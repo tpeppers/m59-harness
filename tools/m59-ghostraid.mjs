@@ -555,6 +555,7 @@ export async function report(cfg) {
     healNote(events),
     spawnBlockNote(events),
     valveNote(events),
+    dazzleNote(events),
     prepNote(events),
     ghostClockNote(events),
     roomNote(events, killAt),
@@ -624,6 +625,12 @@ function prepNote(events) {
   const phases = events.filter(e => e.kind === 'phase').map(e => `${new Date(e.t).toISOString().slice(11, 16)} ${e.phase}`);
   return `cycle: ${phases.join(' → ') || 'no phases'}` + (eps.length ? `; prep: ${eps.map(e => e.lead_ms != null
     ? `ready ${Math.round(e.lead_ms / 60_000)} min after closing, ${Math.round(e.margin_ms / 60_000)} min before the ghost` : 'NOT ready when the ghost came').join('; ')}` : '');
+}
+
+function dazzleNote(events) {
+  const d = events.find(e => e.kind === 'dazzle_summary');
+  if (!d) return 'dazzle: not cast (the light-bearer does not know it, or dazzle=false)';
+  return `dazzle on the ghost: ${d.landed} landed, ${d.already} already on, ${d.failed} failed, ${d.no_ghost} with no ghost in sight`;
 }
 
 function valveNote(events) {
@@ -763,6 +770,7 @@ async function replay(cfg) {
 }
 
 const REHEARSAL_PARKED = { agents: [] };
+const SHORT_OF = [];
 async function rehearse(cfg) {
   const { assertLabFleet } = await import('./m59-fleetscript.mjs');
   assertLabFleet('m59-ghostraid rehearse');
@@ -888,9 +896,16 @@ async function rehearse(cfg) {
     const wantNames = [...new Set((c.inventory ?? []).map(i => lower(i.name)).filter(n => n && !uncreatable.test(n)))];
     const haveNames = new Set(((await rpc('inventory', { agent: c.shadow_account }).catch(() => null))?.items ?? []).map(i => lower(i.name)));
     const missing = wantNames.filter(n => !haveNames.has(n));
-    if (wantNames.length >= 4 && missing.length > wantNames.length * 0.3)
-      lost.push(`${c.shadow_account} (${c.prod_character}): missing ${missing.length} of ${wantNames.length} kinds (${missing.slice(0, 6).join(', ')})`);
+    // DEATH-SHAPED OR NOT. A clone that died has lost nearly everything, its gear included; a few
+    // reagent kinds short is a dressing gap or a keeper's own use, which the raid's reagent step
+    // covers — warned, not refused (each refusal costs a 25-minute rebuild).
+    const gear = /sword|hammer|mace|axe|scimitar|armor|armour|shield/i;
+    const gearLost = wantNames.some(n => gear.test(n)) && !wantNames.filter(n => gear.test(n)).some(n => haveNames.has(n));
+    const line = `${c.shadow_account} (${c.prod_character}): missing ${missing.length} of ${wantNames.length} kinds (${missing.slice(0, 6).join(', ')})`;
+    if (wantNames.length >= 4 && (missing.length > wantNames.length * 0.7 || gearLost)) lost.push(line);
+    else if (missing.length) SHORT_OF.push(line);
   }));
+  if (SHORT_OF.length) console.log(`  fidelity warning — clones short of some kinds (not refused): ${SHORT_OF.join('; ')}`);
   if (lost.length) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);

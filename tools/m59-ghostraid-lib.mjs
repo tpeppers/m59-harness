@@ -25,6 +25,15 @@ export const GHOST_ROOM = 40;          // The Throne Room of Victoria Castle
 export const DOOR_ROOM = 38;           // Castle Victoria — the room the throne room opens off
 
 /**
+ * DAZZLE (Dazzle.kod:40-61, :133-170, ModifyMonsterBehavior): Shal'ille level 4, 12 mana, an emerald
+ * and a PURPLE mushroom. On a monster it sets AI_NOFIGHT and AI_MOVE_RANDOM for 3-15 s (spell power
+ * / 12, plus the caster's karma minus the target's, / 20): the ghost stops attacking and wanders.
+ * It refuses a target already dazzled, so recasting early costs nothing but the attempt. Operator,
+ * 2026-09-25: Loial knows it; it shuts the ghost's offence down.
+ */
+export const DAZZLE = Object.freeze({ spell: 'dazzle', mana: 12, reagents: { emerald: 1, 'purple mushroom': 1 } });
+
+/**
  * THE THRONE ROOM'S SPAWN SQUARES, [row, col] — throne1.kod:61 `plGenerators`. MonsterRoom
  * GenerateMonster (monsroom.kod:216-232) picks ONE generator at random per tick and refuses the
  * spawn when a battler already stands on that square; nothing retries it. So k of these 6 held by
@@ -458,12 +467,13 @@ export function reportMarkdown(rep, { fleet = '?', startedIso = '', notes = [] }
  * bless and super strength per their assignments and rounds, herbs for every heal caster. Pure.
  */
 export function raidNeeds(agents = [], roles = {}, { lightCasts = 16, blessRounds = 4, herbsEach = 30,
-                                                     healCasters = null } = {}) {
+                                                     healCasters = null, dazzleCasts = 0 } = {}) {
   const need = {};
   const add = (reagents, times) => { for (const [k, n] of Object.entries(reagents)) need[k] = (need[k] ?? 0) + n * times; };
   const weapons = agents.filter(a => a !== roles.lightbearer).length;
   add(DEDICATE.reagents, weapons);
   if (roles.lightbearer) add(LIGHT.reagents, lightCasts);
+  if (roles.lightbearer && dazzleCasts > 0) add(DAZZLE.reagents, dazzleCasts);
   const bless = blessAssignments(agents, roles.blessers ?? [], { lightbearer: roles.lightbearer });
   add(BLESS.reagents, Object.values(bless).reduce((n, t) => n + t.length, 0) * blessRounds);
   const strong = buddyAssignments(agents, roles.strongmen ?? [], { lightbearer: roles.lightbearer });

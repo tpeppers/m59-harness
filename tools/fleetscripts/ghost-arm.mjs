@@ -59,7 +59,7 @@ import { forge } from '../m59-foundry.mjs';
 import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, profileOf, deliver, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
-import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
+import { STAGE_ROOM, DEDICATE, DAZZLE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
          planReagents, countFamily, isReagent, assignRoles, raidNeeds, blessAssignments, expect, reexpect, barrier, leave }
   from '../m59-ghostraid-lib.mjs';
 
@@ -127,6 +127,7 @@ export const script = {
     bless_rounds: { type: 'number', default: 4,
                     describe: 'bless casts per raider to provision: the door, then a refresh every few minutes. ' +
                               'Sapphires are the scarce half — 2 a cast, and prod holds few' },
+    dazzle_casts: { type: 'number', default: 40, describe: 'dazzles the light-bearer should carry reagents for (emerald + purple mushroom each), if it knows the spell' },
     herbs_each: { type: 'number', default: 30, describe: 'herbs every minor-heal caster should carry (1 a cast)' },
     channel: { type: 'string', default: 'say' },
     wait_mana_s: { type: 'number', default: 900, describe: 'how long a dedicator may rest for mana, in all' },
@@ -525,7 +526,8 @@ export const script = {
             // WHAT THE RAID NEEDS, LESS WHAT THE FLEET CARRIES — every reagent, gems included (operator:
             // bring any and all required reagents). HALL_WANTS' reagent amounts are a floor. Rehearsal
             // 24's fixed list had no sapphires, and bless (two a cast) failed twenty times at the door.
-            const need = raidNeeds(agents, roles, { lightCasts: Number(p.light_casts), blessRounds: Number(p.bless_rounds), herbsEach: Number(p.herbs_each) });
+            const dazzles = roles.lightbearer && (SURVEY.get(roles.lightbearer)?.spells ?? []).includes(DAZZLE.spell) ? Number(p.dazzle_casts) : 0;
+            const need = raidNeeds(agents, roles, { lightCasts: Number(p.light_casts), blessRounds: Number(p.bless_rounds), herbsEach: Number(p.herbs_each), dazzleCasts: dazzles });
             const carried = k => agents.reduce((n, a) => n + countFamily(SURVEY.get(a)?.items ?? [], k), 0);
             const floor = Object.fromEntries(wants.filter(w => !/shield|armou?r|hammer/i.test(String(w.item))).map(w => [w.item, Number(w.amount) || 0]));
             const keys = new Set([...Object.keys(need), ...Object.keys(floor)]);
@@ -631,6 +633,9 @@ export const script = {
         };
         for (const a of roles.dedicators) add(a, DEDICATE.reagents, each);
         if (roles.lightbearer) add(roles.lightbearer, LIGHT.reagents, Number(p.light_casts));
+        // DAZZLE, if the light-bearer knows it: an emerald and a purple mushroom a cast.
+        if (roles.lightbearer && (SURVEY.get(roles.lightbearer)?.spells ?? []).includes(DAZZLE.spell) && Number(p.dazzle_casts) > 0)
+          add(roles.lightbearer, DAZZLE.reagents, Number(p.dazzle_casts));
         // Bless: each blesser's share of the fleet, times the rounds the raid will cast it —
         // once at the door and again every few minutes it lasts.
         const shares = blessAssignments(agents, roles.blessers, { lightbearer: roles.lightbearer });

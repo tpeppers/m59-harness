@@ -54,7 +54,7 @@ import { fileURLToPath } from 'node:url';
 import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
 import { script as raidAction } from './raid-action.mjs';
-import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
+import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, DAZZLE, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
          buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS,
          nextGhostWindow, valveStep }
   from '../m59-ghostraid-lib.mjs';
@@ -490,6 +490,9 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    dazzle: { type: 'boolean', default: true, describe: 'the light-bearer dazzles the ghost between lights, if it knows the spell (Dazzle.kod: 3-15 s of no attacking)' },
+    dazzle_every_s: { type: 'number', default: 8, describe: 'how often the light-bearer tries a dazzle while a ghost lives (a dazzle already on it is refused for free)' },
+    dazzle_stay: { type: 'boolean', default: false, describe: 'stay in the throne room between dazzles instead of stepping back to the door' },
     provenance: { type: 'string', default: 'organic', describe: 'how the fleet reached the door: organic (mustered, drawn, bought, dedicated this run) or a replay of a recorded run' },
     valve_before_spawn: { type: 'number', default: 1, describe: 'spawn squares the valve may open before a ghost respawn has been seen (the phase unknown)' },
     prep_close_min: { type: 'string', default: 'auto', describe: 'minutes after a seen spawn to shut the valve and prepare for the next ghost; auto = the fleet\'s measured recommendation (m59-raidtimes --prep-lead), else 95' },
@@ -819,11 +822,40 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         return true;
       };
       const heals = [];
+      // DAZZLE THE GHOST (operator, 2026-09-25): an undazzled ghost is a ghost attacking. Between
+      // lights, while a ghost is alive, step in, dazzle it (3-15 s of AI_NOFIGHT), step back to the
+      // door. Mana for the next light is kept back; a dazzle already on it is refused for free.
+      const knows = ((await call('spells', { agent }, 40_000).catch(() => null))?.spells ?? [])
+        .some(sp => String(sp.name ?? '').toLowerCase() === DAZZLE.spell);
+      const dazzleOn = knows && !(p.dazzle === false || p.dazzle === 'false');
+      let lastDazzle = 0;
+      const dazzles = { landed: 0, already: 0, failed: 0, no_ghost: 0 };
+      const dazzleIn = async () => {
+        lastDazzle = Date.now();
+        const o = await observe(agent);
+        if ((o.health ?? 0) < Number(p.light_rest_below)) return;
+        const mana = Number((await call('status', { agent, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
+        const lightSoon = Date.now() - RUN.light.lastCast > (Number(p.light_every_s) - 30) * 1000;
+        if (mana < DAZZLE.mana + (lightSoon ? LIGHT.mana : 0)) return;
+        if (Number(o.room) !== RUN.room && !(await hop(agent, RUN.room, { tries: 3 })).ok) return;
+        const { ghost } = await lookAround(agent, p.target);
+        if (!ghost) { dazzles.no_ghost++; await hop(agent, Number(RUN.door), { tries: 6 }); return; }
+        await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+        const r = await castVerified(agent, DAZZLE.spell, { target: ghost.id, cost: DAZZLE.mana });
+        const outcome = r.landed ? 'landed' : /already/i.test(String(r.why ?? '')) ? 'already' : `failed: ${String(r.why ?? r.outcome ?? '').slice(0, 60)}`;
+        if (r.landed) dazzles.landed++; else if (outcome === 'already') dazzles.already++; else dazzles.failed++;
+        event('dazzle', { outcome });
+        if (!p.dazzle_stay || p.dazzle_stay === 'false') await hop(agent, Number(RUN.door), { tries: 6 });
+      };
       await castIn('opening');
       while (Date.now() < endAt(p)) {
         const due = Date.now() - RUN.light.lastCast > Number(p.light_every_s) * 1000;
         if (RUN.light.expired || due) {
           if (!(await castIn(RUN.light.expired ? 'a raider saw it lapse' : 'timer'))) break;
+          continue;
+        }
+        if (dazzleOn && RUN.ghostSeen && (RUN.ghostAlive || !RUN.killAt) && Date.now() - lastDazzle > Number(p.dazzle_every_s) * 1000) {
+          await dazzleIn();
           continue;
         }
         const o = await observe(agent);
@@ -847,6 +879,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
       }
       await windDown(agent, p);
       RUN.done.add(agent);
+      if (dazzleOn) { st.dazzle = dazzles; event('dazzle_summary', { agent, ...dazzles }); console.log(`  ${agent} dazzle: ${dazzles.landed} landed, ${dazzles.already} already on, ${dazzles.failed} failed`); }
       st.light = { casts: log.filter(l => l.outcome === 'cast').length, attempts: log.length, log: log.slice(-12),
                    heals: heals.length, heals_landed: heals.filter(x => x.landed).length };
       event('light_summary', { agent, ...st.light, log: undefined });
