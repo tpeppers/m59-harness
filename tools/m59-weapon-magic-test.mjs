@@ -165,6 +165,18 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
   const prov = broker.slice(broker.indexOf('provides: (c.spells || [])'), broker.indexOf('mana_now:', broker.indexOf('provides: (c.spells || [])')));
   ok("the fleet row's provides carries enchant weapon for the troll dedication",
      /n === 'enchant weapon'/.test(prov));
+  ok('and says how well each is known, to choose between dedicators', /provides_ability:/.test(broker));
+  // THE TRANCE HOLD REACHES THE KEEPER. It was dropped at the proxy, so a 30-second enchant
+  // weapon ran under the keeper's 15-second default freeze.
+  const proxyCast = broker.slice(broker.indexOf('cast: (spellId, targets = [], opts = {}) => {'),
+                                 broker.indexOf('// AND NO `buy`/`buyItems` HERE'));
+  ok('the keeper proxy forwards holdMs', /holdMs: Number\(opts\.holdMs\)/.test(proxyCast));
+  ok('and the cast tool sends one, defaulting from the spell cast time',
+     /c\.cast\(mine\.id, targets, holdMs \? \{ holdMs \} : \{\}\)/.test(broker) &&
+     /await castHoldMs\(mine\.name\)/.test(broker));
+  const { buffCatalogue } = await import('./m59-buffs.mjs');
+  ok('the catalogue knows enchant weapon is a 30-second trance',
+     buffCatalogue().find(b => b.name === 'enchant weapon')?.cast_time_ms === 30000);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

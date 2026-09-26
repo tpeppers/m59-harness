@@ -2110,7 +2110,7 @@ class KeeperProxy {
       // narrower than it looks: `pacer.submit` forces a fresh snapshot before it runs its
       // callback, and every paced call site therefore acts on vitals that are current.
       attack: (id) => act('attack', { target: id }),
-      cast: (spellId, targets = []) => {
+      cast: (spellId, targets = [], opts = {}) => {
         // THE KEEPER TAKES A SPELL NAME AND THE CALLERS HOLD AN OBJECT ID, because the id
         // is what BP_REQ_CAST wants and the name is what a person types. Resolved here off
         // the snapshot's own spell list rather than sent as a bare number, so the keeper
@@ -2134,7 +2134,8 @@ class KeeperProxy {
         // thought it had put on someone had gone onto the person casting it. Measured
         // 2026-09-11; the tell was `keeper_said.targets: []`.
         return act('cast', { spell: sp?.name ?? String(spellId), spell_id: spellId,
-                             targets: list, ...(list.length ? { target: list[0] } : {}) });
+                             targets: list, ...(list.length ? { target: list[0] } : {}),
+                             ...(Number(opts?.holdMs) > 0 ? { holdMs: Number(opts.holdMs) } : {}) });
       },
       // AND NO `buy`/`buyItems` HERE, DELIBERATELY — THAT ONE STAYS ON THE SESSION.
       //
@@ -6293,6 +6294,20 @@ function safeRtsCastSelection(c, a) {
       throw new Error(`stale cast intent: target ${target} is no longer perceived`);
   }
   return { known, count, target, targetObject };
+}
+
+// A SPELL'S TRANCE, from the buff catalogue (m59-buffs.mjs reads it from the kod), plus the
+// same 10s margin castVerified adds. 0 when the catalogue has no cast time: the keeper then
+// keeps its own 15s default, which covers every other spell.
+let CAST_TIMES = null;
+async function castHoldMs(spellName) {
+  if (CAST_TIMES === null) {
+    try { CAST_TIMES = new Map((await import('./m59-buffs.mjs')).buffCatalogue()
+      .map(b => [String(b.name).toLowerCase(), Number(b.cast_time_ms) || 0])); }
+    catch { CAST_TIMES = new Map(); }
+  }
+  const t = CAST_TIMES.get(String(spellName ?? '').toLowerCase()) ?? 0;
+  return t > 0 ? t + 10_000 : 0;
 }
 
 function resolveTarget(s, arg) {
@@ -12335,6 +12350,9 @@ const TOOLS = [
       target: { type: ['string', 'number'], description: 'who or what to aim it at' },
       force: { type: 'boolean', description: 'send it even if the affordability check says no' },
       observe_created: { type: 'boolean', description: 'read inventory before and after and return positive item deltas; used by opt-in production stats' },
+      holdMs: { type: 'number', description: 'how long the keeper holds perfectly still for the cast. ' +
+        'Defaults to the spell\'s own cast time plus 10s where the catalogue has one (enchant weapon: 30s ' +
+        'trance), else the keeper\'s 15s' },
     }, required: ['agent', 'spell'] },
     run: async (a) => {
       const s = session(a.agent), c = s.need();
@@ -12407,9 +12425,14 @@ const TOOLS = [
       const before = c.evSeq;
       let sent;
       try {
+        // THE HOLD WAS NEVER FORWARDED. The keeper sizes its freeze from `holdMs` and falls
+        // back to 15s, and nothing here passed it — `castVerified` sent one that this tool
+        // dropped — so every keeper-backed enchant weapon (a 30-second trance) was unfrozen
+        // halfway. Forwarded now, and defaulted from the spell's own cast time.
+        const holdMs = Number(a.holdMs) > 0 ? Number(a.holdMs) : await castHoldMs(mine.name);
         sent = await s.pacer.submit('cast', () => {
           beforeRtsMutation(a, 'cast');
-          return c.cast(mine.id, targets);
+          return c.cast(mine.id, targets, holdMs ? { holdMs } : {});
         }, ATTACK_INTERVAL_MS);
       } catch (error) {
         const cancelled = rtsCancellationResult(error, { cast: false });
@@ -16594,6 +16617,14 @@ const TOOLS = [
           provides: (c.spells || [])
             .map(sp => (c.rsc.get(sp.nameRsc) || '').toLowerCase())
             .filter(n => n === 'create food' || n === 'create weapon' || n === 'enchant weapon'),
+          // AND HOW WELL, for choosing between casters. Ability decides the fizzle roll and the
+          // enchantment's duration: the first DUM dedication went to Bunsen (enchant weapon 5,
+          // more mana) over Raphael (20) and spent its reagents on nothing. Cache-only, like
+          // `skills` below.
+          provides_ability: Object.fromEntries(cachedLearningRows(c)
+            .filter(r => r.kind === 'spell' && ['create food', 'create weapon', 'enchant weapon']
+              .includes(String(r.name).toLowerCase()))
+            .map(r => [String(r.name).toLowerCase(), Number(r.ability) || 0])),
           mana_now: v.mana?.value ?? null,
           // What it is up to, in the words a person would use. `time` says which
           // bucket the seconds landed in; this says what is happening.
