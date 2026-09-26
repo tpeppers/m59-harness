@@ -22986,6 +22986,11 @@ export class Autopilot {
           return true;
         }
         await this.practiceAtDesk({ session: st }).catch(() => false);
+        // Out of castable mana or reagents: home to refill, where the desk can be found.
+        if (st.done) {
+          this.chaliceEvent('practice_session_done', { room: st.room, spell: st.spell, why: st.done });
+          st.stage = 'back';
+        }
         return true;
       }
       case 'practice:back': case 'practice:home': {
@@ -23296,14 +23301,24 @@ export class Autopilot {
   // IS A PRACTICE SESSION IN ANOTHER ROOM DUE, AND COULD IT CAST AT LEAST ONCE? The entry, or null.
   // The same reserve and the same choice the desk uses, so a session never starts that would
   // spend what the next customer is owed — it is simply the desk's practice, somewhere else.
-  practiceSessionDue(now = Date.now()) {
+  //
+  // `ignoreMana` asks the other question — could it cast if mana were full? — which is what the
+  // desk uses to decide whether to hold its mana for a `mana_full` session (practiceAtDesk).
+  practiceSessionDue(now = Date.now(), { ignoreMana = false } = {}) {
     const cfg = normalizePractice(this.policy.practiceSpells);
     if (!cfg || cfg.enabled === false) return null;
     const entry = cfg.spells.find(sp => sp.room != null && sp.room !== this.hereRoom());
     if (!entry) return null;
-    if (this._practiceSessionAt && now - this._practiceSessionAt < entry.every_ms) return null;
     const c = this.s?.client;
     const v = c?.vitals?.();
+    if (!ignoreMana) {
+      if (entry.when === 'mana_full') {
+        // FULL MEANS FULL, within a point of rounding; and a floor of 10 s between sessions so
+        // a session that ended on a refusal does not walk straight back through the door.
+        if (!(v?.mana?.max > 0) || v.mana.value < v.mana.max - 1) return null;
+        if (this._practiceSessionAt && now - this._practiceSessionAt < 10_000) return null;
+      } else if (this._practiceSessionAt && now - this._practiceSessionAt < entry.every_ms) return null;
+    }
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return null;
     const spells = (c.spells || []).map(sp => ({
       id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));
@@ -23312,10 +23327,11 @@ export class Autopilot {
     const one = { ...cfg, spells: [entry] };
     const reserve = deskReserve({ practice: one, services, known: spells.map(x => x.name),
                                   keep: this.chaliceReagentFloor() });
-    const choice = choosePractice({ practice: one, spells, mana: v?.mana, reserve, now,
+    const mana = ignoreMana && v?.mana?.max > 0 ? { value: v.mana.max, max: v.mana.max } : v?.mana;
+    const choice = choosePractice({ practice: one, spells, mana, reserve, now,
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused ?? new Map() });
-    this.practiceSessionState = { at: now, entry: entry.name, room: entry.room, why: choice.why };
+    if (!ignoreMana) this.practiceSessionState = { at: now, entry: entry.name, room: entry.room, why: choice.why };
     return choice.cast ? entry : null;
   }
 
@@ -23343,6 +23359,15 @@ export class Autopilot {
     const cfg = { ...loaded, spells: loaded.spells.filter(sp => session
       ? sp.room === here : (sp.room == null || sp.room === here)) };
     if (!cfg.spells.length) return false;
+    // THE DESK HOLDS ITS MANA FOR A `mana_full` SESSION. Otherwise desk practice spends a cast
+    // every gap_ms and the mana never reaches full, so the session never starts. Only while that
+    // session could actually cast (reagents on hand) and only for the holder, who runs sessions;
+    // out of purple mushrooms, the desk practises as before and no regeneration is wasted.
+    if (!session && this.chaliceRole?.() === 'holder'
+        && this.practiceSessionDue(now, { ignoreMana: true })?.when === 'mana_full') {
+      this.practiceState = { at: now, last: 'holding mana for a practice session that starts at full mana' };
+      return false;
+    }
 
     const chalice = this.chaliceCfg;
     const rooms = session ? [here] : cfg.rooms.length ? cfg.rooms
@@ -23374,6 +23399,9 @@ export class Autopilot {
     this.practiceState = { at: now, reserve: reserve.mana, reserve_why: reserve.why,
                            reagents_kept: reserve.reagents, last: choice.why };
     if (!choice.cast) {
+      // A SESSION THAT CANNOT CAST AGAIN IS OVER. It does not sit down in a skeleton room to wait
+      // for mana: the desk is where the mana comes back, and where a customer can find him.
+      if (session) { session.done = choice.why; return false; }
       // Below the reserve and nothing else in the way: win the mana back, on a held wall only.
       if (choice.blocked === 'mana' && cfg.rest_seconds > 0 && this.holdWorks()) {
         const r = await skills.restUntil(s, { health: 0.99, vigor: REST_VIGOR_CAP, mana: 0.95,

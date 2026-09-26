@@ -367,5 +367,43 @@ console.log('\npractice sessions in another room');
      AP.includes('? sp.room === here : (sp.room == null || sp.room === here)'));
 }
 
+// CONSTANT PRACTICE (2026-09-26): "cast it constantly keeping his mana below max, wait until it's
+// max, cast it again", "targeting the skeletons people are fighting or other skeletons in the room".
+console.log('\nmana-full sessions, and the skeleton somebody is fighting');
+{
+  const e = normalizePractice({ spells: [{ name: 'dazzle', target: 'creature', on: ['skeleton'],
+                                           room: 38, when: 'mana_full' }] }).spells[0];
+  ok('when: mana_full is kept', e?.when === 'mana_full', JSON.stringify(e));
+  ok('an entry with no `when` is interval-spaced, as before',
+     normalizePractice({ spells: [{ name: 'dazzle', target: 'creature', on: ['skeleton'], room: 38 }] })
+       .spells[0]?.when === 'interval');
+  ok('an unknown `when` is refused', normalizePractice({ spells: [{ name: 'dazzle', target: 'creature',
+     on: ['skeleton'], room: 38, when: 'sometimes' }] }).problems.some(p => /when must be/.test(p)));
+
+  const me = { row: 10, col: 10 };
+  const objects = [
+    { id: 1, name: 'skeleton', row: 11, col: 10, attackable: true },          // nearest, nobody on it
+    { id: 2, name: 'skeleton', row: 20, col: 20, attackable: true },          // far, being fought
+    { id: 3, name: 'Kermit', row: 21, col: 21, attackable: true, player: true },
+    { id: 4, name: 'skeleton', row: 30, col: 30, attackable: true },
+  ];
+  ok('a skeleton with a player in melee reach outranks a nearer one nobody is fighting',
+     pickCreatureTarget({ objects, on: ['skeleton'], me })?.id === 2);
+  ok('with nobody fighting anything, nearest wins as before',
+     pickCreatureTarget({ objects: objects.filter(o => !o.player), on: ['skeleton'], me })?.id === 1);
+  ok('the player itself is never the target', pickCreatureTarget({ objects, on: ['kermit'], me }) === null);
+
+  const { readFileSync } = await import('node:fs');
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('a mana_full session starts only at full mana',
+     AP.includes("if (entry.when === 'mana_full') {") && AP.includes('v.mana.value < v.mana.max - 1) return null;'));
+  ok('the desk holds its mana for it, holder only, while it could cast',
+     AP.includes("this.chaliceRole?.() === 'holder'")
+       && AP.includes("this.practiceSessionDue(now, { ignoreMana: true })?.when === 'mana_full'"));
+  ok('a session that cannot cast again goes home rather than resting in the room',
+     AP.includes('if (session) { session.done = choice.why; return false; }')
+       && AP.includes("this.chaliceEvent('practice_session_done'"));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

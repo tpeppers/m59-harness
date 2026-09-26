@@ -170,7 +170,15 @@ export function normalizePractice(cfg) {
           const every_ms = within(s.every_ms, 30_000, 3_600_000, 180_000);
           if (session_ms == null) { out.problems.push(`spells.${name}.session_ms must be 10000..600000`); continue; }
           if (every_ms == null) { out.problems.push(`spells.${name}.every_ms must be 30000..3600000`); continue; }
-          extra = { room, session_ms, every_ms };
+          // WHEN A SESSION STARTS. `interval` spaces them by every_ms. `mana_full` — operator,
+          // 2026-09-26: "cast it constantly keeping his mana below max, wait until it's max, cast
+          // it again" — starts one the moment mana is full and casts until the next cast would
+          // eat the desk's reserve, so no regeneration is ever wasted at the cap.
+          const when = s.when == null ? 'interval' : String(s.when).toLowerCase();
+          if (when !== 'interval' && when !== 'mana_full') {
+            out.problems.push(`spells.${name}.when must be "interval" or "mana_full"`); continue;
+          }
+          extra = { room, session_ms, every_ms, when };
         }
         list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra });
       }
@@ -315,12 +323,21 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
  * cast on within `recentlyUntil` is skipped: dazzle refuses a target that is still dazzled
  * (Dazzle.kod, "is already dazzled"), and its effect lasts at most 15 s (bound(iDuration,3,15)).
  *
+ * THE ONE SOMEBODY IS FIGHTING COMES FIRST. Operator, 2026-09-26: "casting it targeting the
+ * skeletons people are fighting or other skeletons in the room". Quarry claims live inside each
+ * keeper process and are not shared, so "being fought" is read off the room itself: a creature
+ * with a player (any player — the objects list carries fleet and strangers alike) within
+ * `engagedWithin` squares, which is melee reach. Those rank ahead of the rest; distance from us
+ * decides within each group.
+ *
  * @param objects        room objects: `{ id, name, row, col, attackable, player }`
  * @param on             lower-case name fragments, from the practice entry
  * @param me             `{ row, col }` or null
  * @param recentlyUntil  Map id -> epoch ms that creature is set aside until
+ * @param engagedWithin  squares from a player that count as being fought (default 2.5)
  */
-export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyUntil = new Map(), now = 0 } = {}) {
+export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyUntil = new Map(), now = 0,
+                                     engagedWithin = 2.5 } = {}) {
   const want = on.map(x => String(x).toLowerCase());
   const ok = objects.filter(o => {
     const n = String(o.name ?? '').toLowerCase();
@@ -328,6 +345,9 @@ export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyU
       && want.some(w => n.includes(w)) && (recentlyUntil.get(o.id) ?? 0) <= now;
   });
   if (!ok.length) return null;
-  const d = o => me ? Math.hypot((o.row ?? 0) - me.row, (o.col ?? 0) - me.col) : 0;
-  return ok.sort((a, b) => d(a) - d(b))[0];
+  const players = objects.filter(o => o.player && o.row != null && o.col != null);
+  const dist = (a, b) => Math.hypot((a.row ?? 0) - b.row, (a.col ?? 0) - b.col);
+  const engaged = o => players.some(p => dist(o, p) <= engagedWithin);
+  const d = o => me ? dist(o, me) : 0;
+  return ok.sort((a, b) => Number(engaged(b)) - Number(engaged(a)) || d(a) - d(b))[0];
 }
