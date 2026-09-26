@@ -277,6 +277,22 @@ section('the holder keeps its Rescue emeralds back from forces of light');
   eq(bad.rescue_emeralds, 3, 'a negative floor keeps the default');
 }
 
+section('holder_keep: reagents the holder keeps for a job that is not the desk (21 teeth for a raid)');
+{
+  const kept = normalizeChalice({ holder: 'x', station_room: 2, holder_keep: { 'Orc Tooth': 21, emerald: 2 } });
+  eq(kept.holder_keep['orc tooth'], 21, 'normalised to the lower-case item name');
+  eq(reagentFloor(kept, 'holder')['orc tooth'], 21, 'the holder keeps the teeth');
+  eq(reagentFloor(kept, 'holder').emerald, 5, 'and a kept emerald ADDS to the Rescue three');
+  eq(Object.keys(reagentFloor(kept, 'alternate')).length, 0, 'the alternate keeps nothing');
+  // reveal.kod:55 — three teeth a cast. 23 on hand, 21 kept: no reveal; 24: one.
+  eq(castsAbove({ 'orc tooth': 23 }, [['orc tooth', 3]], reagentFloor(kept, 'holder')), 0, '23 teeth, 21 kept: no reveal');
+  eq(castsAbove({ 'orc tooth': 24 }, [['orc tooth', 3]], reagentFloor(kept, 'holder')), 1, '24: exactly one');
+  const menu = deskMenu({ cfg: kept, have: { 'orc tooth': 23, emerald: 9 }, floor: reagentFloor(kept, 'holder') });
+  eq(menu.find(m => m.kind === 'reveal')?.ok, false, 'the desk menu says reveal needs reagents at 23');
+  const bad = normalizeChalice({ holder: 'x', station_room: 2, holder_keep: { 'orc tooth': -1 } });
+  ok(bad.problems.some(p => /holder_keep/.test(p)), 'a negative keep is reported');
+}
+
 
 // ---------------------------------------------------------------------------------------
 section('the human desk: a person playing the server keeps the service listed');

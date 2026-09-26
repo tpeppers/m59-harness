@@ -113,6 +113,11 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // 2026-09-24, two of twelve supply trips walked out to Barloque because the pack held zero
   // emeralds, and the 21:19Z one ended in a death in Ukgoth. 0 switches the floor off.
   rescue_emeralds: 3,
+  // REAGENTS THE HOLDER NEVER SPENDS ON A SERVICE, for a job that is not the desk's. Operator,
+  // 2026-09-26: Loial keeps at least 21 orc teeth for the ghost raid, so a reveal (3 teeth)
+  // stops at 24 rather than eating into them. `{item: count}`, added to the Rescue emeralds in
+  // `reagentFloor`, so the desk menu, reveal, forces of light and desk practice all honour it.
+  holder_keep: Object.freeze({}),
   // A ticket older than this is abandoned, whoever holds it.
   ticket_ttl_ms: 300_000,
   // FORCES OF LIGHT ON REQUEST. When set, the holder waits at its post and lights THIS room
@@ -210,6 +215,18 @@ export function normalizeChalice(cfg = null) {
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
     if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
     if (k === 'uncurse' || k === 'reveal' || k === 'human_desk') { out[k] = v !== false; continue; }
+    if (k === 'holder_keep') {
+      const keep = {};
+      if (v && typeof v === 'object' && !Array.isArray(v))
+        for (const [item, n] of Object.entries(v)) {
+          const want = Math.floor(Number(n));
+          if (String(item).trim() && Number.isFinite(want) && want >= 0) keep[String(item).trim().toLowerCase()] = want;
+          else problems.push(`holder_keep.${item} must be a count of zero or more`);
+        }
+      else if (v != null) problems.push('holder_keep must be {item: count}');
+      out.holder_keep = keep;
+      continue;
+    }
     if (k === 'holder_supply') {
       const supply = {};
       if (v && typeof v === 'object' && !Array.isArray(v))
@@ -368,8 +385,13 @@ export function folWanted({ cfg, here, fol = {}, now = Date.now(), role = null }
  * anything: it is the one whose supply trip starts with a Rescue. See `rescue_emeralds`.
  */
 export function reagentFloor(cfg, role) {
+  if (role !== 'holder') return {};
+  const out = {};
+  for (const [item, n] of Object.entries(cfg?.holder_keep ?? {}))
+    if (Number(n) > 0) out[item] = Math.floor(Number(n));
   const n = Math.floor(Number(cfg?.rescue_emeralds) || 0);
-  return role === 'holder' && n > 0 ? { emerald: n } : {};
+  if (n > 0) out.emerald = (out.emerald ?? 0) + n;
+  return out;
 }
 
 /**

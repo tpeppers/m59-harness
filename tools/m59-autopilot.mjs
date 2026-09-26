@@ -22212,9 +22212,11 @@ export class Autopilot {
       .slice(0, this.chaliceCfg?.reveal_max ?? 3)
       .map(o => ({ id: o.id, name: this.s.client?.rsc?.get?.(o.nameRsc) ?? '' }));
     let done = 0;
+    // THE HOLDER'S KEEP IS NOT THE DESK'S TO SPEND (`holder_keep`, e.g. teeth for a raid).
+    const keepTeeth = this.chaliceReagentFloor()['orc tooth'] ?? 0;
     for (const item of items) {
       if (!floorIds.has(item.id)) continue;
-      if (this.reagentOnHand('orc tooth') < 3) break;
+      if (this.reagentOnHand('orc tooth') - keepTeeth < 3) break;
       const r = await this.chaliceCast('reveal', item.id);
       if (r.cast) done++;
     }
