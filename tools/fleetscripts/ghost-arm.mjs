@@ -353,6 +353,19 @@ export const script = {
       // ---- 1. SURVEY. Everyone posts what it holds, then waits for everyone else, so the
       // hand-over plan below is computed from ONE picture of the fleet by every agent alike.
       verify(async ({ state: st }) => {
+        // A RAIDER'S KEEPER SURVIVES, IT DOES NOT FARM, FOR THE WHOLE RAID. A raider under its health
+        // floor is handed back to its keeper to heal, and a keeper in `farm` mode that has the body
+        // goes hunting: on rehearsal 25 eight raiders walked from the stage room to their hunting
+        // grounds (room 27, the woods) while the fleet rested for the door, and only fourteen went
+        // in. `survive` still rests, heals, flees and leaves the Underworld; it picks no quarry. The
+        // mode is remembered (OUTFIT_RUN.modes) and put back when the raid lets go (ghost-raid
+        // restorePosture, and `m59-ghostraid restore` from the policy snapshot).
+        if (!OUTFIT_RUN.modes?.has(agent)) {
+          const ap = await call('autopilot', { agent, action: 'status' }, 40_000).catch(() => null);
+          (OUTFIT_RUN.modes ??= new Map()).set(agent, ap?.mode ?? 'farm');
+          if ((ap?.mode ?? 'farm') !== 'survive')
+            await call('autopilot', { agent, action: 'start', mode: 'survive' }, 40_000).catch(() => {});
+        }
         const [me, inv, sp, lk] = await Promise.all([
           call('status', { agent, brief: false }, 40_000).catch(() => null),
           call('inventory', { agent }, 40_000).catch(() => null),

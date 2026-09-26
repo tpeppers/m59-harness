@@ -302,6 +302,9 @@ async function raidPosture(agent, p) {
   if (!pol) { console.log(`  !! ${agent}: policy unreadable, raid posture NOT applied`); return { applied: false }; }
   const saved = {};
   for (const [camel, snake] of POSTURE_KEYS) if (pol[camel] !== undefined) saved[snake] = pol[camel];
+  // The keeper MODE the raid replaced with `survive` at the survey (ghost-arm), put back with the rest.
+  const mode = OUTFIT_RUN.modes?.get(agent) ?? (st?.mode && st.mode !== 'survive' ? st.mode : null);
+  if (mode) saved.mode = mode;
   RUN.saved.set(agent, saved);
   if (RUN.dir) try { fs.writeFileSync(path.join(RUN.dir, 'policy-snapshot.json'), JSON.stringify(Object.fromEntries(RUN.saved), null, 1)); } catch {}
   const r = await call('autopilot', { agent, action: 'start',
