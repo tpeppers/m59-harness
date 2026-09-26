@@ -434,6 +434,12 @@ async function fight(cfg, { composed = false } = {}) {
     // survival code as much as a kill, and a muster death on the road is exactly the evidence the
     // post-mortem work wants. With the step each one was in, and its post-mortem file.
     await recordDeaths(dir).catch(e => console.log(`  deaths not recorded: ${e.message}`));
+    // THE RAID MAP: the run played back minute by minute (m59-raidmap.mjs), beside the report.
+    try {
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync(process.execPath, [path.join(HERE, 'm59-raidmap.mjs'), '--run', dir], { encoding: 'utf8', timeout: 180_000 });
+      console.log(r.status === 0 ? `raid map: ${path.join(dir, 'raidmap.html')}` : `  raid map not written: ${String(r.stderr || r.stdout).trim().split(NL).pop()}`);
+    } catch (e) { console.log(`  raid map not written: ${e.message}`); }
     const t = summariseTimes(dir);
     fs.appendFileSync(HISTORY, JSON.stringify(t) + NL);
     console.log(`timings: pre-raid ${t.pre_raid_ms == null ? '?' : (t.pre_raid_ms / 60000).toFixed(1) + ' min'} at ${git.short}${git.dirty ? ' (dirty)' : ''} — node tools/m59-raidtimes.mjs`);
