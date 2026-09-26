@@ -842,9 +842,16 @@ async function rehearse(cfg) {
   // is not the one prod has (--allow-lost to run it anyway).
   const lost = [];
   await Promise.all(clones.map(async c => {
-    const want = (c.inventory ?? []).length;
-    const have = ((await rpc('inventory', { agent: c.shadow_account }).catch(() => null))?.items ?? []).length;
-    if (want >= 6 && have < want / 2) lost.push(`${c.shadow_account} (${c.prod_character}): ${have} of ${want} items`);
+    // BY NAME, NOT BY LINE, and not counting what the rebuild cannot make: stacks merge on dressing,
+    // and a scroll names a family of fifteen classes the wire does not tell apart, so rehearsal 25's
+    // first attempt refused a clone whose "14 of 29" was fifteen uncreatable scrolls.
+    const lower = x => String(x ?? '').toLowerCase();
+    const uncreatable = /scroll/i;
+    const wantNames = [...new Set((c.inventory ?? []).map(i => lower(i.name)).filter(n => n && !uncreatable.test(n)))];
+    const haveNames = new Set(((await rpc('inventory', { agent: c.shadow_account }).catch(() => null))?.items ?? []).map(i => lower(i.name)));
+    const missing = wantNames.filter(n => !haveNames.has(n));
+    if (wantNames.length >= 4 && missing.length > wantNames.length * 0.3)
+      lost.push(`${c.shadow_account} (${c.prod_character}): missing ${missing.length} of ${wantNames.length} kinds (${missing.slice(0, 6).join(', ')})`);
   }));
   if (lost.length) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
