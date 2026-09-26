@@ -7,13 +7,13 @@
 // configuration turns itself off rather than serve from one.
 //
 // No socket, no roster, no broker. `node tools/m59-chalice-test.mjs`.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
          servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS,
          reagentFloor, castsAbove, servingDesk, humanMark, HUMAN_FRESH_MS, deskMenu, formatDeskMenu,
-         parseDeskRequest, parseDeskReply, serviceTellText } from './m59-chalice.mjs';
+         parseDeskRequest, parseDeskReply, serviceTellText, cargoWants } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -253,6 +253,24 @@ section("a ride is refused while the server's teleport ban is running");
   const off = normalizeChalice({ holder: 'x', station_room: 2, pvp_block_ms: 0 });
   eq(shouldRide({ ...base, cfg: off, now, lastPlayerAttackAt: now - 1000 }).ride, true,
      'pvp_block_ms 0 switches the check off');
+}
+
+section('every trip home brings at least a quarter of the holder\'s target (operator, 2026-09-26)');
+{
+  const target = { 'orc tooth': 50, elderberry: 200, emerald: 110 };
+  eq(CHALICE_DEFAULTS.restock_min_fraction, 0.25, 'a quarter by default');
+  const w = cargoWants({ shortfall: { 'orc tooth': 49, elderberry: 150, emerald: 5 }, target,
+                         cfg: { ...CHALICE_DEFAULTS, restock_per_trip: 10 } });
+  eq(w['orc tooth'], 13, 'a per-trip cap of 10 is raised to 25% of 50 teeth: 13');
+  eq(w.elderberry, 50, 'and to 25% of 200 berries');
+  eq(w.emerald, 5, 'but never more than he is short');
+  const big = cargoWants({ shortfall: { 'orc tooth': 49 }, target, cfg: CHALICE_DEFAULTS });
+  eq(big['orc tooth'], 49, 'the standard cap of 60 already exceeds a quarter');
+  eq(Object.keys(cargoWants({ shortfall: {}, target, cfg: CHALICE_DEFAULTS })).length, 0, 'not short: nothing');
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const draw = src.indexOf(`["draw the holder's restock"`), buy = src.indexOf(`["buy the holder's restock"`);
+  ok(draw > 0 && buy > draw, 'the town trip draws from the chest BEFORE it buys');
+  ok(/async chaliceTownCargo\(\)[\s\S]{0,900}chest_detour_hops/.test(src), 'and only within chest_detour_hops of the hall');
 }
 
 section('the holder keeps its Rescue emeralds back from forces of light');

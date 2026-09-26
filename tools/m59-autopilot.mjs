@@ -73,7 +73,7 @@ import { WeaponMagicBook, magicSwap } from './m59-weapon-magic.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
-         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
+         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu } from './m59-chalice.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
@@ -21966,9 +21966,9 @@ export class Autopilot {
   async chaliceTakeCargo(cfg, store) {
     if (!Object.keys(cfg.holder_supply ?? {}).length) return;
     if (!this.policy.guildWants?.enabled && !this.policy.reagentCoop?.enabled) return;
-    const short = holderShortfall(store.supply(), { except: this.who() });
-    const wants = Object.fromEntries(Object.entries(short)
-      .map(([k, n]) => [k, Math.min(n, cfg.restock_per_trip)]).filter(([, n]) => n > 0));
+    const supply = store.supply();
+    const short = holderShortfall(supply, { except: this.who() });
+    const wants = cargoWants({ shortfall: short, target: supply.target ?? cfg.holder_supply, cfg });
     if (!Object.keys(wants).length) return;
     const granted = store.pledge(this.who(), wants);
     if (!Object.keys(granted).length) return;
@@ -21994,6 +21994,29 @@ export class Autopilot {
     this._holderCargo = { items: got, at: Date.now(), tries: 0 };
     this.chaliceEvent('cargo_taken', { items: got });
     this.note('carrying the holder\'s restock back', { items: got });
+  }
+
+  // DRAW THE HOLDER'S RESTOCK FROM THE GUILD CHEST ON AN ORDINARY TRIP HOME. Operator,
+  // 2026-09-26: "Resources for the chalice holder shouldn't only be replenished on chalice ride".
+  // `chaliceTakeCargo` ran only for a traveller that rode the cup and landed in the hall, and
+  // rides rarely complete — so the chest (which holds the teeth no merchant sells) was almost
+  // never drawn for him. Now every town trip that passes near the hall draws his shortfall, at
+  // least `restock_min_fraction` of his target per item, and hands it over at the station on
+  // the way home through the same `_holderCargo` delivery. Before the buying step: the chest
+  // is free, and a pledge here shrinks what the counter is asked for.
+  async chaliceTownCargo() {
+    const cfg = this.chaliceCfg;
+    if (!cfg?.enabled || this.chaliceRole() !== 'traveller' || this._holderCargo) return;
+    if (!Object.keys(cfg.holder_supply ?? {}).length) return;
+    const store = this.chaliceStore();
+    if (!Object.keys(holderShortfall(store.supply(), { except: this.who() })).length) return;
+    const hops = this.hereRoom() === GUILD_HALL_ROOM ? 0 : this.hopsTo(GUILD_HALL_ROOM);
+    if (!Number.isFinite(hops) || hops > cfg.chest_detour_hops) {
+      this.chaliceEvent('cargo_chest_skipped', { hops: Number.isFinite(hops) ? hops : null,
+        limit: cfg.chest_detour_hops, why: 'the guild hall is too far from this town trip' });
+      return;
+    }
+    await this.chaliceTakeCargo(cfg, store);
   }
 
   // BUY THE HOLDER'S RESTOCK WITH THE MONEY THIS TRIP JUST MADE, and carry it back as the tip.
@@ -24995,6 +25018,8 @@ export class Autopilot {
       // own food and reagents: the tip comes from the surplus, never from the floor. See
       // `chaliceBuyCargo` — it is carried home and handed over at the station by the same
       // path the guild-chest draw uses.
+      // THE GUILD CHEST FIRST, on every trip home and not only after a ride (chaliceTownCargo).
+      ["draw the holder's restock", () => this.chaliceTownCargo()],
       ["buy the holder's restock", () => this.chaliceBuyCargo()],
       ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
       ['vault', () => this.vaultRunIfPassing()],

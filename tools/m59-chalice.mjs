@@ -132,6 +132,16 @@ export const CHALICE_DEFAULTS = Object.freeze({
   holder_supply: Object.freeze({}),
   // How much of the holder's shortfall one traveller takes on per trip, per item.
   restock_per_trip: 60,
+  // AT LEAST THIS SHARE OF THE HOLDER'S TARGET, per item, on every trip home while he is short
+  // (operator, 2026-09-26: "25%+ of Loial's desired orc tooth reagents every time someone goes
+  // home while he's lower than desired"). Raises `restock_per_trip` when that is the smaller;
+  // never more than he is actually short, since pledges from other trips already count.
+  restock_min_fraction: 0.25,
+  // THE GUILD CHEST IS DRAWN ON EVERY TOWN TRIP, not only after a chalice ride — but only when
+  // the hall is within this many hops of where the trip is. The Bookmaker's hall is two hops
+  // from the Barloque counters; from Tos it is across the world, and a detour that long is a
+  // journey rather than an errand.
+  chest_detour_hops: 4,
   // WHERE TO BUY WHAT THE HOLDER IS SHORT OF, so a town trip can restock him with money
   // instead of with a chest draw. Keyed by the same names as `holder_supply`:
   //
@@ -195,6 +205,7 @@ const NUMBERS = {
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
+  restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
   restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000], rescue_emeralds: [0, 100],
   human_wait_ms: [10_000, 600_000], human_hold_ms: [10_000, 900_000],
   human_max_wait_ms: [30_000, 1_800_000], human_offer_ms: [8_000, 180_000],
@@ -339,6 +350,22 @@ export function restockBuyPlan({ shortfall = {}, cfg = null, perTrip = null } = 
   // the plan deterministic so two runs of the same shortfall visit the counters in the same
   // order and a test can say what it expects.
   return stops.sort((a, b) => a.room - b.room);
+}
+
+/**
+ * What ONE trip takes toward the holder, per item: the larger of `restock_per_trip` and
+ * `restock_min_fraction` of the target, never more than the shortfall. Pure.
+ */
+export function cargoWants({ shortfall = {}, target = {}, cfg = CHALICE_DEFAULTS } = {}) {
+  const cap = Math.max(0, Number(cfg?.restock_per_trip) || 0);
+  const frac = Math.max(0, Math.min(1, Number(cfg?.restock_min_fraction) || 0));
+  const out = {};
+  for (const [item, short] of Object.entries(shortfall)) {
+    const floor = Math.ceil(frac * (Number(target?.[item]) || 0));
+    const n = Math.min(Number(short) || 0, Math.max(cap, floor));
+    if (n > 0) out[item] = n;
+  }
+  return out;
 }
 
 export function holderShortfall(supply = {}, { now = Date.now(), except = null } = {}) {
