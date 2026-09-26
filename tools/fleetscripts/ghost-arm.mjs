@@ -140,6 +140,7 @@ export const script = {
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
     hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
     outfit_profile: { type: 'string', default: 'light', describe: 'light: leather + small round shield from the chests, chain from the smith for a gap; chain: rehearsal 21-24' },
+    dress_limit_s: { type: 'number', default: 900, describe: 'late dedications must finish this long after the first starts; a raider not served by then goes to the door with the weapon it has' },
     extra_trip_min: { type: 'number', default: 3, describe: 'after the first armorer trip, ride again only for at least this many owed pieces' },
     spare_hammers: { type: 'number', default: 6, describe: 'hammers the armorers carry unassigned, for raiders the foundry fails' },
     split_hall: { type: 'boolean', default: true, describe: 'armorers draw armour and shop in ONE trip while runners fetch the reagents (false: rehearsal 21 order)' },
@@ -807,7 +808,8 @@ export const script = {
         }
         const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || isArmorer || !!forged?.ok || spareTaken;
         if (late) st.outfit.dedicate = await lateDedicate(agent, roles.dedicators,
-          { lab, dm: lab ? await dmLab() : null, donors: agents.filter(a => a !== roles.lightbearer) });
+          { lab, dm: lab ? await dmLab() : null, donors: agents.filter(a => a !== roles.lightbearer),
+            deadline: DRESS_DEADLINE.at ??= Date.now() + Number(p.dress_limit_s) * 1000 });
         console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +
                     (st.outfit.dedicate ? `; hammer ${st.outfit.dedicate.ok ? st.outfit.dedicate.outcome : 'NOT dedicated: ' + st.outfit.dedicate.why}` : ''));
         return true;
@@ -849,6 +851,8 @@ function runnersOf(agents, p, roles, pair) {
  */
 // ONE READING PER STEP, SHARED: every agent plans the same hand-outs, and two readings a second
 // apart can disagree about a character walking in — a receiver then waits for a hammer nobody sends.
+// One deadline for the whole fleet's late dedications, set by the first raider to reach them.
+const DRESS_DEADLINE = { at: null };
 const PRESENT = new Map();
 const presentOnce = (key, agents, room) => {
   if (!PRESENT.has(key)) PRESENT.set(key, presentIn(agents, room));

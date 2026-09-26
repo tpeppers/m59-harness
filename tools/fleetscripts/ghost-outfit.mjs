@@ -304,10 +304,25 @@ export async function wearOutfit(agent, { profile = 'chain' } = {}) {
 /**
  * DEDICATE A WEAPON THAT ARRIVED LATE — a newly bought hammer, or an armorer's own, which left
  * with it. The owner hands it to a dedicator with the mana, the dedicator casts, hands it back,
- * the owner wields it. Serialised: one dedicator trade at a time.
+ * the owner wields it.
+ *
+ * ONE QUEUE PER DEDICATOR, AND A DEADLINE. This used to run the whole fleet's late dedications
+ * through ONE lock, each allowed ten minutes of waiting for mana: on rehearsal 24 two raiders were
+ * still queued at the dress an hour after the raid had gone in, and missed the fight. Now each
+ * owner goes to the least-loaded dedicator in its room that can pay, dedicators work in parallel,
+ * and nothing runs past `deadline` — an owner that cannot be served in time keeps its weapon and
+ * goes to the door with the fleet.
  */
-export async function lateDedicate(owner, dedicators, { lab = false, dm = null, donors = [] } = {}) {
-  return serially(async () => {
+const DEDICATOR_LOCK = new Map(), DEDICATOR_LOAD = new Map();
+const withDedicator = (d, fn) => {
+  DEDICATOR_LOAD.set(d, (DEDICATOR_LOAD.get(d) ?? 0) + 1);
+  const run = DEDICATOR_LOCK.get(d) ?? Promise.resolve();
+  const p = run.then(fn, fn).finally(() => DEDICATOR_LOAD.set(d, Math.max(0, (DEDICATOR_LOAD.get(d) ?? 1) - 1)));
+  DEDICATOR_LOCK.set(d, p.catch(() => {}));
+  return p;
+};
+export async function lateDedicate(owner, dedicators, { lab = false, dm = null, donors = [], deadline = Date.now() + 10 * 60_000 } = {}) {
+  {
     const weapon = (await inv(owner)).find(i => /^(hammer|mace)$/i.test(String(i.name ?? '').trim()));
     if (!weapon) return { ok: false, why: 'no blunt weapon to dedicate' };
     // A DEDICATOR IN THE OWNER'S ROOM. A hand-over is one room; on the 2026-09-25 rehearsal four
@@ -324,8 +339,11 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null, 
     const pays = async a => { const it = await inv(a);
       return Object.entries(DEDICATE.reagents).every(([k, n]) => countFamily(it, k) >= n); };
     for (const x of here) x.pays = await pays(x.a);
-    let d = (here.find(x => x.pays && x.mana >= 17) ?? here.find(x => x.pays) ?? here.find(x => x.mana >= 17) ?? here[0])?.a ?? null;
+    const load = a => DEDICATOR_LOAD.get(a) ?? 0;
+    const d = [...here].sort((x, y) => (Number(!!y.pays) - Number(!!x.pays)) || (load(x.a) - load(y.a)) || (y.mana - x.mana))[0]?.a ?? null;
     if (!d) return { ok: false, why: `no dedicator in room ${me.room} with the owner` };
+    return withDedicator(d, async () => {
+    if (Date.now() >= deadline) return { ok: false, why: `out of time: ${d} was busy until the dress deadline` };
     // Nobody here can pay: top the chosen one up from whoever in the room can spare it (the owner
     // first), stack by stack, by id — a hand-over is one room, which this already is.
     if (!here.find(x => x.a === d)?.pays) {
@@ -347,7 +365,7 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null, 
     if (!g?.supplied) return { ok: false, why: `hand-over failed: ${g?.reason ?? '?'}` };
     // Wait for mana on prod; the lab may refill. Bounded, and asked again before EVERY attempt,
     // because a fizzle spends the 17 (2026-09-25: every retry read "costs 17, you have 4/7").
-    const until = Date.now() + 10 * 60_000;
+    const until = Math.min(deadline, Date.now() + 10 * 60_000);
     const waitMana = async () => {
       while (Date.now() < until) {
         const m = Number((await call('status', { agent: d, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
@@ -376,7 +394,8 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null, 
     if (mine) await call('act', { agent: owner, verb: 'use', target: mine.id }, 60_000).catch(() => {});
     if (got) return { ok: !!back?.supplied, by: d, outcome: r.landed ? 'dedicated' : 'already' };
     return { ok: false, returned: !!back?.supplied, why: `dedication failed: ${String(r?.why ?? '?').slice(0, 80)}` };
-  });
+    });
+  }
 }
 
 /**
