@@ -2296,6 +2296,10 @@ console.log('\na cast is read from the sentence, not from the receipt');
   ok('an unrecognised sentence classifies as nothing, never as success',
      classifyCast(['The troll shuffles about.']) === null);
   ok('and silence classifies as nothing too', classifyCast([]) === null);
+  const lacking = classifyCast(["You don't have the reagents to cast enchant weapon!"]);
+  ok('a missing reagent is named, and is not retried', lacking?.outcome === 'no_reagents' && lacking.retryable === false);
+  const sitting = classifyCast(['You find yourself unable to cast a spell.']);
+  ok('a resting caster is named, and is retryable', sitting?.outcome === 'cannot_cast' && sitting.retryable === true);
 }
 
 console.log('\nan interruption names the thing that interrupted it');

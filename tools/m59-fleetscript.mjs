@@ -1963,6 +1963,12 @@ export async function castVerified(agent, spell, { target = null, cost = null, s
     // Wait out the trance, then settle. A spell with no trance settles immediately.
     await sleep(trance + settleMs);
     await stop();
+    // THE CAST REPLY CARRIES THE SERVER'S OWN SENTENCES TOO. The listener above misses what the
+    // keeper's wait consumed; the reply's `messages` (and `keeper_said.said`) are the same
+    // sentences caught on the other side. Rehearsal 30: "You don't have the reagents to cast
+    // enchant weapon!" sat in every reply while the verdict read "nothing happened".
+    for (const m of [...(reply?.messages ?? []), ...(reply?.keeper_said?.said ?? [])])
+      if (m && !said.includes(String(m))) said.push(String(m));
 
     const after = await Promise.all([
       call('status', { agent, brief: true }, 40_000).catch(() => null),

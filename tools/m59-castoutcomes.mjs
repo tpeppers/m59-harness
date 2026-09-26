@@ -105,6 +105,25 @@ export const CAST_OUTCOMES = Object.freeze([
     note: 'minor heal takes exactly one User, so a corpse, an item or a monster reads as ' +
           'spell_bad_target rather than as a miss.',
   },
+  // THE TWO REFUSALS THAT COST NOTHING, AND THEREFORE LOOKED LIKE NOTHING. Both are raised
+  // before payment, so the cost check reads "no mana and no reagents moved"; rehearsals 29 and
+  // 30 (2026-09-26) put fourteen dedications and every door buff under that line, when the
+  // server had said, every time, "You don't have the reagents to cast enchant weapon!".
+  {
+    outcome: 'no_reagents', retryable: false,
+    re: /don't have the reagents to cast/i,
+    why: 'the caster does not carry the reagents',
+    cites: 'spell.kod:52 spell_insufficient_reagent',
+    note: 'Not a fault in the caster and not retryable: supply it. enchant weapon is 3 elderberry ' +
+          'and an orc tooth; bless is 2 plain mushroom and 2 sapphire.',
+  },
+  {
+    outcome: 'cannot_cast', retryable: true,
+    re: /unable to cast a spell/i,
+    why: 'the caster is resting (or otherwise barred from magic)',
+    cites: 'user.kod:118 user_no_cast; player.kod:1162 PFLAG_NO_MAGIC while resting',
+    note: 'Stand up and cast again.',
+  },
   {
     outcome: 'no_such_spell', retryable: false,
     re: /do not know a spell matching/i,
