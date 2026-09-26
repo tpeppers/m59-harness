@@ -242,11 +242,17 @@ export const script = {
           // READ BACK WITH PATIENCE: the keeper's inventory is a cache, and the first read after a
           // DM give still shows the old pack — the 2026-09-25 run printed NOT GIVEN for a cup that
           // had arrived, and a second give would have left two (a full cup refuses a second).
+          // A LONGER READ-BACK, AND ONE MORE TRY. Rehearsal 25 logged NOT GIVEN while the same DM
+          // create-and-give by hand landed within three seconds: the pack read had given up first.
+          const holding = async () => ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+            .some(i2 => /chalice/i.test(String(i2.name ?? '')));
           let now = false;
-          for (let i = 0; i < 5 && !now; i++) {
-            await sleep(1500);
-            now = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
-              .some(i2 => /chalice/i.test(String(i2.name ?? '')));
+          for (let i = 0; i < 12 && !now; i++) { await sleep(2000); now = await holding(); }
+          if (!has && !now) {
+            const ids = await dm.resolve([who]);
+            const made = /Created object (\d+)/.exec(String(await dm.dm(['create object Chalice'])))?.[1];
+            if (made && ids[who] != null) await dm.dm([`send object ${ids[who]} NewHold what OBJECT ${made}`]);
+            for (let i = 0; i < 10 && !now; i++) { await sleep(2000); now = await holding(); }
           }
           console.log(`  ${agent} holds the cup where prod does: ${has ? 'already' : now ? 'given a full one' : 'NOT GIVEN'}`);
         }

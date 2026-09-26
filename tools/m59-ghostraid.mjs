@@ -910,6 +910,22 @@ async function rehearse(cfg) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
   }
+  // WHERE PROD STANDS, BEFORE THE RAID LOOKS. A clone logs in where its body last stood on the lab
+  // server — sometimes a trap an earlier run's keeper walked it into (rehearsal 25: shadow19 in
+  // Kardde's Canyon, room 49), and the FleetScript route check refuses a start that can only leave
+  // through a known trap. So every clone is DM-placed on its prod square here, during the rebuild
+  // (loopback only); ghost-arm's own placement then finds it already there.
+  {
+    const dm = await import('./m59-dm.mjs');
+    let placed = 0;
+    for (const c of clones) {
+      const at = startPositions[c.shadow_account];
+      if (!at?.room || !c.shadow_name) continue;
+      const r = await dm.relocate([c.shadow_name], Number(at.room), { row: at.row, col: at.col, verify: true }).catch(() => null);
+      if (r?.moved?.[c.shadow_name]) placed++;
+    }
+    console.log(`  placed ${placed} of ${clones.length} clone(s) where prod stands, before the raid's route check`);
+  }
   // Unparked at the last moment: the raid takes the hold seconds from now, and a parked keeper would
   // otherwise sit out the raid's own walks.
   await Promise.all(clones.map(c => rpc('autopilot', { agent: c.shadow_account, action: 'unpark', why: 'the raid takes over' }, 15_000).catch(() => null)));
