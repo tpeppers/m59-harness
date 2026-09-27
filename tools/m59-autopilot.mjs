@@ -1813,6 +1813,9 @@ export class Autopilot {
       // must stay in the pack. Unlike vaultItems this is never deposited: faction
       // errands use it for the item that has to be offered to a quest recipient.
       protectedItems: [],
+      // Cursed items this character may loot (see lootFloor's NEVER PICK THESE UP). Empty
+      // refuses both, which is every character that is not a Shal'ille trainee.
+      pickupCursed: [],
       // Total weapons retained after a merchant visit, including the equipped one.
       // Two means the weapon in hand and one best spare under weaponPriority.
       maxWeapons: 2,
@@ -14773,6 +14776,7 @@ export class Autopilot {
     // this fleet already refuses to sell are also the things it refuses to trade away.
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
                           this.carryFloors());
+    s.setCursedPickup?.(this.policy.pickupCursed ?? []);
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
       await s.combat.tick();

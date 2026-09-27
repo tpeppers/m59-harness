@@ -13,7 +13,7 @@
 // 60 vigor of a 200 bar for life, and all four parked against a wall at FULL HEALTH for
 // nineteen minutes — because the rest floor they were waiting for was 80, which the curse had
 // already put out of reach.
-import { UNREVEALED_JEWELLERY } from './m59-game.mjs';
+import { UNREVEALED_JEWELLERY, mayLootCursed } from './m59-game.mjs';
 import { isUnrevealed, VIGOR_MAX } from './m59-skills.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -38,6 +38,23 @@ console.log('--- layer 1: never pick it up ---');
   ok('an unidentified reagent is still taken', !blocked(unread('emerald')));
   ok('a stack is never "unrevealed"', !blocked({ name: 'ring', rarity: 100, amount: 4 }),
      'isUnrevealed excludes stacks, which is how a pile of arrows stays lootable');
+}
+
+console.log('\n--- layer 1b: a Shal\'ille trainee MAY take one amulet, and only one ---');
+{
+  // Operator, 2026-09-26: the disciples farm Castle Victoria for the Amulet of Shadows their
+  // practice runs on. `pickupCursed` is the per-character opt-in; everybody else keeps the ban.
+  const allow = new Set(['amulet of shadows']);
+  ok('with no opt-in the amulet is still refused', !mayLootCursed('Amulet of Shadows'));
+  ok('an opted-in character takes it', mayLootCursed('Amulet of Shadows', { allow }));
+  ok('but not while it already wears one',
+     !mayLootCursed('Amulet of Shadows', { allow, held: n => n === 'amulet of shadows' }));
+  const taken = new Set();
+  ok('the first of two on one floor is taken', mayLootCursed('Amulet of Shadows', { allow, taken }));
+  ok('and the second is not', !mayLootCursed('Amulet of Shadows', { allow, taken }));
+  ok('an amulet opt-in does not admit the ring', !mayLootCursed('ring of lethargy', { allow }));
+  ok('and the opt-in cannot widen the ban to anything else',
+     !mayLootCursed('ring', { allow: new Set(['ring']) }));
 }
 
 console.log('\n--- layer 3: the bar is what THIS character can reach ---');

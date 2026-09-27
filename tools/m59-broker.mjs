@@ -10674,6 +10674,10 @@ const TOOLS = [
         description: 'item names to protect from eating/selling/gifting/dropping and deposit at the Barloque vault during town loops' },
       protect_items: { type: 'array', items: { type: 'string' },
         description: 'temporary cargo to protect from eating/selling/gifting/dropping while keeping it in the pack' },
+      pickup_cursed: { type: 'array', items: { type: 'string', enum: ['amulet of shadows', 'ring of lethargy'] },
+        description: 'cursed items this character MAY loot, at most one of each held. Picking one up is ' +
+          'WEARING it (item.kod:514) and it cannot come off without remove curse. For a Shal\'ille ' +
+          'trainee, whose practice runs on an Amulet of Shadows. [] (the default) refuses both.' },
       strategy_stats: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, retention_hours: { type: 'number' },
         default_window_hours: { type: 'number' }, crate_check: { type: 'boolean' },
@@ -11484,6 +11488,13 @@ const TOOLS = [
           throw new Error('protect_items must be a list of item names');
         if (a.protect_items.length > 24) throw new Error('protect_items may contain at most 24 items');
         p.policy.protectedItems = resolveItemNames(a.protect_items);
+      }
+      if (a.pickup_cursed !== undefined) {
+        const allowed = ['amulet of shadows', 'ring of lethargy'];
+        const want = [].concat(a.pickup_cursed ?? []).map(v => String(v).trim().toLowerCase());
+        const bad = want.filter(v => !allowed.includes(v));
+        if (bad.length) throw new Error(`pickup_cursed accepts only ${allowed.join(' / ')}, not ${bad.join(', ')}`);
+        p.policy.pickupCursed = [...new Set(want)];
       }
       if (a.strategy_stats !== undefined) {
         if (a.strategy_stats == null) p.policy.strategyStats = null;

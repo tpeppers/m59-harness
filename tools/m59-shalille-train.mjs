@@ -52,8 +52,9 @@
 //    about every thirty seconds. `busy` will not stop either of them — it is broker-side
 //    only, which this repository has already paid to learn. The only thing that holds him
 //    is a commander lease on WORK and MOVEMENT, heartbeated for the whole run, and it is
-//    released on the way out so he goes back to farming. Solo skips this entirely, which is
-//    most of why it is steadier.
+//    released on the way out so he goes back to farming. In SOLO the lease is on the caster
+//    himself, and it is just as necessary: a caster who is also a farming character is walked
+//    off to his station by DUM mid-drill otherwise. What solo skips is the SECOND body.
 //
 // 3. THE HEALER DYING. He is a level-1 caster with twenty hit points. Nothing in this loop
 //    hurts him — except in SOLO, where the amulet is his own — so the run refuses to start
@@ -377,12 +378,26 @@ console.log(`\npatient keeper on ${kport.port} (pid ${kport.pid}, ${kport.charac
 
 const health = await (await fetch(`${BROKER}health`)).json();
 const owner = `shalille-train:${process.pid}`;
+// WHO AND WHERE, FROM THE BROKER THAT HOLDS THEM. This used to name the patient 'Beaker' and
+// the server 76.214.42.186:5959 outright, so it could lease exactly one character on exactly
+// one fleet — the one it was written for. The lease is pinned to the exact roster character
+// and game endpoint, so both have to be the broker's own answer for this agent, never a guess.
+const CHARACTER = health.session_characters?.[PATIENT] ?? kport.character ?? null;
+const ENDPOINT = health.session_game_servers?.[PATIENT] ?? health.game_server ?? null;
+if (!CHARACTER || !ENDPOINT?.host || !ENDPOINT?.port)
+  die(`the broker does not report a character and game server for ${PATIENT} — cannot lease it`);
+const pin = { fleet: health.fleet, broker_pid: health.pid,
+              server_host: ENDPOINT.host, server_port: Number(ENDPOINT.port) };
+async function selfObjectId() {
+  const h = await (await fetch(`${BROKER}health`, { signal: AbortSignal.timeout(15_000) })).json();
+  const id = Number(h?.session_object_ids?.[HEALER]);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 let lease = null;
 async function claim() {
   const out = await call('commander_lease', {
-    action: 'acquire', fleet: health.fleet, broker_pid: health.pid,
-    server_host: (await read(PATIENT)).host ?? '76.214.42.186', server_port: 5959,
-    agents: [{ agent: PATIENT, character: 'Beaker' }], owner, lease_ms: 30_000,
+    action: 'acquire', ...pin,
+    agents: [{ agent: PATIENT, character: CHARACTER }], owner, lease_ms: 30_000,
   }, 30_000).catch(e => ({ error: e.message }));
   // `lease_id` is what commander_lease actually returns; the other two spellings are
   // what it looked like it should return. Measured, not assumed.
@@ -391,14 +406,12 @@ async function claim() {
 }
 async function heartbeat() {
   if (!lease) return;
-  await call('commander_lease', { action: 'heartbeat', fleet: health.fleet, broker_pid: health.pid,
-    server_host: '76.214.42.186', server_port: 5959, lease_token: lease, owner, lease_ms: 30_000 }, 20_000)
+  await call('commander_lease', { action: 'heartbeat', ...pin, lease_token: lease, owner, lease_ms: 30_000 }, 20_000)
     .catch(() => { lease = null; });
 }
 async function release() {
   if (!lease) return;
-  await call('commander_lease', { action: 'release', fleet: health.fleet, broker_pid: health.pid,
-    server_host: '76.214.42.186', server_port: 5959, lease_token: lease, owner }, 20_000).catch(() => {});
+  await call('commander_lease', { action: 'release', ...pin, lease_token: lease, owner }, 20_000).catch(() => {});
   lease = null;
 }
 
@@ -539,10 +552,17 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
     //
     // Verified 2026-09-09: identical call, broker path 140 emeralds -> 140, keeper path
     // 140 -> 139.
+    // IN SOLO THE TARGET IS THE CASTER, AND A CASTER'S OWN NAME DOES NOT RESOLVE: measured on
+    // prod 2026-09-19, `target: "Camilla"` from Camilla answered "nothing here matches", and
+    // `target: "me"` resolved to a STRANGER and reported success. What works is the numeric
+    // object id — read fresh every cast, because ids are renumbered on every server save.
+    const target = SOLO
+      ? (await selfObjectId().catch(() => null)) ?? kport.character
+      : kport.character;
     const r = healerKeeper
-      ? await keeperAct(healerKeeper, 'cast', { spell: spell.name, target: kport.character }, 40_000)
+      ? await keeperAct(healerKeeper, 'cast', { spell: spell.name, target }, 40_000)
           .catch(e => ({ error: e.message }))
-      : await call('cast', { agent: HEALER, spell: spell.name, target: kport.character }, 40_000)
+      : await call('cast', { agent: HEALER, spell: spell.name, target }, 40_000)
           .catch(e => ({ error: e.message }));
     casts++;
     // A CAST THAT SPENT NO MANA DID NOT HAPPEN. The broker says so in the reply and I was

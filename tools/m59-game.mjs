@@ -113,6 +113,17 @@ const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
 
+// MAY THIS CHARACTER LOOT THIS CURSED ITEM? Only when its policy names it (`pickupCursed`), and
+// only ONE: not while one of that name is already carried or worn (`held`), and not a second in
+// the same sweep (`taken`, updated here). A name not in CURSED_ITEMS is not this function's
+// business and answers false, so it can never widen what the ban covers.
+export function mayLootCursed(name, { allow = new Set(), held = () => false, taken = new Set() } = {}) {
+  const key = String(name ?? '').trim().toLowerCase();
+  if (!CURSED_ITEMS.test(key) || !allow.has(key) || held(key) || taken.has(key)) return false;
+  taken.add(key);
+  return true;
+}
+
 // THE SHAPES THAT EQUIP THEMSELVES AND NEVER COME OFF. A cursed weapon is refused at the
 // WIELD by `weaponRanking`, which is a second chance this family does not get: `item.kod:514`
 // posts `TryUseItem` on pickup, so for a ring or an amulet the pickup IS the wear.
@@ -4366,6 +4377,14 @@ class Session {
   }
 
   /**
+   * The cursed items this character has been ALLOWED to loot, lower-case names. Installed by
+   * the autopilot every pass from `policy.pickupCursed`, like the overfarm policy above.
+   */
+  setCursedPickup(names = []) {
+    this._cursedPickup = new Set([].concat(names ?? []).map(n => String(n).trim().toLowerCase()));
+  }
+
+  /**
    * A LAP ENDS WHERE THE GOODS DO. Called when the pack is emptied into a merchant, a vault
    * or a guild chest — that is the moment the next 150% starts counting, and it is the only
    * moment, because a lap measured from anything else (a clock, a room change, a restart)
@@ -4423,9 +4442,22 @@ class Session {
     // it is the difference between scavenging being profitable and being a trap. They
     // are REFUSED rather than silently skipped, so the reason is visible.
     const cursedSkipped = [];
+    // UNLESS THIS CHARACTER WAS TOLD IT MAY — and then ONE. A Shal'ille trainee's practice runs
+    // on an Amulet of Shadows (m59-shalille-train.mjs), so `policy.pickupCursed` lets a named
+    // character take one. A second is never useful and would be a second curse, so a name is
+    // allowed only while nothing of that name is already carried or worn.
+    const allowCursed = this._cursedPickup ?? new Set();
+    // A worn item is also in the pack list, but a cursed one that JUST equipped itself can be
+    // in the use list before the next inventory read (m59-client.mjs equipment()), so both.
+    const held = n => [...(c.inventory ?? []), ...(c.equipment?.()?.equipped ?? [])]
+      .some(i => String((i?.nameRsc != null && c.rsc.get(i.nameRsc)) || i?.name || '').toLowerCase() === n);
+    const takenCursed = new Set();
     cands = cands.filter(o => {
       const n = c.rsc.get(o.nameRsc) || '';
-      if (CURSED_ITEMS.test(n)) { cursedSkipped.push(n); return false; }
+      if (CURSED_ITEMS.test(n)) {
+        if (mayLootCursed(n, { allow: allowCursed, held, taken: takenCursed })) return true;
+        cursedSkipped.push(n); return false;
+      }
       // AND THE ONES WHOSE NAME HAS NOT TOLD US YET.
       //
       // `CURSED_ITEMS` is a NAME ban, and a name cannot protect against an item whose name
