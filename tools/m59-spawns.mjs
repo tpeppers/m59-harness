@@ -378,10 +378,37 @@ export function buildSpawnIndex({ spawnsFile, mapFile, monstersFile, treasureFil
   return out;
 }
 
+// NAMES A CLASS WEARS AT RUNTIME, which the extractor cannot see. A stone troll takes its name
+// in `NewOwner` (stntroll.kod): "Guardian of Zjiria" in Ukgoth (RID_I9), "stone troll" anywhere
+// else — so the table carries the class name, `StoneTroll`, which is on no creature in the game.
+// Every lookup by the name on the wire missed, and the keeper refused the Guardian as "nothing is
+// known about it" while it killed ~200 of our characters. Keyed by class; add a row when another
+// runtime-named creature turns up.
+export const DISPLAY_ALIASES = Object.freeze({
+  StoneTroll: Object.freeze(['Guardian of Zjiria', 'stone troll']),
+});
+
+export function withDisplayAliases(spawns) {
+  for (const c of Object.values(spawns?.creatures ?? {})) {
+    const extra = DISPLAY_ALIASES[c.cls];
+    if (extra) c.aliases = [...new Set([...(c.aliases ?? []), ...extra])];
+  }
+  return spawns;
+}
+
+/** The table's row for a creature by the name the server shows, aliases included. */
+export function creatureByName(spawns, name) {
+  const key = String(name ?? '').trim().toLowerCase();
+  if (!key) return null;
+  return Object.values(spawns?.creatures ?? {}).find(c =>
+    String(c.name).toLowerCase() === key ||
+    (c.aliases ?? []).some(a => String(a).toLowerCase() === key)) ?? null;
+}
+
 let cached;
 export function loadSpawns(file) {
   if (cached !== undefined) return cached;
-  try { cached = JSON.parse(readFileSync(file, 'utf8')); } catch { cached = null; }
+  try { cached = withDisplayAliases(JSON.parse(readFileSync(file, 'utf8'))); } catch { cached = null; }
   return cached;
 }
 
@@ -441,7 +468,7 @@ const creatureIdentity = (value) => String(value ?? '').toLowerCase()
 export function creatureMatchesHunt(creature, want) {
   const needle = creatureIdentity(want);
   if (!needle || !creature) return false;
-  return [creature.name, creature.creature, creature.cls]
+  return [creature.name, creature.creature, creature.cls, ...(creature.aliases ?? [])]
     .some(value => creatureIdentity(value) === needle);
 }
 
@@ -514,7 +541,7 @@ export function huntMatcher(spawns, want) {
     const hits = huntedCreatures(spawns, name);
     if (hits.some(c => creatureMatchesHunt(c, name))) {
       const identities = new Set([needle,
-        ...hits.flatMap(c => [c.name, c.cls].map(creatureIdentity))].filter(Boolean));
+        ...hits.flatMap(c => [c.name, c.cls, ...(c.aliases ?? [])].map(creatureIdentity))].filter(Boolean));
       return live => identities.has(creatureIdentity(live));
     }
     const loose = String(name).toLowerCase();

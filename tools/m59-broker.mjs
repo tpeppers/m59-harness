@@ -16583,6 +16583,15 @@ const TOOLS = [
                 .map(e => e.name)[0] ?? null)
             : undefined,
           equipped_count: c.equipment().known ? c.equipment().count : undefined,
+          // WHAT IS WORN, BESIDE WHAT IS WIELDED: every equipped name that is not a weapon —
+          // armour, shield, helm, rings. A bot deciding whether a character is fit for the
+          // Guardians of Zjiria has to know whether it is in armour and carrying a shield, and
+          // the equipment tool is one call per character. Undefined when the equipment set is
+          // unknown, which is not the same as wearing nothing.
+          worn: c.equipment().known
+            ? c.equipment().equipped.filter(e => e.name && !(skills.weaponScore(e.name) > 0))
+                .map(e => e.name)
+            : undefined,
           // A HELD TOKEN LOOKS EXACTLY LIKE A CHARACTER THAT HAS BEEN WALKING A WHILE,
           // AND IS NOT. `Token.NewUsed` (kod/object/item/passitem/token.kod:227) adds
           // `viVigorDrop` — 120,000 — of exertion, arms a `TortureHolder` timer that

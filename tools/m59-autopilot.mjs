@@ -47,7 +47,7 @@ import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
-         FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
+         FORGIVING_RATING as GENTLE_RATING, creatureByName } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
 import { sameRoomDoorPlan, sameRoomIslandBridgePlan } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
@@ -7530,8 +7530,7 @@ export class Autopilot {
       if (!name || seen.has(key)) continue;
       seen.add(key);
       if (isPrey?.(name)) continue;                      // our prey is not a blocker
-      const info = Object.values(spawns.creatures ?? {})
-        .find(x => x.name.toLowerCase() === key);
+      const info = creatureByName(spawns, name);
       const lvl = info?.level ?? null;
       const politicalTroop = info?.political_troop === true;
       const count = mons.filter(m => (c.rsc.get(m.nameRsc) || '').toLowerCase() === key).length;
@@ -10227,8 +10226,7 @@ export class Autopilot {
     const key = String(name || '').toLowerCase();
     if (!key) return null;
     const spawns = loadSpawns(SPAWN_FILE);
-    const info = Object.values(spawns.creatures ?? {})
-      .find(x => String(x.name).toLowerCase() === key);
+    const info = creatureByName(spawns, name);
     const ceiling = this.threatCeiling();
     return engagementRefusal(info, { name, ceiling });
   }

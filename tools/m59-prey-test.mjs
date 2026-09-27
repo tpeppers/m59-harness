@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 
 import { goalYield, scorePrey, healthCeiling, PURPOSES, huntingGrounds,
          creatureMatchesHunt, huntedCreatures, huntMatcher, huntLabel, huntNames,
-         whoDrops, suggestDrops, moneyPerKill } from './m59-spawns.mjs';
+         whoDrops, suggestDrops, moneyPerKill, withDisplayAliases, creatureByName } from './m59-spawns.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -407,6 +407,21 @@ console.log('\nan order that names several creatures');
   const rooms = huntingGrounds(SPAWNS, ['giant rat', 'ant']).map(g => g.room);
   ok('hunting grounds are the union of the named creatures rooms',
      rooms.includes(566) && rooms.includes(563), JSON.stringify(rooms));
+}
+
+// THE NAME ON THE WIRE, 2026-09-27. A stone troll is named at runtime (stntroll.kod NewOwner):
+// "Guardian of Zjiria" in Ukgoth, "stone troll" elsewhere. The table carries the class name, so
+// every lookup by the wire name missed and the keeper refused it as unknown.
+console.log('\na runtime-named creature is found by the name the server shows');
+{
+  const t = withDisplayAliases({ creatures: {
+    stonetroll: { name: 'StoneTroll', cls: 'StoneTroll', level: 120 },
+    troll: { name: 'troll', cls: 'Troll', level: 90 } } });
+  ok('the Guardian resolves to the level-120 stone troll', creatureByName(t, 'Guardian of Zjiria')?.level === 120);
+  ok('and so does its name outside Ukgoth', creatureByName(t, 'stone troll')?.cls === 'StoneTroll');
+  ok('hunting the Guardian matches it on the wire', huntMatcher(t, ['guardian of zjiria'])('Guardian of Zjiria'));
+  ok('hunting trolls does NOT match a Guardian', !huntMatcher(t, ['troll'])('Guardian of Zjiria'));
+  ok('and a Guardian hunt does not match an ordinary troll', !huntMatcher(t, ['guardian of zjiria'])('troll'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
