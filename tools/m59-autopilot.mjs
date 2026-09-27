@@ -18856,6 +18856,23 @@ export class Autopilot {
     return did;
   }
 
+  // EATING OUTSIDE FARM MODE, WHEN SOMEBODY ASKED FOR A FLOOR ABOVE THE REST CAP.
+  //
+  // provision() — the only thing that eats — ran only inside passFarm's farm block, and an idle
+  // character returns from passErrand before passFarm while a survive-mode one skips that block.
+  // So a floor of 160 was an order nothing could carry out: 2026-09-27, the Ukgoth troll crew
+  // staged idle at room 2 and Raphael (survive, the stage-room dedicator) each sat at 80 of 200
+  // with food in their packs and a floor of 160 (operator: "troll hunters should be keeping 160+
+  // vigor being fed off inky-cap mushrooms, meat pies, and bread"). Gated on a floor above the
+  // cap so the rest of the fleet, whose floor is the cap or below, behaves exactly as before.
+  async eatToFloor(ctx) {
+    const floor = Number(this.policy?.fightAboveVigor) || 0;
+    if (floor <= REST_VIGOR_CAP * 200) return null;       // the cap is a fraction of 200: 80
+    const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
+    const v = ctx?.v ?? this.s?.client?.vitals?.() ?? {};
+    return await this.provision(plan, v).catch(() => null);
+  }
+
   async passErrand(ctx) {
     // THE CHALICE HOLDER AND ALTERNATE serve before anything else directional — a
     // traveller is standing at the station waiting on them.
@@ -19037,6 +19054,7 @@ export class Autopilot {
       // prod 2026-09-26: twelve staged, every weapon `unknown`, zero dedications. The sweep is
       // rate-limited (60 s, two looks, paced) and does not move the character.
       this.sweepWeaponMagic().catch(() => {});
+      if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
       if (await this.hibernate('idle: no job to do').catch(() => false)) return HANDLED;
       return HANDLED;
     }
@@ -19499,6 +19517,7 @@ export class Autopilot {
                 'Underworld, which are decided far above this branch' });
       }
     }
+    if (this.mode !== 'farm' && await this.eatToFloor(ctx) === 'ate') return HANDLED;
     if (this.mode === 'farm') {
       // EAT FIRST — BEFORE THE ROOM, THE PREY, THE PACK OR THE WALL.
       //
