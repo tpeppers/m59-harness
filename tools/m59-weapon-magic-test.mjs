@@ -234,5 +234,27 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
      buffCatalogue().find(b => b.name === 'enchant weapon')?.cast_time_ms === 30000);
 }
 
+// 2026-09-27: a hunter's dedicated hammer read "This weapon has been dedicated to Kraanan's glory ...
+// This hammer has been shattered by a powerful blow." and was re-ordered as a magic spare every pass.
+console.log('a shattered enchanted weapon is not a magic spare');
+{
+  const SHATTERED = 'A hammer. This weapon has been dedicated to Kraanan\'s glory. This hammer has been shattered by a powerful blow.';
+  const c = classifyWeapon({ name: 'hammer', look: SHATTERED });
+  ok('the look reads enchanted AND broken', c.class === 'enchanted' && c.broken === true);
+  const book = new WeaponMagicBook();
+  book.record(1, 'hammer', SHATTERED);
+  book.record(2, 'short sword', 'A short sword.');
+  const items = [{ id: 1, name: 'hammer' }, { id: 2, name: 'short sword' }];
+  const sum = book.summary(items, 2);
+  ok('it is not counted as a magic spare', sum.magic_spares === 0);
+  ok('and the row says broken', sum.weapons.find(w => w.id === 1)?.broken === true);
+  ok('and the keeper\'s swap does not choose it', magicSwap(sum) === null);
+  const book2 = new WeaponMagicBook();
+  book2.record(1, 'hammer', ENCH.replace('long sword', 'hammer'));
+  book2.record(2, 'short sword', 'A short sword.');
+  const sum2 = book2.summary(items, 2, undefined, new Set([1]));
+  ok('a weapon the server refused as broken is excluded too', sum2.magic_spares === 0 && magicSwap(sum2) === null);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

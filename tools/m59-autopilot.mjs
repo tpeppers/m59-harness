@@ -27331,7 +27331,8 @@ export class Autopilot {
   weaponMagicStatus() {
     const c = this.s.client;
     if (!c?.inventory) return null;
-    const sum = this.weaponMagicBook().summary(this.packWeapons(c), this.wieldedWeaponId(c));
+    const sum = this.weaponMagicBook().summary(this.packWeapons(c), this.wieldedWeaponId(c),
+      undefined, skills.brokenSet(c));
     return { ...sum, prefer_magic: this.policy?.preferMagicWeapon === true,
              swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0 };
   }
@@ -27387,7 +27388,8 @@ export class Autopilot {
   syncMagicSet(c = this.s?.client, items = null) {
     if (!c) return null;
     const on = this.policy?.preferMagicWeapon === true;
-    const sum = this.weaponMagicBook().summary(items ?? this.packWeapons(c), this.wieldedWeaponId(c));
+    const sum = this.weaponMagicBook().summary(items ?? this.packWeapons(c), this.wieldedWeaponId(c),
+      undefined, skills.brokenSet(c));
     // WHAT WAS CONJURED, whatever the policy: the sale plan skips it (inventorySalePlan), because
     // no merchant takes a made item and offering one is a refusal that reads like a bad price.
     c._madeItemIds = new Set(sum.weapons.filter(w => w.made === true).map(w => w.id));

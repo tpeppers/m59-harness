@@ -51,6 +51,8 @@ export const DEDICATED_MSG = /^\s*Your (.+?) is now dedicated to Kraanan\.?\s*$/
  *   bypasses_nonmagic  true | false | null   (null: nobody has looked)
  *   made               true | false | null   (a conjured weapon; null: nobody has looked)
  */
+const SHATTERED_DESC = /shattered by a powerful blow/i;
+
 export function classifyWeapon({ name, look = null } = {}) {
   const n = norm(name);
   const text = look == null ? null : String(look);
@@ -59,9 +61,12 @@ export function classifyWeapon({ name, look = null } = {}) {
   if (UNFLAGGED.includes(n)) return { name: n, class: 'unflagged', bypasses_nonmagic: true, made,
     ...(n === 'nerudite sword' ? { troll_weakness: true } : {}) };
   if (text == null) return { name: n, class: 'unknown', bypasses_nonmagic: null, made };
+  // THE CONDITION SENTENCE IS IN THE SAME LOOK (weapon.kod:87-92). A shattered weapon keeps its
+  // enchantment text, so it has to be read here or it passes for a working magic spare.
+  const broken = SHATTERED_DESC.test(text) ? { broken: true } : {};
   return ENCHANTED_DESC.test(text)
-    ? { name: n, class: 'enchanted', bypasses_nonmagic: true, made }
-    : { name: n, class: 'mundane', bypasses_nonmagic: false, made };
+    ? { name: n, class: 'enchanted', bypasses_nonmagic: true, made, ...broken }
+    : { name: n, class: 'mundane', bypasses_nonmagic: false, made, ...broken };
 }
 
 /** The weapon a lapse or a dedication sentence names, or null when the line is neither. */
@@ -134,7 +139,11 @@ export class WeaponMagicBook {
   }
 
   /** What a board and a bot read: the wielded weapon's verdict and how many magic spares. */
-  summary(items = [], wieldedId = null, isWeapon = defaultIsWeapon) {
+  // `broken`: ids the server has refused as shattered (skills.brokenSet). A shattered enchanted
+  // weapon still READS as enchanted, so without this it counted as a magic spare for ever and both
+  // the keeper's swap and the DUM's "wield the enchanted twin" re-tried it every pass (2026-09-27,
+  // a hunter's dedicated hammer "shattered by a powerful blow", re-ordered seventeen times).
+  summary(items = [], wieldedId = null, isWeapon = defaultIsWeapon, broken = null) {
     const weapons = items.filter(i => i?.id != null && isWeapon(i.name));
     const verdict = i => {
       const n = norm(i.name);
@@ -146,14 +155,15 @@ export class WeaponMagicBook {
       const v = verdict(i);
       return { id: Number(i.id), name: v.name, class: v.class, bypasses_nonmagic: v.bypasses_nonmagic,
                made: v.made ?? null, wielded: wieldedId != null && Number(i.id) === Number(wieldedId),
-               at: v.at ?? null, source: v.source ?? (v.class === 'unknown' ? null : 'class') };
+               at: v.at ?? null, source: v.source ?? (v.class === 'unknown' ? null : 'class'),
+               ...(broken?.has?.(Number(i.id)) || v.broken ? { broken: true } : {}) };
     });
     const wielded = rows.find(r => r.wielded) ?? null;
     const spares = rows.filter(r => !r.wielded);
     return {
       wielded: wielded ? { name: wielded.name, class: wielded.class,
                            bypasses_nonmagic: wielded.bypasses_nonmagic, made: wielded.made } : null,
-      magic_spares: spares.filter(r => r.bypasses_nonmagic === true).length,
+      magic_spares: spares.filter(r => r.bypasses_nonmagic === true && !r.broken).length,
       unknown: rows.filter(r => r.bypasses_nonmagic == null).length,
       weapons: rows,
     };
@@ -177,7 +187,7 @@ export function magicSwap(summary, rank = () => 0) {
   const cur = w.find(r => r.wielded);
   if (cur && cur.bypasses_nonmagic === true) return null;
   const curRank = cur ? rank(cur.name) : Number.POSITIVE_INFINITY;
-  const best = w.filter(r => !r.wielded && r.bypasses_nonmagic === true)
+  const best = w.filter(r => !r.wielded && r.bypasses_nonmagic === true && !r.broken)
     .sort((a, b) => rank(a.name) - rank(b.name) || a.id - b.id)[0];
   if (!best) return null;
   return rank(best.name) <= curRank ? best.id : null;
