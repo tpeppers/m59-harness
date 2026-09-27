@@ -99,6 +99,8 @@ if (SOLO && UNTIL_KARMA)
       'character with --patient to pump karma, or drop --until-karma to train the spell.');
 const MAX_CASTS = Number(arg('max-casts') || 200);
 const EVERY_MS = Math.max(1500, Number(arg('every') || 3) * 1000);
+// How long an outage (broker or keeper restart) may last before the run gives up, in minutes.
+const PATIENCE_MS = Math.max(1, Number(arg('patience') || 15)) * 60_000;
 
 // The patient never takes a hit below this much of his maximum. 0.6 leaves room for one
 // amulet hit plus the gap before a heal lands, on a 60-health character.
@@ -381,9 +383,29 @@ if (!APPLY) { console.log('\n(plan only — pass --apply to run it)'); process.e
 
 // ------------------------------------------------------------------ hold the patient
 
-const kport = await findKeeper(PATIENT);
+// `let`, NOT `const`: A KEEPER RESTART CHANGES THE PID AND OFTEN THE PORT, and a keeper refuses
+// any write that names a pid other than its own. So a run that found its keepers once and kept
+// them for ever died at the first keeper restart. refreshKeepers() is called whenever a keeper
+// write fails and after the broker comes back from an outage (operator, 2026-09-27: "set up the
+// shalille trainings to survive restarts of the dum/keeper").
+let kport = await findKeeper(PATIENT);
 // The healer needs one too, only so he can be told to STAND before a cast.
-const healerKeeper = await findKeeper(HEALER);
+let healerKeeper = await findKeeper(HEALER);
+async function refreshKeepers() {
+  const k = await findKeeper(PATIENT).catch(() => null);
+  if (k) kport = k;
+  healerKeeper = SOLO ? kport : ((await findKeeper(HEALER).catch(() => null)) ?? healerKeeper);
+  return !!k;
+}
+// A keeper write that fails is retried ONCE against a freshly found keeper.
+async function keeperDo(which, action, args = {}, timeoutMs = 20_000) {
+  const k = which === 'patient' ? kport : healerKeeper;
+  const r = k ? await keeperAct(k, action, args, timeoutMs).catch(e => ({ error: e.message })) : { error: 'no keeper' };
+  if (!r?.error && r?.ok !== false) return r;
+  await refreshKeepers();
+  const k2 = which === 'patient' ? kport : healerKeeper;
+  return k2 ? keeperAct(k2, action, args, timeoutMs).catch(e => ({ error: e.message })) : r;
+}
 if (!kport) die(`no keeper answered for ${PATIENT} — the amulet is toggled through its keeper`);
 console.log(`\npatient keeper on ${kport.port} (pid ${kport.pid}, ${kport.character})`);
 
@@ -397,8 +419,16 @@ const CHARACTER = health.session_characters?.[PATIENT] ?? kport.character ?? nul
 const ENDPOINT = health.session_game_servers?.[PATIENT] ?? health.game_server ?? null;
 if (!CHARACTER || !ENDPOINT?.host || !ENDPOINT?.port)
   die(`the broker does not report a character and game server for ${PATIENT} — cannot lease it`);
-const pin = { fleet: health.fleet, broker_pid: health.pid,
-              server_host: ENDPOINT.host, server_port: Number(ENDPOINT.port) };
+// `let`: the lease is pinned to the BROKER'S PID, and a broker restart changes it, so every
+// heartbeat after one fails. refreshPin() re-reads /health and the next claim uses the new pid.
+let pin = { fleet: health.fleet, broker_pid: health.pid,
+            server_host: ENDPOINT.host, server_port: Number(ENDPOINT.port) };
+async function refreshPin() {
+  const h = await (await fetch(`${BROKER}health`, { signal: AbortSignal.timeout(15_000) })).json().catch(() => null);
+  if (!h?.pid) return false;
+  pin = { ...pin, fleet: h.fleet, broker_pid: h.pid };
+  return true;
+}
 async function selfObjectId() {
   const h = await (await fetch(`${BROKER}health`, { signal: AbortSignal.timeout(15_000) })).json();
   const id = Number(h?.session_object_ids?.[HEALER]);
@@ -416,9 +446,18 @@ async function claim() {
   return out;
 }
 async function heartbeat() {
-  if (!lease) return;
-  await call('commander_lease', { action: 'heartbeat', ...pin, lease_token: lease, owner, lease_ms: 30_000 }, 20_000)
-    .catch(() => { lease = null; });
+  if (lease) {
+    await call('commander_lease', { action: 'heartbeat', ...pin, lease_token: lease, owner, lease_ms: 30_000 }, 20_000)
+      .catch(() => { lease = null; });
+  }
+  // A LOST LEASE IS RE-TAKEN, NOT MOURNED. It is lost when the broker restarts (new pid, and
+  // the lease table starts empty) or when a heartbeat is late; either way the answer is the
+  // same — a fresh pin and a fresh claim — and without it the caster is unheld for the rest of
+  // a run that may last hours.
+  if (!lease && await refreshPin()) {
+    await claim();
+    if (lease) console.log('  lease re-taken');
+  }
 }
 async function release() {
   if (!lease) return;
@@ -472,7 +511,7 @@ process.on('SIGINT', () => { finish('interrupted').catch(() => process.exit(1));
 
 // ------------------------------------------------------------------ the loop
 
-let casts = 0, hits = 0, hb = 0, misses = 0, landed = 0, apartFor = 0;
+let casts = 0, hits = 0, hb = 0, misses = 0, landed = 0, apartFor = 0, outageSince = 0;
 const startKarma = healer0.karma;
 
 for (let round = 1; !stop && casts < MAX_CASTS; round++) {
@@ -483,11 +522,24 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
   if (!h.ok || !p.ok) {
     // Tolerate a bad read; give up only if it keeps happening. A keeper that is briefly
     // unreadable is the ordinary state of a character being pulled off a fight.
+    //
+    // AND A BROKER OR KEEPER RESTART IS MINUTES, NOT SECONDS. This used to give up after five
+    // consecutive bad rounds — about fifteen seconds — which is shorter than any restart, so
+    // every fleet deploy ended the run. It now waits on a CLOCK (--patience minutes, default
+    // 15), backing off, and on recovery re-finds the keepers and re-takes the lease.
+    if (!misses) outageSince = Date.now();
     misses++;
-    console.log(`[${round}] unreadable (${misses}/5): ${h.why ?? p.why}`);
-    if (misses >= 5) { await finish('five consecutive unreadable rounds'); break; }
-    await new Promise(r2 => setTimeout(r2, EVERY_MS));
+    const waitedS = Math.round((Date.now() - outageSince) / 1000);
+    console.log(`[${round}] unreadable (${waitedS}s of ${PATIENCE_MS / 1000}s): ${h.why ?? p.why}`);
+    if (Date.now() - outageSince > PATIENCE_MS) { await finish(`unreadable for ${waitedS}s`); break; }
+    await new Promise(r2 => setTimeout(r2, Math.min(30_000, EVERY_MS * misses)));
     continue;
+  }
+  if (misses) {
+    console.log(`  back after ${Math.round((Date.now() - outageSince) / 1000)}s — re-finding keepers and the lease`);
+    await refreshKeepers();
+    lease = null;                                  // a restarted broker forgot it anyway
+    await heartbeat();
   }
   misses = 0;
 
@@ -553,7 +605,7 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
     // keeper's own equip handler stands before using an item for exactly this reason. This
     // loop rests whenever it runs dry, so from the first rest onward every cast was a
     // silent no-op: `cast: true`, no error, and `mana_spent: 0`.
-    if (healerKeeper) await keeperAct(healerKeeper, 'stand').catch(() => {});
+    if (healerKeeper) await keeperDo('healer', 'stand').catch(() => {});
     // CAST THROUGH THE KEEPER, NOT THE BROKER TOOL.
     //
     // For a keeper-backed character the broker holds a SNAPSHOT rather than a live client,
@@ -571,7 +623,7 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
       ? (await selfObjectId().catch(() => null)) ?? kport.character
       : kport.character;
     const r = healerKeeper
-      ? await keeperAct(healerKeeper, 'cast', { spell: spell.name, target }, 40_000)
+      ? await keeperDo('healer', 'cast', { spell: spell.name, target }, 40_000)
           .catch(e => ({ error: e.message }))
       : await call('cast', { agent: HEALER, spell: spell.name, target }, 40_000)
           .catch(e => ({ error: e.message }));
@@ -644,7 +696,7 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
     continue;
   }
   const act = wearing ? 'unuse' : 'equip';
-  const r = await keeperAct(kport, act, { id: am.id });
+  const r = await keeperDo('patient', act, { id: am.id });
   hits++;
   console.log(`[${round}] patient ${act === 'equip' ? 'puts the amulet ON' : 'tries to take it OFF'}` +
     ` -> ${r?.error ? 'FAILED ' + String(r.error).slice(0, 60) : (r?.serverSaid ?? 'sent')}`);
