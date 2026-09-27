@@ -986,6 +986,41 @@ try {
     ok(cfg.supply_shops.elderberry, 'the berries stay');
   }
 
+  // Operator, 2026-09-27: "Keep the chalice off the floor in room2, it should only ever be dropped
+  // very briefly." On prod the cup lay in room 2 for 43 minutes after a keeper roll restarted the
+  // alternate between a traveller's drink and its pickup: the new process had no ride open, so it
+  // never looked at the floor.
+  section('a cup left on the floor is swept up by the server beside it, with no ride open');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'sweep' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', alternate: 'Rizzo', station_room: 2,
+      post_room: 2, floor_grace_ms: 150 });
+    store.setDuty({ with: 'Rizzo', holder_away: true });
+    const rizzoP = world.add('Rizzo', { room: 2 });
+    world.floor.set(2, [world.item('chalice of the rain')]);
+    const rizzo = keeper(world, rizzoP, { cfg, store });
+    rizzo.chaliceMakeRoom = async () => {};
+    await rizzo.chaliceDuty();
+    ok(!has(world, rizzoP, /chalice/i), 'not inside the grace: the server that owns the ride goes first');
+    const swept = await runUntil(() => has(world, rizzoP, /chalice/i), [async () => { await rizzo.chaliceDuty(); }],
+      { limit: 40, pause: 20 });
+    ok(swept, 'after the grace it is picked up');
+    ok((world.floor.get(2) ?? []).length === 0, 'the floor is clear');
+    ok(rizzo.events.some(e => e.what === 'swept' && e.room === 2), 'on the ledger as swept');
+    ok(store.duty()?.with === 'Rizzo' && store.duty()?.lost === false, 'and the duty record says who has it');
+
+    // A cup somewhere else is somebody else's floor: nothing is walked to.
+    const loialP = world.add('Loial the Ogier', { room: 38 });
+    world.floor.set(2, [world.item('chalice of the rain')]);
+    const loial = keeper(world, loialP, { cfg, store });
+    loial.chaliceMakeRoom = async () => {};
+    loial.chaliceStep = async () => false;
+    loial.chaliceNextJob = () => null;
+    for (let i = 0; i < 10; i++) { await loial.chaliceSweep(cfg, store, 'Loial the Ogier', Date.now() + 10_000); }
+    ok(!has(world, loialP, /chalice/i), 'a server in another room does not sweep it');
+  }
+
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

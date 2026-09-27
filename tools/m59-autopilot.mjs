@@ -21887,6 +21887,37 @@ export class Autopilot {
       && CHALICE.match.test(String(c.rsc.get(o.nameRsc) || ''))) ?? null;
   }
 
+  // A LOOSE CUP IN THIS ROOM IS PICKED UP, WHATEVER THIS PROCESS REMEMBERS.
+  //
+  // The only pickup used to be the `ride:pickup` step, so it needed an open ride in THIS keeper's
+  // memory. A keeper restarted between a traveller's drink and the pickup — a keeper roll, a
+  // crash — starts with no ride, never looks at the floor, and the cup lies there until somebody
+  // happens to serve again. Measured 2026-09-27: 97 of 100 drinks were picked up (p50 2.4s, p90
+  // 14.5s); the other three were not, and one of them lay in room 2 from 20:05Z until it was
+  // picked up by hand at 20:48Z, across a keeper roll, while every ride ticket in between expired.
+  //
+  // Only after `floor_grace_ms`, so the server that owns the ride takes it first and does not
+  // report it lost. Returns true only when it spent the pass trying.
+  async chaliceSweep(cfg, store, me, now = Date.now()) {
+    const floor = this.chaliceOnFloor();
+    if (!floor) { this._chaliceFloorSince = null; return false; }
+    // Our own ride's pickup step takes it itself, with the ticket bookkeeping.
+    if (this._chaliceServe?.kind === 'ride' && this._chaliceServe.stage === 'pickup') return false;
+    const key = `${this.hereRoom()}:${floor.id}`;
+    if (this._chaliceFloorSince?.key !== key) this._chaliceFloorSince = { key, at: now };
+    const lying = now - this._chaliceFloorSince.at;
+    if (lying < (cfg.floor_grace_ms ?? 30_000)) return false;
+    await this.chaliceMakeRoom();
+    await this.s.lootFloor({ ids: [floor.id], maxItems: 1, overfarm: null }).catch(() => {});
+    await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
+    await new Promise(r => setTimeout(r, 800));
+    if (!this.chaliceInPack()) return true;              // tried; the next pass tries again
+    try { store.setDuty({ with: me, lost: false }); } catch {}
+    this.chaliceEvent('swept', { room: this.hereRoom(), seen_on_floor_ms: lying });
+    this._chaliceFloorSince = null;
+    return true;
+  }
+
   playerHere(name) {
     const c = this.s?.client;
     if (!name) return null;
@@ -22935,6 +22966,7 @@ export class Autopilot {
       try { store.setSupply({ have, target: cfg.holder_supply }); } catch {}
     }
     if (role === 'holder' || cup) this.chalicePublishDesk(cfg, store, me, cup, now);
+    if (!cup && await this.chaliceSweep(cfg, store, me, now)) return true;
 
     let st = this._chaliceServe;
     if (st && now > st.expires) {

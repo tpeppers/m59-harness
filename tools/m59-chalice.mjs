@@ -99,6 +99,11 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // How long the server waits for the traveller to show up, and then for the cup to hit
   // the floor, before giving up on that ticket.
   serve_ms: 90_000,
+  // A CUP LEFT ON THE FLOOR THIS LONG IS PICKED UP by the holder or alternate standing beside it,
+  // whatever ride it remembers (operator, 2026-09-27: "Keep the chalice off the floor in room2, it
+  // should only ever be dropped very briefly"). Longer than an ordinary pickup (p90 14.5s, max 52s
+  // over 100 rides that day), so the server that owns the ride gets there first.
+  floor_grace_ms: 30_000,
   // THE TIP. Offered after the cup arrives, only out of money the trip does not need.
   tip_amount: 300,
   tip_min: 50,
@@ -208,6 +213,7 @@ export const HUMAN_FRESH_MS = 90_000;
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
+  floor_grace_ms: [100, 600_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
   restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
