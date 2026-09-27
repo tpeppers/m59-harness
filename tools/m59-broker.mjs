@@ -10908,6 +10908,10 @@ const TOOLS = [
         description: 'shillings retained in hand when banking surplus, default 400' },
       sell_at_load: { type: 'number',
         description: 'go sell when weight or bulk reaches this fraction, default 0.85' },
+      min_sell_trip_value: { type: 'number',
+        description: 'a sell trip opened by pack load or stack count waits until the pack is estimated ' +
+          'to fetch at least this many shillings (unless 97% full). Default 10000; 0 sells at the ' +
+          'load threshold regardless of value, which a courier that stops taking loot at a ceiling needs' },
       drop_at_load: { type: ['number', 'null'],
         description: 'without travelling, drop expendable lowest-value loot one stack at a time ' +
           'until weight and bulk are below this fraction. Intended for confined shelter farming; ' +
@@ -11965,6 +11969,9 @@ const TOOLS = [
         p.policy.walkingMoney = Math.max(0, Number(a.walking_money) || 0);
       if (a.sell_at_load !== undefined)
         p.policy.sellAtLoad = Math.max(0, Math.min(1, Number(a.sell_at_load) || 0));
+      if (a.min_sell_trip_value !== undefined)
+        p.policy.minSellTripValue = a.min_sell_trip_value == null ? null
+          : Math.max(0, Number(a.min_sell_trip_value) || 0);
       if (a.drop_at_load !== undefined)
         p.policy.dropAtLoad = a.drop_at_load == null ? null
           : Math.max(0.05, Math.min(0.99, Number(a.drop_at_load) || 0.75));
