@@ -108,7 +108,27 @@ if (isMain) {
   // for the whole run. No cup anywhere: the rider walks, as provision already knows how to.
   const cupHolders = rows => HOLDERS.filter(a => (rows.find(r => r.agent === a)?.pack_items ?? [])
     .some(i => /chalice/i.test(String(i.name))));
+  // THE CUP HOLDER EATS BEFORE IT IS HELD AGAIN. A provision run holds the holder for its whole
+  // length, and two of these runners take turns, so the holder's keeper — whose eating rung sits
+  // behind the hold — never got a turn: Rizzo stood at vigor 80 with ten loaves aboard all evening
+  // (2026-09-27). One sitting per run, until the server says the stomach is full.
+  const FOODS = ['Inky-cap mushroom', 'meat pie', 'loaf of bread'];
+  const feedHolders = async (holders, rows) => {
+    for (const a of holders) {
+      const r = rows.find(x => x.agent === a);
+      const vigor = Number(r?.vigor?.value ?? r?.vigor);
+      if (!(vigor < 160)) continue;
+      for (const food of FOODS.filter(f => (r?.pack_items ?? []).some(i => i.name === f))) {
+        for (let n = 0; n < 6; n++) {
+          const ate = await call('act', { agent: a, verb: 'eat', target: food }).catch(() => null);
+          if ((ate?.messages ?? []).some(m => /too full/i.test(m))) return say(`  ${a} ate to full before the run`);
+          if (!ate) break;
+        }
+      }
+    }
+  };
   const provision = async (rider, wants, rows = []) => {
+    await feedHolders(cupHolders(rows), rows).catch(() => {});
     const out = [];
     const { scripts } = await loadFleetScripts();
     const r = await runNamed('provision', { agents: [...new Set([...cupHolders(rows), rider])].join(','),
