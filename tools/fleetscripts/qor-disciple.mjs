@@ -28,8 +28,11 @@
 //     -10, and nothing past about -15 (both negative, doer below act). ~104 kills from 0 to -10.
 //   * EVERY centipede room also spawns an EVIL creature (baby spider -10, spider -30, larva -10,
 //     giant rat -20), and killing one of those RAISES karma — a baby spider at -11 undoes about
-//     four centipede kills. So the hunt list is the good quarry ONLY. Room 545 is half centipede
-//     (cap 12), the best ratio of the centipede rooms; 554, the fleet's usual station, is 35%.
+//     four centipede kills. So the hunt list is the good quarry ONLY.
+//   * THE ROOM IS 554, NOT THE ONE WITH THE BEST RATIO. 545 is half centipede (cap 12) on paper, and
+//     measured 2026-09-27 it produced ZERO kills in 30 minutes for two characters: "the coarse grid
+//     found no route beside the target, and the fine grid could not reach one either". 554 is 35%
+//     centipede but the fleet has farmed it for weeks, so its approaches are known to work.
 //   * karma is stored in hundredths and read truncated (player.kod:6429), so -10.99 reads -10.
 //
 // THE GATE (spell.kod:456-498): GetRequiredKarma is level * -10 for Qor, KarmaCheck fails while
@@ -70,9 +73,9 @@ export const script = {
   params: {
     agents: { type: 'agents', required: true },
     karmaTo: { type: 'number', default: -10, describe: 'the karma to reach (level-1 Qor needs <= -10)' },
-    room: { type: 'number', default: 545, describe: 'where to farm (545: half centipede, cap 12)' },
+    room: { type: 'number', default: 554, describe: 'where to farm (554: the proven centipede station)' },
     quarry: { type: 'string', default: 'centipede', describe: 'the GOOD creature to hunt (comma list); never an evil one' },
-    home: { type: 'number', default: 545, describe: 'where to go after buying (back to farm by default)' },
+    home: { type: 'number', default: 554, describe: 'where to go after buying (back to farm by default)' },
     unholyResolve: { type: 'string', default: 'false', describe: 'true = also buy unholy resolve at the Bone Priestess (2141)' },
   },
   async steps(p, agentArg) {
