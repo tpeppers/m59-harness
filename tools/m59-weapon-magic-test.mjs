@@ -9,7 +9,7 @@
 //   - the swap stays inside the character's own weapon priority (no forced sword)
 import { classifyWeapon, lapsedWeapon, dedicatedWeapon, WeaponMagicBook, magicSwap }
   from './m59-weapon-magic.mjs';
-import { weaponRanking, inventorySalePlan, equipBest, armourOf } from './m59-skills.mjs';
+import { weaponRanking, inventorySalePlan, equipBest, armourOf, isOwnSummon } from './m59-skills.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
@@ -254,6 +254,19 @@ console.log('a shattered enchanted weapon is not a magic spare');
   book2.record(2, 'short sword', 'A short sword.');
   const sum2 = book2.summary(items, 2, undefined, new Set([1]));
   ok('a weapon the server refused as broken is excluded too', sum2.magic_spares === 0 && magicSwap(sum2) === null);
+}
+
+// 2026-09-27: after a keeper restart `_summoned` is empty, so a conjured weapon the look had read as
+// made ("shimmers insubstantially") was treated as unidentified loot and never wielded.
+console.log('the look decides what is a summon');
+{
+  const o = { id: 77, rarity: 100 };
+  ok('a weapon the look read as made is our summon, with no id memory at all',
+     isOwnSummon({ _madeItemIds: new Set([77]) }, o) === true);
+  ok('a weapon the look read as NOT made is not, whatever the id memory says',
+     isOwnSummon({ _summoned: new Set([77]), _notMadeIds: new Set([77]) }, o) === false);
+  ok('an unread weapon falls back to the id memory', isOwnSummon({ _summoned: new Set([77]) }, o) === true);
+  ok('and with neither it is not ours', isOwnSummon({}, o) === false);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

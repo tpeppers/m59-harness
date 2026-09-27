@@ -304,7 +304,20 @@ export function isMagicGrade(o = null) {
 // keeper wield its own unread Create Weapon result therefore trusted a number that can come to
 // name looted magic — 2026-09-27, Scooter was wielding an UNIDENTIFIED short sword that his
 // keeper's look had read as not conjured. A look that says "not made" outranks the memory.
-export const isOwnSummon = (c, o) => !!o && !!c?._summoned?.has(o.id) && !c?._notMadeIds?.has(o.id);
+//
+// AND THE LOOK DECIDES IN BOTH DIRECTIONS. A summon "shimmers insubstantially"; a real magic item has
+// "something odd about it you can't put your finger on" — distinct sentences (operator, 2026-09-27).
+// The keeper's weapon-magic book reads that and publishes it as `_madeItemIds` / `_notMadeIds`. The
+// remembered-id set `_summoned` is in-memory and EMPTY after every keeper restart, so a conjured
+// weapon the look had already read as made was treated as unidentified loot and never wielded:
+// Fozzie stood in the stage room with an enchanted conjured hammer unused. The id memory is now
+// only the fallback for a weapon nobody has looked at yet.
+export const isOwnSummon = (c, o) => {
+  if (!o) return false;
+  if (c?._madeItemIds?.has?.(o.id)) return true;
+  if (c?._notMadeIds?.has?.(o.id)) return false;
+  return !!c?._summoned?.has(o.id);
+};
 
 // HOW MANY OF THESE ARE BEING HELD BACK, AND WHY — because "nothing wieldable in the pack" and
 // "everything wieldable in the pack is unread" must never print the same. That conflation is the
