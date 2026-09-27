@@ -91,5 +91,17 @@ console.log('\nand the setting can finally be reached from the broker');
      /applies ONLY to the room this character/.test(broker));
 }
 
+console.log('\na cap full of our own prey is not a reason to leave');
+{
+  // 2026-09-27, Ukgoth: 18/15 was three Guardians of Zjiria and fifteen trolls. The denial
+  // fired and two troll hunters walked out mid-streak for room 516 — the cap was full of the
+  // very thing they were killing, and every kill freed a slot.
+  const at = pilot.indexOf("this.note('this room is capped by things we will not fight'");
+  const gate = at < 0 ? '' : pilot.slice(Math.max(0, at - 900), at);
+  ok('the capped-room denial is still findable', at > 0);
+  ok('it fires only when none of our prey is present',
+     /capped\.blocked\.length\s*&& !\(capped\.prey_present > 0\)/.test(gate));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

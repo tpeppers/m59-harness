@@ -19785,7 +19785,13 @@ export class Autopilot {
               note: 'the cap is a room-wide total, so what we decline to kill is what ' +
                     'stops our prey appearing. Leaving would not reset it.' });
           }
-        } else if (capped?.full && !capped.clearable.length && capped.blocked.length) {
+        // A CAP FULL OF OUR OWN PREY IS NOT A BLOCKED ROOM. Every kill frees a slot, so the room
+        // keeps producing for as long as we keep killing. 2026-09-27, Ukgoth: 18/15 was three
+        // Guardians of Zjiria and fifteen trolls, and the denial fired anyway — Janice and Animal
+        // walked out of the troll room mid-streak (five kills between them) for room 516. Only a
+        // cap with NONE of the prey present is one that nothing we do will reopen.
+        } else if (capped?.full && !capped.clearable.length && capped.blocked.length
+                   && !(capped.prey_present > 0)) {
           // Cannot clear it, so the room is finished for us — and it will still be
           // finished when we come back, because an abandoned full room keeps its
           // generator switched off. Go, and prefer somewhere else next time.
