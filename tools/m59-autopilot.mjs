@@ -27543,20 +27543,33 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     // Do not truncate before looking for the assignment.  Ranking is global, whereas
     // assignedRoom is an operator/fleet decision and must be allowed to outrank it.
+    const mine = this.policy.assignedRoom;
+    // AN ASSIGNMENT OUTRANKS THE BYSTANDER CEILING — and only that. The ceiling is how a keeper
+    // picks a room ON ITS OWN; an assigned room is somebody's decision about exactly that risk.
+    // Ukgoth generates trolls and is rejected for its level-120 Guardians, so a troll hunter
+    // assigned 599 farmed it once inside and, the moment anything took it out, walked to 516
+    // instead — 2026-09-27, Animal and Janice, each noting "leaving for the explicitly assigned
+    // farming room" on the way somewhere else. The survival ladder is unchanged.
+    const assignedOverride = r => !!r.rejected && mine != null && r.room === mine;
     const rooms = huntingGrounds(spawns, want,
       { maxDanger: ceiling, limit: Number.MAX_SAFE_INTEGER })
-      .filter(r => !r.rejected && r.room !== room?.num && !this.unreachable.has(r.room))
+      .filter(r => (!r.rejected || assignedOverride(r)) && r.room !== room?.num && !this.unreachable.has(r.room))
       // And not one we have already refused for having no usable wall or an irrecoverably
       // blocked spawn cap. Without this the keeper walks out and ranks the room it just
       // abandoned as the best destination again.
       .filter(r => !deniedFarmRooms.has(r.room))
       .filter(r => !this.bansDestination(r.room));
+    const kept = rooms.find(assignedOverride);
+    if (kept && this.notedAssignedOverride !== mine) {
+      this.notedAssignedOverride = mine;
+      this.note('keeping the assigned room over the threat ceiling', { room: mine,
+        ceiling_says: kept.rejected, why: 'the assignment is an explicit order about that risk' });
+    }
     // AN ASSIGNMENT OUTRANKS THE SPAWN TABLE. Every caller takes [0], so putting the
     // assigned room at the front is the whole of "go back where you were put" — and
-    // it stays subject to the same filters above, so an assignment to somewhere that
+    // it stays subject to the other filters above, so an assignment to somewhere that
     // cannot generate the prey, or that we have proven unreachable, is ignored rather
     // than obeyed into a corner.
-    const mine = this.policy.assignedRoom;
     return preferAssignedRoom(rooms, mine === room?.num ? null : mine, 8);
   }
 
