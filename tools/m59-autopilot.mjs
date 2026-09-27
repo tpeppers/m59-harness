@@ -17863,6 +17863,20 @@ export class Autopilot {
       this.settleTries = 0;
     }
 
+    // EAT BEFORE RESTING, WHEN RESTING CANNOT GET THERE. Past the danger rungs above, and ahead of
+    // every wall and rest below: a floor above the rest cap (80) is reached only by eating, and
+    // this stage used to take the pass first. Measured 2026-09-27 on the Ukgoth troll crew, floor
+    // 160, bread in every pack. A hunter in the troll room was hit (fight-back answered), stepped
+    // onto a wall at 78 as "hurt" (vigor under 40%), rested to 80, left the wall and fought again.
+    // It never reached passFarm's provision, the only place that ate. The chalice alternate parked
+    // at the station every pass (passErrand), so it never reached the idle branch's eatToFloor.
+    // Both sat at 80 with food for hours; room 2 was 42% of fleet time that day, 98% of it dead,
+    // and 64% of that was this. Fed by hand, a loaf was accepted at once (78 -> 97): the server
+    // had room, the keeper never asked.
+    //
+    // eatToFloor is inert below a floor of 81, so the rest of the fleet behaves exactly as before.
+    if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
+
     // 3. Hurt but safe. Resting next to something hostile just feeds it — out in the
     //    open. In a proven safe spot "next to something hostile" is not a danger at
     //    all, and refusing to rest there is refusing the single largest advantage the
