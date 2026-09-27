@@ -9,7 +9,7 @@
 //   - the swap stays inside the character's own weapon priority (no forced sword)
 import { classifyWeapon, lapsedWeapon, dedicatedWeapon, WeaponMagicBook, magicSwap }
   from './m59-weapon-magic.mjs';
-import { weaponRanking, inventorySalePlan } from './m59-skills.mjs';
+import { weaponRanking, inventorySalePlan, equipBest } from './m59-skills.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
@@ -128,6 +128,38 @@ console.log('Autopilot: the lapse re-opens, reports, and the status carries it')
   ok('the lapse is noted, ledgered, counted, and the swap made due',
      notes.includes('ENCHANTMENT LAPSED') && ledger.includes('enchant_lapse') &&
      st.lapses === 1 && rig._magicSwapDue === true);
+}
+
+// 2026-09-27: Animal reconnected in Ukgoth to shed aggro, the new client had no magic set, the
+// sweep that rebuilds it sits in a pass rung the recovery ladder pre-empted, and every fight's
+// equip picked the conjured mundane long sword over the enchanted one in his pack.
+console.log('a reconnect cannot blind the equip: the set is rebuilt from the book at ranking time');
+{
+  const names = ['long sword', 'long sword'];
+  const fresh = () => ({ inventory: [{ id: 1, nameRsc: 1000, flags: 0 }, { id: 2, nameRsc: 1001, flags: 0 }],
+    rsc: { get: r => names[r - 1000] ?? '' },
+    equipment: () => ({ known: true, equipped: [{ id: 1, name: 'long sword' }] }) });
+  const rig = { policy: { preferMagicWeapon: true } };
+  for (const m of ['weaponMagicBook', 'packWeapons', 'wieldedWeaponId', 'syncMagicSet'])
+    rig[m] = Autopilot.prototype[m].bind(rig);
+  rig.weaponMagicBook().record(1, 'long sword', 'It shimmers insubstantially.');
+  rig.weaponMagicBook().record(2, 'long sword', 'This weapon has been dedicated to Kraanan\'s glory.');
+  const c = fresh();
+  rig.s = { client: c };
+  ok('a fresh client starts with no magic set', c._magicWeaponIds === undefined);
+  rig.syncMagicSet(c);
+  ok('syncMagicSet restores it from the book, and marks the conjured one',
+     c._magicWeaponIds?.has(2) && !c._magicWeaponIds.has(1) && c._madeItemIds?.has(1));
+
+  // equipBest itself asks: with the hook, the enchanted twin is already in hand and nothing is sent.
+  const c2 = { ...fresh(), using: new Set([2]) };
+  const sent = [];
+  const s = { need: () => c2, beforeEquip: (cl) => rig.syncMagicSet(cl),
+              pacer: { submit: async (k, f) => { sent.push(k); return f(); } } };
+  c2.use = () => {}; c2.waitFor = async () => ({ events: [] });
+  const r = await equipBest(s, { priority: ['long sword'], refresh: false, maxTries: 1 });
+  ok('equipBest ranks with the hook: it keeps the enchanted sword and sends no use',
+     r?.id === 2 && r?.already_wielded === true && !sent.includes('use'));
 }
 
 console.log('inventorySalePlan: a conjured weapon is never offered');

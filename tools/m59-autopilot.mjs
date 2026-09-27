@@ -1750,6 +1750,8 @@ export function splitBySourcing(requests = [], { policy = null, plan = null } = 
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
+    // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
+    if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
     attachReplayRecorder(session,this);
     attachSurvivalTrace(session, this);
     this.survivalRecorder = createSurvivalDecisionRecorder(session.name);
@@ -27170,17 +27172,32 @@ export class Autopilot {
     } finally { this._weaponMagicBusy = false; }
   }
 
-  // THE ONE-SECOND HALF OF THE UKGOTH STRATEGY: keep the client's magic set current, and when the
-  // weapon in hand is not known magic but a same-rank spare is, wield the spare. equipBest does
-  // the swap and its verification; the ranking's tie-break is what makes it choose the spare.
-  async applyMagicPreference(c = this.s.client, items = this.packWeapons(c)) {
+  // THE CLIENT'S MAGIC SET, REBUILT FROM THE BOOK. Synchronous, no wire. `weaponRanking` breaks a
+  // tie toward `c._magicWeaponIds`, and that set lives on the CLIENT — which a reconnect replaces —
+  // while the readings live in the book, which survives it. The set used to be written only by the
+  // magic sweep inside passFarm, a rung the recovery ladder pre-empts for minutes at a time, so a
+  // keeper that reconnected to shed aggro fought with an empty set: 2026-09-27 Animal went back to
+  // a conjured mundane long sword in Ukgoth with the enchanted twin in his pack, and the trolls
+  // rule stood him down "not ready". Every fight entry calls this, so the equip inside the fight
+  // always ranks with the book's answer.
+  syncMagicSet(c = this.s?.client, items = null) {
+    if (!c) return null;
     const on = this.policy?.preferMagicWeapon === true;
-    const sum = this.weaponMagicBook().summary(items, this.wieldedWeaponId(c));
+    const sum = this.weaponMagicBook().summary(items ?? this.packWeapons(c), this.wieldedWeaponId(c));
     // WHAT WAS CONJURED, whatever the policy: the sale plan skips it (inventorySalePlan), because
     // no merchant takes a made item and offering one is a refusal that reads like a bad price.
     c._madeItemIds = new Set(sum.weapons.filter(w => w.made === true).map(w => w.id));
     c._magicWeaponIds = on
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
+    return sum;
+  }
+
+  // THE ONE-SECOND HALF OF THE UKGOTH STRATEGY: keep the client's magic set current, and when the
+  // weapon in hand is not known magic but a same-rank spare is, wield the spare. equipBest does
+  // the swap and its verification; the ranking's tie-break is what makes it choose the spare.
+  async applyMagicPreference(c = this.s.client, items = this.packWeapons(c)) {
+    const on = this.policy?.preferMagicWeapon === true;
+    const sum = this.syncMagicSet(c, items);
     const due = this._magicSwapDue; this._magicSwapDue = false;
     if (!on) return null;
     const priority = this.weaponPriorityNow?.() ?? null;

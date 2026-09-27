@@ -643,6 +643,13 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
   const broken = brokenSet(c);
+  // THE OWNER'S LAST WORD ON WHAT IS MAGIC, read at the moment of ranking. A keeper registers
+  // `s.beforeEquip` to rebuild `c._magicWeaponIds` from its reading book, because that set lives on
+  // the client and a reconnect replaces the client — and ten call sites equip, a fight among them.
+  // Without this, a keeper that had just reconnected ranked its conjured mundane twin level with
+  // the enchanted one and kept it (Animal in Ukgoth, 2026-09-27). A hook that throws must not
+  // stop anyone arming: an unranked equip is still better than none.
+  try { s.beforeEquip?.(c); } catch { /* rank with whatever the client already holds */ }
   const ranked = weaponRanking(c, { priority, banned, allowUnrevealed });
   if (!ranked.length) {
     // "NOTHING WIELDABLE" AND "EVERY WEAPON HERE IS UNREAD" MUST NOT PRINT THE SAME. A character
