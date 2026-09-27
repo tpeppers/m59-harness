@@ -192,7 +192,35 @@ const describe = e => e.stdin ? `repl<<< ${e.stdin}` : e.cmd.join(' ');
 say(`${AGENT}: training until "${UNTIL}" is learnable` +
     (TARGETS.length ? ` and ${TARGETS.map(t => `${t.name}>=${t.to}`).join(', ')}` : '') +
     ` — ${ENTRIES.map(describe).join('  |  ')}`);
+// YIELDING THE CHARACTER TO ANOTHER ERRAND, BETWEEN RUNS. Operator, 2026-09-27: a Shal'ille disciple
+// is to act as the guild hall's door-man for a courier who cannot enter it. The errand writes
+//     <broker root>/substrate/history/<fleet>/training-yield/<agent>   (content: who wants it, and why)
+// and this runner, at the next run boundary — never mid-run — writes `<agent>.yielded` beside it
+// and waits until the request file is gone, then deletes its acknowledgement and carries on. The
+// errand waits for the acknowledgement before it claims the character, so nothing contends for the
+// body: a heal loop holds a commander lease no other claim could take. A request older than
+// --yield-max minutes (default 30) is treated as abandoned and training resumes.
+async function honourYield() {
+  let h = null; try { h = await brokerHealth(); } catch { return; }
+  const dir = join(h.root, 'substrate', 'history', h.fleet, 'training-yield');
+  const req = join(dir, AGENT), ack = join(dir, `${AGENT}.yielded`);
+  if (!existsSync(req)) return;
+  const maxMs = Math.max(1, Number(arg('yield-max') || 30)) * 60_000;
+  const why = (() => { try { return readFileSync(req, 'utf8').trim().slice(0, 200); } catch { return '?'; } })();
+  say(`yielding ${AGENT} between runs: ${why}`);
+  const { writeFileSync, unlinkSync, statSync } = await import('node:fs');
+  try { writeFileSync(ack, `${new Date().toISOString()} keep-training pid ${process.pid}\n`); } catch {}
+  while (existsSync(req) && !stopping) {
+    let age = 0; try { age = Date.now() - statSync(req).mtimeMs; } catch {}
+    if (age > maxMs) { say(`yield request is ${Math.round(age / 60000)} min old — treating it as abandoned`); break; }
+    await sleep(10_000);
+  }
+  try { unlinkSync(ack); } catch {}
+  say(`${AGENT} is back from the yield`);
+}
+
 for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
+  await honourYield();
   await waitReady();
   const g0 = await gateOpen();
   const want = await abilitiesMet();
