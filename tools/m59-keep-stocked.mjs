@@ -103,10 +103,15 @@ if (isMain) {
   // quoting, and "orc tooth" has a space in it. `wants` goes over as a real array.
   const { loadFleetScripts, runNamed } = await import('./m59-fleetlib.mjs');
   const { fleetScript } = await import('./m59-fleetscript.mjs');
-  const provision = async (rider, wants) => {
+  // ONLY THE HOLDER THAT ACTUALLY CARRIES THE CUP. Passing every possible holder held one that had
+  // nothing to do, and the lease fight over it (a DUM re-claiming the troll crew every 30 s) was noise
+  // for the whole run. No cup anywhere: the rider walks, as provision already knows how to.
+  const cupHolders = rows => HOLDERS.filter(a => (rows.find(r => r.agent === a)?.pack_items ?? [])
+    .some(i => /chalice/i.test(String(i.name))));
+  const provision = async (rider, wants, rows = []) => {
     const out = [];
     const { scripts } = await loadFleetScripts();
-    const r = await runNamed('provision', { agents: [...new Set([...HOLDERS, rider])].join(','),
+    const r = await runNamed('provision', { agents: [...new Set([...cupHolders(rows), rider])].join(','),
       rider_names: rider, wants, buy_gear: false, stage: ROOM },
       { scripts, fleetScript, onLog: (...a) => out.push(a.join(' ')) }).catch(e => ({ ok: false, why: e.message }));
     return { r, out: out.join('\n') };
@@ -132,7 +137,7 @@ if (isMain) {
           else {
             lastTrip = Date.now();
             say(`short of ${plan.short.join(', ')} (${JSON.stringify(have)}); ${rider.agent} fetches ${JSON.stringify(plan.wants)}`);
-            const run = await provision(rider.agent, plan.wants);
+            const run = await provision(rider.agent, plan.wants, rows);
             const tail = run.out.split('\n').filter(l => /provision|took|bought|SHORT|refus|lock/i.test(l)).slice(-6);
             for (const l of tail) say('  ', l.trim());
             for (const item of Object.keys(WANT)) {
