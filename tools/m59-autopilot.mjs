@@ -1460,6 +1460,19 @@ const BANKS = [
 //
 // A bank is where MONEY goes; this is where GOODS go. Which one a trip aims at depends on
 // which threshold opened it — see bankRun.
+// WHAT A TOWN TRIP IS FOR, by the trigger that opened it (checkIfShouldSell). `town_trip_opened`
+// records both, so a trip can be judged against its purpose: a SELL trip should carry enough to be
+// worth the road (MIN_SELL_TRIP_VALUE), a RESTOCK trip should buy enough not to repeat soon.
+export const TRIP_PURPOSE = Object.freeze({
+  load: 'sell', stacks: 'sell', unweighable: 'sell', broke: 'sell',
+  supply: 'restock', food: 'food', standing_order: 'order', policy: 'policy', bank: 'bank',
+});
+// Operator, 2026-09-27: "town trips should aim to be $10k+ if their purpose is for selling".
+// Overridable per character as policy.minSellTripValue.
+export const MIN_SELL_TRIP_VALUE = 10_000;
+// A pack this full goes to market whatever it is worth: there is no room left to make it worth more.
+export const SELL_REGARDLESS_AT = 0.97;
+
 export const MARKET_STOPS = Object.freeze([
   { room: 113, name: "Fehr'loi Qan, Barloque" },
   { room: 109, name: 'Herbutte, Barloque', maxStack: 25 },
@@ -23981,11 +23994,25 @@ export class Autopilot {
       this.note('overfarming - holding the town trip', { ...hold,
         why: 'the pack is full, which is when overfarming starts: keep killing and trade up ' +
              'until ' + hold.target_percent + '% of capacity has been sifted' });
-    if (!saleCooling && fullness >= at && !hold)
-      return { sell: true, trigger: 'load', fullness,
+    // A SELL TRIP HAS TO BE WORTH THE ROAD (operator, 2026-09-27: "$10k+ if their purpose is for
+    // selling"). Below the value, a full-enough pack keeps farming until it is worth more or has
+    // no room left at all (SELL_REGARDLESS_AT). The estimate is a floor — most items are unpriced
+    // — so a pack of unpriced loot still goes when it is truly full.
+    const worth = (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)) ? this.packSaleValue() : null;
+    const cheap = worth && worth.value < this.minSellTripValue() && fullness < SELL_REGARDLESS_AT;
+    if (cheap && !hold && !saleCooling && Date.now() - (this._cheapTripNotedAt ?? 0) > 600_000 &&
+        (this._cheapTripNotedAt = Date.now()))
+      this.note('sell trip held: pack worth too little', {
+        estimated_value: worth.value, min_sell_value: this.minSellTripValue(),
+        unpriced_stacks: worth.unpriced, fullness: Number(fullness.toFixed(3)), stacks,
+        why: `the pack would fetch about ${worth.value}, under the ${this.minSellTripValue()} a sell ` +
+             `trip should carry; it goes when it is worth that or reaches ${Math.round(SELL_REGARDLESS_AT * 100)}%` });
+    if (!saleCooling && fullness >= at && !hold && !cheap)
+      return { sell: true, trigger: 'load', fullness, estimated_value: worth?.value,
                why: `pack is ${Math.round(fullness * 100)}% of capacity` };
-    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold)
-      return { sell: true, trigger: 'stacks', stacks, why: `${stacks} stacks, at the pack ceiling` };
+    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold && !cheap)
+      return { sell: true, trigger: 'stacks', stacks, estimated_value: worth?.value,
+               why: `${stacks} stacks, at the pack ceiling` };
 
     // RUNNING OUT IS A REASON TO GO. A PART-FULL PACK IS NOT.
     //
@@ -25075,8 +25102,8 @@ export class Autopilot {
     // run and a full pack are not alternatives — a character is routinely both, and it is
     // already walking past the specialists. See `packWantsMarket`.
     const wantsMarket = packFull || brokeWithGoods || this.packWantsMarket();
-    this.townTrip = { target, nextService: -1, startedAt: Date.now(),
-      marketStops: wantsMarket ? MARKET_STOPS.filter(m=>!this.bansDestination(m.room)) : null };
+    this.openTownTrip(target, { sellCall, errand, wantsMarket, supplyTrip, starving,
+      needsCashFirst, brokeWithGoods });
     if (wantsMarket && !packFull && !brokeWithGoods)
       this.note('carrying enough to be worth the circuit while we are here', {
         trigger: sellCall.trigger, stops: MARKET_STOPS.map(m => m.name),
@@ -25084,6 +25111,57 @@ export class Autopilot {
              'ceiling anyway — the equipment and gem counters are on the way' });
     this.postShoppingPlan(this.shoppingPlan());
     return this.continueTownTrip();
+  }
+
+  // EVERY TOWN TRIP OPENS HERE, AND SAYS WHY. Operator, 2026-09-27: "group up all such code and
+  // put it through a 'make town trips' telemetry/bookkeeping method, so we can understand
+  // conceptually these things to better sort out bugs vs intentional decisions". A trip used to
+  // leave only `town_trip_completed` — its cash, never its cause — so a hunter making a
+  // three-hundred-shilling trip every twenty minutes and a character lapping a road with nothing
+  // to sell looked the same as a full pack going to market. `town_trip_opened` names the
+  // trigger, the purpose it serves, and what the pack was estimated to fetch when it left;
+  // `town_trip_completed` carries the same fields, so the two pair up by `trip_started_at`.
+  openTownTrip(target, { sellCall = {}, errand = null, wantsMarket = false, supplyTrip = false,
+                         starving = false, needsCashFirst = false, brokeWithGoods = false } = {}) {
+    const startedAt = Date.now();
+    const trigger = sellCall.trigger ?? (starving ? 'food' : 'bank');
+    const purpose = TRIP_PURPOSE[trigger] ?? (supplyTrip ? 'restock' : starving ? 'food' : 'other');
+    const value = this.packSaleValue();
+    this.townTrip = { target, nextService: -1, startedAt, trigger, purpose,
+      estimatedValue: value.value,
+      marketStops: wantsMarket ? MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
+    try {
+      this.ledgerEvent('town_trip_opened', { trip_started_at: startedAt, trigger, purpose,
+        errand, why: sellCall.why ?? null, to: target?.room ?? null, to_name: target?.name ?? null,
+        fullness: Number.isFinite(sellCall.fullness) ? Number(sellCall.fullness.toFixed(3)) : null,
+        stacks: (this.s.client?.inventory ?? []).length,
+        estimated_value: value.value, unpriced_stacks: value.unpriced,
+        min_sell_value: this.minSellTripValue(),
+        missing: sellCall.missing ?? null, market_circuit: !!wantsMarket,
+        supply_trip: !!supplyTrip, needs_cash_first: !!needsCashFirst,
+        broke_with_goods: !!brokeWithGoods,
+        room: this.s.world?.room?.num ?? null });
+    } catch { /* never let accounting interrupt play */ }
+    return this.townTrip;
+  }
+
+  // WHAT THE PACK WOULD FETCH, ESTIMATED. Shillings excluded. ITEM_VALUE prices 89 of 249 items, so
+  // this is a floor, and `unpriced` says how many stacks it could not price.
+  packSaleValue() {
+    const c = this.s.client;
+    let value = 0, unpriced = 0;
+    for (const o of c?.inventory ?? []) {
+      const name = String(c.rsc?.get?.(o.nameRsc) ?? '').toLowerCase();
+      if (!name || /shilling/.test(name)) continue;
+      const v = this.itemValue(name, o.amount);
+      if (v > 0) value += v; else unpriced += 1;
+    }
+    return { value: Math.round(value), unpriced };
+  }
+
+  minSellTripValue() {
+    const v = Number(this.policy.minSellTripValue);
+    return Number.isFinite(v) && v >= 0 ? v : MIN_SELL_TRIP_VALUE;
   }
 
   async continueTownTrip() {
@@ -25247,7 +25325,9 @@ export class Autopilot {
           completed_at: this.lastTownServiceAt, room: this.s.world?.room?.num ?? null,
           purse: Array.isArray(this.s.client.inventory) ? this.purseNow() : null,
           accounts: balancesFor(who) });
-        if (income) this.ledgerEvent('town_trip_completed', income);
+        if (income) this.ledgerEvent('town_trip_completed', { ...income,
+          trigger: trip.trigger ?? null, purpose: trip.purpose ?? null,
+          estimated_value_at_open: trip.estimatedValue ?? null });
       }
     } catch { /* never let accounting interrupt play */ }
     this.progress('finished the shopping trip');
