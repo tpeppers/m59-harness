@@ -2452,6 +2452,21 @@ class KeeperProxy {
         }])),
       },
     };
+    // WHICH WEAPONS ARE MAGIC, carried across the rebuild like every other field above.
+    //
+    // `equipBest` breaks a tie toward `c._magicWeaponIds` (m59-skills.mjs weaponRanking), and
+    // the keeper sets that on its OWN client from its reading book. This rebuild never carried
+    // it, so `equip_best` through the broker ranked an enchanted long sword level with its
+    // mundane twin and kept the one in hand. Measured 2026-09-27: the ukgoth-trolls rule
+    // dedicated Animal's spare long sword (read `enchanted` a minute later), ran equip_best two
+    // seconds after the hand-back, and he went on holding the conjured mundane one — so the
+    // crew stood at the stage room "not ready" with a magic weapon in the pack. The readings are
+    // the keeper's (`autopilot_status.weapon_magic`); nothing here re-derives them.
+    const wm = s.autopilot_status?.weapon_magic;
+    const wmRows = Array.isArray(wm?.weapons) ? wm.weapons : [];
+    client._magicWeaponIds = wm?.prefer_magic === true
+      ? new Set(wmRows.filter(w => w.bypasses_nonmagic === true).map(w => Number(w.id))) : null;
+    client._madeItemIds = new Set(wmRows.filter(w => w.made === true).map(w => Number(w.id)));
     this._client = client;
     this._client._stateAt = this._stateAt;
     return client;

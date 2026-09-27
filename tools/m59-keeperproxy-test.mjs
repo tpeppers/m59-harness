@@ -278,5 +278,25 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
      'now forwards. Remove them: an exemption nobody rechecks is how the sweep stops working.');
 }
 
+// THE PRIVATE FIELDS THE WEAPON RANKING READS, 2026-09-27. `weaponRanking` breaks a tie toward
+// `c._magicWeaponIds`; the keeper sets it on its own client and this rebuild did not, so
+// `equip_best` through the broker kept a mundane long sword in Animal's hand with an enchanted
+// twin in his pack, and the troll crew stood at the stage room "not ready". Any of these the
+// ranking reads must be assigned on the proxy's client too, from the keeper's own readings.
+{
+  const skills = read('m59-skills.mjs');
+  const start = skills.indexOf('export function weaponRanking');
+  const end = start < 0 ? -1 : skills.indexOf('\nexport ', start + 10);
+  const ranking = start < 0 ? '' : skills.slice(start, end < 0 ? undefined : end);
+  const fields = [...new Set([...ranking.matchAll(/\bc\._(magicWeaponIds|madeItemIds)\b/g)].map(m => m[1]))];
+  ok('weaponRanking was found and reads the magic set', fields.includes('magicWeaponIds'));
+  for (const f of fields)
+    ok(`the proxy's rebuilt client carries _${f}`, proxyBody.includes(`client._${f} =`),
+       `weaponRanking reads c._${f}; KeeperProxy's client getter never assigns it, so every ` +
+       'keeper-backed equip_best ranks without it.');
+  ok('the magic set is taken from the keeper, not re-derived',
+     /autopilot_status\?\.weapon_magic/.test(proxyBody));
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
