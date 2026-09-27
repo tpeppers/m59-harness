@@ -252,6 +252,7 @@ async function read(agent, tries = 2) {
     roomName: s?.where?.name ?? '',
     health: pct(s?.vitals?.health), hp: s?.vitals?.health,
     mana: s?.vitals?.mana, karma: s?.karma?.value ?? null,
+    vigor: Number(s?.vigor?.value ?? s?.vitals?.vigor?.value ?? NaN),
     spells: (s?.spells ?? []).map(x => String(x.name ?? x).toLowerCase()),
     busy: String(s?.job?.busy ?? ''),
   };
@@ -560,6 +561,17 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
 
   const h = await read(HEALER);
   const p = await read(PATIENT);
+  // VIGOR IS THE MANA CLOCK, AND RESTING STOPS AT 80. An inky cap is +50; eaten under 150 so it
+  // never overshoots 200 (where `eat` refuses). This loop HOLDS the healer, so the keeper's own
+  // eating (at <=150 since 097d456) never runs for him — measured 2026-09-27, Statler at 78 vigor
+  // carrying 20 caps through a paired run. Measured on the drill: ~103 s a round -> ~68 s with caps.
+  if (h.ok && Number.isFinite(h.vigor) && h.vigor < 150 && round % 3 === 1) {
+    const pack = await packOf(HEALER);
+    if (countOf(pack, /inky/i) > 0) {
+      const r = await call('act', { agent: HEALER, verb: 'eat', target: 'Inky-cap mushroom' }, 30_000).catch(e => ({ error: e.message }));
+      console.log(`  healer ate an inky cap at vigor ${h.vigor}${r?.error ? ' — ' + r.error : ''}`);
+    }
+  }
   if (!h.ok || !p.ok) {
     // Tolerate a bad read; give up only if it keeps happening. A keeper that is briefly
     // unreadable is the ordinary state of a character being pulled off a fight.
