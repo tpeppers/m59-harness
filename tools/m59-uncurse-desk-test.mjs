@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // WHO GETS A REMOVE CURSE, AND WHAT A RELEASE SAYS, OFFLINE.   node tools/m59-uncurse-desk-test.mjs
-import { suspects } from './m59-uncurse-desk.mjs';
+import { suspects, castVerdict } from './m59-uncurse-desk.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 
 let passed = 0, failed = 0;
@@ -35,6 +35,17 @@ ok('a character cast on within the cooldown is skipped', !cooled.some(s => s.age
 ok('the release line names the item', unCursedFromSaid('Your short sword loses its ominous luster.') === 'short sword');
 ok('other lines name nothing', unCursedFromSaid('Your short sword seems a little more... ordinary.') === null);
 ok('the cast\'s own line is recognised', UNCURSE_SAID.test("Shal'ille tears the cursed item from your body."));
+
+// 2026-09-27: the first live hour read "no mana spent" as "nothing cursed" while the desk was simply
+// out of emeralds, and a resting caster read the same way.
+const NO_REAGENT = ["You don't have the reagents to cast remove curse!"];
+ok('no emerald is not "clean", and is retried',
+   castVerdict(NO_REAGENT).verdict === 'no_reagents' && castVerdict(NO_REAGENT).retry === true);
+ok('a resting caster is retried', castVerdict(['You find yourself unable to cast a spell.']).retry === true);
+ok('"detects no accursed items" is clean',
+   castVerdict(["Shal'ille detects no accursed items to strip away."]).verdict === 'clean');
+ok('a spent cast is a lift', castVerdict(['You cast remove curse on Piggy.'], 65, 61).verdict === 'lifted');
+ok('silence is unknown, never clean', castVerdict([], 65, 65).verdict === 'unknown');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

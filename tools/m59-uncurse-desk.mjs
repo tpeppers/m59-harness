@@ -26,6 +26,22 @@ import { fileURLToPath } from 'node:url';
 const SUSPECT_GRADES = new Set([100, 200]);
 
 /**
+ * THE VERDICT IS THE SERVER'S SENTENCE, NOT THE MANA. A missing emerald and a resting caster both
+ * cost no mana either, and reading "no mana spent" as "nothing cursed" is how the first live hour
+ * reported three clean characters while the desk was simply out of emeralds (2026-09-27).
+ * `retry` = the target was not judged at all; do not start its cooldown.
+ */
+export function castVerdict(messages = [], manaBefore = null, manaAfter = null) {
+  const t = (messages ?? []).join(' ');
+  if (/detects no accursed items/i.test(t)) return { verdict: 'clean', retry: false };
+  if (/have the reagents/i.test(t)) return { verdict: 'no_reagents', retry: true };
+  if (/unable to cast|cannot cast|too tired|not enough mana/i.test(t)) return { verdict: 'caster_blocked', retry: true };
+  if (/you cast remove curse/i.test(t) || (manaBefore != null && manaAfter != null && manaAfter < manaBefore))
+    return { verdict: 'lifted', retry: false };
+  return { verdict: 'unknown', retry: true };
+}
+
+/**
  * The characters in `room` wielding or wearing a suspect item. Pure: `rows` is the broker's fleet,
  * `packs` maps agent -> inventory items ({name, rarity}). A name match is enough — the cast costs
  * nothing when the guess is wrong, so an ambiguous twin is a reason to cast, not to skip.
@@ -84,16 +100,20 @@ if (isMain) {
           const st = await call('status', { agent: sus.agent, brief: false }).catch(() => null);
           const id = st?.self_id ?? st?.you?.id;
           if (!id || id < 0) { say(`${sus.character}: no object id to aim at; skipped`); continue; }
-          last.set(sus.agent, Date.now());
           const before = await manaOf(CASTER);
           const r = await call('cast', { agent: CASTER, spell: 'remove curse', target: id }, 90_000)
             .catch(e => ({ error: e.message }));
           const after = await manaOf(CASTER);
-          const took = after < before;
-          say(`${sus.character} wearing ${sus.items.join(', ')}: ` +
-              (r.error ? `cast failed (${r.error})`
-                : took ? `curse LIFTED (mana ${before} -> ${after}); the keeper records what was released`
-                : 'nothing cursed (the cast was refused free)'));
+          const v = r.error ? { verdict: 'error', retry: true } : castVerdict(r.messages, before, after);
+          if (!v.retry) last.set(sus.agent, Date.now());
+          say(`${sus.character} wearing ${sus.items.join(', ')}: ` + ({
+            lifted: `curse LIFTED (mana ${before} -> ${after}); the keeper records what was released`,
+            clean: 'nothing cursed (the server refused it free)',
+            no_reagents: `NOT CAST: ${CASTER} has no emeralds — restock the desk`,
+            caster_blocked: `NOT CAST: ${CASTER} cannot cast right now (resting or busy); retried next round`,
+            error: `cast failed (${r.error})`,
+          }[v.verdict] ?? `unclear reply ${JSON.stringify(r.messages ?? [])}; retried next round`));
+          if (v.verdict === 'no_reagents') break;
         }
       }
     } catch (e) { say(`round failed: ${e.message}`); }
