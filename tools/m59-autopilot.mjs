@@ -3449,7 +3449,7 @@ export class Autopilot {
     // unread weapon of that name in the pack is one of ours.
     const equipWant = async () => {
       const unread = (c.inventory || []).filter(o => isWant(o) && skills.isUnrevealed(o));
-      const allowUnrevealed = unread.length > 0 && unread.every(o => mine.has(o.id));
+      const allowUnrevealed = unread.length > 0 && unread.every(o => skills.isOwnSummon(c, o));
       const eq = await skills.equipBest(s, { priority: [want], banned: this.bannedWeaponsNow(),
         allowUnrevealed }).catch(() => null);
       return String(eq?.wielding ?? '').toLowerCase() === want;
@@ -27236,6 +27236,8 @@ export class Autopilot {
     // WHAT WAS CONJURED, whatever the policy: the sale plan skips it (inventorySalePlan), because
     // no merchant takes a made item and offering one is a refusal that reads like a bad price.
     c._madeItemIds = new Set(sum.weapons.filter(w => w.made === true).map(w => w.id));
+    // Read as NOT conjured: a remembered summon id that now names one of these is looted, not ours.
+    c._notMadeIds = new Set(sum.weapons.filter(w => w.made === false).map(w => w.id));
     c._magicWeaponIds = on
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
     return sum;

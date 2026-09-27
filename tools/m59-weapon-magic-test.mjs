@@ -9,7 +9,7 @@
 //   - the swap stays inside the character's own weapon priority (no forced sword)
 import { classifyWeapon, lapsedWeapon, dedicatedWeapon, WeaponMagicBook, magicSwap }
   from './m59-weapon-magic.mjs';
-import { weaponRanking, inventorySalePlan, equipBest } from './m59-skills.mjs';
+import { weaponRanking, inventorySalePlan, equipBest, armourOf } from './m59-skills.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
@@ -160,6 +160,29 @@ console.log('a reconnect cannot blind the equip: the set is rebuilt from the boo
   const r = await equipBest(s, { priority: ['long sword'], refresh: false, maxTries: 1 });
   ok('equipBest ranks with the hook: it keeps the enchanted sword and sends no use',
      r?.id === 2 && r?.already_wielded === true && !sent.includes('use'));
+}
+
+// Operator, 2026-09-27: nobody uses magic items that are not Kraanan-enchanted; they are revealed
+// and kept. An enchantment leaves the grade at 0, so the grade decides.
+console.log('magic loot is kept, not wielded or worn');
+{
+  const names = ['short sword', 'short sword', 'scimitar', 'leather armor', 'small round shield'];
+  const inv = [{ id: 1, rarity: 2 }, { id: 2, rarity: 0 }, { id: 3, rarity: 100 },
+               { id: 4, rarity: 1 }, { id: 5, rarity: 0 }]
+    .map((o, i) => ({ ...o, nameRsc: 1000 + i, flags: 0 }));
+  const c = { inventory: inv, rsc: { get: r => names[r - 1000] ?? '' }, using: new Set() };
+  const ids = weaponRanking(c, { priority: ['short sword', 'scimitar'] }).map(r => r.o.id);
+  ok('an identified magic short sword (grade 2) is never ranked', !ids.includes(1));
+  ok('the normal-grade twin is', ids.includes(2));
+  ok('an unidentified scimitar (100) is not either', !ids.includes(3));
+  const arm = armourOf(c);
+  ok('magic armour (grade 1) is not worn', !arm.armour.some(x => x.o.id === 4));
+  ok('a normal shield is', arm.shield.some(x => x.o.id === 5));
+  const summoned = { ...c, _summoned: new Set([3]) };
+  ok('a remembered summon may be wielded unread', weaponRanking(summoned).some(r => r.o.id === 3));
+  const renumbered = { ...c, _summoned: new Set([3]), _notMadeIds: new Set([3]) };
+  ok('but not once a look has read it as NOT conjured (ids renumber on a save)',
+     !weaponRanking(renumbered).some(r => r.o.id === 3));
 }
 
 console.log('inventorySalePlan: a conjured weapon is never offered');

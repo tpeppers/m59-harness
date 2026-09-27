@@ -280,6 +280,22 @@ export function isUnrevealed(o = null) {
   return Number(o.rarity) === 100;
 }
 
+// MAGIC LOOT IS KEPT, NOT WORN (operator, 2026-09-27: "Nobody should use magic items that aren't
+// the Kraanan enchanted ones, we want to reveal & potentially save those"). A Kraanan enchantment
+// leaves the grade at 0 (WeapAttEnchanted's rarity modifier is 0, itematt.kod:587), so the rule is
+// the grade itself: an identified magic item — uncommon 1, rare 2, legendary 4 — is never wielded
+// or worn; an unidentified one (100) is already refused below. Stacks are not gear.
+export function isMagicGrade(o = null) {
+  if (!o || (Number(o.amount) || 0) > 1) return false;
+  return [1, 2, 4].includes(Number(o.rarity));
+}
+
+// A SUMMON IS AN ID WE REMEMBER, AND IDS ARE RENUMBERED ON EVERY SAVE. The exemption that lets a
+// keeper wield its own unread Create Weapon result therefore trusted a number that can come to
+// name looted magic — 2026-09-27, Scooter was wielding an UNIDENTIFIED short sword that his
+// keeper's look had read as not conjured. A look that says "not made" outranks the memory.
+export const isOwnSummon = (c, o) => !!o && !!c?._summoned?.has(o.id) && !c?._notMadeIds?.has(o.id);
+
 // HOW MANY OF THESE ARE BEING HELD BACK, AND WHY — because "nothing wieldable in the pack" and
 // "everything wieldable in the pack is unread" must never print the same. That conflation is the
 // commonest bug in this repository: a character holding three unrevealed maces and no others
@@ -562,7 +578,8 @@ export function weaponRanking(c, { priority = null, banned = null,
                  // IN ANY WAY THAT MATTERS: it reads rarity 100 like loot, but it cannot be
                  // cursed. Without this, every equip after the training-weapon roulette
                  // wielded one ranked it out and swapped straight back to a long sword.
-                 !(allowUnrevealed !== true && isUnrevealed(x.o) && !c._summoned?.has(x.o.id)) &&
+                 !(allowUnrevealed !== true && isUnrevealed(x.o) && !isOwnSummon(c, x.o)) &&
+                 !isMagicGrade(x.o) &&
                  !isBannedWeapon(x.name, banned) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
@@ -906,6 +923,7 @@ export function armourOf(c, { allowUnrevealed = false, exclude = null } = {}) {
     // simply never got the same line.
     if (isCursedItem(c, o, name)) continue;
     if (allowUnrevealed !== true && isUnrevealed(o)) continue;
+    if (isMagicGrade(o)) continue;                 // magic loot is revealed and kept, not worn
     if (typeof exclude === 'function' && exclude(name)) continue;
     out[kind.slot].push({ o, name, kind, score: armourScore(kind) });
   }
