@@ -3735,7 +3735,7 @@ export class Autopilot {
       this.doing = 'recovering';
       if (vigor < (ceiling || floor)) {
         const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
-                                       exclude: this.protectedItemNames() })
+                                       exclude: this.inheritedProtectedNames() })
                               .catch(() => ({ ate: [] }));
         if (e.ate?.length) {
           this.tally.meals = (this.tally.meals || 0) + 1;
@@ -3804,7 +3804,7 @@ export class Autopilot {
     // measured in minutes. `eat` declines anything that would overshoot 200.
     if (ceiling && this.stomach.roomFor(smallest.filling)) {
       const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling,
-                                     exclude: this.protectedItemNames() })
+                                     exclude: this.inheritedProtectedNames() })
                             .catch(() => ({ ate: [] }));
       if (e.ate?.length) {
         this.tally.meals = (this.tally.meals || 0) + 1;
@@ -4719,6 +4719,14 @@ export class Autopilot {
     return [...new Set([
       ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems : []),
       ...(Array.isArray(this.policy.protectedItems) ? this.policy.protectedItems : []),
+      ...this.inheritedProtectedNames(),
+    ].map(String).filter(Boolean))];
+  }
+
+  // Everything protectedItemNames holds back EXCEPT this character's own two keep lists.
+  // Split out because the larder needs exactly this: see larder().
+  inheritedProtectedNames() {
+    return [...new Set([
       // AND WHATEVER THE GUILD IS STILL SHORT OF, which is the half of the overflow rule
       // that has to hold on the sell paths this town trip does not own. The order is
       // pack -> own floor -> guild chests -> sold -> banked, so an item is held back from
@@ -4822,9 +4830,25 @@ export class Autopilot {
     } catch { return []; }
   }
 
-  // The keeper's usable larder excludes collection items. Centralising the filter is
-  // what keeps hunger, gifting, town-trip decisions and the actual eat call in agreement.
+  // The keeper's usable larder. Centralising the filter is what keeps hunger, town-trip
+  // decisions and the actual eat call in agreement.
+  //
+  // VAULTED AND PROTECTED IS NOT UNEATABLE. `vaultItems` and `protectedItems` say what must
+  // not be sold, dropped or evicted; they never meant "not food". Excluding them here made
+  // every inky-cap invisible to the keeper, because the vault strategy lists them to cap the
+  // vault at fifty — measured on prod 2026-09-27: 22 of 24 characters listed them, 12 of 21
+  // sat at the 80 resting cap, several carrying 2-10 inkies, and `has_food` read false on
+  // Beaker holding eight. WHEN to spend a scarce food is the food preference's job
+  // (larderOf's `held`), not the keep lists'. What still excludes is everything that is not
+  // this character's to eat: the guild's shortfall, the chalice, the holder's cargo.
   larder(c = this.s.client) {
+    return skills.larderOf(c, { exclude: this.inheritedProtectedNames() });
+  }
+
+  // What this character may hand to someone else. Eating an inky is spending it on the
+  // character that owns it; giving one away is a different decision, and the keep lists
+  // still govern that one.
+  giveableLarder(c = this.s.client) {
     return skills.larderOf(c, { exclude: this.protectedItemNames() });
   }
 
@@ -7005,7 +7029,7 @@ export class Autopilot {
   // and the farmer is not going anywhere.
   async payFarmer(e) {
     const s = this.s, c = s.need();
-    const larder = this.larder(c);
+    const larder = this.giveableLarder(c);
     if (!larder.length) return { gave: [], why: 'carrying no food' };
     const them = [...c.room.objects.values()]
       .find(o => (o.flags & OF.PLAYER) &&

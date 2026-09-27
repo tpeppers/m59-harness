@@ -1619,6 +1619,16 @@ export class Stomach {
 let _foodPreference = null;
 export function setFoodPreference(fn) { _foodPreference = typeof fn === 'function' ? fn : null; }
 
+// Would the fleet's preference hold this row back at this vigor? False when there is no
+// preference, no vigor, or the preference throws — the same starvation guard larderOf keeps.
+function heldAt(item, vigor) {
+  if (!_foodPreference || vigor == null) return false;
+  try {
+    const rank = _foodPreference(item.name, vigor, item.food);
+    return rank === null || rank === false;
+  } catch { return false; }
+}
+
 export function larderOf(c, { vigor = null, exclude = [] } = {}) {
   if (!c) return [];
   const rows = (c.inventory || [])
@@ -1634,9 +1644,12 @@ export function larderOf(c, { vigor = null, exclude = [] } = {}) {
     const eatable = ranked.filter(x => x.rank !== null && x.rank !== false);
     const held = ranked.filter(x => x.rank === null || x.rank === false);
     eatable.sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-    // Held food goes to the BACK rather than out: a character with nothing else must still be
-    // able to eat the thing it was saving, or a preference becomes a way to starve.
-    return [...eatable.map(x => x.r), ...held.map(x => x.r)];
+    // Held food goes to the BACK rather than out, so it still counts as food: `has_food`, the
+    // larder's vigor and the fighting floor all read this list, and dropping it would collapse
+    // the floor to 80 for a character carrying ten inky-caps. It is MARKED, because the one
+    // reader that must not act on it is `eat` — "held" means "not now", and a preference that
+    // eat ignored was not a preference (the 2026-09-07 inky rule was, until 2026-09-27).
+    return [...eatable.map(x => x.r), ...held.map(x => ({ ...x.r, held: true }))];
   } catch { return rows; }
 }
 
@@ -1793,11 +1806,18 @@ export async function eat(s, { maxItems = 4, stomach = null, upToVigor = null,
   const vig = () => c.vitals()?.vigor?.value ?? null;
   const before = vig();
 
-  // Best nutrition per unit of filling first — the stomach is what runs out.
-  const larder = larderOf(c).filter(item => !itemIsProtected(item.name, exclude));
+  // Best nutrition per unit of filling first — the stomach is what runs out. The vigor goes to
+  // the fleet's food preference so it can say "not yet", and a row it holds is not eaten — but
+  // only when the vigor is actually known. A preference asked about an unknown vigor holds by
+  // default, and skipping on that would starve a character whose vitals have not arrived.
+  const larder = larderOf(c, { vigor: before })
+    .filter(item => !itemIsProtected(item.name, exclude))
+    .filter(item => !(item.held && before != null));
 
   if (!larder.length)
-    return { ate: [], filling: 0, vigor: before, reason: 'carrying no food',
+    return { ate: [], filling: 0, vigor: before,
+             reason: larderOf(c, { vigor: before }).length
+               ? 'carrying only food the fleet is saving at this vigor' : 'carrying no food',
              note: 'vigor above the resting threshold of 80 comes only from eating; ' +
                    'inky cap mushrooms are the most stomach-efficient thing to carry' };
 
@@ -1810,6 +1830,10 @@ export async function eat(s, { maxItems = 4, stomach = null, upToVigor = null,
     // Stop once we have what we came for; the rest of the larder keeps, and stomach
     // room spent now is room unavailable during the fight.
     if (upToVigor != null && (vig() ?? 0) >= upToVigor) break;
+    // The larder was ranked at the vigor we sat down with, and one inky moves it fifty. So
+    // ask again before each mouthful: the second inky at 130 -> 180 is fine, a third at 180
+    // is exactly what "only at 150 or below" forbids.
+    if (heldAt(item, vig())) continue;
     // Do not spend a request on a mouthful we already know will be refused.
     if (stomach && !stomach.roomFor(item.food.filling)) { tooFull = true; continue; }
     // Do not spend fifty vigor of mushroom to gain five. Skip it and try something
