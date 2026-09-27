@@ -84,4 +84,14 @@ ok('the three rooms SetRandomHomeroom can produce are all in the table', () => {
     assert.ok(HOMETOWNS.some(h => h.room === room), `random target ${room} missing`);
 });
 
+// THE LIVE SERVER HAS A TENTH WORDING (operator, 2026-09-27): "has been a resident of [town] for
+// # years". It is not in the kod this table was read from, so it is matched on the town name.
+ok('"has been a resident of <town>" resolves to that town\'s inn', () => {
+  assert.deepEqual(hometownFrom('She has been a resident of Cor Noth for three years.'),
+    { town: 'Cor Noth', room: 153, said: 'resident of Cor Noth' });
+  assert.equal(hometownFrom('He has been a resident of Tos for a year.')?.room, 52);
+  assert.equal(hometownFrom('He has been a resident of Nowhere for a year.'), null,
+    'an unknown town is not guessed');
+});
+
 console.log(`\n${n} assertions, all offline.\n`);

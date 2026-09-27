@@ -240,8 +240,17 @@ export function hometownFrom(extra) {
   const text = String(extra ?? '');
   if (!text) return null;
   const hit = HOMETOWNS.find(h => text.includes(h.match));
-  if (!hit) return null;
-  return { town: hit.town, room: hit.room, said: hit.match };
+  if (hit) return { town: hit.town, room: hit.room, said: hit.match };
+  // "HAS BEEN A RESIDENT OF <TOWN>", which the kod we read does not contain and the live server
+  // sends anyway (operator, 2026-09-27: it says a character "has been a resident of [town] for #
+  // years"). Prod is not our server, so its sentences can differ from our tree's; the town NAME is
+  // still one of the table's, and resolves to the same inn room.
+  const resident = /resident of ([A-Z][\w']*(?: [A-Z][\w']*)?)/.exec(text);
+  if (resident) {
+    const named = HOMETOWNS.find(h => h.town && h.town.toLowerCase() === resident[1].toLowerCase());
+    if (named) return { town: named.town, room: named.room, said: resident[0] };
+  }
+  return null;
 }
 
 export async function callTool(name, args, { host = HOST, port = PORT } = {}) {
