@@ -1898,6 +1898,9 @@ const server = createServer(async (req, res) => {
               return;
             }
             if (allowHazard) log(`[keeper] ${agent} entering a hazard room on purpose: ${hazardWhy}`);
+            // A journey ordered from outside (a DUM recall, a stand-down) eats first too; see
+            // Autopilot.eatBeforeTravel. A meal is seconds and never blocks the walk.
+            await autopilot?.eatBeforeTravel?.(dest);
             const job = session.travelJob(dest, {
               where: args.where, maxHops: Number(args.max_hops ?? args.maxHops ?? 25),
               controlToken: args.control_token ?? args.controlToken,

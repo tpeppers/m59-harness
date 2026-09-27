@@ -8609,6 +8609,7 @@ export class Autopilot {
     // the same awaited errand. Give the next survival pass the body first.
     if (this.travelInterrupted())
       return { arrived: false, paused: true, cancelled: true, reason: 'travel paused for survival' };
+    await this.eatBeforeTravel(room);
     const movementGeneration = sessionOpts.movementGeneration ?? this.s.movementGeneration;
     // ONE GATE, BECAUSE THERE IS MORE THAN ONE DOOR AND I KEPT FINDING NEW ONES.
     //
@@ -18934,6 +18935,58 @@ export class Autopilot {
   // with food in their packs and a floor of 160 (operator: "troll hunters should be keeping 160+
   // vigor being fed off inky-cap mushrooms, meat pies, and bread"). Gated on a floor above the
   // cap so the rest of the fleet, whose floor is the cap or below, behaves exactly as before.
+  // EAT BEFORE SETTING OUT, SO THE STOMACH DIGESTS ON THE ROAD (operator, 2026-09-27: "keepers
+  // eat before travel if they expect to want to have eaten on the other side ... get their stomachs
+  // digesting by eating before"). A sitting is capped by the stomach, not the vigor: from 80, one
+  // sitting of bread reaches about 120 and the next waits for 100 filling to drain at 0.12/s
+  // (vigor-food-and-rest report). A walk is that wait, spent. And walking costs vigor: each moving
+  // second adds EXERTION_PER_MOVE * (5/6 speed)^2 exertion (user.kod:3013-3033), so a meal eaten
+  // first covers the road as well.
+  //
+  // Only for a character that wants vigor above the rest cap (the same gate as eatToFloor), and
+  // never in danger: nothing in reach, health at or above the rest line. A retreat does not stop
+  // to eat. One sitting, as far as the stomach allows. Never throws; travel always goes ahead.
+  async eatBeforeTravel(dest = null) {
+    try {
+      const p = this.policy ?? {};
+      const floor = Number(p.vigorFloor ?? p.fightAboveVigor) || 0;
+      if (floor <= REST_VIGOR_CAP * 200) return null;
+      const c = this.s?.client, v = c?.vitals?.();
+      const vigor = v?.vigor?.value;
+      if (!Number.isFinite(vigor)) return null;
+      const ceiling = Number(p.vigorCeiling) || 200;
+      if (vigor >= Math.min(ceiling, 200) - 10) return null;
+      const hp = v?.health?.max ? v.health.value / v.health.max : null;
+      if (hp === null || hp < (p.restBelow ?? 0.85)) return null;
+      if (this.inReachOfUs?.()?.length) return null;
+      const larder = this.larder(c);
+      if (!larder.length) return null;
+      // travel() is called often; ask the server for nothing when our own stomach says no room.
+      const smallest = Math.min(...larder.map(x => Number(x.food?.filling) || 0));
+      if (this.stomach && !this.stomach.roomFor(smallest)) return null;
+      // A WHOLE SITTING. `skills.eat` takes one mouthful per stack per call, so one call of a
+      // single bread stack is one loaf and the stomach sets out mostly empty. Keep going until the
+      // stomach refuses, the ceiling is reached, or nothing more is eaten (at most 6 rounds).
+      const e = { ate: [], vigor: { before: vigor, after: vigor } };
+      for (let round = 0; round < 6; round++) {
+        const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: ceiling,
+                                             exclude: this.inheritedProtectedNames() });
+        if (!r?.ate?.length) break;
+        e.ate.push(...r.ate);
+        e.vigor.after = r.vigor?.after ?? e.vigor.after;
+        if (r.tooFull || (e.vigor.after ?? 0) >= ceiling || !this.stomach?.roomFor(smallest)) break;
+      }
+      if (!e.ate.length) return null;
+      this.tally.meals = (this.tally.meals || 0) + 1;
+      this.recordAte(e, 'before travel');
+      this.note('ate before setting out', { ate: e.ate, vigor: e.vigor, to: dest,
+        stomach: Math.round(this.stomach?.level ?? 0),
+        why: 'the stomach empties on the road, so there is room to eat again on arrival, and the ' +
+             'walk itself costs vigor' });
+      return 'ate';
+    } catch { return null; }
+  }
+
   async eatToFloor(ctx) {
     const floor = Number(this.policy?.fightAboveVigor) || 0;
     if (floor <= REST_VIGOR_CAP * 200) return null;       // the cap is a fraction of 200: 80
