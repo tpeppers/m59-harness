@@ -18,6 +18,8 @@
 //   * stands (a seated character cannot cast, silently), casts, and judges the outcome by the
 //     REAGENT: consumed = the spell ran; a failed roll consumes none and cannot improve anything
 //     (spell.kod:1255); refused = the broker or the server said no;
+//   * DOES NOT RETURN UNTIL THE CAST HAS RESOLVED — succeeded or fizzled — so nothing the host does
+//     next (a move, a sit, a hand-over, another cast) can break the concentration. See TRANCE below;
 //   * records a `cast` in the training ledger (m59-training-ledger.mjs) when given one;
 //   * returns. It never walks, never rests, never waits for mana: when nothing is castable it says
 //     why and how long until it probably is (`retryInMs`), and the host decides.
@@ -28,11 +30,25 @@
 // Detect evil is a personal enchantment: re-cast while it is still up, the server takes nothing and
 // says little, which reads here as `unknown` rather than as a fizzle.
 
+// TRANCE (operator, 2026-09-27: "shouldn't return before the spell is successfully cast or fizzles,
+// so that outside methods don't accidentally break concentrations"). The ORDER in the kod is what
+// makes this subtle: UserCast pays the costs FIRST (user.kod:4822 PayCosts — mana AND reagent, or
+// "You were unsuccessful in casting %s" with no trance at all) and only THEN begins the trance
+// (user.kod:4825). So a reagent that has left the pack means the trance has STARTED, not ended —
+// the old check read it 2.5 s after the reply and called that success in the middle of detect
+// evil's charge. The trance lasts viCast_time * (150 - spellpower) / 100 (spell.kod:1883-1901),
+// at most 1.49x the cast time, and any run, rest, use or second cast inside it breaks it with
+// "Your concentration is broken and the %s spell fizzles." So after a cast that got past PayCosts
+// this waits until that break is heard OR the longest possible trance has elapsed since the cast
+// was sent, and only then reads the pack and returns.
+export const TRANCE_MARGIN_MS = 1500;
+export const maxTranceMs = castMs => Math.ceil((Number(castMs) || 15_000) * 1.49) + TRANCE_MARGIN_MS;
+
 // A PRACTICE TABLE is data: spell, reagent (as the pack names it) and how many a cast takes, mana,
 // and whether it targets the caster. The Shal'ille level-1 drill, read off the kod and the server:
 export const SHALILLE_DRILL = Object.freeze([
-  { spell: 'holy symbol', reagent: /^elderberry$/i, per: 3, mana: 8, self: false, school: "Shal'ille" },  // holysymb.kod:61
-  { spell: 'detect evil', reagent: /^fairy wing$/i, per: 1, mana: 10, self: true, school: "Shal'ille" },   // persench/detevil.kod:66
+  { spell: 'holy symbol', reagent: /^elderberry$/i, per: 3, mana: 8, self: false, castMs: 2000, school: "Shal'ille" },  // holysymb.kod:49,61
+  { spell: 'detect evil', reagent: /^fairy wing$/i, per: 1, mana: 10, self: true, castMs: 3000, school: "Shal'ille" },   // persench/detevil.kod:52,66
 ]);
 
 const count = (items, rx) => (items ?? []).filter(i => rx.test(i.name ?? '')).reduce((n, i) => n + (Number(i.amount) || 1), 0);
@@ -84,17 +100,24 @@ export async function practiceOnce({ call, agent, table = SHALILLE_DRILL, ledger
   }
   const before = count(pack, t.reagent);
   await call('rest', { agent, stand: true }).catch(() => null);
+  const sentAt = Date.now();
   const r = await call('cast', { agent, spell: t.spell, ...(target != null ? { target } : {}) }).catch(e => ({ error: e.message }));
-  const said = [...(r?.messages ?? []), ...(r?.keeper_said?.said ?? [])];
+  const said = [...(r?.messages ?? []), ...(r?.said ?? []), ...(r?.keeper_said?.said ?? [])].map(String);
   let outcome;
+  // NO TRANCE: refused, or the chance roll failed inside PayCosts. Nothing is charging.
   if (r?.cast === false || r?.error) outcome = 'refused';
   else if (said.some(m => /unsuccessful in casting/i.test(m))) outcome = 'fizzle';
+  else if (said.some(m => /concentration is broken/i.test(m))) outcome = 'broken';
   else {
-    await new Promise(res => setTimeout(res, 2500));      // let the reagent leave before reading
+    // A TRANCE MAY BE CHARGING. Sit it out to the longest it can last, measured from the send —
+    // the reply may already have taken that long (the keeper holds still for the cast), in which
+    // case this waits nothing.
+    const left = sentAt + maxTranceMs(t.castMs) - Date.now();
+    if (left > 0) await new Promise(res => setTimeout(res, left));
     const after = await call('inventory', { agent }).catch(() => null);
     outcome = Array.isArray(after?.items) ? (count(after.items, t.reagent) <= before - t.per ? 'success' : 'unknown') : 'unknown';
   }
   await ledger?.record({ kind: 'cast', spell: t.spell, school: t.school, outcome,
                          ...(outcome === 'refused' ? { why: r?.reason ?? r?.error ?? null } : {}) }).catch(() => {});
-  return { cast: outcome !== 'refused', spell: t.spell, outcome, why: c.why, retryInMs: 3_000 };
+  return { cast: outcome !== 'refused', spell: t.spell, outcome, why: c.why, resolvedMs: Date.now() - sentAt, retryInMs: 0 };
 }
