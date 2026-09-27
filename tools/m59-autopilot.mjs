@@ -25591,7 +25591,15 @@ export class Autopilot {
     for (const item of inside) {
       if (left <= 0) break;
       const had = held();
-      await s.pacer.submit('trade', () => c.get(item.id)).catch(() => {});
+      // ASK FOR WHAT IS WANTED, NOT THE STACK. BP_REQ_GET_FROM_CONTAINER carries a count after a
+      // number-tagged id (user.kod:977 passes it to UserGet as #number, which Splits the stack,
+      // user.kod:3669); the ground get, BP_REQ_GET, drops it (user.kod:969). hallWithdraw has
+      // asked this way since de163e8; this path still took the whole 75,000 and put 70,000 back.
+      // A client without the opcode falls back to the whole-stack get and the put-back below.
+      const n = Math.min(left, Number(item.amount) || 1);
+      const spec = this.dropSpec(item, Number(item.amount) >= 1 ? n : null);
+      await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function'
+        ? c.getFromContainer(spec) : c.get(item.id))).catch(() => {});
       await new Promise(r => setTimeout(r, 400));
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
@@ -25600,10 +25608,11 @@ export class Autopilot {
       // reports nothing is not a `get` that worked — the same rule the deposit half follows.
       let moved = Math.max(0, held() - had);
       if (!moved) break;                       // it refused; stop hammering the chest
-      // A GET HAS NO AMOUNT, SO IT TAKES THE WHOLE STACK. The guild's money is one stack of
-      // 75,000; taking it to buy a 6,000 lesson would walk the entire treasury down a road.
-      // The surplus goes back into the same chest before this character leaves the hall,
-      // and it is measured leaving the pack rather than assumed to have.
+      // MORE THAN WAS ASKED FOR STILL GOES BACK. The counted get should make this unreachable,
+      // but the fallback above takes whole stacks, and the guild's money is one stack of 75,000:
+      // taking it to buy a 6,000 lesson would walk the entire treasury down a road. The surplus
+      // goes back into the same chest before this character leaves the hall, and it is measured
+      // leaving the pack rather than assumed to have.
       if (moved > left) {
         const surplus = moved - left;
         const stack = (c.inventory || []).filter(o => same(c.rsc.get(o.nameRsc) || '', want.item))
@@ -25620,7 +25629,7 @@ export class Autopilot {
         this.note(returned >= surplus ? 'put the rest of the stack back in the chest'
                                       : 'COULD NOT put the rest of the stack back', {
           item: want.item, wanted: left, took: moved + returned, returned, chest: want.slot,
-          why: 'a chest get takes the whole stack; only what the errand needs leaves the hall' });
+          why: 'the chest handed over more than was asked for; only what the errand needs leaves the hall' });
       }
       left -= moved;
       onTook(moved);
@@ -25638,8 +25647,8 @@ export class Autopilot {
    * chests (162 teeth sat in r18c2 on 2026-09-25 while the whole fleet carried three).
    *
    * So this does only the in-room half: through the passage to the chests, then for each want,
-   * whole stacks (REQ_GET takes a stack and has no amount) until the pack holds the amount more
-   * than it did. WHAT ARRIVED IN THE PACK decides, never the get — a container refusal is a
+   * exactly the amount still wanted, stack by stack, through the counted container get
+   * (BP_REQ_GET_FROM_CONTAINER), until the pack holds the amount more than it did. WHAT ARRIVED IN THE PACK decides, never the get — a container refusal is a
    * sentence, not an error. Does not travel; refuses outside 714 rather than guessing.
    *
    *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }

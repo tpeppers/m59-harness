@@ -184,5 +184,52 @@ function rig({ pack = [], ability = 13, style = 'short_sword', weapon = 'hammer'
   ok(tookN.join() === '500', 'and the ledger records what actually arrived (500), plural name matched');
 }
 
+// ------------------------------------------------------------------ the counted container get
+// A client that has BP_REQ_GET_FROM_CONTAINER asks for the amount, so the treasury never leaves
+// the chest: no whole-stack get, no put-back. The fake Splits the stack the way UserGet does.
+const countedRig = (stacks, purse0 = 0) => {
+  const chest = new Map(stacks.map(s => [s.id, s.amount]));
+  let purse = purse0;
+  const sent = { counted: [], whole: 0, puts: 0 };
+  const c = {
+    inventory: purse ? [{ id: 5, nameRsc: 'shilling', amount: purse }] : [], rsc: { get: x => x },
+    requestInventory() {}, async waitFor() { return { events: [] }; },
+    getFromContainer(spec) {
+      sent.counted.push(spec);
+      const have = chest.get(spec.id) ?? 0, n = Number(spec.amount);
+      if (!(n > 0) || n > have) return;                 // Split returns $ past the total: nothing moves
+      chest.set(spec.id, have - n); purse += n;
+      c.inventory = [{ id: 5, nameRsc: 'shilling', amount: purse }];
+    },
+    get() { sent.whole++; }, put() { sent.puts++; },
+  };
+  const ap = Object.create(Autopilot.prototype);
+  ap.s = { client: c, need: () => c, pacer: { submit: async (_k, fn) => fn() } };
+  ap.policy = {}; ap.notes = [];
+  ap.note = (what, detail) => ap.notes.push({ what, detail });
+  ap.packAsItems = () => c.inventory.map(o => ({ name: o.nameRsc, amount: o.amount }));
+  ap.dropSpec = (o, n) => ({ id: o.id, amount: n });
+  return { ap, chest, sent, purse: () => purse };
+};
+{
+  const r = countedRig([{ id: 901, amount: 75000 }], 3083);
+  const tookN = [];
+  const left = await r.ap.takeFromChest({ target: { id: 900 }, want: { item: 'shilling', amount: 917 },
+    inside: [{ id: 901, name: 'shilling', amount: 75000 }], onTook: n => tookN.push(n) });
+  ok(r.sent.counted.length === 1 && r.sent.counted[0].amount === 917,
+     `the get asks for 917, not the stack (sent ${JSON.stringify(r.sent.counted)})`);
+  ok(r.sent.whole === 0 && r.sent.puts === 0, 'no whole-stack get and nothing to put back');
+  ok(r.purse() === 4000 && r.chest.get(901) === 75000 - 917, `purse 4,000, chest 74,083 (${r.purse()}, ${r.chest.get(901)})`);
+  ok(left === 0 && tookN.join() === '917', 'the errand is told it took 917');
+}
+{
+  // Short stacks: the want is split across them, each get asking only for what is still owed.
+  const r = countedRig([{ id: 901, amount: 300 }, { id: 902, amount: 5000 }]);
+  const left = await r.ap.takeFromChest({ target: { id: 900 }, want: { item: 'shillings', amount: 1000 },
+    inside: [{ id: 901, name: 'shilling', amount: 300 }, { id: 902, name: 'shilling', amount: 5000 }] });
+  ok(r.sent.counted.map(s => s.amount).join() === '300,700', `300 from the first, 700 from the second (${r.sent.counted.map(s => s.amount)})`);
+  ok(left === 0 && r.purse() === 1000 && r.chest.get(902) === 4300, 'exactly 1,000 arrives and 4,300 stays');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

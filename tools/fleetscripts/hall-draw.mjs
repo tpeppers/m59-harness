@@ -8,13 +8,15 @@
 // tool, keeper op, `Autopilot.hallWithdraw`) is the errand-shaped half, and this is its errand.
 //
 // THE SHAPE: ride the chalice from the stage room if its holder is standing there (it lands in
-// 714), otherwise walk; take whole stacks of each want; walk home. The raid's own reagent step
+// 714), otherwise walk; take exactly the amount of each want; walk home. The raid's own reagent step
 // then spreads what came back, and its money pool hands the shillings to the armorers — so
 // nothing downstream needs to know this run happened.
 //
 //   node tools/m59-fleet-repl.mjs  ->  run hall-draw agents=t3 holder=hk1
 //
-// WHOLE STACKS, because REQ_GET has no amount: asking for 40 teeth takes the whole 162-stack.
+// EXACT AMOUNTS, not whole stacks: asking for 40 teeth takes 40 out of a 162-stack, because the
+// container get carries a count (de163e8). This header used to say the opposite, and an operator
+// was told a 917-shilling top-up would mean walking the whole 75,000 treasury down a road.
 // Shillings weigh nothing; teeth and elderberry weigh 3 each, herbs 2 (bulk 4), so the default
 // wants come to roughly 1,550 weight and 1,900 bulk — inside one pack, not inside a full one.
 import { walk, verify } from '../m59-fleetscript.mjs';

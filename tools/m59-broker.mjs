@@ -13650,8 +13650,9 @@ const TOOLS = [
       'TAKE NAMED ITEMS OUT OF THE GUILD HALL\'S CHESTS (Bookmaker\'s hall, room 714). The ' +
       'character must already be standing in 714 — a chalice ride lands there — and must be a ' +
       'guild member of rank sir or above, or the door stays shut in silence. It walks out of the ' +
-      'foyer, speaks the hall password, and takes WHOLE STACKS of each named item (the server\'s ' +
-      'get has no amount) until the pack holds at least `amount` more than before. What arrived ' +
+      'foyer, speaks the hall password, and takes EXACTLY `amount` of each named item — a partial ' +
+      'stack is fine, e.g. 1,000 shillings out of 75,000 — through the counted container get, ' +
+      'splitting across stacks and chests if one is short. What arrived ' +
       'is read off the pack, never assumed from the get. Returns {took, short}.',
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
