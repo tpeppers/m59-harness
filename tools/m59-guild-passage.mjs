@@ -230,3 +230,93 @@ export async function guildPassage(k, destination, isInterrupted) {
   }
   throw new Error('guild passage exceeded its door limit');
 }
+
+// ------------------------------------------------------------------ the booth, and door 58
+//
+// THE VAULT BROKER'S POST (operator, 2026-09-27): the chest manager stands in the BOOTH, rows 2-3
+// col 25 (guildh14.kod InZone :604-607), the one square whose speech crosses to and from the
+// foyer (:227-229), and serves the foyer across it without the main door opening. The booth is
+// NOT on the line of sections above: with every door shut it reaches the counter strip and nothing
+// else. The counter strip opens WEST through COUNTER_DOOR, sector 58 (press on rows 2-3, cols
+// 19-21, :340-351, no gate, 5 s), into the room east of the secret door (section 3). So the
+// manager's whole beat is booth <-58-> section 3 <-password-> chests: two doors, never the
+// main door. Which trigger square each side reaches was measured on the closed-door bake:
+// the section-3 side reaches (2,19), the booth side (2,21); (2,20) is ambiguous and never used.
+export const BOOTH = [2, 25];
+export const COUNTER = Object.freeze({ sector: 58, west: [2, 19], east: [2, 21],
+  westLanding: [2, 19], eastLanding: [2, 22] });
+
+/** Is this square on the booth side of door 58 (the booth pocket)? Closed-door geometry. */
+export function inBoothPocket(row, col) {
+  guildSection(row, col);                                   // builds `closed`
+  return closed.path(row, col, BOOTH[0], BOOTH[1]).found && closed.path(BOOTH[0], BOOTH[1], row, col).found;
+}
+
+async function crossCounter(k, westward, isInterrupted) {
+  const s = k.s, c = s.need();
+  const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
+  const trigger = westward ? COUNTER.east : COUNTER.west;
+  const landing = westward ? COUNTER.westLanding : COUNTER.eastLanding;
+  await standUp(s, isInterrupted);
+  await s.walkTo(trigger[1], trigger[0], { maxSteps: 40, hardCap: 50, beforeMutation: guard });
+  await s.confirmPosition?.();
+  if (c.self.row !== trigger[0] || c.self.col !== trigger[1])
+    throw new Error(`counter door trigger (${trigger.join(',')}) not reached`);
+  const plan = { sector: COUNTER.sector, from_height: 100, to_height: 190, within_ms: 5000 };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    guard();
+    await standUp(s, isInterrupted);
+    const since = c.evSeq;
+    await s.pacer.submit('move', () => { guard(); return c.go(); });
+    const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted });
+    if (opening.opened) {
+      for (let step = 0; step < 6; step++) {
+        guard();
+        if (c.self.row === landing[0] && c.self.col === landing[1]) break;
+        const path = s.world?.geometry?.path(c.self.row, c.self.col, landing[0], landing[1]);
+        const next = path?.found ? path.steps?.[0] : { row: landing[0], col: landing[1] };
+        const r = await s.step(next.col, next.row, { confirm: true, beforeMutation: guard });
+        if (!r?.moved) break;
+      }
+      const ok = westward ? !inBoothPocket(c.self.row, c.self.col) : inBoothPocket(c.self.row, c.self.col);
+      k.note?.('counter door passage', { westward, crossed: ok, at: { row: c.self.row, col: c.self.col } });
+      if (ok) return;
+    } else {
+      k.note?.('counter door opening not verified', { reason: refusedToGo(c, since)
+        ? 'the server refused the press: "You are unable to go anywhere."' : opening.reason });
+    }
+    const retryAt = Date.now() + 5200;
+    while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
+  }
+  throw new Error('counter door 58 could not be crossed');
+}
+
+/**
+ * Walk to a broker post inside the hall: 'booth' (the window), 'chests' (section 4), or 'inside'
+ * (section 3, the room between them). Never the main door: from the foyer or the main hall this
+ * refuses rather than walk in through door 59, because opening it is what the broker exists to stop.
+ */
+export async function hallPost(k, where, isInterrupted = () => false) {
+  const c = k.s.need();
+  const here = () => [c.self.row, c.self.col];
+  if (where === 'booth') {
+    if (inBoothPocket(...here())) {
+      await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
+      return { ok: c.self.row === BOOTH[0] && c.self.col === BOOTH[1], at: here() };
+    }
+    const sec = guildSection(...here());
+    if (sec < 1) return { ok: false, why: `refusing to reach the booth from section ${sec} (it would open the main door)`, at: here() };
+    await guildPassage(k, 3, isInterrupted);
+    await crossCounter(k, false, isInterrupted);
+    await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
+    return { ok: c.self.row === BOOTH[0] && c.self.col === BOOTH[1], at: here() };
+  }
+  if (where === 'chests' || where === 'inside') {
+    if (inBoothPocket(...here())) await crossCounter(k, true, isInterrupted);
+    const sec = guildSection(...here());
+    if (sec < 1) return { ok: false, why: `refusing to walk in from section ${sec} (it would open the main door)`, at: here() };
+    await guildPassage(k, where === 'chests' ? 4 : 3, isInterrupted);
+    return { ok: guildSection(...here()) === (where === 'chests' ? 4 : 3), at: here() };
+  }
+  return { ok: false, why: `unknown post ${where}: booth, chests or inside` };
+}

@@ -96,7 +96,7 @@ import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
 import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
-import { guildPassage } from './m59-guild-passage.mjs';
+import { guildPassage, hallPost } from './m59-guild-passage.mjs';
 // The chest side of the hall. The coop runtime asks guildPassage for the same section.
 const GUILD_CHEST_SECTION = 4;
 import { listLoadouts } from './m59-loadout.mjs';
@@ -25498,6 +25498,18 @@ export class Autopilot {
    *
    * Returns { ok, why, chests, steps } and NEVER throws: the caller records it.
    */
+  // THE VAULT BROKER'S POSTS: 'booth' (the window to the foyer), 'chests', 'inside'. Never through
+  // the main door; see hallPost. Refuses outside the hall.
+  async hallPostTo(where) {
+    const roomNum = Number(this.s.world?.room?.num ?? NaN);
+    if (roomNum !== BOOKMAKERS_HALL_ROOM)
+      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})` };
+    const r = await hallPost(this, where, () => this.travelInterrupted?.() ?? false)
+      .catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    this.note('hall post', { where, ...r });
+    return r;
+  }
+
   async reachHallChests() {
     const s = this.s, c = s.need();
     const steps = [];

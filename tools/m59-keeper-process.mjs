@@ -2571,6 +2571,14 @@ const server = createServer(async (req, res) => {
           // TAKE NAMED ITEMS OUT OF THE HALL'S CHESTS for an errand standing in 714. The passage
           // and the chest reads live in the Autopilot (reachHallChests), so the door is opened
           // the one way that has been measured to work; see Autopilot.hallWithdraw.
+          case 'hall_post': {
+            if (typeof autopilot?.hallPostTo !== 'function') {
+              json({ error: 'this keeper has no hall post' }, 409); return;
+            }
+            json(await autopilot.hallPostTo(String(args.where ?? ''))
+              .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
+            return;
+          }
           case 'hall_withdraw': {
             if (typeof autopilot?.hallWithdraw !== 'function') {
               json({ error: 'this keeper has no hall withdrawal' }, 409); return;

@@ -13699,6 +13699,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'hall_post',
+    description:
+      'WALK TO A VAULT-BROKER POST INSIDE THE BOOKMAKERS HALL (room 714): "booth" (rows 2-3 col 25, ' +
+      'the window whose speech and offers reach the foyer), "chests" (the chest side, through the ' +
+      'password door) or "inside" (the room between them). The route is booth <-> counter door 58 <-> ' +
+      'inside <-> password door <-> chests; it NEVER opens the main door, and refuses from the foyer ' +
+      'for that reason. The character must already be inside 714. Keeper-backed characters only.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      where: { type: 'string', enum: ['booth', 'chests', 'inside'] },
+    }, required: ['agent', 'where'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, why: 'hall_post needs a keeper-backed character' };
+      return keeperAction(s.name, s._index, 'hall_post', { where: a.where }, { timeoutMs: 300_000 });
+    },
+  },
+  {
     name: 'vault',
     description:
       'STORE THINGS AT A VAULTMAN, or read back what is already there. This is the other half of ' +
