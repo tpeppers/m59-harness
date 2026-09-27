@@ -163,6 +163,8 @@ export async function snapshot(call, agent, { school = null, reagentNames = [] }
     room: st?.where?.num ?? st?.room?.num ?? null,
     mana: st?.mana?.value ?? st?.vitals?.mana?.value ?? null,
     vigor: st?.vigor?.value ?? null,
+    // Karma is progress for a Qor or Shal'ille disciple; it is read, never assumed.
+    karma: st?.karma?.value ?? null,
   };
 }
 

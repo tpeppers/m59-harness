@@ -68,6 +68,7 @@ const PRE = arg('pre');
 const TARGETS = (arg('until-ability') || '').split(',').map(x => x.trim()).filter(Boolean)
   .map(x => { const [name, n] = x.split('='); return { name: name.trim(), to: Number(n) }; });
 const SCHOOL = arg('school');
+const UNTIL_KNOWN = opts.includes('--until-known');
 const REAGENTS = (arg('reagents') || '').split(',').map(x => x.trim()).filter(Boolean);
 const BROKER = `http://127.0.0.1:${Number(arg('broker') || 8901)}/`;
 const MAX_RUNS = Number(arg('max-runs') || 500);
@@ -141,7 +142,9 @@ async function gateOpen() {
     // but it would keep one training past the real gate. Report it and decide nothing from it.
     if (!(Number(r?.intellect) > 0))
       return { known: false, why: `intellect unread (${JSON.stringify(r?.intellect)}); need ${row.need} is not trustworthy` };
-    return { known: true, open: row.can_learn === true || row.already_known === true,
+    // --until-known: done only when the character KNOWS the ability, not when it could buy it. The
+    // Qor-disciple order buys its spells inside the run, so "learnable" there means "not yet".
+    return { known: true, open: UNTIL_KNOWN ? row.already_known === true : (row.can_learn === true || row.already_known === true),
              have: row.have, need: row.need, gap: row.remaining_required };
   } catch (e) { return { known: false, why: e.message }; }
 }
@@ -224,7 +227,7 @@ for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
   await waitReady();
   const g0 = await gateOpen();
   const want = await abilitiesMet();
-  if (g0.open) say(`"${UNTIL}" is learnable (${g0.have}/${g0.need}) — buy it`);
+  if (g0.open) say(UNTIL_KNOWN ? `"${UNTIL}" is known` : `"${UNTIL}" is learnable (${g0.have}/${g0.need}) — buy it`);
   if (g0.open && want.met) { say('every target met — done'); process.exit(0); }
   const entry = ENTRIES[(run - 1) % ENTRIES.length];
   say(`run ${run}${g0.known ? ` — gate ${g0.have}/${g0.need}, gap ${g0.gap}` : g0.why ? ` — gate UNKNOWN: ${g0.why}` : ''}` +
