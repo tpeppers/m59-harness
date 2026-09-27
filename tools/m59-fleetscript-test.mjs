@@ -2023,6 +2023,49 @@ console.log('\na take-back never cancels the errand\'s own walk');
   ok('the walk arrived', r.results.a1.ok === true, JSON.stringify(r.results.a1).slice(0, 200));
 }
 
+console.log('\na keeper restarted mid-run is re-found, not addressed as a ghost');
+{
+  // 2026-09-27: after a rolling keeper restart a disciple drill logged "could not cancel the
+  // journey: this keeper is pid 32152, not 2780 — the order is addressed to a keeper process that
+  // has been replaced". holdKeeper resolved the keeper once for the run's life.
+  let pid = 4242;
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 5, col: 5 } } });
+  const brokerFetch = globalThis.fetch;
+  const refuse = b => (Number(b.keeper_pid) !== pid
+    ? { error: `this keeper is pid ${pid}, not ${b.keeper_pid} — the order is addressed to a keeper process that has been replaced` }
+    : null);
+  globalThis.fetch = async (u, o) => {
+    const url = String(u);
+    if (url.includes(':' + KEEPER_PORT + '/live'))
+      return { ok: true, json: async () => ({ agent: 'a1', character: 'Tester', pid }) };
+    if (url.includes(':' + KEEPER_PORT + '/action')) {
+      const b = JSON.parse(o.body); seen.push({ n: b.name, pid: b.keeper_pid });
+      const no = refuse(b);
+      if (no) return { ok: true, json: async () => no };
+      if (b.name === 'commander_claim') pid = 5151;          // the keeper restarts right after the claim
+      if (b.name === 'commander_heartbeat') return { ok: true, json: async () => ({ renewed: ['work', 'movement', 'economy'] }) };
+      return { ok: true, json: async () => ({ faculties: { work: {}, movement: {}, economy: {} }, ok: true }) };
+    }
+    if (url.includes(':' + KEEPER_PORT + '/cancel')) {
+      const b = JSON.parse(o.body); seen.push({ n: 'cancel', pid: b.keeper_pid });
+      const no = refuse(b);
+      return { ok: true, json: async () => no ?? { cancelled: true } };
+    }
+    if (/127\.0\.0\.1:19\d\d\d\//.test(url)) throw new Error('connection refused');
+    return brokerFetch(u, o);
+  };
+  const logs = [];
+  await fleetScript({ name: 'ghost', fleet: 'testfleet', agents: ['a1'], steps: [walk(54)],
+    onLog: (...a) => logs.push(a.join(' ')) });
+  globalThis.fetch = realFetch;
+  ok('orders after the restart reach the NEW keeper pid',
+     seen.some(c => Number(c.pid) === 5151), JSON.stringify(seen));
+  ok('and nothing reports a cancel that could not be delivered',
+     !logs.some(l => /could not (cancel|clear) the journey/.test(l)), logs.filter(l => /could not/.test(l)).join(' | '));
+}
+
 console.log('\ncrawl_to waits an orc out and then walks past it');
 {
   // E is blocked by a BODY for the first two readings and clear afterwards — an orc that

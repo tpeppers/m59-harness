@@ -2613,6 +2613,29 @@ export async function holdKeeper(ctx, agent, fleet) {
   const ports = await keeperPorts(fleet, { wantAgent: agent });
   const entry = ports.get(agent);
   const who = entry && { ...entry, agent };
+  // A KEEPER THAT RESTARTS MID-RUN IS ON A NEW PID, AND AN ORDER ADDRESSED TO THE OLD ONE IS REFUSED:
+  // "the order is addressed to a keeper process that has been replaced". `who` was resolved once for
+  // the run's whole life, so after a rolling keeper restart every cancel and heartbeat went to a ghost
+  // (2026-09-27, a disciple drill logged it twice after the roll). Re-scan on that refusal and retry
+  // once, in place, so every closure below sees the new keeper.
+  const stale = r => /has been replaced|addressed to a keeper process/i.test(String(r?.error ?? ''));
+  const refresh = async () => {
+    const fresh = (await keeperPorts(fleet, { wantAgent: agent, maxAgeMs: 0 }).catch(() => null))?.get(agent);
+    if (fresh && who) Object.assign(who, fresh, { agent });
+    return !!fresh;
+  };
+  const ask = async (name, args, timeoutMs) => {
+    const r = await keeperCall(who, name, args, timeoutMs);
+    return stale(r) && await refresh() ? keeperCall(who, name, args, timeoutMs) : r;
+  };
+  const cancelNow = async () => {
+    const send = () => fetch(`http://127.0.0.1:${who.port}/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
+      signal: AbortSignal.timeout(20_000) }).then(r => r.json()).catch(e => ({ error: e.message }));
+    const r = await send();
+    return stale(r) && await refresh() ? send() : r;
+  };
   if (!who) {
     // NOT FATAL AND NOT SILENT. A broker-run session has no keeper process to lease from, and
     // the broker-side claim is then the whole story. Saying so matters because the difference
@@ -2626,7 +2649,7 @@ export async function holdKeeper(ctx, agent, fleet) {
   // deaths — and an uncaught `fetch` rejection here took the WHOLE agent out with a bare
   // `connection refused`, naming neither the character nor what was attempted. The branch
   // below already has an honest answer for a keeper we cannot lease from; this routes into it.
-  const claim = await keeperCall(who, 'commander_claim', {
+  const claim = await ask('commander_claim', {
     faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}`,
     lease_ms: KEEPER_LEASE_MS, why: `fleet errand: ${ctx.name}`,
   }).catch(e => ({ error: `keeper :${who.port} did not answer the claim (${e.message}) — ` +
@@ -2655,11 +2678,7 @@ export async function holdKeeper(ctx, agent, fleet) {
   // `/cancel` and not `release`: release ends the job slot AND hands the faculties back,
   // which would undo the claim we just took. This only bumps the movement generation, which
   // is what ends the walk.
-  const cancelled = await fetch(`http://127.0.0.1:${who.port}/cancel`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
-    signal: AbortSignal.timeout(20_000),
-  }).then(r => r.json()).catch(e => ({ error: e.message }));
+  const cancelled = await cancelNow();
   if (cancelled?.error) ctx.log(agent, `could not clear the journey in flight: ${cancelled.error}`);
 
   let done = false;
@@ -2684,7 +2703,7 @@ export async function holdKeeper(ctx, agent, fleet) {
     if (done) return;
     done = true;
     clearInterval(beat);
-    await keeperCall(who, 'commander_release',
+    await ask('commander_release',
       { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
     ctx.log(agent, why ?? 'gave work, movement and economy back to the keeper');
   };
@@ -2710,11 +2729,11 @@ export async function holdKeeper(ctx, agent, fleet) {
   const own = { walkUntil: 0 };
   const beat = setInterval(() => {
     if (done) return;
-    keeperCall(who, 'commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS }).then(async hb => {
+    ask('commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS }).then(async hb => {
       if (done) return;
       const renewed = Array.isArray(hb?.renewed) ? hb.renewed : null;
       if (!renewed || KEEPER_FACULTIES.every(f => renewed.includes(f))) return;
-      const again = await keeperCall(who, 'commander_claim', {
+      const again = await ask('commander_claim', {
         faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
         why: `fleet errand: ${ctx.name} (lease lapsed, taken back)` }).catch(() => null);
       const got = Object.keys(again?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
@@ -2723,10 +2742,7 @@ export async function holdKeeper(ctx, agent, fleet) {
                      (!got.length ? 'and the keeper would not give it back'
                        : walking ? `took ${got.join(', ')} back and left the errand's own walk running`
                        : `took ${got.join(', ')} back and stopped whatever the keeper started`));
-      if (got.length && !walking) await fetch(`http://127.0.0.1:${who.port}/cancel`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
-        signal: AbortSignal.timeout(20_000) }).catch(() => {});
+      if (got.length && !walking) await cancelNow();
     }).catch(() => {});
     // The read is what makes this a guard rather than a timer, so a failed read must not be
     // mistaken for a death — an unreadable character keeps its lease and the next beat asks
@@ -2753,7 +2769,7 @@ export async function holdKeeper(ctx, agent, fleet) {
      * go back or the keeper inherits a journey it never chose.
      */
     cancelJourney: async why => {
-      const r = await keeperCall(who, 'release', { why: why ?? 'the errand ended' })
+      const r = await ask('release', { why: why ?? 'the errand ended' })
         .catch(e => ({ error: e.message }));
       if (r?.error) ctx.log(agent, `could not cancel the journey: ${r.error}`);
       return r;
