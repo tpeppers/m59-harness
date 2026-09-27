@@ -27510,11 +27510,16 @@ export class Autopilot {
       const i = priority.findIndex(p => String(n).toLowerCase().includes(String(p).toLowerCase()));
       return i === -1 ? priority.length : i;
     };
-    const id = magicSwap(sum, rank);
+    // A BANNED MAGIC SPARE IS NOT A CANDIDATE. Magic now beats the family, so without this the swap
+    // would pick an enchanted scimitar its owner bans, equipBest would refuse it, and the keeper
+    // would try again every thirty seconds.
+    const banned = this.bannedWeaponsNow?.() ?? null;
+    const id = magicSwap({ ...sum, weapons: (sum?.weapons ?? []).filter(w => w.wielded ||
+      !skills.isBannedWeapon(w.name, banned)) }, rank);
     if (id == null) return null;
     if (!due && Date.now() - (this._magicSwapAt ?? 0) < 30_000) return null;
     this._magicSwapAt = Date.now();
-    const r = await skills.equipBest(this.s, { priority, banned: this.bannedWeaponsNow?.() ?? null })
+    const r = await skills.equipBest(this.s, { priority, banned })
       .catch(e => ({ ok: false, why: e.message }));
     this.note('MAGIC SWAP', { to: id, result: r?.ok ?? null,
       why: 'the weapon in hand is not read as magic and a same-rank spare is' });

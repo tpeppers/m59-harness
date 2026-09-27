@@ -182,13 +182,17 @@ export const defaultIsWeapon = name => WEAPONISH.test(String(name ?? ''));
  * the SAME rank, and never over a better-ranked one. That is the operator's rule — "they would
  * not want swords to be forced" — expressed as a tie-break rather than a ranking.
  */
-export function magicSwap(summary, rank = () => 0) {
+export function magicSwap(summary, rank = () => 0, { familyOnly = false } = {}) {
   const w = summary?.weapons ?? [];
   const cur = w.find(r => r.wielded);
   if (cur && cur.bypasses_nonmagic === true) return null;
-  const curRank = cur ? rank(cur.name) : Number.POSITIVE_INFINITY;
+  // ANY MAGIC SPARE BEATS A MUNDANE WEAPON IN HAND (operator, 2026-09-27: troll fights are
+  // "always enchanted & only enchanted"). The rank still orders the magic spares among themselves,
+  // but no longer vetoes the swap: that veto kept an enchanted long sword in the pack of a hunter
+  // whose priority ranked its conjured axe higher. `familyOnly` restores the old rule.
   const best = w.filter(r => !r.wielded && r.bypasses_nonmagic === true && !r.broken)
     .sort((a, b) => rank(a.name) - rank(b.name) || a.id - b.id)[0];
   if (!best) return null;
-  return rank(best.name) <= curRank ? best.id : null;
+  if (familyOnly) return rank(best.name) <= (cur ? rank(cur.name) : Number.POSITIVE_INFINITY) ? best.id : null;
+  return best.id;
 }

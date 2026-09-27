@@ -77,9 +77,15 @@ console.log('magicSwap');
   ok('mundane hammer + enchanted hammer spare: swap to the spare',
      magicSwap(s([{ id: 1, name: 'hammer', wielded: true, bypasses_nonmagic: false },
                   { id: 2, name: 'hammer', wielded: false, bypasses_nonmagic: true }]), rank) === 2);
-  ok('mundane hammer + enchanted long sword: NO swap (never trade down the priority)',
+  // REVERSED 2026-09-27 by the operator for the troll crew: "always enchanted & only enchanted ...
+  // when fighting trolls". Magic now beats the family; `familyOnly` keeps the old rule available.
+  ok('mundane hammer + enchanted long sword: SWAP to the magic one (magic beats the family)',
      magicSwap(s([{ id: 1, name: 'hammer', wielded: true, bypasses_nonmagic: false },
-                  { id: 2, name: 'long sword', wielded: false, bypasses_nonmagic: true }]), rank) === null);
+                  { id: 2, name: 'long sword', wielded: false, bypasses_nonmagic: true }]), rank) === 2);
+  ok('and familyOnly restores "never trade down the priority"',
+     magicSwap(s([{ id: 1, name: 'hammer', wielded: true, bypasses_nonmagic: false },
+                  { id: 2, name: 'long sword', wielded: false, bypasses_nonmagic: true }]), rank,
+               { familyOnly: true }) === null);
   ok('already magic: no swap',
      magicSwap(s([{ id: 1, name: 'hammer', wielded: true, bypasses_nonmagic: true },
                   { id: 2, name: 'hammer', wielded: false, bypasses_nonmagic: true }]), rank) === null);
@@ -98,8 +104,9 @@ console.log('weaponRanking tie-break (the keeper\'s equip order)');
   const order = (magic, priority) => weaponRanking(client(magic), { priority }).map(r => r.o.id).join();
   ok('with no magic set the equal hammers keep their order', order(null, ['hammer']).startsWith('1,2'));
   ok('the magic hammer wins the tie between hammers', order(new Set([2]), ['hammer']).startsWith('2,1'));
-  ok('a magic long sword NEVER outranks a hammer the priority puts first',
-     order(new Set([3]), ['hammer', 'long sword']) === '1,2,3');
+  ok('with magic preferred, a magic long sword outranks a hammer the priority puts first',
+     order(new Set([3]), ['hammer', 'long sword']) === '3,1,2');
+  ok('and without the magic preference the priority alone decides', order(null, ['hammer', 'long sword']) === '1,2,3');
 }
 
 console.log('Autopilot: the lapse re-opens, reports, and the status carries it');

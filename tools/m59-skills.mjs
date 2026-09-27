@@ -624,8 +624,14 @@ export function weaponRanking(c, { priority = null, banned = null,
       const i = priority.findIndex(p => n.toLowerCase().includes(String(p).toLowerCase()));
       return i === -1 ? priority.length : i;
     };
-    return rows.sort((a, b) => rank(a.name) - rank(b.name) || mundane(a) - mundane(b) ||
-      b.base - a.base);
+    // MAGIC FIRST, THEN THE FAMILY (operator, 2026-09-27, for the troll crew: "always enchanted &
+    // only enchanted ... when fighting trolls"). The set is only non-null while the policy says
+    // preferMagicWeapon, which only the Ukgoth crew carries, so every other character still ranks
+    // by its priority alone. Trolls resist a mundane blade by 80 (troll.kod:64-67): an enchanted long
+    // sword in an axe trainee's hand beats its conjured axe outright. It was a tie-break inside the
+    // family, and a hunter stood in the stage room holding an enchanted long sword he would not wield.
+    return rows.sort((a, b) => (magic ? mundane(a) - mundane(b) : 0) || rank(a.name) - rank(b.name) ||
+      mundane(a) - mundane(b) || b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
   // bigger one you are not. Unread abilities fall back to the crude name score rather
