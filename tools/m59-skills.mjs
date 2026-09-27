@@ -208,6 +208,16 @@ export const isCursed = (name) => /\bcursed\b/i.test(String(name || ''));
 // item is still in the use list. The other way out is to break it: WeaponBroke strips every
 // attribute before unusing, and says so (weapon.kod:532-551).
 export const CURSE_SAID = /seems to cling to your hand/i;
+// WHAT A REMOVE CURSE RELEASED, as the TARGET hears it (remcurse.kod:25, wacursed.kod:38): one
+// "tears the cursed item from your body" per cast that found something, then "Your <item> loses its
+// ominous luster." per item freed. A cast that found nothing is refused before any mana is spent
+// ("detects no accursed items"), so casting on a mere suspicion costs nothing.
+export const UNCURSE_SAID = /tears the cursed item from your body/i;
+/** The item a "loses its ominous luster" line names, lower-cased, or null. */
+export const unCursedFromSaid = (text) => {
+  const m = /^\s*your\s+(.+?)\s+loses its ominous luster/i.exec(String(text ?? ''));
+  return m ? m[1].trim().toLowerCase() : null;
+};
 export const CURSE_AURA = /glows with a pale red aura/i;
 export const UNIDENTIFIED_SAID = /something odd about it you can[^ ]?t put your finger on/i;
 

@@ -27337,6 +27337,17 @@ export class Autopilot {
              swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0 };
   }
 
+  // A CURSE WAS LIFTED. `item` is the name the server gave, or null for the cast's own line (which
+  // names nothing). Recorded as `uncursed` so a release can be audited; the item's own cursed mark
+  // is cleared so the ranking may consider it again once it is revealed.
+  noteUncursed(item, said = null) {
+    const c = this.s.client;
+    if (item && c?._cursedItemIds) c._cursedItemIds.delete(`name:${item}`);
+    this.note(item ? 'CURSE LIFTED' : 'remove curse took', { item: item ?? null, said,
+      why: item ? `remove curse released the ${item}` : 'a remove curse found a cursed item on this body' });
+    this.ledgerEvent('uncursed', { item: item ?? null, said, room: this.s.world?.room?.num ?? null });
+  }
+
   // THE LAPSE, at the packet boundary. The sentence names a weapon and no id, so every reading
   // of that name is re-opened and the next sweep runs NOW rather than on its minute clock.
   noteEnchantLapse(name) {

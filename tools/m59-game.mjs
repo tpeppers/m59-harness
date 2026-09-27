@@ -84,6 +84,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon } from './m59-weapon-magic.mjs';
+import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
 // BROKER imports it, and ESM modules do not share scope, so the reference here was free
@@ -1525,6 +1526,17 @@ class Session {
   // word the server sends when an enchantment ends, and it goes to whoever holds the weapon at
   // that moment. Caught here, at the packet boundary, because the client's event ring is small
   // and a fight fills it; the keeper re-reads and swaps (Autopilot.noteEnchantLapse).
+  // WHAT A REMOVE CURSE RELEASED (operator, 2026-09-27: uncursing is free to use as often as
+  // desired, "but keepers should note what gets released"). The lines go only to the character
+  // that was freed, so this is the one place they can be recorded; the keeper writes the ledger row.
+  noteUncursed(ev) {
+    const text = ev?.text;
+    const item = unCursedFromSaid(text);
+    if (!item && !UNCURSE_SAID.test(String(text ?? ''))) return;
+    const keeper = autopilotIfAny(this.name);
+    if (keeper?.s === this) keeper.noteUncursed?.(item, text);
+  }
+
   noteEnchantLapse(ev) {
     const name = lapsedWeapon(ev?.text);
     if (!name) return;
@@ -2268,7 +2280,7 @@ class Session {
       this.recorder.line('event', ev);
       this.playerEvidence?.event(ev,c);
       if (ev.kind === 'ability') this.noteAdvancement(ev);
-      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); }
+      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); }
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
       // exactly the reason a bank balance is: whatever walked a character to a vaultman
       // has already paid for the trip, and if the reply goes past unread the contents are
