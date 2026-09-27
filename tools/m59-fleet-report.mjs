@@ -97,6 +97,14 @@ say(`- **Vigor:** avg ${avg(vig)?.toFixed(0) ?? '-'} of 200; ${atCap.length} at 
 say(`- **Inkies:** ${table.reduce((n, t) => n + t.inkies, 0)} carried fleet-wide; ` +
     `**${stuck.length} characters at or below 150 still holding them**` +
     (stuck.length ? ` (${stuck.map(t => `${t.name} ${t.vigor}/${t.inkies}`).join(', ')})` : ''));
+// THE FLEET'S ONE CHALICE (operator, 2026-09-27: "keep the chalice off the floor in room2, it
+// should only ever be dropped very briefly"). In nobody's pack means on a floor or lost, and a
+// ride dropped at the right moment reads that way for a few seconds, so it is a flag, not a verdict.
+const cupWith = rows.filter(r => (r.pack_items || []).some(i => /chalice of the rain/i.test(i.name || '')));
+if (rows.length)
+  say(cupWith.length
+    ? `- **Chalice:** with ${cupWith.map(r => `${r.character} (room ${r.room_num ?? '?'})`).join(', ')}`
+    : '- **Chalice: IN NOBODY'S PACK.** On a floor or lost; check room 2.');
 say();
 say(`| Character | Max HP | Kills (${MINUTES}m) | Vigor | Inkies | Food vigor | has_food |`);
 say('|---|---|---|---|---|---|---|');
