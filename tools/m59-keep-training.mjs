@@ -38,6 +38,10 @@ const AGENT = arg('agent') || die('--agent is required');
 const UNTIL = arg('until') || die('--until "<ability>" is required: the gate that ends the training');
 const STDIN = arg('stdin');                    // a line to feed the command (the fleet REPL), then EOF
 const CWD = arg('cwd') || process.cwd();
+// A FleetScript line run through the fleet REPL (in --cwd) BEFORE every run — a restock, say. The
+// script decides for itself whether there is anything to do; one that compiles to no steps costs a
+// read. Added 2026-09-27 when Pepe's heal loop ran its pack dry of herbs and could only stop.
+const PRE = arg('pre');
 const BROKER = `http://127.0.0.1:${Number(arg('broker') || 8901)}/`;
 const MAX_RUNS = Number(arg('max-runs') || 500);
 const PAUSE_MS = Math.max(5, Number(arg('pause') || 30)) * 1000;
@@ -81,15 +85,21 @@ async function gateOpen() {
     const r = await call('remaining_required_to_learn_new_skills', { agent: AGENT, name: UNTIL }, 60_000);
     const row = (r?.candidates ?? [])[0];
     if (!row) return { known: false };
+    // AN UNREAD INTELLECT IS NOT ZERO. A keeper that came up without its attribute read publishes
+    // `attributes: null`, and the formula then subtracts nothing for intellect — measured on Pepe
+    // 2026-09-27: need 255 instead of 171. That errs strict, so it could never stop a run early,
+    // but it would keep one training past the real gate. Report it and decide nothing from it.
+    if (!(Number(r?.intellect) > 0))
+      return { known: false, why: `intellect unread (${JSON.stringify(r?.intellect)}); need ${row.need} is not trustworthy` };
     return { known: true, open: row.can_learn === true || row.already_known === true,
              have: row.have, need: row.need, gap: row.remaining_required };
   } catch (e) { return { known: false, why: e.message }; }
 }
 
-function runOnce() {
+function runOnce(cmd = command, stdinLine = STDIN) {
   return new Promise((resolve) => {
-    const child = spawn(command[0], command.slice(1), { cwd: CWD, stdio: [STDIN ? 'pipe' : 'ignore', 'inherit', 'inherit'] });
-    if (STDIN) { child.stdin.write(`${STDIN}\n`); child.stdin.end(); }
+    const child = spawn(cmd[0], cmd.slice(1), { cwd: CWD, stdio: [stdinLine ? 'pipe' : 'ignore', 'inherit', 'inherit'] });
+    if (stdinLine) { child.stdin.write(`${stdinLine}\n`); child.stdin.end(); }
     const stop = () => { try { child.kill(); } catch {} };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     child.on('exit', (code, signal) => {
@@ -108,7 +118,12 @@ for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
   await waitReady();
   const g0 = await gateOpen();
   if (g0.open) { say(`"${UNTIL}" is learnable (${g0.have}/${g0.need}) — done, buy it`); process.exit(0); }
-  say(`run ${run}${g0.known ? ` — gate ${g0.have}/${g0.need}, gap ${g0.gap}` : ''}`);
+  say(`run ${run}${g0.known ? ` — gate ${g0.have}/${g0.need}, gap ${g0.gap}` : g0.why ? ` — gate UNKNOWN: ${g0.why}` : ''}`);
+  if (PRE) {
+    say(`before run ${run}: ${PRE}`);
+    await runOnce(['node', 'tools/m59-fleet-repl.mjs'], PRE);
+    if (stopping) break;
+  }
   const r = await runOnce();
   if (stopping) break;
   say(`run ${run} ended (${r.signal ?? `exit ${r.code}`}); checking the gate before the next`);
