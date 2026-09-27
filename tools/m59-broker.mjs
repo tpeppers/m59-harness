@@ -13690,7 +13690,7 @@ const TOOLS = [
       stash: { type: 'array', items: { type: 'string' },
         description: 'KEEP list (substrings). Before taking anything, put every pack item that matches none of these and is not worn or wielded into a chest, to make room.' },
       deposit: { type: 'array', items: { type: 'string' },
-        description: 'names (substrings) to PUT into the chests — every matching pack item not worn or wielded. The other direction of stash, for bringing farmed gear home. wants may be empty.' },
+        description: 'names (substrings) to PUT into the chests — every matching pack item not worn or wielded. The other direction of stash, for bringing farmed gear home. An entry "id:<object id>" names exactly one item (a revealed magic weapon often keeps its plain name). wants may be empty.' },
     }, required: ['agent', 'wants'] },
     run: async (a) => {
       const s = session(a.agent);

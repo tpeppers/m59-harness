@@ -25962,7 +25962,13 @@ export class Autopilot {
     // `deposit` is the other direction of the same step: put THESE named things in (a prefarm run
     // bringing its gear home), rather than everything BUT a keep list.
     let stashed = 0;
-    const dep = Array.isArray(deposit) && deposit.length ? deposit.map(d => String(d).toLowerCase()) : null;
+    // `id:<n>` entries name ONE object by id; the rest are name substrings. By id because a revealed
+    // permanent attribute often does not rename the item (magicsort's table: seven of twelve), so
+    // depositing "long sword" by name would take the rider's ordinary long swords with it.
+    const depList = Array.isArray(deposit) && deposit.length ? deposit.map(d => String(d).toLowerCase()) : null;
+    const depIds = new Set((depList ?? []).map(d => /^id:(\d+)$/.exec(d)?.[1]).filter(Boolean).map(Number));
+    const depNames = (depList ?? []).filter(d => !/^id:\d+$/.test(d));
+    const dep = depList ? { has: o => depIds.has(o.id) || depNames.some(d => nameOf(o).includes(d)) } : null;
     if ((Array.isArray(stash) || dep) && chests.length) {
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
@@ -25978,7 +25984,7 @@ export class Autopilot {
       if (!using) { this.note('stash refused: the use list is unknown', {}); }
       const keep = (stash ?? []).map(k => String(k).toLowerCase());
       const spare = !using ? [] : (c.inventory ?? []).filter(o => !using.has(o.id)
-        && (dep ? dep.some(d => nameOf(o).includes(d)) : !keep.some(k => nameOf(o).includes(k))));
+        && (dep ? dep.has(o) : !keep.some(k => nameOf(o).includes(k))));
       for (const chest of chests) {
         if (!spare.length) break;
         await nearChest(chest);

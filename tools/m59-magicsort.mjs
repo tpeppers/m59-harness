@@ -387,6 +387,31 @@ const containsNeedle = (haystack, key, word) => word
  * a wand goes to a person, because the wand's charges are what the buyer is paying for and they
  * do not tick. Only a timed attribute with nothing else to recommend it goes to the smith.
  */
+// HOW STRONG A REVEALED ITEM IS, AS A NUMBER THE KEEP LEDGER CAN RANK BY.
+//
+// Operator, 2026-09-27: permanent magic is stored, weak ones too "until we fill storage, then we
+// gate (and evict) by 'stronger than we have' (evicting the weakest)". classify() answers keep or
+// sell and carries no strength, so this reads the same table for the kod's own `viDifficulty`.
+// Matching follows classify's rules exactly: a permanent row is a distinctive phrase anywhere in
+// the name or look; a timed row is a bare word, taken only as a WHOLE WORD of the NAME (that is
+// how the kod names it, "holy long sword", and as prose it matched a quest item).
+//
+// Returns {permanent, timed, difficulty, attribute, file}. Several permanent attributes: the
+// strongest wins. Nothing matched: {permanent: null, ...} — unknown, which is not "weak".
+export function strengthOf({ name = '', look = null } = {}) {
+  const hay = `${name ?? ''}
+${look ?? ''}`.toLowerCase();
+  const nameWords = new Set(String(name ?? '').toLowerCase().split(/[^a-z']+/).filter(Boolean));
+  const perm = WEAPON_ATTRIBUTES.filter(a => !a.timed && hay.includes(a.look.toLowerCase()))
+    .sort((a, b) => (b.difficulty ?? 0) - (a.difficulty ?? 0));
+  if (perm.length)
+    return { permanent: true, timed: false, difficulty: perm[0].difficulty, attribute: perm[0].look,
+             file: perm[0].file };
+  const timed = WEAPON_ATTRIBUTES.find(a => a.timed && nameWords.has(a.look.toLowerCase()));
+  if (timed) return { permanent: false, timed: true, difficulty: null, attribute: timed.look, file: timed.file };
+  return { permanent: null, timed: null, difficulty: null, attribute: null, file: null };
+}
+
 export function classify({ name = '', look = null } = {}, list = null) {
   const L = list ?? loadList();
   const n = hay(name);

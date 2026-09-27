@@ -77,6 +77,7 @@ export const script = {
     smith: { type: 'string', default: "Fehr'loi Qan" },
     buy_gear: { type: 'boolean', default: true, describe: 'buy gear the chests lacked at the smith on the same trip' },
     wait_s: { type: 'number', default: 2400, describe: 'how long everyone waits for the riders to come home' },
+    deposit: { type: 'string', default: '', describe: 'hall_withdraw deposit entries to PUT in the chests on the same visit: JSON array or comma list of "id:<n>" or names (the reveal desk: permanent magic items)' },
   },
 
   async steps(p, agentArg) {

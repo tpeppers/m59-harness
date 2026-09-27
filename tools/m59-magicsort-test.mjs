@@ -382,5 +382,34 @@ console.log('\nlook_at can answer about the WRONG item, and this refuses rather 
   });
 }
 
+// ---- strength, for the keep ledger (operator, 2026-09-27: store the weak ones until storage
+// fills, then keep "stronger than we have" and evict the weakest)
+{
+  const { strengthOf } = await import('./m59-magicsort.mjs');
+  ok('a permanent attribute reads its kod difficulty', () => {
+    const s = strengthOf({ name: 'long sword', look: 'An unholy glow seems to suck all life from the air.' });
+    assert.deepEqual([s.permanent, s.difficulty, s.file], [true, 10, 'wavamper.kod']);
+  });
+  ok('the weakest permanent is still permanent: ceremonial is 5, stored, not sold', () => {
+    const s = strengthOf({ name: 'axe', look: 'obviously unsuitable for blood combat' });
+    assert.deepEqual([s.permanent, s.difficulty], [true, 5]);
+  });
+  ok('a timed attribute is a whole word of the NAME, and has no strength', () => {
+    const s = strengthOf({ name: 'holy long sword', look: 'The weapon glows with a pure, white light.' });
+    assert.deepEqual([s.permanent, s.timed, s.difficulty], [false, true, null]);
+  });
+  ok('the same word in prose is nothing', () => {
+    assert.equal(strengthOf({ name: 'axe', look: 'It is holy ground, they say.' }).permanent, null);
+  });
+  ok('two permanent phrases: the stronger wins', () => {
+    const s = strengthOf({ name: 'mace of the defender', look: "Colhorr's signature is engraved on the haft." });
+    assert.equal(s.difficulty, 9);
+  });
+  ok('nothing matched is unknown, never "weak"', () => {
+    const s = strengthOf({ name: 'ring', look: 'A plain ring.' });
+    assert.deepEqual([s.permanent, s.difficulty], [null, null]);
+  });
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${n} assertions, all offline.\n`);

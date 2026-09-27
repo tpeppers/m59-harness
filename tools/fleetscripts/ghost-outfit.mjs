@@ -568,24 +568,37 @@ export function hallSplit(crew = [], wants = [], weigh = () => null, room = null
  * clone has neither) draws nothing and says so; a rider the Rescue dropped somewhere else still
  * walks home, because the raid is waiting for it.
  */
+// `p.deposit`: things to PUT into the chests on the same visit — a JSON array or comma list of
+// hall_withdraw deposit entries ("id:<n>" or a name). A deposit-only visit (no share) still rides.
+export const depositOf = p => {
+  const raw = p?.deposit;
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  const t = String(raw ?? '').trim();
+  if (!t) return [];
+  try { const j = JSON.parse(t); if (Array.isArray(j)) return j.map(String).filter(Boolean); } catch {}
+  return t.split(',').map(x => x.trim()).filter(Boolean);
+};
+
 export async function hallDraw({ agent, crew = [], holder, share = [], p, log = console.log }) {
   const out = { share };
+  const deposit = depositOf(p);
   const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) }))
                       : { ok: false, why: 'no cup holder' };
   out.ride = ride.ok ? 'chalice' : `no ride (${ride.why})`;
   // NO RIDE IS NOT NO DRAW. Rehearsal 26's reagent runner could not pick up the dropped cup and drew
   // nothing, which left the whole raid without its sapphires and purple mushrooms. An armorer that
   // cannot ride already walks to the hall; so does a runner now.
-  if (!ride.ok && share.length && Number(p.hall)) {
+  if (!ride.ok && (share.length || deposit.length) && Number(p.hall)) {
     const w = await hopTo(agent, Number(p.hall), { floor: 0.5 });
     if (w.ok) { ride.inHall = true; out.ride += ' — walked to the hall'; }
   }
   const there = ride.ok || ride.inHall;
-  if (there && share.length) {
+  if (there && (share.length || deposit.length)) {
     // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
     // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
     // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
-    const draw = () => inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...HALL_STASH_KEEP, ...share.map(w => w.item)] }, 620_000)
+    const draw = () => inHall(() => call('hall_withdraw', { agent, wants: share,
+      ...(deposit.length ? { deposit } : { stash: [...HALL_STASH_KEEP, ...share.map(w => w.item)] }) }, 620_000)
       .catch(e => ({ ok: false, why: e.message })));
     let r = await draw();
     // A DOOR REFUSAL IS WORTH ONE MORE TRY. On the 2026-09-25 rehearsal a rider was refused
