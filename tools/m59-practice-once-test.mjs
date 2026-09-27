@@ -6,7 +6,9 @@ import { choosePractice, SHALILLE_DRILL } from './m59-practice-once.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
-const pack = (e, w) => [{ name: 'elderberry', amount: e }, { name: 'fairy wing', amount: w }];
+// NONE IS NO ROW. In a real pack `amount: 0` is a single NON-STACKING item (a scroll, a suit of
+// armour), which is why count() reads it as one — so "out of fairy wings" is an absent row.
+const pack = (e, w) => [...(e ? [{ name: 'elderberry', amount: e }] : []), ...(w ? [{ name: 'fairy wing', amount: w }] : [])];
 const abil = { 'holy symbol': 44, 'detect evil': 40 };
 
 let c = choosePractice({ table: SHALILLE_DRILL, abilities: abil, pack: pack(90, 20), mana: 27 });
