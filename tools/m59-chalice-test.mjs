@@ -61,6 +61,13 @@ section('which trips ride');
   eq(shouldRide({ ...base, stationHops: 3, targetHops: 3 }).ride, false, 'the town is no further than the station: walk');
   eq(shouldRide({ ...base, role: 'holder' }).ride, false, 'the holder never rides — it serves');
   eq(shouldRide({ ...base, role: 'alternate', carrying: true }).ride, false, 'the alternate on duty stays');
+  // 2026-09-27: a keeper roll mid-ride left Robin holding the cup; the fresh trip declined and
+  // walked it toward Jasper. A traveller with the cup takes it back to the station first.
+  {
+    const d = shouldRide({ ...base, role: 'traveller', carrying: true, stationHops: 9 });
+    eq(d.ride, true, 'a traveller holding the cup goes back to the station, however far');
+    eq(d.returning, true, 'and it is a return, not a ride');
+  }
   eq(shouldRide({ ...base, role: 'alternate' }).ride, true, 'the alternate off duty rides like anyone');
   eq(shouldRide({ ...base, duty: { with: 'Loial the Ogier', lost: true } }).ride, false, 'a lost cup serves nobody');
   eq(shouldRide({ ...base, duty: { with: 'Loial the Ogier', seen_at: Date.now() - 20 * 60_000 } }).ride, false,

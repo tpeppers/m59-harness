@@ -22519,6 +22519,13 @@ export class Autopilot {
             ...(d.wait_ms ? { wait_ms: Math.round(d.wait_ms) } : {}) });
           return { skip: true, why: d.why };
         }
+        if (d.returning) {
+          st.returning = true;
+          st.stage = 'to_station';
+          this.note('taking the fleet\'s chalice back to the station', { why: d.why, station_hops: stationHops });
+          this.chaliceEvent('returning', { why: d.why, station_hops: stationHops });
+          return pending(0);
+        }
         st.server = d.server;
         st.human = !!d.human;
         st.stage = 'to_station';
@@ -22528,12 +22535,37 @@ export class Autopilot {
       }
 
       case 'to_station': {
-        if (this.hereRoom() === cfg.station_room) { st.stage = 'room'; return pending(0); }
-        const r = await this.travel(cfg.station_room, { maxHops: cfg.max_detour_hops + 2 })
+        const next = st.returning ? 'return' : 'room';
+        if (this.hereRoom() === cfg.station_room) { st.stage = next; return pending(0); }
+        // A RETURN IS NOT A DETOUR. The cup is the fleet's, so the walk back is not capped at the
+        // ride's detour budget, and a failed walk is tried again rather than skipped — a skip
+        // would walk the town trip with the cup still in the pack, which is the whole bug.
+        const r = await this.travel(cfg.station_room,
+          st.returning ? {} : { maxHops: cfg.max_detour_hops + 2 })
           .catch(e => ({ arrived: false, reason: e.message }));
-        if (r.arrived) { st.stage = 'room'; return pending(0); }
+        if (r.arrived) { st.stage = next; return pending(0); }
         if (r.paused || r.cancelled || this.travelInterrupted()) return pending(5000);
+        if (st.returning) return pending(30_000);
         return skip('could not reach the station', { reason: r.reason ?? r.why ?? null });
+      }
+
+      case 'return': {
+        const cup = this.chaliceInPack();
+        if (!cup) { st.stage = 'off'; return { skip: true, why: 'the chalice is no longer in the pack' }; }
+        const desk = servingDesk(store.duty(), cfg, now, store.humans());
+        const to = desk?.server ?? cfg.holder;
+        const r = await this.chaliceGive(to, [cup.id], { stillHave: () => !!this.chaliceInPack() })
+          .catch(e => ({ gave: false, why: e.message }));
+        if (r.gave) {
+          st.stage = 'off';
+          this.note('handed the fleet\'s chalice back', { to });
+          this.chaliceEvent('returned', { to });
+          return { skip: true, why: `returned the chalice to ${to}; walking the trip` };
+        }
+        st.returnTries = (st.returnTries ?? 0) + 1;
+        if (st.returnTries === 1 || st.returnTries % 10 === 0)
+          this.chaliceEvent('return_waiting', { to, tries: st.returnTries, why: r.why ?? null });
+        return pending(15_000);
       }
 
       case 'room': {

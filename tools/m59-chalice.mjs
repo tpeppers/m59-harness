@@ -478,7 +478,13 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
   if (role === 'holder') return { ride: false, why: 'the holder serves; its own trips are its own' };
   if (role === 'alternate' && carrying)
     return { ride: false, why: 'the alternate is on duty with the cup' };
-  if (carrying) return { ride: false, why: 'already carrying a chalice — nobody needs to hand one over' };
+  // A TRAVELLER HOLDING THE CUP OUTSIDE A RIDE IS HOLDING THE FLEET'S ONLY CUP. This used to
+  // decline ("nobody needs to hand one over") and walk the town trip with it. 2026-09-27: Rizzo
+  // handed Robin the cup for a ride, a keeper roll restarted Robin's keeper mid-ride, the fresh
+  // trip asked again, declined, and walked it into Ukgoth toward the Jasper bank while Rizzo
+  // marked it lost. The station comes first: take it back to whoever is serving.
+  if (carrying) return { ride: true, returning: true,
+    why: 'carrying the fleet\'s chalice outside a ride — take it back to the station first' };
   // THE SERVER WILL REFUSE THE SIP FOR TEN MINUTES AFTER WE SWING AT A PLAYER, so find out
   // here rather than at the counter. `chalice.kod:168-177` is the gate — not the spell's
   // `CanPayCosts`, which an item cast skips — and it is the same clock `rescue.kod:68` and
