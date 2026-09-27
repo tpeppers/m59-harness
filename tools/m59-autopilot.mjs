@@ -3663,6 +3663,22 @@ export class Autopilot {
     return !!r?.worn?.length;
   }
 
+  // WHAT WAS EATEN, ON THE LEDGER. One `ate` row per food per sitting, so food eaten can be set
+  // against food looted (`looted` rows) and bought. Operator, 2026-09-27: the troll crew's food
+  // should go net-positive once it is fighting again, and nothing recorded a meal until now.
+  // `skills.eat` answers `ate` as one name per mouthful and `vigor` as {before, after} for the
+  // whole sitting, so vigor is per sitting and the amount is per item.
+  recordAte(e, how) {
+    try {
+      const counts = new Map();
+      for (const name of e?.ate ?? []) counts.set(name, (counts.get(name) ?? 0) + 1);
+      for (const [item, amount] of counts)
+        recordEvent(this.who(), 'ate', { item, amount, how,
+          vigor_before: e.vigor?.before ?? null, vigor_after: e.vigor?.after ?? null,
+          room: this.s?.world?.room?.num ?? null });
+    } catch { /* telemetry must never break the thing it is measuring */ }
+  }
+
   async provision(plan, v) {
     const p = this.policy;
     const floor = this.fightFloor(plan);
@@ -3752,6 +3768,7 @@ export class Autopilot {
                               .catch(() => ({ ate: [] }));
         if (e.ate?.length) {
           this.tally.meals = (this.tally.meals || 0) + 1;
+          this.recordAte(e, 'stocking up');
           this.note('ate while stocking up', {
             ate: e.ate, vigor: e.vigor, ceiling,
             stomach: Math.round(this.stomach.level), strategy: p.strategy });
@@ -3821,6 +3838,7 @@ export class Autopilot {
                             .catch(() => ({ ate: [] }));
       if (e.ate?.length) {
         this.tally.meals = (this.tally.meals || 0) + 1;
+        this.recordAte(e, 'mid-hunt');
         this.note('ate mid-hunt', { ate: e.ate, vigor: e.vigor,
                                     stomach: Math.round(this.stomach.level) });
       }
