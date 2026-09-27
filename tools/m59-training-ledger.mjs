@@ -119,7 +119,12 @@ export function summarizeTraining(events, { school = null, since = 0 } = {}) {
     }
   }
   const spent = Object.values(restock).filter(r => r.source === 'bought').reduce((n, r) => n + r.cost, 0);
-  const codes = [...new Set([...runs.values()].map(r => r.code && `${r.code.tool}@${r.code.git_sha ?? '?'}${r.code.dirty ? '+dirty' : ''}#${r.code.file_sha1 ?? '?'}`).filter(Boolean))];
+  // AN UNTRACKED FILE HAS NO COMMIT THAT DESCRIBES IT. The checkout's HEAD is still recorded (it
+  // pins the tools the file imports), but the report must not print it as the file's own version:
+  // for a local FleetScript the file hash is the identity.
+  const codes = [...new Set([...runs.values()].map(r => r.code &&
+    `${r.code.tool}@${r.code.tracked === false ? `untracked(checkout ${r.code.git_sha ?? '?'})` : (r.code.git_sha ?? '?')}` +
+    `${r.code.dirty ? '+dirty' : ''}#${r.code.file_sha1 ?? '?'}`).filter(Boolean))];
   const snaps = ev.filter(e => e.kind === 'run_start' || e.kind === 'run_end').filter(e => e.snapshot?.abilities);
   const abilitySpan = snaps.length >= 2 ? diffAbilities(snaps[0].snapshot.abilities, snaps.at(-1).snapshot.abilities) : null;
   const rooms = ev.filter(e => e.kind === 'run_end').reduce((n, e) => n + (Number(e.rooms_travelled) || 0), 0);
