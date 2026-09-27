@@ -85,6 +85,9 @@ function fakeKeeperSession(name, opts = {}) {
                                      tag: o.tag ?? null, flags: 0 })),
       waitFor: async () => ({ events: [], seq: null, timedOut: true, no_event_stream: true }),
       requestInventory: () => null,
+      // What is worn, when the test says: ids, or undefined for "the use list is unknown".
+      equipment: () => (opts.worn === undefined ? { known: false, equipped: [] }
+        : { known: true, equipped: opts.worn.map(id => ({ id, name: 'worn' })) }),
     };
     return s._client;
   };
@@ -823,6 +826,29 @@ section('AND THE BROKER SIDE OF THE PROXY ANSWERS IN THE SHAPE THE CALLERS READ'
   ok('the create-food reagents are still kept', /KEEP_REAGENT = .*elderberry/.test(sellrun));
 }
 
+
+section('GEAR BY NAME: NEVER WHAT IS WORN, AT MOST THE AMOUNT, NOTHING WHEN THE USE LIST IS UNKNOWN');
+{
+  const shields = [{ id: 51, name: 'small round shield' }, { id: 52, name: 'small round shield' },
+                   { id: 53, name: 'small round shield' }];
+  const run = async (worn, amount = 1) => {
+    const giver = fakeKeeperSession('g', { character: 'Giver', room: 100, items: shields, worn,
+      others: [{ id: 99, name: 'Recv', room: 100 }] });
+    const recv = fakeKeeperSession('r', { character: 'Recv', room: 100, items: [],
+      others: [{ id: 98, name: 'Giver', room: 100 }] });
+    const out = await supplyBetween({ from: 'g', to: 'r', what: 'small round shield', amount,
+      who_travels: 'neither' }, deps({ g: giver, r: recv }));
+    const offered = (giver._fake.lastOffer?.items ?? giver._fake.lastOffer?.what ?? [])
+      .map(x => Number(x?.id ?? x));
+    return { out, offered };
+  };
+  const one = await run([51]);
+  ok('the worn shield is never offered', !one.offered.includes(51), JSON.stringify(one.offered));
+  ok('and only one of the spares goes', one.offered.length === 1, JSON.stringify(one.offered));
+  const unknown = await run(undefined);
+  ok('an unknown use list hands over no gear at all', unknown.offered.length === 0 && unknown.out.supplied === false,
+     JSON.stringify(unknown));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

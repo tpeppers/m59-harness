@@ -368,8 +368,22 @@ export async function supplyBetween(a, deps) {
         const n = nameOf(o).toLowerCase().replace(/\s+/g, ' ').trim();
         return n === wanted || n === `${wanted}s` || `${n}s` === wanted;
       };
-      return inventory.filter(hit).map(o => (o.amount > 0
-        ? { ...o, amount: Math.max(1, Math.min(o.amount, per)) } : o));
+      const matched = inventory.filter(hit);
+      // A NAME CAN ALSO BE GEAR, AND GEAR IS WORN. A reagent is a stack; a shield is one entry per
+      // shield, and the inventory includes the one on the giver's arm. So by name: never an item
+      // in use, at most `amount` single entries, and when the use list cannot be read, nothing
+      // single at all — handing a fighter's own armour away is worse than handing nothing.
+      // (2026-09-27: the ukgoth-trolls rule hands spare armour and shields to crew without them.)
+      const singles = matched.filter(o => !(o.amount > 0));
+      let usable = singles;
+      if (singles.length) {
+        const eq = give.client()?.equipment?.();
+        const ids = eq?.known ? eq.equipped.map(e => Number(e.id)) : null;
+        usable = ids && ids.every(id => id > 0)
+          ? singles.filter(o => !ids.includes(Number(o.id))).slice(0, per) : [];
+      }
+      return [...matched.filter(o => o.amount > 0)
+        .map(o => ({ ...o, amount: Math.max(1, Math.min(o.amount, per)) })), ...usable];
     }
     return [...take(/elder\s*berry/i), ...take(/herb/i)];
   };
