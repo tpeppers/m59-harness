@@ -1980,6 +1980,49 @@ console.log('\na lapsed lease is taken back, even while the broker cannot answer
      JSON.stringify(r.results.a1).slice(0, 200));
 }
 
+console.log('\na take-back never cancels the errand\'s own walk');
+{
+  // 2026-09-27: a competing claimant took work and movement between beats; the retake was right
+  // and its cancel killed the errand's OWN walk every 30 s — Animal never left 599 in ten
+  // minutes. Here the travel reply takes 2 s, so several beats land while our walk is in flight.
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 5, col: 5 } } });
+  const brokerFetch = globalThis.fetch;
+  let walkFrom = null, walkTo = null;
+  globalThis.fetch = async (u, o) => {
+    const url = String(u);
+    if (url.includes(':' + KEEPER_PORT + '/live'))
+      return { ok: true, json: async () => ({ agent: 'a1', character: 'Tester', pid: 4242 }) };
+    if (url.includes(':' + KEEPER_PORT + '/action')) {
+      const b = JSON.parse(o.body); calls.push({ n: b.name, at: Date.now() });
+      if (b.name === 'commander_heartbeat') return { ok: true, json: async () => ({ renewed: ['economy'] }) };
+      return { ok: true, json: async () => ({ faculties: { work: {}, movement: {}, economy: {} } }) };
+    }
+    if (url.includes(':' + KEEPER_PORT + '/cancel')) {
+      calls.push({ n: 'cancel', at: Date.now() });
+      return { ok: true, json: async () => ({ cancelled: true }) };
+    }
+    if (/127\.0\.0\.1:19\d\d\d\//.test(url)) throw new Error('connection refused');
+    const isTravel = o?.body && /"name":"travel"/.test(String(o.body));
+    if (isTravel) { walkFrom = Date.now(); await new Promise(res => setTimeout(res, 2000)); }
+    const out = await brokerFetch(u, o);
+    if (isTravel) walkTo = Date.now();
+    return out;
+  };
+  const r = await fleetScript({ name: 'ownwalk', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk(54)], onLog: quiet });
+  globalThis.fetch = realFetch;
+  const inWalk = c => walkFrom != null && c.at >= walkFrom && c.at <= (walkTo ?? Date.now());
+  const retakes = calls.filter(c => c.n === 'commander_claim' && inWalk(c)).length;
+  const cancels = calls.filter(c => c.n === 'cancel' && inWalk(c)).length;
+  ok('the lost faculties were still taken back during the walk', retakes >= 1,
+     JSON.stringify(calls.map(c => c.n)));
+  ok('and the errand\'s own walk was never cancelled by it', cancels === 0,
+     JSON.stringify(calls.map(c => c.n)));
+  ok('the walk arrived', r.results.a1.ok === true, JSON.stringify(r.results.a1).slice(0, 200));
+}
+
 console.log('\ncrawl_to waits an orc out and then walks past it');
 {
   // E is blocked by a BODY for the first two readings and clear afterwards — an orc that

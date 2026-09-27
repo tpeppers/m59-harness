@@ -2202,7 +2202,13 @@ const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
 const UNREADABLE_WAIT_MS = Number(process.env.M59_UNREADABLE_WAIT_MS ?? 60_000);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
-async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null }) {
+// The walk, with the errand's own-walk marker cleared however it ends (see holdKeeper's take-back).
+async function compiledWalk(ctx, agent, to, opts) {
+  try { return await compiledWalkInner(ctx, agent, to, opts); }
+  finally { ctx.holds?.get(agent)?.endOwnWalk?.(); }
+}
+
+async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -2333,6 +2339,7 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, p
     const budget = Math.min(ctx.budgetCapMs,
       Math.max(ctx.budgetFloorMs, (Number(est?.ms) || 400_000) + 90_000));
     ctx.log(agent, `walking ${at.room} -> ${to}, budget ${Math.round(budget / 1000)}s`);
+    ctx.holds?.get(agent)?.ownWalk?.(Date.now() + budget);
     // THE REPLY IS EVIDENCE AND IT USED TO BE THROWN AWAY.
     //
     // `await call('travel', ...).catch(() => ({}))` discarded the answer, so a travel that was
@@ -2693,6 +2700,14 @@ export async function holdKeeper(ctx, agent, fleet) {
   // keeper every beat, and when it renews less than we hold, the claim is taken again and the
   // walk the keeper started in the gap is cancelled.
   const by = `fleetscript:${ctx.name}`;
+  // OUR OWN WALK IS NOT "WHATEVER THE KEEPER STARTED". The take-back below cancels the keeper's
+  // job, and a walk this errand issued is a job in the same slot. A competing claimant (another
+  // bot's lease restored, a DUM re-asserting) takes work and movement between beats, the retake
+  // is right — and the cancel then killed the errand's own journey, every 30 s, for good:
+  // 2026-09-27, disciple-arm, Animal "walking 599 -> 48" cancelled after 6 s ten minutes running
+  // and never left 599; a walk to 104 failed 3 of 3 the same way. While a walk of ours is in
+  // flight the retake still happens and the cancel does not.
+  const own = { walkUntil: 0 };
   const beat = setInterval(() => {
     if (done) return;
     keeperCall(who, 'commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS }).then(async hb => {
@@ -2703,10 +2718,12 @@ export async function holdKeeper(ctx, agent, fleet) {
         faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
         why: `fleet errand: ${ctx.name} (lease lapsed, taken back)` }).catch(() => null);
       const got = Object.keys(again?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
+      const walking = own.walkUntil > Date.now();
       ctx.log(agent, `the lease had lapsed (renewed ${renewed.join(', ') || 'nothing'}) — ` +
-                     (got.length ? `took ${got.join(', ')} back and stopped whatever the keeper started`
-                                 : 'and the keeper would not give it back'));
-      if (got.length) await fetch(`http://127.0.0.1:${who.port}/cancel`, {
+                     (!got.length ? 'and the keeper would not give it back'
+                       : walking ? `took ${got.join(', ')} back and left the errand's own walk running`
+                       : `took ${got.join(', ')} back and stopped whatever the keeper started`));
+      if (got.length && !walking) await fetch(`http://127.0.0.1:${who.port}/cancel`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
         signal: AbortSignal.timeout(20_000) }).catch(() => {});
@@ -2742,6 +2759,9 @@ export async function holdKeeper(ctx, agent, fleet) {
       return r;
     },
     release: () => releaseNow(),
+    /** A walk this errand issued, in flight until `untilMs`: a take-back must not cancel it. */
+    ownWalk: untilMs => { own.walkUntil = Math.max(own.walkUntil, Number(untilMs) || 0); },
+    endOwnWalk: () => { own.walkUntil = 0; },
   };
 }
 
