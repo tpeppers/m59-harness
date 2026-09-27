@@ -298,5 +298,17 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
      /autopilot_status\?\.weapon_magic/.test(proxyBody));
 }
 
+// AND NOTHING MAY WIPE IT, 2026-09-27. The Autopilot constructor installs `session.beforeEquip`,
+// which rebuilds the magic set from ITS OWN reading book, and the broker builds an Autopilot around
+// this proxy the first time the `autopilot` tool is called — with an empty book. So equipBest ran
+// the hook and ranked with an empty set on every call. The proxy must refuse the hook.
+{
+  const auto = read('m59-autopilot.mjs');
+  ok('the Autopilot still installs a beforeEquip hook on its session (so the refusal matters)',
+     /session\.beforeEquip\s*=/.test(auto));
+  ok('the proxy answers no beforeEquip', /get beforeEquip\(\)\s*\{\s*return undefined;\s*\}/.test(proxyBody));
+  ok('and assigning one to it stores nothing', /set beforeEquip\(_\)\s*\{\s*\/\*[^*]*\*\/\s*\}/.test(proxyBody));
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

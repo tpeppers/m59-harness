@@ -1851,6 +1851,17 @@ const KEEPER_LIVENESS_SWEEP_MS = Math.max(1000,
 let _exitView = null;
 
 class KeeperProxy {
+  // NO `beforeEquip` HOOK ON A PROXY, AND NONE CAN BE INSTALLED. `autopilotFor(session)` builds an
+  // Autopilot around this proxy the first time the `autopilot` tool touches the character, and the
+  // Autopilot constructor sets `session.beforeEquip` to rebuild `c._magicWeaponIds` from ITS reading
+  // book — which in the broker is empty, because the readings live in the keeper. So every
+  // `equip_best` through the broker ran the rebuild below (the keeper's own readings) and then had
+  // it wiped to an empty set: 2026-09-27, an enchanted long sword ranked level with five mundane
+  // twins and the one in hand was kept, on every call since the hook went in. The keeper's
+  // `autopilot_status.weapon_magic`, carried by the rebuild, is the only authority here.
+  get beforeEquip() { return undefined; }
+  set beforeEquip(_) { /* the keeper's readings are authoritative; see above */ }
+
   constructor(agent, index) {
     this.name = agent;
     this._index = index;
