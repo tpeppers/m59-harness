@@ -104,7 +104,7 @@ const cupWith = rows.filter(r => (r.pack_items || []).some(i => /chalice of the 
 if (rows.length)
   say(cupWith.length
     ? `- **Chalice:** with ${cupWith.map(r => `${r.character} (room ${r.room_num ?? '?'})`).join(', ')}`
-    : '- **Chalice: IN NOBODY'S PACK.** On a floor or lost; check room 2.');
+    : "- **Chalice: IN NOBODY'S PACK.** On a floor or lost; check room 2.");
 say();
 say(`| Character | Max HP | Kills (${MINUTES}m) | Vigor | Inkies | Food vigor | has_food |`);
 say('|---|---|---|---|---|---|---|');
