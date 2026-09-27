@@ -435,20 +435,50 @@ async function selfObjectId() {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 let lease = null;
+// ON ITS OWN TIMER, NOT THE LOOP'S. The heartbeat used to fire every third round, and a round
+// is two status reads plus a cast that can wait forty seconds on the keeper — so the lease
+// ("commander lease expired", measured 2026-09-27) ran out between beats. The broker caps a
+// commander lease at 30 s (lease_ms 5000-30000), so no per-round cadence can keep up with a
+// slow round; a timer beating every 10 s beside the loop can, whatever the loop is waiting on.
+const LEASE_MS = 30_000, BEAT_MS = 10_000;
+let beating = false;
+const beatTimer = setInterval(() => {
+  if (beating) return;
+  beating = true;
+  heartbeat().catch(() => {}).finally(() => { beating = false; });
+}, BEAT_MS);
+beatTimer.unref?.();
+async function beatIfDue() {}     // the timer does it; kept so the loop reads the same
+const leasedAgents = () => [{ agent: PATIENT, character: CHARACTER }];
 async function claim() {
   const out = await call('commander_lease', {
     action: 'acquire', ...pin,
-    agents: [{ agent: PATIENT, character: CHARACTER }], owner, lease_ms: 30_000,
+    agents: leasedAgents(), owner, lease_ms: LEASE_MS,
   }, 30_000).catch(e => ({ error: e.message }));
-  // `lease_id` is what commander_lease actually returns; the other two spellings are
-  // what it looked like it should return. Measured, not assumed.
-  lease = out?.lease_id ?? out?.lease_token ?? out?.token ?? null;
+  // THE TOKEN, NOT THE ID. The acquire reply carries BOTH: `lease_id` is the lease's public
+  // name (the one "already held by lease <id>" prints) and `lease_token` is the secret every
+  // heartbeat and release must present. This read `lease_id` first — a comment here called it
+  // "what commander_lease actually returns" — so every heartbeat answered "unknown commander
+  // lease token", measured 2026-09-27, and the caster was unheld thirty seconds into every run.
+  lease = out?.lease_token ?? out?.token ?? null;
   return out;
 }
 async function heartbeat() {
   if (lease) {
-    await call('commander_lease', { action: 'heartbeat', ...pin, lease_token: lease, owner, lease_ms: 30_000 }, 20_000)
-      .catch(() => { lease = null; });
+    // THE AGENT LIST IS ECHOED ON EVERY CALL. The broker refuses a heartbeat or release whose
+    // `agents` do not exactly match the acquire ("commander agents do not exactly match the
+    // leased roster set"), and this sent none — so every heartbeat since this file was written
+    // failed, and the lease quietly lapsed thirty seconds into every run.
+    const r = await call('commander_lease', { action: 'heartbeat', ...pin, agents: leasedAgents(), lease_token: lease, owner, lease_ms: LEASE_MS }, 20_000)
+      .catch(e => { lease = null; return { error: e.message }; });
+    // A HEARTBEAT CAN SUCCEED AND STILL DROP US. The broker answers a heartbeat whose keeper did
+    // not confirm every faculty by releasing that agent and returning normally, with the reason in
+    // the row's `blocked_reason` — so "no exception" is not "still held". Read the row.
+    const row = [...(r?.agents ?? []), ...(r?.outcomes ?? [])].find(x => x?.agent === PATIENT);
+    if (r?.error || row?.granted === false) {
+      console.log(`  heartbeat lost the lease: ${r?.error ?? row?.blocked_reason ?? JSON.stringify(r).slice(0, 200)}`);
+      lease = null;
+    }
   }
   // A LOST LEASE IS RE-TAKEN, NOT MOURNED. It is lost when the broker restarts (new pid, and
   // the lease table starts empty) or when a heartbeat is late; either way the answer is the
@@ -461,7 +491,7 @@ async function heartbeat() {
 }
 async function release() {
   if (!lease) return;
-  await call('commander_lease', { action: 'release', ...pin, lease_token: lease, owner }, 20_000).catch(() => {});
+  await call('commander_lease', { action: 'release', ...pin, agents: leasedAgents(), lease_token: lease, owner }, 20_000).catch(() => {});
   lease = null;
 }
 
@@ -476,7 +506,7 @@ if (GATHER && ROOM) {
   console.log(`gathering both into room ${ROOM}`);
   const sent = new Set();
   for (let i = 0; i < 60; i++) {
-    if (i % 3 === 0) await heartbeat();
+    await beatIfDue();
     const h2 = await read(HEALER), p2 = await read(PATIENT);
     if (h2.room === ROOM && p2.room === ROOM) { console.log('  both there'); break; }
     for (const [ag, st] of [[HEALER, h2], [PATIENT, p2]]) {
@@ -503,6 +533,9 @@ let stop = false;
 const finish = async (why) => {
   if (stop) return; stop = true;
   console.log(`\nstopping: ${why}`);
+  // Stop the beat FIRST: a heartbeat that finds no lease re-takes one, which would put the
+  // hold straight back on a character this is releasing.
+  clearInterval(beatTimer);
   await release();
   console.log('lease released — he goes back to farming.');
   process.exit(0);
@@ -515,7 +548,7 @@ let casts = 0, hits = 0, hb = 0, misses = 0, landed = 0, apartFor = 0, outageSin
 const startKarma = healer0.karma;
 
 for (let round = 1; !stop && casts < MAX_CASTS; round++) {
-  if (++hb % 3 === 0) await heartbeat();
+  await beatIfDue();
 
   const h = await read(HEALER);
   const p = await read(PATIENT);
