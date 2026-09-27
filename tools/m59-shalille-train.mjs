@@ -170,14 +170,25 @@ async function call(tool, args = {}, timeoutMs = 45_000) {
 // own port, which is DISCOVERED rather than computed: a port is not a name, and this
 // repository has already had one broker read another fleet's keeper because the arithmetic
 // happened to agree.
+//
+// THE WHOLE 9000s, AND THE CHARACTER AS WELL AS THE AGENT. This scanned 9011-9110 — one
+// machine's band on one day — and on 2026-09-27 prod's keepers were on 9500-9560, so the run
+// refused with "no keeper answered for t2" beside a keeper that was answering on 9512. And an
+// agent handle is not unique across fleets: the shadow fleet has a `t2` too, on its own band,
+// so a wider scan that matched the handle alone could command the wrong fleet's body. The
+// character the BROKER holds for this agent is what makes the match.
 async function findKeeper(agent) {
-  const ports = Array.from({ length: 100 }, (_, i) => 9011 + i);
-  for (const group of Array.from({ length: 10 }, (_, g) => ports.slice(g * 10, g * 10 + 10))) {
+  const h = await (await fetch(`${BROKER}health`, { signal: AbortSignal.timeout(15_000) })).json().catch(() => ({}));
+  const want = h?.session_characters?.[agent] ?? null;
+  if (!want) return null;
+  const ports = Array.from({ length: 1000 }, (_, i) => 9000 + i);
+  for (const group of Array.from({ length: 10 }, (_, g) => ports.slice(g * 100, g * 100 + 100))) {
     const hits = await Promise.all(group.map(async p => {
       try {
         const r = await fetch(`http://127.0.0.1:${p}/health`, { signal: AbortSignal.timeout(1200) });
         const j = await r.json();
-        return j?.agent === agent ? { port: p, agent: j.agent, character: j.character, pid: j.pid } : null;
+        return j?.agent === agent && j?.character === want
+          ? { port: p, agent: j.agent, character: j.character, pid: j.pid } : null;
       } catch { return null; }
     }));
     const hit = hits.find(Boolean);
