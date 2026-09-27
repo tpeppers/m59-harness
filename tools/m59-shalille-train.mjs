@@ -66,6 +66,8 @@
 // that wanders in — the protected-faculty rule, which is not this tool's to switch off.
 
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { trainingLedger, codeIdentity } from './m59-training-ledger.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (n, d = null) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -545,6 +547,12 @@ process.on('SIGINT', () => { finish('interrupted').catch(() => process.exit(1));
 // ------------------------------------------------------------------ the loop
 
 let casts = 0, hits = 0, hb = 0, misses = 0, landed = 0, apartFor = 0, outageSince = 0;
+// THE TRAINING LEDGER (m59-training-ledger.mjs): one `cast` record per heal, success or fizzle read
+// off the reagent. The run id comes from m59-keep-training.mjs when it started us, so these records
+// land inside its run_start/run_end; run alone, this opens its own run. Never fatal.
+let pendingCast = null;
+const training = await trainingLedger({ agent: HEALER, run: process.env.M59_TRAINING_RUN || null,
+  code: codeIdentity(fileURLToPath(import.meta.url)), health }).catch(() => null);
 const startKarma = healer0.karma;
 
 for (let round = 1; !stop && casts < MAX_CASTS; round++) {
@@ -616,6 +624,17 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
   apartFor = 0;
 
   const hpack = await packOf(HEALER);
+  // THE TRAINING LEDGER'S VERDICT ON LAST ROUND'S CAST: a success consumes its reagent, a failed
+  // roll consumes none (spell.kod:1255), so the reagent count this round is the answer. Only
+  // recorded when both counts were read — an unreadable pack is `unknown`, never a fizzle.
+  if (pendingCast) {
+    const now = countOf(hpack, pendingCast.reagent);
+    const outcome = !hpack.length || pendingCast.before == null ? 'unknown'
+      : now < pendingCast.before ? 'success' : 'fizzle';
+    await training?.record({ kind: 'cast', spell: pendingCast.spell, school: "Shal'ille",
+                             target: SOLO ? 'self' : PATIENT, outcome }).catch(() => {});
+    pendingCast = null;
+  }
   const ppack = await packOf(PATIENT);
   const am = ppack.find(i => CURSED.test(i.name || ''));
   const wearing = (await call('equipment', { agent: PATIENT }, 20_000).catch(() => null))
@@ -661,6 +680,9 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
       : await call('cast', { agent: HEALER, spell: spell.name, target }, 40_000)
           .catch(e => ({ error: e.message }));
     casts++;
+    if (r?.error) await training?.record({ kind: 'cast', spell: spell.name, school: "Shal'ille",
+                                            target: SOLO ? 'self' : PATIENT, outcome: 'refused', why: r.error }).catch(() => {});
+    else pendingCast = { spell: spell.name, reagent: spell.reagent, before: hpack.length ? countOf(hpack, spell.reagent) : null };
     // A CAST THAT SPENT NO MANA DID NOT HAPPEN. The broker says so in the reply and I was
     // not reading it: `what_the_mana_says` is "NOTHING was spent - the cast did not happen
     // at all". Counting those as successes is how a loop reports three hundred casts and
