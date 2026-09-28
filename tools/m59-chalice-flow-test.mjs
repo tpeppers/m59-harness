@@ -1139,6 +1139,13 @@ try {
     let asked2 = false; elsewhere.ap.chaliceGive = async () => { asked2 = true; return { gave: true }; };
     await elsewhere.ap.chaliceHandInMoney();
     ok(!asked2, 'nothing is walked to: only in the station room');
+    // 2026-09-28: Kermit handed a spell's price to the desk seconds before the errand's hold.
+    const held = k('Rowlf');
+    held.P.client.inventory.push(world.item('shilling', 5000));
+    held.ap.facultyHeld = f => f === 'economy';
+    let asked3 = false; held.ap.chaliceGive = async () => { asked3 = true; return { gave: true }; };
+    await held.ap.chaliceHandInMoney();
+    ok(!asked3, 'not while an errand holds the economy faculty: that money is carried for a reason');
     ok(L.ap.chaliceRole() === 'holder', '(the desk itself never hands in)');
   }
 

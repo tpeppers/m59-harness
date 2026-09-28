@@ -22320,6 +22320,10 @@ export class Autopilot {
     const cfg = this.chaliceCfg;
     if (!cfg?.money_flow || this.hereRoom() !== cfg.station_room) return false;
     if (this.chaliceRole() !== 'traveller' || this._chaliceServe || this.busyStatus?.() || this.inert) return false;
+    // NOT WHILE SOMEBODY ELSE HOLDS THE PURSE. An errand that took `economy` is carrying money for
+    // a reason: 2026-09-28 Kermit was funded 700 for a 1000-shilling spell and handed it straight to
+    // the desk five seconds before learn-skill's hold landed, then walked for the bank in Barloque.
+    if (this.facultyHeld?.('economy')) return false;
     const ride = this.townTrip?.chalice;
     if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
     if (now - (this._moneyHandInAt ?? 0) < 3 * 60_000) return false;
