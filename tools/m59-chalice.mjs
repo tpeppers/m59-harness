@@ -854,7 +854,16 @@ export class ChaliceStore {
         !(['done', 'abandoned'].includes(t.status) && now - (t.updated_at ?? 0) > 10 * 60_000));
       const tmp = this.path + '.' + process.pid + '.tmp';
       writeFileSync(tmp, JSON.stringify(state, null, 1));
-      renameSync(tmp, this.path);
+      // ON WINDOWS A RENAME OVER A FILE ANOTHER PROCESS HAS OPEN FAILS WITH EPERM (or EBUSY/EACCES), and
+      // readers of this file are many and lock-free (the vault desk reads the human marks every turn).
+      // Seen on prod 2026-09-28. The read is short, so the rename is retried for up to a second.
+      for (let attempt = 0; ; attempt++) {
+        try { renameSync(tmp, this.path); break; }
+        catch (e) {
+          if (!['EPERM', 'EBUSY', 'EACCES'].includes(e?.code) || attempt >= 20) { try { unlinkSync(tmp); } catch {} throw e; }
+          Atomics.wait(LOCK_WAIT, 0, 0, 50);
+        }
+      }
       return result;
     } finally {
       try { closeSync(fd); } catch {}

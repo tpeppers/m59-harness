@@ -370,6 +370,10 @@ try {
     W.rows.t3.room_num = 104;
     const r2 = await d.turn();
     ok('manager off post: paused', /manager is in room 104/.test(r2.paused ?? ''), JSON.stringify(r2));
+    W.rows.t3.room_num = HALL; W.rows.t3.activity = 'NOT IN GAME';
+    const r3 = await d.turn();
+    ok('a manager not in game: paused, even though its row still says the hall', /manager is not in game/.test(r3.paused ?? ''), JSON.stringify(r3));
+    W.rows.t3.activity = 'idle'; W.rows.t3.room_num = 104;
     const t0 = Date.now(); d.now = () => t0 + 11 * 60_000;
     await d.turn();
     ok('ten minutes of it closes the desk', /unhealthy for 10 minutes/.test(closed ?? ''), closed);
