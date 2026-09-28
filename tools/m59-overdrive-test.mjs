@@ -2,7 +2,7 @@
 // OFFLINE. Vigor OVERDRIVE (operator, 2026-09-28): sit and eat to 200 on the stomach clock at a natural
 // stop, then go back to the task — rather than leaving at the fighting floor and stopping again forty
 // vigor later. overdriveSettings reads the policy; shouldWaitForProvision is the one rule it changes.
-import { overdriveSettings, shouldWaitForProvision, Autopilot } from './m59-autopilot.mjs';
+import { overdriveSettings, overdriveDigest, shouldWaitForProvision, Autopilot } from './m59-autopilot.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
@@ -36,6 +36,20 @@ ok(rows.length === 1 && rows[0].kind === 'overdrive' && rows[0].gained === 108 &
    `one ledger row: +108 vigor over 6 meals (${JSON.stringify(rows[0])})`);
 k.endOverdrive(198, 'again');
 ok(rows.length === 1, 'ending twice writes once');
+
+
+// THE DIGEST PHASE (operator addendum, 2026-09-28): at 200, keep sitting until the stomach has room for
+// a full sitting again, so the fight begins both fed AND able to top up.
+{
+  const od = overdriveSettings({ overdrive: { enabled: true } });
+  ok(od.digestTo === 20 && od.digestMaxMinutes === 15, 'digest defaults: down to 20 of 100, at most 15 min');
+  ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 0 }).hold === true, 'stomach at 70: keep sitting');
+  ok(overdriveDigest({ od, stomachLevel: 18, digestingForMs: 0 }).released_by === 'digested: room to eat again', 'at 18: released, room to eat again');
+  ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 0, danger: true }).released_by === 'something in reach', 'danger releases at once');
+  ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 0, leased: true }).released_by === 'a lease wanted the body', 'a lease (DUM, an order) releases at once');
+  ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 15 * 60_000 }).hold === false, 'the digest cap releases');
+  ok(overdriveSettings({ overdrive: { enabled: true, digestTo: 100 } }).digestTo === 100, 'digestTo 100 switches the digest phase off (release at the target)');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

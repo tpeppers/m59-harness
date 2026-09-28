@@ -1213,14 +1213,36 @@ export function shouldWaitForProvision({ vigor, floor, wait, hurt, overdrive = n
 // is not wasted on a hurt character. Eating on the clock DURING the fight (provision, "mid-hunt") is
 // the other half and already runs.
 //
-// policy.overdrive = { enabled, target = 200, maxMinutes = 30 }. Off unless set: silence is the
-// behaviour that was already there.
+// AND IT DOES NOT LET GO THE MOMENT IT REACHES 200 (operator, 2026-09-28): "afterwards it should wait
+// until it's expected to be back near full hungriness before releasing control, part of the goal is its
+// *more* ready to keep farming than if it just ate to max vigor, since it's both max vigor and ready to
+// immediately continue reinforcing that max vigor by eating again once it begins expending vigor." So
+// the sitting has two phases: EAT to the target, then DIGEST — keep sitting until the modelled stomach
+// is down to `digestTo` (default 20 of 100: room for a full sitting). Released early by anything that
+// needs the body (something in reach, a lease on work or movement) or by `digestMaxMinutes`.
+//
+// policy.overdrive = { enabled, target = 200, maxMinutes = 30, digestTo = 20, digestMaxMinutes = 15 }.
+// Off unless set: silence is the behaviour that was already there.
 export function overdriveSettings(policy) {
   const o = policy?.overdrive;
   if (!o || o.enabled === false || o.enabled == null && !o.target) return null;
   const target = Math.min(200, Math.max(81, Number(o.target) || 200));
   const maxMinutes = Math.max(1, Number(o.maxMinutes) || 30);
-  return { target, maxMinutes };
+  const digestTo = Math.min(100, Math.max(0, Number.isFinite(Number(o.digestTo)) ? Number(o.digestTo) : 20));
+  const digestMaxMinutes = Math.max(0, Number.isFinite(Number(o.digestMaxMinutes)) ? Number(o.digestMaxMinutes) : 15);
+  return { target, maxMinutes, digestTo, digestMaxMinutes };
+}
+
+/**
+ * The DIGEST phase, pure: after the target is reached, should the character keep sitting? Returns
+ * { hold, released_by } — `hold` while the stomach is above digestTo and nothing needs the body.
+ */
+export function overdriveDigest({ od, stomachLevel, digestingForMs, danger = false, leased = false }) {
+  if (danger) return { hold: false, released_by: 'something in reach' };
+  if (leased) return { hold: false, released_by: 'a lease wanted the body' };
+  if (!(stomachLevel > od.digestTo)) return { hold: false, released_by: 'digested: room to eat again' };
+  if (digestingForMs >= od.digestMaxMinutes * 60_000) return { hold: false, released_by: `${od.digestMaxMinutes} min digest cap` };
+  return { hold: true, released_by: null };
 }
 
 // VIGOR IS NOT SHAPED LIKE THE OTHER TWO, and reading it as though it were has been
@@ -3711,7 +3733,12 @@ export class Autopilot {
     this.overdrive = { ...o, active: false };
     const minutes = +((Date.now() - o.since) / 60000).toFixed(1);
     const row = { from: o.from, to: vigor, gained: (vigor ?? 0) - (o.from ?? 0), minutes,
-                  meals: (this.tally.meals || 0) - (o.meals || 0), target: o.target, why };
+                  meals: (this.tally.meals || 0) - (o.meals || 0), target: o.target, why,
+                  // THE DIGEST WAIT, as the operator asked it to be recorded.
+                  stomach_before: o.stomach_before ?? null, predicted_ready_at: o.predicted_ready_at ?? null,
+                  stomach_after: Math.round(Number(this.stomach?.level ?? 0)),
+                  digest_minutes: o.digestFrom ? +((Date.now() - o.digestFrom) / 60000).toFixed(1) : 0,
+                  released_by: why };
     this.note('overdrive released: back to the task', row);
     try { this.ledgerEvent('overdrive', row); } catch {}
   }
@@ -3814,10 +3841,32 @@ export class Autopilot {
       this.startOverdrive(od, vigor, 'a climb began below the fighting floor');
     if (this.overdrive?.active) {
       const why = !od ? 'switched off'
-        : vigor >= this.overdrive.target - 5 ? 'reached the target'
-        : Date.now() - this.overdrive.since > od.maxMinutes * 60_000 ? `${od.maxMinutes} min cap`
+        : Date.now() - this.overdrive.since > od.maxMinutes * 60_000 && vigor < this.overdrive.target - 5 ? `${od.maxMinutes} min cap`
         : null;
       if (why) this.endOverdrive(vigor, why);
+      else if (vigor >= this.overdrive.target - 5) {
+        // AT THE TARGET: DIGEST, then release. See overdriveSettings.
+        const level = Number(this.stomach?.level ?? 0);
+        if (!this.overdrive.digestFrom) {
+          const readyInS = this.stomach?.secondsUntilRoomFor?.(100 - od.digestTo) ?? 0;
+          this.overdrive = { ...this.overdrive, digestFrom: Date.now(), stomach_before: Math.round(level),
+                             predicted_ready_at: new Date(Date.now() + readyInS * 1000).toISOString() };
+        }
+        const d = overdriveDigest({ od, stomachLevel: level, digestingForMs: Date.now() - this.overdrive.digestFrom,
+          danger: !!this.inReachOfUs?.()?.length,
+          leased: !!(this.facultyHeld?.('work') || this.facultyHeld?.('movement')) });
+        if (d.hold) {
+          this.doing = 'overdrive: digesting';
+          if (!this.overdrive.notedDigest) {
+            this.overdrive.notedDigest = true;
+            this.note('overdrive: at the target, digesting before setting out', { vigor, stomach: Math.round(level),
+              digest_to: od.digestTo, predicted_ready_at: this.overdrive.predicted_ready_at,
+              why: 'setting out with room for a full sitting, so vigor is topped up as soon as fighting spends it' });
+          }
+          return 'waiting';
+        }
+        this.endOverdrive(vigor, d.released_by);
+      }
     }
 
 

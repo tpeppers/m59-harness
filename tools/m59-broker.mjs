@@ -11047,7 +11047,9 @@ const TOOLS = [
           'creatures with karma > 0, good only < 0. On its own it narrows what is HUNTED and CLEARED ' +
           'and nothing else; null clears it' },
       overdrive: { type: ['object', 'null'],
-        description: 'VIGOR OVERDRIVE: {enabled, target = 200, maxMinutes = 30}, or null to clear. When a climb ' +
+        description: 'VIGOR OVERDRIVE: {enabled, target = 200, maxMinutes = 30, digestTo = 20, digestMaxMinutes = 15}, ' +
+          'or null to clear. At the target it keeps sitting until the stomach is down to digestTo (room for a ' +
+          'full sitting), so it sets out able to top up at once. When a climb ' +
           'begins (vigor fell below the fighting floor) the character waits out the stomach and eats to the ' +
           'target instead of leaving at the floor, then goes back to its task; a journey climbs to it before ' +
           'setting out. Food in the pack only; nothing is bought. Off unless set' },
@@ -12069,7 +12071,9 @@ const TOOLS = [
       if (a.karma_strict !== undefined) p.policy.karmaStrict = !!a.karma_strict;
       if (a.overdrive !== undefined) p.policy.overdrive = a.overdrive && typeof a.overdrive === 'object'
         ? { enabled: a.overdrive.enabled !== false, target: Number(a.overdrive.target) || 200,
-            maxMinutes: Number(a.overdrive.maxMinutes) || 30 } : null;
+            maxMinutes: Number(a.overdrive.maxMinutes) || 30,
+            ...(a.overdrive.digestTo != null ? { digestTo: Number(a.overdrive.digestTo) } : {}),
+            ...(a.overdrive.digestMaxMinutes != null ? { digestMaxMinutes: Number(a.overdrive.digestMaxMinutes) } : {}) } : null;
       // Whether a fight OPENS with a walk to a wall. See the schema entry: with this on and
       // the wall unreachable, the pass retries for ever and the character never swings at prey
       // standing next to it. Both spellings land on both keys so the roster stays readable by
