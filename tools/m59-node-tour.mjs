@@ -52,11 +52,13 @@ export function tourPlan(){return [
   {kind:'cut',room:49,x:20544,y:512,row:1,col:21},{kind:'cross',row:0,col:21,to:593},
   ...[583,584,574,150,575,576,587,27].map(to=>({kind:'travel',to})),
   {kind:'walk',row:23,col:53},{kind:'meld',node:'cave'},
-  {kind:'cross',row:57,col:45,to:587},
-  ...[576,587,597,598,599,2].map(to=>({kind:'travel',to})),
+  {kind:'walk',row:57,col:45},
+  ...[587,576,587,597,598,599,2].map(to=>({kind:'travel',to})),
 ];}
 
-export async function runTour(ctx,{railFile='substrate/node-rails.json',evidenceDir='substrate/node-tours',fromStep=0}={}){
+export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0}={}){
+  fromStep=Number(fromStep);
+  if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
   const health=await(await fetch(new URL('health',process.env.M59_CONTROL_URL))).json();
   const first=await call('look',{agent});
@@ -129,7 +131,8 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
         writeFileSync(join(out,id+'-'+label+'-cut.json'),JSON.stringify(proof));
         const walk=railLeg({waypoints:points},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
         const route={ok:true,rail_complete:walk.unvalidated===0,direction:'to_node',exit:'body-cut',exit_label:'body-cut',
-          from:`r${p.row}c${p.col}`,to:`r${step.row}c${step.col}`,legs:[walk],jumps:0,all_declared:true,waypoints:walk.waypoints.length};
+          from:`r${p.row}c${p.col}`,to:`r${step.row}c${step.col}`,legs:[walk],jumps:0,all_declared:true,waypoints:walk.waypoints.length,
+          confidence:'body-seeded exact-endpoint walk, checked before following'};
         leg.check=checkRoute(route,{edge});if(!leg.check.ok||leg.check.skipped||!route.rail_complete)throw Error('cut_check_failed');
         const file=join(out,id+'-'+label+'-rail.json');writeFileSync(file,JSON.stringify({stones:[{node:'cut',room:p.room,routes:[route]}]}));
         leg.rail_ref=file;leg.rail_sha256=hashFile(file);await follow({node:'cut'},label,file);
@@ -142,18 +145,23 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
         const l=await read(),p=tourPosition(l);if(!insideNode(p,step.node))throw Error('outside_meld_box_'+step.node);
         const node=l.objects.find(o=>/mana node/i.test(o.name));if(!node)throw Error('node_not_visible_'+step.node);
         const before=await call('status',{agent}),activation=await command('act',{verb:'activate',target:node.id},label);
+        // A short act response can precede its message. Read only events after this
+        // room look; never search old history for an already-bonded sentence.
+        const observation=meldVerdict(JSON.stringify(activation)).verdict==='unrelated'&&Number.isFinite(l.ev_seq)
+          ?await call('wait_for_event',{agent,since:l.ev_seq,kinds:['message'],timeout_ms:3000}):null;
         await sleep(3000);const after=await call('status',{agent});await sleep(1500);const stable=await call('status',{agent});
-        const verdict=meldVerdict(JSON.stringify(activation));
+        const verdict=meldVerdict(JSON.stringify({activation,observation}));
         const grant=before.connection_revision===after.connection_revision&&after.connection_revision===stable.connection_revision&&
           Number.isFinite(before.mana?.max)&&after.mana?.max>before.mana.max&&stable.mana?.max===after.mana.max;
-        const objective={stone:step.node,position:p,node_state:nodeReport({objects:l.objects,you:l.you}),activation,verdict,
+        const objective={stone:step.node,position:p,node_state:nodeReport({objects:l.objects,you:l.you}),activation,observation,observed_since:l.ev_seq,verdict,
           before:before.mana,after:after.mana,stable:stable.mana,grant,connection_revision:before.connection_revision,
           status:verdict.verdict==='melded'||grant?'melded':verdict.verdict==='already'?'already':verdict.verdict==='dead'?'dead_node':'unknown'};
         record.nodes.push(objective);console.log('TOUR NODE '+JSON.stringify(objective));
       }
       leg.end=tourPosition(await read());leg.completed_at=new Date().toISOString();save();
     }
-    record.end=tourPosition(await read());record.complete=fromStep===0&&tourComplete(record);return record.complete||fromStep>0;
+    record.end=tourPosition(await read());record.complete=fromStep===0&&tourComplete(record);
+    record.partial_complete=fromStep>0;return record.complete||record.partial_complete;
   }catch(e){record.failure=String(e.stack??e);console.log('TOUR STOP '+e.message);return false;}
   finally{
     await call('cancel_movement',{agent});record.end=tourPosition(await call('look',{agent}));save();
