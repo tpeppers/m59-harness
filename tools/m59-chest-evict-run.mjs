@@ -52,7 +52,8 @@ export function brokerCall(url = process.env.M59_CONTROL_URL || 'http://127.0.0.
  * Returns {sold: {item: n}, proceeds, rounds}.
  */
 export async function runEviction({ plan, agent, dry = false, log = console.log, call = brokerCall(),
-                                    fleet = 'prod', ledgerFile = null, maxRounds = 6, keep = {} } = {}) {
+                                    fleet = 'prod', ledgerFile = null, maxRounds = 6, keep = {}, own = [],
+                                    sellAt = () => null } = {}) {
   if (!agent) throw new Error('--agent is required');
   const ledger = ledgerFile ?? fileURLToPath(new URL(`../substrate/history/${fleet}/chest-evict.jsonl`, import.meta.url));
   const record = row => { try { mkdirSync(dirname(ledger), { recursive: true }); appendFileSync(ledger, JSON.stringify({ at: new Date().toISOString(), agent, ...row }) + '\n'); } catch {} };
@@ -60,7 +61,9 @@ export async function runEviction({ plan, agent, dry = false, log = console.log,
   const sold = {}; let proceeds = 0;
   const row = async () => (await call('fleet', {}, 60_000)).fleet?.find(r => r.agent === agent);
   const pack = async () => (await call('inventory', { agent }, 60_000))?.items ?? [];
-  if (!left.size) { log('nothing to evict'); return { sold, proceeds, rounds: 0 }; }
+  // A MOVES-ONLY PLAN IS NOT "NOTHING TO DO": the 08:27 run printed "nothing to evict" and returned
+  // before its twelve moves, because this looked at sales alone.
+  if (!left.size && !(plan.moves ?? []).length && !own.length) { log('nothing to evict'); return { sold, proceeds, rounds: 0 }; }
   record({ kind: 'start', dry, plan: plan.total.map(t => ({ item: t.item, amount: t.amount, tier: t.tier })) });
 
   // WORN GEAR IS NEVER OFFERED. The first live run (2026-09-28 07:58) was walking Statler to Izzio to sell
@@ -74,7 +77,7 @@ export async function runEviction({ plan, agent, dry = false, log = console.log,
   // bounced stock can go straight into those two chests"). What it carries of a planned item above
   // `keep` is deposited (the chests with room take it; the full one refuses) and `keep` drawn back,
   // in one visit. A deposit never takes anything worn (hallWithdraw's own rule).
-  const names = [...new Set([...plan.total.map(t => t.item), ...(plan.moves ?? []).map(m => m.item)])];
+  const names = [...new Set([...plan.total.map(t => t.item), ...(plan.moves ?? []).map(m => m.item), ...own])];
   const mine = await pack();
   const carried = names.filter(n => countOf(mine.filter(offerable), n) > (Number(keep[norm(n)] ?? keep[n]) || 0));
   if (carried.length) {
@@ -84,6 +87,38 @@ export async function runEviction({ plan, agent, dry = false, log = console.log,
       const wants = Object.entries(keep).filter(([k]) => carried.some(n => norm(n) === norm(k))).map(([item, amount]) => ({ item, amount: Number(amount) }));
       const d = await call('hall_withdraw', { agent, wants, deposit: carried }, 620_000).catch(e => ({ ok: false, why: e.message }));
       record({ kind: 'predeposit', items: carried, ok: d?.ok !== false, why: d?.why ?? null, stashed: d?.stashed ?? null });
+      // WHATEVER STILL WON'T FIT: what the chests refused, above `keep`, is sold where it is sold in
+      // this town — cheap stock only (sellAt answers null for anything else, and it stays carried).
+      const after = await pack();
+      const bounced = new Map();
+      for (const n of carried) {
+        const extra = countOf(after.filter(offerable), n) - (Number(keep[norm(n)] ?? keep[n]) || 0);
+        const at = extra > 0 ? sellAt(n) : null;
+        if (!at) continue;
+        const key = `${at.merchant}@${at.room}`;
+        if (!bounced.has(key)) bounced.set(key, { ...at, items: [] });
+        bounced.get(key).items.push({ item: n, amount: extra });
+      }
+      for (const m of bounced.values()) {
+        log(`  the chests refused ${m.items.map(i => `${i.amount} ${i.item}`).join(', ')}: selling to ${m.merchant}`);
+        await call('travel', { agent, to: m.room, background: false }, 900_000).catch(() => null);
+        const p = await pack();
+        const specs = m.items.flatMap(({ item, amount }) => {
+          let rest = amount;
+          return p.filter(o => norm(o.name) === norm(item) && offerable(o)).map(o => {
+            if (rest <= 0) return null;
+            const k = Number(o.amount) > 0 ? Math.min(Number(o.amount), rest) : 1;
+            rest -= k;
+            return Number(o.amount) > 0 ? { id: o.id, amount: k } : o.id;
+          }).filter(Boolean);
+        });
+        if (!specs.length) continue;
+        const s = await call('sell', { agent, to: m.merchant, items: specs, confirm: true }, 120_000).catch(e => ({ error: e.message }));
+        const q = await pack();
+        const soldNow = m.items.map(i => ({ item: i.item, amount: countOf(p, i.item) - countOf(q, i.item) }));
+        for (const x of soldNow) if (x.amount > 0) sold[x.item] = (sold[x.item] ?? 0) + x.amount;
+        record({ kind: 'sold_bounced', merchant: m.merchant, room: m.room, items: soldNow, reply: s?.error ?? null });
+      }
     }
   }
 
