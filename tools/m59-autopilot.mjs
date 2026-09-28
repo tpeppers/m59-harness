@@ -3869,7 +3869,11 @@ export class Autopilot {
         }
         const d = overdriveDigest({ od, stomachLevel: level, digestingForMs: Date.now() - this.overdrive.digestFrom,
           danger: !!this.inReachOfUs?.()?.length,
-          leased: !!(this.facultyHeld?.('work') || this.facultyHeld?.('movement')) });
+          // NOT "IS A LEASE HELD": DUM holds work and movement on every crew hunter for good, so that
+          // released every digest the instant it began (Sweetums, 2026-09-28: 151 -> 180, digest 0 min,
+          // "a lease wanted the body"). What needs the body is something USING it — an errand or a
+          // journey in hand (inert), or one waiting to resume.
+          leased: !!(this.inert || this.suspendedJourney) });
         if (d.hold) {
           this.doing = 'overdrive: digesting';
           if (!this.overdrive.notedDigest) {
