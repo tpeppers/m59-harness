@@ -16021,11 +16021,16 @@ export class Autopilot {
         const levelAfterDeath = this.s.client?.vitals?.()?.health?.max ?? null;
         // Ask for a fresh post-death ceiling; an unchanged cached value is not proof
         // that this death cost no HP. The existing broadcast wait bounds this read.
+        const healthBeforeRequest = this.s.client?.statsById?.get('health');
+        const healthRequestSeq = this.s.client?.evSeq;
         try { this.s.client?.stats?.(1); } catch { /* unknown is still a valid report */ }
-        const bcast = await this.awaitDeathBroadcast().catch(() => null);
+        const freshHealth = this.s.client?.statsById?.get('health') !== healthBeforeRequest ? null
+          : this.s.client?.waitFor?.({ since: healthRequestSeq, kinds: 'stat', timeoutMs: 1500,
+            match: event => event.name === 'health' })?.catch(() => null);
+        const [bcast] = await Promise.all([this.awaitDeathBroadcast().catch(() => null), freshHealth]);
         const afterStat = this.s.client?.statsById?.get('health');
         death.max_hp_before = death.level;
-        death.max_hp_after = this.lastDeath === death && afterStat?.observed_at >= death.at
+        death.max_hp_after = this.lastDeath === death && afterStat !== healthBeforeRequest && afterStat?.observed_at >= death.at
           ? afterStat.currentMax : null;
         death.max_hp_lost = Number.isFinite(death.max_hp_before) && Number.isFinite(death.max_hp_after)
           && death.max_hp_before >= death.max_hp_after ? death.max_hp_before - death.max_hp_after : null;

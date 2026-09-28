@@ -195,8 +195,8 @@ export function renderDeaths({ hours = 168, characters = null, impact = 'all' } 
   ${NAV('deaths')}
 
   <div class="cards">
-    <div class="card"><div class="k">True Deaths</div><div class="v bad">${counts.true_deaths}</div>
-      <div class="n">${counts.hp_lost} max HP lost in this window</div></div>
+    <div class="card"><div class="k">True Deaths</div><div class="v ${counts.true_deaths ? 'bad' : 'dim'}">${counts.true_deaths}</div>
+      <div class="n">${counts.hp_lost} known max HP lost in this window</div></div>
     <div class="card"><div class="k">No HP loss</div><div class="v">${counts.no_hp_loss}</div></div>
     <div class="card"><div class="k">Unknown HP loss</div><div class="v">${counts.unknown}</div>
       <div class="n">missing a confirmed before/after reading</div></div>
@@ -213,6 +213,11 @@ export function renderDeaths({ hours = 168, characters = null, impact = 'all' } 
         deciding against a world that stopped changing</div></div>
   </div>
 
+  <form method="get"><input type="hidden" name="hours" value="${hours}"><label>Show deaths
+    <select name="impact" onchange="this.form.submit()">${filters.map(([key, label]) => `<option value="${key}"${impact === key ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+    <button type="submit">Apply</button></form>
+  <p class="caveat">${counts.total} total deaths; ${counts.under_30} below 30 max HP. Low level alone does not prove zero HP loss.
+    The cause and location charts use the selected group. Historical records without a confirmed HP cost remain unknown.</p>
   <div class="panel">
     <div class="facets">
       <button data-facet="cause" class="on">What killed them</button>
@@ -230,11 +235,6 @@ export function renderDeaths({ hours = 168, characters = null, impact = 'all' } 
     <div class="caveat" id="facet-note"></div>
   </div>
 
-  <form method="get"><input type="hidden" name="hours" value="${hours}"><label>Show deaths
-    <select name="impact" onchange="this.form.submit()">${filters.map(([key, label]) => `<option value="${key}"${impact === key ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
-    <button type="submit">Apply</button></form>
-  <p class="caveat">${counts.total} total deaths; ${counts.under_30} below 30 max HP. Low level alone does not prove zero HP loss.
-    The cause and location charts use the selected group. Historical records without a confirmed HP cost remain unknown.</p>
   <h2>The last ${Math.min(80, rows.length)} deaths</h2>
   <div class="sub">Click one to open its report.</div>
   <div class="panel scroller" style="padding:.25rem .5rem">

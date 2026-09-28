@@ -14,7 +14,7 @@ export function travelSummary({ events = [], samples = [], books = [], character
   const allowed = who => who && (!characters || characters.has(who));
   const inWindow = t => finite(t) && t >= since && t <= now;
   const person = who => {
-    if (!people.has(who)) people.set(who, { character: who, maps: new Set(), entries: 0,
+    if (!people.has(who)) people.set(who, { character: who, maps: new Set(), entries: 0, entry_logging: false, method_logging: false,
       journeys: 0, arrived: 0, failed: 0, unknown: 0, journey_ms: 0,
       crossings: 0, issues: 0, collisions: 0, stuck_ms: 0,
       methods: Object.fromEntries(Object.keys(TRAVEL_METHODS).map(k => [k, 0])) });
@@ -47,6 +47,7 @@ export function travelSummary({ events = [], samples = [], books = [], character
   for (const e of events) {
     if (!allowed(e.character) || !inWindow(e.t)) continue;
     const p = person(e.character);
+    if (['travel_map_entered', 'travel_cast', 'travel_method'].includes(e.kind)) p.method_logging = true;
     if (e.kind === 'travel_journey' || e.kind === 'zone_change') {
       p.journeys++;
       p[e.arrived === true ? 'arrived' : e.arrived === false ? 'failed' : 'unknown']++;
@@ -55,6 +56,7 @@ export function travelSummary({ events = [], samples = [], books = [], character
       if (e.arrived === true) seen(p, e.to);
     }
     if (e.kind === 'travel_map_entered') {
+      p.entry_logging = true;
       seen(p, e.room, e.room_name);
       if (e.from !== null && e.from !== e.room) p.entries++;
     }
