@@ -1089,6 +1089,27 @@ try {
     ok(store.duty()?.with === 'Loial the Ogier' && !store.duty()?.acting, 'no acting desk left behind');
   }
 
+  section('a return the holder does not take is not bounced: the picker runs the desk instead');
+  {
+    const { world, store, k } = guardWorld('g-bounce');
+    const L = k('Loial the Ogier'), G = k('Gonzo');
+    G.P.client.inventory.push(world.item('chalice of the rain'));
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i), 'dropped for the holder once');
+    // Loial's keeper is held elsewhere and never looks. The hand-off expires.
+    store.setHandoff({ rider: 'Loial the Ogier', by: 'Gonzo', ttlMs: 1000 }, Date.now() - 5000);
+    G.ap._chaliceFloorSince = { key: `2:${world.floor.get(2)[0].id}`, at: Date.now() - 10_000 };
+    await G.ap.chaliceGuard();
+    ok(has(world, G.P, /chalice/i), 'picked up again after the grace');
+    ok(G.ap.events.some(e => e.what === 'return_not_taken'), 'the failed return is ledgered');
+    G.ap._chaliceReturnedAt = 0;
+    await G.ap.chaliceGuard();
+    ok(has(world, G.P, /chalice/i), 'and it is NOT dropped again');
+    ok(store.duty()?.acting === 'Gonzo', 'Gonzo runs the desk');
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', null, store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'reclaim', 'the holder, when it works again, asks for it back by ticket');
+  }
+
   section('a cup somewhere else is somebody else\'s floor');
   {
     const { world, k, cupDown } = guardWorld('g-elsewhere');

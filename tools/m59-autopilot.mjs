@@ -22063,7 +22063,13 @@ export class Autopilot {
       // nobody else is. Dropped, with the hand-off registered first, so only they may lift it.
       // A fleetscript holding the body may be about to drink it (cupRide): not ours to move.
       if (this.chaliceRole() !== 'traveller' || strangers || this.busyStatus?.() || this.inert) return false;
-      const to = [cfg.holder, cfg.alternate].find(n => n && fleetHere.some(x => sameName(x, n)));
+      // A RETURN THAT WAS NOT TAKEN IS NOT TRIED AGAIN FOR A WHILE. On prod 2026-09-28 01:19-01:31 the
+      // holder stood in room 2 with its keeper held by a fleetscript: every drop for it lay 20 s,
+      // expired, and was picked up and dropped again. The cup was on the floor more than it was in
+      // a pack. After one failed return this character runs the desk; the holder asks for the cup
+      // back (a `return` ticket, handed by trade) once its keeper is working again.
+      const backoff = now < (this._chaliceReturnBackoffUntil ?? 0);
+      const to = backoff ? null : [cfg.holder, cfg.alternate].find(n => n && fleetHere.some(x => sameName(x, n)));
       if (!to) {
         // NOBODY ON DUTY IS AT THE DESK: this character runs it until the holder is back
         // (operator, 2026-09-28). Registered, so it serves as the alternate and the holder asks
@@ -22075,6 +22081,7 @@ export class Autopilot {
       }
       if (this._chaliceReturnedAt && now - this._chaliceReturnedAt < 30_000) return false;
       this._chaliceReturnedAt = now;
+      this._chaliceReturnedTo = { to, at: now };
       try { store.setHandoff({ rider: to, by: me, why: 'returned to duty' }); } catch { return false; }
       await this.s.pacer.submit('act', () => c.drop([cup.id])).catch(() => {});
       this.chaliceEvent('returned_to_duty', { room: this.hereRoom(), to });
@@ -22098,6 +22105,12 @@ export class Autopilot {
     try { store.setDuty({ with: me, lost: false, acting: null }); } catch {}
     this._chaliceActing = null;
     if (handoff && sameName(handoff.rider, me)) try { store.clearHandoff(me); } catch {}
+    const unreturned = this._chaliceReturnedTo && now - this._chaliceReturnedTo.at < 120_000;
+    if (unreturned) {
+      this._chaliceReturnBackoffUntil = now + 10 * 60_000;
+      this.chaliceEvent('return_not_taken', { room: this.hereRoom(), to: this._chaliceReturnedTo.to });
+      this._chaliceReturnedTo = null;
+    }
     this.chaliceEvent('swept', { room: this.hereRoom(), by: me, why: v.why, strangers,
       seen_on_floor_ms: lyingMs, ...(handoff ? { handoff_rider: handoff.rider } : {}) });
     this._chaliceFloorSince = null;
