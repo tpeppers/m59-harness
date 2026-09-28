@@ -109,6 +109,7 @@ import { loadSpawns } from './m59-spawns.mjs';
 // answers null when there is no door table, so a checkout without one is unaffected.
 import { operableDoorsBlocking } from './m59-doorplan.mjs';
 import * as skills from './m59-skills.mjs';
+import { isEmptyHealingWandObject } from './m59-healing-wands.mjs';
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
@@ -4532,6 +4533,14 @@ class Session {
       return true;
     });
 
+    const emptyWandsSkipped = [];
+    if (!ids?.length || !explicitIdsOverride) {
+      cands = cands.filter(o => {
+        const name = c.rsc.get(o.nameRsc);
+        if (!isEmptyHealingWandObject(name, o)) return true;
+        emptyWandsSkipped.push(name); return false;
+      });
+    }
     if (ids?.length) { const w = new Set(ids.map(Number)); cands = cands.filter(o => w.has(o.id)); }
     else if (only) { const q = String(only).toLowerCase(); cands = cands.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(q)); }
     cands.sort((a, b) => manhattan(a) - manhattan(b));
@@ -4550,7 +4559,7 @@ class Session {
     // brokenness we can read, and only when nothing was asked for by id — an explicit
     // `ids` request is the caller overriding us on purpose. UNKNOWN is taken, not
     // skipped: a look that came back empty is not evidence of anything.
-    const brokenSkipped = [];
+    const brokenSkipped = [...emptyWandsSkipped];
     if ((!ids?.length || !explicitIdsOverride) && cands.length) {
       // ARMOUR AND SHIELDS BREAK THE SAME WAY AND WERE NOT BEING ASKED ABOUT.
       //

@@ -3,6 +3,11 @@
 import { dropSpec } from './m59-parse.mjs';
 
 export const isHealingWand = name => /^wand of healing$/i.test(String(name ?? '').trim());
+// item.kod SendAnimation sends HealWand.viBroken_group (3) iff piHits <= 0.
+// Read it on the ground too, so another farmer never re-loots a spent wand.
+export const isEmptyHealingWandObject = (name, object) =>
+  isHealingWand(name) && object?.animate?.animation === 1 && object.animate.group === 3;
+
 export function healingWandState(description) {
   const text = String(description ?? '').replace(/~[a-z]/gi, '').replace(/\s+/g, ' ').trim();
   if (text === 'The once pristine wand is now a blackened mess.') return 'empty';

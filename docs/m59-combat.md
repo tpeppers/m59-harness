@@ -200,3 +200,6 @@ passes. Failed/missing/stale LOOK replies never authorize a drop. Unknown and
 vampiric wands are neither applied nor discarded by this routine; existing saving
 rules remain in force. Journal entries distinguish an application sent from healing
 observed. Tests: `node tools/m59-healing-wands-test.mjs`.
+
+The loot filter also leaves healing wands with the server's broken animation group
+(3) on the ground, preventing pickup/drop loops across farmers and reconnects.

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { HealingWands, healingWandState, isHealingWand } from './m59-healing-wands.mjs';
+import { HealingWands, healingWandState, isHealingWand, isEmptyHealingWandObject } from './m59-healing-wands.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 import { Session } from './m59-session.mjs';
+import { OF, ANIMATE } from './m59-parse.mjs';
 import { normalise } from './m59-loadout.mjs';
 import { TUNABLES } from './m59-tuning.mjs';
 const charged = 'This wand is almost comically decorated by obviously fake gems. Still, the wand hums nearly inaudibly, and when you put your hand on it, it is warm to the touch.';
@@ -116,6 +117,21 @@ await test('threshold is persisted and validated in loadouts and tuning',()=>{
     assert.equal(normalise({policy:{heal_wand_below:value}}).loadout.policy.heal_wand_below,undefined);
     assert.equal(TUNABLES.heal_wand_below.check(value),null);
   }
+});
+await test('ground sprite excludes spent healing wands, preserves other wands',()=>{
+  const broken={animate:{animation:ANIMATE.NONE,group:3}};
+  assert(isEmptyHealingWandObject('wand of healing',broken));
+  for(const name of ['wand of vampiric shock','wand','vampiric wand']) assert(!isEmptyHealingWandObject(name,broken));
+  for(const object of [{},{animate:{animation:ANIMATE.NONE,group:2}},{animate:{animation:ANIMATE.CYCLE,group:3}}]) assert(!isEmptyHealingWandObject('wand of healing',object));
+});
+await test('real loot path leaves a discarded empty healing wand on the ground',async()=>{
+  const f=fixture(); const wand={id:2,nameRsc:2,flags:OF.GETTABLE,col:1,row:1,animate:{animation:ANIMATE.NONE,group:3}};
+  f.c.self={id:1,col:1,row:1}; f.c.room={objects:new Map([[2,wand]])};
+  f.c.roomContents=()=>{}; f.c.requestInventory=()=>{}; f.c.inventory=[];
+  f.c.get=()=>{throw Error('must not pick an empty healing wand back up');};
+  f.s.need=()=>f.c; f.s.world={room:{num:39}};
+  const r=await Session.prototype.lootFloor.call(f.s,{stayPut:true});
+  assert.equal(r.taken.length,0); assert(r.refused.some(x=>x.item==='wand of healing'));
 });
 console.log(passed + ' healing-wand tests passed');
 
