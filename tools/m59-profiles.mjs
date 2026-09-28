@@ -117,7 +117,27 @@ export const TOWNS = {
       },
     },
   },
+
+  // BARLOQUE, walked out of substrate/m59-map.json on 2026-09-28 from North Barloque (101) over go
+  // and edge exits: the two streets and every building whose door opens onto them. The sewers
+  // (108, 110-112) and the Old Jailhouse's cells are not town; the Main gate (593) is the edge,
+  // and 583 (the Outskirts) is outside it. The Bookmaker's guild house (714) opens onto 101, which
+  // is what makes this the guild chest's town.
+  barloque: {
+    name: 'Barloque',
+    hub: 101,
+    rooms: [101, 102, 103, 104, 105, 106, 107, 109, 113, 114, 593, 700, 702, 709, 714, 971],
+    boundary: [583, 108],
+    farms: {},
+  },
 };
+
+/** The town (key and entry) a room belongs to, or null. */
+export function townOfRoom(room) {
+  const n = Number(room);
+  for (const [key, t] of Object.entries(TOWNS)) if ((t.rooms ?? []).includes(n)) return { key, ...t };
+  return null;
+}
 
 // The two things worth knowing about each before sending anybody at them. Levels are from
 // substrate/m59-spawns.json. A kill only pays when the creature's level is STRICTLY above
