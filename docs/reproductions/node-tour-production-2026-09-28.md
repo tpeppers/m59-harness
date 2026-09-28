@@ -84,3 +84,38 @@ enchant-weapon service available; the other 23 entries remained pending.
 Evidence: `substrate/node-campaign/hk3-1790632244168/five-node-1790632296182.json`
 and `substrate/node-campaign/hk3-1790632335545/five-node-1790632345995.json`, with
 their adjacent `-keeper.jsonl` journals and `desk-recovery.json`.
+
+## Director handoff and combat-displaced boarding
+
+Build `7bf399e` fixes the initial busy-owner transition (368 FleetScript checks,
+15 movement suites, zero new regressions). An additional attempt exposed DUM's
+independent claim-restoration loop. Production has two running directors on
+loopback 8916 and 8917; both support the authenticated 45-second per-character
+`/tactical` reservation. Reserving Raphael on both, heartbeating during the
+campaign, and releasing after cleanup prevented the competing claims without
+stopping either director or changing saved policies. The local wrapper is
+`substrate/node-campaign/run-reserved.mjs`; its receipts are `handoffs.jsonl`.
+
+The reserved attempt reached room 38 at r15c17 with 25/25 health, then room 39
+at r9c31 with 19/25 health. The fine follower observed r10c31 and refused
+`not on the rail` (distance printed as 2.0 squares, exceeding the 2-square
+boarding threshold). Recovery observed r10c33, floor 2048, and refused its
+return rail at 2.5 squares. Neither node activation nor mana grant occurred.
+This is a combat-displaced boarding defect, not evidence that the node rail
+itself cannot walk. Do not increase the boarding radius without checking the
+connector and its shelf.
+
+Evidence: `substrate/node-campaign/hk3-1790633395150/five-node-1790633405642.json`,
+its `02-rail-victoria-follow.txt`, and recovery
+`five-node-1790633435254-00-rail-victoria-follow.txt`. After the failure, a separate
+reserved, health-gated FleetScript returned Raphael to room 2 r19c8 with 25/25
+health and 25/25 mana. Receipt: `substrate/node-campaign/reserved-desk-return-1790633525839.json`.
+Enchantment service was read back as available; both reservations were released.
+The queue remains stopped on Raphael, with the other 23 entries pending.
+
+Next experiment: reproduce the captured room-39 body and monster scene on the
+shadow, cut a floor-checked connector from the actual displaced fine point to
+the inbound rail (and a separate exit connector), and require a stable survival
+state before boarding. Exercise the displaced return as well as the approach;
+do not advance the production queue on a failed route or merely lower survival
+thresholds to make the rail start.
