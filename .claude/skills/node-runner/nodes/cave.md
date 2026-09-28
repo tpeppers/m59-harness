@@ -1,5 +1,20 @@
 # cave — NODE_ORCCAVES, room 27, stone at r23c53
 
+## Five-node tour integration
+
+The [five-node rehearsal](../../../../docs/reproductions/five-node-tour-2026-09-28.md)
+preserves two distinct exit operations: walk to r57c45, then travel to 587.
+The staging walk's `arrived: true` does not establish a room crossing. Omitting
+the travel produced `cave_exit_staging_is_not_crossing` in receipt
+`five-node-1790622360454`; the corrected cave-and-return partial replay
+`five-node-1790623640202` reached room 2 r21c3, floor 8192, without intervention.
+
+The immediate activation reply can precede its message. The tour now waits in
+a bounded event window beginning at the pre-activation look cursor. The partial
+replay captured event 9402, "You have already bonded with this mana node."
+after cursor 9341. No history search or repeat activation supplies that verdict.
+The inferred cave fall remains experimental and the measured scene remains quiet.
+
 ## 2026-09-28 — repeatable arrival on the quiet local shadow
 
 The **same** `node-trial route=cave-entry` recipe reached the node three times
