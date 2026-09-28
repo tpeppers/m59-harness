@@ -218,7 +218,12 @@ async function honourYield() {
   let h = null; try { h = await brokerHealth(); } catch { return; }
   const dir = join(h.root, 'substrate', 'history', h.fleet, 'training-yield');
   const req = join(dir, AGENT), ack = join(dir, `${AGENT}.yielded`);
-  if (!existsSync(req)) return;
+  // AN ACK THAT OUTLIVED ITS RUNNER IS A LIE. This runner deletes its ack only while it is alive and
+  // sees the request go, so a killed or restarted runner leaves one behind — and an errand that
+  // waits only for the ack to EXIST then drives a character this runner still owns (2026-09-28,
+  // two eviction runs drove Statler while disciple-drill held him). With no request standing, any
+  // ack on disk is stale; this runner never leaves one unless it is actually standing aside.
+  if (!existsSync(req)) { try { (await import('node:fs')).unlinkSync(ack); } catch {} return; }
   const maxMs = Math.max(1, Number(arg('yield-max') || 30)) * 60_000;
   const why = (() => { try { return readFileSync(req, 'utf8').trim().slice(0, 200); } catch { return '?'; } })();
   say(`yielding ${AGENT} between runs: ${why}`);
