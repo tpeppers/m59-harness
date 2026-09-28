@@ -480,6 +480,18 @@ try {
     ok('and the go-between goes back to the inn', W.rows.t2.room_num === INN);
   }
 
+  section('a standing ticket whose customer has left town is dropped at once, not waited for');
+  {
+    const W = world();
+    W.rows.hk2.room_num = 2;
+    W.packs.hk2 = [{ id: 91, name: 'diamond', amount: 5 }];
+    const d = deskFor(W, { town_rooms: [102, 106], meet_ms: 60 * 60_000 });
+    const tk = d.book.request({ kind: 'deposit', from: 'hk2', items: [{ item: 'diamond', amount: 5 }], where: INN });
+    d.book.update(tk.id, { standing: true });
+    const r = await d.turn();
+    ok('abandoned without a wait', r.worked?.status === 'abandoned' && /left town/.test(r.worked?.note ?? ''), JSON.stringify(r));
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

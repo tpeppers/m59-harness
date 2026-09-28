@@ -437,6 +437,11 @@ export class VaultDesk {
     const rows = await this.rows(true);
     const who = rowFor(rows, t.from);
     if (!who) return this.close(t, 'abandoned', `${t.from} is not on this fleet`);
+    // A STANDING TICKET WHOSE CUSTOMER HAS LEFT TOWN IS DROPPED AT ONCE: he never comes to the inn on
+    // his own (vb-222 held the desk ten minutes waiting for Marco, who had gone), and the next time
+    // he stands in town a fresh one is filed.
+    if (t.standing && !(this.cfg.town_rooms ?? []).includes(Number(who.room_num)))
+      return this.close(t, 'abandoned', `${who.character} left town before the desk reached it; the next visit files it again`);
     const person = !!t.human || this.isHuman(who.character);
     // A BOT THAT ASKED TO BE MET AT THE INN is met there, whatever its health: a keeper contributing
     // to the guild files `where: 106` and waits there for the go-between (m59-harness-3f a125d96).
