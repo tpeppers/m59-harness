@@ -4846,7 +4846,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
     let hold = { ok: false, cancelJourney: async () => {}, release: async () => {} };
     // The `busy` renewal, cleared in the `finally` below. Declared out here so the finally can
     // reach it however the errand ended.
-    let busyBeat = null;
+    let busyBeat = null, busyRenewal = null;
     const setHold = h => { hold = h; ctx.holds.set(agent, h); return h; };
     setHold(hold);
     try {
@@ -4871,7 +4871,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // the beat that would have carried the renewal never starts. The character still needs
       // the fleet to leave it alone. This interval is the runner's, so it runs on every path.
       busyBeat = setInterval(() => {
-        call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
+        busyRenewal = call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
                             lease_ms: BUSY_LEASE_MS }, 20_000).catch(() => {});
       }, KEEPER_BEAT_MS);
       busyBeat.unref?.();
@@ -5199,6 +5199,11 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // Faculties second: give the character its own legs back before anything else is
       // allowed to notice it is free.
       await hold.release().catch(() => {});
+      // A RENEWAL ALREADY ON THE WIRE LANDS AFTER THE FREE unless we wait for it: clearInterval
+      // stops the next beat, not the one in flight, and on a busy broker that one re-marked the
+      // character for a whole lease after the errand ended — Pepe's travels were refused
+      // "busy: fleetscript (disciple-drill (local))" for five minutes, 2026-09-28.
+      await busyRenewal?.catch?.(() => {});
       await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
       held.delete(agent);
     }
