@@ -29,7 +29,37 @@ Runtime evidence in the production checkout:
 - `substrate/node-campaign/first-flight-recorder.jsonl`
 - `substrate/node-campaign/first-return.json`
 
-Next experiment: one bounded retry with the ownership repair and journal capture,
-keeping survival active. Stop the queue if Victoria still causes a survival exit;
-inspect its recorded threat/predicate before changing movement or dispatching
-another character.
+## Second attempt and current blocker
+
+Build `a8884d5`, deploy `deploy-2026-09-28-49`, keeper PID 58640 verified on
+that build. At 20:49:57 UTC Raphael entered room 39 r9c27 at 19/25 health.
+The keeper journal named the predicate: health 76% below `restBelow` 85%, ten
+monsters, no reachable proven wall. `m59-autopilot.mjs`'s
+`mustLeaveForHealth && combatZone && !sheltered && !testing && !this.hold`
+branch correctly took the exit to Castle Victoria. Fineclimb refused to start
+in the wrong room. The ownership fix retained the tour's walk during lease
+retake, as the log explicitly confirms.
+
+The single-hop recovery raced a survival trip between rooms 38 and 39 and used
+its hop before reaching room 2. A recovery-aware FleetScript waited for 25/25
+health, then walked 38 → 2 and reached the desk r19c8 at 20:51:41 UTC. This
+measured fallback is now part of the campaign for room 38 or room 2 only;
+special node-room exits remain checked rails. Failed trials remain failed.
+
+Second evidence:
+
+- `substrate/node-campaign/hk3-1790628503427/five-node-1790628565710.json`
+- `substrate/node-campaign/hk3-1790628503427/five-node-1790628565710-keeper.jsonl`
+- `substrate/node-campaign/hk3-1790628503427/five-node-1790628601577.json`
+- `substrate/node-campaign/second-return.json`
+
+Production status: **0/2 Victoria arrivals, no node interactions; other four
+nodes not attempted on production.** All 23 other characters remain queued.
+No deaths or max-health loss in either attempt. The quiet shadow full circuit
+remains separate evidence, not production success.
+
+Next experiment must change the measured condition: clear the castle entrance
+with a suitable escort, or establish a sheltered approach before sending the
+25-health enchanter again. Capture the entry scene and verify health stays
+above the recovery threshold before the fine rail begins. Do not repeat the
+same solo entry or disable survival merely to force the itinerary.

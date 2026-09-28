@@ -14,6 +14,9 @@ export function availableForTour(row){
 }
 export function tourObjectiveComplete(r){return r?.complete===true&&r.nodes?.length===5&&r.nodes.every(n=>['melded','already'].includes(n.status));}
 export function atPost(p,post){return p?.room===post.room&&Math.abs(p.row-post.row)<=2&&Math.abs(p.col-post.col)<=2;}
+// Both live failure recoveries exercised FleetScript's heal-then-walk from 38.
+// Do not substitute an ordinary route for the special exits of node trap rooms.
+export const deskRecoveryAllowed=room=>room===2||room===38;
 export function stableNodeGrant(before,after,stable){
   return Number.isInteger(before?.pid)&&before.pid===after?.pid&&after.pid===stable?.pid&&
     Number.isInteger(before.connection_revision)&&before.connection_revision===after.connection_revision&&

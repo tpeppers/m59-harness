@@ -6,7 +6,7 @@ import {readFileSync,writeFileSync,mkdirSync,renameSync,existsSync} from 'node:f
 import {resolve,dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {availableForTour,tourObjectiveComplete,atPost,endpointName} from './m59-node-tour-policy.mjs';
+import {availableForTour,tourObjectiveComplete,atPost,endpointName,deskRecoveryAllowed} from './m59-node-tour-policy.mjs';
 import {runTour,tourPosition} from './m59-node-tour.mjs';
 import {takeRunLock,releaseRunLock} from './m59-runlock.mjs';
 import {fleetName,stateFileFor} from './m59-fleetpath.mjs';
@@ -57,12 +57,13 @@ if(arg('plan')){
       delete record.waiting;record.status='running';job.status='active';
       const attempt={at:new Date().toISOString(),broker_pid:fresh.pid,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim()};job.attempts.push(attempt);save(record);
       const evidenceDir=join(dirname(file),job.agent+'-'+Date.now());mkdirSync(evidenceDir,{recursive:true});
-      let replacementHold=null;
+      let replacementHold=null,savedBefore=null;
       const script={name:'mana-node-service-tour',source:'public',params:{agents:{type:'agents',required:true},minHealth:{default:0.9},fragileBelow:{default:20}},
         async steps(){return [
           verify(async({agent,call,state})=>{
             const l=await call('look',{agent}),a=await call('autopilot',{agent,action:'status'});
             state.before={position:tourPosition(l),mode:a.mode,policy:a.policy,keeper_build:a.replay_capture?.provenance??null};
+            savedBefore=state.before;
             writeFileSync(join(evidenceDir,'before.json'),JSON.stringify(state.before,null,2));return true;
           },'cannot capture return duties'),
           walk(2),
@@ -111,6 +112,27 @@ if(arg('plan')){
       try{result=await runNamed(script.name,{agents:job.agent},{scripts:new Map([[script.name,script]]),fleetScript});}
       catch(e){result={ok:false,error:e.stack};}
       finally{await replacementHold?.release();}
+      // A survival exit can race the one-hop recovery and consume its hop in the
+      // other castle room. Use the measured heal-then-walk return, under a new
+      // normal lease, after the original script has released its own hold.
+      const recoveryLook=await call('look',{agent:job.agent});
+      if(!attempt.post_restored&&savedBefore&&deskRecoveryAllowed(recoveryLook.room?.num)){
+        const recovered=await fleetScript({name:'node-tour-desk-return',fleet,agents:[job.agent],steps:[walk(2),
+          verify(async({agent,call})=>{
+            if(job.post)await call('walk_to',{agent,row:job.post.row,col:job.post.col,max_steps:100,arrive_within:3});
+            const l=await call('look',{agent});attempt.return_position=tourPosition(l);
+            attempt.post_restored=l.room?.num===2&&(!job.post||atPost(attempt.return_position,job.post));
+            let a=await call('autopilot',{agent,action:'status'});
+            if(job.service&&a.policy?.assignedRoom!==job.post.room){
+              await call('autopilot',{agent,action:'start',mode:savedBefore.mode,assigned_room:job.post.room});
+              a=await call('autopilot',{agent,action:'status'});
+            }
+            attempt.duties_preserved=a.mode===savedBefore.mode&&(!job.service||a.policy?.assignedRoom===job.post.room);
+            save(record);return attempt.post_restored&&attempt.duties_preserved;
+          },'measured castle recovery did not reach the desk')]});
+        attempt.desk_recovery_ref=join(evidenceDir,'desk-recovery.json');
+        writeFileSync(attempt.desk_recovery_ref,JSON.stringify(recovered,null,2));save(record);
+      }
       writeFileSync(join(evidenceDir,'script-result.json'),JSON.stringify(result,null,2));
       attempt.finished_at=new Date().toISOString();attempt.script_ref=join(evidenceDir,'script-result.json');
       // Releasing the lease permits the original director to resume its saved service.
