@@ -49,6 +49,17 @@ export const DEFAULTS = Object.freeze({
   go_between: null,                           // agent id: posted at the inn
   keep_free: 0.35,                            // share of the manager's pack kept empty for customers
   ticket_ttl_ms: 6 * 3600_000,
+  // THE GATE'S FACTS, asserted by the operator in the private config: no tool reads guild ownership,
+  // the password or a rank back from the game, and a gate that guesses open is no gate.
+  hall_owned: null,
+  password_known: null,
+  ranks: null,                                // {agent: rank}
+  // THE DESK (m59-vault-desk.mjs).
+  meet_ms: 10 * 60_000,                       // how long a customer has to reach the meeting place
+  offer_ms: 90_000,                           // how long a person has to counter an offer
+  poll_ms: 3_000,
+  practice: true,                             // cast practice spells between customers
+  practice_keep: Object.freeze({ elderberry: 30, 'fairy wing': 10 }),   // re-drawn after a deposit
 });
 
 export const CONFIG_FILE = process.env.M59_VAULT_BROKER || here('../substrate/strategies/vault-broker.json');
