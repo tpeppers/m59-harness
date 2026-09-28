@@ -176,6 +176,15 @@ if (isMain) {
             const run = await provision(rider.agent, plan.wants, rows);
             const tail = run.out.split('\n').filter(l => /provision|took|bought|SHORT|refus|lock/i.test(l)).slice(-6);
             for (const l of tail) say('  ', l.trim());
+            // THE RIDER HAS TO BE HOME BEFORE IT HANDS OVER. provision can finish with the rider a
+            // room short and still walking (Rowlf, 2026-09-28: 597, one room out), and a supply sent
+            // then fails "not in the room" with the stock stuck in the rider's pack.
+            for (let w = 0; w < 30; w++) {
+              const rr = (await call('fleet', {})).fleet.find(r => r.agent === rider.agent);
+              if (rr?.room_num === ROOM) break;
+              if (w === 0) say(`  ${rider.agent} is in ${rr?.room_num}, not ${ROOM}: waiting for it before the hand-over`);
+              await sleep(20_000);
+            }
             for (const item of Object.keys(WANT)) {
               const got = carriedCounts((await call('fleet', {})).fleet.find(r => r.agent === rider.agent), [item])[item];
               const need = Math.max(0, WANT[item] - (have[item] ?? 0));
