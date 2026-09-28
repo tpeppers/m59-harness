@@ -32,6 +32,52 @@ of arrival on the upper shelf.
 Evidence lives under ignored `substrate/node-attempts/20260928/`; inspect the
 ledger for the live outcome. No escape or meld claim follows from the bake.
 
+### Live result and guard repair
+
+First trial `badlands-1790613972596` reached floor 6144 in Kardde's Canyon,
+then fell at aim 83: from client (12032,20992)/5632 toward
+(12768,21728)/6016, actual endpoint (12272,21328)/3840. No monster was present.
+64/128/256-unit traces of this diagonal are retained as `canyon-wp83-*.json`;
+changing the sampling phase changes which thin floor it sees.
+
+The shared shelf guard checked the float trace while `validateFineTarget`
+subsequently quantized and re-traced an integer wire endpoint. Commit **0fd8d5a**
+uses that sender validation for the guard. Its new collision regression sends
+zero unsafe packets; before the fix it sent one and detected the fall afterward.
+405 collision checks and 15 walking dependency checks pass.
+
+The fixed replay `badlands-1790614493355` rejected four unsafe headings at aim
+83, stayed on 6016, finished all 98 canyon aims, crossed normally into room 45,
+then finished all 361 strict Badlands aims. Actual node arrival was r63c46,
+client (46080,64448), floor 4096. The distinct meld message and stable
+same-keeper **49 → 57** max mana verify one first-time grant. Health stayed 20/20.
+The fixed approach passed **3/3 independent quiet-scene trials**:
+`badlands-1790614493355`, `badlands-1790615094139`, and
+`badlands-1790615724125`. The third followed a broker/keeper restart
+(PID 41624 → 28088), still on 0fd8d5a. All started at the same documented
+room-49 fine point and ended at exactly (46080,64448)/4096 with 20/20 health.
+One first grant and two already-bonded replies establish repeatable arrival and
+interaction, not three first grants. The pre-fix failed trial remains in the ledger.
+The operator was notified immediately at this threshold.
+
+Return-only experiment: `node-escape` stages before its measured route, activates
+no node, and writes `escapes.jsonl` separately. It cuts a checked return from the
+node shelf to room 45's north exit, then through 49 to 593. Use a northern canyon
+goal at client (20544,512), not (20544,64): the latter lies against the boundary
+and the strict in-room flood does not reach it. Actual edge crossing is a separate
+normal movement command. A return cut needs more than the default 400,000-point
+search budget in room 45; do not label that cap as terrain impossibility.
+
+Return trial `badlands-escape-1790616387096` passed 45 → 49 → 593 from the
+exact approach endpoint, ending r29c36/(36352,29184)/2560 with 20/20 health.
+This is **one** walking-return pass, not three. Both edge commands pessimistically
+reported an out-of-grid refusal; subsequent actual room reads proved the crossings.
+The first escape setup failed before movement because `look.you.id` was absent.
+The retained recipe uses the successfully exercised square-placement plus bounded
+fine-alignment setup, then begins the measured return. Remaining experiment:
+reintroduce one captured obstructing body at canyon aim 83 and repeat the approach
+with floor receipts; quiet-scene success does not establish monster tolerance.
+
 ## Historical attempts (superseded where the update above differs)
 
 **BLOCKED, and the operator has said it is not reachable with the current mover.** Two rooms

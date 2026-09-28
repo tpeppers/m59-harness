@@ -51,6 +51,7 @@ export const script={
         if(agent!=='shadow22')throw Error('This measured recipe is scoped to Marco clone shadow22');
         const health=await (await fetch(process.env.M59_CONTROL_URL+'health')).json();
         if(health.session_characters?.[agent]!=='Vvvv'||health.game_server?.host!=='127.0.0.1'||health.game_server?.port!==15959)throw Error('Wrong shadow identity');
+        state.authorized=true;
         mkdirSync(out,{recursive:true});
         const id=node+'-'+Date.now();state.id=id;
         state.attempt={format:'m59-node-attempt/1',at:new Date().toISOString(),stone:node,room:stone.room,
@@ -159,6 +160,7 @@ export const script={
         state.attempt.escape={verified:true,position:position(await call('look',{agent}))};return true;
       },'scripted escape failed'),
       safe(async({agent,call,state})=>{
+        if(!state.authorized)return true;
         await call('cancel_movement',{agent});
         if(state.attempt&&!state.attempt.end)state.attempt.end=position(await call('look',{agent}));
         for(const scene of state.scenes??[])if(scene.generation!=null)await dm([sendMsg(scene.before.room_object,'SetMonsterGeneration',{bValue:['INT',scene.generation]})]);

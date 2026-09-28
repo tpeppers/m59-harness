@@ -11,6 +11,14 @@ and the character is rescued to Familiars after the attempt. That rescue is neve
 counted as a successful walking escape. The quiet scene is a condition of the result.
 The recipe does not edit terrain, node state, attributes or maximum health/mana.
 
+`tools/fleetscripts/node-escape.mjs` is a separate Badlands return experiment.
+It stages at the exact recorded approach endpoint (46080,64448)/4096 **before**
+measuring the escape, verifies that fine position, activates nothing,
+and cannot count as a successful inbound route. It validates body-seeded rails
+through 45 and 49 and reads the actual crossing into 593. Its receipt format is
+`m59-node-escape/1`, appended to `escapes.jsonl`, with separate setup, command,
+scene, actual position, rail hash, result and post-trial rescue evidence.
+
 The recipe accepts `node`, `room`, `row`, `col`, `route`, `exit`, and `quiet`.
 Routes are `coarse` (one bounded normal walk), `rail` (existing checked node rail),
 `cave-entry` (576 → 587 → 27 → stone, then 587 → 576), and
@@ -23,6 +31,22 @@ Use the repository FleetScript runner with an explicit shadow roster and
 Do not copy credentials into a recipe. Set `M59_TRIAL_BROKER_SHA` only after
 checking the running process's deployment; it is an operator attestation, not a
 hash magically recovered from the running process.
+
+To regenerate the exercised room-45 rail from its measured entry, run these
+offline commands before the recipe. Generated rails remain runtime files:
+
+```powershell
+New-Item -ItemType Directory -Force substrate/node-attempts/20260928 | Out-Null
+node tools/m59-ground.mjs --room 45 --flood --from-client 53856,992 --to r63c46 --lattice 64 > substrate/node-attempts/20260928/badlands-flood64.json
+node tools/m59-node-rail-import.mjs substrate/node-attempts/20260928/badlands-flood64.json badlands substrate/node-attempts/20260928/badlands-strict-rail.json
+node tools/m59-noderails.mjs check --file substrate/node-attempts/20260928/badlands-strict-rail.json
+```
+
+Expected route: 4,599 dense points, 361 aims, 4,598 validated edges, no skipped
+edges, endpoint (46080,64448)/4096. Import time and source-file formatting may
+change metadata; compare the `stones` route payload with the retained trial rail.
+The original file SHA-256 is
+`6ed6cee1effc8dcbb38480e5ef5042db7596d08fe09000fef90287d27ae55028`.
 
 ## Receipts
 
@@ -73,5 +97,5 @@ an offline candidate. The follower must be exercised from its starting shelf.
 
 For a zero flood, compare at least two resolutions and check whether the search
 hit its cap. For a split square, record the actual fine floor. The Peak square
-r38c25 illustrates why: its centre's floor is 12432, while the measured body
+r38c25 illustrates why: the fine router's chosen footing is on 12432, while the measured body
 at client (25552,38304) stood on model floor 5056.
