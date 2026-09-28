@@ -4,6 +4,7 @@
 //   node tools/m59-vault-desk.mjs run                 work the desk until Ctrl-C
 //   node tools/m59-vault-desk.mjs run --once          one poll and whatever tickets it finds, then stop
 //   node tools/m59-vault-desk.mjs run --no-yield      the disciples are not in a training run
+//   node tools/m59-vault-desk.mjs run --no-yield-for t2   one of them has no training runner to ask
 //   touch substrate/history/<fleet>/vault-broker/STOP  stop it gracefully (manager to the chests, both released)
 //
 // Operator, 2026-09-27 (the spec is in m59-vault-broker.mjs and the vault-broker memory). In short:
@@ -891,6 +892,7 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 if (isMain) {
   const argv = process.argv.slice(2);
   const has = n => argv.includes(`--${n}`);
+  const arg = (n, d = null) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
   const BROKER = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901';
   // hall_post is a KEEPER op; a broker started before it existed has no tool for it, so it goes to the
   // keeper directly (the 2026-09-27 probe did the same).
@@ -944,7 +946,10 @@ if (isMain) {
     const { borrow } = await import('./m59-yield.mjs');
     say(`asked ${agents.join(', ')} to yield; waiting for their training runners`);
     let loans;
-    try { loans = await Promise.all(agents.map(a => borrow({ dir: ydir, agent: a, why: `vault-desk:${process.pid} — working the guild hall vault desk` }))); }
+    // --no-yield-for t2: a character whose training runner is not running has nobody to acknowledge a
+    // yield (m59-harness-3f stopped Pepe's runner outright on 2026-09-28); it is taken without one.
+    const skip = String(arg('no-yield-for', '')).split(',').map(x => x.trim()).filter(Boolean);
+    try { loans = await Promise.all(agents.filter(a => !skip.includes(a)).map(a => borrow({ dir: ydir, agent: a, why: `vault-desk:${process.pid} — working the guild hall vault desk` }))); }
     catch (e) { say(`${e.message} — is a training runner holding them? (--no-yield if none is)`); for (const a of agents) { try { unlinkSync(join(ydir, a)); } catch {} } process.exit(1); }
     setInterval(() => { for (const l of loans) l.refresh(); }, 10 * 60_000).unref();
   }
