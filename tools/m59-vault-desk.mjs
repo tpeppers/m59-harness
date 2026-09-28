@@ -150,8 +150,9 @@ export class VaultDesk {
    * @param humans () -> the chalice store's human marks, or {} (who is a person right now)
    */
   constructor({ call, cfg, book, humans = () => ({}), log = console.log, sleep = ms => new Promise(r => setTimeout(r, ms)),
-                now = Date.now, practice = practiceOnce, ledgers = {} }) {
-    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers });
+                now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null }) {
+    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose });
+    this.failedInARow = 0;
     this.M = cfg.manager; this.G = cfg.go_between;
     this.cursor = {};                                   // chat seq per desk agent
     this.rowsAt = 0; this.rowsCache = [];
@@ -410,6 +411,8 @@ export class VaultDesk {
       return t.kind === 'withdraw' ? await this.withdraw(t, who, person, carrier, meet)
                                    : await this.deposit(t, who, person, carrier, meet);
     } catch (e) {
+      // HELD STAYS HELD: the carrier has the goods, and the next healthy turn finishes it.
+      if (this.book.read().tickets.find(x => x.id === t.id)?.status === 'held') return { id: t.id, status: 'held', note: e.message };
       this.log(`  ${t.id} failed: ${e.message}`);
       await this.tell(this.G, who.character, `${t.id} could not be finished: ${e.message}`);
       return this.close(t, 'failed', e.message);
@@ -504,18 +507,47 @@ export class VaultDesk {
     const got = person ? await this.takeFromPerson(carrier, who.character)
                        : await this.takeFromBot(carrier, who.agent, t.items, inTown ? 'to' : 'neither');
     if (!Object.keys(got).length) return this.close(t, 'abandoned', 'nothing was handed over');
-    if (carrier === this.G) {
-      if (!(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
-      for (const [item, n] of Object.entries(got)) {
-        const arrived = await this.hand(this.G, this.M, item, n);
-        if (arrived < n) this.log(`  only ${arrived} of ${n} ${item} crossed the window`);
+    return this.store(t, who, carrier, got);
+  }
+
+  /**
+   * THE SECOND HALF OF A DEPOSIT: the carrier has the goods; get them into the chests. A failure here
+   * leaves the ticket HELD with what the carrier holds, never failed — on prod 2026-09-28 a desk whose
+   * posts had been taken over failed four deposits after taking the goods, and the go-between walked
+   * off carrying 24 diamonds, 21 sapphires and three relics of Qor. A held ticket is finished first
+   * the next time the desk is healthy.
+   */
+  async store(t, who, carrier, got) {
+    try {
+      if (carrier === this.G) {
+        if (!(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
+        for (const [item, n] of Object.entries(got)) {
+          const arrived = await this.hand(this.G, this.M, item, n);
+          if (arrived < n) this.log(`  only ${arrived} of ${n} ${item} crossed the window`);
+        }
+        await this.goTo(this.G, INN);
       }
-      await this.goTo(this.G, INN);
+      await this.chestVisit({ deposit: got });
+    } catch (e) {
+      this.book.update(t.id, { status: 'held', held_by: carrier, holding: got, note: e.message });
+      this.log(`  ${t.id}: HELD — ${carrier} is carrying ${Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ')} (${e.message})`);
+      throw e;
     }
-    await this.chestVisit({ deposit: got });
     const text = Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ');
-    await this.tell(carrier === this.G ? this.G : this.M, who.character, `${t.id} done: ${text} are in the chests.`);
-    return this.close(t, 'done', null, { moved: got });
+    await this.tell(carrier === this.G ? this.G : this.M, who?.character ?? t.from, `${t.id} done: ${text} are in the chests.`);
+    return this.close(t, 'done', null, { moved: got, holding: null });
+  }
+
+  /** A deposit the carrier is still holding goes in before anything new is taken. */
+  async resumeHeld() {
+    const t = this.book.read().tickets.find(x => x.status === 'held' && x.holding && Object.keys(x.holding).length);
+    if (!t) return null;
+    const pack = await this.pack(t.held_by);
+    const got = Object.fromEntries(Object.entries(t.holding).map(([k, n]) => [k, Math.min(n, countOf(pack, k))]).filter(([, n]) => n > 0));
+    if (!Object.keys(got).length) return this.close(t, 'lost', `${t.held_by} no longer carries what it held`, { holding: null });
+    this.log(`${t.id}: finishing a held deposit — ${t.held_by} carries ${Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ')}`);
+    const who = await this.row(t.from, true);
+    return this.store(t, who, t.held_by, got).catch(e => this.close(t, 'held', e.message, { holding: got }));
   }
 
   // ---------------------------------------------------------------- the shift
@@ -578,7 +610,8 @@ export class VaultDesk {
       const g = (await this.row(this.G))?.character ?? this.G;
       const open = this.book.open(this.now()).some(t => (same(t.from, g) || same(t.from, this.G)) && t.kind === 'withdraw');
       const want = Number((this.cfg.shift_kit?.[this.G] ?? this.cfg.shift_kit ?? {})['loaf of bread']) || 10;
-      if (!open) { this.book.request({ kind: 'withdraw', from: g, items: [{ item: 'loaf of bread', amount: want }], where: HALL,
+      const recent = this.now() - (this.breadAskedAt ?? 0) < 10 * 60_000;
+      if (!open && !recent) { this.breadAskedAt = this.now(); this.book.request({ kind: 'withdraw', from: g, items: [{ item: 'loaf of bread', amount: want }], where: HALL,
                                        now: this.now(), ttlMs: this.cfg.ticket_ttl_ms });
                    this.log(`  ${g} is short of food: a ticket for ${want} bread from the chests`); }
     }
@@ -654,14 +687,46 @@ export class VaultDesk {
   }
 
   /** One turn: take requests, hand over what is held, work the oldest open ticket, else practise. */
+  /**
+   * THE DESK WORKS ONLY WHILE IT HOLDS BOTH BODIES AND BOTH ARE AT THEIR POSTS. Prod, 2026-09-28: the
+   * lease was refused at a broker restart (03:55), both characters were taken elsewhere, and the desk
+   * went on filing and failing tickets for an hour and a half — 204 of them. Returns null when healthy,
+   * else why not.
+   */
+  async health() {
+    if (!this.leased()) return 'the commander lease is not held';
+    const m = await this.row(this.M, true), g = await this.row(this.G);
+    if (Number(m?.room_num) !== HALL) return `the manager is in room ${m?.room_num}, not the hall`;
+    if (![INN, HALL, ...(this.cfg.town_rooms ?? [])].includes(Number(g?.room_num))) return `the go-between is in room ${g?.room_num}, out of town`;
+    return null;
+  }
+
   async turn() {
+    const sick = await this.health().catch(e => `health unreadable: ${e.message}`);
+    if (sick) {
+      this.sickSince ??= this.now();
+      if (this.now() - (this.sickSaidAt ?? 0) > 60_000) { this.sickSaidAt = this.now(); this.log(`NOT WORKING: ${sick}`); }
+      // Ten minutes unhealthy closes the desk: whoever holds the bodies now, it is not us.
+      if (this.now() - this.sickSince > 10 * 60_000 && this.onClose) await this.onClose(`unhealthy for 10 minutes: ${sick}`);
+      await this.sleep(10_000);
+      return { paused: sick };
+    }
+    this.sickSince = null;
     await this.poll();
+    const held = await this.resumeHeld();
+    if (held) return { worked: held };
     await this.noticeDepositors().catch(e => this.log(`  noticing depositors failed: ${e.message}`));
     const resumed = await this.resumeWaiting();
     if (resumed) return { worked: resumed };
     const next = this.book.open(this.now()).filter(t => t.status === 'open')
       .sort((a, b) => a.at - b.at)[0];
-    if (next) return { worked: await this.work(next) };
+    if (next) {
+      const r = await this.work(next);
+      // FIVE FAILURES IN A ROW CLOSE THE DESK: something is wrong that retrying will not fix.
+      this.failedInARow = r?.status === 'failed' ? this.failedInARow + 1 : 0;
+      if (this.failedInARow >= 5 && this.onClose) await this.onClose(`five tickets failed in a row, the last: ${r?.note}`);
+      return { worked: r };
+    }
     return { idle: await this.idle() };
   }
 
@@ -746,7 +811,10 @@ if (isMain) {
   const claim = async () => {
     const out = await call('commander_lease', { action: 'acquire', ...pin, agents: leased, owner, lease_ms: 30_000 }, 30_000).catch(e => ({ error: e.message }));
     lease = out?.lease_token ?? out?.token ?? null;
-    if (!lease) say(`lease NOT held: ${JSON.stringify(out).slice(0, 200)}`);
+    if (!lease) {
+      const why = [...(out?.agents ?? []), ...(out?.outcomes ?? [])].map(a => `${a.agent}: ${a.blocked_reason ?? a.reason ?? a.state ?? '?'}`).join('; ');
+      say(`lease NOT held: ${out?.error ?? out?.state ?? '?'}${why ? ` — ${why}` : ''}`);
+    }
   };
   const beat = async () => {
     if (lease) {
@@ -770,7 +838,7 @@ if (isMain) {
   const ledgers = {};
   for (const a of agents) ledgers[a] = await trainingLedger({ agent: a }).catch(() => null);
   const desk = new VaultDesk({ call, cfg, book: new TicketBook(TICKETS_FILE(fleet)), humans: () => chalice?.read()?.human ?? {},
-                               log: say, ledgers });
+                               log: say, ledgers, leased: () => !!lease, onClose: why => stop(why) });
   let stopping = false;
   let openTimer = null;                 // the OPEN heartbeat; declared before stop() can run
   const stop = async (why) => {
@@ -803,7 +871,9 @@ if (isMain) {
   const opened = await desk.startShift().then(() => true).catch(e => stop(`could not open: ${e.message}`).then(() => false));
   if (opened) {
     writeDeskOpen(fleet, openInfo());
-    openTimer = setInterval(() => { try { if (!stopping) writeDeskOpen(fleet, openInfo()); } catch {} }, 60_000);
+    // OPEN ONLY WHILE WORKING: keepers bring deposits to an open desk, so an unhealthy one must stop
+    // saying so (a reader treats three minutes' silence as closed).
+    openTimer = setInterval(() => { try { if (!stopping && !desk.sickSince && lease) writeDeskOpen(fleet, openInfo()); } catch {} }, 60_000);
   }
   if (has('once')) { await desk.turn(); await stop('--once'); }
   // A GRACEFUL STOP FROM OUTSIDE: on Windows a background process cannot be sent Ctrl-C, and a hard

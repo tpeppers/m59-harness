@@ -350,6 +350,58 @@ try {
     ok('at 80 nothing more is filed', (await d.noticeDepositors()).length === 0);
   }
 
+  section('the desk does not work without its lease or its posts, and closes after ten minutes of it');
+  {
+    const W = world();
+    let leased = false, closed = null;
+    const d = deskFor(W);
+    d.leased = () => leased; d.onClose = why => { closed = why; };
+    d.book.request({ kind: 'withdraw', from: 't9', items: [{ item: 'elderberry', amount: 10 }] });
+    const r = await d.turn();
+    ok('no lease: paused, the ticket untouched', /lease/.test(r.paused ?? '') && d.book.open()[0].status === 'open', JSON.stringify(r));
+    leased = true;
+    W.rows.t3.room_num = 104;
+    const r2 = await d.turn();
+    ok('manager off post: paused', /manager is in room 104/.test(r2.paused ?? ''), JSON.stringify(r2));
+    const t0 = Date.now(); d.now = () => t0 + 11 * 60_000;
+    await d.turn();
+    ok('ten minutes of it closes the desk', /unhealthy for 10 minutes/.test(closed ?? ''), closed);
+  }
+
+  section('five failed tickets in a row close the desk; a self bread ticket backs off');
+  {
+    const W = world();
+    let closed = null;
+    const d = deskFor(W);
+    d.onClose = why => { closed = why; };
+    for (let i = 0; i < 5; i++) d.book.request({ kind: 'withdraw', from: 'Nobody Here', items: [{ item: 'elderberry', amount: 1 }] });
+    d.work = async t => d.close(t, 'failed', 'test');
+    for (let i = 0; i < 5; i++) await d.turn();
+    ok('closed after five', /five tickets failed/.test(closed ?? ''), closed);
+    const W2 = world();
+    const d2 = deskFor(W2);
+    d2.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
+    for (let i = 0; i < 6; i++) { await d2.idle(); const o = d2.book.open(); if (o[0]) d2.book.update(o[0].id, { status: 'failed' }); }
+    ok('one bread ticket per ten minutes, however often it fails', d2.book.read().tickets.length === 1, String(d2.book.read().tickets.length));
+  }
+
+  section('a deposit whose goods were taken but not stored is HELD, and finished first next time');
+  {
+    const W = world();
+    W.rows.hk2.room_num = INN;
+    W.packs.hk2 = [{ id: 95, name: 'diamond', amount: 24 }];
+    const d = deskFor(W);
+    d.book.request({ kind: 'deposit', from: 'hk2', items: [{ item: 'diamond', amount: 24 }], where: INN });
+    const realGoTo = d.goTo.bind(d);
+    d.goTo = async (a, room) => (room === HALL ? false : realGoTo(a, room));
+    const r = await d.turn();
+    const t = d.book.read().tickets[0];
+    ok('held, with what the go-between carries', t.status === 'held' && t.holding?.diamond === 24 && W.count(W.packs.t2, 'diamond') === 24, JSON.stringify(t));
+    d.goTo = realGoTo;
+    const r2 = await d.turn();
+    ok('finished first on the next healthy turn', r2.worked?.status === 'done' && W.chests.diamond === 24, JSON.stringify(r2));
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();
