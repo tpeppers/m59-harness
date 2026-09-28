@@ -2,7 +2,7 @@
 // OFFLINE. Vigor OVERDRIVE (operator, 2026-09-28): sit and eat to 200 on the stomach clock at a natural
 // stop, then go back to the task — rather than leaving at the fighting floor and stopping again forty
 // vigor later. overdriveSettings reads the policy; shouldWaitForProvision is the one rule it changes.
-import { overdriveSettings, overdriveDigest, shouldWaitForProvision, Autopilot } from './m59-autopilot.mjs';
+import { overdriveSettings, overdriveDigest, overdriveReachable, shouldWaitForProvision, Autopilot } from './m59-autopilot.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
@@ -49,6 +49,18 @@ ok(rows.length === 1, 'ending twice writes once');
   ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 0, leased: true }).released_by === 'a lease wanted the body', 'a lease (DUM, an order) releases at once');
   ok(overdriveDigest({ od, stomachLevel: 70, digestingForMs: 15 * 60_000 }).hold === false, 'the digest cap releases');
   ok(overdriveSettings({ overdrive: { enabled: true, digestTo: 100 } }).digestTo === 100, 'digestTo 100 switches the digest phase off (release at the target)');
+}
+
+
+// WHAT THE LARDER CAN REACH (Kermit, 2026-09-28: 188 -> 188, 29.5 min, 0 meals — bread is +20, so no bite fit).
+{
+  const bread = [{ food: { nutrition: 20 } }], mixed = [{ food: { nutrition: 20 } }, { food: { nutrition: 5 } }];
+  ok(overdriveReachable(200, bread) === 185, 'bread only: 185 counts as there (no bite of 20 fits above 180)');
+  ok(188 >= overdriveReachable(200, bread) - 5, 'so Kermit at 188 is released, not left waiting 30 min');
+  ok(overdriveReachable(200, mixed) === 200, 'an edible mushroom (+5) aboard: 200 is reachable');
+  ok(overdriveReachable(200, []) === 200, 'an empty larder leaves the target alone (out of food ends it anyway)');
+  ok(shouldWaitForProvision({ vigor: 188, floor: 130, wait: 400, hurt: false, overdrive: { active: true, target: 200, reach: 185 } }) === false,
+     'the waiting rule uses the reachable target');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1194,7 +1194,7 @@ export function shouldWaitForProvision({ vigor, floor, wait, hurt, overdrive = n
   // stop every forty vigor. Bounded by one full digestion (833 s): a wait longer than that means
   // the stomach model is wrong, and waiting on a wrong model is waiting for ever.
   // Within the last bite of the target counts as there (provision releases at target - 5 too).
-  if (overdrive?.active && vigor < overdrive.target - 5 && wait <= 900) return true;
+  if (overdrive?.active && vigor < (overdrive.reach ?? overdrive.target) - 5 && wait <= 900) return true;
   return vigor < floor || hurt || wait <= 60;
 }
 
@@ -1231,6 +1231,18 @@ export function overdriveSettings(policy) {
   const digestTo = Math.min(100, Math.max(0, Number.isFinite(Number(o.digestTo)) ? Number(o.digestTo) : 20));
   const digestMaxMinutes = Math.max(0, Number.isFinite(Number(o.digestMaxMinutes)) ? Number(o.digestMaxMinutes) : 15);
   return { target, maxMinutes, digestTo, digestMaxMinutes };
+}
+
+/**
+ * THE TARGET A LARDER CAN ACTUALLY REACH. `eat` refuses a bite that would carry vigor past 200, so with
+ * nothing smaller than bread (+20) aboard, 181 is as high as a climb gets — and a climb that waits for
+ * 200 waits out its whole cap eating nothing. Measured 2026-09-28: Kermit, 188 -> 188, 29.5 min, 0 meals.
+ * Returns the target to compare against (`target - 5` is "there").
+ */
+export function overdriveReachable(target, larder = []) {
+  const bites = larder.map(x => Number(x?.food?.nutrition ?? x?.nutrition)).filter(n => n > 0);
+  if (!bites.length) return target;
+  return Math.min(target, 205 - Math.min(...bites));
 }
 
 /**
@@ -3837,14 +3849,17 @@ export class Autopilot {
 
     // OVERDRIVE STARTS WITH A CLIMB AND ENDS AT ITS TARGET. See overdriveSettings.
     const od = overdriveSettings(p);
-    if (od && this.climbing && !this.overdrive?.active && vigor < od.target - 5)
+    const reach = od ? overdriveReachable(od.target, larder) : null;
+    if (od && this.climbing && !this.overdrive?.active && vigor < reach - 5)
       this.startOverdrive(od, vigor, 'a climb began below the fighting floor');
     if (this.overdrive?.active) {
+      // The waiting rule compares against what the larder can reach, not the nominal target.
+      this.overdrive.reach = reach ?? this.overdrive.target;
       const why = !od ? 'switched off'
-        : Date.now() - this.overdrive.since > od.maxMinutes * 60_000 && vigor < this.overdrive.target - 5 ? `${od.maxMinutes} min cap`
+        : Date.now() - this.overdrive.since > od.maxMinutes * 60_000 && vigor < this.overdrive.reach - 5 ? `${od.maxMinutes} min cap`
         : null;
       if (why) this.endOverdrive(vigor, why);
-      else if (vigor >= this.overdrive.target - 5) {
+      else if (vigor >= this.overdrive.reach - 5) {
         // AT THE TARGET: DIGEST, then release. See overdriveSettings.
         const level = Number(this.stomach?.level ?? 0);
         if (!this.overdrive.digestFrom) {
@@ -3884,6 +3899,19 @@ export class Autopilot {
             stomach: Math.round(this.stomach.level), strategy: p.strategy });
           this.progress('ate to raise vigor');
           return 'ate';
+        }
+        // NOTHING FITS UNDER THE CEILING: every food aboard would carry vigor past 200, which `eat`
+        // refuses — and the stomach wait reads 0 because there IS room, so the rule below would wait
+        // for ever. This is as high as this larder reaches; set out. (Kermit, 2026-09-28: 188 -> 188,
+        // 29.5 min, 0 meals.)
+        const minBite = Math.min(...larder.map(x => Number(x.food?.nutrition) || Infinity));
+        if (Number.isFinite(minBite) && vigor + minBite > Math.min(200, ceiling || 200)) {
+          this.climbing = false;
+          if (this.overdrive?.active && !(vigor >= (this.overdrive.reach ?? this.overdrive.target) - 5))
+            this.endOverdrive(vigor, 'no bite fits under 200');
+          this.note('as high as this larder reaches', { vigor, smallest_bite: minBite, ceiling,
+            why: 'every food aboard would carry vigor past 200, which eating refuses' });
+          return false;
         }
         // Too full to make progress: waiting is useful only until the configured
         // fighting floor is satisfied. Above it, a long digestion interval is time
@@ -19108,11 +19136,12 @@ export class Autopilot {
       // OVERDRIVE BEFORE A JOURNEY: not one sitting but a climb to the target, waiting out the stomach
       // between sittings — bounded by maxMinutes and abandoned the moment anything is in reach.
       const od = overdriveSettings(p);
-      if (od && vigor < od.target - 5) {
+      const reach = od ? overdriveReachable(od.target, larder) : null;
+      if (od && vigor < reach - 5) {
         this.startOverdrive(od, vigor, `setting out for ${dest ?? 'a journey'}`);
         const until = Date.now() + od.maxMinutes * 60_000;
         let now = vigor;
-        while (Date.now() < until && now < od.target - 5 && !this.stopping && !this.inReachOfUs?.()?.length) {
+        while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !this.inReachOfUs?.()?.length) {
           const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
                                                exclude: this.inheritedProtectedNames() }).catch(() => null);
           if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
@@ -19122,7 +19151,7 @@ export class Autopilot {
           now = this.s?.client?.vitals?.()?.vigor?.value ?? now;
         }
         e.vigor.after = now;
-        this.endOverdrive(now, now >= od.target - 5 ? 'reached the target' : 'set out before the target');
+        this.endOverdrive(now, now >= overdriveReachable(od.target, this.larder(c)) - 5 ? 'reached the target' : 'set out before the target');
         if (e.ate.length) { this.recordAte(e, 'overdrive before travel'); return 'ate'; }
         return null;
       }
