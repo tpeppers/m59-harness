@@ -25210,13 +25210,21 @@ export class Autopilot {
   }
 
   shoppingPlan({ kind = 'all', items = null } = {}) {
+    // A FOOD CARRY FLOOR IS A FOOD LINE, NOT A REAGENT ONE. purchaseRequests() lists every loadout
+    // floor, and they all used to ride the reagent gate and the guild-plan sourcing below — so a
+    // courier with reagent buying off (or bread chest-sourced) walked to a bread shop on its bread
+    // floor, dropped the bread line, and bought its own supper instead: cheapest vigor per
+    // shilling, apples (2026-09-28: two trips, ~22 apples, 0 bread, against a floor of 30).
+    const all = ['all', 'reagents', 'restock', 'food'].includes(kind) ? this.purchaseRequests() : [];
+    const foodLines = purchaseEnabled(this.policy, 'food') && ['all', 'food', 'restock'].includes(kind)
+      ? all.filter(r => isFood(r.item)) : [];
     let requests = purchaseEnabled(this.policy, 'reagents') && ['all', 'reagents', 'restock'].includes(kind)
-      ? this.purchaseRequests() : [];
+      ? all.filter(r => !isFood(r.item)) : [];
     // The stockpile is the only source for these, so they never reach a price. Removed here
     // rather than at the counter: a merchant refusal is a sentence spoken to the room, and an
     // unaffordable TOTAL is what opens the loop this exists to close.
     const split = splitBySourcing(requests, { policy: this.policy, plan: guildPlan() });
-    requests = split.buy;
+    requests = [...split.buy, ...foodLines];
     this.chestOnlyWants = split.stockpile;
     this.reagentsOff = split.off;
     if (purchaseEnabled(this.policy, 'reagents') && ['all', 'delivery'].includes(kind)
