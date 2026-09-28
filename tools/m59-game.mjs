@@ -1511,6 +1511,14 @@ class Session {
     } catch { /* the record is a convenience; never let it interrupt play */ }
   }
 
+  noteTravelMethod(method) {
+    try {
+      recordEvent(this.client?.me?.name ?? this.name, 'travel_method', {
+        method, room: this.world?.room?.num ?? null, room_name: this.world?.room?.name ?? null,
+      });
+    } catch { /* telemetry must not interrupt a crossing */ }
+  }
+
   // WHO IS SWINGING, when the server happens to have said so.
   //
   // Damage arrives as a stat packet and names nobody; the prose that names an attacker is
@@ -2273,6 +2281,7 @@ class Session {
     // needs these.
     this.credentials = { account, password, character, host, port };
     const c = new M59Client({ host, port, verbose: false, resources });
+    this.travelObservedRoom = null;
     c.combatReady = false;
     const loginCombatEvents = [];
     // Everything the server says, straight to disk. This is the only place the raw
@@ -2336,10 +2345,24 @@ class Session {
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
       if (ev.kind === 'stat' && ev.name === 'health') this.noteHealth(ev);
+      if (ev.kind === 'travel-cast') {
+        try { recordEvent(c.me?.name ?? this.name, 'travel_cast', { spell: ev.spell }); } catch {}
+      }
       // A travel await can enter AND leave the Underworld before the next keeper
       // pass. Observe the authoritative room event while it is still here. The
       // observer records only; the current movement owner remains the only escape.
       if (ev.kind === 'room-entered' && this.client === c) {
+        try {
+          const room = this.world?.room;
+          const previous = this.travelObservedRoom;
+          if (Number.isFinite(room?.num) && previous?.num !== room.num) {
+            recordEvent(c.me?.name ?? this.name, 'travel_map_entered', {
+              room: room.num, room_name: room.name, from: previous?.num ?? null,
+            });
+            if (previous?.num === 1) this.noteTravelMethod('underworld');
+            this.travelObservedRoom = { num: room.num };
+          }
+        } catch { /* telemetry must not delay observing a death */ }
         if (/underworld/i.test(ev.roomName ?? '')) this.lifeBoundary = (this.lifeBoundary ?? 0) + 1;
         const keeper = autopilotIfAny(this.name);
         if (keeper?.s === this)

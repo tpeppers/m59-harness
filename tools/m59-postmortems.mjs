@@ -59,6 +59,8 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import { postmortemSurvivalDecisions } from './m59-survival-decisions.mjs';
+import { deathImpact } from './m59-death-impact.mjs';
+import { deathTimeFromName } from './m59-death-tally.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR || here('../substrate/postmortems');
@@ -366,6 +368,8 @@ export function loadPostmortems({ sinceMs = null, limit = 5000, dir = POSTMORTEM
   const cutoff = sinceMs ? Date.now() - sinceMs : null;
   const out = [];
   for (const f of files) {
+    const namedAt = deathTimeFromName(f);
+    if (cutoff && Number.isFinite(namedAt) && namedAt < cutoff) continue;
     const pm = parse(f, dir);
     if (!pm?.at) continue;
     if (cutoff && pm.at < cutoff) continue;
@@ -373,6 +377,7 @@ export function loadPostmortems({ sinceMs = null, limit = 5000, dir = POSTMORTEM
     out.push({
       file: f, at: pm.at, character: pm.character ?? null, agent: pm.agent ?? null,
       level: pm.summary?.level ?? pm.vitals?.level ?? null,
+      impact: deathImpact(pm),
       strategy: pm.was?.strategy ?? null,
       hunting: pm.was?.hunting ?? null,
       doing: pm.was?.doing ?? null,
@@ -413,6 +418,7 @@ export function digest(file) {
 
   return {
     file, character: pm.character, agent: pm.agent, at: pm.at, level,
+    impact: deathImpact(pm),
     cause, where, keeper: keeperOf(pm),
     survival_decisions: postmortemSurvivalDecisions(pm),
     replay: pm.replay ?? null,

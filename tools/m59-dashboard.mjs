@@ -17,6 +17,9 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 // the deaths page carried another; a fourth board would have had to be added to both.
 import { NAV } from './m59-page-chrome.mjs';
 
+const deathCell = counts => `<strong class="${counts.true_deaths ? 'bad' : 'dim'}">${counts.true_deaths}</strong>` +
+  ` <span class="dim" title="no HP loss / unknown HP loss">/ ${counts.no_hp_loss} / ${counts.unknown}</span>`;
+
 // WHICH FLEET THIS PAGE IS OF. Named on the page rather than left implicit: the
 // dashboard binds to every interface and is the thing people leave open on a phone,
 // and two fleets' pages are otherwise identical down to the character count. A page
@@ -284,7 +287,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
       <td class="num strong">${c.levels_per_hour ?? '—'}</td>
       <td class="bar"><span style="width:${bestRate ? Math.round(100 * (c.levels_per_hour ?? 0) / bestRate) : 0}%"></span></td>
       <td class="num">${c.levels_gained}</td>
-      <td class="num ${c.deaths ? 'bad' : ''}">${c.deaths}</td>
+      <td class="num">${deathCell(c.death_counts)}</td>
       <td class="num">${c.stalls}</td>
       <td class="num dim">${c.hours}</td>
     </tr>`).join('');
@@ -330,7 +333,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
       <td class="gear">${gearCell(r.gear_condition, 'weapon', r.has_weapon)}</td>
       <td class="gear">${gearCell(r.gear_condition, 'armor',  null)}</td>
       <td>${esc(r.strategy ?? '—')}</td>
-      <td class="num ${r.deaths ? 'bad' : 'dim'}">${r.deaths}</td>
+      <td class="num">${deathCell(r.death_counts)}</td>
       <td class="num dim">${r.kills ?? 0}</td>
       <!-- KILLS IN THE LAST HALF HOUR. The lifetime count answers "has this character ever
            worked", which nobody is asking: it is reset by every keeper restart, so on this
@@ -483,7 +486,9 @@ ${controls}
   <div class="cards">
     <div class="card"><div class="k">characters</div><div class="v">${sum.characters}</div></div>
     <div class="card"><div class="k">levels gained</div><div class="v">${sum.total_levels_gained}</div></div>
-    <div class="card"><div class="k">deaths</div><div class="v ${sum.total_deaths ? 'bad' : ''}">${sum.total_deaths}</div></div>
+    <div class="card"><div class="k">True Deaths</div><div class="v ${sum.death_counts.true_deaths ? 'bad' : ''}">${sum.death_counts.true_deaths}</div><div class="dim">known max-HP loss</div></div>
+    <div class="card"><div class="k">No HP loss</div><div class="v">${sum.death_counts.no_hp_loss}</div></div>
+    <div class="card"><div class="k">Unknown HP loss</div><div class="v">${sum.death_counts.unknown}</div></div>
     <div class="card"><div class="k">past 30 hp</div><div class="v">${at30}</div></div>
     <div class="card"><div class="k">at 50 hp</div><div class="v">${atGoal}</div></div>
   </div>
@@ -492,11 +497,12 @@ ${controls}
     <h2>Strategies</h2>
     <p class="note">Max health gained per hour is the comparison that matters — max health <em>is</em> the level,
       and it is what every pattern is trying to buy. Kills are not a proxy for it: a creature at or below your
-      own level fails the advancement test and is worth nothing. Read deaths next; each one costs a point of
-      max health outright, so a fast pattern that dies is not fast.</p>
+      own level fails the advancement test and is worth nothing. Death columns show
+      <strong>True Deaths / no HP loss / unknown</strong>. Only recorded max-HP loss counts as a True Death;
+      a level below 30 alone does not establish the cost. ${sum.death_counts.under_30} deaths were below 30 max HP.</p>
     <table>
       <thead><tr><th>strategy</th><th class="num">chars</th><th class="num">levels/hr</th><th></th>
-        <th class="num">gained</th><th class="num">deaths</th><th class="num">stalls</th><th class="num">hours</th></tr></thead>
+        <th class="num">gained</th><th class="num">True Deaths / no loss / ?</th><th class="num">stalls</th><th class="num">hours</th></tr></thead>
       <tbody>${strategyRows || '<tr><td colspan="8" class="dim">no strategy data yet</td></tr>'}</tbody>
     </table>
   </section>
@@ -523,7 +529,7 @@ ${controls}
         <th title="combined previous-level ability percentage still required">points to next</th>
         <th>health</th><th>mana</th><th>vigor</th>
         <th class="num">food?</th><th class="gear">weapon</th><th class="gear">armor</th>
-        <th>strategy</th><th class="num">deaths</th><th class="num">kills</th>
+        <th>strategy</th><th class="num">True Deaths / no loss / ?</th><th class="num">kills</th>
         <th class="num" title="kills in the last 30 minutes, counted from the ledger — the column to its left is a high-water mark over the whole window, because a keeper restart zeroes that counter">kills/30m</th><th>where</th>
         <th>doing</th></tr></thead>
       <tbody>${fleetRows || '<tr><td colspan="16" class="dim">nothing recorded yet</td></tr>'}</tbody>

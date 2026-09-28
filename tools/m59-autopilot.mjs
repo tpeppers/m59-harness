@@ -16019,7 +16019,18 @@ export class Autopilot {
         // and retain this death's summary even if another death arrives first.
         const pm = structuredClone(this.postMortem('died'));
         const levelAfterDeath = this.s.client?.vitals?.()?.health?.max ?? null;
+        // Ask for a fresh post-death ceiling; an unchanged cached value is not proof
+        // that this death cost no HP. The existing broadcast wait bounds this read.
+        try { this.s.client?.stats?.(1); } catch { /* unknown is still a valid report */ }
         const bcast = await this.awaitDeathBroadcast().catch(() => null);
+        const afterStat = this.s.client?.statsById?.get('health');
+        death.max_hp_before = death.level;
+        death.max_hp_after = this.lastDeath === death && afterStat?.observed_at >= death.at
+          ? afterStat.currentMax : null;
+        death.max_hp_lost = Number.isFinite(death.max_hp_before) && Number.isFinite(death.max_hp_after)
+          && death.max_hp_before >= death.max_hp_after ? death.max_hp_before - death.max_hp_after : null;
+        this.ledgerEvent('death_cost', { death_at: death.at, max_hp_before: death.max_hp_before,
+          max_hp_after: death.max_hp_after, max_hp_lost: death.max_hp_lost });
         // WAS ANYTHING DRIVING WHEN THIS HAPPENED? A character whose keeper stopped
         // stands still in whatever fight it was in; attributing that to a hunting
         // decision charges the strategy for an operator restart. Marked, not excluded —

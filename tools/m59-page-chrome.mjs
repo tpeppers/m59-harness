@@ -73,6 +73,7 @@ export const TABS = [
   { key: 'dum', href: '/dum', label: 'DUM bot' },
   { key: 'harness', href: '/harness', label: 'Harness' },
   { key: 'deaths', href: '/deaths', label: 'Post mortems' },
+  { key: 'travel', href: '/travel', label: 'Travel' },
   { key: 'tougher', href: '/tougher', label: 'Tougher' },
   { key: 'economy', href: '/economy', label: 'Economy' },
   { key: 'inventory', href: '/inventory', label: 'Inventory' },

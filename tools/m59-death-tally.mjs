@@ -9,6 +9,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { deathImpact, emptyDeathCounts } from './m59-death-impact.mjs';
 
 export const DEATH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -62,6 +63,7 @@ export function projectPostmortem(record) {
     at: record?.at,
     character: record?.character,
     reason: record?.reason,
+    impact: deathImpact(record),
     where: record?.where ? {
       room: record.where.room ?? null, num: record.where.num ?? null,
       col: record.where.col ?? null, row: record.where.row ?? null,
@@ -93,8 +95,14 @@ export function countRecentDeaths(records = [], {
     if (!character || !Number.isFinite(at) || at < cutoff || at > now + 60_000) continue;
     const row = by.get(character) ?? {
       count: 0, in_safe_spot: 0, in_proven_safe_spot: 0, last: null,
+      death_counts: emptyDeathCounts(),
     };
     row.count++;
+    const impact = record.impact ?? deathImpact(record);
+    row.death_counts[impact.category]++;
+    row.death_counts.total++;
+    if (impact.under_30) row.death_counts.under_30++;
+    row.death_counts.hp_lost += impact.max_hp_lost ?? 0;
     if (record?.was?.in_safe_spot) {
       row.in_safe_spot++;
       if (record.was.in_safe_spot?.proven === true) row.in_proven_safe_spot++;
@@ -102,6 +110,9 @@ export function countRecentDeaths(records = [], {
     if (!row.last || at > row.last.at) {
       row.last = {
         at,
+        max_hp_before: impact.before,
+        max_hp_after: impact.after,
+        max_hp_lost: impact.max_hp_lost,
         reason: record.reason ?? 'died',
         died_in: record.where?.room ?? null,
         room_num: record.where?.num ?? null,

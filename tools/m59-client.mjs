@@ -605,6 +605,7 @@ export class M59Client {
   // `name_res` resolves to a bitmap filename. Index by both the slot pair and the
   // name STAT_NAMES gives it, so an agent can ask for "health".
   noteStat(s, { bulk = false } = {}) {
+    s.observed_at = Date.now();
     this.statsById.set(`${s.group}.${s.num}`, s);
     // BOTH SPELLINGS, because the server capitalises and every reader here does not.
     //
@@ -1154,6 +1155,11 @@ export class M59Client {
   // target still sends an empty list.
   cast(spellId, targets = []) {
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
+    try {
+      const spell = this.spells?.find(s => objId(s.id) === objId(spellId));
+      const name = String(spell?.name ?? this.rsc?.get?.(spell?.nameRsc) ?? '').toLowerCase();
+      if (name === 'rescue' || name === 'elusion') this.emit('travel-cast', { spell: name });
+    } catch { /* recording must not change whether a cast is sent */ }
   }
 
   // BP_REQ_APPLY {4,OBJECT} {4,OBJECT} — use one item on another.

@@ -6140,8 +6140,10 @@ export function sessionWalkPrototype(deps) {
                                        clearance: LEAVE_VIA_CLEARANCE });
       const stoppedAfterPortalWalk = await stopAfterAwait();
       if (stoppedAfterPortalWalk) return stoppedAfterPortalWalk;
-      if (walk?.left_room)
+      if (walk?.left_room) {
+        this.noteTravelMethod?.('portal');
         return { left: true, arrived_in: c.rsc.get(c.roomNameRsc), via: 'portal' };
+      }
       if (isTerminalMovementReason(walk.reason) && c.room.id === portalStartRoom)
         return { left: false, stage: 'walk', ...walk };
       const tGo = Date.now();
@@ -6154,6 +6156,7 @@ export function sessionWalkPrototype(deps) {
       if (!entered)
         return { left: false, stage: walk.arrived ? 'stood on it' : 'walk', ...walk,
                  reason: walk.arrived ? 'standing on it did nothing — it may not be a portal after all' : undefined };
+      this.noteTravelMethod?.('portal');
       return { left: true, arrived_in: entered.roomName, via: 'portal' };
     }
 
