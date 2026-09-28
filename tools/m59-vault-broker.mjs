@@ -101,6 +101,34 @@ export function loadConfig(file = CONFIG_FILE) {
 
 const maxHealthOf = r => Number(String(r?.health ?? '').split('/')[1]) || Number(r?.max_health) || 0;
 
+// ------------------------------------------------------------------ is the desk open
+// THE CONCIERGE ANSWERS "AM I OPEN" IN A FILE, so every errand that would walk into the hall can ask
+// first (operator, 2026-09-28: "Make it so those chest routings are automatic, like the same path
+// someone would normally route to try to deposit, it checks for the 'concierge service'").
+//
+//   <substrate>/history/<fleet>/vault-broker/OPEN.json
+//   { "at": <ms>, "pid": <desk pid>, "town_rooms": [106, ...], "meet_room": 106 }
+//
+// The desk writes it while open (refreshed at least every DESK_OPEN_STALE_MS / 3) and deletes it on
+// close. A reader treats a missing, unreadable or stale file as CLOSED — the hall walk is always the
+// fallback, so a wrong "closed" costs a walk and a wrong "open" costs an eight-minute wait.
+export const DESK_OPEN_STALE_MS = 180_000;
+export const DESK_OPEN_FILE = (fleet = 'prod') => join(dirname(TICKETS_FILE(fleet)), 'OPEN.json');
+export function readDeskOpen(fleet = 'prod', { now = Date.now(), file = DESK_OPEN_FILE(fleet) } = {}) {
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    if (!(Number(j?.at) > 0) || now - Number(j.at) > DESK_OPEN_STALE_MS) return null;
+    const rooms = (Array.isArray(j.town_rooms) ? j.town_rooms : [106]).map(Number).filter(Number.isInteger);
+    return { ...j, town_rooms: rooms, meet_room: Number(j.meet_room) || rooms[0] || 106 };
+  } catch { return null; }
+}
+export function writeDeskOpen(fleet = 'prod', info = {}, { now = Date.now(), file = DESK_OPEN_FILE(fleet) } = {}) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  writeFileSync(tmp, JSON.stringify({ ...info, at: now }));
+  renameSync(tmp, file);
+}
+
 /**
  * Can this fleet run the brokers? Pure. `facts`: {hallOwned, passwordKnown, ranks: {agent: n}}, each
  * read by the caller; null means "not known", which refuses — a gate that guesses open is no gate.

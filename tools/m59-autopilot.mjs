@@ -93,6 +93,7 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
 import { contributionPlan, guildPlan, guildKeepTest, reagentSource, REAGENT_MODES }
   from './m59-guildwants.mjs';
 import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
+import { TicketBook, TICKETS_FILE, readDeskOpen } from './m59-vault-broker.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
 import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
@@ -26675,6 +26676,34 @@ export class Autopilot {
       this.note('nothing to contribute to the guild chests', { total: 0 });
       return want;
     }
+    // THE SNAPSHOT THE COMMENT ABOVE PROMISED, AND NOTHING TOOK. `before` was named in both
+    // recordHallRun calls and declared nowhere, so in this module (strict) each threw a
+    // ReferenceError: a trip that did not arrive threw at its record, and the town scheduler reads a
+    // thrown stage as "pending" and runs it again five seconds later; a trip that DID deposit threw
+    // after depositing and ran again. Found 2026-09-28 wiring the vault desk in.
+    const before = snapshot();
+
+    // THE CONCIERGE FIRST (operator, 2026-09-28: "Make it so those chest routings are automatic, like
+    // the same path someone would normally route to try to deposit, it checks for the 'concierge
+    // service'"). With the vault desk open, a contributor does not walk into the hall: it goes to the
+    // desk's town room, files a deposit ticket and hands the goods to the go-between, who carries
+    // them across the window. The hall walk below is the fallback, never removed — a desk that does
+    // not answer costs one wait, and the next trip within the hour does not ask it again.
+    const desk = this.policy.useVaultDesk === false ? null : readDeskOpen(TITHE_FLEET);
+    if (desk && !(Date.now() - (this._deskMissedAt ?? 0) < 3600_000)) {
+      const viaDesk = await this.depositViaDesk(want, desk)
+        .catch(e => ({ contributed: 0, why: e?.message ?? String(e) }));
+      if (viaDesk.contributed > 0) {
+        this.tally.guild_contributed = (this.tally.guild_contributed || 0) + viaDesk.contributed;
+        this.recordHallRun({ before, after: snapshot(), want, contributed: viaDesk.contributed, done: [],
+          hall: { ok: true, via: 'vault desk', ticket: viaDesk.ticket ?? null, room: viaDesk.room ?? null } });
+        this.note('contributed to the guild chests through the vault desk', viaDesk);
+        this.progress('stocked the guild hall through the vault desk');
+        return { ...want, contributed: viaDesk.contributed, done: [], via: 'vault desk' };
+      }
+      this._deskMissedAt = Date.now();
+      this.note('the vault desk did not take the contribution — walking into the hall instead', viaDesk);
+    }
 
     this.doing = 'travelling';
     const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
@@ -26783,6 +26812,45 @@ export class Autopilot {
       hall: hall?.ok ? 'chests reachable' : (hall?.why ?? 'unknown') });
     if (contributed) this.progress('stocked the guild hall');
     return { ...want, contributed, done };
+  }
+
+  /**
+   * Hand a guild contribution to the vault desk rather than walking into the hall. Walks to the
+   * desk's town room, files a deposit ticket naming exactly what `want` gives, and waits for the
+   * go-between to take it (the desk walks to a bot standing in one of its town rooms and trades).
+   * Returns { contributed, ticket, room, status, why } — `contributed` is read off the pack, never
+   * off the ticket, because a ticket that says done while the goods are still here is not done.
+   */
+  async depositViaDesk(want, desk) {
+    const items = new Map();
+    for (const ch of want?.chests ?? []) for (const g of ch.give ?? [])
+      if (g.amount > 0) items.set(g.item, (items.get(g.item) ?? 0) + g.amount);
+    if (!items.size) return { contributed: 0, why: 'nothing to give' };
+    const room = Number(desk?.meet_room) || 106;
+    this.doing = 'travelling';
+    const trip = await this.travel(room, { maxHops: 14 })
+      .catch(error => ({ arrived: false, reason: error.message }));
+    if (!trip.arrived) return { contributed: 0, room, why: `could not reach room ${room}: ${trip.reason || 'travel refused'}` };
+    const count = name => this.packAsItems().filter(x => norm(x.name) === name)
+      .reduce((t, x) => t + (x.amount || 1), 0);
+    const start = new Map([...items.keys()].map(k => [k, count(k)]));
+    const book = new TicketBook(TICKETS_FILE(TITHE_FLEET));
+    const t = book.request({ kind: 'deposit', from: this.name ?? this.s.name,
+      items: [...items].map(([item, amount]) => ({ item, amount })), where: room });
+    this.note('filed a vault desk deposit', { ticket: t.id, room, items: Object.fromEntries(items) });
+    this.doing = 'waiting for the vault desk';
+    const until = Date.now() + (Number(this.policy.vaultDeskWaitMs) || 8 * 60_000);
+    const moved = () => [...start].reduce((n, [k, v]) => n + Math.max(0, v - count(k)), 0);
+    let status = 'open';
+    while (Date.now() < until && !this.stopping) {
+      await sleep(Number(this.policy.vaultDeskPollMs) || 10_000);
+      status = book.read().tickets.find(x => x.id === t.id)?.status ?? status;
+      if (!['open', 'working'].includes(status)) break;
+    }
+    const contributed = moved();
+    if (!contributed && ['open', 'working'].includes(status))
+      try { book.update(t.id, { status: 'expired', why: 'the contributor left: nobody took it' }); status = 'expired'; } catch {}
+    return { contributed, ticket: t.id, room, status };
   }
 
   async guildTitheFromSale(sale) {
