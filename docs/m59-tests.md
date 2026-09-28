@@ -281,6 +281,11 @@ the records it describes.
   that an unusable value keeps the committed one instead of unsetting it, that an
   unrecognised key is reported rather than dropped, and that no local file can move a
   mechanic or throw hard enough to stop a supervisor round) and
+  `node tools/m59-gate-test.mjs` (29 — playing a character from another machine: the
+  password that reaches the game server is the roster's and the placeholder never does, a
+  character not granted is refused before the server sees a byte, an unknown or revoked key
+  gets nothing, a changed gate key is refused, and the claim sits on a live local pid for
+  exactly the session) and
   `node tools/m59-handoff-test.mjs` (112 — **the contract test for lending a character
   without lending the password**: that the token is never on disk so a leaked grant file is
   an audit record rather than a key, that expiry is decided on USE and revocation on the
