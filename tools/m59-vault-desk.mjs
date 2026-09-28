@@ -870,6 +870,14 @@ export class VaultDesk {
   async health() {
     if (!this.leased()) return 'the commander lease is not held';
     const m = await this.row(this.M, true), g = await this.row(this.G);
+    // A ROW THAT IS MISSING OR NOT IN GAME IS NOT A POST. A disconnected manager keeps its last room
+    // (714) in the fleet row, so the post check passed and the desk walked the go-between to the
+    // window and back for a hand-over nobody could take (2026-09-28 14:38, Statler "NOT IN GAME").
+    // One missing reading is not a verdict: the fleet read can omit a row for a moment.
+    for (const [who, r] of [['manager', m], ['go-between', g]]) {
+      if (!r) return `the ${who}'s fleet row is missing`;
+      if (/NOT IN GAME/i.test(String(r.activity ?? ''))) return `the ${who} is not in game`;
+    }
     if (Number(m?.room_num) !== HALL) return `the manager is in room ${m?.room_num}, not the hall`;
     if (![INN, HALL, ...(this.cfg.town_rooms ?? [])].includes(Number(g?.room_num))) return `the go-between is in room ${g?.room_num}, out of town`;
     return null;
