@@ -72,7 +72,9 @@ export function loadCatalogue(file = process.env.M59_SPELLS || join(HERE, '..', 
 // THE KOD SPELLS REAGENTS AS CLASS NAMES, THE PACK SPELLS THEM AS ITEM NAMES. `ElderBerry` is
 // the elderberry in the pack and `Herbs` is matched by `herb` (reagentOnHand matches by
 // substring, the same way the chalice code asks for 'orc tooth' and 'emerald').
-const REAGENT_NAMES = { elderberry: 'elderberry', herbs: 'herb' };
+// CLASS NAME -> WHAT THE PACK CALLS IT, where the two differ. `Snack` is the edible mushroom
+// (snack.kod name_rsc): relay's reagent read as "snack" matched nothing in any pack, ever.
+const REAGENT_NAMES = { elderberry: 'elderberry', herbs: 'herb', snack: 'edible mushroom' };
 export function reagentName(cls) {
   const flat = String(cls ?? '').toLowerCase();
   if (REAGENT_NAMES[flat]) return REAGENT_NAMES[flat];
@@ -143,8 +145,18 @@ export function normalizePractice(cfg) {
         const name = String(typeof s === 'string' ? s : s?.name ?? '').trim().toLowerCase();
         if (!name) { out.problems.push('spells has an unnamed entry'); continue; }
         const target = typeof s === 'object' && s?.target != null ? String(s.target).toLowerCase() : null;
-        if (target != null && target !== 'self' && target !== 'none' && target !== 'creature') {
-          out.problems.push(`spells.${name}.target must be "self", "none" or "creature"`); continue;
+        if (target != null && target !== 'self' && target !== 'none' && target !== 'creature' && target !== 'fleetmate') {
+          out.problems.push(`spells.${name}.target must be "self", "none", "creature" or "fleetmate"`); continue;
+        }
+        // A FLEET-MATE TARGET (operator, 2026-09-28: troll hunters train relay on the low-vigor
+        // characters waiting in the stage room, toward enchant weapon). Relay MOVES the caster's own
+        // vigor to the target at 125% (relay.kod:121-151), so it is cast only while the caster has
+        // `min_vigor` to spare; never on self (relay refuses), never on a stranger.
+        let fleetExtra = {};
+        if (target === 'fleetmate') {
+          const mv = s?.min_vigor == null ? 150 : Number(s.min_vigor);
+          if (!(mv >= 16 && mv <= 200)) { out.problems.push(`spells.${name}.min_vigor must be 16..200`); continue; }
+          fleetExtra = { min_vigor: mv };
         }
         // A CREATURE TARGET NAMES WHICH CREATURES. Dazzle (Dazzle.kod CanPayCosts) wants a Battler
         // that is not the caster and not already dazzled; "any monster in the room" would pick
@@ -180,7 +192,7 @@ export function normalizePractice(cfg) {
           }
           extra = { room, session_ms, every_ms, when };
         }
-        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra });
+        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra, ...fleetExtra });
       }
       out.spells = list;
       continue;
@@ -266,7 +278,7 @@ export function deskReserve({ practice = PRACTICE_DEFAULTS, services = [], known
  * @returns { cast: { name, target: 'self'|'none', mana }, why } | { cast: null, why, blocked }
  */
 export function choosePractice({ practice, spells = [], mana = null, have = () => 0,
-                                 reserve, refusedUntil = new Map(), now = 0,
+                                 reserve, refusedUntil = new Map(), now = 0, vigor = null,
                                  catalogue = loadCatalogue() } = {}) {
   if (!practice) return { cast: null, why: 'practice is off', blocked: 'off' };
   if (!(mana && Number.isFinite(mana.value)))
@@ -293,6 +305,10 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
     const s = byName.get(want.name);
     if (!s) { tried.push(`${want.name}: not known`); continue; }
     if ((refusedUntil.get(want.name) ?? 0) > now) { tried.push(`${want.name}: refused recently`); continue; }
+    // A FLEET-MATE SPELL SPENDS THE CASTER'S OWN VIGOR (relay): only with min_vigor to spare.
+    if (want.target === 'fleetmate' && !(Number(vigor) >= (want.min_vigor ?? 150))) {
+      tried.push(`${want.name}: vigor ${vigor ?? '?'} under the ${want.min_vigor ?? 150} it may give from`); continue;
+    }
     const cost = spellCost(want.name, catalogue);
     if (!cost) { tried.push(`${want.name}: no cost in the spell catalogue`); continue; }
     if (mana.value - cost.mana < reserve.mana) {
@@ -306,7 +322,8 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
       continue;
     }
     const target = want.target ?? ((Number(s.targets) || 0) > 0 ? 'self' : 'none');
-    return { cast: { name: want.name, target, mana: cost.mana, ...(want.on ? { on: want.on } : {}) },
+    return { cast: { name: want.name, target, mana: cost.mana, ...(want.on ? { on: want.on } : {}),
+                     ...(want.min_vigor ? { min_vigor: want.min_vigor } : {}) },
              why: `practice ${want.name} (${cost.mana} mana, ${mana.value} on hand, ${reserve.mana} kept for the desk)` };
   }
   const manaOnly = tried.length && tried.every(t => /under the \d+ reserve|refused recently|not known/.test(t))

@@ -24028,7 +24028,7 @@ export class Autopilot {
     const reserve = deskReserve({ practice: cfg, services, known: spells.map(x => x.name),
                                   keep: this.chaliceReagentFloor() });
     this._practiceRefused ||= new Map();
-    const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now,
+    const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now, vigor: v?.vigor?.value ?? null,
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused });
     this.practiceState = { at: now, reserve: reserve.mana, reserve_why: reserve.why,
@@ -24072,7 +24072,25 @@ export class Autopilot {
           { spell: choice.cast.name, why: 'none in the room, or each was cast on within the last few seconds' });
       }
     }
-    const targets = choice.cast.target === 'self' ? [c.selfId] : creature ? [creature.id] : [];
+    // A FLEET-MATE TARGET: a player in the room who is one of ours, never self, least recently cast
+    // on first. Its vigor cannot be read from here, so the server answers for it — "cannot handle
+    // additional vigor" costs nothing (CanPayCosts refuses before mana) and sets that one aside.
+    let mate = null;
+    if (choice.cast.target === 'fleetmate') {
+      this._practiceTargets ||= new Map();
+      const mates = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) && party.isFleetmate(c.rsc.get(o.nameRsc) || ''))
+        .map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' }))
+        .filter(o => !((this._practiceTargets.get(o.id) ?? 0) > now))
+        .sort((a, b) => (this._practiceTargets.get(a.id) ?? 0) - (this._practiceTargets.get(b.id) ?? 0));
+      mate = mates[0] ?? null;
+      if (!mate) {
+        this._practiceAt = now;
+        return this.declinedCast('practice', 'no fleet-mate here to practise on',
+          { spell: choice.cast.name, why: 'none in the room, or each has refused within the last few minutes' });
+      }
+    }
+    const targets = choice.cast.target === 'self' ? [c.selfId] : creature ? [creature.id] : mate ? [mate.id] : [];
     this._practiceAt = now;
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
@@ -24086,11 +24104,14 @@ export class Autopilot {
     // "out of reach" are facts about that target, and the next skeleton may take it. A landed one
     // is set aside for the longest the effect can run (Dazzle.kod bounds it to 15 s) plus a second.
     if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));
+    // A full fleet-mate refuses relay; set IT aside five minutes, not the spell. A landed one waits a
+    // minute, so the practice spreads across whoever is in the room.
+    else if (mate) this._practiceTargets.set(mate.id, now + (landed === false ? 300_000 : 60_000));
     else if (landed === false) this._practiceRefused.set(choice.cast.name, now + cfg.refused_ms);
     if (landed) this.tally.practice_casts = (this.tally.practice_casts || 0) + 1;
     this.recordCast(choice.cast.name, {
       ok: landed !== false,
-      target: choice.cast.target === 'self' ? 'self' : creature ? `${creature.name} #${creature.id}` : null,
+      target: choice.cast.target === 'self' ? 'self' : creature ? `${creature.name} #${creature.id}` : mate ? mate.name : null,
       why: landed === false
         ? (creature ? `practice: no mana was spent on ${creature.name}; that creature is set aside 60s`
                     : `practice: no mana was spent, so the server refused it; set aside ${Math.round(cfg.refused_ms / 1000)}s`)

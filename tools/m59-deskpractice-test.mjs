@@ -307,7 +307,7 @@ console.log('\na one-target spell practised on a creature');
   ok('it is kept, lower-cased, with its creature list',
      cfg.spells[0]?.target === 'creature' && cfg.spells[0]?.on?.[0] === 'skeleton', JSON.stringify(cfg.spells));
   ok('an unknown target is still refused', normalizePractice({ spells: [{ name: 'x', target: 'orc' }] })
-     .problems.some(p => /self", "none" or "creature/.test(p)));
+     .problems.some(p => /must be "self", "none", "creature" or "fleetmate"/.test(p)));
 
   const objects = [
     { id: 1, name: 'skeleton', row: 10, col: 10, attackable: true },
@@ -403,6 +403,26 @@ console.log('\nmana-full sessions, and the skeleton somebody is fighting');
   ok('a session that cannot cast again goes home rather than resting in the room',
      AP.includes('if (session) { session.done = choice.why; return false; }')
        && AP.includes("this.chaliceEvent('practice_session_done'"));
+}
+
+
+// RELAY ON A FLEET-MATE (operator, 2026-09-28: troll hunters train relay toward enchant weapon).
+{
+  const cfg = normalizePractice({ spells: [{ name: 'relay', target: 'fleetmate', min_vigor: 150 }], rooms: [2] });
+  ok('a fleetmate target is accepted, with its min_vigor', cfg.spells[0]?.target === 'fleetmate' && cfg.spells[0]?.min_vigor === 150,
+     JSON.stringify(cfg));
+  ok('relay costs 5 mana and an EDIBLE MUSHROOM (the Snack class), read off the kod',
+     JSON.stringify(spellCost('relay')) === JSON.stringify({ name: 'relay', mana: 5, reagents: [['edible mushroom', 1]] }),
+     JSON.stringify(spellCost('relay')));
+  const reserve = deskReserve({ practice: cfg, services: [], known: ['relay'], keep: {} });
+  const base = { practice: cfg, spells: [{ name: 'relay', targets: 1 }], mana: { value: 30, max: 30 }, reserve,
+                 have: i => (i === 'edible mushroom' ? 5 : 0), now: 1 };
+  ok('under min_vigor the caster does not give its vigor away', choosePractice({ ...base, vigor: 120 }).cast === null);
+  ok('with vigor to spare and a mushroom aboard, relay is cast on a fleet-mate',
+     choosePractice({ ...base, vigor: 180 }).cast?.target === 'fleetmate');
+  ok('an unknown vigor is not vigor to spare', choosePractice({ ...base, vigor: null }).cast === null);
+  ok('a bad min_vigor is reported, not applied',
+     normalizePractice({ spells: [{ name: 'relay', target: 'fleetmate', min_vigor: 5 }] }).problems.some(p => /min_vigor must be 16..200/.test(p)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
