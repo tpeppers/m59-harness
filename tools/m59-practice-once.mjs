@@ -11,10 +11,11 @@
 //
 // WHAT IT DOES, IN ORDER, AND WHAT IT NEVER DOES:
 //   * reads the pack, mana, vigor and the practice spells' abilities (one read each);
-//   * eats one inky cap when vigor < 150 (+50 never overshoots 200; vigor is the mana clock and
-//     resting stops at 80 — on the drill, caps took a round from ~103 s to ~68 s);
+//   * eats on a CLOCK, not on a threshold — see FOOD below: the first food of `foods` it carries,
+//     whenever the modelled stomach has room for it and the vigor would not overshoot 200;
 //   * picks ONE spell: among those it has the reagent and the mana for, the LOWEST ability — the
-//     gate sums the best three at a level and a low ability improves fastest;
+//     gate sums the best three at a level and a low ability improves fastest — except that below
+//     `thriftBelow` vigor it picks the CHEAPEST IN VIGOR, because then vigor is the bottleneck;
 //   * stands (a seated character cannot cast, silently), casts, and judges the outcome by the
 //     REAGENT: consumed = the spell ran; a failed roll consumes none and cannot improve anything
 //     (spell.kod:1255); refused = the broker or the server said no;
@@ -44,18 +45,78 @@
 export const TRANCE_MARGIN_MS = 1500;
 export const maxTranceMs = castMs => Math.ceil((Number(castMs) || 15_000) * 1.49) + TRANCE_MARGIN_MS;
 
+// FOOD, AND WHY IT IS ON A CLOCK (operator, 2026-09-28: "Set the guildhall deskers to eat other food,
+// not inky-caps. Bread or cheese ... they should be able to still reach 200 vigor by constantly eating
+// the given foodstuff as hunger re-builds up again (can basically be timed/calculated ...)"). All of
+// it is deterministic, player.kod:
+//   * eating adds the food's nutrition to vigor at once (EatSomething :5734, exertion -10000*n),
+//     clamped at viMax_vigor 200 (:740, NewVigor :1217) — so a bite that overshoots is wasted;
+//   * and its FILLING to a stomach that refuses past 100 (ReqEatSomething :5703);
+//   * the stomach empties at FOOD_USE_RATE 12 hundredths a second (:51, UpdateStomach :1347) —
+//     833 s from full to empty, no randomness.
+// So the most vigor a stomach can deliver is 0.12 * nutrition/filling a second: inky cap 14.4 a
+// minute, cheese and turkey leg 5.4, meat pie 4.3, bread 3.6, pork 3.2. Eating is therefore a CLOCK:
+// eat as soon as the modelled stomach has room, and never let a bite overshoot 200.
+//
+// WHAT CASTING COSTS IN VIGOR: viSpellExertion (spell.kod:1283, half on a failed roll :1166) — holy
+// symbol 15 (holysymb.kod:47), detect evil 5 (detevil.kod:50). Mana regenerates in proportion to
+// vigor (CalculateManaTime :5650): at 27 max mana and 30 mysticism, 11.2 mana a minute at 200 vigor.
+// Alternating the two spells burns ~12.4 vigor a minute at 200 — more than bread or cheese can
+// supply — so on ordinary food the steady state is ~58 (bread) or ~87 (cheese). Casting mostly the
+// CHEAP spell burns ~5.6 at 200, which cheese very nearly holds. Hence `thriftBelow`.
+export const FOOD = Object.freeze({
+  'inky-cap mushroom': { nutrition: 50, filling: 25 },   // inkycap.kod
+  'wheel of cheese': { nutrition: 30, filling: 40 },     // cheese.kod
+  'turkey leg': { nutrition: 15, filling: 20 },          // turkyleg.kod
+  'meat pie': { nutrition: 30, filling: 50 },            // meatpie.kod
+  'bowl of stew': { nutrition: 15, filling: 25 },        // stew.kod
+  'loaf of bread': { nutrition: 20, filling: 40 },       // bread.kod
+  'slice of pork': { nutrition: 9, filling: 20 },        // pork.kod
+});
+// Best vigor per unit of stomach first. Inky caps are NOT on the default list: they are the fleet's
+// scarce food (the chests held 2 on 2026-09-28) and a desk can run on bread.
+export const DEFAULT_FOODS = Object.freeze(['wheel of cheese', 'turkey leg', 'meat pie', 'loaf of bread', 'slice of pork']);
+export const VIGOR_MAX = 200;
+export const STOMACH_EMPTY_PER_S = 0.12;
+
+// THE STOMACH, MODELLED. The server does not send it, so it is integrated from what we ate: +filling
+// per bite, -0.12 a second, starting empty. A bite that does not raise vigor was refused as too full,
+// and resets the model to full — the only correction it ever needs.
+export class Stomach {
+  constructor(now = Date.now()) { this.level = 0; this.at = now; }
+  current(now = Date.now()) { return Math.max(0, this.level - (now - this.at) / 1000 * STOMACH_EMPTY_PER_S); }
+  ate(filling, now = Date.now()) { this.level = Math.min(100, this.current(now) + filling); this.at = now; }
+  full(now = Date.now()) { this.level = 100; this.at = now; }
+  /** Seconds until `filling` fits. */
+  waitFor(filling, now = Date.now()) { return Math.max(0, (this.current(now) + filling - 100) / STOMACH_EMPTY_PER_S); }
+}
+
+const packHas = (pack, name) => (pack ?? []).some(i => String(i.name ?? '').toLowerCase() === name.toLowerCase());
+
+/** Which food to eat now, if any. Pure: the first food of `foods` carried, if it fits and does not overshoot. */
+export function chooseFood({ pack, vigor, stomach, foods = DEFAULT_FOODS, now = Date.now() }) {
+  if (!Number.isFinite(vigor)) return { food: null, why: 'vigor unread' };
+  const carried = foods.filter(n => FOOD[n.toLowerCase()] && packHas(pack, n));
+  if (!carried.length) return { food: null, why: `carrying none of ${foods.join(', ')}`, restock: true };
+  const name = carried[0], f = FOOD[name.toLowerCase()];
+  if (vigor + f.nutrition > VIGOR_MAX) return { food: null, why: `${name} would overshoot ${VIGOR_MAX} (vigor ${vigor})` };
+  const wait = stomach.waitFor(f.filling, now);
+  if (wait > 0) return { food: null, why: `stomach full for ${Math.ceil(wait)} s more`, waitS: wait };
+  return { food: name, ...f };
+}
+
 // A PRACTICE TABLE is data: spell, reagent (as the pack names it) and how many a cast takes, mana,
 // and whether it targets the caster. The Shal'ille level-1 drill, read off the kod and the server:
 export const SHALILLE_DRILL = Object.freeze([
-  { spell: 'holy symbol', reagent: /^elderberry$/i, per: 3, mana: 8, self: false, castMs: 2000, school: "Shal'ille" },  // holysymb.kod:49,61
-  { spell: 'detect evil', reagent: /^fairy wing$/i, per: 1, mana: 10, self: true, castMs: 3000, school: "Shal'ille" },   // persench/detevil.kod:52,66
+  { spell: 'holy symbol', reagent: /^elderberry$/i, per: 3, mana: 8, vigor: 15, self: false, castMs: 2000, school: "Shal'ille" },  // holysymb.kod:47,49,61
+  { spell: 'detect evil', reagent: /^fairy wing$/i, per: 1, mana: 10, vigor: 5, self: true, castMs: 3000, school: "Shal'ille" },   // persench/detevil.kod:50,52,66
 ]);
 
 const count = (items, rx) => (items ?? []).filter(i => rx.test(i.name ?? '')).reduce((n, i) => n + (Number(i.amount) || 1), 0);
 
 // THE CHOICE, as a pure function so it can be tested without a server: the castable spell with the
 // lowest ability; null (with the reason) when none is castable.
-export function choosePractice({ table, abilities, pack, mana }) {
+export function choosePractice({ table, abilities, pack, mana, vigor = null, thriftBelow = 180 }) {
   const rows = table.map(t => ({ ...t, ability: abilities?.[t.spell] ?? null,
     haveReagent: count(pack, t.reagent) >= t.per }));
   const known = rows.filter(r => r.ability != null);
@@ -67,11 +128,20 @@ export function choosePractice({ table, abilities, pack, mana }) {
     const need = Math.min(...stocked.map(r => r.mana));
     return { pick: null, why: `mana ${mana ?? '?'} under the ${need} the cheapest stocked spell costs`, manaShort: need - (mana ?? 0) };
   }
+  // VIGOR IS THE BOTTLENECK BELOW thriftBelow: the cheapest-in-vigor spell, then the lowest ability.
+  const thrift = Number.isFinite(vigor) && vigor < thriftBelow && affordable.every(r => Number.isFinite(r.vigor));
+  if (thrift) {
+    affordable.sort((a, b) => a.vigor - b.vigor || a.ability - b.ability);
+    return { pick: affordable[0], why: `vigor ${vigor} < ${thriftBelow}: cheapest in vigor (${affordable.map(r => `${r.spell} ${r.vigor}`).join(', ')})` };
+  }
   affordable.sort((a, b) => a.ability - b.ability || a.mana - b.mana);
   return { pick: affordable[0], why: `lowest ability of those castable (${affordable.map(r => `${r.spell} ${r.ability}`).join(', ')})` };
 }
 
-export async function practiceOnce({ call, agent, table = SHALILLE_DRILL, ledger = null, eatBelow = 150,
+const STOMACHS = new Map();   // per agent, for the life of the host process
+
+export async function practiceOnce({ call, agent, table = SHALILLE_DRILL, ledger = null,
+                                     foods = DEFAULT_FOODS, thriftBelow = 180,
                                      controlUrl = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901' } = {}) {
   const [inv, st, ab] = await Promise.all([
     call('inventory', { agent }).catch(() => null),
@@ -81,12 +151,22 @@ export async function practiceOnce({ call, agent, table = SHALILLE_DRILL, ledger
   if (!Array.isArray(inv?.items) || !st) return { cast: false, why: 'pack or status unreadable', retryInMs: 15_000 };
   const pack = inv.items;
   const vigor = Number(st?.vigor?.value ?? st?.vitals?.vigor?.value ?? NaN);
-  if (Number.isFinite(vigor) && vigor < eatBelow && count(pack, /inky/i) > 0)
-    await call('act', { agent, verb: 'eat', target: 'Inky-cap mushroom' }).catch(() => null);
+  // EAT ON THE CLOCK. One bite a call at most; a bite that does not raise vigor was refused, and a
+  // refusal means the stomach is full — the model's only correction.
+  const stomach = STOMACHS.get(agent) ?? STOMACHS.set(agent, new Stomach()).get(agent);
+  const meal = chooseFood({ pack, vigor, stomach, foods });
+  let ate = null, vigorNow = vigor;
+  if (meal.food) {
+    await call('act', { agent, verb: 'eat', target: meal.food }).catch(() => null);
+    const after = await call('status', { agent }).catch(() => null);
+    const v2 = Number(after?.vigor?.value ?? after?.vitals?.vigor?.value ?? NaN);
+    if (Number.isFinite(v2) && v2 > vigor) { stomach.ate(meal.filling); ate = meal.food; vigorNow = v2; }
+    else stomach.full();
+  }
   const mana = st?.mana?.value ?? st?.vitals?.mana?.value ?? null;
   const abilities = Object.fromEntries((ab?.spells ?? []).map(s => [String(s.name).toLowerCase(), s.ability ?? null]));
-  const c = choosePractice({ table, abilities, pack, mana });
-  if (!c.pick) return { cast: false, why: c.why, restock: !!c.restock,
+  const c = choosePractice({ table, abilities, pack, mana, vigor: vigorNow, thriftBelow });
+  if (!c.pick) return { cast: false, why: c.why, restock: !!c.restock, ate, foodRestock: !!meal.restock,
                         retryInMs: c.manaShort ? Math.max(10_000, c.manaShort * 6_000) : 60_000 };
   const t = c.pick;
   let target = null;
@@ -119,5 +199,5 @@ export async function practiceOnce({ call, agent, table = SHALILLE_DRILL, ledger
   }
   await ledger?.record({ kind: 'cast', spell: t.spell, school: t.school, outcome,
                          ...(outcome === 'refused' ? { why: r?.reason ?? r?.error ?? null } : {}) }).catch(() => {});
-  return { cast: outcome !== 'refused', spell: t.spell, outcome, why: c.why, resolvedMs: Date.now() - sentAt, retryInMs: 0 };
+  return { cast: outcome !== 'refused', spell: t.spell, outcome, why: c.why, ate, foodRestock: !!meal.restock, resolvedMs: Date.now() - sentAt, retryInMs: 0 };
 }

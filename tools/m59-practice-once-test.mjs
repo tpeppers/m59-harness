@@ -2,7 +2,7 @@
 // OFFLINE. The practice picker (choosePractice in m59-practice-once.mjs) that a service desk or a
 // drill calls between other work — no broker, no socket. Each case is a way one practice cast could
 // be wasted or never happen.
-import { choosePractice, practiceOnce, maxTranceMs, SHALILLE_DRILL } from './m59-practice-once.mjs';
+import { choosePractice, practiceOnce, maxTranceMs, SHALILLE_DRILL, Stomach, chooseFood } from './m59-practice-once.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
@@ -67,6 +67,32 @@ function fake(castReply) {
   ok(r.outcome === 'broken', `a broken trance is reported as broken, not success (${r.outcome})`);
 }
 ok(SHALILLE_DRILL.every(t => t.castMs > 0), 'every drill spell carries its kod cast time');
+
+// EAT ON A CLOCK (FOOD, Stomach, chooseFood) and pick the cheap spell when vigor is short.
+{
+  const t0 = 1_000_000;
+  const st = new Stomach(t0);
+  ok(chooseFood({ pack: [{ name: 'loaf of bread', amount: 5 }], vigor: 100, stomach: st, now: t0 }).food === 'loaf of bread',
+     'an empty stomach and room under 200: eat the bread');
+  st.ate(40, t0); st.ate(40, t0);
+  const c1 = chooseFood({ pack: [{ name: 'loaf of bread', amount: 5 }], vigor: 100, stomach: st, now: t0 });
+  ok(!c1.food && Math.round(c1.waitS) === 167, `80 in the stomach: bread (40) waits (80+40-100)/0.12 = 167 s (${Math.round(c1.waitS)})`);
+  ok(chooseFood({ pack: [{ name: 'loaf of bread', amount: 5 }], vigor: 100, stomach: st, now: t0 + 167_000 }).food === 'loaf of bread',
+     'and fits exactly when the clock says');
+  ok(!chooseFood({ pack: [{ name: 'loaf of bread', amount: 5 }], vigor: 185, stomach: new Stomach(t0), now: t0 }).food,
+     'a bite that would overshoot 200 is not taken');
+  ok(chooseFood({ pack: [{ name: 'Inky-cap mushroom', amount: 3 }], vigor: 50, stomach: new Stomach(t0), now: t0 }).restock,
+     'inky caps are not on the default list — a desk runs on ordinary food');
+  ok(chooseFood({ pack: [{ name: 'loaf of bread', amount: 5 }, { name: 'wheel of cheese', amount: 1 }], vigor: 50,
+                  stomach: new Stomach(t0), now: t0 }).food === 'wheel of cheese', 'cheese before bread: more vigor per stomach');
+}
+{
+  const both = pack(90, 20), ab = { 'holy symbol': 40, 'detect evil': 44 };
+  ok(choosePractice({ table: SHALILLE_DRILL, abilities: ab, pack: both, mana: 27, vigor: 190 }).pick.spell === 'holy symbol',
+     'plenty of vigor: the lowest ability, as before');
+  ok(choosePractice({ table: SHALILLE_DRILL, abilities: ab, pack: both, mana: 27, vigor: 120 }).pick.spell === 'detect evil',
+     'vigor short: the spell costing 5 vigor, not 15');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
