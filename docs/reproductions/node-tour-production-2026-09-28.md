@@ -63,3 +63,24 @@ with a suitable escort, or establish a sheltered approach before sending the
 25-health enchanter again. Capture the entry scene and verify health stays
 above the recovery threshold before the fine rail begins. Do not repeat the
 same solo entry or disable survival merely to force the itinerary.
+
+## Cache-aware campaign: busy owner transition
+
+On build `24b651f`, two starts stopped in room 2 before any node interaction.
+The first followed a selected-keeper restart and overlapped a supply handoff;
+the second did not restart. Both recorded `declared busy` under the FleetScript
+owner interrupting `walk to Castle Victoria`. The initial broker announcement
+had belonged to the prior director because the keeper claim followed it.
+The first ten-second busy renewal changed owners, so the keeper correctly
+treated it as a new operation and cancelled the already-started script walk.
+
+`holdKeeper` now announces busy to the actual keeper after claiming and clearing
+the prior journey, before returning control to the script. Replacement keepers
+use the same path. A regression drives the real `Autopilot.declareBusy` through
+the compiler and verifies that renewal does not interrupt the new owner's walk.
+Survival remains enabled. Raphael returned to room 2 r19c8, 25/25 health,
+enchant-weapon service available; the other 23 entries remained pending.
+
+Evidence: `substrate/node-campaign/hk3-1790632244168/five-node-1790632296182.json`
+and `substrate/node-campaign/hk3-1790632335545/five-node-1790632345995.json`, with
+their adjacent `-keeper.jsonl` journals and `desk-recovery.json`.

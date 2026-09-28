@@ -1955,6 +1955,47 @@ function fakeKeeper({ world, character = 'Tester' }) {
   return () => { globalThis.fetch = realFetch; };
 }
 
+console.log('\nbusy ownership is established before the first errand walk');
+{
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  let walking = false, interrupted = 0;
+  const ap = Object.assign(Object.create(Autopilot.prototype), {
+    running: true, claims: new Map(), policy: {},
+    s: { cancelMovement: () => { if (walking) interrupted++; return { cancelled: true }; } },
+    note() {}, progress() {},
+  });
+  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const begin = src.indexOf("case 'autopilot_claim':");
+  const end = src.indexOf('// WHO IS ACTUALLY STANDING HERE', begin);
+  const dispatch = new Function('name', 'args', 'autopilot', 'json', `switch(name){${src.slice(begin,end)}}`);
+  const action = (name,args) => { let result; dispatch(name,args,ap,x=>{result=x;}); return result; };
+  action('autopilot_claim',{by:'prior-director',faculties:['work','movement'],lease_ms:120000});
+  const restoreFetch=globalThis.fetch;
+  fakeBroker({rooms:{a1:2}});
+  const brokerFetch=globalThis.fetch;
+  globalThis.fetch=async(u,o)=>{
+    const url=String(u),reply=x=>({ok:true,json:async()=>x});
+    if(url.includes(':'+KEEPER_PORT+'/live'))return reply({agent:'a1',character:'Tester',pid:4242});
+    if(url.includes(':'+KEEPER_PORT+'/action')){const b=JSON.parse(o.body);return reply(action(b.name,b.args));}
+    if(url.includes(':'+KEEPER_PORT+'/cancel'))return reply(ap.s.cancelMovement());
+    if(/127\.0\.0\.1:19\d\d\d\//.test(url))throw Error('connection refused');
+    const b=o?.body?JSON.parse(o.body):null;
+    if(b?.params?.name==='autopilot'&&b.params.arguments.action==='busy'){
+      const a=b.params.arguments;ap.declareBusy({kind:a.kind,label:a.label,leaseMs:a.lease_ms});
+    }
+    return brokerFetch(u,o);
+  };
+  try {
+    const r=await fleetScript({name:'busy-owner',fleet:'testfleet',agents:['a1'],onLog:quiet,
+      steps:[verify(async()=>{
+        ok('the keeper already advertises the new owner before any walk',ap.busyStatus()?.by==='fleetscript:busy-owner');
+        walking=true;await new Promise(resolve=>setTimeout(resolve,1100));walking=false;
+        return true;
+      },'wait across busy heartbeats')]});
+    ok('the real busy renewal does not interrupt the errand walk',r.ok&&interrupted===0,JSON.stringify({interrupted,r}));
+  } finally { walking=false;globalThis.fetch=restoreFetch; }
+}
+
 console.log('\na lapsed lease is taken back, even while the broker cannot answer');
 {
   // The keeper forgot the claim (renewed: []), and every observe through the broker fails —

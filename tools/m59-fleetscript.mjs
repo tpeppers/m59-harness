@@ -2681,6 +2681,18 @@ export async function holdKeeper(ctx, agent, fleet) {
   const cancelled = await cancelNow();
   if (cancelled?.error) ctx.log(agent, `could not clear the journey in flight: ${cancelled.error}`);
 
+  // Establish busy under the NEW socket owner's claim before returning the hold.
+  // The broker's earlier announcement can belong to the prior director. Waiting
+  // for its first renewal changes owner mid-walk and declareBusy cancels our own
+  // journey (Raphael, 2026-09-28). This also covers a replacement keeper.
+  const busy = await ask('autopilot_busy', { by: `fleetscript:${ctx.name}`,
+    kind: 'fleetscript', label: ctx.name, lease_ms: BUSY_LEASE_MS });
+  if (busy?.error || busy?.refused) {
+    await ask('commander_release', { faculties: KEEPER_FACULTIES,
+      by: `fleetscript:${ctx.name}` }).catch(() => {});
+    throw Error(`keeper busy announcement refused: ${busy.error ?? busy.refused}`);
+  }
+
   let done = false;
   // GUARANTEE: A DEAD BODY DOES NOT KEEP ITS LEASE.
   //
