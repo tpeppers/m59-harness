@@ -103,6 +103,7 @@ console.log('\nthe keeper\'s keep lists govern giving, not eating');
   const ap = Object.create(Autopilot.prototype);
   ap.policy = { vaultItems: [INKY, 'blue dragon scale'], protectedItems: ['herb', INKY] };
   ap.inheritedProtectedNames = () => ['chalice'];
+  ap.notOursToEat = () => ['chalice'];
   const { c } = rig([[1, 8], [3, 20]], 80);
   ap.s = { client: c };
   ok('protectedItemNames still holds the inky back from sale',
@@ -110,8 +111,13 @@ console.log('\nthe keeper\'s keep lists govern giving, not eating');
   ok('the eating larder sees it', ap.larder(c).some(r => r.name === INKY));
   ok('the giving larder does not', !ap.giveableLarder(c).some(r => r.name === INKY));
 
-  // Not this character's to eat: something protected by inheritance stays out of the larder.
+  // SELL PROTECTION IS NOT EATING PROTECTION (2026-09-28): food the guild or the fleet's stockpile
+  // keeps from MERCHANTS is still this character's to eat — a bread floor on one loadout once made
+  // the whole troll crew's bread uneatable.
   ap.inheritedProtectedNames = () => [INKY];
+  ok('stockpile/guild-kept food is still eaten', ap.larder(c).some(r => r.name === INKY));
+  // Not this character's to eat: a holder's cargo stays out of the larder.
+  ap.notOursToEat = () => [INKY];
   ok('an inky that is the holder\'s cargo is still not eaten', ap.larder(c).length === 0);
 }
 

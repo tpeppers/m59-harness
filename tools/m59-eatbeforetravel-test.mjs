@@ -88,8 +88,14 @@ try {
      t > 0 && src.slice(t, t + 2500).includes('await this.eatBeforeTravel(room);'));
   const kp = readFileSync(join(here, 'm59-keeper-process.mjs'), 'utf8');
   const j = kp.indexOf('const job = session.travelJob(dest, {');
-  ok('and so does a journey ordered from outside (DUM recall, stand-down)',
-     j > 0 && kp.slice(Math.max(0, j - 400), j).includes('await autopilot?.eatBeforeTravel?.(dest);'));
+  // AND SO DOES A JOURNEY ORDERED FROM OUTSIDE — inside the job, not before the answer. The keeper
+  // process used to await the meal before replying; with overdrive that held a DUM travel order's
+  // HTTP answer for up to 30 minutes and it was re-issued (2026-09-28). Session.travelJob routes
+  // through the keeper's Autopilot.travel, which eats first (asserted above).
+  const game = readFileSync(join(here, 'm59-game.mjs'), 'utf8');
+  ok('and so does a journey ordered from outside (DUM recall, stand-down) — inside the job',
+     j > 0 && !kp.slice(Math.max(0, j - 400), j).includes('await autopilot?.eatBeforeTravel?.(dest);') &&
+     /travelJob\(dest[\s\S]{0,8000}keeper\.travel\(dest/.test(game));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

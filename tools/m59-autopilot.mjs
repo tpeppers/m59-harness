@@ -3904,7 +3904,7 @@ export class Autopilot {
       this.doing = 'recovering';
       if (vigor < (ceiling || floor)) {
         const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling || undefined,
-                                       exclude: this.inheritedProtectedNames() })
+                                       exclude: this.notOursToEat() })
                               .catch(() => ({ ate: [] }));
         if (e.ate?.length) {
           this.tally.meals = (this.tally.meals || 0) + 1;
@@ -3988,7 +3988,7 @@ export class Autopilot {
     // measured in minutes. `eat` declines anything that would overshoot 200.
     if (ceiling && this.stomach.roomFor(smallest.filling)) {
       const e = await skills.eat(s, { stomach: this.stomach, upToVigor: ceiling,
-                                     exclude: this.inheritedProtectedNames() })
+                                     exclude: this.notOursToEat() })
                             .catch(() => ({ ate: [] }));
       if (e.ate?.length) {
         this.tally.meals = (this.tally.meals || 0) + 1;
@@ -5026,8 +5026,22 @@ export class Autopilot {
   // Beaker holding eight. WHEN to spend a scarce food is the food preference's job
   // (larderOf's `held`), not the keep lists'. What still excludes is everything that is not
   // this character's to eat: the guild's shortfall, the chalice, the holder's cargo.
+  // WHAT IS NOT THIS CHARACTER'S TO EAT: the fleet's chalice, a holder's cargo (somebody else's
+  // restock), the weapon the roulette is working towards. NOT the sell protections — guild wants,
+  // the stockpile, chest-sourced reagents keep an item from a MERCHANT, and eating it is spending
+  // it on the character that owns it (see giveableLarder). 2026-09-28: a bread floor on one
+  // loadout made bread fleet "stockpile" stock, the larder excluded it, and the whole troll crew
+  // sat at 80 vigor with bread aboard ("out of food" after the pies, 9 of 14 overdrives).
+  notOursToEat() {
+    return [...new Set([
+      ...(this.chaliceCfg ? [CHALICE.name] : []),
+      ...(this._holderCargo ? Object.keys(this._holderCargo.items) : []),
+      ...(this.rouletteTarget?.()?.want ? [this.rouletteTarget().want] : []),
+    ].map(String).filter(Boolean))];
+  }
+
   larder(c = this.s.client) {
-    return skills.larderOf(c, { exclude: this.inheritedProtectedNames() });
+    return skills.larderOf(c, { exclude: this.notOursToEat() });
   }
 
   // What this character may hand to someone else. Eating an inky is spending it on the
@@ -19159,7 +19173,7 @@ export class Autopilot {
         let now = vigor;
         while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !this.inReachOfUs?.()?.length) {
           const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
-                                               exclude: this.inheritedProtectedNames() }).catch(() => null);
+                                               exclude: this.notOursToEat() }).catch(() => null);
           if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
           if (!this.larder(c).length) break;
           const wait = Math.min(60, Math.max(5, this.stomach?.secondsUntilRoomFor?.(smallest) ?? 30));
@@ -19173,7 +19187,7 @@ export class Autopilot {
       }
       for (let round = 0; round < 6; round++) {
         const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: ceiling,
-                                             exclude: this.inheritedProtectedNames() });
+                                             exclude: this.notOursToEat() });
         if (!r?.ate?.length) break;
         e.ate.push(...r.ate);
         e.vigor.after = r.vigor?.after ?? e.vigor.after;
