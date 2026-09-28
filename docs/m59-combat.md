@@ -182,3 +182,21 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). The engagement ceiling, the spawn tabl
   **not** raised, because anything over 25 flips leather-versus-scale fleet-wide as a side
   effect, and that question turns on block, on shields, and on the spell modifier the
   create-food loop runs on. See `ARMOUR` and `absorbsSomething` in `m59-skills.mjs`.
+
+## Automatic healing wands
+
+Farmers can opt into `heal_wand_below` (0–1 health fraction; 0 disables,
+which is the default) through `autopilot`, tuning, or their loadout's `policy`.
+The keeper checks between ordinary passes and combat swings. It applies one
+identified **wand of healing** to itself below the threshold, with at least two
+seconds between attempts. This does not override retreat, a control lease, an
+inert/parked keeper, or a survival freeze.
+
+`HealWand` restores 2–10 HP per application. `SpecialWand` starts with five charges,
+but the protocol does not report the remaining count. The keeper therefore uses
+LOOK: a fresh, matching “The once pristine wand is now a blackened mess.” confirms
+an empty healing wand and allows dropping it, including during healthy farming
+passes. Failed/missing/stale LOOK replies never authorize a drop. Unknown and
+vampiric wands are neither applied nor discarded by this routine; existing saving
+rules remain in force. Journal entries distinguish an application sent from healing
+observed. Tests: `node tools/m59-healing-wands-test.mjs`.

@@ -4333,6 +4333,12 @@ class Session {
         cancelled = { at_swing: i };
         break;
       }
+      // The keeper's optional healing reflex also runs during multi-swing fights.
+      // Recheck cancellation after its bounded LOOK/pacer await; healing never owns retreat.
+      await this.healingWandTick?.(() => this.client !== c || shouldCancel?.() === true);
+      if (this.client !== c || (typeof shouldCancel === 'function' && shouldCancel())) {
+        cancelled = { at_swing: i }; break;
+      }
       // Before the swing as well as after it: the previous exchange's damage has
       // already landed, and one more swing at 15% is how a character dies mid-round.
       if (abortBelow != null) {
@@ -4351,6 +4357,10 @@ class Session {
       keep(ev.events);
       if (ev.events.some(e => e.kind === 'vanished' && e.id === targetId)) break;
       if (!c.room.objects.has(c.selfId)) break;      // we died
+      await this.healingWandTick?.(() => this.client !== c || shouldCancel?.() === true);
+      if (this.client !== c || (typeof shouldCancel === 'function' && shouldCancel())) {
+        cancelled = { at_swing: i + 1 }; break;
+      }
       if (abortBelow != null) {
         const hp = healthPct();
         if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i + 1 }; break; }

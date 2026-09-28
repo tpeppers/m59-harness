@@ -133,6 +133,7 @@ export function blank(character, agent = null) {
 // character file that could quietly raise one is exactly the file nobody would think to
 // check after a death.
 export const POLICY_KEYS = {
+  heal_wand_below:         { type: 'number', as: 'healWandBelow', fraction: true },
   poor_farming:           { type: 'boolean', as: 'poorFarming' },
   no_food_vigor_floor:    { type: 'number', as: 'noFoodVigorFloor' },
   poor_supply_retry_ms:   { type: 'number', as: 'poorSupplyRetryMs' },
@@ -471,6 +472,7 @@ export function normalise(raw, { character = null } = {}) {
     if (spec.type === 'number') {
       const n = numOr(v, null);
       if (n === null) { problems.push(`policy.${k}: ${JSON.stringify(v)} is not a number — dropped`); continue; }
+      if (spec.fraction && (n < 0 || n > 1)) { problems.push('policy.' + k + ': expected a fraction from 0 to 1 — dropped'); continue; }
       out.policy[k] = n;
     } else if (spec.type === 'boolean') {
       if (typeof v !== 'boolean') { problems.push(`policy.${k}: ${JSON.stringify(v)} is not true or false — dropped`); continue; }

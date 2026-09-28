@@ -65,6 +65,7 @@ export const TUNABLES = {
     'the health fraction at which a character disengages. NOTE it is a FLOOR, not the ' +
     'answer: safety() takes Math.max(this, 2*maxHit/max), so on a 41-health character ' +
     'anything below about 0.68 is inert and the two-hits-of-margin rule wins' },
+  heal_wand_below: { check: v => v === 0 ? 0 : frac(v), why: 'farmers use healing wands below this health fraction; 0 disables, vampiric wands stay saved' },
   rest_below: { check: frac, why: 'the health fraction at which it breaks off and rests' },
   hold_resume_above: { check: frac, why:
     'in a safe spot, top up to this fraction before swinging again. Stopping costs nothing ' +

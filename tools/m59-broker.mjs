@@ -10663,6 +10663,8 @@ const TOOLS = [
           'preference order, and the keeper takes whichever is in front of it. That is what ' +
           'lets a two-generator room be worked at the rate it spawns — and the room spawn ' +
           'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
+      heal_wand_below: { type: 'number', minimum: 0, maximum: 1,
+        description: 'Farmers apply healing wands to self below this health fraction; 0 disables (default). Confirmed empty healing wands are dropped. Vampiric wands are preserved.' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
       flee_below: { type: 'number', description: 'under this fraction, reach for the logoff ' +
           'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
@@ -11502,6 +11504,11 @@ const TOOLS = [
           .map(h => (typeof h === 'string' ? h.trim() : h))
           .filter(h => typeof h === 'string' && h.length);
         p.policy.hunt = !named.length ? null : named.length === 1 ? named[0] : named;
+      }
+      if (a.heal_wand_below !== undefined) {
+        const v = Number(a.heal_wand_below);
+        if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('heal_wand_below must be between 0 and 1');
+        p.policy.healWandBelow = v;
       }
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);

@@ -41,6 +41,7 @@ import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOpe
          survivalTraceSummary } from './m59-survival-trace.mjs';
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
+import { HealingWands } from './m59-healing-wands.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
@@ -1840,6 +1841,8 @@ export function splitBySourcing(requests = [], { policy = null, plan = null } = 
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
+    this.healingWands = new HealingWands();
+    session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
     if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
     attachReplayRecorder(session,this);
@@ -1860,6 +1863,8 @@ export class Autopilot {
     this.policy = {
       // Rest when health OR vigor falls below this and nothing is attacking us.
       restBelow: 0.7,
+      // Opt in locally when the fleet has healing wands to spend. Zero disables.
+      healWandBelow: 0,
       // Break off and withdraw at this. Deliberately higher than fight()'s own
       // threshold: the keeper is not watching a fight, it is watching a character.
       fleeBelow: 0.4,
@@ -15009,6 +15014,16 @@ export class Autopilot {
       await this.continueSurvivalDecision();
   }
 
+  async useHealingWand(cancelled = () => false) {
+    const allowed = () => this.running && !this.stopping && !this.inert
+      && !this.parking && !this.busyStatus?.() && !this.checkFreeze()
+      && this.mode === 'farm' && !this.s.combat?.active;
+    return this.healingWands.tick(this.s, {
+      below: this.policy.healWandBelow, allowed, cancelled,
+      note: result => this.note('healing wand', result),
+    }).catch(e => { this.note('healing wand failed', { reason: e.message }); return null; });
+  }
+
   async passOnce() {
     const s = this.s;
     // INSTALL THE OVERFARM POLICY ON THE SESSION, EVERY PASS. `lootFloor` defaults to it,
@@ -15056,6 +15071,7 @@ export class Autopilot {
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.
     this.applyLoadoutPolicyOverlay();
+    await this.useHealingWand();
     // ------------------------------------------------------------------
     // GOAP KEEPER (opt-in via policy.useGOAP)
     //
