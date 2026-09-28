@@ -11046,6 +11046,11 @@ const TOOLS = [
         description: 'THE KARMA SCHOOL THIS CHARACTER IS PROTECTING (policy.karma): evil kills only ' +
           'creatures with karma > 0, good only < 0. On its own it narrows what is HUNTED and CLEARED ' +
           'and nothing else; null clears it' },
+      overdrive: { type: ['object', 'null'],
+        description: 'VIGOR OVERDRIVE: {enabled, target = 200, maxMinutes = 30}, or null to clear. When a climb ' +
+          'begins (vigor fell below the fighting floor) the character waits out the stomach and eats to the ' +
+          'target instead of leaving at the floor, then goes back to its task; a journey climbs to it before ' +
+          'setting out. Food in the pack only; nothing is bought. Off unless set' },
       karma_strict: { type: 'boolean',
         description: 'NEVER STRIKE WHAT MOVES KARMA THE WRONG WAY, not even an attacker (default false). ' +
           'With `karma` set, hitting back, fighting back, the lone-attacker rung and wedged swings all ' +
@@ -12062,6 +12067,9 @@ const TOOLS = [
       if (a.clear_weak !== undefined) p.policy.clearWeak = !!a.clear_weak;
       if (a.karma !== undefined) p.policy.karma = ['evil', 'good', 'neutral'].includes(a.karma) ? a.karma : null;
       if (a.karma_strict !== undefined) p.policy.karmaStrict = !!a.karma_strict;
+      if (a.overdrive !== undefined) p.policy.overdrive = a.overdrive && typeof a.overdrive === 'object'
+        ? { enabled: a.overdrive.enabled !== false, target: Number(a.overdrive.target) || 200,
+            maxMinutes: Number(a.overdrive.maxMinutes) || 30 } : null;
       // Whether a fight OPENS with a walk to a wall. See the schema entry: with this on and
       // the wall unreachable, the pass retries for ever and the character never swings at prey
       // standing next to it. Both spellings land on both keys so the roster stays readable by

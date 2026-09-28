@@ -1188,8 +1188,39 @@ export function bearingIn(row, col, rows, cols) {
 // long digestion interval chasing the strategy's ideal ceiling. The floor is the
 // operator's statement that fighting is safe; the ceiling is only a useful top-up
 // target when the next bite is soon, or when the wait is also healing us.
-export function shouldWaitForProvision({ vigor, floor, wait, hurt }) {
+export function shouldWaitForProvision({ vigor, floor, wait, hurt, overdrive = null }) {
+  // OVERDRIVE WAITS OUT THE STOMACH TO THE TARGET, not just to the fighting floor: a fed character
+  // leaves at 200 rather than at 160, so the fight that follows is one long stretch instead of a
+  // stop every forty vigor. Bounded by one full digestion (833 s): a wait longer than that means
+  // the stomach model is wrong, and waiting on a wrong model is waiting for ever.
+  // Within the last bite of the target counts as there (provision releases at target - 5 too).
+  if (overdrive?.active && vigor < overdrive.target - 5 && wait <= 900) return true;
   return vigor < floor || hurt || wait <= 60;
+}
+
+// OVERDRIVE (operator, 2026-09-28): "an 'overdrive' strategy for vigor that mirrors our overfarm
+// strategy: seeking to maximize the resource. Overdriving vigor causes the unit to just sit and eat
+// food until reaching 200 vigor while tracking hunger. Then they get released from overdrive back to
+// their original task, so they can maintain 200 vigor longer rather than stop/starting."
+//
+// WHAT IT CAN AND CANNOT BUY, from the kod, so nobody reads more into it than is there. Vigor comes
+// in only through the stomach, which empties at 0.12 filling a second whether the character sits or
+// fights (player.kod:1347) — so over a long day no schedule of eating raises the TOTAL: meat pie
+// 4.3 vigor a minute, bread 3.6, cheese 5.4, inky cap 14.4. A swing costs 0.5 (ATTACK_EXERTION,
+// player.kod:57). What overdrive changes is the SHAPE: one sitting to 200 at a natural stop, then a
+// long unbroken fight, instead of forty-vigor stretches with a walk to a rest spot between each. And
+// every minute sat at high vigor heals faster ((200-v)^2/6 + 1000 ms a point, :5617), so the sitting
+// is not wasted on a hurt character. Eating on the clock DURING the fight (provision, "mid-hunt") is
+// the other half and already runs.
+//
+// policy.overdrive = { enabled, target = 200, maxMinutes = 30 }. Off unless set: silence is the
+// behaviour that was already there.
+export function overdriveSettings(policy) {
+  const o = policy?.overdrive;
+  if (!o || o.enabled === false || o.enabled == null && !o.target) return null;
+  const target = Math.min(200, Math.max(81, Number(o.target) || 200));
+  const maxMinutes = Math.max(1, Number(o.maxMinutes) || 30);
+  return { target, maxMinutes };
 }
 
 // VIGOR IS NOT SHAPED LIKE THE OTHER TWO, and reading it as though it were has been
@@ -3669,6 +3700,22 @@ export class Autopilot {
   // should go net-positive once it is fighting again, and nothing recorded a meal until now.
   // `skills.eat` answers `ate` as one name per mouthful and `vigor` as {before, after} for the
   // whole sitting, so vigor is per sitting and the amount is per item.
+  startOverdrive(od, vigor, why) {
+    this.overdrive = { active: true, since: Date.now(), target: od.target, from: vigor, why, meals: this.tally.meals || 0 };
+    this.note('overdrive: sitting to eat up to ' + od.target + ' vigor', { from: vigor, target: od.target, why });
+  }
+
+  endOverdrive(vigor, why) {
+    const o = this.overdrive;
+    if (!o?.active) return;
+    this.overdrive = { ...o, active: false };
+    const minutes = +((Date.now() - o.since) / 60000).toFixed(1);
+    const row = { from: o.from, to: vigor, gained: (vigor ?? 0) - (o.from ?? 0), minutes,
+                  meals: (this.tally.meals || 0) - (o.meals || 0), target: o.target, why };
+    this.note('overdrive released: back to the task', row);
+    try { this.ledgerEvent('overdrive', row); } catch {}
+  }
+
   recordAte(e, how) {
     try {
       const counts = new Map();
@@ -3751,6 +3798,7 @@ export class Autopilot {
           hint: 'inky cap mushrooms give the most vigor per unit of stomach (50/25)' });
       }
       this.climbing = false;
+      if (this.overdrive?.active) this.endOverdrive(vigor, 'out of food');
       return false;
     }
     this.warnedNoFood = false;
@@ -3759,6 +3807,18 @@ export class Autopilot {
     // With no floor set there is nothing to fall through, so the latch also trips on the
     // ceiling — otherwise the implicit target above would be computed and never used.
     if (vigor < floor || (!floor && vigor < ceiling)) this.climbing = true;
+
+    // OVERDRIVE STARTS WITH A CLIMB AND ENDS AT ITS TARGET. See overdriveSettings.
+    const od = overdriveSettings(p);
+    if (od && this.climbing && !this.overdrive?.active && vigor < od.target - 5)
+      this.startOverdrive(od, vigor, 'a climb began below the fighting floor');
+    if (this.overdrive?.active) {
+      const why = !od ? 'switched off'
+        : vigor >= this.overdrive.target - 5 ? 'reached the target'
+        : Date.now() - this.overdrive.since > od.maxMinutes * 60_000 ? `${od.maxMinutes} min cap`
+        : null;
+      if (why) this.endOverdrive(vigor, why);
+    }
 
 
     if (this.climbing) {
@@ -3781,7 +3841,7 @@ export class Autopilot {
         // not spent fighting; eat opportunistically during the hunt instead.
         const wait = this.stomach.secondsUntilRoomFor(smallest.filling);
         const hurt = (v.health?.value ?? 0) < (v.health?.max ?? 0) * 0.95;
-        if (!shouldWaitForProvision({ vigor, floor, wait, hurt })) {
+        if (!shouldWaitForProvision({ vigor, floor, wait, hurt, overdrive: this.overdrive })) {
           this.climbing = false;
           this.note('setting out above the fighting floor', {
             vigor, floor, ceiling, stomach: Math.round(this.stomach.level),
@@ -3789,6 +3849,7 @@ export class Autopilot {
             why: 'the configured fighting floor is satisfied and the next top-up is too far away' });
           return false;
         }
+        if (this.overdrive?.active) this.doing = 'overdrive';
         this.note('waiting to get hungry', {
           vigor, ceiling, stomach: Math.round(this.stomach.level),
           room_for_next_in_s: wait, next: larder[0].name,
@@ -18995,6 +19056,27 @@ export class Autopilot {
       // single bread stack is one loaf and the stomach sets out mostly empty. Keep going until the
       // stomach refuses, the ceiling is reached, or nothing more is eaten (at most 6 rounds).
       const e = { ate: [], vigor: { before: vigor, after: vigor } };
+      // OVERDRIVE BEFORE A JOURNEY: not one sitting but a climb to the target, waiting out the stomach
+      // between sittings — bounded by maxMinutes and abandoned the moment anything is in reach.
+      const od = overdriveSettings(p);
+      if (od && vigor < od.target - 5) {
+        this.startOverdrive(od, vigor, `setting out for ${dest ?? 'a journey'}`);
+        const until = Date.now() + od.maxMinutes * 60_000;
+        let now = vigor;
+        while (Date.now() < until && now < od.target - 5 && !this.stopping && !this.inReachOfUs?.()?.length) {
+          const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
+                                               exclude: this.inheritedProtectedNames() }).catch(() => null);
+          if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
+          if (!this.larder(c).length) break;
+          const wait = Math.min(60, Math.max(5, this.stomach?.secondsUntilRoomFor?.(smallest) ?? 30));
+          await new Promise(res => setTimeout(res, wait * 1000));
+          now = this.s?.client?.vitals?.()?.vigor?.value ?? now;
+        }
+        e.vigor.after = now;
+        this.endOverdrive(now, now >= od.target - 5 ? 'reached the target' : 'set out before the target');
+        if (e.ate.length) { this.recordAte(e, 'overdrive before travel'); return 'ate'; }
+        return null;
+      }
       for (let round = 0; round < 6; round++) {
         const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: ceiling,
                                              exclude: this.inheritedProtectedNames() });

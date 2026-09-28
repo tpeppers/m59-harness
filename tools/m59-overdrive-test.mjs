@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+// OFFLINE. Vigor OVERDRIVE (operator, 2026-09-28): sit and eat to 200 on the stomach clock at a natural
+// stop, then go back to the task — rather than leaving at the fighting floor and stopping again forty
+// vigor later. overdriveSettings reads the policy; shouldWaitForProvision is the one rule it changes.
+import { overdriveSettings, shouldWaitForProvision, Autopilot } from './m59-autopilot.mjs';
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
+
+ok(overdriveSettings({}) === null, 'off by default: silence is the behaviour that was already there');
+ok(overdriveSettings({ overdrive: { enabled: false, target: 200 } }) === null, 'enabled:false is off');
+ok(overdriveSettings({ overdrive: { enabled: true } })?.target === 200, 'on: the target defaults to 200');
+ok(overdriveSettings({ overdrive: { enabled: true, target: 500 } })?.target === 200, 'the target never exceeds the game cap of 200');
+ok(overdriveSettings({ overdrive: { enabled: true, target: 40 } })?.target === 81, 'nor sits below the resting cap (resting gets there free)');
+
+// A fed character above its fighting floor with a long digestion ahead used to set out at once.
+const base = { vigor: 170, floor: 160, wait: 400, hurt: false };
+ok(shouldWaitForProvision(base) === false, 'without overdrive: above the floor with a long wait, it sets out (the old rule)');
+ok(shouldWaitForProvision({ ...base, overdrive: { active: true, target: 200 } }) === true,
+   'with overdrive: it waits out the stomach toward 200');
+ok(shouldWaitForProvision({ ...base, vigor: 196, overdrive: { active: true, target: 200 } }) === false,
+   'at the target (within the last bite) it is released');
+ok(shouldWaitForProvision({ ...base, wait: 2000, overdrive: { active: true, target: 200 } }) === false,
+   'a wait longer than a full digestion is a wrong stomach model, and is not waited on');
+ok(shouldWaitForProvision({ ...base, vigor: 150 }) === true, 'below the floor it waits either way, as before');
+
+// start / end write one ledger row with what the sitting bought.
+const k = new Autopilot({}, { mode: 'farm', policy: { overdrive: { enabled: true } } });
+const rows = [];
+k.note = () => {}; k.ledgerEvent = (kind, d) => rows.push({ kind, ...d });
+k.tally.meals = 3;
+k.startOverdrive({ target: 200 }, 90, 'test');
+k.tally.meals = 9;
+k.endOverdrive(198, 'reached the target');
+ok(rows.length === 1 && rows[0].kind === 'overdrive' && rows[0].gained === 108 && rows[0].meals === 6,
+   `one ledger row: +108 vigor over 6 meals (${JSON.stringify(rows[0])})`);
+k.endOverdrive(198, 'again');
+ok(rows.length === 1, 'ending twice writes once');
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
