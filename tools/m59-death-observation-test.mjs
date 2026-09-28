@@ -10,6 +10,8 @@ const records = [], notes = [], broadcasts = [];
 const client = Object.assign(Object.create(M59Client.prototype), {
   evSeq: 0, events: [], maxEvents: 100, waiters: [], inventory: [],
   vitals: () => ({ health: { value: 1, max: 20 } }),
+  statsById: new Map(),
+  stats() { this.statsById.set('health', { currentMax: 20, observed_at: Date.now() }); },
 });
 const s = { name: null, client, recorder: { line() {} }, hits: { segments: [] } };
 const k = Object.assign(Object.create(Autopilot.prototype), {
@@ -52,6 +54,9 @@ assert.equal(records[0].where.num, 584, 'the pre-wait death evidence survives es
 assert.equal(records[0].summary.room_num, 584);
 assert.deepEqual(records[0].summary.killed_by, ['ant']);
 assert.equal(k.lastDeath.post_mortem, 'offline-record');
+assert.equal(records[0].summary.max_hp_before, 21);
+assert.equal(records[0].summary.max_hp_after, 20);
+assert.equal(records[0].summary.max_hp_lost, 1, 'fresh post-death max HP survives in the immutable report');
 assert.equal(k.pendingDeath.killed_by, 'ant');
 
 // A second death re-arms recording. A later record finishing first must remain current.

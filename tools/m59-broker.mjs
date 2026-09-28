@@ -191,6 +191,7 @@ import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deat
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
+import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
@@ -16848,6 +16849,7 @@ const TOOLS = [
           deaths: st?.did?.deaths ?? 0,
           deaths_since_keeper_start: st?.did?.deaths ?? 0,
           deaths_24h: durableDeath?.count ?? 0,
+          death_counts_24h: durableDeath?.death_counts ?? null,
           // Same reason, and it is the pair to the above: the ledger's own note says a
           // quantity with two homes in this repository ends up with two answers, so the
           // row should carry the keeper's figure rather than leaving a reader to guess.
@@ -19169,9 +19171,11 @@ function serveDashboard(port) {
         });
       return;
     }
-    if (url.pathname === '/deaths' || url.pathname === '/tougher' || url.pathname === '/skills') {
+    if (url.pathname === '/deaths' || url.pathname === '/tougher' || url.pathname === '/skills' || url.pathname === '/travel') {
       try {
-        const hours = Number(url.searchParams.get('hours')) || 168;
+        const requestedHours = Number(url.searchParams.get('hours'));
+        const hours = Number.isFinite(requestedHours) && requestedHours > 0
+          ? Math.min(requestedHours, 720) : url.pathname === '/travel' ? 24 : 168;
         // WHICH CHARACTERS THIS BOARD IS ABOUT. These three read directories keyed by
         // character name, which any second fleet on this machine also writes into — so
         // without this they sum two populations and say nothing about it. This broker is
@@ -19179,7 +19183,8 @@ function serveDashboard(port) {
         // no probing, no fleet label, just the names it is logged in as.
         const characters = fleetCharacters();
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(url.pathname === '/deaths' ? renderDeaths({ hours, characters })
+        return res.end(url.pathname === '/deaths' ? renderDeaths({ hours, characters, impact: url.searchParams.get('impact') ?? 'all' })
+                     : url.pathname === '/travel' ? renderTravel({ hours, characters, sort: url.searchParams.get('sort') ?? 'crossings' })
                      : url.pathname === '/skills' ? renderSkills({ hours, characters })
                      : renderTougher({ hours, characters }));
       } catch (e) {

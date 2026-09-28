@@ -23,6 +23,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fleetName, ledgerDirFor } from './m59-fleetpath.mjs';
+import { deathImpact, emptyDeathCounts, withDeathCosts } from './m59-death-impact.mjs';
 
 // Per-fleet, because this is keyed by character name and names are only unique
 // within a server. See ledgerDirFor. Naming no fleet keeps the original directory,
@@ -264,6 +265,10 @@ export function recordSample(rows = []) {
         // a monster wearing it down, and on a shared server the obvious question is
         // whether another player killed it. The record could not say.
         recordEvent(name, 'died', {
+          death_at: d.at ?? null,
+          max_hp_before: d.max_hp_before ?? null,
+          max_hp_after: d.max_hp_after ?? null,
+          max_hp_lost: d.max_hp_lost ?? null,
           died_in: d.died_in ?? now.room, level: d.level ?? now.level,
           health_trail: d.health_trail, last_health: d.last_health, last_vigor: d.last_vigor,
           killed_by: d.killed_by ? d.killed_by.join(', ') : null,
@@ -897,11 +902,23 @@ export function summarise({ sinceMs = 24 * 3600 * 1000 } = {}) {
     e.samples++;
     by.set(s.character, e);
   }
-  for (const ev of events) {
+  for (const ev of withDeathCosts(events)) {
     const e = by.get(ev.character);
     if (!e) continue;
     e.events ??= {};
     e.events[ev.kind] = (e.events[ev.kind] || 0) + 1;
+    if (ev.kind === 'died') {
+      const impact = deathImpact(ev);
+      e.death_counts ??= emptyDeathCounts();
+      e.death_counts[impact.category]++;
+      e.death_counts.total++;
+      if (impact.under_30) e.death_counts.under_30++;
+      e.death_counts.hp_lost += impact.max_hp_lost ?? 0;
+      if (e.strategy_since && ev.t >= e.strategy_since) {
+        e.strategy_death_counts ??= emptyDeathCounts();
+        e.strategy_death_counts[impact.category]++;
+      }
+    }
     // Deaths under the CURRENT strategy — the only ones that say anything about it.
     if (ev.kind === 'died' && e.strategy_since && ev.t >= e.strategy_since)
       e.deaths_in_strategy = (e.deaths_in_strategy || 0) + 1;
@@ -918,6 +935,8 @@ export function summarise({ sinceMs = 24 * 3600 * 1000 } = {}) {
     // actually recorded in the last half hour. A row can honestly show 134 and 0.
     kills_30m: recentKills.get(e.character) ?? 0,
     deaths: e.events?.died || 0,
+    death_counts: e.death_counts ?? emptyDeathCounts(),
+    strategy_death_counts: e.strategy_death_counts ?? emptyDeathCounts(),
     stalls: e.events?.stalled || 0,
     left_newbie_zone: !!e.events?.left_the_newbie_zone,
     room: e.room_last,
@@ -960,6 +979,9 @@ export function summarise({ sinceMs = 24 * 3600 * 1000 } = {}) {
     g.characters++;
     g.levels_gained += Math.max(0, r.gained_on_strategy);
     g.deaths += r.deaths_on_strategy;
+    g.death_counts ??= emptyDeathCounts();
+    for (const key of ['true_deaths', 'no_hp_loss', 'unknown'])
+      g.death_counts[key] += r.strategy_death_counts[key];
     g.stalls += r.stalls;
     g.kills += r.kills || 0;
     g.hours += r.on_strategy_hours;
@@ -999,6 +1021,10 @@ export function summarise({ sinceMs = 24 * 3600 * 1000 } = {}) {
     samples: samples.length,
     total_levels_gained: rows.reduce((a, r) => a + Math.max(0, r.gained), 0),
     total_deaths: rows.reduce((a, r) => a + r.deaths, 0),
+    death_counts: rows.reduce((counts, r) => {
+      for (const key of Object.keys(counts)) counts[key] += r.death_counts[key];
+      return counts;
+    }, emptyDeathCounts()),
     fleet: rows,
     comparison,
     comparison_note: 'levels_per_hour is the figure that matters — max health IS the ' +

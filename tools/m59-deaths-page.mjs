@@ -14,6 +14,7 @@
 // m59-page-chrome.mjs, because five boards carrying five copies of one tab list means a
 // sixth board is invisible from whichever copy nobody remembered to edit.
 import { deathCauseLabel } from './m59-death-attribution.mjs';
+import { countDeathImpacts } from './m59-death-impact.mjs';
 import { loadPostmortems, facets, causeGroups, digest, TRUST_MS } from './m59-postmortems.mjs';
 import { allGains, toughSummary, allFeeds, FEED_SIZE } from './m59-tougher.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
@@ -62,7 +63,7 @@ function renderDigest(d) {
       ' · '+safeText(x.outcome || x.status)+'</div>';
   }).join('') : '<span class="dim">No explicit survival decisions in this older record.</span>';
   var place = w.trusted
-    ? w.room + ' <span class="dim">(' + w.col + ',' + w.row + ')</span>'
+    ? w.room + ' <span class="dim">r' + w.row + 'c' + w.col + '</span>'
     : '<span class="guess">not known — ' + w.why + '</span>';
   var killer = safeText(c.killer || (c.kind === 'player_murder' ? 'Unnamed player' :
     c.kind === 'environment' ? 'Environment' : c.kind === 'self_inflicted' ? 'Own folly' : 'Unattributed')) +
@@ -90,6 +91,9 @@ function renderDigest(d) {
     kv('where', place) +
     kv('was', (d.was.doing || '?') + (d.was.hunting ? ' · hunting ' + d.was.hunting : '')) +
     kv('level', d.level + (d.was.in_safe_spot ? ' · <span class="bad">in a safe spot</span>' : '')) +
+    kv('HP cost', !d.impact || d.impact.category === 'unknown' ? 'Unknown — no confirmed before/after max HP' :
+      (d.impact.category === 'true_deaths' ? 'True Death — lost ' + d.impact.max_hp_lost + ' max HP' : 'No HP loss') +
+      ' (' + d.impact.before + ' → ' + d.impact.after + ')') +
     kv('shape', d.shape + ' <span class="dim">(biggest drop ' + d.biggest_drop + ')</span>') +
     kv('health', '<span class="trail">' + (d.health_trail || []).join(' ') + '</span>') +
     kv('crowd', (d.threats || []).join(', ') || '<span class="dim">nothing in view</span>') +
@@ -134,9 +138,14 @@ function keeperCell(k) {
 // record on the machine. The broker passes its OWN roster — it is serving this page, so it
 // already knows, and probing itself over HTTP to find out would be absurd. See
 // m59-fleetscope.mjs for why these directories need telling at all.
-export function renderDeaths({ hours = 168, characters = null } = {}) {
+export function renderDeaths({ hours = 168, characters = null, impact = 'all' } = {}) {
   const all = loadPostmortems({ sinceMs: hours * 3600 * 1000 });
-  const rows = characters ? all.filter(r => characters.has(r.character)) : all;
+  const scoped = characters ? all.filter(r => characters.has(r.character)) : all;
+  const counts = countDeathImpacts(scoped);
+  const filters = [['all', 'All deaths'], ['true_deaths', 'True Deaths'], ['no_hp_loss', 'No HP loss'], ['unknown', 'Unknown HP loss'], ['under_30', 'Below 30 max HP']];
+  if (!filters.some(([key]) => key === impact)) impact = 'all';
+  const rows = impact === 'all' ? scoped : scoped.filter(r => impact === 'under_30'
+    ? r.impact.under_30 : r.impact.category === impact);
   const f = facets(rows);
   const placed = rows.filter(r => r.where.trusted).length;
   const observed = rows.filter(r => r.cause.cause_observed).length;
@@ -149,7 +158,7 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
     <tr class="death" data-file="${esc(r.file)}">
       <td class="dim">${esc(ago(r.at))}</td>
       <td>${esc(r.character ?? '?')}</td>
-      <td class="dim">${r.level ?? '—'}</td>
+      <td class="dim">${r.level ?? '—'}${r.impact.under_30 ? ' · under 30' : ''}<br><span class="${r.impact.category === 'true_deaths' ? 'bad' : 'dim'}">${r.impact.category === 'true_deaths' ? `True Death · −${r.impact.max_hp_lost} HP` : r.impact.category === 'no_hp_loss' ? 'No HP loss' : 'HP loss unknown'}</span></td>
       <td class="keeper">${keeperCell(r.keeper)}</td>
       <td>${esc(deathCauseLabel(r.cause))}
         ${r.cause.kind === 'player_murder' ? '<span class="pill obs">player murder</span>' : ''}
@@ -186,8 +195,11 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
   ${NAV('deaths')}
 
   <div class="cards">
-    <div class="card"><div class="k">deaths</div><div class="v">${rows.length}</div>
-      <div class="n">each costs a point of max health, for ever</div></div>
+    <div class="card"><div class="k">True Deaths</div><div class="v ${counts.true_deaths ? 'bad' : 'dim'}">${counts.true_deaths}</div>
+      <div class="n">${counts.hp_lost} known max HP lost in this window</div></div>
+    <div class="card"><div class="k">No HP loss</div><div class="v">${counts.no_hp_loss}</div></div>
+    <div class="card"><div class="k">Unknown HP loss</div><div class="v">${counts.unknown}</div>
+      <div class="n">missing a confirmed before/after reading</div></div>
     <div class="card"><div class="k">cause confirmed</div><div class="v good">${observed}</div>
       <div class="n">${rows.length ? Math.round(100 * observed / rows.length) : 0}% — named killers and explicit causes</div></div>
     <div class="card"><div class="k">location trusted</div><div class="v">${placed}</div>
@@ -201,6 +213,11 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
         deciding against a world that stopped changing</div></div>
   </div>
 
+  <form method="get"><input type="hidden" name="hours" value="${hours}"><label>Show deaths
+    <select name="impact" onchange="this.form.submit()">${filters.map(([key, label]) => `<option value="${key}"${impact === key ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+    <button type="submit">Apply</button></form>
+  <p class="caveat">${counts.total} total deaths; ${counts.under_30} below 30 max HP. Low level alone does not prove zero HP loss.
+    The cause and location charts use the selected group. Historical records without a confirmed HP cost remain unknown.</p>
   <div class="panel">
     <div class="facets">
       <button data-facet="cause" class="on">What killed them</button>
@@ -222,7 +239,7 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
   <div class="sub">Click one to open its report.</div>
   <div class="panel scroller" style="padding:.25rem .5rem">
   <table>
-    <thead><tr><th>when</th><th>who</th><th>lvl</th>
+    <thead><tr><th>when</th><th>who</th><th>max HP / cost</th>
       <th title="was a keeper driving — and had it looked recently">keeper?</th>
       <th>killed by</th><th>where</th><th>doing</th></tr></thead>
     <tbody>${logRows || '<tr><td colspan="7" class="empty">no deaths in this window</td></tr>'}</tbody>
