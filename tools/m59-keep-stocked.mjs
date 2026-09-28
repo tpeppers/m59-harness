@@ -132,7 +132,10 @@ if (isMain) {
     const out = [];
     const { scripts } = await loadFleetScripts();
     const r = await runNamed('provision', { agents: [...new Set([...cupHolders(rows), rider])].join(','),
-      rider_names: rider, wants, buy_gear: false, stage: ROOM },
+      rider_names: rider, wants, buy_gear: false, stage: ROOM,
+      // A failed ride is retried after the cooldown; a WALK from the stage room to the hall crosses
+      // 599 and has stranded a hunter off station for over an hour, three times in one day.
+      walk_if_no_ride: false },
       { scripts, fleetScript, onLog: (...a) => out.push(a.join(' ')) }).catch(e => ({ ok: false, why: e.message }));
     return { r, out: out.join('\n') };
   };

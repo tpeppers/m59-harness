@@ -588,7 +588,12 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   // NO RIDE IS NOT NO DRAW. Rehearsal 26's reagent runner could not pick up the dropped cup and drew
   // nothing, which left the whole raid without its sapphires and purple mushrooms. An armorer that
   // cannot ride already walks to the hall; so does a runner now.
-  if (!ride.ok && (share.length || deposit.length) && Number(p.hall)) {
+  // UNLESS THE CALLER SAYS A WALK IS WORSE THAN NO DRAW. From the Ukgoth stage room the walk to the
+  // hall crosses 599 and stalled around 589 three times on 2026-09-27 (Piggy 70 min, Floyd 30,
+  // Kermit 80+), each time with a hunter off station. A caller that will simply try again later
+  // passes walk_if_no_ride: false and a failed ride ends the visit.
+  const mayWalk = !(p?.walk_if_no_ride === false || String(p?.walk_if_no_ride) === 'false');
+  if (!ride.ok && mayWalk && (share.length || deposit.length) && Number(p.hall)) {
     const w = await hopTo(agent, Number(p.hall), { floor: 0.5 });
     if (w.ok) { ride.inHall = true; out.ride += ' — walked to the hall'; }
   }
