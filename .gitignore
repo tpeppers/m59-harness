@@ -788,3 +788,6 @@ substrate/magic-keep.json
 # Live node trial scenes, command receipts and append-only attempt ledger.
 /substrate/node-attempts/
 /substrate/run-node-trial.mjs
+/substrate/node-tours/
+/substrate/node-tour*.json
+/substrate/run-node-tour.mjs

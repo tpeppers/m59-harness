@@ -1,5 +1,23 @@
 # victoria — NODE_VICTORIA, room 39, stone at r13c46
 
+## 2026-09-28: connected room-2 approach and return
+
+The fine-rail tour supersedes the old last-twelve-squares failure below. Receipt
+`five-node-1790621039582` walks room 2 → 38 → 39 using the east stair doorway,
+landing at r8c28, client `x=28160, y=7680`, floor 2048. Inbound rail
+`go:38:r8c27` reaches r13c46, `x=46320, y=12848`, floor 2048, in 72 seconds.
+The node returned already bonded, stable max mana 65, health 20/20.
+
+Outbound rail `go:38:r9c27` reaches the doorway at r8c27,
+`x=26912, y=8176`, floor 2048. Ordinary travel then returns through 38 to room
+2 and continues to Sentinel via 599. Neither approach nor exit uses placement.
+Setup removes hostile bodies; monster tolerance is not established. The earlier
+scratch run recorded the original first grant 25 → 33.
+
+See [the tour recipe](../../../../docs/m59-node-tour.md) and ignored
+`substrate/node-tours/` for live trial counts. The historical notes below retain
+the measured coarse-route disagreements, not the current fine-rail verdict.
+
 **The approach is SOLVED. The last twelve squares are not.** Marco Polo (hk2) crossed the
 whole world to the stone's room at full health on 2026-09-10 and then could not walk the
 last twelve squares, for a reason that is measured and is not the geometry.
