@@ -59,6 +59,7 @@ export const DEFAULTS = Object.freeze({
   offer_ms: 90_000,                           // how long a person has to counter an offer
   poll_ms: 3_000,
   practice: true,                             // cast practice spells between customers
+  start_vigor: 130,                           // each desker eats to this before the shift's walks (keepers pause walks at 80)
   // Re-drawn after a deposit, and by the manager when practice says it is short of reagent or FOOD.
   // Deskers eat ordinary food, never inky caps (operator, 2026-09-28): one bread per ~333 s at most.
   practice_keep: Object.freeze({ elderberry: 30, 'fairy wing': 10, 'loaf of bread': 10 }),

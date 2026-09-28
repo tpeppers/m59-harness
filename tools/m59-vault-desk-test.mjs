@@ -139,7 +139,8 @@ function world() {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'vault-desk-'));
-const deskFor = (W, extra = {}) => new VaultDesk({ call: W.call, cfg: { ...DEFAULTS, manager: 't3', go_between: 't2', meet_ms: 50, offer_ms: 200, ...extra },
+const deskFor = (W, extra = {}) => new VaultDesk({ feed: async (agent, target) => { (W.fed ??= []).push(`${agent}:${target}@${W.rows[agent]?.where ?? W.rows[agent]?.room_num}`); return { before: 80, after: target, bites: 3 }; },
+  call: W.call, cfg: { ...DEFAULTS, manager: 't3', go_between: 't2', meet_ms: 50, offer_ms: 200, ...extra },
   book: new TicketBook(join(dir, `t-${Math.random()}.json`)), humans: () => W.humans ?? {}, log: () => {}, sleep: async () => {},
   practice: async ({ agent }) => { W.practised = (W.practised ?? 0) + 1; return { cast: true, agent }; } });
 
@@ -478,6 +479,8 @@ try {
     ok('manager at the booth, go-between at the inn', W2.rows.t3.where === 'booth' && W2.rows.t2.room_num === INN);
     const iStash = W2.walks.indexOf('stash:t3@chests'), iBooth = W2.walks.lastIndexOf('booth');
     ok('the manager empties its pack AT THE CHESTS, before it walks to the booth', iStash >= 0 && iStash < iBooth, W2.walks.join(','));
+    ok('each desker is fed before its walk: the manager at the chests, the go-between at the inn',
+       W2.fed?.[0] === 't3:130@chests' && W2.fed?.[1] === `t2:130@${INN}`, JSON.stringify(W2.fed));
     ok('the main door never opened', W2.mainDoor === 0);
   }
   section('the manager re-draws practice reagents when it runs out, not the go-between');

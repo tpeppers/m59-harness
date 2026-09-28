@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP, writeDeskOpen, DESK_OPEN_FILE } from './m59-vault-broker.mjs';
 import { checkItemName, weighItem } from './m59-items.mjs';
 import { practiceOnce } from './m59-practice-once.mjs';
+import { eatTo } from './m59-inventory.mjs';
 import { serviceReplyText, humanMark, chaliceStoreFor } from './m59-chalice.mjs';
 
 export const HALL = 714, INN = 106;
@@ -150,8 +151,9 @@ export class VaultDesk {
    * @param humans () -> the chalice store's human marks, or {} (who is a person right now)
    */
   constructor({ call, cfg, book, humans = () => ({}), log = console.log, sleep = ms => new Promise(r => setTimeout(r, ms)),
-                now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null, reload = null }) {
-    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose, reload });
+                now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null, reload = null,
+                feed = (agent, target) => eatTo(agent, target) }) {
+    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose, reload, feed });
     this.failedInARow = 0;
     this.M = cfg.manager; this.G = cfg.go_between;
     this.cursor = {};                                   // chat seq per desk agent
@@ -632,9 +634,22 @@ export class VaultDesk {
                  `${d?.ok === false ? `deposit FAILED ${d.why}` : `protected reagents in, kit back ${JSON.stringify(d?.took ?? {})}`}`);
       }
     }
+    // FED BEFORE IT WALKS (m59-harness-3f, 2026-09-28): a keeper pauses hall walks for survival at
+    // vigor 80, and a desker resting never climbs past 80, so the 06:26 start's booth walk was cut off
+    // twice. Each bite is read back (eatTo); the kit's bread is +20 a loaf.
+    await this.fed(this.M);
     await this.post('booth');
     if (!(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
+    await this.fed(this.G);
     this.log(`desk open: ${this.names().manager} at the booth, ${this.names().go_between} at the Brownestone Inn`);
+  }
+
+  async fed(agent) {
+    const target = Number(this.cfg.start_vigor ?? 130);
+    const r = await this.feed(agent, target).catch(e => ({ error: e.message }));
+    if (r?.error) this.log(`  ${agent} could not eat: ${r.error}`);
+    else this.log(`  ${agent} ate to ${r?.after ?? '?'} vigor (from ${r?.before ?? '?'}, ${r?.bites ?? 0} bites; target ${target})`);
+    return r;
   }
 
   /** Between customers: one practice cast, alternating characters. */
