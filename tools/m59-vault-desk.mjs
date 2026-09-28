@@ -4,6 +4,7 @@
 //   node tools/m59-vault-desk.mjs run                 work the desk until Ctrl-C
 //   node tools/m59-vault-desk.mjs run --once          one poll and whatever tickets it finds, then stop
 //   node tools/m59-vault-desk.mjs run --no-yield      the disciples are not in a training run
+//   touch substrate/history/<fleet>/vault-broker/STOP  stop it gracefully (manager to the chests, both released)
 //
 // Operator, 2026-09-27 (the spec is in m59-vault-broker.mjs and the vault-broker memory). In short:
 //   * The CHEST MANAGER stands in the BOOTH (714 rows 2-3 col 25), the window whose offers and speech
@@ -30,7 +31,7 @@
 // fresh while it runs (a request older than 30 minutes is treated as abandoned), and deletes them on
 // the way out. It holds a commander lease on both (work and movement) so the DUM leaves them alone.
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP } from './m59-vault-broker.mjs';
 import { checkItemName, weighItem } from './m59-items.mjs';
@@ -696,5 +697,13 @@ if (isMain) {
   await desk.rows(true);
   await desk.startShift().catch(e => stop(`could not open: ${e.message}`));
   if (has('once')) { await desk.turn(); await stop('--once'); }
-  for (;;) { if (stopping) break; await desk.turn().catch(e => say(`turn failed: ${e.message}`)); }
+  // A GRACEFUL STOP FROM OUTSIDE: on Windows a background process cannot be sent Ctrl-C, and a hard
+  // kill leaves the manager in the booth and the yield requests on disk. Touch this file instead;
+  // the desk finishes its turn, walks the manager to the chests, releases both and deletes it.
+  const stopFile = join(dirname(TICKETS_FILE(fleet)), 'STOP');
+  for (;;) {
+    if (stopping) break;
+    if (existsSync(stopFile)) { try { unlinkSync(stopFile); } catch {} await stop(`stop file ${stopFile}`); break; }
+    await desk.turn().catch(e => say(`turn failed: ${e.message}`));
+  }
 }
