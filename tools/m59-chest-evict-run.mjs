@@ -33,7 +33,7 @@ export function brokerCall(url = process.env.M59_CONTROL_URL || 'http://127.0.0.
  * Returns {sold: {item: n}, proceeds, rounds}.
  */
 export async function runEviction({ plan, agent, dry = false, log = console.log, call = brokerCall(),
-                                    fleet = 'prod', ledgerFile = null, maxRounds = 6 } = {}) {
+                                    fleet = 'prod', ledgerFile = null, maxRounds = 6, keep = {} } = {}) {
   if (!agent) throw new Error('--agent is required');
   const ledger = ledgerFile ?? fileURLToPath(new URL(`../substrate/history/${fleet}/chest-evict.jsonl`, import.meta.url));
   const record = row => { try { mkdirSync(dirname(ledger), { recursive: true }); appendFileSync(ledger, JSON.stringify({ at: new Date().toISOString(), agent, ...row }) + '\n'); } catch {} };
@@ -43,6 +43,40 @@ export async function runEviction({ plan, agent, dry = false, log = console.log,
   const pack = async () => (await call('inventory', { agent }, 60_000))?.items ?? [];
   if (!left.size) { log('nothing to evict'); return { sold, proceeds, rounds: 0 }; }
   record({ kind: 'start', dry, plan: plan.total.map(t => ({ item: t.item, amount: t.amount, tier: t.tier })) });
+
+  // ROOM FIRST. A runner already carrying the planned items (m59-harness-3f, 2026-09-28: Statler held
+  // the 250 herbs that had bounced off the full chest) sells its own above `keep` at the same merchant
+  // before drawing: the same guild stock, the same buyer, and otherwise every round is pack-sized to
+  // nothing. This frees the runner's pack, not the chest; the chest's plan is unchanged.
+  const mine = await pack();
+  const pre = new Map();
+  for (const t of left.values()) {
+    const extra = countOf(mine, t.item) - (Number(keep[norm(t.item)] ?? keep[t.item]) || 0);
+    if (extra > 0 && t.sell_at) {
+      const key = `${t.sell_at.merchant}@${t.sell_at.room}`;
+      if (!pre.has(key)) pre.set(key, { ...t.sell_at, items: [] });
+      pre.get(key).items.push({ item: t.item, amount: extra });
+    }
+  }
+  for (const m of pre.values()) {
+    log(`first, room: selling ${agent}'s own ${m.items.map(i => `${i.amount} ${i.item}`).join(', ')} to ${m.merchant}`);
+    if (dry) continue;
+    await call('travel', { agent, to: m.room, background: false }, 900_000).catch(() => null);
+    const p = await pack();
+    const specs = m.items.flatMap(({ item, amount }) => {
+      let rest = amount;
+      return p.filter(o => norm(o.name) === norm(item)).map(o => {
+        if (rest <= 0) return null;
+        const n = Number(o.amount) > 0 ? Math.min(Number(o.amount), rest) : 1;
+        rest -= n;
+        return Number(o.amount) > 0 ? { id: o.id, amount: n } : o.id;
+      }).filter(Boolean);
+    });
+    if (!specs.length) continue;
+    const s = await call('sell', { agent, to: m.merchant, items: specs, confirm: true }, 120_000).catch(e => ({ error: e.message }));
+    const after = await pack();
+    record({ kind: 'presold', merchant: m.merchant, items: m.items.map(i => ({ item: i.item, amount: countOf(p, i.item) - countOf(after, i.item) })), reply: s?.error ?? null });
+  }
 
   for (let round = 1; round <= maxRounds && [...left.values()].some(t => t.amount > 0); round++) {
     const r = await row();
@@ -68,8 +102,18 @@ export async function runEviction({ plan, agent, dry = false, log = console.log,
     for (const m of byMerchant.values()) {
       await call('travel', { agent, to: m.room, background: false }, 900_000).catch(() => null);
       const p = await pack();
-      const specs = m.items.flatMap(item => p.filter(o => norm(o.name) === norm(item))
-        .map(o => (Number(o.amount) > 0 ? { id: o.id, amount: o.amount } : o.id)));
+      // ONLY WHAT THIS ROUND DREW: the runner's own stock of the same item (its kept herbs) is not the
+      // chest's overstock, and selling it would also end the plan early.
+      const drawnOf = item => Number(w.took?.[item] ?? w.took?.[norm(item)] ?? take.find(t => norm(t.item) === norm(item))?.amount ?? 0);
+      const specs = m.items.flatMap(item => {
+        let rest = drawnOf(item);
+        return p.filter(o => norm(o.name) === norm(item)).map(o => {
+          if (rest <= 0) return null;
+          const n = Number(o.amount) > 0 ? Math.min(Number(o.amount), rest) : 1;
+          rest -= n;
+          return Number(o.amount) > 0 ? { id: o.id, amount: n } : o.id;
+        }).filter(Boolean);
+      });
       if (!specs.length) continue;
       const before = Object.fromEntries(m.items.map(i => [i, countOf(p, i)]));
       const s = await call('sell', { agent, to: m.merchant, items: specs, confirm: true }, 120_000).catch(e => ({ error: e.message }));

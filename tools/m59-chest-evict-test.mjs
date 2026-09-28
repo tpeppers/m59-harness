@@ -78,6 +78,21 @@ console.log('\nthe run: draw what fits, sell where it is sold, on the ledger');
   ok('drawn from the chests and sold to Joguer in his room', W.sales[0]?.to === 'Joguer' && W.sales[0]?.room === 104 && W.chests.herb === 50, JSON.stringify(W));
   ok('exactly the planned amount', r.sold.herb === 250, JSON.stringify(r));
 }
+{
+  const W = { room: 714, pack: [{ id: 5, name: 'herb', amount: 250 }], chests: { herb: 300 }, sales: [] };
+  const call = async (tool, a) => {
+    if (tool === 'fleet') return { fleet: [{ agent: 't3', room_num: W.room, pack: { weight: 0, bulk: 1000, max: 1100, exact: true } }] };
+    if (tool === 'inventory') return { items: W.pack.map(o => ({ ...o })) };
+    if (tool === 'travel') { W.room = a.to; return { arrived: true }; }
+    if (tool === 'hall_withdraw') { const w = a.wants[0]; W.chests.herb -= w.amount; W.pack.push({ id: 9, name: 'herb', amount: w.amount }); return { ok: true, took: { herb: w.amount }, short: {} }; }
+    if (tool === 'sell') { W.sales.push({ room: W.room, items: a.items }); for (const sp of a.items) { const o = W.pack.find(x => x.id === (sp.id ?? sp)); if (o) o.amount -= sp.amount ?? o.amount; } W.pack = W.pack.filter(o => o.amount > 0); return {}; }
+    throw new Error(tool);
+  };
+  const plan = { total: [{ item: 'herb', amount: 20, tier: 'here', sell_at: { merchant: 'Joguer', room: 104 } }] };
+  await runEviction({ plan, agent: 't3', call, log: () => {}, keep: { herb: 40 }, ledgerFile: `${process.env.TEMP ?? '/tmp'}/chest-evict-test.jsonl` });
+  ok('the runner sells its own herbs above the keep first', W.sales[0]?.items?.[0]?.amount === 210, JSON.stringify(W.sales[0]));
+  ok('then draws the chest\'s planned herbs', W.chests.herb === 280, JSON.stringify(W.chests));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

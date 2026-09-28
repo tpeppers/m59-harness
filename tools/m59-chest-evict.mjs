@@ -5,6 +5,7 @@
 //   node tools/m59-chest-evict.mjs plan --fill 0.7         aim every chest at 70% bulk instead of 80%
 //   node tools/m59-chest-evict.mjs run --agent t9          one character draws it out and sells it in town
 //   node tools/m59-chest-evict.mjs run --agent t9 --dry    walk through the plan without drawing or selling
+//   node tools/m59-chest-evict.mjs run --agent t3 --keep herb:40   sell the runner's own planned stock above 40 first
 //
 // Operator, 2026-09-28, the universal default: "Free room by evicting low overstock first, with an
 // absolute preference for overstock that can be rebought in [Barloque] first (whatever town the
@@ -186,6 +187,8 @@ if (isMain) {
   }
   if (verb === 'run') {
     const { runEviction } = await import('./m59-chest-evict-run.mjs');
-    await runEviction({ plan, agent: arg('agent'), dry: has('dry'), log: say });
+    // --keep "herb:40,elderberry:60": what the runner keeps of its OWN stock of a planned item.
+    const keep = Object.fromEntries(String(arg('keep', '')).split(',').filter(Boolean).map(x => { const [k, v] = x.split(':'); return [k.trim().toLowerCase(), Number(v) || 0]; }));
+    await runEviction({ plan, agent: arg('agent'), dry: has('dry'), log: say, keep });
   }
 }
