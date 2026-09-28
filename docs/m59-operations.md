@@ -523,6 +523,57 @@ The borrowed characters then appear in the borrower's own tooling as ordinary MC
   directly. `substrate/grants/` is gitignored, like the roster.
 
 
+## PLAYING A CHARACTER FROM ANOTHER MACHINE — A REAL CLIENT, STILL NO PASSWORD
+
+The lend door lends the MCP. `tools/m59-gate.mjs` lends the **body**: a Steam Deck or a
+second desktop runs the TUI as though it were at home, and **L** opens a real client on
+that machine, logged in as the character, while the password stays here.
+
+```bash
+# remote, once — prints one public key line; the private half never leaves ~/.m59
+node tools/m59-gate.mjs keygen
+# home — the line goes into m59-private/gate/authorized_peers.json; commit it there
+node tools/m59-gate.mjs authorize deck ed25519:... --agents t1,t4
+# home — the gate on loopback, and a relay that publishes only it on the tailnet
+M59_PRIVATE=<m59-private> node tools/m59-gate.mjs serve --fleet prod
+m59-tsrelay -forward 8950
+# remote
+node tools/m59-gate.mjs connect m59-fleet:8950 --tui
+```
+
+**How the password stays home.** The remote client logs in as the roster key (`t4`) with the
+placeholder `m59-gate`. The gate frames the stream, and the one packet it changes is the
+first `AP_LOGIN`: the username and the MD5 digest at its tail are replaced with the roster's.
+Login is not checksummed against the security seeds, so that is safe; nothing after it is
+touched, because everything after it is. A character the peer was not granted is refused
+**before one byte reaches the server**.
+
+**Why keys and not the handoff tokens.** A public key can be committed beside the rosters it
+guards and is useless to whoever reads it; a token cannot be written down at all. The host key
+lives there too, and a peer pins it on first connect (`~/.m59/known_gates.json`), so a relay
+answering with a different key is refused. Revoking is `m59-gate.mjs revoke <name>` and takes
+effect on the next connection with nothing restarted.
+
+**The claim, and why the gate makes it.** A client login bumps the broker, and the 45s rejoin
+sweep logs the keeper back in and bumps the client — unless the character is `pilot`-claimed,
+and a claim is bound to a pid **the broker can poll on this machine**. The Deck's pid is not
+one. So for each login the gate starts a placeholder process here, claims with its pid, and
+kills it when the session closes; the broker's own poll gives the character back. In gate mode
+the TUI skips its own claim and rearm, which would name a pid on the wrong machine.
+
+**Why a relay and not the Tailscale client.** `tailscaled` on Windows insists on a control pipe
+owned by Administrators — as an ordinary user it exits with *"This security ID may not be
+assigned as the owner of this object"* even in userspace-networking mode — and the MSI wants
+elevation. `tools/tsrelay` is `tsnet`: the same tailnet as a library, one process, no admin, no
+adapter, no service. Build it once with a portable Go (`go build` in `tools/tsrelay`). **Forward
+the gate, never the broker**: every device on the tailnet reaches whatever the relay publishes,
+and 8901 checks nothing. One Tailscale account covers every device you own; a friend on their
+own account needs the node shared to them from the admin console.
+
+**Not covered.** The gate encrypts the leg between the two machines, not the game session
+beyond it (there is no such thing). S (swarm) through the gate goes straight to the game server,
+so the home proxy's view of that character is lost. `m59-gate-test.mjs` (29) pins the rest.
+
 ## A broker started from another checkout can only be stopped from there
 
 `m59-service.mjs stop` refuses a broker whose `/health` reports a different repository root:

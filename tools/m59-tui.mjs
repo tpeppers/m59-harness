@@ -558,8 +558,18 @@ async function ensureProxy(host, port) {
   return { started: true, ok: false };
 }
 
+// THROUGH A GATE (tools/m59-gate.mjs connect --tui). This machine holds no roster, so the
+// client logs in as the character's roster key with a placeholder password, at the gate's
+// local login port; the gate on the home machine swaps in the real account and password,
+// and claims the character there — a pid on THIS machine is nothing the broker can poll.
+const GATE = env.M59_GATE || null;
+const GATE_LOGIN_PORT = String(env.M59_PROXY_PORT || 5961);
+const gateCreds = (row) => ({ creds: { account: row.agent, password: 'm59-gate',
+                                        host: '127.0.0.1', port: GATE_LOGIN_PORT }, why: null });
+
 async function launch(row, { viaProxy = false } = {}) {
-  const { creds, why } = rosterFor(row.agent);
+  const { creds, why } = GATE ? gateCreds(row) : rosterFor(row.agent);
+  if (GATE) viaProxy = false;
   if (!creds) { S.status = c.red(why ?? ('no credentials on file for ' + row.agent)); return; }
   // THE PATCHED CLIENT FIRST — see the header. Its directory has no `steamapps` in it, so
   // isSteamInstall says no and `/S` stays off, which is right: it is a build, not a
@@ -655,8 +665,9 @@ async function launch(row, { viaProxy = false } = {}) {
     // the terminal is still open. The claim stops the keeper and tells the reconciler
     // to leave the character alone; the broker then polls this pid and gives the
     // character back on its own when the client is closed.
-    // (Not when the broker is remote: holdRemotely already holds it by lease.)
-    ...(REMOTE ? [] : [
+    // (Not when the broker is remote: holdRemotely already holds it by lease. Not through
+    // the gate either: the gate pilot-claims for exactly the session itself.)
+    ...(REMOTE || GATE ? [] : [
     `$body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"pilot",'`
       + `+ '"arguments":{"action":"claim","agent":"${row.agent}","pid":' + $p.Id + '}}}'`,
     `try { Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/' -Method Post `
@@ -700,8 +711,9 @@ async function launch(row, { viaProxy = false } = {}) {
   // the operator stands in the room with none of the privileges the launch was for, and
   // the only sign is that spoken commands are heard and ignored. That exact failure is
   // why the automatic claim exists at all — see m59-localclient.mjs.
-  // A remote broker scanning ITS machine for this client would find nothing; the lease is the telling.
-  const r = REMOTE ? null : await call('pilot', { action: 'rearm', why: `the terminal launched ${row.agent}` }, 4000);
+  // A remote broker scanning ITS machine for this client would find nothing; the lease is the
+  // telling. Through the gate, the gate's own claim is.
+  const r = REMOTE || GATE ? null : await call('pilot', { action: 'rearm', why: `the terminal launched ${row.agent}` }, 4000);
   if (r?.__error) {
     S.status += ' ' + c.red('· broker not told to watch (' + r.__error + ') — `pilot claim` by hand');
     draw();
