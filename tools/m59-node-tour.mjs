@@ -12,6 +12,7 @@ import {STONES} from './m59-stones.mjs';
 import {nodeReport,meldVerdict} from './m59-nodecheck.mjs';
 import {epochId} from './m59-epoch.mjs';
 import {updateNodeMemory} from './m59-node-memory.mjs';
+import {withTourWalkOwnership,stableNodeGrant} from './m59-node-tour-policy.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const TOUR_NODES=['victoria','sentinel','ancient','badlands','cave'];
@@ -77,7 +78,10 @@ export function tourReturnPlan(room){
   throw Error('no_measured_return_for_room_'+room);
 }
 
-export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false}={}){
+export async function runTour(ctx,options={}){
+  return withTourWalkOwnership(ctx.agent,()=>runTourInner(ctx,options));
+}
+async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false}={}){
   fromStep=Number(fromStep);
   if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
@@ -92,6 +96,16 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
     start:tourPosition(first),nodes:[],legs:[],complete:false};
   record.rail_ref=id+'-rails.json';writeFileSync(join(out,record.rail_ref),readFileSync(resolve(root,railFile)));
   state.tour=record;state.tourFile=join(out,id+'.json');
+  let journalRead=null,lastJournalAt=0;
+  const journalTimer=setInterval(()=>{
+    if(journalRead)return;
+    journalRead=call('autopilot',{agent,action:'status'}).then(a=>{
+      const recent=(a.recent??[]).filter(r=>r.at>lastJournalAt);
+      if(recent.length)lastJournalAt=Math.max(...recent.map(r=>r.at));
+      appendFileSync(join(out,id+'-keeper.jsonl'),JSON.stringify({at:new Date().toISOString(),recent,
+        did:a.did,faculties:a.faculties})+'\n');
+    }).catch(()=>{}).finally(()=>{journalRead=null;});
+  },5000);journalTimer.unref?.();
   const save=()=>writeFileSync(state.tourFile,JSON.stringify(record,null,2));
   const read=async()=>{const l=await call('look',{agent});if(l.hp?.value<=0||l.room?.num===1)throw Error('tour_character_died');return l;};
   const command=async(name,args,label,stopRoom=null)=>{
@@ -174,10 +188,10 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
           ?await call('wait_for_event',{agent,since:l.ev_seq,kinds:['message'],timeout_ms:3000}):null;
         await sleep(3000);const after=await call('status',{agent});await sleep(1500);const stable=await call('status',{agent});
         const verdict=meldVerdict(JSON.stringify({activation,observation}));
-        const grant=before.connection_revision===after.connection_revision&&after.connection_revision===stable.connection_revision&&
-          Number.isFinite(before.mana?.max)&&after.mana?.max>before.mana.max&&stable.mana?.max===after.mana.max;
+        const grant=stableNodeGrant(before,after,stable);
         const objective={stone:step.node,position:p,node_state:nodeReport({objects:l.objects,you:l.you}),activation,observation,observed_since:l.ev_seq,verdict,
           before:before.mana,after:after.mana,stable:stable.mana,grant,connection_revision:before.connection_revision,
+          keeper_pids:[before.pid,after.pid,stable.pid],connection_revisions:[before.connection_revision,after.connection_revision,stable.connection_revision],
           status:verdict.verdict==='melded'||grant?'melded':verdict.verdict==='already'?'already':verdict.verdict==='dead'?'dead_node':'unknown'};
         record.nodes.push(objective);save();
         if(['melded','already'].includes(objective.status)){
@@ -195,6 +209,7 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
     record.partial_complete=!recovery&&fromStep>0;return record.complete||record.partial_complete||record.recovery_complete;
   }catch(e){record.failure=String(e.stack??e);console.log('TOUR STOP '+e.message);return false;}
   finally{
+    clearInterval(journalTimer);if(journalRead)await journalRead;
     await call('cancel_movement',{agent});record.end=tourPosition(await call('look',{agent}));save();
     appendFileSync(join(out,'tours.jsonl'),JSON.stringify(record)+'\n');console.log('TOUR RECEIPT '+state.tourFile+' complete='+record.complete);
   }

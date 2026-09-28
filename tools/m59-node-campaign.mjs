@@ -96,9 +96,14 @@ if(arg('plan')){
             if(l.room?.num!==2){attempt.return_failed=tourPosition(l);save(record);return false;}
             if(job.post){await call('walk_to',{agent,row:job.post.row,col:job.post.col,fine:false,max_steps:100,arrive_within:3});await call('cancel_movement',{agent});l=await call('look',{agent});}
             attempt.return_position=tourPosition(l);attempt.post_restored=!job.post||atPost(attempt.return_position,job.post);
-            const a=await call('autopilot',{agent,action:'status'});
+            let a=await call('autopilot',{agent,action:'status'});
+            if(job.service&&a.policy?.assignedRoom!==job.post.room){
+              await call('autopilot',{agent,action:'start',mode:state.before.mode,assigned_room:job.post.room});
+              a=await call('autopilot',{agent,action:'status'});
+              attempt.service_assignment_restored=a.policy?.assignedRoom===job.post.room;
+            }
             attempt.saved_mode=state.before?.mode;attempt.return_mode=a.mode;
-            attempt.duties_preserved=a.mode===state.before?.mode;attempt.objectives_complete=tourObjectiveComplete(state.fullTour);
+            attempt.duties_preserved=a.mode===state.before?.mode&&(!job.service||a.policy?.assignedRoom===job.post.room);attempt.objectives_complete=tourObjectiveComplete(state.fullTour);
             save(record);return attempt.post_restored&&attempt.duties_preserved;
           },'return to room 2 and saved post failed'),always:true}
         ];}};
@@ -109,7 +114,12 @@ if(arg('plan')){
       writeFileSync(join(evidenceDir,'script-result.json'),JSON.stringify(result,null,2));
       attempt.finished_at=new Date().toISOString();attempt.script_ref=join(evidenceDir,'script-result.json');
       // Releasing the lease permits the original director to resume its saved service.
-      const after=(await call('fleet',{})).fleet.find(r=>r.agent===job.agent);
+      let after;
+      for(let i=0;i<6;i++){
+        after=(await call('fleet',{})).fleet.find(r=>r.agent===job.agent);
+        if(!String(after?.committed?.held_by?.by??'').startsWith('fleetscript:mana-node-service-tour'))break;
+        await sleep(2000); // Broker views can briefly retain the released keeper sample.
+      }
       attempt.released=!String(after?.committed?.held_by?.by??'').startsWith('fleetscript:mana-node-service-tour');
       attempt.service_available=!job.service||after?.room_num===2&&(after.provides??[]).includes('enchant weapon');
       job.status=result.ok&&attempt.objectives_complete&&attempt.post_restored&&attempt.duties_preserved&&attempt.released&&attempt.service_available?'complete':'needs_attention';

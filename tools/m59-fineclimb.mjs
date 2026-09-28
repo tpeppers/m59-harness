@@ -411,7 +411,9 @@ for (const [li, leg] of plan.legs.entries()) {
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
     const p = w?.position;
-    if (p?.x == null || p?.y == null) pos = await look();
+    // A refused walk can have triggered survival travel to another room. Its
+    // position has no room field; never interpret it using the old room's floor.
+    if (w?.arrived!==true || p?.x == null || p?.y == null) pos = await look();
     else pos = { room: pos.room, row: p.row, col: p.col, x:p.x, y:p.y, hp: pos.hp };
     const cx = pos?.x != null ? toClient(pos.x) : null, cy = pos?.y != null ? toClient(pos.y) : null;
     if(cx == null || cy == null || pos.room !== ROOM){

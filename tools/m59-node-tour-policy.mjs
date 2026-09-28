@@ -14,3 +14,17 @@ export function availableForTour(row){
 }
 export function tourObjectiveComplete(r){return r?.complete===true&&r.nodes?.length===5&&r.nodes.every(n=>['melded','already'].includes(n.status));}
 export function atPost(p,post){return p?.room===post.room&&Math.abs(p.row-post.row)<=2&&Math.abs(p.col-post.col)<=2;}
+export function stableNodeGrant(before,after,stable){
+  return Number.isInteger(before?.pid)&&before.pid===after?.pid&&after.pid===stable?.pid&&
+    Number.isInteger(before.connection_revision)&&before.connection_revision===after.connection_revision&&
+    after.connection_revision===stable.connection_revision&&Number.isFinite(before.mana?.max)&&
+    after.mana?.max>before.mana.max&&stable.mana?.max===after.mana.max;
+}
+// holdKeeper consults this shared marker before cancelling a walk on lease retake.
+// Fineclimb runs in a child process, so its parent must keep the marker alive.
+export async function withTourWalkOwnership(agent,fn){
+  const walks=globalThis.__m59OwnWalks??=new Map(),prior=walks.get(agent);
+  const renew=()=>walks.set(agent,Date.now()+60000);
+  renew();const timer=setInterval(renew,10000);timer.unref?.();
+  try{return await fn();}finally{clearInterval(timer);if(prior==null)walks.delete(agent);else walks.set(agent,prior);}
+}

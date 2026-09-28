@@ -62,7 +62,8 @@ Failed runs remain in the append-only ledger.
 `m59-node-campaign.mjs` saves a queue, controls one character at a time through
 FleetScript's existing locks and faculty leases, and returns enchanters to the
 room-2 post before releasing them. It preserves their policies and service
-assignments rather than replacing them. Active errands and human-piloted
+settings; designated enchanters return to their saved room-2 service assignment.
+Active errands and human-piloted
 characters wait. A failed route or unconfirmed node stops the campaign after a
 bounded ordinary return attempt; `--retry <agent>` requires deliberate review.
 No administrative game connection is used by this runner or its recovery.
