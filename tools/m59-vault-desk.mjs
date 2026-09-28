@@ -336,8 +336,18 @@ export class VaultDesk {
   async goTo(agent, room) {
     const here = (await this.row(agent, true))?.room_num;
     if (Number(here) === room) return true;
-    await this.call('travel', { agent, to: room, background: false }, 900_000).catch(() => null);
-    return Number((await this.row(agent, true))?.room_num) === room;
+    // THE JOURNEY'S OWN ANSWER FIRST. The fleet row lags a journey's end: on prod 2026-09-28 01:43:36
+    // the go-between arrived (arrived:true, ended_in 106) while the row still read 101, and the desk
+    // closed "could not reach the inn". Then the row, for up to 20 s.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await this.call('travel', { agent, to: room, background: false }, 900_000).catch(() => null);
+      if (r?.arrived === true || Number(r?.ended_in) === room) return true;
+      for (let i = 0; i < 4; i++) {
+        if (Number((await this.row(agent, true))?.room_num) === room) return true;
+        await this.sleep(5_000);
+      }
+    }
+    return false;
   }
 
   async waitFor(name, room) {
