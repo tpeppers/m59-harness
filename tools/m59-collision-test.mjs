@@ -1506,7 +1506,7 @@ const leaveVia = compileSessionMethod(brokerSource,
     // and handing it hand-written imitations of the two helpers it drives would be
     // testing the imitations. `DOOR_SETTLE_MS` is zeroed for the same reason
     // MOVE_INTERVAL_MS is: the fake client answers immediately or not at all.
-    boundedSilentGo, boundedRegionEntry, DOOR_SETTLE_MS: 0,
+    boundedSilentGo, boundedRegionEntry, spreadEdges, DOOR_SETTLE_MS: 0,
     // Zero, which is the broker's own default and the measured one — see the constant.
     // Declared rather than inherited so a change to it shows up here as a test to update.
     LEAVE_VIA_CLEARANCE: 0,
@@ -1973,6 +1973,22 @@ console.log('\nterminal movement propagation and edge packet authority');
       stand_on: { col: 2, row: 2 }, fine_stand_on: { x: 160, y: 160 },
       edge_target: { x: 192, y: 160 }, fine_path: [{ x: 160, y: 160 }],
     };
+
+    // A previous walk already reached a published stage. An old anchor must not
+    // walk it off again, and a different destination/direction cannot substitute.
+    for (const mode of ['same exit', 'different destination', 'different direction', 'wrong door']) {
+      const old = {...exit,stand_on:{row:2,col:4}};
+      const current = {...exit,
+        ...(mode==='different destination'?{to:3}:{}),
+        ...(mode==='different direction'?{direction:'west'}:{})};
+      let aimed=null;
+      const stagedSession={...terminalSession,
+        world:{exits:()=>[current],wrongExitSquares:()=>mode==='wrong door'?new Set(['2,2']):null},
+        async walkTo(col,row) { aimed={col,row};return {arrived:false,reason:'room_security_unknown'}; }};
+      await leaveVia.call(stagedSession,old,{});
+      ok(`an already reached stage is reused only for the same allowed exit: ${mode}`,
+        aimed?.col===(mode==='same exit'?2:4) && aimed?.row===2,JSON.stringify(aimed));
+    }
 
     // RESTING SETS PFLAG_NO_MOVE. Standing at the final packet is too late: both a rail
     // boarding walk and the ordinary approach have already been refused by then. Model the

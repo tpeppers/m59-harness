@@ -46,6 +46,8 @@ const SUITES = [
    'a one-square corridor with bodies in it is threaded by routing WITHIN squares, not around them'],
   ['m59-lane-test.mjs',
    'two characters in a one-square pipe keep right and pass instead of stalling nose to nose'],
+  ['m59-traffic-continuation-test.mjs',
+   'traffic partitions, pre-cast progress and nested recovery cannot undo a journey unnoticed'],
   ['m59-wallstop-test.mjs',
    'where a journey is allowed to stop, on the wall book this fleet actually learned'],
   ['m59-collision-test.mjs',

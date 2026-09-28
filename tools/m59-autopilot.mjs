@@ -5487,7 +5487,7 @@ export class Autopilot {
     if(answer?.answer?.do!=='blink')return false;
     if(currentSurvivalDecision(s)?.id!==d?.id || s.movementWasCancelled?.(generation)
         || this.checkFreeze() || this.currentRecoveryWall())return false;
-    const out=await s.blinkOut({expect:answer.answer.expect,movementGeneration:generation});
+    const out=await s.blinkOut({expect:answer.answer.expect,proposalId:answer.answer.proposalId,movementGeneration:generation});
     this.ledgerEvent('survival_blink',{episode_id:e.id,resume_to:this.suspendedJourney?.to??null,...out});
     this.survivalJam(); // actual relocation invalidates the old pocket; no invented clearance
     return !!out?.cast;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {mkdtempSync} from 'node:fs';
+import {mkdtempSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const scratch=mkdtempSync(join(tmpdir(),'m59-traffic-'));
@@ -8,6 +8,8 @@ process.env.M59_LEDGER_DIR=scratch;process.env.M59_UPTIME_FILE=join(scratch,'upt
 const {Session}=await import('./m59-game.mjs');
 const {Autopilot}=await import('./m59-autopilot.mjs');
 const {chooseTrafficBlink}=await import('./m59-blink-rung.mjs');
+const {canBlinkOut,reachableAround}=await import('./m59-blink.mjs');
+const {sharedRoomGeometry}=await import('./m59-roo.mjs');
 const {firstAnswer}=await import('./m59-strategies.mjs');
 const {attachSurvivalDecisions,chooseSurvivalDecision}=await import('./m59-survival-decision.mjs');
 
@@ -36,6 +38,54 @@ test('clean checkout selects the shipped blink rung across an actual blocked cor
   const out=await s.blinkOut({expect:a.answer.expect});
   assert.equal(out.arrived,true);assert.equal(s._tickLoop._frozen,false);
   assert.equal(s.blinkRungStats.casts,1);assert.equal(s.blinkRungStats.arrivals,1);
+});
+
+test('Flatlands: traffic behind the body and a bad goal are not a sealed pocket',()=>{
+  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+  const room=map.rooms[584],geo=sharedRoomGeometry(room);
+  // 2026-09-28 14:18:41.984Z decision, monster positions only.
+  const bodies=[{row:27,col:30},{row:26,col:4},{row:31,col:23},{row:35,col:28},
+    {row:35,col:29},{row:40,col:4},{row:32,col:20},{row:21,col:25}];
+  const args={geo,rows:room.rows,cols:room.cols,from:{row:40,col:35},
+    goal:{row:43,col:38},blink:{row:24,col:29},bodies};
+  const v=canBlinkOut(args);
+  assert.equal(v.can,false);assert.equal(v.reason,'traffic_partition_not_stranded');
+  assert.equal(v.from_here,37);assert.equal(v.from_blink,916);
+  assert.equal(v.empty_from_here,961);assert.equal(v.goal_reachable_without_bodies,false);
+  assert.equal(reachableAround(geo,args.from,bodies,room).has(42036),true,
+    'the valid r42c36 stage is reachable on the current side of the ants');
+  assert.equal(canBlinkOut({...args,stalled:'old oscillation'}).can,false);
+});
+
+test('pre-cast progress invalidates an old stall exception and is recorded in fine units',async()=>{
+  const {s,c,ctx}=blinkFixture();ctx.bodies.length=0;ctx.stalled='old oscillation';
+  c.self.x=160;c.self.y=96;
+  const receipts=[];const record=s._recordBlinkRung.bind(s);
+  s._recordBlinkRung=e=>{receipts.push(e);record(e);};
+  const a=await s._askStrategies('whenStuck',ctx);
+  assert.equal(a.answer.do,'blink');
+  // Mutate the live object to catch proposals that kept a reference, not a snapshot.
+  c.self.col=6;c.self.x=416;let casts=0;c.cast=()=>casts++;
+  const out=await s.blinkOut({expect:a.answer.expect,proposalId:a.answer.proposalId});
+  assert.equal(casts,0);assert.equal(out.reason,'no_reachable_gain');
+  const pre=receipts.find(x=>x.phase==='pre_cast');
+  assert.equal(pre.selected_position.col,2);assert.equal(pre.position.col,6);
+  assert.equal(pre.displacement_fine,256);assert.equal(pre.stalled_revalidated,false);
+  assert.equal(pre.proposal_id,a.answer.proposalId);
+});
+
+test('a fresh successful bypass remains available after preparation movement',async()=>{
+  const {s,c,ctx}=blinkFixture();const a=await s._askStrategies('whenStuck',ctx);
+  c.self={row:1,col:3};
+  assert.equal((await s.blinkOut({expect:a.answer.expect,proposalId:a.answer.proposalId})).arrived,true);
+});
+
+test('an outer blink cannot consume a nested proposal with the same movement owner',async()=>{
+  const {s,ctx}=blinkFixture();const outer=await s._askStrategies('whenStuck',ctx);
+  const inner=await s._askStrategies('whenStuck',{...ctx,goal:{row:1,col:8}});
+  assert.equal((await s.blinkOut({proposalId:outer.answer.proposalId})).reason,'proposal_replaced');
+  assert.equal(s._blinkProposal.id,inner.answer.proposalId);
+  assert.equal((await s.blinkOut({proposalId:inner.answer.proposalId,expect:inner.answer.expect})).arrived,true);
 });
 for(const [reason,change] of [
   ['spell_unknown',x=>x.knowsBlink=false],['under_fire',x=>x.underFire=true],
