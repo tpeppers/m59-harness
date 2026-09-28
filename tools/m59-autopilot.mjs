@@ -44,7 +44,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
-import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
+import { isFood, foodValue, weighItem, weighPack, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING, creatureByName } from './m59-spawns.mjs';
@@ -24572,10 +24572,28 @@ export class Autopilot {
         unpriced_stacks: worth.unpriced, fullness: Number(fullness.toFixed(3)), stacks,
         why: `the pack would fetch about ${worth.value}, under the ${this.minSellTripValue()} a sell ` +
              `trip should carry; it goes when it is worth that or reaches ${Math.round(SELL_REGARDLESS_AT * 100)}%` });
-    if (!saleCooling && fullness >= at && !hold && !cheap)
+    // A TRIP THAT CANNOT FIX THE THING THAT OPENED IT RUNS FOR EVER (CLAUDE.md). Both triggers
+    // measure the WHOLE pack, and a courier's pack is mostly what it is told to keep — gems,
+    // reagents, bread for the crew. 2026-09-28: hk2 at 97% with 10 stacks, every stack kept,
+    // walked to Barloque to sell, died on the road seven times in ninety minutes and dropped the
+    // guild's gems each time. So a trip opens only when what the counter WOULD sell (the same
+    // inventorySalePlan the trip uses) brings the pack back under the trigger that fired.
+    const loadDue = !saleCooling && fullness >= at && !hold && !cheap;
+    const stacksDue = !saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold && !cheap;
+    const relief = (loadDue || stacksDue) ? this.saleRelief(cap) : null;
+    if (relief && !((loadDue && relief.fixesLoad(at, fullness)) ||
+                    (stacksDue && relief.fixesStacks(this.policy.maxCarry ?? 14, stacks)))) {
+      if (Date.now() - (this._keepFullNotedAt ?? 0) > 600_000 && (this._keepFullNotedAt = Date.now()))
+        this.note('sell trip held: the pack is full of what it keeps', {
+          fullness: Number(fullness.toFixed(3)), stacks, after_sale: relief.summary,
+          why: 'selling everything the counter would take still leaves the pack over the trigger — ' +
+               'the rest is kept, protected or wanted by the guild, and a walk to town cannot move it' });
+      return { sell: false, trigger: null, why: 'pack full of kept stock; a sell trip would not relieve it' };
+    }
+    if (loadDue && !hold)
       return { sell: true, trigger: 'load', fullness, estimated_value: worth?.value,
                why: `pack is ${Math.round(fullness * 100)}% of capacity` };
-    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold && !cheap)
+    if (stacksDue && !hold)
       return { sell: true, trigger: 'stacks', stacks, estimated_value: worth?.value,
                why: `${stacks} stacks, at the pack ceiling` };
 
@@ -25246,6 +25264,37 @@ export class Autopilot {
     return purchasePlan({ requests, menu, foodGap, estimated: items == null,
       reserve: requests.length || foodGap > 0 ? Math.max(0, this.policy.shopFloor ?? 0,
         ['all', 'delivery'].includes(kind) && this.pendingFarmDelivery ? (this.policy.walkingMoney ?? 400) : 0) : 0 });
+  }
+
+  /**
+   * What a market visit could take off this pack: the counter's own sale plan, weighed. Null when
+   * the plan cannot say (equipment unknown, intent unreadable, no weights) — the caller then goes
+   * to town as it always did, because "I cannot tell" is not "there is nothing to sell".
+   */
+  saleRelief(cap = skills.carryCapacity(this.s.client)) {
+    try {
+      if (!cap?.known || !cap.load) return null;
+      // Unknown equipment blocks every line of the plan, which would read as "nothing to sell".
+      if (!skills.equippedNow(this.s.client)) return null;
+      const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
+        loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+      if (plan?.error) return null;
+      const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0);
+      const w = weighPack(sold.map(i => ({ name: i.name, amount: i.sale_amount })));
+      const freedStacks = sold.filter(i => i.sale_amount >= (i.amount || 1)).length;
+      const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
+      const after = Math.max(frac(cap.load.weight - (w?.weight ?? 0), cap.weight_max),
+                             frac(cap.load.bulk - (w?.bulk ?? 0), cap.bulk_max));
+      const stacksAfter = (this.s.client?.inventory?.length ?? 0) - freedStacks;
+      return {
+        after, stacksAfter,
+        // Under the trigger, or at least a quarter of the pack's capacity freed: a trip that
+        // takes a hunter from 97% to 75% is still worth the road.
+        fixesLoad: (at, now = 1) => after < at || now - after >= 0.25,
+        fixesStacks: (max, now = Infinity) => stacksAfter < max || now - stacksAfter >= 5,
+        summary: { fullness: Number(after.toFixed(3)), stacks: stacksAfter, sellable_stacks: sold.length },
+      };
+    } catch { return null; }
   }
 
   postShoppingPlan(plan) {
