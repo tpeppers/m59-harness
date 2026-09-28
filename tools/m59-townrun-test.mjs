@@ -65,8 +65,10 @@ console.log('\nwhere a town trip is aimed');
      rooms({ packFull: true }).join() === String(MARKET));
   ok('broke with goods aboard goes to the market too',
      rooms({ brokeWithGoods: true }).join() === String(MARKET));
-  ok('an empty larder goes to the bread shop',
-     rooms({ starving: true }).join() === String(BREAD));
+  // Meidei's (103) door is fenced (operator, 2026-09-28), so a starving character is offered every
+  // bread shop, nearest first by the caller: Solomon's (151), Pietro's (371), then 103.
+  ok('an empty larder goes to a bread shop — all three, 103 last',
+     rooms({ starving: true }).join() === '151,371,' + String(BREAD), rooms({ starving: true }).join());
   ok('a full pack sells before buying food',
      rooms({ starving: true, packFull: true }).join() === String(MARKET));
 

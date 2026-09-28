@@ -1553,6 +1553,17 @@ const MARKETS = [MARKET_STOPS[0]];
 // the eat leg are the same trip. Tos cheese at 112 for 30 vigor is cheaper per point,
 // but Barloque is where the selling happens and a second town is a second walk.
 const FOOD_SHOP = { room: 103, name: 'The Bhrama & Falcon, Barloque' };
+// MORE THAN ONE BREAD SHOP, NEAREST FIRST (operator, 2026-09-28: "There is a fence/wall blocking the
+// door to Meidei's"). 103 was the ONLY food shop this keeper knew, so with its door fenced no keeper
+// has bought food at all — and the troll crew's vigor followed the pie drops down. Solomon's Edibles
+// (151, off Cor Noth) and Pietro's Wicked Brews (371, Jasper) both sell bread (m59-merchants.json);
+// 103 stays last in case the fence comes down.
+export const FOOD_SHOPS = Object.freeze([
+  { room: 151, name: "Solomon's Edibles, Cor Noth" },
+  { room: 371, name: "Pietro's Wicked Brews, Jasper" },
+  FOOD_SHOP,
+]);
+const FOOD_WORD = /cheese|pie|bread|apple|grape|edible mushroom|inky.?cap|stew|drumstick|turkey|pork/i;
 
 // AND THE REAGENTS ARE NEXT DOOR, WHICH IS WHY THE HERBS RAN OUT WITHIN SIGHT OF THEM.
 //
@@ -1622,7 +1633,7 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
   if (packFull || brokeWithGoods) return MARKETS;
   if (richEnoughToBank) return BANKS;
   if (supplyTrip) return [REAGENT_SHOP];
-  if (starving && !packFull) return [FOOD_SHOP];
+  if (starving && !packFull) return [...FOOD_SHOPS];   // 103 alone is fenced (2026-09-28)
   return BANKS;
 }
 
@@ -25809,7 +25820,7 @@ export class Autopilot {
         // this service; only another service creates another chance.
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':' + trip.nextService,
-          nextRoom: name === 'buy food' ? FOOD_SHOP.room : name === 'buy reagents' ? REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
+          nextRoom: name === 'buy food' ? FOOD_SHOPS[0].room : name === 'buy reagents' ? REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
           bankable: Math.max(0, this.purseNow() - Math.max(this.policy.walkingMoney ?? 400,
             this.shoppingPlan().required_purse ?? 0)),
         }, TITHE_FLEET);
@@ -26787,10 +26798,25 @@ export class Autopilot {
   // The food half of a town trip. Only worth the hop when there is actually a gap to
   // fill: vigor above the resting cap has to be EATEN, and everything below it comes
   // back for free by sitting down.
+  /** How far below its loadout's FOOD carry floors this character is, in units (0 when not). */
+  foodCarryShort() {
+    const pack = this.packAsItems();
+    let short = 0;
+    for (const e of this.loadout()?.carry ?? []) {
+      if (!(e.min > 0) || !FOOD_WORD.test(String(e.item))) continue;
+      const held = pack.filter(i => purchaseKey(i.name) === purchaseKey(e.item)).reduce((n, i) => n + (i.amount || 1), 0);
+      if (held < e.min) short += Math.max(e.min, Number(e.max) || 0) - held;
+    }
+    return short;
+  }
+
   async buyFoodInTown() {
     if (!purchaseEnabled(this.policy, 'food')) return;
     const s = this.s, c = s.need();
-    const want = this.purchaseFoodGap();
+    // A LOADOUT'S FOOD FLOOR OPENS THE TRIP TOO (the courier carries bread OUT to the crew: it is
+    // stock, not its own supper, and its own vigor gap may be zero). The counter already buys carry
+    // floors — shoppingPlan's restock lines — once the character is standing at one.
+    const want = Math.max(this.purchaseFoodGap(), this.foodCarryShort());
     if (want <= 0) return;
     const funded = await this.ensurePurchaseFunds(this.shoppingPlan({ kind: 'food' }));
     if (!funded.ready) return funded;
@@ -26811,18 +26837,25 @@ export class Autopilot {
     // So three attempts, which turns a coin toss into a near-certainty, and the failure
     // note now says how many were made — a note reading "could not reach" after one try
     // and after three are different facts about the world.
-    if (s.world?.room?.num !== FOOD_SHOP.room) {
+    // THE NEAREST ROUTABLE SHOP, then the next. Three attempts across them, as before.
+    const hops = shop => { try { const r = s.world?.route?.(shop.room); return r?.found ? (r.hops?.length ?? 99) : Infinity; } catch { return Infinity; } };
+    const shops = FOOD_SHOPS.map(sh => ({ ...sh, hops: hops(sh) })).filter(sh => Number.isFinite(sh.hops))
+      .sort((a, b) => a.hops - b.hops);
+    const atShop = () => FOOD_SHOPS.some(sh => sh.room === s.world?.room?.num);
+    const shopHere = () => FOOD_SHOPS.find(sh => sh.room === s.world?.room?.num) ?? FOOD_SHOP;
+    if (!atShop()) {
       let got = null;
-      for (let i = 0; i < 3 && s.world?.room?.num !== FOOD_SHOP.room; i++) {
+      for (let i = 0; i < 3 && !atShop() && shops.length; i++) {
         if (this.travelInterrupted() || this.suspendedJourney)
           return { pending: true, reason: 'paused for survival' };
-        got = await this.travel(FOOD_SHOP.room, { maxHops: 12 })
+        const target = shops[Math.min(i, shops.length - 1)];
+        got = await this.travel(target.room, { maxHops: 14 })
                         .catch(e => ({ arrived: false, reason: e.message }));
         if (got?.arrived) break;
       }
-      if (s.world?.room?.num !== FOOD_SHOP.room) {
+      if (!atShop()) {
         this.note('could not reach the bread shop', {
-          to: FOOD_SHOP.name, short_by: want, attempts: 3, why: got?.reason,
+          to: shops.map(sh => sh.name), short_by: want, attempts: 3, why: got?.reason ?? (shops.length ? null : 'no food shop is routable'),
           note: 'the route exists and the last hop is a door; three refusals in a row is ' +
                 'about this room rather than about the map' });
         return { pending: true, reason: got?.reason ?? 'bread shop journey still pending' };
@@ -26840,12 +26873,12 @@ export class Autopilot {
                         .catch(() => null);
     if (!pick) {
       this.note('nobody in the bread shop opened a food list', {
-      at: FOOD_SHOP.name, short_by: want,
+      at: shopHere().name, short_by: want,
       note: 'the room can hold more than one merchant and only one of them trades' });
       return { pending: true, reason: 'waiting for the food merchant' };
     }
     const got = await this.restockReagents(pick.seller).catch(e => ({ pending: true, reason: e.message }));
-    if (got?.length) this.note('bought food in town', { at: FOOD_SHOP.name, bought: got, was_short: want,
+    if (got?.length) this.note('bought food in town', { at: shopHere().name, bought: got, was_short: want,
                                                         from: c.rsc.get(pick.seller.nameRsc) });
     return got;
   }
