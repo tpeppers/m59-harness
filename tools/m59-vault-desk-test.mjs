@@ -92,6 +92,9 @@ function world() {
         const r = W.rows[a.agent];
         if (r.where === 'foyer') { W.mainDoor++; r.where = 'chests'; }
         if (r.where !== 'chests') return { ok: false, why: 'guild position is outside the known passage' };
+        if (Array.isArray(a.stash)) { W.stashedBy = [...(W.stashedBy ?? []), a.agent];
+          for (const o of [...W.packs[a.agent]]) if (!a.stash.some(k => o.name.includes(k))) {
+            W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         for (const d of a.deposit ?? []) { const o = W.packs[a.agent].find(x => `id:${x.id}` === d);
           if (o) { W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         const took = {}, short = {};
@@ -256,6 +259,28 @@ try {
     ok('the go-between is at the inn', W.rows.t2.room_num === INN);
     await d.endShift();
     ok('closing leaves nobody in the booth', W.rows.t3.where === 'chests');
+  }
+  section('shift_stash: both inside empty their packs to the kit; off by default');
+  {
+    const W = world();
+    W.rows.t2.room_num = HALL; W.rows.t2.position = { row: 18, col: 6 }; W.rows.t2.where = 'chests';
+    W.packs.t2 = [{ id: 70, name: 'herb', amount: 132 }, { id: 71, name: 'elderberry', amount: 96 }];
+    W.packs.t3.push({ id: 72, name: 'herb', amount: 250 }, { id: 73, name: 'shilling', amount: 1784 });
+    await deskFor(W).startShift();
+    ok('off by default: nothing stashed', !W.stashedBy);
+    const W2 = world();
+    W2.rows.t2.room_num = HALL; W2.rows.t2.position = { row: 18, col: 6 }; W2.rows.t2.where = 'chests';
+    W2.packs.t2 = [{ id: 70, name: 'herb', amount: 132 }, { id: 71, name: 'elderberry', amount: 96 }];
+    W2.packs.t3.push({ id: 72, name: 'herb', amount: 250 }, { id: 73, name: 'shilling', amount: 1784 });
+    W2.chests.elderberry = 0;
+    await deskFor(W2, { shift_stash: true }).startShift();
+    ok('both stashed', W2.stashedBy?.includes('t2') && W2.stashedBy?.includes('t3'), JSON.stringify(W2.stashedBy));
+    ok('herbs went in', W2.chests.herb === 382 && W2.count(W2.packs.t3, 'herb') === 0);
+    ok('money stayed', W2.count(W2.packs.t3, 'shilling') === 1784);
+    ok('the kit came back', W2.count(W2.packs.t3, 'elderberry') === 30 && W2.count(W2.packs.t2, 'elderberry') === 30,
+       `${W2.count(W2.packs.t3, 'elderberry')}/${W2.count(W2.packs.t2, 'elderberry')}`);
+    ok('manager at the booth, go-between at the inn', W2.rows.t3.where === 'booth' && W2.rows.t2.room_num === INN);
+    ok('the main door never opened', W2.mainDoor === 0);
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

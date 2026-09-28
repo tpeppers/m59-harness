@@ -462,6 +462,21 @@ export class VaultDesk {
       r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
     }
     if (r?.ok === false) throw new Error(`manager could not reach the booth: ${r.why}`);
+    // ROOM FOR CUSTOMERS: with shift_stash, whoever of the two is inside empties its pack into the
+    // chests and keeps only the kit. The go-between does it only if already inside — it never walks in
+    // for this. The manager does it from the chests and goes back to the booth.
+    if (this.cfg.shift_stash) {
+      const kit = Object.entries(this.cfg.shift_kit ?? {}).map(([item, amount]) => ({ item, amount }));
+      for (const agent of [this.G, this.M]) {
+        const row = await this.row(agent, true);
+        if (Number(row?.room_num) !== HALL) continue;
+        if (agent === this.M) await this.post('chests');
+        else if (row?.position && row.position.row <= 4 && row.position.col >= 26) continue;   // in the foyer: not inside
+        const s = await this.call('hall_withdraw', { agent, wants: kit, stash: ['shilling'] }, 620_000).catch(e => ({ ok: false, why: e.message }));
+        this.log(`  ${agent} emptied its pack into the chests: ${s?.ok === false ? `FAILED ${s.why}` : `stashed ${s?.stashed ?? '?'}`}`);
+        if (agent === this.M) await this.post('booth');
+      }
+    }
     if (!(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
     this.log(`desk open: ${this.names().manager} at the booth, ${this.names().go_between} at the Brownestone Inn`);
   }
@@ -515,7 +530,31 @@ if (isMain) {
   const argv = process.argv.slice(2);
   const has = n => argv.includes(`--${n}`);
   const BROKER = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901';
+  // hall_post is a KEEPER op; a broker started before it existed has no tool for it, so it goes to the
+  // keeper directly (the 2026-09-27 probe did the same).
+  const { discover, bandFor } = await import('./m59-keeperwhy.mjs');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const keeperAct = async (agent, name, args, ms) => {
+    const k = (await discover(bandFor('prod', root)))[agent];
+    if (!k) throw new Error(`no keeper for ${agent}`);
+    const r = await fetch(`http://127.0.0.1:${k.port}/action`, { method: 'POST', headers: { 'content-type': 'application/json',
+      'x-m59-agent': agent, 'x-m59-character': k.character, 'x-m59-keeper-pid': String(k.pid) },
+      body: JSON.stringify({ name, args, agent }), signal: AbortSignal.timeout(ms) });
+    return r.json();
+  };
+  let brokerHasHallPost = null;
   const call = async (name, args, ms = 60_000) => {
+    if (name === 'hall_post') {
+      if (brokerHasHallPost == null) {
+        const l = await (await fetch(BROKER.replace(/\/?$/, '/'), { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) })).json().catch(() => null);
+        brokerHasHallPost = !!l?.result?.tools?.some(t => t.name === 'hall_post');
+      }
+      if (!brokerHasHallPost) {
+        const r = await keeperAct(args.agent, 'hall_post', { where: args.where }, ms);
+        return r?.result ?? r;
+      }
+    }
     const r = await fetch(BROKER.replace(/\/?$/, '/'), { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
       signal: AbortSignal.timeout(ms) });

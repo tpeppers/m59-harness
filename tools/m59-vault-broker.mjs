@@ -60,6 +60,11 @@ export const DEFAULTS = Object.freeze({
   poll_ms: 3_000,
   practice: true,                             // cast practice spells between customers
   practice_keep: Object.freeze({ elderberry: 30, 'fairy wing': 10 }),   // re-drawn after a deposit
+  // AT THE START OF A SHIFT, a desk character standing inside puts its whole pack in the chests
+  // (worn gear and money stay) and draws back only this kit. Off by default: the two are somebody's
+  // disciples and their packs are their training stock. The manager needs keep_free of its pack empty.
+  shift_stash: false,
+  shift_kit: Object.freeze({ elderberry: 30, 'fairy wing': 10, 'loaf of bread': 5 }),
 });
 
 export const CONFIG_FILE = process.env.M59_VAULT_BROKER || here('../substrate/strategies/vault-broker.json');
