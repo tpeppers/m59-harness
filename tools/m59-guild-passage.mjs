@@ -307,17 +307,23 @@ async function crossCounter(k, westward, isInterrupted) {
 export async function hallPost(k, where, isInterrupted = () => false) {
   const c = k.s.need();
   const here = () => [c.self.row, c.self.col];
+  // A SHORT WALK SAYS SO. This answered {ok:false, at} with no reason, which the vault desk logged as
+  // "undefined" three times before closing (prod 2026-09-28 02:44, stopped at (3,21)).
+  const atBooth = () => (c.self.row === BOOTH[0] && c.self.col === BOOTH[1]
+    ? { ok: true, at: here() }
+    : { ok: false, at: here(), pocket: inBoothPocket(...here()),
+        why: `stopped at (${here().join(',')}), short of the booth (${BOOTH.join(',')})` });
   if (where === 'booth') {
     if (inBoothPocket(...here())) {
       await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
-      return { ok: c.self.row === BOOTH[0] && c.self.col === BOOTH[1], at: here() };
+      return atBooth();
     }
     const sec = guildSection(...here());
     if (sec < 1) return { ok: false, why: `refusing to reach the booth from section ${sec} (it would open the main door)`, at: here() };
     await guildPassage(k, 3, isInterrupted);
     await crossCounter(k, false, isInterrupted);
     await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
-    return { ok: c.self.row === BOOTH[0] && c.self.col === BOOTH[1], at: here() };
+    return atBooth();
   }
   if (where === 'chests' || where === 'inside') {
     if (inBoothPocket(...here())) await crossCounter(k, true, isInterrupted);
