@@ -300,7 +300,20 @@ export async function buyByName(agent, seller, lines = []) {
  * WALK TO A ROOM AND WAIT FOR IT; clear the journey on arrival. A background travel stays
  * registered after the body is there, and the next walk is refused "busy: walk to <here>".
  */
+// THIS PROCESS'S OWN WALKS, by agent -> until. A FleetScript holding the body re-takes a lease a
+// competing claimant took, and that take-back cancels "whatever the keeper started" — which, with
+// nothing to tell them apart, included the walk this module had just issued: 2026-09-27/28 two
+// provision riders drew their goods in the guild hall and then stood idle there for 30+ minutes,
+// every walk home cancelled within seconds by the lease beat (m59-fleetscript.mjs holdKeeper).
+export const ownWalks = () => (globalThis.__m59OwnWalks ??= new Map());
+
 export async function walkRoom(agent, to, { floor = 0, budgetMs = 15 * 60_000, tries = 3 } = {}) {
+  ownWalks().set(agent, Date.now() + budgetMs * tries + 60_000);
+  try { return await walkRoomInner(agent, to, { floor, budgetMs, tries }); }
+  finally { ownWalks().delete(agent); }
+}
+
+async function walkRoomInner(agent, to, { floor, budgetMs, tries }) {
   for (let i = 0; i < tries; i++) {
     await call('cancel_movement', { agent, why: `walking to ${to}` }, 30_000).catch(() => {});
     await call('travel', { agent, to, background: true, run_errands: false, health_floor: floor }, 60_000).catch(() => {});

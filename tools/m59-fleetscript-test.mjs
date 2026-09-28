@@ -2023,6 +2023,44 @@ console.log('\na take-back never cancels the errand\'s own walk');
   ok('the walk arrived', r.results.a1.ok === true, JSON.stringify(r.results.a1).slice(0, 200));
 }
 
+console.log('\na walk a helper module issued is the errand\'s own too');
+{
+  // 2026-09-28: provision's hallDraw walks home through m59-inventory walkRoom, which calls travel
+  // directly. The lease take-back did not know that walk and cancelled it every 30 s, and a rider
+  // stood idle in the guild hall for half an hour.
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 5, col: 5 } } });
+  const brokerFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    const url = String(u);
+    if (url.includes(':' + KEEPER_PORT + '/live'))
+      return { ok: true, json: async () => ({ agent: 'a1', character: 'Tester', pid: 4242 }) };
+    if (url.includes(':' + KEEPER_PORT + '/action')) {
+      const b = JSON.parse(o.body); calls.push({ n: b.name, at: Date.now() });
+      if (b.name === 'commander_heartbeat') return { ok: true, json: async () => ({ renewed: ['economy'] }) };
+      return { ok: true, json: async () => ({ faculties: { work: {}, movement: {}, economy: {} } }) };
+    }
+    if (url.includes(':' + KEEPER_PORT + '/cancel')) { calls.push({ n: 'cancel', at: Date.now() }); return { ok: true, json: async () => ({ cancelled: true }) }; }
+    if (/127\.0\.0\.1:19\d\d\d\//.test(url)) throw new Error('connection refused');
+    return brokerFetch(u, o);
+  };
+  let from = null, to = null;
+  const helperWalk = verify(async () => {
+    (globalThis.__m59OwnWalks ??= new Map()).set('a1', Date.now() + 60_000);   // what walkRoom does
+    from = Date.now(); await new Promise(res => setTimeout(res, 2500)); to = Date.now();
+    globalThis.__m59OwnWalks.delete('a1');
+    return true;
+  }, 'the helper walk');
+  await fleetScript({ name: 'helperwalk', fleet: 'testfleet', agents: ['a1'], steps: [helperWalk], onLog: quiet });
+  globalThis.fetch = realFetch;
+  const during = c => from != null && c.at > from && c.at <= (to ?? Date.now());
+  ok('the lease was still taken back during the helper\'s walk',
+     calls.some(c => c.n === 'commander_claim' && during(c)), JSON.stringify(calls.map(c => c.n)));
+  ok('and the helper\'s walk was never cancelled by it', !calls.some(c => c.n === 'cancel' && during(c)),
+     JSON.stringify(calls.map(c => c.n)));
+}
+
 console.log('\na keeper restarted mid-run is re-found, not addressed as a ghost');
 {
   // 2026-09-27: after a rolling keeper restart a disciple drill logged "could not cancel the

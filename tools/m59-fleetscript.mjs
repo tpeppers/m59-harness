@@ -2737,7 +2737,9 @@ export async function holdKeeper(ctx, agent, fleet) {
         faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
         why: `fleet errand: ${ctx.name} (lease lapsed, taken back)` }).catch(() => null);
       const got = Object.keys(again?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
-      const walking = own.walkUntil > Date.now();
+      // A walk issued by a helper module (m59-inventory walkRoom) counts as the errand's own too.
+      const walking = own.walkUntil > Date.now() ||
+        (globalThis.__m59OwnWalks?.get?.(agent) ?? 0) > Date.now();
       ctx.log(agent, `the lease had lapsed (renewed ${renewed.join(', ') || 'nothing'}) — ` +
                      (!got.length ? 'and the keeper would not give it back'
                        : walking ? `took ${got.join(', ')} back and left the errand's own walk running`
