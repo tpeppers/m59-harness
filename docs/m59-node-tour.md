@@ -3,7 +3,10 @@
 `mana-node-tour` connects room 2 → Upstairs in Castle Victoria (39) → Under the
 shadow of the Sentinel (589) → Ancient Place (579) → Badlands (45) → Icky Cave
 (27) → room 2. It uses ordinary travel, checked fine rails, declared falls and
-normal node activation. Administrative setup is confined to the separate
+normal node activation. The cave leg still uses the keeper's measured inferred
+fall, described in the [cave dossier](../.claude/skills/node-runner/nodes/cave.md),
+so this is an experimental shadow recipe, not a production movement promotion.
+Administrative setup is confined to the separate
 `mana-node-tour-shadow` lab recipe.
 
 Prepare the fine-rail dependency offline:
@@ -35,7 +38,7 @@ on loopback port 15959. It removes hostile bodies and disables generation in
 the itinerary rooms, heals only to the existing ceiling and places the clone
 in room 2 at the normal western arrival, r21c3, **before** starting. This also
 tests the room-2 approach from the point where the loop returns. It restores generation after the attempt and
-rescues to Familiars only after a failed route. A successful route ends in room
+rescues to Familiars after a failed route or partial debug replay. A complete successful route ends in room
 2. Quiet-scene evidence does not establish monster tolerance.
 
 `fromStep` and staging parameters on the lab recipe support a measured partial

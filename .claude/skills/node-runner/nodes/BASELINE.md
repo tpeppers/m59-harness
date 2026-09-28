@@ -1,5 +1,11 @@
 # The seven stones: what is missing from OUR MAP, per node
 
+> **Five-node circuit, 2026-09-28:** [the connected tour report](../../../../docs/reproductions/five-node-tour-2026-09-28.md)
+> records one complete quiet-scene room-2 → upstairs Victoria → Sentinel →
+> Ancient → Badlands → Icky Cave → room-2 run on `5e9572f`. All five returned
+> already bonded; start/end were r21c3 at 20/20 health and 65/65 mana. This is
+> one whole-loop rehearsal, not three-run repeatability or monster tolerance.
+
 > **2026-09-28 local-shadow follow-up:** see each node dossier and
 > [the four-stone measured report](../../../../docs/reproductions/four-mana-2026-09-28.md).
 > It records quiet-scene live repeats, exact fine positions, distinct meld replies,
