@@ -1,5 +1,5 @@
 {
- "builtAt": "2026-09-11T21:13:03.647Z",
+ "builtAt": "2026-09-28T02:54:57.280Z",
  "source": "compendium/data/koddb.json",
  "defaults": {
   "weight": 10,
@@ -8,8 +8,8 @@
  },
  "capacity_formula": "1700 + might * 20, for weight AND bulk (player.kod:10456, :10461)",
  "counts": {
-  "item_classes": 254,
-  "distinct_names": 249,
+  "item_classes": 285,
+  "distinct_names": 280,
   "used_defaults": 0,
   "foods": 22,
   "weapons": 21,
@@ -26,6 +26,19 @@
     "bulk": "FormulaScroll"
    },
    "also": []
+  },
+  "alembic of free action": {
+   "name": "alembic of free action",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "FreeActionPotion",
+   "declared_by": {
+    "weight": "FreeActionPotion",
+    "bulk": "FreeActionPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "ammunition": {
    "name": "ammunition",
@@ -70,6 +83,19 @@
     "bulk": "TotemFour"
    },
    "also": []
+  },
+  "anonymity potion": {
+   "name": "anonymity potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "AnonymityPotion",
+   "declared_by": {
+    "weight": "AnonymityPotion",
+    "bulk": "AnonymityPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "ant mask": {
    "name": "ant mask",
@@ -235,6 +261,19 @@
     "bulk": "Offering"
    },
    "also": []
+  },
+  "bottled avian eyesight": {
+   "name": "bottled avian eyesight",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "EagleEyesPotion",
+   "declared_by": {
+    "weight": "EagleEyesPotion",
+    "bulk": "EagleEyesPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "bow": {
    "name": "bow",
@@ -451,6 +490,32 @@
    },
    "also": []
   },
+  "cure disease potion": {
+   "name": "cure disease potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "CureDiseasePotion",
+   "declared_by": {
+    "weight": "CureDiseasePotion",
+    "bulk": "CureDiseasePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "cure poison potion": {
+   "name": "cure poison potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "CurePoisonPotion",
+   "declared_by": {
+    "weight": "CurePoisonPotion",
+    "bulk": "CurePoisonPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
   "daemon skeleton mask": {
    "name": "daemon skeleton mask",
    "weight": 10,
@@ -594,6 +659,32 @@
    },
    "also": []
   },
+  "elixir of cloaking": {
+   "name": "elixir of cloaking",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "CloakPotion",
+   "declared_by": {
+    "weight": "CloakPotion",
+    "bulk": "CloakPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "elixir of magic resistance": {
+   "name": "elixir of magic resistance",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistMagicPotion",
+   "declared_by": {
+    "weight": "ResistMagicPotion",
+    "bulk": "ResistMagicPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
   "emerald": {
    "name": "emerald",
    "weight": 1,
@@ -648,6 +739,19 @@
     "bulk": "RiijaCharm"
    },
    "also": []
+  },
+  "feline vitreous humour": {
+   "name": "feline vitreous humour",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "NightVisionPotion",
+   "declared_by": {
+    "weight": "NightVisionPotion",
+    "bulk": "NightVisionPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "fey mask": {
    "name": "fey mask",
@@ -797,6 +901,19 @@
     "bulk": "Item"
    },
    "also": []
+  },
+  "generic potion": {
+   "name": "generic potion",
+   "weight": 17,
+   "bulk": 20,
+   "cls": "Potion",
+   "declared_by": {
+    "weight": "Potion",
+    "bulk": "Potion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "generic scroll": {
    "name": "generic scroll",
@@ -1043,6 +1160,19 @@
     "bulk": "Token"
    },
    "also": []
+  },
+  "karahol's accursed elixir": {
+   "name": "Karahol's accursed elixir",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "KaraholsCursePotion",
+   "declared_by": {
+    "weight": "KaraholsCursePotion",
+    "bulk": "KaraholsCursePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "key": {
    "name": "key",
@@ -1552,6 +1682,97 @@
    },
    "also": []
   },
+  "possum potion": {
+   "name": "possum potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "FeignDeathPotion",
+   "declared_by": {
+    "weight": "FeignDeathPotion",
+    "bulk": "FeignDeathPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of acid resistance": {
+   "name": "potion of acid resistance",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistAcidPotion",
+   "declared_by": {
+    "weight": "ResistAcidPotion",
+    "bulk": "ResistAcidPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of cold resistance": {
+   "name": "potion of cold resistance",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistColdPotion",
+   "declared_by": {
+    "weight": "ResistColdPotion",
+    "bulk": "ResistColdPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of deflection": {
+   "name": "potion of deflection",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "DeflectPotion",
+   "declared_by": {
+    "weight": "DeflectPotion",
+    "bulk": "DeflectPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of deliverance": {
+   "name": "potion of deliverance",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "RescuePotion",
+   "declared_by": {
+    "weight": "RescuePotion",
+    "bulk": "RescuePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of denial": {
+   "name": "potion of denial",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "DenialPotion",
+   "declared_by": {
+    "weight": "DenialPotion",
+    "bulk": "DenialPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of evil detection": {
+   "name": "potion of evil detection",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "DetectEvilPotion",
+   "declared_by": {
+    "weight": "DetectEvilPotion",
+    "bulk": "DetectEvilPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
   "potion of forgetfulness": {
    "name": "potion of forgetfulness",
    "weight": 20,
@@ -1562,6 +1783,123 @@
     "bulk": "ForgetPotion"
    },
    "also": []
+  },
+  "potion of good detection": {
+   "name": "potion of good detection",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "DetectGoodPotion",
+   "declared_by": {
+    "weight": "DetectGoodPotion",
+    "bulk": "DetectGoodPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of haste": {
+   "name": "potion of haste",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "HastePotion",
+   "declared_by": {
+    "weight": "HastePotion",
+    "bulk": "HastePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of invisibility detection": {
+   "name": "potion of invisibility detection",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "DetectInvisibilityPotion",
+   "declared_by": {
+    "weight": "DetectInvisibilityPotion",
+    "bulk": "DetectInvisibilityPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of nonconductivity": {
+   "name": "potion of nonconductivity",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistShockPotion",
+   "declared_by": {
+    "weight": "ResistShockPotion",
+    "bulk": "ResistShockPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of poison resistance": {
+   "name": "potion of poison resistance",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistPoisonPotion",
+   "declared_by": {
+    "weight": "ResistPoisonPotion",
+    "bulk": "ResistPoisonPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of purification": {
+   "name": "potion of purification",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "PurifyPotion",
+   "declared_by": {
+    "weight": "PurifyPotion",
+    "bulk": "PurifyPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of shielding": {
+   "name": "potion of shielding",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "MagicShieldPotion",
+   "declared_by": {
+    "weight": "MagicShieldPotion",
+    "bulk": "MagicShieldPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion of super strength": {
+   "name": "potion of super strength",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "StrengthPotion",
+   "declared_by": {
+    "weight": "StrengthPotion",
+    "bulk": "StrengthPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
+  "potion": {
+   "name": "potion",
+   "weight": 17,
+   "bulk": 20,
+   "cls": "Potion",
+   "declared_by": {
+    "weight": "Potion",
+    "bulk": "Potion"
+   },
+   "also": [],
+   "unidentified": true,
+   "spoils_ms": 86400000
   },
   "practice bow": {
    "name": "practice bow",
@@ -1595,6 +1933,19 @@
     "bulk": "Prism"
    },
    "also": []
+  },
+  "pungent elixir": {
+   "name": "pungent elixir",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "NodeBurstPotion",
+   "declared_by": {
+    "weight": "NodeBurstPotion",
+    "bulk": "NodeBurstPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "purple mushroom": {
    "name": "purple mushroom",
@@ -1683,6 +2034,19 @@
     "bulk": "Scepter"
    },
    "also": []
+  },
+  "remove curse potion": {
+   "name": "remove curse potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "RemoveCursePotion",
+   "declared_by": {
+    "weight": "RemoveCursePotion",
+    "bulk": "RemoveCursePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "ring of acid resistance": {
    "name": "ring of acid resistance",
@@ -2079,6 +2443,19 @@
    "unidentified": true,
    "spoils_ms": 0
   },
+  "shadow form potion": {
+   "name": "shadow form potion",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ShadowFormPotion",
+   "declared_by": {
+    "weight": "ShadowFormPotion",
+    "bulk": "ShadowFormPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
   "shaman blood": {
    "name": "shaman blood",
    "weight": 4,
@@ -2360,6 +2737,19 @@
    },
    "also": []
   },
+  "succulent salve": {
+   "name": "succulent salve",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "ResistFirePotion",
+   "declared_by": {
+    "weight": "ResistFirePotion",
+    "bulk": "ResistFirePotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
+  },
   "sweat of the warrior king": {
    "name": "sweat of the warrior king",
    "weight": 25,
@@ -2425,6 +2815,19 @@
     "bulk": "ChickenSoup"
    },
    "also": []
+  },
+  "the widow qesino's secret sauce": {
+   "name": "The Widow Qesino's Secret Sauce",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "BaitPotion",
+   "declared_by": {
+    "weight": "BaitPotion",
+    "bulk": "BaitPotion"
+   },
+   "also": [],
+   "identified_label": true,
+   "spoils_ms": 86400000
   },
   "token": {
    "name": "Token",

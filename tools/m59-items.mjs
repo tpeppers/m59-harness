@@ -150,7 +150,7 @@ export function buildItemTable(koddbFile = KODDB) {
   // chain, read off the kod like everything else here.
   for (const cls of Object.values(classes)) {
     const chain = (cls.chain || []).map(x => String(x).toLowerCase());
-    if (!chain.includes('scroll') && !chain.includes('wand')) continue;
+    if (!chain.includes('scroll') && !chain.includes('wand') && !chain.includes('potion')) continue;
     const rsc = cls?.classvars?.vrLabelName?.rsc;
     const name = rsc?.kind === 'string' && typeof rsc.value === 'string' ? rsc.value.trim() : null;
     if (!name || byName.has(name.toLowerCase())) continue;
@@ -169,7 +169,10 @@ export function buildItemTable(koddbFile = KODDB) {
     });
   }
 
-  const GENERIC_UNIDENTIFIED = { scroll: 'scroll', wand: 'wand' };
+  // POTION TOO (2026-09-28): an unidentified potion is "potion" (potion.kod:24,75, weight 17/bulk 20
+  // at :54-55), and a hunter's pack holding one read "unweighable" and opened a market trip whatever
+  // it was worth — three in one hour, named once town_trip_opened carried the unweighed items.
+  const GENERIC_UNIDENTIFIED = { scroll: 'scroll', wand: 'wand', potion: 'potion' };
   for (const [clsKey, name] of Object.entries(GENERIC_UNIDENTIFIED)) {
     const cls = classes[clsKey];
     if (!cls || byName.has(name)) continue;
