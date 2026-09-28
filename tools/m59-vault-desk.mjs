@@ -631,7 +631,10 @@ export class VaultDesk {
     // 08:51: Pepe's 28 sapphire and 38 diamond went in with the stash, and this said "lost"). So a
     // desker's held ticket whose goods are gone since the shift began is done, not lost.
     if (!Object.keys(got).length) {
-      const stashed = [this.M, this.G].includes(t.held_by) && this.shiftStartedAt && (t.updated ?? t.at) < this.shiftStartedAt;
+      // ONLY IF A STASH ACTUALLY RAN FOR THAT DESKER THIS SHIFT. vb-262 was called "went in with the shift
+      // stash" when no stash had run for Pepe (he started outside the hall); his own keeper had sold the
+      // goods on a town trip between shifts. Anything else unaccounted for is `lost`, which is honest.
+      const stashed = (this.stashedAgents ?? new Set()).has(t.held_by) && (t.updated ?? t.at) < this.shiftStartedAt;
       return stashed
         ? this.close(t, 'done', 'went into the chests with the shift stash', { moved: t.holding, holding: null })
         : this.close(t, 'lost', `${t.held_by} no longer carries what it held`, { holding: null });
@@ -682,6 +685,7 @@ export class VaultDesk {
         const s = await this.call('hall_withdraw', { agent, wants: [], stash: ['shilling'] }, 620_000).catch(e => ({ ok: false, why: e.message }));
         const d = await this.call('hall_withdraw', { agent, wants: kit, deposit: [...(this.cfg.shift_deposit ?? [])] }, 620_000)
           .catch(e => ({ ok: false, why: e.message }));
+        if (s?.ok !== false) (this.stashedAgents ??= new Set()).add(agent);
         this.log(`  ${agent} emptied its pack into the chests: ${s?.ok === false ? `stash FAILED ${s.why}` : `stashed ${s?.stashed ?? '?'}`}; ` +
                  `${d?.ok === false ? `deposit FAILED ${d.why}` : `protected reagents in, kit back ${JSON.stringify(d?.took ?? {})}`}`);
       }
