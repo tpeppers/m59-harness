@@ -6,7 +6,7 @@
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
          rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint, budgetForTimeout, aimOrBoard, MIN_AIM,
-         enforceAimFloor } from './m59-railfollow.mjs';
+         enforceAimFloor, unexpectedFall, landingCheck, quantizeRailPoint } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -432,5 +432,24 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
   ok(custom.dist >= 384, 'the floor is a parameter, not a constant baked into the caller');
 }
 
+ok(!unexpectedFall(8000,5248,5248),'planned drop onto requested shelf is not a fall');
+ok(unexpectedFall(8640,3520,8640),'Ancient valley fall is caught');
+ok(!unexpectedFall(6208,6560,7264),'an ascending intermediate tread is not a fall');
+ok(!unexpectedFall(null,3520,8640),'unknown previous floor is not invented');
+ok(!landingCheck({x:30736,y:38432},{x:30480,y:38384},{floor:8000,wantedFloor:8000}).ok,
+  'Ancient jump 2 on the correct shelf but 260 units short is not verified');
+ok(!landingCheck({x:30480,y:38384},{x:30480,y:38384},{floor:3520,wantedFloor:8000}).ok,
+  'exact x/y on wrong shelf is not a landing');
+ok(landingCheck({x:30480,y:38384},{x:30480,y:38384},{floor:8000,wantedFloor:8000}).ok,
+  'server at exact fine landing and floor verifies even when reply is pessimistic');
+{
+  // Actual Ancient leg 3 waypoint 20. Rounding (34327,36038) to the wire gave
+  // (34320,36032), floor 3392 instead of 7360: holdShelf then allowed the descent.
+  const p={x:34327,y:36038};
+  const q=quantizeRailPoint(p,{floorAt:(x,y)=>y<=36032?3392:7360,edge:()=>true});
+  ok(q.ok&&q.client.y>36032,'wire quantization stays on the waypoint shelf');
+  eq(q.floor,7360,'the actual encoded point has the intended floor');
+  ok(!quantizeRailPoint(p,{floorAt:()=>7360,edge:()=>false}).ok,'untraceable rounding refuses');
+}
 console.log(`\nm59-railfollow: ${pass} assertion(s) passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

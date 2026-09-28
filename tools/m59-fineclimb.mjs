@@ -50,14 +50,16 @@
 // It moves a character. It refuses a game server that is not loopback, on the roster, for the
 // same reason every other tool here does.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
-import { distanceToRail } from './m59-railfollow.mjs';
+import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint } from './m59-railfollow.mjs';
+import { exactFloor } from './m59-noderails.mjs';
+import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -69,7 +71,7 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'rail', 'exit', 'direction', 'rail-file', 'board-within']);
+                       'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -149,8 +151,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // mover dutifully set off toward it: a character standing ON the first waypoint was walked
 // 6.9 squares away from it in three seconds, and the follower called that "came off". It had
 // not come off; it had been sent somewhere else.
-const toClient = v => (v - 64) * 16;      // kod protocol -> client fine
-const toProto  = v => v / 16 + 64;        // client fine -> kod protocol
+const toClient = v => protocolToClient({x:v,y:v}).x;
+const toProto = v => clientToProtocol({x:v,y:v}).x;
+const receipt = data => { if(flag('receipt')) appendFileSync(flag('receipt'), JSON.stringify({at:new Date().toISOString(),...data})+'\n'); };
 
 function call(name, args, ms = 120000) {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
@@ -226,6 +229,7 @@ if (RAIL && Number(RAIL.room) !== ROOM) {
 // r37c34 means the 7040 shelf. Planning from the shelf for a body in the valley produces a
 // route it cannot take a single step of. `look` gives x/y in kod PROTOCOL units.
 const R = fineRouter(ROOM);
+const bodyFloor = exactFloor(R.geo);
 const fromPt = (at0.x != null && at0.y != null)
   ? { row: at0.row, col: at0.col, x: toClient(at0.x), y: toClient(at0.y) }
   : { row: at0.row, col: at0.col };
@@ -275,7 +279,7 @@ if (RAIL && !DRY) {
     process.exit(2);
   }
   const here = { x: toClient(at0.x), y: toClient(at0.y) };
-  const d = distanceToRail(first, here, { floor: R.floorAt(here.x, here.y) });
+  const d = distanceToRail(first, here, { floor: bodyFloor(here.x, here.y) });
   if (!(d.d <= BOARD * F)) {
     console.log(`not on the rail: ${(d.d / F).toFixed(1)} square(s) from it ` +
                 `(nearest segment ${d.i}, shelf ${d.onShelf === false ? 'DIFFERENT' : 'same'}, ` +
@@ -330,7 +334,7 @@ await call('cancel_movement', { agent: AGENT }, 20000).catch(() => null);
 const t0 = Date.now();
 let came_off = null, pos = at0, hops = 0;
 // The body's own floor, one waypoint ago — see the fall test below.
-let lastFloor = (at0?.x != null) ? R.floorAt(toClient(at0.x), toClient(at0.y)) : null;
+let lastFloor = (at0?.x != null) ? bodyFloor(toClient(at0.x), toClient(at0.y)) : null;
 outer:
 for (const [li, leg] of plan.legs.entries()) {
   if (leg.kind === 'jump') {
@@ -343,14 +347,21 @@ for (const [li, leg] of plan.legs.entries()) {
     // 640 client units and two thirds of a square, so a line-up "arrives" while still a
     // square and a half out.
     const aim = leg.declared_from ?? leg.fromFine;
-    for (let k = 0; k < 30; k++) {
+    let aligned = false, previousDistance = Infinity, refusals = 0;
+    for (let k = 0; k < 8; k++) {
       const q = await look();
       if (q?._error || q?.room !== ROOM) break;
-      if (Math.hypot(toClient(q.x) - aim.x, toClient(q.y) - aim.y) < 110) break;
-      await call('walk_to', { agent: AGENT, x: toProto(aim.x), y: toProto(aim.y),
-                              max_steps: 8, stride: 8, arrive_within: 6,
-                              hold_shelf: k < 6 }, 60000).catch(() => null);
+      const distance = Math.hypot(toClient(q.x) - aim.x, toClient(q.y) - aim.y);
+      if (distance < 110) { aligned = true; break; }
+      if (distance >= previousDistance - 16) refusals++; else refusals = 0;
+      if (refusals >= 2) break;
+      previousDistance = distance;
+      const alignment = await call('walk_to', { agent: AGENT, x: toProto(aim.x), y: toProto(aim.y),
+                              max_steps: 8, stride: 8, arrive_within: 3,
+                              hold_shelf: true }, 60000).catch(() => null);
+      receipt({kind:'alignment',leg:li+1,aim,body:q,reply:alignment});
     }
+    if (!aligned) { came_off = { leg:li+1, kind:'alignment', why:'takeoff_not_reached', aim, actual:await look() }; receipt(came_off); console.log(JSON.stringify(came_off)); break; }
     const j = await call('jump', { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
     // A FALL IS CONFIRMED BY THE SERVER, NOT BY THE REPLY. The mover answers `predicted: true`
     // and usually `geometry_blocked` — our local trace refuses what the client does anyway —
@@ -360,7 +371,11 @@ for (const [li, leg] of plan.legs.entries()) {
     // which is how it ended in the gully.
     await sleep(3000);
     pos = await look();
-    const ok = j?.jumped === true;
+    const target = leg.declared_to ?? leg.toFine;
+    const landedPoint = pos.x == null ? null : protocolToClient(pos);
+    const landing = landingCheck(landedPoint,target,{floor:landedPoint ? bodyFloor(landedPoint.x,landedPoint.y):null,wantedFloor:bodyFloor(target.x,target.y)});
+    const ok = pos.room === ROOM && landing.ok;
+    receipt({kind:'jump',leg:li+1,target,body:pos,landing,reply:j});
     console.log(`  leg ${li + 1}  JUMP r${leg.from.row}c${leg.from.col} -> r${leg.to.row}c${leg.to.col}  ` +
                 `${ok ? 'JUMPED' : 'REFUSED'}  now r${pos.row}c${pos.col} hp ${pos.hp}` +
                 (ok ? '' : `\n           ${j?._error ?? j?.reason ?? JSON.stringify(j).slice(0, 200)}`));
@@ -382,21 +397,27 @@ for (const [li, leg] of plan.legs.entries()) {
     // side, because the very next waypoint is measured against where the body actually is.
     {
       const lx = pos?.x != null ? toClient(pos.x) : null;
-      const landed = lx == null ? null : R.floorAt(lx, toClient(pos.y));
+      const landed = lx == null ? null : bodyFloor(lx, toClient(pos.y));
       if (landed != null) lastFloor = landed;
     }
     continue;
   }
   for (const [wi, wp] of leg.waypoints.entries()) {
-    const w = await call('walk_to', { agent: AGENT, x: toProto(wp.x), y: toProto(wp.y),
+    const wire = quantizeRailPoint(wp,{floorAt:bodyFloor,edge:(a,b)=>R.geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
+    if(!wire.ok){came_off={leg:li+1,waypoint:wi+1,why:wire.reason,asked:wp};receipt(came_off);console.log(JSON.stringify(came_off));break outer;}
+    const w = await call('walk_to', { agent: AGENT, ...wire.protocol,
                                       max_steps: STEPS, stride: STRIDE,
-                                      hold_shelf: true }, 60000);
+                                      arrive_within: 3, hold_shelf: true }, 60000);
+    receipt({kind:'walk',leg:li+1,waypoint:wi+1,aim:wp,wire,reply:w});
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
     const p = w?.position;
-    const cx = p?.x != null ? toClient(p.x) : null, cy = p?.y != null ? toClient(p.y) : null;
-    if (cx == null) { pos = await look(); }
-    else pos = { room: pos.room, row: p.row, col: p.col, x: cx, y: cy, hp: pos.hp };
+    if (p?.x == null || p?.y == null) pos = await look();
+    else pos = { room: pos.room, row: p.row, col: p.col, x:p.x, y:p.y, hp: pos.hp };
+    const cx = pos?.x != null ? toClient(pos.x) : null, cy = pos?.y != null ? toClient(pos.y) : null;
+    if(cx == null || cy == null || pos.room !== ROOM){
+      came_off={leg:li+1,waypoint:wi+1,why:'position_unreadable_or_left_room',got:pos};break outer;
+    }
     if (w?._error) {
       console.log(`  leg ${li + 1}  waypoint ${wi + 1}/${leg.waypoints.length}: ${w._error}`);
       came_off = { leg: li + 1, waypoint: wi + 1, why: w._error }; break outer;
@@ -412,8 +433,8 @@ for (const [li, leg] of plan.legs.entries()) {
     // So the check is both: how far, and WHICH SHELF. A body more than one step-height off
     // its waypoint's floor is not near it in any sense that matters.
     let off = (cx == null) ? 0 : Math.hypot(cx - wp.x, cy - wp.y) / F;
-    let hBody = cx == null ? null : R.floorAt(cx, cy);
-    const hWant = R.floorAt(wp.x, wp.y);
+    let hBody = cx == null ? null : bodyFloor(cx, cy);
+    const hWant = bodyFloor(wp.x, wp.y);
 
     // BLOCKED BY SOMETHING STANDING THERE? GO ROUND IT IN THE AIR.
     //
@@ -426,14 +447,14 @@ for (const [li, leg] of plan.legs.entries()) {
     // declaration; `short_hop` enforces exactly that and refuses anything bigger. It is tried
     // only when the ordinary walk has stopped making ground — never as the first move — so a
     // climb that is walking fine never leaves the floor.
-    if (!w?.arrived && off > 0.9 && hWant != null) {
+    if (!has('no-hop') && !w?.arrived && off > 0.9 && hWant != null) {
       const hop = await call('short_hop', { agent: AGENT, to_row: wp.row, to_col: wp.col,
                                             x: toProto(wp.x), y: toProto(wp.y) }, 60000);
       if (hop?.hopped) {
         pos = await look();
         const nx = pos?.x != null ? toClient(pos.x) : null, ny = pos?.y != null ? toClient(pos.y) : null;
         off = nx == null ? off : Math.hypot(nx - wp.x, ny - wp.y) / F;
-        hBody = nx == null ? hBody : R.floorAt(nx, ny);
+        hBody = nx == null ? hBody : bodyFloor(nx, ny);
         hops++;
         console.log(`  leg ${li + 1}  hopped past a block at waypoint ${wi + 1}: ` +
                     `${hop.span_squares} squares, floor ${hop.from_floor} -> ${hop.landed_floor}`);
@@ -454,7 +475,7 @@ for (const [li, leg] of plan.legs.entries()) {
     //
     // Against the body's own last floor, a tread reads as the climb it is and only a real drop
     // — the gully is thousands below the shelf — trips it.
-    const fell = hBody != null && lastFloor != null && lastFloor - hBody > 1000;
+    const fell = unexpectedFall(lastFloor,hBody,hWant);
     void hWant;
     if (fell) {
       console.log(`  leg ${li + 1}  FELL OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
@@ -479,6 +500,7 @@ for (const [li, leg] of plan.legs.entries()) {
 
 const end = await look();
 const arrived = end.room === ROOM && Math.abs(end.row - toRow) < 3 && Math.abs(end.col - toCol) < 3;
+receipt({kind:'outcome',arrived,came_off,end});
 console.log('');
 console.log(`${arrived ? 'ARRIVED' : 'did not arrive'} — r${end.row}c${end.col} in room ${end.room}, ` +
             `hp ${end.hp}, ${Math.round((Date.now() - t0) / 1000)}s` +

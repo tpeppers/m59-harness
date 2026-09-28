@@ -1,5 +1,39 @@
 # badlands — NODE_BADLANDS, room 45, stone at r63c46
 
+## 2026-09-28 update — read before the older conclusions below
+
+The mesa is **not proved impossible**. Exact-endpoint floods from client
+(53856,992), checked at 128 and 64 units, reach the stone's square on floor 4096.
+The 64-unit search needs a cap above 400,000: it visits 1,031,495 points.
+The imported candidate has 4,599 dense points, 361 driving aims, and all 4,598
+edges validate with no skipped spans. This is an offline candidate, not live success.
+
+The strict edge predicate matters. The old lattice helper accepted any moved
+trace, including a slide that never reached the requested vertex. Measured at
+room 45 wall 700: client (15776,18336)/2048 toward (16032,18272)/2432 slides
+onto 1664. `m59-ground` now requires `arrived === true`; `m59-ground-test` keeps
+the partial-slide regression. `badlands-wall700.json` retains the exact trace.
+
+Reusable generation:
+
+```powershell
+node tools/m59-ground.mjs --room 45 --flood --from-client 53856,992 --to r63c46 --lattice 64 > flood.json
+node tools/m59-node-rail-import.mjs flood.json badlands rail.json
+```
+
+The `node-trial` FleetScript's `badlands-canyon` recipe first cuts a fresh rail
+from the body's actual position in room 49 to client (19488,26656), floor 6016.
+It validates the cut, dry-runs the follower, follows with `hold_shelf`, crosses
+normally into 45, then follows the strict room-45 candidate. Setup, route and
+administrative rescue are separate receipts. The initial documented test shelf
+is r22c11, client (10752,22016), floor 3840. Never treat r25c17 alone as proof
+of arrival on the upper shelf.
+
+Evidence lives under ignored `substrate/node-attempts/20260928/`; inspect the
+ledger for the live outcome. No escape or meld claim follows from the bake.
+
+## Historical attempts (superseded where the update above differs)
+
 **BLOCKED, and the operator has said it is not reachable with the current mover.** Two rooms
 share the name "The Badlands"; **45** has the node, 615 does not.
 
