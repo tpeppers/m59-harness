@@ -99,18 +99,16 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // How long the server waits for the traveller to show up, and then for the cup to hit
   // the floor, before giving up on that ticket.
   serve_ms: 90_000,
-  // A CUP LEFT ON THE FLOOR THIS LONG IS PICKED UP by the holder or alternate standing beside it,
-  // whatever ride it remembers (operator, 2026-09-27: "Keep the chalice off the floor in room2, it
-  // should only ever be dropped very briefly"). Longer than an ordinary pickup (p90 14.5s, max 52s
-  // over 100 rides that day), so the server that owns the ride gets there first.
-  floor_grace_ms: 30_000,
-  // BUT A CUP THAT LEFT OUR OWN PACK MOMENTS AGO WAS PUT THERE ON PURPOSE. A fleetscript hand-off
-  // (m59-inventory cupRide) makes the holder drop it for a rider to pick up, through the broker, in a
-  // step this keeper never hears about. On 2026-09-27 at 22:54Z the sweep re-lifted exactly such a
-  // cup after 31 s and the rider's grab found nothing. So when the cup was in this pack within this
-  // long, the sweep waits this long instead: the rider takes it first, and a cup truly abandoned
-  // is still off the floor within minutes, not the forty it once lay there.
-  handoff_grace_ms: 180_000,
+  // A CUP ON THE FLOOR IS PICKED UP AT ONCE, by whoever the duty record says (operator,
+  // 2026-09-28: "grab it from the ground immediately if someone sees it, especially if any
+  // non-fleet players are in the room ... Other players can steal it"). See sweepVerdict.
+  // A fleet character who is NOT on duty waits this long for the holder or alternate standing
+  // beside it, and then takes it anyway: the duty character may be stuck.
+  floor_grace_ms: 4_000,
+  // A REGISTERED HAND-OFF (ChaliceStore.setHandoff): only its rider may lift the cup, for this
+  // long after it was registered. After that the cup is anybody's to keep safe. A stranger in the
+  // room overrides it at once.
+  handoff_ttl_ms: 20_000,
   // THE TIP. Offered after the cup arrives, only out of money the trip does not need.
   tip_amount: 300,
   tip_min: 50,
@@ -220,7 +218,7 @@ export const HUMAN_FRESH_MS = 90_000;
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
-  floor_grace_ms: [100, 600_000], handoff_grace_ms: [100, 1_800_000],
+  floor_grace_ms: [0, 600_000], handoff_ttl_ms: [1_000, 120_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
   restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
@@ -468,6 +466,34 @@ export function castsAbove(have, reagents, floor = {}) {
 }
 
 /** 'holder', 'alternate' or 'traveller'. Everybody not named is a traveller. */
+/**
+ * WHO PICKS UP A CUP LYING ON THE FLOOR, AND WHEN. Pure. Asked by every fleet keeper that sees it.
+ *
+ *   1. A stranger in the room: anyone of ours takes it NOW, even mid-hand-off. A ride can be
+ *      redone; a stolen cup cannot.
+ *   2. A live registered hand-off: its rider alone takes it; everyone else leaves it.
+ *   3. Otherwise the holder takes it, else the alternate, else any fleet character. One who is
+ *      not on duty waits `floor_grace_ms` for a holder or alternate standing in the room.
+ *
+ * `fleetHere`: names of our characters in the room, not counting `me`.
+ * Returns { grab, why }.
+ */
+export function sweepVerdict({ me, cfg, handoff = null, fleetHere = [], strangers = 0, lyingMs = 0 } = {}) {
+  if (strangers > 0) return { grab: true, why: `${strangers} stranger(s) in the room` };
+  if (handoff?.rider) return sameName(handoff.rider, me)
+    ? { grab: true, why: 'the registered rider' }
+    : { grab: false, why: `handed to ${handoff.rider}` };
+  if (sameName(me, cfg?.holder)) return { grab: true, why: 'the holder' };
+  const here = n => n && fleetHere.some(x => sameName(x, n));
+  const wait = cfg?.floor_grace_ms ?? CHALICE_DEFAULTS.floor_grace_ms;
+  if (here(cfg?.holder)) return lyingMs >= wait
+    ? { grab: true, why: 'the holder is here and has not taken it' } : { grab: false, why: 'the holder is here' };
+  if (sameName(me, cfg?.alternate)) return { grab: true, why: 'the alternate' };
+  if (here(cfg?.alternate)) return lyingMs >= wait
+    ? { grab: true, why: 'the alternate is here and has not taken it' } : { grab: false, why: 'the alternate is here' };
+  return { grab: true, why: 'nobody on duty is here' };
+}
+
 export function roleOf(character, cfg) {
   if (!cfg?.enabled || !character) return null;
   if (sameName(character, cfg.holder)) return 'holder';
@@ -540,6 +566,17 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
 }
 
 /** Who is carrying the cup and serving, per the duty record. null when nobody is. */
+/**
+ * THE ACTING DESK: a fleet character who picked the cup up while nobody on duty was at the desk,
+ * and runs it (as the alternate does) until the holder is back and takes the cup (operator,
+ * 2026-09-28). Registered on the duty record as `acting`; live only while that character is
+ * still the one with the cup. Returns the name, or null.
+ */
+export function actingDesk(duty) {
+  const d = duty ?? {};
+  return d.acting && !d.lost && sameName(d.acting, d.with) ? d.acting : null;
+}
+
 export function servingCharacter(duty, cfg, now = Date.now(), humans = null) {
   return servingDesk(duty, cfg, now, humans)?.server ?? null;
 }
@@ -567,7 +604,7 @@ export function servingDesk(duty, cfg, now = Date.now(), humans = null) {
   if (d.paused) return null;                         // its body is somebody else's right now
   // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
   if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
-  return { server: d.with, human: false };
+  return { server: d.with, human: false, ...(actingDesk(d) ? { acting: true } : {}) };
 }
 
 /** Whoever should receive the holder's restock: the server on duty, else the holder. */
@@ -865,6 +902,23 @@ export class ChaliceStore {
 
   // ---- duty
   duty() { return this.read().duty ?? {}; }
+
+  // ---- a hand-off in flight: who alone may lift the cup off the floor, and until when.
+  // REGISTERED, NOT INFERRED: whoever drops the cup for somebody says so here FIRST, so every
+  // keeper that sees it lying there knows whether to take it or leave it for the rider.
+  handoff(now = Date.now()) {
+    const h = this.read().handoff;
+    return h && Number(h.expires) > now ? { ...h } : null;
+  }
+
+  setHandoff({ rider, by = null, why = null, ttlMs = CHALICE_DEFAULTS.handoff_ttl_ms } = {}, now = Date.now()) {
+    return this.update(s => { s.handoff = { rider, by, why, since: now, expires: now + ttlMs }; return { ...s.handoff }; }, now);
+  }
+
+  /** Clears the hand-off; with `rider`, only if it is still that rider's. */
+  clearHandoff(rider = null, now = Date.now()) {
+    return this.update(s => { if (!rider || sameName(s.handoff?.rider, rider)) s.handoff = null; return null; }, now);
+  }
 
   setDuty(patch, now = Date.now()) {
     return this.update(s => { s.duty = { ...s.duty, ...patch, seen_at: now }; return { ...s.duty }; }, now);

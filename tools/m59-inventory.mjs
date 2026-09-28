@@ -28,6 +28,8 @@
 import { call, observe, verify, foodIn, REAGENT_RE } from './m59-fleetscript.mjs';
 import { weighItem } from './m59-items.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { chaliceStoreFor } from './m59-chalice.mjs';
+import { titheFleet } from './m59-tithe.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const lower = s => String(s ?? '').toLowerCase().trim();
@@ -328,6 +330,17 @@ export const rideCup = fn => { const p = CUP.then(fn, fn); CUP = p.catch(() => {
  *   - IF THE RIDER CANNOT LIFT IT, THE HOLDER TAKES IT BACK, or it lies there for every later rider.
  * Call inside rideCup(). Returns {ok, why?, cupBack}.
  */
+// EVERY DROP OF THE CUP IS REGISTERED FIRST (ChaliceStore.setHandoff), so the keepers that see it
+// lying there leave it for `rider` instead of grabbing it (operator, 2026-09-28: every fleet keeper
+// grabs a loose cup at once). Before this, the holder's keeper swept up a cup dropped here for the
+// rider (2026-09-27 22:54Z) and the ride failed. Never throws: a ride without a register only risks
+// the cup being lifted by one of ours, which is recoverable.
+const CUP_HANDOFF_MS = 30_000;
+const registerHandoff = (rider, by, why) => {
+  try { chaliceStoreFor({ fleet: titheFleet() }).setHandoff({ rider, by, why, ttlMs: CUP_HANDOFF_MS }); } catch {}
+};
+const clearHandoff = rider => { try { chaliceStoreFor({ fleet: titheFleet() }).clearHandoff(rider); } catch {} };
+
 export async function cupRide(rider, holder, { hall = 714, waitMs = 5 * 60_000 } = {}) {
   // THE CUP IS HANDED ACROSS A FLOOR, SO BOTH MUST BE STANDING ON IT. On the 2026-09-25 rehearsal
   // the holder had been walked off to another map; it dropped the cup there and two riders in the
@@ -339,20 +352,25 @@ export async function cupRide(rider, holder, { hall = 714, waitMs = 5 * 60_000 }
   while (hr !== rr && Date.now() < meetBy) { await sleep(5000); hr = await roomOf(holder); rr = await roomOf(rider); }
   if (hr !== rr) return { ok: false, why: `${holder} (the cup) is in room ${hr} and ${rider} in room ${rr} — the cup is not dropped` };
   const cup = (await freshItems(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
+  registerHandoff(rider, holder, 'cupRide');
   if (!cup) {
     const floor = ((await freshLook(holder))?.objects ?? []).find(o => /chalice/i.test(String(o.name ?? '')));
     if (!floor) return { ok: false, why: `${holder} is not carrying the chalice, and none lies in its room` };
   } else await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
   if (!(await grabFromFloor(rider, /chalice/i))) {
+    registerHandoff(holder, rider, 'cupRide: the rider could not lift it');
     const back = await grabFromFloor(holder, /chalice/i);
+    if (back) clearHandoff(holder);
     return { ok: false, why: `${rider} could not pick the cup up after ${holder} dropped it` + (back ? '' : ' — AND the holder could not take it back') };
   }
   const mine = (await freshItems(rider)).find(i => /chalice/i.test(String(i.name ?? '')));
   await call('rest', { agent: rider, stand: true }, 30_000).catch(() => {});
   await call('act', { agent: rider, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
   await sleep(1500);
+  registerHandoff(holder, rider, 'cupRide: drunk');
   await call('act', { agent: rider, verb: 'drop', target: mine.id }, 60_000).catch(() => {});
   const cupBack = await grabFromFloor(holder, /chalice/i);
+  if (cupBack) clearHandoff(holder);
   const until = Date.now() + 60_000;
   while (Date.now() < until) {
     if (Number((await observe(rider)).room) === Number(hall)) return { ok: true, cupBack };

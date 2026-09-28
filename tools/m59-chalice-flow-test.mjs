@@ -987,59 +987,115 @@ try {
   }
 
   // Operator, 2026-09-27: "Keep the chalice off the floor in room2, it should only ever be dropped
-  // very briefly." On prod the cup lay in room 2 for 43 minutes after a keeper roll restarted the
-  // alternate between a traveller's drink and its pickup: the new process had no ride open, so it
-  // never looked at the floor.
-  section('a cup left on the floor is swept up by the server beside it, with no ride open');
-  {
+  // very briefly." Then 2026-09-28: "grab it from the ground immediately if someone sees it,
+  // especially if any non-fleet players are in the room ... Other players can steal it." And:
+  // whoever picks it up runs the desk until the holder is back, then returns it.
+  const guardWorld = (ns, extra = {}) => {
     const world = makeWorld();
-    const store = new ChaliceStore({ directory: dir, namespace: 'sweep' });
+    const store = new ChaliceStore({ directory: dir, namespace: ns });
     const cfg = normalizeChalice({ holder: 'Loial the Ogier', alternate: 'Rizzo', station_room: 2,
-      post_room: 2, floor_grace_ms: 150 });
-    store.setDuty({ with: 'Rizzo', holder_away: true });
-    const rizzoP = world.add('Rizzo', { room: 2 });
-    world.floor.set(2, [world.item('chalice of the rain')]);
-    const rizzo = keeper(world, rizzoP, { cfg, store });
-    rizzo.chaliceMakeRoom = async () => {};
-    await rizzo.chaliceDuty();
-    ok(!has(world, rizzoP, /chalice/i), 'not inside the grace: the server that owns the ride goes first');
-    const swept = await runUntil(() => has(world, rizzoP, /chalice/i), [async () => { await rizzo.chaliceDuty(); }],
-      { limit: 40, pause: 20 });
-    ok(swept, 'after the grace it is picked up');
-    ok((world.floor.get(2) ?? []).length === 0, 'the floor is clear');
-    ok(rizzo.events.some(e => e.what === 'swept' && e.room === 2), 'on the ledger as swept');
-    ok(store.duty()?.with === 'Rizzo' && store.duty()?.lost === false, 'and the duty record says who has it');
+      post_room: 2, floor_grace_ms: 150, ...extra });
+    const k = (name, room = 2) => {
+      const P = world.add(name, { room });
+      const ap = keeper(world, P, { cfg, store });
+      ap.chaliceMakeRoom = async () => {};
+      return { P, ap };
+    };
+    const cupDown = (room = 2) => world.floor.set(room, [world.item('chalice of the rain')]);
+    return { world, store, cfg, k, cupDown };
+  };
 
-    // A cup somewhere else is somebody else's floor: nothing is walked to.
-    const loialP = world.add('Loial the Ogier', { room: 38 });
-    world.floor.set(2, [world.item('chalice of the rain')]);
-    const loial = keeper(world, loialP, { cfg, store });
-    loial.chaliceMakeRoom = async () => {};
-    loial.chaliceStep = async () => false;
-    loial.chaliceNextJob = () => null;
-    for (let i = 0; i < 10; i++) { await loial.chaliceSweep(cfg, store, 'Loial the Ogier', Date.now() + 10_000); }
-    ok(!has(world, loialP, /chalice/i), 'a server in another room does not sweep it');
+  section('a loose cup: the holder beside it takes it at once, with no ride open and no grace');
+  {
+    const { world, store, k, cupDown } = guardWorld('g-holder');
+    const L = k('Loial the Ogier'), G = k('Gonzo');
+    cupDown();
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i), 'a farmer beside the holder leaves it to the holder');
+    await L.ap.chaliceGuard();
+    ok(has(world, L.P, /chalice/i), 'the holder takes it on its first look');
+    ok(L.ap.events.some(e => e.what === 'swept' && e.why === 'the holder' && e.strangers === 0), 'ledgered as swept, with why');
+    ok(store.duty()?.with === 'Loial the Ogier', 'and the duty record says who has it');
   }
 
-  // 2026-09-27 22:54Z: provision's cupRide made t19 drop the cup for t1, and the sweep re-lifted it
-  // at 31 s, before t1's grab. A cup that left this keeper's own pack moments ago was handed off.
-  section('a cup the holder just handed off is left for the rider, not swept back');
+  section('a loose cup, nobody on duty here: any fleet character takes it and runs the desk');
   {
-    const world = makeWorld();
-    const store = new ChaliceStore({ directory: dir, namespace: 'handoff' });
-    const cfg = normalizeChalice({ holder: 'Loial the Ogier', alternate: 'Rizzo', station_room: 2,
-      post_room: 2, floor_grace_ms: 100, handoff_grace_ms: 600 });
-    const loialP = world.add('Loial the Ogier', { room: 2 });
-    const loial = keeper(world, loialP, { cfg, store });
-    loial.chaliceMakeRoom = async () => {};
-    const t0 = Date.now();
-    loial._chaliceLastHeldAt = t0;                        // it was in the pack a moment ago
-    world.floor.set(2, [world.item('chalice of the rain')]);  // a fleetscript dropped it
-    for (const dt of [0, 200, 400, 590]) await loial.chaliceSweep(cfg, store, 'Loial the Ogier', t0 + dt);
-    ok(!has(world, loialP, /chalice/i), 'past floor_grace_ms but inside handoff_grace_ms: left on the floor');
-    await loial.chaliceSweep(cfg, store, 'Loial the Ogier', t0 + 700);
-    ok(has(world, loialP, /chalice/i), 'past handoff_grace_ms: an abandoned hand-off is still swept');
-    ok(loial.events.some(e => e.what === 'swept'), 'and ledgered as swept');
+    const { world, store, k, cupDown } = guardWorld('g-anyone');
+    const G = k('Gonzo');
+    cupDown();
+    await G.ap.chaliceGuard();
+    ok(has(world, G.P, /chalice/i), 'taken at once');
+    ok(G.ap.events.some(e => e.what === 'swept' && e.why === 'nobody on duty is here'), 'and says why');
+    await G.ap.chaliceGuard();
+    ok(store.duty()?.acting === 'Gonzo' && store.duty()?.holder_away === true, 'registered as the acting desk');
+    ok(G.ap.chaliceRole() === 'alternate', 'and serves as the alternate');
+    ok(G.ap.events.some(e => e.what === 'acting_desk'), 'the role change is ledgered');
+    // The holder comes back to its post and asks for the cup back.
+    const L = k('Loial the Ogier');
+    const job = L.ap.chaliceNextJob(G.ap.chaliceCfg, 'holder', null, store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'reclaim', 'the holder, back at its post, asks the acting desk for the cup');
+  }
+
+  section('a registered hand-off: only its rider may lift the cup');
+  {
+    const { world, store, k, cupDown } = guardWorld('g-handoff');
+    const L = k('Loial the Ogier'), T = k('Kermit');
+    store.setHandoff({ rider: 'Kermit', by: 'Loial the Ogier', why: 'cupRide' });
+    cupDown();
+    await L.ap.chaliceGuard();
+    ok(!has(world, L.P, /chalice/i), 'the holder that dropped it leaves it for the rider');
+    await T.ap.chaliceGuard();
+    ok(has(world, T.P, /chalice/i), 'the rider takes it');
+    ok(store.handoff() === null, 'and the register is cleared');
+  }
+
+  section('an expired hand-off is anybody\'s again');
+  {
+    const { world, store, k, cupDown } = guardWorld('g-expired');
+    const L = k('Loial the Ogier');
+    store.setHandoff({ rider: 'Kermit', by: 'Loial the Ogier', ttlMs: 1000 }, Date.now() - 5000);
+    cupDown();
+    await L.ap.chaliceGuard();
+    ok(has(world, L.P, /chalice/i), 'the holder takes it back');
+  }
+
+  section('a stranger in the room overrides the hand-off');
+  {
+    const { world, store, k, cupDown } = guardWorld('g-stranger');
+    const G = k('Gonzo');
+    world.add('Stranger', { room: 2 });
+    store.setHandoff({ rider: 'Kermit', by: 'Loial the Ogier' });
+    cupDown();
+    await G.ap.chaliceGuard();
+    ok(has(world, G.P, /chalice/i), 'whoever of ours is here takes it now');
+    const e = G.ap.events.find(x => x.what === 'swept');
+    ok(e?.strangers === 1 && e?.handoff_rider === 'Kermit', 'ledgered with the stranger and the hand-off it broke');
+    await G.ap.chaliceGuard();
+    ok(has(world, G.P, /chalice/i), 'and it is not dropped back while the stranger is here');
+  }
+
+  section('a fleet character carrying the cup gives it back to the holder beside it');
+  {
+    const { world, store, k } = guardWorld('g-return');
+    const L = k('Loial the Ogier'), G = k('Gonzo');
+    G.P.client.inventory.push(world.item('chalice of the rain'));
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i), 'dropped for the holder');
+    ok(store.handoff()?.rider === 'Loial the Ogier', 'with the hand-off registered first');
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i), 'and not re-lifted by the one who dropped it');
+    await L.ap.chaliceGuard();
+    ok(has(world, L.P, /chalice/i), 'the holder has it');
+    ok(store.duty()?.with === 'Loial the Ogier' && !store.duty()?.acting, 'no acting desk left behind');
+  }
+
+  section('a cup somewhere else is somebody else\'s floor');
+  {
+    const { world, k, cupDown } = guardWorld('g-elsewhere');
+    const L = k('Loial the Ogier', 38);
+    cupDown(2);
+    for (let i = 0; i < 5; i++) await L.ap.chaliceGuard();
+    ok(!has(world, L.P, /chalice/i), 'nothing is walked to');
   }
 
 } finally {
