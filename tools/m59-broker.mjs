@@ -7935,7 +7935,7 @@ const TOOLS = [
       for (let r = me.row - 1; r <= me.row + 1; r++)
         for (let c = me.col - 1; c <= me.col + 1; c++)
           for (const j of geo.declaredFallJumps(r, c)) table.push({ from: { row: r, col: c }, to: j });
-      const declared = table.some(j =>
+      const declared = table.find(j =>
         nearFrom(j.from.row, j.from.col, me.row, me.col) &&
         near(j.to.row, j.to.col, a.to_row, a.to_col) &&
         sameFloor(hereFloor, floorOfDeclared(j.from.row, j.from.col, 'from')) &&
@@ -7945,7 +7945,12 @@ const TOOLS = [
                         `fall-jump or a one-square variation of one. Declared near here: ` +
                         (table.map(j => `${j.from.row},${j.from.col}->${j.to.row},${j.to.col}`).join(' ') || 'none'));
       const before = { col: me.col, row: me.row };
-      const r = await s.step(a.to_col, a.to_row, { fall: true });
+      const declaration=declaredFine.find(j=>j.from.row===declared.from.row&&j.from.col===declared.from.col&&
+        j.to.row===declared.to.row&&j.to.col===declared.to.col);
+      const fine=declaration?.to_fine;
+      const r = await s.step(a.to_col, a.to_row, { fall: true,
+        timedFall:declaration?.requires?.timed_fall===true,
+        ...(fine?{aimX:fine.x/16+64,aimY:fine.y/16+64}:{}) });
       const now = s.client?.self;
       const landed = now ? { col: now.col, row: now.row } : null;
       // WHERE IT LANDED IS THE ONLY HONEST VERDICT. A jump that comes up short lands on real

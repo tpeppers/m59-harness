@@ -369,7 +369,9 @@ for (const [li, leg] of plan.legs.entries()) {
     // the landing. Reading immediately recorded a jump that WORKED as one that did nothing,
     // twice, and each time sent the follower down the post-jump route from the take-off,
     // which is how it ended in the gully.
-    await sleep(3000);
+    // The keeper conservatively carries a vertical range for up to five seconds.
+    // A subsequent timed fall must begin from a settled, known shelf.
+    await sleep(5500);
     pos = await look();
     const target = leg.declared_to ?? leg.toFine;
     const landedPoint = pos.x == null ? null : protocolToClient(pos);

@@ -63,6 +63,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { movementMapFile } from './m59-map-path.mjs';
 import { attachDeferredStepMask } from './m59-room-artifacts.mjs';
+import { traceFallMotion } from './m59-falltrace.mjs';
 
 const ROO_MAGIC = Buffer.from([0x52, 0x4f, 0x4f, 0xb1]);
 const ROO_MIN_VERSION = 4;
@@ -1337,6 +1338,8 @@ export class RoomGeometry {
   // units (64/square) at the boundary and emits only the returned legal endpoint.
   traceFineMoveClient(x0, y0, x1, y1, {
     slide = true,
+    timedFall = false,
+    airborne = false,
     playerRadius = PLAYER_RADIUS,
     playerHeight = PLAYER_HEIGHT,
     maxMicrostep = PLAYER_RADIUS / 2,
@@ -1369,6 +1372,8 @@ export class RoomGeometry {
       reason: 'collision_geometry_unavailable',
       note: 'this map predates collision metadata; rebuild or refresh its baked .roo geometry',
     };
+    if (timedFall) return traceFallMotion(this,x0,y0,x1,y1,
+      {slide,playerRadius,playerHeight,obstacles,roomFlags,overrideDepths,motionZ,enforceStepHeight});
     const startLeaf = this.leafAtClient(x0, y0);
     const startFloor = this.floorBaseAtClient(x0, y0, startLeaf,
       { roomFlags, overrideDepths });
@@ -1386,6 +1391,11 @@ export class RoomGeometry {
       ? { min: Math.min(commandMotionZ.min, startFloor),
           max: Math.max(commandMotionZ.max, startFloor) }
       : { min: Math.min(commandMotionZ, startFloor), max: Math.max(commandMotionZ, startFloor) };
+    // Explicit airborne frames have a physical z, not an uncertainty interval
+    // extending all the way down to the valley floor beneath the body.
+    if (fall && airborne) carriedMotionZ = typeof commandMotionZ === 'number'
+      ? {min:Math.max(commandMotionZ,startFloor),max:Math.max(commandMotionZ,startFloor)}
+      : {min:Math.max(commandMotionZ.min,startFloor),max:Math.max(commandMotionZ.max,startFloor)};
     const distance = Math.hypot(x1 - x0, y1 - y0);
     if (distance <= GEOMETRY_EPSILON)
       return { available: true, moved: false, blocked: false, arrived: true,
