@@ -95,7 +95,7 @@ function world() {
         if (W.doorStumbles > 0) { W.doorStumbles--; return { ok: false, why: 'guild door 59 trigger not reached' }; }
         if (r.where === 'foyer') { W.mainDoor++; r.where = 'chests'; }
         if (r.where !== 'chests') return { ok: false, why: 'guild position is outside the known passage' };
-        if (Array.isArray(a.stash)) { W.stashedBy = [...(W.stashedBy ?? []), a.agent];
+        if (Array.isArray(a.stash)) { W.stashedBy = [...(W.stashedBy ?? []), a.agent]; W.walks.push(`stash:${a.agent}@${r.where}`);
           for (const o of [...W.packs[a.agent]]) if (!a.stash.some(k => o.name.includes(k)) && !(W.protect ?? []).includes(o.name)) {
             W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         for (const d of (a.deposit ?? []).filter(d => !d.startsWith('id:'))) for (const o of W.packs[a.agent].filter(x => x.name.includes(d))) {
@@ -476,6 +476,8 @@ try {
     ok('each its own kit back', W2.count(W2.packs.t3, 'elderberry') === 30 && W2.count(W2.packs.t2, 'elderberry') === 60,
        `${W2.count(W2.packs.t3, 'elderberry')}/${W2.count(W2.packs.t2, 'elderberry')}`);
     ok('manager at the booth, go-between at the inn', W2.rows.t3.where === 'booth' && W2.rows.t2.room_num === INN);
+    const iStash = W2.walks.indexOf('stash:t3@chests'), iBooth = W2.walks.lastIndexOf('booth');
+    ok('the manager empties its pack AT THE CHESTS, before it walks to the booth', iStash >= 0 && iStash < iBooth, W2.walks.join(','));
     ok('the main door never opened', W2.mainDoor === 0);
   }
   section('the manager re-draws practice reagents when it runs out, not the go-between');

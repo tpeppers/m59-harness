@@ -590,17 +590,18 @@ export class VaultDesk {
 
   // ---------------------------------------------------------------- the shift
   async startShift() {
-    // The manager: inside, at the booth. From the street or the foyer the ONE entry of the shift
-    // goes through the main door (hall_withdraw with nothing wanted), then never again.
+    // THE ORDER MATTERS (prod 2026-09-28 06:26): the manager used to walk to the booth FULL — 100% bulk
+    // from its trainer's restock — and empty its pack only afterwards, so every start's hardest walks
+    // were made overloaded and the booth walk failed three times. Now: in, to the CHESTS; empty the
+    // pack there; only then to the booth. From the street or the foyer the ONE entry of the shift goes
+    // through the main door (hall_withdraw with nothing wanted), then never again.
     const m = await this.row(this.M, true);
     if (Number(m?.room_num) !== HALL) {
       if (!(await this.goTo(this.M, HALL))) throw new Error('the manager could not reach the hall');
     }
-    const r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
+    const r = await this.call('hall_post', { agent: this.M, where: 'chests' }, 300_000).catch(e => ({ ok: false, why: e.message }));
     if (r?.ok === false && /main door|foyer/i.test(r.why ?? '')) {
       this.log('manager is in the foyer: walking in once, to the chests');
-      // THREE TRIES, like every other walk in the hall: "guild door 59 trigger not reached" closed the
-      // 05:48 start on its first attempt (prod 2026-09-28).
       let w = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         w = await this.call('hall_withdraw', { agent: this.M, wants: [] }, 620_000).catch(e => ({ ok: false, why: e.message }));
@@ -609,31 +610,29 @@ export class VaultDesk {
         await this.sleep(5_000);
       }
       if (w?.ok === false) throw new Error(`manager could not get inside: ${w.why}`);
-      await this.post('booth');
-    } else if (r?.ok === false) await this.post('booth');
+    } else if (r?.ok === false) await this.post('chests');
     // ROOM FOR CUSTOMERS: with shift_stash, whoever of the two is inside empties its pack into the
     // chests and keeps only the kit. The go-between does it only if already inside — it never walks in
-    // for this. The manager does it from the chests and goes back to the booth.
+    // for this. The manager is at the chests already.
     if (this.cfg.shift_stash) {
       const kitOf = agent => {
         const k = this.cfg.shift_kit ?? {};
         const mine = k[agent] && typeof k[agent] === 'object' ? k[agent] : k;
         return Object.entries(mine).filter(([, n]) => typeof n === 'number' && n > 0).map(([item, amount]) => ({ item, amount }));
       };
-      for (const agent of [this.G, this.M]) {
+      for (const agent of [this.M, this.G]) {
         const kit = kitOf(agent);
         const row = await this.row(agent, true);
         if (Number(row?.room_num) !== HALL) continue;
-        if (agent === this.M) await this.post('chests');
-        else if (row?.position && row.position.row <= 4 && row.position.col >= 26) continue;   // in the foyer: not inside
+        if (agent === this.G && row?.position && row.position.row <= 4 && row.position.col >= 26) continue;   // in the foyer: not inside
         const s = await this.call('hall_withdraw', { agent, wants: [], stash: ['shilling'] }, 620_000).catch(e => ({ ok: false, why: e.message }));
         const d = await this.call('hall_withdraw', { agent, wants: kit, deposit: [...(this.cfg.shift_deposit ?? [])] }, 620_000)
           .catch(e => ({ ok: false, why: e.message }));
         this.log(`  ${agent} emptied its pack into the chests: ${s?.ok === false ? `stash FAILED ${s.why}` : `stashed ${s?.stashed ?? '?'}`}; ` +
                  `${d?.ok === false ? `deposit FAILED ${d.why}` : `protected reagents in, kit back ${JSON.stringify(d?.took ?? {})}`}`);
-        if (agent === this.M) await this.post('booth');
       }
     }
+    await this.post('booth');
     if (!(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
     this.log(`desk open: ${this.names().manager} at the booth, ${this.names().go_between} at the Brownestone Inn`);
   }
