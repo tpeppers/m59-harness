@@ -65,6 +65,20 @@ r = await k.depositViaDesk(want, desk);
 ok(r.contributed === 0 && new TicketBook(TICKETS_FILE('prod')).read().tickets.length === before,
    'the town room was unreachable: no ticket is filed');
 
+
+// ---- drawViaConcierge: the same question for a WITHDRAWAL, as fleetScript steps
+{
+  const { drawViaConcierge } = await import('./m59-inventory.mjs');
+  const { rmSync: rm } = await import('node:fs');
+  rm(DESK_OPEN_FILE('prod'), { force: true });
+  let st = drawViaConcierge('t9', [{ item: 'shilling', amount: 1319 }], { fleet: 'prod' });
+  ok(st[0].do === 'walk' && Number(st[0].to) === 714, 'desk closed: walk into the hall and draw there');
+  writeDeskOpen('prod', { pid: 1, town_rooms: [106], meet_room: 106 });
+  st = drawViaConcierge('t9', [{ item: 'shilling', amount: 1319 }], { fleet: 'prod' });
+  ok(st[0].do === 'walk' && Number(st[0].to) === 106 && st[1].anywhere === true && st[1].optional === true,
+     'desk open: walk to its town room and file a ticket (optional, and not skipped with a failed leg)');
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -45,6 +45,7 @@
 // (tempqor.kod ExitsTimer). A walk that finds the wrong one closed fails; this script is run again
 // by the runner ten minutes later, which is the right cadence for exactly that door.
 import { walk, learn, act, verify } from '../m59-fleetscript.mjs';
+import { drawViaConcierge } from '../m59-inventory.mjs';
 
 const CONTROL = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901';
 const TEMPLE = 802, TEACHER = 'Priestess Zuxana';
@@ -122,12 +123,9 @@ export const script = {
           { why: 'stop farming before the trip' }),
       // FROM THE GUILD HALL (operator, 2026-09-26: "use as much money ... from the guild hall"); a
       // character's own bank account can be empty, as Statler's was on 2026-09-27.
-      ...(purse < cost ? [walk(714, { why: 'the guild chests, for the spell money' }), { ...verify(async ({ call }) => {
-        const r = await call('hall_withdraw', { agent, wants: [{ item: 'shilling', amount: cost - purse }] }, 620_000)
-          .catch(e => ({ ok: false, why: e.message }));
-        console.log(`  ${agent} HALL took ${JSON.stringify(r?.took ?? {})}${r?.ok ? '' : `  REFUSED: ${r?.why ?? '?'}`}`);
-        return r?.ok === true && Number(r?.took?.shilling ?? 0) > 0;
-      }, 'the hall gave no shillings'), optional: true }] : []),
+      // Through the vault desk when it is open — Camilla (2026-09-28) was refused at the hall door with
+      // an empty purse after a death — and into the hall only when it is closed.
+      ...(purse < cost ? drawViaConcierge(agent, [{ item: 'shilling', amount: cost - purse }], { why: 'the spell money' }) : []),
       ...(want.length ? [
         // WAIT OUT ONE FLIP OF THE DOOR RATHER THAN WALKING HOME. Only one of the two entrances is
         // open at a time and they swap every ten minutes (tempqor.kod ExitsTimer), so a walk that

@@ -25,7 +25,8 @@
 //
 // And the same as FleetScript STEPS (makeRoomStep, grabStep, handOverStep, buyStep, stashStep,
 // depositStep, drawStep, cupRideStep), so a script composes them like walk() and verify().
-import { call, observe, verify, foodIn, REAGENT_RE } from './m59-fleetscript.mjs';
+import { call, observe, verify, walk, foodIn, REAGENT_RE } from './m59-fleetscript.mjs';
+import { TicketBook, TICKETS_FILE, readDeskOpen } from './m59-vault-broker.mjs';
 import { weighItem } from './m59-items.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { chaliceStoreFor } from './m59-chalice.mjs';
@@ -443,6 +444,47 @@ export const depositStep = names => stepOf(async agent => {
   return r?.ok ? true : { ok: false, why: r?.why ?? 'the deposit was refused' };
 }, 'deposited in the guild chests');
 /** In the guild hall: draw exact amounts. */
+/**
+ * DRAW FROM THE GUILD CHESTS, CONCIERGE FIRST (operator, 2026-09-28: every chest routing "checks for the
+ * 'concierge service'"). Steps for a fleetScript: with the vault desk open, walk to its town room, file
+ * a WITHDRAW ticket and wait for the go-between to bring it (read off the pack, never the ticket); with
+ * it closed, walk into the hall and draw there. A desk that does not deliver is not waited on twice:
+ * the steps are OPTIONAL, so the errand carries on and its next run finds the desk closed or answers.
+ * `wants` is [{item, amount}]; `amount` may be a function of nothing, read at run time.
+ */
+export function drawViaConcierge(agent, wants, { fleet = titheFleet(), deskWaitMin = 10, why = 'the guild chests' } = {}) {
+  const desk = readDeskOpen(fleet);
+  const list = () => wants.map(w => ({ item: w.item, amount: typeof w.amount === 'function' ? w.amount() : w.amount }))
+    .filter(w => w.amount > 0);
+  const counts = pack => Object.fromEntries(list().map(w => [w.item, (pack ?? []).filter(i => String(i.name ?? '').toLowerCase() === w.item.toLowerCase())
+    .reduce((n, i) => n + (Number(i.amount) || 1), 0)]));
+  if (desk) {
+    const room = Number(desk.meet_room) || 106;
+    return [walk(room, { why: `the vault desk (${why}): a withdraw ticket, no walk into the hall` }),
+      { ...verify(async ({ call: c }) => {
+        const items = list();
+        if (!items.length) return true;
+        const p0 = counts((await c('inventory', { agent }, 60_000).catch(() => null))?.items);
+        const t = new TicketBook(TICKETS_FILE(fleet)).request({ kind: 'withdraw', from: agent, items, where: room });
+        const until = Date.now() + deskWaitMin * 60_000;
+        while (Date.now() < until) {
+          await new Promise(r => setTimeout(r, 15_000));
+          const now = counts((await c('inventory', { agent }, 60_000).catch(() => null))?.items);
+          if (items.some(w => (now[w.item] ?? 0) > (p0[w.item] ?? 0))) return true;
+        }
+        try { new TicketBook(TICKETS_FILE(fleet)).update(t.id, { status: 'expired', why: 'the customer left: nobody came' }); } catch {}
+        return false;
+      }, `the vault desk did not bring ${why}`), optional: true, anywhere: true }];
+  }
+  return [walk(714, { why }), { ...verify(async ({ call: c }) => {
+    const items = list();
+    if (!items.length) return true;
+    const r = await c('hall_withdraw', { agent, wants: items }, 620_000).catch(e => ({ ok: false, why: e.message }));
+    console.log(`  ${agent} HALL took ${JSON.stringify(r?.took ?? {})}${r?.ok ? '' : `  REFUSED: ${r?.why ?? '?'}`}`);
+    return r?.ok === true;
+  }, `the hall gave nothing (${why})`), optional: true }];
+}
+
 export const drawStep = wants => stepOf(async agent => {
   const r = await hallDraw(agent, wants);
   console.log(`  ${agent} drew ${JSON.stringify(r?.took ?? {})}${Object.keys(r?.short ?? {}).length ? ` SHORT ${JSON.stringify(r.short)}` : ''}`);
