@@ -3,7 +3,7 @@
 //
 // m59-keep-stocked.mjs keeps one character (the stage-room dedicator) stocked from the guild chest
 // on somebody else's legs. What it fetches, when, and who goes are pure functions; pinned here.
-import { parseCounts, carriedCounts, restockPlan, pickRider } from './m59-keep-stocked.mjs';
+import { parseCounts, carriedCounts, restockPlan, pickRider, pendingDelivery } from './m59-keep-stocked.mjs';
 
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => { if (cond) { passed++; console.log(`  ok   ${what}`); }
@@ -40,6 +40,17 @@ ok('the rider is the idle full-sized one with the most free pack', r?.agent === 
 ok('never the target, an excluded cup holder, a small, a hurt or a piloted one',
    !['hk3', 't19', 't9', 't8', 't2'].includes(r?.agent));
 ok('nobody suitable: no rider', pickRider(rows, { room: 38, target: 'hk3' }) === null);
+
+// 2026-09-28: a refused hand-over left Floyd with 71 elderberry and the next round fetched 119 more.
+{
+  const rider = { pack_items: [{ name: 'elderberry', amount: 190 }, { name: 'shilling', amount: 10000 }] };
+  const d = pendingDelivery(rider, want, { elderberry: 23, 'orc tooth': 100 });
+  ok('undelivered stock is what the target still wants, capped by what the rider holds',
+     d.elderberry === 190 && d['orc tooth'] === undefined, JSON.stringify(d));
+  ok('nothing is pending once the rider holds none of it',
+     Object.keys(pendingDelivery({ pack_items: [] }, want, {})).length === 0);
+  ok('or once the target is full', Object.keys(pendingDelivery(rider, want, { elderberry: 300, 'orc tooth': 100 })).length === 0);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

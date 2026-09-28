@@ -59,6 +59,20 @@ export function restockPlan(have, want, low, money = 0) {
   return { short, wants: money > 0 ? [{ item: 'shilling', amount: money }, ...wants] : wants };
 }
 
+/**
+ * What a rider still carries that the target wants: per item, min(carried, want - have). Empty when
+ * the rider has nothing left for it. Pure.
+ */
+export function pendingDelivery(riderRow, want, have) {
+  const carried = carriedCounts(riderRow, Object.keys(want));
+  const out = {};
+  for (const [item, target] of Object.entries(want)) {
+    const n = Math.min(carried[item] ?? 0, Math.max(0, target - (have[item] ?? 0)));
+    if (n > 0) out[item] = n;
+  }
+  return out;
+}
+
 /** An idle, takeable, full-sized character in the room, with the most free pack. */
 export function pickRider(rows, { room, target, exclude = [], minMaxHealth = 75, minHealth = 0.9 } = {}) {
   const maxOf = r => Number(String(r?.health ?? '').split('/')[1]) || Number(r?.max_health) || 0;
@@ -156,12 +170,35 @@ if (isMain) {
   say(`keeping ${TARGET} stocked in room ${ROOM}: want ${JSON.stringify(WANT)}, restock under ` +
       `${JSON.stringify(LOW)}, ${MONEY} shillings per trip`);
   let lastTrip = 0;
+  // A RIDER STILL CARRYING UNDELIVERED STOCK IS DELIVERED FROM BEFORE ANYBODY FETCHES MORE.
+  // 2026-09-28: a hand-over refused "receiver full" left Floyd holding 71 elderberry, and the next
+  // round sent Floyd for 119 more — an hour on the road with ~190 elderberry and 10k shillings.
+  let pending = arg("pending") || null;   // --pending <agent>: a rider carrying stock from before a restart
+  const handOver = async (riderAgent, have) => {
+    const rr = (await call('fleet', {})).fleet.find(r => r.agent === riderAgent);
+    const todo = pendingDelivery(rr, WANT, have);
+    for (const [item, n] of Object.entries(todo)) {
+      const r = await call('supply', { from: riderAgent, to: TARGET, what: item, amount: n,
+                                       who_travels: 'neither' }, 200_000).catch(e => ({ reason: e.message }));
+      say(`  ${riderAgent} -> ${TARGET}: ${n} ${item}: ${r.supplied ? 'delivered' : r.reason}`);
+    }
+    const after = pendingDelivery((await call('fleet', {})).fleet.find(r => r.agent === riderAgent), WANT,
+      carriedCounts((await call('fleet', {})).fleet.find(r => r.agent === TARGET), Object.keys(WANT)));
+    return Object.keys(after).length ? riderAgent : null;
+  };
   for (;;) {
     try {
       const rows = (await call('fleet', {})).fleet ?? [];
       const t = rows.find(r => r.agent === TARGET);
       if (!t) say(`${TARGET} is not in the fleet reading`);
       else if (t.room_num !== ROOM) say(`${TARGET} is in ${t.room_num}, not ${ROOM}: waiting for it`);
+      else if (pending) {
+        const pr = rows.find(r => r.agent === pending);
+        const have = carriedCounts(t, Object.keys(WANT));
+        if (!Object.keys(pendingDelivery(pr, WANT, have)).length) { say(`  ${pending} holds nothing more for ${TARGET}`); pending = null; }
+        else if (pr?.room_num !== ROOM) say(`  ${pending} still carries stock for ${TARGET} and is in ${pr?.room_num}: waiting for it`);
+        else pending = await handOver(pending, have);
+      }
       else {
         const have = carriedCounts(t, Object.keys(WANT));
         const plan = restockPlan(have, WANT, LOW, MONEY);
@@ -185,15 +222,8 @@ if (isMain) {
               if (w === 0) say(`  ${rider.agent} is in ${rr?.room_num}, not ${ROOM}: waiting for it before the hand-over`);
               await sleep(20_000);
             }
-            for (const item of Object.keys(WANT)) {
-              const got = carriedCounts((await call('fleet', {})).fleet.find(r => r.agent === rider.agent), [item])[item];
-              const need = Math.max(0, WANT[item] - (have[item] ?? 0));
-              const n = Math.min(got, need);
-              if (n <= 0) continue;
-              const r = await call('supply', { from: rider.agent, to: TARGET, what: item, amount: n,
-                                               who_travels: 'neither' }, 200_000).catch(e => ({ reason: e.message }));
-              say(`  ${rider.agent} -> ${TARGET}: ${n} ${item}: ${r.supplied ? 'delivered' : r.reason}`);
-            }
+            pending = await handOver(rider.agent, have);
+            if (pending) say(`  ${pending} keeps undelivered stock; it is delivered before anybody fetches more`);
           }
         }
       }
