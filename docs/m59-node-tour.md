@@ -5,7 +5,8 @@ shadow of the Sentinel (589) → Ancient Place (579) → Badlands (45) → Icky 
 (27) → room 2. It uses ordinary travel, checked fine rails, declared falls and
 normal node activation. The cave leg still uses the keeper's measured inferred
 fall, described in the [cave dossier](../.claude/skills/node-runner/nodes/cave.md),
-so this is an experimental shadow recipe, not a production movement promotion.
+so populated-server runs remain experimental. The operator explicitly authorized
+production testing on 2026-09-28; this does not establish monster tolerance.
 Administrative setup is confined to the separate
 `mana-node-tour-shadow` lab recipe.
 
@@ -55,3 +56,48 @@ node tools/m59-node-tour-report.mjs substrate/node-tours/tours.jsonl
 Three independent complete circuits with the same code, rail revision, starting
 point and scene condition are required before the reader reports repeatability.
 Failed runs remain in the append-only ledger.
+
+## Production campaign and node beliefs
+
+`m59-node-campaign.mjs` saves a queue, controls one character at a time through
+FleetScript's existing locks and faculty leases, and returns enchanters to the
+room-2 post before releasing them. It preserves their policies and service
+assignments rather than replacing them. Active errands and human-piloted
+characters wait. A failed route or unconfirmed node stops the campaign after a
+bounded ordinary return attempt; `--retry <agent>` requires deliberate review.
+No administrative game connection is used by this runner or its recovery.
+
+```powershell
+node tools/m59-node-campaign.mjs --plan substrate/node-campaign/prod.json --fleet prod --port 8901 --priority hk3,t9 --expected-game <game-host:port>
+node tools/m59-node-campaign.mjs --run substrate/node-campaign/prod.json --fleet prod --port 8901 --limit 1
+```
+
+The priority agents are operator-local choices, not embedded defaults. Their
+post is room 2 r19c8; review that field in the saved plan before starting. Other
+characters finish in room 2 and their existing director resumes their duties.
+Every selected keeper must be running the merged movement build before its
+turn. Fineclimb's remote mode requires the exact `--expected-game` endpoint,
+agreement between roster and live broker, and a checked declared rail.
+
+The tour updates `substrate/node-memory/` after a confirmed `melded` or `already`
+reply (or the supported stable same-keeper mana-grant evidence). It records the
+KOD `piNodelist` mask, a `known_mask`, timestamps, receipt paths and correction
+history, keyed by server endpoint plus character name. These five nodes are
+`0x001f`. Missing bits are unknown until observed; a dead node, silence, range
+refusal or login mana comparison cannot establish absence or possession.
+The cache is a belief, never an authoritative live-server query, and never
+causes the tour to skip activation. Other game activity may make it stale.
+
+```powershell
+node tools/m59-node-memory.mjs read --server <game-host:port> --character "Character Name"
+node tools/m59-node-memory.mjs forget --server <game-host:port> --character "Character Name" --mask 0x1f --reason "External reset suspected"
+node tools/m59-node-memory.mjs set --server <game-host:port> --character "Character Name" --mask 0x1f --reason "Operator observed the complete KOD mask"
+```
+
+`set` replaces the whole belief, including removals; `forget` marks selected
+bits unknown. Neither changes the game. Files are ignored, atomically replaced
+under per-character locks, and corruption fails visibly rather than resetting
+the mask. `M59_NODE_MEMORY_DIR` selects a shared runtime directory across
+checkouts. A surviving lock after a crash requires inspection; it is never
+silently stolen. Focused tests: `m59-node-memory-test.mjs` and
+`m59-node-tour-policy-test.mjs`.

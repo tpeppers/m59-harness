@@ -47,14 +47,15 @@
 // PROTOCOL units, not client units; `(v - 64) * 16` is the conversion and getting it wrong
 // silently compares two different coordinate spaces.
 //
-// It moves a character. It refuses a game server that is not loopback, on the roster, for the
-// same reason every other tool here does.
+// Remote use requires --expected-game host:port, a checked declared rail, and agreement
+// between roster and live broker identity. It never permits candidate jumps remotely.
 
 import { readFileSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { rosterGameEndpoint } from './m59-fleetpath.mjs';
+import { rosterGameEndpoint,stateFileFor } from './m59-fleetpath.mjs';
+import {railIdentityProblem} from './m59-node-tour-policy.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
 import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint } from './m59-railfollow.mjs';
@@ -71,7 +72,7 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt']);
+                       'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -181,17 +182,13 @@ function call(name, args, ms = 120000) {
 }
 
 // ---------------------------------------------------------------- which fleet
-const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
-const rosterFile = FLEET === '-' ? join(REPO, 'substrate', 'fleet-state.json')
-                                 : join(REPO, 'substrate', 'fleets', `${FLEET}.json`);
+const rosterFile = stateFileFor(FLEET==='-'?'':FLEET);
 const rostered = rosterGameEndpoint(rosterFile);
 if (!DRY) {
-  if (!rostered) { console.error(`fineclimb: ${rosterFile} does not name one game server.`); process.exit(2); }
-  if (!LOOPBACK.has(rostered.host.toLowerCase())) {
-    console.error(`fineclimb: REFUSING. Fleet "${FLEET}" is on ${rostered.host}, not loopback.`);
-    console.error(`           This walks a character off ledges on purpose. Lab servers only.`);
-    process.exit(2);
-  }
+  const health=await(await fetch(`http://127.0.0.1:${PORT}/health`,{signal:AbortSignal.timeout(10000)})).json();
+  const problem=railIdentityProblem({fleet:FLEET,agent:AGENT,rostered,health,expectedGame:flag('expected-game'),
+    checkedRail:!!RAIL?.rail_complete&&RAIL?.all_declared===true,candidates:has('allow-candidates')});
+  if(problem){console.error('fineclimb: REFUSING '+problem);process.exit(2);}
 }
 
 const look = async () => {

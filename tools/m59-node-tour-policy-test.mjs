@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {railIdentityProblem,availableForTour,tourObjectiveComplete,atPost} from './m59-node-tour-policy.mjs';
+import {tourReturnPlan} from './m59-node-tour.mjs';
+const server={host:'example.test',port:5959},base={fleet:'prod',agent:'a',rostered:server,
+  health:{fleet:'prod',game_server:server,session_characters:{a:'Example'}},expectedGame:'example.test:5959',checkedRail:true};
+let n=0;const test=(name,fn)=>{fn();console.log('ok '+name);n++;};
+test('explicit remote endpoint permits checked rail',()=>assert.equal(railIdentityProblem(base),null));
+test('wrong server refuses',()=>assert.equal(railIdentityProblem({...base,expectedGame:'other:5959'}),'remote_requires_exact_expected_game'));
+test('remote candidate jump refuses',()=>assert.equal(railIdentityProblem({...base,candidates:true}),'remote_requires_checked_declared_rail'));
+test('remote incomplete rail refuses',()=>assert.equal(railIdentityProblem({...base,checkedRail:false}),'remote_requires_checked_declared_rail'));
+test('wrong broker fleet refuses',()=>assert.equal(railIdentityProblem({...base,health:{...base.health,fleet:'shadow'}}),'fleet_or_game_endpoint_mismatch'));
+test('another agent endpoint cannot borrow fleet identity',()=>assert.equal(railIdentityProblem({...base,health:{...base.health,session_game_servers:{a:{host:'other',port:5959}}}}),'fleet_or_game_endpoint_mismatch'));
+test('human and active errand are deferred',()=>{assert.equal(availableForTour({piloted:{}}),false);assert.equal(availableForTour({committed:{label:'trade'}}),false);assert.equal(availableForTour({committed:{takeable:true}}),true);});
+test('arrival with a dead node is not campaign completion',()=>assert.equal(tourObjectiveComplete({complete:true,nodes:[{status:'dead_node'},...Array(4).fill({status:'already'})]}),false));
+test('already bonded counts as possession',()=>assert.equal(tourObjectiveComplete({complete:true,nodes:Array(5).fill({status:'already'})}),true));
+test('post check requires actual room and square',()=>{assert.equal(atPost({room:2,row:19,col:8},{room:2,row:19,col:8}),true);assert.equal(atPost({room:39,row:19,col:8},{room:2,row:19,col:8}),false);});
+test('every itinerary return ends at room2 without activation or admin steps',()=>{for(const room of [38,39,599,589,579,578,576,587,586,585,584,583,593,49,45,574,150,575,27,597,598]){const p=tourReturnPlan(room);assert.deepEqual(p.at(-1),{kind:'travel',to:2});assert.ok(p.every(s=>!['meld','place','heal'].includes(s.kind)));}});
+test('cave recovery includes actual crossing',()=>assert.deepEqual(tourReturnPlan(27).slice(0,2),[{kind:'walk',row:57,col:45},{kind:'travel',to:587}]));
+test('unknown recovery room refuses instead of guessing',()=>assert.throws(()=>tourReturnPlan(1),/no_measured_return/));
+console.log(n+' tour policy checks passed');

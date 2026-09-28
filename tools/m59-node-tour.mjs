@@ -11,6 +11,7 @@ import {railLeg,checkRoute} from './m59-noderails.mjs';
 import {STONES} from './m59-stones.mjs';
 import {nodeReport,meldVerdict} from './m59-nodecheck.mjs';
 import {epochId} from './m59-epoch.mjs';
+import {updateNodeMemory} from './m59-node-memory.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const TOUR_NODES=['victoria','sentinel','ancient','badlands','cave'];
@@ -56,22 +57,43 @@ export function tourPlan(){return [
   ...[587,576,587,597,598,599,2].map(to=>({kind:'travel',to})),
 ];}
 
-export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0}={}){
+export function tourReturnPlan(room){
+  const travel=to=>({kind:'travel',to});
+  const north=[578,576,587,597,598,599,2].map(travel);
+  const ancient=[{kind:'rail',node:'ancient',direction:'to_exit',exit:'edge:578:r1c17'},...north];
+  const canyon=[{kind:'cut',room:49,x:20544,y:512,row:1,col:21},{kind:'cross',row:0,col:21,to:593},
+    ...[583,584,574,150,575,576,587,597,598,599,2].map(travel)];
+  if(room===2)return [];
+  if(room===39)return [{kind:'rail',node:'victoria',direction:'to_exit',exit:'go:38:r9c27'},travel(38),travel(2)];
+  if(room===589)return [{kind:'rail',node:'sentinel',direction:'to_exit',exit:'edge:579:r43c1'},travel(579),...ancient];
+  if(room===579)return ancient;
+  if(room===45)return [{kind:'cut',room:45,boxFlood:true,row:1,col:53},{kind:'cross',row:0,col:53,to:49},...canyon];
+  if(room===49)return canyon;
+  if(room===27)return [{kind:'walk',row:57,col:45},travel(587),...north.slice(3)];
+  for(const road of [[38,2],[578,576,587,597,598,599,2],[586,585,584,574,150,575,576,587,597,598,599,2],
+    [593,583,584,574,150,575,576,587,597,598,599,2]]){
+    const i=road.indexOf(room);if(i>=0)return road.slice(i+1).map(travel);
+  }
+  throw Error('no_measured_return_for_room_'+room);
+}
+
+export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false}={}){
   fromStep=Number(fromStep);
   if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
   const health=await(await fetch(new URL('health',process.env.M59_CONTROL_URL))).json();
   const first=await call('look',{agent});
-  if(fromStep===0&&first.room?.num!==2)throw Error('tour_start_requires_room_2');
+  if(!recovery&&fromStep===0&&first.room?.num!==2)throw Error('tour_start_requires_room_2');
   const id='five-node-'+Date.now(),record={format:'m59-node-tour/1',id,at:new Date().toISOString(),agent,
     fleet:health.fleet,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),
     broker_sha:process.env.M59_TRIAL_BROKER_SHA??'unknown',broker_pid:health.pid,movement_epoch:epochId(),
     recipe_sha256:hashFile(fileURLToPath(import.meta.url)),rail_sha256:hashFile(resolve(root,railFile)),
-    setup:state.tourSetup??null,scene_ref:state.tourSceneRef??null,from_step:fromStep,start:tourPosition(first),nodes:[],legs:[],complete:false};
+    setup:state.tourSetup??null,scene_ref:state.tourSceneRef??null,from_step:recovery?-1:fromStep,recovery,
+    start:tourPosition(first),nodes:[],legs:[],complete:false};
   record.rail_ref=id+'-rails.json';writeFileSync(join(out,record.rail_ref),readFileSync(resolve(root,railFile)));
   state.tour=record;state.tourFile=join(out,id+'.json');
   const save=()=>writeFileSync(state.tourFile,JSON.stringify(record,null,2));
-  const read=async()=>{const l=await call('look',{agent});if(l.hp?.value<=0)throw Error('tour_character_died');return l;};
+  const read=async()=>{const l=await call('look',{agent});if(l.hp?.value<=0||l.room?.num===1)throw Error('tour_character_died');return l;};
   const command=async(name,args,label,stopRoom=null)=>{
     const before=tourPosition(await read());let reply,done=false,crossed=false,watchError=null;
     const watcher=stopRoom==null?null:(async()=>{
@@ -105,6 +127,7 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
   const follow=async(step,label,file=railFile)=>{
     const args=['tools/m59-fineclimb.mjs','--fleet',health.fleet,'--port',String(new URL(process.env.M59_CONTROL_URL).port),
       '--agent',agent,'--rail',step.node,'--rail-file',resolve(root,file),'--direction',step.direction??'to_node','--no-hop',
+      ...(expectedGame?['--expected-game',expectedGame]:[]),
       ...(step.exit?['--exit',step.exit]:[])];
     for(const dry of [true,false]){
       const extra=dry?['--dry-run']:['--receipt',join(out,id+'-'+label+'-commands.jsonl')];
@@ -116,7 +139,7 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
     }
   };
   try{
-    const plan=tourPlan();
+    const plan=recovery?tourReturnPlan(first.room.num):tourPlan();
     for(let i=fromStep;i<plan.length;i++){
       const step=plan[i],label=String(i).padStart(2,'0')+'-'+step.kind+'-'+(step.node??step.to??step.room??'point');
       const leg={index:i,label,step,start:tourPosition(await read()),at:new Date().toISOString()};record.legs.push(leg);save();
@@ -156,12 +179,20 @@ export async function runTour(ctx,{railFile='substrate/node-tour-rails.json',evi
         const objective={stone:step.node,position:p,node_state:nodeReport({objects:l.objects,you:l.you}),activation,observation,observed_since:l.ev_seq,verdict,
           before:before.mana,after:after.mana,stable:stable.mana,grant,connection_revision:before.connection_revision,
           status:verdict.verdict==='melded'||grant?'melded':verdict.verdict==='already'?'already':verdict.verdict==='dead'?'dead_node':'unknown'};
-        record.nodes.push(objective);console.log('TOUR NODE '+JSON.stringify(objective));
+        record.nodes.push(objective);save();
+        if(['melded','already'].includes(objective.status)){
+          const character=health.session_characters?.[agent]??l.character??l.you?.name;
+          const server=health.session_game_servers?.[agent]??health.game_server;
+          objective.memory=await updateNodeMemory({server:server.host+':'+server.port,character},
+            {kind:'observe',node:step.node,status:objective.status,evidence:state.tourFile,at:new Date().toISOString()});
+        }
+        console.log('TOUR NODE '+JSON.stringify(objective));
       }
       leg.end=tourPosition(await read());leg.completed_at=new Date().toISOString();save();
     }
-    record.end=tourPosition(await read());record.complete=fromStep===0&&tourComplete(record);
-    record.partial_complete=fromStep>0;return record.complete||record.partial_complete;
+    record.end=tourPosition(await read());record.complete=!recovery&&fromStep===0&&tourComplete(record);
+    record.recovery_complete=recovery&&record.end.room===2;
+    record.partial_complete=!recovery&&fromStep>0;return record.complete||record.partial_complete||record.recovery_complete;
   }catch(e){record.failure=String(e.stack??e);console.log('TOUR STOP '+e.message);return false;}
   finally{
     await call('cancel_movement',{agent});record.end=tourPosition(await call('look',{agent}));save();
