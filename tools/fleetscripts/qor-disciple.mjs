@@ -129,7 +129,21 @@ export const script = {
         return r?.ok === true && Number(r?.took?.shilling ?? 0) > 0;
       }, 'the hall gave no shillings'), optional: true }] : []),
       ...(want.length ? [
-        walk(TEMPLE, { why: 'Priestess Zuxana, Temple of Qor (the entrance alternates between 598 and 589)' }),
+        // WAIT OUT ONE FLIP OF THE DOOR RATHER THAN WALKING HOME. Only one of the two entrances is
+        // open at a time and they swap every ten minutes (tempqor.kod ExitsTimer), so a walk that
+        // arrives at the shut one fails at the threshold — measured 2026-09-28, Camilla at 598
+        // twice — and the old answer was the walk home to the hunt room and back again ten minutes
+        // later. Standing at the entrance for one flip guarantees the next attempt meets an open
+        // door. The wait is skipped the moment the character is already inside.
+        { ...walk(TEMPLE, { why: 'Priestess Zuxana, Temple of Qor (the entrance alternates between 598 and 589)' }), optional: true },
+        { ...verify(async ({ call }) => {
+          const here = async () => Number((await call('status', { agent }, 30_000).catch(() => null))?.room_num);
+          if (await here() === TEMPLE) return true;
+          console.log(`  ${agent}: the temple door was shut — waiting one ten-minute flip where I stand`);
+          await new Promise(r => setTimeout(r, 630_000));
+          return true;
+        }, 'could not wait for the temple door'), optional: true },
+        walk(TEMPLE, { why: 'Priestess Zuxana, after one flip of the entrance' }),
         ...want.map(s => learn(TEACHER, s, { retry: true })),
         knowsAll(want),
       ] : []),
