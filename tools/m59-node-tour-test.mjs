@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {tourPlan,tourComplete,insideNode,TOUR_NODES} from './m59-node-tour.mjs';
+import {STONES} from './m59-stones.mjs';
+let count=0;const test=(name,fn)=>{fn();count++;console.log('ok '+name);};
+const complete=()=>({start:{room:2},end:{room:2},nodes:TOUR_NODES.map(stone=>({stone,position:STONES[stone]}))});
+test('requested node order is fixed',()=>assert.deepEqual(tourPlan().filter(s=>s.kind==='meld').map(s=>s.node),['victoria','sentinel','ancient','badlands','cave']));
+test('full loop requires all five actual meld boxes',()=>assert.equal(tourComplete(complete()),true));
+test('stopped outbound route cannot masquerade as loop',()=>{const r=complete();r.end.room=52;assert.equal(tourComplete(r),false);});
+test('a partial replay cannot become a room-2 loop',()=>{const r=complete();r.start.room=39;assert.equal(tourComplete(r),false);});
+test('failure retained even when cleanup returns room 2',()=>{const r=complete();r.failure='shelf';assert.equal(tourComplete(r),false);});
+test('missing node stays incomplete',()=>{const r=complete();r.nodes.pop();assert.equal(tourComplete(r),false);});
+test('wrong order stays incomplete',()=>{const r=complete();r.nodes.reverse();assert.equal(tourComplete(r),false);});
+test('same coordinates in wrong room are not a node arrival',()=>assert.equal(insideNode({...STONES.ancient,room:589},'ancient'),false));
+test('box includes two squares on both axes',()=>assert.equal(insideNode({room:39,row:15,col:48},'victoria'),true));
+test('box excludes three squares on either axis',()=>{assert.equal(insideNode({room:39,row:16,col:46},'victoria'),false);assert.equal(insideNode({room:39,row:13,col:49},'victoria'),false);});
+test('ordinary route has no administrative step',()=>assert.ok(tourPlan().every(s=>['travel','rail','meld','cut','cross','walk'].includes(s.kind))));
+test('loop ends with the actual room-2 transition',()=>assert.deepEqual(tourPlan().at(-1),{kind:'travel',to:2}));
+console.log(count+' tour checks passed');
