@@ -24590,8 +24590,15 @@ export class Autopilot {
       const spare = inv.filter(o => !/shilling/i.test(c.rsc.get(o.nameRsc) || '')).length;
       const under = this.policy.sellWhenBrokeUnder ?? 500;
       const need = this.policy.sellWhenBrokeStacks ?? 8;
+      // AND IT IS STILL A SELL TRIP, so it carries the same $10k floor as load and stacks. With the
+      // money flow on, a chalice rider hands its shillings to the guild hall and is "broke" by design:
+      // 2026-09-28 Floyd and Animal opened six broke trips to Barloque in an hour with ~7.5k aboard.
+      const worth = money < under && spare >= need ? this.packSaleValue() : null;
+      if (worth && worth.value < this.minSellTripValue()) return { sell: false, trigger: null, fullness,
+        why: `${money} to its name, but the pack would fetch about ${worth.value}, under the ` +
+             `${this.minSellTripValue()} a sell trip should carry` };
       if (money < under && spare >= need)
-        return { sell: true, trigger: 'broke', money, spare,
+        return { sell: true, trigger: 'broke', money, spare, estimated_value: worth?.value,
                  why: `${money} to its name and ${spare} stacks aboard, and nothing is spawning` };
     }
     return { sell: false, trigger: null, fullness,

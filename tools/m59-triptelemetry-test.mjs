@@ -51,5 +51,19 @@ ok('the operator\'s number is the default', MIN_SELL_TRIP_VALUE === 10_000);
 }
 ok('a truly full pack goes whatever it is worth', SELL_REGARDLESS_AT > 0.9 && SELL_REGARDLESS_AT < 1);
 
+// 2026-09-28: chalice riders hand their shillings to the guild hall and read "broke" by design;
+// Floyd and Animal opened six broke trips to Barloque in an hour with ~7.5k aboard.
+{
+  const items = [{ name: 'shilling', amount: 400 }, ...Array.from({ length: 9 }, () => ({ name: 'long sword', amount: 1 }))];
+  const stub = r => Object.assign(r, { standingOrderUnstarted: () => null, overfarmHoldsTrip: () => null,
+    supplyShortfall: () => ({ short: false }) });
+  const { r } = rig({ items, policy: { sellWhenBroke: true } });
+  const cheap = stub(r).checkIfShouldSell();
+  ok('a broke character whose pack is worth under the floor stays', cheap.sell === false, JSON.stringify(cheap));
+  const { r: low } = rig({ items, policy: { sellWhenBroke: true, minSellTripValue: 250 } });
+  const go = stub(low).checkIfShouldSell();
+  ok('and goes once the pack clears it', go.sell === true && go.trigger === 'broke', JSON.stringify(go));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
