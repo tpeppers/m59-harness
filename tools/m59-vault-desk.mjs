@@ -466,8 +466,13 @@ export class VaultDesk {
     // chests and keeps only the kit. The go-between does it only if already inside — it never walks in
     // for this. The manager does it from the chests and goes back to the booth.
     if (this.cfg.shift_stash) {
-      const kit = Object.entries(this.cfg.shift_kit ?? {}).map(([item, amount]) => ({ item, amount }));
+      const kitOf = agent => {
+        const k = this.cfg.shift_kit ?? {};
+        const mine = k[agent] && typeof k[agent] === 'object' ? k[agent] : k;
+        return Object.entries(mine).filter(([, n]) => typeof n === 'number' && n > 0).map(([item, amount]) => ({ item, amount }));
+      };
       for (const agent of [this.G, this.M]) {
+        const kit = kitOf(agent);
         const row = await this.row(agent, true);
         if (Number(row?.room_num) !== HALL) continue;
         if (agent === this.M) await this.post('chests');
@@ -486,6 +491,13 @@ export class VaultDesk {
     if (!this.cfg.practice) return this.sleep(this.cfg.poll_ms);
     const agent = this.practiceTurn++ % 2 ? this.G : this.M;
     const r = await this.practice({ call: this.call, agent, ledger: this.ledgers[agent] ?? null }).catch(e => ({ cast: false, why: e.message }));
+    // THE MANAGER RE-DRAWS between customers: a chest visit tops practice_keep back up. At most every
+    // ten minutes, so an empty chest is not walked to on every idle turn. The go-between cannot.
+    if (r?.restock && agent === this.M && this.now() - (this.redrewAt ?? 0) > 10 * 60_000) {
+      this.redrewAt = this.now();
+      await this.chestVisit({}).catch(e => this.log(`  practice re-draw failed: ${e.message}`));
+      return r;
+    }
     if (!r?.cast) await this.sleep(Math.min(this.cfg.poll_ms, r?.retryInMs ?? this.cfg.poll_ms));
     return r;
   }

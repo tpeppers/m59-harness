@@ -64,6 +64,8 @@ export const DEFAULTS = Object.freeze({
   // (worn gear and money stay) and draws back only this kit. Off by default: the two are somebody's
   // disciples and their packs are their training stock. The manager needs keep_free of its pack empty.
   shift_stash: false,
+  // {item: n} for both, or {agent: {item: n}} per character (the go-between cannot reach the chests
+  // to top up, so it carries more).
   shift_kit: Object.freeze({ elderberry: 30, 'fairy wing': 10, 'loaf of bread': 5 }),
 });
 

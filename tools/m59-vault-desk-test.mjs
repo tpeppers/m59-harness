@@ -273,14 +273,26 @@ try {
     W2.packs.t2 = [{ id: 70, name: 'herb', amount: 132 }, { id: 71, name: 'elderberry', amount: 96 }];
     W2.packs.t3.push({ id: 72, name: 'herb', amount: 250 }, { id: 73, name: 'shilling', amount: 1784 });
     W2.chests.elderberry = 0;
-    await deskFor(W2, { shift_stash: true }).startShift();
+    await deskFor(W2, { shift_stash: true, shift_kit: { t2: { elderberry: 60, 'fairy wing': 20 }, t3: { elderberry: 30 } } }).startShift();
     ok('both stashed', W2.stashedBy?.includes('t2') && W2.stashedBy?.includes('t3'), JSON.stringify(W2.stashedBy));
     ok('herbs went in', W2.chests.herb === 382 && W2.count(W2.packs.t3, 'herb') === 0);
     ok('money stayed', W2.count(W2.packs.t3, 'shilling') === 1784);
-    ok('the kit came back', W2.count(W2.packs.t3, 'elderberry') === 30 && W2.count(W2.packs.t2, 'elderberry') === 30,
+    ok('each its own kit back', W2.count(W2.packs.t3, 'elderberry') === 30 && W2.count(W2.packs.t2, 'elderberry') === 60,
        `${W2.count(W2.packs.t3, 'elderberry')}/${W2.count(W2.packs.t2, 'elderberry')}`);
     ok('manager at the booth, go-between at the inn', W2.rows.t3.where === 'booth' && W2.rows.t2.room_num === INN);
     ok('the main door never opened', W2.mainDoor === 0);
+  }
+  section('the manager re-draws practice reagents when it runs out, not the go-between');
+  {
+    const W = world();
+    W.packs.t3 = [];
+    const d = deskFor(W);
+    d.practice = async ({ agent }) => ({ cast: false, restock: true, agent });
+    await d.idle();                                    // the manager's turn
+    ok('a chest visit, back at the booth', W.walks.join(',') === 'chests,booth', W.walks.join(','));
+    ok('with its practice kit', W.count(W.packs.t3, 'elderberry') === 30);
+    await d.idle(); await d.idle();
+    ok('the go-between never walks for it, and no second visit inside ten minutes', W.walks.length === 2, W.walks.join(','));
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });
