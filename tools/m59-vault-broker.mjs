@@ -61,6 +61,8 @@ export const DEFAULTS = Object.freeze({
   practice: true,                             // cast practice spells between customers
   buy_food_at_inn: true,                      // the go-between buys the deskers' food at the inn (m59-vault-desk INN_FOOD)
   inn_food_amount: 10,
+  food_float: 1000,                           // shillings drawn from the chests for the go-between's food
+  food_float_min: 300,                        // below this the float is drawn before buying
   start_vigor: 130,                           // each desker eats to this before the shift's walks (keepers pause walks at 80)
   // Re-drawn after a deposit, and by the manager when practice says it is short of reagent or FOOD.
   // Deskers eat ordinary food, never inky caps (operator, 2026-09-28): one bread per ~333 s at most.

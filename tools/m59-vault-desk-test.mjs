@@ -508,6 +508,34 @@ try {
     ok('not again inside ten minutes', W.bought.length === 2, JSON.stringify(W.bought));
   }
 
+  section('a go-between with no money gets a food float from the chests before it buys');
+  {
+    const W = world();
+    W.chests.shilling = 50_000;
+    const d = deskFor(W);
+    d.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
+    d.practiceTurn = 1;                                   // the go-between's turn
+    await d.idle();
+    ok('1000 shillings drawn and passed across the window', W.count(W.packs.t2, 'shilling') === 1000 && W.chests.shilling === 49_000, `${W.count(W.packs.t2, 'shilling')} / ${W.chests.shilling}`);
+    ok('then the food was bought', W.count(W.packs.t2, 'turkey leg') === 10);
+  }
+
+  section('the shift ends with nothing of the guild’s in a desker’s pack');
+  {
+    const W = world();
+    W.packs.t2 = [{ id: 81, name: 'edible mushroom', amount: 80 }, { id: 82, name: 'diamond', amount: 5 }];
+    const d = deskFor(W);
+    const a = d.book.request({ kind: 'withdraw', from: 'hk2', items: [{ item: 'edible mushroom', amount: 80 }], where: INN });
+    d.book.update(a.id, { status: 'waiting', held_by: 't2', holding: [{ item: 'edible mushroom', amount: 80 }], meet: 'town' });
+    const b = d.book.request({ kind: 'deposit', from: 'hk2', items: [{ item: 'diamond', amount: 5 }], where: INN });
+    d.book.update(b.id, { status: 'held', held_by: 't2', holding: { diamond: 5 } });
+    await d.endShift();
+    ok('the held deposit is finished', d.book.read().tickets.find(x => x.id === b.id).status === 'done' && W.chests.diamond === 5);
+    ok('the waiting withdrawal’s goods go back into the chests', d.book.read().tickets.find(x => x.id === a.id).status === 'returned'
+       && W.count(W.packs.t2, 'edible mushroom') === 0, JSON.stringify(W.packs.t2));
+    ok('and the manager ends at the chests', W.rows.t3.where === 'chests');
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

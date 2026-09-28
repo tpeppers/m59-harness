@@ -717,6 +717,11 @@ export class VaultDesk {
     if (!this.cfg.buy_food_at_inn) return false;
     const n = Number(this.cfg.inn_food_amount ?? 10);
     if (!(await this.goTo(this.G, INN))) return false;
+    // A FOOD FLOAT FROM THE CHESTS: the go-between's own keeper banks everything above its walking
+    // money, so five turkey legs emptied his purse on the first buy (2026-09-28 13:07) and the next
+    // bought nothing. The manager draws `food_float` from the chests and passes it across the window.
+    const purse = countOf(await this.pack(this.G), 'shilling');
+    if (purse < Number(this.cfg.food_float_min ?? 300)) await this.fundFood().catch(e => this.log(`  food float failed: ${e.message}`));
     const before = countOf(await this.pack(this.G), INN_FOOD.item);
     await this.buyFood(this.G, n);
     const bought = countOf(await this.pack(this.G), INN_FOOD.item) - before;
@@ -728,6 +733,19 @@ export class VaultDesk {
     await this.goTo(this.G, INN);
     this.log(`  ${given} ${INN_FOOD.item} crossed the window to ${this.names().manager}`);
     return given > 0;
+  }
+
+  /** Shillings from the chests to the go-between, across the window, for food. */
+  async fundFood() {
+    const amount = Number(this.cfg.food_float ?? 1000);
+    const { took } = await this.chestVisit({ wants: [{ item: 'shilling', amount }] });
+    const drew = Number(took?.shilling ?? 0);
+    if (!drew) { this.log('  the chests gave no shillings for food'); return 0; }
+    if (!(await this.goTo(this.G, HALL))) return 0;
+    const given = await this.hand(this.M, this.G, 'shilling', drew);
+    await this.goTo(this.G, INN);
+    this.log(`  food float: ${given} shillings from the chests to ${this.names().go_between}`);
+    return given;
   }
 
   /** Between customers: one practice cast, alternating characters. */
@@ -886,6 +904,24 @@ export class VaultDesk {
   }
 
   async endShift() {
+    // NOTHING OF THE GUILD'S IS LEFT IN A DESKER'S PACK. Between shifts a desker's own keeper treats its
+    // pack as its own: 640 edible mushrooms held for a customer were sold and banked by Pepe's keeper on
+    // 2026-09-28. So held deposits are finished, and whatever the go-between holds for a waiting
+    // withdrawal goes back into the chests, before the two are released.
+    for (let i = 0; i < 3; i++) { const r = await this.resumeHeld().catch(() => null); if (!r) break; }
+    const waits = this.book.read().tickets.filter(t => t.status === 'waiting' && Array.isArray(t.holding) && t.holding.length && t.held_by === this.G);
+    if (waits.length) {
+      const back = {};
+      for (const t of waits) for (const l of t.holding) back[l.item] = (back[l.item] ?? 0) + l.amount;
+      if (await this.goTo(this.G, HALL).catch(() => false)) {
+        const crossed = {};
+        for (const [item, n] of Object.entries(back)) { const k = await this.hand(this.G, this.M, item, n).catch(() => 0); if (k) crossed[item] = k; }
+        await this.goTo(this.G, INN).catch(() => false);
+        if (Object.keys(crossed).length) await this.chestVisit({ deposit: crossed }).catch(() => null);
+        for (const t of waits) this.close(t, 'returned', 'the shift ended before he came; returned to the chests', { holding: null });
+        this.log(`  shift end: ${JSON.stringify(crossed)} returned to the chests`);
+      }
+    }
     // Never leave anyone in the booth: a keeper without 7263b8f cannot find its way out of it.
     await this.call('hall_post', { agent: this.M, where: 'chests' }, 300_000).catch(() => null);
   }
