@@ -11046,6 +11046,10 @@ const TOOLS = [
         description: 'THE KARMA SCHOOL THIS CHARACTER IS PROTECTING (policy.karma): evil kills only ' +
           'creatures with karma > 0, good only < 0. On its own it narrows what is HUNTED and CLEARED ' +
           'and nothing else; null clears it' },
+      hold_for_courier: { type: 'boolean',
+        description: 'HOLD THE FULL-PACK TOWN TRIP FOR THE COURIER (default false): the load and stack sell ' +
+          'triggers wait, so a crew hunter unloads to its courier at the stage room instead of walking to ' +
+          'town. Unweighable and supply triggers still fire' },
       overdrive: { type: ['object', 'null'],
         description: 'VIGOR OVERDRIVE: {enabled, target = 200, maxMinutes = 30, digestTo = 20, digestMaxMinutes = 15}, ' +
           'or null to clear. At the target it keeps sitting until the stomach is down to digestTo (room for a ' +
@@ -12069,6 +12073,7 @@ const TOOLS = [
       if (a.clear_weak !== undefined) p.policy.clearWeak = !!a.clear_weak;
       if (a.karma !== undefined) p.policy.karma = ['evil', 'good', 'neutral'].includes(a.karma) ? a.karma : null;
       if (a.karma_strict !== undefined) p.policy.karmaStrict = !!a.karma_strict;
+      if (a.hold_for_courier !== undefined) p.policy.holdForCourier = !!a.hold_for_courier;
       if (a.overdrive !== undefined) p.policy.overdrive = a.overdrive && typeof a.overdrive === 'object'
         ? { enabled: a.overdrive.enabled !== false, target: Number(a.overdrive.target) || 200,
             maxMinutes: Number(a.overdrive.maxMinutes) || 30,

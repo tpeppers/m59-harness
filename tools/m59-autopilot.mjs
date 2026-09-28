@@ -24442,9 +24442,21 @@ export class Autopilot {
     // read, and supply below is the character saying it can no longer work; neither waits.
     // That is also why purchaseRequests buys the scaled amount -- leaving town stocked for an
     // ordinary lap would just move the interruption rather than remove it.
-    const hold = this.overfarmHoldsTrip();
+    // HOLD FOR THE COURIER (operator, 2026-09-28: "Hunters in room 2 should strive to overeat and wait
+    // for the courier to return"). A crew with a courier unloads to it at the stage room; when it is
+    // away, the full hunter waits there — eating to 200 meanwhile — instead of walking its own load to
+    // town. Only the load and stack triggers wait, exactly as overfarming's do: unweighable and supply
+    // still leave, because those are the character saying it cannot work.
+    const courierHold = this.policy.holdForCourier ? { courier: true } : null;
+    const hold = this.overfarmHoldsTrip() ?? courierHold;
     const at = this.policy.sellAtLoad ?? 0.85;
-    if (hold && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)))
+    if (hold?.courier && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)) &&
+        Date.now() - (this._courierHoldNotedAt ?? 0) > 300_000) {
+      this._courierHoldNotedAt = Date.now();
+      this.note('pack full — waiting for the courier rather than walking to town', { fullness, stacks,
+        why: 'holdForCourier: the crew unloads at the stage room, and a walk to town is 31% of its day' });
+    }
+    if (hold && !hold.courier && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)))
       this.note('overfarming - holding the town trip', { ...hold,
         why: 'the pack is full, which is when overfarming starts: keep killing and trade up ' +
              'until ' + hold.target_percent + '% of capacity has been sifted' });
