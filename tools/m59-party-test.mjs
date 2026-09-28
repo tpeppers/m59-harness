@@ -26,7 +26,7 @@ import { claimSpot, releaseSpot, spotTakenByAnother, claimedSpotList,
 import * as party from './m59-party.mjs';
 import { armourKind, armourScore, armourOf, ARMOUR_SLOTS, weaponRanking, weaponScore,
          isUnrevealed, unrevealedHeldBack,
-         absorbsSomething, wearBest } from './m59-skills.mjs';
+         absorbsSomething, wearBest, brokenGearText, brokenSet, parseConditionLevel } from './m59-skills.mjs';
 import { pairUp, assignRooms } from './m59-supervise.mjs';
 
 let pass = 0, fail = 0;
@@ -335,6 +335,28 @@ party.resetParties();
     return { need: () => c, pacer: { submit: async (_k, fn) => fn() }, _c: c };
   };
   const bodyOf = (r) => (r.worn || []).find(w => w.slot === 'armour');
+  {
+    const s = mk(['gauntlets', 'scale armor', "knight's shield"], [2, 3]);
+    const r = await wearBest(s, { refresh: false });
+    ok('default wearBest equips gauntlets alongside existing armour and shield',
+       r.worn.some(w => w.slot === 'gauntlets') && [1, 2, 3].every(id => s._c.using.has(id)));
+    const again = await wearBest(s, { refresh: false, slots: ['gauntlets'] });
+    ok('already-worn gauntlets are recognised from the equipment list',
+       again.worn.some(w => w.slot === 'gauntlets' && w.already));
+    s._c.inventory[0].rarity = 100;
+    ok('unrevealed gauntlets are not eligible for automatic use', armourOf(s._c).gauntlets.length === 0);
+    s._c.inventory[0].rarity = 0;
+    brokenSet(s._c).add(1);
+    ok('known broken gauntlets are not eligible for automatic use', armourOf(s._c).gauntlets.length === 0);
+    ok('ruined gauntlets are recognised from their condition description',
+       brokenGearText('These gauntlets are ruined and offer no benefit.') &&
+       parseConditionLevel('These gauntlets are ruined and offer no benefit.') === 0);
+    ok('gauntlet condition readings retain the full wear scale',
+       parseConditionLevel('They are in danger of falling apart.') === 1 &&
+       parseConditionLevel('They have been harshly dented in several places.') === 2 &&
+       parseConditionLevel('They are tarnished and scarred but still usable.') === 3 &&
+       parseConditionLevel('They shine with the glint of perfection.') === 4);
+  }
 
   ok('absorption is what makes the trade real', absorbsSomething({ absorb: 4 }) === true);
   ok('leather absorbs nothing, and does not need to', absorbsSomething({ absorb: 0 }) === false);

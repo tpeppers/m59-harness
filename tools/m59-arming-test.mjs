@@ -140,7 +140,7 @@ console.log('\nlooted armour is worn by an armed character too');
   const { readFileSync } = await import('node:fs');
   // A client with an axe worn and, in the pack, a leather armour and a shield. `wearing` adds
   // names to the use list.
-  const names = { 1: 'axe', 2: 'leather armor', 3: 'small round shield', 4: 'chain armor' };
+  const names = { 1: 'axe', 2: 'leather armor', 3: 'small round shield', 4: 'chain armor', 5: 'gauntlets' };
   const mk = ({ wearing = ['axe'], carrying = [1, 2, 3], economy = 'keeper', saved = [] } = {}) => {
     const ap = Object.create(Autopilot.prototype);
     ap.policy = {}; ap.tally = {}; ap.note = () => {};
@@ -158,6 +158,18 @@ console.log('\nlooted armour is worn by an armed character too');
   };
 
   let ap = mk();
+  ap = mk({ wearing: ['axe', 'chain armor', 'small round shield'], carrying: [1, 3, 4, 5] });
+  await ap.wearLootedArmour(['gauntlets']);
+  ok('looted gauntlets fill their own slot without replacing body armour or shield',
+     ap.asked.length === 1 && ap.asked[0].join(',') === 'gauntlets');
+  ap = mk({ carrying: [1, 5], saved: ['gauntlets'] });
+  await ap.wearIntoEmptySlots();
+  ok('gauntlets reserved for someone else are not worn', ap.asked.length === 0);
+  ap = mk({ carrying: [1, 5] });
+  await ap.wearIntoEmptySlots();
+  ok('gauntlets already in inventory are equipped without a new loot event',
+     ap.asked.length === 1 && ap.asked[0].includes('gauntlets'));
+  ap = mk();
   await ap.wearLootedArmour(['orc tooth x3', 'scimitar']);
   ok('loot with no armour in it asks for nothing', ap.asked.length === 0);
   ap = mk();

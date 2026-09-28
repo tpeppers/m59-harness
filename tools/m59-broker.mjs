@@ -10354,7 +10354,7 @@ const TOOLS = [
   {
     name: 'wear_best',
     description:
-      'Put on the best armour, shield and helm in your inventory. The counterpart to equip_best, ' +
+      'Put on the best armour, shield, helm and gauntlets in your inventory. The counterpart to equip_best, ' +
       'which handles WEAPONS ONLY — a character can own leather armour and fight in its shirt, and ' +
       'the pack will not tell you: only the server\'s use list (plUsing) says what is actually worn.\n' +
       'HEAVY ARMOUR IS NOT SIMPLY BETTER HERE, which is why this ranks rather than picking the ' +
@@ -10369,8 +10369,8 @@ const TOOLS = [
       'list first and only sends what is actually missing.',
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
-      slots: { type: 'array', items: { type: 'string', enum: ['armour', 'shield', 'helm'] },
-               description: 'default all three' },
+      slots: { type: 'array', items: { type: 'string', enum: skills.ARMOUR_SLOTS },
+               description: 'default all four' },
     }, required: ['agent'] },
     run: (a) => skills.wearBest(session(a.agent),
                                a.slots?.length ? { slots: a.slots } : {}),
@@ -18110,7 +18110,7 @@ async function brokerRtsRead(url) {
           const name = c.rsc.get(item.nameRsc);
           const armour = skills.armourKind(name);
           const role = skills.weaponScore(name) > 0 ? 'weapon'
-            : armour?.slot === 'armour' ? 'armor'
+            : ['armour', 'gauntlets'].includes(armour?.slot) ? 'armor'
             : armour?.slot === 'shield' ? 'shield'
             : armour?.slot === 'helm' ? 'helmet'
             : foodIds.has(item.id) ? 'food'

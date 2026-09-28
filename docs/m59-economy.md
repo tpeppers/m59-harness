@@ -1,5 +1,12 @@
 # Money, merchants, gear and supply
 
+Gauntlets have their own default equipment slot. The keeper equips usable,
+unreserved pairs after looting and during its periodic empty-slot check;
+`wear_best` includes them too. Existing armour, shield and helm slots are
+independent. Gauntlets' +1 damage is an attack bonus, not damage absorption
+(`gauntlet.kod`); their +15 defence alone makes wearing a sound pair preferable
+to an empty slot. Broken, cursed, unrevealed and reserved items remain excluded.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what a guild want is, and every way a trade can succeed while moving nothing.
 
 ## Who will actually pay you

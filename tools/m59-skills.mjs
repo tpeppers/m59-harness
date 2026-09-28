@@ -403,7 +403,7 @@ export const WEAPON_CONDITION = /shattered by a powerful blow/i;  // seen when e
 // against the sound reading, "without blemish or flaw". Confirmed live on Beaker: of two
 // identical-looking leathers, the one described as useless was refused silently and the
 // one without blemish went straight on.
-export const ARMOUR_CONDITION = /is useless[.,]/i;                // armor.kod:24, helmet.kod:24
+export const ARMOUR_CONDITION = /is useless[.,]|are ruined and offer no benefit|gauntlets are a tangled mess of metal/i;
 export const brokenGearText = (t) => ARMOUR_CONDITION.test(t || '');
 
 export const brokenWeaponText = (t) => WEAPON_SHATTERED.test(t || '') || WEAPON_IS_BROKEN.test(t || '')
@@ -425,29 +425,33 @@ export function parseConditionLevel(desc) {
   if (!desc) return null;
   // Broken first — both weapon and armour
   if (/shattered by a powerful blow/i.test(desc)) return 0;
-  if (/is useless[.,]/i.test(desc)) return 0;
+  if (ARMOUR_CONDITION.test(desc)) return 0;
   if (/shattered by a forceful blow/i.test(desc)) return 0;
   if (/cleft in two/i.test(desc)) return 0;
   // Poor / nearly broken
   if (/may not last much longer/i.test(desc)) return 1;
   if (/cracked in several places/i.test(desc)) return 1;
   if (/dented and worn nearly to the point/i.test(desc)) return 1;
+  if (/are in danger of falling apart/i.test(desc)) return 1; // gauntlet.kod
   // Battle-worn but functional
   if (/notched and stained/i.test(desc)) return 2;
   if (/nicked and scarred/i.test(desc)) return 2;
   if (/deeply scarred from battle/i.test(desc)) return 2;
   if (/marked with the scars/i.test(desc)) return 2;
+  if (/have been harshly dented in several places/i.test(desc)) return 2;
   // Good condition
   if (/slightly tarnished/i.test(desc)) return 3;
   if (/dent or two/i.test(desc)) return 3;
   if (/deep gouge/i.test(desc)) return 3;
   if (/stained with blood but otherwise/i.test(desc)) return 3;
+  if (/are tarnished and scarred but still usable/i.test(desc)) return 3;
   // Excellent / flawless (including mended)
   if (/flawless condition/i.test(desc)) return 4;
   if (/without blemish/i.test(desc)) return 4;
   if (/smooth perfection/i.test(desc)) return 4;
   if (/excellent condition/i.test(desc)) return 4;
   if (/great condition/i.test(desc)) return 4;
+  if (/shine with the glint of perfection/i.test(desc)) return 4;
   return null; // description present but no condition phrase recognised
 }
 
@@ -876,9 +880,12 @@ export const ARMOUR = [
   { re: /\bhelm\b/i,                     slot: 'helm',   defense: 20,   absorb: 1, spell: -5 },  // helmet/simphelm.kod:19,45
   { re: /ivy circlet/i,                  slot: 'helm',   defense: 10,   absorb: 0, spell: 0 },   // helmet/ivycircl.kod
   { re: /circlet/i,                      slot: 'helm',   defense: 5,    absorb: 0, spell: 0 },   // helmet/circlet.kod
+  // gauntlet.kod: separate ITEM_USE_GAUNTLET slot; +15 defence, +20 attack,
+  // +1 outgoing damage. The damage bonus is not incoming-hit absorption.
+  { re: /\bgauntlets\b/i,                slot: 'gauntlets', defense: 15, absorb: 0, spell: 0 },
 ];
 
-export const ARMOUR_SLOTS = ['armour', 'shield', 'helm'];
+export const ARMOUR_SLOTS = ['armour', 'shield', 'helm', 'gauntlets'];
 
 // AN EMPTY SLOT IS NOT A NEUTRAL BASELINE, AND `score` ASKS THE WRONG QUESTION ABOUT ONE.
 //
@@ -940,7 +947,7 @@ export const armourScore = (a) => a ? a.defense + a.absorb * ABSORB_IS_WORTH : -
 // and so must not be worn. A worn piece is out of the pack's reach for a deposit or a hand-over.
 export function armourOf(c, { allowUnrevealed = false, exclude = null } = {}) {
   const broken = brokenSet(c);
-  const out = { armour: [], shield: [], helm: [] };
+  const out = Object.fromEntries(ARMOUR_SLOTS.map(slot => [slot, []]));
   for (const o of c.inventory || []) {
     if (broken.has(o.id)) continue;
     const name = c.rsc.get(o.nameRsc) || '';
