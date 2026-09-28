@@ -459,6 +459,27 @@ try {
     ok('the ticket did not claim success', r.worked?.status !== 'done', JSON.stringify(r));
   }
 
+  section('a withdrawal half-handed-over in town waits with the go-between, and is finished next time');
+  {
+    const W = world();
+    W.chests['edible mushroom'] = 747;
+    W.rows.hk2.room_num = 102;
+    W.packs.hk2 = [];
+    const d = deskFor(W, { town_rooms: [101, 102, 106, 109] });
+    d.book.request({ kind: 'withdraw', from: 'hk2', items: [{ item: 'edible mushroom', amount: 80 }], where: INN });
+    const realHand = d.hand.bind(d);
+    d.hand = async (f, to, item, n, tr) => (to === 'hk2' ? (W.rows.hk2.room_num = 109, 0) : realHand(f, to, item, n, tr));   // he walks off mid-trade
+    const r = await d.turn();
+    const t = d.book.read().tickets[0];
+    ok('waiting, held by the go-between for him in town', t.status === 'waiting' && t.meet === 'town' && t.holding?.[0]?.amount === 80 && W.count(W.packs.t2, 'edible mushroom') === 80, JSON.stringify(t));
+    d.hand = realHand;
+    d.cfg.auto_withdraw = { hk2: { items: { 'edible mushroom': [20, 80] } } }; d.noticedAt = 0;
+    ok('no second withdrawal is filed while it waits', (await d.noticeDepositors()).length === 0);
+    const r2 = await d.turn();
+    ok('handed over when he next stands in town', r2.worked?.status === 'done' && W.count(W.packs.hk2, 'edible mushroom') === 80, JSON.stringify(r2));
+    ok('and the go-between goes back to the inn', W.rows.t2.room_num === INN);
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

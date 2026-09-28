@@ -509,8 +509,13 @@ export class VaultDesk {
           moved[item] = (moved[item] ?? 0) + n;
           const w = wants.find(x => same(x.item, item)); if (w) w.amount -= n;
         }
-        if (got.some(l => (gave[l.item] ?? 0) < l.amount))
-          return this.close(t, 'partial', `${who.character} moved off before all of it was handed over; ${carrier} is holding the rest`, { moved });
+        // THE REST WAITS FOR HIM IN TOWN, held by the go-between, handed over the next time he stands in
+        // a town room (resumeWaiting). vb-217 closed "partial" with 80 edible mushrooms in Pepe's pack and
+        // nothing to ever deliver them; the next standing withdrawal would have drawn 80 more.
+        const rest = got.map(l => ({ item: l.item, amount: l.amount - (gave[l.item] ?? 0) })).filter(l => l.amount > 0);
+        if (rest.length)
+          return this.close(t, 'waiting', `${who.character} moved off before all of it was handed over; ${carrier} holds it for the next time he is in town`,
+                            { moved, held_by: carrier, holding: rest, meet: 'town' });
         if (Object.keys(short).length) break;
         continue;
       }
@@ -721,8 +726,13 @@ export class VaultDesk {
     const book = this.book.read();
     for (const t of book.tickets.filter(x => x.status === 'waiting' && x.holding?.length)) {
       const who = await this.row(t.from, true);
-      if (!who || Number(who.room_num) !== Number(t.meet)) continue;
+      if (!who) continue;
+      if (t.meet === 'town') {
+        if (!(this.cfg.town_rooms ?? []).includes(Number(who.room_num))) continue;
+        if ((await this.meetInTown(who.agent)) == null) { await this.goTo(this.G, INN); continue; }
+      } else if (Number(who.room_num) !== Number(t.meet)) continue;
       const gave = await this.deliver(t.held_by, who, !!t.human || this.isHuman(who.character), t.holding);
+      if (t.meet === 'town') await this.goTo(this.G, INN);
       const moved = { ...(t.moved ?? {}) };
       for (const [k, n] of Object.entries(gave)) moved[k] = (moved[k] ?? 0) + n;
       const all = t.holding.every(l => (gave[l.item] ?? 0) >= l.amount);
@@ -771,7 +781,8 @@ export class VaultDesk {
     for (const [agent, s] of Object.entries(this.cfg.auto_withdraw ?? {})) {
       const row = rowFor(rows, agent);
       if (!row || !(this.cfg.town_rooms ?? []).includes(Number(row.room_num))) continue;
-      if (this.book.open(this.now()).some(t => t.kind === 'withdraw' && (same(t.from, row.character) || same(t.from, agent)))) continue;
+      if (this.book.read().tickets.some(t => t.kind === 'withdraw' && ['open', 'working', 'waiting'].includes(t.status)
+                                        && (same(t.from, row.character) || same(t.from, agent)))) continue;
       const pack = await this.pack(agent);
       const items = Object.entries(s.items ?? {}).map(([item, [min, target]]) => {
         const have = countOf(pack, item);
