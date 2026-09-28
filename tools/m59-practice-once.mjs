@@ -43,7 +43,10 @@
 // this waits until that break is heard OR the longest possible trance has elapsed since the cast
 // was sent, and only then reads the pack and returns.
 export const TRANCE_MARGIN_MS = 1500;
-export const maxTranceMs = castMs => Math.ceil((Number(castMs) || 15_000) * 1.49) + TRANCE_MARGIN_MS;
+// A cast time of 0 is a spell with NO trance (spell.kod:1892: viCast_time = 0 returns 0) — darkness,
+// for one — and must not be read as "unknown": that turned every darkness into a 15 s wait.
+export const maxTranceMs = castMs => Math.ceil((castMs == null || !Number.isFinite(Number(castMs)) ? 15_000 : Number(castMs)) * 1.49)
+  + TRANCE_MARGIN_MS;
 
 // FOOD, AND WHY IT IS ON A CLOCK (operator, 2026-09-28: "Set the guildhall deskers to eat other food,
 // not inky-caps. Bread or cheese ... they should be able to still reach 200 vigor by constantly eating
@@ -112,13 +115,28 @@ export const SHALILLE_DRILL = Object.freeze([
   { spell: 'detect evil', reagent: /^fairy wing$/i, per: 1, mana: 10, vigor: 5, self: true, castMs: 3000, school: "Shal'ille" },   // persench/detevil.kod:50,52,66
 ]);
 
+// THE QOR LEVEL-1 DRILL (operator, 2026-09-28: the Qor masters "stand there and spam-cast their
+// spells ... running a variant of the other casters"). Read off the kod: darkness costs a fairy wing
+// AND an entroot berry (roomench/darkness.kod:58-59, mana 8, no trance, default exertion 2); detect
+// good a fairy wing (persench/detgood.kod:49-66, mana 10, exertion 5, 3 s); cloak two entroot berries
+// (persench/cloak.kod:46-59, mana 5, 2 s). The two personal enchantments target the caster (by object
+// id, like detect evil); darkness targets the room. Every cast is karma-checked (spell.kod:456-498):
+// a Qor caster above -10 karma cannot cast any of these.
+export const QOR_DRILL = Object.freeze([
+  { spell: 'detect good', reagent: /^fairy wing$/i, per: 1, mana: 10, vigor: 5, self: true, castMs: 3000, school: 'Qor' },
+  { spell: 'cloak', reagent: /^entroot berr/i, per: 2, mana: 5, vigor: 2, self: true, castMs: 2000, school: 'Qor' },
+  { spell: 'darkness', reagent: /^fairy wing$/i, per: 1, also: [{ reagent: /^entroot berr/i, per: 1 }],
+    mana: 8, vigor: 2, self: false, castMs: 0, school: 'Qor' },
+]);
+
 const count = (items, rx) => (items ?? []).filter(i => rx.test(i.name ?? '')).reduce((n, i) => n + (Number(i.amount) || 1), 0);
 
 // THE CHOICE, as a pure function so it can be tested without a server: the castable spell with the
 // lowest ability; null (with the reason) when none is castable.
 export function choosePractice({ table, abilities, pack, mana, vigor = null, thriftBelow = 180 }) {
   const rows = table.map(t => ({ ...t, ability: abilities?.[t.spell] ?? null,
-    haveReagent: count(pack, t.reagent) >= t.per }));
+    // A SPELL WITH TWO REAGENTS (darkness) needs every one of them in the pack.
+    haveReagent: count(pack, t.reagent) >= t.per && (t.also ?? []).every(a => count(pack, a.reagent) >= a.per) }));
   const known = rows.filter(r => r.ability != null);
   if (!known.length) return { pick: null, why: 'knows none of the practice spells' };
   const stocked = known.filter(r => r.haveReagent);

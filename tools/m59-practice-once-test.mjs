@@ -2,7 +2,7 @@
 // OFFLINE. The practice picker (choosePractice in m59-practice-once.mjs) that a service desk or a
 // drill calls between other work — no broker, no socket. Each case is a way one practice cast could
 // be wasted or never happen.
-import { choosePractice, practiceOnce, maxTranceMs, SHALILLE_DRILL, Stomach, chooseFood } from './m59-practice-once.mjs';
+import { choosePractice, practiceOnce, maxTranceMs, SHALILLE_DRILL, QOR_DRILL, Stomach, chooseFood } from './m59-practice-once.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fail++; console.log(`  FAIL ${m}`); } };
@@ -92,6 +92,18 @@ ok(SHALILLE_DRILL.every(t => t.castMs > 0), 'every drill spell carries its kod c
      'plenty of vigor: the lowest ability, as before');
   ok(choosePractice({ table: SHALILLE_DRILL, abilities: ab, pack: both, mana: 27, vigor: 120 }).pick.spell === 'detect evil',
      'vigor short: the spell costing 5 vigor, not 15');
+}
+
+{
+  const qab = { 'detect good': 15, cloak: 18, darkness: 20 };
+  const qpack = (w, b) => [...(w ? [{ name: 'fairy wing', amount: w }] : []), ...(b ? [{ name: 'entroot berry', amount: b }] : [])];
+  ok(choosePractice({ table: QOR_DRILL, abilities: qab, pack: qpack(10, 10), mana: 30, vigor: 190 }).pick.spell === 'detect good',
+     'Qor: the lowest ability first');
+  ok(choosePractice({ table: QOR_DRILL, abilities: { ...qab, 'detect good': 50, cloak: 50 }, pack: qpack(0, 10), mana: 30, vigor: 190 }).pick.spell === 'cloak',
+     'darkness needs a wing AS WELL as a berry: with no wings it is skipped, cloak is cast');
+  ok(choosePractice({ table: QOR_DRILL, abilities: qab, pack: qpack(10, 0), mana: 30, vigor: 190 }).pick.spell === 'detect good',
+     'no berries: only detect good is castable');
+  ok(maxTranceMs(0) === 1500 && maxTranceMs(undefined) > 20_000, 'no trance (darkness) waits only the margin; an unknown cast time still waits long');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
