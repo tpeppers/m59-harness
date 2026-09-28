@@ -150,8 +150,8 @@ export class VaultDesk {
    * @param humans () -> the chalice store's human marks, or {} (who is a person right now)
    */
   constructor({ call, cfg, book, humans = () => ({}), log = console.log, sleep = ms => new Promise(r => setTimeout(r, ms)),
-                now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null }) {
-    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose });
+                now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null, reload = null }) {
+    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose, reload });
     this.failedInARow = 0;
     this.M = cfg.manager; this.G = cfg.go_between;
     this.cursor = {};                                   // chat seq per desk agent
@@ -650,6 +650,9 @@ export class VaultDesk {
    * look at most once a minute.
    */
   async noticeDepositors() {
+    // THE STANDING LISTS ARE RE-READ LIVE: a skip or a target changed in the private config applies
+    // within a minute, without a restart (and so without a shift's stash and redraw).
+    if (this.reload) { try { const f = this.reload(); for (const k of ['auto_deposit', 'auto_withdraw', 'town_rooms']) if (k in f) this.cfg[k] = f[k]; } catch {} }
     const spec = this.cfg.auto_deposit;
     if ((!spec && !this.cfg.auto_withdraw) || this.now() - (this.noticedAt ?? 0) < 60_000) return [];
     this.noticedAt = this.now();
@@ -838,7 +841,7 @@ if (isMain) {
   const ledgers = {};
   for (const a of agents) ledgers[a] = await trainingLedger({ agent: a }).catch(() => null);
   const desk = new VaultDesk({ call, cfg, book: new TicketBook(TICKETS_FILE(fleet)), humans: () => chalice?.read()?.human ?? {},
-                               log: say, ledgers, leased: () => !!lease, onClose: why => stop(why) });
+                               log: say, ledgers, leased: () => !!lease, onClose: why => stop(why), reload: () => loadConfig() });
   let stopping = false;
   let openTimer = null;                 // the OPEN heartbeat; declared before stop() can run
   const stop = async (why) => {

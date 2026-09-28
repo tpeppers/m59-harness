@@ -348,6 +348,10 @@ try {
     ok('the main door stayed shut', W.mainDoor === 0);
     d.noticedAt = 0;
     ok('at 80 nothing more is filed', (await d.noticeDepositors()).length === 0);
+    d.reload = () => ({ auto_withdraw: { hk2: { items: { 'edible mushroom': [90, 100] } } }, town_rooms: [102] });
+    d.noticedAt = 0;
+    const again = await d.noticeDepositors();
+    ok('a target changed in the config applies without a restart', again[0]?.items?.[0]?.amount === 20, JSON.stringify(again));
   }
 
   section('the desk does not work without its lease or its posts, and closes after ten minutes of it');
