@@ -693,6 +693,12 @@ if (isMain) {
   };
   process.on('SIGINT', () => stop('interrupted'));
   process.on('SIGTERM', () => stop('terminated'));
+  // A STOP ALWAYS SAYS WHY (m59-harness-3f, 2026-09-28): a crash and a hard kill used to leave the
+  // log ending at "desk open", which reads exactly like a desk still working.
+  process.on('uncaughtException', e => { say(`CRASHED: ${e?.stack ?? e}`); stop('crashed').catch(() => process.exit(1)); });
+  process.on('unhandledRejection', e => say(`unhandled rejection (still running): ${e?.message ?? e}`));
+  process.on('exit', code => { if (!stopping) say(`exited (code ${code}) without closing — killed from outside? ` +
+    'If so the manager may be in the booth and the training-yield requests may still be on disk'); });
 
   await desk.rows(true);
   await desk.startShift().catch(e => stop(`could not open: ${e.message}`));
