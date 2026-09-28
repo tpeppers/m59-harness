@@ -112,9 +112,25 @@ export const script = {
           const share = hallSplit(crew, parseWants(p.wants), weighItem, room)[agent] ?? [];
           st.draw = await hallDraw({ agent, crew, holder, share, p });
           PROVISION_RUN.draws.push({ agent, ...st.draw });
-        } else if (agent !== holder) {
+        } else if (agent === holder) {
+          // THE HOLDER IS FREED AS SOON AS THE RIDES ARE DONE. Its only part is dropping the cup, and
+          // held for the whole run (20-40 min) its keeper cannot run chalice duty: 2026-09-28 01:19-01:31
+          // a cup-return to it expired again and again while the cup bounced on the floor. Wait until
+          // every rider has left the stage room (the ride landed) or five minutes, then leave — it is
+          // not counted at the barrier below.
+          const stage = Number(p.stage);
+          const by = Date.now() + 5 * 60_000;
+          while (Date.now() < by) {
+            const rooms = await Promise.all(crew.map(a => call('status', { agent: a, brief: true }, 20_000)
+              .then(x => Number(x?.room_num ?? x?.where?.num)).catch(() => null)));
+            if (rooms.every(r => r != null && r !== stage)) break;
+            await new Promise(res => setTimeout(res, 5000));
+          }
+          return true;
+        } else {
           await call('rest', { agent }, 30_000).catch(() => {});
         }
+        reexpect('provisioned', SURVEY.size - (holder && SURVEY.has(holder) ? 1 : 0));
         await barrier('provisioned', agent, { ms: Number(p.wait_s) * 1000 });
         return true;
       }, 'the provisioning draw could not be read back'),
