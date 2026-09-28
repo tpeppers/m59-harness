@@ -1097,6 +1097,26 @@ console.log('a leg that fails is not an errand that fails');
      !sent.some(c => c.name === 'container'));
 }
 
+console.log('a step marked `anywhere` survives a skipped leg');
+{
+  // The Temple of Qor's entrance is shut half the time. The order is: try to walk in (optional),
+  // WAIT where you stand for the door to flip, walk in again. The wait does not need room 802 — it
+  // is precisely for when you are not in it — so it must not be skipped with the leg.
+  const sent = fakeBroker({ rooms: { a1: 39 }, unreachable: new Set([114]) });
+  let waited = false;
+  const r = await fleetScript({
+    name: 'wait-for-the-door', fleet: 'testfleet', agents: ['a1'], onLog: quiet,
+    pollMs: 5, budgetFloorMs: 20, budgetCapMs: 60,
+    steps: [
+      walk(114, { optional: true }),
+      { ...verify(async () => { waited = true; return true; }, 'could not wait'), optional: true, anywhere: true },
+      walk(113),
+    ],
+  });
+  ok('the anywhere step runs after the optional walk failed', waited === true, JSON.stringify(r.results.a1));
+  ok('and the next walk still happens', sent.some(c => c.name === 'travel' && Number(c.args?.to ?? c.args?.room) === 113) || r.results.a1.ok === true);
+}
+
 console.log('an abandoned errand still comes home');
 {
   // The other half of Zoot. Even with legs, a MANDATORY step can fail — and the worst place

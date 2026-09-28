@@ -142,7 +142,7 @@ export const script = {
           console.log(`  ${agent}: the temple door was shut — waiting one ten-minute flip where I stand`);
           await new Promise(r => setTimeout(r, 630_000));
           return true;
-        }, 'could not wait for the temple door'), optional: true },
+        }, 'could not wait for the temple door'), optional: true, anywhere: true },
         walk(TEMPLE, { why: 'Priestess Zuxana, after one flip of the entrance' }),
         ...want.map(s => learn(TEACHER, s, { retry: true })),
         knowsAll(want),

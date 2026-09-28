@@ -5128,8 +5128,12 @@ They are driven by tools/m59-menagerie.mjs and ` +
           }
           if (step.optional) {
             let skipped = 0;
+            // A STEP MARKED `anywhere` DOES NOT NEED THE ROOM, so the skip stops there. Without it, a
+            // "wait here for the door to open, then try again" after an optional walk was skipped as
+            // though it belonged to the room it is waiting to get into — Camilla at the Temple of Qor's
+            // shut entrance, 2026-09-28, walked away 42 s after arriving instead of waiting one flip.
             if (step.do === 'walk')
-              while (i + 1 < plan.length && plan[i + 1].do !== 'walk') { i++; skipped++; }
+              while (i + 1 < plan.length && plan[i + 1].do !== 'walk' && !plan[i + 1].anywhere) { i++; skipped++; }
             ctx.log(agent, `step ${at} (${step.do}) skipped, carrying on: ${r.why ?? '?'}` +
               (skipped ? ` (and ${skipped} step(s) that needed to be there)` : ''));
             continue;
