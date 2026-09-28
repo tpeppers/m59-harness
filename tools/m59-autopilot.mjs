@@ -21991,7 +21991,11 @@ export class Autopilot {
     const key = `${this.hereRoom()}:${floor.id}`;
     if (this._chaliceFloorSince?.key !== key) this._chaliceFloorSince = { key, at: now };
     const lying = now - this._chaliceFloorSince.at;
-    if (lying < (cfg.floor_grace_ms ?? 30_000)) return false;
+    // Left our own pack recently, and not by a step of ours: a deliberate hand-off. See
+    // handoff_grace_ms. (A keeper that restarted has no such memory, so a cup forgotten across a
+    // restart still gets the short grace — the case this sweep was written for.)
+    const handedOff = this._chaliceLastHeldAt && now - this._chaliceLastHeldAt < (cfg.handoff_grace_ms ?? 180_000);
+    if (lying < (handedOff ? (cfg.handoff_grace_ms ?? 180_000) : (cfg.floor_grace_ms ?? 30_000))) return false;
     await this.chaliceMakeRoom();
     await this.s.lootFloor({ ids: [floor.id], maxItems: 1, overfarm: null }).catch(() => {});
     await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
@@ -23051,6 +23055,7 @@ export class Autopilot {
       try { store.setSupply({ have, target: cfg.holder_supply }); } catch {}
     }
     if (role === 'holder' || cup) this.chalicePublishDesk(cfg, store, me, cup, now);
+    if (cup) this._chaliceLastHeldAt = now;
     if (!cup && await this.chaliceSweep(cfg, store, me, now)) return true;
 
     let st = this._chaliceServe;

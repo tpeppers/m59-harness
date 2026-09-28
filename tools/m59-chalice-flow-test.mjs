@@ -1021,6 +1021,27 @@ try {
     ok(!has(world, loialP, /chalice/i), 'a server in another room does not sweep it');
   }
 
+  // 2026-09-27 22:54Z: provision's cupRide made t19 drop the cup for t1, and the sweep re-lifted it
+  // at 31 s, before t1's grab. A cup that left this keeper's own pack moments ago was handed off.
+  section('a cup the holder just handed off is left for the rider, not swept back');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'handoff' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', alternate: 'Rizzo', station_room: 2,
+      post_room: 2, floor_grace_ms: 100, handoff_grace_ms: 600 });
+    const loialP = world.add('Loial the Ogier', { room: 2 });
+    const loial = keeper(world, loialP, { cfg, store });
+    loial.chaliceMakeRoom = async () => {};
+    const t0 = Date.now();
+    loial._chaliceLastHeldAt = t0;                        // it was in the pack a moment ago
+    world.floor.set(2, [world.item('chalice of the rain')]);  // a fleetscript dropped it
+    for (const dt of [0, 200, 400, 590]) await loial.chaliceSweep(cfg, store, 'Loial the Ogier', t0 + dt);
+    ok(!has(world, loialP, /chalice/i), 'past floor_grace_ms but inside handoff_grace_ms: left on the floor');
+    await loial.chaliceSweep(cfg, store, 'Loial the Ogier', t0 + 700);
+    ok(has(world, loialP, /chalice/i), 'past handoff_grace_ms: an abandoned hand-off is still swept');
+    ok(loial.events.some(e => e.what === 'swept'), 'and ledgered as swept');
+  }
+
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

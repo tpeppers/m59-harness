@@ -104,6 +104,13 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // should only ever be dropped very briefly"). Longer than an ordinary pickup (p90 14.5s, max 52s
   // over 100 rides that day), so the server that owns the ride gets there first.
   floor_grace_ms: 30_000,
+  // BUT A CUP THAT LEFT OUR OWN PACK MOMENTS AGO WAS PUT THERE ON PURPOSE. A fleetscript hand-off
+  // (m59-inventory cupRide) makes the holder drop it for a rider to pick up, through the broker, in a
+  // step this keeper never hears about. On 2026-09-27 at 22:54Z the sweep re-lifted exactly such a
+  // cup after 31 s and the rider's grab found nothing. So when the cup was in this pack within this
+  // long, the sweep waits this long instead: the rider takes it first, and a cup truly abandoned
+  // is still off the floor within minutes, not the forty it once lay there.
+  handoff_grace_ms: 180_000,
   // THE TIP. Offered after the cup arrives, only out of money the trip does not need.
   tip_amount: 300,
   tip_min: 50,
@@ -213,7 +220,7 @@ export const HUMAN_FRESH_MS = 90_000;
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
-  floor_grace_ms: [100, 600_000],
+  floor_grace_ms: [100, 600_000], handoff_grace_ms: [100, 1_800_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
   restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
