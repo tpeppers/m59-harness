@@ -9,9 +9,9 @@ import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const script={name:'mana-node-tour-shadow',describe:'Quiet local-shadow preparation, then the ordinary five-node tour',
-  params:{agents:{type:'agents',required:true},railFile:{type:'string',default:'substrate/node-rails.json'},
+  params:{agents:{type:'agents',required:true},railFile:{type:'string',default:'substrate/node-tour-rails.json'},
     evidenceDir:{type:'string',default:'substrate/node-tours'},fromStep:{type:'number',default:0},
-    stageRoom:{type:'number',default:2},stageRow:{type:'number',default:5},stageCol:{type:'number',default:44},
+    stageRoom:{type:'number',default:2},stageRow:{type:'number',default:21},stageCol:{type:'number',default:3},
     minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20}},
   async steps(params){
     const safe=(fn,why,always=false)=>({...verify(async ctx=>{try{return await fn(ctx);}catch(e){console.log('SHADOW TOUR ERROR '+e.stack);return false;}},why),always});
@@ -27,6 +27,7 @@ export const script={name:'mana-node-tour-shadow',describe:'Quiet local-shadow p
           state.scenes.push({room,before,generation});
           if(generation!=null)await dm([sendMsg(before.room_object,'SetMonsterGeneration',{bValue:['INT',0]})]);
           await dm(before.actors.filter(o=>o.properties?.pihit_points!=null&&o.properties?.pibehavior!=null&&!(o.properties.pibehavior.value&1)).map(o=>sendMsg(o.id,'Delete')));
+          state.scenes.at(-1).after=await readAdminRoom(room);
         }
         await heal('Vvvv');
         await relocate('Vvvv',params.stageRoom,{row:params.stageRow,col:params.stageCol,verify:true});await sleep(1000);
@@ -43,7 +44,8 @@ export const script={name:'mana-node-tour-shadow',describe:'Quiet local-shadow p
           const current=await readAdminRoom(s.room);await dm([sendMsg(current.room_object,'SetMonsterGeneration',{bValue:['INT',s.generation]})]);
         }
         if(!state.tour?.complete){await relocate('Vvvv',52,{row:6,col:10,verify:true});await heal('Vvvv');}
-        const recovery={kind:state.tour?.complete?'finished_in_room_2':'admin_rescue_after_failed_route',position:tourPosition(await call('look',{agent}))};
+        await sleep(1000); // Allow the post-relocation room frame to carry its position.
+        const recovery={kind:state.tour?.complete?'finished_in_room_2':state.tour?.partial_complete?'admin_rescue_after_partial_replay':'admin_rescue_after_failed_route',position:tourPosition(await call('look',{agent}))};
         if(state.tourFile)writeFileSync(state.tourFile.replace(/\.json$/,'-cleanup.json'),JSON.stringify(recovery,null,2));
         console.log('TOUR CLEANUP '+JSON.stringify(recovery));return true;
       },'shadow cleanup failed',true)];

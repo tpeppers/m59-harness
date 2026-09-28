@@ -46,6 +46,35 @@ Two driver corrections followed:
 
 `m59-node-tour-bake.mjs` reproduces the fine-rail dependencies offline. Rebuilt
 Victoria, Sentinel, Ancient and Badlands waypoint arrays matched those used in
-the exploratory run. Sixteen focused tour checks pass. Offline checks do not
+the exploratory run. Seventeen focused tour checks pass. Offline checks do not
 establish a live loop; the append-only tour ledger is the source for full-run
 counts, including all failures and partial replays.
+
+## Partial replay from the road
+
+`five-node-1790622360454` resumed experimentally at step 19, from room 587
+r5c1, with broker `d956c50` / PID 26348. It crossed the roads, entered Kardde's
+Canyon from the north on floor 6144, reached Badlands and received already bonded.
+The corrected Badlands return passed, including the actual crossings 45 → 49 →
+593, followed by the road through Cor Noth and the Icky Cave trigger.
+
+Cave arrival was r23c53, x53760/y23040/floor 1536, health 20/20. Its immediate
+activation reply contained no message and no mana increase; that interaction
+remains **unknown** in the receipt. The attempted exit then reached r57c45
+inside room 27 and stopped with `crossing_failed_room_587`. This was a script
+composition error, `cave_exit_staging_is_not_crossing`: the earlier working
+recipe walked to that staging square and then invoked `travel` to 587. The tour
+now retains both operations, with a regression for the missing crossing step.
+
+`five-node-1790623640202` replays from the cave's documented entrance,
+r57c46/x46592/y57856/floor 2432 (partial start at step 41). It repeated the node
+arrival. The immediate activation again returned no message, but a bounded
+`wait_for_event` using the pre-activation look cursor **9341** received event
+**9402**, `You have already bonded with this mana node.` The receipt retains
+both responses. The tour now reads this fresh event window when an immediate
+reply is inconclusive; it never searches old history to infer a new outcome.
+
+That cave replay then completed every remaining leg: 27 → 587 → 576 → 587 →
+597 → 598 → 599 → **2**. Its pre-cleanup end was r21c3, x2560/y20992/floor
+8192, health 20/20, mana 65/65. It remains a **partial** replay, not a full loop.
+The later complete rehearsal starts at that same normal return point.

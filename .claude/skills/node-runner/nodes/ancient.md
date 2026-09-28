@@ -1,5 +1,16 @@
 # Ancient Place — room 579, r52c30
 
+## Five-node tour connection
+
+The tour's natural entry from Sentinel is r39c71, client x72192/y39424,
+floor 6304. In `five-node-1790621039582` the east inbound rail boarded from
+there and repeated the node endpoint x29952/y52256/floor 5088. The **north**
+outbound rail `edge:578:r1c17` then walked to r1c17,
+x16432/y0/floor 4912, and ordinary travel entered room 578 at
+r46c18/x17920/y46592/floor 4800. This is a separately measured exit from the
+earlier east-return experiment. See [the tour report](../../../../docs/reproductions/five-node-tour-2026-09-28.md)
+for whole-circuit counts and the quiet-scene condition.
+
 ## Follow-up: timed fall repair, 2026-09-28
 
 The repair in **0bccf18** passed **3/3 independent full quiet-shadow approaches**,

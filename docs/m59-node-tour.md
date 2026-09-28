@@ -33,7 +33,8 @@ separate outcomes. A completed route does not imply five new grants.
 The lab recipe is scoped to the existing local Marco clone `shadow22` / `Vvvv`
 on loopback port 15959. It removes hostile bodies and disables generation in
 the itinerary rooms, heals only to the existing ceiling and places the clone
-in room 2 **before** starting. It restores generation after the attempt and
+in room 2 at the normal western arrival, r21c3, **before** starting. This also
+tests the room-2 approach from the point where the loop returns. It restores generation after the attempt and
 rescues to Familiars only after a failed route. A successful route ends in room
 2. Quiet-scene evidence does not establish monster tolerance.
 

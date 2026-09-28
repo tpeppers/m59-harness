@@ -16,6 +16,10 @@ test('box includes two squares on both axes',()=>assert.equal(insideNode({room:3
 test('box excludes three squares on either axis',()=>{assert.equal(insideNode({room:39,row:16,col:46},'victoria'),false);assert.equal(insideNode({room:39,row:13,col:49},'victoria'),false);});
 test('ordinary route has no administrative step',()=>assert.ok(tourPlan().every(s=>['travel','rail','meld','cut','cross','walk'].includes(s.kind))));
 test('loop ends with the actual room-2 transition',()=>assert.deepEqual(tourPlan().at(-1),{kind:'travel',to:2}));
+test('cave exit staging is followed by a real boundary crossing',()=>{
+  const plan=tourPlan(),i=plan.findIndex(s=>s.kind==='meld'&&s.node==='cave');
+  assert.deepEqual(plan.slice(i+1,i+3),[{kind:'walk',row:57,col:45},{kind:'travel',to:587}]);
+});
 test('active broker travel is busy',()=>assert.equal(travelJobActive({busy:'walk to Tos',running_for_s:3}),true));
 test('retained cancellation receipt is not an active job',()=>assert.equal(travelJobActive({last_action:'walk to Tos',took_s:4,cancelled:true}),false));
 test('retained success receipt is not an active job',()=>assert.equal(travelJobActive({last_action:'walk to Tos',took_s:4}),false));

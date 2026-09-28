@@ -1,5 +1,20 @@
 # badlands — NODE_BADLANDS, room 45, stone at r63c46
 
+## Five-node tour connection
+
+Partial tour `five-node-1790622360454` entered room 49 normally from 593:
+r1c22, client x22016/y512, floor 6144. A fresh body-seeded cut reached
+r27c20/x19536/y26704/floor 6016; the ordinary south crossing entered 45 at
+r1c53/x53760/y512/floor 1664. The strict rail repeated the known node endpoint
+x46080/y64448/floor 4096 and received already bonded, health 20/20.
+
+Its return uses the measured full `floodReport` (64-unit lattice, cap 1,500,000)
+into the exact r1c53 square, not `cutRail`'s smaller default cap. It reached
+x54208/y960/floor 1664, crossed into 49 at r27c20/x19968/y27136/floor 6016,
+then cut toward client x20544/y512 on the north shelf. See
+[the tour report](../../../../docs/reproductions/five-node-tour-2026-09-28.md)
+for the full-loop result and limitations. This partial replay is not a circuit.
+
 ## 2026-09-28 update — read before the older conclusions below
 
 The mesa is **not proved impossible**. Exact-endpoint floods from client
