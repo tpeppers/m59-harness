@@ -96,6 +96,12 @@ export const DOMAINS = Object.freeze({
       'tools/m59-railfollow.mjs',
       'tools/m59-railcut.mjs',
       'tools/m59-noderails.mjs',
+      'tools/m59-node-circuit.mjs', // promoted node itinerary and cache-selected connectors
+      'tools/m59-node-tour.mjs',
+      'tools/m59-node-tour-bake.mjs',
+      'tools/m59-node-tour-rails.mjs',
+      'tools/m59-node-tour-policy.mjs',
+      'substrate/m59-falljumps.json', // declared node falls feed the downstream rail bake
       'tools/m59-ground.mjs',
       'tools/m59-world.mjs',      // exits(), the candidate ranking, wrongExitSquares
       'tools/m59-autopilot.mjs',  // survival movement ownership and replacement choices

@@ -225,6 +225,23 @@ The grant is `((5 + Mysticism) / 10) + 3`, so +3 at mysticism 0 and +8 at 45 and
 
 ## Running one node
 
+### Promote reusable acquisition after a movement repair
+
+The downstream `get-all-nodes` FleetScript and its `mana-node-tour` alias share
+`tools/m59-node-circuit.mjs`, the tour engine, and the node-runner's checked rails
+and declared falls. See [the circuit recipe](../../../docs/m59-node-tour.md).
+It skips positive cached KOD bits, attempts absent/unknown bits, and accepts
+`getAll=true` for a full observation run. Keep research trials independent of
+that optimization: direct `runTour` and the shadow recipe still exercise the
+whole itinerary by default.
+
+After solving another node, promote its approach **and return/connectors** into
+the shared catalog, bump its revision, update this node's dossier, and extend
+the circuit tests. Do not auto-promote an offline planner success or conditional
+node. A `#movement` change refreshes the downstream rail bake automatically;
+the refreshed geometry is not new live verification. Keep failure receipts and
+full-route counts distinct from cache-covered acquisition results.
+
 **0. Read `FROM-RESEARCH-2026-09-10.md` and then `nodes/<key>.md` in this directory first.**
 The first is what the SOURCE says — the client's real step predicate, the fall-jump reach
 table, and the three stones that are not terrain problems at all. The second is what previous

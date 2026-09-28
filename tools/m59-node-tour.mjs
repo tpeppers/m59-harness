@@ -11,11 +11,14 @@ import {railLeg,checkRoute} from './m59-noderails.mjs';
 import {STONES} from './m59-stones.mjs';
 import {nodeReport,meldVerdict} from './m59-nodecheck.mjs';
 import {epochId} from './m59-epoch.mjs';
-import {updateNodeMemory} from './m59-node-memory.mjs';
-import {withTourWalkOwnership,stableNodeGrant} from './m59-node-tour-policy.mjs';
+import {updateNodeMemory,readNodeMemory} from './m59-node-memory.mjs';
+import {CIRCUIT_NODES,circuitPlan,selectCircuitNodes,selectedCircuitComplete} from './m59-node-circuit.mjs';
+import {ensureTourRails} from './m59-node-tour-rails.mjs';
+import {withTourWalkOwnership,stableNodeGrant,railIdentityProblem} from './m59-node-tour-policy.mjs';
+import {rosterGameEndpoint,stateFileFor} from './m59-fleetpath.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-export const TOUR_NODES=['victoria','sentinel','ancient','badlands','cave'];
+export const TOUR_NODES=CIRCUIT_NODES;
 export const TOUR_ROOMS=[2,38,39,599,589,579,578,576,587,586,585,584,583,593,49,45,574,150,575,27,597,598];
 export const hashFile=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
 // look retains a completed/cancelled job as a receipt. Presence does not mean busy.
@@ -36,27 +39,7 @@ export function cutTourWalk(geo,from,step){
   if(points&&(points[0].x!==from.x||points[0].y!==from.y))points=[from,...points];
   return {proof,points};
 }
-export function tourPlan(){return [
-  {kind:'travel',to:38},{kind:'travel',to:39},
-  {kind:'rail',node:'victoria',exit:'go:38:r8c27'}, {kind:'meld',node:'victoria'},
-  {kind:'rail',node:'victoria',direction:'to_exit',exit:'go:38:r9c27'},
-  {kind:'travel',to:38},{kind:'travel',to:2},{kind:'travel',to:599},{kind:'travel',to:589},
-  {kind:'rail',node:'sentinel',exit:'edge:599:r18c46'},{kind:'meld',node:'sentinel'},
-  {kind:'rail',node:'sentinel',direction:'to_exit',exit:'edge:579:r43c1'},
-  {kind:'travel',to:579},
-  {kind:'rail',node:'ancient',exit:'edge:589:r38c74'},{kind:'meld',node:'ancient'},
-  {kind:'rail',node:'ancient',direction:'to_exit',exit:'edge:578:r1c17'},
-  ...[578,576,587,586,585,584,583,593,49].map(to=>({kind:'travel',to})),
-  {kind:'cut',room:49,x:19488,y:26656,row:27,col:20},
-  {kind:'cross',row:28,col:20,to:45},
-  {kind:'rail',node:'badlands'},{kind:'meld',node:'badlands'},
-  {kind:'cut',room:45,boxFlood:true,row:1,col:53},{kind:'cross',row:0,col:53,to:49},
-  {kind:'cut',room:49,x:20544,y:512,row:1,col:21},{kind:'cross',row:0,col:21,to:593},
-  ...[583,584,574,150,575,576,587,27].map(to=>({kind:'travel',to})),
-  {kind:'walk',row:23,col:53},{kind:'meld',node:'cave'},
-  {kind:'walk',row:57,col:45},
-  ...[587,576,587,597,598,599,2].map(to=>({kind:'travel',to})),
-];}
+export const tourPlan=circuitPlan;
 
 export function tourReturnPlan(room){
   const travel=to=>({kind:'travel',to});
@@ -81,20 +64,34 @@ export function tourReturnPlan(room){
 export async function runTour(ctx,options={}){
   return withTourWalkOwnership(ctx.agent,()=>runTourInner(ctx,options));
 }
-async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false}={}){
+async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false,useCache=false,getAll=false}={}){
   fromStep=Number(fromStep);
   if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
   const health=await(await fetch(new URL('health',process.env.M59_CONTROL_URL))).json();
+  if(useCache){
+    const identityProblem=railIdentityProblem({fleet:health.fleet,agent,health,expectedGame,
+      rostered:rosterGameEndpoint(stateFileFor(health.fleet)),checkedRail:true});
+    if(identityProblem)throw Error(identityProblem);
+  }
   const first=await call('look',{agent});
   if(!recovery&&fromStep===0&&first.room?.num!==2)throw Error('tour_start_requires_room_2');
+  if(useCache&&fromStep!==0)throw Error('cache_selection_cannot_resume_by_full_circuit_step');
+  const character=health.session_characters?.[agent];
+  const server=health.session_game_servers?.[agent]??health.game_server;
+  const memory=useCache&&!recovery?await readNodeMemory({server:server.host+':'+server.port,character}):null;
+  const selection=selectCircuitNodes(memory,{getAll:useCache?getAll:true});
+  console.log('TOUR SELECTION '+JSON.stringify(selection));
+  const plan=recovery?tourReturnPlan(first.room.num):tourPlan(selection.selected);
+  if(useCache&&!recovery)await ensureTourRails({railFile,selected:selection.selected});
+  const usesBakedRails=plan.some(s=>s.kind==='rail');
   const id='five-node-'+Date.now(),record={format:'m59-node-tour/1',id,at:new Date().toISOString(),agent,
-    fleet:health.fleet,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),
+    fleet:health.fleet,character,game_server:server,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),
     broker_sha:process.env.M59_TRIAL_BROKER_SHA??'unknown',broker_pid:health.pid,movement_epoch:epochId(),
-    recipe_sha256:hashFile(fileURLToPath(import.meta.url)),rail_sha256:hashFile(resolve(root,railFile)),
+    recipe_sha256:hashFile(fileURLToPath(import.meta.url)),rail_sha256:usesBakedRails?hashFile(resolve(root,railFile)):null,
     setup:state.tourSetup??null,scene_ref:state.tourSceneRef??null,from_step:recovery?-1:fromStep,recovery,
-    start:tourPosition(first),nodes:[],legs:[],complete:false};
-  record.rail_ref=id+'-rails.json';writeFileSync(join(out,record.rail_ref),readFileSync(resolve(root,railFile)));
+    start:tourPosition(first),nodes:[],legs:[],complete:false,selection};
+  if(usesBakedRails){record.rail_ref=id+'-rails.json';writeFileSync(join(out,record.rail_ref),readFileSync(resolve(root,railFile)));}
   state.tour=record;state.tourFile=join(out,id+'.json');
   let journalRead=null,lastJournalAt=0;
   const journalTimer=setInterval(()=>{
@@ -153,7 +150,6 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
     }
   };
   try{
-    const plan=recovery?tourReturnPlan(first.room.num):tourPlan();
     for(let i=fromStep;i<plan.length;i++){
       const step=plan[i],label=String(i).padStart(2,'0')+'-'+step.kind+'-'+(step.node??step.to??step.room??'point');
       const leg={index:i,label,step,start:tourPosition(await read()),at:new Date().toISOString()};record.legs.push(leg);save();
@@ -205,8 +201,10 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
       leg.end=tourPosition(await read());leg.completed_at=new Date().toISOString();save();
     }
     record.end=tourPosition(await read());record.complete=!recovery&&fromStep===0&&tourComplete(record);
+    record.selected_complete=selectedCircuitComplete(record);
     record.recovery_complete=recovery&&record.end.room===2;
-    record.partial_complete=!recovery&&fromStep>0;return record.complete||record.partial_complete||record.recovery_complete;
+    record.partial_complete=!recovery&&fromStep>0;
+    return useCache&&!recovery?record.selected_complete:record.complete||record.partial_complete||record.recovery_complete;
   }catch(e){record.failure=String(e.stack??e);console.log('TOUR STOP '+e.message);return false;}
   finally{
     clearInterval(journalTimer);if(journalRead)await journalRead;

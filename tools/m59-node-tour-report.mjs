@@ -16,5 +16,6 @@ console.log(JSON.stringify({attempts:rows.length,full_starts:rows.filter(r=>r.fr
   repeatable_circuit:repeated.length>0,repeat_groups:repeated.map(g=>g.map(r=>r.id)),
   nodes:TOUR_NODES.map(stone=>({stone,arrivals:rows.filter(r=>r.nodes?.some(n=>n.stone===stone&&insideNode(n.position,stone))).length,
     first_melds:rows.flatMap(r=>r.nodes??[]).filter(n=>n.stone===stone&&n.status==='melded').length})),
-  runs:rows.map(r=>({id:r.id,from_step:r.from_step,complete:r.complete,nodes:r.nodes?.map(n=>n.stone),
+  runs:rows.map(r=>({id:r.id,from_step:r.from_step,complete:r.complete,selected_complete:r.selected_complete,
+    skipped:r.selection?.skipped,selected:r.selection?.selected,nodes:r.nodes?.map(n=>n.stone),
     last_leg:r.legs?.at(-1)?.label,predicate:r.failure?.split('\n')[0]??null,receipt:r.id+'.json'}))},null,2));

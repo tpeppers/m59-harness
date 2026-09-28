@@ -83,9 +83,10 @@ if(arg('plan')){
             state.tourSceneRef=join(evidenceDir,'start-scene.json');
             writeFileSync(state.tourSceneRef,JSON.stringify(await call('scene_capture',{agent}),null,2));
             state.tourSetup={quiet:false,independent_reset:false,procedure:'ordinary production travel; no scene changes or placement'};
-            await runTour(ctx,{evidenceDir,expectedGame:record.expected_game});
+            await runTour(ctx,{evidenceDir,expectedGame:record.expected_game,useCache:true,getAll:args.includes('--get-all')});
             attempt.tour_ref=state.tourFile;attempt.route_complete=state.tour?.complete===true;
             attempt.nodes=state.tour?.nodes?.map(n=>({stone:n.stone,status:n.status}));
+            attempt.selection=state.tour?.selection;attempt.selected_complete=state.tour?.selected_complete;
             state.fullTour=state.tour;save(record);return true; // Recovery and post check run even after a failed tour.
           },'tour invocation failed'),
           {...verify(async ctx=>{

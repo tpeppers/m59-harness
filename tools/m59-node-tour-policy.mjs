@@ -1,4 +1,5 @@
 // Pure identity and sequencing checks for explicitly authorized remote node tours.
+import {CIRCUIT_NODES} from './m59-node-circuit.mjs';
 export const endpointName=s=>s&&`${String(s.host).toLowerCase()}:${s.port}`;
 export function railIdentityProblem({fleet,agent,rostered,health,expectedGame=null,checkedRail=false,candidates=false}){
   const live=health?.session_game_servers?.[agent]??health?.game_server;
@@ -12,7 +13,13 @@ export function railIdentityProblem({fleet,agent,rostered,health,expectedGame=nu
 export function availableForTour(row){
   return !!row&&!row.piloted&&!row.parked&&(!row.committed||row.committed.takeable===true);
 }
-export function tourObjectiveComplete(r){return r?.complete===true&&r.nodes?.length===5&&r.nodes.every(n=>['melded','already'].includes(n.status));}
+export function tourObjectiveComplete(r){
+  if(!r?.selection)return r?.complete===true&&r.nodes?.length===5&&r.nodes.every(n=>['melded','already'].includes(n.status));
+  if(r.selected_complete!==true||r.failure)return false;
+  const confirmed=new Set((r.nodes??[]).filter(n=>['melded','already'].includes(n.status)).map(n=>n.stone));
+  for(const s of r.selection.skipped??[])if(s.reason==='cached_present'&&(r.selection.mask&s.bit)&&(r.selection.known_mask&s.bit))confirmed.add(s.stone);
+  return CIRCUIT_NODES.every(k=>confirmed.has(k));
+}
 export function atPost(p,post){return p?.room===post.room&&Math.abs(p.row-post.row)<=2&&Math.abs(p.col-post.col)<=2;}
 // Both live failure recoveries exercised FleetScript's heal-then-walk from 38.
 // Do not substitute an ordinary route for the special exits of node trap rooms.

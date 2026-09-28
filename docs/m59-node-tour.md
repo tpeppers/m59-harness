@@ -1,6 +1,6 @@
 # Five-node tour from Outside Castle Victoria
 
-`mana-node-tour` connects room 2 → Upstairs in Castle Victoria (39) → Under the
+`get-all-nodes` (also available as `mana-node-tour`) connects room 2 → Upstairs in Castle Victoria (39) → Under the
 shadow of the Sentinel (589) → Ancient Place (579) → Badlands (45) → Icky Cave
 (27) → room 2. It uses ordinary travel, checked fine rails, declared falls and
 normal node activation. The cave leg still uses the keeper's measured inferred
@@ -9,6 +9,60 @@ so populated-server runs remain experimental. The operator explicitly authorized
 production testing on 2026-09-28; this does not establish monster tolerance.
 Administrative setup is confined to the separate
 `mana-node-tour-shadow` lab recipe.
+
+## Reusable acquisition FleetScript
+
+Run one character at a time, starting in room 2, through the fleet REPL:
+
+```text
+get-all-nodes agents=hk3 expectedGame=76.214.42.186:5959
+get-all-nodes agents=hk3 expectedGame=76.214.42.186:5959 getAll=true
+```
+
+The default reads the character's disk cache at the verified game endpoint. A
+node is skipped only when its bit is present in **both** `mask` and `known_mask`.
+Known absent and unknown nodes are attempted. `getAll=true` requests the full
+supported circuit regardless of cached possession; `getAll=false` is also
+accepted as a REPL string. An all-present cache produces a receipt with no
+travel or activation. Cache skips remove the node detours, not just the meld
+calls. Sentinel's exit still passes through Ancient Place when Ancient is
+cached, using a passage that avoids the stone's meld box. Ancient alone uses
+the existing north inbound rail and bypasses Sentinel.
+
+The public script refuses multiple agents, keeps survival with the keeper,
+verifies the selected keeper's deployed build before departure, attempts the
+checked return on failure, and releases its lease. The serial production
+campaign uses the same selector and planner; its CLI override is `--get-all`.
+It additionally restores enchanters to their desk and has the measured castle
+recovery fallback. The production campaign remains stopped at the documented
+solo-survival blocker; this change does not dispatch or retry it.
+
+Receipts retain the cache revision, positive bits, skipped observations, actual
+visits and results. `selected_complete` means the selected acquisition finished
+in room 2. `complete` still means all five approaches were actually exercised;
+cache-covered or shortened runs cannot count as full-circuit repeatability.
+
+### Downstream from node-runner
+
+`m59-node-circuit.mjs` is the shared promotion boundary, not a copy of movement
+logic. It consumes `STONES`/KOD bits and the existing fine router, declared falls,
+checked rails, shelf follower, live objective checker and cache writer. The
+rail bake records its catalog revision and `#movement` epoch; the acquisition
+runner automatically rebuilds a missing or stale bake and checks selected rails
+before leaving room 2. A refresh is offline validation, never a new live-success
+claim. There is no scheduled background job or separate fork of the mover.
+
+Currently **five nodes** are promoted. Seafarer's Peak, Ice Caves and conditional
+or exempt nodes are not silently enabled by their presence in `STONES`. To
+promote another solved node, update the shared catalog and circuit connectors,
+bump `CIRCUIT_REVISION`, retain the node-runner receipt/dossier, and extend the
+selection/route tests. The `get-all-nodes` name means all supported recipes.
+
+Validation for the cache-aware compiler: all 243 three-state cache combinations,
+all 32 selected subsets, a persisted-cache no-travel run against a fake broker,
+and 14 checked rails / 18,335 lattice edges. The new Ancient transit and subset
+connections are **offline checked, not live verified**. The earlier quiet-shadow
+full loop remains the live evidence for the unchanged all-five itinerary.
 
 Prepare the fine-rail dependency offline:
 
@@ -26,7 +80,7 @@ With the correct fleet, roster, `M59_CONTROL_URL`, shared run-lock directory and
 broker build established, run through the fleet REPL:
 
 ```text
-mana-node-tour agents=<agent> railFile=substrate/node-tour-rails.json
+mana-node-tour agents=<agent> railFile=substrate/node-tour-rails.json getAll=true
 ```
 
 The body must start in room 2. A held FleetScript lease covers the whole circuit.
@@ -88,8 +142,9 @@ KOD `piNodelist` mask, a `known_mask`, timestamps, receipt paths and correction
 history, keyed by server endpoint plus character name. These five nodes are
 `0x001f`. Missing bits are unknown until observed; a dead node, silence, range
 refusal or login mana comparison cannot establish absence or possession.
-The cache is a belief, never an authoritative live-server query, and never
-causes the tour to skip activation. Other game activity may make it stale.
+The cache is a belief, never an authoritative live-server query. Acquisition
+skips positively cached nodes; `getAll=true` forces re-observation. Other game
+activity may make a belief stale, so invalidate it when that is known or suspected.
 
 ```powershell
 node tools/m59-node-memory.mjs read --server <game-host:port> --character "Character Name"

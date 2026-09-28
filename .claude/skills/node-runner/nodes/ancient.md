@@ -1,5 +1,15 @@
 # Ancient Place — room 579, r52c30
 
+## Cache-aware circuit connectors, 2026-09-28
+
+When Sentinel is already cached, the acquisition circuit uses the existing north
+inbound rail `edge:578:r1c17`. When Ancient is cached but Sentinel is needed, the
+new `ancient-transit` rail walks from the measured east arrival
+`x72192/y39424` to r1c17, without entering the Ancient stone's 5×5 meld box.
+`bakeOne` and `checkRoute` validate all 1,673 transit edges; no jump is needed.
+These subset connectors are offline checked, not new live approach evidence.
+`m59-node-circuit-test.mjs` retains the no-stone-detour and geometry regressions.
+
 ## Five-node tour connection
 
 The tour's natural entry from Sentinel is r39c71, client x72192/y39424,
