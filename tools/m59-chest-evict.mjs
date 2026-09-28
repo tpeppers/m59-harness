@@ -44,6 +44,7 @@ export const DEFAULTS = Object.freeze({
   blocked_merchants: Object.freeze(['Meidei']),  // a fence blocks the Bhrama & Falcon's door (operator, 2026-09-28)
   protect: Object.freeze([]),                    // names never evicted, whatever the plan says
   allow_irreplaceable: false,
+  cheap_per_bulk: 2.5,                           // at or under this (shillings per bulk), town stock is sold rather than moved
 });
 
 const norm = s => String(s ?? '').toLowerCase().trim();
@@ -77,52 +78,91 @@ export function sellersByItem({ merchants = [], items = {}, blocked = [] } = {})
  *   sellers:  Map(itemLower -> [{merchant, room}])   (sellersByItem)
  *   townRooms: the rooms of the chests' town
  *   worth(name) -> shillings per unit or null;  bulk(name) -> bulk per unit or null
- * Returns {chests: [{slot, bulk, capacity, over, evict: [...]}], total}.
+ *
+ * FOR EACH CHEST OVER ITS GOAL, IN THIS ORDER (operator, 2026-09-28: "Over stocking the unfull chests
+ * also works, particularly for items of value" — move before selling, sell only what is cheap and
+ * rebuyable in town, or whatever still won't fit):
+ *   1. MOVE overstock into chests under their goal — the most valuable per bulk first, and anything
+ *      nobody sells (a move is not a loss). Cheap town-rebuyable stock is not moved: it would only
+ *      spend another chest's room on something the town sells back.
+ *   2. SELL cheap overstock (value per bulk <= cheapPerBulk) that a merchant in this town sells,
+ *      least valuable first.
+ *   3. SELL WHATEVER STILL WON'T FIT: the remaining overstock that somebody sells, town first, least
+ *      valuable first. Nothing nobody sells is ever sold unless allowIrreplaceable.
+ * Returns {chests: [{slot, bulk, goal, need, freed, short, moves, evict}], total, moves}.
  */
 export function planEviction({ chests = [], targets = new Map(), sellers = new Map(), townRooms = [],
                                worth = () => null, bulk = () => null, fill = DEFAULTS.fill,
-                               capacity = CHEST_BULK, protect = [], allowIrreplaceable = false } = {}) {
+                               capacity = CHEST_BULK, protect = [], allowIrreplaceable = false,
+                               cheapPerBulk = DEFAULTS.cheap_per_bulk } = {}) {
   const town = new Set(townRooms.map(Number));
   const guard = new Set(protect.map(norm));
   const TIER = { here: 0, elsewhere: 1, none: 2 };
-  const out = [];
-  for (const ch of chests) {
-    const merged = new Map();
+  const goal = Math.floor(capacity * fill);
+  const merge = ch => {
+    const m = new Map();
     for (const it of ch.items ?? []) {
       const k = norm(it.name);
-      merged.set(k, { name: it.name, amount: (merged.get(k)?.amount ?? 0) + (Number(it.amount) > 0 ? Number(it.amount) : 1) });
+      m.set(k, { name: it.name, amount: (m.get(k)?.amount ?? 0) + (Number(it.amount) > 0 ? Number(it.amount) : 1) });
     }
+    return m;
+  };
+  const state = chests.map(ch => {
+    const merged = merge(ch);
     const used = [...merged.values()].reduce((n, it) => n + (bulk(it.name) ?? 0) * it.amount, 0);
-    const goal = Math.floor(capacity * fill);
-    const need = Math.max(0, used - goal);
-    const want = targets.get(ch.slot) ?? new Map();
+    return { slot: ch.slot, merged, used, room: Math.max(0, goal - used) };
+  });
+  const out = [], allMoves = [];
+  for (const d of state) {
+    const need = Math.max(0, d.used - goal);
+    const want = targets.get(d.slot) ?? new Map();
     const cands = [];
-    for (const [k, it] of merged) {
+    for (const [k, it] of d.merged) {
       if (guard.has(k)) continue;
       const over = it.amount - (want.get(k) ?? 0);
       const b = bulk(it.name);
-      if (over <= 0 || !(b > 0)) continue;             // at or under target, or weightless / unknown bulk
+      if (over <= 0 || !(b > 0)) continue;
       const who = sellers.get(k) ?? [];
       const tier = who.some(s => town.has(Number(s.room))) ? 'here' : who.length ? 'elsewhere' : 'none';
-      if (tier === 'none' && !allowIrreplaceable) continue;
       const v = worth(it.name);
-      cands.push({ item: it.name, over, unit_bulk: b, unit_value: v, per_bulk: v == null ? null : v / b, tier,
+      const perBulk = v == null ? null : v / b;
+      cands.push({ item: it.name, over, left: over, unit_bulk: b, unit_value: v, per_bulk: perBulk, tier,
+                   cheap_here: tier === 'here' && perBulk != null && perBulk <= cheapPerBulk,
                    sell_at: who.find(s => town.has(Number(s.room))) ?? who[0] ?? null,
                    target: want.get(k) ?? 0, have: it.amount });
     }
-    // Tier first (the absolute preference), then least value per bulk; unknown value goes last in its tier.
-    cands.sort((a, b) => TIER[a.tier] - TIER[b.tier]
-      || (a.per_bulk ?? Infinity) - (b.per_bulk ?? Infinity));
-    const evict = [];
     let left = need;
-    for (const c of cands) {
+    const moves = [], evict = [];
+    const take = (c, n) => { c.left -= n; left -= n * c.unit_bulk; };
+    // 1. MOVE: valuables (and the irreplaceable) into chests with room, most valuable per bulk first.
+    const movable = cands.filter(c => !c.cheap_here)
+      .sort((a, b) => (b.per_bulk ?? Infinity) - (a.per_bulk ?? Infinity));
+    for (const c of movable) {
+      while (left > 0 && c.left > 0) {
+        const to = state.filter(r => r !== d && r.room >= c.unit_bulk).sort((a, b) => b.room - a.room)[0];
+        if (!to) break;
+        const n = Math.min(c.left, Math.ceil(left / c.unit_bulk), Math.floor(to.room / c.unit_bulk));
+        if (n <= 0) break;
+        to.room -= n * c.unit_bulk;
+        moves.push({ item: c.item, amount: n, from: d.slot, to: to.slot, bulk: n * c.unit_bulk, per_bulk: c.per_bulk, tier: c.tier });
+        take(c, n);
+      }
       if (left <= 0) break;
-      const amount = Math.min(c.over, Math.ceil(left / c.unit_bulk));
-      evict.push({ ...c, amount, bulk: amount * c.unit_bulk, value: c.unit_value == null ? null : amount * c.unit_value });
-      left -= amount * c.unit_bulk;
     }
-    out.push({ slot: ch.slot, bulk: Math.round(used), capacity, goal, need: Math.round(need),
-               freed: Math.round(need - Math.max(0, left)), short: Math.round(Math.max(0, left)), evict });
+    // 2 and 3. SELL: cheap town stock first, then whatever still won't fit (town first).
+    const sellable = cands.filter(c => c.left > 0 && (c.tier !== 'none' || allowIrreplaceable))
+      .sort((a, b) => (b.cheap_here - a.cheap_here) || TIER[a.tier] - TIER[b.tier]
+        || (a.per_bulk ?? Infinity) - (b.per_bulk ?? Infinity));
+    for (const c of sellable) {
+      if (left <= 0) break;
+      const n = Math.min(c.left, Math.ceil(left / c.unit_bulk));
+      evict.push({ ...c, amount: n, bulk: n * c.unit_bulk, value: c.unit_value == null ? null : n * c.unit_value,
+                   why: c.cheap_here ? 'cheap and sold in this town' : 'still would not fit' });
+      take(c, n);
+    }
+    allMoves.push(...moves);
+    out.push({ slot: d.slot, bulk: Math.round(d.used), capacity, goal, need: Math.round(need),
+               freed: Math.round(need - Math.max(0, left)), short: Math.round(Math.max(0, left)), moves, evict });
   }
   const total = new Map();
   for (const c of out) for (const e of c.evict) {
@@ -130,7 +170,7 @@ export function planEviction({ chests = [], targets = new Map(), sellers = new M
     t.amount += e.amount; t.bulk += e.bulk; t.value += e.value ?? 0;
     total.set(norm(e.item), t);
   }
-  return { chests: out, total: [...total.values()] };
+  return { chests: out, total: [...total.values()], moves: allMoves };
 }
 
 // ------------------------------------------------------------------ the live inputs
@@ -173,8 +213,11 @@ if (isMain) {
     for (const c of plan.chests) {
       say(`\n${c.slot}: ${c.bulk} bulk (${Math.round(c.bulk / c.capacity * 100)}%)` +
           (c.need ? ` -> free ${c.need}${c.short ? `, SHORT ${c.short} (nothing more it is allowed to evict)` : ''}` : ' — under the goal, left alone'));
+      for (const m of c.moves ?? [])
+        say(`   MOVE ${String(m.amount).padStart(5)} ${m.item.padEnd(22)} -> ${m.to}  ${String(m.bulk).padStart(6)} bulk` +
+            `  (${m.per_bulk == null ? '?' : m.per_bulk.toFixed(1)} sh/bulk, ${m.tier})`);
       for (const e of c.evict)
-        say(`   ${String(e.amount).padStart(5)} ${e.item.padEnd(22)} ${e.tier.padEnd(9)} ${String(e.bulk).padStart(6)} bulk` +
+        say(`   SELL ${String(e.amount).padStart(5)} ${e.item.padEnd(22)} ${e.tier.padEnd(9)} ${String(e.bulk).padStart(6)} bulk` +
             `  ${e.value == null ? '   ? sh' : `${String(e.value).padStart(6)} sh`}  (has ${e.have}, target ${e.target})` +
             (e.sell_at ? `  sell: ${e.sell_at.merchant} @${e.sell_at.room}` : ''));
     }

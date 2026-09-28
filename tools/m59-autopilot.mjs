@@ -26504,6 +26504,82 @@ export class Autopilot {
   }
 
   /**
+   * MOVE STOCK FROM ONE NAMED GUILD CHEST TO ANOTHER, through this pack. `moves`:
+   * [{item, amount, from: 'r18c6', to: 'r18c2'}] — chests are named by their square (m59-storage
+   * chestKey), never a number. The take is from `from` only and the put into `to` only, so a chest's
+   * overstock can be rebalanced into one with room (operator, 2026-09-28: "Over stocking the unfull
+   * chests also works, particularly for items of value"). hall_withdraw cannot do this: it takes
+   * from whichever chest it reaches first.
+   *
+   * Only what this call took is put back down: the character's own stock of the same item stays in
+   * its pack. A put the destination refuses (full, storebox.kod ReqNewHold) goes back into `from`,
+   * so nothing is left carried; whatever still cannot be put back is reported `carried`.
+   */
+  async hallMove(moves = []) {
+    const s = this.s, c = s.need();
+    const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
+    const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
+    const packCount = async (item) => {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+      return (c.inventory ?? []).filter(o => same(nameOf(o), item)).reduce((n, o) => n + (Number(o.amount) || 1), 0);
+    };
+    const roomNum = Number(s.world?.room?.num ?? NaN);
+    if (roomNum !== BOOKMAKERS_HALL_ROOM) return { ok: false, why: `not in the hall (room ${roomNum})`, moves: [] };
+    const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    if (!hall.ok) return { ok: false, why: hall.why, moves: [] };
+    const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));
+    const bySquare = new Map(chests.map(ch => [chestKey(ch), ch]));
+    const nearChest = async (chest) => {
+      const me = c.self;
+      if (me && Number.isFinite(chest.row) && Number.isFinite(chest.col)
+          && Math.abs(me.row - chest.row) + Math.abs(me.col - chest.col) > 5)
+        await s.walkTo(chest.col, chest.row, { maxSteps: 40, hardCap: 50 }).catch(() => {});
+    };
+    const putBack = async (item, n, chest) => {
+      let left = n;
+      await nearChest(chest);
+      for (const o of [...(c.inventory ?? [])].filter(x => same(nameOf(x), item))) {
+        if (left <= 0) break;
+        const k = Number(o.amount) >= 1 ? Math.min(left, Number(o.amount)) : 1;
+        const before = await packCount(item);
+        await s.pacer.submit('trade', () => c.put(dropSpecFor(o, Number(o.amount) >= 1 ? k : null), chest.id)).catch(() => {});
+        await new Promise(r => setTimeout(r, 300));
+        left -= Math.max(0, before - await packCount(item));
+      }
+      return n - left;
+    };
+    const out = [];
+    for (const m of moves) {
+      const item = String(m.item ?? ''), want = Math.max(0, Number(m.amount) || 0);
+      const from = bySquare.get(String(m.from)), to = bySquare.get(String(m.to));
+      if (!item || !want || !from || !to || from === to) { out.push({ ...m, moved: 0, why: !from || !to ? 'chest not in this hall' : 'nothing to move' }); continue; }
+      const start = await packCount(item);
+      await nearChest(from);
+      const since = c.evSeq;
+      await s.pacer.submit('read', () => c.contents(from.id)).catch(() => {});
+      const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
+      const box = (reply?.events ?? []).find(e => e.kind === 'container');
+      const stacks = (box?.items ?? []).filter(o => same(o.name ?? nameOf(o), item)).sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
+      let have = start;
+      for (const st of stacks) {
+        if (have - start >= want) break;
+        const n = Math.min(want - (have - start), Number(st.amount) || 1);
+        await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function' ? c.getFromContainer(dropSpecFor(st, Number(st.amount) >= 1 ? n : null)) : c.get(st.id))).catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
+        have = Math.max(have, await packCount(item));
+      }
+      const took = have - start;
+      const put = took ? await putBack(item, took, to) : 0;
+      const returned = took - put ? await putBack(item, took - put, from) : 0;
+      out.push({ item, from: m.from, to: m.to, asked: want, took, moved: put, returned, carried: took - put - returned,
+                 ...(took < want ? { short: want - took } : {}), ...(put < took ? { refused_by: m.to } : {}) });
+    }
+    this.note('hall move', { moves: out });
+    return { ok: true, moves: out };
+  }
+
+  /**
    * WHAT THIS CHARACTER WANTS, CANNOT BUY, AND DOES NOT HAVE.
    *
    * Published rather than retried. `reagent_short` carries the item, how many casts it is worth,

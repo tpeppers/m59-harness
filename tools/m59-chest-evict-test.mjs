@@ -62,6 +62,29 @@ const base = { sellers, townRooms: [101, 104, 109], worth: n => WORTH[n] ?? null
 }
 ok('the capacity is the kod\'s', CHEST_BULK === 24_000);
 
+console.log('\nmove before selling: valuables into the unfull chests, cheap town stock sold');
+{
+  const p = planEviction({ ...base, chests: [
+    { slot: 'full', items: [{ name: 'herb', amount: 1000 }, { name: 'long sword', amount: 60 }, { name: 'mystic sword', amount: 20 }] },   // 4000+3600+1200 = 8800
+    { slot: 'roomy', items: [{ name: 'herb', amount: 250 }] } ] });                                                                          // 1000, room 7000 to 8000
+  const f = p.chests.find(c => c.slot === 'full');
+  const moved = f.moves.map(m => m.item), sold = f.evict.map(e => e.item);
+  ok('the most valuable per bulk moves first (the mystic sword nobody sells)', moved[0] === 'mystic sword', JSON.stringify(f.moves));
+  ok('valuables move rather than sell', !sold.includes('long sword') && !sold.includes('mystic sword'), JSON.stringify(f.evict));
+  ok('cheap town stock is not moved into another chest', !moved.includes('herb'), JSON.stringify(f.moves));
+  ok('the full chest reaches its goal', f.short === 0 && f.freed >= f.need, JSON.stringify(f));
+  ok('moves go into the chest with room', f.moves.every(m => m.to === 'roomy'));
+}
+{
+  // No room anywhere: cheap town stock sold first, then whatever still won't fit; irreplaceable never sold.
+  const p = planEviction({ ...base, chests: [
+    { slot: 'full', items: [{ name: 'herb', amount: 300 }, { name: 'long sword', amount: 120 }, { name: 'mystic sword', amount: 20 }] },
+    { slot: 'also', items: [{ name: 'axe', amount: 100 }] } ] });
+  const f = p.chests.find(c => c.slot === 'full');
+  ok('herb (cheap, town) is sold before the long sword (only still-won\'t-fit)', f.evict[0]?.item === 'herb' && f.evict.some(e => e.item === 'long sword' && e.why === 'still would not fit'), JSON.stringify(f.evict));
+  ok('the mystic sword is never sold', !f.evict.some(e => e.item === 'mystic sword'));
+}
+
 console.log('\nthe run: draw what fits, sell where it is sold, on the ledger');
 {
   const W = { room: 101, pack: [], chests: { herb: 300 }, sales: [] };
@@ -79,19 +102,30 @@ console.log('\nthe run: draw what fits, sell where it is sold, on the ledger');
   ok('exactly the planned amount', r.sold.herb === 250, JSON.stringify(r));
 }
 {
-  const W = { room: 714, pack: [{ id: 5, name: 'herb', amount: 250 }], chests: { herb: 300 }, sales: [] };
+  const W = { room: 714, pack: [{ id: 5, name: 'herb', amount: 250 }, { id: 6, name: 'small round shield' }], chests: { herb: 300 }, sales: [], deposits: [], moves: [] };
   const call = async (tool, a) => {
-    if (tool === 'fleet') return { fleet: [{ agent: 't3', room_num: W.room, pack: { weight: 0, bulk: 1000, max: 1100, exact: true } }] };
+    if (tool === 'fleet') return { fleet: [{ agent: 't3', room_num: W.room, pack: { weight: 0, bulk: 200, max: 2400, exact: true } }] };
     if (tool === 'inventory') return { items: W.pack.map(o => ({ ...o })) };
+    if (tool === 'equipment') return { known: true, equipped: [{ id: 6 }] };
     if (tool === 'travel') { W.room = a.to; return { arrived: true }; }
-    if (tool === 'hall_withdraw') { const w = a.wants[0]; W.chests.herb -= w.amount; W.pack.push({ id: 9, name: 'herb', amount: w.amount }); return { ok: true, took: { herb: w.amount }, short: {} }; }
-    if (tool === 'sell') { W.sales.push({ room: W.room, items: a.items }); for (const sp of a.items) { const o = W.pack.find(x => x.id === (sp.id ?? sp)); if (o) o.amount -= sp.amount ?? o.amount; } W.pack = W.pack.filter(o => o.amount > 0); return {}; }
+    if (tool === 'hall_move') { W.moves.push(...a.moves); return { ok: true, moves: a.moves.map(m => ({ ...m, took: m.amount, moved: m.amount })) }; }
+    if (tool === 'hall_withdraw') {
+      if (a.deposit) { W.deposits.push(a.deposit); for (const n of a.deposit) { const o = W.pack.find(x => x.name === n && x.id !== 6); if (o) { W.chests[n] = (W.chests[n] ?? 0) + o.amount; W.pack = W.pack.filter(x => x !== o); } }
+        for (const w of a.wants ?? []) { W.chests[w.item] -= w.amount; W.pack.push({ id: 7, name: w.item, amount: w.amount }); } return { ok: true }; }
+      const w = a.wants[0]; W.chests[w.item] -= w.amount; W.pack.push({ id: 9, name: w.item, amount: w.amount }); return { ok: true, took: { [w.item]: w.amount }, short: {} };
+    }
+    if (tool === 'sell') { W.sales.push({ room: W.room, items: a.items }); for (const sp of a.items) { const o = W.pack.find(x => x.id === (sp.id ?? sp)); if (o) o.amount = (o.amount ?? 1) - (sp.amount ?? 1); } W.pack = W.pack.filter(o => (o.amount ?? 1) > 0 || o.amount === undefined); return {}; }
     throw new Error(tool);
   };
-  const plan = { total: [{ item: 'herb', amount: 20, tier: 'here', sell_at: { merchant: 'Joguer', room: 104 } }] };
+  const plan = { total: [{ item: 'herb', amount: 20, tier: 'here', sell_at: { merchant: 'Joguer', room: 104 } },
+                         { item: 'small round shield', amount: 1, tier: 'here', sell_at: { merchant: 'Izzio', room: 593 } }],
+                 moves: [{ item: 'long sword', amount: 5, from: 'r18c6', to: 'r18c2' }] };
   await runEviction({ plan, agent: 't3', call, log: () => {}, keep: { herb: 40 }, ledgerFile: `${process.env.TEMP ?? '/tmp'}/chest-evict-test.jsonl` });
-  ok('the runner sells its own herbs above the keep first', W.sales[0]?.items?.[0]?.amount === 210, JSON.stringify(W.sales[0]));
-  ok('then draws the chest\'s planned herbs', W.chests.herb === 280, JSON.stringify(W.chests));
+  ok('the runner\'s own herbs go INTO the chests, with its 40 drawn back', W.deposits[0]?.includes('herb') && W.chests.herb >= 490, JSON.stringify({ d: W.deposits, c: W.chests }));
+  ok('the worn shield is never deposited or offered', !W.deposits.flat().includes('small round shield') &&
+     !W.sales.some(s => s.items.some(i => (i.id ?? i) === 6)), JSON.stringify({ d: W.deposits, s: W.sales }));
+  ok('the moves are made chest to chest before selling', W.moves[0]?.item === 'long sword' && W.moves[0]?.to === 'r18c2', JSON.stringify(W.moves));
+  ok('then the planned herbs are drawn and sold', W.sales.some(s => s.room === 104), JSON.stringify(W.sales));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

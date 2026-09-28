@@ -2582,6 +2582,11 @@ const server = createServer(async (req, res) => {
               .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
             return;
           }
+          case 'hall_move': {
+            if (typeof autopilot?.hallMove !== 'function') { json({ error: 'this keeper has no hall move' }, 409); return; }
+            json(await autopilot.hallMove(Array.isArray(args.moves) ? args.moves : []));
+            return;
+          }
           case 'hall_withdraw': {
             if (typeof autopilot?.hallWithdraw !== 'function') {
               json({ error: 'this keeper has no hall withdrawal' }, 409); return;

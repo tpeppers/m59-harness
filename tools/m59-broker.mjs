@@ -13733,6 +13733,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'hall_move',
+    description:
+      'MOVE STOCK BETWEEN TWO NAMED GUILD CHESTS in the Bookmaker\'s hall (714), through this character\'s pack: ' +
+      'moves [{item, amount, from: "r18c6", to: "r18c2"}], chests named by their square. The take is from `from` ' +
+      'only and the put into `to` only (hall_withdraw takes from whichever chest it reaches first). A put the ' +
+      'destination refuses goes back into `from`. The character must already be inside 714. Returns per move ' +
+      '{took, moved, returned, carried}.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      moves: { type: 'array', items: { type: 'object', properties: {
+        item: { type: 'string' }, amount: { type: 'number' }, from: { type: 'string' }, to: { type: 'string' } },
+        required: ['item', 'amount', 'from', 'to'] } },
+    }, required: ['agent', 'moves'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, why: 'hall_move needs a keeper-backed character' };
+      return keeperAction(s.name, s._index, 'hall_move', { moves: a.moves ?? [] }, { timeoutMs: 600_000 });
+    },
+  },
+  {
     name: 'hall_post',
     description:
       'WALK TO A VAULT-BROKER POST INSIDE THE BOOKMAKERS HALL (room 714): "booth" (rows 2-3 col 25, ' +
