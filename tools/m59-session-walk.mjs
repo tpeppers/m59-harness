@@ -639,7 +639,7 @@ export function sessionWalkPrototype(deps) {
   // `substrate/m59-falljumps.json` already carries `to_fine` for exactly this reason. Nothing
   // was reading it.
   async step(col, row, { confirm = false, beforeMutation = null, fall = false,
-                         aimX = null, aimY = null } = {}) {
+                         aimX = null, aimY = null, timedFall = false } = {}) {
     const c = this.need();
     const roomId = c.room.id;
     const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
@@ -1109,7 +1109,7 @@ export function sessionWalkPrototype(deps) {
     // router priced — measured: Ukgoth 2,27 -> 71,2 went from 1.04x to bouncing on 12 of 13
     // steps. Both `{ slide: true, fall: true }` and `{ slide: false, fall: true }` arrive on
     // the step that started this; only the missing `fall` ever refused one.
-    const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall,
+    const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,
         beforeMutation: typeof beforeMutation === 'function'
           ? () => beforeMutation('move', { col, row }) : null,
         minGap: Math.max(gap, owed), expectedRoomId: roomId });

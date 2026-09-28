@@ -4376,5 +4376,24 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
     packets===0&&result.shelf_refusals===5,JSON.stringify({packets,result}));
 }
 
+// Ancient's third fall must fit below the overhang after losing height, while
+// the ordinary single-command trace remains conservative and refuses it.
+{
+  const {roomGeometry}=await import('./m59-ground.mjs');
+  const geo=roomGeometry(579);
+  const f=fakeBrokerSession(geo,{x:clientToWire(30720),y:clientToWire(38400)});
+  const x=clientToWire(30320),y=clientToWire(42000);
+  const ordinary=f.session.validateFineTarget(x,y,{fall:true,slide:true});
+  const timed=f.session.validateFineTarget(x,y,{fall:true,slide:true,timedFall:true});
+  ok('ordinary fall does not silently enable timed physics',ordinary.target?.y!==y);
+  ok('timed fall validates the exact integer landing under wall 407',
+    timed.arrived&&timed.target.x===x&&timed.target.y===y&&timed.destinationFloor===4800,JSON.stringify(timed));
+  const began=Date.now();
+  const sent=await f.session.queueValidatedMove(x,y,{fall:true,slide:true,timedFall:true});
+  ok('timed fall sends only after paying the simulated duration',
+    sent.sent&&f.packets.length===1&&Date.now()-began>=timed.fall_motion.elapsed_ms);
+  ok('landed timed fall does not retain the old high-altitude uncertainty',f.session.collisionVertical===null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}`);
 process.exitCode = fail ? 1 : 0;

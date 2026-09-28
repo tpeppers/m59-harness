@@ -2961,7 +2961,7 @@ class Session {
 
   // COORDINATE CONTRACT: `(x,y)` is a fine point in 64-units-per-square kod wire space.
   // A FALL IS PLANNED IN FALL MODE AND MUST BE ATTEMPTED IN FALL MODE — see `fall` below.
-  validateFineTarget(x, y, { slide = false, fall = false } = {}) {
+  validateFineTarget(x, y, { slide = false, fall = false, timedFall = false } = {}) {
     const c = this.need();
     const geo = this.world.geometry;
     const me = c.self;
@@ -3138,7 +3138,7 @@ class Session {
     // first jump. This is the repository's own rule — the router must plan on the map the
     // mover enforces — broken for exactly one kind of step.
     const traceOptions = {
-      slide, fall, obstacles,
+      slide, fall, timedFall:fall && timedFall, obstacles,
       roomFlags: c.room.flags ?? 0,
       overrideDepths: c.room.overrideDepths ?? null,
       motionZ,
@@ -3186,7 +3186,7 @@ class Session {
     // marked unwalkable, but the server allows the character to stand there.
     // The nearest walkable square can be 2-3 cells away.
     const NO_FLOOR_RECOVERY_RADIUS = 3 * KOD_FINENESS;
-    if (requestedTrace.reason === 'start_has_no_floor'
+    if (!timedFall && requestedTrace.reason === 'start_has_no_floor'
         && Math.abs(x - fromWireX) <= NO_FLOOR_RECOVERY_RADIUS
         && Math.abs(y - fromWireY) <= NO_FLOOR_RECOVERY_RADIUS
         && geo.leafAtClient(toClient(x), toClient(y))) {
@@ -3309,7 +3309,7 @@ class Session {
   }
 
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units, not a grid tuple.
-  async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, beforeMutation = null,
+  async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, timedFall = false, beforeMutation = null,
                                     minGap = MOVE_INTERVAL_MS, expectedRoomId = null,
                                     offMap = false } = {}) {
     const c = this.need();
@@ -3405,13 +3405,17 @@ class Session {
       }, minGap);
     }
 
-    const initial = this.validateFineTarget(x, y, { slide, fall });
+    const initial = this.validateFineTarget(x, y, { slide, fall, timedFall });
     // WRITE DOWN THAT PROD MOVED. Otherwise a drifted room is only ever visible as a move
     // that did not happen — and the baked map is evidence about somebody else's server,
     // which can be patched without telling us.
     if (initial?.drift) noteGeometryDrift(this, initial.drift);
     if (!initial.available || !initial.moved || !initial.target)
       return { sent: false, validation: initial };
+    // A timed fall includes waiting at an overhang while gravity lowers the body.
+    // Pay that simulated time, then repeat the proof against the live scene.
+    const fallDelayMs = timedFall ? initial.fall_motion?.elapsed_ms ?? 0 : 0;
+    if (fallDelayMs > 0) await new Promise(resolve => setTimeout(resolve, fallDelayMs));
     return this.pacer.submit('move', () => {
       // Pacing can delay this callback while an asynchronous room entry, teleport,
       // or older room read changes the world beneath it. Bind the packet to the room
@@ -3419,7 +3423,9 @@ class Session {
       if (c.room.id !== roomId) return { sent: false, validation: {
         available: false, moved: false, blocked: true, reason: 'room_changed_before_move',
       } };
-      const validation = this.validateFineTarget(x, y, { slide, fall });
+      const validation = this.validateFineTarget(x, y, { slide, fall, timedFall });
+      if (timedFall && (validation.fall_motion?.elapsed_ms ?? Infinity) > fallDelayMs)
+        return { sent:false, validation:{...validation,moved:false,reason:'fall_changed_before_send'} };
       if (validation?.drift) noteGeometryDrift(this, validation.drift);
       const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
       if (!validation.available || !validation.moved || !validation.target || !before)

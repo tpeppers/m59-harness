@@ -87,6 +87,7 @@ export const DOMAINS = Object.freeze({
       'tools/m59-guild-passage.mjs',
       'tools/m59-movement.mjs',   // the terminal reasons and the packet validator
       'tools/m59-roo.mjs',        // the collision model, step masks, edge crossings
+      'tools/m59-falltrace.mjs',  // opt-in timed falls through height-dependent openings
       'tools/m59-routes.mjs',     // the baked table and its accessors
       'tools/m59-routebake.mjs',  // what goes into that table
       'tools/m59-finepath.mjs',   // fine pathing

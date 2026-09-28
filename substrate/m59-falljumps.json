@@ -107,16 +107,16 @@
    },
    "to": {
     "row": 38,
-    "col": 30
+    "col": 31
    },
-   "note": "Second of three, and the one that reads as impossible. 38,30 is NOT walkable — no floor at its centre, it is mostly wall — and you jump into it anyway, because the footing is a sliver the coarse grid cannot express. The reason you must not fall short is 38,31: walkable, and 7488 below the take-off (10880 -> 3392). That is the valley, and landing in it costs the whole climb. Declared with a landing the grid calls solid on purpose; anything reading this must not assume the landing square is floor. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 12800 when the body is actually at 10880, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 10880 -> 8000.",
+   "note": "Second of three, and the one that reads as impossible. 38,30 is NOT walkable — no floor at its centre, it is mostly wall — and you jump into it anyway, because the footing is a sliver the coarse grid cannot express. The reason you must not fall short is 38,31: walkable, and 7488 below the take-off (10880 -> 3392). That is the valley, and landing in it costs the whole climb. Declared with a landing the grid calls solid on purpose; anything reading this must not assume the landing square is floor. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 12800 when the body is actually at 10880, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 10880 -> 8000. 2026-09-28 correction: live trial ancient-1790612212744 landed at client (30720,38400), floor 8000. Old (30480,38384) lies inside wall-399 clearance. Use the measured reachable point, not a widened tolerance.",
    "from_fine": {
     "x": 32848,
     "y": 38352
    },
    "to_fine": {
-    "x": 30480,
-    "y": 38384
+    "x": 30720,
+    "y": 38400
    },
    "floors": {
     "from": 10880,
@@ -128,22 +128,23 @@
    "room_name": "An ancient place, its origin forgotten",
    "kind": "fall",
    "requires": {
-    "running": true
+    "running": true,
+    "timed_fall": true
    },
    "observed_by": "operator, 2026-08-25",
    "part_of_cycle": false,
    "from": {
     "row": 38,
-    "col": 30
+    "col": 31
    },
    "to": {
     "row": 42,
     "col": 30
    },
-   "note": "Last of three, four squares south onto real floor at 4800. After this a short walk south reaches the mana node at 51,30 — the point of the whole climb. Take-off is the sliver at 38,30 that the previous jump lands on, so these two are a PAIR: a character that can make the second and not the third is standing on a square the map says does not exist. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 8000 when the body is actually at 8000, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 8000 -> 4800.",
+   "note": "Last of three, four squares south onto real floor at 4800. After this a short walk south reaches the mana node at 51,30 — the point of the whole climb. Take-off is the sliver at 38,30 that the previous jump lands on, so these two are a PAIR: a character that can make the second and not the third is standing on a square the map says does not exist. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 8000 when the body is actually at 8000, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 8000 -> 4800. 2026-09-28: start at the measured jump-2 landing. Explicit timed_fall models gravity while wall 407 blocks entry under its 6080 ceiling; offline 8/16/33/50ms frames reach the 4800 shelf. Live shadow validation pending.",
    "from_fine": {
-    "x": 30480,
-    "y": 38384
+    "x": 30720,
+    "y": 38400
    },
    "to_fine": {
     "x": 30320,

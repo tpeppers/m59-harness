@@ -2392,7 +2392,8 @@ const server = createServer(async (req, res) => {
             const land = raw.find(x => x?.to && x.to_fine &&
               Number(x.to.row) === Number(match.row) && Number(x.to.col) === Number(match.col));
             const aim = land ? { aimX: land.to_fine.x / 16 + 64, aimY: land.to_fine.y / 16 + 64 } : {};
-            const r = await session.step(toCol, toRow, { fall: true, ...aim });
+            const r = await session.step(toCol, toRow, { fall: true,
+              timedFall:land?.requires?.timed_fall===true, ...aim });
             const now = session.client?.self;
             const moved = !!now && (now.row !== before.row || now.col !== before.col);
             json({ jumped: moved, asked: { row: toRow, col: toCol },
