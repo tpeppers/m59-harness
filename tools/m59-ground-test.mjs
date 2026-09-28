@@ -9,7 +9,7 @@
 // from a lucky one.
 //
 // A peer caught this module shipping without a test at all, which it should not have.
-import { headingsFrom, floorsInSquare, reachability, floorAt, edgeOf, HEADINGS, REACHES }
+import { headingsFrom, floorsInSquare, reachability, floorAt, edgeOf, traceReport, floodReport, HEADINGS, REACHES }
   from './m59-ground.mjs';
 
 let pass = 0, fail = 0;
@@ -23,7 +23,7 @@ const fakeGeo = ({ floors = () => 1024, passable = () => true, rows = 30, cols =
   rows, cols,
   leafAtClient: (x, y) => (floors(x, y) == null ? null : { sector: {} }),
   floorBaseAtClient: (x, y) => floors(x, y),
-  traceFineMoveClient: (ax, ay, bx, by) => ({ ok: passable({ x: ax, y: ay }, { x: bx, y: by }) }),
+  traceFineMoveClient: (ax, ay, bx, by) => ({ arrived: passable({ x: ax, y: ay }, { x: bx, y: by }), x: bx, y: by }),
 });
 
 // ---- the shape of the constants -----------------------------------------------------------
@@ -55,6 +55,23 @@ eq(REACHES, [64, 256, 512], 'three reaches: one lattice step, four, eight');
 }
 
 // ---- headingsFrom: THE CASE THIS TOOL WAS BUILT FOR --------------------------------------
+{
+  // Measured room 45, rail leg 233: a slid landing below the requested shelf.
+  const trace = { moved: true, arrived: false, reason: 'geometry_blocked', wall: 700,
+    x: 15931.67, y: 18231.33, destinationFloor: 1664 };
+  const g = fakeGeo({ floors: x => x === 16032 ? 2432 : 1664 });
+  g.traceFineMoveClient = () => trace;
+  const a = { x: 15776, y: 18336 }, b = { x: 16032, y: 18272 };
+  ok(!edgeOf(g)(a,b), 'partial movement cannot create a lattice edge');
+  const r = traceReport(g,a,b);
+  eq(r.arrived,false,'diagnostic refuses the same slide');
+  eq(r.steps.length,1,'stop at first refusal, never seed the next leg at the fictional aim');
+  eq(r.steps[0].landed.floor_client,1664,'report actual landing floor');
+  eq(r.to.floor_client,2432,'report requested shelf separately');
+  eq(r.predicate,'geometry_blocked','retain the named refusing predicate');
+  g.traceFineMoveClient = () => ({ ok: true, moved: true, arrived: false });
+  ok(!edgeOf(g)(a,b),'a generic ok cannot override explicit nonarrival');
+}
 {
   // Marco at r23c17: every heading accepted except due SOUTH, at every reach. That asymmetry is
   // the entire difference between "wedged" and "blocked in the one direction I wanted", and it
@@ -148,5 +165,12 @@ eq(REACHES, [64, 256, 512], 'three reaches: one lattice step, four, eight');
   ok(/NOT walkable/.test(r.caveat), 'and the caveat says the rail cannot be boarded');
 }
 
+{
+  const g=fakeGeo({rows:4,cols:4});
+  ok(floodReport(g,{x:64,y:64},{row:2,col:2},{lattice:256,box:0}).reached,'exact flood reaches an open box');
+  eq(floodReport(g,{x:0,y:0},{row:4,col:4},{cap:3,box:0}).predicate,'search_cap','bounded search never reports exhaustion as terrain');
+  g.traceFineMoveClient=()=>({moved:true,arrived:false,x:0,y:0});
+  eq(floodReport(g,{x:0,y:0},{row:4,col:4},{box:0}).visited,1,'partial slides cannot grow fictional flood vertices');
+}
 console.log(`\nm59-ground: ${pass} assertion(s) passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

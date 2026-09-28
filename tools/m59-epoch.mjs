@@ -90,6 +90,12 @@ export const DOMAINS = Object.freeze({
       'tools/m59-routes.mjs',     // the baked table and its accessors
       'tools/m59-routebake.mjs',  // what goes into that table
       'tools/m59-finepath.mjs',   // fine pathing
+      'tools/m59-fineclimb.mjs',  // node rail driver and fine landing verification
+      'tools/m59-fineroute.mjs',
+      'tools/m59-railfollow.mjs',
+      'tools/m59-railcut.mjs',
+      'tools/m59-noderails.mjs',
+      'tools/m59-ground.mjs',
       'tools/m59-world.mjs',      // exits(), the candidate ranking, wrongExitSquares
       'tools/m59-autopilot.mjs',  // survival movement ownership and replacement choices
       'tools/m59-skills.mjs',     // shelter arrival and cancellation propagation

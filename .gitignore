@@ -784,3 +784,7 @@ substrate/magic-keep.json
 
 # Live wallproof collections, same reasoning as wallproof.jsonl above.
 /substrate/wallproof-*.jsonl
+
+# Live node trial scenes, command receipts and append-only attempt ledger.
+/substrate/node-attempts/
+/substrate/run-node-trial.mjs

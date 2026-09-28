@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { sharedRoomGeometry, MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { finePosition, squareCentreClient, protocolToClient } from './m59-finepos.mjs';
-import { cutRail, snap, LATTICE } from './m59-railcut.mjs';
+import { cutRail, snap, LATTICE, flood, chainTo } from './m59-railcut.mjs';
 
 export const HEADINGS = Object.freeze([
   ['N', 0, -1], ['NE', 1, -1], ['E', 1, 0], ['SE', 1, 1],
@@ -51,9 +51,53 @@ export const floorAt = (geo, x, y) => {
   catch { return null; }
 };
 export const edgeOf = (geo) => (a, b) => {
-  try { const t = geo.traceFineMoveClient(a.x, a.y, b.x, b.y); return !!(t && (t.ok ?? t.moved ?? t.arrived)); }
+  // A lattice flood records b, not the slide's actual endpoint. Room 45 wall 700
+  // moved the body but landed below b's shelf; accepting `moved` invented a climb.
+  try { const t = geo.traceFineMoveClient(a.x, a.y, b.x, b.y); return t?.arrived === true; }
   catch { return false; }
 };
+
+/** Reproduce one failed leg at its exact fine points without moving a character. */
+export function traceReport(geo, from, to, { stride = 64 } = {}) {
+  if (!(Number.isFinite(stride) && stride > 0)) throw new Error('stride must be positive');
+  const point = p => ({ ...p, floor_client: floorAt(geo, p.x, p.y) });
+  const n = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / stride));
+  const steps = [];
+  let body = from;
+  for (let i = 1; i <= n; i++) {
+    const aim = { x: from.x + (to.x - from.x) * i / n, y: from.y + (to.y - from.y) * i / n };
+    const trace = geo.traceFineMoveClient(body.x, body.y, aim.x, aim.y);
+    const landed = Number.isFinite(trace?.x) && Number.isFinite(trace?.y)
+      ? { x: trace.x, y: trace.y } : body;
+    steps.push({ i, from: point(body), aim: point(aim), landed: point(landed), trace });
+    if (trace?.arrived !== true) break;
+    body = landed;
+  }
+  return { units: 'client', from: point(from), to: point(to), stride,
+    arrived: steps.length === n && steps.at(-1).trace?.arrived === true,
+    predicate: steps.at(-1).trace?.arrived === true ? null : (steps.at(-1).trace?.reason ?? 'trace_did_not_arrive'), steps };
+}
+
+/** A bounded, exact-arrival flood into the server's meld box; never a terrain verdict. */
+export function floodReport(geo, from, to, { lattice=64, cap=1500000, box=2 }={}) {
+  if(![lattice,cap].every(v=>Number.isFinite(v)&&v>0))throw Error('positive lattice and cap required');
+  const seed={x:snap(from.x,lattice),y:snap(from.y,lattice)},edge=edgeOf(geo);
+  const bridge=Math.hypot(seed.x-from.x,seed.y-from.y)===0||edge(from,seed);
+  if(!bridge)return {reached:false,predicate:'lattice_bridge_refused',from,seed,lattice,cap};
+  const parent=flood(seed,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice,cap});
+  let count=0,highest=null,nearest=null,best=Infinity;
+  for(const key of parent.keys()){
+    const [x,y]=key.split(',').map(Number),row=Math.floor(y/1024)+1,col=Math.floor(x/1024)+1;
+    const floor=floorAt(geo,x,y);if(floor!=null)highest=highest==null?floor:Math.max(highest,floor);
+    const d=Math.max(Math.abs(row-to.row),Math.abs(col-to.col));
+    if(d<best){best=d;nearest={x,y,row,col,floor_client:floor};}
+    if(d<=box)count++;
+  }
+  return {reached:count>0,predicate:count?'reached_box_in_model':parent.size>=cap?'search_cap':'no_box_sample_at_this_lattice',
+    from,seed,to,box,lattice,cap,visited:parent.size,reached_box_samples:count,highest_floor_client:highest,nearest,
+    caveat:'Offline model, exact trace endpoints, one lattice phase; no live arrival claim.',
+    ...(count?{path:chainTo(parent,nearest)}:{})};
+}
 
 /** Which headings does the mover's own trace accept from this exact point, at each reach? */
 export function headingsFrom(geo, point, { reaches = REACHES } = {}) {
@@ -110,6 +154,20 @@ const parseSquare = (s) => {
 async function main(argv) {
   const json = argv.includes('--json');
   const arg = (k) => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i + 1] : null; };
+  if(argv.includes('--flood')) {
+    const v=String(arg('from-client')).split(',').map(Number),to=parseSquare(arg('to'));
+    if(v.length!==2||!v.every(Number.isFinite)||!to||!arg('room'))throw Error('--flood requires --room N --from-client X,Y --to rNcM');
+    const r=floodReport(roomGeometry(Number(arg('room'))),{x:v[0],y:v[1]},to,
+      {lattice:Number(arg('lattice')??64),cap:Number(arg('cap')??1500000),box:Number(arg('box')??2)});
+    console.log(JSON.stringify(r,null,2));return r.reached?0:1;
+  }
+  if (arg('from-client') || arg('to-client')) {
+    const parse = s => { const v = String(s).split(',').map(Number); return v.length === 2 && v.every(Number.isFinite) ? { x: v[0], y: v[1] } : null; };
+    const from = parse(arg('from-client')), to = parse(arg('to-client'));
+    if (!arg('room') || !from || !to) throw new Error('--room N --from-client X,Y --to-client X,Y required');
+    const report = traceReport(roomGeometry(Number(arg('room'))), from, to, { stride: Number(arg('stride') ?? 64) });
+    console.log(JSON.stringify(report, null, 2)); return report.arrived ? 0 : 1;
+  }
   const agent = argv.find((a) => !a.startsWith('--') &&
                                  argv[argv.indexOf(a) - 1] !== '--to' &&
                                  argv[argv.indexOf(a) - 1] !== '--at' &&

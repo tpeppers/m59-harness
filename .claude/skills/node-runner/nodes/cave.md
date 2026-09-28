@@ -1,5 +1,62 @@
 # cave — NODE_ORCCAVES, room 27, stone at r23c53
 
+## 2026-09-28 — repeatable arrival on the quiet local shadow
+
+The **same** `node-trial route=cave-entry` recipe reached the node three times
+from room 576 r115c86, client (87552,117248), floor 2624. It crossed west into
+587, took the region trigger into 27, and used a bounded ordinary `walk_to`
+to r23c53. All three ended at client (53760,23040), floor 1536, health 20/20.
+The third run followed a broker/keeper restart (broker 20952 → 38320).
+Room scenes were reset to no hostile bodies, with monster generation disabled
+during each run. **No claim with monsters present.**
+
+Trial IDs, under ignored `substrate/node-attempts/20260928/`:
+
+- `cave-1790613394692`
+- `cave-1790613571304`
+- `cave-1790613790675`
+
+Each objective receipt includes the authoritative server room list as well as
+the keeper's actual position. The recipe hash was
+`5b44ddc13335cc05f51a9926943c08c2daf7cd57ad30806bf116d4ae728f4798`,
+on checkout/broker base 1258ce4, driver movement epoch `a979093360a3+50651354`.
+Command and sampled fine-position receipts identify every transition.
+
+All three replies were **already bonded**. The earlier entrance-only trial
+`cave-1790612748029` supplied the distinct first-time meld message and a stable
+same-session max-mana increase **41 → 49**. That is one first-time grant, not
+three. No node-bit reset or fresh-character grant was performed.
+
+### The missing crossing is an inferred fall, not a fine walking chain
+
+The normal walker took r36c46 → r34c46: observed client (46592,36352)/1280
+to (46592,34304)/896. `cave-crossing-tactics.json` identifies its
+`undeclared_fall` decision. This is a **shadow experimental recipe**, not an
+undeclared jump promoted as production movement. The live route and activation
+contradict the older blanket “no arrival reaches the stone” conclusions below.
+The 128/64 exact-endpoint walking floods still find no box point, which is
+consistent with a fall being needed. Do not erase either observation.
+
+### Return and known-bad recipe
+
+The first whole-approach trial `cave-1790612973970` also arrived, but a plain
+`travel(587)` escape timed out, oscillating around r35c40/r35c45 on floor 0.
+It was rescued afterward, at full health. Keep that failure.
+
+The revised return first calls bounded `walk_to(row=57,col=45,fine=false)`,
+then travels 587 → 576, cancelling each travel when `look` observes the new
+room. This returned to room 576 r115c88, client (89600,117248), floor 2624,
+in the repeatability trials. The ledger's `escape` field records each outcome;
+the separate later administrative return to Familiars is never counted as escape.
+
+Reproduce via FleetScript: `node-trial agents=shadow22 node=cave room=576
+row=115 col=86 route=cave-entry quiet=true`. See `docs/m59-node-attempts.md`.
+Next scene experiment: restore a captured hostile-body configuration and repeat
+the measured fall with the same position receipts. Do not assume quiet-scene
+reliability transfers to six orcs standing on its line.
+
+## Historical notebook (later measurements above take precedence)
+
 **SOLVED 2026-09-09.** Loial the Ogier melded it; max mana 25 -> 33 (+8 at mysticism 50).
 
 ## The puzzle is the DOOR, not the terrain

@@ -28,6 +28,22 @@
 // asked once per leg and answered wrong for free.
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
+import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
+
+/** Quantize a fine waypoint without rounding it over a shelf lip. */
+export function quantizeRailPoint(point, { floorAt, edge } = {}) {
+  const wanted = floorAt(point.x,point.y), centre=clientToProtocol(point), candidates=[];
+  if (!Number.isFinite(wanted)) return {ok:false,reason:'waypoint_floor_unknown'};
+  for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+    const protocol={x:centre.x+dx,y:centre.y+dy}, client=protocolToClient(protocol);
+    const floor=floorAt(client.x,client.y);
+    const distance=Math.hypot(client.x-point.x,client.y-point.y);
+    if(!Number.isFinite(floor)||Math.abs(floor-wanted)>MAX_STEP_HEIGHT)continue;
+    if(distance>0&&!edge(point,client))continue;
+    candidates.push({ok:true,protocol,client,floor,wanted,distance});
+  }
+  return candidates.sort((a,b)=>a.distance-b.distance)[0]??{ok:false,reason:'no_wire_point_on_waypoint_shelf',point,wanted};
+}
 
 /** A waypoint is off-shelf when no single step could reach the body's floor from it. */
 export const onSameShelf = (waypointFloor, bodyFloor, step = MAX_STEP_HEIGHT) =>
@@ -36,6 +52,19 @@ export const onSameShelf = (waypointFloor, bodyFloor, step = MAX_STEP_HEIGHT) =>
 // Pushed to the back rather than excluded, so a follower whose floor read failed — or which
 // genuinely is off every shelf — still has somewhere to aim instead of stalling with no answer.
 export const OFF_SHELF_PENALTY = 1e6;
+
+/** A planned descent is not a fall off the route (Sentinel 8000 -> 5248). */
+export const unexpectedFall = (previous, actual, wanted) =>
+  [previous, actual, wanted].every(Number.isFinite) && previous - actual > 1000 &&
+  wanted - actual > MAX_STEP_HEIGHT;
+
+/** Compare a server position with a declared fine landing, never the jump reply. */
+export function landingCheck(actual, target, { floor, wantedFloor, tolerance = 128 } = {}) {
+  const distance = actual && target ? Math.hypot(actual.x - target.x, actual.y - target.y) : Infinity;
+  const floorKnown = Number.isFinite(floor) && Number.isFinite(wantedFloor);
+  return { ok: distance <= tolerance && floorKnown && Math.abs(floor - wantedFloor) <= MAX_STEP_HEIGHT,
+    distance, floor, wantedFloor, tolerance, floorKnown };
+}
 
 /**
  * Which waypoint is a body at `point` nearest, judged on the shelf it is standing on?
