@@ -1393,6 +1393,22 @@ function atEdgeOpening(position, opening, direction) {
     && Math.abs(position.y - opening.y) <= KOD_FINENESS;
 }
 
+
+/**
+ * Is `name` on the loot-ignore list for a character wearing `worn` (names)? Pure. Exact names,
+ * case-insensitive, never substrings. A rule with `unless_unworn: 'shield' | 'armor'` lets a
+ * character with nothing of that kind on pick one up: that is how an unarmoured farmer gets armour.
+ */
+export function lootIgnored(name, rules = [], worn = []) {
+  const n = String(name ?? '').toLowerCase().trim();
+  const r = (rules ?? []).find(x => String(x?.name ?? x).toLowerCase().trim() === n);
+  if (!r) return false;
+  if (!r.unless_unworn) return true;
+  const w = (worn ?? []).map(x => String(x).toLowerCase());
+  const wears = r.unless_unworn === 'shield' ? w.some(x => /shield/.test(x)) : w.some(x => /armor|armour|mail|plate/.test(x));
+  return wears;
+}
+
 class Session {
   constructor(name) {
     this.name = name;
@@ -4378,6 +4394,12 @@ class Session {
    * zeroing it would hand the character a fresh 150% budget every time DUM re-asserted an
    * unchanged setting — which it does on a timer.
    */
+  // ITEMS THE FLEET DOES NOT PICK UP (operator, 2026-09-28: "change the looting rules to not keep
+  // everything we're keeping"). [{name, unless_unworn}] — exact names, never substrings, because
+  // "mushroom" is a bless reagent while "gold round shield" is 225 weight for 350 shillings.
+  // `unless_unworn: 'shield' | 'armor'`: still taken by a character wearing none of that kind.
+  setLootIgnore(list = []) { this._lootIgnore = Array.isArray(list) ? list : []; }
+
   setOverfarmPolicy(policy = null, protect = [], floors = null) {
     this._overfarmPolicy = policy ?? null;
     this._overfarmProtect = Array.isArray(protect) ? protect : [];
@@ -4547,8 +4569,23 @@ class Session {
       }
     }
 
+    // THE FLEET'S IGNORE LIST, after the cursed and broken filters and before overfarming ranks
+    // anything. Never applied to an explicit id list: a caller naming an item wants that item.
+    const ignoredSkipped = [];
+    if (!ids?.length && this._lootIgnore?.length) {
+      const worn = (c.equipment?.()?.equipped ?? []).map(e => e.name ?? '');
+      cands = cands.filter(o => {
+        const name = c.rsc.get(o.nameRsc) || '';
+        if (!lootIgnored(name, this._lootIgnore, worn)) return true;
+        ignoredSkipped.push(name);
+        return false;
+      });
+    }
+
     const taken = [], refused = [];
     let wasCancelled = false;
+    for (const n of ignoredSkipped)
+      refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
 
     // OVERFARMING: DECIDE WHICH OF THIS FLOOR IS WORTH THE PACK IT WOULD COST.
     //

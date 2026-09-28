@@ -14995,6 +14995,7 @@ export class Autopilot {
     // The protect list is `protectedItemNames()` — vault items, temporary cargo, whatever
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
+    s.setLootIgnore?.(this.lootIgnoreList());
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
                           this.carryFloors());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
@@ -22281,6 +22282,21 @@ export class Autopilot {
       seen_on_floor_ms: lyingMs, ...(handoff ? { handoff_rider: handoff.rider } : {}) });
     this._chaliceFloorSince = null;
     return true;
+  }
+
+  // THE FLEET LOOT-IGNORE LIST: policy.lootIgnore when a character has its own, else the operator's
+  // fleet file substrate/loot-ignore.json ({ignore: [{name, unless_unworn}]}), re-read at most every
+  // minute. Missing or unreadable is an empty list: loot exactly as before.
+  lootIgnoreList(now = Date.now()) {
+    if (Array.isArray(this.policy?.lootIgnore)) return this.policy.lootIgnore;
+    if (this._lootIgnoreAt && now - this._lootIgnoreAt < 60_000) return this._lootIgnoreCache ?? [];
+    this._lootIgnoreAt = now;
+    try {
+      const f = fileURLToPath(new URL('../substrate/loot-ignore.json', import.meta.url));
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      this._lootIgnoreCache = Array.isArray(j?.ignore) ? j.ignore : [];
+    } catch { this._lootIgnoreCache = []; }
+    return this._lootIgnoreCache;
   }
 
   // ------------------------------------------------------------------ money home by the desk
