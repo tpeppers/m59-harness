@@ -453,6 +453,22 @@ export class VaultDesk {
       // THE GO-BETWEEN'S OWN TICKET: it is its own customer, so it walks to the window itself.
       const selfServe = same(who.agent, this.G);
       if (selfServe && !(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
+      // A BOT ALREADY IN TOWN IS WALKED TO (the giver travelling), as a deposit is.
+      const cur = await this.row(who.agent, true);
+      const inTown = !person && !selfServe && carrier === this.G && (this.cfg.town_rooms ?? []).includes(Number(cur?.room_num));
+      if (inTown) {
+        const gave = {};
+        for (const l of got) gave[l.item] = await this.hand(this.G, who.agent, l.item, l.amount, 'from');
+        await this.goTo(this.G, INN);
+        for (const [item, n] of Object.entries(gave)) {
+          moved[item] = (moved[item] ?? 0) + n;
+          const w = wants.find(x => same(x.item, item)); if (w) w.amount -= n;
+        }
+        if (got.some(l => (gave[l.item] ?? 0) < l.amount))
+          return this.close(t, 'partial', `${who.character} moved off before all of it was handed over; ${carrier} is holding the rest`, { moved });
+        if (Object.keys(short).length) break;
+        continue;
+      }
       if (!(await this.waitFor(who.character, meet))) {
         // THE CARRIER KEEPS IT until they come: nothing is put back, the ticket stays open.
         await this.tell(carrier, who.character, `${t.id} is ready: ${got.map(l => `${l.amount} ${l.item}`).join(', ')} — ` +
@@ -602,13 +618,13 @@ export class VaultDesk {
    */
   async noticeDepositors() {
     const spec = this.cfg.auto_deposit;
-    if (!spec || this.now() - (this.noticedAt ?? 0) < 60_000) return [];
+    if ((!spec && !this.cfg.auto_withdraw) || this.now() - (this.noticedAt ?? 0) < 60_000) return [];
     this.noticedAt = this.now();
     const rows = await this.rows(true), filed = [];
-    for (const [agent, s] of Object.entries(spec)) {
+    for (const [agent, s] of Object.entries(spec ?? {})) {
       const row = rowFor(rows, agent);
       if (!row || !(this.cfg.town_rooms ?? []).includes(Number(row.room_num))) continue;
-      if (this.book.open(this.now()).some(t => same(t.from, row.character) || same(t.from, agent))) continue;
+      if (this.book.open(this.now()).some(t => t.kind === 'deposit' && (same(t.from, row.character) || same(t.from, agent)))) continue;
       const skip = (s.skip ?? []).map(x => String(x).toLowerCase());
       const names = (s.items ?? this.loadoutKeep(s.loadout)).filter(n => !skip.includes(String(n).toLowerCase()));
       const pack = await this.pack(agent);
@@ -617,6 +633,21 @@ export class VaultDesk {
       const t = this.book.request({ kind: 'deposit', from: agent, items, where: INN, now: this.now(), ttlMs: this.cfg.ticket_ttl_ms });
       this.book.update(t.id, { standing: true });
       this.log(`${t.id}: ${row.character} is in town (${row.room_num}) with ${items.map(i => `${i.amount} ${i.item}`).join(', ')} — a standing deposit`);
+      filed.push(t);
+    }
+    for (const [agent, s] of Object.entries(this.cfg.auto_withdraw ?? {})) {
+      const row = rowFor(rows, agent);
+      if (!row || !(this.cfg.town_rooms ?? []).includes(Number(row.room_num))) continue;
+      if (this.book.open(this.now()).some(t => t.kind === 'withdraw' && (same(t.from, row.character) || same(t.from, agent)))) continue;
+      const pack = await this.pack(agent);
+      const items = Object.entries(s.items ?? {}).map(([item, [min, target]]) => {
+        const have = countOf(pack, item);
+        return have < Number(min) ? { item, amount: Number(target) - have } : null;
+      }).filter(i => i && i.amount > 0);
+      if (!items.length) continue;
+      const t = this.book.request({ kind: 'withdraw', from: agent, items, where: INN, now: this.now(), ttlMs: this.cfg.ticket_ttl_ms });
+      this.book.update(t.id, { standing: true });
+      this.log(`${t.id}: ${row.character} is in town (${row.room_num}) short of ${items.map(i => `${i.amount} ${i.item}`).join(', ')} — a standing withdrawal`);
       filed.push(t);
     }
     return filed;

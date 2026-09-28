@@ -78,6 +78,10 @@ export const DEFAULTS = Object.freeze({
   // items are its loadout's `keep` list, read live, less `skip` (its own food). When it stands in one
   // of `town_rooms`, the desk files the deposit itself and the go-between walks to it.
   auto_deposit: null,
+  // STANDING WITHDRAWALS, the mirror: {agent: {items: {name: [min, target]}}}. In a town room with
+  // fewer than `min`, the desk files a withdrawal up to `target` and the go-between walks it over
+  // (m59-harness-3f, 2026-09-28: Marco carries the chests' edible mushrooms out for relay practice).
+  auto_withdraw: null,
   town_rooms: Object.freeze([106]),
 });
 

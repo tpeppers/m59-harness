@@ -110,6 +110,7 @@ function world() {
       case 'supply': {
         const from = W.rows[a.from], to = W.rows[a.to];
         if (a.who_travels === 'to') { to.room_num = from.room_num; to.where = null; W.walks.push(`${a.to}->${from.room_num}`); }
+        if (a.who_travels === 'from') { from.room_num = to.room_num; from.where = null; W.walks.push(`${a.from}->${to.room_num}`); }
         if (from.room_num !== to.room_num) return { ok: false, why: 'not together' };
         for (const spec of a.what) { const o = byId(a.from, spec); if (!o) continue;
           const n = typeof spec === 'object' ? spec.amount : 1; remove(a.from, o.name, n); add(a.to, o.name, n); }
@@ -329,6 +330,24 @@ try {
     ok('done from (3,21)', r.worked?.status === 'done', JSON.stringify(r));
     await d.startShift();
     ok('and the shift opens there', W.rows.t2.room_num === INN);
+  }
+
+  section('a standing withdrawal: the courier in town short of mushrooms gets topped up to the target');
+  {
+    const W = world();
+    W.chests['edible mushroom'] = 747;
+    W.rows.hk2.room_num = 102;                                       // South Barloque
+    W.packs.hk2 = [{ id: 85, name: 'edible mushroom', amount: 12 }];
+    const d = deskFor(W, { auto_withdraw: { hk2: { items: { 'edible mushroom': [20, 80] } } }, town_rooms: [102, 106, 109] });
+    const filed = await d.noticeDepositors();
+    ok('a withdrawal for 68, up to 80', filed.length === 1 && filed[0].kind === 'withdraw' && filed[0].items[0].amount === 68, JSON.stringify(filed));
+    const r = await d.turn();
+    ok('done', r.worked?.status === 'done', JSON.stringify(r));
+    ok('he has 80', W.count(W.packs.hk2, 'edible mushroom') === 80);
+    ok('Pepe walked to him and back to the inn', W.walks.includes('t2->102') && W.rows.t2.room_num === INN, W.walks.join(','));
+    ok('the main door stayed shut', W.mainDoor === 0);
+    d.noticedAt = 0;
+    ok('at 80 nothing more is filed', (await d.noticeDepositors()).length === 0);
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');
