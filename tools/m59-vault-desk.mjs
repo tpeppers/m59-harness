@@ -487,8 +487,11 @@ export class VaultDesk {
         if (Number(row?.room_num) !== HALL) continue;
         if (agent === this.M) await this.post('chests');
         else if (row?.position && row.position.row <= 4 && row.position.col >= 26) continue;   // in the foyer: not inside
-        const s = await this.call('hall_withdraw', { agent, wants: kit, stash: ['shilling'] }, 620_000).catch(e => ({ ok: false, why: e.message }));
-        this.log(`  ${agent} emptied its pack into the chests: ${s?.ok === false ? `FAILED ${s.why}` : `stashed ${s?.stashed ?? '?'}`}`);
+        const s = await this.call('hall_withdraw', { agent, wants: [], stash: ['shilling'] }, 620_000).catch(e => ({ ok: false, why: e.message }));
+        const d = await this.call('hall_withdraw', { agent, wants: kit, deposit: [...(this.cfg.shift_deposit ?? [])] }, 620_000)
+          .catch(e => ({ ok: false, why: e.message }));
+        this.log(`  ${agent} emptied its pack into the chests: ${s?.ok === false ? `stash FAILED ${s.why}` : `stashed ${s?.stashed ?? '?'}`}; ` +
+                 `${d?.ok === false ? `deposit FAILED ${d.why}` : `protected reagents in, kit back ${JSON.stringify(d?.took ?? {})}`}`);
         if (agent === this.M) await this.post('booth');
       }
     }

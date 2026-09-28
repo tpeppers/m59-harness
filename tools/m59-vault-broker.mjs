@@ -67,6 +67,10 @@ export const DEFAULTS = Object.freeze({
   // {item: n} for both, or {agent: {item: n}} per character (the go-between cannot reach the chests
   // to top up, so it carries more).
   shift_kit: Object.freeze({ elderberry: 30, 'fairy wing': 10, 'loaf of bread': 5 }),
+  // A STASH KEEPS WHAT THE CHARACTER PROTECTS (its policy's protect_items), and the disciples protect
+  // their training reagents, so the first live stash (2026-09-28) left Statler 250 herbs and 66% full.
+  // These go in BY NAME, which the protect list does not stop; the kit is then drawn back.
+  shift_deposit: Object.freeze(['herb', 'elderberry', 'fairy wing', 'inky-cap mushroom']),
 });
 
 export const CONFIG_FILE = process.env.M59_VAULT_BROKER || here('../substrate/strategies/vault-broker.json');

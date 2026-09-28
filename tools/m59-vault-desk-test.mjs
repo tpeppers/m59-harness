@@ -93,8 +93,10 @@ function world() {
         if (r.where === 'foyer') { W.mainDoor++; r.where = 'chests'; }
         if (r.where !== 'chests') return { ok: false, why: 'guild position is outside the known passage' };
         if (Array.isArray(a.stash)) { W.stashedBy = [...(W.stashedBy ?? []), a.agent];
-          for (const o of [...W.packs[a.agent]]) if (!a.stash.some(k => o.name.includes(k))) {
+          for (const o of [...W.packs[a.agent]]) if (!a.stash.some(k => o.name.includes(k)) && !(W.protect ?? []).includes(o.name)) {
             W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
+        for (const d of (a.deposit ?? []).filter(d => !d.startsWith('id:'))) for (const o of W.packs[a.agent].filter(x => x.name.includes(d))) {
+          W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); }
         for (const d of a.deposit ?? []) { const o = W.packs[a.agent].find(x => `id:${x.id}` === d);
           if (o) { W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         const took = {}, short = {};
@@ -273,6 +275,7 @@ try {
     W2.packs.t2 = [{ id: 70, name: 'herb', amount: 132 }, { id: 71, name: 'elderberry', amount: 96 }];
     W2.packs.t3.push({ id: 72, name: 'herb', amount: 250 }, { id: 73, name: 'shilling', amount: 1784 });
     W2.chests.elderberry = 0;
+    W2.protect = ['herb', 'elderberry'];                 // the disciples protect their training reagents
     await deskFor(W2, { shift_stash: true, shift_kit: { t2: { elderberry: 60, 'fairy wing': 20 }, t3: { elderberry: 30 } } }).startShift();
     ok('both stashed', W2.stashedBy?.includes('t2') && W2.stashedBy?.includes('t3'), JSON.stringify(W2.stashedBy));
     ok('herbs went in', W2.chests.herb === 382 && W2.count(W2.packs.t3, 'herb') === 0);
