@@ -561,7 +561,15 @@ export class VaultDesk {
     const r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
     if (r?.ok === false && /main door|foyer/i.test(r.why ?? '')) {
       this.log('manager is in the foyer: walking in once, to the chests');
-      const w = await this.call('hall_withdraw', { agent: this.M, wants: [] }, 620_000).catch(e => ({ ok: false, why: e.message }));
+      // THREE TRIES, like every other walk in the hall: "guild door 59 trigger not reached" closed the
+      // 05:48 start on its first attempt (prod 2026-09-28).
+      let w = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        w = await this.call('hall_withdraw', { agent: this.M, wants: [] }, 620_000).catch(e => ({ ok: false, why: e.message }));
+        if (w?.ok !== false) break;
+        this.log(`  manager -> inside: ${w.why}; trying again`);
+        await this.sleep(5_000);
+      }
       if (w?.ok === false) throw new Error(`manager could not get inside: ${w.why}`);
       await this.post('booth');
     } else if (r?.ok === false) await this.post('booth');

@@ -92,6 +92,7 @@ function world() {
       }
       case 'hall_withdraw': {
         const r = W.rows[a.agent];
+        if (W.doorStumbles > 0) { W.doorStumbles--; return { ok: false, why: 'guild door 59 trigger not reached' }; }
         if (r.where === 'foyer') { W.mainDoor++; r.where = 'chests'; }
         if (r.where !== 'chests') return { ok: false, why: 'guild position is outside the known passage' };
         if (Array.isArray(a.stash)) { W.stashedBy = [...(W.stashedBy ?? []), a.agent];
@@ -413,6 +414,9 @@ try {
     const d = deskFor(W);
     await d.startShift();
     ok('in through the main door once, to the chests', W.mainDoor === 1);
+    const W3 = world(); W3.rows.t3.where = 'foyer'; W3.doorStumbles = 2;
+    await deskFor(W3).startShift();
+    ok('a walk-in that misses the door trigger is tried again', W3.rows.t3.where === 'booth' && W3.mainDoor === 1);
     ok('then to the booth', W.rows.t3.where === 'booth');
     ok('the go-between is at the inn', W.rows.t2.room_num === INN);
     await d.endShift();
