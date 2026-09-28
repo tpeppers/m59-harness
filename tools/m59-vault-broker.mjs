@@ -73,6 +73,12 @@ export const DEFAULTS = Object.freeze({
   // their training reagents, so the first live stash (2026-09-28) left Statler 250 herbs and 66% full.
   // These go in BY NAME, which the protect list does not stop; the kit is then drawn back.
   shift_deposit: Object.freeze(['herb', 'elderberry', 'fairy wing', 'inky-cap mushroom']),
+  // STANDING DEPOSITS: a bot of ours whose loot belongs in the chests and who cannot carry it there
+  // (the Ukgoth courier, under 30 HP: m59-harness-3f, 2026-09-28). {agent: {loadout, skip}} — the
+  // items are its loadout's `keep` list, read live, less `skip` (its own food). When it stands in one
+  // of `town_rooms`, the desk files the deposit itself and the go-between walks to it.
+  auto_deposit: null,
+  town_rooms: Object.freeze([106]),
 });
 
 export const CONFIG_FILE = process.env.M59_VAULT_BROKER || here('../substrate/strategies/vault-broker.json');

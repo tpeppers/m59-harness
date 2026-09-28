@@ -30,7 +30,7 @@
 // training-yield requests (m59-keep-training.mjs) and waits for `<agent>.yielded`, keeps the requests
 // fresh while it runs (a request older than 30 minutes is treated as abandoned), and deletes them on
 // the way out. It holds a commander lease on both (work and movement) so the DUM leaves them alone.
-import { existsSync, mkdirSync, writeFileSync, unlinkSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, utimesSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP } from './m59-vault-broker.mjs';
@@ -236,12 +236,13 @@ export class VaultDesk {
 
   // ---------------------------------------------------------------- moving things
   /** Hand `item` x `amount` from one of ours to another, standing together. Returns what arrived. */
-  async hand(from, to, item, amount) {
+  async hand(from, to, item, amount, travels = 'neither') {
     const fromPack = await this.pack(from);
     const { specs } = specsFor(fromPack, item, amount);
     if (!specs.length) return 0;
     const before = countOf(await this.pack(to), item);
-    await this.call('supply', { from, to, what: specs, who_travels: 'neither' }, 200_000).catch(e => this.log(`  supply failed: ${e.message}`));
+    await this.call('supply', { from, to, what: specs, who_travels: travels }, travels === 'neither' ? 200_000 : 600_000)
+      .catch(e => this.log(`  supply failed: ${e.message}`));
     return Math.max(0, countOf(await this.pack(to), item) - before);
   }
 
@@ -294,13 +295,13 @@ export class VaultDesk {
   }
 
   /** Customer (a bot of ours) -> carrier. Everything the ticket lists, or all of it ('*' = unsupported for bots). */
-  async takeFromBot(carrier, customerAgent, items) {
+  async takeFromBot(carrier, customerAgent, items, travels = 'neither') {
     const got = {};
     for (const i of items) {
       const room = freeRoom(await this.row(carrier, true), 0);
       const { take } = whatFits([i], room, weighItem);
       if (!take.length) continue;
-      const n = await this.hand(customerAgent, carrier, i.item, take[0].amount);
+      const n = await this.hand(customerAgent, carrier, i.item, take[0].amount, travels);
       if (n) got[i.item] = n;
     }
     return got;
@@ -461,9 +462,15 @@ export class VaultDesk {
 
   async deposit(t, who, person, carrier, meet) {
     if (!person && t.items.some(i => i.item === '*')) throw new Error('a bot deposit must list its items');
-    if (carrier === this.G && !(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
-    if (!(await this.waitFor(who.character, meet))) return this.close(t, 'abandoned', `${who.character} never came to room ${meet}`);
-    const got = person ? await this.takeFromPerson(carrier, who.character) : await this.takeFromBot(carrier, who.agent, t.items);
+    // A BOT ALREADY IN TOWN IS WALKED TO: the go-between goes to it (supply, the receiver travelling)
+    // rather than waiting for a courier whose own errand never brings it to the inn.
+    const inTown = !person && carrier === this.G && (this.cfg.town_rooms ?? []).includes(Number(who.room_num));
+    if (!inTown) {
+      if (carrier === this.G && !(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
+      if (!(await this.waitFor(who.character, meet))) return this.close(t, 'abandoned', `${who.character} never came to room ${meet}`);
+    }
+    const got = person ? await this.takeFromPerson(carrier, who.character)
+                       : await this.takeFromBot(carrier, who.agent, t.items, inTown ? 'to' : 'neither');
     if (!Object.keys(got).length) return this.close(t, 'abandoned', 'nothing was handed over');
     if (carrier === this.G) {
       if (!(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
@@ -564,9 +571,45 @@ export class VaultDesk {
     return null;
   }
 
+  /** The `keep` list of a loadout (substrate/loadouts/<name>.json), read live; [] when unreadable. */
+  loadoutKeep(name) {
+    try {
+      const f = fileURLToPath(new URL(`../substrate/loadouts/${name}.json`, import.meta.url));
+      return (JSON.parse(readFileSync(f, 'utf8')).keep ?? []).map(String);
+    } catch { return []; }
+  }
+
+  /**
+   * STANDING DEPOSITS (cfg.auto_deposit): a listed bot standing in one of cfg.town_rooms with any of
+   * its keep-list items gets a deposit ticket for all of them — at most one open at a time, and a
+   * look at most once a minute.
+   */
+  async noticeDepositors() {
+    const spec = this.cfg.auto_deposit;
+    if (!spec || this.now() - (this.noticedAt ?? 0) < 60_000) return [];
+    this.noticedAt = this.now();
+    const rows = await this.rows(true), filed = [];
+    for (const [agent, s] of Object.entries(spec)) {
+      const row = rowFor(rows, agent);
+      if (!row || !(this.cfg.town_rooms ?? []).includes(Number(row.room_num))) continue;
+      if (this.book.open(this.now()).some(t => same(t.from, row.character) || same(t.from, agent))) continue;
+      const skip = (s.skip ?? []).map(x => String(x).toLowerCase());
+      const names = (s.items ?? this.loadoutKeep(s.loadout)).filter(n => !skip.includes(String(n).toLowerCase()));
+      const pack = await this.pack(agent);
+      const items = names.map(n => ({ item: n, amount: countOf(pack, n) })).filter(i => i.amount > 0);
+      if (!items.length) continue;
+      const t = this.book.request({ kind: 'deposit', from: agent, items, where: INN, now: this.now(), ttlMs: this.cfg.ticket_ttl_ms });
+      this.book.update(t.id, { standing: true });
+      this.log(`${t.id}: ${row.character} is in town (${row.room_num}) with ${items.map(i => `${i.amount} ${i.item}`).join(', ')} — a standing deposit`);
+      filed.push(t);
+    }
+    return filed;
+  }
+
   /** One turn: take requests, hand over what is held, work the oldest open ticket, else practise. */
   async turn() {
     await this.poll();
+    await this.noticeDepositors().catch(e => this.log(`  noticing depositors failed: ${e.message}`));
     const resumed = await this.resumeWaiting();
     if (resumed) return { worked: resumed };
     const next = this.book.open(this.now()).filter(t => t.status === 'open')

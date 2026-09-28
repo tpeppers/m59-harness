@@ -108,6 +108,7 @@ function world() {
       case 'travel': W.rows[a.agent].room_num = a.to; W.rows[a.agent].where = a.to === HALL ? 'foyer' : null; W.walks.push(`${a.agent}->${a.to}`); return { arrived: true };
       case 'supply': {
         const from = W.rows[a.from], to = W.rows[a.to];
+        if (a.who_travels === 'to') { to.room_num = from.room_num; to.where = null; W.walks.push(`${a.to}->${from.room_num}`); }
         if (from.room_num !== to.room_num) return { ok: false, why: 'not together' };
         for (const spec of a.what) { const o = byId(a.from, spec); if (!o) continue;
           const n = typeof spec === 'object' ? spec.amount : 1; remove(a.from, o.name, n); add(a.to, o.name, n); }
@@ -280,6 +281,28 @@ try {
     ok('served', r.worked?.status === 'done', JSON.stringify(r));
     ok('Pepe has his bread', W.count(W.packs.t2, 'loaf of bread') === 20, String(W.count(W.packs.t2, 'loaf of bread')));
     ok('and is back at the inn', W.rows.t2.room_num === INN);
+  }
+
+  section('a standing deposit: the courier in town is noticed, walked to, and his keep list goes in');
+  {
+    const W = world();
+    W.rows.hk2.room_num = 109;                                       // selling at the Sparkling Stone
+    W.packs.hk2 = [{ id: 80, name: 'emerald', amount: 25 }, { id: 81, name: 'sapphire', amount: 9 },
+                   { id: 82, name: 'meat pie', amount: 3 }, { id: 83, name: 'elderberry', amount: 120 }];
+    const d = deskFor(W, { auto_deposit: { hk2: { items: ['emerald', 'sapphire', 'meat pie'], skip: ['meat pie'] } }, town_rooms: [102, 106, 109] });
+    const filed = await d.noticeDepositors();
+    ok(filed.length === 1 && filed[0].items.length === 2, 'one ticket, his food left out', JSON.stringify(filed));
+    ok((await d.noticeDepositors()).length === 0, 'not twice');
+    const r = await d.turn();
+    ok(r.worked?.status === 'done', 'done', JSON.stringify(r));
+    ok(W.chests.emerald === 35 && W.chests.sapphire === 9, 'the gems are in the chests', JSON.stringify(W.chests));
+    ok(W.count(W.packs.hk2, 'meat pie') === 3 && W.count(W.packs.hk2, 'elderberry') === 120, 'his food and his carry stock stayed');
+    ok(W.walks.includes('t2->109'), 'Pepe walked to him', W.walks.join(','));
+    ok(W.rows.t2.room_num === INN && W.mainDoor === 0, 'and went home by the window, the main door shut');
+    W.rows.hk2.room_num = 2;
+    d.noticedAt = 0;
+    W.packs.hk2.push({ id: 84, name: 'diamond', amount: 4 });
+    ok((await d.noticeDepositors()).length === 0, 'out of town: nothing filed');
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');
