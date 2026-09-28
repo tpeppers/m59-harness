@@ -33,7 +33,7 @@
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, utimesSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP } from './m59-vault-broker.mjs';
+import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP, writeDeskOpen, DESK_OPEN_FILE } from './m59-vault-broker.mjs';
 import { checkItemName, weighItem } from './m59-items.mjs';
 import { practiceOnce } from './m59-practice-once.mjs';
 import { serviceReplyText, humanMark, chaliceStoreFor } from './m59-chalice.mjs';
@@ -399,7 +399,9 @@ export class VaultDesk {
     const who = rowFor(rows, t.from);
     if (!who) return this.close(t, 'abandoned', `${t.from} is not on this fleet`);
     const person = !!t.human || this.isHuman(who.character);
-    const route = routeFor(who);
+    // A BOT THAT ASKED TO BE MET AT THE INN is met there, whatever its health: a keeper contributing
+    // to the guild files `where: 106` and waits there for the go-between (m59-harness-3f a125d96).
+    const route = !person && Number(t.where) === INN ? 'inn' : routeFor(who);
     const carrier = route === 'window' ? this.M : this.G;
     const meet = route === 'window' ? HALL : INN;
     this.book.update(t.id, { status: 'working', route, carrier });
@@ -739,10 +741,13 @@ if (isMain) {
   const desk = new VaultDesk({ call, cfg, book: new TicketBook(TICKETS_FILE(fleet)), humans: () => chalice?.read()?.human ?? {},
                                log: say, ledgers });
   let stopping = false;
+  let openTimer = null;                 // the OPEN heartbeat; declared before stop() can run
   const stop = async (why) => {
     if (stopping) return; stopping = true;
     say(`closing the desk: ${why}`);
     clearInterval(beatTimer);
+    clearInterval(openTimer);
+    closeDesk();
     await desk.endShift().catch(() => {});
     if (lease) await call('commander_lease', { action: 'release', ...pin, agents: leased, lease_token: lease, owner }, 20_000).catch(() => {});
     if (!has('no-yield')) for (const a of agents) { try { unlinkSync(join(ydir, a)); } catch {} }
@@ -754,11 +759,21 @@ if (isMain) {
   // log ending at "desk open", which reads exactly like a desk still working.
   process.on('uncaughtException', e => { say(`CRASHED: ${e?.stack ?? e}`); stop('crashed').catch(() => process.exit(1)); });
   process.on('unhandledRejection', e => say(`unhandled rejection (still running): ${e?.message ?? e}`));
-  process.on('exit', code => { if (!stopping) say(`exited (code ${code}) without closing — killed from outside? ` +
+  process.on('exit', code => { closeDesk(); if (!stopping) say(`exited (code ${code}) without closing — killed from outside? ` +
     'If so the manager may be in the booth and the training-yield requests may still be on disk'); });
 
+  // THE DESK SAYS IT IS OPEN, so keepers bring their guild deposits here instead of walking into the
+  // hall (m59-vault-broker readDeskOpen; a reader treats three minutes' silence as closed). Written
+  // on opening and every minute after; removed on every way out.
+  const openInfo = () => ({ pid: process.pid, town_rooms: cfg.town_rooms ?? [INN], meet_room: INN,
+                            manager: cfg.manager, go_between: cfg.go_between });
+  function closeDesk() { try { unlinkSync(DESK_OPEN_FILE(fleet)); } catch {} }
   await desk.rows(true);
-  await desk.startShift().catch(e => stop(`could not open: ${e.message}`));
+  const opened = await desk.startShift().then(() => true).catch(e => stop(`could not open: ${e.message}`).then(() => false));
+  if (opened) {
+    writeDeskOpen(fleet, openInfo());
+    openTimer = setInterval(() => { try { if (!stopping) writeDeskOpen(fleet, openInfo()); } catch {} }, 60_000);
+  }
   if (has('once')) { await desk.turn(); await stop('--once'); }
   // A GRACEFUL STOP FROM OUTSIDE: on Windows a background process cannot be sent Ctrl-C, and a hard
   // kill leaves the manager in the booth and the yield requests on disk. Touch this file instead;

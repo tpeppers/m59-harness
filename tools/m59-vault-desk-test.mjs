@@ -306,6 +306,18 @@ try {
     ok((await d.noticeDepositors()).length === 0, 'out of town: nothing filed');
   }
 
+  section('a keeper contributing to the guild is met at the inn by the go-between, whatever its health');
+  {
+    const W = world();
+    W.rows.t9.room_num = INN;                                   // Camilla, 70 HP, waiting at the inn
+    W.packs.t9.push({ id: 90, name: 'emerald', amount: 12 });
+    const d = deskFor(W);
+    d.book.request({ kind: 'deposit', from: 't9', items: [{ item: 'emerald', amount: 12 }], where: INN });
+    const r = await d.turn();
+    ok('done through the go-between', r.worked?.status === 'done' && W.chests.emerald === 22, JSON.stringify(r));
+    ok('Pepe carried it; the main door stayed shut', W.walks.includes('t2->714') && W.mainDoor === 0, W.walks.join(','));
+  }
+
   section('the booth pocket serves when the booth square itself cannot be reached');
   {
     const W = world();
