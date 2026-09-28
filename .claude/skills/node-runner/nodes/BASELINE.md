@@ -1,5 +1,14 @@
 # The seven stones: what is missing from OUR MAP, per node
 
+> **2026-09-28 local-shadow follow-up:** see each node dossier and
+> [the four-stone measured report](../../../../docs/reproductions/four-mana-2026-09-28.md).
+> It records quiet-scene live repeats, exact fine positions, distinct meld replies,
+> code epochs, failed trials and recovery. Cave now has three repeated approaches
+> and walking escapes. The Badlands shelf failure was reproduced at the sender's
+> quantized endpoint and repaired; use the report's live counts, not the historical
+> "impossible" or "one remaining defect" conclusions below. Ancient's current
+> boundary is declared landing clearance; Peak still has no verified arrival.
+
 > **THIS FILE IS MAINTAINED ON `main`, AND A SECOND COPY EXISTS ON THE PROD DEPLOY LINE.**
 > They have diverged and the prod copy is the SMALLER and OLDER of the two — measured
 > 2026-09-11: `main` 38,120 bytes against `deploy-2026-09-11-2/-3` at 33,798, with the prod

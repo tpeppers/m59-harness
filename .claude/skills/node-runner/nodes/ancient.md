@@ -35,6 +35,16 @@ point reached. The keeper currently reuses the declared fine landing even when
 the caller perturbs the destination square; such a perturbation alone is not an
 independent landing test. A corrected declaration needs live evidence and a new bake.
 
+Follow-up offline measurement: all twelve 64-unit steps from the actual landing
+(30720,38400)/8000 to (30720,39168)/8000 arrive. From there, the falling trace
+toward the existing third landing (30320,42000)/4800 is clipped by **wall 407**:
+actual trace endpoint (30326,40938), ground floor 3200, `arrived:false`.
+See `ancient-south-wall407.json` and its adjacent `ancient-south-audit.mjs`.
+This is a model experiment, not another live trial. The next test is a clearance
+audit around wall 407 from that reachable southern shelf, followed by one bounded
+shadow replay only if a declared landing can be supported. No height-gaining jump
+or widened landing tolerance follows from this result.
+
 Recipe: `node-trial node=ancient room=579 row=38 col=74 route=rail
 exit=edge:589:r38c74 quiet=true`. Run via FleetScript, never direct admin placement
 in the middle of its route. `m59-ground` exact-point trace and
