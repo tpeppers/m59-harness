@@ -16,6 +16,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 // The tab bar, from the one place that has it. This page used to carry its own copy and
 // the deaths page carried another; a fourth board would have had to be added to both.
 import { NAV } from './m59-page-chrome.mjs';
+import { compendiumBase } from './m59-compendium-links.mjs';
 
 const deathCell = counts => `<strong class="${counts.true_deaths ? 'bad' : 'dim'}">${counts.true_deaths}</strong>` +
   ` <span class="dim" title="no HP loss / unknown HP loss">/ ${counts.no_hp_loss} / ${counts.unknown}</span>`;
@@ -35,7 +36,6 @@ const { label: FLEET_LABEL, ledgerDir: LEDGER_DIR } = resolveFleet();
 // guess, provided you look up by NUMBER: twenty-two room NAMES name more than one
 // room ("The Fields" is four different places), and a link that silently picks the
 // wrong one of those is worse than no link.
-const COMPENDIUM = process.env.M59_COMPENDIUM || 'http://localhost:8099';
 const MAP_FILE = process.env.M59_MAP_FILE ||
   fileURLToPath(new URL('../substrate/m59-map.json', import.meta.url));
 
@@ -79,14 +79,14 @@ export function lore(name, { cls = 'lore' } = {}) {
   const page = compendiumIndex.get(slug(name));
   if (!name) return '—';
   if (!page) return esc(name);
-  return `<a class="${cls}" href="${COMPENDIUM}/${page}" target="_blank" rel="noopener">${esc(name)}</a>`;
+  return `<a class="${cls}" href="${esc(compendiumBase())}/${page}" target="_blank" rel="noopener">${esc(name)}</a>`;
 }
 
 export function roomLink(name, num) {
   const page = (num != null && zoneByNum.get(Number(num))) || zoneByName.get(name);
   if (!name) return '?';
   if (!page) return esc(name);
-  return `<a class="room-link" href="${COMPENDIUM}/zones/${page}.html" target="_blank" rel="noopener">${esc(name)}</a>`;
+  return `<a class="room-link" href="${esc(compendiumBase())}/zones/${page}.html" target="_blank" rel="noopener">${esc(name)}</a>`;
 }
 
 // THREE BARS OF FIXED LENGTH, COLOURED PER SQUARE.

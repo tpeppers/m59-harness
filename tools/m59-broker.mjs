@@ -190,6 +190,7 @@ import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
 import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn, attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
+import { withCompendiumRequest } from './m59-compendium-links.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
 import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
@@ -18224,7 +18225,7 @@ async function brokerRtsRead(url) {
 
 function serveHttp(port, dashboardPort = null) {
   const audioPending=new Map();
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer(withCompendiumRequest(async (req, res) => {
     // A page for the human, on the same port everything else runs on. Read-only: it
     // renders the ledger and drives nothing, so it is safe to leave open in a tab.
     if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/fleet'))) {
@@ -18371,7 +18372,7 @@ function serveHttp(port, dashboardPort = null) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(Array.isArray(msg) ? outs : outs[0]));
     });
-  });
+  }));
   // Loopback by default, because this transport has no authentication of its own
   // and anyone who can reach it can drive every character. Set M59_BIND=0.0.0.0 to
   // expose it deliberately — behind something that does authenticate.
@@ -18747,7 +18748,7 @@ function handleControl(action, res) {
 }
 
 function serveDashboard(port) {
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer(withCompendiumRequest(async (req, res) => {
     const url0 = new URL(req.url, 'http://x');
     // THE ONLY WRITES THIS SERVER ACCEPTS, and only from the machine it runs on.
     //
@@ -19277,7 +19278,7 @@ function serveDashboard(port) {
       res.writeHead(500, { 'content-type': 'text/plain' });
       res.end('dashboard failed: ' + e.message);
     }
-  });
+  }));
   // Bound to every interface ON PURPOSE. Unlike the broker port there is nothing
   // here to abuse: no tools, no sessions, no writes.
   const bind = process.env.M59_DASHBOARD_BIND || '0.0.0.0';
