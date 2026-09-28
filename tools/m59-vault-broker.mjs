@@ -59,7 +59,9 @@ export const DEFAULTS = Object.freeze({
   offer_ms: 90_000,                           // how long a person has to counter an offer
   poll_ms: 3_000,
   practice: true,                             // cast practice spells between customers
-  practice_keep: Object.freeze({ elderberry: 30, 'fairy wing': 10 }),   // re-drawn after a deposit
+  // Re-drawn after a deposit, and by the manager when practice says it is short of reagent or FOOD.
+  // Deskers eat ordinary food, never inky caps (operator, 2026-09-28): one bread per ~333 s at most.
+  practice_keep: Object.freeze({ elderberry: 30, 'fairy wing': 10, 'loaf of bread': 10 }),
   // AT THE START OF A SHIFT, a desk character standing inside puts its whole pack in the chests
   // (worn gear and money stay) and draws back only this kit. Off by default: the two are somebody's
   // disciples and their packs are their training stock. The manager needs keep_free of its pack empty.

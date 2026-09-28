@@ -262,6 +262,26 @@ try {
     ok('done despite two stumbles', r.worked?.status === 'done', JSON.stringify(r));
   }
 
+  section('deskers eat bread: the manager re-draws it; the go-between is sent bread across the window');
+  {
+    const W = world();
+    W.chests['loaf of bread'] = 100;
+    const d = deskFor(W, { shift_kit: { t2: { 'loaf of bread': 20 } } });
+    d.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
+    await d.idle();                                    // the manager: a chest visit
+    ok('the manager drew bread', W.count(W.packs.t3, 'loaf of bread') === 10, String(W.count(W.packs.t3, 'loaf of bread')));
+    await d.idle();                                    // the go-between: a ticket
+    const t = d.book.open()[0];
+    ok('a bread ticket for the go-between', t?.from === 'Pepe' && t.items[0].item === 'loaf of bread' && t.items[0].amount === 20, JSON.stringify(t));
+    await d.idle();
+    ok('only one at a time', d.book.open().length === 1);
+    d.practice = async () => ({ cast: true });
+    const r = await d.turn();
+    ok('served', r.worked?.status === 'done', JSON.stringify(r));
+    ok('Pepe has his bread', W.count(W.packs.t2, 'loaf of bread') === 20, String(W.count(W.packs.t2, 'loaf of bread')));
+    ok('and is back at the inn', W.rows.t2.room_num === INN);
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

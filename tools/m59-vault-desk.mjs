@@ -336,9 +336,18 @@ export class VaultDesk {
       .catch(e => ({ ok: false, why: e.message }));
     await this.post('booth');
     if (r?.ok === false) throw new Error(`chest visit failed: ${r.why}`);
-    const took = { ...(r?.took ?? {}) };
-    for (const k of keep) took[k.item] = Math.max(0, (took[k.item] ?? 0) - k.amount);
-    return { took, short: r?.short ?? {} };
+    // The kit's top-up is the desk's own, drawn last: what came goes to the customer first, and only
+    // what the CUSTOMER asked for can be short.
+    const took = { ...(r?.took ?? {}) }, short = {};
+    for (const k of keep) {
+      const want = wants.find(w => same(w.item, k.item))?.amount ?? 0;
+      took[k.item] = Math.min(want, took[k.item] ?? 0);
+    }
+    for (const w of wants) {
+      const n = Math.max(0, w.amount - (took[w.item] ?? 0));
+      if (n) short[w.item] = n;
+    }
+    return { took, short };
   }
 
   // ---------------------------------------------------------------- the go-between's walks
@@ -423,6 +432,9 @@ export class VaultDesk {
         for (const l of got) l.amount = await this.hand(this.M, this.G, l.item, l.amount);
         if (!(await this.goTo(this.G, INN))) throw new Error('the go-between could not get back to the inn');
       }
+      // THE GO-BETWEEN'S OWN TICKET: it is its own customer, so it walks to the window itself.
+      const selfServe = same(who.agent, this.G);
+      if (selfServe && !(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
       if (!(await this.waitFor(who.character, meet))) {
         // THE CARRIER KEEPS IT until they come: nothing is put back, the ticket stays open.
         await this.tell(carrier, who.character, `${t.id} is ready: ${got.map(l => `${l.amount} ${l.item}`).join(', ')} — ` +
@@ -435,6 +447,7 @@ export class VaultDesk {
         moved[item] = (moved[item] ?? 0) + n;
         const w = wants.find(x => same(x.item, item)); if (w) w.amount -= n;
       }
+      if (selfServe) await this.goTo(this.G, INN);
       for (const l of got) if ((gave[l.item] ?? 0) < l.amount)
         return this.close(t, 'partial', `${who.character} did not take all of it; ${carrier} is holding the rest`, { moved });
       if (Object.keys(short).length) break;             // the chests are out: another round finds nothing
@@ -514,10 +527,20 @@ export class VaultDesk {
     const r = await this.practice({ call: this.call, agent, ledger: this.ledgers[agent] ?? null }).catch(e => ({ cast: false, why: e.message }));
     // THE MANAGER RE-DRAWS between customers: a chest visit tops practice_keep back up. At most every
     // ten minutes, so an empty chest is not walked to on every idle turn. The go-between cannot.
-    if (r?.restock && agent === this.M && this.now() - (this.redrewAt ?? 0) > 10 * 60_000) {
+    if ((r?.restock || r?.foodRestock) && agent === this.M && this.now() - (this.redrewAt ?? 0) > 10 * 60_000) {
       this.redrewAt = this.now();
       await this.chestVisit({}).catch(e => this.log(`  practice re-draw failed: ${e.message}`));
       return r;
+    }
+    // THE GO-BETWEEN CANNOT REACH THE CHESTS, so its food is a ticket like any customer's: it walks to
+    // the foyer and the manager hands bread across the window. One open at a time.
+    if (r?.foodRestock && agent === this.G) {
+      const g = (await this.row(this.G))?.character ?? this.G;
+      const open = this.book.open(this.now()).some(t => (same(t.from, g) || same(t.from, this.G)) && t.kind === 'withdraw');
+      const want = Number((this.cfg.shift_kit?.[this.G] ?? this.cfg.shift_kit ?? {})['loaf of bread']) || 10;
+      if (!open) { this.book.request({ kind: 'withdraw', from: g, items: [{ item: 'loaf of bread', amount: want }], where: HALL,
+                                       now: this.now(), ttlMs: this.cfg.ticket_ttl_ms });
+                   this.log(`  ${g} is short of food: a ticket for ${want} bread from the chests`); }
     }
     if (!r?.cast) await this.sleep(Math.min(this.cfg.poll_ms, r?.retryInMs ?? this.cfg.poll_ms));
     return r;
