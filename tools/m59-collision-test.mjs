@@ -4375,5 +4375,22 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
      declIdx < lines.findIndex(l => l.trim() === 'if (fall && before) {'));
 }
 
+// Room 49, 2026-09-28: the float trace stayed on 6016, but the sender's
+// quantized/clipped endpoint was (831,1397) wire, floor 3840. Checking only
+// the float landing let a guarded walk step off the 5632 shelf.
+{
+  let packets=0;
+  const client={selfId:1,self:{x:816,y:1376,row:21,col:12},room:{id:49,objects:new Map()}};
+  const geometry={leafAtClient:()=>({sector:{}}),floorBaseAtClient:(x,y)=>
+    x===12272&&y===21328?3840:x===12768&&y===21728?6016:5632,
+    traceFineMoveClient:()=>({moved:true,arrived:true,x:12768,y:21728,destinationFloor:6016})};
+  const session={client,world:{geometry,room:{num:49}},need(){return client;},movementWasCancelled(){return false;},
+    validateFineTarget(){return {available:true,moved:true,arrived:true,target:{x:831,y:1397}};},
+    async stepFine(){packets++;client.self={x:831,y:1397,row:21,col:12};return {moved:true,position:client.self};}};
+  const result=await walkFine.call(session,862,1422,{holdShelf:true,stride:16,maxSteps:1,arriveWithin:3});
+  ok('shelf guard checks the sender integer endpoint before sending (canyon wp83)',
+    packets===0&&result.shelf_refusals===5,JSON.stringify({packets,result}));
+}
+
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}`);
 process.exitCode = fail ? 1 : 0;

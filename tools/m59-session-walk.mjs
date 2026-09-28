@@ -1652,10 +1652,6 @@ export function sessionWalkPrototype(deps) {
             // That is also the only thing here that can vary between two runs of identical
             // code, and it did: the same climb walked all 47 waypoints once and fell at 15
             // the next time. Geometry does not move. Monsters do.
-            const bodies = [...(c.room?.objects?.values?.() ?? [])]
-              .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0) &&
-                           Number.isFinite(o.x) && Number.isFinite(o.y))
-              .map(o => ({ id: o.id, x: protocolToClient(o.x), y: protocolToClient(o.y) }));
             // A TRACE THAT SAYS THE BODY WILL NOT MOVE IS A REFUSAL, NOT A REASON TO GUESS.
             //
             // This fell back to judging the AIM whenever the trace reported no movement, and
@@ -1665,21 +1661,20 @@ export function sessionWalkPrototype(deps) {
             // trace reports no movement — so the climb went from occasionally working to
             // falling every time at the same tread. If the mover says this heading goes
             // nowhere, take the next heading.
-            let landX = aimX, landY = aimY, traced = false;
-            try {
-              const t = shelfGeo.traceFineMoveClient(
-                protocolToClient(me.x), protocolToClient(me.y),
-                protocolToClient(aimX), protocolToClient(aimY),
-                { slide: true, obstacles: bodies, roomFlags: c.room?.flags ?? 0,
-                  overrideDepths: c.room?.overrideDepths ?? null });
-              if (t) {
-                traced = true;
-                if (!t.moved) { shelfRefusals++; continue; }
-                landX = clientToProtocol(t.x); landY = clientToProtocol(t.y);
-              }
-            } catch { traced = false; /* no trace at all: judge the aim and hope */ }
-            void traced;
-            const landFloor = floorOf(landX, landY);
+            // Ask the SAME validator the sender uses, including bodies, vertical
+            // state and integer quantization. Room 49 wp83: the float trace was
+            // on 6016; the eventual wire point (831,1397) was on 3840. Checking
+            // the pre-quantization trace allowed a fall from the 5632 shelf.
+            const prediction = this.validateFineTarget(aimX, aimY, { slide: true });
+            if (!prediction?.moved || !prediction.target) {
+              shelfRefusals++;
+              if (isTerminalMovementReason(prediction?.reason))
+                return { arrived:false, reason:prediction.reason, note:prediction.note,
+                  position:{col:me.col,row:me.row,x:me.x,y:me.y},steps:i,log,
+                  shelf_refusals:shelfRefusals,dest_floor:destFloor };
+              continue;
+            }
+            const landFloor = floorOf(prediction.target.x, prediction.target.y);
             if (landFloor != null &&
                 hereFloor - landFloor > MAX_STEP_HEIGHT &&
                 (destFloor == null || Math.abs(landFloor - destFloor) > MAX_STEP_HEIGHT)) {
@@ -6419,7 +6414,7 @@ export function sessionWalkPrototype(deps) {
       if (walked?.left_room || (roomId != null && c.room?.id !== roomId)) { out.left_room = true; return note(); }
       let at = c.self;
       // A WALL IS A POCKET, AND THE LAST STEP INTO ONE IS THE FINE GRID'S. See the handover in
-      // m59-skills.mjs: the square walker is best for the haul and worst for the last squares.
+      // Shelter approach: the square walker is best for the haul and worst for the last squares.
       if (!(walked?.arrived && at?.row === next.row && at?.col === next.col)
           && at && Math.max(Math.abs(at.row - next.row), Math.abs(at.col - next.col)) <= 3
           && typeof this.approachFine === 'function') {
