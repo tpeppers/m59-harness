@@ -85,6 +85,7 @@ function world() {
       case 'say': W.told.push({ from: a.agent, to: a.to, text: a.text }); return { echoed: a.text };
       case 'hall_post': {
         const r = W.rows[a.agent];
+        if (W.stumbles > 0) { W.stumbles--; return { ok: false, why: 'counter door trigger (2,19) not reached' }; }
         if (r.where === 'foyer') return { ok: false, why: 'refused from the foyer: that is the main door' };
         W.walks.push(a.where); r.where = a.where; return { ok: true };
       }
@@ -248,6 +249,17 @@ try {
     ok('and no reply either', W.told.length === 0);
     const r = await d.turn();
     ok('nothing to do: one practice cast', r.idle?.cast === true && W.practised === 1);
+  }
+
+  section('a walk that stops short inside the hall is tried again');
+  {
+    const W = world();
+    W.rows.t9.room_num = HALL;
+    W.stumbles = 2;
+    const d = deskFor(W);
+    d.book.request({ kind: 'withdraw', from: 't9', items: [{ item: 'elderberry', amount: 10 }] });
+    const r = await d.turn();
+    ok('done despite two stumbles', r.worked?.status === 'done', JSON.stringify(r));
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');

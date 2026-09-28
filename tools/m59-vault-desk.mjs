@@ -306,10 +306,19 @@ export class VaultDesk {
   }
 
   // ---------------------------------------------------------------- the manager's walks
+  // THREE TRIES. A walk inside the hall can stop short and say so ("counter door trigger (2,19) not
+  // reached", prod 2026-09-28 01:54, the manager left at (7,8)); the same route had just been walked.
+  // A refusal that names the main door is final: that is the rule, not a stumble.
   async post(where) {
-    const r = await this.call('hall_post', { agent: this.M, where }, 300_000).catch(e => ({ ok: false, why: e.message }));
-    if (r?.ok === false) throw new Error(`manager could not reach the ${where}: ${r.why}`);
-    return r;
+    let r = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      r = await this.call('hall_post', { agent: this.M, where }, 300_000).catch(e => ({ ok: false, why: e.message }));
+      if (r?.ok !== false) return r;
+      if (/main door/i.test(r.why ?? '')) break;
+      this.log(`  manager -> ${where}: ${r.why}; trying again`);
+      await this.sleep(3_000);
+    }
+    throw new Error(`manager could not reach the ${where}: ${r?.why}`);
   }
 
   /** The manager stores `got` ({item: n}) and draws `wants`, in one chest visit, back at the booth. */
@@ -464,14 +473,13 @@ export class VaultDesk {
     if (Number(m?.room_num) !== HALL) {
       if (!(await this.goTo(this.M, HALL))) throw new Error('the manager could not reach the hall');
     }
-    let r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
+    const r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
     if (r?.ok === false && /main door|foyer/i.test(r.why ?? '')) {
       this.log('manager is in the foyer: walking in once, to the chests');
       const w = await this.call('hall_withdraw', { agent: this.M, wants: [] }, 620_000).catch(e => ({ ok: false, why: e.message }));
       if (w?.ok === false) throw new Error(`manager could not get inside: ${w.why}`);
-      r = await this.call('hall_post', { agent: this.M, where: 'booth' }, 300_000).catch(e => ({ ok: false, why: e.message }));
-    }
-    if (r?.ok === false) throw new Error(`manager could not reach the booth: ${r.why}`);
+      await this.post('booth');
+    } else if (r?.ok === false) await this.post('booth');
     // ROOM FOR CUSTOMERS: with shift_stash, whoever of the two is inside empties its pack into the
     // chests and keeps only the kit. The go-between does it only if already inside — it never walks in
     // for this. The manager does it from the chests and goes back to the booth.
