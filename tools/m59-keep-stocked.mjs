@@ -106,8 +106,21 @@ if (isMain) {
   // ONLY THE HOLDER THAT ACTUALLY CARRIES THE CUP. Passing every possible holder held one that had
   // nothing to do, and the lease fight over it (a DUM re-claiming the troll crew every 30 s) was noise
   // for the whole run. No cup anywhere: the rider walks, as provision already knows how to.
-  const cupHolders = rows => HOLDERS.filter(a => (rows.find(r => r.agent === a)?.pack_items ?? [])
-    .some(i => /chalice/i.test(String(i.name))));
+  // WHO IS ON THE DESK IS THE BROKER'S DUTY RECORD, NOT A PACK SCAN (operator, 2026-09-28: "who's
+  // on [x]-duty is a broker/roster question"). servingDesk names the serving character — the
+  // registered holder or an acting one — and we still check that its pack holds the cup, because a
+  // record can lag a grab. No record, or a record that disagrees with the packs: the pack scan.
+  const { chaliceStoreFor, servingDesk } = await import('./m59-chalice.mjs');
+  const FLEET = arg('fleet', 'prod');
+  const carriesCup = r => (r?.pack_items ?? []).some(i => /chalice/i.test(String(i.name)));
+  const cupHolders = rows => {
+    try {
+      const server = servingDesk(chaliceStoreFor({ fleet: FLEET }).duty(), {})?.server;
+      const row = server && rows.find(r => r.character === server || r.agent === server);
+      if (row && carriesCup(row)) return [row.agent];
+    } catch { /* fall back to the packs */ }
+    return HOLDERS.filter(a => carriesCup(rows.find(r => r.agent === a)));
+  };
   // THE CUP HOLDER EATS BEFORE IT IS HELD AGAIN. A provision run holds the holder for its whole
   // length, and two of these runners take turns, so the holder's keeper — whose eating rung sits
   // behind the hold — never got a turn: Rizzo stood at vigor 80 with ten loaves aboard all evening
