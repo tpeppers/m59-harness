@@ -117,6 +117,12 @@ export function menuText(cfg, names) {
     `at the Brownestone Inn. ${PKILL_ENABLE_HP}+: the Bookmaker's hall foyer, by the booth (${names.manager}).`;
 }
 
+/**
+ * Behind the counter: the booth (rows 2-3, col 25) and the strip west of it to counter door 58's
+ * booth-side trigger (col 21). Measured on the closed-door bake (m59-guild-passage COUNTER, BOOTH).
+ */
+export const inBoothPocketSquare = at => Array.isArray(at) && at[0] >= 2 && at[0] <= 3 && at[1] >= 21 && at[1] <= 25;
+
 /** Stacks in a pack that make up `amount` of `item`, as supply/trade specs. */
 export function specsFor(pack, item, amount) {
   const out = [];
@@ -316,6 +322,14 @@ export class VaultDesk {
     for (let attempt = 0; attempt < 3; attempt++) {
       r = await this.call('hall_post', { agent: this.M, where }, 300_000).catch(e => ({ ok: false, why: e.message }));
       if (r?.ok !== false) return r;
+      // THE BOOTH POCKET IS THE POST. An offer needs only the same room (user.kod:5134) and customers
+      // reach the desk by tell, so the counter strip behind door 58 serves as well as the booth square.
+      // On prod 2026-09-28 the last steps from (3,21) to (2,25) failed every time, in silence
+      // (hall_post answered ok:false with no reason), and that closed the desk twice.
+      if (where === 'booth' && inBoothPocketSquare(r?.at)) {
+        this.log(`  manager at (${r.at.join(',')}), in the booth pocket but not on the booth square: serving from there`);
+        return { ok: true, at: r.at, pocket: true };
+      }
       if (/main door/i.test(r.why ?? '')) break;
       this.log(`  manager -> ${where}: ${r.why}; trying again`);
       await this.sleep(3_000);

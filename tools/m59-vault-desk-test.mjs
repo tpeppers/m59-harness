@@ -86,6 +86,7 @@ function world() {
       case 'hall_post': {
         const r = W.rows[a.agent];
         if (W.stumbles > 0) { W.stumbles--; return { ok: false, why: 'counter door trigger (2,19) not reached' }; }
+        if (a.where === 'booth' && W.pocketOnly) { r.where = 'booth'; return { ok: false, at: [3, 21] }; }
         if (r.where === 'foyer') return { ok: false, why: 'refused from the foyer: that is the main door' };
         W.walks.push(a.where); r.where = a.where; return { ok: true };
       }
@@ -303,6 +304,19 @@ try {
     d.noticedAt = 0;
     W.packs.hk2.push({ id: 84, name: 'diamond', amount: 4 });
     ok((await d.noticeDepositors()).length === 0, 'out of town: nothing filed');
+  }
+
+  section('the booth pocket serves when the booth square itself cannot be reached');
+  {
+    const W = world();
+    W.pocketOnly = true;
+    W.rows.t9.room_num = HALL;
+    const d = deskFor(W);
+    d.book.request({ kind: 'withdraw', from: 't9', items: [{ item: 'elderberry', amount: 10 }] });
+    const r = await d.turn();
+    ok('done from (3,21)', r.worked?.status === 'done', JSON.stringify(r));
+    await d.startShift();
+    ok('and the shift opens there', W.rows.t2.room_num === INN);
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');
