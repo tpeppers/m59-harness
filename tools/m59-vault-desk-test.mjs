@@ -407,6 +407,23 @@ try {
     ok('finished first on the next healthy turn', r2.worked?.status === 'done' && W.chests.diamond === 24, JSON.stringify(r2));
   }
 
+  section('what does not cross the window stays held, not done');
+  {
+    const W = world();
+    W.rows.hk2.room_num = INN;
+    W.packs.hk2 = [{ id: 96, name: 'diamond', amount: 4 }, { id: 97, name: 'blue mushroom', amount: 20 }];
+    const d = deskFor(W);
+    const realHand = d.hand.bind(d);
+    d.hand = async (from, to, item, n, tr) => (from === 't2' && item === 'blue mushroom' ? 0 : realHand(from, to, item, n, tr));
+    d.book.request({ kind: 'deposit', from: 'hk2', items: [{ item: 'diamond', amount: 4 }, { item: 'blue mushroom', amount: 20 }], where: INN });
+    const r = await d.turn();
+    const t = d.book.read().tickets[0];
+    ok('held, with the mushrooms still carried', t.status === 'held' && t.holding?.['blue mushroom'] === 20 && W.chests.diamond === 4, JSON.stringify(t));
+    d.hand = realHand;
+    const r2 = await d.turn();
+    ok('and finished when they cross', r2.worked?.status === 'done' && W.chests['blue mushroom'] === 20, JSON.stringify(r2));
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

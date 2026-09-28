@@ -248,9 +248,13 @@ export class VaultDesk {
     const { specs } = specsFor(fromPack, item, amount);
     if (!specs.length) return 0;
     const before = countOf(await this.pack(to), item);
-    await this.call('supply', { from, to, what: specs, who_travels: travels }, travels === 'neither' ? 200_000 : 600_000)
-      .catch(e => this.log(`  supply failed: ${e.message}`));
-    return Math.max(0, countOf(await this.pack(to), item) - before);
+    const r = await this.call('supply', { from, to, what: specs, who_travels: travels }, travels === 'neither' ? 200_000 : 600_000)
+      .catch(e => ({ error: e.message }));
+    const arrived = Math.max(0, countOf(await this.pack(to), item) - before);
+    // WHY IT DID NOT ARRIVE, said: on 2026-09-28 "only 0 of 20 blue mushroom crossed the window" and
+    // nothing recorded the reason.
+    if (arrived < amount) this.log(`  supply ${from} -> ${to} ${amount} ${item}: ${arrived} arrived — ${JSON.stringify(r).slice(0, 300)}`);
+    return arrived;
   }
 
   /** Offer to a PERSON and wait for their counter; accept. Returns what left the pack, by item. */
@@ -518,22 +522,34 @@ export class VaultDesk {
    * the next time the desk is healthy.
    */
   async store(t, who, carrier, got) {
+    const left = {};
     try {
       if (carrier === this.G) {
         if (!(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
+        // WHAT DID NOT CROSS STAYS WITH THE GO-BETWEEN AND STAYS HELD. vb-213 closed "done" while 20 blue
+        // mushrooms never left the go-between's pack.
+        const crossed = {};
         for (const [item, n] of Object.entries(got)) {
           const arrived = await this.hand(this.G, this.M, item, n);
           if (arrived < n) this.log(`  only ${arrived} of ${n} ${item} crossed the window`);
+          if (arrived > 0) crossed[item] = arrived;
+          if (arrived < n) left[item] = n - arrived;
         }
         await this.goTo(this.G, INN);
+        got = crossed;
       }
-      await this.chestVisit({ deposit: got });
+      if (Object.keys(got).length) await this.chestVisit({ deposit: got });
     } catch (e) {
       this.book.update(t.id, { status: 'held', held_by: carrier, holding: got, note: e.message });
       this.log(`  ${t.id}: HELD — ${carrier} is carrying ${Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ')} (${e.message})`);
       throw e;
     }
     const text = Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ');
+    if (Object.keys(left).length) {
+      const leftText = Object.entries(left).map(([k, n]) => `${n} ${k}`).join(', ');
+      return this.close(t, 'held', `in the chests: ${text || 'nothing'}; still carried by ${carrier}: ${leftText}`,
+                        { moved: got, holding: left, held_by: carrier });
+    }
     await this.tell(carrier === this.G ? this.G : this.M, who?.character ?? t.from, `${t.id} done: ${text} are in the chests.`);
     return this.close(t, 'done', null, { moved: got, holding: null });
   }
