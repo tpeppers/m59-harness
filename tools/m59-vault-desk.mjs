@@ -612,7 +612,15 @@ export class VaultDesk {
     if (!t) return null;
     const pack = await this.pack(t.held_by);
     const got = Object.fromEntries(Object.entries(t.holding).map(([k, n]) => [k, Math.min(n, countOf(pack, k))]).filter(([, n]) => n > 0));
-    if (!Object.keys(got).length) return this.close(t, 'lost', `${t.held_by} no longer carries what it held`, { holding: null });
+    // A DESKER'S SHIFT STASH PUTS ITS WHOLE PACK IN THE CHESTS, held goods included (vb-216, 2026-09-28
+    // 08:51: Pepe's 28 sapphire and 38 diamond went in with the stash, and this said "lost"). So a
+    // desker's held ticket whose goods are gone since the shift began is done, not lost.
+    if (!Object.keys(got).length) {
+      const stashed = [this.M, this.G].includes(t.held_by) && this.shiftStartedAt && (t.updated ?? t.at) < this.shiftStartedAt;
+      return stashed
+        ? this.close(t, 'done', 'went into the chests with the shift stash', { moved: t.holding, holding: null })
+        : this.close(t, 'lost', `${t.held_by} no longer carries what it held`, { holding: null });
+    }
     this.log(`${t.id}: finishing a held deposit — ${t.held_by} carries ${Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ')}`);
     const who = await this.row(t.from, true);
     return this.store(t, who, t.held_by, got).catch(e => this.close(t, 'held', e.message, { holding: got }));
@@ -620,6 +628,7 @@ export class VaultDesk {
 
   // ---------------------------------------------------------------- the shift
   async startShift() {
+    this.shiftStartedAt = this.now();
     // THE ORDER MATTERS (prod 2026-09-28 06:26): the manager used to walk to the booth FULL — 100% bulk
     // from its trainer's restock — and empty its pack only afterwards, so every start's hardest walks
     // were made overloaded and the booth walk failed three times. Now: in, to the CHESTS; empty the
