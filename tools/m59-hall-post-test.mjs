@@ -31,5 +31,16 @@ const stub = (row, col) => ({ s: { need: () => ({ self: { row, col } }),
   ok('an unknown post is refused', u.ok === false && /unknown post/.test(u.why));
 }
 
+console.log('\nthe booth is not a dead end');
+{
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./m59-guild-passage.mjs', import.meta.url), 'utf8');
+  const gp = src.indexOf('export async function guildPassage(');
+  const body = src.slice(gp, src.indexOf('\n}\n', gp));
+  ok('guildPassage crosses door 58 out of the booth before refusing an unknown position',
+     body.indexOf('inBoothPocket(c.self.row, c.self.col)') > 0 &&
+     body.indexOf('inBoothPocket(c.self.row, c.self.col)') < body.indexOf("'guild position is outside the known passage'"));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

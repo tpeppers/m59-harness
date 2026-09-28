@@ -146,6 +146,14 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (isInterrupted()) throw new Error('guild passage paused for survival');
     const section = guildSection(c.self.row, c.self.col);
     if (section === destination) return;
+    // THE BOOTH IS OFF THE LINE: out through counter door 58 into section 3 first. A character left
+    // in the booth (the vault broker's post) was stranded by every ordinary hall path —
+    // hall_withdraw refused "outside the known passage" and a walk out never left the room
+    // (2026-09-27, Statler, after the broker probe).
+    if (section < 0 && inBoothPocket(c.self.row, c.self.col)) {
+      await crossCounter(k, true, isInterrupted);
+      continue;
+    }
     if (section < 0) throw new Error('guild position is outside the known passage');
     const inward = section < destination, door = doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
