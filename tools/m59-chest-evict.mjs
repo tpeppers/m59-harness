@@ -242,6 +242,17 @@ if (isMain) {
       const v = inputs.worth(name), b = inputs.bulk(name);
       return at && v != null && b > 0 && v / b <= DEFAULTS.cheap_per_bulk ? at : null;
     };
-    await runEviction({ plan, agent: arg('agent'), dry: has('dry'), log: say, keep, own, sellAt });
+    // --borrow: take the runner from its training runner by the yield protocol (fresh ack only), and
+    // give it back however the run ends.
+    let loan = null;
+    if (has('borrow') && !has('dry')) {
+      const { borrow } = await import('./m59-yield.mjs');
+      const ydir = fileURLToPath(new URL('../substrate/history/prod/training-yield', import.meta.url));
+      say(`borrowing ${arg('agent')} from its training runner…`);
+      loan = await borrow({ dir: ydir, agent: arg('agent'), why: `chest-evict:${process.pid} — making room in the guild chests` });
+      say('yielded');
+    }
+    try { await runEviction({ plan, agent: arg('agent'), dry: has('dry'), log: say, keep, own, sellAt }); }
+    finally { loan?.release(); if (loan) say('released'); }
   }
 }

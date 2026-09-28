@@ -881,15 +881,13 @@ if (isMain) {
   const ydir = join(health.root, 'substrate', 'history', fleet, 'training-yield');
   const agents = [cfg.manager, cfg.go_between];
   if (!has('no-yield')) {
-    mkdirSync(ydir, { recursive: true });
-    for (const a of agents) writeFileSync(join(ydir, a), `vault-desk:${process.pid} — working the guild hall vault desk\n`);
+    // A FRESH ACK ONLY (m59-yield borrow): a stale `.yielded` from an earlier loan is not a yield.
+    const { borrow } = await import('./m59-yield.mjs');
     say(`asked ${agents.join(', ')} to yield; waiting for their training runners`);
-    const until = Date.now() + 15 * 60_000;
-    while (!agents.every(a => existsSync(join(ydir, `${a}.yielded`)))) {
-      if (Date.now() > until) { say('no yield after 15 min — is a training runner holding them? (--no-yield if none is)'); process.exit(1); }
-      await new Promise(r => setTimeout(r, 5_000));
-    }
-    setInterval(() => { for (const a of agents) try { const f = join(ydir, a); utimesSync(f, new Date(), new Date()); } catch {} }, 10 * 60_000).unref();
+    let loans;
+    try { loans = await Promise.all(agents.map(a => borrow({ dir: ydir, agent: a, why: `vault-desk:${process.pid} — working the guild hall vault desk` }))); }
+    catch (e) { say(`${e.message} — is a training runner holding them? (--no-yield if none is)`); for (const a of agents) { try { unlinkSync(join(ydir, a)); } catch {} } process.exit(1); }
+    setInterval(() => { for (const l of loans) l.refresh(); }, 10 * 60_000).unref();
   }
 
   // HOLD THEM against the DUM: a commander lease on both, beaten every 10 s.
