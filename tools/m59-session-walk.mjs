@@ -3578,7 +3578,8 @@ export function sessionWalkPrototype(deps) {
                                .catch(e => ({ rested: false, why: e.message }))
                   : { rested: false, why: 'no autopilot to rest with' };
               }
-              const out = await this.blinkOut({ expect: answer.answer.expect, movementGeneration, controlToken }).catch(() => null);
+              const out = await this.blinkOut({ expect: answer.answer.expect, proposalId: answer.answer.proposalId,
+                movementGeneration, controlToken }).catch(() => null);
               recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
                              tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
                              // ALWAYS TRUE NOW: nothing left can turn this into a decision
@@ -5647,6 +5648,25 @@ export function sessionWalkPrototype(deps) {
       if (!exit.stand_on || !exit.fine_stand_on || !exit.edge_target)
         return { left: false, stage: 'walk',
                  reason: `no BSP-valid crossing on the ${exit.direction} boundary` };
+      // A rail or recovery may already have reached a valid staging square.
+      // Re-read THIS destination's complete crossing tuple before chasing an
+      // older anchor. Flatlands reached r42c36, then walked away toward r43c38.
+      const atStage = c.self;
+      if (atStage && (atStage.row!==exit.stand_on.row || atStage.col!==exit.stand_on.col)) {
+        const published = this.world.exits?.() ?? [];
+        const current = spreadEdges(published.filter(e=>e.kind==='edge'
+          && e.to===exit.to && e.direction===exit.direction))
+          .find(e=>e.stand_on?.row===atStage.row && e.stand_on?.col===atStage.col
+            && e.fine_stand_on && e.edge_target
+            && !wrongDoor?.has?.(`${atStage.row},${atStage.col}`));
+        if (current) {
+          recordTactic({character:this.client?.me?.name??this.name??null,
+            room:this.world?.room?.num,tactic:'exit_stage_reused',trigger:'already_at_valid_stage',
+            worked:true,attempted:false,
+            note:`kept r${atStage.row}c${atStage.col} for exit ${exit.to} instead of walking to r${exit.stand_on.row}c${exit.stand_on.col}`});
+          exit=current;
+        }
+      }
       const edgeStartRoom = c.room.id;
       // No reachable boundary square, says the square grid — the same verdict it
       // gives for a cliff ledge, and wrong for the same reason. Pick the nearest
@@ -6729,16 +6749,24 @@ export function sessionWalkPrototype(deps) {
       const candidate = chooseTrafficBlink(full);
       // Explicit local policy retains precedence, even when it is disabled or
       // declines. Never turn an allow-list refusal into a built-in permission.
-      const selected = answer ?? (!privateBlink && !blinkLoadError && candidate.can
+      let selected = answer ?? (!privateBlink && !blinkLoadError && candidate.can
         ? {strategy:'builtin-blink-escape',answer:candidate.answer} : null);
+      const proposalId = selected?.answer?.do==='blink' ? (this._blinkProposalSeq=(this._blinkProposalSeq??0)+1) : null;
+      if (proposalId != null) selected={...selected,answer:{...selected.answer,proposalId}};
       this._recordBlinkRung({phase:'decision',from:ctx.from,reason:blinkLoadError && !answer
         ? 'private_policy_load_error' : privateBlink && !answer
         ? (privateBlink.enabled?'private_policy_declined':'private_policy_disabled') : candidate.reason,
         selected:selected?.answer?.do==='blink',goal:ctx.goal,landing:ctx.blink,
+        strategy:selected?.strategy??null,exit_to:ctx.exit_to??null,
+        stuck_ms:ctx.stuck_ms??null,crossing_ms:ctx.crossing_ms??null,stalled:ctx.stalled??null,
+        strategy_reason:selected?.answer?.why??null,
         position:ctx.self?{row:ctx.self.row,col:ctx.self.col}:null,bodies:ctx.bodies??[],
-        verdict:candidate.verdict??null});
+        verdict:candidate.verdict??null,proposal_id:proposalId,
+        position_fine:ctx.self && Number.isFinite(ctx.self.x) && Number.isFinite(ctx.self.y)
+          ? {x:ctx.self.x,y:ctx.self.y,units:'kod'} : null});
       if (selected?.answer?.do==='blink') {
-        this._blinkProposal={ctx:full,generation:this.movementGeneration,room:this.world?.room?.num,
+        this._blinkProposal={id:proposalId,at:Date.now(),ctx:{...full,self:{...full.self},goal:{...full.goal}},
+          generation:this.movementGeneration,room:this.world?.room?.num,
           client:this.client,life:this.lifeBoundary??0};
       }
       return selected;
@@ -6785,6 +6813,8 @@ export function sessionWalkPrototype(deps) {
       return [...(c.room?.objects?.values?.() ?? [])]
         .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0))
         .map(o => ({
+          id:o.id,
+          ...(Number.isFinite(o.x)&&Number.isFinite(o.y)?{x:o.x,y:o.y}:{}),
           row: o.row ?? (Number.isFinite(o.y) ? Math.floor(o.y / KOD_FINENESS) : null),
           col: o.col ?? (Number.isFinite(o.x) ? Math.floor(o.x / KOD_FINENESS) : null),
           kind: (o.flags & OF.PLAYER) ? 'player' : 'monster',
@@ -6835,21 +6865,39 @@ export function sessionWalkPrototype(deps) {
    * believed the message would report success in every room that has no blink point at all.
    * What is believed here is the `moved` EVENT and the position read back after it.
    */
-  async blinkOut({ expect = null, holdMs = 15000,
+  async blinkOut({ expect = null, holdMs = 15000, proposalId = null,
                    movementGeneration = this.movementGeneration, controlToken = null } = {}) {
     const c=this.client, proposal=this._blinkProposal;
+    const finish=out=>{this._recordBlinkRung({phase:'outcome',proposal_id:proposalId??proposal?.id??null,...out});return out;};
+    // A nested shelter walk can make its own proposal in the same movement
+    // generation. The outer caller must not consume that different objective.
+    if(proposalId!=null && proposalId!==proposal?.id)
+      return finish({cast:false,arrived:false,reason:'proposal_replaced',why:'a newer blink decision replaced this proposal'});
     this._blinkProposal=null;
-    const finish=out=>{this._recordBlinkRung({phase:'outcome',...out});return out;};
     const cancelled=()=>this.client!==c || c!==proposal?.client
       || this.movementWasCancelled?.(movementGeneration,controlToken)
       || (this.lifeBoundary??0)!==proposal?.life
       || this.world?.room?.num!==proposal?.room || !(c?.vitals?.()?.health?.value>0);
     if(!c || !proposal || proposal.generation!==movementGeneration || cancelled())
       return finish({cast:false,arrived:false,reason:'ownership_or_life_changed',why:'stale blink proposal'});
+    const selectedAt=proposal.ctx.self, nowAt=c.self;
+    const displacement = selectedAt && nowAt
+      ? (Number.isFinite(selectedAt.x) && Number.isFinite(selectedAt.y)
+          && Number.isFinite(nowAt.x) && Number.isFinite(nowAt.y)
+        ? Math.hypot(nowAt.x-selectedAt.x,nowAt.y-selectedAt.y)
+        : Math.hypot(nowAt.col-selectedAt.col,nowAt.row-selectedAt.row)*KOD_FINENESS) : 0;
     const ctx=this._trafficBlinkContext({...proposal.ctx,self:c.self,room:this.world?.room,
       geo:this.world?.geometry,bodies:this._blockingBodies(),vitals:c.vitals?.(),
+      // Movement during shelter preparation invalidates the OLD oscillation
+      // exception. A fresh reachability check can still approve a real bypass.
+      stalled:displacement>=KOD_FINENESS?false:proposal.ctx.stalled,
       underFire:proposal.ctx.underFire || Date.now()-(this.damagedAt??0)<5000});
     const gate=chooseTrafficBlink(ctx);
+    this._recordBlinkRung({phase:'pre_cast',proposal_id:proposal.id??null,
+      proposal_age_ms:Date.now()-(proposal.at??Date.now()),reason:gate.reason,allowed:gate.can,
+      selected_position:selectedAt,position:nowAt?{row:nowAt.row,col:nowAt.col,x:nowAt.x,y:nowAt.y}:null,
+      fine_units:'kod',displacement_fine:displacement,stalled_revalidated:ctx.stalled??false,
+      goal:ctx.goal,landing:ctx.blink,bodies:ctx.bodies,verdict:gate.verdict??null});
     if(!gate.can)return finish({cast:false,arrived:false,reason:gate.reason,why:gate.reason});
     const spell=(c.spells??[]).find(sp=>String(c.rsc?.get?.(sp.nameRsc)??sp.name??'').toLowerCase()==='blink');
     const loop=this._tickLoop, frozen=loop?._frozen, since=c.evSeq, from={...c.self},
@@ -7455,6 +7503,7 @@ export function sessionWalkPrototype(deps) {
     const crossingLoop = typeof this._crossingOscillation === 'function'
       ? this._crossingOscillation() : null;
     const stuckAnswer = await this._askStrategies('whenStuck', {
+      from:'exit_candidates_exhausted',exit_to:bestExit?.to??null,
       room: this.world?.room ?? null,
       geo: this.world?.geometry ?? null,
       self: this.client?.self ?? null,
@@ -7522,7 +7571,8 @@ export function sessionWalkPrototype(deps) {
           : { rested: false, why: 'no autopilot to rest with' };
       }
       const out = !tookTheExit
-        ? await this.blinkOut({ expect: stuckAnswer.answer.expect, movementGeneration, controlToken }).catch(() => null)
+        ? await this.blinkOut({ expect: stuckAnswer.answer.expect, proposalId: stuckAnswer.answer.proposalId,
+            movementGeneration, controlToken }).catch(() => null)
         : { cast: false, arrived: false, why: 'did not cast: the nearest wall was the exit and it was taken' };
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));

@@ -27,6 +27,6 @@ export function chooseTrafficBlink(ctx) {
   const gate=blinkAdmission(ctx); if(!gate.can)return gate;
   const verdict=canBlinkOut({geo:ctx.geo,blink:ctx.blink,from:ctx.self,goal:ctx.goal,
     bodies:ctx.bodies,rows:ctx.room.rows,cols:ctx.room.cols,stalled:ctx.stalled});
-  return {can:verdict.can,reason:verdict.can?'useful_landing':'no_reachable_gain',verdict,
+  return {can:verdict.can,reason:verdict.can?'useful_landing':verdict.reason??'no_reachable_gain',verdict,
     ...(verdict.can?{answer:{do:'blink',expect:ctx.blink,why:verdict.why}}:{})};
 }

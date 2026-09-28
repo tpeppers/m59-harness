@@ -234,12 +234,26 @@ export function canBlinkOut({ geo, blink, from, goal, bodies, rows, cols,
     // Gated on being genuinely sealed in — the blink point must reach at least four times
     // what we can — so this cannot fire for a body that merely has a bad goal while standing
     // in the main region. 55 against 835 passes it; 400 against 835 does not.
-    if (here.size * UNSTRAND_FACTOR <= there.size)
+    // A traffic partition is not a sealed geometry pocket. In Flatlands a body
+    // past the needle reached 37 squares versus 916 at the landing, with neither
+    // side reaching a bad exit anchor. Blink sent it back behind the ants.
+    // Require the size advantage to survive removing traffic before unstranding.
+    if (here.size * UNSTRAND_FACTOR <= there.size) {
+      const emptyHere = reachableAround(geo, from, [], { rows, cols });
+      const emptyThere = reachableAround(geo, blink, [], { rows, cols });
+      const evidence = { from_here: here.size, from_blink: there.size,
+        empty_from_here: emptyHere.size, empty_from_blink: emptyThere.size,
+        goal_reachable_without_bodies: emptyHere.has(key(goal.row, goal.col)),
+        ...(stalled ? { stalled } : {}) };
+      if (emptyHere.size * UNSTRAND_FACTOR > emptyThere.size)
+        return say({ can: false, reason: 'traffic_partition_not_stranded',
+          why: 'traffic shrinks the reachable floor, but the empty room is not a sealed pocket; replan the exit before blinking' }, evidence);
       return say({ can: true, unstrands: true,
                    why: `stranded: ${here.size} square(s) from here and the goal is reachable from ` +
                         `neither, but the blink point opens ${there.size} — blinking to get unstuck ` +
                         `rather than to arrive` },
-                 { from_here: here.size, from_blink: there.size, ...(stalled ? { stalled } : {}) });
+                 evidence);
+    }
     return say({ can: false, why: 'the blink point is on the same side of the traffic as we are' },
                 { from_here: here.size, from_blink: there.size, stalled });
   }
