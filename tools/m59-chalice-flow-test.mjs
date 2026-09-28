@@ -1110,6 +1110,60 @@ try {
     ok(job?.kind === 'reclaim', 'the holder, when it works again, asks for it back by ticket');
   }
 
+  // Operator, 2026-09-28: "Send excess shillings back to the guild hall ... drop excess $$ to whoever
+  // is on the desk ... give their excess $$ to whoever's taking the next ride, who can then deposit it",
+  // and "set the guild chest to want 150k before 'overflowing' to personal".
+  section('money: a farmer in the station room hands its excess to the desk');
+  {
+    const { world, store, k } = guardWorld('m-handin');
+    const L = k('Loial the Ogier'), G = k('Gonzo');
+    G.P.client.inventory.push(world.item('shilling', 3000));
+    G.ap.shoppingPlan = () => ({ required_purse: 600 });
+    const offered = [];
+    G.ap.chaliceGive = async (to, items) => { offered.push({ to, items });
+      const coins = G.P.client.inventory.find(x => /shilling/i.test(world.nameOf(x))); coins.amount -= items[0].amount;
+      return { gave: true }; };
+    await G.ap.chaliceHandInMoney();
+    ok(offered.length === 1 && offered[0].to === 'Loial the Ogier', 'offered to whoever is serving the desk', JSON.stringify(offered));
+    ok(offered[0]?.items[0].amount === 2400, 'the excess over its keep (the larger of walking money and the shopping bill)', JSON.stringify(offered[0]?.items));
+    ok(G.ap.events.some(e => e.what === 'money_handed_in' && e.amount === 2400), 'ledgered with the amount');
+    await G.ap.chaliceHandInMoney();
+    ok(offered.length === 1, 'not again inside three minutes');
+    const small = k('Kermit');
+    small.P.client.inventory.push(world.item('shilling', 700));
+    let asked = false; small.ap.chaliceGive = async () => { asked = true; return { gave: true }; };
+    await small.ap.chaliceHandInMoney();
+    ok(!asked, 'an excess under money_min is not worth a trade');
+    const elsewhere = k('Zoot', 38);
+    elsewhere.P.client.inventory.push(world.item('shilling', 5000));
+    let asked2 = false; elsewhere.ap.chaliceGive = async () => { asked2 = true; return { gave: true }; };
+    await elsewhere.ap.chaliceHandInMoney();
+    ok(!asked2, 'nothing is walked to: only in the station room');
+    ok(L.ap.chaliceRole() === 'holder', '(the desk itself never hands in)');
+  }
+
+  section('money: the rider deposits at the hall up to the target, and keeps the overflow');
+  {
+    const { world, k, cfg } = guardWorld('m-deposit', { hall_shilling_target: 150_000 });
+    const R = k('Rowlf', GUILD_HALL_ROOM);
+    R.P.client.inventory.push(world.item('shilling', 10_400));
+    R.ap.shoppingPlan = () => ({ required_purse: 0 });
+    const calls = [];
+    R.ap.hallWithdraw = async (wants, opts) => { calls.push({ wants, opts });
+      const coins = R.P.client.inventory.find(x => /shilling/i.test(world.nameOf(x)));
+      coins.amount = wants[0]?.amount ?? 0; return { ok: true }; };
+    R.ap.hallShillings = () => 145_000;
+    await R.ap.chaliceDepositMoney(cfg);
+    const e = R.ap.events.find(x => x.what === 'money_deposited');
+    ok(calls.length === 1 && calls[0].opts.deposit[0] === 'shilling', 'one chest visit, depositing shillings', JSON.stringify(calls));
+    ok(e?.amount === 5000 && e.chest_before === 145_000, 'exactly up to the 150,000 target', JSON.stringify(e));
+    ok(e?.overflow_kept === 5000 && coins(world, R.P) === 5400, 'the overflow stays for its own banking', JSON.stringify(e));
+    R.ap.hallShillings = () => null;
+    calls.length = 0;
+    await R.ap.chaliceDepositMoney(cfg);
+    ok(calls.length === 0, 'an unknown chest count deposits nothing');
+  }
+
   section('a cup somewhere else is somebody else\'s floor');
   {
     const { world, k, cupDown } = guardWorld('g-elsewhere');

@@ -208,6 +208,20 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // Measured on prod 2026-09-25: two riders stood in room 2 with the fleet's cup for 35-45s
   // waiting on a service the person had no reason to know was holding them up.
   human_service_ms: 30_000,
+  // MONEY GOES HOME BY THE DESK, NOT BY A WALK (operator, 2026-09-28: "Send excess shillings back to
+  // the guild hall. It doesn't need to be an extra step, they can drop excess $$ to whoever is on the
+  // desk, and they can give their excess $$ to whoever's taking the next ride, who can then deposit
+  // it to the guild hall"). Shillings weigh nothing, so this costs no pack room, only a trade.
+  //   * anyone of ours in the station room with more than its keep + `money_min` hands the excess to
+  //     whoever is serving the desk;
+  //   * the server passes its own excess over `money_float` on with the cup to each rider;
+  //   * the rider deposits at its hall landing, up to `hall_shilling_target` in the chests, and KEEPS
+  //     the overflow for its own banking ("we should set the guild chest to want 150k before
+  //     'overflowing' to personal"). A future money truck (chest -> Tos bank) fits after this.
+  money_flow: true,
+  money_min: 500,
+  money_float: 1_000,
+  hall_shilling_target: 150_000,
 });
 
 // A HUMAN MARK IS LIVE ONLY WHILE IT IS FRESH. The broker refreshes it every thirty seconds
@@ -226,6 +240,7 @@ const NUMBERS = {
   human_wait_ms: [10_000, 600_000], human_hold_ms: [10_000, 900_000],
   human_max_wait_ms: [30_000, 1_800_000], human_offer_ms: [8_000, 180_000],
   human_tell_gap_ms: [0, 900_000], human_service_ms: [5_000, 300_000],
+  money_min: [0, 1_000_000], money_float: [0, 1_000_000], hall_shilling_target: [0, 100_000_000],
 };
 
 /**
@@ -709,6 +724,26 @@ export function parseDeskReply(text) {
  * The tip: `tip_amount`, cut to what the trip can spare, or nothing below `tip_min`.
  * `keep` is what the trip needs to hold on to — walking money and the shopping bill.
  */
+/** Shillings over `keep`, when there are at least `min` of them; else 0. Pure. */
+export function moneyExcess({ purse = 0, keep = 0, min = CHALICE_DEFAULTS.money_min } = {}) {
+  const x = Math.floor((Number(purse) || 0) - Math.max(0, Number(keep) || 0));
+  return x >= Math.max(1, Number(min) || 0) ? x : 0;
+}
+
+/**
+ * How much of a rider's excess goes into the chests, and how much it keeps for its own banking.
+ * `chest` null (never read) deposits nothing: filling a chest past its target is the one thing
+ * this must not do, and an unknown count cannot promise it.
+ */
+export function depositPlan({ excess = 0, chest = null, target = CHALICE_DEFAULTS.hall_shilling_target } = {}) {
+  const x = Math.max(0, Math.floor(Number(excess) || 0));
+  if (chest == null || !Number.isFinite(Number(chest))) return { deposit: 0, overflow: x, why: 'the shilling count in the chests is unknown' };
+  const room = Math.max(0, Math.floor(Number(target) - Number(chest)));
+  const deposit = Math.min(x, room);
+  return { deposit, overflow: x - deposit,
+           why: x - deposit ? `the chests are ${Number(chest) >= Number(target) ? 'at' : 'near'} their ${target} target; the rest is kept for banking` : null };
+}
+
 export function tipPlan({ purse = 0, keep = 0, cfg = CHALICE_DEFAULTS } = {}) {
   const spare = Math.max(0, Math.floor(Number(purse) || 0) - Math.max(0, Number(keep) || 0));
   const amount = Math.min(Number(cfg.tip_amount) || 0, spare);

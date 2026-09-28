@@ -72,7 +72,7 @@ import * as tougher from './m59-tougher.mjs';
 import { WeaponMagicBook, magicSwap } from './m59-weapon-magic.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
-import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide, sweepVerdict, actingDesk,
+import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide, sweepVerdict, actingDesk, moneyExcess, depositPlan,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf } from './m59-chalice.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
@@ -15083,6 +15083,7 @@ export class Autopilot {
     // A CUP ON THE FLOOR BEFORE ANYTHING ELSE: it can be stolen in the time a pass takes.
     if (await this.chaliceGuard().catch(e => { this.note('chalice guard failed', { why: e.message }); return false; }))
       return 'chaliceGuard';
+    await this.chaliceHandInMoney().catch(e => this.note('money hand-in failed', { why: e.message }));
     await this.social().catch(e => this.note('social failed', { why: e.message }));
 
     // GIVE BACK ANY SIGNET RING WHOSE OWNER IS STANDING HERE.
@@ -22117,6 +22118,76 @@ export class Autopilot {
     return true;
   }
 
+  // ------------------------------------------------------------------ money home by the desk
+
+  /** Shillings in the guild hall's chests, from the latest readings; null when none was ever read. */
+  hallShillings() {
+    try {
+      const chests = new StorageCache().allChests().filter(ch => Number(ch.room) === BOOKMAKERS_HALL_ROOM);
+      if (!chests.length) return null;
+      return chests.reduce((n, ch) => n + (ch.items ?? []).filter(i => /^shillings?$/i.test(String(i.name ?? '')))
+        .reduce((m, i) => m + (Number(i.amount) || 0), 0), 0);
+    } catch { return null; }
+  }
+
+  /**
+   * HAND THE EXCESS TO THE DESK. Anyone of ours standing in the station room, not serving it, with
+   * more than its keep + money_min, offers the excess to whoever servingDesk() says is on the desk
+   * (whose social() counters a gift on its next pass). At most every three minutes.
+   */
+  async chaliceHandInMoney(now = Date.now()) {
+    const cfg = this.chaliceCfg;
+    if (!cfg?.money_flow || this.hereRoom() !== cfg.station_room) return false;
+    if (this.chaliceRole() !== 'traveller' || this._chaliceServe || this.busyStatus?.() || this.inert) return false;
+    const ride = this.townTrip?.chalice;
+    if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
+    if (now - (this._moneyHandInAt ?? 0) < 3 * 60_000) return false;
+    const keep = Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan?.().required_purse ?? 0);
+    const amount = moneyExcess({ purse: this.purseNow(), keep, min: cfg.money_min });
+    if (!amount) return false;
+    const store = this.chaliceStore();
+    let desk = null;
+    try { desk = servingDesk(store.duty(), cfg, now, store.read().human); } catch {}
+    if (!desk?.server || desk.human || !this.playerHere(desk.server)) return false;
+    this._moneyHandInAt = now;
+    const c = this.s.client;
+    const coins = (c.inventory || []).find(o => /shilling/i.test(c.rsc.get(o.nameRsc) || ''));
+    if (!coins) return false;
+    const before = this.purseNow();
+    const r = await this.chaliceGive(desk.server, [{ id: coins.id, amount }], { stillHave: () => this.purseNow() >= before, counterMs: 20_000 });
+    this.chaliceEvent('money_handed_in', { to: desk.server, amount: r.gave ? before - this.purseNow() : 0, offered: amount,
+      purse_before: before, purse_after: this.purseNow(), room: this.hereRoom(), ...(r.gave ? {} : { why: r.why }) });
+    return !!r.gave;
+  }
+
+  /**
+   * DEPOSIT AT THE HALL LANDING, up to the chests' target; the overflow is kept for the rider's own
+   * banking. The whole stack goes in and the keep is drawn back in the same visit (a deposit takes
+   * whole stacks). Verified by the purse, and the chest count before is on the ledger.
+   */
+  async chaliceDepositMoney(cfg) {
+    if (!cfg?.money_flow) return false;
+    const keep = Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan?.().required_purse ?? 0);
+    const purse = this.purseNow();
+    const excess = moneyExcess({ purse, keep, min: cfg.money_min });
+    if (!excess) return false;
+    const chest = this.hallShillings();
+    const plan = depositPlan({ excess, chest, target: cfg.hall_shilling_target });
+    if (plan.deposit < (cfg.money_min ?? 0)) {
+      this.chaliceEvent('money_deposited', { amount: 0, chest_before: chest, target: cfg.hall_shilling_target,
+        overflow_kept: excess, why: plan.why ?? `under money_min (${plan.deposit})` });
+      return false;
+    }
+    const drawBack = purse - plan.deposit;
+    const r = await this.hallWithdraw(drawBack > 0 ? [{ item: 'shilling', amount: drawBack }] : [], { deposit: ['shilling'] });
+    const after = this.purseNow();
+    this.chaliceEvent('money_deposited', { amount: purse - after, planned: plan.deposit, chest_before: chest,
+      target: cfg.hall_shilling_target, overflow_kept: plan.overflow, purse_before: purse, purse_after: after,
+      ok: r?.ok !== false, ...(r?.ok === false ? { why: r.why } : {}) });
+    if (after < keep) this.note('MONEY: the deposit left less than the keep', { purse: after, keep, drew_back: r?.took ?? null });
+    return r?.ok !== false;
+  }
+
   playerHere(name) {
     const c = this.s?.client;
     if (!name) return null;
@@ -23082,6 +23153,8 @@ export class Autopilot {
           // unfunded there. The later call draws only if still short, so this cannot double.
           if (here === GUILD_HALL_ROOM) await this.fundStandingOrder().catch(e =>
             this.note('could not fund the standing order at the hall', { why: e.message }));
+          if (here === GUILD_HALL_ROOM) await this.chaliceDepositMoney(cfg).catch(e =>
+            this.note('could not deposit money at the hall', { why: e.message }));
           return { done: true, landed: here };
         }
         if (Date.now() - st.drankAt > cfg.landing_ms)
@@ -23388,8 +23461,20 @@ export class Autopilot {
           await this.chaliceTell(st.traveller, 'offering you the chalice — counter with nothing; ' +
             'then use it and drop it here', { service: 'ride', ticket: st.ticket, human: true }, { reply: true });
         }
-        const r = await this.chaliceGive(st.traveller, [cup.id], { stillHave: () => !!this.chaliceInPack(),
+        // THE SERVER'S OWN EXCESS RIDES WITH THE CUP to be deposited at the hall (operator, 2026-09-28).
+        // Never to a person: their pack is not ours to bank from.
+        const give = [cup.id];
+        let passOn = 0;
+        if (cfg.money_flow && !st.human) {
+          passOn = moneyExcess({ purse: this.purseNow(), keep: (this.policy.walkingMoney ?? 400) + cfg.money_float, min: cfg.money_min });
+          const coins = passOn ? (this.s.client.inventory || []).find(o => /shilling/i.test(this.s.client.rsc.get(o.nameRsc) || '')) : null;
+          if (coins) give.push({ id: coins.id, amount: passOn }); else passOn = 0;
+        }
+        const purseBefore = this.purseNow();
+        const r = await this.chaliceGive(st.traveller, give, { stillHave: () => !!this.chaliceInPack(),
           counterMs: st.human ? cfg.human_offer_ms : 8000 });
+        if (r.gave && passOn) this.chaliceEvent('money_handed_on', { to: st.traveller, amount: purseBefore - this.purseNow(),
+          purse_before: purseBefore, purse_after: this.purseNow(), ticket: st.ticket });
         if (!r.gave) { this.note('chalice hand-off did not complete', { to: st.traveller, why: r.why }); return true; }
         try { store.mark(st.ticket, 'handed'); } catch {}
         this.chaliceEvent('handed', { ticket: st.ticket, to: st.traveller, ...(st.human ? { human: true } : {}) });
