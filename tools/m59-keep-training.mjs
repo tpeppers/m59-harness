@@ -58,7 +58,13 @@ const arg = (n, d = null) => { const i = opts.indexOf(`--${n}`); return i >= 0 &
 const die = (m) => { console.error(m); process.exit(2); };
 
 const AGENT = arg('agent') || die('--agent is required');
-const UNTIL = arg('until') || die('--until "<ability>" is required: the gate that ends the training');
+const UNTIL = arg('until');
+// A GOAL THAT IS NOT A SPELL. --until-said "<text>" ends the runner after a run whose output contains
+// that text — so a script that knows its own goal (a karma target, a count of berries) says so in one
+// line and the runner needs no idea what it means. Added 2026-09-28 for tree-farm. Either this or
+// --until is required; with both, whichever comes first ends it.
+const UNTIL_SAID = arg('until-said');
+if (!UNTIL && !UNTIL_SAID) die('--until "<ability>" or --until-said "<text>" is required: the goal that ends the training');
 const STDIN = arg('stdin');                    // a line to feed a single command (the fleet REPL), then EOF
 const CWD = arg('cwd') || process.cwd();
 // A FleetScript line run through the fleet REPL (in --cwd) BEFORE every run — a restock, say. The
@@ -132,6 +138,7 @@ async function waitReady() {
 }
 
 async function gateOpen() {
+  if (!UNTIL) return { known: false, open: false, none: true };
   try {
     const r = await call('remaining_required_to_learn_new_skills', { agent: AGENT, name: UNTIL }, 60_000);
     const row = (r?.candidates ?? [])[0];
@@ -173,16 +180,19 @@ function roomsBetween(h, t0, t1) {
   return n;
 }
 
-function runOnce(cmd, stdinLine = null, env = {}) {
+function runOnce(cmd, stdinLine = null, env = {}, { watch = null } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd[0], cmd.slice(1), { cwd: CWD, env: { ...process.env, ...env },
-      stdio: [stdinLine ? 'pipe' : 'ignore', 'inherit', 'inherit'] });
+      stdio: [stdinLine ? 'pipe' : 'ignore', watch ? 'pipe' : 'inherit', 'inherit'] });
     if (stdinLine) { child.stdin.write(`${stdinLine}\n`); child.stdin.end(); }
+    // Tee, so the log reads exactly as before, and remember whether the goal line went past.
+    let said = false;
+    if (watch) child.stdout.on('data', d => { process.stdout.write(d); if (!said && String(d).includes(watch)) said = true; });
     const stop = () => { try { child.kill(); } catch {} };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     child.on('exit', (code, signal) => {
       process.off('SIGINT', stop); process.off('SIGTERM', stop);
-      resolve({ code, signal });
+      resolve({ code, signal, said });
     });
   });
 }
@@ -192,7 +202,8 @@ process.on('SIGINT', () => { stopping = true; });
 process.on('SIGTERM', () => { stopping = true; });
 
 const describe = e => e.stdin ? `repl<<< ${e.stdin}` : e.cmd.join(' ');
-say(`${AGENT}: training until "${UNTIL}" is learnable` +
+say(`${AGENT}: training until ` + [UNTIL && `"${UNTIL}" is ${UNTIL_KNOWN ? 'known' : 'learnable'}`,
+    UNTIL_SAID && `a run says "${UNTIL_SAID}"`].filter(Boolean).join(' or ') +
     (TARGETS.length ? ` and ${TARGETS.map(t => `${t.name}>=${t.to}`).join(', ')}` : '') +
     ` — ${ENTRIES.map(describe).join('  |  ')}`);
 // YIELDING THE CHARACTER TO ANOTHER ERRAND, BETWEEN RUNS. Operator, 2026-09-27: a Shal'ille disciple
@@ -246,7 +257,7 @@ for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
     await led.record({ kind: 'run_start', school: SCHOOL, command: describe(entry), gate: g0, snapshot: before });
   } catch (e) { say(`training ledger unavailable: ${e.message}`); led = null; }
   const t0 = Date.now();
-  const r = await runOnce(entry.cmd, entry.stdin, led ? { M59_TRAINING_RUN: led.run } : {});
+  const r = await runOnce(entry.cmd, entry.stdin, led ? { M59_TRAINING_RUN: led.run } : {}, { watch: UNTIL_SAID });
   if (led) {
     try {
       const after = await snapshot((t, a) => call(t, a), AGENT, { school: SCHOOL, reagentNames: REAGENTS });
@@ -256,6 +267,7 @@ for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
     } catch (e) { say(`training ledger could not close run ${led.run}: ${e.message}`); }
   }
   if (stopping) break;
+  if (r.said) { say(`run ${run} said "${UNTIL_SAID}" — done`); process.exit(0); }
   say(`run ${run} ended (${r.signal ?? `exit ${r.code}`}); checking the gate before the next`);
   await sleep(PAUSE_MS);
 }
