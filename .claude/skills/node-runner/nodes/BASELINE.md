@@ -7,7 +7,10 @@
 > and walking escapes. The Badlands shelf failure was reproduced at the sender's
 > quantized endpoint and repaired; use the report's live counts, not the historical
 > "impossible" or "one remaining defect" conclusions below. Ancient's current
-> boundary is declared landing clearance; Peak still has no verified arrival.
+> boundary was declared landing clearance; the
+> [timed-fall follow-up](../../../../docs/reproductions/ancient-timed-fall-2026-09-28.md)
+> now has three complete Ancient arrivals and one first-time meld. Peak still has
+> no verified arrival.
 
 > **THIS FILE IS MAINTAINED ON `main`, AND A SECOND COPY EXISTS ON THE PROD DEPLOY LINE.**
 > They have diverged and the prod copy is the SMALLER and OLDER of the two — measured

@@ -1,5 +1,31 @@
 # Ancient Place — room 579, r52c30
 
+## Follow-up: timed fall repair, 2026-09-28
+
+The repair in **0bccf18** passed **3/3 independent full quiet-shadow approaches**,
+including a broker/keeper restart. One first meld raised max mana 57 → 65;
+the next two returned already bonded. Both repaired jump landings and the final
+node endpoint repeated exactly, with health 20/20 throughout.
+The separate `node-escape node=ancient` walking return passed 1/1 from that
+endpoint through the east exit into room 589 r46c5; receipt
+`ancient-escape-1790619807314` retains the pessimistic final command reply and
+the confirmed actual room transition. Return repeatability is not yet established.
+See [the timed-fall report](../../../../docs/reproductions/ancient-timed-fall-2026-09-28.md)
+for current repetition counts and receipts. The older failures below remain
+useful reproductions; their conclusions are superseded where this update differs.
+
+Jump 2 now names the measured (30720,38400)/8000 landing at r38c31. Jump 3
+starts there and explicitly requests `requires.timed_fall`: gravity advances
+while the body waits against wall 407, until it fits below the 6080 ceiling.
+The ordinary BSP/object collision checks remain active throughout. The first
+live run landed exactly at (30320,42000)/4800, walked to r52c30 at
+(29952,52256)/5088, and received the distinct first-meld response with stable
+same-keeper max mana **57 → 65**. Health stayed 20/20.
+
+`node tools/m59-node-defect-audit.mjs ancient` now prints the frozen-height
+refusal alongside the timed trajectory. `m59-falltrace-test.mjs` and the packet
+regression in `m59-collision-test.mjs` pin the cause and retain wall/body refusals.
+
 ## 2026-09-28 shadow measurements
 
 Use the checked east inbound rail `edge:589:r38c74`. Actual trial start:
@@ -21,7 +47,7 @@ Two full approach trials stopped short of the node. Evidence IDs under ignored
 Both trials ended with health 20/20, mana 41/41; administrative rescue to room 52
 was outside the measured approach. Neither proves a walking escape.
 
-### Current defect: `ancient_wall399_landing_clearance`
+### Historical defect: `ancient_wall399_landing_clearance`
 
 Wall 399 is impassable at x30464, y37888..38912. The declared fine landing is
 only 16 client units east of it, inside the body's 248-unit wall clearance.

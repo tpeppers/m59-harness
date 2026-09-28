@@ -22,9 +22,11 @@ async function child(args,path){
     (error,stdout,stderr)=>resolve({code:error?.code??0,stdout,stderr})));
   writeFileSync(path,result.stdout+'\n'+result.stderr);console.log(result.stdout.slice(-1500));return result.code===0;
 }
-export const script={name:'node-escape',describe:'Measured Badlands escape, separate from approach and meld trials',
-  params:{agents:{type:'agents',required:true},fragileBelow:{type:'number',default:20},minHealth:{type:'number',default:1}},
-  async steps(){
+export const script={name:'node-escape',describe:'Measured shadow escape, separate from approach and meld trials',
+  params:{agents:{type:'agents',required:true},node:{type:'string',default:'badlands'},fragileBelow:{type:'number',default:20},minHealth:{type:'number',default:1}},
+  async steps({node='badlands'}={}){
+    if(!['badlands','ancient'].includes(node))throw Error('Escape supports badlands or ancient');
+    const rooms=node==='ancient'?[579,589]:[45,49,593];
     const safe=(fn,why,always=false)=>({...verify(async ctx=>{try{return await fn(ctx);}catch(e){
       if(ctx.state.receipt)ctx.state.receipt.failure=String(e.stack??e);console.log(e.message);return false;}},why),always});
     return [act('cancel_movement',{}),
@@ -32,23 +34,30 @@ export const script={name:'node-escape',describe:'Measured Badlands escape, sepa
         const h=await(await fetch(process.env.M59_CONTROL_URL+'health')).json();
         if(agent!=='shadow22'||h.session_characters?.[agent]!=='Vvvv'||h.game_server?.host!=='127.0.0.1'||h.game_server?.port!==15959)throw Error('Wrong shadow identity');
         state.authorized=true;
-        mkdirSync(out,{recursive:true});state.id='badlands-escape-'+Date.now();state.scenes=[];
-        state.receipt={format:'m59-node-escape/1',at:new Date().toISOString(),stone:'badlands',agent,fleet:h.fleet,
+        mkdirSync(out,{recursive:true});state.id=node+'-escape-'+Date.now();state.scenes=[];
+        state.receipt={format:'m59-node-escape/1',at:new Date().toISOString(),stone:node,agent,fleet:h.fleet,
           checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),
           broker_sha:process.env.M59_TRIAL_BROKER_SHA??'unknown',broker_pid:h.pid,movement_epoch:epochId(),
           recipe_sha256:hash(new URL(import.meta.url)),scene_ref:state.id+'-scene.json',legs:[],verified:false,
-          setup:'quiet rooms 45/49/593; square placement and bounded fine alignment to recorded approach endpoint BEFORE escape; no activation; never an inbound-route trial'};
-        for(const room of [45,49,593]){
+          setup:`quiet rooms ${rooms.join('/')}; square placement and bounded fine alignment to recorded approach endpoint BEFORE escape; no activation; never an inbound-route trial`};
+        let endpoint={room:45,row:63,col:46,x_client:46080,y_client:64448,floor_client:4096};
+        if(node==='ancient'){
+          const attempts=readFileSync(new URL('attempts.jsonl',out),'utf8').trim().split(/\r?\n/).map(JSON.parse);
+          const prior=attempts.findLast(a=>a.stone===node&&a.agent===agent&&a.navigation?.status==='reached_box'&&a.end?.room===579);
+          if(!prior)throw Error('Ancient escape requires a recorded actual arrival');
+          endpoint=prior.end;state.receipt.approach_ref=prior.objective.evidence;
+        }
+        for(const room of rooms){
           const before=await readAdminRoom(room),generation=before.properties?.pbgeneratemonsters?.value;
           state.scenes.push({room,before,generation});
           if(generation!=null)await dm([sendMsg(before.room_object,'SetMonsterGeneration',{bValue:['INT',0]})]);
           await dm(before.actors.filter(o=>o.properties?.pihit_points!=null&&o.properties?.pibehavior!=null&&!(o.properties.pibehavior.value&1)).map(o=>sendMsg(o.id,'Delete')));
         }
         await heal('Vvvv');
-        const target=clientToProtocol({x:46080,y:64448});
+        const target=clientToProtocol({x:endpoint.x_client,y:endpoint.y_client});
         // Use the successfully exercised setup; broker look.you has no object id.
         // Placement and this bounded alignment precede the measured escape.
-        state.receipt.placement=await relocate('Vvvv',45,{row:63,col:46,verify:true});
+        state.receipt.placement=await relocate('Vvvv',endpoint.room,{row:endpoint.row,col:endpoint.col,verify:true});
         await sleep(1000);
         state.receipt.setup_alignment=await call('walk_to',{agent,...target,arrive_within:0,max_steps:12,hold_shelf:true});
         state.receipt.start=position(await call('look',{agent}));
@@ -56,9 +65,23 @@ export const script={name:'node-escape',describe:'Measured Badlands escape, sepa
         writeFileSync(new URL(state.receipt.scene_ref,out),JSON.stringify(state.scenes,null,2));
         console.log('ESCAPE START '+JSON.stringify(state.receipt));
         const start=state.receipt.start;
-        return start.room===45&&start.x_client===46080&&start.y_client===64448&&start.floor_client===4096;
+        return start.room===endpoint.room&&start.x_client===endpoint.x_client&&start.y_client===endpoint.y_client&&start.floor_client===endpoint.floor_client;
       },'escape setup failed'),act('rest',{stand:true}),
       safe(async({agent,call,state})=>{
+        if(node==='ancient'){
+          const label=state.id+'-579',args=['tools/m59-fineclimb.mjs','--fleet','shadow-mana','--port','8971',
+            '--agent',agent,'--rail','ancient','--direction','to_exit','--exit','edge:589:r38c74','--no-hop'];
+          state.receipt.legs.push({room:579,start:position(await call('look',{agent})),rail_ref:'substrate/node-rails.json',
+            rail_sha256:hash(new URL('../../substrate/node-rails.json',import.meta.url))});
+          if(!await child([...args,'--dry-run'],new URL(label+'-dry.txt',out)))throw Error('escape_dry_failed_room_579');
+          if(!await child([...args,'--receipt',fileURLToPath(new URL(label+'-commands.jsonl',out))],new URL(label+'-follow.txt',out)))throw Error('escape_follow_failed_room_579');
+          state.receipt.legs[0].edge=await call('walk_to',{agent,row:38,col:75,max_steps:8});
+          await call('cancel_movement',{agent});await sleep(500);
+          state.receipt.end=position(await call('look',{agent}));
+          state.receipt.verified=state.receipt.end.room===589;
+          state.receipt.authoritative=await readAdminRoom(state.receipt.end.room);
+          return state.receipt.verified;
+        }
         for(const [room,row,col,next] of [[45,1,53,49],[49,1,21,593]]){
           const start=position(await call('look',{agent}));if(start.room!==room)throw Error('Wrong escape room');
           const geo=roomGeometry(room),edge=edgeOf(geo),from={x:start.x_client,y:start.y_client};

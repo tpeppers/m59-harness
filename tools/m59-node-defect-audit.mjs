@@ -3,6 +3,7 @@
 // No network, server placement, or live reachability claim.
 import {roomGeometry,traceReport,floorAt,edgeOf} from './m59-ground.mjs';
 import {flood} from './m59-railcut.mjs';
+import {traceFallMotion} from './m59-falltrace.mjs';
 
 const node=process.argv[2];
 if(node==='ancient'){
@@ -12,7 +13,8 @@ if(node==='ancient'){
     walk:traceReport(geo,{x:30720,y:38400},takeoff,{stride:64}),
     takeoff:{...takeoff,floor_client:floorAt(geo,takeoff.x,takeoff.y)},
     requested_landing:{...landing,floor_client:floorAt(geo,landing.x,landing.y)},
-    fall:geo.traceFineMoveClient(takeoff.x,takeoff.y,landing.x,landing.y,{fall:true,slide:true})},null,2));
+    fall:geo.traceFineMoveClient(takeoff.x,takeoff.y,landing.x,landing.y,{fall:true,slide:true}),
+    timed_fall:traceFallMotion(geo,30720,38400,landing.x,landing.y,{recordFrames:true})},null,2));
 }else if(node==='peak'){
   const geo=roomGeometry(515),from={x:25552,y:38304},results=[];
   for(const lattice of [64,32]){

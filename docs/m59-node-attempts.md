@@ -19,6 +19,11 @@ through 45 and 49 and reads the actual crossing into 593. Its receipt format is
 `m59-node-escape/1`, appended to `escapes.jsonl`, with separate setup, command,
 scene, actual position, rail hash, result and post-trial rescue evidence.
 
+With `node=ancient`, the return experiment reads the latest recorded successful
+Ancient approach endpoint, stages and aligns there before measurement, then
+follows the baked `to_exit` rail `edge:589:r38c74` and verifies the actual crossing
+into 589. It never contributes an inbound-arrival or first-meld trial.
+
 The recipe accepts `node`, `room`, `row`, `col`, `route`, `exit`, and `quiet`.
 Routes are `coarse` (one bounded normal walk), `rail` (existing checked node rail),
 `cave-entry` (576 → 587 → 27 → stone, then 587 → 576), and
