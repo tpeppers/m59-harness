@@ -169,6 +169,37 @@ export function buildItemTable(koddbFile = KODDB) {
     });
   }
 
+  // EVERY OTHER NAME A CLASS CAN WEAR (2026-09-28). An item class declares more display names
+  // than vrName: Ring shows "magical ring" until identified (ring.kod:19), and Tanktop is a "light
+  // jerkin" or, in its exotic cut, an "undershirt" (tanktop.kod:19,27). Each missing name read
+  // "unweighable" and opened a market trip whatever the pack was worth — three in one hour. So any
+  // `*_name_rsc` string an item class declares is also a name for that class's weight and bulk.
+  for (const cls of Object.values(classes)) {
+    const chain = cls.chain || [];
+    if (!chain.some(x => String(x).toLowerCase() === 'item') || !cls.resources) continue;
+    for (const [key, rsc] of Object.entries(cls.resources)) {
+      if (!/_name_rsc$/i.test(key) || rsc?.kind !== 'string' || typeof rsc.value !== 'string') continue;
+      const name = rsc.value.trim();
+      if (!name || name.length > 40 || /%/.test(name) || byName.has(name.toLowerCase())) continue;
+      // The generic unidentified names belong to their base classes (the pass below): SpellWand
+      // also calls itself "wand" and would otherwise price every wand at Item's 10/10, not 3/5.
+      if (['scroll', 'wand', 'potion'].includes(name.toLowerCase())) continue;
+      const w = inherited(classes, chain, 'viWeight');
+      const b = inherited(classes, chain, 'viBulk');
+      if (!w || !b) defaulted++;
+      considered++;
+      byName.set(name.toLowerCase(), {
+        name,
+        weight: w?.value ?? DEFAULT_WEIGHT,
+        bulk: b?.value ?? DEFAULT_BULK,
+        cls: cls.name,
+        declared_by: { weight: w?.from ?? 'Item (default)', bulk: b?.from ?? 'Item (default)' },
+        also: [],
+        alias_of: key,
+      });
+    }
+  }
+
   // POTION TOO (2026-09-28): an unidentified potion is "potion" (potion.kod:24,75, weight 17/bulk 20
   // at :54-55), and a hunter's pack holding one read "unweighable" and opened a market trip whatever
   // it was worth — three in one hour, named once town_trip_opened carried the unweighed items.

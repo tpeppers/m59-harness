@@ -1,5 +1,5 @@
 {
- "builtAt": "2026-09-28T02:54:57.280Z",
+ "builtAt": "2026-09-28T14:19:00.784Z",
  "source": "compendium/data/koddb.json",
  "defaults": {
   "weight": 10,
@@ -8,8 +8,8 @@
  },
  "capacity_formula": "1700 + might * 20, for weight AND bulk (player.kod:10456, :10461)",
  "counts": {
-  "item_classes": 285,
-  "distinct_names": 280,
+  "item_classes": 296,
+  "distinct_names": 291,
   "used_defaults": 0,
   "foods": 22,
   "weapons": 21,
@@ -129,6 +129,18 @@
     "bulk": "Arrow"
    },
    "also": []
+  },
+  "assassinated adventurer": {
+   "name": "assassinated adventurer",
+   "weight": 25,
+   "bulk": 35,
+   "cls": "BlackDagger",
+   "declared_by": {
+    "weight": "BlackDagger",
+    "bulk": "BlackDagger"
+   },
+   "also": [],
+   "alias_of": "bkswd_dead_name_rsc"
   },
   "axe": {
    "name": "axe",
@@ -928,6 +940,19 @@
    "identified_label": true,
    "spoils_ms": 0
   },
+  "generic spellitem": {
+   "name": "generic spellitem",
+   "weight": 3,
+   "bulk": 5,
+   "cls": "SpellItem",
+   "declared_by": {
+    "weight": "SpellItem",
+    "bulk": "SpellItem"
+   },
+   "also": [],
+   "alias_of": "Spellitem_label_name_rsc",
+   "spoils_ms": 86400000
+  },
   "generic wand": {
    "name": "generic wand",
    "weight": 3,
@@ -1174,6 +1199,18 @@
    "identified_label": true,
    "spoils_ms": 86400000
   },
+  "karma potion": {
+   "name": "Karma Potion",
+   "weight": 5000,
+   "bulk": 20,
+   "cls": "KarmaPotion",
+   "declared_by": {
+    "weight": "KarmaPotion",
+    "bulk": "KarmaPotion"
+   },
+   "also": [],
+   "alias_of": "KarmaPotion_name_rsc"
+  },
   "key": {
    "name": "key",
    "weight": 10,
@@ -1250,6 +1287,18 @@
      "bulk": 10
     }
    ]
+  },
+  "light jerkin": {
+   "name": "light jerkin",
+   "weight": 10,
+   "bulk": 10,
+   "cls": "Tanktop",
+   "declared_by": {
+    "weight": "Shirt",
+    "bulk": "Shirt"
+   },
+   "also": [],
+   "alias_of": "tanktop_name_rsc"
   },
   "light robes": {
    "name": "light robes",
@@ -1373,6 +1422,18 @@
     "bulk": "Helm"
    },
    "also": []
+  },
+  "magical ring": {
+   "name": "magical ring",
+   "weight": 10,
+   "bulk": 10,
+   "cls": "Ring",
+   "declared_by": {
+    "weight": "Item",
+    "bulk": "Item"
+   },
+   "also": [],
+   "alias_of": "ring_unidentified_name_rsc"
   },
   "mana crystal": {
    "name": "mana crystal",
@@ -1539,6 +1600,18 @@
    },
    "also": []
   },
+  "negative karma potion": {
+   "name": "Negative Karma Potion",
+   "weight": 5000,
+   "bulk": 20,
+   "cls": "KarmaPotion",
+   "declared_by": {
+    "weight": "KarmaPotion",
+    "bulk": "KarmaPotion"
+   },
+   "also": [],
+   "alias_of": "KarmaPotion_neg_name_rsc"
+  },
   "nerudite armor": {
    "name": "nerudite armor",
    "weight": 500,
@@ -1681,6 +1754,18 @@
     "bulk": "PolishedSeraphym"
    },
    "also": []
+  },
+  "positive karma potion": {
+   "name": "Positive Karma Potion",
+   "weight": 5000,
+   "bulk": 20,
+   "cls": "KarmaPotion",
+   "declared_by": {
+    "weight": "KarmaPotion",
+    "bulk": "KarmaPotion"
+   },
+   "also": [],
+   "alias_of": "KarmaPotion_pos_name_rsc"
   },
   "possum potion": {
    "name": "possum potion",
@@ -2704,6 +2789,19 @@
     }
    ]
   },
+  "spellitem": {
+   "name": "spellitem",
+   "weight": 3,
+   "bulk": 5,
+   "cls": "SpellItem",
+   "declared_by": {
+    "weight": "SpellItem",
+    "bulk": "SpellItem"
+   },
+   "also": [],
+   "alias_of": "Spellitem_name_rsc",
+   "spoils_ms": 86400000
+  },
   "spider eye": {
    "name": "spider eye",
    "weight": 9,
@@ -2804,6 +2902,18 @@
     "bulk": "TotemFive"
    },
    "also": []
+  },
+  "the infamous beta potion!": {
+   "name": "The infamous BETA POTION!",
+   "weight": 20,
+   "bulk": 20,
+   "cls": "BetaPotion",
+   "declared_by": {
+    "weight": "BetaPotion",
+    "bulk": "BetaPotion"
+   },
+   "also": [],
+   "alias_of": "BetaPotion_name_rsc"
   },
   "the widow qesino's famous chicken soup": {
    "name": "The Widow Qesino's famous chicken soup",
@@ -2917,6 +3027,18 @@
    },
    "also": []
   },
+  "undershirt": {
+   "name": "undershirt",
+   "weight": 10,
+   "bulk": 10,
+   "cls": "Tanktop",
+   "declared_by": {
+    "weight": "Shirt",
+    "bulk": "Shirt"
+   },
+   "also": [],
+   "alias_of": "exotic_top_name_rsc"
+  },
   "vial of perfume": {
    "name": "vial of perfume",
    "weight": 20,
@@ -2938,6 +3060,18 @@
     "bulk": "Sacchaqua"
    },
    "also": []
+  },
+  "vial of shaman blood": {
+   "name": "vial of shaman blood",
+   "weight": 4,
+   "bulk": 5,
+   "cls": "ShamanBlood",
+   "declared_by": {
+    "weight": "ShamanBlood",
+    "bulk": "ShamanBlood"
+   },
+   "also": [],
+   "alias_of": "ShamanBlood_vial_name_rsc"
   },
   "vial of solagh": {
    "name": "vial of solagh",
