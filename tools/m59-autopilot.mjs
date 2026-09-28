@@ -10281,9 +10281,31 @@ export class Autopilot {
     return this.fightBackDue;
   }
 
+  // A KARMA-STRICT CHARACTER NEVER STRIKES WHAT WOULD MOVE ITS KARMA THE WRONG WAY — not even
+  // something hitting it. Operator, 2026-09-28, of two Qor disciples killing living trees for
+  // negative karma in a forest full of spiders: "it will also have to avoid (and not kill!) the
+  // spiders when being run for -karma goals". `policy.karma` alone only ever narrowed what to
+  // HUNT and CLEAR (karmaSafe in capBlockers); hitting back, fighting back, the lone-attacker
+  // rung and a wedged swing all ignored it on purpose — "something already swinging at us is
+  // not a choice" — and one spider kill (karma -30) undoes several trees. So this is opt-in,
+  // per character, and the price is named: an attacker we may not strike is left to the
+  // survival ladder (the flee line still fires) and to whoever is clearing the room for us.
+  // Returns null, or a refusal shaped like engagementRefusal's.
+  karmaForbids(name) {
+    if (!this.policy?.karmaStrict || !this.policy?.karma || !name) return null;
+    const info = creatureByName(loadSpawns(SPAWN_FILE), name);
+    if (info?.karma == null) return null;
+    if (karmaSafe(info.karma, this.policy.karma)) return null;
+    return { name, level: info.level ?? null, rating: info.attack_rating ?? null, karma_strict: true,
+             why: `karma_strict: killing a ${name} (karma ${info.karma}) moves a ${this.policy.karma} ` +
+                  "character's karma the wrong way" };
+  }
+
   refuseEngagement(name) {
     const key = String(name || '').toLowerCase();
     if (!key) return null;
+    const karma = this.karmaForbids(name);
+    if (karma) return karma;
     const spawns = loadSpawns(SPAWN_FILE);
     const info = creatureByName(spawns, name);
     const ceiling = this.threatCeiling();
@@ -14524,7 +14546,7 @@ export class Autopilot {
     const known=Object.values(loadSpawns(SPAWN_FILE)?.creatures ?? {});
     const infoOf=o=>known.find(x=>String(x.name).toLowerCase()===nameOf(o).toLowerCase());
     const candidates=near.filter(o=>(o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)
-      && infoOf(o)?.level!=null
+      && infoOf(o)?.level!=null && !this.karmaForbids(nameOf(o))
       && Math.hypot(o.col-me.col,o.row-me.row)<=REACH);
     const hp=(v ?? c.vitals())?.health,frac=pct(hp);
     if (frac==null || !(hp?.max>0)) return false;
@@ -20802,7 +20824,17 @@ export class Autopilot {
       // the whole room a bystander. Say it out loud rather than relying on either.
       const want = this.clearing || this.policy.hunt || null;
       const isOurs = want ? this.huntMatch(want) : () => true;
-      const bystander = adjacent.find(o => !isOurs(c.rsc.get(o.nameRsc) || ''));
+      // A karma-strict character does not hit back at what it may not kill — and does not leave
+      // the room over it either (the refusal branch below would): it keeps on its quarry, and
+      // the flee line is what protects it. See karmaForbids.
+      const bystander = adjacent.find(o => { const n = c.rsc.get(o.nameRsc) || '';
+                                             return !isOurs(n) && !this.karmaForbids(n); });
+      if (!bystander && this.policy?.karmaStrict) {
+        const spared = adjacent.map(o => c.rsc.get(o.nameRsc) || '').filter(n => n && !isOurs(n) && this.karmaForbids(n));
+        if (spared.length) this.note('sparing an attacker (karma_strict)', {
+          spared: spared.slice(0, 4), instead: want,
+          why: 'killing it would move karma the wrong way; the flee line still protects this body' });
+      }
 
       // HITTING BACK IS STILL A CHOICE, AND IT IS NOT ALWAYS THE RIGHT ONE.
       //
@@ -20886,7 +20918,8 @@ export class Autopilot {
         // The partner preference was already part of quarry ranking before the wall was
         // chosen. Do not replace that validated quarry here with a different distant id.
         if (seen && seen.id === selectedQuarry?.id
-            && (seen.flags & OF.ATTACKABLE) && !(seen.flags & OF.PLAYER)) {
+            && (seen.flags & OF.ATTACKABLE) && !(seen.flags & OF.PLAYER)
+            && !this.karmaForbids(c.rsc.get(seen.nameRsc) || '')) {
           partyFoe = seen;
           engageName = c.rsc.get(seen.nameRsc) || engageName;
           if (this.foeId !== seen.id)

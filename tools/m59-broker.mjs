@@ -11042,6 +11042,16 @@ const TOOLS = [
           'is assigned to — clearing a room it is merely standing in buys nothing, and the movement ' +
           'it issues cancels the walk back to the room that does. It had no argument here at all ' +
           'until now, so the only way to set it was to reach into a running keeper' },
+      karma: { type: ['string', 'null'], enum: ['evil', 'good', 'neutral', null],
+        description: 'THE KARMA SCHOOL THIS CHARACTER IS PROTECTING (policy.karma): evil kills only ' +
+          'creatures with karma > 0, good only < 0. On its own it narrows what is HUNTED and CLEARED ' +
+          'and nothing else; null clears it' },
+      karma_strict: { type: 'boolean',
+        description: 'NEVER STRIKE WHAT MOVES KARMA THE WRONG WAY, not even an attacker (default false). ' +
+          'With `karma` set, hitting back, fighting back, the lone-attacker rung and wedged swings all ' +
+          'refuse such a creature too; the character keeps on its quarry and the flee line protects it. ' +
+          'For a karma goal (a Qor disciple killing living trees among spiders); pair it with ' +
+          'clear_weak:false and, ideally, somebody else clearing the room' },
       pull_to_safe_wall: { type: 'boolean',
         description: 'DOES A FIGHT OPEN BY WALKING TO A WALL? Default true. Renamed 2026-09-10 ' +
           'from require_safe_wall, which had grown four jobs and only one of them was this. ' +
@@ -12050,6 +12060,8 @@ const TOOLS = [
       // See the schema entry: clearing applies only to the assigned room, and it had no
       // way in from here at all — a `clear_weak` passed to this tool was silently dropped.
       if (a.clear_weak !== undefined) p.policy.clearWeak = !!a.clear_weak;
+      if (a.karma !== undefined) p.policy.karma = ['evil', 'good', 'neutral'].includes(a.karma) ? a.karma : null;
+      if (a.karma_strict !== undefined) p.policy.karmaStrict = !!a.karma_strict;
       // Whether a fight OPENS with a walk to a wall. See the schema entry: with this on and
       // the wall unreachable, the pass retries for ever and the character never swings at prey
       // standing next to it. Both spellings land on both keys so the roster stays readable by
