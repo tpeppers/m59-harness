@@ -36,10 +36,13 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, gate, TicketBook, TICKETS_FILE, freeRoom, whatFits, PKILL_ENABLE_HP, writeDeskOpen, DESK_OPEN_FILE } from './m59-vault-broker.mjs';
 import { checkItemName, weighItem } from './m59-items.mjs';
 import { practiceOnce } from './m59-practice-once.mjs';
-import { eatTo } from './m59-inventory.mjs';
+import { eatTo, buyByName } from './m59-inventory.mjs';
 import { serviceReplyText, humanMark, chaliceStoreFor } from './m59-chalice.mjs';
 
 export const HALL = 714, INN = 106;
+// THE DESKERS' FOOD WHEN THE CHESTS HAVE NONE (operator, 2026-09-28: "Buy at the inn"). Pritchett keeps
+// the Brownestone Inn, where the go-between already stands, and sells turkey legs (m59-merchants).
+export const INN_FOOD = Object.freeze({ seller: 'Pritchett', item: 'turkey leg' });
 
 // ------------------------------------------------------------------ what a person asked for
 
@@ -152,8 +155,9 @@ export class VaultDesk {
    */
   constructor({ call, cfg, book, humans = () => ({}), log = console.log, sleep = ms => new Promise(r => setTimeout(r, ms)),
                 now = Date.now, practice = practiceOnce, ledgers = {}, leased = () => true, onClose = null, reload = null,
-                feed = (agent, target) => eatTo(agent, target) }) {
-    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose, reload, feed });
+                feed = (agent, target) => eatTo(agent, target),
+                buyFood = (agent, n) => buyByName(agent, INN_FOOD.seller, [{ item: INN_FOOD.item, amount: n }]) }) {
+    Object.assign(this, { call, cfg, book, humans, log, sleep, now, practice, ledgers, leased, onClose, reload, feed, buyFood });
     this.failedInARow = 0;
     this.M = cfg.manager; this.G = cfg.go_between;
     this.cursor = {};                                   // chat seq per desk agent
@@ -699,6 +703,28 @@ export class VaultDesk {
     return r;
   }
 
+  /**
+   * FOOD FROM THE INN. The go-between buys `inn_food_amount` there for itself; for the manager it buys
+   * the same again and carries it to the foyer, across the window, and back. Each buy is read back.
+   * Returns true when the one who asked has food now.
+   */
+  async foodAtInn(forAgent) {
+    if (!this.cfg.buy_food_at_inn) return false;
+    const n = Number(this.cfg.inn_food_amount ?? 10);
+    if (!(await this.goTo(this.G, INN))) return false;
+    const before = countOf(await this.pack(this.G), INN_FOOD.item);
+    await this.buyFood(this.G, n);
+    const bought = countOf(await this.pack(this.G), INN_FOOD.item) - before;
+    this.log(`  ${this.names().go_between} bought ${bought} ${INN_FOOD.item} from ${INN_FOOD.seller}${forAgent === this.M ? ' for the manager' : ''}`);
+    if (bought <= 0) return false;
+    if (forAgent !== this.M) return true;
+    if (!(await this.goTo(this.G, HALL))) return false;
+    const given = await this.hand(this.G, this.M, INN_FOOD.item, bought);
+    await this.goTo(this.G, INN);
+    this.log(`  ${given} ${INN_FOOD.item} crossed the window to ${this.names().manager}`);
+    return given > 0;
+  }
+
   /** Between customers: one practice cast, alternating characters. */
   async idle() {
     if (!this.cfg.practice) return this.sleep(this.cfg.poll_ms);
@@ -706,14 +732,22 @@ export class VaultDesk {
     const r = await this.practice({ call: this.call, agent, ledger: this.ledgers[agent] ?? null }).catch(e => ({ cast: false, why: e.message }));
     // THE MANAGER RE-DRAWS between customers: a chest visit tops practice_keep back up. At most every
     // ten minutes, so an empty chest is not walked to on every idle turn. The go-between cannot.
-    if ((r?.restock || r?.foodRestock) && agent === this.M && this.now() - (this.redrewAt ?? 0) > 10 * 60_000) {
+    if ((r?.restock || (r?.foodRestock && !this.cfg.buy_food_at_inn)) && agent === this.M && this.now() - (this.redrewAt ?? 0) > 10 * 60_000) {
       this.redrewAt = this.now();
       await this.chestVisit({}).catch(e => this.log(`  practice re-draw failed: ${e.message}`));
       return r;
     }
+    // THE GO-BETWEEN BUYS ITS FOOD AT THE INN IT STANDS IN (operator, 2026-09-28), and the manager's too
+    // when the chests have none: the chests ran out of bread and both deskers sat at 80 vigor with the
+    // manager's walks paused for survival. At most every ten minutes each.
+    if (r?.foodRestock && this.now() - (this.boughtAt?.[agent] ?? 0) > 10 * 60_000) {
+      (this.boughtAt ??= {})[agent] = this.now();
+      const fed = await this.foodAtInn(agent).catch(e => { this.log(`  buying food failed: ${e.message}`); return false; });
+      if (fed) return r;
+    }
     // THE GO-BETWEEN CANNOT REACH THE CHESTS, so its food is a ticket like any customer's: it walks to
     // the foyer and the manager hands bread across the window. One open at a time.
-    if (r?.foodRestock && agent === this.G) {
+    if (r?.foodRestock && agent === this.G && !this.cfg.buy_food_at_inn) {
       const g = (await this.row(this.G))?.character ?? this.G;
       const open = this.book.open(this.now()).some(t => (same(t.from, g) || same(t.from, this.G)) && t.kind === 'withdraw');
       const want = Number((this.cfg.shift_kit?.[this.G] ?? this.cfg.shift_kit ?? {})['loaf of bread']) || 10;

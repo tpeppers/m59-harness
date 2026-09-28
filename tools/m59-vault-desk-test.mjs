@@ -139,7 +139,8 @@ function world() {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'vault-desk-'));
-const deskFor = (W, extra = {}) => new VaultDesk({ feed: async (agent, target) => { (W.fed ??= []).push(`${agent}:${target}@${W.rows[agent]?.where ?? W.rows[agent]?.room_num}`); return { before: 80, after: target, bites: 3 }; },
+const deskFor = (W, extra = {}) => new VaultDesk({ buyFood: async (agent, n) => { W.packs[agent].push({ id: 700 + Math.floor(Math.random() * 99), name: 'turkey leg', amount: n }); (W.bought ??= []).push(`${agent}@${W.rows[agent].room_num}:${n}`); },
+  feed: async (agent, target) => { (W.fed ??= []).push(`${agent}:${target}@${W.rows[agent]?.where ?? W.rows[agent]?.room_num}`); return { before: 80, after: target, bites: 3 }; },
   call: W.call, cfg: { ...DEFAULTS, manager: 't3', go_between: 't2', meet_ms: 50, offer_ms: 200, ...extra },
   book: new TicketBook(join(dir, `t-${Math.random()}.json`)), humans: () => W.humans ?? {}, log: () => {}, sleep: async () => {},
   practice: async ({ agent }) => { W.practised = (W.practised ?? 0) + 1; return { cast: true, agent }; } });
@@ -271,7 +272,7 @@ try {
   {
     const W = world();
     W.chests['loaf of bread'] = 100;
-    const d = deskFor(W, { shift_kit: { t2: { 'loaf of bread': 20 } } });
+    const d = deskFor(W, { shift_kit: { t2: { 'loaf of bread': 20 } }, buy_food_at_inn: false });
     d.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
     await d.idle();                                    // the manager: a chest visit
     ok('the manager drew bread', W.count(W.packs.t3, 'loaf of bread') === 10, String(W.count(W.packs.t3, 'loaf of bread')));
@@ -385,7 +386,7 @@ try {
     for (let i = 0; i < 5; i++) await d.turn();
     ok('closed after five', /five tickets failed/.test(closed ?? ''), closed);
     const W2 = world();
-    const d2 = deskFor(W2);
+    const d2 = deskFor(W2, { buy_food_at_inn: false });
     d2.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
     for (let i = 0; i < 6; i++) { await d2.idle(); const o = d2.book.open(); if (o[0]) d2.book.update(o[0].id, { status: 'failed' }); }
     ok('one bread ticket per ten minutes, however often it fails', d2.book.read().tickets.length === 1, String(d2.book.read().tickets.length));
@@ -490,6 +491,21 @@ try {
     d.book.update(tk.id, { standing: true });
     const r = await d.turn();
     ok('abandoned without a wait', r.worked?.status === 'abandoned' && /left town/.test(r.worked?.note ?? ''), JSON.stringify(r));
+  }
+
+  section('food from the inn: the go-between buys its own, and carries the manager\'s across the window');
+  {
+    const W = world();
+    const d = deskFor(W);
+    d.practice = async ({ agent }) => ({ cast: true, foodRestock: true, agent });
+    await d.idle();                                       // the manager's turn
+    ok('bought at the inn for the manager', W.bought?.[0] === `t2@${INN}:10`, JSON.stringify(W.bought));
+    ok('and it crossed the window', W.count(W.packs.t3, 'turkey leg') === 10 && W.rows.t2.room_num === INN, JSON.stringify(W.packs.t3));
+    await d.idle();                                       // the go-between's turn
+    ok('the go-between buys its own', W.count(W.packs.t2, 'turkey leg') === 10, JSON.stringify(W.packs.t2));
+    ok('no bread ticket is filed against empty chests', d.book.open().length === 0);
+    await d.idle(); await d.idle();
+    ok('not again inside ten minutes', W.bought.length === 2, JSON.stringify(W.bought));
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');
