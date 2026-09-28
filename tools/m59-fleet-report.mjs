@@ -85,7 +85,12 @@ const vig = inGame.filter(t => t.vigor != null).map(t => t.vigor);
 const hp = inGame.map(t => t.hp);
 const totalKills = table.reduce((n, t) => n + t.kills, 0);
 const atCap = inGame.filter(t => t.vigor === REST_CAP);
-const stuck = inGame.filter(t => t.vigor != null && t.vigor <= 150 && t.inkies > 0);
+// A HUNGRY CHARACTER HOLDING INKIES IS ONLY STUCK WHEN IT HAS NOTHING ELSE TO EAT. Keepers eat
+// ordinary food first and keep the inky (the chests ran down to 2 on 2026-09-28, and the operator
+// wants deskers on ordinary food), so "at or below 150 and holding one" alone is not a failure:
+// Waldorf, Floyd and Beaker were each eating mushrooms, pies and water at the time. +50 per inky.
+const holding = inGame.filter(t => t.vigor != null && t.vigor <= 150 && t.inkies > 0);
+const stuck = holding.filter(t => t.food != null && t.food - 50 * t.inkies <= 0);
 
 say(`## Fleet: ${inGame.length} in game`);
 say();
@@ -95,8 +100,10 @@ say(`- **Max HP:** avg ${avg(hp)?.toFixed(1) ?? '-'}, min ${hp.length ? Math.min
 say(`- **Vigor:** avg ${avg(vig)?.toFixed(0) ?? '-'} of 200; ${atCap.length} at the ${REST_CAP} resting cap; ` +
     `${vig.filter(v => v > 150).length} above 150`);
 say(`- **Inkies:** ${table.reduce((n, t) => n + t.inkies, 0)} carried fleet-wide; ` +
-    `**${stuck.length} characters at or below 150 still holding them**` +
-    (stuck.length ? ` (${stuck.map(t => `${t.name} ${t.vigor}/${t.inkies}`).join(', ')})` : ''));
+    `**${stuck.length} at or below 150 holding inkies with nothing else to eat**` +
+    (stuck.length ? ` (${stuck.map(t => `${t.name} ${t.vigor}/${t.inkies}`).join(', ')})` : '') +
+    (holding.length > stuck.length ? `; ${holding.length - stuck.length} more hold one while eating other food first ` +
+      `(${holding.filter(t => !stuck.includes(t)).map(t => `${t.name} ${t.vigor}/${t.inkies}`).join(', ')})` : ''));
 // THE FLEET'S ONE CHALICE (operator, 2026-09-27: "keep the chalice off the floor in room2, it
 // should only ever be dropped very briefly"). In nobody's pack means on a floor or lost, and a
 // ride dropped at the right moment reads that way for a few seconds, so it is a flag, not a verdict.
