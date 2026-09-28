@@ -441,6 +441,24 @@ try {
     ok('stored on the next healthy turn', r2.worked?.status === 'done' && W.chests['blue mushroom'] === 20, JSON.stringify(r2));
   }
 
+  section('the go-between never follows a customer out of town');
+  {
+    const W = world();
+    W.rows.hk2.room_num = 102;
+    W.packs.hk2 = [{ id: 99, name: 'diamond', amount: 38 }];
+    const d = deskFor(W, { town_rooms: [102, 106] });
+    // Marco leaves for room 2 as soon as anyone looks at him.
+    const realCall = W.call;
+    let looks = 0;
+    W.call = async (tool, a) => { if (tool === 'fleet' && ++looks > 3) W.rows.hk2.room_num = 2; return realCall(tool, a); };
+    d.call = W.call;
+    d.book.request({ kind: 'deposit', from: 'hk2', items: [{ item: 'diamond', amount: 38 }], where: INN });
+    const r = await d.turn();
+    ok('nothing followed him: the go-between is in town', [102, 106].includes(W.rows.t2.room_num), `t2 in ${W.rows.t2.room_num}; ${W.walks.join(',')}`);
+    ok('and no supply ever walked anybody', !W.walks.some(w => /->2$/.test(w)), W.walks.join(','));
+    ok('the ticket did not claim success', r.worked?.status !== 'done', JSON.stringify(r));
+  }
+
   section('opening the shift from the foyer walks in once, then only the booth');
   {
     const W = world();

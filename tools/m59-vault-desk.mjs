@@ -307,14 +307,34 @@ export class VaultDesk {
     return out;
   }
 
+  /**
+   * MEET A BOT WHERE IT STANDS — IN TOWN, OR NOT AT ALL. The go-between walks to the customer's room
+   * only when that room is a town room, and the trade is then made in place (supply, nobody
+   * travelling), each item only while the customer is still there. Never a supply that follows the
+   * customer: on prod 2026-09-28 06:36 Marco was already leaving for room 2, and the go-between
+   * followed him out through the wilds carrying 66 gems, down to 2 health in room 584.
+   * Returns the room met in, or null.
+   */
+  async meetInTown(customerAgent) {
+    const town = this.cfg.town_rooms ?? [];
+    const room = Number((await this.row(customerAgent, true))?.room_num);
+    if (!town.includes(room)) return null;
+    if (!(await this.goTo(this.G, room))) return null;
+    return Number((await this.row(customerAgent, true))?.room_num) === room ? room : null;
+  }
+
   /** Customer (a bot of ours) -> carrier. Everything the ticket lists, or all of it ('*' = unsupported for bots). */
-  async takeFromBot(carrier, customerAgent, items, travels = 'neither') {
+  async takeFromBot(carrier, customerAgent, items, meetRoom = null) {
     const got = {};
     for (const i of items) {
+      if (meetRoom != null && Number((await this.row(customerAgent, true))?.room_num) !== meetRoom) {
+        this.log(`  ${customerAgent} left room ${meetRoom}: the rest waits for the next time`);
+        break;
+      }
       const room = freeRoom(await this.row(carrier, true), 0);
       const { take } = whatFits([i], room, weighItem);
       if (!take.length) continue;
-      const n = await this.hand(customerAgent, carrier, i.item, take[0].amount, travels);
+      const n = await this.hand(customerAgent, carrier, i.item, take[0].amount);
       if (n) got[i.item] = n;
     }
     return got;
@@ -478,8 +498,12 @@ export class VaultDesk {
       const cur = await this.row(who.agent, true);
       const inTown = !person && !selfServe && carrier === this.G && (this.cfg.town_rooms ?? []).includes(Number(cur?.room_num));
       if (inTown) {
+        const met = await this.meetInTown(who.agent);
         const gave = {};
-        for (const l of got) gave[l.item] = await this.hand(this.G, who.agent, l.item, l.amount, 'from');
+        if (met != null) for (const l of got) {
+          if (Number((await this.row(who.agent, true))?.room_num) !== met) break;
+          gave[l.item] = await this.hand(this.G, who.agent, l.item, l.amount);
+        }
         await this.goTo(this.G, INN);
         for (const [item, n] of Object.entries(gave)) {
           moved[item] = (moved[item] ?? 0) + n;
@@ -518,12 +542,16 @@ export class VaultDesk {
     // A BOT ALREADY IN TOWN IS WALKED TO: the go-between goes to it (supply, the receiver travelling)
     // rather than waiting for a courier whose own errand never brings it to the inn.
     const inTown = !person && carrier === this.G && (this.cfg.town_rooms ?? []).includes(Number(who.room_num));
-    if (!inTown) {
+    let met = null;
+    if (inTown) {
+      met = await this.meetInTown(who.agent);
+      if (met == null) { await this.goTo(this.G, INN); return this.close(t, 'abandoned', `${who.character} was not standing in town when the go-between got there`); }
+    } else {
       if (carrier === this.G && !(await this.goTo(this.G, INN))) throw new Error('the go-between could not reach the inn');
       if (!(await this.waitFor(who.character, meet))) return this.close(t, 'abandoned', `${who.character} never came to room ${meet}`);
     }
     const got = person ? await this.takeFromPerson(carrier, who.character)
-                       : await this.takeFromBot(carrier, who.agent, t.items, inTown ? 'to' : 'neither');
+                       : await this.takeFromBot(carrier, who.agent, t.items, met);
     if (!Object.keys(got).length) return this.close(t, 'abandoned', 'nothing was handed over');
     return this.store(t, who, carrier, got);
   }
