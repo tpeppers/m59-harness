@@ -24209,7 +24209,7 @@ export class Autopilot {
     // An inexact load is a LOWER bound — carryCapacity withholds room_for rather than
     // guess. "Make room" is the safe reading; "there is room" is how items get deleted.
     if (!saleCooling && cap?.known && cap.load?.exact === false)
-      return { sell: true, trigger: 'unweighable',
+      return { sell: true, trigger: 'unweighable', unweighed: cap.load?.unweighed ?? null,
                why: 'the pack holds something not in the weight table, so its load is a ' +
                     'lower bound — treat that as make room, never as there is room' };
 
@@ -25375,6 +25375,9 @@ export class Autopilot {
         estimated_value: value.value, unpriced_stacks: value.unpriced,
         min_sell_value: this.minSellTripValue(),
         missing: sellCall.missing ?? null, market_circuit: !!wantsMarket,
+        // WHICH ITEMS COULD NOT BE WEIGHED, so the weight table can be filled from the kod rather
+        // than an unweighable pack sending a hunter to town whatever it is worth.
+        unweighed: sellCall.unweighed ?? null,
         supply_trip: !!supplyTrip, needs_cash_first: !!needsCashFirst,
         broke_with_goods: !!brokeWithGoods,
         room: this.s.world?.room?.num ?? null });
