@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import {tourPlan,tourComplete,insideNode,TOUR_NODES} from './m59-node-tour.mjs';
+import {tourPlan,tourComplete,insideNode,TOUR_NODES,cutTourWalk,travelJobActive} from './m59-node-tour.mjs';
 import {STONES} from './m59-stones.mjs';
+import {roomGeometry,edgeOf} from './m59-ground.mjs';
 let count=0;const test=(name,fn)=>{fn();count++;console.log('ok '+name);};
 const complete=()=>({start:{room:2},end:{room:2},nodes:TOUR_NODES.map(stone=>({stone,position:STONES[stone]}))});
 test('requested node order is fixed',()=>assert.deepEqual(tourPlan().filter(s=>s.kind==='meld').map(s=>s.node),['victoria','sentinel','ancient','badlands','cave']));
@@ -15,4 +16,14 @@ test('box includes two squares on both axes',()=>assert.equal(insideNode({room:3
 test('box excludes three squares on either axis',()=>{assert.equal(insideNode({room:39,row:16,col:46},'victoria'),false);assert.equal(insideNode({room:39,row:13,col:49},'victoria'),false);});
 test('ordinary route has no administrative step',()=>assert.ok(tourPlan().every(s=>['travel','rail','meld','cut','cross','walk'].includes(s.kind))));
 test('loop ends with the actual room-2 transition',()=>assert.deepEqual(tourPlan().at(-1),{kind:'travel',to:2}));
+test('active broker travel is busy',()=>assert.equal(travelJobActive({busy:'walk to Tos',running_for_s:3}),true));
+test('retained cancellation receipt is not an active job',()=>assert.equal(travelJobActive({last_action:'walk to Tos',took_s:4,cancelled:true}),false));
+test('retained success receipt is not an active job',()=>assert.equal(travelJobActive({last_action:'walk to Tos',took_s:4}),false));
+test('measured Badlands return survives the old 400k cap and reaches the exit square',()=>{
+  const geo=roomGeometry(45),from={x:46080,y:64448};
+  const step=tourPlan().find(s=>s.kind==='cut'&&s.room===45),{proof,points}=cutTourWalk(geo,from,step);
+  assert.ok(proof.visited>400000);assert.ok(points.length>1);assert.deepEqual(points[0],from);
+  const last=points.at(-1);assert.equal(Math.floor(last.x/1024)+1,53);assert.equal(Math.floor(last.y/1024)+1,1);
+  const edge=edgeOf(geo);assert.ok(points.slice(1).every((p,i)=>edge(points[i],p)));
+});
 console.log(count+' tour checks passed');

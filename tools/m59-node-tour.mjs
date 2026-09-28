@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {protocolToClient} from './m59-finepos.mjs';
-import {roomGeometry,floorAt,edgeOf} from './m59-ground.mjs';
+import {roomGeometry,floorAt,edgeOf,floodReport} from './m59-ground.mjs';
 import {cutRail} from './m59-railcut.mjs';
 import {railLeg,checkRoute} from './m59-noderails.mjs';
 import {STONES} from './m59-stones.mjs';
@@ -16,6 +16,8 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const TOUR_NODES=['victoria','sentinel','ancient','badlands','cave'];
 export const TOUR_ROOMS=[2,38,39,599,589,579,578,576,587,586,585,584,583,593,49,45,574,150,575,27,597,598];
 export const hashFile=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
+// look retains a completed/cancelled job as a receipt. Presence does not mean busy.
+export const travelJobActive=job=>!!job?.busy;
 export function tourPosition(l){
   const p=l.you,c=p?.x!=null?protocolToClient(p):null,room=l.room?.num;
   return {room,row:p?.row,col:p?.col,x_client:c?.x??null,y_client:c?.y??null,
@@ -24,6 +26,14 @@ export function tourPosition(l){
 export function insideNode(p,node){const s=STONES[node];return p.room===s.room&&Math.abs(p.row-s.row)<3&&Math.abs(p.col-s.col)<3;}
 export function tourComplete(r){return r.start?.room===2&&r.end?.room===2&&r.nodes?.length===5&&
   r.nodes.every((n,i)=>n.stone===TOUR_NODES[i]&&insideNode(n.position,n.stone))&&!r.failure;}
+export function cutTourWalk(geo,from,step){
+  const edge=edgeOf(geo);
+  const proof=step.boxFlood?floodReport(geo,from,{row:step.row,col:step.col},{lattice:64,cap:1500000,box:0}):
+    cutRail(from,step,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
+  let points=step.boxFlood?proof.path:(proof.ok&&proof.bridgeOk?proof.waypoints:null);
+  if(points&&(points[0].x!==from.x||points[0].y!==from.y))points=[from,...points];
+  return {proof,points};
+}
 export function tourPlan(){return [
   {kind:'travel',to:38},{kind:'travel',to:39},
   {kind:'rail',node:'victoria',exit:'go:38:r8c27'}, {kind:'meld',node:'victoria'},
@@ -38,8 +48,8 @@ export function tourPlan(){return [
   {kind:'cut',room:49,x:19488,y:26656,row:27,col:20},
   {kind:'cross',row:28,col:20,to:45},
   {kind:'rail',node:'badlands'},{kind:'meld',node:'badlands'},
-  {kind:'cut',room:45,x:53760,y:512,row:1,col:53},{kind:'cross',row:0,col:53,to:49},
-  {kind:'cut',room:49,x:20992,y:512,row:1,col:21},{kind:'cross',row:0,col:21,to:593},
+  {kind:'cut',room:45,boxFlood:true,row:1,col:53},{kind:'cross',row:0,col:53,to:49},
+  {kind:'cut',room:49,x:20544,y:512,row:1,col:21},{kind:'cross',row:0,col:21,to:593},
   ...[583,584,574,150,575,576,587,27].map(to=>({kind:'travel',to})),
   {kind:'walk',row:23,col:53},{kind:'meld',node:'cave'},
   {kind:'cross',row:57,col:45,to:587},
@@ -56,14 +66,25 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
     broker_sha:process.env.M59_TRIAL_BROKER_SHA??'unknown',broker_pid:health.pid,movement_epoch:epochId(),
     recipe_sha256:hashFile(fileURLToPath(import.meta.url)),rail_sha256:hashFile(resolve(root,railFile)),
     setup:state.tourSetup??null,scene_ref:state.tourSceneRef??null,from_step:fromStep,start:tourPosition(first),nodes:[],legs:[],complete:false};
+  record.rail_ref=id+'-rails.json';writeFileSync(join(out,record.rail_ref),readFileSync(resolve(root,railFile)));
   state.tour=record;state.tourFile=join(out,id+'.json');
   const save=()=>writeFileSync(state.tourFile,JSON.stringify(record,null,2));
   const read=async()=>{const l=await call('look',{agent});if(l.hp?.value<=0)throw Error('tour_character_died');return l;};
-  const command=async(name,args,label)=>{
-    const before=tourPosition(await read());let reply;
+  const command=async(name,args,label,stopRoom=null)=>{
+    const before=tourPosition(await read());let reply,done=false,crossed=false,watchError=null;
+    const watcher=stopRoom==null?null:(async()=>{
+      while(!done){const l=await read();
+        appendFileSync(join(out,id+'-positions.jsonl'),JSON.stringify({at:new Date().toISOString(),label,...tourPosition(l)})+'\n');
+        if(l.room.num===stopRoom){crossed=true;await call('cancel_movement',{agent});return;}
+        await sleep(300);
+      }
+    })().catch(async e=>{watchError=e;done=true;try{await call('cancel_movement',{agent});}catch{}});
     try{reply=await call(name,{agent,...args});}catch(e){reply={error:e.message};}
+    finally{done=true;if(watcher)await watcher;}
+    if(watchError)throw watchError;
     const after=tourPosition(await read());
-    appendFileSync(join(out,id+'-commands.jsonl'),JSON.stringify({at:new Date().toISOString(),label,name,args,before,reply,after})+'\n');
+    appendFileSync(join(out,id+'-commands.jsonl'),JSON.stringify({at:new Date().toISOString(),label,name,args,before,reply,after,
+      ...(stopRoom==null?{}:{stop_on_room:stopRoom,crossing_observed:crossed})})+'\n');
     return reply;
   };
   const travel=async(to,label)=>{
@@ -73,8 +94,8 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
     while(Date.now()<until){const l=await read();
       appendFileSync(join(out,id+'-positions.jsonl'),JSON.stringify({at:new Date().toISOString(),label,...tourPosition(l)})+'\n');
       if(l.room.num===to){await command('cancel_movement',{},label+'-arrived');return;}
-      seenJob ||= !!l.job;
-      if(!l.job&&(seenJob||Date.now()>until-234000))throw Error('travel_stopped_before_room_'+to+': '+JSON.stringify(reply));
+      seenJob ||= travelJobActive(l.job);
+      if(!travelJobActive(l.job)&&(seenJob||Date.now()>until-234000))throw Error('travel_stopped_before_room_'+to+': '+JSON.stringify({issued:reply,terminal_job:l.job}));
       await sleep(1000);
     }
     await command('cancel_movement',{},label+'-timeout');throw Error('travel_timeout_room_'+to);
@@ -102,10 +123,11 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
       else if(step.kind==='rail')await follow(step,label);
       else if(step.kind==='cut'){
         const p=tourPosition(await read());if(p.room!==step.room)throw Error('cut_wrong_room');
-        const geo=roomGeometry(p.room),edge=edgeOf(geo),cut=cutRail({x:p.x_client,y:p.y_client},step,
-          {edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
-        if(!cut.ok||!cut.bridgeOk){leg.cut=cut;throw Error('body_seeded_cut_failed');}
-        const walk=railLeg({waypoints:cut.waypoints},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
+        const geo=roomGeometry(p.room),edge=edgeOf(geo),from={x:p.x_client,y:p.y_client};
+        const {proof,points}=cutTourWalk(geo,from,step);
+        if(!points){leg.cut=proof;throw Error('body_seeded_cut_failed');}
+        writeFileSync(join(out,id+'-'+label+'-cut.json'),JSON.stringify(proof));
+        const walk=railLeg({waypoints:points},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
         const route={ok:true,rail_complete:walk.unvalidated===0,direction:'to_node',exit:'body-cut',exit_label:'body-cut',
           from:`r${p.row}c${p.col}`,to:`r${step.row}c${step.col}`,legs:[walk],jumps:0,all_declared:true,waypoints:walk.waypoints.length};
         leg.check=checkRoute(route,{edge});if(!leg.check.ok||leg.check.skipped||!route.rail_complete)throw Error('cut_check_failed');
@@ -113,7 +135,7 @@ export async function runTour(ctx,{railFile='substrate/node-rails.json',evidence
         leg.rail_ref=file;leg.rail_sha256=hashFile(file);await follow({node:'cut'},label,file);
       }else if(step.kind==='walk'||step.kind==='cross'){
         if(step.to&&(await read()).room.num===step.to){leg.already_in_room=true;}
-        else await command('walk_to',{row:step.row,col:step.col,fine:false,max_steps:step.kind==='cross'?80:80,arrive_within:3},label);
+        else await command('walk_to',{row:step.row,col:step.col,fine:false,max_steps:step.kind==='cross'&&step.to!==587?8:80,arrive_within:3},label,step.to??null);
         await command('cancel_movement',{},label+'-settle');await sleep(500);
         if(step.to&&(await read()).room.num!==step.to)throw Error('crossing_failed_room_'+step.to);
       }else if(step.kind==='meld'){
