@@ -4827,6 +4827,10 @@ class Session {
   // long trip through one sticky doorway would run out of journey before it ran out of
   // patience.
   async travel(toRoomNum, {
+    // ROOMS THIS JOURNEY PLANS AROUND, on top of the session's barred rooms (operator, 2026-09-28:
+    // "Marco can also detour around the flatlands if it's blocked by ants/spiders"). The router
+    // already takes an avoid set (World.route); a journey could not say what to add to it.
+    avoid = null,
     // Going into a room on the NEVER_ENTER list, on purpose, with a reason that is recorded.
     // Both halves are required: an override nobody has to justify is just a hole.
     allowHazard = false,
@@ -5183,8 +5187,9 @@ class Session {
         }
       }
 
+      const avoidNow = new Set([...(this.barredRooms ?? []), ...((avoid ?? []).map(Number).filter(n => n !== Number(toRoomNum)))]);
       const route = this.world.route(toRoomNum, {
-        avoid: this.barredRooms?.size ? new Set(this.barredRooms) : null,
+        avoid: avoidNow.size ? avoidNow : null,
         blockedHops: exhaustedHops.size ? new Set(exhaustedHops.keys()) : null,
         allowHazard,
       });
@@ -5242,7 +5247,7 @@ class Session {
           const escaped = await this.retreatAlongBreadcrumbs({
             movementGeneration, controlToken,
             until: () => this.world.route(toRoomNum, { allowHazard,
-              avoid: this.barredRooms?.size ? new Set(this.barredRooms) : null,
+              avoid: (() => { const a = new Set([...(this.barredRooms ?? []), ...((avoid ?? []).map(Number))]); return a.size ? a : null; })(),
               blockedHops: exhaustedHops.size ? new Set(exhaustedHops.keys()) : null,
             }).found,
           }).catch(() => null);

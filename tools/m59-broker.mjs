@@ -2655,6 +2655,7 @@ class KeeperProxy {
       // Deliberately entering a NEVER_ENTER room. The keeper refuses the flag without a
       // reason, so both travel together or neither does.
       ...(opts.allowHazard ? { allow_hazard: true, hazard_why: opts.hazardWhy } : {}),
+      ...(opts.avoid?.length ? { avoid: opts.avoid } : {}),
       // The keeper backgrounds by default; a foreground caller awaits `promise` below and
       // wants the journey's own result rather than an acknowledgement.
       background: !foreground,
@@ -6682,6 +6683,9 @@ const TOOLS = [
       // A HEALTH FLOOR IS NOW ENFORCED FOR EVERY CALLER, and these two are how a caller that
       // has already decided keeps its decision. Without them the gate would be a wall rather
       // than a guarantee, and the first errand it blocked would get it deleted.
+      avoid: { type: 'array', items: { type: 'number' },
+        description: 'ROOMS THIS JOURNEY PLANS AROUND (never the destination). For a detour: a courier sent ' +
+          'round a blocked Flatlands by the East Merchant Way. Added to the session\'s own barred rooms' },
       health_floor: { type: 'number',
         description: 'the fraction of max health required to SET OUT, 0..1. Omitted uses this ' +
           "character's own travel_start_health, and then its flee threshold -- because a body " +
@@ -6793,6 +6797,7 @@ const TOOLS = [
       const startTravel = () => s.travelJob(dest, {
         // Straight through to the gate in `travelJob`; see m59-travelgate.mjs for the decision.
         healthFloor: a.health_floor,
+        ...(Array.isArray(a.avoid) && a.avoid.length ? { avoid: a.avoid.map(Number) } : {}),
         despiteHealth: a.despite_health,
         despiteUnreachable: a.despite_unreachable,
         // A hazard-room override is the flag AND the reason, together or not at all.

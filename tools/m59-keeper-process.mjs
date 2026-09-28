@@ -1898,14 +1898,17 @@ const server = createServer(async (req, res) => {
               return;
             }
             if (allowHazard) log(`[keeper] ${agent} entering a hazard room on purpose: ${hazardWhy}`);
-            // A journey ordered from outside (a DUM recall, a stand-down) eats first too; see
-            // Autopilot.eatBeforeTravel. A meal is seconds and never blocks the walk.
-            await autopilot?.eatBeforeTravel?.(dest);
+            // THE MEAL BEFORE A JOURNEY HAPPENS INSIDE THE JOB, NOT BEFORE THIS ANSWER. Autopilot.travel
+            // already eats first (eatBeforeTravel), inside the travel job. The extra await that stood here
+            // held the HTTP answer until the meal was done — seconds once, up to an overdrive's 30 minutes
+            // now — and a caller whose request times out re-issues the journey into itself (Kermit,
+            // 2026-09-28: a DUM travel order sat 29.5 min in a pre-journey overdrive).
             const job = session.travelJob(dest, {
               where: args.where, maxHops: Number(args.max_hops ?? args.maxHops ?? 25),
               controlToken: args.control_token ?? args.controlToken,
               runErrands: args.run_errands !== false && args.runErrands !== false,
               allowHazard, hazardWhy: hazardWhy || null,
+              ...(Array.isArray(args.avoid) && args.avoid.length ? { avoid: args.avoid.map(Number).filter(Number.isFinite) } : {}),
             });
             if (args.background === false) { json({ ...(await job.promise), destination: dest }); return; }
             json({ started: true, destination: dest,
