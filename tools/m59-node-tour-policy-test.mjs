@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {railIdentityProblem,availableForTour,tourObjectiveComplete,atPost} from './m59-node-tour-policy.mjs';
 import {tourReturnPlan} from './m59-node-tour.mjs';
+import {keeperReloadProblem} from './m59-node-keeper-build.mjs';
 const server={host:'example.test',port:5959},base={fleet:'prod',agent:'a',rostered:server,
   health:{fleet:'prod',game_server:server,session_characters:{a:'Example'}},expectedGame:'example.test:5959',checkedRail:true};
 let n=0;const test=(name,fn)=>{fn();console.log('ok '+name);n++;};
@@ -17,4 +18,10 @@ test('post check requires actual room and square',()=>{assert.equal(atPost({room
 test('every itinerary return ends at room2 without activation or admin steps',()=>{for(const room of [38,39,599,589,579,578,576,587,586,585,584,583,593,49,45,574,150,575,27,597,598]){const p=tourReturnPlan(room);assert.deepEqual(p.at(-1),{kind:'travel',to:2});assert.ok(p.every(s=>!['meld','place','heal'].includes(s.kind)));}});
 test('cave recovery includes actual crossing',()=>assert.deepEqual(tourReturnPlan(27).slice(0,2),[{kind:'walk',row:57,col:45},{kind:'travel',to:587}]));
 test('unknown recovery room refuses instead of guessing',()=>assert.throws(()=>tourReturnPlan(1),/no_measured_return/));
+test('keeper reload is limited to the selected character in room2',()=>{
+  const b={position:{room:2},identity:{agent:'a',character:'Example'},agent:'a',character:'Example'};
+  assert.equal(keeperReloadProblem(b),null);
+  assert.equal(keeperReloadProblem({...b,position:{room:579}}),'keeper_reload_requires_room2');
+  assert.equal(keeperReloadProblem({...b,character:'Other'}),'keeper_reload_identity_mismatch');
+});
 console.log(n+' tour policy checks passed');

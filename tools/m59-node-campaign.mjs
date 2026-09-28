@@ -10,12 +10,13 @@ import {availableForTour,tourObjectiveComplete,atPost,endpointName} from './m59-
 import {runTour,tourPosition} from './m59-node-tour.mjs';
 import {takeRunLock,releaseRunLock} from './m59-runlock.mjs';
 import {fleetName,stateFileFor} from './m59-fleetpath.mjs';
+import {ensureNodeKeeperBuild} from './m59-node-keeper-build.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const args=process.argv.slice(2),arg=(k,d=null)=>{const i=args.indexOf('--'+k);return i<0?d:args[i+1];};
 const fleet=fleetName(),port=Number(arg('port',8901));
 process.env.M59_CONTROL_URL=`http://127.0.0.1:${port}/`;
-const {call,fleetScript,verify,walk}=await import('./m59-fleetscript.mjs');
+const {call,fleetScript,verify,walk,holdKeeper}=await import('./m59-fleetscript.mjs');
 const {runNamed}=await import('./m59-fleetlib.mjs');
 const file=resolve(arg('plan')??arg('run')??'substrate/node-campaign/campaign.json');
 const save=r=>{mkdirSync(dirname(file),{recursive:true});const tmp=file+'.'+process.pid+'.tmp';writeFileSync(tmp,JSON.stringify(r,null,2));renameSync(tmp,file);};
@@ -56,6 +57,7 @@ if(arg('plan')){
       delete record.waiting;record.status='running';job.status='active';
       const attempt={at:new Date().toISOString(),broker_pid:fresh.pid,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim()};job.attempts.push(attempt);save(record);
       const evidenceDir=join(dirname(file),job.agent+'-'+Date.now());mkdirSync(evidenceDir,{recursive:true});
+      let replacementHold=null;
       const script={name:'mana-node-service-tour',source:'public',params:{agents:{type:'agents',required:true},minHealth:{default:0.9},fragileBelow:{default:20}},
         async steps(){return [
           verify(async({agent,call,state})=>{
@@ -64,6 +66,17 @@ if(arg('plan')){
             writeFileSync(join(evidenceDir,'before.json'),JSON.stringify(state.before,null,2));return true;
           },'cannot capture return duties'),
           walk(2),
+          verify(async({agent,call})=>{
+            attempt.keeper_reload=await ensureNodeKeeperBuild({fleet,agent,character:job.character,
+              expectedSha:attempt.checkout_sha,call});
+            // A new process can have a new port. Give it its own verified heartbeat;
+            // release it with the original hold when this one character's run ends.
+            if(attempt.keeper_reload.reloaded){
+              replacementHold=await holdKeeper({name:'mana-node-service-tour (public)',log:console.log},agent,fleet);
+              if(!replacementHold.ok)throw Error('replacement_keeper_lease_refused');
+            }
+            save(record);return true;
+          },'selected keeper did not load the deployed movement code'),
           verify(async ctx=>{
             const {agent,call,state}=ctx;
             state.tourSceneRef=join(evidenceDir,'start-scene.json');
@@ -92,6 +105,7 @@ if(arg('plan')){
       let result;
       try{result=await runNamed(script.name,{agents:job.agent},{scripts:new Map([[script.name,script]]),fleetScript});}
       catch(e){result={ok:false,error:e.stack};}
+      finally{await replacementHold?.release();}
       writeFileSync(join(evidenceDir,'script-result.json'),JSON.stringify(result,null,2));
       attempt.finished_at=new Date().toISOString();attempt.script_ref=join(evidenceDir,'script-result.json');
       // Releasing the lease permits the original director to resume its saved service.

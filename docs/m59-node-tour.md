@@ -75,8 +75,10 @@ node tools/m59-node-campaign.mjs --run substrate/node-campaign/prod.json --fleet
 The priority agents are operator-local choices, not embedded defaults. Their
 post is room 2 r19c8; review that field in the saved plan before starting. Other
 characters finish in room 2 and their existing director resumes their duties.
-Every selected keeper must be running the merged movement build before its
-turn. Fineclimb's remote mode requires the exact `--expected-game` endpoint,
+Before departure the runner checks the selected keeper's recorded build. If
+needed, it restarts only that keeper in room 2, waits for the existing broker
+to respawn it, verifies the loaded commit, and renews its faculty lease. Other
+keepers continue their jobs. Fineclimb's remote mode requires the exact `--expected-game` endpoint,
 agreement between roster and live broker, and a checked declared rail.
 
 The tour updates `substrate/node-memory/` after a confirmed `melded` or `already`
