@@ -357,6 +357,18 @@ export class VaultDesk {
       .catch(e => ({ ok: false, why: e.message }));
     await this.post('booth');
     if (r?.ok === false) throw new Error(`chest visit failed: ${r.why}`);
+    // A DEPOSIT IS READ BACK, NEVER ASSUMED: vb-214 said done while all 20 blue mushrooms stayed in the
+    // manager's pack. What is still carried is returned as `unstored`.
+    const unstored = {};
+    if (Object.keys(deposit).length) {
+      const after = await this.pack(this.M);
+      for (const [item, n] of Object.entries(deposit)) {
+        const kit = this.cfg.practice ? Number(this.cfg.practice_keep?.[item] ?? 0) : 0;
+        const still = Math.max(0, countOf(after, item) - kit);
+        if (still > 0) unstored[item] = Math.min(n, still);
+      }
+      if (Object.keys(unstored).length) this.log(`  NOT STORED, still with the manager: ${JSON.stringify(unstored)} — ${JSON.stringify(r).slice(0, 300)}`);
+    }
     // The kit's top-up is the desk's own, drawn last: what came goes to the customer first, and only
     // what the CUSTOMER asked for can be short.
     const took = { ...(r?.took ?? {}) }, short = {};
@@ -368,7 +380,7 @@ export class VaultDesk {
       const n = Math.max(0, w.amount - (took[w.item] ?? 0));
       if (n) short[w.item] = n;
     }
-    return { took, short };
+    return { took, short, unstored };
   }
 
   // ---------------------------------------------------------------- the go-between's walks
@@ -522,7 +534,7 @@ export class VaultDesk {
    * the next time the desk is healthy.
    */
   async store(t, who, carrier, got) {
-    const left = {};
+    const left = {}, leftM = {};
     try {
       if (carrier === this.G) {
         if (!(await this.goTo(this.G, HALL))) throw new Error('the go-between could not reach the foyer');
@@ -538,17 +550,27 @@ export class VaultDesk {
         await this.goTo(this.G, INN);
         got = crossed;
       }
-      if (Object.keys(got).length) await this.chestVisit({ deposit: got });
+      if (Object.keys(got).length) {
+        const v = await this.chestVisit({ deposit: got });
+        for (const [item, n] of Object.entries(v.unstored ?? {})) {
+          got[item] -= n; if (got[item] <= 0) delete got[item];
+          leftM[item] = n;
+        }
+      }
     } catch (e) {
       this.book.update(t.id, { status: 'held', held_by: carrier, holding: got, note: e.message });
       this.log(`  ${t.id}: HELD — ${carrier} is carrying ${Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ')} (${e.message})`);
       throw e;
     }
     const text = Object.entries(got).map(([k, n]) => `${n} ${k}`).join(', ');
-    if (Object.keys(left).length) {
-      const leftText = Object.entries(left).map(([k, n]) => `${n} ${k}`).join(', ');
-      return this.close(t, 'held', `in the chests: ${text || 'nothing'}; still carried by ${carrier}: ${leftText}`,
-                        { moved: got, holding: left, held_by: carrier });
+    // Whoever still carries something keeps the ticket HELD: the manager first (one chest visit
+    // away), else the go-between (one window crossing away).
+    const heldBy = Object.keys(leftM).length ? this.M : Object.keys(left).length ? carrier : null;
+    if (heldBy) {
+      const holding = heldBy === this.M ? leftM : left;
+      const leftText = Object.entries(holding).map(([k, n]) => `${n} ${k}`).join(', ');
+      return this.close(t, 'held', `in the chests: ${text || 'nothing'}; still carried by ${heldBy}: ${leftText}`,
+                        { moved: got, holding, held_by: heldBy });
     }
     await this.tell(carrier === this.G ? this.G : this.M, who?.character ?? t.from, `${t.id} done: ${text} are in the chests.`);
     return this.close(t, 'done', null, { moved: got, holding: null });

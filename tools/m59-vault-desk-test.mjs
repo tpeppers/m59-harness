@@ -100,7 +100,7 @@ function world() {
             W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         for (const d of (a.deposit ?? []).filter(d => !d.startsWith('id:'))) for (const o of W.packs[a.agent].filter(x => x.name.includes(d))) {
           W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); }
-        for (const d of a.deposit ?? []) { const o = W.packs[a.agent].find(x => `id:${x.id}` === d);
+        for (const d of a.deposit ?? []) { const o = W.packs[a.agent].find(x => `id:${x.id}` === d && !(W.refuse ?? []).includes(x.name));
           if (o) { W.chests[o.name] = (W.chests[o.name] ?? 0) + (o.amount || 1); W.packs[a.agent] = W.packs[a.agent].filter(x => x !== o); } }
         const took = {}, short = {};
         for (const w of a.wants) { const n = Math.min(w.amount, W.chests[w.item] ?? 0); W.chests[w.item] = (W.chests[w.item] ?? 0) - n;
@@ -422,6 +422,22 @@ try {
     d.hand = realHand;
     const r2 = await d.turn();
     ok('and finished when they cross', r2.worked?.status === 'done' && W.chests['blue mushroom'] === 20, JSON.stringify(r2));
+  }
+
+  section('a deposit the chests refuse is read back and stays HELD with the manager');
+  {
+    const W = world();
+    W.rows.t9.room_num = HALL;
+    W.packs.t9.push({ id: 98, name: 'blue mushroom', amount: 20 });
+    W.refuse = ['blue mushroom'];
+    const d = deskFor(W);
+    d.book.request({ kind: 'deposit', from: 't9', items: [{ item: 'blue mushroom', amount: 20 }] });
+    const r = await d.turn();
+    const t = d.book.read().tickets[0];
+    ok('held by the manager, not done', t.status === 'held' && t.held_by === 't3' && t.holding?.['blue mushroom'] === 20, JSON.stringify(t));
+    W.refuse = [];
+    const r2 = await d.turn();
+    ok('stored on the next healthy turn', r2.worked?.status === 'done' && W.chests['blue mushroom'] === 20, JSON.stringify(r2));
   }
 
   section('opening the shift from the foyer walks in once, then only the booth');
