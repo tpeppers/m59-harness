@@ -35,15 +35,15 @@
 // once state === 'game' and the seeds have arrived — so before that we are a plain
 // pipe and simply watch for the seeds going past.
 import net from 'node:net';
+import { attachProxyCommunications, proxyCommunicationsConfig } from './m59-proxy-communications.mjs';
+import { resolveFleet, evidenceDirFor } from './m59-fleetpath.mjs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
 import { parseRoomContents, objId } from './m59-parse.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
-import { fileURLToPath as fileURLToPathP } from 'node:url';
 
-const REPO_DIR = joinPath(dirnamePath(fileURLToPathP(import.meta.url)), '..');
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -309,6 +309,7 @@ export class ProxySession extends EventEmitter {
 
   fromClient(payload, epoch, whole) {
     this.stats.fromClient++;
+    this.emit('received-client-packet', payload);
     this.lastEpoch = epoch;
     if (this.inGame) this.learn(payload);
     // WHAT THE OPERATOR IS SWINGING AT, READ OFF THE WIRE.
@@ -413,6 +414,7 @@ export class ProxySession extends EventEmitter {
 
   fromServer(payload, epoch, whole) {
     this.stats.fromServer++;
+    this.emit('received-server-packet', payload);
     // The client keeps the epoch byte of the LAST server message and stamps it on
     // everything it sends (clientd3d/com.c:409-410). So anything we forge towards the
     // client must carry the epoch the server is currently using — otherwise we would
@@ -779,8 +781,9 @@ function serveControl(port, getSession) {
 
 export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
                              observe = false, control = null, onSession = () => {},
-                             listenHost = '0.0.0.0', contextPort = null } = {}) {
+                             listenHost = '0.0.0.0', contextPort = null, communicationStateFile = null } = {}) {
   if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
+  const communications=communicationStateFile?proxyCommunicationsConfig({stateFile:communicationStateFile,host,port}):null;
   const context=contextPort!==null?proxyContext({host,port,listen}):null;
   let current = null;
   const sessions = new Set();
@@ -811,6 +814,7 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     const log = (m) => console.error(`[proxy ${tag}] ${m}`);
     log('client connected');
     const s = new ProxySession(sock, { host, port, observe, log });
+    if(communications)s.communications=attachProxyCommunications(s,communications);
     if(context)try{context.attach(s);}catch{s.destroy();return;}
     current = s;
     sessions.add(s);
@@ -837,6 +841,9 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
   const listen = Number(arg('--listen', 5960));
   const host = h, port = Number(p || 5959);
 
+  const communicationStateFile=process.argv.includes('--no-communications')?null:arg('--fleet-state',resolveFleet().stateFile);
+  if(communicationStateFile)proxyCommunicationsConfig({stateFile:communicationStateFile,host,port});
+
   // SAY WHAT THIS PROXY FRONTS, so a client launcher can find the right one by itself.
   //
   // "A proxy is listening on 5961" is not the same fact as "a proxy for the server this
@@ -848,10 +855,10 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
   // The pid is in the file for the same reason the broker's is: a file outlives the process
   // that wrote it, and a reader has to be able to tell a live proxy from a leftover.
   try {
-    const advert = joinPath(REPO_DIR, 'substrate', 'proxies', String(listen) + '.json');
+    const advert = joinPath(evidenceDirFor(), 'proxies', String(listen) + '.json');
     mkdirSync(dirnamePath(advert), { recursive: true });
     writeFileSync(advert, JSON.stringify({
-      listen, server: { host, port }, pid: process.pid, at: Date.now(),
+      listen, server: { host, port }, pid: process.pid, at: Date.now(), communication_state_file:communicationStateFile,
     }, null, 1));
     const drop = () => { try { unlinkSync(advert); } catch { /* already gone */ } };
     process.on('exit', drop);
@@ -859,7 +866,7 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
   } catch { /* an unadvertised proxy still works; it just cannot be found automatically */ }
 
   serveProxy({
-    listen, host, port,
+    listen, host, port, communicationStateFile,
     observe: process.argv.includes('--observe'),
     control: arg('--control') ? Number(arg('--control')) : null,
     listenHost: arg('--bind','0.0.0.0'),

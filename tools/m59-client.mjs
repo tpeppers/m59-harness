@@ -910,6 +910,11 @@ export class M59Client {
       }
 
       case AP.MESSAGE: {
+        if (this.onCommunication) {
+          let text;
+          try { text = new Reader(body).str(); } catch { text = '[Undecoded login message; wire packet retained]'; }
+          this.onCommunication({kind:'message',at:Date.now(),text,transport:'bot',packet_hex:Buffer.concat([Buffer.from([op]),body]).toString('hex')});
+        }
         const n = body.readUInt16LE(0);
         this.log(`server message: "${body.subarray(2, 2 + n).toString('latin1')}"`);
         break;
@@ -1419,6 +1424,22 @@ export class M59Client {
   // ---------------------------------------------------------- game mode
 
   onGameMessage(op, body) {
+    // Archive before parser admission and all reply/combat policy. Retain malformed
+    // communication bytes too, but never arbitrary packets or outgoing credentials.
+    if (this.onCommunication && [BP.SAID, BP.MESSAGE, BP.SYS_MESSAGE].includes(op)) {
+      let ev;
+      const speech = op === BP.SAID;
+      try {
+        let resolved = true;
+        const lookup = id => { const value = this.lookup(id); if (value == null) resolved = false; return value; };
+        const p = (speech ? parseSaid : parseStringMessage)(body, lookup);
+        ev = {kind:speech?'said':'message',text:p.text,decoded:p.exact && resolved,
+          ...(speech ? {speaker:p.speaker,name:this.rsc.get(p.nameRsc),type:SAY_NAME[p.sayType] || String(p.sayType)} : {})};
+      } catch {
+        ev = {kind:speech?'said':'message',type:'unknown',text:'[Undecoded incoming communication; wire packet retained]',decoded:false};
+      }
+      this.onCommunication({...ev,at:Date.now(),transport:'bot',packet_hex:Buffer.concat([Buffer.from([op]),body]).toString('hex')});
+    }
     if ([170,171,172].includes(op)) {
       try { if(this.audioObservations.receive(op,body,this.rsc))this.emit('audio',{}); }
       catch(e) { this.log('audio packet rejected: '+e.message); }
@@ -2288,7 +2309,6 @@ export class M59Client {
         const said = { speaker: res.speaker, name: this.rsc.get(res.nameRsc),
                        type: SAY_NAME[res.sayType] || res.sayType, text: res.text };
         // Passive retention runs before conversational callbacks or policy filters.
-        this.onCommunication?.({ kind: 'said', at: Date.now(), ...said });
         this.onSaid?.(said);
         this.log(`SAID [${said.type}] ${said.name}: ${said.text}`);
         this.emit('said', said);
@@ -2313,7 +2333,6 @@ export class M59Client {
       case BP.SYS_MESSAGE: {
         const res = parseStringMessage(body, this.lookup);
         if (res.text) {
-          this.onCommunication?.({ kind: 'message', at: Date.now(), text: res.text });
           this.log(`message: ${res.text}`);
           this._noteCombatOutcome?.(res.text);
           this.emit('message', { text: res.text });
