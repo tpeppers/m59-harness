@@ -1514,3 +1514,7 @@ loudly when there is no bake.
 the time OUR code spent in it (`code_ms` — an `(idle)`-dominated window is not a planning
 stall), the profiler's own analysis not charged as a stall, and a sample stream reduced to
 arrived / died / timeout / elsewhere with damage counted as every drop.
+
+## Incoming communications
+
+- `node tools/m59-communications-test.mjs` (54): decoded speech/system capture, source classification, fleet isolation, persistence and reconnect, filters/pagination, partial records, write failure isolation and HTML escaping. No game connection.

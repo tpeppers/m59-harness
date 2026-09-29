@@ -79,6 +79,7 @@ export const TABS = [
   { key: 'inventory', href: '/inventory', label: 'Inventory' },
   { key: 'skills', href: '/skills', label: 'Skills' },
   { key: 'stats', href: '/stats', label: 'Stats' },
+  { key: 'communications', href: '/communications', label: 'Communications' },
   { key: 'players', href: '/players', label: 'Players' },
 ];
 

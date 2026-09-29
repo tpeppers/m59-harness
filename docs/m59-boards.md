@@ -98,3 +98,5 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). What each page can honestly answer, an
   by 3 (prev level 1) or multiplied by 2/3 (prev level 2), `player.kod:10915`. That is why
   Faren level 2 costs Kermit 43 and Kraanan level 2 costs 129.
 
+
+- **Communications** (/communications) retains incoming player, NPC/world-object, system and unknown messages by UTC day, with recipient/channel/text filters. It is loopback-only. See [incoming communications](m59-communications.md) for source evidence, retention, and receiver activation.

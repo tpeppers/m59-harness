@@ -15,4 +15,6 @@ assert.equal(dashboardRedirectUrl('/stats', '::1', 8902),
   'http://[::1]:8902/stats');
 assert.equal(dashboardRedirectUrl('/health', '127.0.0.1', 8902), null);
 
-console.log('8 passed, 0 failed');
+assert.equal(dashboardRedirectUrl('/communications?date=2026-09-29', '127.0.0.1', 8902),
+  'http://127.0.0.1:8902/communications?date=2026-09-29');
+console.log('9 passed, 0 failed');

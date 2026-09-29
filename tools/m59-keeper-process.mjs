@@ -250,7 +250,7 @@ catch (error) {
 
 // ---------------------------------------------------------------- session
 
-const session = new Session(agent);
+const session = new Session(agent, { communicationStateFile: fleetPath });
 session.replayCaptureEnabled = process.env.M59_REPLAY_CAPTURE !== '0';
 session.pacer; // exists from constructor
 

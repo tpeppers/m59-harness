@@ -793,3 +793,6 @@ substrate/magic-keep.json
 /substrate/node-campaign/
 /substrate/node-tour*.json
 /substrate/run-node-tour.mjs
+
+# Private incoming player/NPC/system receipts; never publish fleet conversations.
+/substrate/communications/

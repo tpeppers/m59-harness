@@ -195,6 +195,7 @@ import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.
 import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
+import { communicationsReport, renderCommunications, fleetCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -5762,7 +5763,7 @@ const session = (name, { create = false } = {}) => {
     sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
     ensureKeeperLivenessSweep();
   }
-  else if (r.action === 'bare') sessions.set(name, new Session(name));
+  else if (r.action === 'bare') sessions.set(name, new Session(name, { communicationStateFile: STATE_FILE }));
   return sessions.get(name);
 };
 
@@ -18228,8 +18229,9 @@ function serveHttp(port, dashboardPort = null) {
   const server = http.createServer(withCompendiumRequest(async (req, res) => {
     // A page for the human, on the same port everything else runs on. Read-only: it
     // renders the ledger and drives nothing, so it is safe to leave open in a tab.
-    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/fleet'))) {
-      const hours = Number(new URL(req.url, 'http://x').searchParams.get('hours')) || 24;
+    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/fleet'))) {
+      const url = new URL(req.url, 'http://x');
+      const hours = Number(url.searchParams.get('hours')) || 24;
       try {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         // Live, not from the ledger: a pilot claim taken since the last five-minute
@@ -18240,7 +18242,8 @@ function serveHttp(port, dashboardPort = null) {
           .map(p => p.character)
           .filter(Boolean);
         const live = await TOOLS.find(t => t.name === 'fleet')?.run({});
-        return res.end(renderDashboard({ hours, piloted: holding, live: live?.fleet ?? null }));
+        const communications = await fleetCommunications({ stateFile: STATE_FILE, params: url.searchParams, local: brokerLoopbackRequest(req) });
+        return res.end(renderDashboard({ hours, piloted: holding, live: live?.fleet ?? null, communications, communicationPath: '/fleet' }));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('dashboard failed: ' + e.message);
@@ -19253,6 +19256,21 @@ function serveDashboard(port) {
     // Refused at the socket rather than merely unlinked from the nav, for the same reason
     // the fleet page's Rejoin/Restart/Stop buttons are: a hidden control is not a
     // permission check.
+    if (url.pathname === '/communications') {
+      if (!isLocal(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('Private communications are served on loopback only');
+      }
+      try {
+        const report = await communicationsReport({ stateFile: STATE_FILE, params: url.searchParams });
+        const json = url.searchParams.get('format') === 'json';
+        res.writeHead(200, { 'content-type': json ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(json ? JSON.stringify(report) : renderCommunications(report, url.searchParams));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+        return res.end('Communications unavailable: ' + e.message);
+      }
+    }
     if (url.pathname === '/players') {
       if (!isLocal(req)) {
         res.writeHead(403, { 'content-type': 'text/plain' });
@@ -19273,7 +19291,8 @@ function serveDashboard(port) {
       const hours = Number(url.searchParams.get('hours')) || 24;
       const live = await TOOLS.find(t => t.name === 'fleet')?.run({});
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(renderDashboard({ hours, localhost: isLocal(req), live: live?.fleet ?? null }));
+      const communications = await fleetCommunications({ stateFile: STATE_FILE, params: url.searchParams, local: isLocal(req) });
+      res.end(renderDashboard({ hours, localhost: isLocal(req), live: live?.fleet ?? null, communications, communicationPath: url.pathname === '/fleet' ? '/fleet' : '/' }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'text/plain' });
       res.end('dashboard failed: ' + e.message);
