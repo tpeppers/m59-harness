@@ -2292,3 +2292,7 @@ The asynchronous platform refusal test explicitly requests the eastern north
 opening at r1c62. A generic request for room578 can consider different western
 openings and cannot establish access to the isolated eastern Brax component.
 The test does not assert every exit from every platform pose is unreachable.
+
+- `node tools/m59-hometowns-test.mjs`: fleet-scoped disk persistence, changed
+  assignment history, failed/stale readings, unknown versus wandering, complete
+  roster grouping, HTML escaping, and dashboard navigation.
