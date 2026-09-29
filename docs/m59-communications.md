@@ -53,8 +53,31 @@ shown with NPCs; the protocol cannot distinguish a talking sign from a person-li
 NPC here. Unresolved resource/message speakers stay Unknown. Server messages with
 no sender cannot be attributed to an NPC and stay System.
 
-History begins when each receiving process loads this version. A disconnected or
-separately human-piloted client cannot be observed by this harness; no existing
+The local proxy also records incoming speech and system messages from connection
+startup, independently of the broker or bot keeper. Start it from the deployed
+checkout with the same absolute fleet roster used by the broker:
+
+```powershell
+node tools/m59-proxy.mjs --listen 5961 --bind 127.0.0.1 --server 76.214.42.186:5959 --observe --fleet-state C:/code/m59-lab/prod-deploy/substrate/fleets/prod.json
+```
+
+CLI capture defaults to the selected fleet; startup refuses an unreadable roster or
+an upstream that does not match it. `--no-communications` explicitly disables the
+archive for unrelated proxy use. The TUI passes its selected roster when starting
+a proxy. Programmatic `serveProxy` callers enable it with `communicationStateFile`.
+The observer sends no packets and does not decode or retain outgoing login credentials.
+Incoming communication packet bytes are retained alongside the text for debugging;
+undecodable packets remain visible as receipts with expandable wire details.
+
+Character selection identifies the receiver before its first room snapshot. Text
+received before selection is saved immediately as **Proxy login (unassigned)**;
+failed logins retain that text too. Each connection has a correlation ID in JSON.
+Reconnects start a new identity/resource context. Both human and bot receipts for
+a character share the same daily archive and fleet-page filters.
+
+History begins when each receiving process loads this version. A native client
+connected directly to the server (bypassing the proxy) cannot be observed. Neither
+can messages while every client for that character is disconnected. No existing
 in-memory history is claimed as backfilled. A broker-only restart can adopt old
 keepers, so activation also requires those keepers to restart onto the release.
 Writes append at receipt; a write failure is logged as `[communications]`, counted
@@ -71,3 +94,5 @@ packets, source classification, own echoes, fleet/recipient isolation, daily rot
 restart persistence, repeated broadcasts, pagination, partial-write recovery,
 filter validation, escaped rendering, write failures and the Session reconnect
 observer. It opens no game connection and uses a temporary evidence directory.
+
+`node tools/m59-proxy-communications-test.mjs` checks login-time persistence, character selection, reconnects, shared bot/proxy history, undecodable messages, credential exclusion, and byte-for-byte forwarding without opening a game connection.

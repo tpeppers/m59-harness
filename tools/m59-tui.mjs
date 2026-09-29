@@ -532,7 +532,7 @@ async function ensureProxy(host, port) {
   // --observe: forward and rewrite, inject nothing. A swarm only needs to WATCH the
   // leader; taking over its stream buys nothing and risks the operator's own session.
   const child = spawn(process.execPath,
-    [proxy, '--listen', String(PROXY_PORT), '--server', `${host}:${port}`, '--observe'],
+    [proxy, '--listen', String(PROXY_PORT), '--server', `${host}:${port}`, '--observe', '--fleet-state', STATE_FILE],
     { stdio: 'ignore', detached: false, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) {

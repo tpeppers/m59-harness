@@ -35,7 +35,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, readdirS
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
+import { fleetName, stateFileFor, evidenceDirFor } from './m59-fleetpath.mjs';
 import { OVERLAY_DIR } from './m59-overlay.mjs';
 import { SIGNAL_PORT } from './m59-signal.mjs';
 import { processStartedAt, START_TIME_TOLERANCE_MS } from './runtime/process-identity.mjs';
@@ -93,7 +93,7 @@ export function rosterFor(fleet) {
 // time we cannot read keeps the old answer. Probing the port instead would have been worse: a
 // connection to a real proxy opens a session upstream to the game server.
 export function proxyFor(host, port, {
-  dir = join(REPO, 'substrate', 'proxies'),
+  dir = join(evidenceDirFor(), 'proxies'),
   isLive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } },
   startedAt = processStartedAt,
 } = {}) {

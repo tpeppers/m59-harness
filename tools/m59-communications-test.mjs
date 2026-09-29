@@ -129,6 +129,17 @@ try {
     eq((await readCommunications({ dir, day: '2026-09-29', recipient: 'Session Receiver' })).total, 2);
     s.pacer.stop?.();
   } finally { M59Client.prototype.login = originalLogin; }
+  const raw = [];
+  const early = new M59Client({verbose:false,resources:new Map()});
+  early.onCommunication = ev => raw.push(ev);
+  const welcome=Buffer.from('hello during login','latin1'), login=Buffer.alloc(3+welcome.length);
+  login[0]=34;login.writeUInt16LE(welcome.length,1);welcome.copy(login,3);
+  early.onMessage(login);
+  eq(raw[0].text,'hello during login');eq(raw[0].packet_hex,login.toString('hex'));
+  early.state='game';early.onMessage(Buffer.from([BP.SAID,1]));
+  eq(raw[1].decoded,false);eq(raw[1].packet_hex,Buffer.from([BP.SAID,1]).toString('hex'));
+  early.onMessage(Buffer.from([BP.MESSAGE,1]));eq(raw[2].decoded,false);
+  early.onGameMessage(BP.SAID,saidBody(2,10,9,999));eq(raw[3].decoded,false);
   console.log(`${checks} communications assertions passed; no game connection opened.`);
 } finally {
   // root is exclusively this test's mkdtemp directory, never a fleet path.

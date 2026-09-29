@@ -61,6 +61,7 @@ export class CommunicationsArchive {
         sender: ev.name ?? null, speaker_handle: ev.speaker ?? null,
         ...communicationSource(ev, c), channel: ev.kind === 'said' ? ev.type : 'system',
         text: ev.text ?? '', host: c.host, port: c.port,
+        ...(ev.transport ? {transport:ev.transport,connection_id:ev.connection_id,packet_hex:ev.packet_hex,decoded:ev.decoded} : {}),
       };
       const folder = join(this.dir, day);
       if (this.readyDay !== day) {

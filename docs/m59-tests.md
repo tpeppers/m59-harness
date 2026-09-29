@@ -1517,4 +1517,6 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
 
 ## Incoming communications
 
-- `node tools/m59-communications-test.mjs` (54): decoded speech/system capture, source classification, fleet isolation, persistence and reconnect, filters/pagination, partial records, write failure isolation and HTML escaping. No game connection.
+- `node tools/m59-communications-test.mjs` (60): decoded speech/system capture, source classification, fleet isolation, persistence and reconnect, filters/pagination, partial records, write failure isolation and HTML escaping. No game connection.
+
+- `node tools/m59-proxy-communications-test.mjs`: passive human-proxy receipt, login and reconnect attribution, shared bot history, wire preservation, credential exclusion. No game connection.
