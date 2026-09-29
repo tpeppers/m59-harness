@@ -5,7 +5,7 @@ import { stripCodes } from './m59-parse.mjs';
 
 export async function communicationsReport({ stateFile, params, env }) {
   const filters = communicationFilters(params);
-  return { filters, ...await readCommunications({ dir: communicationsDirFor(stateFile, env), ...filters }) };
+  return { filters, ...await readCommunications({ dir: communicationsDirFor(stateFile, env), stateFile, ...filters }) };
 }
 // Namespace filters so the fleet's own hours window stays independent of the archive.
 export async function fleetCommunications({ stateFile, params, local, env }) {
@@ -42,7 +42,7 @@ export function renderCommunicationsPanel(report, params = new URLSearchParams()
   };
   const json = new URLSearchParams(params); json.set('date', f.day); json.set('format', 'json');
   return `<section id="communications" class="communications"><h2>Player communications</h2>
-<p>Incoming player tells, say, broadcasts, yells, and emotes across the fleet. Only these messages are retained. Logs stay on this machine, outside Git.</p>
+<p>Incoming tells, say, broadcasts, yells, and emotes from players outside the fleet. Only these messages are retained. Logs stay on this machine, outside Git.</p>
 <form method="get" action="${basePath}#communications">
 ${hours == null ? '' : `<input type="hidden" name="hours" value="${esc(hours)}">`}
 <label>Day (UTC)<input type="date" name="${name('date')}" value="${esc(f.day)}" required></label>

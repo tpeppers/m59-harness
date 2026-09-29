@@ -20,6 +20,7 @@ const saidBody = (speaker, name, channel, format) => {
   b[8] = channel; b.writeUInt32LE(format, 9); return b;
 };
 try {
+  writeFileSync(stateFile, JSON.stringify({t1:{credentials:{character:'Fleet One'}},t2:{credentials:{character:'Fleet Two'}}}));
   const a = new CommunicationsArchive({ stateFile, agent: 't1', env });
   const c = new M59Client({ verbose: false, resources: new Map([[10, 'Visitor'], [11, 'Shopkeeper'], [12, 'Fleet One'], [100, 'hello <script>alert(1)</script>'], [101, 'Buy something!']]) });
   c.selfId = 1; c.me = { name: 'Fleet One' };
@@ -140,7 +141,8 @@ try {
   early.onMessage(Buffer.from([BP.MESSAGE,1]));eq(raw.length,0);
   early.onGameMessage(BP.SAID,saidBody(2,10,9,999));eq(raw[0].decoded,false);
   // Exclusions happen before creating any directory or scheduling a disk write.
-  const quiet=new CommunicationsArchive({stateFile:join(root,'quiet.json'),agent:'quiet',env});
+  const quietState=join(root,'quiet.json');writeFileSync(quietState,'{}');
+  const quiet=new CommunicationsArchive({stateFile:quietState,agent:'quiet',env});
   for(const type of ['resource','message','group','group-one','guild','unknown'])
     eq(quiet.record({...ev,type},c),null);
   eq(quiet.record({kind:'message',text:'combat spam',at},c),null);
@@ -159,6 +161,22 @@ try {
   const received=[];c.log=(...args)=>received.push(args.join(' '));
   const before=c.evSeq;c.onGameMessage(BP.MESSAGE,sys);c.onGameMessage(BP.SAID,saidBody(2,10,1,100));
   eq(c.eventsSince(before).map(x=>x.kind),['message','said']);eq(received,[]);
+  // Exclude the full roster, including offline and human-piloted fleet members.
+  const membersState=join(root,'members.json');
+  writeFileSync(membersState,JSON.stringify({a:{credentials:{character:'Fleet One'}},offline:{credentials:{character:'Fleet Two'}},human:{credentials:{character:'Human Pilot'}}}));
+  const members=new CommunicationsArchive({stateFile:membersState,agent:'a',env});
+  for(const type of PLAYER_COMMUNICATION_CHANNELS)eq(members.record({...ev,name:' fLeEt TwO ',type},c),null);
+  eq(members.record({...ev,name:'Human Pilot'},c),null);yes(!existsSync(members.dir));
+  yes(members.record({...ev,name:'Fleet Two Visitor'},c));
+  yes(members.record({...ev,name:'Outsider'},c));
+  // Existing writers notice new roster membership without reconnecting.
+  writeFileSync(membersState,JSON.stringify({a:{credentials:{character:'Fleet One'}},added:{credentials:{character:'Outsider'}}}));
+  eq(members.record({...ev,name:'OUTSIDER'},c),null);
+  const memberReport=await communicationsReport({stateFile:membersState,env,params:new URLSearchParams('date=2026-09-29')});
+  eq(memberReport.total,1);eq(memberReport.rows[0].sender,'Fleet Two Visitor');eq(memberReport.counts.player,1);
+  // Membership cannot be guessed if the roster is unreadable; do not write then.
+  writeFileSync(membersState,'broken roster');let memberErrors=0;members.onError=()=>memberErrors++;
+  eq(members.record({...ev,name:'Another Outsider'},c),null);eq(memberErrors,1);
   console.log(`${checks} communications assertions passed; no game connection opened.`);
 } finally {
   // root is exclusively this test's mkdtemp directory, never a fleet path.
