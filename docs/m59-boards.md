@@ -140,3 +140,8 @@ the numeric self object id (self is absent from the room object list). Successfu
 self-look replies through the broker also update the cache automatically. The
 Hall of Genealogy's assignment action and its lock status are never inferred from
 a check; no hometown is assigned by this feature.
+
+The collector also reads the cached scene to recover self IDs omitted by the
+status projection. Human-piloted characters are never reconnected: a connected
+fleetmate may inspect an exact named player seen in its current room. If nobody
+can see that character, the cache remains explicitly unknown.

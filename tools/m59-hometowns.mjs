@@ -44,18 +44,50 @@ export async function refreshHometowns({ stateFile = resolveFleet().stateFile, p
   const health = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(5000) }).then(r => r.json());
   if (!health.state || path.resolve(health.state).toLowerCase() !== path.resolve(stateFile).toLowerCase())
     throw new Error('Broker roster does not match the requested fleet');
-  const results = [], dir = hometownDir(stateFile);
-  for (const row of hometownRoster(stateFile)) {
-    if (!force && readHometown(row.character, { dir })) continue;
+  const results = [], dir = hometownDir(stateFile), roster = hometownRoster(stateFile);
+  const observers = new Map();
+  for (const row of roster) {
+    const needsCheck = force || !readHometown(row.character, { dir });
     try {
       const status = await call('status', { agent: row.agent });
       if (status.character !== row.character) throw new Error('Character identity did not match');
-      if (!Number.isInteger(status.you?.id) || status.you.id <= 0) throw new Error('No live self object id');
-      const look = await call('look_at', { agent: row.agent, target: status.you.id });
-      if (look.id !== status.you.id || !look.is_player || !look.editable) throw new Error('No confirmed self-look reply');
+      if (status.connected === false || status.in_game === false)
+        throw new Error('No connected automated session; needs an observer');
+      const scene = (await call('scene_capture', { agent: row.agent })).scene;
+      for (const actor of scene?.actors ?? []) {
+        if (actor.kind !== 'player' || !Number.isInteger(actor.object_at_capture)) continue;
+        const sightings = observers.get(actor.name) ?? [];
+        sightings.push({ agent: row.agent, id: actor.object_at_capture });
+        observers.set(actor.name, sightings);
+      }
+      if (!needsCheck) continue;
+      const self = scene?.actors?.find(a => a.mine && a.name === row.character);
+      const id = self?.object_at_capture ?? status.you?.id;
+      if (!Number.isInteger(id) || id <= 0) throw new Error('No live self object id');
+      const look = await call('look_at', { agent: row.agent, target: id });
+      if (look.id !== id || !look.is_player || !look.editable) throw new Error('No confirmed self-look reply');
       const saved = recordHometown(row.character, look.extra, { dir });
       results.push({ ...row, hometown: saved?.current ?? null, checked: !!saved });
-    } catch (e) { results.push({ ...row, checked: false, error: e.message }); }
+    } catch (e) { if (needsCheck) results.push({ ...row, checked: false, error: e.message }); }
+  }
+  // A human keeps their connection. A connected fleetmate can look at them only
+  // when a fresh scene proves the exact named player is in the same room.
+  for (const result of results.filter(r => !r.checked)) {
+    for (const observer of observers.get(result.character) ?? []) {
+      if (observer.agent === result.agent) continue;
+      try {
+        const scene = (await call('scene_capture', { agent: observer.agent })).scene;
+        const actor = scene?.actors?.find(a => a.kind === 'player' && a.name === result.character);
+        if (!actor || !Number.isInteger(actor.object_at_capture)) continue;
+        const look = await call('look_at', { agent: observer.agent, target: actor.object_at_capture });
+        if (look.id !== actor.object_at_capture || !look.is_player) continue;
+        const saved = recordHometown(result.character, look.extra, { dir });
+        if (!saved) continue;
+        Object.assign(result, { hometown: saved.current, checked: true, observed_by: observer.agent });
+        delete result.error;
+        break;
+      } catch { /* Keep the gap explicit if a player zones before the look arrives. */ }
+    }
   }
   return results;
 }
