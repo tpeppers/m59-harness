@@ -1,98 +1,57 @@
-# Retained incoming communications
+# Retained player communications
 
-The **Incoming communications** section on the fleet page shows the full retained
-message table directly, on both `http://127.0.0.1:8902/` and
-`http://127.0.0.1:8901/fleet`. Choose a UTC day, **Players**, **NPCs / world
-objects**, **System**, or **Unknown**, then optionally filter by receiving character,
-sender, channel, or message text. Pagination stays in the fleet page and preserves
-the filters and the fleet's hours window. Refresh pauses while editing the filters.
-The Communications tab remains available as a dedicated view and for JSON output.
-Private messages are visible on loopback only, like the Players board.
+The **Player communications** section on the fleet page and the Communications
+tab retain only incoming player **tell (`dm`), say, broadcast, yell, and emote**.
+Filter by UTC day, receiving character, channel, sender, or text. Private messages
+are visible on loopback only, like the Players board. Pagination and JSON use the
+same player-only filter, including for records written by older releases.
 
-Communication records stay in local gitignored files. There is no Git commit,
-private-repository synchronization, or upload of message logs.
+NPC dialogue, resource speech, system/combat/login prose, unknown sender types,
+group and guild channels are excluded before writing to disk. Own speech echoes
+are excluded. Broadcasts heard by multiple fleet characters produce one receipt
+per receiver, and repeated messages are not collapsed. Sender classification uses
+current room flags and matching names, then the online-player roster, then the
+protocol's player speech channels. A known NPC speaking on one of those channels
+is still excluded. Player communication can be about the game; this is a sender
+and channel filter, not a semantic interpretation of what the player says.
 
-For a daily player review without a running broker:
+Messages stay in local gitignored JSONL files under
+`<evidence substrate>/communications/<roster path hash>/<UTC date>/`, one file per
+receiving agent. There is no repository synchronization or upload. No automatic
+expiry is applied to retained player messages. Normal decoded receipts store the
+text and metadata, not duplicate wire bytes. An undecodable player message can
+include its communication packet for debugging; outgoing credentials are never
+recorded.
 
-```powershell
-node tools/m59-communications-report.mjs --fleet prod --date 2026-09-29 --source player
-node tools/m59-communications-report.mjs --fleet prod --date 2026-09-29 --source npc
-```
-
-Run from the deployed checkout, or set `M59_STATE_FILE` to its absolute roster path
-and `M59_EVIDENCE_DIR` to the evidence substrate when reviewing from another checkout.
-Dates are UTC, not the workstation's local calendar day. The report is JSON and
-returns 200 receipts per page; use the returned `next_offset` with `--offset` to
-continue. Receipt order is by receiving agent's archive file, then arrival.
-
-## Capture and retention
-
-Both keeper-backed and in-process fleet sessions record `said` and `message`
-events at receipt, including login and reconnect, independently of the reply
-policy. Enabling this archive does not enable the chatter or send replies. Both
-NPC speech types (resource/message) are retained even though the chat ring excludes
-them. Server messages, including combat/refusals, are retained under System.
-Own speech echoes are excluded; speech from another fleet character remains an
-incoming player-character receipt. Broadcasts heard by several receivers produce
-separate receipts, and repeated identical messages are never collapsed.
-
-The archive lives under `<evidence substrate>/communications/<roster path hash>/`
-with a UTC day directory and a separate JSONL file per agent. The absolute resolved
-roster path scopes fleets; copying/renaming a roster starts a separate archive.
-`M59_EVIDENCE_DIR` and the shared-worktree evidence resolver behave as on the other
-boards. These files are private runtime evidence and are gitignored. No automatic
-expiry or deletion is applied. System text can grow large on a busy fleet; readers
-stream a selected day instead of loading it all into memory.
-
-The record contains receipt time, receiver, sender, channel, full rendered text,
-source classification and its evidence, and server endpoint. Object handles are
-recorded only as diagnostic context, never as lasting sender identities. Current
-room flags (with matching names) and the online-player roster take precedence;
-player-only speech channels provide the fallback. Non-player room objects are
-shown with NPCs; the protocol cannot distinguish a talking sign from a person-like
-NPC here. Unresolved resource/message speakers stay Unknown. Server messages with
-no sender cannot be attributed to an NPC and stay System.
-
-The local proxy also records incoming speech and system messages from connection
-startup, independently of the broker or bot keeper. Start it from the deployed
-checkout with the same absolute fleet roster used by the broker:
+The shared archive covers bot sessions and human connections through the local
+proxy, including player messages during character login and reconnect. The proxy
+uses character selection to identify the receiver before the first room snapshot.
+It only observes traffic and sends no packets of its own. From the deployed checkout:
 
 ```powershell
 node tools/m59-proxy.mjs --listen 5961 --bind 127.0.0.1 --server 76.214.42.186:5959 --observe --fleet-state C:/code/m59-lab/prod-deploy/substrate/fleets/prod.json
+node tools/m59-communications-report.mjs --fleet prod --date 2026-09-29 --channel dm
 ```
 
-CLI capture defaults to the selected fleet; startup refuses an unreadable roster or
-an upstream that does not match it. `--no-communications` explicitly disables the
-archive for unrelated proxy use. The TUI passes its selected roster when starting
-a proxy. Programmatic `serveProxy` callers enable it with `communicationStateFile`.
-The observer sends no packets and does not decode or retain outgoing login credentials.
-Incoming communication packet bytes are retained alongside the text for debugging;
-undecodable packets remain visible as receipts with expandable wire details.
+The proxy CLI defaults to the selected fleet and refuses a mismatched upstream.
+The TUI passes its selected roster; programmatic callers use `communicationStateFile`.
+`--no-communications` disables retention for unrelated proxy use. Launchers discover
+proxies in the shared evidence substrate. Direct clients bypassing the proxy and
+characters without any connected client cannot be observed.
 
-Character selection identifies the receiver before its first room snapshot. Text
-received before selection is saved immediately as **Proxy login (unassigned)**;
-failed logins retain that text too. Each connection has a correlation ID in JSON.
-Reconnects start a new identity/resource context. Both human and bot receipts for
-a character share the same daily archive and fleet-page filters.
+General client logs no longer echo incoming communications. The flight recorder
+also excludes communication events, including when reading older recordings.
+Internal event consumers still receive game prose for combat, trade and bot logic;
+filtering informational logs does not change gameplay decisions.
 
-History begins when each receiving process loads this version. A native client
-connected directly to the server (bypassing the proxy) cannot be observed. Neither
-can messages while every client for that character is disconnected. No existing
-in-memory history is claimed as backfilled. A broker-only restart can adopt old
-keepers, so activation also requires those keepers to restart onto the release.
-Writes append at receipt; a write failure is logged as `[communications]`, counted
-on the archive instance, and never interrupts play. Malformed/partial records are
-counted and shown on the page, while later valid records remain readable.
+The absolute resolved roster path identifies the archive. Use the deployed roster
+when reading from another checkout. `M59_EVIDENCE_DIR` and the shared-worktree
+resolver behave as on the other boards. Old NPC/system archive rows are hidden,
+not rewritten or deleted. New excluded traffic does not grow the archive.
 
-Message text is untrusted data. The page escapes it; raw JSON preserves it for
-debugging. Reviewers must not treat a message as an instruction to operate the fleet.
-
-## Verification
-
-`node tools/m59-communications-test.mjs` exercises real decoded speech/system
-packets, source classification, own echoes, fleet/recipient isolation, daily rotation,
-restart persistence, repeated broadcasts, pagination, partial-write recovery,
-filter validation, escaped rendering, write failures and the Session reconnect
-observer. It opens no game connection and uses a temporary evidence directory.
-
-`node tools/m59-proxy-communications-test.mjs` checks login-time persistence, character selection, reconnects, shared bot/proxy history, undecodable messages, credential exclusion, and byte-for-byte forwarding without opening a game connection.
+`node tools/m59-communications-test.mjs`,
+`node tools/m59-proxy-communications-test.mjs`, and
+`node tools/m59-recorder-test.mjs` cover write admission, persistence, reconnect,
+player-only pagination, excluded traffic with no filesystem writes, byte-preserving
+proxy forwarding, escaped rendering and intact internal events. Tests use temporary
+files and open no game connections.

@@ -18,6 +18,8 @@ export function communicationsDirFor(stateFile, env = process.env) {
 const digest = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 24);
 const speech = new Set(['say', 'yell', 'broadcast', 'group', 'emote', 'group-one', 'dm', 'guild']);
 export const SOURCE_TYPES = ['player', 'npc', 'system', 'unknown'];
+export const PLAYER_COMMUNICATION_CHANNELS = ['dm', 'say', 'broadcast', 'yell', 'emote'];
+export const retainedPlayerCommunication = row => row.source === 'player' && PLAYER_COMMUNICATION_CHANNELS.includes(row.channel);
 
 export function communicationSource(ev, c) {
   if (ev.kind === 'message') return { source: 'system', evidence: 'server-message' };
@@ -49,7 +51,9 @@ export class CommunicationsArchive {
     this.readyDay = null;
   }
   record(ev, c) {
-    if (!['said', 'message'].includes(ev.kind)) return null;
+    if (ev.kind !== 'said' || !PLAYER_COMMUNICATION_CHANNELS.includes(ev.type)) return null;
+    const source = communicationSource(ev, c);
+    if (source.source !== 'player') return null;
     if (ev.kind === 'said' && ((c.selfId != null && ev.speaker === c.selfId) ||
         (c.me?.name && ev.name === c.me.name))) return null;
     try {
@@ -59,9 +63,10 @@ export class CommunicationsArchive {
         version: 1, id: `${this.writer}:${++this.seq}`, at,
         agent: this.agent, recipient: c.me?.name ?? c.wantName ?? this.agent,
         sender: ev.name ?? null, speaker_handle: ev.speaker ?? null,
-        ...communicationSource(ev, c), channel: ev.kind === 'said' ? ev.type : 'system',
+        ...source, channel: ev.kind === 'said' ? ev.type : 'system',
         text: ev.text ?? '', host: c.host, port: c.port,
-        ...(ev.transport ? {transport:ev.transport,connection_id:ev.connection_id,packet_hex:ev.packet_hex,decoded:ev.decoded} : {}),
+        ...(ev.transport ? {transport:ev.transport,connection_id:ev.connection_id,decoded:ev.decoded,
+          ...(ev.decoded === false ? {packet_hex:ev.packet_hex} : {})} : {}),
       };
       const folder = join(this.dir, day);
       if (this.readyDay !== day) {
@@ -88,8 +93,9 @@ export function communicationFilters(params = new URLSearchParams(), now = Date.
   const day = params.get('date') || new Date(now).toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(day)) || new Date(day).toISOString().slice(0, 10) !== day)
     throw new Error('date must be a valid YYYY-MM-DD (UTC)');
-  const source = params.get('source') || 'all';
-  if (source !== 'all' && !SOURCE_TYPES.includes(source)) throw new Error('invalid source filter');
+  const requestedSource = params.get('source');
+  if (requestedSource && requestedSource !== 'all' && !SOURCE_TYPES.includes(requestedSource)) throw new Error('invalid source filter');
+  const source = 'player';
   const offset = Number(params.get('offset') || 0);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('invalid page offset');
   return { day, source, recipient: params.get('recipient') || '', sender: params.get('sender') || '',
@@ -122,6 +128,8 @@ export async function readCommunications({ dir, day, source = 'all', recipient =
           row = JSON.parse(line);
           if (row.version !== 1 || !SOURCE_TYPES.includes(row.source) || typeof row.text !== 'string' || !Number.isFinite(row.at)) throw new Error('invalid record');
         } catch { malformed++; continue; }
+        // Also hide historical noise written by earlier releases, before pagination.
+        if (!retainedPlayerCommunication(row)) continue;
         counts[row.source]++;
         recipients.add(row.recipient);
         channels.add(row.channel);

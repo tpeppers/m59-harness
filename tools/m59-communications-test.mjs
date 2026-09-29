@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Offline receipt, source, persistence, fleet isolation, filtering and rendering regressions.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, appendFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, readdirSync, appendFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CommunicationsArchive, communicationsDirFor, communicationSource, communicationFilters, readCommunications } from './m59-communications.mjs';
+import { CommunicationsArchive, communicationsDirFor, communicationSource, communicationFilters, readCommunications, PLAYER_COMMUNICATION_CHANNELS } from './m59-communications.mjs';
 import { communicationsReport, renderCommunications, fleetCommunications, renderFleetCommunications } from './m59-communications-page.mjs';
 import { M59Client, BP, OF } from './m59-client.mjs';
 
@@ -38,8 +38,8 @@ try {
   checks++; c.onSaid = null;
   const dir = communicationsDirFor(stateFile, env);
   let report = await readCommunications({ dir, day: '2026-09-29' });
-  eq(report.total, 6);
-  eq(report.counts, { player: 2, npc: 1, system: 2, unknown: 1 });
+  eq(report.total, 2);
+  eq(report.counts, { player: 2, npc: 0, system: 0, unknown: 0 });
   eq(c.chat.length, 2); // archive has not expanded the responder's speech-only ring
   eq(a.record({ kind: 'said', speaker: 999, name: 'Fleet One', type: 'say', text: 'echo', at }, c), null);
   eq(report.rows[0].recipient, 'Fleet One');
@@ -57,18 +57,17 @@ try {
   restarted.record(ev, c);
   restarted.record({ ...ev, at: at + 86400000 }, c);
   report = await readCommunications({ dir, day: '2026-09-29' });
-  eq(report.total, 10);
-  eq(new Set(report.rows.map(r => r.id)).size, 10);
+  eq(report.total, 6);
+  eq(new Set(report.rows.map(r => r.id)).size, 6);
   eq((await readCommunications({ dir, day: '2026-09-30' })).total, 1);
   eq((await readCommunications({ dir, day: '2026-09-29', source: 'player' })).total, 6);
-  eq((await readCommunications({ dir, day: '2026-09-29', source: 'npc' })).total, 1);
+  eq((await readCommunications({ dir, day: '2026-09-29', source: 'npc' })).total, 0);
   eq((await readCommunications({ dir, day: '2026-09-29', recipient: 'Fleet Two' })).total, 1);
   eq((await readCommunications({ dir, day: '2026-09-29', sender: 'visitor', channel: 'broadcast', q: 'PEAT' })).total, 4);
   const page1 = await readCommunications({ dir, day: '2026-09-29', limit: 4 });
   const page2 = await readCommunications({ dir, day: '2026-09-29', limit: 4, offset: page1.next_offset });
-  const page3 = await readCommunications({ dir, day: '2026-09-29', limit: 4, offset: page2.next_offset });
-  eq(new Set([...page1.rows, ...page2.rows, ...page3.rows].map(r => r.id)).size, 10);
-  eq(page3.next_offset, null);
+  eq(new Set([...page1.rows, ...page2.rows].map(r => r.id)).size, 6);
+  eq(page2.next_offset, null);
   const shadowDir = communicationsDirFor(join(root, 'shadow.json'), env);
   yes(shadowDir !== dir);
   eq((await readCommunications({ dir: shadowDir, day: '2026-09-29' })).total, 0);
@@ -76,19 +75,19 @@ try {
   appendFileSync(file, '{"partial":');
   restarted.record(ev, c);
   report = await readCommunications({ dir, day: '2026-09-29' });
-  eq(report.total, 11); eq(report.malformed, 1);
+  eq(report.total, 7); eq(report.malformed, 1);
   const params = new URLSearchParams('date=2026-09-29&source=player&q=script');
   const view = await communicationsReport({ stateFile, env, params });
   eq(view.total, 2);
   const html = renderCommunications(view, params);
   yes(!html.includes('<script>')); yes(html.includes('&lt;script&gt;'));
-  yes(html.includes('selected>Players')); yes(html.includes('malformed or partial'));
+  yes(html.includes('Player communications')); yes(html.includes('malformed or partial'));
   const fleetParams = new URLSearchParams('hours=48&comm_date=2026-09-29&comm_source=player&comm_q=script');
   const fleetView = await fleetCommunications({ stateFile, params: fleetParams, local: true, env });
   eq(fleetView.report.total, 2);
   const panel = renderFleetCommunications(fleetView, { basePath: '/fleet', hours: 48 });
   yes(panel.includes('action="/fleet#communications"'));
-  yes(panel.includes('name="comm_source"')); yes(panel.includes('name="hours" value="48"'));
+  yes(!panel.includes('name="comm_source"')); yes(panel.includes('name="hours" value="48"'));
   yes(panel.includes('&lt;script&gt;')); yes(!panel.includes('<script>'));
   const nextPanel = renderFleetCommunications({ ...fleetView, report: { ...fleetView.report, next_offset: 200 } }, { basePath: '/fleet', hours: 48 });
   yes(nextPanel.includes('comm_offset=200')); yes(nextPanel.includes('hours=48#communications'));
@@ -134,12 +133,32 @@ try {
   early.onCommunication = ev => raw.push(ev);
   const welcome=Buffer.from('hello during login','latin1'), login=Buffer.alloc(3+welcome.length);
   login[0]=34;login.writeUInt16LE(welcome.length,1);welcome.copy(login,3);
-  early.onMessage(login);
-  eq(raw[0].text,'hello during login');eq(raw[0].packet_hex,login.toString('hex'));
+  const logs=[];early.log=(...args)=>logs.push(args.join(' '));
+  early.onMessage(login);eq(raw.length,0);yes(!logs.join(' ').includes('hello during login'));
   early.state='game';early.onMessage(Buffer.from([BP.SAID,1]));
-  eq(raw[1].decoded,false);eq(raw[1].packet_hex,Buffer.from([BP.SAID,1]).toString('hex'));
-  early.onMessage(Buffer.from([BP.MESSAGE,1]));eq(raw[2].decoded,false);
-  early.onGameMessage(BP.SAID,saidBody(2,10,9,999));eq(raw[3].decoded,false);
+  eq(raw.length,0);
+  early.onMessage(Buffer.from([BP.MESSAGE,1]));eq(raw.length,0);
+  early.onGameMessage(BP.SAID,saidBody(2,10,9,999));eq(raw[0].decoded,false);
+  // Exclusions happen before creating any directory or scheduling a disk write.
+  const quiet=new CommunicationsArchive({stateFile:join(root,'quiet.json'),agent:'quiet',env});
+  for(const type of ['resource','message','group','group-one','guild','unknown'])
+    eq(quiet.record({...ev,type},c),null);
+  eq(quiet.record({kind:'message',text:'combat spam',at},c),null);
+  eq(quiet.record({...ev,speaker:3,name:'Shopkeeper',type:'say'},c),null);
+  yes(!existsSync(quiet.dir));
+  for(const type of PLAYER_COMMUNICATION_CHANNELS) yes(quiet.record({...ev,type},c));
+  eq((await readCommunications({dir:quiet.dir,day:'2026-09-29'})).total,5);
+  const quietFile=join(quiet.dir,'2026-09-29',readdirSync(join(quiet.dir,'2026-09-29'))[0]);
+  yes(!readFileSync(quietFile,'utf8').includes('combat spam'));
+  // Legacy noisy records cannot fill the first page or its filter options.
+  const legacy=Array.from({length:250},(_,i)=>({version:1,id:'old'+i,at,source:'system',channel:'system',recipient:'Noise',text:'old combat'}));
+  appendFileSync(quietFile,'\n'+legacy.map(x=>JSON.stringify(x)).join('\n')+'\n');
+  const clean=await readCommunications({dir:quiet.dir,day:'2026-09-29',limit:2});
+  eq(clean.total,5);eq(clean.rows.length,2);eq(clean.next_offset,2);yes(!clean.recipients.includes('Noise'));yes(!clean.channels.includes('system'));
+  // The event stream remains available to bot logic even when general logs are quiet.
+  const received=[];c.log=(...args)=>received.push(args.join(' '));
+  const before=c.evSeq;c.onGameMessage(BP.MESSAGE,sys);c.onGameMessage(BP.SAID,saidBody(2,10,1,100));
+  eq(c.eventsSince(before).map(x=>x.kind),['message','said']);eq(received,[]);
   console.log(`${checks} communications assertions passed; no game connection opened.`);
 } finally {
   // root is exclusively this test's mkdtemp directory, never a fleet path.

@@ -59,6 +59,8 @@ export class Recorder {
 
   line(kind, data) {
     if (!this.enabled || this.stopped) return;
+    // Communications belong only in the dedicated player communication archive.
+    if (['said', 'message', 'chat'].includes(data?.kind ?? kind)) return;
     if (this.buf.length > 5000) { this.dropped++; return; }
     this.buf.push(JSON.stringify({ at: this.now(), kind, ...data }));
     this._armFlush();
@@ -145,7 +147,7 @@ export class Recorder {
           if (!line) continue;
           try {
             const event = JSON.parse(line);
-            if (!want || want.has(event.kind)) out.push(event);
+            if (!['said', 'message', 'chat'].includes(event.kind) && (!want || want.has(event.kind))) out.push(event);
           } catch { /* torn line */ }
         }
       }

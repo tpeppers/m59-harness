@@ -37,28 +37,28 @@ try {
   p.serverPacket(said(1,7)); // own echo omitted
   p.c.room.objects.set(3,{id:3,nameRsc:9,flags:0});
   p.serverPacket(said(3,9,5,101));
-  p.serverPacket(said(4,9,5,999)); // resource unavailable, wire retained
-  p.serverPacket(bytes(206,1)); // malformed speech retained
-  p.serverPacket(bytes(32,1)); // malformed prose retained
+  p.serverPacket(said(4,9,5,999)); // NPC resource speech excluded
+  p.serverPacket(bytes(206,1)); // malformed/unidentified speech excluded
+  p.serverPacket(bytes(32,1)); // malformed prose excluded
   p.serverPacket(bytes(149));p.serverPacket(bytes(32,u32(100))); // no stale character identity
   const dir=communicationsDirFor(stateFile,env);
   let report=await readCommunications({dir,day});
-  eq(report.total,9);
-  eq(report.rows.filter(r=>r.recipient==='Fleet One').length,7);
-  eq(report.rows.filter(r=>r.source==='npc').length,1);
+  eq(report.total,2);
+  eq(report.rows.filter(r=>r.recipient==='Fleet One').length,2);
+  eq(report.rows.filter(r=>r.source==='npc').length,0);
   eq(report.rows.filter(r=>r.sender==='Visitor').length,2);
   eq(report.rows.every(r=>r.transport==='proxy'),true);
-  eq(report.rows.every(r=>r.packet_hex),true);
+  eq(report.rows.some(r=>r.packet_hex),false);
   eq(JSON.stringify(report).includes('SECRET'),false);
-  eq(report.rows.some(r=>r.packet_hex===bytes(206,1).toString('hex')),true);
-  eq(report.rows.filter(r=>r.decoded===false).length,3);
-  eq(report.rows.find(r=>r.text==='Welcome before character selection').recipient,'Proxy login (unassigned)');
+  eq(report.rows.some(r=>r.packet_hex===bytes(206,1).toString('hex')),false);
+  eq(report.rows.filter(r=>r.decoded===false).length,0);
+  eq(report.rows.some(r=>r.text==='Welcome before character selection'),false);
   const p2=new ProxyCommunications(opts);p2.serverPacket(bytes(25));
   p2.serverPacket(bytes(139,u16(1),u32(1),str('Fleet One'),0));p2.clientPacket(bytes(46,u32(1)));p2.serverPacket(said(2,8));
   eq(p2.lookup(8),undefined); // per-connection resources don't leak
   const bot=new CommunicationsArchive({stateFile,agent:'t1',env});
-  bot.record({kind:'message',text:'Bot resumed',at},{me:{name:'Fleet One'}});
-  report=await readCommunications({dir,day,recipient:'Fleet One'});eq(report.total,9);
+  bot.record({kind:'said',speaker:2,name:'Visitor',type:'say',text:'Bot resumed',at},{me:{name:'Fleet One'}});
+  report=await readCommunications({dir,day,recipient:'Fleet One'});eq(report.total,4);
   eq(new Set(report.rows.map(r=>r.id)).size,report.total);
 
   // Exercise actual proxy forwarding methods without creating a game connection.
