@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { CommunicationsArchive } from './m59-communications.mjs';
 import { loadResources } from './m59-rsc.mjs';
-import { Reader, objId, parseSaid, parseStringMessage, parsePlayer, parsePlayers,
+import { Reader, objId, parseSaid, parsePlayer, parsePlayers,
   parsePlayerAdd, parseChangeResource, parseRoomContents, parseCreate, parseChange, parseRemove } from './m59-parse.mjs';
 
 const channels = {1:'say',2:'yell',3:'broadcast',4:'group',5:'resource',6:'emote',7:'message',8:'group-one',9:'dm',10:'guild'};
@@ -22,8 +22,8 @@ export function proxyCommunicationsConfig({stateFile,host,port}) {
 }
 
 // A passive decoder: no sockets, no sends, and no decoding of client login packets.
-// Persist login messages immediately under a connection label; never keep an
-// in-memory-only queue waiting for a login that might fail or be interrupted.
+// Character selection identifies the receiver before the first room snapshot.
+// Login and game-system prose never enter the communication archive.
 export class ProxyCommunications {
   constructor({stateFile,host,port,characters=new Map(),resources=loadResources(),env,now=Date.now}) {
     this.characters=characters; this.resources=resources; this.dynamic=new Map(); this.now=now;
@@ -57,11 +57,10 @@ export class ProxyCommunications {
   }
   serverPacket(packet) {
     const op=packet[0], body=packet.subarray(1);
-    const communication=this.inGame?[31,32,206].includes(op):op===34;
+    const communication=this.inGame && op===206 && [1,2,3,6,9].includes(body[8]);
     try {
       if (!this.inGame) {
         if(op===25)this.inGame=true;
-        else if(op===34)this.record({kind:'message',text:new Reader(body).str()},packet);
         return;
       }
       if(op===20 || op===149) {
@@ -91,14 +90,11 @@ export class ProxyCommunications {
         const p=(op===217?parseCreate:parseChange)(body);
         if(p.exact)this.c.room.objects.set(p.object.id,p.object);
       } else if(op===218)this.c.room.objects.delete(parseRemove(body).id);
-      else if(op===206) {
+      else if(communication) {
         const p=this.decode(parseSaid,body);
         this.record({kind:'said',speaker:p.speaker,name:this.lookup(p.nameRsc)??'<unresolved sender>',
           type:channels[p.sayType]??String(p.sayType),text:p.text||'[Undecoded speech; wire packet retained]',
           decoded:p.decoded},packet);
-      } else if(op===31 || op===32) {
-        const p=this.decode(parseStringMessage,body);
-        this.record({kind:'message',text:p.text||'[Undecoded server message; wire packet retained]',decoded:p.decoded},packet);
       }
     } catch {
       if(communication)this.record({kind:op===206?'said':'message',type:'unknown',

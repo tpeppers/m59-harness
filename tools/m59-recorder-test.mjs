@@ -34,6 +34,9 @@ try {
     'an idle recorder does not touch the filesystem');
   assert.equal(pending.size, 0, 'an idle recorder owns no timer');
 
+  for (const kind of ['said','message','chat']) recorder.line('event',{kind,text:'communication noise'});
+  assert.equal(recorder.buf.length,0,'communications never enter the general recorder');
+  assert.equal(pending.size,0,'communications do not arm a flush timer');
   recorder.line('state', { room: 1 });
   recorder.line('state', { room: 2 });
   assert.equal(pending.size, 1, 'a burst shares one one-shot flush timer');

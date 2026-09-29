@@ -86,7 +86,7 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `combatlog` | WHO SWUNG AT WHOM, AND DID IT LAND — READ OFF THE SERVER'S OWN PROSE. |
 | `commitment` | WHICH CHARACTERS THE FLEET IS ALREADY USING FOR SOMETHING. |
 | `communications-page` | Daily fleet communications board and inline fleet-page review panel. |
-| `communications-report` | Review retained incoming fleet communication by UTC date, player/NPC source and recipient. |
+| `communications-report` | Review retained incoming fleet communication by UTC date, player channel and recipient. |
 | `communications` | Retain incoming fleet communications independently of chat and reply policy. |
 | `commute` | DRIVE A FLEET BACK AND FORTH SO THE TRAVEL CODE GETS EXERCISED. |
 | `compendium-links` | **NO SUMMARY — add a header comment** |
