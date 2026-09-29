@@ -195,6 +195,7 @@ import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.
 import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
+import { communicationsReport, renderCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -5762,7 +5763,7 @@ const session = (name, { create = false } = {}) => {
     sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
     ensureKeeperLivenessSweep();
   }
-  else if (r.action === 'bare') sessions.set(name, new Session(name));
+  else if (r.action === 'bare') sessions.set(name, new Session(name, { communicationStateFile: STATE_FILE }));
   return sessions.get(name);
 };
 
@@ -19253,6 +19254,21 @@ function serveDashboard(port) {
     // Refused at the socket rather than merely unlinked from the nav, for the same reason
     // the fleet page's Rejoin/Restart/Stop buttons are: a hidden control is not a
     // permission check.
+    if (url.pathname === '/communications') {
+      if (!isLocal(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('Private communications are served on loopback only');
+      }
+      try {
+        const report = await communicationsReport({ stateFile: STATE_FILE, params: url.searchParams });
+        const json = url.searchParams.get('format') === 'json';
+        res.writeHead(200, { 'content-type': json ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(json ? JSON.stringify(report) : renderCommunications(report, url.searchParams));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+        return res.end('Communications unavailable: ' + e.message);
+      }
+    }
     if (url.pathname === '/players') {
       if (!isLocal(req)) {
         res.writeHead(403, { 'content-type': 'text/plain' });

@@ -2287,6 +2287,8 @@ export class M59Client {
         if (!this.check('SAID', res)) break;
         const said = { speaker: res.speaker, name: this.rsc.get(res.nameRsc),
                        type: SAY_NAME[res.sayType] || res.sayType, text: res.text };
+        // Passive retention runs before conversational callbacks or policy filters.
+        this.onCommunication?.({ kind: 'said', at: Date.now(), ...said });
         this.onSaid?.(said);
         this.log(`SAID [${said.type}] ${said.name}: ${said.text}`);
         this.emit('said', said);
@@ -2311,6 +2313,7 @@ export class M59Client {
       case BP.SYS_MESSAGE: {
         const res = parseStringMessage(body, this.lookup);
         if (res.text) {
+          this.onCommunication?.({ kind: 'message', at: Date.now(), text: res.text });
           this.log(`message: ${res.text}`);
           this._noteCombatOutcome?.(res.text);
           this.emit('message', { text: res.text });

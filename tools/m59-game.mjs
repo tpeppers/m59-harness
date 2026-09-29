@@ -58,6 +58,7 @@ import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
 import { Recorder } from './m59-recorder.mjs';
+import { CommunicationsArchive } from './m59-communications.mjs';
 import {attachPlayerEvidence} from './m59-player-evidence-store.mjs';
 
 // ── IMPORTS THE PORTED SESSION NEEDS ────────────────────────────────────────────
@@ -1411,8 +1412,9 @@ export function lootIgnored(name, rules = [], worn = []) {
 }
 
 class Session {
-  constructor(name) {
+  constructor(name, { communicationStateFile = null } = {}) {
     this.name = name;
+    this.communications = communicationStateFile ? new CommunicationsArchive({ stateFile: communicationStateFile, agent: name }) : null;
     this.pacer = new Pacer();
     this.combatEpoch = 0;
     this.combat = new CombatMode(this, { keeper: () => autopilotIfAny(this.name) });
@@ -2281,6 +2283,7 @@ class Session {
     // needs these.
     this.credentials = { account, password, character, host, port };
     const c = new M59Client({ host, port, verbose: false, resources });
+    c.onCommunication = ev => this.communications?.record(ev, c);
     this.travelObservedRoom = null;
     c.combatReady = false;
     const loginCombatEvents = [];
@@ -2514,6 +2517,7 @@ class Session {
     if(!fastReplay)await new Promise(r => setTimeout(r, 900));
 
     const c = new M59Client({ host, port, verbose: false, resources });
+    c.onCommunication = ev => this.communications?.record(ev, c);
     c.onEvent = ev => {this.recorder.line('event', ev);this.playerEvidence?.event(ev,c);};
     let asked = false, newId = null, refused = false, replaced = null, notFirstTime = null;
     c.onCharacters = (list) => {
