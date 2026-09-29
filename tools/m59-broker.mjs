@@ -195,7 +195,7 @@ import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.
 import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
-import { communicationsReport, renderCommunications } from './m59-communications-page.mjs';
+import { communicationsReport, renderCommunications, fleetCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -18229,8 +18229,9 @@ function serveHttp(port, dashboardPort = null) {
   const server = http.createServer(withCompendiumRequest(async (req, res) => {
     // A page for the human, on the same port everything else runs on. Read-only: it
     // renders the ledger and drives nothing, so it is safe to leave open in a tab.
-    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/fleet'))) {
-      const hours = Number(new URL(req.url, 'http://x').searchParams.get('hours')) || 24;
+    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/fleet'))) {
+      const url = new URL(req.url, 'http://x');
+      const hours = Number(url.searchParams.get('hours')) || 24;
       try {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         // Live, not from the ledger: a pilot claim taken since the last five-minute
@@ -18241,7 +18242,8 @@ function serveHttp(port, dashboardPort = null) {
           .map(p => p.character)
           .filter(Boolean);
         const live = await TOOLS.find(t => t.name === 'fleet')?.run({});
-        return res.end(renderDashboard({ hours, piloted: holding, live: live?.fleet ?? null }));
+        const communications = await fleetCommunications({ stateFile: STATE_FILE, params: url.searchParams, local: brokerLoopbackRequest(req) });
+        return res.end(renderDashboard({ hours, piloted: holding, live: live?.fleet ?? null, communications, communicationPath: '/fleet' }));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('dashboard failed: ' + e.message);
@@ -19289,7 +19291,8 @@ function serveDashboard(port) {
       const hours = Number(url.searchParams.get('hours')) || 24;
       const live = await TOOLS.find(t => t.name === 'fleet')?.run({});
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(renderDashboard({ hours, localhost: isLocal(req), live: live?.fleet ?? null }));
+      const communications = await fleetCommunications({ stateFile: STATE_FILE, params: url.searchParams, local: isLocal(req) });
+      res.end(renderDashboard({ hours, localhost: isLocal(req), live: live?.fleet ?? null, communications, communicationPath: url.pathname === '/fleet' ? '/fleet' : '/' }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'text/plain' });
       res.end('dashboard failed: ' + e.message);

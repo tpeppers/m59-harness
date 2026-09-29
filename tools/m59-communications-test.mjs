@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, appendFileSync, writeFileSync, rmSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CommunicationsArchive, communicationsDirFor, communicationSource, communicationFilters, readCommunications } from './m59-communications.mjs';
-import { communicationsReport, renderCommunications } from './m59-communications-page.mjs';
+import { communicationsReport, renderCommunications, fleetCommunications, renderFleetCommunications } from './m59-communications-page.mjs';
 import { M59Client, BP, OF } from './m59-client.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'm59-communications-'));
@@ -83,6 +83,23 @@ try {
   const html = renderCommunications(view, params);
   yes(!html.includes('<script>')); yes(html.includes('&lt;script&gt;'));
   yes(html.includes('selected>Players')); yes(html.includes('malformed or partial'));
+  const fleetParams = new URLSearchParams('hours=48&comm_date=2026-09-29&comm_source=player&comm_q=script');
+  const fleetView = await fleetCommunications({ stateFile, params: fleetParams, local: true, env });
+  eq(fleetView.report.total, 2);
+  const panel = renderFleetCommunications(fleetView, { basePath: '/fleet', hours: 48 });
+  yes(panel.includes('action="/fleet#communications"'));
+  yes(panel.includes('name="comm_source"')); yes(panel.includes('name="hours" value="48"'));
+  yes(panel.includes('&lt;script&gt;')); yes(!panel.includes('<script>'));
+  const nextPanel = renderFleetCommunications({ ...fleetView, report: { ...fleetView.report, next_offset: 200 } }, { basePath: '/fleet', hours: 48 });
+  yes(nextPanel.includes('comm_offset=200')); yes(nextPanel.includes('hours=48#communications'));
+  eq(await fleetCommunications({ stateFile: null, params: fleetParams, local: false, env }), { local: false });
+  const failedView = await fleetCommunications({ stateFile, params: new URLSearchParams('comm_date=invalid'), local: true, env });
+  yes(renderFleetCommunications(failedView).includes('role="alert"'));
+  process.env.M59_LEDGER_DIR = join(root, 'ledger');
+  const { renderDashboard } = await import('./m59-dashboard.mjs');
+  const dashboard = renderDashboard({ communications: fleetView, communicationPath: '/fleet', hours: 48 });
+  yes(dashboard.includes('id="communications"')); yes(dashboard.includes('hello &lt;script&gt;'));
+  yes(dashboard.includes('name="comm_q" value="script"')); yes(!dashboard.includes('http-equiv="refresh"'));
   for (const bad of ['date=2026-02-30', 'date=../../foo', 'source=wat', 'offset=-1']) {
     assert.throws(() => communicationFilters(new URLSearchParams(bad))); checks++;
   }

@@ -1,10 +1,16 @@
 # Retained incoming communications
 
-The dashboard's **Communications** tab (`http://127.0.0.1:8902/communications`)
-reviews one UTC calendar day across the fleet. Choose **Players**, **NPCs / world
+The **Incoming communications** section on the fleet page shows the full retained
+message table directly, on both `http://127.0.0.1:8902/` and
+`http://127.0.0.1:8901/fleet`. Choose a UTC day, **Players**, **NPCs / world
 objects**, **System**, or **Unknown**, then optionally filter by receiving character,
-sender, channel, or message text. Pagination and the JSON link preserve filters.
-Private messages make this a loopback-only page, like the Players board.
+sender, channel, or message text. Pagination stays in the fleet page and preserves
+the filters and the fleet's hours window. Refresh pauses while editing the filters.
+The Communications tab remains available as a dedicated view and for JSON output.
+Private messages are visible on loopback only, like the Players board.
+
+Communication records stay in local gitignored files. There is no Git commit,
+private-repository synchronization, or upload of message logs.
 
 For a daily player review without a running broker:
 

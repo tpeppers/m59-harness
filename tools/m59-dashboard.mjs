@@ -16,6 +16,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 // The tab bar, from the one place that has it. This page used to carry its own copy and
 // the deaths page carried another; a fourth board would have had to be added to both.
 import { NAV } from './m59-page-chrome.mjs';
+import { COMMUNICATIONS_STYLE, renderFleetCommunications } from './m59-communications-page.mjs';
 import { compendiumBase } from './m59-compendium-links.mjs';
 
 const deathCell = counts => `<strong class="${counts.true_deaths ? 'bad' : 'dim'}">${counts.true_deaths}</strong>` +
@@ -200,7 +201,7 @@ const ago = (t) => {
 // one am I actually playing" is a question that is useless if it is five minutes stale.
 // Passing it keeps the page's read-only property intact: it is a list of names, not a
 // route to a session.
-export function renderDashboard({ hours = 24, localhost = false, piloted = [], live = null } = {}) {
+export function renderDashboard({ hours = 24, localhost = false, piloted = [], live = null, communications = null, communicationPath = '/' } = {}) {
   const nowPiloted = new Set([].concat(piloted).filter(Boolean).map(n => String(n).toLowerCase()));
   const sinceMs = hours * 3600 * 1000;
   const sum = summarise({ sinceMs });
@@ -367,7 +368,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meridian 59 — ${esc(FLEET_LABEL)} fleet</title>
-<meta http-equiv="refresh" content="60">
+
 <style>
   :root { color-scheme: light dark; --fg:#1a1a1a; --dim:#767676; --bg:#fbfbfa;
           --panel:#fff; --line:#e6e4e0; --good:#1a7f4b; --bad:#b3261e; --accent:#5b6ee1;
@@ -475,6 +476,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
   button.ctl:disabled { opacity:.5; cursor:default; }
   button.ctl.danger:hover:not(:disabled) { border-color:var(--bad); color:var(--bad); }
   .ctl-msg { font-size:.82rem; color:var(--dim); }
+${COMMUNICATIONS_STYLE}
 </style></head>
 <body><div class="wrap">
   <h1>Meridian 59 — ${esc(FLEET_LABEL)} fleet</h1>
@@ -536,6 +538,8 @@ ${controls}
     </table>
   </section>
 
+  ${renderFleetCommunications(communications, { basePath: communicationPath, hours })}
+
   <section>
     <h2>What happened</h2>
     <table>
@@ -547,6 +551,17 @@ ${controls}
   <footer>${esc(LEDGER_DIR)} · append-only · keyed by character name</footer>
 </div>
 <script>
+// Refresh preserves submitted filters in the URL, but never erase an unfinished edit.
+(function () {
+  var form = document.querySelector('#communications form'), dirty = false;
+  if (form) {
+    form.addEventListener('input', function () { dirty = true; });
+    form.addEventListener('change', function () { dirty = true; });
+  }
+  setInterval(function () {
+    if (!dirty && !(form && form.contains(document.activeElement))) location.reload();
+  }, 60000);
+})();
 // The disconnected-for clock. Counts up from however long it had already been when
 // this page was rendered, NOT from a timestamp — the viewer is often a phone, and a
 // phone whose clock is a few minutes off would otherwise show a confidently wrong
