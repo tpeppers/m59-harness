@@ -78,6 +78,7 @@ export const TABS = [
   { key: 'economy', href: '/economy', label: 'Economy' },
   { key: 'inventory', href: '/inventory', label: 'Inventory' },
   { key: 'skills', href: '/skills', label: 'Skills' },
+  { key: 'hometowns', href: '/hometowns', label: 'Hometown / Rescue' },
   { key: 'stats', href: '/stats', label: 'Stats' },
   { key: 'players', href: '/players', label: 'Players' },
 ];

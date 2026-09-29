@@ -1514,3 +1514,7 @@ loudly when there is no bake.
 the time OUR code spent in it (`code_ms` — an `(idle)`-dominated window is not a planning
 stall), the profiler's own analysis not charged as a stall, and a sample stream reduced to
 arrived / died / timeout / elsewhere with damage counted as every drop.
+
+- `node tools/m59-hometowns-test.mjs`: fleet-scoped disk persistence, changed
+  assignment history, failed/stale readings, unknown versus wandering, complete
+  roster grouping, HTML escaping, and dashboard navigation.

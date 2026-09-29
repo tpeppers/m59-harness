@@ -98,3 +98,27 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). What each page can honestly answer, an
   by 3 (prev level 1) or multiplied by 2/3 (prev level 2), `player.kod:10915`. That is why
   Faren level 2 costs Kermit 43 and Kraanan level 2 costs 129.
 
+
+## Hometown / Rescue board
+
+`/hometowns` groups the current roster by hometown, with counts, fleet shares and
+assigned names, followed by an alphabetical character table. All eight known towns
+remain visible even when empty. Unknown (no confirmed reading) and Wandering (the
+server's own fallback) are distinct. Home rooms are not promises of Rescue's final
+landing: guild halls and regional rules can override them.
+
+Readings live beside the exact roster in `<stateFile>.hometowns/`, keyed by a hash
+of the character name. This keeps prod and shadow separate, including identical
+character names. Each file retains check time, when the current assignment was
+first observed, and a history of changed assignments. Missing or failed replies
+never erase a confirmed reading. The report reads only disk, including offline
+roster members; it neither sends speech nor travels or casts Rescue.
+
+After `node tools/m59-which.mjs --fleet prod`, run
+`node tools/m59-hometowns.mjs --fleet prod` to check missing entries, or add
+`--refresh` to recheck all entries after a hometown change or a re-roll. The tool
+checks the broker's exact roster path, verifies character identity, and looks at
+the numeric self object id (self is absent from the room object list). Successful
+self-look replies through the broker also update the cache automatically. The
+Hall of Genealogy's assignment action and its lock status are never inferred from
+a check; no hometown is assigned by this feature.
