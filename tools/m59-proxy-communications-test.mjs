@@ -35,6 +35,13 @@ try {
   p.serverPacket(said(2,8)); // repeats survive
   p.serverPacket(bytes(30,u32(7),str('Fleet One')));
   p.serverPacket(said(1,7)); // own echo omitted
+  p.serverPacket(bytes(30,u32(10),str('Fleet One')));
+  p.serverPacket(said(999,10)); // roster membership, not a potentially recycled handle
+  const roster=JSON.parse((await import('node:fs')).readFileSync(stateFile,'utf8'));
+  roster.t2={credentials:{character:'Offline Fleet Member',host:'example.test',port:5959}};
+  writeFileSync(stateFile,JSON.stringify(roster));
+  p.serverPacket(bytes(30,u32(11),str('offline fleet member')));
+  p.serverPacket(said(123,11)); // full roster excludes absent/human members too
   p.c.room.objects.set(3,{id:3,nameRsc:9,flags:0});
   p.serverPacket(said(3,9,5,101));
   p.serverPacket(said(4,9,5,999)); // NPC resource speech excluded

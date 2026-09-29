@@ -1,5 +1,5 @@
 // Retain incoming fleet communications independently of chat and reply policy.
-import { mkdirSync, appendFileSync, readdirSync, createReadStream } from 'node:fs';
+import { mkdirSync, appendFileSync, readdirSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -20,6 +20,24 @@ const speech = new Set(['say', 'yell', 'broadcast', 'group', 'emote', 'group-one
 export const SOURCE_TYPES = ['player', 'npc', 'system', 'unknown'];
 export const PLAYER_COMMUNICATION_CHANNELS = ['dm', 'say', 'broadcast', 'yell', 'emote'];
 export const retainedPlayerCommunication = row => row.source === 'player' && PLAYER_COMMUNICATION_CHANNELS.includes(row.channel);
+const senderName = value => stripCodes(String(value ?? '')).trim().toLowerCase();
+const fleetSenderCache = new Map();
+
+// Fleet membership comes from the complete roster, not just online/bot-controlled
+// sessions. Cache only names, never account credentials. Refresh on roster changes.
+export function fleetCommunicationSenders(stateFile) {
+  if (!stateFile) throw new Error('sender exclusion requires an explicit fleet state file');
+  const path = resolve(stateFile), stat = statSync(path, {bigint:true});
+  const revision = `${stat.mtimeNs}:${stat.size}`;
+  const cached = fleetSenderCache.get(path);
+  if (cached?.revision === revision) return cached.names;
+  const roster = JSON.parse(readFileSync(path, 'utf8'));
+  if (!roster || typeof roster !== 'object' || Array.isArray(roster)) throw new Error('invalid fleet roster for communication sender exclusion');
+  const names = new Set(Object.values(roster).map(entry => senderName(entry?.credentials?.character)).filter(Boolean));
+  fleetSenderCache.set(path, {revision, names});
+  return names;
+}
+
 
 export function communicationSource(ev, c) {
   if (ev.kind === 'message') return { source: 'system', evidence: 'server-message' };
@@ -41,6 +59,7 @@ export function communicationSource(ev, c) {
 export class CommunicationsArchive {
   constructor({ stateFile, agent, env, onError = e => console.error('[communications] ' + e.message) }) {
     this.dir = communicationsDirFor(stateFile, env);
+    this.stateFile = stateFile;
     this.agent = agent;
     this.writer = randomUUID();
     this.seq = 0;
@@ -57,6 +76,7 @@ export class CommunicationsArchive {
     if (ev.kind === 'said' && ((c.selfId != null && ev.speaker === c.selfId) ||
         (c.me?.name && ev.name === c.me.name))) return null;
     try {
+      if (fleetCommunicationSenders(this.stateFile).has(senderName(ev.name))) return null;
       const at = Number.isFinite(ev.at) ? ev.at : Date.now();
       const day = new Date(at).toISOString().slice(0, 10);
       const row = {
@@ -102,10 +122,11 @@ export function communicationFilters(params = new URLSearchParams(), now = Date.
     channel: params.get('channel') || '', q: params.get('q') || '', offset, limit: 200 };
 }
 
-export async function readCommunications({ dir, day, source = 'all', recipient = '', sender = '', channel = '', q = '', offset = 0, limit = 200 }) {
+export async function readCommunications({ dir, stateFile = null, day, source = 'all', recipient = '', sender = '', channel = '', q = '', offset = 0, limit = 200 }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('invalid archive date');
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0)
     throw new Error('invalid archive pagination');
+  const fleetSenders = stateFile ? fleetCommunicationSenders(stateFile) : new Set();
   const folder = join(dir, day);
   let files;
   try { files = readdirSync(folder).filter(f => /^[a-f0-9]{24}\.jsonl$/.test(f)).sort(); }
@@ -129,7 +150,7 @@ export async function readCommunications({ dir, day, source = 'all', recipient =
           if (row.version !== 1 || !SOURCE_TYPES.includes(row.source) || typeof row.text !== 'string' || !Number.isFinite(row.at)) throw new Error('invalid record');
         } catch { malformed++; continue; }
         // Also hide historical noise written by earlier releases, before pagination.
-        if (!retainedPlayerCommunication(row)) continue;
+        if (!retainedPlayerCommunication(row) || fleetSenders.has(senderName(row.sender))) continue;
         counts[row.source]++;
         recipients.add(row.recipient);
         channels.add(row.channel);

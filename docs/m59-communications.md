@@ -1,14 +1,18 @@
 # Retained player communications
 
 The **Player communications** section on the fleet page and the Communications
-tab retain only incoming player **tell (`dm`), say, broadcast, yell, and emote**.
+tab retain only incoming non-fleet player **tell (`dm`), say, broadcast, yell, and emote**.
 Filter by UTC day, receiving character, channel, sender, or text. Private messages
 are visible on loopback only, like the Players board. Pagination and JSON use the
 same player-only filter, including for records written by older releases.
 
 NPC dialogue, resource speech, system/combat/login prose, unknown sender types,
-group and guild channels are excluded before writing to disk. Own speech echoes
-are excluded. Broadcasts heard by multiple fleet characters produce one receipt
+group and guild channels are excluded before writing to disk. Messages sent by any character in the selected fleet roster are excluded before
+writing, including offline and human-piloted members. Matching uses the complete
+character name without case sensitivity; it never relies on recycled object IDs.
+Roster changes refresh the exclusion list without a reconnect. An unreadable roster
+prevents archive writes until it can be read again. Existing fleet-origin receipts
+are also filtered out of the page and JSON before counts and pagination. Broadcasts heard by multiple fleet characters produce one receipt
 per receiver, and repeated messages are not collapsed. Sender classification uses
 current room flags and matching names, then the online-player roster, then the
 protocol's player speech channels. A known NPC speaking on one of those channels
