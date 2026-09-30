@@ -1906,6 +1906,45 @@ console.log('\na deflected step lands only where the body can do what the stand 
     ok('onto a door square, which the body leaves the room from (200 r50c22 -> r50c21)',
        deflected(marion, 50, 22, 50, 21) && marion._traceMoverStep(50, 22, 50, 21) === true);
   }
+
+  // EAST JASPER (350): THE LOSS THAT LOOKED LIKE A REGRESSION AND WAS A WALL. Against the v6
+  // table the anchor r52c26 went from 16 routes to none, which read as "a character arriving
+  // from West Jasper has nowhere to plan". It is not the arrival. West Jasper's stair squares
+  // land a body at r51c28 (kod plExits, arriveRow/arriveCol), INSIDE the stair tunnel: a
+  // low-ceilinged L whose solid walls run along r51.25 and r51.75 and diagonally from
+  // (c27.63, r51.25) to (c27.21, r51.75). r52c26 is the tunnel's other listed stair square,
+  // OUTSIDE that wall, in a yard the body flood from every arrival never enters. The v6 routes
+  // out of it were r52c26 -> r51c26 -> r51c27: the slide stops west of the diagonal, and the
+  // next step is planned from r51c27's stand point inside the tunnel. The Marion shape.
+  const jasper = fresh(350);
+  if (!jasper) {
+    skip('East Jasper stair tunnel', 'room 350 has no collision geometry');
+  } else {
+    ok('350 r51c26 -> r51c27 does not land: the slide stops outside the stair tunnel\'s wall',
+       jasper._traceMoverStep(51, 26, 51, 27) === false);
+    const a = jasper.standPoint(51, 26), b = jasper.standPoint(51, 27);
+    ok('and a straight body trace between the two stand points is refused (the wall is real)',
+       jasper.traceFineMoveClient(a.x, a.y, b.x, b.y, { slide: false }).arrived !== true);
+    // From the real arrival, on the mover's own predicate, every exit the room has is reached.
+    const seen = new Set(['51,28']);
+    const queue = [[51, 28]];
+    for (let h = 0; h < queue.length; h++) {
+      const [r, c] = queue[h];
+      for (const d of STEP_MASK_DIRS) {
+        const nr = r + d.dr, nc = c + d.dc, k = `${nr},${nc}`;
+        if (seen.has(k) || !jasper.inBounds(nr, nc) || !jasper.standable(nr, nc)) continue;
+        if (!jasper._traceMoverStep(r, c, nr, nc)) continue;
+        seen.add(k);
+        queue.push([nr, nc]);
+      }
+    }
+    const exits = { 704: '72,35', 568: '17,74', 710: '29,61', 372: '59,31', 373: '49,39',
+                    374: '41,57', 382: '44,32' };
+    const missed = Object.entries(exits).filter(([, sq]) => !seen.has(sq)).map(([to]) => to);
+    ok('the arrival from West Jasper (r51c28) still reaches every exit: 704, 568, 710, 372, 373, 374, 382',
+       !missed.length, missed.length ? `missed ${missed.join(', ')}` : `${seen.size} squares`);
+    ok('and never the yard behind the tunnel wall (r52c26)', !seen.has('52,26'));
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);

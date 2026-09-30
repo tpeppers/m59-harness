@@ -717,6 +717,31 @@ only by arriving in it) and one first-offered north-edge square in 2134 whose ne
 serve the exit. Ukgoth's gutter (599, r51c17) now reaches 589 and not 598 — the operator's
 account in `substrate/m59-gutters.json`; the 598 route crossed the rail from r46c20 to r50c22.
 
+**Compare a rebake against a fresh bake of the base, never against the committed table.** On
+review (2026-09-30) this change read as 948 lost routes in 29 rooms, East Jasper's r52c26 among
+them with zero. The committed v6 table was a stitched partial (`complete: false`) from older bake
+code: 787 of those "losses" were the stale table's, most of them routes over undeclared
+three-square jumps that current code no longer stores at all (574 in Ko'catan, 2009, alone). Against `origin/main` rebaked fully, the change costs 161 anchor routes and
+170 reach pairs in 14 rooms and gains 39 and 45; at the level that matters, **exit to exit**, it
+loses only Castle Victoria's trapdoor chamber (38: `go:41` to 2, 39 and 40, which were walks
+through the north and east walls — the chamber is left by its own door, `sameRoomDoorPlan`), the
+Winding Caverns' locked door (826: behind a solid two-sided wall at c41.33) and one reach pair in
+Konima's Ascension (2505: through a closed zero-height door slab at c62.4–c62.6 that no door
+variant opens), and gains Marion's crypt door and one pair in 2506. **East Jasper's r52c26 is not
+the arrival from West Jasper**: those stairs land at r51c28, inside the stair tunnel, whose reach
+is unchanged. r52c26 is the tunnel's other listed stair square, in a sealed yard on the outside
+of the tunnel's diagonal wall, and every v6 route out of it went r51c26 -> r51c27 through that
+wall. `m59-routing-test.mjs` pins both halves.
+
+A body-walk that follows the body's own landing point (not the stand point) from every arrival
+finds the rule's one real cost: in a room whose stand points sit in a filler sector — Faronath's
+shape, where the filler is the same sector number as a piece of the playable ground, so
+`m59-void-sectors.json` cannot declare it — the corridor's squares become unenterable. A Dark,
+Humid Cavern (2110) is the case: 113 of 180 stand points in sector 1, reach from its one anchor
+158 -> 1. No exit in the map leads into 2110. Elsewhere the squares a body stands in and the mask
+now refuses are one-square slivers on the far side of a wall (1–9 per room), which lead nowhere
+the stand point's side does not.
+
 **Rebake after landing this**: `node tools/m59-routebake.mjs --jobs 8`, then
 `node tools/m59-doorbake.mjs --write` (the variants are dropped when the predicate version
 moves), then `node tools/m59-doorstate-test.mjs` and `npm run test:movement`.
