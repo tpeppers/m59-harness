@@ -297,6 +297,12 @@ const isHostCharacter = !fleet?.[agent] && !!menagerieRoster[agent];
 session.combat.fleetmate = name => party.isFleetmate(name);
 session.combat.warEligibility = () => joinWanted && !isHostCharacter &&
   process.env.M59_WAR_RESPONSE !== '0' && (autopilot?.policy ?? policy)?.warResponse !== false;
+// AND EVERY CHARACTER, HOSTS INCLUDED, IS A SENTINEL: it reports a war enemy it sees to the whole
+// fleet (a `sighted` alarm) and never fights because of it. A host is the point -- Loial stands
+// Outside Castle Victoria, on Morpheus's road to the stairs. `warSentinel: false` or
+// M59_WAR_SENTINEL=0 turn the reporting off.
+session.combat.sentinelEligibility = () => joinWanted &&
+  process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
 // The zone alarm: one line in a shared file, watched rather than polled by a keeper pass, so a
 // fleetmate's fight reaches this character in milliseconds instead of on its next decision.
 try { war.watchAlarms(a => session.combat.onWarAlarm(a)); }

@@ -255,5 +255,38 @@ await test('a guildmate or fleetmate in the room is never a target, whatever the
   assert.equal(f.mode.active, null);
 });
 
+// ------------------------------------------------------------------ sentinels
+
+await test('a sentinel (a host) reports an enemy fleet-wide and never engages', async () => {
+  reset(); const f = fixture({ name: 'Loial', room: 2, enabled: false });
+  f.mode.sentinelEligibility = () => true;
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
+  assert.equal(f.mode.active, null, 'a sentinel does not fight');
+  assert.deepEqual(f.sent, []);
+  const a = war.readAlarms().at(-1);
+  assert.equal(a.basis, 'sighted'); assert.equal(a.room, 2); assert.equal(a.enemy, 'Morpheus'); assert.equal(a.reporter, 'Loial');
+  // Standing there does not flood the file: one sighting per WAR_SIGHTING_EVERY_MS.
+  f.mode.event({ kind: 'changed', id: 2 }); f.mode.event({ kind: 'changed', id: 2 });
+  assert.equal(war.readAlarms().length, 1);
+});
+
+await test('a sighting in another map is recorded as the fleet\'s threat, and pulls nobody', async () => {
+  reset(); const guard = fixture({ name: 'Lew', room: 39 });
+  put(guard, 2, P);
+  assert.equal(guard.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Loial', enemy: 'Morpheus', basis: 'sighted' }), false);
+  assert.equal(guard.mode.active, null);
+  assert.equal(guard.mode.status().war.threat.room, 2);
+  assert.equal(guard.mode.status().war.threat.enemy, 'Morpheus');
+});
+
+await test('a sighting in OUR map is a report, not a call to arms; a fight is', async () => {
+  reset(); const f = fixture({ name: 'Kermit', room: 38 });
+  put(f, 2, P);                                          // no enemy mark here
+  assert.equal(f.mode.onWarAlarm({ at: Date.now(), room: 38, reporter: 'Loial', enemy: 'Morpheus', basis: 'sighted' }), false);
+  assert.equal(f.mode.active, null);
+  assert.equal(f.mode.onWarAlarm({ at: Date.now(), room: 38, reporter: 'Statler', enemy: 'Morpheus', basis: 'attacked' }), true);
+  f.mode.stop('test');
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${tests} passed`);

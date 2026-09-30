@@ -19,6 +19,8 @@ export const WAR_LOOK_EVERY_MS = 1500;
 export const WAR_LOOK_FALLBACK_MS = 4000;
 // The same (map, enemy) alarm is not re-raised by one keeper more often than this.
 export const WAR_ALARM_EVERY_MS = 3000;
+// A sentinel watching an enemy stand in its room reports it again this often.
+export const WAR_SIGHTING_EVERY_MS = 15_000;
 
 const demand = (ok, why) => { if (!ok) throw new Error(`combat: ${why}`); };
 const square = (p, label) => {
@@ -188,11 +190,17 @@ export class CombatMode {
   }
 
   warStatus() {
-    return { enabled: this.warEnabled(), last: this.warLast, error: this.warError,
+    return { enabled: this.warEnabled(), sentinel: this.sentinelEnabled(), last: this.warLast,
+      threat: this.warThreat ?? null, error: this.warError,
       enemy_guilds: (() => { try { return war.enemyGuilds().map(g => g.name); } catch { return null; } })() };
   }
 
   warEnabled() { return !!this.warEligibility?.(); }
+  // A SENTINEL SEES AND SAYS, AND NEVER SWINGS. Every fighter is also a sentinel; a menagerie
+  // host is ONLY one. Loial the Ogier sits Outside Castle Victoria (2), on the road Morpheus
+  // walks to the stairs, and a host that fought would be a merchant thrown at a killer -- but a
+  // host that reports what walks past is the fleet's early warning.
+  sentinelEnabled() { return this.warEnabled() || !!this.sentinelEligibility?.(); }
 
   isOurs(name) {
     if (!name) return false;
@@ -209,7 +217,7 @@ export class CombatMode {
   // server's safety check with safety ON and nothing here should ever need it off.
   // See tools/m59-war.mjs for the argument.
   observeWar(ev, c) {
-    if (!this.warEnabled()) return;
+    if (!this.sentinelEnabled()) return;
     try {
       let learned = null;
       if (ev.kind === 'message' && ev.text) learned = war.learnFromMessage(ev.text, { isOurs: n => this.isOurs(n) });
@@ -251,7 +259,13 @@ export class CombatMode {
       if (!(o.flags & OF.GUILDMATE) && war.needsLook(name, { now })) unknown.push({ o, name });
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
-    if (hostile) this.beginWar(hostile.name, { basis: hostile.verdict.basis, why: hostile.verdict.why, room });
+    // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
+    if (hostile && this.warEnabled())
+      this.beginWar(hostile.name, { basis: hostile.verdict.basis, why: hostile.verdict.why, room });
+    else if (hostile) {
+      this.warLast = { at: now, enemy: hostile.name, basis: 'sighted', room, reporter: null };
+      this.raiseWarAlarm(hostile.name, 'sighted', room);
+    }
     if (unknown.length && war.enemyGuilds().length) this.lookForGuild(c, unknown, ours, now);
   }
 
@@ -290,9 +304,12 @@ export class CombatMode {
   }
 
   raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num) {
-    if (!this.warEnabled() || !(room > 1) || !enemy) return;
+    if (!this.sentinelEnabled() || !(room > 1) || !enemy) return;
     const key = `${room}|${String(enemy).toLowerCase()}`, now = this.now();
-    if (now - (this.warAlarmed.get(key) ?? 0) < WAR_ALARM_EVERY_MS) return;
+    // A sighting repeats for as long as the enemy stands there; say it again only every
+    // WAR_SIGHTING_EVERY_MS. An engagement or an attack is the room's call to arms and is fast.
+    const every = basis === 'sighted' ? WAR_SIGHTING_EVERY_MS : WAR_ALARM_EVERY_MS;
+    if (now - (this.warAlarmed.get(key) ?? 0) < every) return;
     this.warAlarmed.set(key, now);
     if (this.warAlarmed.size > 256) this.warAlarmed.clear();
     war.raiseAlarm({ room, reporter: this.character?.() ?? characterName(this.s, this.s.client), enemy, basis, at: now });
@@ -300,11 +317,20 @@ export class CombatMode {
 
   /** Another keeper's alarm. Joins the fight only when it names the map this character is in. */
   onWarAlarm(a) {
-    if (!this.warEnabled() || !a?.enemy) return false;
+    if (!this.sentinelEnabled() || !a?.enemy) return false;
     const me = this.character?.() ?? characterName(this.s, this.s.client);
-    if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
     if (this.isOurs(a.enemy)) return false;                  // never an alarm about one of ours
+    // THE FLEET-WIDE WARNING. Every alarm, from any map, is the fleet's latest knowledge of
+    // where an enemy is -- a sentinel's sighting in map 2 is what tells a guard in 39 to get
+    // ready before anybody is hit. Kept here and reported in `combat status` (war.threat).
+    this.warThreat = { enemy: a.enemy, room: Number(a.room), reporter: a.reporter ?? null,
+      basis: a.basis ?? null, at: a.at ?? this.now() };
+    if (!this.warEnabled()) return false;
+    if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
     if (Number(a.room) !== this.s.world?.room?.num) return false;
+    // A sighting in our map is a report, not a call to arms: our own scan sees the same enemy
+    // and engages on its own terms. Only a fight in progress pulls the room in by alarm.
+    if (a.basis === 'sighted') return false;
     return this.beginWar(a.enemy, { basis: a.basis ?? 'alarm', why: `${a.reporter} reported ${a.enemy}`,
       room: a.room, reporter: a.reporter ?? 'a fleetmate' });
   }
