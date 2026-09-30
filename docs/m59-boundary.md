@@ -10,6 +10,13 @@ visible exact target in an assigned map activates its combat override. Target
 loss returns ownership to farming; survival suspends the encounter while the
 watch remains armed for recovery. Paused or held farming cannot activate it.
 
+The [PvP return delay](m59-policy.md#the-pvp-return-delay--pvp_return_delay_ms)
+(`pvp_return_delay_ms`, default 30 minutes) holds only the keeper's OWN
+directional choices after a player kills a character. The Underworld exit,
+fleeing and recovery detours stay the keeper's and are never held; an explicit
+travel order, a movement lease or a busy holder is never held either, because
+the lease holder decides the destination.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md), which carries the clock table this expands on: the three moments a playbook answers, and the difference between owning a character and being busy with it.
 
 ### The three moments the keeper asks about — `m59-playbook.mjs`

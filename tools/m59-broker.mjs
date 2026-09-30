@@ -11299,6 +11299,17 @@ const TOOLS = [
         description: 'in a safe spot, top up to this fraction of health before swinging again, ' +
           'default 1.0 — rest FULL. Stopping costs nothing there, so there is no reason to fight ' +
           'hurt, and on a road a tenth of the bar missing is a tenth of the margin missing' },
+      pvp_return_delay_ms: { type: 'number', minimum: 0, maximum: 86_400_000,
+        description: 'after a PLAYER kills this character, how long its keeper refuses to start a ' +
+          'journey to a farming room (its assignment, or any room that generates something ' +
+          'huntable). Default 1800000 — thirty minutes, ON fleet-wide by the operator\'s order of ' +
+          '2026-09-30, after a camper at the farm entrances killed respawned characters one at a ' +
+          'time as each walked straight back. 0 disables; null restores the default. The keeper ' +
+          'rests where it recovered (normally the inn it lands in, where nobody can touch it). ' +
+          'Deaths to monsters start no hold. Never blocks the Underworld exit, fleeing or any ' +
+          'recovery detour, an explicit travel order, or a character whose movement is leased — ' +
+          'the lease holder decides. The hold survives a keeper restart; autopilot status ' +
+          'reports it as pvp_return_hold' },
       blind_walk_watchdog: { type: 'boolean',
         description: 'OFF by default and deliberately so. The watchdog rung that cancels a ' +
           'walk when health is under the flee line and the pass has been inside one await for ' +
@@ -12300,6 +12311,20 @@ const TOOLS = [
       }
       if (a.hold_resume_above !== undefined) p.policy.holdResumeAbove = Number(a.hold_resume_above);
       if (a.blind_walk_watchdog !== undefined) p.policy.blindWalkWatchdog = a.blind_walk_watchdog === true;
+      // AN UNUSABLE VALUE IS REFUSED, NOT COERCED. `Number('30m')` is NaN and `Number(null)` is
+      // 0 — either would silently switch the hold off, which is the direction that gets a
+      // character killed at the gate. Null is the explicit way back to the default.
+      if (a.pvp_return_delay_ms !== undefined) {
+        if (a.pvp_return_delay_ms === null) p.policy.pvpReturnDelayMs = null;
+        else {
+          const ms = Number(a.pvp_return_delay_ms);
+          if (typeof a.pvp_return_delay_ms === 'boolean' || !Number.isFinite(ms) || ms < 0 || ms > 86_400_000)
+            return { started: false, reason: 'pvp_return_delay_ms is milliseconds between 0 (off) and ' +
+              `86400000 (a day); got ${JSON.stringify(a.pvp_return_delay_ms)}. The default is 1800000 ` +
+              '(thirty minutes); pass null to restore it' };
+          p.policy.pvpReturnDelayMs = Math.floor(ms);
+        }
+      }
       if (a.travel_vigor_floor !== undefined) p.policy.travelVigorFloor = Number(a.travel_vigor_floor);
       if (a.travel_shelter_detour !== undefined) p.policy.travelShelterDetour = Number(a.travel_shelter_detour);
       if (a.retreat_to_inn !== undefined) p.policy.retreatToInn = a.retreat_to_inn === true;
@@ -16938,6 +16963,9 @@ const TOOLS = [
           // bucket the seconds landed in; this says what is happening.
           activity: st?.activity ?? (ap ? ap.activity() : 'no keeper'),
           suspended_journey: st?.suspended_journey ?? null,
+          // Why a healthy character is sitting in an inn: a player killed it inside the PvP
+          // return delay. Passed through from the keeper's status; null when there is none.
+          pvp_return_hold: st?.pvp_return_hold ?? null,
           position: (() => {
             const me = s instanceof KeeperProxy ? s._state?.you : c.self;
             return me ? { row: me.row, col: me.col } : null;
