@@ -438,8 +438,11 @@ export function loadSpawns(file) {
 // it can be measured; this is for the handful of rooms where the answer is permanent and
 // already known, and where leaving them in the ranking costs a fleet its day.
 export const DEAD_ROOMS = new Map([
-  [2601, 'permanently over its cap: 23 of its 26 statues expose no attack verb, and ' +
-         'PlaceStatues will not reset the room while any statue remains'],
+  // Barren until cleared rather than permanent: marcryp2.kod seats 37 LivingStatues against
+  // a cap of 25, and a dormant statue offers only `look` until a player within 3 squares
+  // wakes it. Killable once awake; see doctrines/local/marionCrypt.jsonc in dum-head.
+  [2601, 'over its cap of 25 with 37 statues until at least 13 are killed; a dormant ' +
+         'statue offers no attack verb until a player walks within 3 squares of it'],
 ]);
 
 // AN ORDER IS AN IDENTITY IF ANYTHING ANSWERS TO IT EXACTLY, AND A FAMILY ONLY WHEN
@@ -561,7 +564,12 @@ export function huntingGrounds(spawns, want, { maxDanger = null, limit = 12 } = 
   const rows = [];
   for (const c of hits) {
     for (const s of c.sites) {
-      if (DEAD_ROOMS.has(s.room)) continue;
+      // A DEAD ROOM IS REJECTED, NOT SKIPPED. Skipping it hid it from the one caller allowed
+      // to overrule a rejection — preyRooms' explicit assignment — so on 2026-09-30 seventeen
+      // characters ordered into 2601 to clear its statues each walked to 39 instead, noting
+      // "leaving for the explicitly assigned farming room" on the way. Every ranking still
+      // drops rejected rows, so nothing chooses a dead room on its own.
+      const dead = DEAD_ROOMS.get(s.room);
       if (s.how && s.how !== 'generator' && !generates(s.room, c.name)) continue;
       const here = spawns.rooms[s.room] || [];
       // THE THREAT CEILING IS ABOUT BYSTANDERS, NOT ABOUT THE PREY.
@@ -628,6 +636,7 @@ export function huntingGrounds(spawns, want, { maxDanger = null, limit = 12 } = 
                        .map(x => `${x.creature} ${x.level}${x.chance ? ` @${x.chance}%` : ''}`),
         ...(tooHot ? { rejected: `something OTHER than your prey here is level ${worstOther}, ` +
                                  `above your limit of ${maxDanger}` } : {}),
+        ...(dead ? { rejected: `dead room: ${dead}` } : {}),
         ...(overLevel && allGentle
               ? { allowed_anyway: `level ${worstOther} is over the ${maxDanger} limit, but nothing ` +
                                   `here hits harder than ${Math.max(...ratings)} — a fungus beast ` +
