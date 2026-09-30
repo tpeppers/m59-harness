@@ -2158,7 +2158,9 @@ export class M59Client {
           role: 'recipient',
           withId: res.from.id,
           withName: this.rsc.get(res.from.nameRsc),
-          theirs: res.items.map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc), amount: o.amount || undefined })),
+          theirs: res.items.map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc), amount: o.amount || undefined,
+                                    // Kept so an UNIDENTIFIED wand can be named from its palette (m59-pvp-gear.mjs).
+                                    translation: o.translation ?? 0 })),
           ours: [],
           mayAccept: false,
         };
@@ -2190,7 +2192,9 @@ export class M59Client {
         const res = parseOfferItems(body);
         if (!this.check('COUNTEROFFER', res)) break;
         this.trade = { ...(this.trade || {}), revision: ++this.tradeRevision, updatedAt: Date.now(),
-                       theirs: res.items.map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc), amount: o.amount || undefined })),
+                       theirs: res.items.map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc), amount: o.amount || undefined,
+                                    // Kept so an UNIDENTIFIED wand can be named from its palette (m59-pvp-gear.mjs).
+                                    translation: o.translation ?? 0 })),
                        mayAccept: true };
         this.emit('countered', { theirs: this.trade.theirs, may_accept: true });
         break;

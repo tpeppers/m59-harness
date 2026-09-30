@@ -42,6 +42,7 @@ export const DEFAULT_PVP_GEAR = Object.freeze({
   items: [],
   wands: [{ match: 'lightning wand', timer: true }, { match: 'vampiric shock', timer: false }],
   volley_ms: 2000,
+  expect_incoming: [],
 });
 
 export const PVP_GEAR_FILE = () => {
@@ -70,12 +71,37 @@ export function pvpGearConfig() {
       wands: Array.isArray(raw.wands) ? raw.wands.filter(w => w?.match).map(w => ({ match: String(w.match), timer: w.timer !== false }))
                                       : DEFAULT_PVP_GEAR.wands,
       volley_ms: Number(raw.volley_ms) >= 1000 ? Number(raw.volley_ms) : DEFAULT_PVP_GEAR.volley_ms,
+      expect_incoming: Array.isArray(raw.expect_incoming) ? raw.expect_incoming.map(String).filter(Boolean) : [],
     };
   } catch { /* keep the last good value */ }
   return cache.value;
 }
 
 const has = (name, pat) => String(name ?? '').toLowerCase().includes(String(pat).toLowerCase());
+
+// AN UNIDENTIFIED WAND CAN STILL BE NAMED FROM THE WIRE. Until identified every `Wand` subclass is
+// called just "wand" (wand.kod:19 HideHiddenAttributes hides the NAME only) and shares one icon,
+// wand6.bgf -- but each keeps its own palette translation, which the server sends per object and
+// m59-parse.mjs extracts as `translation`. Among everything named "wand" on the wand6 icon:
+//   LightningWand  viColor = XLAT_TO_YELLOW (0x08)   lightngw.kod:28   <- the only yellow one
+//   IdentifyWand   XLAT_TO_BLUE (0x06); the Qor wands gray; brittle/shatter orange; forget,
+//   dement, slither, seduce purple; purify, hospice sky; mark of dishonor red; SpellWand (the
+//   SpecialWand fireball, also named "wand") red.
+// So a "wand" whose translation is 0x08 is a lightning wand, and in particular is NOT a wand of
+// identification. The wand of vampiric shock always shows its own name (vampwand.kod, wand3.bgf).
+export const XLAT_TO_YELLOW = 0x08;
+export const UNIDENTIFIED_SIGNATURES = Object.freeze([
+  { as: 'lightning wand', name: 'wand', translation: XLAT_TO_YELLOW },
+]);
+
+/** The name this item should be treated as: its own, or what its wire signature proves it is. */
+export function effectiveName(c, o) {
+  const name = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '');
+  const bare = name.trim().toLowerCase();
+  for (const sig of UNIDENTIFIED_SIGNATURES)
+    if (bare === sig.name && Number(o.translation) === sig.translation) return sig.as;
+  return name;
+}
 
 /** Is this item one the character wears ONLY in a PvP fight? */
 export const isPvpOnly = (name, cfg = pvpGearConfig()) => !!name && cfg.items.some(p => has(name, p));
@@ -93,7 +119,7 @@ export function pvpItemsIn(c, cfg = pvpGearConfig()) {
 export function volleyWandsIn(c, { spent = new Set(), cfg = pvpGearConfig() } = {}) {
   const out = [];
   for (const w of cfg.wands) for (const o of c.inventory ?? []) {
-    const name = nameOf(c, o);
+    const name = effectiveName(c, o);
     if (!spent.has(o.id) && has(name, w.match) && !out.some(x => x.o.id === o.id))
       out.push({ o, name, timer: w.timer });
   }
@@ -101,3 +127,28 @@ export function volleyWandsIn(c, { spent = new Set(), cfg = pvpGearConfig() } = 
 }
 
 export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / ms);
+
+// EXPECTED INCOMING: what a character should accept when somebody hands it over, without asking.
+// The operator's rule, 2026-09-30: "always accept being handed anything from the PVP gear list (or
+// any expected incoming list), with the remaining elements from the PvP gear list always expected
+// unless already carried" -- so the operator can offer a character its kit and it takes it.
+//   * every PvP item and volley wand the character is NOT already carrying (a pattern already
+//     satisfied by something in the pack is not expected again: one shield, one lightning wand);
+//   * everything in the config's `expect_incoming` list, always.
+export function expectedIncoming(c, { cfg = pvpGearConfig() } = {}) {
+  const carried = (c?.inventory ?? []).map(o => effectiveName(c, o));
+  const missing = [...cfg.items, ...cfg.wands.map(w => w.match)]
+    .filter(p => !carried.some(n => has(n, p)));
+  return [...new Set([...missing, ...(cfg.expect_incoming ?? [])])];
+}
+
+/**
+ * Is every item in this offer expected? Offered items are {name, translation?} as the trade
+ * window reports them; an unidentified yellow "wand" counts as the lightning wand it must be.
+ */
+export function offerIsExpected(c, offered, { cfg = pvpGearConfig() } = {}) {
+  if (!offered?.length) return false;
+  const expected = expectedIncoming(c, { cfg });
+  const as = i => effectiveName({ rsc: { get: () => i.name } }, { nameRsc: 0, translation: i.translation });
+  return offered.every(i => expected.some(p => has(as(i), p)));
+}

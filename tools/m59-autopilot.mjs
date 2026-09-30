@@ -104,6 +104,7 @@ const GUILD_CHEST_SECTION = 4;
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
+import * as pvpGear from './m59-pvp-gear.mjs';
 import { mayShareSpot } from './m59-party.mjs';
 import {
   claimFileSpot, fileClaimedSpotList, fileSpotClaimSnapshot,
@@ -21962,9 +21963,13 @@ export class Autopilot {
     };
 
     if (!offered.length) return refuse('an empty offer is a trade window, not a donation');
-    if (!party.isFleetmate(t.withName))
+    // EXPECTED INCOMING IS ALWAYS TAKEN (m59-pvp-gear.mjs): the PvP kit this character does not
+    // carry yet, and the fleet's expect_incoming list. The operator hands characters their kit
+    // and they take it -- whoever is handing it over, and whatever the take list says.
+    const expected = pvpGear.offerIsExpected(c, t.theirs || []);
+    if (!expected && !party.isFleetmate(t.withName))
       return refuse(`${t.withName} is not on the fleet roster — this is a shared server`);
-    const unwanted = offered.filter(n => !takes.some(w => n.includes(w)));
+    const unwanted = expected ? [] : offered.filter(n => !takes.some(w => n.includes(w)));
     if (unwanted.length)
       return refuse(`offered something not on the take list: ${[...new Set(unwanted)].join(', ')}`);
 

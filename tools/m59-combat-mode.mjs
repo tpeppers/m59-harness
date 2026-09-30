@@ -11,6 +11,7 @@ import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision
   updateSurvivalDecision } from './m59-survival-decision.mjs';
 import * as war from './m59-war.mjs';
 import * as gear from './m59-pvp-gear.mjs';
+import { sameRoomDoorPlan } from './m59-world.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -435,6 +436,26 @@ export class CombatMode {
       this.record('wand_volley', o);
     }, 1050);
     return hold;
+  }
+
+  /** Cross the internal door that leads toward the target, if the room has one. true when tried. */
+  async crossDoorToward(o, target) {
+    const s = this.s, c = o.client;
+    if (typeof s.crossSameRoomDoor !== 'function' || !s.world?.map || !s.world?.geometry || !c.self) return false;
+    let plan = null;
+    try {
+      plan = sameRoomDoorPlan(s.world.map, s.world.room?.num, s.world.geometry, c.self,
+        [{ row: target.row, col: target.col }]);
+    } catch { plan = null; }
+    const door = plan?.doors?.[0];
+    if (!door) return false;
+    await this.stand(o);
+    const result = await s.crossSameRoomDoor(door, { movementGeneration: s.movementGeneration })
+      .catch(e => ({ crossed: false, reason: e.message }));
+    o.lastDoor = { at: this.now(), stand_on: { row: door.row, col: door.col },
+      lands: { row: door.arriveRow, col: door.arriveCol }, crossed: result?.crossed === true, why: result?.reason ?? null };
+    this.record('pvp_door', o);
+    return true;
   }
 
   // A wand that has run out stays in the pack (a broken SpecialWand) or is deleted (a SpellItem
@@ -1205,6 +1226,13 @@ export class CombatMode {
     if (step.do === 'wait') { o.nextAt = this.now() + step.ms; this.nextAction(o); return; }
     if (step.do === 'attack' && Math.hypot(target.row - c.self.row, target.col - c.self.col) > 2) {
       const next = safeCombatStep(s, target);
+      // THROUGH A SAME-ROOM DOOR WHEN THE FLOOR ENDS. Castle Victoria (38) is one room number and
+      // many regions joined only by `go` doors back into itself (m59-world.mjs sameRoomDoors), so an
+      // enemy who steps through one is still visible and still "in the room" but has no floor path
+      // to him. The monster chase has crossed these since bridgeToQuarry; a PvP approach demanded a
+      // floor path and stood still, which Morpheus used (2026-09-30). One door per tick; the next
+      // tick re-plans from wherever the door put us.
+      if (!next && await this.crossDoorToward(o, target)) return;
       demand(next, 'no safe approach to player');
       await this.stand(o); await s.step(next.col, next.row); return;
     }
