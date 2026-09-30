@@ -86,15 +86,49 @@ await test('not swarm-held: the leader file is ignored', async () => {
   assert.equal(f.mode.active, null);
 });
 
-await test('a stale leader swing is ignored; a target in another room is ignored', async () => {
+await test('an entry from a previous session (over 15 minutes) is never taken up; one elsewhere waits', async () => {
   const f = fixture();
   f.put(3, OF.ATTACKABLE);
-  leader(3, Date.now() - 60_000);
-  await tick(200); await f.mode.warbandTick();
-  assert.equal(f.mode.active, null, 'stale');
-  leader(999);                                           // not in our room
-  await tick(200); await f.mode.warbandTick();
-  assert.equal(f.mode.active, null, 'elsewhere');
+  await tick(200); leader(3, Date.now() - 20 * 60_000); await tick(200);
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null, 'ancient: object ids recycle');
+  await tick(200); leader(999); await tick(200);           // not in our room
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null, 'elsewhere: nothing to swing at here');
+  f.put(999, OF.ATTACKABLE);                                // it walks in
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active?.order?.target, 999, 'engaged the moment it is here');
+  f.mode.stop('test');
+});
+
+await test('the target STANDS after the leader stops swinging, until it dies', async () => {
+  const f = fixture();
+  f.put(3, OF.ATTACKABLE);
+  await tick(200); leader(3, Date.now() - 5 * 60_000); await tick(200);   // one swing, five minutes ago
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active?.order?.target, 3, 'still the target');
+  f.c.room.objects.delete(3);                             // it dies
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null, 'dead: the order ends');
+  f.put(3, OF.ATTACKABLE);                                // the same id shows up again
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null, 'a finished target is not re-engaged on its own');
+  await tick(200); leader(3); await tick(200);            // the leader attacks it again
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active?.order?.target, 3, 're-armed by a new swing');
+  f.mode.stop('test');
+});
+
+await test('a recycled id (same number, different name) is not the target', async () => {
+  const f = fixture();
+  f.put(3, OF.ATTACKABLE);                                // "troll"
+  await tick(200); leader(3); await tick(200);
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active?.order?.target, 3);
+  f.mode.stop('test');
+  f.c.rsc.set(3, 'heartstone');                           // the server reused the id
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null);
 });
 
 await test('the leader switching target switches the warband; losing it ends the order', async () => {
@@ -108,12 +142,17 @@ await test('the leader switching target switches the warband; losing it ends the
   assert.equal(f.mode.active, null, 'the swarm ended, so did the warband order');
 });
 
-await test('never a fleetmate or guildmate, even if the leader swings at one', async () => {
+await test('never a fleetmate or guildmate, even if the leader swings at one -- and it is dropped', async () => {
   const f = fixture();
   f.put(4, OF.PLAYER | OF.ATTACKABLE);                   // Gonzo is ours
   await tick(200); leader(4); await tick(200);
   await f.mode.warbandTick();
   assert.equal(f.mode.active, null);
+  assert.equal(f.mode.warbandTarget?.done, 'a fleetmate');
+  f.put(6, OF.PLAYER | OF.ATTACKABLE | OF.GUILDMATE); f.c.rsc.set(6, 'Some Guildmate');
+  await tick(200); leader(6); await tick(200);
+  await f.mode.warbandTick();
+  assert.equal(f.mode.active, null, 'a guildmate is never a target either');
 });
 
 await test('an innocent the server refuses is dropped, not re-issued every tick', async () => {

@@ -21,8 +21,9 @@ export const WAR_LOOK_EVERY_MS = 1500;
 export const WAR_LOOK_FALLBACK_MS = 4000;
 // The same (map, enemy) alarm is not re-raised by one keeper more often than this.
 export const WAR_ALARM_EVERY_MS = 3000;
-// A swarm leader's target is followed while their last swing at it is this recent.
-export const WARBAND_TARGET_FRESH_MS = 6000;
+// A swarm leader's target stands until it dies or the leader names another; an entry older than
+// this is never taken up at all (object ids recycle within hours).
+export const WARBAND_TARGET_MAX_AGE_MS = 15 * 60_000;
 // A sentinel watching an enemy stand in its room reports it again this often.
 export const WAR_SIGHTING_EVERY_MS = 15_000;
 
@@ -454,11 +455,12 @@ export class CombatMode {
   // to `swarm/<leader>@terminal`, and the proxy writes whatever the operator attacks to
   // swarm-leader.json. A keeper whose claim is held by a swarm is in the warband, and every 250ms
   // (keeper process) it:
-  //   * focus-fires the LEADER'S target -- player or monster -- when that swing is fresh and the
-  //     target is in this character's room: a warband attack order on that object id, which puts
-  //     on the PvP gear and fires the 2s wand volley like any PvP fight. Safety stays ON (an
+  //   * focus-fires the LEADER'S target -- player or monster -- whenever it is in this character's
+  //     room: a warband attack order on that object id, which puts on the PvP gear and fires the 2s
+  //     wand volley like any PvP fight. The target STANDS until it is dead or the leader issues a
+  //     new one (operator, 2026-09-30) -- not while the leader keeps swinging. Safety stays ON (an
   //     `attack`, never a `kill`), so an innocent the leader swings at is refused by the server
-  //     and dropped for the warband;
+  //     and dropped; a fleetmate, host or guildmate the leader swings at is never a target at all;
   //   * when not fighting, and if this character is a named buffer (pvp-gear warband_buffs), keeps
   //     EVERY warband ally in its room -- itself and the leader included -- buffed: the operator's
   //     rule is that the warband is collectively buffed and ready.
@@ -469,12 +471,35 @@ export class CombatMode {
     if (!this.warbandEligibility?.()) { leaving('warband ended: no longer swarm-held'); return; }
     if (!s.live || !c?.self || c.vitals?.()?.health?.value === 0) return;
     if (this.active?.pvp) return;                       // a war fight already owns the body
+    // THE STANDING TARGET. A new target from the leader -- a different id, or the same id attacked
+    // again after it was finished -- replaces it; nothing else does. An entry older than
+    // WARBAND_TARGET_MAX_AGE_MS is never taken up: object ids are recycled within hours, and a
+    // target from a previous session would name something else.
     const lead = gear.readSwarmLeader();
-    const fresh = lead && Number.isFinite(Number(lead.at)) && this.now() - Number(lead.at) < WARBAND_TARGET_FRESH_MS;
-    const t = fresh ? c.room?.objects?.get?.(Number(lead.target)) : null;
-    const name = t ? (c.rsc?.get?.(t.nameRsc) ?? t.name ?? '') : '';
-    const ok = !!t && t.id !== c.selfId && (t.flags & OF.ATTACKABLE) && !(t.flags & OF.GUILDMATE) &&
-      !((t.flags & OF.PLAYER) && this.isOurs(name)) && !this.warbandRefused?.has(t.id) && !this.pvpForbiddenHere();
+    const leadAt = Number(lead?.at), leadId = Number(lead?.target);
+    const w = this.warbandTarget;
+    if (Number.isSafeInteger(leadId) && Number.isFinite(leadAt) && this.now() - leadAt < WARBAND_TARGET_MAX_AGE_MS &&
+        (!w || w.id !== leadId || (w.done && leadAt > w.at)))
+      this.warbandTarget = { id: leadId, at: leadAt, name: null, seenInRoom: null, done: false };
+    const target = this.warbandTarget;
+    const room = s.world?.room?.num;
+    let t = target && !target.done ? c.room?.objects?.get?.(target.id) : null;
+    const name = t ? String(c.rsc?.get?.(t.nameRsc) ?? t.name ?? '') : '';
+    if (target && !target.done) {
+      if (t) {
+        // The same id on a different thing is a RECYCLED id, not our target: it died.
+        if (target.name && name.toLowerCase() !== target.name.toLowerCase()) { target.done = 'id recycled'; t = null; }
+        else { target.name ??= name; target.seenInRoom = room; }
+      } else if (target.seenInRoom != null && target.seenInRoom === room) {
+        // Gone from the room we saw it in, while we are still standing in it: dead (or fled).
+        target.done = 'gone from the room';
+      }
+      // NEVER ONE OF OURS. The operator may swing at a fleetmate by accident; the warband does not
+      // follow, and the target is dropped rather than retried.
+      if (t && (this.isOurs(name) || (t.flags & OF.GUILDMATE))) { target.done = 'a fleetmate'; t = null; }
+    }
+    const ok = !!t && t.id !== c.selfId && (t.flags & OF.ATTACKABLE) &&
+      !this.warbandRefused?.has(t.id) && !this.pvpForbiddenHere();
     if (this.active?.order?.warband) {
       if (ok && this.active.order.target === t.id) return;
       this.stop(ok ? 'warband: the leader switched target' : 'warband: the leader\'s target is gone');
