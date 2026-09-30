@@ -1225,14 +1225,19 @@ export class CombatMode {
     const step = o.order.sequence[o.index];
     if (step.do === 'wait') { o.nextAt = this.now() + step.ms; this.nextAction(o); return; }
     if (step.do === 'attack' && Math.hypot(target.row - c.self.row, target.col - c.self.col) > 2) {
-      const next = safeCombatStep(s, target);
-      // THROUGH A SAME-ROOM DOOR WHEN THE FLOOR ENDS. Castle Victoria (38) is one room number and
+      // THROUGH A SAME-ROOM DOOR WHEN ONE IS NEEDED. Castle Victoria (38) is one room number and
       // many regions joined only by `go` doors back into itself (m59-world.mjs sameRoomDoors), so an
       // enemy who steps through one is still visible and still "in the room" but has no floor path
       // to him. The monster chase has crossed these since bridgeToQuarry; a PvP approach demanded a
       // floor path and stood still, which Morpheus used (2026-09-30). One door per tick; the next
       // tick re-plans from wherever the door put us.
-      if (!next && await this.crossDoorToward(o, target)) return;
+      // ASKED FIRST, NOT AS A FALLBACK. safeCombatStep plans on the COARSE grid, which joins
+      // Castle Victoria's chambers through stand points a body cannot use -- r7c26 toward r12c26
+      // returns a detour step via r2c34 -- so "no floor step" never happens there and the door was
+      // never tried. sameRoomDoorPlan uses the live body's FINE position and returns doors only
+      // when the walk really needs one; with no doors needed it returns none and we fall through.
+      if (await this.crossDoorToward(o, target)) return;
+      const next = safeCombatStep(s, target);
       demand(next, 'no safe approach to player');
       await this.stand(o); await s.step(next.col, next.row); return;
     }
