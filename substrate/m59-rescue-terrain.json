@@ -1,0 +1,518 @@
+{
+  "schema": "m59-rescue-terrain/v1",
+  "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+  "rule": "Room.GetShalilleBonus > 20; forest/jungle, excluding the KA0 offering room",
+  "rooms": {
+    "2": {
+      "name": "Outside Castle Victoria",
+      "cls": "Castle1c",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_MOUNTAIN | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/castle1c.kod"
+    },
+    "4": {
+      "name": "The Deep Dark Woods of Tos",
+      "cls": "Forest4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/forest4.kod"
+    },
+    "6": {
+      "name": "The Deep Dark Woods of Marion",
+      "cls": "Forest5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/objroom/forest5.kod"
+    },
+    "24": {
+      "name": "The Forests of Meridian",
+      "cls": "Forest1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER",
+      "source": "kod/object/active/holder/room/monsroom/objroom/forest1.kod"
+    },
+    "26": {
+      "name": "The Forests of Meridian",
+      "cls": "Forest2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/forest2.kod"
+    },
+    "28": {
+      "name": "The Forests of Meridian",
+      "cls": "Forest3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/forest3.kod"
+    },
+    "48": {
+      "name": "The Temple of Shal'ille",
+      "cls": "Temple",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_TEMPLE | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/temple.kod"
+    },
+    "49": {
+      "name": "Kardde's Canyon",
+      "cls": "Badland2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_BADLANDS | TERRAIN_FOREST | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/badland2.kod"
+    },
+    "200": {
+      "name": "Marion",
+      "cls": "Marion",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_CITY | TERRAIN_ROAD | TERRAIN_FIELDS | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/marnrm/marion.kod"
+    },
+    "511": {
+      "name": "North Quilicia Wood",
+      "cls": "OutdoorsA1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "516": {
+      "name": "The Hills",
+      "cls": "OutdoorsA6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_LAKE | TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_HILLS",
+      "source": "kod/object/active/holder/room/monsroom/a6.kod"
+    },
+    "521": {
+      "name": "Elhadrim",
+      "cls": "OutdoorsB1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "522": {
+      "name": "Lower Elhadrim",
+      "cls": "OutdoorsB2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "531": {
+      "name": "The Fey's Crossing",
+      "cls": "OutdoorsC1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "532": {
+      "name": "The Vale of Sorrows",
+      "cls": "OutdoorsC2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "533": {
+      "name": "Quilicia Wood",
+      "cls": "OutdoorsC3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "534": {
+      "name": "Deep Woods of Ileria",
+      "cls": "OutdoorsC4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/c4.kod"
+    },
+    "535": {
+      "name": "West Merchant Way through Ilerian Woods",
+      "cls": "OutdoorsC5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_LAKE | TERRAIN_WATERFALL | TERRAIN_ROAD",
+      "source": "kod/object/active/holder/room/monsroom/objroom/c5.kod"
+    },
+    "536": {
+      "name": "Forest of Farol",
+      "cls": "OutdoorsC6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/c6.kod"
+    },
+    "537": {
+      "name": "Faronath, home of the TreeFolk",
+      "cls": "OutdoorsC7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/objroom/c7.kod"
+    },
+    "541": {
+      "name": "Dirhadrim",
+      "cls": "OutdoorsD1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "542": {
+      "name": "Lower Dirhadrim",
+      "cls": "OutdoorsD2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MYSTICAL",
+      "source": "kod/object/active/holder/room/monsroom/feyforst.kod"
+    },
+    "544": {
+      "name": "Valley of Ileria",
+      "cls": "OutdoorsD4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_HILLS",
+      "source": "kod/object/active/holder/room/monsroom/d4.kod"
+    },
+    "545": {
+      "name": "West Merchant Way",
+      "cls": "OutdoorsD5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_ROAD | TERRAIN_HILLS | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/d5.kod"
+    },
+    "546": {
+      "name": "Deep in the Forest of Farol",
+      "cls": "OutdoorsD6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER",
+      "source": "kod/object/active/holder/room/monsroom/d6.kod"
+    },
+    "547": {
+      "name": "Deep in the Forest of Farol",
+      "cls": "OutdoorsD7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/d7.kod"
+    },
+    "552": {
+      "name": "The Great Ocean",
+      "cls": "OutdoorsE2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_BEACH",
+      "source": "kod/object/active/holder/room/monsroom/e2.kod"
+    },
+    "554": {
+      "name": "East Merchant Way through Ilerian Woods",
+      "cls": "OutdoorsE4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_LAKE | TERRAIN_FOREST | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/e4.kod"
+    },
+    "555": {
+      "name": "The Forest Shrine",
+      "cls": "OutdoorsE5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_FIELDS",
+      "source": "kod/object/active/holder/room/monsroom/e5.kod"
+    },
+    "556": {
+      "name": "Deep Forest of Farol",
+      "cls": "OutdoorsE6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/objroom/e6.kod"
+    },
+    "557": {
+      "name": "The Sweet Grass Prairies",
+      "cls": "OutdoorsE7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_FIELDS",
+      "source": "kod/object/active/holder/room/monsroom/e7.kod"
+    },
+    "562": {
+      "name": "The sandy shores of the Great Ocean",
+      "cls": "OutdoorsF2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_BEACH | TERRAIN_FOREST | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/f2.kod"
+    },
+    "563": {
+      "name": "Source of the River Ille",
+      "cls": "OutdoorsF3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_LAKE",
+      "source": "kod/object/active/holder/room/monsroom/f3.kod"
+    },
+    "564": {
+      "name": "East Merchant Way",
+      "cls": "OutdoorsF4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_ROAD",
+      "source": "kod/object/active/holder/room/monsroom/f4.kod"
+    },
+    "566": {
+      "name": "Off the beaten path",
+      "cls": "OutdoorsF6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_ROAD",
+      "source": "kod/object/active/holder/room/monsroom/f6.kod"
+    },
+    "567": {
+      "name": "Off the beaten path",
+      "cls": "OutdoorsF7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_ROAD",
+      "source": "kod/object/active/holder/room/monsroom/f7.kod"
+    },
+    "568": {
+      "name": "Lake of Jala's Song",
+      "cls": "OutdoorsF8",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_LAKE | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/f8.kod"
+    },
+    "574": {
+      "name": "Main gate to Cor Noth",
+      "cls": "OutdoorsG4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_LAKE | TERRAIN_ROAD | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/g4.kod"
+    },
+    "575": {
+      "name": "The King's Way",
+      "cls": "OutdoorsG5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_RIVER | TERRAIN_ROAD | TERRAIN_WATERFALL",
+      "source": "kod/object/active/holder/room/monsroom/g5.kod"
+    },
+    "576": {
+      "name": "The King's Way",
+      "cls": "OutdoorsG6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_LAKE | TERRAIN_MOUNTAIN | TERRAIN_ROAD",
+      "source": "kod/object/active/holder/room/monsroom/g6.kod"
+    },
+    "583": {
+      "name": "Outskirts of Barloque",
+      "cls": "OutdoorsH3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_ROAD | TERRAIN_RIVER",
+      "source": "kod/object/active/holder/room/monsroom/h3.kod"
+    },
+    "584": {
+      "name": "The Flatlands",
+      "cls": "OutdoorsH4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_ROAD | TERRAIN_RIVER | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/objroom/h4.kod"
+    },
+    "586": {
+      "name": "Main gate to the city of Tos",
+      "cls": "OutdoorsH6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_ROAD | TERRAIN_FIELDS",
+      "source": "kod/object/active/holder/room/monsroom/h6.kod"
+    },
+    "587": {
+      "name": "Western border of the Twisted Wood",
+      "cls": "OutdoorsH7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/h7.kod"
+    },
+    "593": {
+      "name": "Main gate of Barloque-- Royal City of Meridian",
+      "cls": "OutdoorsI3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_ROAD | TERRAIN_RIVER | TERRAIN_BEACH",
+      "source": "kod/object/active/holder/room/monsroom/i3.kod"
+    },
+    "596": {
+      "name": "Outskirts of Tos",
+      "cls": "OutdoorsI6",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/i6.kod"
+    },
+    "597": {
+      "name": "The Twisted Wood",
+      "cls": "OutdoorsI7",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/i7.kod"
+    },
+    "603": {
+      "name": "The Queen's Way",
+      "cls": "OutdoorsJ3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_ROAD | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/monsroom/j3.kod"
+    },
+    "712": {
+      "name": "The home of the Friends of the Forest",
+      "cls": "GuildHall11",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_FOREST | TERRAIN_GUILDHALL | TERRAIN_RESIDENCE",
+      "source": "kod/object/active/holder/room/ghall/guildh11.kod"
+    },
+    "1002": {
+      "name": "Hazar",
+      "cls": "Guest2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_CITY | TERRAIN_ROAD | TERRAIN_LAKE | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/guest2.kod"
+    },
+    "1012": {
+      "name": "Raza",
+      "cls": "Newb2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_CITY | TERRAIN_ROAD | TERRAIN_LAKE | TERRAIN_FOREST",
+      "source": "kod/object/active/holder/room/guest2.kod"
+    },
+    "2111": {
+      "name": "Cliff Hive",
+      "cls": "OutdoorsKA1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ka1.kod"
+    },
+    "2112": {
+      "name": "The Jungle Cliffs",
+      "cls": "OutdoorsKA2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ka2.kod"
+    },
+    "2113": {
+      "name": "A notch in the jungle",
+      "cls": "OutdoorsKA3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ka3.kod"
+    },
+    "2114": {
+      "name": "Into the Jungle",
+      "cls": "OutdoorsKA4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ka4.kod"
+    },
+    "2115": {
+      "name": "Outside the Guard Tower",
+      "cls": "OutdoorsKA5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ka5.kod"
+    },
+    "2121": {
+      "name": "The Cliffs",
+      "cls": "OutdoorsKB1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kb1.kod"
+    },
+    "2122": {
+      "name": "Headquarters for the Avar Warriors",
+      "cls": "OutdoorsKB2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kb2.kod"
+    },
+    "2123": {
+      "name": "Camp of the Warrior Avars",
+      "cls": "OutdoorsKB3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kb3.kod"
+    },
+    "2124": {
+      "name": "Path to the Ruins",
+      "cls": "OutdoorsKB4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kb4.kod"
+    },
+    "2125": {
+      "name": "Into the Jungle",
+      "cls": "OutdoorsKB5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kb5.kod"
+    },
+    "2131": {
+      "name": "The Chasm",
+      "cls": "OutdoorsKC1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kc1.kod"
+    },
+    "2132": {
+      "name": "Turf of the Warrior Avars",
+      "cls": "OutdoorsKC2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kc2.kod"
+    },
+    "2133": {
+      "name": "Ruins of the Riija Temple",
+      "cls": "OutdoorsKC3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kc3.kod"
+    },
+    "2134": {
+      "name": "Origin of the Kriipa",
+      "cls": "OutdoorsKC4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kc4.kod"
+    },
+    "2135": {
+      "name": "Outside the Mad Scientist's Hut",
+      "cls": "OutdoorsKC5",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kc5.kod"
+    },
+    "2141": {
+      "name": "Lair of the Bone Priestess",
+      "cls": "OutdoorsKD1",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kd1.kod"
+    },
+    "2142": {
+      "name": "Territory of the Noble Avars",
+      "cls": "OutdoorsKD2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kd2.kod"
+    },
+    "2143": {
+      "name": "Deep in the Jungle",
+      "cls": "OutdoorsKD3",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kd3.kod"
+    },
+    "2144": {
+      "name": "The Clearing of the Trading Post",
+      "cls": "OutdoorsKD4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/kd4.kod"
+    },
+    "2151": {
+      "name": "The Temple of Riija",
+      "cls": "TempleRiija",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_TEMPLE | TERRAIN_MYSTICAL | TERRAIN_JUNGLE | TERRAIN_BEACH | TERRAIN_MOUNTAIN",
+      "source": "kod/object/active/holder/room/temprii.kod"
+    },
+    "2152": {
+      "name": "Headquarters of the Noble Avars",
+      "cls": "OutdoorsKE2",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ke2.kod"
+    },
+    "2154": {
+      "name": "Avar Village",
+      "cls": "OutdoorsKE4",
+      "shalille_bonus": 25,
+      "expression": "TERRAIN_JUNGLE",
+      "source": "kod/object/active/holder/room/monsroom/kcforest/ke4.kod"
+    }
+  }
+}

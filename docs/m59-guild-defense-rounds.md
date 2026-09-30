@@ -17,7 +17,8 @@ config and roster lease. The scenario driver never connects to production.
 4. Review the bundle, including validity and temporary-account cleanup.
 5. Attach a concise outcome, report hash and bundle location to that exact commit
    with `git notes --ref=m59-sim-results add -F <note-file> <commit>`.
-   Publish the experimental branch and the notes ref together. Read results with
+   When publication is authorized, publish the experimental branch and the notes
+   ref together. Local rounds and notes do not require a remote push. Read results with
    `git log --show-notes=m59-sim-results`. Do not amend the tested commit afterward.
 
 Bundles live under ignored `substrate/guild-defense/rounds/<round>`. Existing
@@ -40,6 +41,12 @@ Defenders retain captured skills/max HP and use matched weapons, knight shields
 and scale armor. Full HP, 200 vigor, light packs, no spells or consumables.
 Road monsters remain. The raid timer begins with an ordinary lever activation.
 
+Round 002 adds the explicitly modeled two 3/3 chalices, coordinated assembly,
+Floyd's reserve role and raider lever contesting. See
+[Rescue defense](m59-rescue-defense.md) for its changed assumptions and gates.
+Its observation horizon is fifteen minutes, with living attackers at timeout
+reported as unresolved.
+
 Round 000 archives the one-shot travel controller: watchdog active, no recovery
 loop after a journey pauses, and no live door observer. Earliest arrival was
 Beaker in the foyer at 399163 ms; nobody reached the inner hall; Floyd died.
@@ -49,3 +56,11 @@ Compare foyer/inner arrival times, all casualties, Floyd's recovery, native hall
 ownership/timer and setup/cleanup validity. A combined controller change is one
 bundle of hypotheses, not proof of each change independently. Native randomness,
 shared-process contention and modeled loadouts limit production conclusions.
+
+Round 005 adds the 8:00 relay and sacrificial shield-reset objective: two chalices
+transport four defenders, leaving sixteen road runners. Summaries now include
+confirmed shield resets and travel denominators, not just successful arrivals.
+`node tools/m59-guild-defense-metrics.mjs` computes the historical comparison.
+Treat different runner counts and policies as exploratory comparisons. An interval
+without half the fleet arriving has no observed fleet median; deaths are competing
+failures, not ten-minute travel observations.

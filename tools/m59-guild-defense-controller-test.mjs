@@ -3,7 +3,30 @@ import {M59Client,BP} from './m59-client.mjs';
 import {loadMap} from './m59-map.mjs';
 import {World} from './m59-world.mjs';
 import {Autopilot,HANDLED,CONTINUE} from './m59-autopilot.mjs';
-import {ensureReplayHallDoors,respondWithRecovery} from './m59-guild-defense-controller.mjs';
+import {ensureReplayHallDoors,respondWithRecovery,observedHallSection,
+  defenseAssemblyPoint,recoverGuildPassage} from './m59-guild-defense-controller.mjs';
+assert.equal(observedHallSection({world:{room:{num:714}},client:{}}),null,'room packet may precede the player object');
+assert.equal(observedHallSection({world:{room:{num:714}},client:{self:{row:NaN,col:8}}}),null);
+assert.equal(observedHallSection({world:{room:{num:39}},client:{self:{row:7,col:8}}}),null);
+assert.equal(observedHallSection({world:{room:{num:714}},client:{self:{row:2,col:32}}}),0);
+assert.equal(observedHallSection({world:{room:{num:714}},client:{self:{row:7,col:8}}}),3);
+const slots=Array.from({length:20},(_,i)=>defenseAssemblyPoint(i));
+assert.equal(new Set(slots.map(s=>JSON.stringify(s))).size,20);
+for(const self of slots)assert.equal(observedHallSection({world:{room:{num:714}},client:{self}}),2);
+{
+  const keeper={s:{world:{room:{num:714}},client:{self:{row:20,col:10}}}};
+  let attempts=0;
+  const result=await recoverGuildPassage(keeper,2,{retryMs:0,passage:async()=>{if(++attempts===1)throw Error('trigger temporarily blocked');}});
+  assert.equal(result.attempts,2);
+  attempts=0;
+  await assert.rejects(recoverGuildPassage(keeper,2,{maxAttempts:2,retryMs:0,
+    passage:async()=>{attempts++;throw Error('blocked');}}),/budget exhausted/);
+  assert.equal(attempts,2);
+  attempts=0;
+  await assert.rejects(recoverGuildPassage(keeper,2,{stopped:()=>true,
+    passage:async()=>{attempts++;}}),/stopped/);
+  assert.equal(attempts,0);
+}
 const map=loadMap();
 function session(){
   const client=new M59Client({host:'127.0.0.1',port:1,log(){}});

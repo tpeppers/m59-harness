@@ -4,18 +4,25 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {travelMetrics} from './m59-guild-defense-metrics.mjs';
 
 export const sha256=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const json=(file,value)=>fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
 export function summarize(report) {
   const run=report.runs?.[0],t=run?.team_experiment??report.team_experiment??{},events=t.events??[];
-  const arrivals=kind=>events.filter(e=>e.kind===kind).map(({actor,ms})=>({actor,ms}));
+  const arrivals=kind=>events.filter(e=>e.kind===kind).map(({actor,ms,method})=>({actor,ms,...(method?{method}:{})}));
   const foyer=arrivals('hall_foyer_arrival'),inner=arrivals('inner_hall_arrival'),deaths=arrivals('casualty');
   return {completed:report.completed===true,validation:report.validation??null,
     outcome:t.winner??'invalid',reason:t.reason??report.error??null,resolved_ms:t.resolved_ms??null,
     first_foyer_ms:foyer[0]?.ms??null,first_inner_ms:inner[0]?.ms??null,
     foyer_arrivals:foyer,inner_arrivals:inner,deaths,
+    travel:travelMetrics(report),
+    shield_resets:events.filter(e=>e.kind==='guard_lever_attempt'&&e.state?.status===3),
+    rescue_defense:{casts:events.filter(e=>e.kind==='rescue_sent'),handoffs:events.filter(e=>e.kind==='chalice_handoff'),
+      assembly:events.find(e=>e.kind==='assembly_released')??null,
+      breach:events.find(e=>e.kind==='breach_released')??null,
+      chalices_initial:t.chalices_initial??null,chalices_final:t.chalices_final??null},
     floyd:{died:deaths.some(x=>x.actor==='t16'),final:t.final?.actors?.find(x=>x.key==='t16')??null},
     hall:t.hall_final??null,errors:t.errors??[],cleanup:run?.pvp?.cleanup??null};
 }
