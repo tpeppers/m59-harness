@@ -288,6 +288,42 @@ let joinGeneration = 0;
 let keeperJoinInFlight = null;
 session.combat.pvpEligibility = () => joinWanted;
 
+// THE WAR RESTART HANDOFF. A restart used to be a LOGOFF: the old keeper stopped, the character
+// left the world, and the broker's sweep logged it back in later -- one at a time over a minute
+// or two, mid-fight, with a node window flashing for each (operator, 2026-09-30: "allowing our
+// enemies to kill everyone one at a time as they log back in"). A handoff never leaves the world:
+// this keeper is told first, keeps playing and fighting exactly as before, but will NOT reconnect
+// by any path; the broker then starts the replacement, whose login makes the server drop this
+// connection ("new connection overrides old one"), and the drop is this keeper's cue to save and
+// exit. If no replacement arrives before the deadline the handoff lapses and nothing changed.
+let handoff = null;                              // { since, deadline } while being replaced
+const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
+// Session.rejoin is the autopilot's own reconnect (Autopilot.reconnect), and it goes around
+// join() and joinWanted entirely. Refuse it during a handoff or it logs the old keeper back in
+// and kicks the replacement straight back out.
+{
+  const rejoinOriginal = typeof session.rejoin === 'function' ? session.rejoin.bind(session) : null;
+  if (rejoinOriginal) session.rejoin = async (...args) => {
+    if (handoffActive()) throw new Error('keeper is handing off to its replacement; not reconnecting');
+    return rejoinOriginal(...args);
+  };
+}
+setInterval(() => {
+  if (!handoff) return;
+  if (!handoffActive()) {
+    log(`[keeper] ${agent} handoff lapsed: no replacement took the connection; carrying on`);
+    handoff = null; return;
+  }
+  // The replacement's login dropped us. Save and go -- never reconnect.
+  if (inGame && !session.live) {
+    log(`[keeper] ${agent} handed off: the replacement holds the connection; exiting`);
+    handoff = null;
+    try { autopilot?.stop('handed off to a replacement keeper'); } catch {}
+    try { saveFinalState(); } catch {}
+    setImmediate(async () => { try { await session.playerEvidence?.close?.(); } finally { process.exit(0); } });
+  }
+}, 250).unref?.();
+
 // THE WAR RESPONSE (tools/m59-war.mjs). On for every fleet character this process holds; off for
 // a menagerie host, which is ours for "do not shoot" and never a combatant. The kill switches are
 // `warResponse: false` in this character's roster policy and M59_WAR_RESPONSE=0 for the process.
@@ -814,6 +850,7 @@ async function joinGenerationOnce(generation) {
 // the old attempt to observe that invalidation before it can report the character out.
 async function join() {
   if (!joinWanted) throw new Error('keeper is intentionally left out of game');
+  if (handoffActive()) throw new Error('keeper is handing off to its replacement; not logging in');
   const generation = joinGeneration;
   const current = keeperJoinInFlight;
   if (current) {
@@ -3970,6 +4007,25 @@ const server = createServer(async (req, res) => {
       } else {
         json({ ok: true, already_running: true });
       }
+      return;
+    }
+
+    // THE WAR RESTART HANDOFF (see `handoff` above). `{cancel: true}` withdraws it -- the
+    // broker's replacement failed to come up, so this keeper simply carries on.
+    if (req.method === 'POST' && path === '/handoff') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
+      if (asked.cancel) {
+        handoff = null;
+        log(`[keeper] ${agent} handoff cancelled; carrying on`);
+        json({ ok: true, handoff: null });
+        return;
+      }
+      const ms = Math.min(600_000, Math.max(10_000, Number(asked.timeout_ms) || 120_000));
+      handoff = { since: Date.now(), deadline: Date.now() + ms };
+      cancelInitialJoinRetry();
+      log(`[keeper] ${agent} handing off: no reconnect from here; exits when the replacement logs in`);
+      json({ ok: true, handoff, connected: !!session.live, in_game: inGame });
       return;
     }
 

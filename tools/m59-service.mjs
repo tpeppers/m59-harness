@@ -292,7 +292,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
 // adopting it; a lab or alias roster cannot. Kill just the broker pid identified by /health.
 function killPid(pid) {
   if (process.platform === 'win32') {
-    const r = spawnSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
+    const r = spawnSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', windowsHide: true });
     return r.status === 0;
   }
   try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; }
@@ -404,7 +404,8 @@ async function cmdStart() {
     // detached + unref is what makes this outlive the shell that ran it. stdio goes to
     // the log rather than 'ignore', which is how the previous arrangement lost every
     // word the broker said.
-    { detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env });
+    // windowsHide: a detached broker with no console would otherwise get a window of its own.
+    { detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env, windowsHide: true });
   child.unref();
   writeFileSync(PID_FILE, JSON.stringify({ pid: child.pid, fleet: LABEL, at: Date.now(),
                                            http: HTTP_PORT, dashboard: DASH_PORT }, null, 2));

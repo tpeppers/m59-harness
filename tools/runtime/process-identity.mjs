@@ -54,8 +54,10 @@ export function processImageName(pid, { exec = execFileSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === 'win32') {
+      // HIDDEN: called by a console-less broker, where every console child otherwise gets a
+      // window -- one flash per keeper on each adoption or restart.
       const out = exec('tasklist', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'],
-        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
       const name = String(out).trim().split('","')[0]?.replace(/^"/, '') ?? '';
       return name && !/^INFO:/i.test(name) ? name : null;
     }
@@ -86,7 +88,7 @@ export function processStartTimes(pids, { exec = execFileSync } = {}) {
       const text = exec('powershell', ['-NoProfile', '-NonInteractive', '-Command',
         `Get-CimInstance Win32_Process -Filter '${filter}' | ` +
         'ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.CreationDate.ToUniversalTime().Ticks }'],
-        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
       for (const line of String(text).split(/\r?\n/)) {
         const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
         if (!m) continue;

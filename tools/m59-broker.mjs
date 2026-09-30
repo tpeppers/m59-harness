@@ -886,6 +886,10 @@ const keeperProcesses = new Map();     // agent name -> { pid, port, startedAt }
 // anybody. Membership here means "somebody is already bringing this one up"; the sweep
 // steps over it and tries again next lap.
 const keeperSpawning = new Map();      // agent -> the one in-flight spawn/adoption promise
+// A WAR RESTART IN FLIGHT (warRestartKeeper): the old keeper is handing its connection to a
+// replacement. The sweep must step over the agent -- a `/rejoin` sent to the old keeper would log
+// it back in and kick the replacement straight out.
+const keeperHandoffs = new Set();
 // EACH FLEET GETS ITS OWN BAND, BECAUSE SHARING ONE BASE PUT TWO FLEETS IN ONE RANGE.
 //
 // This was a flat 8911 for everybody, and the scan-forward allocator then interleaved two
@@ -1473,6 +1477,145 @@ async function spawnKeeperInner(agent, index, credentials) {
                   `${child.pid} is stopped and that port is retired for this session`);
   }
   return false;
+}
+
+// ============================================================================ WAR RESTART
+//
+// REPLACE A KEEPER WITHOUT THE CHARACTER EVER LEAVING THE WORLD. The old restart was a logoff:
+// /stop, then the 45s sweep spawned a new keeper that logged in later -- a fleet came back one at
+// a time over a minute or two, mid-PvP, and the enemy killed them as they arrived (operator,
+// 2026-09-30). This is a handoff instead:
+//
+//   1. the old keeper is told (POST /handoff): it keeps playing and fighting, but nothing in it
+//      will reconnect, and the moment its connection drops it saves and exits;
+//   2. a replacement is spawned hidden on a DIFFERENT port (the old one is still serving), with
+//      this account's ownership guard installed beside the old pid's (the lock accepts both);
+//   3. the replacement logs in; the server drops the old connection ("new connection overrides
+//      old one"), which is the old keeper's cue;
+//   4. once the replacement answers in_game AND connected with its own identity, the broker's
+//      records and proxy are swapped to it.
+// The sweep steps over the agent for the whole of it (keeperHandoffs). If the replacement does
+// not come up, it is stopped and the old keeper's handoff is withdrawn: nothing changed.
+async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
+  const index = agentIndices.get(agent);
+  const credentials = rosterEntry(agent)?.credentials ?? null;
+  const old = keeperProcesses.get(agent);
+  if (!credentials) return { agent, ok: false, why: 'not in a loaded roster' };
+  if (!old || !recordedKeeperAlive(old)) return { agent, ok: false, why: 'no live keeper to hand off from' };
+  if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) return { agent, ok: false, why: 'already being brought up or handed off' };
+  if (pilotOf(agent)) return { agent, ok: false, why: 'being played by a person' };
+  keeperHandoffs.add(agent);
+  let child = null;
+  try {
+    const target = await verifiedKeeperWriteTarget(agent, index);
+    const tell = async (body) => fetch(`http://127.0.0.1:${target.port}/handoff`, {
+      method: 'POST', headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, body), signal: AbortSignal.timeout(5000),
+    }).then(r => r.ok).catch(() => false);
+    // A KEEPER FROM BEFORE /handoff EXISTED is handed off by force: pause its autopilot (the only
+    // thing in it that reconnects on its own), let the replacement's login drop its connection,
+    // and stop it the moment the replacement is in the world -- by then its socket is already
+    // gone, so the stop logs nobody out. This is how the first war restart reaches new code.
+    const post = (path, body = {}) => fetch(`http://127.0.0.1:${target.port}${path}`, {
+      method: 'POST', headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, body), signal: AbortSignal.timeout(5000),
+    }).then(r => r.ok).catch(() => false);
+    let legacy = false;
+    if (!(await tell({ timeout_ms: timeoutMs + 30_000 }))) {
+      legacy = true;
+      await post('/pause', { why: 'war restart: handing off to a replacement keeper' });
+    }
+
+    // A FREE PORT THAT IS NOT THE OLD ONE, without touching keeperPorts: the old keeper is still
+    // this agent's recorded keeper until the swap, and every write addresses it by that record.
+    const band = keeperPortBand();
+    const taken = new Set([old.port]);
+    for (const [, p] of keeperPorts) taken.add(p);
+    for (const [, rec] of keeperProcesses) if (rec?.port) taken.add(rec.port);
+    let port = null;
+    for (let p = band.base; p <= band.end && port == null; p++) {
+      if (taken.has(p) || portsLostToOthers.has(p)) continue;
+      const answers = await keeperLiveAt(p, { timeoutMs: 800 }).then(r => r.ok).catch(() => false);
+      if (!answers && await canBind(p)) port = p;
+    }
+    const undo = async () => { if (legacy) await post('/resume', {}); else await tell({ cancel: true }); };
+    if (port == null) { await undo(); return { agent, ok: false, why: 'no free keeper port in the band' }; }
+
+    const { spawn } = await import('node:child_process');
+    const HERE = dirname(fileURLToPath(import.meta.url));
+    const permit = keeperOwnershipPermit(agent);
+    const logFd = openSync(`substrate/keeper-${agent}.log`, 'a');
+    try {
+      child = spawn(process.execPath,
+        [...keeperHeapArgs(), join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port),
+         '--fleet', FLEET ?? '-'],
+        { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
+          env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url') },
+          windowsHide: process.env.M59_KEEPER_WINDOWS !== '1' });
+      child.once('error', e => console.error(`[war-restart] ${agent} replacement spawn failed: ${e.message}`));
+    } finally { try { closeSync(logFd); } catch {} }
+    if (!Number.isInteger(child?.pid)) { await undo(); return { agent, ok: false, why: 'replacement spawn returned no pid' }; }
+    const guarded = installKeeperOwnershipGuards(agent, child.pid, Date.now());
+    if (!guarded.ok) {
+      try { child.kill('SIGTERM'); } catch {}
+      await waitForSpawnedChildExit(child);
+      await undo();
+      return { agent, ok: false, why: `replacement guard failed: ${guarded.reason}` };
+    }
+    console.error(`[war-restart] ${agent}: replacement pid=${child.pid} port=${port}; old pid=${old.pid} port=${old.port} handing off`);
+
+    // READY MEANS IN THE WORLD, NOT MERELY LISTENING: in_game and connected, with this exact pid.
+    const deadline = Date.now() + timeoutMs;
+    let ready = false;
+    while (!brokerStopping && Date.now() < deadline && !spawnedChildExited(child)) {
+      await new Promise(r => setTimeout(r, 250));
+      const reply = await keeperLiveAt(port, { timeoutMs: 2000 }).catch(() => ({ ok: false }));
+      if (!reply.ok) continue;
+      const id = validateKeeperSample(reply.value, { agent, character: credentials.character ?? null, pid: child.pid });
+      if (!id.ok) break;
+      if (reply.value.in_game && reply.value.connected) { ready = true; break; }
+    }
+    if (!ready) {
+      try { child.kill('SIGTERM'); } catch {}
+      await waitForSpawnedChildExit(child);
+      await undo();
+      return { agent, ok: false, why: 'the replacement did not reach the world in time; the old keeper carries on' };
+    }
+
+    // THE SWAP. The old keeper exits on its own when its connection drops; the broker now talks
+    // only to the replacement.
+    keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child });
+    keeperPorts.set(agent, port);
+    const previous = sessions.get(agent);
+    const proxy = makeKeeperProxy(agent, index);
+    await proxy.initialize();
+    sessions.set(agent, proxy);
+    try { previous?.dispose?.(); } catch {}
+    // A pre-handoff keeper does not exit by itself: stop it now, while its socket is already gone.
+    if (legacy) await post('/stop', {});
+    ensureKeeperLivenessSweep();
+    console.error(`[war-restart] ${agent}: now pid=${child.pid} port=${port} (old pid ${old.pid} ${legacy ? 'stopped' : 'exits on its own'})`);
+    return { agent, ok: true, pid: child.pid, port, old_pid: old.pid };
+  } catch (e) {
+    if (child && !spawnedChildExited(child)) { try { child.kill('SIGTERM'); } catch {} }
+    return { agent, ok: false, why: e.message };
+  } finally {
+    keeperHandoffs.delete(agent);
+  }
+}
+
+async function warRestartFleet({ agents = null, concurrency = 3, timeoutMs = 90_000 } = {}) {
+  const want = (agents?.length ? agents : [...keeperProcesses.keys()]).filter(a => keeperProcesses.has(a));
+  const results = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < want.length) {
+      const agent = want[next++];
+      results.push(await warRestartKeeper(agent, { timeoutMs }));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, want.length)) }, worker));
+  return { ok: results.every(r => r.ok), restarted: results.filter(r => r.ok).length, of: want.length, results };
 }
 
 async function stopRecordedKeeper(agent, record, { reason = 'shutdown' } = {}) {
@@ -4731,7 +4874,7 @@ async function reconcileFleet() {
   await Promise.all([...sessions.entries()]
     .filter(([agent, s]) => s instanceof KeeperProxy &&
       inAnyRoster(agent) && !leftOnPurpose.has(agent) &&
-      !keeperSpawning.has(agent) && !pilotOf(agent))
+      !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent))
     .map(async ([agent, proxy]) => {
       const proof = await proxy.refreshLiveness({ force: true });
       livenessProofs.set(agent, { proxy, proof });
@@ -4753,7 +4896,7 @@ async function reconcileFleet() {
     // here, exactly like a keeper that has died, and the remedy for that is to spawn a
     // second one on the same port for the same character. Measured twice: two zombies
     // per resume, each holding a game socket for a character nobody could then log in.
-    if (keeperSpawning.has(agent)) continue;
+    if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) continue;
     // Being played by a person. Not missing — occupied. Rejoining would take the
     // character out from under a hand that is on the keys, and the login would bump
     // them straight out of the world.
@@ -4770,7 +4913,7 @@ async function reconcileFleet() {
       // than making a recovery decision without a proof tied to this exact proxy.
       if (!observed || observed.proxy !== existing) continue;
       const { proof } = observed;
-      if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || pilotOf(agent) ||
+      if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
           sessions.get(agent) !== existing || existing._liveness.disposed)
         continue;
       if (proof.identityMismatch) {
@@ -4942,7 +5085,7 @@ async function reconcileFleet() {
           // seconds old by now; a rolling keeper can change generations in between.
           const target = await verifiedKeeperWriteTarget(agent, index);
           const port = target.port;
-          if (brokerStopping || leftOnPurpose.has(agent) || keeperSpawning.has(agent) || pilotOf(agent) ||
+          if (brokerStopping || leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
               sessions.get(agent) !== existing || existing._liveness.disposed)
             continue;
           const r = await fetch(`http://127.0.0.1:${port}/rejoin`, {
@@ -6453,6 +6596,21 @@ const combatDispatch = new CombatDispatch({
 });
 
 const TOOLS = [
+  {
+    name: 'war_restart',
+    description: 'Restart keepers onto the code on disk WITHOUT logging characters out: each old keeper is told to hand off, a hidden replacement logs in (the server drops the old connection), and the broker swaps to it. Nobody leaves the world, nobody comes back one at a time. `agents` limits it; default is every keeper this broker holds. A replacement that does not reach the world in timeout_ms is stopped and the old keeper carries on.',
+    schema: { type: 'object', properties: {
+      fleet_state: { type: 'string', description: 'Required absolute roster path, verified before anything is touched' },
+      agents: { type: 'array', items: { type: 'string' } },
+      concurrency: { type: 'integer', minimum: 1, maximum: 8, description: 'handoffs in flight at once (default 3)' },
+      timeout_ms: { type: 'integer', minimum: 20000, maximum: 300000 },
+    }, required: ['fleet_state'] },
+    run: async a => {
+      if (!a.fleet_state || resolve(a.fleet_state) !== resolve(STATE_FILE))
+        throw new Error(`war_restart: fleet_state ${a.fleet_state} is not this broker's roster (${STATE_FILE})`);
+      return warRestartFleet({ agents: a.agents ?? null, concurrency: a.concurrency ?? 3, timeoutMs: a.timeout_ms ?? 90_000 });
+    },
+  },
   {
     name: 'combat_order',
     description: 'URGENT group player combat: dispatch first, without fleet/look inspection. Kill or attack an exact player, selecting all automated units currently in room (name or map number), or explicit agents. Selection uses live keeper state. Stay in the assigned map and wait indefinitely for visibility when absent or lost. Kill temporarily disables game PvP safety while engaging and restores it while waiting or on stop. Status/stop can name command_id; ready checks deployed support. Receipts distinguish pending, waiting, engaging and skipped. Never infer a kill from attack counts.',
