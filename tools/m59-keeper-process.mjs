@@ -295,7 +295,7 @@ session.combat.pvpEligibility = () => joinWanted;
 // on a guild the war book lists, or on a fleetmate's alarm about a fight in this same map.
 const isHostCharacter = !fleet?.[agent] && !!menagerieRoster[agent];
 session.combat.fleetmate = name => party.isFleetmate(name);
-session.combat.warEligibility = () => joinWanted && !isHostCharacter &&
+session.combat.warEligibility = () => joinWanted && !isHostCharacter && !war.isNoncombatant(character) &&
   process.env.M59_WAR_RESPONSE !== '0' && (autopilot?.policy ?? policy)?.warResponse !== false;
 // AND EVERY CHARACTER, HOSTS INCLUDED, IS A SENTINEL: it reports a war enemy it sees to the whole
 // fleet (a `sighted` alarm) and never fights because of it. A host is the point -- Loial stands

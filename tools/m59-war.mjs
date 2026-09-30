@@ -241,6 +241,23 @@ export function markRefused(name, { at = Date.now(), why = null } = {}) {
     r.refused_at = at; r.refused_why = why; return r; });
 }
 
+// NONCOMBATANTS: characters of ours that report what they see and never fight in the war. Kept in
+// the book rather than the roster because the roster is the password file, and a war role is not a
+// credential. 2026-09-30: Loial the Ogier (20 max health) and Raphael (25) sit Outside Castle
+// Victoria as lookouts, are in the ordinary fleet roster rather than the menagerie, and so were
+// counted as fighters -- Raphael engaged Morpheus and Loial engaged Wenbo.
+export const isNoncombatant = name => !!name &&
+  (current().noncombatants ?? []).some(n => normName(n) === normName(name));
+
+export function setNoncombatant(name, on = true) {
+  return mutate(book => {
+    const list = (book.noncombatants ?? []).filter(n => normName(n) !== normName(name));
+    if (on) list.push(String(name).trim());
+    book.noncombatants = list;
+    return list;
+  });
+}
+
 export const enemyGuilds = () => Object.values(current().enemy_guilds ?? {});
 export const isEnemyGuild = g => !!current().enemy_guilds?.[normGuild(g)];
 export const membership = name => current().members?.[normName(name)] ?? null;
@@ -450,6 +467,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   if (arg('--our-guild')) { fail(setOurGuild(arg('--our-guild'))); console.log(`our guild: ${current().our_guild}`); }
   if (arg('--declare')) { fail(declareEnemyGuild(arg('--declare'))); console.log(`at war with ${arg('--declare')}`); }
   if (arg('--peace')) console.log(fail(makePeace(arg('--peace'))) ? `peace with ${arg('--peace')}` : 'was not at war with that guild');
+  if (arg('--noncombatant')) { fail(setNoncombatant(arg('--noncombatant'), true)); console.log(`${arg('--noncombatant')} reports and never fights`); }
+  if (arg('--combatant')) { fail(setNoncombatant(arg('--combatant'), false)); console.log(`${arg('--combatant')} fights in the war again`); }
   if (argv.includes('--member')) {
     const i = argv.indexOf('--member');
     fail(recordMembership(argv[i + 1], argv[i + 2], { source: 'operator' }));
@@ -470,6 +489,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const b = current();
   console.log(`\n${WAR_FILE()}`);
   console.log(`our guild: ${b.our_guild ?? '(unknown — learned from the first guild-combat kill, or --our-guild)'}`);
+  console.log(`noncombatants (report, never fight): ${(b.noncombatants ?? []).join(', ') || '(none)'}`);
   const gs = enemyGuilds();
   console.log(gs.length ? `at war with: ${gs.map(g => `${g.name} (${g.source}, since ${new Date(g.since).toISOString()})`).join('; ')}` : 'at war with nobody');
   const ms = Object.values(b.members).filter(m => m.guild_key && b.enemy_guilds[m.guild_key]);

@@ -288,5 +288,14 @@ await test('a sighting in OUR map is a report, not a call to arms; a fight is', 
   f.mode.stop('test');
 });
 
+await test('a noncombatant is named in the book, by character, and can be taken back off', () => {
+  reset();
+  assert.equal(war.isNoncombatant('Loial the Ogier'), false);
+  war.setNoncombatant('Loial the Ogier');
+  assert.equal(war.isNoncombatant('  loial THE ogier '), true);
+  war.setNoncombatant('Loial the Ogier', false);
+  assert.equal(war.isNoncombatant('Loial the Ogier'), false);
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${tests} passed`);
