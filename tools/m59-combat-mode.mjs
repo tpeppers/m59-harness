@@ -21,6 +21,8 @@ export const WAR_LOOK_EVERY_MS = 1500;
 export const WAR_LOOK_FALLBACK_MS = 4000;
 // The same (map, enemy) alarm is not re-raised by one keeper more often than this.
 export const WAR_ALARM_EVERY_MS = 3000;
+// A swarm leader's target is followed while their last swing at it is this recent.
+export const WARBAND_TARGET_FRESH_MS = 6000;
 // A sentinel watching an enemy stand in its room reports it again this often.
 export const WAR_SIGHTING_EVERY_MS = 15_000;
 
@@ -46,7 +48,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -94,6 +96,9 @@ export function normalizeCombatOrder(input) {
   demand(input.repeat == null || typeof input.repeat === 'boolean', 'repeat must be boolean');
   const order = { action: input.action, target: typeof input.target === 'string' ? input.target.trim() : input.target,
     ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true,
+    // A WARBAND ORDER follows the swarm leader's target, which may be a monster: it names an
+    // object id and is the one kind of order allowed to target something that is not a player.
+    ...(input.warband === true && Number.isSafeInteger(input.target) ? { warband: true } : {}),
     ...(when_absent === 'farm' ? { when_absent, ...(input.watch_maps ? { watch_maps: [...new Set(input.watch_maps)] } : {}) } : {}) };
   if (input.action === 'ambush') {
     demand(Number.isSafeInteger(input.map) && input.map > 1, 'ambush needs a map number, not a room object id');
@@ -110,7 +115,12 @@ export function normalizeCombatOrder(input) {
   return order;
 }
 
-export function combatTarget(client, target) {
+export function combatTarget(client, target, { anyAttackable = false } = {}) {
+  // A warband order names an object id and may be a monster; everything else is a player.
+  if (anyAttackable && typeof target === 'number') {
+    const o = client.room.objects.get(target);
+    return o && o.id !== client.selfId && (o.flags & OF.ATTACKABLE) ? o : null;
+  }
   const players = [...client.room.objects.values()].filter(o => o.id !== client.selfId && (o.flags & OF.PLAYER));
   const matches = players.filter(o => typeof target === 'number' ? o.id === target : exactName(client, o) === target.toLowerCase());
   demand(matches.length <= 1, 'player identity is ambiguous');
@@ -436,6 +446,74 @@ export class CombatMode {
       this.record('wand_volley', o);
     }, 1050);
     return hold;
+  }
+
+  // ------------------------------------------------------------------ WARBAND COMBAT
+  //
+  // SWARM ON = WARBAND. The terminal's S key hands every other fleet character's movement and work
+  // to `swarm/<leader>@terminal`, and the proxy writes whatever the operator attacks to
+  // swarm-leader.json. A keeper whose claim is held by a swarm is in the warband, and every 250ms
+  // (keeper process) it:
+  //   * focus-fires the LEADER'S target -- player or monster -- when that swing is fresh and the
+  //     target is in this character's room: a warband attack order on that object id, which puts
+  //     on the PvP gear and fires the 2s wand volley like any PvP fight. Safety stays ON (an
+  //     `attack`, never a `kill`), so an innocent the leader swings at is refused by the server
+  //     and dropped for the warband;
+  //   * when not fighting, and if this character is a named buffer (pvp-gear warband_buffs), keeps
+  //     EVERY warband ally in its room -- itself and the leader included -- buffed: the operator's
+  //     rule is that the warband is collectively buffed and ready.
+  // Movement between fights stays with the swarm driver; this owns the body only while it fights.
+  async warbandTick() {
+    const s = this.s, c = s.client;
+    const leaving = why => { if (this.active?.order?.warband) this.stop(why); };
+    if (!this.warbandEligibility?.()) { leaving('warband ended: no longer swarm-held'); return; }
+    if (!s.live || !c?.self || c.vitals?.()?.health?.value === 0) return;
+    if (this.active?.pvp) return;                       // a war fight already owns the body
+    const lead = gear.readSwarmLeader();
+    const fresh = lead && Number.isFinite(Number(lead.at)) && this.now() - Number(lead.at) < WARBAND_TARGET_FRESH_MS;
+    const t = fresh ? c.room?.objects?.get?.(Number(lead.target)) : null;
+    const name = t ? (c.rsc?.get?.(t.nameRsc) ?? t.name ?? '') : '';
+    const ok = !!t && t.id !== c.selfId && (t.flags & OF.ATTACKABLE) && !(t.flags & OF.GUILDMATE) &&
+      !((t.flags & OF.PLAYER) && this.isOurs(name)) && !this.warbandRefused?.has(t.id) && !this.pvpForbiddenHere();
+    if (this.active?.order?.warband) {
+      if (ok && this.active.order.target === t.id) return;
+      this.stop(ok ? 'warband: the leader switched target' : 'warband: the leader\'s target is gone');
+    }
+    if (ok && !this.active) {
+      try {
+        this.issue({ action: 'attack', target: t.id, warband: true, command_id: `warband-${t.id}`,
+          select_map: s.world?.room?.num, repeat: true });
+        this.warbandLast = { at: this.now(), target: t.id, name };
+      } catch (e) { this.warbandError = e.message; }
+      return;
+    }
+    if (!this.active) await this.warbandBuff().catch(e => { this.warbandError = e.message; });
+  }
+
+  async warbandBuff() {
+    const cfg = gear.pvpGearConfig();
+    const spells = cfg.warband_buffs?.[this.agentId] ?? [];
+    if (!spells.length || this.warbandBuffing) return;
+    if (this.now() - (this.warbandBuffAt ?? 0) < cfg.warband_rebuff_ms) return;
+    const s = this.s, c = s.client;
+    const known = spells.map(n => (c.spells ?? []).find(sp => exactName(c, sp) === String(n).toLowerCase())).filter(Boolean);
+    if (!known.length) return;
+    // Every ally in the room: ourselves by object id (a caster's own name does not resolve as a
+    // target), and every fleet character we can see -- the leader among them.
+    const allies = [c.selfId, ...[...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) && this.isOurs(c.rsc?.get?.(o.nameRsc) ?? o.name))
+      .map(o => o.id)];
+    this.warbandBuffing = true;
+    this.warbandBuffAt = this.now();
+    try {
+      await withBodyCommand(s, () => withPacketScope(() => {}, async () => {
+        for (const ally of allies) for (const sp of known) {
+          if (this.active) return;                      // a fight started: stop buffing
+          await s.pacer.submit('cast', () => { c.cast(sp.id, [ally]); }, 1500);
+        }
+      }), 'warband-buff');
+      this.warbandBuffed = { at: this.now(), allies: allies.length, spells: known.map(sp => exactName(c, sp)) };
+    } finally { this.warbandBuffing = false; }
   }
 
   /** Cross the internal door that leads toward the target, if the room has one. true when tried. */
@@ -773,7 +851,7 @@ export class CombatMode {
     demand(c.self && s.world?.room?.num > 1, 'live player and map identity required');
     if (input.select_map != null && s.world.room.num !== input.select_map)
       return { accepted: false, skipped: true, reason: 'outside assigned map', map: s.world.room.num };
-    const target = combatTarget(c, order.target);
+    const target = combatTarget(c, order.target, { anyAttackable: !!order.warband });
     if (typeof order.target === 'number') demand(target && (target.flags & OF.ATTACKABLE),
       'exact player is not here or not attackable; use a player name to wait');
     const keeper = this.keeper();
@@ -956,7 +1034,7 @@ export class CombatMode {
       demand(!this.playerThreatPresent(o), 'player threat preempts monster shelter');
     if (o.phase === 'engaging' && ['attack', 'turn', 'cast'].includes(kind)) {
       const t = o.client.room.objects.get(o.targetId);
-      demand(t && t.id !== o.playerId && (t.flags & OF.PLAYER) && (t.flags & OF.ATTACKABLE) &&
+      demand(t && t.id !== o.playerId && (o.order.warband || (t.flags & OF.PLAYER)) && (t.flags & OF.ATTACKABLE) &&
         exactName(o.client, t) === o.targetName, 'target left or identity changed');
     }
   }
@@ -991,6 +1069,9 @@ export class CombatMode {
       }
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
+        // The leader swung at somebody the server will not let us hit (an innocent, with our
+        // safety on): drop this target for the warband rather than re-issuing it every tick.
+        if (o.order.warband && o.targetId != null) (this.warbandRefused ??= new Set()).add(o.targetId);
         // A WAR ENGAGEMENT THE SERVER REFUSES WAS A WRONG MEMORY, and safety did its job: the
         // player is not at war with us now (left the guild, newbie, war over). Stop swinging
         // at them and stop remembering them as an enemy for a while.
@@ -1069,7 +1150,7 @@ export class CombatMode {
 
   refreshTarget(o) {
     if (!['waiting', 'engaging'].includes(o.phase)) return;
-    const t = combatTarget(o.client, o.order.target);
+    const t = combatTarget(o.client, o.order.target, { anyAttackable: !!o.order.warband });
     const visible = t && (t.flags & OF.ATTACKABLE);
     if (visible && o.phase === 'engaging' && t.id === o.targetId && exactName(o.client, t) === o.targetName) return;
     if (!visible && o.phase === 'waiting') return;
@@ -1209,7 +1290,7 @@ export class CombatMode {
     const target = c.room.objects.get(o.targetId);
     if (!target || exactName(c, target) !== o.targetName) { this.refreshTarget(o); return; }
     await this.prepareSafety(o);
-    if (o.pvp || this.targetAtWar(o)) {
+    if (o.pvp || this.targetAtWar(o) || o.order.warband) {
       // PVP GEAR ON, ONCE PER FIGHT, inside this fight's own packet scope (m59-pvp-gear.mjs).
       if (!o.pvpGearOn) await this.pvpGearOn(o);
       // THE VOLLEY. 'hold' means a lightning wand is carried: no swing between beats, because a

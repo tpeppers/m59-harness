@@ -339,6 +339,12 @@ session.combat.warEligibility = () => joinWanted && !isHostCharacter && !war.isN
 // M59_WAR_SENTINEL=0 turn the reporting off.
 session.combat.sentinelEligibility = () => joinWanted &&
   process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
+// WARBAND COMBAT (CombatMode.warbandTick): on while a swarm holds this character -- the terminal's S
+// key claims movement+work as `swarm/<leader>@terminal`. Never a host or a war noncombatant.
+session.combat.agentId = agent;
+session.combat.warbandEligibility = () => joinWanted && !isHostCharacter && !war.isNoncombatant(character) &&
+  /^swarm\//.test(String(autopilot?.heldStatus?.()?.by ?? ''));
+setInterval(() => { session.combat.warbandTick?.().catch?.(() => {}); }, 250).unref?.();
 // The zone alarm: one line in a shared file, watched rather than polled by a keeper pass, so a
 // fleetmate's fight reaches this character in milliseconds instead of on its next decision.
 try { war.watchAlarms(a => session.combat.onWarAlarm(a)); }

@@ -44,6 +44,8 @@ export const DEFAULT_PVP_GEAR = Object.freeze({
   volley_ms: 2000,
   expect_incoming: [],
   accept_if_missing: [],
+  warband_buffs: {},
+  warband_rebuff_ms: 180_000,
 });
 
 export const PVP_GEAR_FILE = () => {
@@ -74,6 +76,11 @@ export function pvpGearConfig() {
       volley_ms: Number(raw.volley_ms) >= 1000 ? Number(raw.volley_ms) : DEFAULT_PVP_GEAR.volley_ms,
       expect_incoming: Array.isArray(raw.expect_incoming) ? raw.expect_incoming.map(String).filter(Boolean) : [],
       accept_if_missing: Array.isArray(raw.accept_if_missing) ? raw.accept_if_missing.map(String).filter(Boolean) : [],
+      // WARBAND BUFFS: { "<agent>": ["bless", "super strength"] } -- each named buffer keeps every
+      // warband ally in its room (and itself) buffed while the swarm is on.
+      warband_buffs: raw.warband_buffs && typeof raw.warband_buffs === 'object' ? raw.warband_buffs : {},
+      warband_rebuff_ms: Number(raw.warband_rebuff_ms) >= 30_000 ? Number(raw.warband_rebuff_ms) : 180_000,
+      swarm_leader_files: Array.isArray(raw.swarm_leader_files) ? raw.swarm_leader_files.map(String).filter(Boolean) : [],
     };
   } catch { /* keep the last good value */ }
   return cache.value;
@@ -129,6 +136,35 @@ export function volleyWandsIn(c, { spent = new Set(), cfg = pvpGearConfig() } = 
 }
 
 export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / ms);
+
+// THE SWARM LEADER'S TARGET, as m59-proxy.mjs writes it from the operator's own REQ_ATTACK:
+// { target: <object id>, how, at, room_object_id, player_object_id }. The proxy writes into ITS
+// checkout's substrate/, so run the terminal from the checkout the keepers run from, or point
+// both at one file with M59_SWARM_LEADER_FILE.
+export const SWARM_LEADER_FILE = () => process.env.M59_SWARM_LEADER_FILE || join(HERE, 'substrate', 'swarm-leader.json');
+// THE TERMINAL MAY RUN FROM ANOTHER CHECKOUT. The proxy writes swarm-leader.json into ITS repo's
+// substrate/, and the fleet terminal is usually started from the mindmap checkout while the
+// keepers run from the deploy -- so the config may list more files (`swarm_leader_files`, read
+// live), and the freshest `at` among them wins.
+const leaderFiles = () => [...new Set([SWARM_LEADER_FILE(), ...(pvpGearConfig().swarm_leader_files ?? [])])];
+let leaderCache = { value: null, checked: 0, mtimes: '' };
+export function readSwarmLeader() {
+  const now = Date.now();
+  if (now - leaderCache.checked < 150) return leaderCache.value;
+  leaderCache.checked = now;
+  const files = leaderFiles();
+  const mtimes = files.map(f => { try { return existsSync(f) ? statSync(f).mtimeMs : 0; } catch { return 0; } });
+  const key = mtimes.join(',') + '|' + files.join(',');
+  if (key === leaderCache.mtimes) return leaderCache.value;
+  leaderCache.mtimes = key;
+  let best = null;
+  files.forEach((f, i) => {
+    if (!mtimes[i]) return;
+    try { const v = JSON.parse(readFileSync(f, 'utf8')); if (!best || Number(v?.at) > Number(best.at)) best = v; } catch {}
+  });
+  leaderCache.value = best;
+  return leaderCache.value;
+}
 
 // EXPECTED INCOMING: what a character should accept when somebody hands it over, without asking.
 // The operator's rule, 2026-09-30: "always accept being handed anything from the PVP gear list (or
