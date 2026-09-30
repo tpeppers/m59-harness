@@ -979,8 +979,13 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
         let ok = steps.length > 0;
         let pr = fr, pc = fc;
         for (const s of steps) {
+          // A DECLARED fall is legal here for the reason the bake keeps it (see
+          // `walksOnTheMover` in m59-routebake.mjs): `moverStepLands` is a step predicate and
+          // cannot speak to a fall somebody ran off and wrote down. Room 2600's lever routes
+          // cross the gully at r32c30 -> r35c30 and read "invalid" without this.
           const legal = useMover
-            ? g.moverStepLands(pr, pc, s.row, s.col)
+            ? (g.declaredFallJumps(pr, pc).some(j => j.row === s.row && j.col === s.col)
+               || g.moverStepLands(pr, pc, s.row, s.col))
             : (g.walkable(s.row, s.col) &&
                Math.abs(s.row - pr) <= 1 && Math.abs(s.col - pc) <= 1);
           if (!legal) { ok = false; break; }

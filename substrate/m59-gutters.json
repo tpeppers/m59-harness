@@ -53,5 +53,55 @@
         "why": "the basin's only exit, out through 589"
       }
     ]
+  },
+  "2600": {
+    "_name": "The crypt in Marion",
+    "_why": "The operator, 2026-09-30: the only way to the levers is a jump over the gully, r32c30 -> r35c30, and spectral mummies standing in it or on the landing can make it take several tries, like the Ukgoth jump. A miss drops the body into the gully (r33-34 c28-31, sector floor 1856 with depth, 1652 standing), 512-716 units below the corridor it was jumping for against a 384 step limit, so there is no way forward from it. This rail walks the body back out of the gully and round to the take-off to try again. The three longer rails from the same head carry on over the jump to the lever squares (lever-west, lever-east, lever-hall in substrate/m59-waypoints.json), so a body in the gully that is still headed for a lever is offered one line that retries the jump and finishes the errand, rather than a line that stops at the ledge. One head serves the whole gully: it is within 2.3 squares of every one of its eight squares, and railAcross ranks heads by walking distance.",
+    "rails": [
+      {
+        "from": [
+          34,
+          30
+        ],
+        "to": [
+          32,
+          30
+        ],
+        "why": "missed the gully jump: back to the take-off"
+      },
+      {
+        "from": [
+          34,
+          30
+        ],
+        "to": [
+          26,
+          4
+        ],
+        "why": "missed the gully jump: round again, over it, and on to the west lever"
+      },
+      {
+        "from": [
+          34,
+          30
+        ],
+        "to": [
+          26,
+          9
+        ],
+        "why": "missed the gully jump: round again, over it, and on to the east lever"
+      },
+      {
+        "from": [
+          34,
+          30
+        ],
+        "to": [
+          25,
+          8
+        ],
+        "why": "missed the gully jump: round again, over it, and on to the hall"
+      }
+    ]
   }
 }

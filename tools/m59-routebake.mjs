@@ -746,6 +746,10 @@ function bfs(geometry, fromRow, fromCol,
       const nextFrontier = [];
       for (const [r, c] of frontier) {
         for (const n of geometry.neighbors(r, c, { collision })) {
+          // Honoured here as well as in `visit`: an unweighted caller asking for "only these
+          // falls" must not be handed a different one because it skipped the weighted pass.
+          if (n.fall && allowedFallEdges
+              && !allowedFallEdges.has(`${r},${c}>${n.row},${n.col}`)) continue;
           if (coarseFloor && !coarseSpanClear(geometry, r, c, n.row, n.col)) continue;
           const k = key(n.row, n.col);
           if (came.has(k)) continue;
@@ -1160,16 +1164,69 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
   // not walk. A pair with no walkable spelling stores no route at all — `reach` still
   // carries the honest "can it be got to", so a refusal stays correct — rather than storing
   // a line that reads like a proof and is not one.
+  //
+  // A DECLARED FALL IS THE ONE STEP THIS DOES NOT ASK THE MOVER ABOUT.
+  //
+  // `moverStepLands` is a STEP predicate and a fall is not a step, so it refuses every fall
+  // it is not lucky enough to trace — and a fall that some person ran off and wrote down in
+  // substrate/m59-falljumps.json is exactly the edge that predicate cannot speak to. The
+  // rail follower already treats those pairs as jumps (`declaredJumpHere` in followRail),
+  // running and all; only this check still called them unwalkable.
+  //
+  // The crypt in Marion (2600), 2026-09-30. The only way from the entrance at r11c17 to the
+  // two levers is ~110 steps round the east side and a running fall over a gully, r32c30 ->
+  // r35c30. The operator recorded it with F9 and Bunsen crossed it live in one step. The bake
+  // said `reach 11,17>26,4` and stored no route, because the first plan took the detector's
+  // column-31 pair and every gully pair fails `moverStepLands`. With no rail, sixteen
+  // characters asked walk_to for the whole thing in one go and wedged at r16-18 c12-15.
+  //
+  // NARROW ON PURPOSE. Only a pair in the declared table is exempt — and that table's own
+  // loader has already refused any entry with no landing floor or that gains height. An
+  // undeclared, auto-detected fall still has to pass `moverStepLands` exactly as before, so
+  // a room with no declarations bakes byte-for-byte what it did yesterday.
+  const declaredFalls = new Set();
+  for (let r = 1; r <= geometry.rows; r++)
+    for (let c = 1; c <= geometry.cols; c++)
+      for (const j of geometry.declaredFallJumps(r, c)) declaredFalls.add(`${r},${c}>${j.row},${j.col}`);
   const walksOnTheMover = (start, str) => {
     if (!str) return false;
     try {
       let prev = start;
       for (const step of replay(start.row, start.col, str)) {
-        if (!geometry.moverStepLands(prev.row, prev.col, step.row, step.col)) return false;
+        if (!declaredFalls.has(`${prev.row},${prev.col}>${step.row},${step.col}`)
+            && !geometry.moverStepLands(prev.row, prev.col, step.row, step.col)) return false;
         prev = step;
       }
       return true;
     } catch { return false; }
+  };
+  // AND WHEN THE PLAN TOOK THE WRONG JUMP, ASK AGAIN WITH ONLY THE DECLARED ONES.
+  //
+  // Exempting the declared pair is not enough on its own, because the BFS does not know
+  // which of two parallel falls a person walked: in 2600 it reaches r35c31 from r32c31 as
+  // readily as r35c30 from r32c30, took column 31 first, and the route died at a pair nobody
+  // declared. So a pair that would otherwise be DROPPED is planned once more with every
+  // undeclared fall removed (`allowedFallEdges` = the declared set) — strict first, then
+  // permissive, one search per start square, and only in a room that declares something.
+  // It never replaces a route that already walks; it only rescues one that would be lost.
+  const declaredOnlyCache = new Map();
+  const declaredOnlyPath = (from, to) => {
+    if (!declaredFalls.size) return null;
+    const k = `${from.row},${from.col}`;
+    if (!declaredOnlyCache.has(k)) {
+      declaredOnlyCache.set(k, [
+        ...(preferCoarseFloor ? [bfs(geometry, from.row, from.col,
+          { collision, coarseFloor: true, clearance: CLEARANCE_PENALTY,
+            allowedFallEdges: declaredFalls })] : []),
+        bfs(geometry, from.row, from.col, { collision, allowedFallEdges: declaredFalls }),
+      ]);
+    }
+    for (const plan of declaredOnlyCache.get(k)) {
+      if (!plan.came.has(plan.key(to.row, to.col))) continue;
+      const p = pathString(plan.came, plan.key, from.row, from.col, to.row, to.col);
+      if (p && walksOnTheMover(from, p)) return p;
+    }
+    return null;
   };
   let unwalkable = 0;
 
@@ -1262,10 +1319,16 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
         const alt = strict && strict.came.has(strict.key(to.row, to.col))
           ? pathString(strict.came, strict.key, from.row, from.col, to.row, to.col)
           : null;
-        if (alt && walksOnTheMover(from, alt)) {
+        const altWalks = !!alt && walksOnTheMover(from, alt);
+        const declaredOnly = altWalks ? null : declaredOnlyPath(from, to);
+        if (altWalks) {
           p = alt;
           evidence = pulledRoute(from, alt);
           usedStrict = true;
+        } else if (declaredOnly) {
+          // See declaredOnlyPath: the same pair, planned over the jump somebody walked.
+          p = declaredOnly;
+          evidence = pulledRoute(from, declaredOnly);
         } else {
           p = null;
           unwalkable++;
@@ -1417,6 +1480,12 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
         if (p != null) strictRoutes++;
       }
       if (p == null) p = pathString(came, key, g.row, g.col, to.row, to.col);
+      // A gutter line was never held to the mover the way an anchor route is, and that is
+      // left alone — dropping one is how a character ends up in a hole with nothing written
+      // down. But where it would ride an undeclared fall the mover refuses and a line over a
+      // DECLARED one walks, take that: 2600's rail out of the gully and back over the jump
+      // is the case, and it must retry at the column somebody ran, not at column 31.
+      if (p != null && !walksOnTheMover(g, p)) p = declaredOnlyPath(g, to) ?? p;
       if (p == null) { if (reach[pair]) unspellable++; continue; }
       routes[pair] = p;
     }

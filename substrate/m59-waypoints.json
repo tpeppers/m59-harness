@@ -24,6 +24,16 @@
         { "name": "gen-n-e",    "row": 15, "col": 43 },
         { "name": "gen-e-far",  "row": 16, "col": 56 }
       ]
+    },
+    "2600": {
+      "_room": "The crypt in Marion",
+      "_source": "kod/object/active/holder/room/monsroom/marcryp1.kod places two GuestLevers at r27c4 and r27c9 (CreateLevers); gstlever.kod answers only within ONE square (GUESTLEVER_RANGE = 1).",
+      "_why": "Both levers must be switched within 2 s (SLAM_TIME) to open the final door, so two characters have to STAND beside them. From the entrance the way there is ~110 steps: east along row 18, north up col 23, round the east side, down to the ledge, over the gully (r32c30 -> r35c30, a running fall), west along row 37 and down the ramp at col 12. walk_to caps one call at 30 steps, and on 2026-09-30 sixteen characters wedged against the north wall asking for it in one go; a baked route is the rail they follow instead.",
+      "points": [
+        { "name": "lever-west", "row": 26, "col": 4, "_what": "one square north of the lever at r27c4" },
+        { "name": "lever-east", "row": 26, "col": 9, "_what": "one square north of the lever at r27c9" },
+        { "name": "lever-hall", "row": 25, "col": 8, "_what": "in front of the final door; where everyone not pulling waits" }
+      ]
     }
   }
 }
