@@ -12,6 +12,7 @@ import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision
 import * as war from './m59-war.mjs';
 import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
+import * as keepoff from './m59-keepoff.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -49,7 +50,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -106,6 +107,9 @@ export function normalizeCombatOrder(input) {
     demand(typeof order.target === 'string', 'ambush needs a player name that survives room changes');
     order.map = input.map;
     order.position = square(input.position, 'ambush position');
+    // A KEEP-OFF ambush (m59-keepoff.mjs) waits NEAR a logoff ghost, not on one exact square, and
+    // engages a target already standing there -- several characters share one ghost.
+    if (input.keepoff === 'wait' || input.keepoff === 'rush') order.keepoff = input.keepoff;
     if (input.door != null) {
       order.door = square(input.door, 'door arrival area');
       order.door.radius = input.door.radius ?? 1;
@@ -215,6 +219,7 @@ export class CombatMode {
   warStatus() {
     return { enabled: this.warEnabled(), sentinel: this.sentinelEnabled(), last: this.warLast,
       threat: this.warThreat ?? null, error: this.warError,
+      keepoff: { last: this.keepoffLast ?? null, error: this.keepoffError ?? null },
       enemy_guilds: (() => { try { return war.enemyGuilds().map(g => g.name); } catch { return null; } })() };
   }
 
@@ -467,9 +472,10 @@ export class CombatMode {
   // Movement between fights stays with the swarm driver; this owns the body only while it fights.
   async warbandTick() {
     const s = this.s, c = s.client;
-    const leaving = why => { if (this.active?.order?.warband) this.stop(why); };
+    const leaving = why => { if (this.active?.order?.warband || this.active?.order?.keepoff) this.stop(why); };
     if (!this.warbandEligibility?.()) { leaving('warband ended: no longer swarm-held'); return; }
     if (!s.live || !c?.self || c.vitals?.()?.health?.value === 0) return;
+    this.keepoffTrack();
     if (this.active?.pvp) return;                       // a war fight already owns the body
     // THE STANDING TARGET. A new target from the leader -- a different id, or the same id attacked
     // again after it was finished -- replaces it; nothing else does. An entry older than
@@ -489,10 +495,19 @@ export class CombatMode {
       if (t) {
         // The same id on a different thing is a RECYCLED id, not our target: it died.
         if (target.name && name.toLowerCase() !== target.name.toLowerCase()) { target.done = 'id recycled'; t = null; }
-        else { target.name ??= name; target.seenInRoom = room; }
+        else {
+          target.name ??= name; target.seenInRoom = room; target.player = !!(t.flags & OF.PLAYER);
+          target.lastAt = { room, row: t.row, col: t.col, at: this.now() }; target.goneAt = null;
+        }
       } else if (target.seenInRoom != null && target.seenInRoom === room) {
-        // Gone from the room we saw it in, while we are still standing in it: dead (or fled).
-        target.done = 'gone from the room';
+        // Gone from the room we saw it in, while we are still standing in it: dead, fled -- or, for
+        // a player who is also off the server's player list, LOGGED OFF, which takes the keep-off
+        // lock (m59-keepoff.mjs). The list removal can trail the room removal by a packet or two,
+        // so a player still listed is given a moment before being called gone.
+        if (target.player && target.name && this.playerOnline(target.name) === false) {
+          this.lockLoggedOff(target.name, target.lastAt); target.done = 'logged off';
+        } else if (target.player && this.now() - (target.goneAt ??= this.now()) < 2000) { /* wait for the list */ }
+        else target.done = 'gone from the room';
       }
       // NEVER ONE OF OURS. The operator may swing at a fleetmate by accident; the warband does not
       // follow, and the target is dropped rather than retried.
@@ -504,6 +519,9 @@ export class CombatMode {
       if (ok && this.active.order.target === t.id) return;
       this.stop(ok ? 'warband: the leader switched target' : 'warband: the leader\'s target is gone');
     }
+    // The leader naming a NEW target here outranks waiting at a ghost or rushing a login.
+    if (ok && this.active?.order?.keepoff && target.at > this.active.acceptedAt)
+      this.stop('keep-off: the leader named a new target');
     if (ok && !this.active) {
       try {
         this.issue({ action: 'attack', target: t.id, warband: true, command_id: `warband-${t.id}`,
@@ -512,7 +530,119 @@ export class CombatMode {
       } catch (e) { this.warbandError = e.message; }
       return;
     }
+    await this.keepoffTick();
     if (!this.active) await this.warbandBuff().catch(e => { this.warbandError = e.message; });
+  }
+
+  // ------------------------------------------------------------------ the keep-off lock
+  //
+  // tools/m59-keepoff.mjs has the argument. A warband target who LOGS OFF is locked by name at the
+  // square he left; `keepoff_waiters` swarm characters (default 2) wait near his ghost, and when the
+  // server announces his login (BP_PLAYER_ADD, which every client receives for every player) every
+  // swarm character not already in a PvP fight rushes the ghost's map and attacks. Safety stays on
+  // throughout -- an `ambush`, never a `kill` -- so somebody the server will not let us hit ends
+  // the lock instead of being swung at for ever.
+
+  /** true / false from the server's player list; null when this client has no list to ask. */
+  playerOnline(name) {
+    const list = this.s.client?.playersOnline;
+    if (!list?.size) return null;
+    const want = keepoff.norm(name);
+    for (const p of list.values()) if (keepoff.norm(p?.name) === want) return true;
+    return false;
+  }
+
+  lockLoggedOff(name, seen) {
+    if (!name || this.isOurs(name)) return null;
+    const now = this.now();
+    const pos = seen && now - seen.at < 15_000 ? { room: seen.room, row: seen.row, col: seen.col } : {};
+    try {
+      // A room the server forbids combat in (an inn) is not worth waiting in: locked, not waited.
+      const noCombat = pos.room != null && pos.room === this.s.world?.room?.num && this.pvpForbiddenHere();
+      const l = keepoff.markOffline(name, { ...pos, at: now, by: this.character?.() ?? null, noCombat });
+      this.keepoffLast = { at: now, event: 'locked', name, room: l?.room ?? null };
+      return l;
+    } catch (e) { this.keepoffError = e.message; return null; }
+  }
+
+  /** Where each locked player was last seen by this keeper: the square a re-logoff leaves a ghost on. */
+  keepoffTrack() {
+    const c = this.s.client, room = this.s.world?.room?.num;
+    if (!c?.room?.objects) return;
+    const locks = keepoff.activeLocks({ now: this.now(), ttl: gear.pvpGearConfig().keepoff_ms });
+    if (!locks.length) return;
+    this.keepoffSeen ??= new Map();
+    for (const o of c.room.objects.values()) {
+      if (o.id === c.selfId) continue;
+      const n = exactName(c, o);
+      const l = locks.find(x => keepoff.norm(x.name) === n);
+      if (!l) continue;
+      if (o.flags & OF.PLAYER) this.keepoffSeen.set(n, { room, row: o.row, col: o.col, at: this.now() });
+      // HIS GHOST: same name, not a player. It is where he will come back, to the square.
+      else if (l.offline && (l.room !== room || l.row !== o.row || l.col !== o.col)) {
+        try { keepoff.notePosition(l.name, { room, row: o.row, col: o.col }); } catch {}
+      }
+    }
+  }
+
+  issueKeepoff(l, role) {
+    try {
+      return this.issue({ action: 'ambush', target: l.name, map: l.room, position: { row: l.row, col: l.col },
+        keepoff: role, repeat: true, ttl_ms: role === 'rush' ? 600_000 : 1_800_000,
+        command_id: `keepoff-${role}-${keepoff.norm(l.name)}-${l.offline ? l.offline_at : l.online_at}` });
+    } catch (e) { this.keepoffError = `${role} ${l.name}: ${e.message}`; return null; }
+  }
+
+  /** Idle and swarm-held: take a waiter slot at a logged-off target's ghost. */
+  async keepoffTick() {
+    const cfg = gear.pvpGearConfig(), now = this.now(), room = this.s.world?.room?.num;
+    const a = this.active;
+    if (a?.order?.keepoff === 'wait') { try { keepoff.heartbeatWaiter(a.order.target, this.agentId, { now }); } catch {} return; }
+    if (a || !cfg.keepoff_waiters) return;
+    const locks = keepoff.activeLocks({ now, ttl: cfg.keepoff_ms })
+      .filter(l => l.offline && l.room > 1 && l.row != null && !l.no_combat)
+      .sort((x, y) => (y.room === room) - (x.room === room));
+    for (const l of locks) {
+      // Those already in his map get first claim; everybody else only after five seconds.
+      if (l.room !== room && now - Number(l.offline_at) < 5000) continue;
+      if (this.keepoffRefusedAt?.[keepoff.norm(l.name)] > now - 60_000) continue;
+      let mine = false;
+      try { mine = keepoff.claimWaiter(l.name, this.agentId, { max: cfg.keepoff_waiters, now, ttl: cfg.keepoff_ms }); } catch { mine = false; }
+      if (!mine) continue;
+      const r = this.issueKeepoff(l, 'wait');
+      if (r?.accepted) { this.keepoffLast = { at: now, event: 'waiting', name: l.name, room: l.room }; return; }
+      (this.keepoffRefusedAt ??= {})[keepoff.norm(l.name)] = now;
+      try { keepoff.releaseWaiter(l.name, this.agentId); } catch {}
+    }
+  }
+
+  /** The server's player list moved: a locked player logged on or off. */
+  onPlayerListEvent(ev) {
+    if (!ev?.name || !this.warbandEligibility?.()) return;
+    const cfg = gear.pvpGearConfig(), now = this.now(), n = keepoff.norm(ev.name);
+    if (ev.kind === 'logged-off') {
+      const w = this.warbandTarget;
+      const isTarget = !!(w && w.player && w.name && keepoff.norm(w.name) === n && w.done !== 'a fleetmate');
+      if (!isTarget && !keepoff.lockOf(ev.name, { now, ttl: cfg.keepoff_ms })) return;
+      // A rusher lets go; waiters (everybody) re-claim at the ghost he has just left.
+      if (this.active?.order?.keepoff && keepoff.norm(this.active.order.target) === n) this.stop('keep-off: he logged off again');
+      const seen = isTarget && w.lastAt && now - w.lastAt.at < 15_000 ? w.lastAt : this.keepoffSeen?.get(n);
+      this.lockLoggedOff(ev.name, seen);
+      if (isTarget && !w.done) w.done = 'logged off';
+      return;
+    }
+    if (ev.kind !== 'logged-on') return;
+    const l = keepoff.lockOf(ev.name, { now, ttl: cfg.keepoff_ms });
+    if (!l) return;
+    try { keepoff.markOnline(ev.name, { at: now }); } catch {}
+    this.keepoffLast = { at: now, event: 'logged on', name: l.name, room: l.room };
+    if (!cfg.keepoff_rush || !(l.room > 1) || l.row == null || l.no_combat) return;
+    const a = this.active;
+    if (a?.pvp || a?.order?.keepoff) return;             // already fighting a person, or already there
+    // "Not currently doing PvP fighting": a warband fight against a PLAYER is one; a monster is not.
+    if (a?.order?.warband && a.phase === 'engaging' && (a.client?.room?.objects?.get?.(a.targetId)?.flags & OF.PLAYER)) return;
+    const r = this.issueKeepoff(l, 'rush');
+    if (r?.accepted) this.keepoffLast = { at: now, event: 'rushing', name: l.name, room: l.room };
   }
 
   async warbandBuff() {
@@ -1067,6 +1197,7 @@ export class CombatMode {
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observeWar(ev, client);
+    if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
@@ -1090,6 +1221,7 @@ export class CombatMode {
       if (ROOM_REFUSAL.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'room_refused' };
         this.record('room_refused', o);
+        if (o.order.keepoff) try { keepoff.markNoCombat(o.order.target); } catch {}
         this.stop(`the server forbids combat in this room: ${ev.text}`); return;
       }
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
@@ -1097,6 +1229,9 @@ export class CombatMode {
         // The leader swung at somebody the server will not let us hit (an innocent, with our
         // safety on): drop this target for the warband rather than re-issuing it every tick.
         if (o.order.warband && o.targetId != null) (this.warbandRefused ??= new Set()).add(o.targetId);
+        // A keep-off target the server will not let us hit (safety on: not at war, not a murderer)
+        // is no target at all: lift the lock rather than camp him for three hours.
+        if (o.order.keepoff) try { keepoff.clearLock(o.order.target, `server refused: ${ev.text}`); } catch {}
         // A WAR ENGAGEMENT THE SERVER REFUSES WAS A WRONG MEMORY, and safety did its job: the
         // player is not at war with us now (left the guild, newbie, war over). Stop swinging
         // at them and stop remembering them as an enemy for a while.
@@ -1298,6 +1433,20 @@ export class CombatMode {
         const result = await s.travel(o.order.map, { movementGeneration: s.movementGeneration, controlToken: o.id });
         this.guard(o);
         demand(result?.arrived && s.world.room.num === o.order.map, result?.reason ?? 'ambush map was not reached');
+      }
+      if (o.order.keepoff) {
+        // KEEP-OFF: near his ghost is enough (several of us share it), and if he is already standing
+        // here there is nothing to wait for.
+        const here = combatTarget(c, o.order.target);
+        const near = Math.hypot(c.self.row - o.order.position.row, c.self.col - o.order.position.col) <= 2;
+        if (!here && !near) {
+          const next = safeCombatStep(s, { ...o.order.position, exact: false });
+          demand(next, 'no safe path to the logoff ghost');
+          await this.stand(o); await s.step(next.col, next.row); return;
+        }
+        o.room = s.world.room.num; o.roomObject = c.room.id; o.armedAt = this.now();
+        o.phase = 'waiting'; o.phaseRevision++; this.record('keepoff_waiting', o);
+        this.refreshTarget(o); return;
       }
       if (c.self.row !== o.order.position.row || c.self.col !== o.order.position.col) {
         const next = safeCombatStep(s, { ...o.order.position, exact: true });

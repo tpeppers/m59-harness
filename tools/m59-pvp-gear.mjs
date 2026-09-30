@@ -46,6 +46,9 @@ export const DEFAULT_PVP_GEAR = Object.freeze({
   accept_if_missing: [],
   warband_buffs: {},
   warband_rebuff_ms: 180_000,
+  keepoff_waiters: 2,
+  keepoff_ms: 3 * 60 * 60_000,
+  keepoff_rush: true,
 });
 
 export const PVP_GEAR_FILE = () => {
@@ -80,6 +83,11 @@ export function pvpGearConfig() {
       // warband ally in its room (and itself) buffed while the swarm is on.
       warband_buffs: raw.warband_buffs && typeof raw.warband_buffs === 'object' ? raw.warband_buffs : {},
       warband_rebuff_ms: Number(raw.warband_rebuff_ms) >= 30_000 ? Number(raw.warband_rebuff_ms) : 180_000,
+      // THE KEEP-OFF LOCK (tools/m59-keepoff.mjs): how many wait at a logged-off target's ghost, how
+      // long the lock lasts, and whether every idle swarm character rushes his login.
+      keepoff_waiters: Number.isSafeInteger(raw.keepoff_waiters) && raw.keepoff_waiters >= 0 ? raw.keepoff_waiters : 2,
+      keepoff_ms: Number(raw.keepoff_ms) >= 60_000 ? Number(raw.keepoff_ms) : 3 * 60 * 60_000,
+      keepoff_rush: raw.keepoff_rush !== false,
       swarm_leader_files: Array.isArray(raw.swarm_leader_files) ? raw.swarm_leader_files.map(String).filter(Boolean) : [],
     };
   } catch { /* keep the last good value */ }

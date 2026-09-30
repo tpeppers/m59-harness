@@ -808,3 +808,6 @@ substrate/magic-keep.json
 # fight people. An order, this machine's, like substrate/loadouts.
 /substrate/pvp-gear.json
 /substrate/pvp-gear-*.json
+# Keep-off locks (tools/m59-keepoff.mjs): names other players and where they logged off.
+/substrate/keepoff.json
+/substrate/keepoff-*.json
