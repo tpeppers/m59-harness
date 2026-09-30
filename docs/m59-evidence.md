@@ -88,8 +88,8 @@ keeper that was already running when you commit `#movement` therefore goes on st
 old epoch.
 
 That is correct rather than a gap: **every keeper is a child process of the broker and
-picks up new code only when it is itself restarted** (`POST /stop` on its port; the 45s
-sweep respawns it from the roster on disk). An epoch change means the code changed, which
+picks up new code only when it is itself restarted** (`m59-service.mjs restart-keepers`,
+a handoff; see [`m59-operations.md`](m59-operations.md#restarting-keepers-hand-them-off-do-not-log-them-off)). An epoch change means the code changed, which
 means a restart was needed anyway. The two facts move together — a keeper still stamping
 the old epoch is a keeper still *running* the old code, which is exactly what you want the
 ledger to say.

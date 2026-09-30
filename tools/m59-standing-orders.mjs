@@ -159,7 +159,7 @@ if (process.argv[1]?.endsWith('m59-standing-orders.mjs')) {
           '--skill', skill, '--price', String(o.price), '--teacher', o.teacher,
           '--teacher-room', String(o.teacher_room),
           '--home', String(last ? homeOf(agent) : o.teacher_room),
-          '--carrying', String(Math.max(0, carrying))], { encoding: 'utf8', timeout: 45 * 60_000 });
+          '--carrying', String(Math.max(0, carrying))], { encoding: 'utf8', timeout: 45 * 60_000, windowsHide: true });
         const said = String(r.stdout ?? '').split('\n')[0];
         console.log(`  -> exit ${r.status}: ${said}`);
         if (r.status === 0) {

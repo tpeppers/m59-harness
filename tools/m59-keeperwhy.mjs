@@ -55,7 +55,7 @@ export const SIGNATURES = Object.freeze([
     says: 'fight() was sent at an exact creature id that its own filters remove, so it finds nothing ' +
           'and no pull or close ever runs. Two causes are fixed: a quarry proved unreachable being ' +
           're-selected (52053aa) and a pulled quarry that died to somebody else (41d2b73).',
-    lever: 'if the keeper predates deploy-2026-09-25-10, restart it (POST /stop, addressed). If it ' +
+    lever: 'if the keeper predates deploy-2026-09-25-10, hand it off (m59-service.mjs restart-keepers). If it ' +
            'does not, this is a THIRD cause — read `recent` for the pull and the avoid set.',
   },
   {

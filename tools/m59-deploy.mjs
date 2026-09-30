@@ -532,7 +532,7 @@ if (mode === '--cut') {
     const step = (what, repo, args) => {
       console.log(`\n-> ${what}`);
       try {
-        const out = execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const out = execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         if (out.trim()) console.log(out.trim());
       } catch (e) {
         console.error(`FAILED: ${what}`);
@@ -549,13 +549,20 @@ if (mode === '--cut') {
       console.log(`\n-> record the orders pin`);
       try {
         const out = execFileSync(process.execPath, [join(pin.repo, 'promote.mjs'), '--apply', '--push'],
-                                 { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+                                 { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         if (out.trim()) console.log(out.trim());
       } catch (e) { console.error('FAILED: the orders pin was not recorded — the code is deployed and the orders are not');
         console.error((e.stderr || e.stdout || e.message || '').toString().trim()); process.exit(1); }
     }
-    console.log(`\ncut and applied: prod is now ${tag}. The broker still needs restarting:`);
-    console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart --fleet ${process.env.M59_FLEET ?? 'prod'}`);
+    // KEEPERS ARE HANDED OFF, NOT LOGGED OFF. Keeper code loads through `restart-keepers`
+    // (the broker's war_restart, memory-gated in m59-keeper-restart.mjs): nobody leaves the
+    // world. A broker restart stops every keeper and logs the whole fleet off, so it is the
+    // second line, needed only when the broker's own code changed.
+    const fleetArg = `--fleet ${process.env.M59_FLEET ?? 'prod'}`;
+    console.log(`\ncut and applied: prod is now ${tag}. Load the new keeper code with a handoff:`);
+    console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart-keepers ${fleetArg}`);
+    console.log('Only if the broker itself changed (this logs every character off):');
+    console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart ${fleetArg}`);
   }
   process.exit(0);
 }

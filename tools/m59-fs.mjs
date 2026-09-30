@@ -67,7 +67,7 @@ async function fleetRows() {
 function minimal(minutes) {
   const out = execFileSync(process.execPath,
     [join(HERE, 'm59-minimal.mjs'), '--json', '--minutes', String(minutes)],
-    { encoding: 'utf8', timeout: 120_000 });
+    { windowsHide: true, encoding: 'utf8', timeout: 120_000 });
   return JSON.parse(out);
 }
 

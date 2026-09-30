@@ -5,11 +5,18 @@
 //   node tools/m59-friendly-reboot.mjs --go             # evacuate, then restart keepers
 //   node tools/m59-friendly-reboot.mjs --go --seconds 10
 //   node tools/m59-friendly-reboot.mjs --go --agents t4,t7
+//   node tools/m59-friendly-reboot.mjs --go --mode logoff   # the stop-and-sweep, on purpose
 //
-// WHY THIS EXISTS. A keeper restart is a LOGOFF: `POST /stop` closes the game socket and
-// exits (m59-keeper-process.mjs), and the broker's 45s rejoin sweep brings the character
+// WHY THIS EXISTS. A keeper restart USED to be a LOGOFF: `POST /stop` closes the game socket
+// and exits (m59-keeper-process.mjs), and the broker's 45s rejoin sweep brings the character
 // back from the roster on disk. That is already safe while the keeper is down — a character
 // that is not in the world cannot be hit.
+//
+// NOW IT IS A HANDOFF WHENEVER THE MACHINE CAN AFFORD ONE (m59-keeper-restart.mjs): a hidden
+// replacement keeper logs in and the old one exits, and nobody leaves the world. The logoff
+// below is the fallback for a machine short of memory, and it is announced with the numbers.
+// The walk to a safe spot is kept either way: a handoff inherits the old keeper's fight just
+// as a relog does, and being behind a wall at that moment is still the better place to be.
 //
 // The danger is WHERE IT COMES BACK. It logs in exactly where it logged off, and if that is
 // the middle of a monster room at a fifth of its health, the new keeper inherits a fight it
@@ -31,6 +38,7 @@
 // takes no hits at all. It never stops the broker: the broker is what runs the sweep that
 // brings everybody back, and stopping it turns a 45-second gap into a manual recovery.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { restartKeepers } from './m59-war-restart.mjs';
 
 const args = process.argv.slice(2);
 const has = (flag) => args.includes(flag);
@@ -315,24 +323,27 @@ if (!GO) { console.log('\nplan only — nothing was moved and no keeper was stop
 
 // ---------------------------------------------------------------- phase 2: restart
 //
-// EVERY keeper stops, safe or not. A character that could not reach a spot is logged off
-// where it stands, and that is the better of the two available outcomes: out of the world
-// entirely for ~45 seconds beats standing in the open with nothing watching it. The sweep
-// respawns from the roster on disk, which is also how it picks up new code.
+// EVERY keeper restarts, safe or not — by HANDOFF when free memory covers a second keeper
+// process (nobody leaves the world), otherwise by the old stop-and-sweep, which logs a
+// character that could not reach a spot off where it stands. The decision and its numbers are
+// printed first; `M59_RESTART_MODE` or `--mode handoff|logoff|auto` overrides it.
 //
-// ADDRESSED BY AGENT, CHARACTER AND EXACT PID, because a keeper refuses an order that names
-// somebody else — two fleets on one machine is a working configuration and a stop sent to a
-// guessed port would take down a character nobody asked about.
-let stopped = 0, refused = 0;
-for (const [agent, k] of before) {
-  const ok = await fetch(`http://127.0.0.1:${k.port}/stop`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent, character: k.character, keeper_pid: k.pid }),
-    signal: AbortSignal.timeout(8000),
-  }).then(r => r.ok).catch(() => false);
-  if (ok) stopped++; else refused++;
-}
-console.log(`\nstopped ${stopped} keeper(s)${refused ? `, ${refused} refused` : ''}`);
+// ADDRESSED BY AGENT, CHARACTER AND EXACT PID either way, because a keeper refuses an order
+// that names somebody else — two fleets on one machine is a working configuration and a stop
+// sent to a guessed port would take down a character nobody asked about.
+console.log('');
+const restart = await restartKeepers({
+  agents: [...before.keys()], mode: val('--mode', null),
+  concurrency: val('--concurrency', null) != null ? Number(val('--concurrency')) : null,
+  fleet: health.fleet === 'default' ? null : health.fleet,
+  url: `http://127.0.0.1:${PORT}/`, fleetState: health.state ?? null, health,
+  waitS: 60,
+}).catch(e => ({ mode: 'error', ok: false, restarted: 0, of: before.size, results: [], why: e.message }));
+console.log(restart.mode === 'handoff'
+  ? `\nhanded off ${restart.restarted} of ${restart.of} keeper(s) without leaving the world`
+  : restart.mode === 'logoff'
+    ? `\nlogged off ${restart.of} keeper(s) by stop-and-sweep (memory fallback or forced)`
+    : `\nrestart FAILED: ${restart.why}`);
 
 // ---------------------------------------------------------------- phase 3: see them back
 //
@@ -344,7 +355,7 @@ console.log(`\nstopped ${stopped} keeper(s)${refused ? `, ${refused} refused` : 
 // wait for nothing: the old process reports it right up until it goes.
 const waitMs = Math.max(60_000, (Number(val('--wait-seconds', '150')) || 150) * 1000);
 const until = Date.now() + waitMs;
-process.stdout.write('waiting for the rejoin sweep');
+process.stdout.write(restart.mode === 'handoff' ? 'confirming every keeper is on a new pid' : 'waiting for the rejoin sweep');
 let back = new Map();
 while (Date.now() < until) {
   await new Promise(r => setTimeout(r, 5000));

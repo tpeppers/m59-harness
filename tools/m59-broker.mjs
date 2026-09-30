@@ -18082,6 +18082,10 @@ function brokerHealth() {
     combat_mode: 3,
     audio_observations: 1,
     intent_observations: 1,
+    // THE NO-LOGOFF KEEPER RESTART, and whether it may run several at once. `port_reservation`
+    // is fae8bd3: before it, concurrent handoffs probed the same free port and one died
+    // EADDRINUSE. m59-keeper-restart.mjs defaults to one at a time when this is absent.
+    keeper_handoff: { tool: 'war_restart', port_reservation: true },
     pid: process.pid,
     root: BROKER_ROOT,
     fleet: FLEET || 'default',

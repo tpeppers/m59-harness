@@ -304,7 +304,8 @@ cited file changes), applied to an operation instead of a document, and for the 
 ```bash
 node tools/m59-service.mjs start   --fleet prod     # detached, survives this terminal
 node tools/m59-service.mjs status  --fleet prod     # up/down, pid, how many are in game
-node tools/m59-service.mjs restart --fleet prod
+node tools/m59-service.mjs restart --fleet prod     # the BROKER: logs every character off
+node tools/m59-service.mjs restart-keepers --fleet prod   # keepers onto new code, nobody leaves
 node tools/m59-service.mjs stop    --fleet prod
 node tools/m59-service.mjs logs    --fleet prod --follow
 ```
@@ -325,8 +326,10 @@ was written against that claim — the fleet-mate check's roster fallback was in
 the broker process, so inside every keeper it called the whole fleet strangers
 (see [`docs/m59-keeper.md`](docs/m59-keeper.md#a-keeper-process-called-its-own-fleet-strangers)).
 Two consequences: stopping the broker does **not** necessarily stop them, and a keeper
-picks up new code only when it is itself restarted (`POST /stop` on its port; the 45s sweep
-respawns it from the roster on disk). New fleet/account claims guard each exact keeper PID
+picks up new code only when it is itself restarted — **by handoff**, `m59-service.mjs
+restart-keepers`: a replacement logs in and the old keeper exits, nobody leaves the world. It is
+memory-gated and falls back, loudly, to the old `POST /stop` + 45s sweep only when a second
+keeper process will not fit ([`docs/m59-operations.md`](docs/m59-operations.md#restarting-keepers-hand-them-off-do-not-log-them-off)). New fleet/account claims guard each exact keeper PID
 before login. A broker restarting the exact same roster may atomically adopt verified
 guarded survivors; a lab or copied/alias roster cannot. Claims predating keeper guards fail
 closed and use the one-time `M59_ALLOW_UNGUARDED_TAKEOVER=1` migration in

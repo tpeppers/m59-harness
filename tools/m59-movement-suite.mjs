@@ -134,7 +134,7 @@ for (const [file, why] of SUITES) {
     missing++; summary.push([file, 'MISSING', '']); continue;
   }
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, [path], { encoding: 'utf8', timeout: 300_000 });
+  const r = spawnSync(process.execPath, [path], { windowsHide: true, encoding: 'utf8', timeout: 300_000 });
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   ran++;
   const out = (r.stdout ?? '') + (r.stderr ?? '');

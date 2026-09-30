@@ -44,7 +44,9 @@ const ok = (c, why) => { n++; assert.ok(c, why); };
 // Anything that starts a PROGRAM. A bare `exec(...)` on some local helper is not one of these,
 // which is why the call text has to name an executable or `process.execPath`.
 const CALL = /\b(execFileSync|spawnSync|execFile|spawn|execSync|exec)\s*\(/g;
-const LAUNCHES = /(process\.execPath|['"`](powershell|pwsh|cmd|cmd\.exe|node|npm|git|docker|tar|ssh)['"`.])/;
+// tasklist/taskkill are here because a keeper restart runs them: the ownership checks in
+// tools/runtime/ read process identity with tasklist on every adoption or handoff.
+const LAUNCHES = /(process\.execPath|['"`](powershell|pwsh|cmd|cmd\.exe|node|npm|git|docker|tar|ssh|tasklist|taskkill)['"`.])/;
 
 // The last top-level argument, when it is an object literal. Walks the call tracking depth,
 // strings and comments, because a regex cannot tell `{` in a string from `{` in an options
@@ -80,7 +82,13 @@ export function optionsSpan(s, openParen) {
 
 const offenders = [];
 let checked = 0;
-for (const f of readdirSync(TOOLS).filter(x => x.endsWith('.mjs') && !x.endsWith('-test.mjs'))) {
+// tools/ and tools/runtime/: the second holds the process-identity and fleet-lock code the broker
+// runs for every keeper it spawns, adopts or hands off, so a window there is one per keeper.
+const SCANNED = [
+  ...readdirSync(TOOLS),
+  ...readdirSync(join(TOOLS, 'runtime')).map(x => join('runtime', x)),
+].filter(x => x.endsWith('.mjs') && !x.endsWith('-test.mjs'));
+for (const f of SCANNED) {
   const s = readFileSync(join(TOOLS, f), 'utf8');
   CALL.lastIndex = 0;
   let m;

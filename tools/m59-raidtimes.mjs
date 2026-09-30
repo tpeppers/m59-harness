@@ -78,7 +78,7 @@ export function stepsFromLog(text, { day, started }) {
 }
 
 export function gitState(repo = REPO) {
-  const run = args => { try { return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim(); } catch { return null; } };
+  const run = args => { try { return execFileSync('git', ['-C', repo, ...args], { windowsHide: true, encoding: 'utf8' }).trim(); } catch { return null; } };
   const sha = run(['rev-parse', 'HEAD']);
   const dirty = run(['status', '--porcelain', '-uno']);
   return { sha, short: sha?.slice(0, 7) ?? null, dirty: !!dirty, dirty_files: dirty ? dirty.split(/\r?\n/).length : 0,
