@@ -122,7 +122,7 @@ await test('mayReturnFire: murderers with a grudge still engage exactly as befor
 
 // ------------------------------------------------------------------ CombatMode
 
-function fixture({ name = 'Us', room = 38, enabled = true } = {}) {
+function fixture({ name = 'Us', room = 38, enabled = true, roomFlags = undefined } = {}) {
   let clock = Date.now();
   const sent = [], timers = new Map(); let timerId = 0;
   const c = { selfId: 1, self: { id: 1, nameRsc: 1, row: 5, col: 5, flags: OF.SAFETY },
@@ -134,7 +134,7 @@ function fixture({ name = 'Us', room = 38, enabled = true } = {}) {
     safety(on) { sent.push('safety:' + on); this.self.flags = on ? OF.SAFETY : 0; } };
   const s = { name, client: c, live: true, combatEpoch: 0, movementGeneration: 0, fightGeneration: 0,
     job: null, need: () => c,
-    world: { room: { num: room }, geometry: { rows: 50, cols: 70, standable: () => true,
+    world: { room: { num: room, ...(roomFlags == null ? {} : { flags: roomFlags }) }, geometry: { rows: 50, cols: 70, standable: () => true,
       path: (r, col, tr, tc) => ({ found: true, steps: [{ row: r + Math.sign(tr - r), col: col + Math.sign(tc - col) }] }) } },
     cancelMovement() { this.movementGeneration++; },
     async step(col, row) { return this.pacer.submit('move', () => { sent.push(`move:r${row}c${col}`); c.self.row = row; c.self.col = col; }); } };
@@ -295,6 +295,52 @@ await test('a noncombatant is named in the book, by character, and can be taken 
   assert.equal(war.isNoncombatant('  loial THE ogier '), true);
   war.setNoncombatant('Loial the Ogier', false);
   assert.equal(war.isNoncombatant('Loial the Ogier'), false);
+});
+
+// ------------------------------------------------------------------ rooms the server forbids combat in
+//
+// 2026-09-30: nine characters in Familiars (52, an inn, flags 0x10a2) held a kill order on Wenbo for
+// ten minutes and 470 attacks, each refused "You can't fight here.", and could not be walked out.
+
+await test('no-combat room: an enemy-marked entrant is NOT engaged, and nothing is sent', async () => {
+  reset(); const f = fixture({ room: 52, roomFlags: 0x10a2 });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  assert.equal(f.mode.active, null, 'the combat override must not take the body');
+  assert.ok(!f.sent.some(x => x.startsWith('attack:')), `sent ${f.sent}`);
+});
+
+await test('no-combat room: a zone alarm about this room does not pull anybody in', async () => {
+  reset(); const f = fixture({ name: 'Kermit', room: 52, roomFlags: 0x0002 });
+  put(f, 2, P);
+  assert.equal(f.mode.onWarAlarm({ at: Date.now(), room: 52, reporter: 'Statler', enemy: 'Morpheus', basis: 'war_flag' }), false);
+  assert.equal(f.mode.active, null);
+});
+
+await test('NO_PK room forbids a war engagement too; a guild-only room (Castle Victoria 0x8) does not', async () => {
+  reset(); const nopk = fixture({ roomFlags: 0x0004 });
+  put(nopk, 2, P | OF.ENEMY); nopk.mode.event({ kind: 'appeared', id: 2 });
+  assert.equal(nopk.mode.active, null);
+  const cv = fixture({ roomFlags: 0x0008 });
+  put(cv, 2, P | OF.ENEMY); cv.mode.event({ kind: 'appeared', id: 2 });
+  assert.ok(cv.mode.active?.pvp, 'guild war is legal in a guild-PK room');
+  cv.mode.stop('test');
+});
+
+await test('a ROOM refusal ends the engagement and does not mark the target as no longer an enemy', async () => {
+  reset(); const f = fixture();                 // flags unknown: the engagement starts
+  war.declareEnemyGuild('Human Resistance'); war.recordMembership('Morpheus', 'Human Resistance', { source: 'operator' });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  assert.equal(f.mode.active?.phase, 'engaging');
+  f.mode.event({ kind: 'message', text: "You can't fight here." });
+  assert.equal(f.mode.active, null, 'the body is handed back');
+  assert.equal(war.rememberedEnemy('Morpheus')?.guild, 'Human Resistance', 'membership is not marked wrong by a room refusal');
+});
+
+await test('the guild-only room refusal sentence also ends it', async () => {
+  reset(); const f = fixture();
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  f.mode.event({ kind: 'message', text: 'Only those in guilds may attack each other here.' });
+  assert.equal(f.mode.active, null);
 });
 
 rmSync(dir, { recursive: true, force: true });

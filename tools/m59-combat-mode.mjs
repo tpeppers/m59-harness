@@ -23,6 +23,16 @@ export const WAR_ALARM_EVERY_MS = 3000;
 // A sentinel watching an enemy stand in its room reports it again this often.
 export const WAR_SIGHTING_EVERY_MS = 15_000;
 
+// ROOMS WHERE THE SERVER WILL NOT LET ANYBODY SWING (blakston.khd room flags, checked in
+// room.kod ReqSomethingAttack before anything else). 2026-09-30: nine characters sat in
+// Familiars (52, an inn: 0x10a2) on a kill order against Wenbo for ten minutes and 470 attacks,
+// every one answered "You can't fight here.", and could not be walked out because the combat
+// override owned the body. 73 rooms carry NO_COMBAT, Marion (200) among them.
+export const ROOM_NO_COMBAT = 0x0002;
+export const ROOM_NO_PK = 0x0004;
+// The sentences ReqSomethingAttack answers with (room.kod resources room_no_attack,
+// room_no_pk_allowed, room_guild_combat). A ROOM refusal says nothing about the target.
+export const ROOM_REFUSAL = /you can't fight here|you cannot attack another player here|only those in guilds may attack each other here/i;
 const demand = (ok, why) => { if (!ok) throw new Error(`combat: ${why}`); };
 const square = (p, label) => {
   demand(p && Number.isSafeInteger(p.row) && p.row > 0 &&
@@ -284,8 +294,35 @@ export class CombatMode {
     c.look(pick.o.id);
   }
 
+  /** The server's own room flags for where the body stands: the world map carries the kod
+   *  viPermanent_flags per room; a fixture may put them on s.world.room.flags instead. */
+  roomFlagsHere() {
+    const num = this.s.world?.room?.num;
+    const f = this.s.world?.map?.rooms?.[String(num)]?.flags ?? this.s.world?.room?.flags;
+    return Number.isFinite(Number(f)) ? Number(f) : 0;
+  }
+
+  /** Can a player be attacked in this room at all? NO_COMBAT forbids every swing, NO_PK every
+   *  swing at a player. Guild-only rooms (Castle Victoria, 0x8) allow a guild war. */
+  pvpForbiddenHere() {
+    return (this.roomFlagsHere() & (ROOM_NO_COMBAT | ROOM_NO_PK)) !== 0;
+  }
+
   beginWar(name, { basis, why, room, reporter = null }) {
     if (this.pvpEligibility?.() === false) return false;
+    // THE GATE FOR BOTH ENTRY PATHS — the on-sight scan and another keeper's alarm both come
+    // through here, and the scan re-runs on every object change, so a gate on the refusal path
+    // alone would re-engage within a tick. Sighting alarms are still raised elsewhere: an inn is
+    // a good lookout; it is only a bad place to swing.
+    if (this.pvpForbiddenHere()) {
+      const key = `${this.s.world?.room?.num}:${String(name).toLowerCase()}`;
+      if (this.warSkippedRoom !== key) {
+        this.warSkippedRoom = key;
+        this.s.recorder?.line?.('combat', { event: 'war_skipped_no_combat_room', target: name,
+          room: this.s.world?.room?.num, room_flags: this.roomFlagsHere() });
+      }
+      return false;
+    }
     // An operator's own combat order owns the body; the war does not take it away from them.
     if (this.active && !this.active.pvp) return false;
     const had = !!this.active?.pvp;
@@ -370,6 +407,9 @@ export class CombatMode {
     const c = o.client, s = this.s;
     const cfg = gear.pvpGearConfig();
     this.spentWands ??= new Set();
+    // A wand zap is an attack too (ReqSomethingAttack via CanPayCosts / ReqNewApply), so in a
+    // no-combat room every beat is refused and the volley would keep firing into it.
+    if (this.pvpForbiddenHere()) return null;
     const wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
     if (!wands.length) return null;
     const hold = wands.some(w => w.timer) ? 'hold' : null;
@@ -919,6 +959,15 @@ export class CombatMode {
     // Only a real CREATE after arming counts as an entry. A refresh, or somebody
     // already standing in the room when the ambush was armed, does not.
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
+      // THE ROOM REFUSED, NOT THE TARGET. Checked first because "cannot attack another player
+      // here" would otherwise fall into the branch below and mark a genuine enemy's membership
+      // as wrong. Ends every engagement — war, return fire, operator order — because nothing
+      // can land here and the body is stuck under the override until it does.
+      if (ROOM_REFUSAL.test(ev.text)) {
+        o.lastOutcome = { at: this.now(), text: ev.text, kind: 'room_refused' };
+        this.record('room_refused', o);
+        this.stop(`the server forbids combat in this room: ${ev.text}`); return;
+      }
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
         // A WAR ENGAGEMENT THE SERVER REFUSES WAS A WRONG MEMORY, and safety did its job: the
