@@ -104,6 +104,49 @@ answering "not in game". Three things it will not do:
 
 `--no-rejoin` or `M59_REJOIN=0` turns it off.
 
+### Restarting keepers: hand them off, do not log them off
+
+```bash
+node tools/m59-service.mjs restart-keepers --fleet prod          # every keeper
+node tools/m59-war-restart.mjs --fleet prod --agents t1,t8       # just these
+node tools/m59-update.mjs --keepers --fleet prod                 # the same, from the update tool
+```
+
+**This is the standard way to put keepers onto new code, and it is a critical fix, not a
+special mode.** Each keeper is handed off: a hidden replacement logs in, the server drops the
+old connection, the old keeper exits (`war_restart`, `warRestartKeeper` in `m59-broker.mjs`).
+Nobody leaves the world. The old way — `POST /stop` on the keeper port, then the 45s rejoin
+sweep — is a LOGOFF: characters leave and come back one at a time, and on 2026-09-30 an enemy
+player killed them one by one as they logged back in.
+
+**It is gated on memory, and a fallback is announced.** A handoff runs a second keeper process
+for that character for a moment, so `m59-keeper-restart.mjs` hands off only when
+
+    free physical memory > (concurrency + 1) x per-keeper RSS + margin
+
+— per-keeper RSS measured from the running keepers (largest one) when it can be read, else
+`M59_KEEPER_RSS_MB`, else 600 MB; margin `M59_RESTART_MARGIN_MB`, else 2048 MB. A concurrency
+that does not fit is lowered first; only a machine that cannot afford ONE handoff falls back to
+the stop-and-sweep, and it prints `LOGOFF RESTART:` with the free memory and the threshold.
+Measured on prod 2026-09-30: 24 keepers at ~490 MB, 15.1 GB free of 63.8 GB, and a full 24/24
+handoff at concurrency 1.
+
+`M59_RESTART_MODE=handoff|logoff|auto` (or `--mode`) overrides it; default `auto`. A forced
+handoff on a short machine goes ahead with a warning; an unrecognised value is reported and
+treated as `auto`.
+
+**Concurrency is one at a time unless the broker says otherwise.** Before fae8bd3 concurrent
+handoffs probed the same free port and one died `EADDRINUSE` (nine of twenty-two at
+concurrency 3). A broker with the port reservation advertises
+`keeper_handoff: {port_reservation: true}` on `/health`, and only then does the default rise
+to three.
+
+**A broker restart is not a keeper restart.** `m59-service.mjs restart` stops the broker, and
+the broker's orderly shutdown stops every keeper it holds — so the whole fleet leaves the world
+until the resume brings it back. That is still the only way to load new *broker* code; use it
+only when the broker changed. Deliberate logoffs stay where they are for their own reasons:
+`leave`, `m59-service.mjs stop`, and `m59-shutdown.mjs`.
+
 ## The two front ends, and the one command that starts everything
 
 ```bash

@@ -437,7 +437,7 @@ async function fight(cfg, { composed = false } = {}) {
     // THE RAID MAP: the run played back minute by minute (m59-raidmap.mjs), beside the report.
     try {
       const { spawnSync } = await import('node:child_process');
-      const r = spawnSync(process.execPath, [path.join(HERE, 'm59-raidmap.mjs'), '--run', dir], { encoding: 'utf8', timeout: 180_000 });
+      const r = spawnSync(process.execPath, [path.join(HERE, 'm59-raidmap.mjs'), '--run', dir], { windowsHide: true, encoding: 'utf8', timeout: 180_000 });
       console.log(r.status === 0 ? `raid map: ${path.join(dir, 'raidmap.html')}` : `  raid map not written: ${String(r.stderr || r.stdout).trim().split(NL).pop()}`);
     } catch (e) { console.log(`  raid map not written: ${e.message}`); }
     const t = summariseTimes(dir);
@@ -807,7 +807,7 @@ async function replay(cfg) {
                   '--skip-snapshot', '--no-settle', '--trim-items'];
     console.log(`re-dressing the shadow fleet from ${path.basename(src)}: node ${args.join(' ')}`);
     const { spawnSync } = await import('node:child_process');
-    const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
+    const r = spawnSync(process.execPath, args, { windowsHide: true, stdio: 'inherit', env: process.env });
     if (r.status !== 0) throw new Error(`the re-dress stopped (exit ${r.status}); nothing was fought`);
   } else {
     console.log(`replay of ${src}: ${Object.keys(positions).length} raiders would be re-dressed and placed, then ghost-raid runs (pass --commit)`);
@@ -850,7 +850,7 @@ async function rehearse(cfg) {
     // walked to Barloque on a town trip in that gap and came back without its gems. A parked keeper
     // still survives (defends, flees, leaves the Underworld) but picks no new errand or fight.
     const { spawn } = await import('node:child_process');
-    const child = spawn(process.execPath, args, { stdio: 'inherit', env: process.env });
+    const child = spawn(process.execPath, args, { windowsHide: true, stdio: 'inherit', env: process.env });
     const parked = new Set();
     let building = true;
     const parker = (async () => {

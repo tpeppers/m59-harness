@@ -1181,6 +1181,23 @@ starts the count again, and a character that earns something is forgotten. **It 
 the day a stall reason can go unclassified again.**
 
 
+## m59-keeper-restart-test.mjs (55) — a keeper restart is a handoff unless memory says no
+
+Pins `decideRestartMode` in `m59-keeper-restart.mjs`: handoff when free memory exceeds
+(concurrency + 1) x per-keeper RSS + margin, strictly; a concurrency that does not fit is lowered
+before the handoff is given up; short even for one is a `LOGOFF RESTART:` naming the free memory
+and the threshold; `M59_RESTART_MODE` and `--mode` override it, a caller's flag beats the
+environment, and an unrecognised value is reported and treated as `auto`; measured RSS beats
+`M59_KEEPER_RSS_MB` and unusable sizes keep the defaults. Concurrency is one unless the broker's
+`/health` advertises `keeper_handoff.port_reservation`. The RSS reading is one hidden `tasklist`;
+the logoff fallback is addressed by agent, character and pid with one line per keeper; only an
+`unknown tool` may fall through to a logoff — a wrong-broker refusal never does. And the callers
+that used to `POST /stop` (friendly-reboot, node-keeper-build) now go through it.
+
+`m59-nowindow-test.mjs` now also scans `tools/runtime/` and counts `tasklist`/`taskkill` as
+program launches, because the process-identity checks there run on every keeper spawn, adoption
+and handoff.
+
 ## m59-which-test.mjs (27) — the third answer a port can give
 
 The gate every `/m59*` command runs first already had two answers and a rule about them:

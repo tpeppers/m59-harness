@@ -187,6 +187,6 @@ function noRowsYet() {
   console.log('  That is not the same as nothing having left. The event ships in');
   console.log('  m59-client.mjs (BP_INVENTORY_REMOVE) and is recorded by Session.noteLeftPack,');
   console.log('  and a keeper only picks up new code when the keeper process itself restarts —');
-  console.log('  POST /stop on its port, then the broker\'s 45s sweep respawns it from disk.');
+  console.log('  `m59-service.mjs restart-keepers` hands it off without logging anybody out.');
   console.log('  Check with: node tools/m59-deploy.mjs --verify');
 }

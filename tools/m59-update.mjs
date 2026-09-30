@@ -6,6 +6,13 @@
 //   node tools/m59-update.mjs --timeout 300        # seconds to wait for the fleet, default 240
 //   node tools/m59-update.mjs --no-wait            # restart immediately, the old way
 //   node tools/m59-update.mjs --force              # park gently, but restart over a live errand
+//   node tools/m59-update.mjs --keepers            # KEEPER code only: hand each keeper off, no parking
+//
+// --keepers IS THE STANDARD WAY TO SHIP KEEPER CODE. A broker restart stops every keeper, so the
+// whole fleet leaves the world; a keeper handoff (m59-keeper-restart.mjs, the broker's
+// war_restart) swaps each keeper for a replacement that is already logged in, so nobody does and
+// there is nothing to park for. Only when memory is too short for a handoff does it fall back to
+// the stop-and-sweep, and then it parks first, exactly as the broker restart below does.
 //
 // --force PARKS THE FLEET AS USUAL and only overrides the errand guard in m59-service.mjs.
 // It is NOT --no-wait: the characters still get behind walls first. What it gives up is a
@@ -37,8 +44,9 @@
 //      that cannot find a wall gives up after ninety seconds and says so rather than
 //      holding the fleet hostage. Reported per character, so an operator can see who is
 //      about to take the outage in the open.
-//   3. RESTART THE BROKER, which is what actually loads the new code. Every keeper runs
-//      inside it, so this is the one restart that matters.
+//   3. RESTART THE BROKER, which is what loads new BROKER code. Keepers are child processes
+//      of it, stopped by its shutdown and respawned by the new one, so this also reloads
+//      them -- by logging every character off. For keeper code alone use --keepers.
 //
 // WHAT ELSE HOLDS STATE, since "restart the broker" is not the whole answer:
 //
@@ -71,6 +79,7 @@ const TIMEOUT_MS = Number(arg('timeout', 240)) * 1000;
 // to give up at by itself, so this only ever catches a park that is genuinely stuck.
 const PARK_GIVE_UP_MS = Number(arg('park-give-up', 150)) * 1000;
 const FLEET = arg('fleet', null);
+const KEEPERS = !!arg('keepers', false);
 const RPC = `http://127.0.0.1:${PORT}/`;
 
 let id = 0;
@@ -235,7 +244,18 @@ async function unparkFleet() {
 
   const sup = supervisorRunning();
 
-  if (!NO_WAIT) {
+  // KEEPERS ONLY: decided once, up front, so the parking below happens only for a logoff.
+  let keeperMode = null;
+  if (KEEPERS) {
+    const { decideRestartMode } = await import('./m59-keeper-restart.mjs');
+    const mode = arg('mode', null);
+    const d = decideRestartMode({ concurrency: 1, requested: typeof mode === 'string' ? mode : null });
+    for (const w of d.warnings) console.log(`WARNING: ${w}`);
+    keeperMode = d.mode;
+    console.log(`${stamp()} ${d.message}`);
+  }
+
+  if (!NO_WAIT && keeperMode !== 'handoff') {
     const rows = await parkFleet();
     if (rows.length) {
       const r = await waitForReady(rows.length);
@@ -253,10 +273,25 @@ async function unparkFleet() {
     }
   }
 
+  if (DRY && keeperMode === 'handoff') {
+    console.log('\ndry run — keepers would be handed off; nothing was parked or restarted.');
+    process.exit(0);
+  }
   if (DRY) {
     console.log('\ndry run — the fleet is parked and NOTHING has been restarted.');
     console.log('Put it back to work with:  node tools/m59-update.mjs --unpark');
     process.exit(0);
+  }
+
+  if (KEEPERS) {
+    const { restartKeepers } = await import('./m59-war-restart.mjs');
+    const conc = arg('concurrency', null);
+    const r = await restartKeepers({ url: RPC, fleet: FLEET ?? undefined, mode: keeperMode,
+      concurrency: typeof conc === 'string' ? Number(conc) : null });
+    console.log(`\n${stamp()} ${r.restarted} of ${r.of} keeper(s) ` +
+                (r.mode === 'handoff' ? 'handed off without leaving the world' : 'logged off and back on a new pid'));
+    if (r.mode !== 'handoff' && !NO_WAIT) await unparkFleet().catch(() => {});
+    process.exit(r.ok ? 0 : 1);
   }
 
   console.log(`\n${stamp()} restarting the broker — this is what loads the new code`);

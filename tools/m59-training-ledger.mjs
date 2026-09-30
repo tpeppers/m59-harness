@@ -55,10 +55,10 @@ export function codeIdentity(file) {
   try { id.file_sha1 = createHash('sha1').update(readFileSync(file)).digest('hex').slice(0, 12); } catch {}
   try {
     const cwd = dirname(file);
-    id.git_sha = execFileSync('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    const tracked = execFileSync('git', ['-C', cwd, 'ls-files', '--error-unmatch', file], { stdio: ['ignore', 'pipe', 'ignore'] });
+    id.git_sha = execFileSync('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const tracked = execFileSync('git', ['-C', cwd, 'ls-files', '--error-unmatch', file], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     id.tracked = !!tracked;
-    id.dirty = execFileSync('git', ['-C', cwd, 'status', '--porcelain', '--', file], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== '';
+    id.dirty = execFileSync('git', ['-C', cwd, 'status', '--porcelain', '--', file], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== '';
   } catch { if (id.git_sha) id.tracked = false; }
   return id;
 }

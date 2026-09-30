@@ -25,7 +25,15 @@ Do not restart if that test failed.
 node tools/m59-service.mjs restart --fleet <the fleet named above>
 ```
 
-That is the whole restart. It stops the broker **by asking `/health` which pid it is**,
+**Only the keepers changed?** Do not restart the broker — that logs every character off.
+Hand the keepers off instead; nobody leaves the world (memory-gated, see
+`docs/m59-operations.md`):
+
+```
+node tools/m59-service.mjs restart-keepers --fleet <the fleet named above>
+```
+
+That is the whole broker restart. It stops the broker **by asking `/health` which pid it is**,
 then starts a new one with the same fleet, ports 8901/8902, a pid file, and its log
 appended to `substrate/broker-<fleet>.log`.
 

@@ -27,7 +27,7 @@ for(const r of Object.values(loadMap().rooms)){
   if(t&&/\bTERRAIN_(FOREST|JUNGLE)\b/i.test(t.expression)&&r.cls?.toLowerCase()!=='ka0')
     rooms[r.num]={name:r.name,cls:r.cls,shalille_bonus:25,...t};
 }
-const out={schema:'m59-rescue-terrain/v1',source_commit:execFileSync('git',['-c','safe.directory='+root,'-C',root,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),
+const out={schema:'m59-rescue-terrain/v1',source_commit:execFileSync('git',['-c','safe.directory='+root,'-C',root,'rev-parse','HEAD'],{ windowsHide: true,encoding:'utf8'}).trim(),
   rule:'Room.GetShalilleBonus > 20; forest/jungle, excluding the KA0 offering room',rooms};
 fs.writeFileSync(new URL('../substrate/m59-rescue-terrain.json',import.meta.url),JSON.stringify(out,null,2)+'\n');
 console.log(JSON.stringify({rooms:Object.keys(rooms).length,source_commit:out.source_commit}));

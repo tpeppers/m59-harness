@@ -3,7 +3,8 @@
 //
 //   node tools/m59-service.mjs start   [--fleet prod]
 //   node tools/m59-service.mjs stop    [--fleet prod]
-//   node tools/m59-service.mjs restart [--fleet prod]
+//   node tools/m59-service.mjs restart [--fleet prod]           # the BROKER: logs everyone off
+//   node tools/m59-service.mjs restart-keepers [--fleet prod]   # KEEPERS only: handed off, nobody leaves
 //   node tools/m59-service.mjs status  [--fleet prod]
 //   node tools/m59-service.mjs logs    [--fleet prod] [--lines 80] [--follow]
 //
@@ -868,7 +869,30 @@ if (goapMode) {
 } else switch (cmd) {
   case 'start':   code = await cmdStart(); break;
   case 'stop':    code = await cmdStop({ force: FORCE }); break;
+  case 'restart-keepers': {
+    // THE STANDARD WAY TO PUT KEEPERS ONTO NEW CODE. Each keeper is handed off to a hidden
+    // replacement (the broker's war_restart), so nobody leaves the world; a machine short of
+    // memory falls back to the old stop-and-sweep and says so with the numbers
+    // (m59-keeper-restart.mjs). --mode handoff|logoff|auto and M59_RESTART_MODE override it.
+    const { restartKeepers } = await import('./m59-war-restart.mjs');
+    const r = await restartKeepers({ url: `http://127.0.0.1:${HTTP_PORT}/`,
+      agents: arg('--agents')?.split(',').map(x => x.trim()).filter(Boolean) ?? null,
+      mode: arg('--mode'), concurrency: arg('--concurrency') != null ? Number(arg('--concurrency')) : null })
+      .catch(e => ({ ok: false, why: e.message }));
+    if (r.why && !r.results?.length) console.error(c.bad(r.why));
+    else console.log(r.mode === 'handoff'
+      ? c.ok(`${r.restarted} of ${r.of} keeper(s) handed off without leaving the world`)
+      : `${r.restarted} of ${r.of} keeper(s) logged off and back on a new pid`);
+    code = r.ok ? 0 : 1;
+    break;
+  }
   case 'restart': {
+    // A BROKER RESTART IS NOT A KEEPER RESTART, AND IT LOGS EVERYBODY OFF. The broker's orderly
+    // shutdown stops every keeper it holds (killAllKeepers), so the whole fleet leaves the world
+    // and comes back through the resume. That is still the only way to load new BROKER code;
+    // new KEEPER code wants `restart-keepers`, which hands each keeper off instead.
+    console.log(c.dim('  broker restart: every character leaves the world until the resume brings it back.'));
+    console.log(c.dim('  For keeper code only, `restart-keepers` hands each keeper off and nobody leaves.'));
     // A refused stop must abort the restart. Falling through to cmdStart() would find the
     // broker still up, print "already up", and exit 0 — reporting success for a restart
     // that did not happen.
@@ -880,7 +904,7 @@ if (goapMode) {
   case 'logs':    code = cmdLogs(); break;
   default:
     console.error(`unknown command "${cmd}"`);
-    console.error('usage: m59-service.mjs start|stop|restart|status|logs [--fleet <name>]');
+    console.error('usage: m59-service.mjs start|stop|restart|restart-keepers|status|logs [--fleet <name>]');
     code = 2;
 }
 if (code !== null) process.exit(code);

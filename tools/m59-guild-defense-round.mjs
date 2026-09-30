@@ -8,7 +8,7 @@ import {travelMetrics} from './m59-guild-defense-metrics.mjs';
 
 export const sha256=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const json=(file,value)=>fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');
-const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+const git=(...args)=>execFileSync('git',args,{ windowsHide: true,encoding:'utf8'}).trim();
 export function summarize(report) {
   const run=report.runs?.[0],t=run?.team_experiment??report.team_experiment??{},events=t.events??[];
   const arrivals=kind=>events.filter(e=>e.kind===kind).map(({actor,ms,method})=>({actor,ms,...(method?{method}:{})}));
