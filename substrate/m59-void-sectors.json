@@ -1,0 +1,10 @@
+{
+  "format": "m59-void-sectors/1",
+  "note": "Sectors whose floor exists in the BSP but that no body can reach from any entry into the room. _occupiable refuses a point in one, so standPoint never plans there. Found with tools/m59-void-sectors.mjs, declared only after the room was looked at; a declaration changes the room's step mask, so rebake it (node tools/m59-routebake.mjs --rooms <n> --resume).",
+  "rooms": {
+    "537": {
+      "sectors": [1],
+      "why": "Faronath: the filler sector around every bulb. Each bulb's boundary is a one-sided wall facing into the bulb, so bulb->filler is refused and filler->bulb is free; stand points in the filler (1,629 of 2,450 squares) made the step mask one open field and the router planned straight through the gaps between bulbs (stuck at r34c24). 2026-09-30."
+    }
+  }
+}

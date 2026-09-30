@@ -124,6 +124,18 @@ function declaredFallJumpTable() {
   } catch { DECLARED_FALL_JUMPS = null; }
   return DECLARED_FALL_JUMPS;
 }
+// VOID SECTORS (substrate/m59-void-sectors.json, tools/m59-void-sectors.mjs): floor that exists in
+// the BSP and that no body entering the room can ever reach. Read once, like the fall-jump table;
+// an unreadable or absent table declares nothing, which leaves every room as it was.
+let VOID_SECTORS;
+function voidSectorTable() {
+  if (VOID_SECTORS !== undefined) return VOID_SECTORS;
+  try {
+    const url = new URL('../substrate/m59-void-sectors.json', import.meta.url);
+    VOID_SECTORS = JSON.parse(fs.readFileSync(url, 'utf8'));
+  } catch { VOID_SECTORS = null; }
+  return VOID_SECTORS;
+}
 export const FALL_MAX_SQUARES = Number(process.env.M59_FALL_MAX_SQUARES || 3);
 
 // THE COLLISION RAYCAST PRUNES THE BSP. See `_blockingWall`'s traversal for the measurement
@@ -2120,9 +2132,22 @@ export class RoomGeometry {
    * be sloped and a slope is exactly where the two could cross.
    */
   // COORDINATE CONTRACT: `(x,y)` is a fine point in client/BSP units.
+  /** 1-based sector numbers this room declares unreachable (substrate/m59-void-sectors.json). */
+  voidSectors() {
+    if (this._voidSectors && this._voidSectorsFor === this.roomNum) return this._voidSectors;
+    const entry = this.roomNum == null ? null : voidSectorTable()?.rooms?.[String(this.roomNum)];
+    this._voidSectorsFor = this.roomNum;
+    this._voidSectors = new Set((entry?.sectors ?? []).map(Number).filter(Number.isInteger));
+    return this._voidSectors;
+  }
+
   _occupiable(x, y) {
     const leaf = this.leafAtClient(x, y);
     if (!leaf?.sector) return false;
+    // GROUND NO BODY CAN REACH IS NOT GROUND. Faronath's filler sector has floor, and the only
+    // walls between it and the bulbs are one-sided and face the bulbs -- so it can be entered
+    // from nowhere, and a stand point in it joins every bulb to every other on the step mask.
+    if (this.voidSectors().has(leaf.sectorNum)) return false;
     if (this.floorBaseAtClient(x, y, leaf) == null) return false;
     const ceiling = ceilingHeightAt(x, y, leaf.sector);
     const floor = floorHeightAt(x, y, leaf.sector);
