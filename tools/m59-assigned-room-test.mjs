@@ -49,5 +49,17 @@ const here = { num: 2 };
   ok('the other filters still apply: an unreachable assignment is not obeyed', !r.preyRooms(here).some(x => x.room === 599));
 }
 
+// 2026-09-30. DEAD_ROOMS used to SKIP 2601 inside huntingGrounds, so the override above never
+// saw it: seventeen characters assigned to the Marion crypt to clear its statues walked to 39.
+const crypt = ['statue', 'living statue', 'skeleton', 'battered skeleton'];
+{
+  const rooms = rig({ hunt: crypt, assignedRoom: 2601 }).preyRooms(here);
+  ok('a dead room is obeyed when it is the explicit assignment', rooms[0]?.room === 2601);
+}
+{
+  const rooms = rig({ hunt: crypt, assignedRoom: null }).preyRooms(here);
+  ok('and never chosen by an unassigned keeper', !rooms.some(x => x.room === 2601));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
