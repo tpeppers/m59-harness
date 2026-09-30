@@ -43,6 +43,7 @@ export const DEFAULT_PVP_GEAR = Object.freeze({
   wands: [{ match: 'lightning wand', timer: true }, { match: 'vampiric shock', timer: false }],
   volley_ms: 2000,
   expect_incoming: [],
+  accept_if_missing: [],
 });
 
 export const PVP_GEAR_FILE = () => {
@@ -72,6 +73,7 @@ export function pvpGearConfig() {
                                       : DEFAULT_PVP_GEAR.wands,
       volley_ms: Number(raw.volley_ms) >= 1000 ? Number(raw.volley_ms) : DEFAULT_PVP_GEAR.volley_ms,
       expect_incoming: Array.isArray(raw.expect_incoming) ? raw.expect_incoming.map(String).filter(Boolean) : [],
+      accept_if_missing: Array.isArray(raw.accept_if_missing) ? raw.accept_if_missing.map(String).filter(Boolean) : [],
     };
   } catch { /* keep the last good value */ }
   return cache.value;
@@ -137,7 +139,9 @@ export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / 
 //   * everything in the config's `expect_incoming` list, always.
 export function expectedIncoming(c, { cfg = pvpGearConfig() } = {}) {
   const carried = (c?.inventory ?? []).map(o => effectiveName(c, o));
-  const missing = [...cfg.items, ...cfg.wands.map(w => w.match)]
+  // `accept_if_missing`: ordinary gear (not PvP-only -- farming wears it too) that a character
+  // should still take when it has none, e.g. a shield.
+  const missing = [...cfg.items, ...cfg.wands.map(w => w.match), ...(cfg.accept_if_missing ?? [])]
     .filter(p => !carried.some(n => has(n, p)));
   return [...new Set([...missing, ...(cfg.expect_incoming ?? [])])];
 }
