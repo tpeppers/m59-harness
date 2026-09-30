@@ -1,4 +1,4 @@
-// Combat is a bounded, event-driven override in the process that owns the socket.
+﻿// Combat is a bounded, event-driven override in the process that owns the socket.
 // No script compiler, snapshot fetch, external planner or keeper pass is on the
 // arrival -> first attack path. All packets still use the ordinary server pacer.
 import { randomUUID } from 'node:crypto';
@@ -10,6 +10,7 @@ import { parsePlayerCombat } from './m59-player-evidence.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision,
   updateSurvivalDecision } from './m59-survival-decision.mjs';
 import * as war from './m59-war.mjs';
+import * as gear from './m59-pvp-gear.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -212,8 +213,8 @@ export class CombatMode {
   //
   // THREE INPUTS, ONE OUTPUT. A player in our room is hostile because the server marks it
   // (OF.ENEMY, a mutual guild war), or because the war book remembers its guild; a fleetmate in
-  // our MAP raised an alarm. Every one of them ends in beginPvP — the same body-owning return
-  // fire an incoming hit already starts — with `keepSafety`, because a mutual war passes the
+  // our MAP raised an alarm. Every one of them ends in beginPvP â€” the same body-owning return
+  // fire an incoming hit already starts â€” with `keepSafety`, because a mutual war passes the
   // server's safety check with safety ON and nothing here should ever need it off.
   // See tools/m59-war.mjs for the argument.
   observeWar(ev, c) {
@@ -335,6 +336,76 @@ export class CombatMode {
       room: a.room, reporter: a.reporter ?? 'a fleetmate' });
   }
 
+  // ------------------------------------------------------------------ PvP gear and the volley
+  //
+  // See tools/m59-pvp-gear.mjs for the mechanics. The gear goes on at the first engaging tick of a
+  // PvP fight and comes off when the fight ends; `c.pvpGearActive` is what keeps the keeper's own
+  // armSelf/wearBest/equipBest from swapping it back for the farming set in between.
+  async pvpGearOn(o) {
+    const c = o.client, s = this.s;
+    o.pvpGearOn = true;
+    c.pvpGearActive = true;
+    const wear = gear.pvpItemsIn(c).filter(r => !r.worn);
+    for (const r of wear) await s.pacer.submit('use', () => { c.use(r.o.id); });
+    if (wear.length) { o.pvpGearWorn = wear.map(r => r.name); this.record('pvp_gear_on', o); }
+  }
+
+  pvpGearOff(o) {
+    const c = o.client, s = this.s;
+    if (!c?.pvpGearActive) return;
+    c.pvpGearActive = false;
+    const off = gear.pvpItemsIn(c).filter(r => r.worn);
+    if (!off.length) return;
+    // A fresh body command, like restoreSafety: the fight's own guard has just been cancelled.
+    void withBodyCommand(s, () => withPacketScope(() => {}, () => s.pacer.submit('unuse', () => {
+      for (const r of off) c.unuse(r.o.id);
+    })), 'pvp-gear-off').then(() => this.record('pvp_gear_off', o)).catch(e => { this.pvpGearError = e.message; });
+  }
+
+  /**
+   * One volley per wall-clock beat, fired by every keeper in the fight on the same beat.
+   * @returns {'hold'|null} 'hold' while a timer (lightning) wand is carried: no melee this tick.
+   */
+  async wandVolley(o) {
+    const c = o.client, s = this.s;
+    const cfg = gear.pvpGearConfig();
+    this.spentWands ??= new Set();
+    const wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
+    if (!wands.length) return null;
+    const hold = wands.some(w => w.timer) ? 'hold' : null;
+    const beat = gear.beatOf(this.now(), cfg.volley_ms);
+    if (beat === this.lastVolleyBeat) return hold;
+    this.lastVolleyBeat = beat;                       // claimed before any await: one zap per beat
+    const pick = wands[0];
+    await this.stand(o);
+    if (pick.timer) await s.pacer.submit('turn', () => {
+      const live = c.room.objects.get(o.targetId), me = c.self;
+      if (!live || !me) return;
+      c.face((Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360);
+    });
+    await s.pacer.submit('cast', () => {
+      const live = c.room.objects.get(o.targetId);
+      if (!live) return;
+      c.apply(pick.o.id, live.id);
+      this.lastWandId = pick.o.id;
+      o.zaps = (o.zaps ?? 0) + 1;
+      if (o.pvp) { o.pvp.zaps = (o.pvp.zaps ?? 0) + 1; o.pvp.last_wand = pick.name; }
+      if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
+      try { this.s.lastPlayerAttackAt = this.now(); } catch {}
+      this.record('wand_volley', o);
+    }, 1050);
+    return hold;
+  }
+
+  // A wand that has run out stays in the pack (a broken SpecialWand) or is deleted (a SpellItem
+  // wand); either way it must not be picked again. "Nothing happens" is the attack timer refusing
+  // a zap -- no charge spent -- and is only recorded.
+  noteWandMessage(text) {
+    if (/is broken|has no more charges|shatters into pieces|is out of charges/i.test(text) && this.lastWandId != null)
+      this.spentWands?.add(this.lastWandId);
+    if (/point your wand but nothing happens/i.test(text) && this.active) this.record('wand_refused', this.active);
+  }
+
   targetAtWar(o) {
     const t = o?.targetId != null ? o.client?.room?.objects?.get?.(o.targetId) : null;
     return !!(t && (t.flags & OF.ENEMY));
@@ -399,7 +470,7 @@ export class CombatMode {
       // A crowded room must not compile a suite of regexes for every monster
       // on every chat/outgoing-combat line. Only a matching prefix needs parsing.
       if (!names.some(n => line.startsWith(n.toLowerCase() + ' ') ||
-        line.startsWith(n.toLowerCase() + "'s ") || line.startsWith(n.toLowerCase() + '’s '))) continue;
+        line.startsWith(n.toLowerCase() + "'s ") || line.startsWith(n.toLowerCase() + 'â€™s '))) continue;
       const hit = parsePlayerCombat(ev.text, names);
       if (hit?.direction !== 'incoming' || hit.outcome !== 'hit' || hit.verb.toLowerCase() === 'fails to damage') continue;
       p.last_monster_hit = { at: this.now(), room: this.s.world?.room?.num,
@@ -832,6 +903,7 @@ export class CombatMode {
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observeWar(ev, client);
+    if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
     const requested = this.safetyRequest;
@@ -901,6 +973,9 @@ export class CombatMode {
     }
     withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId }), o.id);
     this.active = null; this.s.combatEpoch = (this.s.combatEpoch ?? 0) + 1;
+    // AFTER the epoch bump, like restoreSafety: started before it, the unequip is preempted as
+    // part of the fight being stopped.
+    if (o.pvpGearOn) this.pvpGearOff(o);
     this.s.pacer.wake?.();
     if (this.timer) this.unschedule(this.timer);
     this.timer = null;
@@ -1064,6 +1139,13 @@ export class CombatMode {
     const target = c.room.objects.get(o.targetId);
     if (!target || exactName(c, target) !== o.targetName) { this.refreshTarget(o); return; }
     await this.prepareSafety(o);
+    if (o.pvp || this.targetAtWar(o)) {
+      // PVP GEAR ON, ONCE PER FIGHT, inside this fight's own packet scope (m59-pvp-gear.mjs).
+      if (!o.pvpGearOn) await this.pvpGearOn(o);
+      // THE VOLLEY. 'hold' means a lightning wand is carried: no swing between beats, because a
+      // swing would take the attack timer the next zap needs.
+      if (await this.wandVolley(o) === 'hold') return;
+    }
     if (this.now() < o.nextAt) return;
     if (o.pendingAdvance) {
       o.pendingAdvance = false;

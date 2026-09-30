@@ -803,3 +803,8 @@ substrate/magic-keep.json
 
 # Private incoming player/NPC/system receipts; never publish fleet conversations.
 /substrate/communications/
+
+# PvP-only gear and volley wands (tools/m59-pvp-gear.mjs): which items this fleet wears only to
+# fight people. An order, this machine's, like substrate/loadouts.
+/substrate/pvp-gear.json
+/substrate/pvp-gear-*.json

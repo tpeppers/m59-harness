@@ -3465,6 +3465,9 @@ export class Autopilot {
   async armSelf() {
     const c = this.s.client;
     if (!c) return false;
+    // IN A PVP FIGHT THE BODY WEARS ITS PVP GEAR, and CombatMode put it on. Re-arming here would
+    // take it off for the farming set mid-fight. See m59-pvp-gear.mjs.
+    if (c.pvpGearActive) return false;
     await this.wearArmourIfNeeded().catch(() => {});
     // A BRAWLER IS NOT AN UNARMED CHARACTER WITH A PROBLEM. Armour still goes on above;
     // only the weapon is declined, and only on this character's own farm ground.
@@ -3671,6 +3674,7 @@ export class Autopilot {
   async wearIntoEmptySlots(what = 'put on armour we were carrying') {
     if (this.facultyHeld?.('economy')) return false;
     const c = this.s?.client;
+    if (c?.pvpGearActive) return false;          // PvP gear is on; see armSelf
     const using = skills.equippedNow(c);
     if (!c || !using) return false;           // no use list: cannot tell what is empty
     const exclude = this.savedArmourName();
@@ -3728,6 +3732,7 @@ export class Autopilot {
 
   async wearArmourIfNeeded() {
     const c = this.s.client;
+    if (c?.pvpGearActive) return false;          // PvP gear is on; see armSelf
     const using = skills.equippedNow(c);
     if (!c || !using) return false;          // no use list: cannot tell, so do not guess
     const have = skills.armourOf(c);

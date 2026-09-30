@@ -38,6 +38,7 @@ import * as buyers from './m59-buyers.mjs';
 import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
+import { isPvpOnly } from './m59-pvp-gear.mjs';
 
 // The merchant index resolves a live object id to the class whose buying rule applies.
 // Read once and kept: it is a built artefact that changes when somebody rebuilds it, and
@@ -598,6 +599,8 @@ export function weaponRanking(c, { priority = null, banned = null,
     // been identified, so the name test alone hands us the very weapon we must not
     // pick up. See the block above isCursedItem.
     !isJunk(x.name) && !isCursedItem(c, x.o, x.name) &&
+                 // A PvP-only weapon is never a farming weapon (m59-pvp-gear.mjs).
+                 (c.pvpGearActive || !isPvpOnly(x.name)) &&
                  // AND NOT ONE NOBODY HAS READ. isCursedItem learns from the server's refusal to
                  // UNWIELD, which is one move too late for the only irreversible mistake in this
                  // game; the grade is knowable before the draw. See isUnrevealed.
@@ -961,6 +964,10 @@ export function armourOf(c, { allowUnrevealed = false, exclude = null } = {}) {
     if (allowUnrevealed !== true && isUnrevealed(o)) continue;
     if (isMagicGrade(o)) continue;                 // magic loot is revealed and kept, not worn
     if (typeof exclude === 'function' && exclude(name)) continue;
+    // PVP-ONLY PIECES ARE NOT FARMING ARMOUR. Outside a PvP fight they are invisible here, so no
+    // "better piece in the pack" swap ever puts them on for monsters; in one (c.pvpGearActive,
+    // set by CombatMode) they are the pieces being worn. See m59-pvp-gear.mjs.
+    if (!c.pvpGearActive && isPvpOnly(name)) continue;
     out[kind.slot].push({ o, name, kind, score: armourScore(kind) });
   }
   for (const k of ARMOUR_SLOTS) out[k].sort((a, b) => b.score - a.score);
