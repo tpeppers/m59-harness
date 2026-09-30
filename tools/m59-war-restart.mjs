@@ -31,8 +31,11 @@ export async function warRestart({ agents = null, concurrency = 3, timeoutS = 90
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
+    // ONE AT A TIME BY DEFAULT: a broker older than the port reservation in warRestartKeeper lets
+    // concurrent handoffs collide on one port (the loser fails safely, but fails). Raise it with
+    // --concurrency once the broker has been restarted onto that fix.
     const r = await warRestart({ agents: opt('agents')?.split(',').map(s => s.trim()).filter(Boolean) ?? null,
-      concurrency: Number(opt('concurrency') ?? 3), timeoutS: Number(opt('timeout') ?? 90) });
+      concurrency: Number(opt('concurrency') ?? 1), timeoutS: Number(opt('timeout') ?? 90) });
     console.log(`${r.restarted} of ${r.of} handed off without leaving the world`);
     for (const x of r.results) console.log(`  ${x.agent.padEnd(5)} ${x.ok ? `ok  pid ${x.old_pid} -> ${x.pid} (port ${x.port})` : `FAILED  ${x.why}`}`);
     if (!r.ok) process.exitCode = 1;

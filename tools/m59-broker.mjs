@@ -890,6 +890,7 @@ const keeperSpawning = new Map();      // agent -> the one in-flight spawn/adopt
 // replacement. The sweep must step over the agent -- a `/rejoin` sent to the old keeper would log
 // it back in and kick the replacement straight out.
 const keeperHandoffs = new Set();
+const handoffPorts = new Set();          // ports reserved by replacements still coming up
 // EACH FLEET GETS ITS OWN BAND, BECAUSE SHARING ONE BASE PUT TWO FLEETS IN ONE RANGE.
 //
 // This was a flat 8911 for everybody, and the scan-forward allocator then interleaved two
@@ -1505,7 +1506,7 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
   if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) return { agent, ok: false, why: 'already being brought up or handed off' };
   if (pilotOf(agent)) return { agent, ok: false, why: 'being played by a person' };
   keeperHandoffs.add(agent);
-  let child = null;
+  let child = null, reservedPort = null;
   try {
     const target = await verifiedKeeperWriteTarget(agent, index);
     const tell = async (body) => fetch(`http://127.0.0.1:${target.port}/handoff`, {
@@ -1528,16 +1529,24 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
 
     // A FREE PORT THAT IS NOT THE OLD ONE, without touching keeperPorts: the old keeper is still
     // this agent's recorded keeper until the swap, and every write addresses it by that record.
+    // RESERVED BEFORE THE FIRST await. Concurrent handoffs probed the same free port and both took
+    // it: 2026-09-30, nine of twenty-two replacements died "EADDRINUSE 9513" at concurrency 3.
     const band = keeperPortBand();
-    const taken = new Set([old.port]);
-    for (const [, p] of keeperPorts) taken.add(p);
-    for (const [, rec] of keeperProcesses) if (rec?.port) taken.add(rec.port);
+    const taken = () => {
+      const t = new Set([old.port, ...handoffPorts]);
+      for (const [, p] of keeperPorts) t.add(p);
+      for (const [, rec] of keeperProcesses) if (rec?.port) t.add(rec.port);
+      return t;
+    };
     let port = null;
     for (let p = band.base; p <= band.end && port == null; p++) {
-      if (taken.has(p) || portsLostToOthers.has(p)) continue;
+      if (taken().has(p) || portsLostToOthers.has(p)) continue;
+      handoffPorts.add(p);
       const answers = await keeperLiveAt(p, { timeoutMs: 800 }).then(r => r.ok).catch(() => false);
       if (!answers && await canBind(p)) port = p;
+      else handoffPorts.delete(p);
     }
+    reservedPort = port;
     const undo = async () => { if (legacy) await post('/resume', {}); else await tell({ cancel: true }); };
     if (port == null) { await undo(); return { agent, ok: false, why: 'no free keeper port in the band' }; }
 
@@ -1601,6 +1610,7 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     return { agent, ok: false, why: e.message };
   } finally {
     keeperHandoffs.delete(agent);
+    if (reservedPort != null) handoffPorts.delete(reservedPort);
   }
 }
 
