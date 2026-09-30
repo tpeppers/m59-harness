@@ -344,6 +344,12 @@ session.combat.sentinelEligibility = () => joinWanted &&
 session.combat.agentId = agent;
 session.combat.warbandEligibility = () => joinWanted && !isHostCharacter && !war.isNoncombatant(character) &&
   /^swarm\//.test(String(autopilot?.heldStatus?.()?.by ?? ''));
+// THE SWARM LEASH (m59-war.mjs): the operator's character -- the swarm leader named in the claim,
+// swarm/<agent>@terminal -- is whose 'go', 'hold' and death the leash listens for.
+session.combat.leaderCharacter = () => {
+  const m = /^swarm\/([^@]+)@/.exec(String(autopilot?.heldStatus?.()?.by ?? ''));
+  return m ? fleet?.[m[1]]?.credentials?.character ?? menagerieRoster?.[m[1]]?.credentials?.character ?? null : null;
+};
 setInterval(() => { session.combat.warbandTick?.().catch?.(() => {}); }, 250).unref?.();
 // The zone alarm: one line in a shared file, watched rather than polled by a keeper pass, so a
 // fleetmate's fight reaches this character in milliseconds instead of on its next decision.

@@ -380,6 +380,58 @@ export function learnFromMessage(text, { isOurs = () => false, at = Date.now() }
 // ------------------------------------------------------------------ the zone alarm
 
 /** Append one alarm. Cheap and synchronous: this is on the path to the first swing. */
+// ------------------------------------------------------------------ THE SWARM LEASH
+//
+// Operator, 2026-09-30: in war mode AND swarming, the fleet does not unleash on the enemy until
+// the operator says so -- by saying "go" in game, by attacking a target, or by the character he
+// is playing dying ("### <him> has been murdered in cold blood", "... slaughtered ... in guild
+// combat", any death broadcast). Saying "hold" puts the leash back on.
+//
+// It is a FILE because the triggers are seen by whichever keepers happen to hear them (a say
+// carries only so far), and every swarm character has to act on it. The leash gates only the
+// UNPROVOKED engagement -- on sight, or on a fleetmate's alarm. A character that is itself hit
+// still fights back: survival is never a bot's or a leash's to take (CLAUDE.md, the boundary).
+export const LEASH_FILE = () => bookFile('M59_WAR_LEASH_FILE', 'war-leash', 'json');
+// An unleash this old is never inherited by a keeper that starts mid-swarm.
+export const UNLEASH_MAX_MS = 2 * 60 * 60_000;
+let leashCache = { file: null, mtime: -1, checked: 0, value: {} };
+export function readLeash() {
+  const file = LEASH_FILE(), now = Date.now();
+  if (leashCache.file === file && now - leashCache.checked < STAT_MS) return leashCache.value;
+  leashCache.checked = now;
+  let mtime = 0;
+  try { mtime = existsSync(file) ? statSync(file).mtimeMs : 0; } catch { mtime = 0; }
+  if (leashCache.file === file && leashCache.mtime === mtime) return leashCache.value;
+  let value = {};
+  if (mtime) try { value = JSON.parse(readFileSync(file, 'utf8')) ?? {}; } catch { return leashCache.value; }
+  leashCache = { file, mtime, checked: now, value };
+  return value;
+}
+function writeLeash(patch) {
+  const file = LEASH_FILE();
+  const next = { format: 'm59-war-leash/1', ...readLeash(), ...patch };
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(next, null, 2));
+  renameSync(tmp, file);
+  leashCache = { file: null, mtime: -1, checked: 0, value: next };
+  return next;
+}
+/** Idempotent: an older or equal trigger than the one on file changes nothing. */
+export function unleash({ at = Date.now(), why, by = null } = {}) {
+  const l = readLeash();
+  if (Number(l.unleashed_at) >= at) return l;
+  return writeLeash({ unleashed_at: at, unleash_why: why ?? null, unleash_by: by });
+}
+export function holdLeash({ at = Date.now(), why = 'hold', by = null } = {}) {
+  const l = readLeash();
+  if (Number(l.hold_at) >= at) return l;
+  return writeLeash({ hold_at: at, hold_why: why, hold_by: by });
+}
+// "go", "go!", "GO GO" -- the whole utterance, so "go north" or "I have to go" is not an order.
+export const isGoOrder = t => /^\s*(?:go[\s!.]*)+$/i.test(String(t ?? ''));
+export const isHoldOrder = t => /^\s*(?:hold|stand down)[\s!.]*$/i.test(String(t ?? ''));
+
 export function raiseAlarm({ room, reporter, enemy, basis = 'attacked', at = Date.now() }) {
   if (!(Number(room) > 1) || !enemy) return false;
   const file = ALARM_FILE();

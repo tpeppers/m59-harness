@@ -13,6 +13,7 @@ import * as war from './m59-war.mjs';
 import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
+import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -220,6 +221,7 @@ export class CombatMode {
     return { enabled: this.warEnabled(), sentinel: this.sentinelEnabled(), last: this.warLast,
       threat: this.warThreat ?? null, error: this.warError,
       keepoff: { last: this.keepoffLast ?? null, error: this.keepoffError ?? null },
+      leash: this.leashStatus(),
       enemy_guilds: (() => { try { return war.enemyGuilds().map(g => g.name); } catch { return null; } })() };
   }
 
@@ -288,7 +290,7 @@ export class CombatMode {
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
-    if (hostile && this.warEnabled())
+    if (hostile && this.warEnabled() && !this.warLeashed())
       this.beginWar(hostile.name, { basis: hostile.verdict.basis, why: hostile.verdict.why, room });
     else if (hostile) {
       this.warLast = { at: now, enemy: hostile.name, basis: 'sighted', room, reporter: null };
@@ -358,6 +360,54 @@ export class CombatMode {
     return !!this.active?.pvp;
   }
 
+  // ------------------------------------------------------------------ the swarm leash
+  //
+  // m59-war.mjs has the argument. War mode AND swarming: nobody engages an enemy unprovoked until
+  // the operator says "go", attacks something, or the character he plays dies. Until then a
+  // swarm character is a sentinel (it reports what it sees) that still fights back when hit.
+
+  /** true while this swarm character must wait for the operator's word. */
+  warLeashed() {
+    if (!this.warbandEligibility?.()) { this.swarmSince = null; this.leashBooted = true; return false; }
+    // Joined the swarm while this process watched: only a trigger after that counts. Started
+    // mid-swarm (a war restart): inherit the fleet's unleash, unless it is ancient.
+    this.swarmSince ??= this.leashBooted ? this.now() : this.now() - war.UNLEASH_MAX_MS;
+    this.leashBooted = true;
+    const l = war.readLeash();
+    const since = Math.max(this.swarmSince, Number(l.hold_at) || 0);
+    // THE OPERATOR ATTACKING ANYTHING unleashes: read off his own REQ_ATTACK (m59-proxy).
+    const leadAt = Number(gear.readSwarmLeader()?.at);
+    if (Number.isFinite(leadAt) && leadAt > since && leadAt > (Number(l.unleashed_at) || 0) && this.now() - leadAt < WARBAND_TARGET_MAX_AGE_MS)
+      try { war.unleash({ at: leadAt, why: 'the operator attacked', by: this.character?.() ?? null }); } catch {}
+    const unleashedAt = Math.max(Number(war.readLeash().unleashed_at) || 0,
+      Number.isFinite(leadAt) && this.now() - leadAt < WARBAND_TARGET_MAX_AGE_MS ? leadAt : 0);
+    return !(unleashedAt > since);
+  }
+
+  leashStatus() {
+    const l = war.readLeash();
+    return { swarming: !!this.warbandEligibility?.(), leashed: this.warLeashed(),
+      unleashed_at: l.unleashed_at ?? null, why: l.unleash_why ?? null, hold_at: l.hold_at ?? null };
+  }
+
+  /** The operator's word, and his death, as the swarm hears them. */
+  observeLeash(ev) {
+    if (!this.warbandEligibility?.()) return;
+    const leader = this.leaderCharacter?.();
+    if (!leader) return;
+    const me = this.character?.() ?? null, at = this.now();
+    if (ev.kind === 'said' && war.normName(ev.name) === war.normName(leader)) {
+      if (war.isGoOrder(ev.text)) try { war.unleash({ at, why: `${leader} said go`, by: me }); } catch {}
+      else if (war.isHoldOrder(ev.text)) try { war.holdLeash({ at, why: `${leader} said hold`, by: me }); } catch {}
+      return;
+    }
+    if (ev.kind !== 'message' || !ev.text) return;
+    const text = String(ev.text).replace(/~[A-Za-z]/g, '');
+    const died = parseDeathBroadcast(text)?.who ?? war.parseGuildCombat(text)?.victim ?? null;
+    if (died && war.normName(died) === war.normName(leader))
+      try { war.unleash({ at, why: `${leader} died: ${text}`, by: me }); } catch {}
+  }
+
   raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num) {
     if (!this.sentinelEnabled() || !(room > 1) || !enemy) return;
     const key = `${room}|${String(enemy).toLowerCase()}`, now = this.now();
@@ -380,7 +430,7 @@ export class CombatMode {
     // ready before anybody is hit. Kept here and reported in `combat status` (war.threat).
     this.warThreat = { enemy: a.enemy, room: Number(a.room), reporter: a.reporter ?? null,
       basis: a.basis ?? null, at: a.at ?? this.now() };
-    if (!this.warEnabled()) return false;
+    if (!this.warEnabled() || this.warLeashed()) return false;
     if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
     if (Number(a.room) !== this.s.world?.room?.num) return false;
     // A sighting in our map is a report, not a call to arms: our own scan sees the same enemy
@@ -1198,6 +1248,7 @@ export class CombatMode {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observeWar(ev, client);
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
+    if (ev.kind === 'said' || ev.kind === 'message') this.observeLeash(ev);
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
