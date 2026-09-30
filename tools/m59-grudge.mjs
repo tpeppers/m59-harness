@@ -61,6 +61,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName, resolveFleet } from './m59-fleetpath.mjs';
 import { rosterCharacterNames } from './m59-party.mjs';
+import { warHostility } from './m59-war.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..', '..');
 
@@ -199,6 +200,18 @@ export function mayReturnFire(target, { now = Date.now(), window = GRUDGE_MS,
   if (fleetmate) return { engage: false, why: 'one of ours' };
   if (!(flags & 0x00000004)) return { engage: false, why: 'not a player' };
   if (!(flags & 0x00000008)) return { engage: false, why: 'not attackable' };
+  // A GUILD WAR IS THE OTHER THING THAT MAKES A PLAYER FAIR GAME, and it needs no grudge.
+  // 2026-09-30: 117 of prod's last 150 deaths were three Human Resistance members, every one a
+  // "guild combat" kill that flags nobody (player.kod:4868) — so rule 2 below answered "not
+  // flagged" to all of them and the fleet never swung back. The server marks a member of a
+  // MUTUALLY warring guild with PLAYER_IS_ENEMY on every object it sends; the war book adds
+  // members remembered from a look or a kill broadcast. Rule 3 still holds and is what makes
+  // the memory safe: a mutual war passes the server's safety check with safety ON
+  // (player.kod:3803), and somebody who has since left the guild is refused rather than hit.
+  // See tools/m59-war.mjs.
+  const war = warHostility(target, { fleetmate, now });
+  if (war.hostile) return { engage: true, war: war.basis, grudge: grudgeAgainst(name, { now, window }),
+                            why: `at war: ${war.why}` };
   // Rule 2, the live flag. Read from THIS object, this moment — never from the record.
   const cls = (flags & 0x0001C000) >>> 0;
   if (cls !== 0x4000 && cls !== 0x8000)

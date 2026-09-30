@@ -767,6 +767,12 @@ the records it describes.
   Master is never mistaken for a murderer, that a grudge and a live flag are BOTH required
   and neither alone is enough, that the hour is measured from the last blow, and that a
   fleetmate is refused before anything else is asked) and
+  `node tools/m59-war-test.mjs` (21 — **the guild-war arm of that same gate**: that the
+  server's `PLAYER_IS_ENEMY` mark or a remembered enemy-guild membership is enough with no
+  grudge, that a fleetmate or guildmate is never a target whatever the flags say, that a war
+  engagement never turns safety off and a server refusal suspends the memory, that a zone
+  alarm pulls in fleetmates in the SAME map and only that map, that one look leader looks at a
+  stranger, and that a corrupt war book is never overwritten) and
   `node tools/m59-purchase-funding-test.mjs` (**real shopping flow with simulated bank and
   merchant**: posted costs and quantities, exact shortfalls, reserved cash, failed and
   interrupted withdrawals, fresh merchant quotes after a price change, and separate bank

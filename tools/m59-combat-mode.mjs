@@ -9,8 +9,16 @@ import { effectsAt, groundEffectSquares, groundEffectOnSegment } from './m59-gro
 import { parsePlayerCombat } from './m59-player-evidence.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision,
   updateSurvivalDecision } from './m59-survival-decision.mjs';
+import * as war from './m59-war.mjs';
 
 export const PVP_DANGER_MS = 30_000;
+// One look at a stranger per keeper per this long, and only by the room's look leader unless
+// the stranger has gone unread for WAR_LOOK_FALLBACK_MS. Twenty characters in one room must not
+// all look at the same entrant.
+export const WAR_LOOK_EVERY_MS = 1500;
+export const WAR_LOOK_FALLBACK_MS = 4000;
+// The same (map, enemy) alarm is not re-raised by one keeper more often than this.
+export const WAR_ALARM_EVERY_MS = 3000;
 
 const demand = (ok, why) => { if (!ok) throw new Error(`combat: ${why}`); };
 const square = (p, label) => {
@@ -149,12 +157,19 @@ export class CombatMode {
     this.revision = 0; this.cancelled = new Set(); this.safetyLease = null; this.safetyRequest = null;
     this.watch = null;
     this.lastPvP = null;
+    // THE WAR RESPONSE is off until the owning process says otherwise (`warEligibility`). The
+    // keeper process wires it; a broker in-process session and every test that does not ask
+    // for it keep the behaviour that was already there.
+    this.warEligibility = null;
+    this.fleetmate = () => false;
+    this.warLookAt = 0; this.warPendingLook = null; this.warSeen = new Map();
+    this.warAlarmed = new Map(); this.warLast = null; this.warError = null;
   }
 
   status() {
     const o = this.active ?? this.last;
     const watch = this.watchStatus();
-    if (!o) return { active: false, pvp_survival: this.pvpStatus(), ...(watch ? { watch } : {}),
+    if (!o) return { active: false, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
       ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
     return { active: !!this.active, order_id: o.id, action: o.order.action,
       target: o.order.target, map: o.order.map ?? o.room, position: o.order.position,
@@ -168,8 +183,141 @@ export class CombatMode {
       last_outcome: o.lastOutcome ?? null,
       expires_at: o.expiresAt, finished_at: o.finishedAt ?? null,
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
-      pvp_survival: this.pvpStatus(),
+      pvp_survival: this.pvpStatus(), keep_safety: !!o.keepSafety, war: this.warStatus(),
       ...(watch ? { watch } : {}) };
+  }
+
+  warStatus() {
+    return { enabled: this.warEnabled(), last: this.warLast, error: this.warError,
+      enemy_guilds: (() => { try { return war.enemyGuilds().map(g => g.name); } catch { return null; } })() };
+  }
+
+  warEnabled() { return !!this.warEligibility?.(); }
+
+  isOurs(name) {
+    if (!name) return false;
+    if (String(name).trim().toLowerCase() === characterName(this.s, this.s.client)) return true;
+    try { return !!this.fleetmate(name); } catch { return false; }
+  }
+
+  // ------------------------------------------------------------------ the war response
+  //
+  // THREE INPUTS, ONE OUTPUT. A player in our room is hostile because the server marks it
+  // (OF.ENEMY, a mutual guild war), or because the war book remembers its guild; a fleetmate in
+  // our MAP raised an alarm. Every one of them ends in beginPvP — the same body-owning return
+  // fire an incoming hit already starts — with `keepSafety`, because a mutual war passes the
+  // server's safety check with safety ON and nothing here should ever need it off.
+  // See tools/m59-war.mjs for the argument.
+  observeWar(ev, c) {
+    if (!this.warEnabled()) return;
+    try {
+      let learned = null;
+      if (ev.kind === 'message' && ev.text) learned = war.learnFromMessage(ev.text, { isOurs: n => this.isOurs(n) });
+      if (ev.kind === 'look' && ev.player) this.learnFromLook(ev, c);
+      if (learned || ['appeared', 'room-contents', 'changed', 'room-entered', 'look'].includes(ev.kind))
+        this.scanForEnemies(c);
+    } catch (e) { this.warError = e.message; }
+  }
+
+  learnFromLook(ev, c) {
+    const pending = this.warPendingLook;
+    const o = c.room?.objects?.get?.(ev.id);
+    const name = (pending?.id === ev.id ? pending.name : null) ?? (o ? c.rsc?.get?.(o.nameRsc) ?? o.name : null);
+    if (pending?.id === ev.id) this.warPendingLook = null;
+    if (!name || this.isOurs(name)) return;
+    const g = war.parseGuildLine(ev.extra ?? '');
+    if (g) war.recordMembership(name, g.guild, { source: 'look', rank: g.rank });
+    else war.recordUnguilded(name);
+  }
+
+  scanForEnemies(c) {
+    const s = this.s, room = s.world?.room?.num;
+    if (!s.live || !c?.self || !(room > 1) || c.vitals?.()?.health?.value === 0) return;
+    const now = this.now();
+    let hostile = null;
+    const unknown = [], ours = [];
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
+      const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
+      if (!name) continue;
+      const mine = this.isOurs(name);
+      if (mine) { ours.push(name); continue; }
+      const verdict = war.warHostility({ name, flags: o.flags }, { fleetmate: mine, now });
+      if (verdict.hostile) {
+        if ((o.flags & OF.ATTACKABLE) && !hostile) hostile = { o, name, verdict };
+        continue;
+      }
+      if (!this.warSeen.has(o.id)) this.warSeen.set(o.id, now);
+      if (!(o.flags & OF.GUILDMATE) && war.needsLook(name, { now })) unknown.push({ o, name });
+    }
+    if (this.warSeen.size > 512) this.warSeen.clear();
+    if (hostile) this.beginWar(hostile.name, { basis: hostile.verdict.basis, why: hostile.verdict.why, room });
+    if (unknown.length && war.enemyGuilds().length) this.lookForGuild(c, unknown, ours, now);
+  }
+
+  lookForGuild(c, unknown, ours, now) {
+    if (now - this.warLookAt < WAR_LOOK_EVERY_MS || typeof c.look !== 'function') return;
+    // THE LOOK LEADER is the fleet character in this room whose name sorts first. Deterministic
+    // and needs no messaging; if the leader is busy or dead, anyone looks after the fallback.
+    const me = characterName(this.s, c);
+    const leader = [me, ...ours.map(n => n.toLowerCase())].sort()[0] === me;
+    const pick = unknown.find(u => leader || now - (this.warSeen.get(u.o.id) ?? now) >= WAR_LOOK_FALLBACK_MS);
+    if (!pick) return;
+    this.warLookAt = now;
+    this.warPendingLook = { id: pick.o.id, name: pick.name, at: now };
+    war.noteLooked(pick.name, { at: now });
+    c.look(pick.o.id);
+  }
+
+  beginWar(name, { basis, why, room, reporter = null }) {
+    if (this.pvpEligibility?.() === false) return false;
+    // An operator's own combat order owns the body; the war does not take it away from them.
+    if (this.active && !this.active.pvp) return false;
+    const had = !!this.active?.pvp;
+    const known = this.active?.pvp?.attackers?.some(a => a.character.toLowerCase() === name.toLowerCase());
+    if (!known) {
+      this.beginPvP({ character: name, text: reporter ? `zone alarm from ${reporter}: ${why}` : `at war: ${why}`,
+        reason: reporter ? `${reporter} is fighting ${name} in this map; the room fights together`
+                         : `${name} is at war with this fleet (${basis}); engage on sight`,
+        reason_code: reporter ? 'zone_alarm' : 'guild_war' }, this.now());
+      // A war engagement NEVER turns safety off; an incoming hit that already owned the body
+      // keeps whatever it decided.
+      if (this.active?.pvp && !had) this.active.keepSafety = true;
+    }
+    this.warLast = { at: this.now(), enemy: name, basis, room, reporter };
+    if (!reporter) this.raiseWarAlarm(name, basis, room);
+    return !!this.active?.pvp;
+  }
+
+  raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num) {
+    if (!this.warEnabled() || !(room > 1) || !enemy) return;
+    const key = `${room}|${String(enemy).toLowerCase()}`, now = this.now();
+    if (now - (this.warAlarmed.get(key) ?? 0) < WAR_ALARM_EVERY_MS) return;
+    this.warAlarmed.set(key, now);
+    if (this.warAlarmed.size > 256) this.warAlarmed.clear();
+    war.raiseAlarm({ room, reporter: this.character?.() ?? characterName(this.s, this.s.client), enemy, basis, at: now });
+  }
+
+  /** Another keeper's alarm. Joins the fight only when it names the map this character is in. */
+  onWarAlarm(a) {
+    if (!this.warEnabled() || !a?.enemy) return false;
+    const me = this.character?.() ?? characterName(this.s, this.s.client);
+    if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
+    if (this.isOurs(a.enemy)) return false;                  // never an alarm about one of ours
+    if (Number(a.room) !== this.s.world?.room?.num) return false;
+    return this.beginWar(a.enemy, { basis: a.basis ?? 'alarm', why: `${a.reporter} reported ${a.enemy}`,
+      room: a.room, reporter: a.reporter ?? 'a fleetmate' });
+  }
+
+  targetAtWar(o) {
+    const t = o?.targetId != null ? o.client?.room?.objects?.get?.(o.targetId) : null;
+    return !!(t && (t.flags & OF.ENEMY));
+  }
+
+  // Safety comes off only for a kill that needs it: never for a war engagement, and never for a
+  // target the server marks as a mutual-war enemy (CheckStatusAndSafety, player.kod:3803).
+  needsSafetyOff(o) {
+    return !!(o && o.order.action === 'kill' && !o.keepSafety && !this.targetAtWar(o));
   }
 
   pvpStatus() {
@@ -195,7 +343,12 @@ export class CombatMode {
     for (const a of this.active?.pvp?.attackers ?? []) names.push(a.character);
     const result = parsePlayerCombat(ev.text, names);
     if (!result) return;
-    if (result.direction === 'incoming') this.beginPvP(result, ev.at);
+    if (result.direction === 'incoming') {
+      this.beginPvP(result, ev.at);
+      // THE VICTIM IS THE ONLY ONE WHO HEARS THIS LINE, so it is the one fact the room does
+      // not already share. Say it, so every fleet character in this map fights with us.
+      if (this.active?.pvp) this.raiseWarAlarm(result.character, 'attacked');
+    }
     const p = this.active?.pvp;
     if (!p) return;
     const attacker = p.attackers.find(a => a.character.toLowerCase() === result.character.toLowerCase());
@@ -299,8 +452,8 @@ export class CombatMode {
     let o = this.active;
     if (!o?.pvp) {
       const decision = chooseSurvivalDecision(s, { strategy: 'pvp_return_fire', status: 'active',
-        reason: `attacked by ${evidence.character}; return fire until the threat leaves or we die`,
-        reason_code: 'confirmed_player_attack', source: 'combat',
+        reason: evidence.reason ?? `attacked by ${evidence.character}; return fire until the threat leaves or we die`,
+        reason_code: evidence.reason_code ?? 'confirmed_player_attack', source: 'combat',
         mitigation: 'ordinary HP floors, shelter and healing cannot stop return fire' },
       { because: 'confirmed player attack supersedes ordinary recovery' });
       this.stop('superseded by confirmed player attack', { preserveId: decision.id });
@@ -652,6 +805,7 @@ export class CombatMode {
 
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
+    this.observeWar(ev, client);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
     const requested = this.safetyRequest;
@@ -669,6 +823,17 @@ export class CombatMode {
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
+        // A WAR ENGAGEMENT THE SERVER REFUSES WAS A WRONG MEMORY, and safety did its job: the
+        // player is not at war with us now (left the guild, newbie, war over). Stop swinging
+        // at them and stop remembering them as an enemy for a while.
+        if (o.pvp && o.keepSafety && o.targetName) {
+          try { war.markRefused(o.targetName, { at: this.now(), why: ev.text }); } catch {}
+          o.pvp.attackers = o.pvp.attackers.filter(a => a.character.toLowerCase() !== o.targetName);
+          this.record('war_refused', o);
+          if (!o.pvp.attackers.length) { this.stop('war target refused by server safety'); return; }
+          o.targetId = null; o.targetName = null; o.phase = 'waiting'; o.phaseRevision++;
+          this.syncPvP(o); this.wake(); return;
+        }
         this.combatFailure(o, `server refused combat: ${ev.text}`); return;
       }
       if (/your .* (hits|misses) |out of range/i.test(ev.text))
@@ -759,7 +924,7 @@ export class CombatMode {
       if (characterName(s, s.client) !== lease.character) { this.safetyLease = null; return; }
       lease.client = s.client; lease.playerId = s.client.selfId;
     }
-    if (this.active?.order.action === 'kill' && this.active.phase === 'engaging') return;
+    if (this.needsSafetyOff(this.active) && this.active.phase === 'engaging') return;
     if (this.restorePending?.lease === lease && this.restorePending.epoch === s.combatEpoch)
       return this.restorePending.promise;
     const owner = this.active?.id ?? 'combat-safety-restore';
@@ -768,7 +933,7 @@ export class CombatMode {
     pending.promise = withBodyCommand(s, () => withPacketScope(() => {
       demand(this.safetyLease === lease && s.client === lease.client && s.live &&
         s.client.selfId === lease.playerId, 'safety lease changed');
-      demand(!(this.active?.order.action === 'kill' && this.active.phase === 'engaging'), 'kill resumed');
+      demand(!(this.needsSafetyOff(this.active) && this.active.phase === 'engaging'), 'kill resumed');
     }, () => s.pacer.submit('safety', () => {
       lease.client.safety(true);
       this.safetyRequest = { client: lease.client, playerId: lease.playerId, on: true };
@@ -784,7 +949,7 @@ export class CombatMode {
   }
 
   async prepareSafety(o) {
-    if (o.order.action !== 'kill') { await this.restoreSafety(); return; }
+    if (!this.needsSafetyOff(o)) { await this.restoreSafety(); return; }
     if (this.safetyLease?.client !== o.client || this.safetyLease?.playerId !== o.playerId) this.safetyLease = null;
     if (this.safetyLease) return;
     const request = this.safetyRequest;

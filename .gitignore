@@ -326,6 +326,13 @@ __pycache__/
 # server was inheriting production's enemies and refusing to stop at safe walls because of a
 # fight happening somewhere its characters cannot be attacked. See m59-grudge.mjs.
 /substrate/grudges-*.json
+# The war book and its zone alarms (tools/m59-war.mjs): which guilds this fleet is at war with,
+# every player seen in one, and which of our characters raised an alarm where. Names real
+# players and our characters, and is one fleet's operational state.
+/substrate/war.json
+/substrate/war-*.json
+/substrate/war-alarms*.jsonl
+/substrate/*.tmp
 
 # AND THE SIGHTING BOOK NAMES THEM TOO — MORE OF THEM, AND WHEN THEY WERE NOT DOING
 # ANYTHING TO US.

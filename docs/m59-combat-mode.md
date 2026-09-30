@@ -168,6 +168,55 @@ An offline regression with normal five-packet-per-second pacing measures roughly
 Travel, server latency, cooldowns, health and geometry still constrain execution.
 Chat interpretation time is outside that measurement.
 
+## Guild war: engage on sight, and the map fights together
+
+`combat_order` is an operator's decision about one named player. A guild war is a standing
+one about a whole guild, and it needs no operator on the path. 2026-09-30: 117 of prod's last
+150 deaths were three members of the Human Resistance, each announced by the server as
+"... slaughtered by Morpheus of the Human Resistance in guild combat." A guild-combat kill flags
+nobody (`player.kod:4868`), so `mayReturnFire` answered "not flagged" to every one of them.
+
+`tools/m59-war.mjs` is the war book. `CombatMode.observeWar` is the response, in each keeper
+process, on the socket's own events:
+
+| input | where it comes from | effect |
+|---|---|---|
+| `OF.ENEMY` (0x02000000) on a player | the server, on every object packet, set only for a MUTUAL war (`user.kod:2418`), also on invisible players | engage on sight |
+| remembered membership | `substrate/war-<fleet>.json`, from "in guild combat" broadcasts, look replies and operators | engage on sight |
+| an unidentified stranger | room contents | the room's look leader looks once; the guild line is remembered |
+| a zone alarm | `substrate/war-alarms-<fleet>.jsonl`, appended by a keeper that is attacked or engages | every keeper in the SAME map joins the fight |
+
+Every engagement is the existing PvP survival return fire (`beginPvP`), with `keepSafety`.
+A mutual war passes `CheckStatusAndSafety` with safety ON (`player.kod:3803`), so safety never
+comes off in a war. That is what makes remembering safe: a player who has left the guild is
+refused by the server ("Good thing your safety was on"), the engagement ends, and the book
+suspends that name for ten minutes (`markRefused`). The same rule now covers an operator's
+`kill` order against a war-marked target.
+
+**The latency path.** A same-room enemy reaches every keeper in the room in the same server
+packet, so there is no coordination delay. An alarm is one `appendFileSync` and a `fs.watch`
+wake-up (a 250 ms poll backs it up). The broker is not on that path.
+
+**Switches.** It is on in every keeper process and off for menagerie hosts. `warResponse: false`
+in a character's roster policy turns it off for that character, and `M59_WAR_RESPONSE=0`
+turns it off for the process. It stays quiet on its own outside a war, because every input
+needs the server's mark, a listed enemy guild, or a fleetmate's alarm.
+
+```bash
+node tools/m59-war.mjs                                   # the book
+node tools/m59-war.mjs --from-postmortems substrate/postmortems   # learn from past kills
+node tools/m59-war.mjs --declare "Guild" | --peace "Guild" | --member "Name" "Guild"
+node tools/m59-war.mjs --alarms                          # recent zone alarms
+```
+
+**The guild-invite trick is not used.** An invisible player is still sent in room contents under
+its real name (`user.kod:2551`), and a look at an invisible player is allowed (`user.kod:4376`),
+so an invitation would reveal nothing a look does not. It would also put a real invitation in a
+stranger's pack.
+
+PvP *plays* (placement, timing, who musters where) are FleetScripts in the private repository's
+`strategy/pvp/`, installed at `substrate/fleetscripts/pvp/` and listed by the fleet REPL.
+
 ## FleetScratch
 
 ```

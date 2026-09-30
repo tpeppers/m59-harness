@@ -52,6 +52,7 @@ import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
 import { FLEET_KEEP } from './m59-items.mjs';
 import * as party from './m59-party.mjs';
+import * as war from './m59-war.mjs';
 import { chatterFor, fleetChatter } from './m59-chatter.mjs';
 import {
   configureSpotClaimStore, rememberFileSpotPartner, spotClaimNamespace,
@@ -286,6 +287,20 @@ let joinWanted = true;
 let joinGeneration = 0;
 let keeperJoinInFlight = null;
 session.combat.pvpEligibility = () => joinWanted;
+
+// THE WAR RESPONSE (tools/m59-war.mjs). On for every fleet character this process holds; off for
+// a menagerie host, which is ours for "do not shoot" and never a combatant. The kill switches are
+// `warResponse: false` in this character's roster policy and M59_WAR_RESPONSE=0 for the process.
+// It needs no switch to stay quiet outside a war: it acts only on the server's own enemy mark,
+// on a guild the war book lists, or on a fleetmate's alarm about a fight in this same map.
+const isHostCharacter = !fleet?.[agent] && !!menagerieRoster[agent];
+session.combat.fleetmate = name => party.isFleetmate(name);
+session.combat.warEligibility = () => joinWanted && !isHostCharacter &&
+  process.env.M59_WAR_RESPONSE !== '0' && (autopilot?.policy ?? policy)?.warResponse !== false;
+// The zone alarm: one line in a shared file, watched rather than polled by a keeper pass, so a
+// fleetmate's fight reaches this character in milliseconds instead of on its next decision.
+try { war.watchAlarms(a => session.combat.onWarAlarm(a)); }
+catch (e) { console.error(`[keeper] ${agent} war alarm watch unavailable: ${e.message}`); }
 
 function cancelInitialJoinRetry() {
   if (initialJoinRetryTimer !== null) clearTimeout(initialJoinRetryTimer);

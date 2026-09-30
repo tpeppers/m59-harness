@@ -21652,8 +21652,19 @@ export class Autopilot {
     this.socialCursor = c.evSeq;
     const myName = (c.me?.name || '').toLowerCase();
     if (!myName) return;
+    // THE ANSWER BELOW IS A STATUS REPORT, SO IT IS FOR THE OPERATOR AND NOBODY ELSE.
+    //
+    // It recites what this character hunts, its health and whether it is stuck. Said to the
+    // room, that narrates the fleet to whoever is standing there — and it did, on prod, on
+    // 2026-09-30: an NPC's line happened to contain a character's name, and the character
+    // answered it with its quarry and hit points, during a guild war in which three players
+    // have been hunting this fleet by name. So only speech from one of OUR characters counts
+    // as asking — which, since the bots never ask, means the operator piloting one. A
+    // stranger, a player or an NPC gets silence: the answer that was always available.
     const toMe = evs.filter(e => e.speaker !== c.selfId &&
-                                 String(e.text || '').toLowerCase().includes(myName));
+                                 String(e.text || '').toLowerCase().includes(myName) &&
+                                 e.name && String(e.name).toLowerCase() !== myName &&
+                                 party.isFleetmate(e.name));
     if (!toMe.length) return;
 
     // BEING CALLED INTO THE RING IS NOT SMALL TALK, AND THIS RAN FIRST.
@@ -24277,8 +24288,12 @@ export class Autopilot {
 
     // Anything recent that reads like someone asking after the body.
     const since = this.lastDeath.at - 60_000;
+    // ONLY TO OUR OWN. The answer names the room, the square and what killed us, which is a
+    // report on the fleet; a stranger asking "where?" after a death broadcast is as likely to
+    // be the killer as a rescuer. Same rule as social(): a fleetmate, i.e. the operator.
     const asks = box.select({ since, limit: 20 })
-      .filter(m => /\bwhere\b|\bwhere\?|what room|which room|loc\b|location/i.test(m.text || ''));
+      .filter(m => /\bwhere\b|\bwhere\?|what room|which room|loc\b|location/i.test(m.text || ''))
+      .filter(m => party.isFleetmate(m.from ?? m.from_name ?? null));
     for (const m of asks) {
       if (this.answered?.has(m.id)) continue;
       (this.answered ??= new Set()).add(m.id);

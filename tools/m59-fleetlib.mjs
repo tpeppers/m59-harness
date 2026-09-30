@@ -35,6 +35,12 @@ const REPO = join(HERE, '..');
 export const PUBLIC_DIR = process.env.M59_FLEETSCRIPTS_PUBLIC || join(HERE, 'fleetscripts');
 export const LOCAL_DIR = process.env.M59_FLEETSCRIPTS_LOCAL ||
   join(REPO, 'substrate', 'fleetscripts');
+// THE PVP PLAYS: this machine's, like LOCAL_DIR, and a directory of their own because a play
+// against a named enemy guild is an instruction to fight people — it is the private repo's
+// `strategy/pvp/`, installed here by `sync.mjs install`, and never in the public tree. Scanned
+// flat, after `local`, so a play overrides a same-named local script and the listing says so.
+export const PVP_DIR = process.env.M59_FLEETSCRIPTS_PVP ||
+  join(REPO, 'substrate', 'fleetscripts', 'pvp');
 
 function listDir(dir) {
   if (!existsSync(dir)) return [];
@@ -59,7 +65,7 @@ function stamp(file) {
  * and only one of them is the operator's fault.
  */
 export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCAL_DIR,
-                                         dirs = null } = {}) {
+                                         pvpDir = PVP_DIR, dirs = null } = {}) {
   const found = new Map();
   const problems = [];
 
@@ -70,7 +76,7 @@ export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCA
   // It does NOT widen where `list` looks: the default is still the two committed places, and
   // a pad is invisible to anything that does not ask for it by name. That invisibility is the
   // strongest of the three things keeping a half-written pad away from a keeper.
-  for (const [source, dir] of dirs ?? [['public', publicDir], ['local', localDir]]) {
+  for (const [source, dir] of dirs ?? [['public', publicDir], ['local', localDir], ['pvp', pvpDir]]) {
     for (const file of listDir(dir)) {
       const path = join(dir, file);
       let mod;
