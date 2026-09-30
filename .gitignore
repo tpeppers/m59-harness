@@ -816,3 +816,7 @@ substrate/magic-keep.json
 # Keep-off locks (tools/m59-keepoff.mjs): names other players and where they logged off.
 /substrate/keepoff.json
 /substrate/keepoff-*.json
+
+# Carried keeper assignments (tools/m59-keeper-carry.mjs): claims, busy and live policy handed from a
+# keeper to its replacement. Named rosters keep theirs under /substrate/fleets/, already ignored.
+/substrate/.keeper-carry/

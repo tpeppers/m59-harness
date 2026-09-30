@@ -65,7 +65,7 @@ await test('keeper: a 250ms watcher exits on a dropped connection during a hando
   const body = block(keeper, at);
   const tail = keeper.slice(at + 1 + body.length + 'setInterval(() => '.length, at + 1 + body.length + 60);
   assert.match(tail, /^, 250\)/, `interval is 250ms, got ${JSON.stringify(tail.slice(0, 12))}`);
-  assert.match(body, /if \(!handoffActive\(\)\) \{[\s\S]*?handoff = null; return;/, 'a lapsed handoff clears and carries on');
+  assert.match(body, /if \(!handoffActive\(\)\) \{[\s\S]*?handoff = null;[^\n]*return;/, 'a lapsed handoff clears and carries on');
   assert.match(body, /if \(inGame && !session\.live\) \{/, 'the cue is the drop of a connection that was in game');
   before(body, 'handoff = null;\n    try { autopilot?.stop(', 'saveFinalState()');
   before(body, 'saveFinalState()', 'process.exit(0)');

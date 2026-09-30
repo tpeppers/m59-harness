@@ -15,6 +15,7 @@ process.env.M59_KEEPER = '1';
 //   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
+import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
@@ -179,8 +180,35 @@ const credPort = entry.credentials.port || serverPort;
 // orders — the same disappearing-order bug the push was added to end, just on a longer
 // fuse and far harder to catch. /policy updates these too, so a rejoin re-applies the
 // CURRENT orders rather than the ones this process happened to start with.
+// WHAT THE ROSTER SAID AT BOOT, before any push mutates it (`policy` below IS the roster entry's
+// object). The carry compares against it: see tools/m59-keeper-carry.mjs.
+const bootPolicy = structuredClone(entry.autopilot?.policy || {});
+const bootMode = entry.autopilot?.mode || 'goap';
 let policy = entry.autopilot?.policy || {};
 let mode = entry.autopilot?.mode || 'goap';
+// A CHARACTER'S ASSIGNMENTS OUTLIVE ITS KEEPER PROCESS (tools/m59-keeper-carry.mjs). The keeper
+// this one replaces wrote what it had been told -- claims, busy, live policy, mode -- when it was
+// told to hand off or stop. Policy and mode are adopted here, before the first join; claims and
+// busy when the Autopilot is built. A field the roster has changed since is left to the roster.
+const CARRY_FILE = carryFile(fleetPath, agent);
+let carried = null;
+try { carried = readCarry(CARRY_FILE, { agent, character: entry.credentials?.character, pid: process.pid }); }
+catch (e) { console.error(`[keeper] ${agent} carry unreadable: ${e.message}`); }
+if (carried) {
+  const a = policyToAdopt(carried, bootPolicy, bootMode);
+  Object.assign(policy, a.fields);
+  if (a.mode) mode = a.mode;
+  console.error(`[keeper] ${agent} carried from pid ${carried.pid} (${carried.reason}): ` +
+    `${carried.claims.length} claim(s), busy ${carried.busy ? 'yes' : 'no'}, policy ${Object.keys(a.fields).join(',') || 'none'}` +
+    (a.mode ? `, mode ${a.mode}` : '') + (a.skipped.length ? `; roster changed, not carried: ${a.skipped.join(',')}` : ''));
+}
+/** Write what this keeper has been told, for the process that replaces it. */
+function writeAssignmentCarry(reason) {
+  try {
+    writeCarry(CARRY_FILE, captureCarry({ agent, character: entry.credentials?.character, pid: process.pid, reason,
+      claims: autopilot?.claims, busy: autopilot?.busy, bootPolicy, livePolicy: policy, bootMode, liveMode: mode }));
+  } catch (e) { console.error(`[keeper] ${agent} could not write its carry: ${e.message}`); }
+}
 
 // Every character has its own process, so safe-wall reservations need a shared store.
 // Scope it to BOTH the resolved roster and the game endpoint: two fleets may use the same
@@ -312,7 +340,7 @@ setInterval(() => {
   if (!handoff) return;
   if (!handoffActive()) {
     log(`[keeper] ${agent} handoff lapsed: no replacement took the connection; carrying on`);
-    handoff = null; return;
+    handoff = null; consumeCarry(CARRY_FILE); return;
   }
   // The replacement's login dropped us. Save and go -- never reconnect.
   if (inGame && !session.live) {
@@ -846,6 +874,20 @@ async function joinGenerationOnce(generation) {
       defaultPolicy ??= structuredClone(autopilot.policy);
       autopilot.mode = mode;
       Object.assign(autopilot.policy, policy);
+      // Carried leases, before the first pass. A holder that already claimed on this keeper keeps
+      // its claim; each carried lease keeps its own expiry, so the holder still has to heartbeat.
+      if (carried) {
+        const { claims, busy } = leasesToAdopt(carried);
+        for (const [f, c] of claims) {
+          const mine = autopilot.claims?.get(f);
+          if (!mine || mine.until <= Date.now()) (autopilot.claims ??= new Map()).set(f, c);
+        }
+        if (busy && !(autopilot.busy && autopilot.busy.until > Date.now())) autopilot.busy = busy;
+        if (claims.size || busy) autopilot.note?.('assignments carried', { from_pid: carried.pid,
+          faculties: [...claims.keys()], owners: [...new Set([...claims.values()].map(c => c.owner))], busy: busy?.kind ?? null });
+        carried = null;
+        consumeCarry(CARRY_FILE);
+      }
       assertJoinIntent(generation);
       autopilot.start();
       console.error(`[keeper] ${agent} autopilot started (mode=${mode}, hunt=${policy.hunt ?? 'none'})`);
@@ -4029,6 +4071,7 @@ const server = createServer(async (req, res) => {
       if (!requireAddressedWrite(req, asked)) return;
       if (asked.cancel) {
         handoff = null;
+        consumeCarry(CARRY_FILE);
         log(`[keeper] ${agent} handoff cancelled; carrying on`);
         json({ ok: true, handoff: null });
         return;
@@ -4036,6 +4079,7 @@ const server = createServer(async (req, res) => {
       const ms = Math.min(600_000, Math.max(10_000, Number(asked.timeout_ms) || 120_000));
       handoff = { since: Date.now(), deadline: Date.now() + ms };
       cancelInitialJoinRetry();
+      writeAssignmentCarry('handoff');
       log(`[keeper] ${agent} handing off: no reconnect from here; exits when the replacement logs in`);
       json({ ok: true, handoff, connected: !!session.live, in_game: inGame });
       return;
@@ -4046,6 +4090,7 @@ const server = createServer(async (req, res) => {
       if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} stop requested`);
       armShutdownWatchdog('POST /stop');
+      writeAssignmentCarry('stop');
       changeJoinIntent(false);
       if (autopilot) autopilot.stop('keeper stop');
       if (session.client) {
@@ -4907,6 +4952,7 @@ function saveFinalState() {
 process.on('SIGTERM', async () => {
   log(`[keeper] ${agent} SIGTERM received`);
   armShutdownWatchdog('SIGTERM');
+  writeAssignmentCarry('SIGTERM');
   changeJoinIntent(false);
   if (autopilot) autopilot.stop('SIGTERM');
   saveFinalState();
