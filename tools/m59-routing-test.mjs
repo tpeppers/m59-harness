@@ -1705,5 +1705,114 @@ console.log('A SPLIT BOUNDARY HAS SQUARES THAT LEAD SOMEWHERE ELSE, AND THEY ARE
   }
 }
 
+// ------------------------------------------------ the crypt in Marion: a rail over a gully
+// 2026-09-30. The only way from the entrance (r11c17) to the two GuestLevers is ~110 steps
+// round the east side and a RUNNING fall over a gully, r32c30 -> r35c30, which the operator
+// recorded with F9 and Bunsen crossed live. The bake reported `reach 11,17>26,4` and stored
+// no route: its plan took the detector's column-31 pair, and `moverStepLands` refuses every
+// gully pair because a fall is not a step. Sixteen characters asked walk_to for the whole
+// thing and wedged at r16-18 c12-15.
+//
+// Pinned: the jump is declared; the bake keeps entrance->lever routes over the DECLARED jump
+// and no other; the gully has a rail back to the take-off and on to the levers; the same
+// room with the declaration taken away still refuses (the exemption is the table, not
+// "falls"); and `railAcross` boards those lines from where characters were standing.
+console.log('\nroom 2600 — the crypt in Marion, over the gully to the levers');
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const raw = realMap?.rooms?.['2600'] ?? realMap?.rooms?.[2600];
+  const geometry = raw ? sharedRoomGeometry(raw) : null;
+  if (!geometry?.collisionReady) {
+    skip('room 2600 gully rail is baked from real collision geometry', 'no geometry');
+  } else {
+    const JUMP = '32,30>35,30';
+    ok('the gully jump r32c30 -> r35c30 is declared and survives the loader\'s own checks',
+       geometry.declaredFallJumps(32, 30).some(j => j.row === 35 && j.col === 30)
+         && geometry.declaredFallJumps(35, 30, { reverse: true }).some(j => j.row === 32 && j.col === 30),
+       JSON.stringify(geometry.declaredFallJumps(32, 30)));
+
+    const baked = bakeRoom(raw);
+    ok('and it is NOT a step the mover lands — the reason it had to be declared',
+       geometry.moverStepLands(32, 30, 35, 30) === false);
+    const walk = (key) => {
+      const p = baked.routes?.[key];
+      if (!p) return null;
+      const [fr, fc] = key.split('>')[0].split(',').map(Number);
+      let prev = { row: fr, col: fc };
+      const falls = [], refused = [];
+      for (const s of replay(fr, fc, p)) {
+        const edge = `${prev.row},${prev.col}>${s.row},${s.col}`;
+        if (Math.abs(s.row - prev.row) > 1 || Math.abs(s.col - prev.col) > 1) falls.push(edge);
+        else if (!geometry.moverStepLands(prev.row, prev.col, s.row, s.col)) refused.push(edge);
+        prev = s;
+      }
+      return { falls, refused, end: `${prev.row},${prev.col}` };
+    };
+    for (const to of ['26,4', '26,9', '25,8']) {
+      const w = walk(`11,17>${to}`);
+      ok(`the entrance has a baked route to ${to} and it crosses the gully at the DECLARED jump`,
+         w && w.falls.length === 1 && w.falls[0] === JUMP && w.refused.length === 0 && w.end === to,
+         JSON.stringify(w));
+    }
+    const isGutterKey = k => (baked.gutters ?? []).some(g => k.startsWith(`${g.row},${g.col}>`));
+    ok('no anchor route in the room rides an undeclared fall',
+       Object.keys(baked.routes).filter(k => !isGutterKey(k))
+         .every(k => walk(k).falls.every(e => e === JUMP)),
+       JSON.stringify(Object.keys(baked.routes).map(k => [k, walk(k).falls])));
+    const head = (baked.gutters ?? []).find(g => g.row === 34 && g.col === 30);
+    ok('the gully carries the operator\'s gutter head at r34c30, back to the take-off and on to the levers',
+       head && ['32,30', '26,4', '26,9', '25,8'].every(t => head.reaches.includes(t)),
+       JSON.stringify(baked.gutters));
+    const back = walk('34,30>32,30');
+    ok('and its rail climbs out of the gully and ends ON the take-off, with no jump in it',
+       back && back.end === '32,30' && back.falls.length === 0, JSON.stringify(back));
+    const retry = walk('34,30>26,4');
+    ok('and the line on to the west lever retries the jump at the declared column',
+       retry && retry.falls.length === 1 && retry.falls[0] === JUMP && retry.end === '26,4',
+       JSON.stringify(retry));
+
+    // THE CONTROL: the same room, the same waypoints and gutters, and the declaration hidden.
+    // A fresh geometry (a new `.roo` object) stamped with a room number the table does not
+    // name. Without it the pair is still REACHED and must still store no route, because the
+    // only way over is a fall `moverStepLands` refuses and nobody wrote it down.
+    const rooCopy = { ...(raw.roo ?? raw) };
+    const undeclared = sharedRoomGeometry({ roo: rooCopy });
+    undeclared.roomNum = 9902600;
+    const control = bakeRoom({ ...raw, roo: rooCopy });
+    ok('with the declaration hidden, an undeclared refused fall is still refused: reached, no route',
+       undeclared.declaredFallJumps(32, 30).length === 0
+         && control.reach?.['11,17>26,4'] === 1 && !control.routes?.['11,17>26,4'],
+       JSON.stringify({ reach: control.reach?.['11,17>26,4'], route: control.routes?.['11,17>26,4'] ?? null }));
+
+    // BOARDING, through the table on disk and the real `railAcross`.
+    const status = attachStepMasks(realMap);
+    const { activeRoutes } = await import('./m59-routes.mjs');
+    const table = status?.ok ? activeRoutes() : null;
+    if (!table?.rooms?.['2600']?.routes?.['11,17>26,4']) {
+      skip('railAcross boards the 2600 rails', 'the routing table on disk has no 2600 lever route — rebake 2600');
+    } else {
+      const { sessionWalkPrototype } = await import('./m59-session-walk.mjs');
+      const railAcross = sessionWalkPrototype({}).railAcross;
+      const board = (row, col, to) => railAcross.call(
+        { world: { room: { num: 2600 }, geometry }, client: { self: { row, col } } }, to);
+      const LEVERS = [{ row: 26, col: 4 }, { row: 26, col: 9 }, { row: 25, col: 8 }];
+      // Where characters were standing on 2026-09-30. r18c12 is the case the crow line got
+      // wrong: seven squares from the hall waypoint r25c8 through a wall, 108 to walk.
+      for (const [r, c] of [[18, 13], [16, 13], [2, 15], [6, 15], [18, 12], [17, 12]]) {
+        const got = LEVERS.map(t => board(r, c, t));
+        ok(`from r${r}c${c} every lever line is boarded at the entrance, not across the wall`,
+           got.every(x => x?.from?.row === 11 && x?.from?.col === 17),
+           JSON.stringify(got.map(x => x?.from ?? null)));
+      }
+      const gully = [];
+      for (let r = 33; r <= 34; r++) for (let c = 28; c <= 31; c++) gully.push([r, c]);
+      const offered = gully.map(([r, c]) => LEVERS.map(t => board(r, c, t)));
+      ok('from every square of the gully every lever line is the gutter rail at r34c30',
+         offered.every(row => row.every(x => x?.gutter === true && x.from.row === 34 && x.from.col === 30)),
+         JSON.stringify(offered.map(row => row.map(x => x ? `${x.from.row},${x.from.col}` : null))));
+    }
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
 process.exit(failed ? 1 : 0);

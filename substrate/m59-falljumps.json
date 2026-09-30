@@ -212,6 +212,33 @@
     "why": "the take-off is only reachable coming in from Ukgoth; the west anchor from 579 lands in a pocket that cannot reach it"
    },
    "note": "THE ONLY WAY TO THE SENTINEL'S NODE, AND YOU GET ONE ATTEMPT PER CIRCUIT. The operator: you must come in from Ukgoth (599) to reach the take-off at all, and miss it and the way round is the long one. 4.24 squares corner to corner, which is ABOVE FALL_MAX_SQUARES (3), so no detector will ever propose this one -- it exists only because somebody walked it. Declared with fine points because both squares hold two worlds and the square centres are in the wrong one: r35c16 spans 720..6400 and r38c19 spans 720..4800, and the jump is 6400 -> 4800 along the high ground, a drop of 1600. 185/256 sampled points of the take-off are at 6400 and 235/256 of the landing are at 4800. The landing reads fineWalkable=FALSE, like the 579 sliver -- anything reading this must not assume the landing square is floor. Measured 2026-09-03: the node at r45c32 sits at 5024, and the square where nine characters 'got within 9' (r36c35) is at 960 -- the valley floor, four thousand units BELOW the node. Chebyshev closeness in this room is about the valley, not the shelf."
+  },
+  {
+   "room": 2600,
+   "room_name": "The crypt in Marion",
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "operator, 2026-09-30 (debug client F9: start r30c30 fine 30415,30647, stop r38c30 fine 30509,38656, 4.7 s); Bunsen, 2026-09-30, crossed r32c30 -> r35c30 live in ONE walk_to step",
+   "part_of_cycle": false,
+   "from": {
+    "row": 32,
+    "col": 30
+   },
+   "to": {
+    "row": 35,
+    "col": 30
+   },
+   "from_fine": {
+    "x": 30464,
+    "y": 32640
+   },
+   "to_fine": {
+    "x": 30464,
+    "y": 35456
+   },
+   "note": "THE ONLY WAY FROM THE ENTRANCE TO THE TWO GUESTLEVERS, AND IT IS OVER A GULLY. From the entrance (r11c17, the door to Marion 200) the levers at r27c4 and r27c9 are ~110 steps away: east along row 18, north up col 23, round the east side, down to the ledge at r32c30 (floor 3392), then a RUNNING fall south over the gully (r33-34 c28-31, sector floor 1856 with depth, 1652 standing) into the corridor at r35c30 (floor 2368), west along row 37 and up the ramp at col 12 into the hall. The gully sits 512-716 below the corridor against a 384 step limit, so nothing walks across it and nothing walks back out of it the short way. The detector sees a fall here too, but it finds the column-31 pair first, and moverStepLands refuses every gully pair because a fall is not a step -- so until this was declared the bake threw away every route from the entrance to the levers while reach still called them joined. jumpConfidence(1024, ~2816) clears at every frame rate; m59-jumpfinder proposed 32,29 -> 37,31. Kermit missed it the same afternoon and landed in the gully at r33c31: a miss is ordinary, which is why substrate/m59-gutters.json carries a rail from the gully back to this take-off. Fine points follow the F9 line (x 30415 -> 30509, straight down column 30): the take-off is at the south lip of r32 (y 32640, 128 short of the edge) and the landing on the corridor floor in r35 (y 35456)."
   }
  ]
 }

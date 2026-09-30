@@ -4049,10 +4049,65 @@ export function sessionWalkPrototype(deps) {
                    ...(Array.isArray(r.gutters) ? r.gutters : []).map(a => ({ ...a, gutter: true }))];
     // The entry anchor is whichever baked start actually has a line to where we are going.
     // Nearest first, because getting on is an ordinary walk and a shorter one is cheaper.
+    //
+    // NEAREST BY WALKING, NOT BY CROW — the mistake `leaveVia` already corrected for its own
+    // skip decision (see `routeSteps` there), still made one function away. The crypt in
+    // Marion (2600), 2026-09-30: the hall with both levers (r25-26 c4-9) sits just south of
+    // the entrance's upper floor, behind a wall, and the only way between them is ~110 steps
+    // round the east side and over the gully. By crow, 99 of the 189 squares within 25 steps
+    // of the entrance ranked a HALL waypoint their nearest start — r18c12, where characters
+    // were standing that afternoon, was told to get on at r25c8, 7 squares away by crow and
+    // 108 to walk — and the gully's own head lost to a gutter at r38c38 for every square of
+    // the gully.
+    //
+    // One flood from the body over the mover's own graph (the step mask plus declared and
+    // detected falls, exactly what `path` plans on) gives every head's walking distance at
+    // once: 7ms cold / 1ms warm in this room, 58ms cold / 7ms warm in Ukgoth, the largest.
+    // A head the flood cannot reach sorts after every head it can; crow breaks ties and is
+    // the whole answer where there is no geometry to ask, which is what every fixture
+    // without one gets. `M59_RAIL_MEASURE=crow` restores the old order exactly.
+    const crowOf = a => Math.hypot(a.col - me.col, a.row - me.row);
+    const walkOf = (() => {
+      const g = this.world?.geometry;
+      if (process.env.M59_RAIL_MEASURE === 'crow' || typeof g?.neighbors !== 'function')
+        return () => 0;
+      const r0 = Math.floor(Number(me.row)), c0 = Math.floor(Number(me.col));
+      if (!Number.isFinite(r0) || !Number.isFinite(c0)) return () => 0;
+      const dist = new Map([[`${r0},${c0}`, 0]]);
+      try {
+        const queue = [[r0, c0]];
+        for (let i = 0; i < queue.length; i++) {
+          const [qr, qc] = queue[i];
+          const d = dist.get(`${qr},${qc}`);
+          for (const n of g.neighbors(qr, qc, { collision: true })) {
+            const k = `${n.row},${n.col}`;
+            if (dist.has(k)) continue;
+            dist.set(k, d + 1);
+            queue.push([n.row, n.col]);
+          }
+        }
+      } catch { return () => 0; }
+      if (dist.size <= 1) return () => 0;          // nowhere to walk: no opinion, keep crow
+      // The last step INTO a head is exempt, as `path` exempts its goal: a `go` door's tile
+      // is routinely a pocket the mask will not step onto, and 2600's entrance at r11c17 is
+      // one — flooded strictly, the squares beside it could not "reach" their own doorway.
+      return a => {
+        const at = dist.get(`${a.row},${a.col}`);
+        if (at !== undefined) return at;
+        let best = Infinity;
+        for (let dr = -1; dr <= 1; dr++)
+          for (let dc = -1; dc <= 1; dc++) {
+            const d = dist.get(`${a.row + dr},${a.col + dc}`);
+            if (d !== undefined && d + 1 < best) best = d + 1;
+          }
+        return best;
+      };
+    })();
     const starts = heads
       .filter(a => !(a.row === toSquare.row && a.col === toSquare.col))
-      .sort((a, b) => (Math.hypot(a.col - me.col, a.row - me.row))
-                    - (Math.hypot(b.col - me.col, b.row - me.row)));
+      .map(a => ({ a, walk: walkOf(a), crow: crowOf(a) }))
+      .sort((x, y) => (x.walk === y.walk ? 0 : x.walk < y.walk ? -1 : 1) || x.crow - y.crow)
+      .map(x => x.a);
     for (const a of starts) {
       let squares = null;
       try { squares = bakedPath(table, room, { row: a.row, col: a.col }, toSquare); }
