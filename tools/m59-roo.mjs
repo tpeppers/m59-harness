@@ -110,6 +110,14 @@ export const heightClientToKod = h => h >> (LOG_CLIENT_FINENESS - LOG_KOD_FINENE
 // for us it does not exist, and we will walk up cliffs.
 export const MAX_STEP_HEIGHT_KOD = 24;
 export const MAX_STEP_HEIGHT = heightKodToClient(MAX_STEP_HEIGHT_KOD);   // 384 client units
+// The probe `_strandedByLanding` asks "same ground?" with: a POINT, not a body, but not a
+// zero-width one. The client's collision test is on the ENDPOINT of each microstep (a move
+// ends inside a wall's radius or it does not), so a probe whose microstep is wider than its
+// own diameter steps clean over a thin wall. At `playerRadius: 1` and the default 124-unit microstep that
+// is exactly what happened at Marion's crypt gate — a zero-height fence at r71.25 with floor
+// either side — and the gate squares read as one piece. Radius 4 with a 4-unit microstep
+// cannot jump anything.
+const SPLIT_POINT = Object.freeze({ slide: false, playerRadius: 4, maxMicrostep: 4 });
 // How far a body may carry across a gap. Three squares is the operator's Cragged Mountains
 // crossing with room to spare; more would start inventing traversals nobody has walked.
 // The declared fall-jump table, read once and cached. Kept here rather than imported from
@@ -135,6 +143,27 @@ function voidSectorTable() {
     VOID_SECTORS = JSON.parse(fs.readFileSync(url, 'utf8'));
   } catch { VOID_SECTORS = null; }
   return VOID_SECTORS;
+}
+// The declared stand-point table, read once, keyed by .roo file. Same shape of argument as
+// the fall-jump table above: an unreadable or absent table declares nothing, and nothing in it
+// authorises a step — `_traceMoverStep` still has to reach the point. See
+// substrate/m59-standpoints.json for why a square's aim is ever written down by hand.
+let DECLARED_STAND_POINTS;
+function declaredStandPointTable() {
+  if (DECLARED_STAND_POINTS !== undefined) return DECLARED_STAND_POINTS;
+  DECLARED_STAND_POINTS = new Map();
+  try {
+    const url = new URL('../substrate/m59-standpoints.json', import.meta.url);
+    for (const p of JSON.parse(fs.readFileSync(url, 'utf8'))?.points ?? []) {
+      const roo = String(p?.roo ?? '').toLowerCase();
+      const x = Number(p?.fine?.x), y = Number(p?.fine?.y);
+      const row = Number(p?.row), col = Number(p?.col);
+      if (!roo || ![x, y, row, col].every(Number.isFinite)) continue;   // unmeasured: inert
+      if (!DECLARED_STAND_POINTS.has(roo)) DECLARED_STAND_POINTS.set(roo, new Map());
+      DECLARED_STAND_POINTS.get(roo).set(`${row},${col}`, { x, y });
+    }
+  } catch { /* declares nothing */ }
+  return DECLARED_STAND_POINTS;
 }
 export const FALL_MAX_SQUARES = Number(process.env.M59_FALL_MAX_SQUARES || 3);
 
@@ -653,7 +682,17 @@ export const STEP_MASK_DIRS = DIRS;
 //      never once completed. A mask baked before this encodes those squares as sealed, and
 //      a mask that verifies while encoding the wrong doors is the thing this counter is
 //      for.
-export const STEP_MASK_VERSION = 6;
+//   7  and refuses a DEFLECTED step whose body stops where it cannot do what the square's
+//      stand point can do next (`_strandedByLanding`) — unless the stand point sits on a wall
+//      and so belongs to both sides, or the square is a door — and reads DECLARED stand
+//      points (substrate/m59-standpoints.json). Marion's crypt-yard wall was crossed in two
+//      legal-looking steps, r85c24 -> r85c23 -> r84c22, and its locked gate the same way,
+//      while the yard's real entrance, a 16-unit-slack gap at r88.75, was in no mask.
+//      Measured over all 264 rooms: 10,856 of 2,358,606 steps go (-0.46%, 155 rooms), the
+//      squares reachable from the rooms' arrival points fall 249,239 -> 247,354, and a
+//      body-radius flood from the same arrivals walks into none of the 1,410 interior squares
+//      that went — each was reached through a wall. Marion gains the crypt door both ways.
+export const STEP_MASK_VERSION = 7;
 
 /**
  * HOW CLOSE DOES ANY BODY COME TO THIS LINE? In WIRE units, which is what the mover sends.
@@ -2279,6 +2318,15 @@ export class RoomGeometry {
     const x0 = (col - 1) * CLIENT_FINENESS, y0 = (row - 1) * CLIENT_FINENESS;
     const half = CLIENT_FINENESS / 2;
     const centre = { x: x0 + half, y: y0 + half };
+    // A DECLARED POINT WINS, if it is inside this square and on floor. Keyed by the .roo,
+    // because the walls it was measured against are the .roo's. substrate/m59-standpoints.json.
+    const declared = this.collisionReady
+      ? declaredStandPointTable().get(String(this.file ?? '').toLowerCase())?.get(`${row},${col}`)
+      : null;
+    if (declared && declared.x >= x0 && declared.x < x0 + CLIENT_FINENESS
+        && declared.y >= y0 && declared.y < y0 + CLIENT_FINENESS
+        && this._occupiable(declared.x, declared.y))
+      return (memo[i] = { x: declared.x, y: declared.y });
     if (!this.collisionReady || this._occupiable(centre.x, centre.y))
       return (memo[i] = centre);
     // N x N samples; N odd so the centre is one of them and the lattice is symmetric.
@@ -2658,39 +2706,173 @@ export class RoomGeometry {
     // `Session.step` and walkTo's coalescer both call standPoint — or the planner and the
     // mover are back to asking different questions, which is the bug this file exists for.
     const from = this.standPoint(fromRow, fromCol);
-    const to = this.standPoint(toRow, toCol);
-    if (!from || !to) return false;
-    const fromX = from.x, fromY = from.y, toX = to.x, toY = to.y;
+    if (!from) return false;
     try {
-      const requested = this.traceFineMoveClient(fromX, fromY, toX, toY, { slide: true });
-      if (!requested.available || !requested.moved) return false;
-      let qx = protocolToward(requested.x, fromX), qy = protocolToward(requested.y, fromY);
-      let arrived = false;
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const trace = this.traceFineMoveClient(fromX, fromY,
-          protocolToClient(qx), protocolToClient(qy), { slide: true });
-        if (!trace.available || !trace.moved) return false;
-        if (trace.arrived) { arrived = true; break; }
-        const nx = protocolToward(trace.x, fromX), ny = protocolToward(trace.y, fromY);
-        if (nx === qx && ny === qy) return false;
-        qx = nx; qy = ny;
-      }
-      if (!arrived) return false;
-      if (Math.floor(qx / KOD_FINENESS) !== toCol || Math.floor(qy / KOD_FINENESS) !== toRow)
-        return false;
-      // AND AT A HEIGHT CONSISTENT WITH THE SQUARE WE ARE RECORDING IT AS. A square is
-      // 1024 units and a cliff face does not respect the lattice, so a square can straddle
-      // one — 12,12 in the Cragged Mountains does. The mover slides up to the face and
-      // stops on the square's LOW half, `walkTo` compares squares, and that counted as
-      // arriving; the next step was then planned from the square's stand point 1600 units
-      // higher than the character actually stood. Without this the climb rule above never
-      // bites, because the step "succeeds" without ever going up.
-      const landedFloor = this.floorBaseAtClient(protocolToClient(qx), protocolToClient(qy));
-      const aimFloor = this.floorBaseAtClient(toX, toY);
-      if (Number.isFinite(landedFloor) && Number.isFinite(aimFloor)
-          && Math.abs(landedFloor - aimFloor) > MAX_STEP_HEIGHT) return false;
+      const step = this._moverStepFrom(from.x, from.y, toRow, toCol);
+      if (!step.lands) return false;
+      // AND WHERE EVERY NEXT STEP WILL BE PLANNED FROM. The planner plans the next step from
+      // this square's stand point; the body is wherever the slide stopped. When those are two
+      // sides of a wall, the mask says "one more legal step" and the body walks into the wall.
+      // Marion (200), 2026-09-30: a thin raised wall on the crypt yard's east side (2240 on
+      // 1600) runs diagonally through r85c23's stand point. The step from r85c24 slides along
+      // it and stops inside r85c23 on the EAST side; r85c23 -> r84c22, planned from the stand
+      // point, is to the WEST. The baked route to the crypt door crossed the wall in those two
+      // legal-looking steps, and characters ground against it at r85c23. The crypt gate at
+      // r71.25 was the same shape in a fence: land on the north edge of r71c13, walk on from
+      // its stand point south of the gate.
+      //
+      // So a deflected step lands only if the body, from where it stopped, can get to every
+      // square the stand point steps to next — the bug's own definition. Asking instead whether
+      // the body can reach the stand point, or whether a wall separates the two, refuses real
+      // ground wholesale, because most stand points sit ON a wall line (walls run on the
+      // half-square lattice, stand points are centres): measured, that cut the Sewers of
+      // Jasper's pipe off with 360 of the room's 463 squares, and the Cragged Mountains' north
+      // pocket off from its own exit. See `_strandedByLanding` for what is asked and what is
+      // not, and `_standOnBoundary` for why a stand point on a wall decides nothing.
+      //
+      // NOT ON AN EXIT SQUARE. A body that lands anywhere in a door's square has left the room
+      // — the server judges the square, not the point — so there is no next step, and a door
+      // whose stand point sits on its own building face must stay enterable from the street.
+      if (!step.straight && !this.exitSquares?.has(`${toRow},${toCol}`)
+          && this._strandedByLanding(step.x, step.y, toRow, toCol)) return false;
       return true;
     } catch { return true; }        // a trace that throws is not evidence of a wall
+  }
+
+  /**
+   * ONE STEP'S ARITHMETIC, FROM ANY POINT. `_traceMoverStep` is this from the square's stand
+   * point plus the rule about what comes next; the rule needs it from where a body actually
+   * stopped, which is why it is separate. Returns `{ lands, straight, x, y }`: whether the
+   * step lands in (toRow,toCol) at a height consistent with it, whether the straight trace to
+   * the stand point arrived unaided, and where the body ends up (client units).
+   * COORDINATE CONTRACT: `(fromX,fromY)` client units; the square is `(row,col)`.
+   */
+  _moverStepFrom(fromX, fromY, toRow, toCol) {
+    const no = { lands: false, straight: false, x: fromX, y: fromY };
+    const to = this.standPoint(toRow, toCol);
+    if (!to) return no;
+    const toX = to.x, toY = to.y;
+    const requested = this.traceFineMoveClient(fromX, fromY, toX, toY, { slide: true });
+    if (!requested.available || !requested.moved) return no;
+    let qx = protocolToward(requested.x, fromX), qy = protocolToward(requested.y, fromY);
+    let arrived = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const trace = this.traceFineMoveClient(fromX, fromY,
+        protocolToClient(qx), protocolToClient(qy), { slide: true });
+      if (!trace.available || !trace.moved) return no;
+      if (trace.arrived) { arrived = true; break; }
+      const nx = protocolToward(trace.x, fromX), ny = protocolToward(trace.y, fromY);
+      if (nx === qx && ny === qy) return no;
+      qx = nx; qy = ny;
+    }
+    if (!arrived) return no;
+    if (Math.floor(qx / KOD_FINENESS) !== toCol || Math.floor(qy / KOD_FINENESS) !== toRow)
+      return no;
+    // AND AT A HEIGHT CONSISTENT WITH THE SQUARE WE ARE RECORDING IT AS. A square is
+    // 1024 units and a cliff face does not respect the lattice, so a square can straddle
+    // one — 12,12 in the Cragged Mountains does. The mover slides up to the face and
+    // stops on the square's LOW half, `walkTo` compares squares, and that counted as
+    // arriving; the next step was then planned from the square's stand point 1600 units
+    // higher than the character actually stood. Without this the climb rule above never
+    // bites, because the step "succeeds" without ever going up.
+    const x = protocolToClient(qx), y = protocolToClient(qy);
+    const landedFloor = this.floorBaseAtClient(x, y);
+    const aimFloor = this.floorBaseAtClient(toX, toY);
+    if (Number.isFinite(landedFloor) && Number.isFinite(aimFloor)
+        && Math.abs(landedFloor - aimFloor) > MAX_STEP_HEIGHT) return no;
+    return { lands: true, straight: !!requested.arrived, x, y };
+  }
+
+  /**
+   * WOULD A BODY STOPPED AT (x,y) IN THIS SQUARE BE CUT OFF FROM A SQUARE ITS STAND POINT
+   * STEPS STRAIGHT INTO?
+   *
+   * Asked only of a deflected step, so only where the slide stopped short. Cheapest first: a
+   * point-sized probe that reaches the stand point straight from where the body stopped means
+   * the two are on the same ground and nothing differs; and a stand point on a boundary
+   * decides nothing (`_standOnBoundary`). Otherwise each neighbour the stand point steps to
+   * STRAIGHT is tried from the landing, with the same arithmetic — and one the body cannot
+   * step to directly still counts as reached if the body gets there in TWO steps, walked from
+   * where the first one actually leaves it. In The Chimney House (2003) the step r7c8 -> r8c9
+   * stops on the square's corner, from which r9c9 is two steps rather than one; refusing it
+   * for that took ground a body walks. Across Marion's crypt-yard wall there is no second step.
+   */
+  _strandedByLanding(x, y, row, col) {
+    const stand = this.standPoint(row, col);
+    if (!stand) return false;
+    if (this.traceFineMoveClient(x, y, stand.x, stand.y, SPLIT_POINT).arrived) return false;
+    if (this._standOnBoundary(row, col)) return false;
+    const wanted = [];
+    for (const d of DIRS) {
+      const r = row + d.dr, c = col + d.dc;
+      if (!this.inBounds(r, c) || !this._standStepIsStraight(row, col, r, c)) continue;
+      if (!this._moverStepFrom(x, y, r, c).lands) wanted.push([r, c]);
+    }
+    if (!wanted.length) return false;
+    // Where the body can actually be after one step, and whether a second reaches what is left.
+    const firsts = [];
+    for (const d of DIRS) {
+      const r = row + d.dr, c = col + d.dc;
+      if (!this.inBounds(r, c)) continue;
+      const one = this._moverStepFrom(x, y, r, c);
+      if (one.lands) firsts.push(one);
+    }
+    return wanted.some(([r, c]) => !firsts.some(one => this._moverStepFrom(one.x, one.y, r, c).lands));
+  }
+
+  // The stand point's own next steps that ARRIVE STRAIGHT, without the rule above: memoised,
+  // and deliberately not recursive — whether r85c23 -> r84c22 lands from the stand point is a
+  // question about geometry, not about what the square after that is split by.
+  //
+  // STRAIGHT, BECAUSE A SLIDE IS NOT EVIDENCE THAT THE STAND POINT'S SIDE GOES ANYWHERE: it
+  // lands wherever the wall lets go of it. Counting slides refused, among others, 48 squares a
+  // body walks in the Territory of the Noble Avars (2142) and 5 in The Chimney House (2003).
+  // r85c23 -> r84c22 is straight: the yard really is on the stand point's side.
+  _standStepIsStraight(row, col, r, c) {
+    const memo = (this._standStepMemo ??= new Map());
+    const k = ((row * this.cols + col) * 9) + ((r - row + 1) * 3 + (c - col + 1));
+    let hit = memo.get(k);
+    if (hit === undefined) {
+      const from = this.standPoint(row, col);
+      const step = from ? this._moverStepFrom(from.x, from.y, r, c) : null;
+      hit = !!step?.lands && step.straight;
+      memo.set(k, hit);
+    }
+    return hit;
+  }
+
+  // DOES THIS SQUARE'S STAND POINT SIT ON A BOUNDARY — within a client unit of a solid wall, or
+  // of a wall between floors more than MAX_STEP_HEIGHT apart? Such a point belongs to BOTH
+  // sides: the trace lets a point on a wall line leave it either way and walk along it, and no
+  // body can be there to say which side is real. Most stand points are like this (walls run on
+  // the half-square lattice, stand points are centres), and deciding between the two sides
+  // from them refused real ground: the Sewers of Jasper (377) is a pipe three quarters of a
+  // square wide whose squares' centres are its east wall, and the Cragged Mountains' north
+  // pocket (578) is entered up a corridor whose east wall ends at r5c12's centre — refusing
+  // those cut the pipe off with 360 of the room's 463 squares and left the King's Way exit
+  // reachable from the mountain only by a fall. So an ambiguous stand point decides
+  // nothing, and where the wrong answer matters — Marion's crypt-yard wall runs through four
+  // centres — the square gets a DECLARED stand point on the side it belongs to
+  // (substrate/m59-standpoints.json), which is then clear of the wall and decides.
+  _standOnBoundary(row, col) {
+    const memo = (this._standBoundary ??= new Map());
+    const key = row * 4096 + col;
+    let hit = memo.get(key);
+    if (hit !== undefined) return hit;
+    hit = false;
+    const at = this.standPoint(row, col);
+    for (const w of at ? (this.walls ?? []) : []) {
+      if (w.passable) {
+        const a = w.sector1?.floorHeight, b = w.sector2?.floorHeight;
+        if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= MAX_STEP_HEIGHT) continue;
+      }
+      const dx = w.x1 - w.x0, dy = w.y1 - w.y0, len2 = dx * dx + dy * dy;
+      if (!(len2 > 0)) continue;
+      const t = Math.max(0, Math.min(1, ((at.x - w.x0) * dx + (at.y - w.y0) * dy) / len2));
+      if (Math.hypot(w.x0 + t * dx - at.x, w.y0 + t * dy - at.y) <= 1) { hit = true; break; }
+    }
+    memo.set(key, hit);
+    return hit;
   }
 
   // ONE BYTE A SQUARE, ONE BIT A DIRECTION — the whole of `moverStepLands`, precomputed.
@@ -3793,7 +3975,25 @@ export function sharedRoomGeometry(roomOrRoo) {
   // map's room object; a geometry built from a bare `.roo` keeps `roomNum` null and
   // declares nothing, which is the safe direction.
   if (g && g.roomNum == null && Number.isFinite(Number(roomOrRoo?.num))) g.roomNum = Number(roomOrRoo.num);
+  // AND WHICH SQUARES TAKE A BODY OUT OF IT. See `_traceMoverStep`'s split rule, which an
+  // exit square is exempt from. Same provenance and same safe direction as `roomNum`: a
+  // geometry built from a bare `.roo` knows of no exits and applies the rule everywhere.
+  if (g && !g.exitSquares && roomOrRoo?.roo) g.exitSquares = exitSquaresOf(roomOrRoo);
   return g;
+}
+
+// The squares a body LEAVES the room from on arrival: every declared exit to a real room that
+// is not locked. A locked door (`ROOM_LOCKED_DOOR`, `to: -1, locked: true`) answers with a
+// sentence and leaves the body where it is, so it is ordinary ground — Marion's crypt gate is
+// four of them, on both sides of a fence.
+export function exitSquaresOf(room) {
+  const out = new Set();
+  for (const e of [...(room?.goExits ?? []), ...(room?.edgeExits ?? [])]) {
+    if (e?.locked || !(Number(e?.to) > 0)) continue;
+    const row = Number(e.row), col = Number(e.col);
+    if (Number.isFinite(row) && Number.isFinite(col)) out.add(`${row},${col}`);
+  }
+  return out;
 }
 
 // Read-only cache visibility for startup tests and for lazy attachment to geometry that a

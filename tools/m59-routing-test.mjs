@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RoomGeometry, protocolToward, STEP_MASK_DIRS, KOD_FINENESS, CLIENT_FINENESS,
-         sharedRoomGeometry, STEP_MASK_VERSION, elideLoops } from './m59-roo.mjs';
+         sharedRoomGeometry, STEP_MASK_VERSION, elideLoops, exitSquaresOf } from './m59-roo.mjs';
 import { bakeRoom, components, compositionRisk, exitAnchors, replay,
          ROUTES_FILE } from './m59-routebake.mjs';
 import { loadMap, selectedEdgeAt, findPath, edgeExitsOf, edgeCandidatesOf,
@@ -285,9 +285,18 @@ if (!existsSync(mapFile)) {
 
     // AND THE ANCHOR CHOICE. A boundary publishes many staging squares; taking the first
     // is how this room reported all four exits unreachable.
+    //
+    // THE BODY IS THE REGION YOU ARRIVE IN FROM THE KING'S WAY, which is what the finding
+    // below is about. It used to be found as the LARGEST region, which was the same thing
+    // only while the basin happened to be largest: once a deflected step stopped counting as
+    // a landing on the far side of a wall (STEP_MASK_VERSION 7), the King's Way exit's region
+    // is 63 squares and the mountain top's 672 is largest — and the top reaches three exits,
+    // one of them by dropping into the basin, which says nothing about the basin at all.
+    const kingsWay = exitAnchors(room, geo).find(a => Number(a.to) === 576);
     const bodySeed = (() => {
-      let best = -1, id = -1;
-      for (let i = 0; i < comp.sizes.length; i++) if (comp.sizes[i] > best) { best = comp.sizes[i]; id = i; }
+      let best = -1, id = kingsWay ? comp.label[comp.at(kingsWay.row, kingsWay.col)] : -1;
+      if (!(id >= 0))
+        for (let i = 0; i < comp.sizes.length; i++) if (comp.sizes[i] > best) { best = comp.sizes[i]; id = i; }
       for (let r = 1; r <= geo.rows; r++) for (let c = 1; c <= geo.cols; c++)
         if (geo.walkable(r, c) && comp.label[comp.at(r, c)] === id) return { r, c };
       return null;
@@ -1811,6 +1820,91 @@ console.log('\nroom 2600 — the crypt in Marion, over the gully to the levers')
          offered.every(row => row.every(x => x?.gutter === true && x.from.row === 34 && x.from.col === 30)),
          JSON.stringify(offered.map(row => row.map(x => x ? `${x.from.row},${x.from.col}` : null))));
     }
+  }
+}
+
+// ------------------------------------------ a slide that stops on the far side of a wall
+//
+// Marion (200), 2026-09-30. A thin raised wall (2240 on 1600) runs down the crypt yard's east
+// side and then diagonally from r85c24 to r88.5c20.5, through r85c23's centre. The step
+// r85c24 -> r85c23 slid along it and stopped inside r85c23 on the EAST side; the next step,
+// planned from the stand point, went WEST. The baked route to the crypt door crossed the
+// wall in those two legal-looking steps and characters ground against it at r85c23. The yard
+// is really entered by a half-square gap at r88.75 that no square-centre step could thread.
+//
+// Asked of `_traceMoverStep` on a fresh geometry, so that no attached mask — stale or
+// rebaked — answers in its place.
+console.log('\na deflected step lands only where the body can do what the stand point can');
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const fresh = num => {
+    const raw = realMap?.rooms?.[String(num)];
+    if (!raw?.roo) return null;
+    const g = RoomGeometry.fromJSON(raw.roo);
+    if (!g?.collisionReady) return null;
+    g.exitSquares = exitSquaresOf(raw);
+    return g;
+  };
+  const marion = fresh(200);
+  if (!marion) {
+    skip('Marion crypt-yard wall', 'room 200 has no collision geometry');
+  } else {
+    const step = (g, a, b, c, d) => g._traceMoverStep(a, b, c, d);
+    ok('r85c24 -> r85c23 does not land: the slide stops east of the wall, the square is the yard\'s',
+       step(marion, 85, 24, 85, 23) === false);
+    ok('and none of the wall\'s other two-step crossings do either',
+       [[86, 23, 85, 23], [86, 23, 86, 22], [87, 22, 86, 22], [87, 22, 87, 21], [88, 21, 87, 21]]
+         .every(([a, b, c, d]) => step(marion, a, b, c, d) === false));
+    ok('nor the locked crypt gate at r71.25, entered by landing on its north edge',
+       step(marion, 70, 14, 71, 13) === false && step(marion, 70, 13, 71, 14) === false);
+    ok('the south gap is declared: r88c20 and r88c21 stand on its line, r88.75',
+       [[88, 20], [88, 21]].every(([r, c]) => marion.standPoint(r, c)?.y === 87.75 * CLIENT_FINENESS));
+    ok('and a straight body trace along that line arrives from c23 to c19',
+       marion.traceFineMoveClient(22 * CLIENT_FINENESS, 87.75 * CLIENT_FINENESS,
+         18 * CLIENT_FINENESS, 87.75 * CLIENT_FINENESS, { slide: false }).arrived === true);
+    // The route itself, on the mover's own predicate: breadth-first from the inn door.
+    const path = (() => {
+      const [sr, sc] = [62, 58], [tr, tc] = [80, 15];
+      const prev = new Map([[`${sr},${sc}`, null]]);
+      const queue = [[sr, sc]];
+      for (let h = 0; h < queue.length; h++) {
+        const [r, c] = queue[h];
+        if (r === tr && c === tc) break;
+        for (const d of STEP_MASK_DIRS) {
+          const nr = r + d.dr, nc = c + d.dc, k = `${nr},${nc}`;
+          if (prev.has(k) || !marion.inBounds(nr, nc) || !marion.standable(nr, nc)) continue;
+          if (!step(marion, r, c, nr, nc)) continue;
+          prev.set(k, `${r},${c}`);
+          queue.push([nr, nc]);
+        }
+      }
+      if (!prev.has(`${tr},${tc}`)) return null;
+      const out = [];
+      for (let k = `${tr},${tc}`; k; k = prev.get(k)) out.unshift(k);
+      return out;
+    })();
+    ok('a route from Marion\'s east inn door (62,58) to the crypt door (80,15) still exists',
+       !!path, path ? `${path.length} squares` : 'no route');
+    ok('and it goes round through the south gap, r88, not across the wall',
+       !!path && path.includes('88,21') && path.includes('88,20') && !path.includes('85,23'),
+       path?.join(' '));
+  }
+  // THE RULE MUST NOT TAKE THE ORDINARY DEFLECTED STEPS WITH IT. Each of these slides — the
+  // straight line to the stand point does not arrive — and each lands, for a different reason.
+  const sewers = fresh(377), cragged = fresh(578);
+  const deflected = (g, a, b, c, d) => {
+    const from = g.standPoint(a, b), to = g.standPoint(c, d);
+    return g.traceFineMoveClient(from.x, from.y, to.x, to.y, { slide: true }).arrived !== true;
+  };
+  if (!sewers || !cragged || !marion) {
+    skip('ordinary deflected steps still land', 'rooms 377/578/200 have no collision geometry');
+  } else {
+    ok('into the Sewers of Jasper\'s pipe, whose stand points are its own east wall (377 r28c18 -> r28c19)',
+       deflected(sewers, 28, 18, 28, 19) && sewers._traceMoverStep(28, 18, 28, 19) === true);
+    ok('up the corridor into the Cragged Mountains\' north pocket, to the King\'s Way (578 r6c11 -> r5c12)',
+       deflected(cragged, 6, 11, 5, 12) && cragged._traceMoverStep(6, 11, 5, 12) === true);
+    ok('onto a door square, which the body leaves the room from (200 r50c22 -> r50c21)',
+       deflected(marion, 50, 22, 50, 21) && marion._traceMoverStep(50, 22, 50, 21) === true);
   }
 }
 

@@ -277,11 +277,22 @@ console.log('\nreachability is DIRECTED, and Ukgoth is the room that proves it')
      below.reachable.every(e => e.to !== 2), JSON.stringify(below.reachable.map(e => e.to)));
   ok('and it is named as unreachable rather than quietly omitted',
      below.unreachable.some(e => e.to === 2), JSON.stringify(below.unreachable.map(e => e.to)));
-  // THIS IS THE LINE THAT SENDS IT HOME. Two real ways out, so a router asked from down
-  // there routes through one of them and takes the eight-map walk round instead of aiming
-  // at the jump for ever.
-  ok('while the two ways out that DO exist are offered',
-     below.reachable.some(e => e.to === 589) && below.reachable.some(e => e.to === 598),
+  // THIS IS THE LINE THAT SENDS IT HOME. A real way out, so a router asked from down there
+  // routes through it and takes the eight-map walk round instead of aiming at the jump for
+  // ever.
+  //
+  // ONE WAY OUT, NOT TWO. This asserted 589 AND 598 until STEP_MASK_VERSION 7, and 598 was
+  // never real: the gutter's only way east is across the rail that runs diagonally from
+  // r46c20 to r50c22 between the 4912 shelf and the 4576 floor, and the v6 mask crossed it
+  // by a slide that stopped on the shelf side of r48c21 and then stepped on from that
+  // square's stand point on the floor side. A body-radius flood from r51c17 reaches the 589
+  // door and never r48c22, at a 32-unit lattice. The operator said the same on 2026-08-29
+  // (substrate/m59-gutters.json, room 599): "the only move is out through 589".
+  ok('while the way out that DOES exist is offered — 589, the long way round',
+     below.reachable.some(e => e.to === 589),
+     JSON.stringify(below.reachable.map(e => e.to)));
+  ok('and 598 is not: the east side is across a rail no body crosses',
+     !below.reachable.some(e => e.to === 598),
      JSON.stringify(below.reachable.map(e => e.to)));
 
   const north = activeRoutes().rooms['599'].anchors.find(a => Number(a.to) === 2);
