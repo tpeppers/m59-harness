@@ -89,6 +89,18 @@ eq(DEFAULT_MARGIN_MB, 2048, 'default margin is 2 GB');
   ok(e.warnings.some(w => /unrecognised restart mode "hand-off"/.test(w)), 'and REPORTED, never silently applied');
 }
 
+// ---- a decision carried out later is attributed to whoever made it, never to --mode
+{
+  const a = decideRestartMode({ requested: 'logoff', decidedBy: 'the memory check above', env: noEnv, freeBytes: 1 * GB });
+  eq(a.mode, 'logoff', 'the carried decision is honoured');
+  ok(/decided by the memory check above/.test(a.message), 'and attributed to the decision');
+  ok(!/forced by/.test(a.message), 'never "forced by --mode=logoff" when auto chose it');
+  const b = decideRestartMode({ requested: 'handoff', decidedBy: 'x', env: noEnv, freeBytes: 1 * GB });
+  eq(b.warnings, [], 'a carried handoff does not re-warn');
+  ok(/claims, busy, live policy and mode are carried/.test(
+     decideRestartMode({ env: noEnv, freeBytes: 1 * GB }).message), 'the logoff says assignments are carried');
+}
+
 // ---- the sizing knobs
 {
   const d = decideRestartMode({ env: { M59_KEEPER_RSS_MB: '800', M59_RESTART_MARGIN_MB: '1000' }, freeBytes: 40 * GB });

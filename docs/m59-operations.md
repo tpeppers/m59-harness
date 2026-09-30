@@ -128,6 +128,9 @@ for that character for a moment, so `m59-keeper-restart.mjs` hands off only when
 `M59_KEEPER_RSS_MB`, else 600 MB; margin `M59_RESTART_MARGIN_MB`, else 2048 MB. A concurrency
 that does not fit is lowered first; only a machine that cannot afford ONE handoff falls back to
 the stop-and-sweep, and it prints `LOGOFF RESTART:` with the free memory and the threshold.
+Even then the character's assignments survive: since 564887c the old keeper writes its claims,
+busy, live policy and mode to `substrate/fleets/.keeper-carry/` on `/stop` (and on `/handoff`
+and SIGTERM), and the respawned keeper adopts them (`m59-keeper-carry.mjs`).
 Measured on prod 2026-09-30: 24 keepers at ~490 MB, 15.1 GB free of 63.8 GB, and a full 24/24
 handoff at concurrency 1.
 

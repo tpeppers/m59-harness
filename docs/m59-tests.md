@@ -1181,7 +1181,7 @@ starts the count again, and a character that earns something is forgotten. **It 
 the day a stall reason can go unclassified again.**
 
 
-## m59-keeper-restart-test.mjs (55) — a keeper restart is a handoff unless memory says no
+## m59-keeper-restart-test.mjs (60) — a keeper restart is a handoff unless memory says no
 
 Pins `decideRestartMode` in `m59-keeper-restart.mjs`: handoff when free memory exceeds
 (concurrency + 1) x per-keeper RSS + margin, strictly; a concurrency that does not fit is lowered

@@ -62,10 +62,16 @@ export function decideRestartMode({
   env = process.env,
   freeBytes = freemem(),
   keeperRssBytes = null,
+  // An earlier decision being carried out, e.g. m59-update deciding before it parks. The mode
+  // arrives as `requested`, and this names who chose it, so a logoff chosen by `auto` is never
+  // reported as "forced by --mode".
+  decidedBy = null,
 } = {}) {
   const warnings = [];
   let asked = String(requested ?? env.M59_RESTART_MODE ?? 'auto').trim().toLowerCase() || 'auto';
-  const source = requested != null ? '--mode' : env.M59_RESTART_MODE != null ? 'M59_RESTART_MODE' : 'default';
+  const source = decidedBy ? String(decidedBy)
+    : requested != null ? '--mode' : env.M59_RESTART_MODE != null ? 'M59_RESTART_MODE' : 'default';
+  const why = (m) => decidedBy ? `decided by ${decidedBy}` : `forced by ${source}=${m}`;
   if (!RESTART_MODES.includes(asked)) {
     warnings.push(`unrecognised restart mode ${JSON.stringify(asked)} from ${source}; ` +
                   `using auto (expected ${RESTART_MODES.join('|')})`);
@@ -98,14 +104,14 @@ export function decideRestartMode({
 
   if (asked === 'logoff')
     return { ...base, mode: 'logoff', concurrency: wanted, need_mb: needMb(wanted),
-             message: `LOGOFF restart (forced by ${source}=logoff): characters leave the world and ` +
+             message: `LOGOFF restart (${why('logoff')}): characters leave the world and ` +
                       'return one at a time through the 45s rejoin sweep' };
 
   if (asked === 'handoff') {
     if (freeMb <= needMb(wanted))
-      warnings.push(`handoff forced by ${source} with ${freeMb} MB free, below ${rule(wanted)}`);
+      if (!decidedBy) warnings.push(`handoff forced by ${source} with ${freeMb} MB free, below ${rule(wanted)}`);
     return { ...base, mode: 'handoff', concurrency: wanted, need_mb: needMb(wanted),
-             message: `handoff restart (forced by ${source}), ${wanted} at a time, ${freeMb} MB free` };
+             message: `handoff restart (${why('handoff')}), ${wanted} at a time, ${freeMb} MB free` };
   }
 
   let fits = 0;
@@ -117,7 +123,8 @@ export function decideRestartMode({
   return { ...base, mode: 'logoff', concurrency: wanted, need_mb: needMb(1),
            message: `LOGOFF RESTART: only ${freeMb} MB free, and one handoff needs more than ${rule(1)}. ` +
                     'Characters will LEAVE THE WORLD and return one at a time through the 45s rejoin ' +
-                    'sweep. Free memory, or force it with M59_RESTART_MODE=handoff / --mode handoff.' };
+                    'sweep; their claims, busy, live policy and mode are carried in substrate/fleets/.keeper-carry/. ' +
+                    'Free memory, or force it with M59_RESTART_MODE=handoff / --mode handoff.' };
 }
 
 // A BROKER THAT ADVERTISES THE PORT RESERVATION (fae8bd3) may run handoffs concurrently;
@@ -182,7 +189,7 @@ export async function logoffKeepers(identities, { fetchImpl = globalThis.fetch, 
       signal: AbortSignal.timeout(8000),
     }).then(r => r.ok).catch(() => false);
     results.push({ agent: k.agent, ok, old_pid: k.pid, port: k.port, ...(ok ? {} : { why: 'stop refused or unanswered' }) });
-    log(`  ${k.agent.padEnd(5)} ${ok ? `logged off  pid ${k.pid} (port ${k.port}); the sweep brings it back` : 'FAILED  stop refused or unanswered'}`);
+    log(`  ${k.agent.padEnd(5)} ${ok ? `logged off  pid ${k.pid} (port ${k.port}); the sweep brings it back, claims carried` : 'FAILED  stop refused or unanswered'}`);
   }
   return results;
 }

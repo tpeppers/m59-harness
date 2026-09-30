@@ -287,6 +287,7 @@ async function unparkFleet() {
     const { restartKeepers } = await import('./m59-war-restart.mjs');
     const conc = arg('concurrency', null);
     const r = await restartKeepers({ url: RPC, fleet: FLEET ?? undefined, mode: keeperMode,
+      decidedBy: 'the memory check above',
       concurrency: typeof conc === 'string' ? Number(conc) : null });
     console.log(`\n${stamp()} ${r.restarted} of ${r.of} keeper(s) ` +
                 (r.mode === 'handoff' ? 'handed off without leaving the world' : 'logged off and back on a new pid'));

@@ -60,14 +60,14 @@ async function brokerHealthAt(url) {
 // own /health here. A caller that has already chosen a broker by port may pass it explicitly.
 export async function restartKeepers({ agents = null, concurrency = null, timeoutS = 90, mode = null,
   fleet = fleetName(), url = resolveControlUrl().url, fleetState = null, health = undefined,
-  waitS = 150, log = console.log, env = process.env } = {}) {
+  waitS = 150, log = console.log, env = process.env, decidedBy = null } = {}) {
   if (!url) throw Error(resolveControlUrl().why ?? 'restart: control URL required');
   const h = health === undefined ? await brokerHealthAt(url) : health;
   const who = agents?.length ? agents : (h?.sessions ?? []);
   const keepers = await probeKeepers({ fleet, agents: who }).catch(() => new Map());
   const rss = measureKeeperRssBytes([...keepers.values()].map(k => k.pid));
   const d = decideRestartMode({ concurrency: concurrency ?? defaultHandoffConcurrency(h),
-                                requested: mode, env, keeperRssBytes: rss });
+                                requested: mode, env, keeperRssBytes: rss, decidedBy });
   for (const w of d.warnings) log(`WARNING: ${w}`);
   log(d.message);
 
