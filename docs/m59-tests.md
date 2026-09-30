@@ -18,6 +18,14 @@ These tests are offline. They do not execute a raid or shut down a server.
 
 ## Travel and combat regressions
 
+- `m59-pvp-return-test.mjs` (49): the PvP return delay (`pvp_return_delay_ms`, default 30 min).
+  Recognising a PvP death from the two live shapes of 2026-09-30 (a guild-combat kill the
+  attribution could only guess, and a player standing in the room) and refusing every monster
+  shape (an article, an unresolved `<dynamic …>` id, a monster's name in the frames, a
+  fleetmate); a PvP death refuses keeper journeys to farming rooms for 30 minutes and then
+  releases them; a monster death and a delay of 0 hold nothing; the hold survives a restart;
+  an explicit order, a movement lease, a busy holder and a recovery detour are never held;
+  and the schema, setter, fleet row, policy_control reflection and local policy carry the key.
 - `m59-door-wait-test.mjs` and `m59-dooropen-test.mjs`: matched sector/height
   evidence, resolved timeouts, slow animations, cancellation and early closure.
   `m59-travel-test.mjs` also verifies that a confirmed opening permits another

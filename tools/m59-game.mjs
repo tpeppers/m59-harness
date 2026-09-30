@@ -1993,8 +1993,12 @@ class Session {
         // Through the keeper, so the journey gets the pre-departure rest, the hop hook and
         // the ledger row. `Autopilot.travel` calls `Session.travel` underneath, so this is
         // one extra frame and no recursion.
+        // `explicitOrder` marks this as SOMEBODY'S order (the broker's `travel` tool, a
+        // FleetScript leg) rather than a keeper decision, so the PvP return delay — which
+        // holds only the keeper's own choices — does not refuse it. Stripped by
+        // `Autopilot.travel` before it reaches `Session.travel`.
         if (keeper && typeof keeper.travel === 'function')
-          outcome = await keeper.travel(dest, { ...opts, movementGeneration });
+          outcome = await keeper.travel(dest, { ...opts, movementGeneration, explicitOrder: true });
         else outcome = await this.travel(dest, { ...opts, movementGeneration });
         return outcome;
       } finally {

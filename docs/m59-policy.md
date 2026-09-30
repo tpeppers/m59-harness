@@ -299,6 +299,67 @@ remapped. It was not closed by reaching significance: it compared two ways of tr
 where it stands, which neither arm addressed while the control arm paid for the asking by
 walking hurt characters straight past the only free healing on the road.
 
+## THE PVP RETURN DELAY — `pvp_return_delay_ms`
+
+The operator's order, 2026-09-30: *"set it so that there's a 30m PVP delay on returning to any
+farming zone"*. That evening a Human Resistance player camped Castle Victoria's front door, the
+Tos gate and Outside Castle Victoria, and killed respawned characters one at a time as each
+walked straight back: five deaths in twenty minutes, every one from full health. A monster does
+not wait at the door for you. A person does.
+
+```bash
+autopilot action=start agent=<a> pvp_return_delay_ms=1800000   # the default: thirty minutes
+autopilot action=start agent=<a> pvp_return_delay_ms=0         # off for this character
+autopilot action=start agent=<a> pvp_return_delay_ms=null      # back to the default
+autopilot action=status agent=<a>                              # pvp_return_hold: {until, killer, remaining_s, …}
+```
+
+**A death to a player starts a window in which the keeper will not START a journey to a farming
+room** — its assignment, or any room the spawn table says generates something huntable. It rests
+where it recovered, which is normally the inn the Underworld portal dropped it in, and an inn is
+`ROOM_NO_COMBAT`. The fleet row and `autopilot status` carry `pvp_return_hold`, and the activity
+line says *"holding off the farm after a PvP death by …"*, so a healthy character sitting in an
+inn reads as deliberate. Deaths to monsters start nothing.
+
+**How a PvP death is recognised** (`classifyPvpDeath`, `tools/m59-pvp-return.mjs`), from evidence
+available at death time, strongest first: the server's *"… has been slaughtered by X of <guild> in
+guild combat"* naming us (printed only for mutual war enemies, and it REPLACES the ordinary death
+line — which is why the death attribution could only ever guess at a Morpheus kill); a murder
+broadcast; the killer being a player object in the last living frame; the killer being remembered
+in the war book; the killer seen as a player in an earlier frame; and last, the server naming the
+killer without an article when the name is not a monster that was standing there. **Never a
+player:** an unresolved `<dynamic …>` id, a fleetmate, or a monster's name. The answer is stamped
+on the death record (`pvp`, `pvp_killers`, `pvp_basis`, `pvp_why`) so the post-mortem says so.
+
+**Where it is enforced.** At `Autopilot.travel()` — the one gate every keeper-initiated journey
+passes, the same one the Underworld refusal and the confinement use — and as a rung at the top of
+`passFarm`, which rests instead of choosing work while the character stands somewhere safe. A
+character already standing in a farming room is not moved by it: the pass works the room it is in
+and the gate stops it setting off for another.
+
+**What it deliberately does not block**, each for a reason that is not negotiable here:
+
+| | |
+|---|---|
+| the Underworld exit | a portal walk, never `travel`; mortality |
+| fleeing, and every recovery detour | `recoveryTravel` is survival, and survival is the keeper's |
+| a walk to a sanctuary or a town | not a farming room |
+| an explicit travel order | the broker's `travel` tool and FleetScript reach the keeper through `travelJob`, which marks them `explicitOrder`; somebody chose that destination on purpose |
+| a leased or busy character | **the lease holder decides the destination** — the same rule `passFarm` applies to every directional choice. A bot holding `movement` that sends a character back to the farm has made that call |
+
+**It survives a keeper restart.** Keepers restart about once a minute on a busy day and
+`lastDeath` dies with the process, so the death time and the killer are written to
+`substrate/pvp-holds-<fleet>/<agent>.json` (gitignored — it names players and our characters) and
+read back by the next keeper on the same slot. The window is measured against the delay
+**currently** in policy, so setting 0 releases a held character on its next pass.
+
+The same four rules as every other surface here: silence is the default (thirty minutes, **on**,
+because the operator asked for it fleet-wide and an unconfigured character is exactly the one
+walking back into the camper); an unusable value is refused at the setter rather than coerced
+(`Number(null)` is 0, which would switch it off); `m59-localpolicy.mjs` accepts it as an
+overridable key and warns when a block switches it off; and `policy_control` reflects it from
+the schema like every other order. `node tools/m59-pvp-return-test.mjs` (49) pins all of it.
+
 ## Monster count does not veto shelter
 
 Travel shelters and recovery walls are available regardless of how many monsters

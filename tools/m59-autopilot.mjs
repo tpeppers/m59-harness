@@ -21,6 +21,9 @@
 //     find itself somewhere else can find out why.
 
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
+import { classifyPvpDeath, pvpReturnDelayMs, readPvpDeath, writePvpDeath,
+         pvpHoldState } from './m59-pvp-return.mjs';
+import { rememberedEnemy } from './m59-war.mjs';
 import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,sameJamPocket,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
 import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
@@ -7665,6 +7668,13 @@ export class Autopilot {
     if (this.errand)
       return describeCommitment({ errand: this.errand })?.label ?? 'on an errand';
     if (this.mode === 'idle') return 'idle';
+    // Why a healthy character is sitting in an inn. Only while the rung is actually holding —
+    // a character working the room it is already in is described by what it is doing.
+    if (this.pvpHoldingNow) {
+      const pvp = this.pvpReturnHold();
+      if (pvp) return `holding off the farm after a PvP death by ${pvp.killer ?? 'a player'} — ` +
+                      `${Math.ceil(pvp.remaining_s / 60)}m left`;
+    }
     if (this.doing === 'travelling') return 'travelling';
     if (this.doing === 'zoning') return 'changing map';
     if (this.doing === 'trading') return 'trading';
@@ -8058,6 +8068,155 @@ export class Autopilot {
         : `this objective has now cost ${spent} death(s) against an allowance of ${allowed}`,
     });
     return { kept: false, spent, allowed };
+  }
+
+  // ------------------------------------------------------------ THE PVP RETURN DELAY
+  //
+  // "set it so that there's a 30m PVP delay on returning to any farming zone" — the operator,
+  // 2026-09-30, after Morpheus (Human Resistance) camped Castle Victoria's front door, the Tos
+  // gate and Outside Castle Victoria and killed respawned characters one at a time as each
+  // walked straight back: five deaths in twenty minutes, every one from full health. A monster
+  // does not wait at the door for you. A person does.
+  //
+  // So a death to a PLAYER starts a window (`pvp_return_delay_ms`, default 30 minutes, 0
+  // disables) in which this keeper will not START a journey to a farming room. It rests where
+  // it recovered — normally the inn the Underworld portal dropped it in, which is
+  // ROOM_NO_COMBAT, so nobody can touch it there.
+  //
+  // WHAT IT DOES NOT BLOCK, deliberately, because each is a protected faculty or somebody
+  // else's decision: the Underworld exit (a portal walk, never `travel`), the post-escape walk
+  // to a sanctuary (a sanctuary is not a farming room), fleeing and every recovery detour
+  // (`recoveryTravel` — survival), an EXPLICIT travel order (the broker's `travel` tool and
+  // FleetScript arrive through `travelJob`, which marks them), and anything while the movement
+  // faculty is leased or an outside operation holds the character busy — THE LEASE HOLDER
+  // DECIDES THE DESTINATION, the same rule `passFarm` applies to every other directional
+  // choice. Monster deaths are unchanged. m59-pvp-return-test.mjs pins all of it.
+
+  // The key the persisted record is filed under: the roster slot, which survives a restart and
+  // a rename of nothing. The character name is the fallback for a shell with no slot.
+  pvpHoldKey() { return this.s?.name ?? this.who(); }
+
+  // Read once per process, then kept in memory; this keeper is the only writer of its file.
+  pvpDeathRecord() {
+    if (this.pvpDeath === undefined) {
+      try { this.pvpDeath = readPvpDeath(this.pvpHoldKey()); } catch { this.pvpDeath = null; }
+    }
+    return this.pvpDeath;
+  }
+
+  /** The live hold, or null: {until, killer, killers, remaining_s, died_at, delay_ms, basis}. */
+  pvpReturnHold(now = Date.now()) {
+    return pvpHoldState(this.pvpDeathRecord(), pvpReturnDelayMs(this.policy), now);
+  }
+
+  // Classify a death as PvP or not, stamp the answer on the death record (so the post-mortem
+  // says so), and — when it was a player — persist the time so a restart inside the window
+  // still holds. Never throws: this runs inside the death report, whose failure would stop
+  // the Underworld escape.
+  classifyAndRememberPvp(death, { attribution = null, text = [], frames = [] } = {}) {
+    let v;
+    try {
+      v = classifyPvpDeath({ character: this.who(), deathAt: death?.at, attribution, text, frames,
+        isFleetmate: n => party.isFleetmate(n), enemy: n => rememberedEnemy(n) });
+    } catch (e) {
+      try { this.note('could not classify the death as PvP or not', { why: e?.message ?? String(e) }); } catch {}
+      return null;
+    }
+    Object.assign(death, { pvp: v.pvp, pvp_killers: v.killers, pvp_basis: v.basis, pvp_why: v.why });
+    if (!v.pvp || !Number.isFinite(Number(death?.at))) return v;
+    const prev = this.pvpDeathRecord();
+    if (prev && Number(prev.died_at) >= Number(death.at)) return v;
+    const rec = { died_at: Number(death.at), killers: v.killers, basis: v.basis, why: v.why,
+                  died_in: death.died_in ?? null, room_num: death.room_num ?? null };
+    this.pvpDeath = rec;
+    this.pvpHoldNoted = null;
+    this.pvpGateNoted = null;
+    try { writePvpDeath(this.pvpHoldKey(), rec); }
+    catch (e) {
+      this.note('could not persist the PvP death', { why: e?.message ?? String(e),
+        what_it_costs: 'the hold still applies in this process; a keeper restart inside the ' +
+                       'window would forget it' });
+    }
+    const hold = this.pvpReturnHold();
+    this.note('killed by a player — holding off the farm', {
+      killers: v.killers, basis: v.basis, evidence: v.why,
+      delay_s: Math.round(pvpReturnDelayMs(this.policy) / 1000),
+      until: hold ? new Date(hold.until).toISOString() : null,
+      why: 'a player who camps the road kills each character again as it walks straight ' +
+           'back; resting out the window where it recovers costs nothing but time',
+    });
+    try { recordEvent(this.who(), 'pvp_return_hold_started', { killers: v.killers, basis: v.basis,
+      died_at: rec.died_at, until: hold?.until ?? null, room: rec.room_num }); } catch {}
+    return v;
+  }
+
+  // A FARMING ROOM is one the spawn table says generates something huntable — the same test
+  // `sanctuary()` inverts — or this farmer's explicit assignment. Towns, inns and the monster-
+  // free retreats are not, so a walk to one of those is never held.
+  isFarmingDestination(room) {
+    const num = Number(room);
+    if (!Number.isFinite(num)) return false;
+    if (this.mode === 'farm' && this.policy?.assignedRoom != null
+        && Number(this.policy.assignedRoom) === num) return true;
+    const here = loadSpawns(SPAWN_FILE)?.rooms?.[num] || [];
+    return here.some(x => x.huntable);
+  }
+
+  // THE GATE, asked by `travel()` for every keeper journey. Null means go; otherwise the
+  // refusal `travel()` returns. See the block comment above for what is exempt and why.
+  pvpReturnGate(room, { explicitOrder = false, recoveryDetour = false } = {}) {
+    const hold = this.pvpReturnHold();
+    if (!hold || explicitOrder || recoveryDetour) return null;
+    if (this.busyStatus?.() || this.facultyHeld?.('movement')) return null;
+    if (!this.isFarmingDestination(room)) return null;
+    this.tally.pvp_return_refusals = (this.tally.pvp_return_refusals || 0) + 1;
+    const key = `${hold.died_at}:${Number(room)}`;
+    const why = `killed by ${hold.killer ?? 'a player'} ${Math.round((Date.now() - hold.died_at) / 60_000)}m ` +
+                `ago; not returning to a farming room for another ${Math.ceil(hold.remaining_s / 60)}m`;
+    if (this.pvpGateNoted !== key) {
+      this.pvpGateNoted = key;
+      this.note('not returning to a farming room yet — PvP return delay', {
+        wanted: Number(room), here: this.s.world?.room?.num ?? null, killer: hold.killer,
+        remaining_s: hold.remaining_s, until: new Date(hold.until).toISOString(),
+        why: 'pvp_return_delay_ms: the operator\'s order after a player camped the farm ' +
+             'entrances and killed each character as it walked back' });
+      try { recordEvent(this.who(), 'pvp_return_hold_refused_travel', { wanted: Number(room),
+        room: this.s.world?.room?.num ?? null, killer: hold.killer, remaining_s: hold.remaining_s }); } catch {}
+    }
+    return { arrived: false, refused: true, pvp_hold: true, reason: why, why,
+             until: hold.until, remaining_s: hold.remaining_s };
+  }
+
+  // THE RUNG, at the top of `passFarm`: inside the window, a character standing somewhere
+  // safe stays there and rests rather than choosing work. A character already standing in a
+  // farming room is not moved by this — the ordinary pass works the room it is in and the
+  // gate in `travel()` stops it setting off for another one.
+  async holdOffTheFarm(ctx) {
+    const hold = this.pvpReturnHold();
+    if (!hold) {
+      if (this.pvpHoldNoted) {
+        this.note('the PvP return delay is over — back to work', { died_at: this.pvpHoldNoted });
+        this.pvpHoldNoted = null;
+      }
+      this.pvpHoldingNow = false;
+      return CONTINUE;
+    }
+    const room = ctx?.room ?? this.s.world?.room;
+    if (this.facultyHeld('movement') || (room && !this.sanctuary(room))) {
+      this.pvpHoldingNow = false;
+      return CONTINUE;
+    }
+    this.pvpHoldingNow = true;
+    if (this.pvpHoldNoted !== hold.died_at) {
+      this.pvpHoldNoted = hold.died_at;
+      this.note('resting out the PvP return delay', {
+        room: room?.name ?? null, room_num: room?.num ?? null, killer: hold.killer,
+        remaining_s: hold.remaining_s, until: new Date(hold.until).toISOString(),
+        why: 'killed by a player; farming rooms are off limits until the window closes' });
+    }
+    await this.hibernate('resting out the PvP return delay').catch(() => false);
+    this.progress(`holding off the farm after a PvP death — ${Math.ceil(hold.remaining_s / 60)}m left`);
+    return HANDLED;
   }
 
   recordFrame(why = null) {
@@ -8764,7 +8923,8 @@ export class Autopilot {
     // objective there. Keeper rungs (including provisioning) are subordinate to
     // an existing suspended objective, even if they use ordinary travel().
     const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
-            chalice: _chalice, chaliceRoom: _chaliceRoom, ...sessionOpts } = opts ?? {};
+            chalice: _chalice, chaliceRoom: _chaliceRoom, explicitOrder = false,
+            ...sessionOpts } = opts ?? {};
     // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
     // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
     // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
@@ -8783,6 +8943,15 @@ export class Autopilot {
         why: 'room 1 has no inbound route: a body arrives by dying and leaves by a portal, so ' +
              'this destination can only ever be refused, and retrying it is the whole defect' });
       return { arrived: false, reason: 'the Underworld is not a travel destination' };
+    }
+    // THE PVP RETURN DELAY, at the same single gate as the Underworld and the confinement:
+    // every keeper-initiated journey passes through here. `recoveryDetour` is read from the
+    // CALLER's options, never the default — a recovery detour is survival, while the default
+    // merely reflects that some journey is suspended. See `pvpReturnGate`.
+    {
+      const refused = this.pvpReturnGate(room, { explicitOrder: explicitOrder === true,
+                                                 recoveryDetour: opts?.recoveryDetour === true });
+      if (refused) return refused;
     }
     // A cancelled stockpile leg used to fall through into an apothecary leg in
     // the same awaited errand. Give the next survival pass the body first.
@@ -11692,6 +11861,11 @@ export class Autopilot {
       // effective guard: the defaults, with this character's policy over the top.
       travel_guard: Object.fromEntries(TRAVEL_GUARD_KEYS.map(k =>
         [k, { allowed: this.travelGuard()[k], clock: TRAVEL_GUARD_CLOCK[k] }])),
+      // WHY A HEALTHY CHARACTER IS SITTING IN AN INN. Null unless a player killed it inside
+      // the return delay; never absent, so a board can tell "no hold" from "not reported".
+      // The effective delay beside it for the same reason `travel_guard` is always present.
+      pvp_return_hold: this.pvpReturnHold(),
+      pvp_return_delay_ms: pvpReturnDelayMs(this.policy),
       // WHO OWNS WHICH HALF OF THIS CHARACTER. Always present, never undefined: a reader
       // has to be able to tell "the keeper owns everything" from "this broker does not
       // answer that question", and undefined reads as the second. With nothing attached
@@ -16080,6 +16254,11 @@ export class Autopilot {
         }
         applyDeathAttribution(pm);
         const attribution = pm.death_attribution;
+        // WAS IT A PLAYER? Decided here, from evidence available at death time, and stamped
+        // on the record before the post-mortem is written so the file says so. A PvP death
+        // starts the return delay — see `pvpReturnGate`.
+        this.classifyAndRememberPvp(death, { attribution,
+          text: [...(pm.text ?? []), ...this.recentText(60)], frames: before });
         const file = this.writePostMortem(pm);
         death.post_mortem = file;
         if (this.lastDeath === death) this.lastPostMortem = pm;
@@ -16097,6 +16276,7 @@ export class Autopilot {
           // Explicit murder is certain; article-based player guesses remain labelled.
           was_killed_by_player: attribution.was_killed_by_player,
           killed_by_player_is_a_guess: attribution.killed_by_player_is_a_guess,
+          pvp: death.pvp ?? null, pvp_killers: death.pvp_killers ?? null,
           death_kind: attribution.kind,
           death_attribution: attribution,
           room: death.room_num ?? null,
@@ -19846,6 +20026,10 @@ export class Autopilot {
     // A recovery/backoff wait retains its destination. Only an explicit drop or
     // new order releases it for ordinary farming to choose another journey.
     if (resumed === HANDLED || this.suspendedJourney) return HANDLED;
+    // KILLED BY A PLAYER: rest out the return delay where it recovered, before any work is
+    // chosen. Below the resume on purpose — a resumed journey to a farming room is refused by
+    // the gate in `travel()` and dropped, and one to anywhere else is not this rung's business.
+    if (await this.holdOffTheFarm(ctx) === HANDLED) return HANDLED;
     // Every mode reads its weapons, not only farm (see the idle branch in passErrand): a
     // `survive` character — Raphael, the troll crew's dedicator — skips the farm block below.
     this.sweepWeaponMagic().catch(() => {});
@@ -19997,6 +20181,10 @@ export class Autopilot {
             // this exact line. The room is still the wrong room; that is not a reason to
             // arrive at the right one in no state to be there.
             if (!await this.readyToLeaveSanctuary(target.room_name)) return HANDLED;
+            // Asked BEFORE giving up a wall and before the relocation bookkeeping: a refusal
+            // here is a timer, not a failed route, and counting it as a miss would put the
+            // assignment on the unreachable list after three passes.
+            if (this.pvpReturnGate(target.room)) return HANDLED;
             this.note(offAssignment ? 'leaving for the explicitly assigned farming room'
                                     : 'this room cannot produce our prey — leaving now', {
               room: room.name, hunting: this.policy.hunt,

@@ -332,6 +332,11 @@ __pycache__/
 /substrate/war.json
 /substrate/war-*.json
 /substrate/war-alarms*.jsonl
+# The PvP return delay's per-character record (tools/m59-pvp-return.mjs): when a player last
+# killed each character and who. Runtime state that must survive a keeper restart, names real
+# players and our characters, and is one fleet's.
+/substrate/pvp-holds/
+/substrate/pvp-holds-*/
 /substrate/*.tmp
 
 # AND THE SIGHTING BOOK NAMES THEM TOO — MORE OF THEM, AND WHEN THEY WERE NOT DOING
