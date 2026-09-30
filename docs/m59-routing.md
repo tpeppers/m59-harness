@@ -674,6 +674,78 @@ router degrades to coarse-grid planning, which is *more* permissive, not less: t
 suite's room 27 fixture starts offering the stranded 2500 boundary. Rebake before reading any
 routing result.
 
+## A slide that stops on the far side of a wall is not a landing (`STEP_MASK_VERSION` 7)
+
+`_traceMoverStep` accepts a step when the slide ends inside the destination square at a
+compatible height. The NEXT step is then planned from that square's stand point — not from
+where the body stopped. When the two are on opposite sides of a wall, the mask holds two
+legal-looking steps that cross it. Marion (200), 2026-09-30: the crypt yard's thin raised wall
+(2240 on 1600) runs diagonally through r85c23's centre; r85c24 -> r85c23 slid along it and
+stopped on the east side, r85c23 -> r84c22 went west from the stand point, and every baked
+route to the crypt door (r80c15) crossed there. Characters ground against it at r85c23. The
+locked crypt gate at r71.25 was crossed the same way.
+
+So a deflected step now lands only if the body, from where it stopped, can reach every
+square the stand point steps to STRAIGHT next — directly, or in two steps walked from where
+the first one really leaves it (`_strandedByLanding`). Three exemptions keep it from eating
+real ground, and each was measured doing so without one:
+
+- **A stand point on a wall decides nothing** (`_standOnBoundary`: within a unit of a solid
+  wall or of a wall between floors more than a step apart). Walls run on the half-square
+  lattice and stand points are centres, so this is common, and the trace lets such a point
+  leave its wall on either side. Without the exemption the Sewers of Jasper's pipe (377, whose
+  squares' centres are its east wall) was cut off with 360 of 463 squares, and the Cragged
+  Mountains' north pocket from its own King's Way exit.
+- **A door square**: the body leaves the room on arrival anywhere in it. Locked doors
+  (`ROOM_LOCKED_DOOR`, Marion's gate) are ordinary ground (`exitSquaresOf`).
+- **Slides from the stand point do not count** as things it can do — only straight steps.
+
+Where a wall runs through centres and the wrong side matters, the square gets a **declared
+stand point** on its own side: `substrate/m59-standpoints.json`, keyed by `.roo`, read by
+`standPoint` and therefore by the planner and the mover alike. Marion's r85c23, r86c22 and
+r87c21 are the yard's. The same file opens the yard's real entrance: a half-square gap at
+r88.5–r89.0 between the wall's end cap and the room's south boundary, passable by a 248-radius
+body only at r88.75 (±8 units). No square-centre step can thread it; r88c20 and r88c21 now
+stand on that line, and 62,58 -> 80,15 goes round through r88 in 47 steps.
+
+Measured over all 264 rooms against v6: 10,856 of 2,358,606 steps go (-0.46%, 155 rooms). From
+the rooms' arrival points, reachable squares fall 249,239 -> 247,354, and a body-radius flood on
+a 128-unit lattice from the same arrivals walks into **none** of the 1,410 interior squares
+that went. The arrival-to-exit pairs that went (21 of 3,304; Marion gains 5) are Castle Victoria's sealed chamber
+(38, left by its own door, 8,32 -> 10,32), Konima's Ascension's sealed door room (2505, reached
+only by arriving in it) and one first-offered north-edge square in 2134 whose neighbours still
+serve the exit. Ukgoth's gutter (599, r51c17) now reaches 589 and not 598 — the operator's
+account in `substrate/m59-gutters.json`; the 598 route crossed the rail from r46c20 to r50c22.
+
+**Compare a rebake against a fresh bake of the base, never against the committed table.** On
+review (2026-09-30) this change read as 948 lost routes in 29 rooms, East Jasper's r52c26 among
+them with zero. The committed v6 table was a stitched partial (`complete: false`) from older bake
+code: 787 of those "losses" were the stale table's, most of them routes over undeclared
+three-square jumps that current code no longer stores at all (574 in Ko'catan, 2009, alone). Against `origin/main` rebaked fully, the change costs 161 anchor routes and
+170 reach pairs in 14 rooms and gains 39 and 45; at the level that matters, **exit to exit**, it
+loses only Castle Victoria's trapdoor chamber (38: `go:41` to 2, 39 and 40, which were walks
+through the north and east walls — the chamber is left by its own door, `sameRoomDoorPlan`), the
+Winding Caverns' locked door (826: behind a solid two-sided wall at c41.33) and one reach pair in
+Konima's Ascension (2505: through a closed zero-height door slab at c62.4–c62.6 that no door
+variant opens), and gains Marion's crypt door and one pair in 2506. **East Jasper's r52c26 is not
+the arrival from West Jasper**: those stairs land at r51c28, inside the stair tunnel, whose reach
+is unchanged. r52c26 is the tunnel's other listed stair square, in a sealed yard on the outside
+of the tunnel's diagonal wall, and every v6 route out of it went r51c26 -> r51c27 through that
+wall. `m59-routing-test.mjs` pins both halves.
+
+A body-walk that follows the body's own landing point (not the stand point) from every arrival
+finds the rule's one real cost: in a room whose stand points sit in a filler sector — Faronath's
+shape, where the filler is the same sector number as a piece of the playable ground, so
+`m59-void-sectors.json` cannot declare it — the corridor's squares become unenterable. A Dark,
+Humid Cavern (2110) is the case: 113 of 180 stand points in sector 1, reach from its one anchor
+158 -> 1. No exit in the map leads into 2110. Elsewhere the squares a body stands in and the mask
+now refuses are one-square slivers on the far side of a wall (1–9 per room), which lead nowhere
+the stand point's side does not.
+
+**Rebake after landing this**: `node tools/m59-routebake.mjs --jobs 8`, then
+`node tools/m59-doorbake.mjs --write` (the variants are dropped when the predicate version
+moves), then `node tools/m59-doorstate-test.mjs` and `npm run test:movement`.
+
 ## The bag of tricks for traffic, and the one that was missing
 
 When something is standing in the way, the walker has a ladder: wait a lap (six laps if it

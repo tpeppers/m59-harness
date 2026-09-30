@@ -1,0 +1,67 @@
+{
+  "_what": "DECLARED STAND POINTS. A square's stand point is the one fine point the planner traces every step to and from, and the one point the mover sends a body to when it walks onto that square (`RoomGeometry.standPoint`, `standPointWire`). It is the square's centre whenever the centre has floor. That is right almost everywhere and it cannot express a passage narrower than the gap between two centres' lines: a body can thread it only by standing somewhere else in the square. An entry here moves one square's stand point, for the planner and the mover at once, because both ask `standPoint`.",
+  "_declared_not_derived": "Same argument as substrate/m59-falljumps.json. Which point a square should be summarised by is a choice about which passage through it matters, and a rule that re-chose it everywhere would move the aim of every door square in the world. So an entry is written down with the trace that justifies it, and the steps it opens are still decided by `_traceMoverStep`: a declared point the mover cannot reach costs a refused step and authorises nothing. A point with no floor under it is ignored.",
+  "_shape": "points: [{ roo, room, row, col, fine: {x, y}, why, observed_by }]. `roo` is the key: a stand point is a fact about geometry, and rooms that share a .roo share their walls. `room` is for the reader. `row`/`col` are 1-based KOD squares; `fine` is CLIENT/BSP units, 1024 to the square (x = (col-1)*1024 + ..., y = (row-1)*1024 + ...). See docs/m59-coordinates.md.",
+  "points": [
+    {
+      "roo": "marion.roo",
+      "room": 200,
+      "row": 85,
+      "col": 23,
+      "fine": {
+        "x": 22784,
+        "y": 86272
+      },
+      "why": "Marion crypt-yard wall. Its west face runs corner to corner through r85c23, r86c22 and r87c21 (row+col = 109 in square units), so each centre is ON the face and belongs to both sides — and a stand point that belongs to both sides decides nothing, which is how r85c24 -> r85c23 -> r84c22 crossed the wall in two legal-looking steps. These squares are the yard's: the point is in the north-west quarter, 362 client units clear of the face, so a step from the east that slides along the wall and stops on the east side of the square is refused.",
+      "observed_by": "traceFineMoveClient, 2026-09-30"
+    },
+    {
+      "roo": "marion.roo",
+      "room": 200,
+      "row": 86,
+      "col": 22,
+      "fine": {
+        "x": 21760,
+        "y": 87296
+      },
+      "why": "Marion crypt-yard wall (see r85c23): the yard side, the north-west quarter.",
+      "observed_by": "traceFineMoveClient, 2026-09-30"
+    },
+    {
+      "roo": "marion.roo",
+      "room": 200,
+      "row": 87,
+      "col": 21,
+      "fine": {
+        "x": 20736,
+        "y": 88320
+      },
+      "why": "Marion crypt-yard wall (see r85c23): the yard side, the north-west quarter.",
+      "observed_by": "traceFineMoveClient, 2026-09-30"
+    },
+    {
+      "roo": "marion.roo",
+      "room": 200,
+      "row": 88,
+      "col": 21,
+      "fine": {
+        "x": 20992,
+        "y": 89856
+      },
+      "why": "The south gap into Marion's crypt yard. The raised wall on the yard's east side (floor 2240 on 1600) ends in a cap at r88.5, c20.5-c21.0, and the room's south boundary is r89.0: a 512-unit gap for a 496-unit body, passable only at r88.75 (a straight trace at r88.70 or r88.76 is refused; r88.75 from c23 to c19 arrives). With the stand points of r88c21 and r88c20 on the square centres (r88.5) no step reaches r88c20 from the east in either direction, and the yard's only other entries are the wall itself and the locked gate at r71.25 c13-15 (kod ROOM_LOCKED_DOOR). This point and the next put both squares on the gap's line.",
+      "observed_by": "traceFineMoveClient, 2026-09-30"
+    },
+    {
+      "roo": "marion.roo",
+      "room": 200,
+      "row": 88,
+      "col": 20,
+      "fine": {
+        "x": 19968,
+        "y": 89856
+      },
+      "why": "The other half of the south gap (see r88c21). This square's centre is the wall's own end cap, where no body fits.",
+      "observed_by": "traceFineMoveClient, 2026-09-30"
+    }
+  ]
+}
