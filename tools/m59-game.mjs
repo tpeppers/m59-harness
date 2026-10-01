@@ -2422,6 +2422,17 @@ class Session {
     // Only these reads inherit that owner; an old recovery caller does not.
     const loginRead = fn => withBodyCommand(this, () => this.pacer.submit('read', fn),
       this.combat?.active?.id ?? 'login-observation');
+    // BUT NOT BEFORE THE CHARACTER IS IN THE WORLD. `c.login()` resolves on AP_GAME, which comes
+    // BEFORE the character list; the client then sends BP_USE_CHARACTER on its own, and only when
+    // the server processes that does `UserLogon` run and set `pbLogged_on`. A request that arrives
+    // first is dropped in silence -- `ToCliStats` opens with `if not pbLogged_on return`
+    // (user.kod:2663). The room and inventory are pushed by the server on entry anyway, so the
+    // loss showed only in group 2, which is never pushed unasked: measured on prod 2026-10-01,
+    // 13 logins in a day came up with no attributes and no karma at all, every one right after a
+    // join (and handoffs, where the server is also closing the old connection, lost the race most).
+    // BP_PLAYER -- our own object, sent from inside UserLogon -- is the signal that it has run.
+    for (const until = Date.now() + 10_000; !c.selfId && Date.now() < until;)
+      await new Promise(r => setTimeout(r, 50));
     await loginRead(() => c.roomContents());
     await loginRead(() => c.players());
     await loginRead(() => c.requestInventory());

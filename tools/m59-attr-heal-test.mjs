@@ -37,6 +37,16 @@ ok('the keeper heals only in game, never during a handoff, once a minute, and lo
   assert.ok(src.includes('}, ATTR_HEAL_TICK_MS);'));
   assert.ok(src.includes('attrHealDue({ now, loggedInAt: session.loggedInAt, lastAskAt: attrHealAskedAt })'));
 });
+ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login reads', () => {
+  // c.login() resolves on AP_GAME, before the character is chosen; ToCliStats drops a request
+  // until UserLogon sets pbLogged_on (user.kod:2663). BP_PLAYER is sent from inside UserLogon.
+  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('  async joinOnce('));
+  const wait = body.indexOf('!c.selfId && Date.now() < until');
+  const firstRead = body.indexOf('await loginRead(() => c.roomContents())');
+  const statsRead = body.indexOf('await loginRead(() => c.stats(2))');
+  assert.ok(wait > 0 && wait < firstRead && firstRead < statsRead, 'the wait comes before every login read');
+});
 ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
   const login = 1_000_000;
   assert.equal(attrHealDue({ now: login + 15_000, loggedInAt: login, lastAskAt: login + 4_000 }), true, 'fresh login, 11s since the last ask');
