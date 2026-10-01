@@ -337,6 +337,9 @@ __pycache__/
 # players and our characters, and is one fleet's.
 /substrate/pvp-holds/
 /substrate/pvp-holds-*/
+# Who holds which lever in a two-person lever room (tools/m59-leverpuzzle.mjs): live claims that
+# expire in a minute, one fleet's, and meaningless to anybody else.
+/substrate/lever-claims*.json
 /substrate/*.tmp
 
 # AND THE SIGHTING BOOK NAMES THEM TOO — MORE OF THEM, AND WHEN THEY WERE NOT DOING

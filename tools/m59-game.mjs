@@ -4941,6 +4941,12 @@ class Session {
     // destination room that the arrival must be able to walk to. Omit it and travel
     // behaves exactly as it always did. See doorsLandingNear.
     arriveNear = null,
+    // A ROOM THAT IS WORKED, NOT WALKED. `(hereRoomNum, toRoomNum) => boolean`: true ends the
+    // journey on arrival there with `handed_off: true`, before any route is planned, so the
+    // caller's keeper can work the room (the lever puzzle in 2600, m59-leverpuzzle.mjs). The
+    // bake models such a room with its doors shut, so walking at it only exhausts hops and
+    // stumbles. Omit it and travel behaves exactly as it always did.
+    handOffAt = null,
   } = {}) {
     const log = [];
     // TIME EXPOSED, PER MAP. See m59-transits.mjs for why this is the number worth having
@@ -5264,6 +5270,13 @@ class Session {
       }
       if (here.num === toRoomNum)
         return { arrived: true, room: { num: here.num, name: here.name }, hops, stumbles: totalStumbles, log };
+      if (typeof handOffAt === 'function' && handOffAt(Number(here.num), Number(toRoomNum))) {
+        log.push({ handed_off: here.name ?? here.num,
+                   note: 'this room is worked by the keeper rather than walked; the journey stops here' });
+        return { arrived: false, handed_off: true, room: { num: here.num, name: here.name },
+                 hops, stumbles: totalStumbles, log,
+                 reason: `room ${here.num} is handed to the keeper on the way to ${toRoomNum}` };
+      }
 
       // Leave the Bookmakers hall through its known sequence of doors before an
       // ordinary exit walk tries to cross the shut entrance or blinks into a lift.

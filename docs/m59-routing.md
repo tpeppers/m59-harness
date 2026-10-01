@@ -1635,6 +1635,46 @@ Attaching it only during keeper startup left Camilla's replacement client record
 opening packets while its movement geometry stayed shut. Replacement clients reset
 and replay door geometry; events from the retired client cannot change it.
 
+# A room worked by two keepers: the lever puzzle in 2600
+
+Room 2600 (The crypt in Marion) is not a route to 2601, it is a puzzle
+(`marcryp1.kod`, `gstlever.kod`): two levers at r27c4 and r27c9, each answering only
+from one square away, must both be switched inside `SLAM_TIME` (2 s) to open the final
+door (sector 3, 84 -> 172); the final area (rows 28-38, cols 1-10, plus west of col 3
+below row 15) must then be cleared with a player inside it before FightTimer (10 s)
+finds it empty and resets everything; the last kill opens the well (sectors 6/7) whose
+go-exits r38c6/r38c7 lead to 2601, and shuts the final door behind the fighters.
+
+So a journey to 2601 **stops in 2600 and hands the body to the keeper**:
+`Session.travel` takes `handOffAt(here, to)` and returns `handed_off: true` before it
+plans a route (the bake models the room with every door shut, so walking at it only
+exhausts hops); `Autopilot.travel` answers `handed_off` at once when it is asked from
+inside 2600. Neither is a failure: the relocation does not count it toward
+`unreachable`, and the journey row carries `handed_off: true`. Then `passLeverPuzzle`
+(first thing in `passErrand`, below every protected rung) works it one bounded step per
+pass, from `decideLeverStep` in `tools/m59-leverpuzzle.mjs`:
+
+- **who pulls** is settled in `substrate/lever-claims-<fleet>.json` (gitignored): a
+  claim is refreshed every pass and expires after 60 s; a race is settled by reading the
+  file back after the atomic rename;
+- **when** is a shared wall-clock beat (5 s, like the wand volley's `beatOf`): the first
+  keeper to see both levers manned writes the beat into the book and the partner adopts
+  it while it is still ahead, so two passes a second apart pull inside the window without
+  either process talking to the other;
+- **whether it worked** is sector 3 at 172, read only while the world says the body is
+  in 2600 (`trustedDoorHeights`). A `look` from Marion once carried 2600's last-visit
+  heights and an errand sent six characters at a shut door. Nothing is latched: every
+  pass re-reads the door.
+
+A lone traveller takes a lever, rests and defends itself there, and its status reads
+**"waiting for a second lever puller"** (`status().lever_puzzle.waiting`) instead of
+wedging. A character already in 2601 is never brought back up. An assignment to 2601
+yields to a movement lease; an ordered journey does not, because the order is the
+lease holder's. The keeper never fights a player here; every swing is creature-only.
+
+Getting INTO 2600 from Marion's yard is a separate problem (the south gap along row
+88.75, PR #63). `node tools/m59-leverpuzzle.mjs` prints who holds which lever now.
+
 ## Safe-spot legs: cross a killing room wall to wall, and think on a wall
 
 Operator, 2026-09-24: *"Fix Ukgoth pathing. One way to do it would be to path the route plan

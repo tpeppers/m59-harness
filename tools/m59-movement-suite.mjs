@@ -64,6 +64,8 @@ const SUITES = [
    'three coordinate spaces and the boundaries between them'],
   ['m59-recordjam-test.mjs',
    'every committed jam fixture is still roles and not player names'],
+  ['m59-leverpuzzle-test.mjs',
+   'room 2600 on the way to 2601 is worked by two keepers on one beat, judged by the door, never by a stale read'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

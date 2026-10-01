@@ -26,6 +26,14 @@ These tests are offline. They do not execute a raid or shut down a server.
   releases them; a monster death and a delay of 0 hold nothing; the hold survives a restart;
   an explicit order, a movement lease, a busy holder and a recovery detour are never held;
   and the schema, setter, fleet row, policy_control reflection and local policy carry the key.
+- `m59-leverpuzzle-test.mjs` (108): room 2600's lever puzzle on the way to 2601. The
+  declaration matches the kod and the committed ceiling-door bake; the claim book gives the
+  nearest free lever, the other to a second arrival and none to a third, expires an
+  unrefreshed claim, settles a race by reading back, and refuses to overwrite a corrupt
+  file; two keepers deciding apart adopt one beat and pull inside SLAM_TIME; door heights
+  are trusted only from inside 2600 and never latched; players are never foes; a lone
+  keeper waits at its lever with the status "waiting for a second lever puller"; two fake
+  keepers pull on one beat, open the door and walk in; travel hands off in 2600 only.
 - `m59-door-wait-test.mjs` and `m59-dooropen-test.mjs`: matched sector/height
   evidence, resolved timeouts, slow animations, cancellation and early closure.
   `m59-travel-test.mjs` also verifies that a confirmed opening permits another
