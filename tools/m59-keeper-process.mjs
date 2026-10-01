@@ -15,6 +15,7 @@ process.env.M59_KEEPER = '1';
 //   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
+import { attributesIncomplete, ATTR_HEAL_EVERY_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
@@ -324,6 +325,7 @@ session.combat.pvpEligibility = () => joinWanted;
 // by any path; the broker then starts the replacement, whose login makes the server drop this
 // connection ("new connection overrides old one"), and the drop is this keeper's cue to save and
 // exit. If no replacement arrives before the deadline the handoff lapses and nothing changed.
+let attrHealTimer = null, attrHealReported = false;   // tools/m59-attr-heal.mjs
 let handoff = null;                              // { since, deadline } while being replaced
 const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
 // Session.rejoin is the autopilot's own reconnect (Autopilot.reconnect), and it goes around
@@ -579,6 +581,20 @@ async function joinGenerationOnce(generation) {
       session.pacer?.submit('read', () => session.client?.stats?.(2))
         ?.catch(() => { /* a keeper that cannot read its own stats still plays fine */ });
     }, 1500);
+    // AND IF THE BLOCK GOES MISSING LATER, ASK AGAIN (tools/m59-attr-heal.mjs): t9 lost it
+    // mid-session twice on 2026-10-01, cause not yet known, so this heals and logs the evidence.
+    attrHealTimer ??= setInterval(() => {
+      if (!inGame || !session.live || handoffActive()) return;
+      const bad = attributesIncomplete(session.client?.statsById);
+      if (!bad) { attrHealReported = false; return; }
+      if (!attrHealReported) {
+        attrHealReported = true;
+        console.error(`[keeper] ${agent} attribute block incomplete (${bad.why}); re-asking group 2 | ` +
+          `${JSON.stringify(bad.snapshot)} | joined ${session.loggedInAt ? new Date(session.loggedInAt).toISOString() : '?'}`);
+      }
+      session.pacer?.submit('read', () => session.client?.stats?.(2))?.catch(() => {});
+    }, ATTR_HEAL_EVERY_MS);
+    attrHealTimer.unref?.();
 
     // THE DOORS THAT ARE FLOORS — move the bake to the state the SERVER says it is in.
     //
