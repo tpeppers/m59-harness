@@ -2618,21 +2618,34 @@ export async function holdKeeper(ctx, agent, fleet) {
   // the run's whole life, so after a rolling keeper restart every cancel and heartbeat went to a ghost
   // (2026-09-27, a disciple drill logged it twice after the roll). Re-scan on that refusal and retry
   // once, in place, so every closure below sees the new keeper.
-  const stale = r => /has been replaced|addressed to a keeper process/i.test(String(r?.error ?? ''));
+  //
+  // AND THE STANDARD RESTART MOVES THE KEEPER TO A NEW PORT. The no-logout keeper handoff
+  // (warRestartKeeper) brings the replacement up on a free port in the band, so after a roll the
+  // cached port is either silent or ANOTHER agent's keeper, which refuses with `mismatch` set --
+  // "this keeper is agent t14, not t13" was a come-home run's release after the -19 roll
+  // (prod-deploy-84, 2026-10-01). Any addressing refusal re-scans, and so does a REFUSED
+  // CONNECTION -- but never a timeout: a slow verb (a fight) timing out has been delivered, and
+  // re-sending it would issue it twice.
+  const stale = r => r?.mismatch != null || r?.unreachable === true ||
+    /has been replaced|addressed to a keeper process|this keeper is/i.test(String(r?.error ?? ''));
+  const refused = e => /ECONNREFUSED|ECONNRESET/.test(String(e?.cause?.code ?? e?.code ?? ''));
   const refresh = async () => {
     const fresh = (await keeperPorts(fleet, { wantAgent: agent, maxAgeMs: 0 }).catch(() => null))?.get(agent);
-    if (fresh && who) Object.assign(who, fresh, { agent });
-    return !!fresh;
+    if (!fresh || !who || (fresh.port === who.port && fresh.pid === who.pid)) return false;
+    Object.assign(who, fresh, { agent });
+    return true;
   };
   const ask = async (name, args, timeoutMs) => {
-    const r = await keeperCall(who, name, args, timeoutMs);
+    const r = await keeperCall(who, name, args, timeoutMs)
+      .catch(e => { if (refused(e)) return { unreachable: true, error: e.message }; throw e; });
     return stale(r) && await refresh() ? keeperCall(who, name, args, timeoutMs) : r;
   };
   const cancelNow = async () => {
     const send = () => fetch(`http://127.0.0.1:${who.port}/cancel`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
-      signal: AbortSignal.timeout(20_000) }).then(r => r.json()).catch(e => ({ error: e.message }));
+      signal: AbortSignal.timeout(20_000) }).then(r => r.json())
+      .catch(e => ({ error: e.message, ...(refused(e) ? { unreachable: true } : {}) }));
     const r = await send();
     return stale(r) && await refresh() ? send() : r;
   };
