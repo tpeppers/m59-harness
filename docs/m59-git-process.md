@@ -32,8 +32,9 @@ untracked**, belonging to at least four parties. The consequences compound:
 The practice already exists — thirty-seven worktrees is not an accident. It is simply not
 universal, and the one checkout everybody *also* edits is the one that has to stay mergeable.
 
-**Corollary: push before you go idle.** A branch that only exists on this disk is not work that
-has landed. It is work nobody else can see, build on, or rescue.
+**Corollary: land before you go idle.** A branch that only exists on this disk is not work that
+has landed. It is work nobody else can see, build on, or rescue. Landing means merging it into
+`main` *locally* and pushing `main` — never pushing the feature branch itself (rule 9).
 
 ---
 
@@ -286,3 +287,35 @@ afterwards rather than reporting numbers computed from the refs it just moved.
 `m59-release-consent.mjs` is the decision, pure and testable; `m59-release-consent-test.mjs` (39)
 pins it, including that a `Claude-Session:` trailer is not a hold, that every typo'd form refuses,
 and that an indented or fenced example does not hold the commit that explains it.
+
+---
+
+## 9. No pull requests on GitHub, and no pushed feature branches
+
+**Operator, 2026-10-01: stop making PRs publicly on GitHub for merging features, and do not push
+branches before they are merged to `main` locally.** The repository is public; a pushed branch and
+a PR publish work-in-progress, review chatter and incident detail about a live fleet before anyone
+has decided it is finished.
+
+The flow is therefore entirely local until `main` moves:
+
+```bash
+git worktree add ../work-<what> -b <branch> origin/main    # rule 1, unchanged
+# ... commit on <branch>, run the tests ...
+git fetch origin
+git switch --detach origin/main && git merge --no-ff <branch>   # or rebase <branch> onto origin/main
+git push origin HEAD:main                                  # the ONLY push: main, then tags
+```
+
+* **Never** `git push origin <branch>`, and never `gh pr create`. If a branch was pushed by
+  mistake, delete it on the remote once it has landed.
+* The merge into `main` is the sign-off (rule 8). Run the suites the change touches, and
+  `npm run test:movement` for anything tagged `#movement`, **before** the push — there is no PR
+  page to catch it afterwards.
+* A rejected push of `main` means somebody landed first: fetch, re-merge onto the new
+  `origin/main`, re-test, push. Do not force-push `main`.
+* Deploy tags (`deploy-*`) are still pushed — rule 3 needs every tag to name a fetchable commit,
+  and a tag on `main` is not a feature branch.
+
+What it replaced: PR #68 (2026-10-01) was opened publicly, then the merge was blocked waiting on
+a review nobody had asked for, with the fleet waiting on the fix.
