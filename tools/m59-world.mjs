@@ -30,7 +30,13 @@ import { inRegion, describeWhen } from './m59-codeexits.mjs';
 import { affordances, OF, isTeleporter, KOD_FINENESS } from './m59-parse.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { observedCrossings } from './m59-crossings.mjs';
-import { activeRoutes, anchorFor, sameRegion, anchorReach } from './m59-routes.mjs';
+import { activeRoutes, anchorFor, sameRegion, anchorReach, reachableFrom } from './m59-routes.mjs';
+import { gatedEntrance } from './m59-gated-entrances.mjs';
+
+// codeExitTransit's answers, keyed on the reach Set they were computed from. `reachableFrom`
+// hands back a NEW Set once a door in the room moves (forgetReach), so a stale answer is
+// simply never looked up again rather than having to be invalidated.
+const CODE_EXIT_TRANSIT = new WeakMap();
 import { resolveRoomWire } from './m59-room-wire.mjs';
 import { groundEffects, groundEffect } from './m59-ground-effects.mjs';
 
@@ -1102,6 +1108,13 @@ export class World {
         if (!targets.includes(candidate)) targets.push(candidate);
       }
       const best = targets[0] ?? null;
+      // A GATED ENTRANCE (m59-gated-entrances.mjs) NAMES THE WAY IN. Its trigger is the end of a
+      // corridor with one mouth, and the walk goes to the mouth first; the leg after it is the
+      // corridor itself. Static, so it belongs in this cached projection; the lift's live state
+      // does not, and is read by the session at the moment it crosses.
+      const gate = gatedEntrance(room.num, ce.to);
+      const viaFor = target => gate?.via && target.row === gate.trigger.row && target.col === gate.trigger.col
+        ? { via: { col: gate.via.col, row: gate.via.row } } : {};
       out.push({
         kind: 'region',
         to: ce.to,
@@ -1111,11 +1124,14 @@ export class World {
         reachable: best ? best.reachable : (geo && me ? false : null),
         verified: best ? best.verified === true : (geo && me ? false : null),
         ...(best?.approach_on ? { approach_on: best.approach_on } : {}),
+        ...(gate ? { gate: { sector: gate.sector, lift: gate.lift, open: gate.open, closed: gate.closed,
+                             cycle_ms: gate.cycle_ms } } : {}),
         ...(targets.length ? { trigger_targets: targets.map(target => ({
           stand_on: { col: target.col, row: target.row },
           steps_away: target.steps,
           reachable: target.reachable,
           ...(target.approach_on ? { approach_on: target.approach_on } : {}),
+          ...viaFor(target),
         })) } : {}),
         how: best?.reachable
           ? `walk_to {"col":${best.col},"row":${best.row}} (r${best.row}c${best.col}) — the room moves you across as you arrive`
@@ -1436,12 +1452,72 @@ export class World {
    * step mask follows, and for the same reason: a bake must never be the thing that makes
    * a doorway disappear.
    */
+  /**
+   * CAN A BODY THAT CAME IN BY `inA` WALK TO A CODE EXIT OF `roomNum` LEADING TO `goingTo`?
+   *
+   * `true`/`false`/`null` with transitOk's meanings. Asked of the mover's own directed flood
+   * (`reachableFrom`, cached until a door in the room moves) from the inbound anchor, against
+   * every square of the trigger region.
+   *
+   * `false` ONLY WHEN THE MASK MODELS THE REGION AT ALL. A trigger region the step mask can
+   * enter from somewhere — any square outside it with a step that lands inside — is a region
+   * the flood is competent to judge, so not reaching it from this door is a real answer. A
+   * region the mask cannot enter from anywhere is the Icky Cave shape (587 -> 27, behind a gap
+   * narrower than a square, crossed by a staged fine move): the flood cannot see that, and the
+   * answer stays `null`, exactly as before.
+   */
+  codeExitTransit(roomNum, inA, goingTo) {
+    const exits = codeExits(roomNum).filter(e => Number(e.to) === Number(goingTo));
+    if (!exits.length) return null;
+    const reach = reachableFrom(this.map, roomNum, inA.row, inA.col);
+    if (!reach) return null;
+    let byTo = CODE_EXIT_TRANSIT.get(reach);
+    if (!byTo) { byTo = new Map(); CODE_EXIT_TRANSIT.set(reach, byTo); }
+    const key = Number(goingTo);
+    if (byTo.has(key)) return byTo.get(key);
+    const room = this.map?.rooms?.[roomNum] ?? this.map?.rooms?.[String(roomNum)];
+    const geo = room ? sharedRoomGeometry(room) : null;
+    let answer = null;
+    if (geo?.rows) {
+      const region = [];
+      for (const e of exits)
+        for (let r = 1; r <= geo.rows; r++)
+          for (let c = 1; c <= geo.cols; c++)
+            if (inRegion(e.when, r, c)) region.push({ row: r, col: c });
+      const inside = new Set(region.map(s => `${s.row},${s.col}`));
+      if (region.some(s => reach.has(`${s.row},${s.col}`))) answer = true;
+      else {
+        let modelled = false;
+        for (const s of region) {
+          for (let dr = -1; dr <= 1 && !modelled; dr++) for (let dc = -1; dc <= 1 && !modelled; dc++) {
+            const r = s.row + dr, c = s.col + dc;
+            if ((!dr && !dc) || inside.has(`${r},${c}`) || !geo.inBounds(r, c)) continue;
+            try { modelled = geo.moverStepLands(r, c, s.row, s.col) === true; } catch { /* no opinion */ }
+          }
+          if (modelled) break;
+        }
+        answer = modelled ? false : null;
+      }
+    }
+    byTo.set(key, answer);
+    return answer;
+  }
+
   transitOk() {
     const table = activeRoutes();
     if (!table) return null;
     return (room, cameFrom, goingTo) => {
       const inA = anchorFor(table, room, cameFrom);
       const outA = anchorFor(table, room, goingTo);
+      // A CODE EXIT HAS NO ANCHOR, SO THIS USED TO SAY "CARRY ON" FOR EVERY ONE OF THEM.
+      // The bake plans between edge and go anchors; a `SomethingMoved` trigger is neither, so
+      // `anchorFor` is null for it and a journey through any trigger room was planned without
+      // asking whether the trigger can be walked to from the door it came in by. Measured
+      // 2026-10-01: 579 -> 802 planned 579 > 589 > 802, and 589's Qor trigger sits at the end
+      // of a pit nothing in 589 steps or falls into, so `walk(802)` failed three times; and
+      // 599 > 598 > 802 enters the Cragged Mountains by its south door, which reaches neither
+      // the bowl nor the temple. See codeExitTransit.
+      if (inA && !outA) return this.codeExitTransit(room, inA, goingTo);
       if (!inA || !outA) return null;
       // DIRECTED, BECAUSE THE QUESTION IS. `sameRegion` asks whether two doors are in the
       // same strongly connected component — whether each can reach the OTHER — and that is

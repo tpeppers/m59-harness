@@ -45,6 +45,16 @@ These tests are offline. They do not execute a raid or shut down a server.
   conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
   every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
   entrance) the journey still arrives; on 1b5629a the press square itself was refused.
+- `m59-qor-temple-test.mjs` (13 tests): walking into the Temple of Qor (802). The gate
+  declaration matches the kod (heights, sector, triggers, the 600 s alternation) when `M59_ROOT`
+  is set; 598 is in the ceiling table and the observed lift is applied; open, the corridor is four
+  straight steps from its mouth r34c26, shut it is sealed and still planned via the r39c25 sliver;
+  a walk straight at r38c26 from r35c21 never arrives and through the mouth it does; the 598 exit
+  names its mouth and gate; a code exit is a transit only from a door whose directed flood
+  reaches the trigger (589 from both doors and 598 from the south are refused, the Icky Cave is
+  not); 579 and 589 route to 802 via 597 > 598; the gate wait opens on the server's event plus
+  the lift's travel, is bounded by one cycle, and stops on a cancel or a room change; the
+  session walks to the mouth and waits only when the lift is SHUT (Camilla, prod 2026-10-01).
 - `m59-leverpuzzle-test.mjs` (108): room 2600's lever puzzle on the way to 2601. The
   declaration matches the kod and the committed ceiling-door bake; the claim book gives the
   nearest free lever, the other to a second arrival and none to a third, expires an

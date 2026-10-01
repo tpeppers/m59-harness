@@ -1635,6 +1635,39 @@ Attaching it only during keeper startup left Camilla's replacement client record
 opening packets while its movement geometry stayed shut. Replacement clients reset
 and replay door geometry; events from the retired client cannot change it.
 
+# An entrance that is there half the time: the Temple of Qor
+
+802 has two entrances, both `SomethingMoved` code exits, and `tempqor.kod`'s ExitsTimer opens
+them in turn for ten minutes each (`EXIT_DELAY` 600000, two candidates, always the other one).
+598's is a ceiling lift (sector 1, open 348, shut 284) at the north end of a one-square
+corridor, c26 r35-r38, trigger r38c26; 589's is a floor lift (sector 1, open 290, shut 350)
+between a sunken pit and a corridor ending at r26c12. `substrate/m59-ceiling-doors.json`
+carries 598's two states, so the mover's geometry follows the observed lift. Three things
+still stopped Camilla on 2026-10-01, and none of them was the lift:
+
+- **A code exit had no transit check.** It has no baked anchor, so `transitOk` said `null`
+  ("carry on") for every trigger, and 579 -> 802 planned through 589, whose pit nothing in
+  589 steps or falls into at any lift height (it is where `ExitFromQor` drops you leaving the
+  temple). `codeExitTransit` now floods from the inbound anchor (`reachableFrom`, the mover's
+  directed flood) and answers `false` when the trigger region is modelled by the mask but not
+  reached from that door. Across every code exit and inbound anchor in the map, exactly three
+  answers change: 589 from 579 and from 599, and 598 from 599 (its south door reaches neither
+  the bowl nor the temple). A region the mask cannot enter at all, like the Icky Cave behind a
+  sub-square gap, keeps `null`.
+- **The plan entered the trigger through a sliver.** 68% of plans from 598's north door take
+  the last step diagonally from r39c25, an edge that lands only from r39c25's exact stand point;
+  the walker slides off wall 69, climbs back north and bounces at r27c23. A gated entrance now
+  names its mouth (`via`, r34c26) and leaveVia walks there first; from the mouth the trigger is
+  four straight steps.
+- **Shut, it was still offered.** The ceiling at 284 refuses r34c26 -> r35c26, and the planner
+  still reaches r38c26 by the same sliver. `holdForGatedEntrance` reads `client.room.sectorHeights`
+  before travel takes the hop: SHUT, it walks to the mouth and waits, bounded by one cycle, for
+  the server's open event plus the lift's travel time; open or never reported, it does nothing.
+
+`tools/m59-gated-entrances.mjs` holds the declaration; `m59-qor-temple-test.mjs` the evidence.
+The remaining cost is 598's descent from the plateau into the bowl, a walk that slides at
+r27c23 before it finds the fall at r27c30 -> r30c30; that is a mover question, not a gate one.
+
 # A room worked by two keepers: the lever puzzle in 2600
 
 Room 2600 (The crypt in Marion) is not a route to 2601, it is a puzzle

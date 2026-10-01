@@ -64,6 +64,7 @@ import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
 import { planDoorChain } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
+import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
 
 export function sessionWalkPrototype(deps) {
   const {
@@ -4971,6 +4972,45 @@ export function sessionWalkPrototype(deps) {
     } catch { return false; }
   }
 
+  /**
+   * A CODE EXIT WHOSE TRIGGER A LIFT SHUTS ON THE SERVER'S CLOCK: WAIT FOR IT, DO NOT WALK INTO IT.
+   *
+   * `exit` is the region exit travel is about to take. When the room declares a gate on it
+   * (m59-gated-entrances.mjs) and the server has told this client the lift is SHUT, walk to the
+   * gate's waiting square and wait — bounded by one cycle — for the server to open it. Shut, the
+   * Temple of Qor's corridor in 598 is sealed, and the planner still offers the trigger by a
+   * diagonal from r39c25 that lands only from that square's exact stand point, so walking at it
+   * is a journey spent sliding off a wall.
+   *
+   * Open, or never reported moved (the shipped state), it does nothing: `{ held: false }`.
+   * Returns `{ held, opened, waited_ms, reason, cancelled }` and never throws.
+   */
+  async holdForGatedEntrance(exit, { movementGeneration = this.movementGeneration, controlToken,
+                                     wait = waitForGateOpen } = {}) {
+    if (exit?.kind !== 'region') return { held: false };
+    const roomNum = Number(this.world?.room?.num ?? NaN);
+    const gate = gatedEntrance(roomNum, exit.to);
+    if (!gate) return { held: false };
+    const c = this.need?.() ?? this.client;
+    const before = gateState(gate, c?.room?.sectorHeights);
+    if (gatePassable(before)) return { held: false, state: before.state };
+    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken);
+    let walked = null;
+    if (gate.wait_at && !(c.self?.row === gate.wait_at.row && c.self?.col === gate.wait_at.col)) {
+      walked = await this.walkTo(gate.wait_at.col, gate.wait_at.row, { movementGeneration, controlToken })
+        .catch(e => ({ arrived: false, reason: e?.message ?? String(e) }));
+      if (cancelled() || walked?.cancelled)
+        return { held: true, opened: false, cancelled: true, reason: 'movement cancelled' };
+      if (walked?.left_room)
+        return { held: true, opened: false, left_room: true, reason: 'left the room walking to the gate' };
+    }
+    const w = await wait(c, gate, { cancelled });
+    return { held: true, sector: gate.sector, state_before: before.state, height_before: before.height,
+             wait_at: gate.wait_at ?? null,
+             ...(walked && !walked.arrived ? { wait_at_reached: false, wait_walk: walked.reason ?? null } : {}),
+             ...w };
+  }
+
   // WHICH INTERNAL DOOR, IF ANY, JOINS US TO ONE OF THESE SQUARES. Thin: the search is
   // `sameRoomDoorPlan` in m59-world.mjs, which is pure and tested offline. This only
   // supplies the three live things it needs - the map, the geometry the MOVER enforces,
@@ -6137,8 +6177,24 @@ export function sessionWalkPrototype(deps) {
         eventsSince: since => c.eventsSince(since),
         cancelled: () => this.movementWasCancelled(movementGeneration, controlToken),
         stillCurrent: () => !leftExpectedRoom(),
-        walk: candidate => this.walkTo(candidate.stand_on.col, candidate.stand_on.row,
-          { maxSteps: budget(candidate), movementGeneration, controlToken, clearance: LEAVE_VIA_CLEARANCE }),
+        // A GATED ENTRANCE NAMES ITS MOUTH (`via`, m59-gated-entrances.mjs): walk there first,
+        // then down the corridor. Planned straight at the Temple of Qor's trigger in 598, 68% of
+        // routes enter it diagonally from r39c25 — a step that lands only from that square's
+        // exact stand point, which a walker that slid into the square is never on.
+        walk: async candidate => {
+          const via = candidate.via;
+          if (via && !(c.self?.col === via.col && c.self?.row === via.row)) {
+            const leg = await this.walkTo(via.col, via.row,
+              { maxSteps: budget(candidate), movementGeneration, controlToken, clearance: LEAVE_VIA_CLEARANCE });
+            if (leg?.left_room || leg?.cancelled || isTerminalMovementReason(leg?.reason)) return leg;
+            if (!leg?.arrived && !(c.self?.col === via.col && c.self?.row === via.row))
+              return { ...leg, arrived: false,
+                       reason: `could not reach the entrance's mouth r${via.row}c${via.col}` +
+                               (leg?.reason ? ` (${leg.reason})` : '') };
+          }
+          return this.walkTo(candidate.stand_on.col, candidate.stand_on.row,
+            { maxSteps: budget(candidate), movementGeneration, controlToken, clearance: LEAVE_VIA_CLEARANCE });
+        },
         fineWalk: async candidate => {
           // Get as close as the square graph knows how before bypassing it. Fine movement
           // is deliberately expensive — every step is confirmed by a room read — and from

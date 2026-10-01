@@ -5610,6 +5610,30 @@ class Session {
                  ...(this.barredRooms?.size ? { barred_rooms: [...this.barredRooms] } : {}) });
       }
 
+      // A TRIGGER A LIFT HAS SHUT IS WAITED FOR, NOT WALKED INTO. See holdForGatedEntrance and
+      // m59-gated-entrances.mjs: the Temple of Qor's entrances open in turn for ten minutes each,
+      // and the shut one is a sealed corridor the planner still offers by a sliver no walker
+      // can take. Optional, because `travel` is lifted out of this file and run against a
+      // stripped fake in m59-travel-test: without the method, nothing changes.
+      if (exit.kind === 'region' && typeof this.holdForGatedEntrance === 'function') {
+        const gate = await this.holdForGatedEntrance(exit, { movementGeneration, controlToken })
+          .catch(e => ({ held: true, opened: false, reason: e?.message ?? String(e) }));
+        if (gate?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+          return this.cancelledMovement({ log });
+        if (gate?.held) {
+          log.push({ outcome: gate.opened ? 'gate_opened' : 'gate_stayed_shut', room: here.num,
+                     to: nextHop.to, sector: gate.sector ?? null, waited_ms: gate.waited_ms ?? null,
+                     ...(gate.reason ? { note: gate.reason } : {}) });
+          if (!gate.opened)
+            return arrivedIfHere({ arrived: false, log, hops, stumbles: totalStumbles,
+                                   outcome: 'gate_shut', room: { num: here.num, name: here.name },
+                                   reason: gate.reason ?? `the entrance to ${nextHop.to} stayed shut` });
+          // The room is the same and the geometry under the trigger has changed: re-read the
+          // exits from where the wait left us and take the hop on the next pass.
+          continue;
+        }
+      }
+
       // Split so the record can say whether the time went on DECIDING or on DOING. Above
       // this line is routing and exit selection; below it is the walk. If the tail turns
       // out to be in the gap between them, the fix is in the planner, not the legs.

@@ -66,6 +66,8 @@ const SUITES = [
    'every committed jam fixture is still roles and not player names'],
   ['m59-leverpuzzle-test.mjs',
    'room 2600 on the way to 2601 is worked by two keepers on one beat, judged by the door, never by a stale read'],
+  ['m59-qor-temple-test.mjs',
+   'a code exit is a transit only from a door that walks to its trigger, and a shut lift is waited for'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.
