@@ -66,7 +66,23 @@ export function guildSection(row, col) {
     applySectorHeights(closed, state.sectors, { mask: Buffer.from(state.mask, 'base64') });
     closed.attachStepMask(Buffer.from(state.mask, 'base64'));
   }
-  return anchors.findIndex(([r,c]) => closed.path(row, col, r, c).found && closed.path(r, c, row, col).found);
+  // STRICT, NO GOAL EXEMPTION. `path` lets its final step into the goal skip `moverStepLands`
+  // when no legal approach exists, which is right for a walker and wrong for a membership test:
+  // the shut door's own slab is exactly a step the mover refuses, so a square ADJACENT to a shut
+  // door reached it "both ways" and was filed on the far side. r7c7, one square short of the
+  // secret door's across square, read as section 3 while the body was still sealed in with the
+  // chests -- so a crossing that stopped in the doorway reported success, the door shut, and the
+  // next leg answered `guild door 53 trigger not reached` (Camilla, prod 2026-10-01).
+  //
+  // STRICT FIRST, RELAXED ONLY WHEN STRICT HAS NO ANSWER. Strict alone unfiles squares people
+  // stand on: r19c10 (door 55's inward trigger, where Animal sat for twelve hours) has no
+  // mover-legal two-way path to any anchor, only a goal-exempt one. So a square keeps the old
+  // reading when strict membership is empty, and only a square that strictly belongs somewhere
+  // -- r7c7 strictly belongs to the chests -- is filed by it.
+  const member = goalExempt => anchors.findIndex(([r,c]) =>
+    closed.path(row, col, r, c, { goalExempt }).found && closed.path(r, c, row, col, { goalExempt }).found);
+  const strict = member(false);
+  return strict >= 0 ? strict : member(null);
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 

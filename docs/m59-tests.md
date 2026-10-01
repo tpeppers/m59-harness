@@ -26,6 +26,13 @@ These tests are offline. They do not execute a raid or shut down a server.
   releases them; a monster death and a delay of 0 hold nothing; the hold survives a restart;
   an explicit order, a movement lease, a busy holder and a recovery detour are never held;
   and the schema, setter, fleet row, policy_control reflection and local policy carry the key.
+- `m59-chestroom-exit-test.mjs` (5): leaving the Bookmaker's hall from the chest side (section 4)
+  against a mover that refuses what `moverStepLands` refuses. The shipped ceiling-door table is
+  the step-mask version the runtime applies (a stale one is refused wholesale and no ceiling door
+  in 26 rooms ever opens for the mover); with the secret door open r7c7 -> r7c8 lands; r7c7 is
+  still section 4; from r11c4 the doors are worked 3, 53, 55, 59; and a crossing that stops in
+  the doorway throws `guild door 3 could not be crossed` rather than reporting success and
+  failing at door 53's trigger (Camilla, prod 2026-10-01).
 - `m59-leverpuzzle-test.mjs` (108): room 2600's lever puzzle on the way to 2601. The
   declaration matches the kod and the committed ceiling-door bake; the claim book gives the
   nearest free lever, the other to a second arrival and none to a third, expires an
