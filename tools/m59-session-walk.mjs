@@ -4920,6 +4920,27 @@ export function sessionWalkPrototype(deps) {
              reason: 'pressed three times and no sector moved' };
   }
 
+  // IS EVERY WAY OUT BEHIND A DOOR THIS ROOM WILL OPEN? Asked by `travel` BEFORE it walks at a
+  // hop's exit, because the walk is where a shut door costs the journey: The Wryn's Keep (704)
+  // puts its only exit behind a three-sector entrance, and on 2026-10-01 Janice at r42c28 spent
+  // three whole `come-home` budgets in `walkTo` ("coarse grid failed ... requested square
+  // r51c26", r50c26, r50c27) without the door ever being pressed — `openOperableDoor` was only
+  // reachable once the router had run out of routes, and an edge walk that times out never
+  // gets there. True only when the room HAS operable doors and the geometry the mover enforces
+  // has no path from the body to any candidate square; anything unknown answers false, so a
+  // room without doors, or a session without geometry, behaves exactly as before.
+  exitsBehindShutDoor(targets) {
+    try {
+      const roomNum = Number(this.world?.room?.num ?? NaN);
+      const geo = this.world?.geometry;
+      const me = this.client?.self ?? this.c?.self ?? null;
+      if (!Number.isFinite(roomNum) || typeof geo?.path !== 'function' || !me || !targets?.length) return false;
+      const plan = doorsFor(roomNum, { row: me.row, col: me.col });
+      if (!plan || (!plan.on.length && !plan.others.length)) return false;
+      return !targets.some(t => geo.path(me.row, me.col, t.row, t.col)?.found);
+    } catch { return false; }
+  }
+
   // WHICH INTERNAL DOOR, IF ANY, JOINS US TO ONE OF THESE SQUARES. Thin: the search is
   // `sameRoomDoorPlan` in m59-world.mjs, which is pure and tested offline. This only
   // supplies the three live things it needs - the map, the geometry the MOVER enforces,

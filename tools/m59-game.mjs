@@ -5543,6 +5543,41 @@ class Session {
           // is not evidence that the boundary is shut.
         }
       }
+      // A SHUT DOOR BETWEEN THE BODY AND EVERY CANDIDATE: OPEN IT BEFORE WALKING AT THE EXIT.
+      //
+      // The door branch further up only runs once the ROUTER has given up, and the router only
+      // gives up after an exit walk has exhausted its candidates. An exit walk against a shut
+      // door does not exhaust quickly — it grinds `walkTo` from coarse grid to fine grid on
+      // every boundary square — so in The Wryn's Keep (704), whose only exit is behind a
+      // three-sector entrance, Janice spent three whole `come-home` budgets walking at r51c26,
+      // r50c26 and r50c27 from r42c28 and the entrance was never pressed (prod 2026-10-01).
+      // `exitsBehindShutDoor` is true only when this room has operable doors and the mover's
+      // geometry has no path to any candidate; then the door is worked first (press, wait for
+      // the server's sector-height events, about 6.4s for that entrance) and `continue`
+      // re-plans against the opened geometry. Shares `doorTried`, so it is once per journey.
+      // `typeof` guards: `travel` is lifted by text into fakes that have neither method.
+      if (!doorTried && typeof this.openOperableDoor === 'function'
+          && typeof this.exitsBehindShutDoor === 'function'
+          && this.exitsBehindShutDoor(candidates.map(e => e.stand_on).filter(Boolean)
+               .map(p => ({ row: p.row, col: p.col })))) {
+        doorTried = true;
+        const opened = await this.openOperableDoor({ movementGeneration, controlToken })
+          .catch(e => ({ opened: false, reason: e?.message ?? String(e) }));
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return this.cancelledMovement({ log });
+        if (opened?.opened) {
+          for (const key of exhaustedHops.keys())
+            if (key.startsWith(`${here.num}>`)) exhaustedHops.delete(key);
+          log.push({ outcome: 'operated_a_door', room: here.num, sector: opened.sector,
+                     name: opened.name, at: opened.at, shuts_after_ms: opened.shuts_after_ms,
+                     before: 'exit walk',
+                     note: 'every exit candidate was behind a shut door; opened it and ' +
+                           're-planning against the geometry it produced' });
+          continue;
+        }
+        log.push({ outcome: 'door_not_opened', room: here.num, sector: opened?.sector ?? null,
+                   gate: opened?.gate ?? null, before: 'exit walk', note: opened?.reason ?? null });
+      }
       const exit = orderExits(candidates)[0];
       if (!exit)
       {

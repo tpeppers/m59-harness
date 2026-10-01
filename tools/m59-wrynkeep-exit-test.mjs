@@ -225,8 +225,9 @@ function hall(start) {
   return { s, g, c, seen, walk, observed, where: () => pos, now: () => clock };
 }
 
-// TRAVEL'S OWN SHAPE (m59-game.mjs `travel`): plan to the exit; when the room has no route, try
-// its doors once, then re-plan against the geometry the opening produced.
+// A STAND-IN FOR TRAVEL, testing the door opener alone: plan to the exit; when there is no
+// way, work a door once and re-plan. It passed on 7769305 while prod still failed — the real
+// `travel` never reached the opener — so the section after these drives the REAL `travel`.
 async function travelOut(h) {
   const EXIT = { row: 50, col: 27 };       // the south edge -> room 350; where t9 left from
   const log = [];
@@ -275,6 +276,84 @@ console.log('\npart-way through the run the entrance is still shut');
      h.observed.size === 2 && !h.g.path(43, 25, 50, 27).found, `${h.observed.size} sectors seen`);
   await h.c.waitFor({ timeoutMs: 1000 });
   ok('the third one: the way through exists', h.g.path(43, 25, 50, 27).found);
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE REAL `travel`, lifted out of m59-game.mjs by brace matching (as m59-travel-test does),
+// run on the 704 body above. Prod 2026-10-01 after 7769305: Janice at r42c28, `come-home
+// home=350` failed three times and her keeper log held only
+//   [walkTo] t7 coarse grid failed (no route through the geometry) ... requested square r51c26
+// for r51c26, r50c26 and r50c27 — never a press. The exit walker here is honest in the same
+// way: it walks the mover's geometry to a candidate square and crosses the south edge from it,
+// or fails with that sentence. It does not report `exit_candidates_exhausted`, because a
+// grinding walkTo does not get that far inside a job's budget — which is why the router-level
+// door branch never fired.
+const gameSrc = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+const tAt = gameSrc.indexOf('  async travel(toRoomNum, {');
+const SIG_END = '} = {}) {';
+const tSig = gameSrc.indexOf(SIG_END, tAt);
+assert.ok(tAt > 0 && tSig > tAt, 'travel is not in m59-game.mjs — this test is stale');
+let tDepth = 0, tEnd = -1;
+for (let i = tSig + SIG_END.length - 1; i < gameSrc.length; i++) {
+  if (gameSrc[i] === '{') tDepth++;
+  else if (gameSrc[i] === '}') { tDepth--; if (tDepth === 0) { tEnd = i + 1; break; } }
+}
+const { operableDoorsBlocking } = await import('./m59-doorplan.mjs');
+const { readHealth } = await import('./m59-parse.mjs');
+const realTravel = new Function('orderExits', 'BARRED_ON_ENTRY', 'readHealth', 'nearestSafeSpot',
+  'operableDoorsBlocking', `return ({ ${gameSrc.slice(tAt, tEnd)} }).travel`)(
+    c => c, /guardian angel holds you back/i, readHealth, () => null, operableDoorsBlocking);
+
+function travelling(start) {
+  const h = hall(start);
+  const s = h.s;
+  let room = 704;
+  const exitWalks = [];
+  s.name = 't7';
+  s.noteTransit = () => {};
+  s.client = h.c;
+  h.c.roomContents = async () => {};
+  s.world = {
+    geometry: h.g,
+    get room() { return { num: room, name: room === 704 ? "The Wryn's Keep" : 'room 350' }; },
+    get self() { return h.c.self; },
+    route: to => room === to ? { found: true, hops: [] }
+      : { found: true, hops: [{ from: room, to: 350, to_name: 'room 350', kind: 'edge' }] },
+    exits: () => room !== 704 ? [] : [26, 27].map(col =>
+      ({ to: 350, kind: 'edge', direction: 'south', stand_on: { row: 50, col } })),
+  };
+  s.cancelledMovement = ({ log }) => ({ arrived: false, cancelled: true, log });
+  s.rideTrack = async () => ({ rode: false, why: 'no track in this fixture' });
+  s.planSameRoomDoors = () => null;
+  s.leaveViaAny = async candidates => {
+    const tried = [];
+    for (const e of candidates) {
+      exitWalks.push({ from: { ...h.where() }, to: e.stand_on, t: h.now() });
+      const walked = await h.walk(e.stand_on.row, e.stand_on.col);
+      if (walked.arrived) { room = 350; return { left: true, used_exit: e }; }
+      tried.push({ stand_on: e.stand_on, stage: 'walk', crossing_packet_sent: false, why: walked.reason });
+    }
+    return { left: false, tried, reason: tried[0]?.why ?? 'no candidate' };
+  };
+  return { ...h, exitWalks, room: () => room };
+}
+
+for (const start of [{ row: 42, col: 28 }, { row: 39, col: 24 }]) {
+  console.log(`\nthe REAL travel, 704 -> 350 from r${start.row}c${start.col}`);
+  const t = travelling(start);
+  const r = await realTravel.call(t.s, 350, {});
+  const door = (r.log ?? []).find(l => l.outcome === 'operated_a_door');
+  ok('travel works the entrance before walking at the exit',
+     door?.sector === 1 && t.seen.pressedAt.length === 1,
+     JSON.stringify((r.log ?? []).slice(0, 4)).slice(0, 400));
+  ok('no exit walk was spent against the shut entrance',
+     t.exitWalks.length > 0 && t.exitWalks[0].t > (t.seen.pressedAt[0] ?? Infinity),
+     JSON.stringify(t.exitWalks.slice(0, 3)));
+  ok('the first exit walk starts after the run has finished rising (>= 6s after the press)',
+     t.exitWalks[0] && t.seen.pressedAt[0] != null && t.exitWalks[0].t - t.seen.pressedAt[0] >= 6000,
+     `${t.seen.pressedAt[0]} -> ${t.exitWalks[0]?.t}`);
+  ok('and the journey arrives in 350', r.arrived === true && t.room() === 350,
+     JSON.stringify({ arrived: r.arrived, reason: r.reason, room: t.room() }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
