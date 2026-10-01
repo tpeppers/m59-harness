@@ -1,6 +1,6 @@
 // Exact precomputed ceiling geometry, separate from legacy floor door variants.
 import { readFileSync } from 'node:fs';
-import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION } from './m59-roo.mjs';
+import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION, RoomGeometry, exitSquaresOf } from './m59-roo.mjs';
 import { forgetReach, applyDoorState, noteDoorState } from './m59-routes.mjs';
 
 const table = JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)));
@@ -89,4 +89,69 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   return { changed, state: key,
     settledAt: settledAt == null ? null : Math.max(settledAt, ...[...active.values()].map(a => a.until)),
     sectorIndices: [...new Set([...active.values()].flatMap(a => a.indices))] };
+}
+
+// WHICH DOOR FIRST, WHEN SEVERAL STAND BETWEEN A BODY AND WHERE IT IS GOING.
+//
+// The Wryn's Keep (704) has an entrance run and four inner doors. A body in the master's wing
+// is behind MASTERDOOR and the entrance, and "the nearest trigger it can walk to" opened the
+// ASSISTDOOR beside it instead: reachable, and useless. This answers with the first door of the
+// SHORTEST chain whose opening makes one of `targets` reachable. It asks the baked states in
+// this table on a PRIVATE copy of the room, so the live geometry is never touched. Each node is
+// a set of open doors plus the square the body would be standing on; a door is a step only if
+// its trigger can be walked to in that node's state. `plans` are m59-doorplan press plans;
+// `observed` is the live sector heights, so a door already up counts as open. Returns
+// `{ sector, at, chain }`, `{ already: true }` when nothing need open, or null when this table
+// cannot say (no room, wrong version, or no chain within `maxDepth`).
+const PRIVATE_GEOMETRY = new WeakMap();
+export function planDoorChain(map, roomNum, from, targets, plans,
+                              { observed = new Map(), maxDepth = 3 } = {}) {
+  const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum];
+  const room = map?.rooms?.[roomNum];
+  if (!def || !room?.roo || !targets?.length || !plans?.length || !from) return null;
+  let g = PRIVATE_GEOMETRY.get(room.roo);
+  if (!g) {
+    g = RoomGeometry.fromJSON(room.roo);
+    g.roomNum = Number(roomNum);
+    g.exitSquares = exitSquaresOf(room);
+    PRIVATE_GEOMETRY.set(room.roo, g);
+  }
+  if (g.security !== def.security) return null;
+  const doorOf = sector => def.doors.find(d => (d.ids ?? [d.id]).includes(Number(sector)));
+  const setState = open => {
+    const st = def.states[def.doors.map(d => open.has(d.id) ? d.open : (d.shipped ?? d.closed)).join(',')];
+    if (!st) return false;
+    const mask = Buffer.from(st.mask, 'base64');
+    const r = applySectorHeights(g, st.sectors, { mask });
+    if (r.why && r.why !== 'already at that height') return false;
+    return g.attachStepMask(mask);
+  };
+  const reach = (a, b) => !!g.path(a.row, a.col, b.row, b.col)?.found;
+  const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
+  const initial = new Set(def.doors.filter(d => (d.ids ?? [d.id]).every(id => {
+    const h = observed?.get?.(id);
+    return h?.type === 5 && h.height === d.open;
+  })).map(d => d.id));
+  const queue = [{ open: initial, at: { row: from.row, col: from.col }, chain: [] }];
+  const seen = new Set();
+  while (queue.length) {
+    const node = queue.shift();
+    const key = `${[...node.open].sort((a, b) => a - b)}|${node.at.row},${node.at.col}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!setState(node.open)) continue;
+    if (targets.some(t => reach(node.at, t)))
+      return node.chain.length ? { ...node.chain[0], chain: node.chain } : { already: true };
+    if (node.chain.length >= maxDepth) continue;
+    for (const p of plans) {
+      const d = doorOf(p.sector);
+      if (!d || node.open.has(d.id)) continue;
+      const sq = (p.stand_on ?? []).slice().sort((x, y) => cheb(x, node.at) - cheb(y, node.at))
+        .find(s => reach(node.at, s));
+      if (!sq) continue;
+      queue.push({ open: new Set([...node.open, d.id]), at: sq,
+                   chain: [...node.chain, { sector: p.sector, at: sq }] });
+    }
+  }
+  return null;
 }

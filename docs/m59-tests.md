@@ -33,7 +33,7 @@ These tests are offline. They do not execute a raid or shut down a server.
   still section 4; from r11c4 the doors are worked 3, 53, 55, 59; and a crossing that stops in
   the doorway throws `guild door 3 could not be crossed` rather than reporting success and
   failing at door 53's trigger (Camilla, prod 2026-10-01).
-- `m59-wrynkeep-exit-test.mjs` (32): leaving The Wryn's Keep (704) from r42c28 and r39c24,
+- `m59-wrynkeep-exit-test.mjs` (42): leaving The Wryn's Keep (704) from r42c28 and r39c24,
   whose entrance is three ceiling sectors raised one second apart by a counter
   (`#sector=piPos2`). The kod scan reads the counter as sectors 1+2+3, not its initial value 0;
   the shipped door table and ceiling table carry the run (one ceiling door, 32 states); the
@@ -41,7 +41,10 @@ These tests are offline. They do not execute a raid or shut down a server.
   old 1.5s window) and its 4.25s animation, and the body then walks to the south edge; two of
   three sectors up is still shut (Janice, prod 2026-10-01). And the REAL `travel`, lifted from
   m59-game.mjs, works the entrance BEFORE walking at the exit and arrives in 350 — on 7769305 it
-  ground `walkTo` at r50c26/r50c27 and never pressed, exactly as prod did.
+  ground `walkTo` at r50c26/r50c27 and never pressed, exactly as prod did. Under the LIVE
+  conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
+  every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
+  entrance) the journey still arrives; on 1b5629a the press square itself was refused.
 - `m59-leverpuzzle-test.mjs` (108): room 2600's lever puzzle on the way to 2601. The
   declaration matches the kod and the committed ceiling-door bake; the claim book gives the
   nearest free lever, the other to a second arrival and none to a third, expires an

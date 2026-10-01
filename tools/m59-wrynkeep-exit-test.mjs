@@ -30,9 +30,12 @@ import { readFileSync } from 'node:fs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { applyCeilingDoors } from './m59-ceiling-doors.mjs';
+// Absent before the door-chain planner; a checkout without it must FAIL, not refuse to load.
+const { planDoorChain } = await import('./m59-ceiling-doors.mjs');
 import { doorsFor, loadDoors } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
 import { doorsFor as kodDoorsFor } from './m59-doors.mjs';
+import { groundEffectSquares } from './m59-ground-effects.mjs';
 // Imported by namespace so a checkout without the counter scan FAILS its assertions rather than
 // refusing to load — the travel cases below are the ones that say what that costs.
 const counterSectorsInSource = (await import('./m59-varsectors.mjs')).counterSectorsInSource ?? (() => []);
@@ -151,7 +154,7 @@ console.log('\nthe shipped tables');
 // ---------------------------------------------------------------------------------------------
 // A body in 704 with a server that runs guildh4's entrance on a clock.
 const OPEN = 196, SHUT = 128, SPEED = 16, STEP = 1000;
-function hall(start) {
+function hall(start, { plates = false } = {}) {
   const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url)));
   attachStepMasks(map);
   const g = sharedRoomGeometry(map.rooms[704]);
@@ -175,12 +178,28 @@ function hall(start) {
   const c = {
     get self() { return pos; },
     get evSeq() { return evSeq; },
-    room: { id: 4704, sectorHeights: observed },
+    room: { id: 4704, sectorHeights: observed, objects: new Map() },
+    // The room resource, as the live client resolves it, so the ground-effect classifier knows
+    // which hall it is in.
+    roomRsc: 7704, rsc: new Map([[7704, 'guildh4.roo']]),
     eventsSince: () => [],
     // SomethingTryGo receives the body's OWN square (user.kod:5669).
     go: async () => {
       seen.go++;
+      // The four inner doors (guildh4.kod:299-335): up to 204 at speed 16, down 20s later.
+      // MASTERDOOR's kod test is `(row > 35) OR (row < 39)` -- any row -- on col 33.
+      const inner = (pos.row === 29 && pos.col < 24) ? 4 : (pos.row === 29 && pos.col > 25) ? 5
+        : pos.col === 33 ? 6 : (pos.row === 33 && (pos.col === 35 || pos.col === 36)) ? 7 : null;
+      if (inner != null) {
+        seen.pressedAt.push(clock); (seen.inner ??= []).push(inner);
+        pending.push({ kind: 'sector-height', type: 5, room: 4704, sector: inner, height: 204,
+                       speed: SPEED, at: clock });
+        pending.push({ kind: 'sector-height', type: 5, room: 4704, sector: inner, height: SHUT,
+                       speed: SPEED, at: clock + 20000 });
+        return;
+      }
       if (pos.row === 43 && pos.col > 23 && pos.col < 26) {
+        (seen.entranceAt ??= []).push(clock);
         seen.pressedAt.push(clock);
         for (const [i, sector] of [1, 2, 3].entries())
           pending.push({ kind: 'sector-height', type: 5, room: 4704, sector, height: OPEN,
@@ -195,8 +214,20 @@ function hall(start) {
       return { events: deliver().filter(e => !match || match(e)) };
     },
   };
+  // THE LIVE ROOM'S OBJECTS (keeper-t7.json, prod 2026-10-01): guildh4's twelve entry
+  // hotplates, `something`, blank.bgf, flags LOOK_NO|MOVEON_NOTIFY, on rows 42-43 cols 22-27.
+  if (plates) {
+    let id = 2342;
+    for (const row of [43, 42]) for (const col of [22, 23, 24, 25, 26, 27])
+      c.room.objects.set(id, { id: id++, name: 'something', icon_file: 'blank.bgf',
+                               flags: 0x40 | 0x03, row, col });
+  }
+  // The avoid set walkTo plans with: `hazardSquares()` is `groundEffectSquares(this.client)`
+  // (m59-game.mjs), the real classifier, over the live objects.
   const walk = async (row, col) => {
-    const path = g.path(pos.row, pos.col, row, col);
+    const avoid = groundEffectSquares(c);
+    let path = g.path(pos.row, pos.col, row, col, { avoid });
+    if (!path.found && path.collision_view) path = g.path(pos.row, pos.col, row, col, { avoid, collision: false });
     if (!path.found) return { arrived: false, reason: 'coarse grid failed (no route through the geometry)' };
     for (const next of path.steps) {
       if (!g.moverStepLands(pos.row, pos.col, next.row, next.col))
@@ -211,18 +242,19 @@ function hall(start) {
   const a = source.indexOf('  async openOperableDoor('), b = source.indexOf('\n  // WHICH INTERNAL DOOR', a);
   assert.ok(a >= 0 && b > a, 'openOperableDoor moved — this test is stale');
   const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo',
-    `return class { ${source.slice(a, b)} }`)(
+    'planDoorChain', `return class { ${source.slice(a, b)} }`)(
       doorsFor, (fn, ms) => { clock += ms; deliver(); fn(); }, { now: () => clock },
-      (cl, p, opts) => waitForDoorOpen(cl, p, { ...opts, now: () => clock, sleep }), refusedToGo);
+      (cl, p, opts) => waitForDoorOpen(cl, p, { ...opts, now: () => clock, sleep }), refusedToGo,
+      planDoorChain);
   const s = new Session();
   s.movementGeneration = 1;
-  s.world = { room: { num: 704 } };
+  s.world = { room: { num: 704 }, geometry: g, map };
   s.movementWasCancelled = () => false;
   s.pacer = { submit: async (_k, fn) => fn() };
   s.need = () => c;
   s.confirmPosition = async () => ({ ...pos });
   s.walkTo = async (col, row) => { seen.walks.push({ row, col }); return walk(row, col); };
-  return { s, g, c, seen, walk, observed, where: () => pos, now: () => clock };
+  return { s, g, c, map, seen, walk, observed, where: () => pos, now: () => clock };
 }
 
 // A STAND-IN FOR TRAVEL, testing the door opener alone: plan to the exit; when there is no
@@ -304,8 +336,8 @@ const realTravel = new Function('orderExits', 'BARRED_ON_ENTRY', 'readHealth', '
   'operableDoorsBlocking', `return ({ ${gameSrc.slice(tAt, tEnd)} }).travel`)(
     c => c, /guardian angel holds you back/i, readHealth, () => null, operableDoorsBlocking);
 
-function travelling(start) {
-  const h = hall(start);
+function travelling(start, opts = {}) {
+  const h = hall(start, opts);
   const s = h.s;
   let room = 704;
   const exitWalks = [];
@@ -315,6 +347,7 @@ function travelling(start) {
   h.c.roomContents = async () => {};
   s.world = {
     geometry: h.g,
+    map: h.map,
     get room() { return { num: room, name: room === 704 ? "The Wryn's Keep" : 'room 350' }; },
     get self() { return h.c.self; },
     route: to => room === to ? { found: true, hops: [] }
@@ -354,6 +387,28 @@ for (const start of [{ row: 42, col: 28 }, { row: 39, col: 24 }]) {
      `${t.seen.pressedAt[0]} -> ${t.exitWalks[0]?.t}`);
   ok('and the journey arrives in 350', r.arrived === true && t.room() === 350,
      JSON.stringify({ arrived: r.arrived, reason: r.reason, room: t.room() }));
+}
+
+// THE LIVE CONDITIONS, prod 2026-10-01 after 1b5629a: Janice's keeper reported her at r39c26
+// with doors.applied "128,128,128,128,128" (the entrance run and all four inner doors shut)
+// and the twelve hotplates in the room -- and logged only "coarse grid failed ... requested
+// square r43c24 / r43c25": the walk to the press square itself was refused, because the
+// hotplates were filed as unknown ground effects and their squares were in the walk's avoid set.
+// The east-wing start is the inner-door case: behind MASTERDOOR, so the chain is 6 then 1+2+3.
+for (const start of [{ row: 39, col: 26 }, { row: 42, col: 28 }, { row: 42, col: 33 }]) {
+  console.log(`\nthe REAL travel, live conditions (hotplates, every door shut) from r${start.row}c${start.col}`);
+  const t = travelling(start, { plates: true });
+  ok('the hotplates are in the room and the run and inner doors are all shut',
+     t.c.room.objects.size === 12 && t.observed.size === 0);
+  const r = await realTravel.call(t.s, 350, {});
+  ok('the entrance is pressed', (t.seen.entranceAt?.length ?? 0) >= 1,
+     JSON.stringify((r.log ?? []).filter(l => l.outcome).slice(0, 4)).slice(0, 500));
+  ok('and the journey arrives in 350', r.arrived === true && t.room() === 350,
+     JSON.stringify({ arrived: r.arrived, reason: r.reason, at: t.where(), inner: t.seen.inner ?? [] }));
+  if (start.col === 33)
+    ok('the inner door (MASTERDOOR, 6) is opened first, then the entrance',
+       JSON.stringify(t.seen.inner ?? []) === '[6]' &&
+       t.seen.pressedAt[0] < (t.seen.entranceAt?.[0] ?? -1), JSON.stringify(t.seen));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

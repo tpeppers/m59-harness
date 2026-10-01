@@ -62,6 +62,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
+import { planDoorChain } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 
 export function sessionWalkPrototype(deps) {
@@ -4845,7 +4846,7 @@ export function sessionWalkPrototype(deps) {
   }
 
   async openOperableDoor({ movementGeneration = this.movementGeneration, controlToken,
-                           isInterrupted = () => false } = {}) {
+                           isInterrupted = () => false, exclude = null, targets = null } = {}) {
     const c = this.need?.();
     const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken) || isInterrupted();
     if (!c) return { opened: false, reason: 'no client' };
@@ -4862,14 +4863,43 @@ export function sessionWalkPrototype(deps) {
     // Chebyshev, the metric the server's own range tests use.
     const here = { row: c.self?.row, col: c.self?.col };
     const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
-    const pick = plan.on[0] ?? [...plan.others]
-      .map(p => ({ p, sq: p.stand_on.filter(s => Number.isFinite(here.row))
-        .sort((x, y) => cheb(x, here) - cheb(y, here))[0] }))
-      .filter(x => x.sq).sort((a, b) => cheb(a.sq, here) - cheb(b.sq, here))[0]?.p;
+    // A TRIGGER THE BODY CAN WALK TO BEATS A NEARER ONE IT CANNOT. In a hall of several doors
+    // (704: an entrance run and four inner doors) the nearest trigger may be on the far side of
+    // a shut door; walking at it is the whole failure. Reachability is asked of the geometry the
+    // mover enforces; without one every square counts as reachable, as before. `exclude` lets a
+    // caller working a CHAIN of doors skip the ones it has already opened this journey.
+    const geo = this.world?.geometry;
+    const reach = s => (typeof geo?.path === 'function' && Number.isFinite(here.row))
+      ? !!geo.path(here.row, here.col, s.row, s.col)?.found : true;
+    const skip = new Set((exclude ?? []).map(Number));
+    const choices = [...plan.on, ...plan.others].filter(p => !skip.has(Number(p.sector)))
+      .map(p => {
+        const onIt = plan.on.includes(p);
+        const squares = onIt ? p.stand_on.filter(s => s.row === here.row && s.col === here.col)
+          : p.stand_on.filter(() => Number.isFinite(here.row)).slice()
+              .sort((x, y) => cheb(x, here) - cheb(y, here));
+        const sq = onIt ? squares[0] : (squares.find(reach) ?? squares[0]);
+        return sq && { p, sq, onIt, reachable: onIt || reach(sq) };
+      }).filter(Boolean)
+      .sort((a, b) => (b.onIt - a.onIt) || (b.reachable - a.reachable) || (cheb(a.sq, here) - cheb(b.sq, here)));
+    // AND WHEN THE CALLER SAYS WHERE IT IS GOING, THE DOOR THAT GETS IT THERE. Nearest-and-
+    // reachable opened 704's ASSISTDOOR for a body behind MASTERDOOR; `planDoorChain` asks the
+    // ceiling table which door begins the shortest chain to `targets` (see m59-ceiling-doors).
+    // `typeof`: this method is lifted by text into fakes that may not pass it in.
+    let chosen = choices[0];
+    if (targets?.length && typeof planDoorChain === 'function' && this.world?.map && Number.isFinite(here.row)) {
+      let step = null;
+      try {
+        step = planDoorChain(this.world.map, roomNum, here, targets,
+          [...plan.on, ...plan.others].filter(p => !skip.has(Number(p.sector))),
+          { observed: c.room?.sectorHeights ?? new Map() });
+      } catch { step = null; }
+      const viaChain = step?.sector != null && choices.find(x => Number(x.p.sector) === Number(step.sector));
+      if (viaChain) chosen = { ...viaChain, sq: step.at };
+    }
+    const pick = chosen?.p;
     if (!pick) return { opened: false, reason: 'no trigger square this body could aim at' };
-    const target = plan.on.includes(pick)
-      ? pick.stand_on.find(s => s.row === here.row && s.col === here.col)
-      : pick.stand_on.slice().sort((x, y) => cheb(x, here) - cheb(y, here))[0];
+    const target = chosen.sq;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (cancelled() || isInterrupted())

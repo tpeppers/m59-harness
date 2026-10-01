@@ -4,6 +4,31 @@
 // Caster, immunity, spell power and expiry are NOT carried by these objects.
 import { OF, MOVEON, moveOn } from './m59-parse.mjs';
 
+// Every guild hall's `CreateHotPlates` footprint, [row, col], read off the kod
+// (kod/object/active/holder/room/ghall/guildhN.kod, `lHotPlates`; the third element is the
+// plate id and does not matter here). Keyed by the hall's .roo, which is how the room is known.
+const PLATES = {
+  guildh1: [[18,10],[17,9],[17,10],[18,9],[19,9],[19,10]],
+  guildh2: [[18,29],[18,28],[17,29],[17,28],[19,29],[19,28]],
+  guildh3: [[5,8],[4,8],[4,9],[5,9],[6,8],[6,9]],
+  guildh4: [[43,23],[43,24],[43,25],[43,26],[43,27],[43,22],
+            [42,23],[42,24],[42,25],[42,26],[42,27],[42,22]],
+  guildh5: [[24,13],[24,14],[24,15],[24,20],[24,21],[24,22],[23,13],[23,14],[23,15],
+            [23,20],[23,21],[23,22],[23,12],[23,16],[24,16],[24,19],[23,19],[23,23]],
+  guildh6: [[11,13],[10,13],[10,14],[11,14],[12,13],[12,14]],
+  guildh7: [[7,11],[6,23],[18,9],[8,12],[7,22],[18,10]],
+  guildh8: [[21,8],[21,9],[21,7],[21,10],[20,8],[20,9],[20,7],[20,10]],
+  guildh9: [[12,19],[12,18],[12,20],[13,18],[13,19],[13,20]],
+  guildh10: [[16,11],[16,10],[15,10],[15,11],[15,12],[16,12]],
+  guildh11: [[8,16],[8,15],[9,15],[9,16],[8,17],[9,17]],
+  guildh12: [[37,2],[37,3],[39,4],[40,4]],
+  guildh13: [[1,8],[2,8],[3,8],[4,8],[1,9],[2,9],[3,9],[4,9]],
+  guildh14: [[4,28],[4,27],[4,29],[5,28],[5,27],[5,29]],
+  guildh15: [[12,30],[13,30],[14,30],[12,31],[13,31],[14,31]],
+};
+export const GUILD_ENTRY_PLATES = Object.fromEntries(Object.entries(PLATES)
+  .map(([hall, squares]) => [hall, new Set(squares.map(([r, c]) => `${r},${c}`))]));
+
 export function groundEffect(object, lookup = () => null, { roomFile = '' } = {}) {
   if (!object || (object.flags & (OF.PLAYER | OF.GETTABLE))) return null;
   const name = String(lookup(object.nameRsc) ?? object.name ?? '').trim();
@@ -22,15 +47,19 @@ export function groundEffect(object, lookup = () => null, { roomFile = '' } = {}
     // Ordinary fog, spores and poison share appearance. Do not invent immunity.
     if (!notify) { harmful = null; certainty = 'ambiguous'; }
   } else if (notify && (object.flags & OF.NOEXAMINE) && !(object.flags & OF.ATTACKABLE)) {
-    // guildh14.CreateHotPlates creates these six harmless entry sensors. Their
-    // flags/name/icon also fit the conservative unknown-spell heuristic, which
-    // otherwise seals the guild entrance even after the door opens. Match the
-    // room resource AND the exact static footprint; blank objects elsewhere
-    // remain unknown hazards, and named damaging effects above still win.
-    const entryPlate = /(?:^|[\\/])guildh14\.roo$/i.test(String(roomFile)) &&
+    // A GUILD HALL'S ENTRY SENSORS ARE NOT A HAZARD. Every guildhN.kod `CreateHotPlates` lays
+    // `Hotplate` objects (MOVEON_NOTIFY | LOOK_NO, blank, "something") across its entrance, and
+    // their flags/name/icon also fit the conservative unknown-spell heuristic, which then seals
+    // the entrance. This used to know only guildh14 (714). The Wryn's Keep's twelve, rows 42-43
+    // cols 22-27 (guildh4.kod:447), stayed `unknown_ground_effect`: the walker's avoid set was a
+    // wall across the hall ON the entrance's own press squares r43c24/25, and Janice (t7, prod
+    // 2026-10-01) could neither reach the press nor the exit — "coarse grid failed ... requested
+    // square r43c24". Match the room resource AND the exact static footprint from the kod;
+    // blank objects elsewhere remain unknown hazards, and named damaging effects above still win.
+    const hallFile = /(?:^|[\\/])(guildh\d+)\.roo$/i.exec(String(roomFile))?.[1]?.toLowerCase();
+    const entryPlate = !!hallFile && GUILD_ENTRY_PLATES[hallFile]?.has(`${object.row},${object.col}`) &&
       /(?:^|[\\/])blank\.bgf$/.test(icon) && /^something$/i.test(name) &&
-      object.flags === (OF.NOEXAMINE | MOVEON.NOTIFY) &&
-      [4,5].includes(object.row) && [27,28,29].includes(object.col);
+      object.flags === (OF.NOEXAMINE | MOVEON.NOTIFY);
     if (entryPlate) { kind = 'guild_entry_trigger'; harmful = false; periodic = false; }
     else { kind = 'unknown_ground_effect'; harmful = null; certainty = 'unknown'; radius = null; }
   } else return null;

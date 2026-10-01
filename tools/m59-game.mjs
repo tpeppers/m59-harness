@@ -4994,6 +4994,9 @@ class Session {
     // after the first failed is a five-second cycle spent on the same refusal, which is the
     // loop this whole change exists to end rather than to relocate.
     let doorTried = false;
+    // Doors worked before an exit walk this journey (see `exitsBehindShutDoor` below).
+    const exitDoorsOpened = [];
+    let exitDoorRefused = false;
     let guildExitTried = false;
     // A WRONG-ROOM LANDING DOES NOT BAN THE HOP IT AIMED FOR.
     //
@@ -5561,18 +5564,28 @@ class Session {
       // `exitsBehindShutDoor` is true only when this room has operable doors and the mover's
       // geometry has no path to any candidate; then the door is worked first (press, wait for
       // the server's sector-height events, about 6.4s for that entrance) and `continue`
-      // re-plans against the opened geometry. Shares `doorTried`, so it is once per journey.
+      // re-plans against the opened geometry.
+      //
+      // A CHAIN, NOT ONE DOOR. A hall can hold the body behind an inner door AND the entrance,
+      // so up to three distinct doors are worked per journey, each skipping the ones already
+      // opened (`exclude`), and `openOperableDoor` prefers a trigger the body can actually walk
+      // to. The first refusal ends the chain — a refused press is not repeated here. Sets
+      // `doorTried`, so the router-level branch below does not press again.
       // `typeof` guards: `travel` is lifted by text into fakes that have neither method.
-      if (!doorTried && typeof this.openOperableDoor === 'function'
+      if (!exitDoorRefused && exitDoorsOpened.length < 3 && typeof this.openOperableDoor === 'function'
           && typeof this.exitsBehindShutDoor === 'function'
           && this.exitsBehindShutDoor(candidates.map(e => e.stand_on).filter(Boolean)
                .map(p => ({ row: p.row, col: p.col })))) {
         doorTried = true;
-        const opened = await this.openOperableDoor({ movementGeneration, controlToken })
+        const opened = await this.openOperableDoor({ movementGeneration, controlToken,
+                                                     exclude: exitDoorsOpened,
+                                                     targets: candidates.map(e => e.stand_on).filter(Boolean)
+                                                       .map(p => ({ row: p.row, col: p.col })) })
           .catch(e => ({ opened: false, reason: e?.message ?? String(e) }));
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return this.cancelledMovement({ log });
         if (opened?.opened) {
+          exitDoorsOpened.push(Number(opened.sector));
           for (const key of exhaustedHops.keys())
             if (key.startsWith(`${here.num}>`)) exhaustedHops.delete(key);
           log.push({ outcome: 'operated_a_door', room: here.num, sector: opened.sector,
@@ -5582,6 +5595,7 @@ class Session {
                            're-planning against the geometry it produced' });
           continue;
         }
+        exitDoorRefused = true;
         log.push({ outcome: 'door_not_opened', room: here.num, sector: opened?.sector ?? null,
                    gate: opened?.gate ?? null, before: 'exit walk', note: opened?.reason ?? null });
       }

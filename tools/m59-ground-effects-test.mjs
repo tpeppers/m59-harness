@@ -53,4 +53,11 @@ assert.equal(groundEffectOnSegment(plates, { row: 3, col: 28 }, { row: 5, col: 2
 assert.equal(groundEffectSquares(plates).size, 0);
 plates.room.objects.set(11, { ...plate, id: 11, name: 'wall of lightning' });
 assert.equal(groundEffectOnSegment(plates, { row: 3, col: 28 }, { row: 5, col: 28 }).kind, 'lightning_wall');
+// The Wryn's Keep (guildh4, 704): twelve plates on rows 42-43 cols 22-27, two of them ON the
+// entrance's press squares. Filed as unknown hazards they walled the hall (Janice, 2026-10-01).
+const wryn = { roomFile: 'guildh4.roo' };
+for (const [row, col] of [[43, 24], [43, 25], [42, 22], [42, 27]])
+  assert.equal(groundEffect({ ...plate, row, col }, () => null, wryn).avoid, false, `guildh4 r${row}c${col}`);
+assert.equal(groundEffect({ ...plate, row: 44, col: 24 }, () => null, wryn).avoid, true, 'off the footprint');
+assert.equal(groundEffect({ ...plate, row: 4, col: 28 }, () => null, wryn).avoid, true, "another hall's footprint");
 console.log('PASS guild entry triggers: room-bound exception preserves harmful and unknown effects');
