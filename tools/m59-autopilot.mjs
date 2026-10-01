@@ -19557,6 +19557,11 @@ export class Autopilot {
     // A journey somebody ORDERED (travel, possibly by that same lease holder) is the order
     // itself, and working the puzzle is how it is carried out.
     if (via === 'assignment' && this.facultyHeld?.('movement')) return CONTINUE;
+    // AND THE PVP RETURN DELAY HOLDS IT THE SAME WAY IT HOLDS travel(). An assignment or a
+    // suspended keeper journey is the keeper's own choice, so a character killed by a player
+    // is not walked into the crypt by either until the window ends. A journey somebody ORDERED
+    // ('travel') was already let through the gate in travel() (explicitOrder), and is worked.
+    if (via !== 'travel' && this.pvpReturnGate?.(puzzle.to)) return CONTINUE;
     return this.leverPuzzleStep(puzzle, via);
   }
 

@@ -26,7 +26,7 @@ These tests are offline. They do not execute a raid or shut down a server.
   releases them; a monster death and a delay of 0 hold nothing; the hold survives a restart;
   an explicit order, a movement lease, a busy holder and a recovery detour are never held;
   and the schema, setter, fleet row, policy_control reflection and local policy carry the key.
-- `m59-leverpuzzle-test.mjs` (105): room 2600's lever puzzle on the way to 2601. The
+- `m59-leverpuzzle-test.mjs` (108): room 2600's lever puzzle on the way to 2601. The
   declaration matches the kod and the committed ceiling-door bake; the claim book gives the
   nearest free lever, the other to a second arrival and none to a third, expires an
   unrefreshed claim, settles a race by reading back, and refuses to overwrite a corrupt

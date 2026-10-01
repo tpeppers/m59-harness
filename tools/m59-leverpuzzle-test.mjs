@@ -292,6 +292,7 @@ try {
       facultyHeld: f => movementLeased && f === 'movement',
       safety: () => ({ fleeAt: 0.4 }), bannedWeaponsNow: () => null, countLoot: () => {},
       fightNow: async () => ({ fought: false }),
+      pvpReturnHold: () => null,
     });
     return k;
   }
@@ -348,6 +349,22 @@ try {
     const idle = keeper('Idler', { row: 25, col: 8 });
     idle.mode = 'idle';
     ok('an assignment does not walk an IDLE keeper into the puzzle', await idle.passLeverPuzzle({}) === CONTINUE);
+    // THE PVP RETURN DELAY (#65): a character a player killed is not walked into the crypt by
+    // its assignment, but a journey somebody ordered to 2601 is still worked.
+    const hold = { died_at: Date.now() - 60_000, killer: 'Someone', remaining_s: 1700, until: Date.now() + 1_700_000 };
+    const held = keeper('Held', { row: 25, col: 8 });
+    held.pvpReturnHold = () => hold;
+    ok('a PvP-held character is not pulled into the puzzle by its assignment',
+       await held.passLeverPuzzle({}) === CONTINUE && !L.heldLever(L.readClaims({ file: FILE }), 2600, 'Held', Date.now()));
+    const heldOrdered = keeper('HeldOrdered', { row: 25, col: 8 }, { policy: {} });
+    heldOrdered.pvpReturnHold = () => hold;
+    heldOrdered.leverPuzzleHandoff(2600, 2601);
+    ok('...while an explicit journey to 2601 still is', await heldOrdered.passLeverPuzzle({}) === HANDLED);
+    heldOrdered.leaveLeverPuzzle(2601, 'test over');
+    const ap0 = readFileSync(join(here, 'm59-autopilot.mjs'), 'utf8');
+    const tr0 = ap0.slice(ap0.indexOf('  async travel(room, opts) {'));
+    ok('travel() asks the PvP gate before it hands off, so a held keeper journey is refused first',
+       tr0.indexOf('this.pvpReturnGate(room') > 0 && tr0.indexOf('this.pvpReturnGate(room') < tr0.indexOf('this.leverPuzzleHandoff?.('));
     const leased = keeper('Leased', { row: 25, col: 8 }, { movementLeased: true });
     ok('an assignment yields to a movement lease', await leased.passLeverPuzzle({}) === CONTINUE);
     const ordered = keeper('Ordered', { row: 25, col: 8 }, { policy: {}, movementLeased: true });
