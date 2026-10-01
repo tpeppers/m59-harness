@@ -75,11 +75,17 @@ export function triggerSquares(door, { rows, cols }) {
  * whole window from the press, which is what the caller is racing.
  */
 export function pressPlan(door, size) {
+  // A RUN OF SECTORS (`sectors`, the Wryn's Keep entrance) is open when its LAST one is: the
+  // server raises them `sequence_ms / (n-1)` apart, so the event that matters arrives
+  // `sequence_ms` after the press — later than a single door's, and a wait sized for a single
+  // door gives up before it comes.
+  const sectors = door.sectors ?? [door.sector];
   return {
     sector: door.sector,
+    ...(sectors.length > 1 ? { sectors, sequence_ms: door.sequence_ms ?? 0 } : {}),
     name: door.sector_name,
     stand_on: triggerSquares(door, size),
-    wait_for: { event: 'sector-height', sector: door.sector, reaches: door.open },
+    wait_for: { event: 'sector-height', sector: sectors[sectors.length - 1], reaches: door.open },
     within_ms: door.delay_ms ?? null,
     shuts_itself: door.delay_ms != null,
     kind: door.kind,

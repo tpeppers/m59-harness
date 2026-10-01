@@ -114,12 +114,30 @@ for (const entry of varsectors.rooms) {
   // from a previous ordering misses and throws `no baked sector-height state`. Sorting also
   // happens to reproduce the hand-written 714 list exactly — [3,53,55,58,59] — so the room
   // already in production keeps every one of its 32 keys.
-  const doors = ceilings.slice().sort((a, b) => (a.serverId ?? a.sector) - (b.serverId ?? b.sector)).map(s => {
+  // A COUNTER-DRIVEN RUN OF SECTORS IS ONE DOOR. The Wryn's Keep entrance is sectors 1, 2 and 3
+  // raised one after another by `#sector=piPos2` (see `counterSectorsInSource`); a body passes
+  // only when all three are up, and they always move as a run. Baked as three independent doors
+  // the room would have 2^7 states, over the cap, and the partial table would hold no state with
+  // the entrance open and the inner doors at rest — the one a character leaving needs. So the
+  // run becomes one door: `id` is its first sector, `ids` all of them, `indices` every record.
+  const bySequence = new Map();
+  const grouped = [];
+  for (const s of ceilings) {
+    if (!s.sequence) { grouped.push(s); continue; }
+    if (!bySequence.has(s.sequence)) {
+      const g = { ...s, ids: [] };
+      bySequence.set(s.sequence, g); grouped.push(g);
+    }
+    bySequence.get(s.sequence).ids.push(s.serverId ?? s.sector);
+  }
+  for (const g of bySequence.values()) { g.ids.sort((a, b) => a - b); g.sector = g.ids[0]; delete g.serverId; }
+  const doors = grouped.sort((a, b) => (a.serverId ?? a.sector) - (b.serverId ?? b.sector)).map(s => {
     const id = s.serverId ?? s.sector;
+    const ids = s.ids ?? [id];
     // ONE SERVER ID, SEVERAL SECTOR RECORDS — the kod addresses the id and the server
     // moves every record carrying it, so all of them are listed. Patching one moves
     // half a door and then enforces the half that moved.
-    const indices = base.sectors.flatMap((g, i) => (g.serverId === id ? [i] : []));
+    const indices = base.sectors.flatMap((g, i) => (ids.includes(g.serverId) ? [i] : []));
     // WHERE THE .roo SHIPS THIS DOOR, WHICH IS NOT ALWAYS SHUT.
     //
     // `applyCeilingDoors` falls back to `closed` for any door the server has not told it
@@ -132,7 +150,7 @@ for (const entry of varsectors.rooms) {
     // reintroduced by the fix for it. Caught by `m59-ceilingtable-test.mjs` asserting the
     // all-shut mask equals the routing baseline; in those three rooms it does not.
     const shippedKod = Math.round((base.sectors[indices[0]]?.ceilingHeight ?? NaN) / 16);
-    return { id, name: s.name ?? null,
+    return { id, ...(ids.length > 1 ? { ids } : {}), name: s.name ?? null,
              closed: Math.min(...s.heights), open: Math.max(...s.heights),
              shipped: Number.isFinite(shippedKod) ? shippedKod : null, indices };
   }).filter(d => d.indices.length);
@@ -148,7 +166,8 @@ for (const entry of varsectors.rooms) {
   const states = {};
   let inert = 0;
   for (const heights of wanted) {
-    const overrides = Object.fromEntries(doors.map((d, i) => [d.id, { ceiling: heights[i] }]));
+    const overrides = Object.fromEntries(doors.flatMap((d, i) =>
+      (d.ids ?? [d.id]).map(id => [id, { ceiling: heights[i] }])));
     const geometry = geometryWithSectorHeights(buf, overrides, { mask: false, file: roomEntry.rooFile }).geometry;
     const mask = b64(geometry.buildStepMask());
     if (mask === baseline && heights.some((h, i) => h !== doors[i].closed)) inert++;

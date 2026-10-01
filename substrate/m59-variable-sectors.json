@@ -1,7 +1,7 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-19T18:43:38.841Z",
+ "built_at": "2026-10-01T22:03:54.644Z",
  "rooms": [
   {
    "room": 5,
@@ -1126,6 +1126,78 @@
      "gates": false,
      "gate_risk": false,
      "headroom_risk": true
+    },
+    {
+     "sector": 1,
+     "name": "piPos2",
+     "kind": "ceiling",
+     "heights": [
+      128,
+      196
+     ],
+     "cite_lines": [
+      185,
+      221
+     ],
+     "sequence": "piPos2",
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 2,
+     "name": "piPos2",
+     "kind": "ceiling",
+     "heights": [
+      128,
+      196
+     ],
+     "cite_lines": [
+      185,
+      221
+     ],
+     "sequence": "piPos2",
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "piPos2",
+     "kind": "ceiling",
+     "heights": [
+      128,
+      196
+     ],
+     "cite_lines": [
+      185,
+      221
+     ],
+     "sequence": "piPos2",
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "sequences": [
+    {
+     "property": "piPos2",
+     "sectors": [
+      1,
+      2,
+      3
+     ],
+     "kind": "ceiling",
+     "open": 196,
+     "closed": 128,
+     "step_ms": 1000,
+     "step_from": "NEXT_TIME",
+     "hold_ms": 10000,
+     "hold_from": "RESET_TIME",
+     "cite_lines": [
+      185,
+      221
+     ]
     }
    ],
    "groups": []

@@ -233,6 +233,99 @@ export function groupsInSource(src) {
   return out;
 }
 
+/** `piPos2 = 0` out of a class's `properties:` block — integer initial values only. */
+export function propertiesInSource(src) {
+  const out = new Map();
+  const block = /^\s*properties\s*:\s*$([\s\S]*?)^\s*messages\s*:/im.exec(src)?.[1] ?? '';
+  for (const m of block.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+)\s*$/gm))
+    out.set(m[1].toLowerCase(), Number(m[2]));
+  return out;
+}
+
+/**
+ * A DOOR WHOSE SECTOR IS A COUNTER, NOT A CONSTANT — and therefore several sectors in a row.
+ *
+ * The Wryn's Keep (guildh4.kod, room 704) opens its entrance with `#sector=piPos2`, where
+ * `piPos2` is a PROPERTY that `OpenEntranceDoor` increments before every send and refuses past
+ * 2 (`if piPos2 > 2 { return; }`), re-arming itself on a NEXT_TIME timer: the entrance is three
+ * ceiling sectors, 1 then 2 then 3, raised one second apart, and RESET_TIME after the last one
+ * `CloseEntranceDoorTimer` lowers them again through `iSectorID = piPos2 - 3`.
+ *
+ * Every scanner here resolved sector names through `constants:`, so this one was either
+ * dropped (here: `piPos2` is not upper case) or — in m59-doors.mjs, whose constant parser is
+ * case-insensitive and reads the properties block too — resolved to its INITIAL value, 0. The
+ * door table therefore told the walker to wait for sector 0, which never moves, and the
+ * ceiling table never held sectors 1-3 at all, so even a door the server opened stayed shut in
+ * the mover. A body inside the hall could not leave it: t7, 2026-10-01, six journeys out of
+ * 704 in a row.
+ *
+ * Deliberately narrow. Recognised: a property P used as `#sector=P`, in a message that does
+ * `P = P + 1` and guards `if P > N` (or `>= N`). The sectors are init+1 .. the last value the
+ * guard lets through. The close half is any OTHER send whose sector is a local `L = P - K`
+ * with the same animation — its height is the shut one. Anything else is not claimed.
+ */
+export function counterSectorsInSource(src, { consts = constantsInSource(src) } = {}) {
+  const props = propertiesInSource(src);
+  if (!props.size) return [];
+  // Top-level message bodies, skipping comments and strings as groupsInSource does.
+  const bodies = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '%') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (ch === '"') { i++; while (i < src.length && src[i] !== '"') i++; continue; }
+    if (ch === '{') { if (!depth++) start = i; }
+    else if (ch === '}' && depth) { if (!--depth) bodies.push({ start, end: i, text: src.slice(start, i) }); }
+  }
+  const resolve = raw => /^-?\d+$/.test(raw) ? Number(raw) : consts.get(raw) ?? consts.get(raw.toUpperCase());
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sends = [...src.matchAll(/@setsector\s*,\s*#sector\s*=\s*([A-Za-z0-9_]+)[\s\S]{0,200}?#height\s*=\s*([A-Za-z0-9_]+)/gi)]
+    .map(m => ({ raw: m[1], height: resolve(m[2]), at: m.index,
+                 kind: /ANIMATE_CEILING_LIFT/i.test(m[0]) ? 'ceiling'
+                     : /ANIMATE_FLOOR_LIFT/i.test(m[0]) ? 'floor' : 'unknown',
+                 line: src.slice(0, m.index).split('\n').length }));
+  const bodyOf = at => bodies.find(b => at > b.start && at < b.end);
+  const timers = text => [...text.matchAll(/createtimer\s*\([^,]*,\s*@[A-Za-z0-9_]+\s*,\s*([A-Za-z_][A-Za-z0-9_]*|\d+)\s*\)/gi)]
+    .map(t => ({ name: t[1], ms: resolve(t[1]) })).filter(t => Number.isFinite(t.ms));
+  const out = [];
+  const seen = new Set();
+  for (const s of sends) {
+    const prop = s.raw.toLowerCase();
+    if (/^\d+$/.test(s.raw) || consts.has(s.raw) || !props.has(prop) || seen.has(prop)) continue;
+    const body = bodyOf(s.at);
+    if (!body || !Number.isFinite(s.height)) continue;
+    const P = esc(s.raw);
+    if (!new RegExp(`\\b${P}\\s*=\\s*${P}\\s*\\+\\s*1\\b`, 'i').test(body.text)) continue;
+    const guard = new RegExp(`\\bif\\s*\\(?\\s*${P}\\s*(>=|>)\\s*(\\d+)`, 'i').exec(body.text);
+    if (!guard) continue;
+    const first = props.get(prop) + 1;
+    const last = guard[1] === '>' ? Number(guard[2]) + 1 : Number(guard[2]);
+    if (!(last >= first) || last - first > 16) continue;
+    // The shut height: a send through a local derived from this counter, same surface.
+    const closes = sends.filter(o => {
+      if (o === s || o.kind !== s.kind || !Number.isFinite(o.height) || o.height === s.height) return false;
+      const ob = bodyOf(o.at);
+      return ob && new RegExp(`\\b${esc(o.raw)}\\s*=\\s*${P}\\s*-\\s*\\d+`, 'i').test(ob.text);
+    });
+    const closedHeights = [...new Set(closes.map(o => o.height))];
+    const ts = timers(body.text).sort((a, b) => a.ms - b.ms);
+    seen.add(prop);
+    out.push({
+      property: s.raw,
+      sectors: Array.from({ length: last - first + 1 }, (_, i) => first + i),
+      kind: s.kind, open: s.height,
+      closed: closedHeights.length === 1 ? closedHeights[0] : null,
+      // Each send re-arms the next on the SHORT timer and the last one on the LONG: the
+      // sectors rise `step_ms` apart and stay up `hold_ms` after the last one started.
+      step_ms: ts[0]?.ms ?? null, step_from: ts[0]?.name ?? null,
+      hold_ms: ts.length > 1 ? ts[ts.length - 1].ms : null,
+      hold_from: ts.length > 1 ? ts[ts.length - 1].name : null,
+      cite_lines: [s.line, ...closes.map(o => o.line)].slice(0, 4),
+    });
+  }
+  return out;
+}
+
 /**
  * Does moving this sector change whether a character can cross it?
  *
@@ -340,7 +433,14 @@ export function scan(kodRoot = KOD_ROOT) {
     // the fix that was supposed to find it. A guard in front of a search has to agree with
     // the search, or it is a second, stricter search nobody remembers writing.
     if (!/@setsector/i.test(src)) continue;
-    const sectors = sectorsInSource(src);
+    const sequences = counterSectorsInSource(src);
+    // A counter's sectors join the list as ordinary sectors, tagged with the counter that
+    // moves them, so the ceiling bake can treat the run as ONE door. See counterSectorsInSource.
+    const named = sectorsInSource(src);
+    const sectors = [...named, ...sequences.flatMap(q => q.closed == null ? [] :
+      q.sectors.filter(sector => !named.some(n => n.sector === sector)).map(sector => ({ sector, name: q.property, kind: q.kind,
+        heights: [q.closed, q.open].sort((a, b) => a - b), cite_lines: q.cite_lines,
+        sequence: q.property })))];
     if (!sectors.length) continue;
     // Case-insensitive on BOTH sides — see parseRoomIds. `RID_cave3` and `RID_guest6` are
     // written lower case by the rooms that claim them.
@@ -357,6 +457,7 @@ export function scan(kodRoot = KOD_ROOT) {
       // Only groups in which at least two GATING sectors move together are worth a mask —
       // a message that also nudges a bit of scenery is still one door as far as the bake
       // is concerned, and the scenery would multiply the states for nothing.
+      ...(sequences.length ? { sequences } : {}),
       groups: groupsInSource(src)
         .map(g => ({ ...g, states: g.states.filter(st =>
               sectors.some(s => s.sector === st.sector && gatesMovement(s.heights, s.kind))) }))

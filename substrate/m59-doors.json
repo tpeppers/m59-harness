@@ -1,6 +1,6 @@
 {
  "note": "Doors you OPERATE: attempt a `go` on a trigger square, the room moves a sector, and it closes again after delay_ms — which is timed from the PRESS, not from the moment it finishes opening. Derived from SomethingTryGo by tools/m59-doors.mjs; do not hand-edit. `gate` is what refuses the press: ReqLegalEntry or IsMember.",
- "built_at": "2026-09-19T18:45:52.181Z",
+ "built_at": "2026-10-01T22:06:19.497Z",
  "rooms": {
   "5": {
    "name": "The Underground Lake",
@@ -475,7 +475,7 @@
      "gate": null
     },
     {
-     "sector": 0,
+     "sector": 1,
      "sector_name": "PIPOS2",
      "when": [
       {
@@ -495,15 +495,21 @@
       }
      ],
      "open": 196,
-     "closed": 256,
-     "closed_from": "the sector's other SetSector",
+     "closed": 128,
+     "closed_from": "the counter's closing SetSector",
      "kind": "ceiling",
      "animation": "ANIMATE_CEILING_LIFT",
      "speed": 16,
-     "delay_ms": 1000,
-     "delay_from": "NEXT_TIME",
+     "delay_ms": 12000,
+     "delay_from": "2 x NEXT_TIME + RESET_TIME",
      "gate": "ReqLegalEntry",
-     "opened_via": "OpenEntranceDoor"
+     "opened_via": "OpenEntranceDoor",
+     "sectors": [
+      1,
+      2,
+      3
+     ],
+     "sequence_ms": 2000
     }
    ]
   },

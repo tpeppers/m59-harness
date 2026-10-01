@@ -53,6 +53,7 @@ import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from '
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { methodBody, parseCondition, collapseDisjunctions } from './m59-codeexits.mjs';
+import { counterSectorsInSource } from './m59-varsectors.mjs';
 
 /**
  * `NAME = 123` out of the class's `constants:` block.
@@ -131,10 +132,33 @@ export function sectorHeights(src, consts) {
  * The door facts in one piece of kod — a trigger branch, or the method it delegates to.
  * Null when this code does not move a sector at all.
  */
-function doorFacts(code, consts, heights = null) {
+function doorFacts(code, consts, heights = null, sequences = []) {
   const set = /SetSector\s*,?\s*#sector\s*=\s*([A-Za-z_][A-Za-z0-9_]*|\d+)/i.exec(code);
   if (!set) return null;
   const sectorName = set[1];
+  // A SECTOR NAMED BY A COUNTER IS A RUN OF SECTORS, NOT THE COUNTER'S INITIAL VALUE.
+  // `parseConstants` reads the properties block too, so `#sector=piPos2` used to resolve to
+  // `piPos2 = 0` — sector 0, which never moves — and every wait on the Wryn's Keep entrance
+  // waited for nothing. See `counterSectorsInSource` (m59-varsectors.mjs).
+  const seq = sequences.find(q => q.property.toUpperCase() === sectorName.toUpperCase());
+  if (seq) {
+    const n = seq.sectors.length;
+    const speed = Number(/#speed\s*=\s*(\d+)/i.exec(code)?.[1] ?? NaN);
+    const anim = /#animation\s*=\s*(ANIMATE_[A-Z_]+)/i.exec(code)?.[1] ?? null;
+    return {
+      sectorName, sector: seq.sectors[0], sectors: seq.sectors,
+      open: seq.open, closed: seq.closed,
+      closedFrom: seq.closed == null ? null : "the counter's closing SetSector",
+      ambiguousHeights: null,
+      speed: Number.isFinite(speed) ? speed : null, anim,
+      // The run is up `(n-1) x step` after the press, and the LAST sector comes down
+      // `hold` after it rose — so the window, timed from the press, is the sum.
+      delayName: seq.hold_from ? `${n - 1} x ${seq.step_from} + ${seq.hold_from}` : seq.step_from,
+      delayMs: Number.isFinite(seq.hold_ms) ? (n - 1) * (seq.step_ms ?? 0) + seq.hold_ms : null,
+      sequenceMs: (n - 1) * (seq.step_ms ?? 0),
+      openHeightName: String(seq.open),
+    };
+  }
   const heightM = /#height\s*=\s*([A-Za-z_][A-Za-z0-9_]*|\d+)/i.exec(code);
   const open = constant(consts, heightM?.[1]);
   const sector = constant(consts, sectorName);
@@ -164,6 +188,7 @@ export function doorsFor(src) {
   const body = methodBody(src, 'SomethingTryGo');
   if (!body) return [];
   const consts = parseConstants(src);
+  const sequences = counterSectorsInSource(src);
   const heights = sectorHeights(src, consts);
   const out = [];
   const ifRe = /\bif\s*([^{]*?)\s*\{/g;
@@ -188,19 +213,19 @@ export function doorsFor(src) {
     // Zoot and Statler were standing on when this was written. The near-complete table would
     // have been worse than none: every door but the one that mattered.
     const facts = (() => {
-      const direct = doorFacts(block, consts, heights);
+      const direct = doorFacts(block, consts, heights, sequences);
       if (direct) return direct;
       for (const call of block.matchAll(/send\s*\(\s*self\s*,\s*@([A-Za-z0-9_]+)/gi)) {
         const body = methodBody(src, call[1]);
         if (!body) continue;
-        const f = doorFacts(body, consts, heights);
+        const f = doorFacts(body, consts, heights, sequences);
         if (f) return { ...f, via: call[1] };
       }
       return null;
     })();
     if (!facts) continue;                     // a branch that does something else entirely
     const { sectorName, sector, open, closed, closedFrom, speed, anim, delayName, delayMs, via,
-            ambiguousHeights } = facts;
+            ambiguousHeights, sectors, sequenceMs } = facts;
 
     // WHAT STOPS A CHARACTER USING IT. Recorded rather than inferred: a router that sends an
     // outsider at a members-only lift produces a body standing on a trigger that will never
@@ -227,6 +252,8 @@ export function doorsFor(src) {
       speed, delay_ms: delayMs, delay_from: delayName,
       gate,
       ...(via ? { opened_via: via } : {}),
+      // A run of sectors raised one after another: the passage is open when the LAST is.
+      ...(sectors ? { sectors, sequence_ms: sequenceMs } : {}),
       ...(ambiguousHeights ? { ambiguous_heights: ambiguousHeights } : {}),
       ...(ambiguous ? { ambiguous_pairs: true } : {}),
       ...(sector == null ? { unresolved_sector: sectorName } : {}),
@@ -318,7 +345,7 @@ if (process.argv[1]?.endsWith('m59-doors.mjs')) {
     console.log(`\n  ${num}  ${r.name}`);
     for (const d of r.doors) {
       const sq = d.when.map(c => `${c.axis}${c.op}${Array.isArray(c.values) ? '[' + c.values + ']' : c.value}`).join(' ');
-      console.log(`     sector ${String(d.sector ?? '?').padEnd(3)} ${String(d.sector_name).padEnd(14)}` +
+      console.log(`     sector ${String(d.sectors ? d.sectors.join('+') : d.sector ?? '?').padEnd(3)} ${String(d.sector_name).padEnd(14)}` +
                   ` ${String(d.kind ?? '?').padEnd(8)} ${String(d.closed ?? '?')}->${String(d.open ?? '?')}` +
                   ` speed ${String(d.speed ?? '?').padEnd(4)} shuts after ${d.delay_ms ?? '?'}ms` +
                   (d.gate ? `  [${d.gate}]` : '') + (d.ambiguous_pairs ? '  [AMBIGUOUS PAIRS]' : ''));

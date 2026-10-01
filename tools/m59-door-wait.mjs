@@ -1,21 +1,38 @@
 // A sector packet announces the destination, not completion of its animation.
 // Match this door and its OPEN height; waitFor resolves even when it times out.
+//
+// A RUN OF SECTORS IS OPEN WHEN ITS LAST ONE IS. The Wryn's Keep (704) entrance is sectors 1, 2
+// and 3 raised one second apart by a counter (`plan.sectors`, `plan.sequence_ms`), so the event
+// worth waiting for is the LAST sector's, and it arrives `sequence_ms` after the press. The event
+// window is widened by exactly that much: the fixed 1.5s gave up before the third sector had
+// even been asked to move, and every press read "no matching opening event". The animation that
+// follows is the slow part (76 units at speed 16 is 4.85s, the operator's "3-5s for guild hall
+// doors"), and it is waited out from that event, never guessed.
 export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
   now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
   eventTimeoutMs = 1500 } = {}) {
   const began = now(), room = c.room?.id;
+  const sectors = plan.sectors?.length ? plan.sectors : [plan.sector];
+  const lastSector = sectors[sectors.length - 1];
+  const eventWindowMs = eventTimeoutMs + Math.max(0, Number(plan.sequence_ms) || 0);
   const stopped = () => cancelled() || c.room?.id !== room;
-  const matches = e => e.sector === plan.sector && e.height === plan.to_height &&
+  const matches = e => e.sector === lastSector && e.height === plan.to_height &&
     (e.room == null || e.room === room);
+  // A sector of the run that is KNOWN to be somewhere other than open.
+  const shut = () => sectors.some(s => {
+    const latest = c.room?.sectorHeights?.get(s);
+    return latest && latest.height !== plan.to_height;
+  });
   let event = null;
-  while (!stopped() && now() - began < eventTimeoutMs) {
+  while (!stopped() && now() - began < eventWindowMs) {
     const reply = await c.waitFor({ since, kinds: ['sector-height'], match: matches,
-      timeoutMs: Math.min(100, eventTimeoutMs - (now() - began)) });
+      timeoutMs: Math.min(100, eventWindowMs - (now() - began)) });
     event = reply?.events?.find(matches);
     if (event) break;
   }
   if (stopped()) return { opened: false, reason: 'movement cancelled' };
-  if (!event) return { opened: false, reason: 'no matching opening event' };
+  if (!event) return { opened: false, reason: 'no matching opening event' +
+    (sectors.length > 1 ? ` (sector ${lastSector}, the last of ${sectors.join('+')})` : '') };
   if (!Number.isFinite(event.speed) || event.speed < 0)
     return { opened: false, reason: 'door animation speed unknown' };
   const duration = event.speed === 0 ? 0 :
@@ -26,15 +43,11 @@ export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
     return { opened: false, reason: 'door animation exceeds its opening window' };
   const until = started + duration;
   while (!stopped() && now() < until) {
-    const latest = c.room?.sectorHeights?.get(plan.sector);
-    if (latest && latest.height !== plan.to_height)
-      return { opened: false, reason: 'door closed before its animation settled' };
+    if (shut()) return { opened: false, reason: 'door closed before its animation settled' };
     await sleep(Math.min(100, until - now()));
   }
   if (stopped()) return { opened: false, reason: 'movement cancelled' };
-  const latest = c.room?.sectorHeights?.get(plan.sector);
-  if (latest && latest.height !== plan.to_height)
-    return { opened: false, reason: 'door closed before crossing' };
+  if (shut()) return { opened: false, reason: 'door closed before crossing' };
   return { opened: true, animation_ms: duration, waited_ms: now() - began };
 }
 

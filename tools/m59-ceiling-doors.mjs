@@ -45,9 +45,15 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   // there applies a sealed mask to a standing-open passage — the router then calls it no
   // route, which is the exact failure this table exists to prevent. `shipped` is read off the
   // .roo by the bake; `?? d.closed` keeps a table baked before it worked as it did.
+  //
+  // A DOOR THAT IS A RUN OF SECTORS (`ids`, the Wryn's Keep entrance: 1, 2, 3 raised one second
+  // apart) is at a height only when EVERY sector of the run has been seen there. Part-way
+  // through the run the passage is still shut by the sectors that have not moved, so anything
+  // short of all of them reads as the resting height — never as open.
   const heights = definition.doors.map(d => {
-    const seen = observed.get(d.id);
-    return seen?.type === 5 ? seen.height : (d.shipped ?? d.closed);
+    const seen = (d.ids ?? [d.id]).map(id => observed.get(id));
+    const h = seen[0]?.type === 5 ? seen[0].height : null;
+    return h != null && seen.every(x => x?.type === 5 && x.height === h) ? h : (d.shipped ?? d.closed);
   });
   const key = heights.join(','), state = definition.states[key];
   if (!state) return null;
@@ -70,7 +76,7 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   // doors-shut answer. Set unconditionally rather than only on `changed`, because "the room is
   // in this state" is true whether or not this call is what put it there.
   noteDoorState(roomNum, key);
-  const door = event?.type === 5 && definition.doors.find(d => d.id === event.sector);
+  const door = event?.type === 5 && definition.doors.find(d => (d.ids ?? [d.id]).includes(event.sector));
   // Stock client MoveSector: duration = abs(dest-source) / speed seconds.
   // Use the full open/closed span even for a reversal part way through a lift.
   const settledAt = door && Number.isFinite(event.speed) && event.speed >= 0
