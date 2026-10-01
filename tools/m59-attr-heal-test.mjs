@@ -4,7 +4,7 @@
 //   node tools/m59-attr-heal-test.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { attributesIncomplete, attrHealDue, droppedStatMessages } from './m59-attr-heal.mjs';
+import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf } from './m59-attr-heal.mjs';
 
 let n = 0;
 const ok = (name, fn) => { fn(); n++; console.log(`ok ${name}`); };
@@ -54,6 +54,18 @@ ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
   assert.equal(attrHealDue({ now: login + 300_000, loggedInAt: login, lastAskAt: login + 270_000 }), false, 'old login: 30s is not a minute');
   assert.equal(attrHealDue({ now: login + 300_000, loggedInAt: login, lastAskAt: login + 230_000 }), true);
   assert.equal(attrHealDue({ now: 5_000_000, loggedInAt: null, lastAskAt: 0 }), true, 'never asked');
+});
+ok('the trace tells "never asked", "asked and unanswered" and "the login wait timed out" apart', () => {
+  const t = statTraceOf({ createdAt: 1000, statTrace: { asked: { 2: [2000, 3000] }, got: { 1: 2500 } },
+                          loginWait: { waited_ms: 10000, timed_out: true } });
+  assert.equal(t.group2_asked.length, 2, 'asked twice');
+  assert.equal(t.group2_got, null, 'never answered');
+  assert.ok(t.group1_got, 'while group 1 was');
+  assert.equal(t.login_wait.timed_out, true);
+  assert.equal(statTraceOf(null), null);
+  const src = readFileSync(new URL('./m59-client.mjs', import.meta.url), 'utf8');
+  assert.ok(src.includes('this.statTrace.got[res.group] = Date.now();'), 'the client records each group reply');
+  assert.ok(/stats\(group = 1\)\s*\{[\s\S]{0,200}asked\.push\(Date\.now\(\)\)/.test(src), 'and each request');
 });
 ok('the report names dropped STAT messages only, newest last', () => {
   const c = { parseErrors: [{ what: 'SAID', why: 'x', at: 1 }, { what: 'STAT_GROUP', why: 'cursor off by 4 bytes', at: 2 }] };

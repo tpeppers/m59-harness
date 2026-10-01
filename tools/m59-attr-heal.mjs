@@ -34,6 +34,23 @@ export function attrHealDue({ now, loggedInAt = null, lastAskAt = 0 }) {
   return now - lastAskAt >= (fresh ? ATTR_HEAL_TICK_MS : ATTR_HEAL_EVERY_MS);
 }
 
+/**
+ * WHAT THIS CLIENT ASKED FOR AND GOT, for the report. Distinguishes "never asked" (no group-2
+ * requests), "asked, never answered" (requests, no reply), "answered into a different client"
+ * (this client is newer than the reply), and whether the BP_PLAYER wait at login timed out.
+ */
+export function statTraceOf(client) {
+  if (!client) return null;
+  const iso = t => (t ? new Date(t).toISOString() : null);
+  return {
+    client_created: iso(client.createdAt),
+    group2_asked: (client.statTrace?.asked?.[2] ?? []).map(iso),
+    group2_got: iso(client.statTrace?.got?.[2]),
+    group1_got: iso(client.statTrace?.got?.[1]),
+    login_wait: client.loginWait ?? null,
+  };
+}
+
 /** The client's recently DROPPED stat messages (M59Client.check): did the reply arrive and fail to parse? */
 export const droppedStatMessages = (client, limit = 3) =>
   (client?.parseErrors ?? []).filter(e => /^STAT/.test(String(e?.what ?? ''))).slice(-limit)

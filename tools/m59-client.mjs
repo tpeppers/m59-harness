@@ -342,6 +342,11 @@ export class M59Client {
     // something to poll, and it is the only clock on the wire.
     this.sky = new Map();                           // object id -> {angle, height, ...}
     this.statsById = new Map();                     // stat number -> value/text
+    // WHICH CLIENT IS THIS, AND WHAT DID IT ASK FOR. tools/m59-attr-heal.mjs reports these when a
+    // keeper's attribute block is missing: a request never sent, a reply never received, and a
+    // second client object standing where the first one was are three different bugs.
+    this.createdAt = Date.now();
+    this.statTrace = { asked: {}, got: {} };          // group -> [ms...] / last ms
     // WHAT IS CURRENTLY ON US — poison, disease, a blessing. Keyed by the enchantment
     // object's id, which is what BP_REMOVE_ENCHANTMENT names. See parseAddEnchantment.
     this.enchantmentsById = new Map();
@@ -1412,7 +1417,11 @@ export class M59Client {
   // "Invalid stat group number" and sends nothing for anything outside 1..4.
   // Group 1 is health/mana/vigor, which is the one that matters for staying
   // alive; 2 is the attributes; 3 and 4 are spell and skill ability levels.
-  stats(group = 1)      { this.send(BP.SEND_STATS, u8b(group)); }
+  stats(group = 1)      {
+    const asked = (this.statTrace.asked[group] ??= []);
+    asked.push(Date.now()); if (asked.length > 8) asked.shift();
+    this.send(BP.SEND_STATS, u8b(group));
+  }
   allStats()            { for (const g of [1, 2, 3, 4]) this.stats(g); }
 
   // ---------------------------------------------------------- game mode
@@ -2271,6 +2280,7 @@ export class M59Client {
         const res = parseStatGroup(body, this.lookup);
         if (!this.check('STAT_GROUP', res)) break;
         for (const s of res.stats) this.noteStat(s, { bulk: true });
+        this.statTrace.got[res.group] = Date.now();
         // An empty group is still an answer: a character with no spells at all would
         // otherwise never be marked as read and would be re-asked for ever.
         if (res.group === STAT_GROUP.SPELLS) this.abilitiesAt.spells = Date.now();

@@ -15,7 +15,7 @@ process.env.M59_KEEPER = '1';
 //   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
-import { attributesIncomplete, attrHealDue, droppedStatMessages, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
+import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
@@ -594,7 +594,8 @@ async function joinGenerationOnce(generation) {
         attrHealReported = true;
         console.error(`[keeper] ${agent} attribute block incomplete (${bad.why}); re-asking group 2 | ` +
           `${JSON.stringify(bad.snapshot)} | joined ${session.loggedInAt ? new Date(session.loggedInAt).toISOString() : '?'}` +
-          ` | dropped ${JSON.stringify(droppedStatMessages(session.client))}`);
+          ` | dropped ${JSON.stringify(droppedStatMessages(session.client))}` +
+          ` | trace ${JSON.stringify(statTraceOf(session.client))}`);
       }
       attrHealAskedAt = now;
       session.pacer?.submit('read', () => session.client?.stats?.(2))?.catch(() => {});

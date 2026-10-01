@@ -2431,8 +2431,15 @@ class Session {
     // 13 logins in a day came up with no attributes and no karma at all, every one right after a
     // join (and handoffs, where the server is also closing the old connection, lost the race most).
     // BP_PLAYER -- our own object, sent from inside UserLogon -- is the signal that it has run.
+    // NOT SUFFICIENT ON ITS OWN: -22 still showed the block missing after handoff joins with this in
+    // place. So the wait's outcome is recorded on the client (`loginWait`) and reported by
+    // tools/m59-attr-heal.mjs alongside what the client asked for and received.
+    const waitFrom = Date.now();
+    const hadSelf = c.selfId ?? null;
     for (const until = Date.now() + 10_000; !c.selfId && Date.now() < until;)
       await new Promise(r => setTimeout(r, 50));
+    c.loginWait = { waited_ms: Date.now() - waitFrom, self_before: hadSelf, self_after: c.selfId ?? null,
+                    timed_out: !c.selfId, at: Date.now() };
     await loginRead(() => c.roomContents());
     await loginRead(() => c.players());
     await loginRead(() => c.requestInventory());
