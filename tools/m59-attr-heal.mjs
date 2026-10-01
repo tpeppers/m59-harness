@@ -18,7 +18,26 @@
 //   * intellect missing, or 0 -- every character is created with at least 1 in every attribute,
 //     so 0 is not a value, it is an absence the reader filled in.
 
+// MEASURED ON -20, 2026-10-01: every drop is the WHOLE block, and every one follows a fresh LOGIN
+// inside the keeper (a relog, not a restart: t10 logged in five times in three hours, each with a
+// different `joined` time and every attribute null). Session.joinOnce asks for group 2 on every
+// login, and yet the block is absent afterwards while the re-ask a minute later lands. So the check
+// runs every ATTR_HEAL_TICK_MS, and right after a login it re-asks on that tick for
+// ATTR_HEAL_FAST_FOR_MS; after that, at most once a minute.
+export const ATTR_HEAL_TICK_MS = 10_000;
+export const ATTR_HEAL_FAST_FOR_MS = 120_000;
 export const ATTR_HEAL_EVERY_MS = 60_000;
+
+/** Is a re-ask due now? Fast right after a login, then once a minute. */
+export function attrHealDue({ now, loggedInAt = null, lastAskAt = 0 }) {
+  const fresh = Number.isFinite(loggedInAt) && now - loggedInAt < ATTR_HEAL_FAST_FOR_MS;
+  return now - lastAskAt >= (fresh ? ATTR_HEAL_TICK_MS : ATTR_HEAL_EVERY_MS);
+}
+
+/** The client's recently DROPPED stat messages (M59Client.check): did the reply arrive and fail to parse? */
+export const droppedStatMessages = (client, limit = 3) =>
+  (client?.parseErrors ?? []).filter(e => /^STAT/.test(String(e?.what ?? ''))).slice(-limit)
+    .map(e => ({ what: e.what, why: e.why, at: e.at ? new Date(e.at).toISOString() : null }));
 
 const statOf = (statsById, k) => statsById?.get?.(k) ?? statsById?.get?.(k[0].toUpperCase() + k.slice(1)) ?? null;
 

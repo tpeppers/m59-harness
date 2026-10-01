@@ -4,7 +4,7 @@
 //   node tools/m59-attr-heal-test.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { attributesIncomplete } from './m59-attr-heal.mjs';
+import { attributesIncomplete, attrHealDue, droppedStatMessages } from './m59-attr-heal.mjs';
 
 let n = 0;
 const ok = (name, fn) => { fn(); n++; console.log(`ok ${name}`); };
@@ -34,7 +34,21 @@ ok('the keeper heals only in game, never during a handoff, once a minute, and lo
   const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) return;\s*const bad = attributesIncomplete/.test(src));
   assert.ok(src.includes('if (!bad) { attrHealReported = false; return; }'));
-  assert.ok(src.includes('}, ATTR_HEAL_EVERY_MS);'));
+  assert.ok(src.includes('}, ATTR_HEAL_TICK_MS);'));
+  assert.ok(src.includes('attrHealDue({ now, loggedInAt: session.loggedInAt, lastAskAt: attrHealAskedAt })'));
+});
+ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
+  const login = 1_000_000;
+  assert.equal(attrHealDue({ now: login + 15_000, loggedInAt: login, lastAskAt: login + 4_000 }), true, 'fresh login, 11s since the last ask');
+  assert.equal(attrHealDue({ now: login + 15_000, loggedInAt: login, lastAskAt: login + 9_000 }), false, 'only 6s');
+  assert.equal(attrHealDue({ now: login + 300_000, loggedInAt: login, lastAskAt: login + 270_000 }), false, 'old login: 30s is not a minute');
+  assert.equal(attrHealDue({ now: login + 300_000, loggedInAt: login, lastAskAt: login + 230_000 }), true);
+  assert.equal(attrHealDue({ now: 5_000_000, loggedInAt: null, lastAskAt: 0 }), true, 'never asked');
+});
+ok('the report names dropped STAT messages only, newest last', () => {
+  const c = { parseErrors: [{ what: 'SAID', why: 'x', at: 1 }, { what: 'STAT_GROUP', why: 'cursor off by 4 bytes', at: 2 }] };
+  assert.deepEqual(droppedStatMessages(c).map(e => e.what), ['STAT_GROUP']);
+  assert.deepEqual(droppedStatMessages(null), []);
 });
 
 console.log(`\n${n} passed`);
