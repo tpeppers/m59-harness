@@ -1554,6 +1554,12 @@ export const MIN_SELL_TRIP_VALUE = 10_000;
 // A pack this full goes to market whatever it is worth: there is no room left to make it worth more.
 export const SELL_REGARDLESS_AT = 0.97;
 
+// WHEN A TRIP ALREADY GOING TO TOWN ALSO WALKS THE COUNTERS (Autopilot.packWantsMarket). Deliberately
+// lower than a typical sellAtLoad: the trip is happening anyway, and the departure trigger is what
+// the courier and overfarm holds are allowed to veto -- this is not.
+export const MARKET_ALONG_AT = 0.85;
+export const MARKET_ALONG_RELIEF = 0.25;      // selling frees this much capacity: always walk them
+export const MARKET_ALONG_MIN_RELIEF = 0.05;  // near full but this little is sellable: do not
 export const MARKET_STOPS = Object.freeze([
   { room: 113, name: "Fehr'loi Qan, Barloque" },
   { room: 109, name: 'Herbutte, Barloque', maxStack: 25 },
@@ -25432,8 +25438,22 @@ export class Autopilot {
   // Measured on prod 2026-09-19: Pepe and Statler both on `pending_trip.to = 104` with
   // `market_stops: null` and 26 stacks each; 122 long swords across eleven characters.
   //
-  // This asks the pack directly and is deliberately the SAME arithmetic the load and stacks
-  // triggers use, so a trip cannot be attached under one rule and refused under another.
+  // This asked the pack with the SAME threshold the load trigger uses, so a trip could not be
+  // attached under one rule and refused under another -- and that is what regressed. Measured on
+  // prod 2026-10-02: eleven characters carrying 13-31 long swords each at 72-97% load, 291 food
+  // trips in two days, ZERO visits to the Royal Blacksmith (113, who buys weapons: bqSmith.kod
+  // ObjectDesired takes IsObjectWeapon), and every trip ending in `sellInTown` at a counter that
+  // does not buy swords. The live policy had `sellAtLoad: 0.97`, while holdForCourier and an
+  // overfarm hold of 400% keep exactly these packs PLATEAUED just under it (t15: 96.6%), so the
+  // circuit was never attached and the load trip that would go to market is held by design.
+  //
+  // "Should we LEAVE to sell" (the trigger, which the holds may veto) and "since we are going to
+  // town anyway, walk the counters" are different questions. This answers the second:
+  //   * the pack is near full: MARKET_ALONG_AT (85%, or `marketAlongAt`) or the trigger, whichever
+  //     is lower -- unless selling would free almost nothing (a pack of KEPT stock gains no
+  //     relief from the walk, the hk2 lesson in checkIfShouldSell);
+  //   * or what the counters would take frees at least MARKET_ALONG_RELIEF of capacity, whatever
+  //     the fullness -- twenty spare long swords are worth the two rooms from the bread shop.
   packWantsMarket() {
     const c = this.s.client;
     if (!c) return false;
@@ -25442,8 +25462,15 @@ export class Autopilot {
     const fullness = cap?.known && cap.load
       ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
     const stacks = (c.inventory || []).length;
-    return fullness >= (this.policy.sellAtLoad ?? 0.85)
-        || stacks >= (this.policy.maxCarry ?? 14);
+    const at = this.policy.sellAtLoad ?? 0.85;
+    const configured = Number(this.policy.marketAlongAt);
+    const along = Number.isFinite(configured) && configured > 0 ? configured : Math.min(at, MARKET_ALONG_AT);
+    const relief = typeof this.saleRelief === 'function' ? this.saleRelief(cap) : null;
+    const freed = relief ? Math.max(0, fullness - relief.after) : null;
+    if (freed != null && freed >= MARKET_ALONG_RELIEF) return true;
+    const near = fullness >= along || stacks >= (this.policy.maxCarry ?? 14);
+    // Unknown relief (no capacity or equipment read yet) keeps the old answer.
+    return near && (freed == null || freed >= MARKET_ALONG_MIN_RELIEF);
   }
 
   checkIfShouldSell({ windowOpen = false } = {}) {

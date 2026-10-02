@@ -143,8 +143,35 @@ console.log('\nAND THE TRIP ACTUALLY CONSULTS IT');
   ok('the predicate is defined', /packWantsMarket\s*\(\)\s*{/.test(src));
   const at = src.indexOf('marketStops:');
   const attach = src.slice(Math.max(0, at - 900), at + 200);
+  // A FIXED CHARACTER WINDOW ROTS: openTownTrip grew and pushed the call past 900 characters, so
+  // this went red on main with the seam intact. Pin the two lines that ARE the seam instead.
   ok('and the marketStops attachment consults it, not only the trigger',
-     /this\.packWantsMarket\(\)/.test(attach));
+     /const wantsMarket = [^;]*this\.packWantsMarket\(\)/.test(src) &&
+     /marketStops: wantsMarket \?/.test(src), attach.length ? '' : 'no marketStops: found');
+}
+
+// 2026-10-02: eleven characters carrying 13-31 long swords at 72-97%, live sellAtLoad 0.97, and a
+// courier/overfarm hold keeping the packs just UNDER it -- so the circuit was never attached and
+// every trip ended at a counter that does not buy swords. "Walk the counters since we are going
+// anyway" is no longer the departure threshold.
+console.log('\nTHE CIRCUIT ANSWERS "WHILE WE ARE GOING ANYWAY", NOT "SHOULD WE LEAVE"');
+{
+  const swords = n => many('long sword', n);           // 80 weight each against a 2000 ceiling
+  const withRelief = (self, after) => Object.assign(self, { saleRelief: () => ({ after }) });
+  // 23 swords = 92%: under a live sellAtLoad of 0.97, over the 85% "while we are there" line.
+  ok('92% under sellAtLoad 0.97 still walks the counters (the plateau that hid the swords)',
+     wants(rig({ items: swords(23), policy: { sellAtLoad: 0.97, maxCarry: 60 } })) === true);
+  ok('and so it does when the counters would free most of it',
+     wants(withRelief(rig({ items: swords(23), policy: { sellAtLoad: 0.97, maxCarry: 60 } }), 0.10)) === true);
+  // 15 swords = 60%: not near full, but selling frees 50% of capacity.
+  ok('60% with half the pack sellable walks them: the relief rule, whatever the fullness',
+     wants(withRelief(rig({ items: swords(15), policy: { sellAtLoad: 0.97, maxCarry: 60 } }), 0.10)) === true);
+  ok('60% with nothing much sellable does not',
+     wants(withRelief(rig({ items: swords(15), policy: { sellAtLoad: 0.97, maxCarry: 60 } }), 0.58)) === false);
+  ok('near full but the pack is KEPT stock (selling frees 1%): no pointless walk',
+     wants(withRelief(rig({ items: swords(23), policy: { sellAtLoad: 0.97, maxCarry: 60 } }), 0.91)) === false);
+  ok('marketAlongAt overrides the 85% line',
+     wants(rig({ items: swords(23), policy: { sellAtLoad: 0.97, maxCarry: 60, marketAlongAt: 0.95 } })) === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
