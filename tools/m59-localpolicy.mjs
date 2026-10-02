@@ -148,7 +148,7 @@ const KEYS = {
     type: 'number', min: 0, max: 86_400_000,
     what: 'after a PLAYER kills a character, how long before its keeper may set out for a ' +
           'farming room again; 0 disables',
-    mechanics: 'the committed default is 1800000 (thirty minutes) and lives in ' +
+    mechanics: 'the committed default is 7200000 (two hours) and lives in ' +
                'm59-pvp-return.mjs, so a block that says nothing keeps it. A camper waits at ' +
                'the gate for the respawn; a monster does not, so deaths to monsters start no hold',
     warn: (v) => [

@@ -20,13 +20,15 @@ import { parseGuildCombat } from './m59-war.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..', '..');
 
-export const PVP_RETURN_DELAY_MS_DEFAULT = 30 * 60_000;
+// Two hours, operator 2026-10-01: "characters should move themselves to an inn and rest for 2
+// hours after a PVP death before continuing to farm". It was thirty minutes (2026-09-30).
+export const PVP_RETURN_DELAY_MS_DEFAULT = 2 * 60 * 60_000;
 // A day is far past anything the order meant, and a typo of an extra zero or two (3 hours,
 // 30 hours) should be refused at the setter rather than park a character until tomorrow.
 export const PVP_RETURN_DELAY_MS_MAX = 24 * 60 * 60_000;
 
-// SILENCE MEANS THE DEFAULT, AND THE DEFAULT IS ON. Absent, null or unusable all mean 30
-// minutes — the operator asked for this fleet-wide, and a character nobody configured is
+// SILENCE MEANS THE DEFAULT, AND THE DEFAULT IS ON. Absent, null or unusable all mean the
+// default (two hours) — the operator asked for this fleet-wide, and a character nobody configured is
 // exactly the one walking back into the camper. Only an explicit number (0 included) wins.
 export function pvpReturnDelayMs(policy) {
   const v = policy?.pvpReturnDelayMs;

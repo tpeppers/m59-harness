@@ -123,17 +123,17 @@ const classify = (o) => classifyPvpDeath({ isFleetmate: party.isFleetmate, enemy
 
 // ------------------------------------------------------------------ the window
 console.log('the window');
-ok('default is thirty minutes, on', pvpReturnDelayMs({}) === 30 * MIN && PVP_RETURN_DELAY_MS_DEFAULT === 1_800_000);
-ok('null means the default', pvpReturnDelayMs({ pvpReturnDelayMs: null }) === 30 * MIN);
+ok('default is two hours, on', pvpReturnDelayMs({}) === 120 * MIN && PVP_RETURN_DELAY_MS_DEFAULT === 7_200_000);
+ok('null means the default', pvpReturnDelayMs({ pvpReturnDelayMs: null }) === 120 * MIN);
 ok('0 disables', pvpReturnDelayMs({ pvpReturnDelayMs: 0 }) === 0
    && pvpHoldState({ died_at: Date.now() }, 0) === null);
 ok('an unusable value keeps the default rather than switching it off',
-   pvpReturnDelayMs({ pvpReturnDelayMs: 'thirty' }) === 30 * MIN && pvpReturnDelayMs({ pvpReturnDelayMs: -5 }) === 30 * MIN);
+   pvpReturnDelayMs({ pvpReturnDelayMs: 'thirty' }) === 120 * MIN && pvpReturnDelayMs({ pvpReturnDelayMs: -5 }) === 120 * MIN);
 {
   const t0 = 5_000_000;
-  const h = pvpHoldState({ died_at: t0, killers: ['Morpheus'] }, 30 * MIN, t0 + 29 * MIN);
-  ok('29 minutes in: held, with a minute left', h && h.remaining_s === 60 && h.killer === 'Morpheus');
-  ok('30 minutes in: released', pvpHoldState({ died_at: t0 }, 30 * MIN, t0 + 30 * MIN) === null);
+  const h = pvpHoldState({ died_at: t0, killers: ['Morpheus'] }, 120 * MIN, t0 + 119 * MIN);
+  ok('119 minutes in: held, with a minute left', h && h.remaining_s === 60 && h.killer === 'Morpheus');
+  ok('120 minutes in: released', pvpHoldState({ died_at: t0 }, 120 * MIN, t0 + 120 * MIN) === null);
 }
 
 // ------------------------------------------------------------------ the keeper
@@ -172,7 +172,7 @@ const monsterAttribution = { killer: 'frogman', kind: 'named_kill', was_killed_b
   ok('a recovery detour (fleeing) is not held', ap.pvpReturnGate(586, { recoveryDetour: true }) === null);
   const st = ap.status();
   ok('status reports the hold', st.pvp_return_hold?.killer === 'Morpheus' && st.pvp_return_hold.remaining_s > 29 * 60
-     && st.pvp_return_delay_ms === 1_800_000, JSON.stringify(st.pvp_return_hold));
+     && st.pvp_return_delay_ms === 7_200_000, JSON.stringify(st.pvp_return_hold));
   const r = await ap.holdOffTheFarm({ room: ap.s.world.room });
   ok('in the inn, the farm rung rests instead of choosing work', r === HANDLED);
   ap.running = true;                   // activity() answers 'stopped' for a keeper not looping
@@ -200,10 +200,10 @@ const monsterAttribution = { killer: 'frogman', kind: 'named_kill', was_killed_b
   ok('delay 0 -> the rung does not hold', await again.holdOffTheFarm({ room: again.s.world.room }) === CONTINUE);
 }
 {
-  // Thirty-one minutes after the death: departure allowed again.
+  // Two hours and a minute after the death: departure allowed again.
   const ap = keeper('t2');
-  ap.classifyAndRememberPvp({ at: Date.now() - 31 * MIN, room_num: 586 }, { attribution: pvpAttribution });
-  ok('after 30 minutes the departure is allowed', ap.pvpReturnGate(586) === null && ap.pvpReturnHold() === null);
+  ap.classifyAndRememberPvp({ at: Date.now() - 121 * MIN, room_num: 586 }, { attribution: pvpAttribution });
+  ok('after two hours the departure is allowed', ap.pvpReturnGate(586) === null && ap.pvpReturnHold() === null);
   ok('and the rung lets farming choose again', await ap.holdOffTheFarm({ room: ap.s.world.room }) === CONTINUE);
 }
 {

@@ -1943,6 +1943,11 @@ export class Autopilot {
       // Practise spells at a post while nothing needs us, keeping back two casts of the desk's
       // dearest service. null is inert. See m59-deskpractice.mjs and practiceAtDesk().
       practiceSpells: null,
+      // After a death to a PLAYER, how long before this keeper may set out for a farming room
+      // (m59-pvp-return.mjs). null means the committed default. It has to be a key HERE: a keeper
+      // applies a pushed order only for fields this object names, so without it the broker's
+      // pvp_return_delay_ms was recorded nowhere and pushed nowhere (2026-10-01).
+      pvpReturnDelayMs: null,
       // Take reagents from a fleetmate without negotiating. The provider half of a
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.

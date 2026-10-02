@@ -12320,8 +12320,8 @@ const TOOLS = [
           const ms = Number(a.pvp_return_delay_ms);
           if (typeof a.pvp_return_delay_ms === 'boolean' || !Number.isFinite(ms) || ms < 0 || ms > 86_400_000)
             return { started: false, reason: 'pvp_return_delay_ms is milliseconds between 0 (off) and ' +
-              `86400000 (a day); got ${JSON.stringify(a.pvp_return_delay_ms)}. The default is 1800000 ` +
-              '(thirty minutes); pass null to restore it' };
+              `86400000 (a day); got ${JSON.stringify(a.pvp_return_delay_ms)}. The default is 7200000 ` +
+              '(two hours); pass null to restore it' };
           p.policy.pvpReturnDelayMs = Math.floor(ms);
         }
       }
