@@ -49,8 +49,9 @@ export const CONTROL_PORT = Number(process.env.M59_OPERATOR_GATEWAY_CONTROL_PORT
 
 const log = line => {
   const s = `${new Date().toISOString()} ${line}`;
-  console.error(s);
-  try { appendFileSync(LOG_FILE, s + '\n'); } catch {}
+  // Detached, stderr already IS the log file (see `start`): write each line once.
+  if (process.env.M59_OPERATOR_GATEWAY_DETACHED === '1') console.error(s);
+  else { console.error(s); try { appendFileSync(LOG_FILE, s + '\n'); } catch {} }
 };
 
 const hostOnly = h => String(h ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
@@ -194,11 +195,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (h) { console.log(`already running, pid ${h.pid}`); process.exit(0); }
     const fd = openSync(LOG_FILE, 'a');
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'run'],
-      { detached: true, stdio: ['ignore', fd, fd], windowsHide: true, cwd: HERE });
+      { detached: true, stdio: ['ignore', fd, fd], windowsHide: true, cwd: HERE,
+        env: { ...process.env, M59_OPERATOR_GATEWAY_DETACHED: '1' } });
     closeSync(fd);
     child.unref();
     writeFileSync(PID_FILE, String(child.pid));
-    for (let i = 0; i < 20; i++) {
+    // Measured on Vecna: the first start took longer than 5s to answer its own health.
+    for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 250));
       const up = await health();
       if (up) { console.log(`started pid ${up.pid}: ${up.listening.map(a => `${a.address}:${a.port}`).join(', ')}`); process.exit(0); }
