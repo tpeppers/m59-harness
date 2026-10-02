@@ -449,6 +449,16 @@ instead of a token.
   connection to the tailnet address goes to the more specific listener.
 - **The TUI on another machine:** `M59_BROKER_HOST=vecna node tools/m59-tui.mjs`. Keeper columns read
   keeper ports directly and stay empty there; keepers are never exposed.
+- **L from another machine holds the character by LEASE, not by pid.** The pilot claim that stops the
+  rejoin sweep fighting your client is bound locally to the client's pid, which means nothing on the
+  broker's machine. With `M59_BROKER_HOST` set, L spawns `tools/m59-remote-pilot.mjs hold` (detached,
+  output in `substrate/m59-launch.log`): it claims `pilot` with `lease_ms` BEFORE the client logs in,
+  renews every third of the lease while the client named by `/U:` runs here, and releases when it
+  exits. If the holder dies, the lease lapses (60s) and the keeper takes the character back. It needs
+  this machine's own copy of the roster for the password, as local L always did. **A broker older than
+  the lease** answers "pid is required"; the holder then ANCHORS the claim on the broker's own pid and
+  releases it itself, which has no self-expiry: kill the holder and `pilot release` the character by
+  hand.
 - **Never widened:** `m59-dm.mjs`'s maintenance-port check, which is about the GAME server.
 
 ## LENDING CHARACTERS OVER THE INTERNET WITHOUT LENDING THE PASSWORD

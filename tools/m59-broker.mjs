@@ -130,6 +130,8 @@ import {
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
 import { startLoopStallMonitor } from './runtime/loop-stalls.mjs';
+import { pilotLeaseMs, newPilotLease, pilotHeld, renewPilotLease, describePilotLease }
+  from './runtime/pilot-lease.mjs';
 import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned,
          recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
 import { allocateKeeperBand, lookupKeeperBand,
@@ -5230,7 +5232,7 @@ async function reconcileFleet() {
 //
 // When the pid dies the claim is released and the character goes back to work, which is
 // the whole of requirement B.
-const piloted = new Map();     // agent -> { pid, since, objectId, character, keeperWasRunning }
+const piloted = new Map();     // agent -> { pid, since, objectId, character, keeperWasRunning, lease? }
 // The human desk's mark refresh, and its store (see markHumanDesk). Declared beside `piloted`
 // so nothing that can claim a pilot runs before they exist.
 const HUMAN_DESK_REFRESH_MS = 30_000;
@@ -5238,6 +5240,11 @@ let humanDeskStore = null;
 const PILOT_POLL_MS = Number(process.env.M59_PILOT_POLL_MS || 4000);
 
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A claim is held by ONE of two things: a local client pid, or a heartbeat lease from a client on
+// another machine (tools/runtime/pilot-lease.mjs). Every liveness check on a pilot goes through
+// here, because a lease claim has pid null and `pidAlive(null)` would release it on the spot.
+const pilotHeldNow = (p) => pilotHeld(p, { now: Date.now(), pidAlive });
+const pilotAlive = (p) => pilotHeldNow(p).held;
 
 // ARMED, NOT PERIODIC. Every process spawn this broker makes on a quiet machine used to
 // come from here. See createClientWatch() for why looking is now an event rather than a
@@ -5276,7 +5283,8 @@ async function autoClaimLocalClient() {
 function pilotOf(agent) {
   const p = piloted.get(agent);
   if (!p) return null;
-  if (!pidAlive(p.pid)) { releasePilot(agent, 'the client process is gone'); return null; }
+  const h = pilotHeldNow(p);
+  if (!h.held) { releasePilot(agent, p.lease ? h.why : 'the client process is gone'); return null; }
   return p;
 }
 
@@ -5312,7 +5320,7 @@ setPilotLookup(() => {
   return null;
 });
 
-function claimPilot(agent, pid, { character = null, keeperWasRunning: claimedRunning = null } = {}) {
+function claimPilot(agent, pid, { character = null, keeperWasRunning: claimedRunning = null, lease = null } = {}) {
   const s = sessions.get(agent);
   const objectId = s?.client?.selfId ?? null;
   const keeper = autopilotIfAny(agent);
@@ -5350,11 +5358,13 @@ function claimPilot(agent, pid, { character = null, keeperWasRunning: claimedRun
     : (!!keeper?.running && !keeper?.inert);
   if (keeperWasRunning && keeper && !proxied) keeper.stop('a person took the controls — deliberate');
   piloted.set(agent, { pid, since: Date.now(), objectId,
-                       character: character ?? s?.client?.me?.name ?? null, keeperWasRunning });
-  console.error(`[pilot] ${agent} claimed by pid ${pid}` +
+                       character: character ?? s?.client?.me?.name ?? null, keeperWasRunning,
+                       ...(lease ? { lease } : {}) });
+  console.error(`[pilot] ${agent} claimed by ${lease ? `a remote lease from ${lease.holder} (${Math.round(lease.ms / 1000)}s)` : `pid ${pid}`}` +
                 ` (object ${objectId ?? '?'}, keeper ${keeperWasRunning ? 'was running' : 'was stopped'})`);
   markHumanDesk(agent, { first: !prior });
-  return { agent, pid, object_id: objectId, keeper_was_running: keeperWasRunning };
+  return { agent, pid, object_id: objectId, keeper_was_running: keeperWasRunning,
+           ...(lease ? { lease_id: lease.id, lease_ms: lease.ms } : {}) };
 }
 
 function releasePilot(agent, why = 'released') {
@@ -5680,7 +5690,8 @@ function startPilotWatch() {
     // ALWAYS, and it costs nothing: this is a signal 0, not a process spawn. A claim
     // whose client has exited must be released whether or not the watch is armed.
     for (const [agent, p] of [...piloted]) {
-      if (!pidAlive(p.pid)) releasePilot(agent, `client pid ${p.pid} exited`);
+      const h = pilotHeldNow(p);
+      if (!h.held) releasePilot(agent, h.why);
       else if (Date.now() - (p.deskMarkedAt ?? 0) > HUMAN_DESK_REFRESH_MS) markHumanDesk(agent);
     }
     // ...and then look for one to pick up. Releasing first matters: a client that exited
@@ -16988,7 +16999,7 @@ const TOOLS = [
           // the pid, so a closed client stops being an answer without anyone polling.
           // Null for every character nobody is playing, which is nearly all of them.
           piloted: (() => { const p = pilotOf(name);
-            return p ? { since: p.since, pid: p.pid } : null; })(),
+            return p ? { since: p.since, pid: p.pid, ...(p.lease ? { remote: p.lease.holder } : {}) } : null; })(),
           // The safe-spot thesis is a survival claim, so it has to be scored as one.
           // Deaths while standing in a square we believed in are the number that
           // falsifies it, and they are worth separating from deaths in the open.
@@ -17481,7 +17492,7 @@ const TOOLS = [
     description: 'READ ONLY: cached observations from claimed human debug clients: inventory, cached stats, native position, condition pips, DUM configuration, and optional passive proxy room observations. Does not request game data or grant control. Missing/stale domains remain explicitly unavailable.',
     schema: {type:'object',properties:{agent:{type:'string',description:'Optional exact fleet agent; omitted returns claimed humans only'}}},
     run: async a => readNativeContext({fleet:FLEET||'default',brokerPid:process.pid,agents:a.agent?[a.agent]:[],
-      pilot:agent=>{const p=piloted.get(agent);return p&&pidAlive(p.pid)?p:null;}}),
+      pilot:agent=>{const p=piloted.get(agent);return p&&pilotAlive(p)?p:null;}}),
   },
   {
     name: 'pilot',
@@ -17498,6 +17509,11 @@ const TOOLS = [
       'While claimed, speech FROM that character to other fleet members is treated as instruction ' +
       'rather than as chat — see the operator verb table. That privilege lasts exactly as long as ' +
       'the pid does.\n' +
+      'A CLIENT ON ANOTHER MACHINE claims with `lease_ms` and `holder` instead of a pid -- that pid ' +
+      'would mean nothing here. The claim is then held by `renew` (with the returned lease_id) and ' +
+      'ends by itself when renewals stop, so a remote machine that sleeps or drops off the tailnet ' +
+      'hands the character back to its keeper within one lease. tools/m59-remote-pilot.mjs is the ' +
+      'holder; this API is reached remotely only through the operator gateway.\n' +
       'THE BROKER DOES NOT HUNT FOR CLIENTS ON A TIMER. Scanning costs a process spawn, so it is ' +
       'armed by events rather than polled: at boot, when a claim ends, and when something launches ' +
       'a client. Anything starting a client OUT OF BAND should call `rearm` so the automatic claim ' +
@@ -17505,9 +17521,12 @@ const TOOLS = [
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['claim', 'release', 'status', 'rearm'] },
+        action: { type: 'string', enum: ['claim', 'renew', 'release', 'status', 'rearm'] },
         agent: { type: 'string', description: 'the character being played; required for claim/release' },
-        pid: { type: 'number', description: 'process id of the client that was launched, required for claim' },
+        pid: { type: 'number', description: 'process id of the client that was launched, on THIS machine; required for claim unless lease_ms is given' },
+        lease_ms: { type: 'number', description: 'claim/renew: a remote claim held by heartbeat instead of a pid, 15000-300000 (default 60000). Lapses unless renewed' },
+        holder: { type: 'string', description: 'claim with lease_ms: which machine and tool is playing, for the log, e.g. "steamdeck m59-tui"' },
+        lease_id: { type: 'string', description: 'renew/release: the lease_id the claim returned' },
         character: { type: 'string', description: 'name to expect in speech; defaults to the session\'s' },
         why: { type: 'string', description: 'for rearm: what launched a client, for the log' },
       },
@@ -17518,7 +17537,8 @@ const TOOLS = [
         return {
           piloted: [...piloted.entries()].map(([agent, p]) => ({
             agent, character: p.character, pid: p.pid, object_id: p.objectId,
-            alive: pidAlive(p.pid), held_s: Math.round((Date.now() - p.since) / 1000),
+            alive: pilotAlive(p), held_s: Math.round((Date.now() - p.since) / 1000),
+            ...describePilotLease(p, Date.now()),
             keeper_resumes_on_release: p.keeperWasRunning })),
           // WHETHER ANYONE IS EVEN LOOKING. Without this, "the client is running and
           // nothing claimed it" has two very different causes — no match, or nobody
@@ -17536,11 +17556,42 @@ const TOOLS = [
                        'one of ours. It stops looking again the first time it finds nobody.' };
       }
       if (!a.agent) return { error: 'agent is required' };
+      if (a.action === 'renew') {
+        const r = renewPilotLease(piloted.get(a.agent), { id: a.lease_id, now: Date.now(),
+          ms: a.lease_ms != null ? pilotLeaseMs(a.lease_ms) : null });
+        return { ...r, agent: a.agent,
+                 ...(r.reclaim ? { note: 'claim again with lease_ms -- the keeper may already be back' } : {}) };
+      }
       if (a.action === 'release') {
-        const p = releasePilot(a.agent, 'released by request');
+        // A remote holder releasing names its lease, so a stale helper from an earlier launch
+        // cannot end the claim a newer one is holding. A bare release is still the operator's.
+        const held = piloted.get(a.agent);
+        if (a.lease_id && held && held.lease?.id !== a.lease_id)
+          return { released: false, note: 'that lease no longer holds this character -- left as it is' };
+        const p = releasePilot(a.agent, a.lease_id ? `released by ${held?.lease?.holder ?? 'its remote holder'}`
+                                                   : 'released by request');
         return p ? { released: true, agent: a.agent,
                      note: 'the reconciler will log it back in and restore the keeper it had' }
                  : { released: false, note: 'that character was not claimed' };
+      }
+      if (a.lease_ms != null) {
+        // A REMOTE CLAIM. It never displaces a person at THIS machine's keyboard, and never another
+        // machine's live lease -- only its own holder's, which is a relaunch after a crash.
+        const held = piloted.get(a.agent);
+        if (held && pilotAlive(held)) {
+          if (!held.lease) return { error: `${a.agent} is being played by a client on the broker's machine (pid ${held.pid})` };
+          if (held.lease.holder !== String(a.holder ?? '').trim().slice(0, 120))
+            return { error: `${a.agent} is already held by a remote lease from ${held.lease.holder}` };
+        }
+        let lease;
+        try { lease = newPilotLease({ holder: a.holder, ms: pilotLeaseMs(a.lease_ms), now: Date.now() }); }
+        catch (e) { return { error: e.message }; }
+        if (!sessions.has(a.agent) && !rosterEntry(a.agent)) return { error: `${a.agent} is not in this fleet` };
+        const r = claimPilot(a.agent, null, { character: a.character, lease });
+        return { ...r, claimed: true,
+                 note: `keeper stopped and the reconciler will leave it alone while ${lease.holder} renews ` +
+                       `(every ${Math.round(lease.ms / 3000)}s is right). It ends by itself ${Math.round(lease.ms / 1000)}s ` +
+                       'after the last renewal.' };
       }
       if (!a.pid) return { error: 'pid is required for claim — the claim is the process, not the name' };
       if (!pidAlive(a.pid)) return { error: `pid ${a.pid} is not running; refusing to claim on a dead process` };
@@ -18397,7 +18448,7 @@ async function brokerRtsRead(url) {
   // Consumers must opt into human observation domains and their timestamps.
   const nativeClients = process.env.M59_CLIENT_CONTEXT_URL && agents.some(agent=>piloted.has(agent))
     ? await readNativeContext({fleet:FLEET||'default',brokerPid:process.pid,agents,
-        pilot:agent=>{const p=piloted.get(agent);return p&&pidAlive(p.pid)?p:null;}}) : null;
+        pilot:agent=>{const p=piloted.get(agent);return p&&pilotAlive(p)?p:null;}}) : null;
   return {
     schema: RTS_READ_SCHEMA,
     read_only: true,

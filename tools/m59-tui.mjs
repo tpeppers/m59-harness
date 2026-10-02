@@ -30,6 +30,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import { readFileSync, openSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
@@ -64,6 +65,11 @@ const PORT = env.M59_BROKER_PORT || '8901';
 // operator machines and forwards to that broker's loopback. Default: this machine.
 const BROKER_HOST = env.M59_BROKER_HOST || '127.0.0.1';
 const URL_ = `http://${BROKER_HOST}:${PORT}/`;
+// A REMOTE BROKER CANNOT SEE THIS MACHINE'S PROCESSES, so L cannot hand it a client pid to claim
+// on -- that pid would name nothing, or something else, over there. A launch from here is held
+// instead by tools/m59-remote-pilot.mjs: a detached process that claims a heartbeat lease before
+// the client logs in, renews it while the client runs, and releases it when the client exits.
+const REMOTE = !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(BROKER_HOST.toLowerCase());
 // Each keeper is its own process with its own HTTP port. The band is an ownership boundary;
 // the actual agent on each slot is still proved by the keeper itself. See keeperStates().
 const KEEPER_BAND_OPTIONS = {
@@ -608,6 +614,10 @@ async function launch(row, { viaProxy = false } = {}) {
   let stdio = 'ignore';
   try { const fd = openSync(logPath, 'a'); stdio = ['ignore', fd, fd]; } catch { /* keep going */ }
 
+  // Before the client starts, not after: the lease needs no pid, so the rejoin sweep is already
+  // standing down by the time the client bumps the keeper off the character.
+  if (REMOTE) holdRemotely(row, creds, stdio);
+
   if (!WIN) return launchViaSteam({ row, creds, clientDir, steam, args, stdio, viaProxy });
 
   const inject = join(REPO, 'tools', 'm59-inject.ps1');
@@ -645,12 +655,15 @@ async function launch(row, { viaProxy = false } = {}) {
     // the terminal is still open. The claim stops the keeper and tells the reconciler
     // to leave the character alone; the broker then polls this pid and gives the
     // character back on its own when the client is closed.
+    // (Not when the broker is remote: holdRemotely already holds it by lease.)
+    ...(REMOTE ? [] : [
     `$body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"pilot",'`
       + `+ '"arguments":{"action":"claim","agent":"${row.agent}","pid":' + $p.Id + '}}}'`,
     `try { Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/' -Method Post `
       + `-ContentType 'application/json' -Body $body -TimeoutSec 10 | Out-Null; `
       + `Write-Output "claimed ${row.agent} for pid $($p.Id)" } `
       + `catch { Write-Output "pilot claim FAILED: $_" }`,
+    ]),
     `$t=0; while ($t -lt 120 -and -not $p.HasExited -and $p.MainWindowHandle -eq 0) `
       + `{ Start-Sleep -Milliseconds 500; $p.Refresh(); $t++ }`,
     `Write-Output "waited $($t*0.5)s for a window; pid $($p.Id); exited $($p.HasExited)"`,
@@ -687,12 +700,29 @@ async function launch(row, { viaProxy = false } = {}) {
   // the operator stands in the room with none of the privileges the launch was for, and
   // the only sign is that spoken commands are heard and ignored. That exact failure is
   // why the automatic claim exists at all — see m59-localclient.mjs.
-  const r = await call('pilot', { action: 'rearm', why: `the terminal launched ${row.agent}` }, 4000);
+  // A remote broker scanning ITS machine for this client would find nothing; the lease is the telling.
+  const r = REMOTE ? null : await call('pilot', { action: 'rearm', why: `the terminal launched ${row.agent}` }, 4000);
   if (r?.__error) {
     S.status += ' ' + c.red('· broker not told to watch (' + r.__error + ') — `pilot claim` by hand');
     draw();
   }
   // Handed back for --launch, which has to outlive it — see there.
+  return child;
+}
+
+// HOLD THE CHARACTER ON A REMOTE BROKER FOR AS LONG AS THIS MACHINE'S CLIENT RUNS.
+//
+// Detached and unref'd, with its output in the launch log, so quitting the terminal does not end
+// the claim while the person is still playing. The holder name is fixed per machine, which is
+// what lets a relaunch after a crash take over its own predecessor's lease rather than being
+// refused for a minute.
+function holdRemotely(row, creds, stdio) {
+  const args = [join(REPO, 'tools', 'm59-remote-pilot.mjs'), 'hold', '--broker', URL_,
+                '--agent', row.agent, '--account', creds.account ?? row.agent,
+                '--holder', `${hostname()} m59-tui`, ...(FLEET ? ['--fleet', FLEET] : [])];
+  const child = spawn(process.execPath, args, { stdio, detached: true, windowsHide: true });
+  child.unref();
+  child.on('error', e => { S.status += ' ' + c.red('· remote hold did not start: ' + e.message); draw(); });
   return child;
 }
 
@@ -774,7 +804,10 @@ function launchViaSteam({ row, clientDir, steam, args, stdio }) {
       : c.red('could not start steam: ' + e.message);
     draw();
   });
-  S.status = c.green(`launching ${row.character ?? row.agent}…`) + ' ' +
+  S.status = REMOTE
+    ? c.green(`launching ${row.character ?? row.agent}…`) + ' ' +
+      c.dim(`~20s via Steam · held on ${BROKER_HOST} by lease while the client runs · log: substrate/m59-launch.log`)
+    : c.green(`launching ${row.character ?? row.agent}…`) + ' ' +
              c.dim('~20s via Steam · log: substrate/m59-launch.log') + ' ' +
              c.yellow('· claim within ~8s') +
              c.dim(' — the broker reads /U: off /proc; `pilot claim` for it now. No DLL' +
