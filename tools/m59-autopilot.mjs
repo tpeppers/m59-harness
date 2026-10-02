@@ -148,6 +148,8 @@ import { fileURLToPath } from 'node:url';
 // One resolver, shared with the broker's `tithe` tool — see titheFleet in m59-tithe.mjs
 // for why two answers here meant two books and a fleet that tithed twice a day.
 import { UNDERWORLD } from './m59-travelgate.mjs';
+// A touch spell is the weapon: train it with an empty hand and the buff on. See touchTrainingHere.
+import { touchSpellSpec, TouchSpellState, touchRecastBackoffMs } from './m59-touchspell.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1855,6 +1857,12 @@ export class Autopilot {
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
     if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
+    // AND EVERY equipBest ON THIS SESSION ASKS WHETHER THE HAND IS MEANT TO BE EMPTY. Ten call
+    // sites equip — a gift, a rescue plea, a magic swap, `equip_best` — and a touch-spell trainer
+    // on its own ground must not have any of them put a weapon back in its hand, because a
+    // wielded weapon is swung INSTEAD of the touch (player.kod:4712-4729). One veto, at the one
+    // function they all share, rather than ten guards that drift.
+    if (session) session.equipVeto = () => this.touchEquipVeto();
     attachReplayRecorder(session,this);
     attachSurvivalTrace(session, this);
     this.survivalRecorder = createSurvivalDecisionRecorder(session.name);
@@ -1949,6 +1957,13 @@ export class Autopilot {
       // applies a pushed order only for fields this object names, so without it the broker's
       // pvp_return_delay_ms was recorded nowhere and pushed nowhere (2026-10-01).
       pvpReturnDelayMs: null,
+      // TRAIN A TOUCH SPELL BY SWINGING IT — 'acid touch', 'touch of flame', 'holy touch',
+      // 'icy fingers', 'zap', or null (inert). On the assigned farm room in farm mode the keeper
+      // keeps the hand EMPTY (a wielded weapon suppresses the touch, player.kod:4712-4729) and the
+      // buff ON, recasting it on itself when the server says it stopped or a swing reads "Your
+      // punch". Off that room every ordinary arming rule stands. See m59-touchspell.mjs. It has to
+      // be a key HERE, like pvpReturnDelayMs above, or a pushed order is reflected nowhere.
+      touchSpell: null,
       // Take reagents from a fleetmate without negotiating. The provider half of a
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
@@ -2738,6 +2753,202 @@ export class Autopilot {
     return this.styleForNonPrey(this.s?.world?.room) === 'unarmed';
   }
 
+  // ------------------------------------------------------------- TOUCH SPELL TRAINING
+  //
+  // A touch spell is a personal enchantment that IS the weapon, and only while the hand is
+  // empty (player.kod:4712-4729). So training one is `trainingStyle: 'unarmed'` plus a buff
+  // that has to be kept on — and every arming path that would put a weapon back in the hand
+  // has to stand down. See m59-touchspell.mjs for the kod and the messages.
+  //
+  // THE SAME GROUND RULE AS UNARMED PRACTICE: farm mode, standing on the assigned room. A
+  // journey, a recovery detour or a strange room keeps the ordinary arm-first survival rule —
+  // being bare on the road is how the road kills people.
+
+  /** The configured touch spell's spec, or null when the posture is off. */
+  touchSpellNow() { return touchSpellSpec(this.policy?.touchSpell); }
+
+  /** Is this character training its touch spell RIGHT HERE, right now? */
+  touchTrainingHere(room = this.s?.world?.room) {
+    const spec = this.touchSpellNow();
+    if (!spec) return false;
+    const assigned = this.policy?.assignedRoom;
+    return this.mode === 'farm' && assigned != null && room?.num === assigned;
+  }
+
+  /** The tracker for the configured spell, rebuilt if the order names a different one. */
+  touchState() {
+    const spec = this.touchSpellNow();
+    if (!spec) return null;
+    if (this._touch?.name !== spec.name) this._touch = new TouchSpellState(spec.name);
+    return this._touch;
+  }
+
+  /** Read every new server line into the tracker. Memory only — no wire, no wait. */
+  observeTouchSpell(c = this.s?.client) {
+    const st = this.touchState();
+    if (!st || !c) return [];
+    try { return st.consume(c); } catch { return []; }
+  }
+
+  /** `s.equipVeto`: a reason string while the hand is meant to stay empty, else null. */
+  touchEquipVeto() {
+    if (!this.touchTrainingHere()) return null;
+    return `touch spell training: ${this.touchSpellNow().name} is the weapon on room ` +
+      `${this.policy.assignedRoom}, and a wielded weapon would be swung instead of it ` +
+      '(player.kod:4712-4729). Unset touch_spell to arm here.';
+  }
+
+  /**
+   * EMPTY THE HAND, AND PROVE IT. `unuseTrainingWeapon` first (the id join, then the name), and
+   * if the server still says armed, a DIRECT `unuse` of every weapon the equipment list names by
+   * a real id — the one path measured to work instantly on prod (unarmed-training-never-disarms).
+   */
+  async touchDisarm() {
+    const s = this.s, c = s?.client;
+    if (!c || !skills.isArmed(c)) return { ready: true, already: true };
+    const first = await this.unuseTrainingWeapon().catch(e => ({ ready: false, why: e.message }));
+    if (first.ready && !skills.isArmed(c)) return first;
+    const worn = (c.equipment?.()?.equipped ?? [])
+      .filter(o => Number.isFinite(o?.id) && o.id > 0 &&
+        skills.weaponScore(o.name ?? c.rsc?.get?.(o.nameRsc) ?? '') > 0);
+    const removed = [];
+    for (const o of worn) {
+      const before = c.evSeq;
+      await s.pacer.submit('use', () => c.unuse(o.id)).catch(() => {});
+      await c.waitFor?.({ since: before, kinds: ['equipment', 'message'], timeoutMs: 3000 })?.catch?.(() => {});
+      removed.push(o.name ?? c.rsc?.get?.(o.nameRsc) ?? `#${o.id}`);
+    }
+    const ready = !skills.isArmed(c);
+    return { ready, removed: removed[0] ?? first.removed, direct: removed,
+             ...(ready ? {} : { why: first.why ?? 'the server still reports a weapon in the hand' }) };
+  }
+
+  /**
+   * KEEP THE HAND EMPTY AND THE BUFF ON. Called before a swing on the assigned room.
+   *
+   * Never blocks a fight: whatever happens here, the caller swings next, bare. A cast that
+   * cannot be afforded says why on the status and the character keeps fighting with its fists
+   * (or rests, by the ordinary ladder) — refusing to fight for want of a buff would turn a
+   * reagent shortage into an idle character.
+   *
+   * MANA IS THE PROOF A CAST LANDED, NOT THE REPLY (cast-is-a-decision-not-an-outcome): a
+   * cast is counted as landed only on a START line, mana spent, or a reagent consumed. An
+   * ALREADY line settles an unknown state for free.
+   */
+  async maintainTouchSpell(why = 'before a swing') {
+    if (!this.touchTrainingHere()) return { skipped: 'not training here' };
+    const spec = this.touchSpellNow();
+    const st = this.touchState();
+    const s = this.s, c = s?.client;
+    if (!c) return { skipped: 'no client' };
+    this.observeTouchSpell(c);
+
+    // 1. THE HAND.
+    if (st.needDisarm || skills.isArmed(c)) {
+      const bare = await this.touchDisarm().catch(e => ({ ready: false, why: e.message }));
+      st.needDisarm = !bare.ready;
+      if (bare.ready && bare.removed)
+        this.note('touch spell training: put down the weapon', { removed: bare.removed,
+          spell: spec.name, why: 'a wielded weapon is swung instead of the touch (player.kod:4712-4729)' });
+      else if (!bare.ready && Date.now() - (this._touchDisarmComplaint ?? 0) > 60_000) {
+        this._touchDisarmComplaint = Date.now();
+        this.note('touch spell training: could NOT put the weapon down', { why: bare.why ?? null,
+          spell: spec.name, cost: 'every swing is the weapon, and the touch spell trains nothing' });
+      }
+    }
+
+    // 2. THE BUFF.
+    if (st.active === true) { st.blockedReason = null; return { active: true }; }
+    const now = Date.now();
+    const wait = touchRecastBackoffMs(this._touchUnprovenRun ?? 0);
+    if (st.lastCastAt != null && now - st.lastCastAt < wait)
+      return { active: st.active, waiting_ms: wait - (now - st.lastCastAt) };
+
+    const block = (reason, extra = {}) => {
+      const changed = st.blockedReason !== reason;
+      st.blockedReason = reason;
+      if (changed || now - (this._touchBlockedNoteAt ?? 0) > 60_000) {
+        this._touchBlockedNoteAt = now;
+        this.note('touch spell training: cannot cast it, fighting bare', { spell: spec.name, reason, ...extra });
+      }
+      return { active: st.active, blocked: reason };
+    };
+    const selfId = c.selfId;
+    if (!selfId) return block('no object id for ourselves yet — a self-cast needs the numeric id');
+    let spell = (c.spells || []).find(sp => (c.rsc?.get?.(sp.nameRsc) || sp.name || '').toLowerCase() === spec.name);
+    if (!spell && !this._touchSpellsAsked) {
+      this._touchSpellsAsked = true;
+      await s.pacer.submit('read', () => c.requestSpells?.()).catch(() => {});
+      await new Promise(x => setTimeout(x, 400));
+      spell = (c.spells || []).find(sp => (c.rsc?.get?.(sp.nameRsc) || sp.name || '').toLowerCase() === spec.name);
+    }
+    if (!spell) return block(`the character does not know ${spec.name}`);
+    const mana = c.vitals?.()?.mana?.value ?? null;
+    if (mana != null && mana < spec.mana)
+      return block('not enough mana', { mana, needs: spec.mana });
+    const count = (re) => (c.inventory || []).filter(o => re.test(c.rsc?.get?.(o.nameRsc) || o.name || ''))
+      .reduce((n, o) => n + (Number.isFinite(Number(o.amount)) && o.amount != null ? Math.max(0, Number(o.amount)) : 1), 0);
+    for (const r of spec.reagents) {
+      const have = count(r.match);
+      if (have < r.count) return block(`short of ${r.item}`, { have, needs: r.count });
+    }
+    const reagentsBefore = spec.reagents.map(r => count(r.match));
+
+    // 3. CAST, AT OUR OWN OBJECT ID. Not the name (it does not resolve) and never "me" (it
+    // resolved to somebody else on prod). A touch spell takes no target (touchatk.kod:120-123);
+    // [selfId] is the request the server builds from an empty list anyway (persench.kod:75-86).
+    const wasActive = st.active;
+    st.lastCastAt = now;
+    st.castAttempts++;
+    const before = c.evSeq;
+    await s.pacer.submit('cast', () => c.cast(spell.id, [selfId]), 1050);
+    await c.waitFor?.({ since: before, kinds: ['message', 'stat'], timeoutMs: 3000 })?.catch?.(() => {});
+    const seen = this.observeTouchSpell(c);
+    const manaAfter = c.vitals?.()?.mana?.value ?? null;
+    const spent = mana != null && manaAfter != null && mana - manaAfter > 0;
+    const usedReagent = spec.reagents.some((r, i) => count(r.match) < reagentsBefore[i]);
+    const started = seen.includes('start');
+    const already = seen.includes('already');
+    const landed = started || spent || usedReagent;
+    if (landed) {
+      st.active = true;
+      if (!started && st.lastStart == null) st.lastStart = Date.now();
+      st.recasts++;
+      st.punchesSinceCast = 0;
+      st.blockedReason = null;
+      st.castsUnproven = 0;
+      this._touchUnprovenRun = 0;
+      st.lastCastResult = started ? 'started' : spent ? 'mana spent' : 'reagent spent';
+    } else if (already) {
+      st.active = true;
+      st.blockedReason = null;
+      this._touchUnprovenRun = 0;
+      st.lastCastResult = 'already on';
+    } else {
+      st.castsUnproven++;
+      this._touchUnprovenRun = (this._touchUnprovenRun ?? 0) + 1;
+      st.lastCastResult = 'no proof — no start line, no mana or reagent spent';
+      st.blockedReason = 'the last cast left no trace (refused in silence?)';
+    }
+    this.recordCast?.(spec.name, { ok: landed || already, why: `touch spell training: ${why}`,
+      target: 'self', mana_before: mana, mana_after: manaAfter, was_active: wasActive,
+      result: st.lastCastResult });
+    this.note(landed ? 'touch spell training: cast the touch on ourselves'
+              : already ? 'touch spell training: the touch was already on'
+              : 'touch spell training: the cast left no trace', {
+      spell: spec.name, why, was_active: wasActive, mana_before: mana, mana_after: manaAfter,
+      result: st.lastCastResult });
+    return { cast: true, landed, already, active: st.active };
+  }
+
+  /** For `status()`: always present, null when the posture is off. */
+  touchSpellStatus() {
+    const st = this.touchState();
+    if (!st) return null;
+    return { ...st.snapshot(), training_here: this.touchTrainingHere(),
+             assigned_room: this.policy?.assignedRoom ?? null };
+  }
+
   /**
    * Conjured weapons in the pack that this character's own ban list forbids it to hold.
    *
@@ -2907,6 +3118,10 @@ export class Autopilot {
   // Proficiency goes up (player.kod:7335-7339), so switching there discards nothing. Every
   // other switching schedule throws away part of a block.
   trainingStyleFor(targetId = null) {
+    // A TOUCH SPELL IS SWUNG BY AN EMPTY HAND, so on its own ground it outranks whatever weapon
+    // regimen is configured: passArm's disarm, prepareTrainingStyle('unarmed'), armSelf's and
+    // makeWeapon's refusals and styleForNonPrey all key off this one answer.
+    if (this.touchTrainingHere()) return 'unarmed';
     const configured = this.policy.trainingStyle ?? 'normal';
     if (configured === 'alternate_on_improve')
       return this._trainingNextStyle ?? 'short_sword';
@@ -11893,6 +12108,10 @@ export class Autopilot {
       // The effective delay beside it for the same reason `travel_guard` is always present.
       pvp_return_hold: this.pvpReturnHold(),
       pvp_return_delay_ms: pvpReturnDelayMs(this.policy),
+      // THE TOUCH SPELL BEING TRAINED, and whether the server last said it was on. Null when
+      // touch_spell is unset. `blocked_reason` is why it is not being cast (mana, reagents, an
+      // unknown spell) while the character fights bare.
+      touch_spell: this.touchSpellStatus(),
       // WHO OWNS WHICH HALF OF THIS CHARACTER. Always present, never undefined: a reader
       // has to be able to tell "the keeper owns everything" from "this broker does not
       // answer that question", and undefined reads as the second. With nothing attached
@@ -17244,6 +17463,10 @@ export class Autopilot {
   // ── passArm: extracted from pass() ────────────────────────────────
   async passArm(ctx) {
     const { s, c, room } = ctx;
+    // The touch spell's START/STOP lines and every "Your punch"/"Your acid touch" swing are read
+    // on every pass, wherever the character is, so the belief is current the moment it returns
+    // to its ground. Memory only: no wire, no wait.
+    if (this.policy?.touchSpell) this.observeTouchSpell(c);
     // Deliberate bare-hand practice is not a broken loadout. It is allowed only on
     // the assigned farm ground; after a death or during travel the ordinary arm-first
     // survival rule remains in force.
@@ -17271,7 +17494,9 @@ export class Autopilot {
       // one for no client at all. Without the guard this path tried to unwield for a
       // session that does not exist and then threw inside note().
       if (c && skills.isArmed(c)) {
-        const bare = await this.unuseTrainingWeapon()
+        // A touch-spell trainer gets the version that falls back to a DIRECT unuse by the
+        // equipment list's own ids when the id join reads the hand as empty.
+        const bare = await (this.touchTrainingHere() ? this.touchDisarm() : this.unuseTrainingWeapon())
           .catch(e => ({ ready: false, why: e.message }));
         if (bare.ready && bare.removed)
           this.note('unarmed practice: put down the weapon', { removed: bare.removed,
@@ -17828,6 +18053,7 @@ export class Autopilot {
         target: tName, exactTargetId: found.id, includePlayers: true,
         rounds: this.policy.fightRounds ?? 30, disengageAt: safe.fleeAt,
         loot: false, holdPosition: !!this.hold, reach: REACH,
+        ...(this.touchTrainingHere() ? { equip: false } : {}),
         weaponPriority: this.weaponPriorityNow(),
         bannedWeapons: this.bannedWeaponsNow(),
       }).catch(e => ({ killed: false, died: false, note: e.message }));
@@ -17983,7 +18209,13 @@ export class Autopilot {
   // so a kill earned here is a kill on the ledger and a max-health gain is attributable.
   //
   // Overridable seam for the offline test: the real thing is `skills.fight`.
-  fightNow(opts) { return skills.fight(this.s, opts); }
+  // A touch-spell trainer on its own ground fights BARE in every fight — a blocker, a fight-back,
+  // a lever — because equip:true would wield the best weapon in the pack and swing it instead of
+  // the touch. `equipBest` vetoes it too; this keeps the fight from even asking.
+  fightNow(opts) {
+    const o = (this.touchTrainingHere() && opts?.equip === undefined) ? { ...opts, equip: false } : opts;
+    return skills.fight(this.s, o);
+  }
 
   async passFightBack(ctx) {
     const { s, c, room, v, hp } = ctx;
@@ -21970,6 +22202,13 @@ export class Autopilot {
         this.noProgress(`training ${trainingStyle} unavailable: ${training.why}`);
         return HANDLED;
       }
+      // THE TOUCH, BETWEEN SWINGS. An unarmed bout is one round a pass, so this runs before every
+      // swing on the assigned room: empty hand, buff on, recast when the server said it stopped
+      // or a swing read "Your punch". It never refuses the fight — a buff we cannot afford is a
+      // reason on the status, and the character swings bare.
+      if (this.touchTrainingHere())
+        await this.maintainTouchSpell(`before swinging at ${engageName}`)
+          .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
       // Defensive contact must not release the claim on a pulled quarry whose progress
       // is still being watched. Once that experiment ends, normal claim convergence resumes.
       if (!this.pendingPull && claimedSwing != null)

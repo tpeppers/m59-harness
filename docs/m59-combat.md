@@ -183,6 +183,32 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). The engagement ceiling, the spawn tabl
   effect, and that question turns on block, on shields, and on the spell modifier the
   create-food loop runs on. See `ARMOUR` and `absorbsSomething` in `m59-skills.mjs`.
 
+## Touch spells are the weapon — `touch_spell`
+
+A touch spell (acid touch, touch of flame, holy touch, icy fingers, zap) is a personal
+enchantment that the server swings **instead of a fist, and only while the hand is empty**:
+`Player.GetWeapon` returns a wielded weapon first and consults the touch enchantment only
+when there is none (`player.kod:4712-4729`). A wielded weapon does not weaken the touch, it
+hides it completely. A landed touch trains the SPELL (`ImproveStroke`, `touchatk.kod:99-104`).
+
+```bash
+autopilot action=start agent=t9 mode=farm hunt="living tree" touch_spell="acid touch"
+autopilot action=start agent=t9 touch_spell=null            # off
+autopilot action=status agent=t9                            # touch_spell: {active, recasts, ...}
+```
+
+On the assigned room in farm mode the keeper unuses any weapon (falling back to a direct
+`unuse` by the equipment list's id), vetoes every `equipBest` on the session, fights with
+`equip:false`, and before each swing keeps the buff on: it casts at its own numeric object id
+when the server's stop line arrived, a swing read `Your punch …`, or it has not been told
+since starting. The lines it reads are the kod's (`m59-touchspell.mjs` cites each): acid touch
+starts with *"The corrosive spittle of Qor's love oozes from the pores of your hand."*, stops
+with *"Your hands no longer drip with acidic ooze."*, and a cast while it is on answers
+*"Your hands are already dripping with acidic ooze."* at no cost. A miss names no weapon and
+proves nothing. Acid touch costs 10 mana and one entroot berry and lasts one to seven and a
+half minutes by spell power (`touchatk.kod:390-400`). Short of either, `blocked_reason` says
+so and the character fights bare. Off the room every ordinary arming rule stands.
+
 ## Automatic healing wands
 
 Farmers can opt into `heal_wand_below` (0–1 health fraction; 0 disables,

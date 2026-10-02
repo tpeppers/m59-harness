@@ -163,6 +163,7 @@ import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRA
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
          applyFightAboveVigor } from './m59-autopilot.mjs';
+import { touchSpellName, TOUCH_SPELL_NAMES } from './m59-touchspell.mjs';
 import { dropChatter, chatterIfAny, chatterFor, fleetChatter } from './m59-chatter.mjs';
 import * as parties from './m59-party.mjs';
 import * as exitgap from './m59-exitgap.mjs';
@@ -11321,6 +11322,18 @@ const TOOLS = [
           'recovery detour, an explicit travel order, or a character whose movement is leased — ' +
           'the lease holder decides. The hold survives a keeper restart; autopilot status ' +
           'reports it as pvp_return_hold' },
+      touch_spell: { type: ['string', 'null'],
+        enum: [...TOUCH_SPELL_NAMES, null],
+        description: 'TRAIN A TOUCH SPELL BY SWINGING IT: "acid touch", "touch of flame", "holy ' +
+          'touch", "icy fingers" or "zap"; null switches it off. A touch spell is a personal ' +
+          'enchantment that replaces the weapon, and only while the hand is EMPTY (player.kod:' +
+          '4712-4729). While set, in farm mode on the assigned room, the keeper unuses any ' +
+          'wielded weapon, refuses every re-equip (armSelf, makeWeapon, equip_best, fight-back), ' +
+          'reads the server\'s start/stop lines and the combat log ("Your acid touch ..." vs ' +
+          '"Your punch ..."), and recasts the touch on its own object id when it stopped or a ' +
+          'swing was a punch — rate-limited, and counted landed only on a start line, mana or a ' +
+          'reagent spent. Off that room every ordinary arming rule stands. autopilot status ' +
+          'reports it as touch_spell' },
       blind_walk_watchdog: { type: 'boolean',
         description: 'OFF by default and deliberately so. The watchdog rung that cancels a ' +
           'walk when health is under the flee line and the pass has been inside one await for ' +
@@ -12335,6 +12348,12 @@ const TOOLS = [
               '(two hours); pass null to restore it' };
           p.policy.pvpReturnDelayMs = Math.floor(ms);
         }
+      }
+      // AN UNKNOWN SPELL IS REFUSED, NOT SWITCHED OFF: "acid tuoch" coerced to null would report
+      // success and train nothing. Null (or "") is the explicit way off.
+      if (a.touch_spell !== undefined) {
+        try { p.policy.touchSpell = touchSpellName(a.touch_spell); }
+        catch (e) { return { started: false, reason: e.message }; }
       }
       if (a.travel_vigor_floor !== undefined) p.policy.travelVigorFloor = Number(a.travel_vigor_floor);
       if (a.travel_shelter_detour !== undefined) p.policy.travelShelterDetour = Number(a.travel_shelter_detour);

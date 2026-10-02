@@ -691,6 +691,12 @@ export const handsFullText = (t) => HANDS_FULL.test(t || '');
 export async function equipBest(s, { priority = null, banned = null, maxTries = 4,
                                      refresh = true, allowUnrevealed = false,
                                      beforeMutation = null, shouldCancel = null } = {}) {
+  // THE OWNER MAY SAY THE HAND IS MEANT TO BE EMPTY. A keeper training a touch spell registers
+  // `s.equipVeto`; a reason string refuses the equip before anything is read or sent. A hook that
+  // throws does not veto: an unexplained refusal to arm is the dangerous direction.
+  let veto = null;
+  try { veto = s?.equipVeto?.() ?? null; } catch { veto = null; }
+  if (veto) return { wielding: null, verified: false, refused: true, vetoed: true, note: String(veto) };
   const c = s.need();
   if (refresh) {
     await s.pacer.submit('read', () => c.requestInventory());
