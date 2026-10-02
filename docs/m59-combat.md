@@ -209,6 +209,26 @@ proves nothing. Acid touch costs 10 mana and one entroot berry and lasts one to 
 half minutes by spell power (`touchatk.kod:390-400`). Short of either, `blocked_reason` says
 so and the character fights bare. Off the room every ordinary arming rule stands.
 
+## Which quarry first — `hunt_priority`
+
+`hunt` is a SET; `hunt_priority` is an ORDER over it, opt-in and null by default
+(`tools/m59-hunt-priority.mjs`). The operator's case, 2026-10-02: Kermit farms living trees in
+Faronath (537), and the Qor casters there will not kill its spiders for the karma, so he should
+take a spider first whenever one is engageable.
+
+```bash
+autopilot action=start agent=t1 hunt='["spider","living tree"]' hunt_priority='["spider","living tree"]'
+autopilot action=start agent=t1 hunt_priority=null            # off
+```
+
+It only REORDERS the candidate list the keeper already built — after the hunt match,
+confinement, the proved-unreachable avoid set, pull cooling and the island filter — so every
+gate that shaped the list, and every gate after selection (engage health, vigor floor, wall,
+flee line, crowd), still applies to whatever comes first. No engageable spider, and the next
+entry (then the unlisted remainder, in the usual order) wins. The foe already wounded or being
+pulled stays first, because a kill pays only its damager. A name `hunt` never produces is
+reported as `hunt_priority.ignored`, never acted on.
+
 ## Automatic healing wands
 
 Farmers can opt into `heal_wand_below` (0–1 health fraction; 0 disables,

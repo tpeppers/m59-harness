@@ -85,6 +85,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon } from './m59-weapon-magic.mjs';
+import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
@@ -4522,6 +4523,17 @@ class Session {
   // `unless_unworn: 'shield' | 'armor'`: still taken by a character wearing none of that kind.
   setLootIgnore(list = []) { this._lootIgnore = Array.isArray(list) ? list : []; }
 
+  // PER-CREATURE LOOT ALLOW LIST (policy.lootOnly, m59-loot-filter.mjs). Installed every pass
+  // by the autopilot like the two above; `matcherFor` is the keeper's hunt matcher, so a key
+  // means the same creature it would mean in `hunt`. The memory of what was left survives a
+  // policy re-assert and is dropped only when the policy is switched off.
+  setLootOnly(spec = null, { matcherFor = null } = {}) {
+    this._lootOnly = spec ?? null;
+    this._lootOnlyMatcher = matcherFor;
+    if (spec) this._lootOnlyMemory ??= newLootOnlyMemory();
+    else this._lootOnlyMemory = null;
+  }
+
   setOverfarmPolicy(policy = null, protect = [], floors = null) {
     this._overfarmPolicy = policy ?? null;
     this._overfarmProtect = Array.isArray(protect) ? protect : [];
@@ -4565,6 +4577,10 @@ class Session {
                     movementGeneration = this.movementGeneration, controlToken = null,
                     shouldCancel = null, explicitIdsOverride = true,
                     beforeMutation = null,
+                    // { name, before } — the creature this loot follows and the gettable ids on
+                    // the floor when the fight began (fight() supplies it). Read only by the
+                    // lootOnly filter; null for every loot that does not follow a kill.
+                    kill = null,
                     // DEFAULTED FROM THE SESSION, NOT REQUIRED FROM THE CALLER. Six places
                     // call lootFloor and only one of them is inside the autopilot; asking
                     // each to remember to forward the policy is how a strategy ends up
@@ -4712,8 +4728,20 @@ class Session {
       });
     }
 
+    // LOOT_ONLY: after a kill of a listed creature, only its listed items (m59-loot-filter.mjs).
+    // Same placement rule as the ignore list: never against an explicit id request.
+    const lootOnlyLeft = [];
+    if (this._lootOnly && (!ids?.length || !explicitIdsOverride) && cands.length) {
+      const plan = planLootOnly({ spec: this._lootOnly, kill, memory: this._lootOnlyMemory,
+        room: this.world?.room?.num ?? null, matcherFor: this._lootOnlyMatcher,
+        floor: cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' })) });
+      const leave = new Set(plan.leave.map(l => l.id));
+      if (leave.size) { cands = cands.filter(o => !leave.has(o.id)); lootOnlyLeft.push(...plan.leave); }
+    }
+
     const taken = [], refused = [];
     let wasCancelled = false;
+    for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
 

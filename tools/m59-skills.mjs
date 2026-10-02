@@ -40,6 +40,7 @@ import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-invent
 import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
+import { floorSnapshot } from './m59-loot-filter.mjs';
 
 // The merchant index resolves a live object id to the class whose buying rule applies.
 // Read once and kept: it is a built artefact that changes when somebody rebuilds it, and
@@ -2534,6 +2535,9 @@ async function fightWithIntent(s, {
   const foe = resumed || inReach[0];
   setIntentTarget(s,{kind:'attack',object_id:foe.id});
   const foeName = c.rsc.get(foe.nameRsc);
+  // What was already on the floor, so the post-kill loot can tell this kill's drop from an
+  // older one (loot_only attribution, m59-loot-filter.mjs). Cheap: a walk of the room cache.
+  const floorBefore = floorSnapshot(c.room?.objects?.values?.(), o => o.flags & OF.GETTABLE);
   say('chose', { target: describeObject(foe, c.lookup),
                  ...(resumed ? { resumed: 'the one we already damaged' } : {}),
                  ...(holdPosition ? { holding: 'fighting from where we stand' } : {}) });
@@ -2935,7 +2939,7 @@ async function fightWithIntent(s, {
   }
 
   if (loot) {
-    const l = await s.lootFloor({ stayPut: holdPosition });
+    const l = await s.lootFloor({ stayPut: holdPosition, kill: { name: foeName, before: floorBefore } });
     out.looted = l.taken;
     out.refused = l.refused?.length ? l.refused : undefined;
     out.carrying = l.carrying;

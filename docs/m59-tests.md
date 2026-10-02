@@ -18,6 +18,18 @@ These tests are offline. They do not execute a raid or shut down a server.
 
 ## Travel and combat regressions
 
+- `m59-hunt-priority-test.mjs` (42): `hunt_priority`, an order over the `hunt` set. A spider is
+  chosen over a nearer tree; with no engageable spider the tree is; the ordering never adds a
+  creature, keeps the wounded/pulled foe first, matches like `hunt` (spider is not black
+  spider), and in the farm pass sits after the confinement, avoid, cooling and rank filters and
+  before the claim and every engage gate; a malformed order is refused; a name outside `hunt` is
+  reported. Also the policy surfaces for BOTH new keys (`huntPriority`, `lootOnly`): default
+  object, JSON round trip through the keeper's push merge, broker schema, setter and reflection.
+- `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
+  real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom
+  is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
+  spider junk left earlier is not; attribution by novelty against fight()'s floor snapshot;
+  memory expiry, recycled ids and room scoping; malformed shapes and unknown items refused.
 - `m59-touchspell-test.mjs` (51): touch spell training (`touch_spell`). The kod's own start,
   stop, already and kill lines and the "Your acid touch …" / "Your punch …" combat log; on the
   assigned farm room a wielded weapon is unused, the touch is cast at the caster's numeric

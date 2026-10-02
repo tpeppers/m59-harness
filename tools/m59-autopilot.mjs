@@ -150,6 +150,8 @@ import { fileURLToPath } from 'node:url';
 import { UNDERWORLD } from './m59-travelgate.mjs';
 // A touch spell is the weapon: train it with an empty hand and the buff on. See touchTrainingHere.
 import { touchSpellSpec, TouchSpellState, touchRecastBackoffMs } from './m59-touchspell.mjs';
+import { orderByHuntPriority, huntPriorityProblems, priorityRankOf } from './m59-hunt-priority.mjs';
+import { lootOnlyStatus } from './m59-loot-filter.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1964,6 +1966,13 @@ export class Autopilot {
       // punch". Off that room every ordinary arming rule stands. See m59-touchspell.mjs. It has to
       // be a key HERE, like pvpReturnDelayMs above, or a pushed order is reflected nowhere.
       touchSpell: null,
+      // AN ORDER OVER THE HUNT SET, and a per-creature loot allow list. Both null (inert), both
+      // keys HERE for the same reason as touchSpell. huntPriority: ['spider', 'living tree'] takes
+      // the first-listed creature the keeper may already engage (m59-hunt-priority.mjs); lootOnly:
+      // { spider: ['purple mushroom'] } takes only those from that creature's kill
+      // (m59-loot-filter.mjs). Operator, 2026-10-02, for Kermit in Faronath.
+      huntPriority: null,
+      lootOnly: null,
       // Take reagents from a fleetmate without negotiating. The provider half of a
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
@@ -2766,6 +2775,26 @@ export class Autopilot {
 
   /** The configured touch spell's spec, or null when the posture is off. */
   touchSpellNow() { return touchSpellSpec(this.policy?.touchSpell); }
+
+  // HUNT PRIORITY (m59-hunt-priority.mjs). The ordering lives there; this binds it to the
+  // keeper's own name reader and hunt matcher, and remembers the last choice for status.
+  huntPriorityOrder(found, preferId = null) {
+    const c = this.s?.client;
+    const nameOf = o => c?.rsc?.get?.(o.nameRsc) || o.name || '';
+    const matcherFor = n => this.huntMatch(n);
+    const ordered = orderByHuntPriority(found, this.policy.huntPriority, { nameOf, matcherFor, preferId });
+    const head = ordered[0];
+    if (head) this._huntPriorityLast = { target: nameOf(head), id: head.id, at: Date.now(),
+      ...priorityRankOf(nameOf(head), this.policy.huntPriority, { matcherFor }),
+      resumed: preferId != null && head.id === preferId };
+    return ordered;
+  }
+  huntPriorityStatus() {
+    const order = this.policy?.huntPriority;
+    if (!Array.isArray(order) || !order.length) return null;
+    return { order, ignored: huntPriorityProblems(order, this.policy.hunt, { matcherFor: n => this.huntMatch(n) }),
+             last_choice: this._huntPriorityLast ?? null };
+  }
 
   /** Is this character training its touch spell RIGHT HERE, right now? */
   touchTrainingHere(room = this.s?.world?.room) {
@@ -12112,6 +12141,9 @@ export class Autopilot {
       // touch_spell is unset. `blocked_reason` is why it is not being cast (mana, reagents, an
       // unknown spell) while the character fights bare.
       touch_spell: this.touchSpellStatus(),
+      // Null when unset, like touch_spell. `ignored` names priority entries hunt never produces.
+      hunt_priority: this.huntPriorityStatus(),
+      loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
       // WHO OWNS WHICH HALF OF THIS CHARACTER. Always present, never undefined: a reader
       // has to be able to tell "the keeper owns everything" from "this broker does not
       // answer that question", and undefined reads as the second. With nothing attached
@@ -15472,6 +15504,7 @@ export class Autopilot {
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
                           this.carryFloors());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
+    s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k) });
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
       await s.combat.tick();
@@ -21219,6 +21252,8 @@ export class Autopilot {
           : found.some(o => o.id === this.foeId) ? this.foeId
           : found.some(o => o.id === agreed?.id) ? agreed.id : null;
         found = rankQuarries(this.s.name, room?.num, found, { preferId });
+        // hunt_priority: reorder only — every filter above has already run (m59-hunt-priority.mjs).
+        if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);
         claimQuarry(this.s.name, room?.num, found[0]?.id);
       } else {
         releaseQuarry(this.s.name);

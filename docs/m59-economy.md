@@ -486,6 +486,22 @@ event. Both halves are blind to the same unpriced items, so the COMPARISON holds
 the absolute shillings are an estimate off `viValue_average`; the row says `estimated: true`
 and the number must never be reported as takings.
 
+## Per-creature loot: `loot_only`
+
+`loot_only: {"spider": ["purple mushroom"]}` — after killing a listed creature the keeper takes
+ONLY those items from that kill; kills of anything else loot as before
+(`tools/m59-loot-filter.mjs`, applied inside `lootFloor`). Item names match WHOLE, like the
+supply tool, and must resolve in `m59-items.json` or the order is refused with a suggestion.
+Spiders roll the generic `TID_MEDIUM_TOUGH` table, which is why this is an allow list and not
+another ignore list.
+
+The server never ties a dropped item to the monster that dropped it, so attribution is BY
+NOVELTY: `fight()` snapshots the gettable ids on the floor when it picks its foe, and only items
+new since then count as the kill's drop. What was left is remembered (id AND name, that room,
+ten minutes) so the next tree kill, a clean-up sweep or the `loot` tool does not take it
+anyway. Something dropped during the fight by another source reads as this kill's — it fails
+toward leaving loot, never toward carrying spider junk. An explicit id list is never filtered.
+
 ## Chalice farming: a free Rescue home instead of the walk
 
 Operator's plan, 2026-09-23. One named HOLDER carries the fleet's Chalice of the Rain at a

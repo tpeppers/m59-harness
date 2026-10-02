@@ -145,7 +145,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
-import { resolveItemNames, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
+import { resolveItemNames, resolveItemName, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
 import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
@@ -180,7 +180,9 @@ import { RANK, RANK_NAME, COMMANDS, mayI, commandsIn, validateGuild,
 import { isObjectId, sessionObjectId, ourSessionsById,
          rememberObjectId } from './m59-session-identity.mjs';
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
-         knownDrops, whoDrops } from './m59-spawns.mjs';
+         knownDrops, whoDrops, huntMatcher } from './m59-spawns.mjs';
+import { huntPrioritySpec, huntPriorityProblems } from './m59-hunt-priority.mjs';
+import { lootOnlySpec } from './m59-loot-filter.mjs';
 // The shelter helpers. The safe-spot book is RETIRED — removed outright on 2026-09-20 rather
 // than merely left unimported, because two operator chat verbs in this file were still writing
 // `verified` marks into it. There is nothing to import now. See tools/m59-safewall.mjs for the
@@ -11345,6 +11347,27 @@ const TOOLS = [
           'swing was a punch — rate-limited, and counted landed only on a start line, mana or a ' +
           'reagent spent. Off that room every ordinary arming rule stands. autopilot status ' +
           'reports it as touch_spell' },
+      hunt_priority: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
+        description: 'AN ORDER OVER hunt, not a second hunt list: e.g. ["spider", "living tree"]. ' +
+          'When set, the keeper takes the first-listed creature that is already an acceptable ' +
+          'quarry — in hunt, inside the confinement, not proved unreachable, not on pull ' +
+          'cooldown — and falls back to the next entry, then to the unlisted remainder in the ' +
+          'usual nearest/least-claimed order. It never widens hunt and never bypasses a safety ' +
+          'gate (engage health, vigor floor, wall, flee line, crowd): it only reorders the list ' +
+          'those gates produced. The creature already wounded or being pulled stays first. A ' +
+          'name hunt never produces is ignored and reported as hunt_priority.ignored. null or [] ' +
+          'switches it off; a non-list is refused. autopilot status reports it as hunt_priority. ' +
+          'See tools/m59-hunt-priority.mjs' },
+      loot_only: { type: ['object', 'null'], additionalProperties: { type: 'array', items: { type: 'string' } },
+        description: 'PER-CREATURE LOOT ALLOW LIST: { creature: [item, ...] }, e.g. {"spider": ' +
+          '["purple mushroom"]}. After killing a listed creature the keeper picks up ONLY those ' +
+          'items from that kill, matched on the WHOLE item name (purple mushroom is not ' +
+          'mushroom); kills of anything else loot exactly as before. Attribution is by novelty: ' +
+          'items that appeared on the floor during the fight are counted as that kill\'s drop, older ones are ' +
+          'not, and what was left is remembered for ten minutes so a later sweep does not take ' +
+          'it anyway. Creature keys match like hunt. Item names must resolve in m59-items.json ' +
+          'or the order is refused with a suggestion. null switches it off. autopilot status ' +
+          'reports it as loot_only. See tools/m59-loot-filter.mjs' },
       blind_walk_watchdog: { type: 'boolean',
         description: 'OFF by default and deliberately so. The watchdog rung that cancels a ' +
           'walk when health is under the flee line and the pass has been inside one await for ' +
@@ -12366,6 +12389,20 @@ const TOOLS = [
         try { p.policy.touchSpell = touchSpellName(a.touch_spell); }
         catch (e) { return { started: false, reason: e.message }; }
       }
+      // A MALFORMED ORDER IS REFUSED, NOT SWITCHED OFF (m59-hunt-priority.mjs, m59-loot-filter.mjs).
+      // Null is the explicit way off for both.
+      if (a.hunt_priority !== undefined) {
+        try { p.policy.huntPriority = huntPrioritySpec(a.hunt_priority); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      if (a.loot_only !== undefined) {
+        try { p.policy.lootOnly = lootOnlySpec(a.loot_only, { resolveItem: n => resolveItemName(n) }); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      const huntPriorityIgnored = p.policy.huntPriority
+        ? huntPriorityProblems(p.policy.huntPriority, p.policy.hunt,
+            { matcherFor: w => huntMatcher(loadSpawns(SPAWN_FILE), w) })
+        : [];
       if (a.travel_vigor_floor !== undefined) p.policy.travelVigorFloor = Number(a.travel_vigor_floor);
       if (a.travel_shelter_detour !== undefined) p.policy.travelShelterDetour = Number(a.travel_shelter_detour);
       if (a.retreat_to_inn !== undefined) p.policy.retreatToInn = a.retreat_to_inn === true;
@@ -12450,6 +12487,7 @@ const TOOLS = [
       // then ignored, has to come back in the reply. Silence here is what let `purpose` stay
       // out of a schema for a year with every keeper's audit switched off.
       if (overfarmNotes.length) out.overfarm_notes = overfarmNotes;
+      if (huntPriorityIgnored.length) out.hunt_priority_ignored = huntPriorityIgnored;
       return keeper_push ? { ...out, keeper_push } : out;
     },
   },
