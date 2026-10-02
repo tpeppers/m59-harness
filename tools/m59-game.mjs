@@ -111,6 +111,7 @@ import { loadSpawns } from './m59-spawns.mjs';
 import { operableDoorsBlocking } from './m59-doorplan.mjs';
 import * as skills from './m59-skills.mjs';
 import { isEmptyHealingWandObject } from './m59-healing-wands.mjs';
+import { observeRefusal, vetoAttack, isGuildOnlyRefusal } from './m59-refused-targets.mjs';
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
@@ -2306,7 +2307,13 @@ class Session {
     // The server's logoff-penalty clock counts from the last LOGIN (`piLastLoginTime`), and
     // the autopilot's logoff gate asks the same question. See LOGOFF_REFRESH_MS.
     this.loggedInAt = Date.now();
+    // A PLAYER THE SERVER REFUSED US IN THIS ROOM ("Only those in guilds may attack each other
+    // here.") is remembered by room number and name, and no attack packet is sent at them again
+    // while we stand here. See m59-refused-targets.mjs.
+    c.attackVeto = id => vetoAttack(this, c, id);
     c.onEvent = ev => {
+      // FIRST, so every consumer below -- the combat override included -- already knows.
+      try { observeRefusal(this, c, ev); } catch { /* bookkeeping never costs an event */ }
       if (!c.combatReady && ev.kind === 'message') loginCombatEvents.push(ev);
       else this.combat?.event(ev, c);
       if (ev.kind === 'message') this.noteToughness?.(ev, c);
@@ -4423,6 +4430,8 @@ class Session {
         const hp = healthPct();
         if (hp != null && hp < abortBelow) { aborted = { at_health: hp, swing: i }; break; }
       }
+      // A player already refused us in this room: the client would not send it anyway.
+      if (vetoAttack(this, c, targetId)) break;
       await this.faceToward(o);
       const before = c.evSeq;
       await this.pacer.submit('attack', () => c.attack(targetId), ATTACK_INTERVAL_MS);
@@ -4448,6 +4457,9 @@ class Session {
       // identical refusals bought at a packet each. Stop and let the caller act on it;
       // `fight` stands up and takes the round again, which is the usual cure.
       if ([...collected.values()].some((t) => skills.cannotSwingText(t))) break;
+      // REFUSED FOR WHO THEY ARE, IN THIS ROOM ("Only those in guilds may attack each other
+      // here.", room.kod room_guild_combat). Nothing inside a round changes that either.
+      if ([...collected.values()].some(isGuildOnlyRefusal)) break;
     }
     // Health after the exchange, since deciding whether to keep fighting depends on
     // it and the stat only arrives when it changes.
@@ -4466,7 +4478,9 @@ class Session {
     // return straight out of here, so the flag was simply absent, `r?.could_not_swing` read
     // `undefined`, and a raid read 590 refusals as 590 swings that did no damage.
     const couldNotSwing = messages.some(t => skills.cannotSwingText(t));
+    const refusedHere = messages.some(isGuildOnlyRefusal) || vetoAttack(this, c, targetId);
     return { messages, vitals: c.vitals(), aborted, cancelled,
+             ...(refusedHere ? { refused_here: 'guild_only' } : {}),
              ...(couldNotSwing ? { could_not_swing: true,
                                    note: 'the swings were refused, not missed — the character is ' +
                                          'sitting down (PFLAG_NO_FIGHT, player.kod:1164). Send `rest` ' +

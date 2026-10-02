@@ -26,6 +26,7 @@ import { currentSurvivalDecision, cancelSurvivalDecision } from './m59-survival-
 // A ROOM REFERENCE CARRIES ITS SPACE — the client's room `.id` is an OBJECT ID and the bake's
 // key is a ROOM NUMBER, and both are small integers. See tools/m59-roomref.mjs.
 import { roomFields } from './m59-roomref.mjs';
+import { refusedHere } from './m59-refused-targets.mjs';
 // The Underworld's exits, and which city is nearest to any room. As a namespace,
 // because escapeUnderworld re-exports most of it and a bare import would shadow.
 import * as UW from './m59-underworld.mjs';
@@ -2371,6 +2372,9 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
   const low = String(needle ?? '').toLowerCase();
   let list = [...c.room.objects.values()].filter(o => o.id !== c.selfId);
   if (!includePlayers) list = list.filter(o => !(o.flags & OF.PLAYER));
+  // A PLAYER THE SERVER HAS REFUSED US IN THIS ROOM is not a candidate (m59-refused-targets.mjs).
+  // Monsters never consult it.
+  else list = list.filter(o => !(o.flags & OF.PLAYER) || !refusedHere(s, c.rsc?.get?.(o.nameRsc) ?? o.name));
   if (attackableOnly) list = list.filter(o => o.flags & OF.ATTACKABLE);
   if (match) list = list.filter(o => match(c.rsc.get(o.nameRsc) || ''));
   else if (low) list = list.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(low));
@@ -2682,6 +2686,15 @@ async function fightWithIntent(s, {
       { abortBelow: disengageAt, shouldCancel: fightCancelled });
     roundsFought++;
     combatLines.push(...res.messages);
+
+    // REFUSED FOR WHO THEY ARE, IN THIS ROOM. "Only those in guilds may attack each other here."
+    // Every further round is the same refusal; the session has already remembered it, so the
+    // caller's next choice skips this player. Say so and stop.
+    if (res.refused_here)
+      return { fought: false, killed: false, died: false, refused_here: res.refused_here,
+               rounds: roundsFought, target: foeName, foe_id: foe.id, combat: combatLines.slice(-8), log,
+               reason: 'the server will not let us attack this player in this room (guild-only)',
+               note: 'not retried while we stand in this room; pick another target or carry on' };
 
     // Cancelled between swings. Reported rather than folded into "still alive after N
     // rounds", because a fight somebody STOPPED and a fight that ran out of budget call

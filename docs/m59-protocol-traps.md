@@ -259,6 +259,19 @@ taken and sending one kind it never would.
   `node tools/m59-grudge-test.mjs` (48) is the contract test, and the DM assertion in it
   should never be deleted.
 
+- **"Only those in guilds may attack each other here." refuses a TARGET, not the room.**
+  room.kod `room_guild_combat`, spoken to the attacker by `ReqSomethingAttack` in a
+  ROOM_GUILD_PK_ONLY (0x8) room — Castle Victoria, Tos, Barloque, Jasper, Cor Noth, Kocatan —
+  when `AllowGuildAttack(what, victim)` says no: for a guilded fleet, the VICTIM is unguilded,
+  not a murderer, and holds no token or soldier shield. `attack` reports ok and nothing lands.
+  Treated as room-wide it ended the fight and remembered nothing, so the war scan re-engaged on
+  the next object change and the bots stood there swinging (operator, 2026-10-01).
+  `tools/m59-refused-targets.mjs` is the one memory: keyed by `world.room.num` and the player's
+  NAME (never the id), forgotten on leaving the room or after 10 minutes, consulted by every
+  path that swings at a player and by the client's own `attack`. It withholds swings only:
+  a refused player hurting us is still answered by the keeper's flee/rest ladder.
+  `node tools/m59-guild-refusal-test.mjs` (14) pins it.
+
 
 ## DID THE CAST EVEN START? THE REAGENT ANSWERS; THE REPLY DOES NOT
 

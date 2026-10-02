@@ -48,6 +48,7 @@ import { HealingWands } from './m59-healing-wands.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
+import { refusedHere, refusedTargets } from './m59-refused-targets.mjs';
 import { isFood, foodValue, weighItem, weighPack, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
@@ -9809,7 +9810,9 @@ export class Autopilot {
         return { o, name, verdict: grudge.mayReturnFire({ name, flags: o.flags },
                                      { fleetmate: party.isFleetmate(name) }) };
       })
-      .filter(row => row.verdict.engage);
+      // REFUSED IN THIS ROOM ("Only those in guilds may attack each other here."): still a
+      // threat the ladder answers, never somebody we swing at again here. m59-refused-targets.
+      .filter(row => row.verdict.engage && !refusedHere(this.s, row.name));
     if (!candidates.length) return null;
 
     // THE ONE THAT HAS HIT US MOST RECENTLY. Not the nearest and not the weakest: a fight
@@ -11933,6 +11936,9 @@ export class Autopilot {
           for_s: Math.round((Date.now() - this.watch.attack.since) / 1000),
           hits: this.watch.attack.hits, lost: this.watch.attack.lost } : null,
       } : null,
+      // PLAYERS THE SERVER WILL NOT LET US ATTACK IN THIS ROOM ("Only those in guilds may attack
+      // each other here."). Every attack path skips them here; leaving the room forgets them.
+      refused_targets: (() => { try { return refusedTargets(this.s)?.list() ?? []; } catch { return null; } })(),
       passes: this.passes,
       running_for_seconds: this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0,
       // The summary is the part a returning model should read first; the journal is
@@ -17787,6 +17793,8 @@ export class Autopilot {
         o.id !== c.selfId && (o.flags & OF.PLAYER) && (o.flags & OF.ATTACKABLE) &&
         (c.rsc.get(o.nameRsc) || '') === tName);
       if (!found) continue;
+      // The server has already refused us this person in this room (guild-only): move on.
+      if (refusedHere(this.s, tName)) continue;
 
       // THE GATE. Refused for anyone who has not attacked us inside the hour, for anyone
       // the server does not currently call a murderer or an outlaw, and for one of ours.
@@ -18010,7 +18018,10 @@ export class Autopilot {
     const rows = onUs.map(o => {
       const name = c.rsc.get(o.nameRsc) || '';
       return { o, name, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row),
-               refused: name ? this.refuseEngagement(name) : { why: 'it has no name' } };
+               refused: !name ? { why: 'it has no name' }
+                 : (o.flags & OF.PLAYER) && refusedHere(this.s, name)
+                   ? { why: 'the server refused us this player in this room (guild-only)' }
+                   : this.refuseEngagement(name) };
     }).sort((x, y) => x.d - y.d);
     const pick = rows.find(r => r.name && !r.refused);
     const underFor = Math.round((now - due.since) / 1000);

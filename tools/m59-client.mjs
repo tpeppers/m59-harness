@@ -1096,9 +1096,27 @@ export class M59Client {
   // session does not grow it without bound.
   attack(id, info = 1)  {
     if (!Array.isArray(this.attackLog)) this.attackLog = [];
-    this.attackLog.push({ at: Date.now(), id });
+    // A PLAYER THE SERVER HAS ALREADY REFUSED US IN THIS ROOM is not swung at again
+    // (m59-refused-targets.mjs; installed by the session). Logged, never sent.
+    let vetoed = false;
+    try { vetoed = !!this.attackVeto?.(id); } catch { vetoed = false; }
+    this.attackLog.push({ at: Date.now(), id, ...(vetoed ? { vetoed: true } : {}) });
     if (this.attackLog.length > 500) this.attackLog.splice(0, this.attackLog.length - 500);
+    if (vetoed) { this.attacksVetoed = (this.attacksVetoed ?? 0) + 1; return false; }
+    this.noteAttackTarget(id, 'attack');
     this.send(BP.REQ_ATTACK, u8b(info), u32(objId(id)));
+  }
+
+  // WHAT WE LAST SWUNG OR CAST AT, BY NAME. A spoken refusal ("Only those in guilds may attack
+  // each other here.") names nobody, so it is attributed to this. A name, because the id is a
+  // handle that is renumbered on save; the id is kept only to say what was sent.
+  noteAttackTarget(id, via) {
+    try {
+      const o = this.room?.objects?.get?.(objId(id));
+      if (!o || objId(id) === this.selfId) return;
+      const name = this.rsc?.get?.(o.nameRsc) ?? o.name ?? null;
+      this.lastAttackTarget = { at: Date.now(), id: objId(id), name, player: !!(o.flags & OF.PLAYER), via };
+    } catch { /* bookkeeping must never stop a packet */ }
   }
 
   // Record a combat outcome from a server message. The server sends prose for
@@ -1159,6 +1177,7 @@ export class M59Client {
   // target still sends an empty list.
   cast(spellId, targets = []) {
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
+    if ([].concat(targets).length === 1) this.noteAttackTarget([].concat(targets)[0], 'cast');
     try {
       const spell = this.spells?.find(s => objId(s.id) === objId(spellId));
       const name = String(spell?.name ?? this.rsc?.get?.(spell?.nameRsc) ?? '').toLowerCase();
@@ -1169,6 +1188,7 @@ export class M59Client {
   // BP_REQ_APPLY {4,OBJECT} {4,OBJECT} — use one item on another.
   apply(what, onWhat) {
     this.send(BP.REQ_APPLY, u32(objId(what)), u32(objId(onWhat)));
+    this.noteAttackTarget(onWhat, 'apply');
   }
 
   // There is no BP_REQ_GIVE in sprocket.c's table despite the opcode existing, so

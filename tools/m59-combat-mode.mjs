@@ -14,6 +14,7 @@ import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
+import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets } from './m59-refused-targets.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -36,9 +37,16 @@ export const WAR_SIGHTING_EVERY_MS = 15_000;
 // override owned the body. 73 rooms carry NO_COMBAT, Marion (200) among them.
 export const ROOM_NO_COMBAT = 0x0002;
 export const ROOM_NO_PK = 0x0004;
-// The sentences ReqSomethingAttack answers with (room.kod resources room_no_attack,
-// room_no_pk_allowed, room_guild_combat). A ROOM refusal says nothing about the target.
-export const ROOM_REFUSAL = /you can't fight here|you cannot attack another player here|only those in guilds may attack each other here/i;
+// The sentences ReqSomethingAttack answers with when the ROOM forbids it (room.kod resources
+// room_no_attack, room_no_pk_allowed). A room refusal says nothing about the target.
+//
+// room_guild_combat, "Only those in guilds may attack each other here.", is NOT one of them any
+// more. It is refused by AllowGuildAttack(what, victim), which in a ROOM_GUILD_PK_ONLY room says
+// no when the VICTIM is unguilded, not a murderer, and holds no token or soldier shield (the fleet
+// is guilded, so the attacker half does not apply): a fact about one target in one room. It is
+// remembered per (room number, name) in m59-refused-targets.mjs and every attack path skips that
+// target there; other players in the room are unaffected. Operator, 2026-10-01.
+export const ROOM_REFUSAL = /you can't fight here|you cannot attack another player here/i;
 const demand = (ok, why) => { if (!ok) throw new Error(`combat: ${why}`); };
 const square = (p, label) => {
   demand(p && Number.isSafeInteger(p.row) && p.row > 0 &&
@@ -199,7 +207,9 @@ export class CombatMode {
   status() {
     const o = this.active ?? this.last;
     const watch = this.watchStatus();
+    const refused_targets = this.refusedStatus();
     if (!o) return { active: false, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
+      ...(refused_targets?.length ? { refused_targets } : {}),
       ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
     return { active: !!this.active, order_id: o.id, action: o.order.action,
       target: o.order.target, map: o.order.map ?? o.room, position: o.order.position,
@@ -214,7 +224,28 @@ export class CombatMode {
       expires_at: o.expiresAt, finished_at: o.finishedAt ?? null,
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
       pvp_survival: this.pvpStatus(), keep_safety: !!o.keepSafety, war: this.warStatus(),
+      ...(refused_targets?.length ? { refused_targets } : {}),
       ...(watch ? { watch } : {}) };
+  }
+
+  // ------------------------------------------------------------------ refused here
+  //
+  // ONE MEMORY FOR EVERY ATTACK PATH (m59-refused-targets.mjs), on the session, so the keeper's
+  // own self-defence, fight-back and target list read the same entries this module writes.
+  // Kept on this module's clock so its TTL agrees with every other timer here.
+
+  /** The server refused us this player in the room we stand in; null when it has not. */
+  targetRefused(name) {
+    try { return name ? refusedHere(this.s, name, this.now()) : null; } catch { return null; }
+  }
+
+  refuseTarget(name, { why = 'guild_only', text = null, source = 'combat' } = {}) {
+    try { return name ? noteRefused(this.s, name, { why, text, at: this.now(), source })?.entry ?? null : null; }
+    catch { return null; }
+  }
+
+  refusedStatus() {
+    try { return refusedTargets(this.s)?.list(this.now()) ?? null; } catch { return null; }
   }
 
   warStatus() {
@@ -282,7 +313,8 @@ export class CombatMode {
       if (mine) { ours.push(name); continue; }
       const verdict = war.warHostility({ name, flags: o.flags }, { fleetmate: mine, now });
       if (verdict.hostile) {
-        if ((o.flags & OF.ATTACKABLE) && !hostile) hostile = { o, name, verdict };
+        // Refused to us in this room: not engaged here, and not re-engaged on every object change.
+        if ((o.flags & OF.ATTACKABLE) && !hostile && !this.targetRefused(name)) hostile = { o, name, verdict };
         continue;
       }
       if (!this.warSeen.has(o.id)) this.warSeen.set(o.id, now);
@@ -342,6 +374,9 @@ export class CombatMode {
       }
       return false;
     }
+    // THE SERVER ALREADY REFUSED US THIS PLAYER IN THIS ROOM (guild-only). Both entry paths --
+    // the scan and a fleetmate's alarm -- come through here, so this is where it is held.
+    if (this.targetRefused(name)) return false;
     // An operator's own combat order owns the body; the war does not take it away from them.
     if (this.active && !this.active.pvp) return false;
     const had = !!this.active?.pvp;
@@ -564,7 +599,7 @@ export class CombatMode {
       if (t && (this.isOurs(name) || (t.flags & OF.GUILDMATE))) { target.done = 'a fleetmate'; t = null; }
     }
     const ok = !!t && t.id !== c.selfId && (t.flags & OF.ATTACKABLE) &&
-      !this.warbandRefused?.has(t.id) && !this.pvpForbiddenHere();
+      !((t.flags & OF.PLAYER) && this.targetRefused(name)) && !this.pvpForbiddenHere();
     if (this.active?.order?.warband) {
       if (ok && this.active.order.target === t.id) return;
       this.stop(ok ? 'warband: the leader switched target' : 'warband: the leader\'s target is gone');
@@ -889,6 +924,20 @@ export class CombatMode {
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
+    // A PLAYER THE SERVER WILL NOT LET US HIT HERE is not somebody return fire can answer. The
+    // body is NOT taken: the keeper's ordinary ladder (flee below the line, rest when safe) is
+    // the survival that applies, exactly as for anything else hurting us that we will not fight.
+    // Inside a fight that already owns the body they are still counted, just never targeted.
+    if (!this.active?.pvp && this.targetRefused(evidence.character)) {
+      const key = `${s.world.room.num}|${String(evidence.character).toLowerCase()}`;
+      if (this.pvpRefusedNoted !== key) {
+        this.pvpRefusedNoted = key;
+        s.recorder?.line?.('combat', { event: 'pvp_attacker_refused_here', target: evidence.character,
+          room: s.world.room.num, text: evidence.text ?? null,
+          survival: 'keeper ladder; this player cannot be attacked in this room' });
+      }
+      return;
+    }
     const at = Math.min(this.now(), Number.isFinite(observedAt) ? observedAt : this.now());
     let o = this.active;
     if (!o?.pvp) {
@@ -960,7 +1009,13 @@ export class CombatMode {
       this.record('pvp_rebound', o);
     }
     if (o.phase === 'offline') o.phase = 'waiting';
-    const present = p.attackers.map(a => ({ a, target: combatTarget(c, a.character) })).filter(x => x.target);
+    const seen = p.attackers.map(a => ({ a, target: combatTarget(c, a.character) })).filter(x => x.target);
+    // Refused to us in this room: still in the room, never a target (m59-refused-targets.mjs).
+    const present = seen.filter(x => !this.targetRefused(x.a.character));
+    if (!present.length && seen.length) {
+      this.stop('PvP: every attacker here cannot be attacked in this room (guild-only); ' +
+        'survival returns to the keeper ladder'); return false;
+    }
     if (present.length && p.shelter?.status === 'approaching') {
       this.interruptPvPShelter(o, 'player attacker present; return fire takes priority');
       withBodyCommand(s, () => s.cancelMovement(null, 'PvP attacker interrupted monster shelter',
@@ -1059,6 +1114,12 @@ export class CombatMode {
     const target = combatTarget(c, order.target, { anyAttackable: !!order.warband });
     if (typeof order.target === 'number') demand(target && (target.flags & OF.ATTACKABLE),
       'exact player is not here or not attackable; use a player name to wait');
+    // Refused to us in this room already: an order here would only be refused again.
+    const refusedName = order.action === 'ambush' ? null
+      : target && (target.flags & OF.PLAYER) ? exactName(c, target) : typeof order.target === 'string' ? order.target : null;
+    if (refusedName && this.targetRefused(refusedName))
+      return { accepted: false, skipped: true, reason: `${refusedName} cannot be attacked in this room (guild-only)`,
+        map: s.world.room.num };
     const keeper = this.keeper();
     const confine = keeper?.policy?.confineRooms ?? [];
     if (order.map) {
@@ -1206,6 +1267,9 @@ export class CombatMode {
         w.blockedTarget = null; pause('watching', 'normal behavior while waiting for target'); return;
       }
       if (w.blockedTarget === target.id) { pause('blocked', w.reason); return; }
+      if (this.targetRefused(exactName(c, target))) {
+        pause('refused_here', 'target cannot be attacked in this room (guild-only); normal behavior'); return;
+      }
       const { when_absent, watch_maps, ...engage } = w.order;
       this.issue({ ...engage, command_id: w.id, select_map: s.world.room.num,
         ...(w.expiresAt == null ? {} : { ttl_ms: Math.max(1000, w.expiresAt - this.now()) }) }, w);
@@ -1264,6 +1328,26 @@ export class CombatMode {
     }
     // Only a real CREATE after arming counts as an entry. A refresh, or somebody
     // already standing in the room when the ambush was armed, does not.
+    if (ev.kind === 'message' && ev.text && o.phase === 'engaging' && isGuildOnlyRefusal(ev.text)) {
+      // THE TARGET IS REFUSED, NOT THE ROOM (room.kod AllowGuildAttack). Remembered for this room
+      // so no path here swings at them again; the body moves on rather than standing there.
+      // The name as the server spells it, for the log; the memory itself is case-insensitive.
+      const t = o.targetId != null ? o.client.room?.objects?.get?.(o.targetId) : null;
+      const name = (t ? String(o.client.rsc?.get?.(t.nameRsc) ?? t.name ?? '').trim() : '') || o.targetName ||
+        (typeof o.order.target === 'string' ? o.order.target : null);
+      o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused_here' };
+      this.refuseTarget(name, { text: ev.text });
+      this.record('target_refused_here', o);
+      // A keep-off lock on somebody we cannot hit is no lock at all (as for a safety refusal).
+      if (o.order.keepoff) try { keepoff.clearLock(o.order.target, `server refused: ${ev.text}`); } catch {}
+      if (o.pvp) {
+        // Another attacker who CAN be hit keeps the fight; syncPvP stops it if none is left.
+        o.targetId = null; o.targetName = null; o.phase = 'waiting'; o.phaseRevision++;
+        if (this.syncPvP(o)) this.refreshTarget(o);
+        this.wake(); return;
+      }
+      this.stop(`${name ?? 'target'} cannot be attacked in this room (guild-only); not retrying here`); return;
+    }
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
       // THE ROOM REFUSED, NOT THE TARGET. Checked first because "cannot attack another player
       // here" would otherwise fall into the branch below and mark a genuine enemy's membership
@@ -1279,7 +1363,8 @@ export class CombatMode {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
         // The leader swung at somebody the server will not let us hit (an innocent, with our
         // safety on): drop this target for the warband rather than re-issuing it every tick.
-        if (o.order.warband && o.targetId != null) (this.warbandRefused ??= new Set()).add(o.targetId);
+        // Remembered by room and NAME (ids recycle), in the one refused-here memory.
+        if (o.order.warband && o.targetName) this.refuseTarget(o.targetName, { why: 'safety', text: ev.text });
         // A keep-off target the server will not let us hit (safety on: not at war, not a murderer)
         // is no target at all: lift the lock rather than camp him for three hours.
         if (o.order.keepoff) try { keepoff.clearLock(o.order.target, `server refused: ${ev.text}`); } catch {}

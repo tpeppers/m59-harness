@@ -826,6 +826,13 @@ the records it describes.
   engagement never turns safety off and a server refusal suspends the memory, that a zone
   alarm pulls in fleetmates in the SAME map and only that map, that one look leader looks at a
   stranger, and that a corrupt war book is never overwritten) and
+  `node tools/m59-guild-refusal-test.mjs` (14 — **"Only those in guilds may attack each other
+  here."** (room.kod `room_guild_combat`, a ROOM_GUILD_PK_ONLY refusal of one TARGET, not the
+  room): that after it no path — operator order, war scan or alarm, return fire, fight-back,
+  self-defence, a player hunt, the client's own attack packet — swings at that player again in
+  that room, that another player there still is, that leaving the room or ten minutes forgets
+  it, and that the refused player hurting us takes no body from the keeper's survival ladder
+  while an attackable attacker still starts return fire. See `tools/m59-refused-targets.mjs`) and
   `node tools/m59-purchase-funding-test.mjs` (**real shopping flow with simulated bank and
   merchant**: posted costs and quantities, exact shortfalls, reserved cash, failed and
   interrupted withdrawals, fresh merchant quotes after a price change, and separate bank
