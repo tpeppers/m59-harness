@@ -209,6 +209,18 @@ proves nothing. Acid touch costs 10 mana and one entroot berry and lasts one to 
 half minutes by spell power (`touchatk.kod:390-400`). Short of either, `blocked_reason` says
 so and the character fights bare. Off the room every ordinary arming rule stands.
 
+**When it is cast — `touch_spell_timing`.** The operator, 2026-10-02: the buff lasts a minute or
+two, so cast it once the next quarry is FOUND, not in the opening round of the fight and not in
+an empty room. `on_target` (the default; `null` restores it) casts the moment the farm pass has
+chosen its quarry, before the approach, and before a NEW quarry recasts a buff that may lapse:
+the duration is never on the wire, so the estimate is the SHORTEST buff (10 ticks of 6s = 60s),
+and a recast is due when under 20s of that may be left (`M59_TOUCH_REFRESH_MARGIN_MS`) or the
+start was never seen. An *already* answer to that recast settles it for the margin rather than
+being asked again on every target. `before_swing` is the old behaviour. Both keep the stop-line,
+punch-line and unknown-state triggers and the same rate limit; `touch_spell.timing` and
+`touch_spell.last_target_check` say what was decided. `touchRefreshDue` in
+`m59-touchspell.mjs` is the whole rule.
+
 ## Which quarry first — `hunt_priority`
 
 `hunt` is a SET; `hunt_priority` is an ORDER over it, opt-in and null by default

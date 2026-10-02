@@ -173,6 +173,7 @@ export class TouchSpellState {
     this.active = null;
     this.lastStart = null;
     this.lastStop = null;
+    this.lastAlready = null;
     this.punchesSinceCast = 0;
     this.touchHits = 0;
     this.weaponSwings = 0;
@@ -192,7 +193,9 @@ export class TouchSpellState {
     const kind = classifyTouchLine(text, this.name);
     switch (kind) {
       case 'start': this.active = true; this.lastStart = at; break;
-      case 'already': this.active = true; break;
+      // ALREADY proves it is on NOW, and dates nothing: the server answers it before paying for
+      // anything (persench.kod:117-133), so the enchantment it found may be about to end.
+      case 'already': this.active = true; this.lastAlready = at; break;
       case 'stop': this.active = false; this.lastStop = at; break;
       case 'touch': this.active = true; this.touchHits++; break;
       // A punch PROVES the buff is not on: an empty hand with a touch enchantment swings the
@@ -225,7 +228,7 @@ export class TouchSpellState {
   snapshot() {
     return {
       name: this.name, active: this.active,
-      last_start: this.lastStart, last_stop: this.lastStop,
+      last_start: this.lastStart, last_stop: this.lastStop, last_already: this.lastAlready,
       punches_since_cast: this.punchesSinceCast, touch_hits: this.touchHits,
       weapon_swings: this.weaponSwings, recasts: this.recasts,
       cast_attempts: this.castAttempts, casts_unproven: this.castsUnproven,
@@ -244,3 +247,66 @@ export function touchRecastBackoffMs(unprovenInARow) {
 // reason to cast sooner is a refusal we have not understood, which a faster retry will not fix.
 export const TOUCH_RECAST_MIN_MS = Number(process.env.M59_TOUCH_RECAST_MS || 10_000);
 export const TOUCH_RECAST_MAX_MS = 120_000;
+
+// ── WHEN TO CAST: AT THE TARGET, NOT ONLY AT THE SWING ──────────────────────────────────────────
+//
+// The operator, 2026-10-02: "Acid touch as a self-cast spell can be done before starting the fight,
+// too, the buff lasts maybe a minute or two, but often it makes sense to wait until you've found
+// your next target." Casting before the first swing (the original trigger) spends the opening
+// round of every fight on a cast; casting the moment the farm pass has CHOSEN its next quarry
+// puts the cast in the approach, where it costs nothing. Casting any earlier than that spends
+// buff time on an empty room.
+//
+//   'on_target'    (the default) also cast when a NEW quarry is chosen, before the approach, and
+//                  then refresh a buff that may be about to lapse.
+//   'before_swing' only before a swing, which is what the keeper did before this existed.
+//
+// Both keep every reactive trigger — the STOP line, a swing that read "Your punch", an unknown
+// state — and the same rate limit. Only the proactive refresh is new.
+export const TOUCH_CAST_TIMINGS = Object.freeze(['on_target', 'before_swing']);
+
+/** The policy value, normalised. null/'' is the default ('on_target'); an unknown value THROWS. */
+export function touchCastTiming(value) {
+  if (value == null || value === '') return 'on_target';
+  const v = typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s-]+/g, '_') : value;
+  if (!TOUCH_CAST_TIMINGS.includes(v))
+    throw new Error(`touch_spell_timing must be one of ${TOUCH_CAST_TIMINGS.join(', ')} (or null for ` +
+      `on_target), not ${JSON.stringify(value)}`);
+  return v;
+}
+
+// HOW LONG A TOUCH LASTS, which nothing on the wire says. `Random(power/3, power/2)` bounded to
+// 10..75 ticks of 6s (touchatk.kod:390-400): one to seven and a half minutes. The power is not
+// known to the keeper, so the estimate is the SHORTEST buff — conservative on purpose, because
+// recasting early costs ten mana and a berry and lapsing mid-fight costs a round of punches.
+export const TOUCH_MIN_DURATION_MS = 10 * 6_000;
+export const TOUCH_MAX_DURATION_MS = 75 * 6_000;
+// Refresh when this little of the shortest possible buff may be left.
+export const TOUCH_REFRESH_MARGIN_MS = Number(process.env.M59_TOUCH_REFRESH_MARGIN_MS || 20_000);
+
+/**
+ * Should a NEW target get a cast before the approach? Pure; reads a TouchSpellState.
+ *   { due, refresh, why, remaining_ms }
+ * `refresh: true` means "it is on, but may lapse": the caller casts over an active buff. An
+ * ALREADY answer inside the margin settles it — the server just said it is on, and asking again
+ * on every target would spend a cast slot per target to be told the same thing.
+ */
+export function touchRefreshDue(st, now = Date.now(), { minDurationMs = TOUCH_MIN_DURATION_MS,
+                                                        marginMs = TOUCH_REFRESH_MARGIN_MS } = {}) {
+  if (!st) return { due: false, refresh: false, why: 'no touch spell', remaining_ms: null };
+  if (st.active !== true)
+    return { due: true, refresh: false, remaining_ms: 0,
+             why: st.active === false ? 'the touch is off' : 'the touch state is unknown' };
+  if (st.lastAlready != null && now - st.lastAlready < marginMs)
+    return { due: false, refresh: false, remaining_ms: null,
+             why: `the server said it was on ${Math.round((now - st.lastAlready) / 1000)}s ago` };
+  if (st.lastStart == null)
+    return { due: true, refresh: true, remaining_ms: null,
+             why: 'it is on but nothing here saw it start, so its age is unknown' };
+  const remaining = minDurationMs - (now - st.lastStart);
+  if (remaining > marginMs)
+    return { due: false, refresh: false, remaining_ms: remaining,
+             why: `at least ~${Math.round(remaining / 1000)}s left even of the shortest buff` };
+  return { due: true, refresh: true, remaining_ms: Math.max(0, remaining),
+           why: `under ${Math.round(marginMs / 1000)}s may be left of the shortest buff` };
+}

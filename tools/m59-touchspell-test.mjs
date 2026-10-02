@@ -263,5 +263,94 @@ console.log('the policy surfaces');
   ok('policy_control reflects it onto policy.touchSpell', spec?.policy === 'touchSpell');
 }
 
+// ------------------------------------------------------------------ cast timing
+// Operator, 2026-10-02: "Acid touch as a self-cast spell can be done before starting the fight,
+// too ... often it makes sense to wait until you've found your next target." So the default
+// casts when the farm pass has CHOSEN its quarry, and refreshes a buff that may lapse.
+console.log('cast timing: at the target, not only at the swing');
+{
+  ok('timing: null is the default, on_target', touch.touchCastTiming(null) === 'on_target'
+     && touch.touchCastTiming('') === 'on_target');
+  ok('timing: before_swing, case and spacing forgiven', touch.touchCastTiming(' Before Swing ') === 'before_swing');
+  ok('timing: an unknown value is refused, not defaulted',
+     (() => { try { touch.touchCastTiming('whenever'); return false; } catch { return true; } })());
+  ok('the shortest buff is 10 ticks of 6s, the longest 75 (touchatk.kod:390-400)',
+     touch.TOUCH_MIN_DURATION_MS === 60_000 && touch.TOUCH_MAX_DURATION_MS === 450_000);
+
+  const now = 1_000_000;
+  const st = new touch.TouchSpellState('acid touch');
+  const due = (o) => touch.touchRefreshDue(Object.assign(new touch.TouchSpellState('acid touch'), o), now,
+                                           { marginMs: 20_000 });
+  ok('unknown state: due, a plain cast', (() => { const d = touch.touchRefreshDue(st, now); return d.due && !d.refresh; })());
+  ok('off: due, a plain cast', (() => { const d = due({ active: false }); return d.due && !d.refresh; })());
+  ok('on and just started: not due', !due({ active: true, lastStart: now - 5_000 }).due);
+  ok('on for 45s of a 60s minimum: due, as a refresh', (() => {
+    const d = due({ active: true, lastStart: now - 45_000 }); return d.due && d.refresh && d.remaining_ms === 15_000; })());
+  ok('on but its start was never seen (a restart, a hit): due, as a refresh',
+     (() => { const d = due({ active: true, lastStart: null }); return d.due && d.refresh; })());
+  ok('the server said ALREADY 5s ago: not due, whatever the age',
+     !due({ active: true, lastStart: now - 59_000, lastAlready: now - 5_000 }).due);
+  ok('an ALREADY line is recorded with its time', (() => {
+    const t = new touch.TouchSpellState('acid touch');
+    t.observe('Your hands are already dripping with acidic ooze.', 42);
+    return t.active === true && t.lastAlready === 42 && t.snapshot().last_already === 42; })());
+}
+{
+  const { ap, log } = world({ armed: false });
+  ok('the default policy names touchSpellTiming (null = on_target)',
+     Object.hasOwn(ap.policy, 'touchSpellTiming') && ap.touchTimingNow() === 'on_target');
+  let r = await ap.touchOnTarget({ id: 7001 }, 'living tree');
+  ok('a chosen quarry with the state unknown: the touch is cast before the approach',
+     log.cast.length === 1 && ap.touchState().active === true, JSON.stringify(r));
+  r = await ap.touchOnTarget({ id: 7001 }, 'living tree');
+  ok('the same quarry chosen again next pass is not a new target', log.cast.length === 1 && r.skipped === 'same target');
+  r = await ap.touchOnTarget({ id: 7002 }, 'living tree');
+  ok('a new quarry with a fresh buff: no cast', log.cast.length === 1 && /left/.test(r.skipped ?? ''), JSON.stringify(r));
+  ap.touchState().lastStart = Date.now() - 50_000;
+  ap.touchState().lastCastAt = Date.now() - 50_000;
+  r = await ap.touchOnTarget({ id: 7003 }, 'living tree');
+  ok('a new quarry with under 20s of the shortest buff left: recast over the active touch',
+     log.cast.length === 2 && ap.touchState().recasts === 2 && r.landed === true, JSON.stringify(r));
+  ok('status carries the timing and the last target check',
+     ap.status().touch_spell.timing === 'on_target' && ap.status().touch_spell.last_target_check?.id === 7003);
+  ap.touchState().lastStart = Date.now() - 50_000;
+  r = await ap.touchOnTarget({ id: 7004 }, 'living tree');
+  ok('...and a refresh inside the rate limit waits, like every other cast', log.cast.length === 2 && r.waiting_ms > 0,
+     JSON.stringify(r));
+}
+{
+  // A refresh answered ALREADY: the buff is on, and the next target does not ask again at once.
+  const { ap, c, log } = world({ armed: false });
+  c.cast = (id, t) => { log.cast.push({ spellId: id, targets: t }); c.say('Your hands are already dripping with acidic ooze.'); };
+  ap.touchState().active = true; ap.touchState().lastStart = Date.now() - 55_000;
+  await ap.touchOnTarget({ id: 8001 }, 'living tree');
+  ap.touchState().lastCastAt = Date.now() - 60_000;
+  await ap.touchOnTarget({ id: 8002 }, 'living tree');
+  ok('a refresh answered ALREADY settles it: one probe, not one per target', log.cast.length === 1
+     && ap.touchState().lastAlready != null && ap.touchState().recasts === 0);
+}
+{
+  const { ap, log } = world({ armed: false });
+  ap.policy.touchSpellTiming = 'before_swing';
+  const r = await ap.touchOnTarget({ id: 9001 }, 'living tree');
+  ok('before_swing: nothing is cast at the target', log.cast.length === 0 && r.skipped === 'timing');
+  await ap.maintainTouchSpell('before swinging');
+  ok('...the swing still casts it, as before', log.cast.length === 1);
+}
+{
+  const { ap, log } = world({ room: 600, armed: false });
+  await ap.touchOnTarget({ id: 9101 }, 'spider');
+  ok('off the assigned room: no cast at the target', log.cast.length === 0);
+}
+{
+  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  ok('the farm pass casts at the target right after it claims the quarry',
+     /claimQuarry\(this\.s\.name, room\?\.num, found\[0\]\?\.id\);[\s\S]{0,400}await this\.touchOnTarget\(found\[0\]/.test(src));
+  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  ok('the autopilot schema declares touch_spell_timing', /touch_spell_timing: \{ type: \['string', 'null'\], enum: \[\.\.\.TOUCH_CAST_TIMINGS, null\]/.test(broker));
+  ok('the setter validates and writes p.policy.touchSpellTiming',
+     /p\.policy\.touchSpellTiming = a\.touch_spell_timing == null \? null : touchCastTiming\(a\.touch_spell_timing\)/.test(broker));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

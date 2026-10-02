@@ -164,7 +164,7 @@ import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRA
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
          applyFightAboveVigor } from './m59-autopilot.mjs';
-import { touchSpellName, TOUCH_SPELL_NAMES } from './m59-touchspell.mjs';
+import { touchSpellName, TOUCH_SPELL_NAMES, touchCastTiming, TOUCH_CAST_TIMINGS } from './m59-touchspell.mjs';
 import { dropChatter, chatterIfAny, chatterFor, fleetChatter } from './m59-chatter.mjs';
 import * as parties from './m59-party.mjs';
 import * as exitgap from './m59-exitgap.mjs';
@@ -11347,6 +11347,15 @@ const TOOLS = [
           'swing was a punch — rate-limited, and counted landed only on a start line, mana or a ' +
           'reagent spent. Off that room every ordinary arming rule stands. autopilot status ' +
           'reports it as touch_spell' },
+      touch_spell_timing: { type: ['string', 'null'], enum: [...TOUCH_CAST_TIMINGS, null],
+        description: 'WHEN THE TOUCH IS CAST, while touch_spell is training. "on_target" (the ' +
+          'default; null restores it) also casts the moment the farm pass has CHOSEN its next ' +
+          'quarry, before the approach, so the cast lands during the walk rather than costing ' +
+          'the opening round — and before a NEW quarry it recasts a buff that may lapse within ' +
+          '~20s of the shortest possible duration (60s; the kod is Random(power/3, power/2) ' +
+          'ticks of 6s, bounded 10..75). "before_swing" casts only before a swing, the old ' +
+          'behaviour. Both keep the stop-line, punch-line and unknown-state triggers and the ' +
+          'rate limit. autopilot status reports it as touch_spell.timing' },
       hunt_priority: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
         description: 'AN ORDER OVER hunt, not a second hunt list: e.g. ["spider", "living tree"]. ' +
           'When set, the keeper takes the first-listed creature that is already an acceptable ' +
@@ -12387,6 +12396,10 @@ const TOOLS = [
       // success and train nothing. Null (or "") is the explicit way off.
       if (a.touch_spell !== undefined) {
         try { p.policy.touchSpell = touchSpellName(a.touch_spell); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      if (a.touch_spell_timing !== undefined) {
+        try { p.policy.touchSpellTiming = a.touch_spell_timing == null ? null : touchCastTiming(a.touch_spell_timing); }
         catch (e) { return { started: false, reason: e.message }; }
       }
       // A MALFORMED ORDER IS REFUSED, NOT SWITCHED OFF (m59-hunt-priority.mjs, m59-loot-filter.mjs).

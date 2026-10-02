@@ -149,7 +149,8 @@ import { fileURLToPath } from 'node:url';
 // for why two answers here meant two books and a fleet that tithed twice a day.
 import { UNDERWORLD } from './m59-travelgate.mjs';
 // A touch spell is the weapon: train it with an empty hand and the buff on. See touchTrainingHere.
-import { touchSpellSpec, TouchSpellState, touchRecastBackoffMs } from './m59-touchspell.mjs';
+import { touchSpellSpec, TouchSpellState, touchRecastBackoffMs, touchCastTiming,
+         touchRefreshDue } from './m59-touchspell.mjs';
 import { orderByHuntPriority, huntPriorityProblems, priorityRankOf } from './m59-hunt-priority.mjs';
 import { lootOnlyStatus } from './m59-loot-filter.mjs';
 
@@ -1972,6 +1973,10 @@ export class Autopilot {
       // punch". Off that room every ordinary arming rule stands. See m59-touchspell.mjs. It has to
       // be a key HERE, like pvpReturnDelayMs above, or a pushed order is reflected nowhere.
       touchSpell: null,
+      // WHEN the touch is cast: 'on_target' (null, the default) also casts as soon as the farm pass
+      // CHOSE its next quarry — before the approach — and refreshes a buff that may be about to
+      // lapse; 'before_swing' casts only before a swing. Operator, 2026-10-02. m59-touchspell.mjs.
+      touchSpellTiming: null,
       // AN ORDER OVER THE HUNT SET, and a per-creature loot allow list. Both null (inert), both
       // keys HERE for the same reason as touchSpell. huntPriority: ['spider', 'living tree'] takes
       // the first-listed creature the keeper may already engage (m59-hunt-priority.mjs); lootOnly:
@@ -2870,7 +2875,7 @@ export class Autopilot {
    * cast is counted as landed only on a START line, mana spent, or a reagent consumed. An
    * ALREADY line settles an unknown state for free.
    */
-  async maintainTouchSpell(why = 'before a swing') {
+  async maintainTouchSpell(why = 'before a swing', { refresh = false } = {}) {
     if (!this.touchTrainingHere()) return { skipped: 'not training here' };
     const spec = this.touchSpellNow();
     const st = this.touchState();
@@ -2893,7 +2898,9 @@ export class Autopilot {
     }
 
     // 2. THE BUFF.
-    if (st.active === true) { st.blockedReason = null; return { active: true }; }
+    // `refresh` is the on-target timing asking to cast OVER a buff that may be about to lapse
+    // (touchRefreshDue). Without it an active touch is left alone, as it always was.
+    if (st.active === true && !refresh) { st.blockedReason = null; return { active: true }; }
     const now = Date.now();
     const wait = touchRecastBackoffMs(this._touchUnprovenRun ?? 0);
     if (st.lastCastAt != null && now - st.lastCastAt < wait)
@@ -2976,12 +2983,39 @@ export class Autopilot {
     return { cast: true, landed, already, active: st.active };
   }
 
+  /** The configured cast timing; an unusable stored value reads as the default. */
+  touchTimingNow() {
+    try { return touchCastTiming(this.policy?.touchSpellTiming); } catch { return 'on_target'; }
+  }
+
+  /**
+   * THE TOUCH, AT THE TARGET. Called once the farm pass has CHOSEN its quarry, before the
+   * approach (timing 'on_target'). A cast here lands during the walk instead of costing the
+   * opening round; a buff that may lapse within the margin is refreshed before a NEW quarry.
+   * Once per target id: the same quarry chosen again next pass is not a new fight. Never blocks
+   * the pass — whatever happens, the approach and the before-swing check follow.
+   */
+  async touchOnTarget(target, name = null) {
+    if (!this.touchTrainingHere() || this.touchTimingNow() !== 'on_target') return { skipped: 'timing' };
+    if (target?.id == null || target.id === this._touchTargetId) return { skipped: 'same target' };
+    this._touchTargetId = target.id;
+    const st = this.touchState();
+    this.observeTouchSpell();
+    const due = touchRefreshDue(st, Date.now());
+    this._touchTargetLast = { id: target.id, name, at: Date.now(), due: due.due, why: due.why,
+                              remaining_ms: due.remaining_ms };
+    if (!due.due) return { skipped: due.why };
+    return this.maintainTouchSpell(`target chosen: ${name ?? `#${target.id}`} (${due.why})`,
+                                   { refresh: due.refresh });
+  }
+
   /** For `status()`: always present, null when the posture is off. */
   touchSpellStatus() {
     const st = this.touchState();
     if (!st) return null;
     return { ...st.snapshot(), training_here: this.touchTrainingHere(),
-             assigned_room: this.policy?.assignedRoom ?? null };
+             assigned_room: this.policy?.assignedRoom ?? null,
+             timing: this.touchTimingNow(), last_target_check: this._touchTargetLast ?? null };
   }
 
   /**
@@ -21261,6 +21295,11 @@ export class Autopilot {
         // hunt_priority: reorder only — every filter above has already run (m59-hunt-priority.mjs).
         if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);
         claimQuarry(this.s.name, room?.num, found[0]?.id);
+        // THE TOUCH AT THE TARGET (touch_spell_timing 'on_target'): the quarry is chosen, so cast
+        // now, during the approach. A no-op unless training a touch spell here. m59-touchspell.mjs.
+        if (found[0] && this.touchTrainingHere())
+          await this.touchOnTarget(found[0], c.rsc?.get?.(found[0].nameRsc) || found[0].name || null)
+            .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
       } else {
         releaseQuarry(this.s.name);
       }

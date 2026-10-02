@@ -30,14 +30,17 @@ These tests are offline. They do not execute a raid or shut down a server.
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
   spider junk left earlier is not; attribution by novelty against fight()'s floor snapshot;
   memory expiry, recycled ids and room scoping; malformed shapes and unknown items refused.
-- `m59-touchspell-test.mjs` (51): touch spell training (`touch_spell`). The kod's own start,
+- `m59-touchspell-test.mjs` (76): touch spell training (`touch_spell`, `touch_spell_timing`). The kod's own start,
   stop, already and kill lines and the "Your acid touch …" / "Your punch …" combat log; on the
   assigned farm room a wielded weapon is unused, the touch is cast at the caster's numeric
   object id, a punch or the stop line triggers a rate-limited recast counted only on proof
   (start line, mana or reagent spent), short mana or reagents are reported rather than retried,
   and `equipBest`, `armSelf`, `makeWeapon` and `fightNow` do not re-arm; off the room the
   ordinary arming rules stand; the policy key exists in the default object, survives the
-  keeper's push merge, and is declared, validated and reflected by the broker.
+  keeper's push merge, and is declared, validated and reflected by the broker. Cast timing:
+  `on_target` casts when a NEW quarry is chosen (once per target id), refreshes a buff with under
+  20s of the 60s minimum left, settles on an *already* answer, still honours the rate limit;
+  `before_swing` casts only at the swing; the farm pass calls it right after claiming the quarry.
 - `m59-pvp-return-test.mjs` (49): the PvP return delay (`pvp_return_delay_ms`, default 30 min).
   Recognising a PvP death from the two live shapes of 2026-09-30 (a guild-combat kill the
   attribution could only guess, and a player standing in the room) and refusing every monster
