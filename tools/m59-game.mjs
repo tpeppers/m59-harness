@@ -159,6 +159,8 @@ const COMBAT_FACE_HOLD_MS = 1500;
 // never trip the throttle. The old 8/s was 60% over the limit — the server was
 // dropping our swings and moves.
 const PACKETS_PER_SECOND = Number(process.env.M59_RATE || 5);
+// How long a login read may wait for the pacer before it is sent directly (Session.joinOnce).
+export const LOGIN_READ_STALL_MS = Number(process.env.M59_LOGIN_READ_STALL_MS || 5000);
 const ATTACK_INTERVAL_MS = 1050;     // IsOkayAttackTime, plus a little
 
 // WALKING AT ONE SQUARE A SECOND WAS COSTING US CHARACTERS.
@@ -2458,12 +2460,30 @@ class Session {
     // login. So each read is caught; a preempted one is re-sent under whatever owns the body now,
     // and the readiness below always runs.
     const loginReadFailures = (c.loginReadFailures = []);
+    // AND A READ THE PACER NEVER DELIVERS MUST NOT HOLD THE LOGIN EITHER. The pump runs one job
+    // at a time (`job.resolve(await job.fn())`), so a single job ahead of these that never
+    // settles parks every later packet. Measured on prod 2026-10-02, t4 after a handoff:
+    // trace `login_read_failures: []`, NOTHING asked (not even group 1), `combat_ready: false`.
+    // joinOnce was still waiting on its first read while the keeper had moved on. So each
+    // read gets LOGIN_READ_STALL_MS; past that it is sent directly (a read is harmless), and the
+    // record names the job at the head of the queue, which is the blocker.
+    const STALL = Symbol('stall');
+    const delivered = p => Promise.race([p, new Promise(r => setTimeout(() => r(STALL), LOGIN_READ_STALL_MS))]);
+    const sendDirect = (what, why, fn) => {
+      loginReadFailures.push({ what, why, head: this.pacer.q?.[0]?.kind ?? null, depth: this.pacer.q?.length ?? null });
+      try { return fn(); } catch (e) { loginReadFailures.push({ what, why: `direct: ${e?.message ?? e}` }); return null; }
+    };
+    const stalled = `pacer did not deliver in ${LOGIN_READ_STALL_MS}ms; sent directly`;
     const observe = async (what, fn) => {
-      try { return await loginRead(fn); }
-      catch (e) {
+      try {
+        const r = await delivered(loginRead(fn));
+        return r === STALL ? sendDirect(what, stalled, fn) : r;
+      } catch (e) {
         loginReadFailures.push({ what, why: e?.message ?? String(e) });
-        try { return await this.pacer.submit('read', fn); }
-        catch (e2) { loginReadFailures.push({ what, why: `retry: ${e2?.message ?? e2}` }); return null; }
+        try {
+          const r = await delivered(this.pacer.submit('read', fn));
+          return r === STALL ? sendDirect(what, `retry: ${stalled}`, fn) : r;
+        } catch (e2) { loginReadFailures.push({ what, why: `retry: ${e2?.message ?? e2}` }); return null; }
       }
     };
     try {

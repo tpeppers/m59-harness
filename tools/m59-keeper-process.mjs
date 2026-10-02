@@ -326,6 +326,7 @@ session.combat.pvpEligibility = () => joinWanted;
 // connection ("new connection overrides old one"), and the drop is this keeper's cue to save and
 // exit. If no replacement arrives before the deadline the handoff lapses and nothing changed.
 let attrHealTimer = null, attrHealReported = false, attrHealAskedAt = 0;   // tools/m59-attr-heal.mjs
+const COMBAT_READY_GRACE_MS = 20_000;   // see the heal tick: a login buffer, never a state to stay in
 let handoff = null;                              // { since, deadline } while being replaced
 const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
 // Session.rejoin is the autopilot's own reconnect (Autopilot.reconnect), and it goes around
@@ -586,6 +587,16 @@ async function joinGenerationOnce(generation) {
     // right after a login and slow after; the first report per drop names any dropped stat message.
     attrHealTimer ??= setInterval(() => {
       if (!inGame || !session.live || handoffActive()) return;
+      // COMBAT READINESS IS A LOGIN BUFFER, NEVER A STATE TO STAY IN. While `combatReady` is false
+      // CombatMode.event ignores everything -- war response, PvP survival, warband. A login that
+      // never finished its reads left it false (t17, t4 on 2026-10-02). Past COMBAT_READY_GRACE_MS
+      // after the login, a keeper that is in the world declares itself ready, once, and says so.
+      const cl = session.client;
+      if (cl && cl.combatReady === false && session.loggedInAt && Date.now() - session.loggedInAt > COMBAT_READY_GRACE_MS) {
+        cl.combatReady = true;
+        console.error(`[keeper] ${agent} combat was not ready ${Math.round((Date.now() - session.loggedInAt) / 1000)}s ` +
+          `after login; declared ready | trace ${JSON.stringify(statTraceOf(cl))}`);
+      }
       const bad = attributesIncomplete(session.client?.statsById);
       if (!bad) { attrHealReported = false; return; }
       const now = Date.now();
@@ -1032,6 +1043,8 @@ function state() {
     // Names are lowercased on the way out. The server's resource strings are capitalised
     // ("Intellect"), every reader here asks in lowercase, and that mismatch is its own
     // bug — fixed in m59-client.mjs noteStat, and not worth re-introducing here.
+    // false only while a login is buffering combat; anything else is a deaf CombatMode.
+    combat_ready: c?.combatReady ?? null,
     attributes: (() => {
       const out = {};
       for (const k of ['might', 'intellect', 'stamina', 'agility', 'mysticism', 'aim', 'karma']) {

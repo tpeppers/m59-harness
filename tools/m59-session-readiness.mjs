@@ -1,8 +1,13 @@
 // Small, offline-testable session lifecycle helpers for m59-broker.
 
 export async function joinSessionOnce(session, args, start) {
-  if (session.live) return session.snapshot('already in game');
+  // A JOIN IN PROGRESS IS ASKED FIRST. `live` turns true the moment joinOnce installs the new
+  // client, which is BEFORE its login reads run and before combat is ready; answering "already
+  // in game" from that half-built state let a second caller (a keeper retry) carry on with a
+  // client that had no attribute block and a deaf CombatMode (prod, 2026-10-02). Wait for the
+  // join instead; joinOnce bounds its own reads, so this cannot hang on them.
   if (session.joining) return session.joining;
+  if (session.live) return session.snapshot('already in game');
 
   // Defer the call through Promise.resolve so a synchronous setup failure is
   // represented by the same shared promise as an asynchronous login failure.

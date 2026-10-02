@@ -32,7 +32,7 @@ ok('the snapshot carries observed_at, so the log can tell "never arrived" from "
 ok('no client yet: nothing to judge', () => assert.equal(attributesIncomplete(null), null));
 ok('the keeper heals only in game, never during a handoff, once a minute, and logs once per drop', () => {
   const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
-  assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) return;\s*const bad = attributesIncomplete/.test(src));
+  assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) return;[\s\S]{0,1500}?const bad = attributesIncomplete/.test(src));
   assert.ok(src.includes('if (!bad) { attrHealReported = false; return; }'));
   assert.ok(src.includes('}, ATTR_HEAL_TICK_MS);'));
   assert.ok(src.includes('attrHealDue({ now, loggedInAt: session.loggedInAt, lastAskAt: attrHealAskedAt })'));
@@ -56,6 +56,21 @@ ok('THE CAUSE (t17, 2026-10-01): a preempted login read no longer aborts the log
   assert.ok(/catch \(e\) \{\s*loginReadFailures\.push[\s\S]{0,120}this\.pacer\.submit\('read', fn\)/.test(body),
     'a preempted read is recorded and re-sent under the current owner');
   assert.ok(/\} finally \{\s*c\.combatReady = true;\s*\}/.test(body), 'combat readiness ALWAYS runs');
+});
+ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent directly after a bound', () => {
+  // trace: login_read_failures [], nothing asked, combat_ready false -- joinOnce parked on its first
+  // read behind a pacer job that never settled.
+  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
+  assert.ok(/const r = await delivered\(loginRead\(fn\)\);\s*return r === STALL \? sendDirect\(what, stalled, fn\) : r;/.test(body),
+    'the first attempt is bounded and falls back to a direct send');
+  assert.ok(/head: this\.pacer\.q\?\.\[0\]\?\.kind/.test(body), 'and the record names the job blocking the pacer');
+  assert.match(src, /export const LOGIN_READ_STALL_MS = /);
+});
+ok('a keeper never stays combat-deaf: readiness is declared 20s after a login that did not set it', () => {
+  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  assert.ok(/cl\.combatReady === false && session\.loggedInAt && Date\.now\(\) - session\.loggedInAt > COMBAT_READY_GRACE_MS\) \{\s*cl\.combatReady = true;/.test(src));
+  assert.ok(src.includes('combat_ready: c?.combatReady ?? null,'), '/state reports it, so deafness is visible');
 });
 ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
   const login = 1_000_000;

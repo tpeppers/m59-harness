@@ -66,5 +66,23 @@ const check = (name, condition) => {
     JSON.stringify(readiness.known_sessions) === JSON.stringify(['live', 'joining']));
 }
 
+{
+  // A HALF-BUILT JOIN IS NOT "ALREADY IN GAME" (prod, 2026-10-02): joinOnce installs the client, so
+  // `live` is true, before its login reads and combat readiness. A second caller must wait for it.
+  let finish;
+  const session = { live: false, joining: null, snapshot: note => ({ note }) };
+  const first = joinSessionOnce(session, {}, () => new Promise(resolve => { session.live = true; finish = resolve; }));
+  await Promise.resolve(); await Promise.resolve();
+  let settled = false;
+  const second = joinSessionOnce(session, {}, () => { throw new Error('must not start a second login'); })
+    .then(r => { settled = true; return r; });
+  await new Promise(r => setTimeout(r, 10));
+  check('a caller during an in-progress join waits, even though the session already reads live', settled === false);
+  finish({ joined: true, complete: true });
+  const b = await second;
+  check('and receives the completed join, not an already-in-game snapshot', b.complete === true);
+  await first;
+}
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
