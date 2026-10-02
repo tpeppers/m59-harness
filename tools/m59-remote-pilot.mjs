@@ -15,7 +15,11 @@
 //   2. wait for the client to appear on this machine (its /U: names the account), and give the
 //      character back if it never does;
 //   3. renew every third of the lease while that client process lives;
-//   4. release when it exits, or when this process is told to stop.
+//   4. release when it exits, or when this process is told to stop;
+//   5. STOP -- without releasing, and without claiming again -- the moment the broker says the
+//      lease ended: released by request or by an operator, lapsed, or superseded by a newer
+//      claim. Only a broker that RESTARTED (a different pid, no memory of the lease) is claimed
+//      again. Raphael, 2026-10-02: a hand release was undone by the next heartbeat.
 //
 // If this process dies without releasing, the lease lapses by itself and the keeper comes back
 // within one lease. That is the direction to fail in.
@@ -66,6 +70,133 @@ async function clientFor(account) {
 }
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
+/**
+ * THE HOLD, for one character. Everything with a side effect is a dependency, so the offline test
+ * drives the real loop in-process: `rpc(name, args, ms)`, `health()`, `findClient(account)`,
+ * `pidAlive(pid)`, `sleep(ms)`, `now()`, `log(...)`. Resolves { code, why } when it stops; the CLI
+ * exits with `code`. `stop(why)` (for a signal) releases and ends the loop.
+ *
+ * WHEN IT STOPS HEARTBEATING. Raphael (hk3), 2026-10-02: `pilot release` by hand was undone by
+ * this loop's next beat, because the broker answered a released lease with `reclaim: true` and
+ * this loop obeyed it. Now: a reply that says the lease ended stops the loop for good, re-claiming
+ * is reserved for a broker that has NO memory of the lease (it restarted), and a re-claim that
+ * itself comes back refused or released stops it as well. Holding the character again after a
+ * release is a deliberate act -- press L again -- never a heartbeat's side effect.
+ */
+export function createHold({ agent, account = agent, holder, leaseMs = 60_000, waitMs = 180_000, beat }, deps) {
+  const { rpc, health, findClient, pidAlive, sleep, now = Date.now, log = () => {} } = deps;
+  let mode = 'lease', leaseId = null, anchorPid = null;
+  // The broker process our lease was granted by. "Not claimed, reclaim" means a RESTART only if
+  // that process is gone; from the same process it means somebody released the character -- which
+  // is all an older broker (no record of ended leases) can say, so this check is what keeps a
+  // release a release against a broker that has not been rolled yet.
+  let grantedBy = null;
+  let stopping = false, finish = null;
+  const ended = new Promise(r => { finish = r; });
+  const end = (code, why) => { if (!stopping) stopping = true; finish({ code, why }); return { code, why }; };
+
+  const claim = async () => {
+    const pidNow = async () => { try { return (await health())?.pid ?? null; } catch { return null; } };
+    const r = await rpc('pilot', { action: 'claim', agent, lease_ms: leaseMs, holder });
+    if (!r.error) { mode = 'lease'; leaseId = r.lease_id; grantedBy = await pidNow(); return r; }
+    if (!brokerLacksLeases(r)) return r;
+    // An unrolled broker: anchor on its own pid. See the header for what that costs.
+    const hh = await health();
+    const a = await rpc('pilot', { action: 'claim', agent, pid: hh.pid });
+    if (!a.error) { mode = 'anchored'; anchorPid = hh.pid; leaseId = null; }
+    return a;
+  };
+  const release = async (why) => {
+    try {
+      const r = await rpc('pilot', { action: 'release', agent, ...(leaseId ? { lease_id: leaseId } : {}) }, 8000);
+      log(`released ${agent} (${why}): ${r.error ?? (r.released ? 'ok' : r.note)}`);
+    } catch (e) {
+      log(`release of ${agent} FAILED (${why}): ${e.message}` +
+          (mode === 'lease' ? ' -- the lease lapses on its own' : ' -- ANCHORED: run `pilot release` for it by hand'));
+    }
+  };
+
+  async function run() {
+    const first = await claim();
+    if (first.error) { log(`claim of ${agent} refused: ${first.error}`); return end(1, 'claim refused'); }
+    log(mode === 'lease'
+      ? `claimed ${agent} by lease ${leaseId} (${leaseMs / 1000}s, renewed every ${beat / 1000}s) for ${holder}`
+      : `claimed ${agent} ANCHORED on broker pid ${anchorPid} -- that broker predates leases, so ` +
+        'this claim does not expire: if this process is killed, `pilot release` it by hand');
+
+    const started = now();
+    let clientPid = null;
+    for (;;) {
+      await sleep(beat);
+      if (stopping) return ended;
+      // IS THE PERSON STILL HERE? Once seen, the pid is watched directly -- a signal 0, not a scan.
+      if (clientPid == null) {
+        const c = await Promise.resolve().then(() => findClient(account)).catch(() => null);
+        if (c) { clientPid = c.pid; log(`client for ${account} is pid ${clientPid}`); }
+        else if (now() - started > waitMs) {
+          await release(`no client for ${account} appeared within ${Math.round(waitMs / 1000)}s`);
+          return end(1, 'no client appeared');
+        }
+      } else if (!pidAlive(clientPid)) {
+        // A Proton relaunch can hand the account to a new pid; look once before letting go.
+        const again = await Promise.resolve().then(() => findClient(account)).catch(() => null);
+        if (again && again.pid !== clientPid) { clientPid = again.pid; log(`client for ${account} is now pid ${clientPid}`); }
+        else { await release(`client pid ${clientPid} exited`); return end(0, 'client exited'); }
+      }
+      if (stopping) return ended;
+      try {
+        if (mode === 'lease') {
+          const r = await rpc('pilot', { action: 'renew', agent, lease_id: leaseId });
+          if (r.renewed) continue;
+          if (!r.error && r.reclaim === true && r.released !== true) {
+            // The broker has no memory of this lease at all. If it is the SAME broker process that
+            // granted it, the lease was released (an older broker cannot say so) -- stop.
+            let pidThen = grantedBy, pidNowV = null;
+            try { pidNowV = (await health())?.pid ?? null; } catch { /* cannot tell: treat as a restart */ }
+            if (pidThen != null && pidNowV != null && pidThen === pidNowV) {
+              log(`lease ended: ${r.why} by the same broker (pid ${pidNowV}) that granted it, so it was ` +
+                  `released, not lost -- no longer holding ${agent}; stopping without releasing`);
+              return end(0, 'released by the broker');
+            }
+            // It restarted. Claim again, once per beat.
+            const c = await claim();
+            if (c.error || c.released) {
+              log(`re-claim of ${agent} refused: ${c.error ?? c.why} -- stopping without releasing`);
+              return end(1, 're-claim refused');
+            }
+            log(`re-claimed ${agent} after: ${r.why}`);
+            continue;
+          }
+          // Released by request, by an operator, by lapsing, or superseded by a newer claim: this
+          // lease is OVER. Stop heartbeating, and do not release -- nothing of ours is left to end.
+          log(`${r.released ? 'lease ended' : 'renewal refused for good'}: ${r.why ?? r.error} -- ` +
+              `no longer holding ${agent}; stopping without releasing`);
+          return end(r.released ? 0 : 1, r.released ? 'released by the broker' : 'renewal refused');
+        } else {
+          // Anchored: a broker restart drops the claim along with its pid, so claim again on the new one.
+          const hh = await health();
+          if (hh.pid !== anchorPid) {
+            const c = await claim();
+            log(c.error ? `broker restarted; re-claim refused: ${c.error}` : `broker restarted; re-claimed ${agent} (${mode})`);
+          }
+        }
+      } catch (e) { log(`broker unreachable (${e.message}) -- will keep trying while the client runs`); }
+    }
+  }
+
+  return {
+    run,
+    /** End the hold from outside (a signal): release our own lease, and stop beating. */
+    async stop(why) {
+      if (stopping) return ended;
+      stopping = true;
+      await release(why);
+      return end(0, why);
+    },
+    get leaseId() { return leaseId; },
+  };
+}
+
 async function hold() {
   const broker = arg('--broker', process.env.M59_BROKER_URL);
   const agent = arg('--agent');
@@ -90,76 +221,19 @@ async function hold() {
     process.exit(1);
   }
 
-  let mode = 'lease', leaseId = null, anchorPid = null;
-  const claim = async () => {
-    const r = await rpc(broker, 'pilot', { action: 'claim', agent, lease_ms: leaseMs, holder });
-    if (!r.error) { mode = 'lease'; leaseId = r.lease_id; return r; }
-    if (!brokerLacksLeases(r)) return r;
-    // An unrolled broker: anchor on its own pid. See the header for what that costs.
-    const hh = await health(broker);
-    const a = await rpc(broker, 'pilot', { action: 'claim', agent, pid: hh.pid });
-    if (!a.error) { mode = 'anchored'; anchorPid = hh.pid; leaseId = null; }
-    return a;
-  };
-  const release = async (why) => {
-    try {
-      const r = await rpc(broker, 'pilot', { action: 'release', agent, ...(leaseId ? { lease_id: leaseId } : {}) }, 8000);
-      log(`released ${agent} (${why}): ${r.error ?? (r.released ? 'ok' : r.note)}`);
-    } catch (e) {
-      log(`release of ${agent} FAILED (${why}): ${e.message}` +
-          (mode === 'lease' ? ' -- the lease lapses on its own' : ' -- ANCHORED: run `pilot release` for it by hand'));
-    }
-  };
-
-  const first = await claim();
-  if (first.error) { log(`claim of ${agent} refused: ${first.error}`); process.exit(1); }
-  log(mode === 'lease'
-    ? `claimed ${agent} on ${broker} by lease ${leaseId} (${leaseMs / 1000}s, renewed every ${beat / 1000}s) for ${holder}`
-    : `claimed ${agent} on ${broker} ANCHORED on broker pid ${anchorPid} -- that broker predates leases, so ` +
-      'this claim does not expire: if this process is killed, `pilot release` it by hand');
-
-  let stopping = false;
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, async () => {
-    if (stopping) return; stopping = true;
-    await release(`this holder got ${sig}`); process.exit(0);
+  const held = createHold({ agent, account, holder, leaseMs, waitMs, beat }, {
+    rpc: (name, args, ms) => rpc(broker, name, args, ms),
+    health: () => health(broker),
+    findClient: clientFor,
+    pidAlive,
+    sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+    log: (...m) => log(`[${broker}]`, ...m),
   });
-
-  const started = Date.now();
-  let clientPid = null;
-  for (;;) {
-    await new Promise(r => setTimeout(r, beat));
-    if (stopping) return;
-    // IS THE PERSON STILL HERE? Once seen, the pid is watched directly -- a signal 0, not a scan.
-    if (clientPid == null) {
-      const c = await clientFor(account).catch(() => null);
-      if (c) { clientPid = c.pid; log(`client for ${account} is pid ${clientPid}`); }
-      else if (Date.now() - started > waitMs) {
-        await release(`no client for ${account} appeared within ${Math.round(waitMs / 1000)}s`);
-        process.exit(1);
-      }
-    } else if (!pidAlive(clientPid)) {
-      // A Proton relaunch can hand the account to a new pid; look once before letting go.
-      const again = await clientFor(account).catch(() => null);
-      if (again && again.pid !== clientPid) { clientPid = again.pid; log(`client for ${account} is now pid ${clientPid}`); }
-      else { await release(`client pid ${clientPid} exited`); process.exit(0); }
-    }
-    try {
-      if (mode === 'lease') {
-        const r = await rpc(broker, 'pilot', { action: 'renew', agent, lease_id: leaseId });
-        if (r.renewed) continue;
-        if (!r.reclaim) { log(`renewal refused for good: ${r.why ?? r.error} -- stopping without releasing`); process.exit(1); }
-        const c = await claim();
-        log(c.error ? `re-claim of ${agent} refused: ${c.error}` : `re-claimed ${agent} after: ${r.why}`);
-      } else {
-        // Anchored: a broker restart drops the claim along with its pid, so claim again on the new one.
-        const hh = await health(broker);
-        if (hh.pid !== anchorPid) {
-          const c = await claim();
-          log(c.error ? `broker restarted; re-claim refused: ${c.error}` : `broker restarted; re-claimed ${agent} (${mode})`);
-        }
-      }
-    } catch (e) { log(`broker unreachable (${e.message}) -- will keep trying while the client runs`); }
-  }
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, async () => {
+    await held.stop(`this holder got ${sig}`); process.exit(0);
+  });
+  const { code } = await held.run();
+  process.exit(code);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

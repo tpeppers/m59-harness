@@ -130,7 +130,8 @@ import {
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
 import { startLoopStallMonitor } from './runtime/loop-stalls.mjs';
-import { pilotLeaseMs, newPilotLease, pilotHeld, renewPilotLease, describePilotLease }
+import { pilotLeaseMs, newPilotLease, pilotHeld, renewPilotLease, describePilotLease,
+         createLeaseGraveyard, claimLeaseRefusal }
   from './runtime/pilot-lease.mjs';
 import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned,
          recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
@@ -5234,6 +5235,10 @@ async function reconcileFleet() {
 // When the pid dies the claim is released and the character goes back to work, which is
 // the whole of requirement B.
 const piloted = new Map();     // agent -> { pid, since, objectId, character, keeperWasRunning, lease? }
+// LEASES THAT HAVE ENDED, so a heartbeat after a release is told "released" and stops, rather
+// than finding no record, reading that as a broker restart, and claiming the character again.
+// Raphael (hk3), 2026-10-02: released by request, re-claimed by the Deck's next heartbeat.
+const pilotGraveyard = createLeaseGraveyard();
 // The human desk's mark refresh, and its store (see markHumanDesk). Declared beside `piloted`
 // so nothing that can claim a pilot runs before they exist.
 const HUMAN_DESK_REFRESH_MS = 30_000;
@@ -5358,6 +5363,9 @@ function claimPilot(agent, pid, { character = null, keeperWasRunning: claimedRun
     : proxied ? !!proxied._state?.goap?.running
     : (!!keeper?.running && !keeper?.inert);
   if (keeperWasRunning && keeper && !proxied) keeper.stop('a person took the controls — deliberate');
+  // A claim that REPLACES a lease ends it: its holder's next heartbeat is told so, and stops.
+  if (prior?.lease && prior.lease.id !== lease?.id)
+    pilotGraveyard.bury(agent, prior.lease, `superseded by a newer claim${lease ? ` from ${lease.holder}` : ` by pid ${pid}`}`, Date.now());
   piloted.set(agent, { pid, since: Date.now(), objectId,
                        character: character ?? s?.client?.me?.name ?? null, keeperWasRunning,
                        ...(lease ? { lease } : {}) });
@@ -5372,6 +5380,9 @@ function releasePilot(agent, why = 'released') {
   const p = piloted.get(agent);
   if (!p) return null;
   piloted.delete(agent);
+  // EVERY way a lease claim ends comes through here -- its holder, a bare request, an operator,
+  // a lapse noticed by the pilot watch -- so this is the one place to remember it ended.
+  if (p.lease) pilotGraveyard.bury(agent, p.lease, why, Date.now());
   unmarkHumanDesk(agent, p, why);
   // A CLIENT JUST STOPPED BEING THERE, which is the commonest moment for one to start
   // being there again — closing a client and opening it as somebody else is how an
@@ -17545,7 +17556,7 @@ const TOOLS = [
         pid: { type: 'number', description: 'process id of the client that was launched, on THIS machine; required for claim unless lease_ms is given' },
         lease_ms: { type: 'number', description: 'claim/renew: a remote claim held by heartbeat instead of a pid, 15000-300000 (default 60000). Lapses unless renewed' },
         holder: { type: 'string', description: 'claim with lease_ms: which machine and tool is playing, for the log, e.g. "steamdeck m59-tui"' },
-        lease_id: { type: 'string', description: 'renew/release: the lease_id the claim returned' },
+        lease_id: { type: 'string', description: 'renew/release: the lease_id the claim returned. A renew of an ENDED lease (released, lapsed, superseded) answers released:true and is never re-claimed -- stop heartbeating. claim with a lease_id only continues that lease while it is live' },
         character: { type: 'string', description: 'name to expect in speech; defaults to the session\'s' },
         why: { type: 'string', description: 'for rearm: what launched a client, for the log' },
       },
@@ -17576,10 +17587,22 @@ const TOOLS = [
       }
       if (!a.agent) return { error: 'agent is required' };
       if (a.action === 'renew') {
-        const r = renewPilotLease(piloted.get(a.agent), { id: a.lease_id, now: Date.now(),
-          ms: a.lease_ms != null ? pilotLeaseMs(a.lease_ms) : null });
+        // A heartbeat EXTENDS a live lease and nothing else. A lease that was released, lapsed or
+        // superseded answers `released: true, reclaim: false`, and its holder stops; holding the
+        // character again is an explicit claim. Only a lease this broker never heard end (it
+        // restarted) is told to reclaim.
+        const now = Date.now();
+        // A lapse the pilot watch has not reached yet is released HERE, so it is logged and the
+        // reconciler is told now rather than up to a poll later.
+        const cur = piloted.get(a.agent);
+        if (cur?.lease && cur.lease.id === a.lease_id && now >= cur.lease.until)
+          releasePilot(a.agent, pilotHeldNow(cur).why);
+        const r = renewPilotLease(piloted.get(a.agent), { id: a.lease_id, now,
+          ms: a.lease_ms != null ? pilotLeaseMs(a.lease_ms) : null,
+          ended: pilotGraveyard.find(a.agent, a.lease_id, now) });
         return { ...r, agent: a.agent,
-                 ...(r.reclaim ? { note: 'claim again with lease_ms -- the keeper may already be back' } : {}) };
+                 ...(r.released ? { note: 'stop heartbeating this character; claim again (without a lease_id) only if a person means to play it' }
+                   : r.reclaim ? { note: 'claim again with lease_ms -- the keeper may already be back' } : {}) };
       }
       if (a.action === 'release') {
         // A remote holder releasing names its lease, so a stale helper from an earlier launch
@@ -17597,6 +17620,15 @@ const TOOLS = [
         // A REMOTE CLAIM. It never displaces a person at THIS machine's keyboard, and never another
         // machine's live lease -- only its own holder's, which is a relaunch after a crash.
         const held = piloted.get(a.agent);
+        // A claim naming a lease_id is a request to CONTINUE that lease; an ended one is not revived.
+        const stale = claimLeaseRefusal(held, { leaseId: a.lease_id, now: Date.now(),
+          ended: pilotGraveyard.find(a.agent, a.lease_id, Date.now()) });
+        if (stale) return { ...stale, agent: a.agent };
+        if (a.lease_id && held?.lease?.id === a.lease_id && pilotAlive(held)) {
+          renewPilotLease(held, { id: a.lease_id, now: Date.now() });
+          return { agent: a.agent, claimed: true, lease_id: held.lease.id, lease_ms: held.lease.ms,
+                   note: 'that lease already holds this character -- renewed, nothing re-claimed' };
+        }
         if (held && pilotAlive(held)) {
           if (!held.lease) return { error: `${a.agent} is being played by a client on the broker's machine (pid ${held.pid})` };
           if (held.lease.holder !== String(a.holder ?? '').trim().slice(0, 120))

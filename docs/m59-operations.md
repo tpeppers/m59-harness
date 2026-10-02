@@ -459,6 +459,14 @@ instead of a token.
   the lease** answers "pid is required"; the holder then ANCHORS the claim on the broker's own pid and
   releases it itself, which has no self-expiry: kill the holder and `pilot release` the character by
   hand.
+- **A released lease STAYS released.** `pilot release <agent>` by hand, a lapse, or a newer claim
+  ends the lease, and the broker remembers that it ended (`createLeaseGraveyard`, six hours, in
+  memory). A heartbeat for it is answered `released: true, reclaim: false` and the holder stops --
+  it neither renews nor claims again. Only a broker that has NO memory of the lease (it restarted)
+  answers `reclaim: true`, and the holder re-claims only when `/health` shows a DIFFERENT broker pid
+  from the one that granted it. To hold the character again after a release, press L again.
+  Raphael (hk3), 2026-10-02: released by hand, re-claimed by the Deck's next heartbeat within
+  seconds, because "released" and "broker restarted" used to be the same answer.
 - **Never widened:** `m59-dm.mjs`'s maintenance-port check, which is about the GAME server.
 
 ## LENDING CHARACTERS OVER THE INTERNET WITHOUT LENDING THE PASSWORD

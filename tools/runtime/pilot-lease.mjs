@@ -59,19 +59,82 @@ export function pilotHeld(p, { now, pidAlive }) {
 }
 
 /**
- * Renew in place. Refused for a pid claim, an unknown lease id, or one that has already lapsed --
- * a lapsed lease has been (or is about to be) released, and the keeper may already be back, so
- * the holder must CLAIM again rather than quietly resurrect it.
+ * Renew in place. Refused for a pid claim, an unknown lease id, or one that has already lapsed.
+ *
+ * `ended` is what the broker remembers about THIS lease id having ended (createLeaseGraveyard):
+ * released by its holder, by request, by an operator, by lapsing, or by being superseded. An
+ * ended lease is never renewed and never answered `reclaim: true` -- the holder must stop, and
+ * holding the character again takes an explicit claim. Prod, 2026-10-02: `pilot release hk3` was
+ * answered by the Deck's next heartbeat re-claiming Raphael within seconds, because a released
+ * claim left no record, "no record" read as "the broker restarted", and that case says claim
+ * again. Only a lease the broker has NO memory of -- a genuine restart -- may still say reclaim.
  */
-export function renewPilotLease(p, { id, now, ms = null }) {
+export function renewPilotLease(p, { id, now, ms = null, ended = null }) {
+  const live = !!p?.lease && p.lease.id === id && now < p.lease.until;
+  if (!live && ended) return { renewed: false, released: true, reclaim: false,
+                               why: `that lease ended: ${ended.why}` };
   if (!p) return { renewed: false, why: 'not claimed', reclaim: true };
   if (!p.lease) return { renewed: false, why: 'claimed by a local client pid, not by a lease', reclaim: false };
   if (p.lease.id !== id) return { renewed: false, why: 'a different lease holds this character', reclaim: false };
-  if (now >= p.lease.until) return { renewed: false, why: 'the lease already lapsed', reclaim: true };
+  // A lapse is an END, the same as a release: the pilot watch is releasing it (or already has),
+  // and the keeper may be back. A late heartbeat neither resurrects it nor re-claims.
+  if (now >= p.lease.until) return { renewed: false, released: true, reclaim: false,
+                                     why: 'the lease already lapsed' };
   if (ms != null) p.lease.ms = ms;
   p.lease.until = now + p.lease.ms;
   p.lease.renewed = now;
   return { renewed: true, until: p.lease.until };
+}
+
+// HOW LONG THE BROKER REMEMBERS THAT A LEASE ENDED. Longer than any heartbeat gap worth
+// worrying about: a Deck that slept through a release and wakes hours later must still be told
+// "released", not "not claimed" -- the second one is what makes a holder claim again.
+export const PILOT_TOMBSTONE_MS = 6 * 60 * 60_000;
+const TOMBSTONES_PER_AGENT = 8;
+
+/**
+ * The record of leases that have ENDED, per agent: lease id -> { why, at, holder }. Bounded by
+ * age and by count, so it cannot grow without limit on a broker that runs for weeks. It is in
+ * memory on purpose: a broker restart forgets it, and "not claimed, reclaim" is then the truth.
+ */
+export function createLeaseGraveyard({ ttlMs = PILOT_TOMBSTONE_MS, perAgent = TOMBSTONES_PER_AGENT } = {}) {
+  const graves = new Map();     // agent -> Map(id -> { why, at, holder })
+  const prune = (agent, now) => {
+    const g = graves.get(agent);
+    if (!g) return null;
+    for (const [id, t] of g) if (now - t.at > ttlMs) g.delete(id);
+    while (g.size > perAgent) g.delete(g.keys().next().value);
+    if (!g.size) { graves.delete(agent); return null; }
+    return g;
+  };
+  return {
+    /** Remember that `lease` (of `agent`) ended, and why. A pid claim has no lease: nothing to bury. */
+    bury(agent, lease, why, now) {
+      if (!lease?.id) return;
+      const g = graves.get(agent) ?? new Map();
+      g.delete(lease.id);
+      g.set(lease.id, { why: String(why ?? 'ended'), at: now, holder: lease.holder ?? null });
+      graves.set(agent, g);
+      prune(agent, now);
+    },
+    /** The ending of this lease id, or null if the broker has no memory of it ending. */
+    find(agent, id, now) {
+      if (id == null) return null;
+      return prune(agent, now)?.get(id) ?? null;
+    },
+  };
+}
+
+/**
+ * A CLAIM THAT NAMES A LEASE ID is asking to continue that lease, and an ended lease is not
+ * continued -- not by a renewal, and not by a claim either. Returns a refusal, or null when the
+ * claim may proceed: no lease id at all (a fresh, explicit claim), or the id of the one live lease.
+ */
+export function claimLeaseRefusal(p, { leaseId, ended, now }) {
+  if (leaseId == null || leaseId === '') return null;
+  if (p?.lease && p.lease.id === leaseId && now < p.lease.until) return null;
+  return { error: `lease ${leaseId} ${ended ? `ended: ${ended.why}` : 'is not a live lease on this character'}` +
+                  ' -- claim WITHOUT a lease_id to hold it again', released: true, reclaim: false };
 }
 
 /** The fields `pilot status` adds for a lease, so "who is holding Kermit, from where" has an answer. */

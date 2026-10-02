@@ -673,14 +673,21 @@ the records it describes.
   `#!/bin/bash` script runs with `argv[0]` = `/bin/bash` and would have tested the wrong
   shape. **The scan reads the whole machine**, so the assertions are scoped to accounts
   nobody plays — a live Kermit failed five of them by being correctly detected) and
-  `node tools/runtime/pilot-lease-test.mjs` (8 — a remote pilot claim is held by the CLOCK and
+  `node tools/runtime/pilot-lease-test.mjs` (15 — a remote pilot claim is held by the CLOCK and
   never by a pid, because a Steam Deck's pid means nothing on the broker's machine; a lapsed
   lease is not resurrected by a late heartbeat, and another machine cannot take a live one over
-  by renewing it) and
-  `node tools/m59-remote-pilot-test.mjs` (5 — the real holder against a fake broker: claims
-  BEFORE the client exists, renews while it runs, releases its own lease when it exits; on an
-  unrolled broker anchors on the broker pid and says so; refuses the wrong fleet before
-  claiming anything; gives the character back if no client appears) and
+  by renewing it; **a released, lapsed or superseded lease answers `released`, never
+  `reclaim`**, and a claim naming an ended lease_id is refused — Raphael, 2026-10-02 — while a
+  broker with no memory of the lease still says reclaim; plus a source check that the broker
+  is wired to the graveyard) and
+  `node tools/m59-remote-pilot-test.mjs` (7 in process on every platform, +6 CLI cases on POSIX —
+  the real hold loop: a release by hand ends the heartbeat and nothing re-claims, even against a
+  broker that predates the record of ended leases (same broker pid = released, not restarted);
+  a restarted broker IS re-claimed; two characters held, release one, only the other is
+  heartbeated; a superseded holder stops. The CLI half: claims BEFORE the client exists, renews
+  while it runs, releases its own lease when it exits; on an unrolled broker anchors on the
+  broker pid and says so; refuses the wrong fleet before claiming anything; gives the character
+  back if no client appears) and
   `node tools/m59-bank-test.mjs` (52) and
   `node tools/m59-routecheck-test.mjs` (56 — **can these bodies get to these rooms, asked
   before the lock**. The per-character mirror of `reachable`: that one asks whether ANYTHING
