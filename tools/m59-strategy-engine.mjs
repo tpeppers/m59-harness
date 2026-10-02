@@ -373,6 +373,9 @@ export class FarmStrategyEngine {
     const st = this.hookState(name);
     if (st.disabled) return;
     st.disabled = why;
+    // A SILENTLY DISABLED HOOK IS A SETTING THAT DOES NOTHING. Say it at error level, once.
+    console.error(`[strategy] farm strategy "${this.name()}" hook ${name} DISABLED: ${why} ` +
+      '(the rest of the strategy still applies; editing the file re-enables it)');
     this.noteOnce(`disabled:${name}`, 'farm strategy hook disabled', { strategy: this.name(), hook: name, why,
       keeper: 'carries on; the rest of the strategy still applies, and an edit to the file re-enables it' },
       { every: 0 });

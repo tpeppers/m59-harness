@@ -4058,6 +4058,18 @@ const server = createServer(async (req, res) => {
         // And the farming strategy answers for its keys again — at once, not a pass later — while
         // the keeper owns their faculties; a changed assignment loads (or releases) its file here.
         await autopilot.applyFarmStrategy?.('policy push');
+        // A PUSH THE STRATEGY UNDID SAYS SO, OUT LOUD. The broker's autopilot tool reports
+        // farm_strategy_shadows, but a policy_control push arrives here and its reply is read by
+        // nobody: an operator's fleet-wide overfarm change (2026-10-02) would have been silently
+        // reverted on every character with a file. So any pushed key that no longer reads what was
+        // pushed, because the strategy reasserted it, is logged once per push at error level.
+        if (autopilot.policy?.farmStrategy) {
+          const undone = Object.keys(fields).filter(k => k !== 'farmStrategy'
+            && JSON.stringify(autopilot.policy[k]) !== JSON.stringify(fields[k]));
+          if (undone.length) console.error(`[strategy] ${agent} farm strategy "${autopilot.policy.farmStrategy}" ` +
+            `kept its own value for ${undone.join(', ')}; the pushed value${undone.length > 1 ? 's are' : ' is'} ` +
+            `held underneath and return if the strategy is unassigned | by ${writtenBy ?? 'unattributed'}`);
+        }
         if (Object.hasOwn(fields, 'partner'))
           rememberFileSpotPartner(agent, autopilot.policy.partner ?? null);
         // `this.mode` is consulted fresh on every pass (m59-autopilot.mjs: `this.mode ===
