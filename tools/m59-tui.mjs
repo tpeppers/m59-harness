@@ -59,7 +59,11 @@ const WIN = process.platform === 'win32';
 const { fleet: FLEET, label: FLEET_LABEL, stateFile: STATE_FILE } = resolveFleet();
 
 const PORT = env.M59_BROKER_PORT || '8901';
-const URL_ = `http://127.0.0.1:${PORT}/`;
+// THE BROKER MAY BE ON ANOTHER MACHINE. M59_BROKER_HOST points this terminal at the operator gateway
+// on the fleet machine's tailnet address (tools/m59-operator-gateway.mjs), which admits listed
+// operator machines and forwards to that broker's loopback. Default: this machine.
+const BROKER_HOST = env.M59_BROKER_HOST || '127.0.0.1';
+const URL_ = `http://${BROKER_HOST}:${PORT}/`;
 // Each keeper is its own process with its own HTTP port. The band is an ownership boundary;
 // the actual agent on each slot is still proved by the keeper itself. See keeperStates().
 const KEEPER_BAND_OPTIONS = {
@@ -1063,7 +1067,7 @@ async function fieldCommand() {
                  c.dim(`· read substrate/webui.log`);
       return draw();
     }
-    const url = `http://127.0.0.1:${r.port ?? 3000}`;
+    const url = `http://${BROKER_HOST}:${r.port ?? 3000}`;
     openBrowser(url);
     S.status = c.green(before.running ? 'field command already serving' : 'started field command') +
                ' ' + c.dim(`· ${url}`) +

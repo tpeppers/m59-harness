@@ -823,3 +823,8 @@ substrate/magic-keep.json
 # Carried keeper assignments (tools/m59-keeper-carry.mjs): claims, busy and live policy handed from a
 # keeper to its replacement. Named rosters keep theirs under /substrate/fleets/, already ignored.
 /substrate/.keeper-carry/
+
+# Operator machines admitted by tools/m59-operator-gateway.mjs: this machine's, never committed.
+/substrate/operator-access.json
+/substrate/operator-gateway.pid
+/substrate/operator-gateway.log

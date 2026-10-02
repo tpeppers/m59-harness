@@ -1,0 +1,22 @@
+{
+  "format": "m59-operator-access/1",
+  "note": "Copy to substrate/operator-access.json (gitignored) or install it from your private repository. listen: THIS machine's tailnet address(es); operators: the other machines allowed to administer the fleet through tools/m59-operator-gateway.mjs. See tools/runtime/operator-access.mjs.",
+  "listen": {
+    "addresses": [
+      "100.64.0.1"
+    ],
+    "ports": [
+      8901,
+      8902,
+      3000
+    ]
+  },
+  "operators": [
+    {
+      "name": "laptop",
+      "addresses": [
+        "100.64.0.2"
+      ]
+    }
+  ]
+}

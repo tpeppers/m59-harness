@@ -425,6 +425,32 @@ time against a 3,360sh full fill, and trading reached 54% of all active time aga
 fighting. Raising `walking_money` makes it worse, not better — it is a floor.
 
 
+## Your other machines: the operator gateway (Tailscale)
+
+```bash
+node tools/m59-operator-gateway.mjs status   # what it listens on, who it admits, is it up
+node tools/m59-operator-gateway.mjs start    # detached; stop with `stop`
+```
+
+Every admin surface decides "is this the operator" by asking whether the socket is loopback, and
+each is right to: 8901 is unauthenticated full control, the 8902 buttons stop the fleet, and field
+command (3000) writes orders. The gateway does not widen any of them. It listens on THIS machine's
+tailnet address only, on those same ports, admits only the addresses listed in
+`substrate/operator-access.json` (gitignored; shape in `substrate/operator-access.example.json`,
+argument in `tools/runtime/operator-access.mjs`), and forwards to loopback, so the surfaces see a
+loopback caller. That is the trust model `m59-lend.mjs` already uses, with WireGuard as the identity
+instead of a token.
+
+- **Forgery protection survives.** A request with an `Origin` is forwarded only if that Origin is the
+  gateway address the browser used; a page on another site gets 403 before the surface sees it.
+- **Links follow the browser.** Redirects and absolute loopback links in HTML are rewritten to the
+  host the Deck addressed.
+- **No broker restart.** It binds beside the dashboard's own `0.0.0.0:8902`, and measured on Vecna a
+  connection to the tailnet address goes to the more specific listener.
+- **The TUI on another machine:** `M59_BROKER_HOST=vecna node tools/m59-tui.mjs`. Keeper columns read
+  keeper ports directly and stay empty there; keepers are never exposed.
+- **Never widened:** `m59-dm.mjs`'s maintenance-port check, which is about the GAME server.
+
 ## LENDING CHARACTERS OVER THE INTERNET WITHOUT LENDING THE PASSWORD
 
 The fleet cannot be handed over the way a session is handed over, and the server source
