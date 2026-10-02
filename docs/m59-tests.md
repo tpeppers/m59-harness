@@ -30,6 +30,17 @@ These tests are offline. They do not execute a raid or shut down a server.
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
   spider junk left earlier is not; attribution by novelty against fight()'s floor snapshot;
   memory expiry, recycled ids and room scoping; malformed shapes and unknown items refused.
+- `m59-strategy-engine-test.mjs` (87): farming strategy files (`farm_strategy`,
+  `docs/m59-strategies.md`). The three committed examples load and mean today's orders; a file that
+  will not parse, names a survival/war key at any depth, carries a bad value, a non-function hook,
+  a name that is not its file, or nothing, is refused with its reason and NOTHING is applied; keys
+  apply while the keeper owns their faculty and are not written at all while a bot or lease holds
+  it (six passes, zero writes) and return when the lease ends; `protect` is additive; every write is
+  credited in `policy_sources` and unassigning gives each key back; hot reload on mtime, a broken
+  edit keeps the previous good version; a throwing, rejecting or overrunning hook is disabled and
+  the keeper carries on, hooks skip while `work` is held, `ctx.set` refuses survival keys; the key
+  is in the default policy, round-trips through the push merge, is carried by NAME only, and the
+  broker validates and persists the orders without the overlay.
 - `m59-touchspell-test.mjs` (76): touch spell training (`touch_spell`, `touch_spell_timing`). The kod's own start,
   stop, already and kill lines and the "Your acid touch …" / "Your punch …" combat log; on the
   assigned farm room a wielded weapon is unused, the touch is cast at the caster's numeric

@@ -1,0 +1,244 @@
+# Farming strategy files
+
+One file per farming task, assigned to a character by name, applied by the keeper. Split out of
+[`CLAUDE.md`](../CLAUDE.md), whose "about to / read" table points here.
+
+```bash
+node tools/m59-strategy-engine.mjs                 # what this machine has, and whether each one loads
+node tools/m59-strategy-engine.mjs check <name>    # one file: what it sets, under which faculty
+node tools/m59-strategy-engine.mjs --example       # the committed examples
+node tools/m59-strategy-engine-test.mjs            # the guard (offline)
+```
+
+```text
+autopilot action=start agent=t9 mode=farm farm_strategy=qor-acid-touch-trees   # assign
+autopilot action=start agent=t9 farm_strategy=null                             # unassign
+autopilot action=status agent=t9            # farm_strategy {state, keys, hooks, refused}, policy_sources
+```
+
+## What the operator asked for, and the split it implies
+
+The operator, 2026-10-02, in order:
+
+1. *"autopilot should support a kind of generic 'farming strategy'-FleetScript file that it will
+   execute on, with the FleetScript file outlining what weapons to use, what monsters to
+   hunt/prioritize, what loot to prioritize, what maps to confine the farming to, etc."*
+2. *"when I call it generic, I just mean from the perspective of the keeper/autopilot, the farming
+   strategy files intend to be highly specialized for their tasks"*
+3. *"Just the autopilot/keeper side of it should be generic support for it, not having a bunch of
+   'if using acid touch …' on the autopilot/keeper side, that specialized logic belongs in the
+   farming strategy files"*
+4. *"That all said, the generic touch spell support belongs in the keeper/autopilot/whatever
+   central location"*
+
+So there are three layers, and each one knows nothing about the one above it:
+
+| layer | where | knows |
+|---|---|---|
+| **primitives** | `m59-touchspell.mjs`, `m59-hunt-priority.mjs`, `m59-loot-filter.mjs`, `m59-overfarm.mjs`, confinement, arming and banned weapons, `m59-deskpractice.mjs` | how to do one generic thing — train any touch spell, order any hunt set, filter any creature's drop |
+| **the engine** | `m59-strategy-engine.mjs`, `m59-strategy-schema.mjs`, `m59-policy-sources.mjs` | how to load, validate, apply, yield, reload and report a file — and nothing about spells, creatures, items or rooms |
+| **the file** | `substrate/farm-strategies/<name>.mjs` | one task: which primitives, with which arguments, plus the logic only this task needs |
+
+The keeper (`m59-autopilot.mjs`) is bound to the engine in a handful of lines and reads no field
+of a strategy: `applyFarmStrategy` at the top of every pass (and after a push, a rejoin, or a
+loadout write), `farmStrategyHook` at the swing and the kill, `farmStrategyStatus` and
+`policy_sources` in status, `policyForOrders` for anything that persists. The test pins that no
+line naming `farmStrategy` in the keeper also names a spell, creature or room.
+
+## Not `substrate/strategies/`
+
+That directory already exists and is a different system: the TRAVEL strategies
+(`m59-strategies.mjs` — blink-escape, convoy, town stops, chalice). A travel strategy is a
+fleet-wide hook module that every keeper asks at a stuck walk or a counter, switched by its own
+`enabled`. A farming strategy is **assigned to one character by name**, is declarative first, is
+re-applied every pass, and is hot-reloaded. Folding the two together would have meant giving the
+travel files an assignment they do not have, or giving these an `enabled` that would make one
+file every character's orders. So they are siblings:
+
+| | travel strategies | farming strategies |
+|---|---|---|
+| directory | `substrate/strategies/` | `substrate/farm-strategies/` |
+| committed shape | `substrate/strategies.example.mjs` | `substrate/farm-strategies.example/` |
+| loader | `m59-strategies.mjs`, enumerates its directory | `m59-strategy-engine.mjs`, reads exactly `<name>.mjs` |
+| in force | every file with `enabled: true`, for every keeper | the one file named by `policy.farmStrategy`, for that character |
+
+Neither loader reads the other's directory. **m59-private's sync carries `strategy/strategies`;
+farming strategies need their own carry entry there** (not added by this repository).
+
+## The file
+
+Declarations first. Every declared field maps onto a policy key the keeper already obeys and is
+validated by the same function the broker's `autopilot` tool uses for that key — so a file can
+say nothing an operator could not already say with one `autopilot` call. It only says it once, by
+name, for one task.
+
+```js
+// substrate/farm-strategies/wand-farmer-spiders-first.mjs
+export default {
+  name: 'wand-farmer-spiders-first',          // must equal the file name
+  describe: 'Faronath 537: spiders first; from a spider only purple mushrooms.',
+
+  hunt: ['spider', 'living tree'],            // -> hunt                     [work]
+  huntPriority: ['spider', 'living tree'],    // -> huntPriority             [work]
+  lootOnly: { spider: ['purple mushroom'] },  // -> lootOnly                 [economy]
+  protect: ['wand', 'entroot berry'],         // -> protectedItems (ADDED)   [economy]
+  confine: { station: 537, roam: false },     // -> assignedRoom, roam       [movement]
+
+  hooks: {
+    onKill(ctx, kill) { ctx.memory.n = (ctx.memory.n ?? 0) + 1; },
+  },
+};
+```
+
+| field | policy key | faculty | validator |
+|---|---|---|---|
+| `hunt` | `hunt` | work | the broker's hunt normal form |
+| `huntPriority` | `huntPriority` | work | `huntPrioritySpec` |
+| `lootOnly` | `lootOnly` | economy | `lootOnlySpec`, items resolved |
+| `protect` | `protectedItems` | economy | items resolved; **added to** the existing list, never replacing it |
+| `overfarm` | `overfarm` | economy | `normalizeOverfarm`, unknown keys refused |
+| `weapons.touchSpell` | `touchSpell` | work | `touchSpellName` |
+| `weapons.touchSpellTiming` | `touchSpellTiming` | work | `touchCastTiming` |
+| `weapons.priority` | `weaponPriority` | work | list of names |
+| `weapons.banned` | `bannedWeapons` | work | list of names, lower-cased |
+| `weapons.style` | `trainingStyle` | work | the five training styles |
+| `weapons.preferMagic` | `preferMagicWeapon` | work | boolean |
+| `confine.rooms` | `confineRooms` | movement | room numbers |
+| `confine.station` | `assignedRoom` | movement | a room number |
+| `confine.roam` | `roam` | movement | boolean |
+| `vigor.fightAbove` | `fightAboveVigor`, `vigorFloor` | work | 0..200, as `applyFightAboveVigor` |
+| `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
+
+`protect` is additive on purpose: a strategy that replaced the list would quietly unprotect the
+reagents the roster put there, and the next sell would take them.
+
+`confine.rooms` already binds where the survival ladder may retreat to (that is what a
+confinement is, whoever sets it, and the Underworld escape is exempt). It is listed under
+movement because it is the operator's "what maps to confine the farming to"; a strategy cannot
+change *whether* or *when* a character retreats.
+
+The three committed examples, each one of 2026-10-02's real orders:
+
+| file | order |
+|---|---|
+| `qor-acid-touch-trees` | Camilla (t9): acid touch through the central touch support, living trees, station 536, entroot berries protected |
+| `wand-farmer-spiders-first` | Kermit (t1): spider + living tree, spiders first, from a spider only purple mushrooms, station 537, wand + entroot berry protected |
+| `cv-skeletons` | the Castle Victoria undead: battered skeleton, skeleton, zombie; hammer then mace; confined to 39 and its bridge room 38 |
+
+### Hooks
+
+For the logic only this task needs. Five moments:
+
+| hook | when | payload |
+|---|---|---|
+| `onPass(ctx)` | every pass, after the file is applied | `{ reason }` |
+| `onCombatLine(ctx, line)` | each new combat line (`classifyCombatLine` parsed it) | `{ text, parsed }` |
+| `onServerMessage(ctx, msg)` | each new non-combat server line | `{ text }` |
+| `beforeSwing(ctx, s)` | before each prey swing, before the touch-spell check | `{ target, target_id, room }` |
+| `onKill(ctx, kill)` | after a counted kill | `{ creature, room, looted }` |
+
+`ctx` is: `strategy`, `agent`, `now`, `room` (number), `vitals`, `policy` and `touch` (frozen
+copies), `memory` (a scratch object, reset on reload), `pack()` (name and amount, a copy),
+`note(what, data)`, `set(path, value)` and `requestTouchRecast(why)`.
+
+- `ctx.set` takes a field **path** from the table above (`'huntPriority'`, `'weapons.touchSpell'`),
+  validates it the same way, applies it at once if the keeper owns its faculty and returns
+  `{ applied: false, yielded_to }` if not, and credits it `strategy:<name>` with `hook: true`.
+  Anything else — `fleeBelow`, a war key, a made-up name — THROWS, which disables the hook.
+- `ctx.requestTouchRecast` marks the CENTRAL touch-spell state stale; the keeper's own
+  `maintainTouchSpell` recasts at the next opportunity under its own rate limit. The hook never
+  casts.
+
+Hooks are **isolated, not sandboxed**. A strategy file is code this machine chose to run, like a
+playbook. What the engine guarantees is that a bad one cannot take the keeper down: hooks are
+called synchronously and never awaited; a hook that throws, or whose promise rejects, is
+**disabled and noted**; one over its time budget (`M59_STRATEGY_HOOK_MS`, 25ms) three times is
+disabled too; the rest of the strategy keeps applying; an edit to the file re-enables it. Hooks
+do not run at all while a bot or lease holds `work` (counted as `skipped_held`). A file whose
+top-level code never returns would still hang the keeper at import — keep top level to
+declarations.
+
+## The rules
+
+### 1. Two writers is the known failure — so the file yields
+
+A key is applied only while the keeper owns its faculty (`facultyOwner(f)` is `keeper`, or the
+keeper's own `combat:<id>`). While a bot (DUM), a lease, or an errand (`inert`) holds it, the
+engine **writes nothing to that key**, notes "yielding to the faculty holder" once, and status
+shows `yielded_to: <holder>` per key. When the lease ends the file's value returns, once. The
+test drives six passes with a bot changing its mind under a held `work` and counts zero writes.
+
+### 2. Never the protected four, never the war paths
+
+The schema refuses — the WHOLE file — any field named for identity, mortality, survival or
+recovery (`fleeBelow`, `restBelow`, `travelGuard`, `panicLogoff`, …) or for the war and PvP paths
+(`defendAgainstPlayers`, `pvpReturnDelayMs`, `warResponse`, `warband`, `keepOff`, `leash`,
+`combatOrder`, …), at any depth. Refused whole because its author believed the file would change
+how the character survives, and applying the rest while silently not doing that is the setting
+that does nothing. `mode` is refused too: it is the switch the ASSIGNMENT throws. A strategy chooses
+what to hunt; it cannot change when a character flees, fights back or answers a war alarm.
+`m59-unattended-test.mjs` stays the guard for the faculty split.
+
+### 3. One answer per key — `policy_sources`
+
+Every writer of `autopilot.policy` now credits what it **changed** (only changed: the broker pushes
+the whole policy on every `autopilot` call) in `m59-policy-sources.mjs`, reported as
+`policy_sources`:
+
+| source | writer |
+|---|---|
+| `default` | nothing has written it |
+| `roster` | the roster the keeper booted with |
+| `carry` | a push the previous keeper process carried across its restart |
+| `policy` | a live push; `by` names the writer |
+| `bot:<owner>` | a live push that changed a key while `<owner>` held its faculty |
+| `loadout` | the loadout file's policy block |
+| `strategy:<name>` | the farming strategy (`hook: true` when a hook set it) |
+
+`farm_strategy.keys` adds, per key, the file's value, the effective value, whether it is applied,
+who it is yielded to, and what it is **shadowing** (value and source) — which is also what an
+unassignment gives back. "Why is t1 hunting spiders" is `policy_sources.hunt`.
+
+While the keeper owns a faculty and a strategy is assigned, the file is the answer for its keys:
+a push of `hunt` is kept underneath and the file reasserts at once (in the same `/policy` request,
+not a pass later), and the broker's reply says so as `farm_strategy_shadows`. To change such a
+key, edit the file or unassign it.
+
+### 4. Files are orders, so they are this machine's — and silence is the old behaviour
+
+`substrate/farm-strategies/` is gitignored; `substrate/farm-strategies.example/` is committed
+BESIDE it, never inside it. No directory, no assignment, or `farm_strategy=null` is exactly the
+behaviour that was already there.
+
+A missing or unparseable file is **not an empty policy**:
+
+- at assignment, the broker refuses it with the reason and changes nothing;
+- at a later load (the file was edited, deleted, broken), the engine refuses it, notes it once,
+  and the character keeps its posture — the **previous good version** of the same file if there
+  was one (`refused.keeping`), otherwise nothing from the file is applied at all;
+- an unrecognised key is reported (`unrecognised`), never applied, never fatal.
+
+### 5. The carry
+
+**Only the assignment travels.** `farmStrategy` is an ordinary policy key in the Autopilot default
+object, set by the broker, pushed over `/policy`, written into the keeper's order copy and carried
+across a keeper restart like any push (`m59-keeper-carry.mjs`). The file's own keys are written
+straight into `autopilot.policy` and **never** into the keeper's order copy, the roster or the
+carry: each keeper process re-derives them from the file on its first pass (and on `join`, before
+`start()`). A carried copy of a file's keys would be a second, stale source for the same key that
+reads as a live push. The broker persists `policyForOrders()` — the policy with the overlay taken
+back out — for the same reason.
+
+## Hot reload
+
+Every converge stats the file. A changed mtime is re-imported under a fresh URL (`?v=<mtime>`, which
+is what defeats Node's module cache), validated, and applied on the same pass — no keeper restart.
+Keys a new version dropped go back to what they shadowed; hook state and `memory` reset. A broken
+version is refused once per mtime, not on every pass. A re-push of `farm_strategy` with the same
+name also converges at once.
+
+## Not covered
+
+- The **tick driver** (`mode: 'tick'`) is not an Autopilot pass and does not apply a strategy.
+- A strategy does not change `mode`; pass `mode: "farm"` with the assignment.
+- Two characters may share a file; each keeper applies it to itself.

@@ -183,6 +183,9 @@ import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops, huntMatcher } from './m59-spawns.mjs';
 import { huntPrioritySpec, huntPriorityProblems } from './m59-hunt-priority.mjs';
 import { lootOnlySpec } from './m59-loot-filter.mjs';
+// FARMING STRATEGY FILES: the assignment is validated here; the file is applied in the keeper.
+import { loadFarmStrategy } from './m59-strategy-engine.mjs';
+import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS } from './m59-strategy-schema.mjs';
 // The shelter helpers. The safe-spot book is RETIRED — removed outright on 2026-09-20 rather
 // than merely left unimported, because two operator chat verbs in this file were still writing
 // `verified` marks into it. There is nothing to import now. See tools/m59-safewall.mjs for the
@@ -11356,6 +11359,20 @@ const TOOLS = [
           'ticks of 6s, bounded 10..75). "before_swing" casts only before a swing, the old ' +
           'behaviour. Both keep the stop-line, punch-line and unknown-state triggers and the ' +
           'rate limit. autopilot status reports it as touch_spell.timing' },
+      farm_strategy: { type: ['string', 'null'],
+        description: 'ASSIGN A FARMING STRATEGY FILE by name: substrate/farm-strategies/<name>.mjs ' +
+          '(orders for THIS machine, gitignored; examples in substrate/farm-strategies.example/). The file ' +
+          'declares the task — what to hunt and in what priority, the weapons or touch spell, the loot ' +
+          'filter, the items to protect, the confinement — plus small hooks for what cannot be ' +
+          'declared. The keeper lays its keys over the policy on every pass, ONLY while it owns the ' +
+          'faculty of each key (work/movement/economy): a bot or lease holding one is yielded to, never ' +
+          'fought. It can never touch fleeing, resting, recovery or the war paths. Hot-reloaded on ' +
+          'save, no restart. A missing or broken file is REFUSED here with the reason, and a file that ' +
+          'breaks later keeps the previous good version. null unassigns it and gives each key back ' +
+          'what it was shadowing. Only the name is stored and carried. autopilot status reports ' +
+          'farm_strategy (per key: file, effective, applied, yielded_to, shadowing) and ' +
+          'policy_sources (who set every key). Pass mode:"farm" with it. NOT `strategy`, which picks ' +
+          'a STRATEGIES pattern. See docs/m59-strategies.md' },
       hunt_priority: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
         description: 'AN ORDER OVER hunt, not a second hunt list: e.g. ["spider", "living tree"]. ' +
           'When set, the keeper takes the first-listed creature that is already an acceptable ' +
@@ -12412,6 +12429,32 @@ const TOOLS = [
         try { p.policy.lootOnly = lootOnlySpec(a.loot_only, { resolveItem: n => resolveItemName(n) }); }
         catch (e) { return { started: false, reason: e.message }; }
       }
+      // THE FARMING STRATEGY ASSIGNMENT. Loaded and validated HERE so a missing or broken file is
+      // refused at the door with its reason rather than stored as an order that does nothing.
+      // Only the name is stored; the keeper applies the file (m59-strategy-engine.mjs).
+      let farmStrategy = null;
+      if (a.farm_strategy !== undefined) {
+        if (a.farm_strategy == null || String(a.farm_strategy).trim() === '') p.policy.farmStrategy = null;
+        else {
+          const r = await loadFarmStrategy(String(a.farm_strategy).trim());
+          if (!r.ok) return { started: false, reason: `farm_strategy refused: ${r.why}`,
+                              ...(r.problems?.length ? { problems: r.problems } : {}),
+                              note: 'nothing was changed: the character keeps the posture it has' };
+          p.policy.farmStrategy = r.name;
+          farmStrategy = r;
+        }
+      } else if (p.policy.farmStrategy) {
+        farmStrategy = await loadFarmStrategy(p.policy.farmStrategy).catch(() => null);
+      }
+      // What this call asked for that the assigned strategy will lay its own value over. Reported,
+      // because a caller who set `hunt` and watches the character hunt something else deserves
+      // the reason in the reply, not in a status read later.
+      const farmStrategyShadows = farmStrategy?.ok
+        ? Object.entries(FARM_STRATEGY_ARG_KEYS)
+            .filter(([arg, keys]) => a[arg] !== undefined
+              && keys.some(k => Object.hasOwn(farmStrategy.strategy.desired, k)))
+            .map(([arg]) => arg)
+        : [];
       const huntPriorityIgnored = p.policy.huntPriority
         ? huntPriorityProblems(p.policy.huntPriority, p.policy.hunt,
             { matcherFor: w => huntMatcher(loadSpawns(SPAWN_FILE), w) })
@@ -12431,8 +12474,9 @@ const TOOLS = [
         p.policy.defendAgainstPlayers = !!a.defend_against_players;
       if (a.ask_for_help !== undefined) p.policy.askForHelp = !!a.ask_for_help;
       if (a.break_out_via_logoff !== undefined) p.policy.breakOutViaLogoff = !!a.break_out_via_logoff;
-      if (p.mode === 'farm' && !p.policy.hunt)
-        return { started: false, reason: 'farm mode needs something to hunt — pass hunt with a creature name' };
+      if (p.mode === 'farm' && !p.policy.hunt && !farmStrategy?.strategy?.desired?.hunt)
+        return { started: false, reason: 'farm mode needs something to hunt — pass hunt with a creature name, ' +
+                 'or a farm_strategy whose file names one' };
       // SPOTS ARE NO LONGER A CHOICE, and the legacy wall key has to be adopted before
       // anything reads the new one. Both happen here, before the policy is persisted OR
       // pushed, so the roster and the keeper cannot disagree about either.
@@ -12441,7 +12485,9 @@ const TOOLS = [
         console.error(`[autopilot] ${a.agent} policy ${c.key} ${c.from} -> ${c.to} (coerced: ${c.why})`);
       // Persist the instruction, not the running object: on the far side of a
       // restart the keeper is rebuilt from these fields alone.
-      rememberAutopilot(a.agent, { mode: p.mode, policy: { ...p.policy } });
+      rememberAutopilot(a.agent, { mode: p.mode, policy: p.policyForOrders?.() ?? { ...p.policy } });
+      // (`policyForOrders`: an in-process keeper's farm-strategy overlay is taken back out, so a
+      // file's keys are never persisted as if somebody had ordered them — m59-strategy-engine.mjs.)
       // A KEEPER-BACKED CHARACTER MUST NOT GET A SECOND BRAIN IN THIS PROCESS.
       //
       // `p` here is an Autopilot built on whatever `session(agent)` returned, and for every
@@ -12501,6 +12547,13 @@ const TOOLS = [
       // out of a schema for a year with every keeper's audit switched off.
       if (overfarmNotes.length) out.overfarm_notes = overfarmNotes;
       if (huntPriorityIgnored.length) out.hunt_priority_ignored = huntPriorityIgnored;
+      if (farmStrategy?.ok) out.farm_strategy = { name: farmStrategy.name, file: farmStrategy.file,
+        keys: Object.keys(farmStrategy.strategy.desired), hooks: Object.keys(farmStrategy.strategy.hooks),
+        ...(farmStrategy.unrecognised?.length ? { unrecognised_not_applied: farmStrategy.unrecognised } : {}) };
+      if (farmStrategyShadows.length) out.farm_strategy_shadows = { args: farmStrategyShadows,
+        why: `farm strategy "${farmStrategy.name}" declares these, so while the keeper owns their faculty ` +
+             'the value in the file is the one in force; yours is kept underneath and returns if the strategy ' +
+             'is unassigned (farm_strategy=null)' };
       return keeper_push ? { ...out, keeper_push } : out;
     },
   },
@@ -16575,7 +16628,7 @@ const TOOLS = [
           const p = autopilotIfAny(o.agent);
           if (!p) continue;
           p.policy.assignedRoom = o.room;
-          rememberAutopilot(o.agent, { mode: p.mode, policy: { ...p.policy } });
+          rememberAutopilot(o.agent, { mode: p.mode, policy: p.policyForOrders?.() ?? { ...p.policy } });
           // The same push as `autopilot action=start`, for the same reason: `spread`'s
           // whole promise is "make the assignment STICK", and on a keeper-backed broker
           // an assignment written only to the shell and the roster sticks to nobody until

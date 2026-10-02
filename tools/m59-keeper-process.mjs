@@ -17,6 +17,10 @@ process.env.M59_KEEPER = '1';
 
 import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
+// WHO SET EACH POLICY KEY, and which faculty a strategy-governed key belongs to (a push that lands
+// while a bot holds that faculty is the bot's). See m59-policy-sources.mjs, m59-strategy-schema.mjs.
+import { sourceForPush, sameValue } from './m59-policy-sources.mjs';
+import { KEY_FACULTY } from './m59-strategy-schema.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
@@ -906,7 +910,12 @@ async function joinGenerationOnce(generation) {
       autopilot = autopilotFor(session);
       defaultPolicy ??= structuredClone(autopilot.policy);
       autopilot.mode = mode;
+      const beforeJoin = { ...autopilot.policy };
       Object.assign(autopilot.policy, policy);
+      // CREDIT WHAT THE JOIN CHANGED: the roster's value, or a push this process (or the one it
+      // replaced, via the carry) received — `policy` holds both. Unchanged keys keep their writer.
+      autopilot.policySources?.markChanged(beforeJoin, autopilot.policy,
+        k => sameValue(policy[k], bootPolicy[k]) ? 'roster' : 'carry');
       // Carried leases, before the first pass. A holder that already claimed on this keeper keeps
       // its claim; each carried lease keeps its own expiry, so the holder still has to heartbeat.
       if (carried) {
@@ -921,6 +930,10 @@ async function joinGenerationOnce(generation) {
         carried = null;
         consumeCarry(CARRY_FILE);
       }
+      assertJoinIntent(generation);
+      // The farming strategy (if one is assigned) over the orders just re-imposed, before the first
+      // pass reads them. The file's keys never enter `policy` above: only the assignment is an order.
+      await autopilot.applyFarmStrategy?.('join');
       assertJoinIntent(generation);
       autopilot.start();
       console.error(`[keeper] ${agent} autopilot started (mode=${mode}, hunt=${policy.hunt ?? 'none'})`);
@@ -4035,6 +4048,16 @@ const server = createServer(async (req, res) => {
         const before = { ...autopilot.policy };
         Object.assign(autopilot.policy, fields);
         applied.push(...Object.keys(fields));
+        // ONE ANSWER PER KEY: credit only what this push CHANGED (the broker sends the whole policy
+        // every time), to the faculty holder when one holds it, else to the push and its writer.
+        autopilot.policySources?.markChanged(
+          Object.fromEntries(Object.keys(fields).map(k => [k, before[k]])), fields,
+          k => sourceForPush(k, { facultyOf: x => KEY_FACULTY[x] ?? null,
+                                  ownerOf: f => autopilot.facultyOwner?.(f) ?? 'keeper' }),
+          { by: writtenBy ?? null });
+        // And the farming strategy answers for its keys again — at once, not a pass later — while
+        // the keeper owns their faculties; a changed assignment loads (or releases) its file here.
+        await autopilot.applyFarmStrategy?.('policy push');
         if (Object.hasOwn(fields, 'partner'))
           rememberFileSpotPartner(agent, autopilot.policy.partner ?? null);
         // `this.mode` is consulted fresh on every pass (m59-autopilot.mjs: `this.mode ===
@@ -4073,6 +4096,8 @@ const server = createServer(async (req, res) => {
              // Same argument as `applied`: a field that was accepted and then changed must
              // ride back, or the pusher believes it got what it asked for.
              ...(coercedSpots.length ? { coerced: coercedSpots } : {}),
+             // A strategy is assigned: what it did with this push (applied, shadowed, yielded, refused).
+             ...(autopilot?.policy?.farmStrategy ? { farm_strategy: autopilot.farmStrategyStatus?.() ?? null } : {}),
              no_autopilot: !autopilot });
       return;
     }

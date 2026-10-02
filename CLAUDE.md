@@ -26,6 +26,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | touch a board, the compendium or the planner | [`docs/m59-boards.md`](docs/m59-boards.md) |
 | run, back up, restore, lend out or shut down the fleet | [`docs/m59-operations.md`](docs/m59-operations.md) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
+| write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | buy a spell of LEVEL 3 or higher, or find out why a priestess will not sell one | `m59-research/reports/disciple-quests.md`, and `tools/fleetscripts/disciple-quest.mjs` |

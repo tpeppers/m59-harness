@@ -153,6 +153,9 @@ import { touchSpellSpec, TouchSpellState, touchRecastBackoffMs, touchCastTiming,
          touchRefreshDue } from './m59-touchspell.mjs';
 import { orderByHuntPriority, huntPriorityProblems, priorityRankOf } from './m59-hunt-priority.mjs';
 import { lootOnlyStatus } from './m59-loot-filter.mjs';
+// FARMING STRATEGY FILES: the engine applies a file; the keeper only binds it (applyFarmStrategy).
+import { FarmStrategyEngine } from './m59-strategy-engine.mjs';
+import { PolicySourceBook } from './m59-policy-sources.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1984,6 +1987,11 @@ export class Autopilot {
       // (m59-loot-filter.mjs). Operator, 2026-10-02, for Kermit in Faronath.
       huntPriority: null,
       lootOnly: null,
+      // THE FARMING STRATEGY ASSIGNED TO THIS CHARACTER, by name: substrate/farm-strategies/<name>.mjs
+      // (m59-strategy-engine.mjs). null is none. NOT `strategy` below, which picks a STRATEGIES
+      // pattern like 'fieldrest'. Only this name is pushed and carried; the file's own keys are
+      // laid over this object by the engine on every pass and never persisted.
+      farmStrategy: null,
       // Take reagents from a fleetmate without negotiating. The provider half of a
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
@@ -2336,6 +2344,9 @@ export class Autopilot {
       bankAbove: 500,
       ...policy,
     };
+    // WHO SET EACH KEY (m59-policy-sources.mjs): one answer per key, reported as policy_sources.
+    this.policySources = new PolicySourceBook();
+    this.policySources.mark(Object.keys(policy ?? {}), 'roster');
     // What we believe is in the stomach. Nothing reports it, so it is modelled from
     // what we ate plus the documented drain rate, and corrected whenever the server
     // refuses a mouthful. See provision().
@@ -2806,6 +2817,22 @@ export class Autopilot {
     return { order, ignored: huntPriorityProblems(order, this.policy.hunt, { matcherFor: n => this.huntMatch(n) }),
              last_choice: this._huntPriorityLast ?? null };
   }
+
+  // FARMING STRATEGY FILES (m59-strategy-engine.mjs). Binding only: the engine loads, validates,
+  // applies (faculty by faculty — it yields whatever a bot or lease holds) and runs the hooks; the
+  // keeper reads no field of a strategy. Never throws into a pass.
+  async applyFarmStrategy(reason = 'pass') {
+    if (!this.policy?.farmStrategy && !this._farmStrategy) return null;
+    try { return await (this._farmStrategy ??= new FarmStrategyEngine(this)).converge(reason); }
+    catch (e) { this.note('farm strategy failed to apply', { reason, why: e.message }); return null; }
+  }
+  farmStrategyHook(hook, payload = {}) { return this._farmStrategy?.dispatch(hook, payload); }
+  farmStrategyStatus() {
+    return this._farmStrategy?.status()
+      ?? (this.policy?.farmStrategy ? { assigned: this.policy.farmStrategy, state: 'not applied yet' } : null);
+  }
+  /** The policy as the ORDERS say it — the strategy's overlay taken back out — for anything that persists. */
+  policyForOrders() { return this._farmStrategy ? this._farmStrategy.ordersView(this.policy) : { ...this.policy }; }
 
   /** Is this character training its touch spell RIGHT HERE, right now? */
   touchTrainingHere(room = this.s?.world?.room) {
@@ -12184,6 +12211,10 @@ export class Autopilot {
       // Null when unset, like touch_spell. `ignored` names priority entries hunt never produces.
       hunt_priority: this.huntPriorityStatus(),
       loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
+      // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
+      // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.
+      farm_strategy: this.farmStrategyStatus(),
+      policy_sources: this.policySources?.snapshot() ?? null,
       // WHO OWNS WHICH HALF OF THIS CHARACTER. Always present, never undefined: a reader
       // has to be able to tell "the keeper owns everything" from "this broker does not
       // answer that question", and undefined reads as the second. With nothing attached
@@ -15492,7 +15523,7 @@ export class Autopilot {
     const applied = {};
     for (const [key, spec] of Object.entries(POLICY_KEYS)) {
       if (p[key] === null || p[key] === undefined) continue;
-      if (this.policy[spec.as] !== p[key]) applied[key] = p[key];
+      if (this.policy[spec.as] !== p[key]) { applied[key] = p[key]; this.policySources?.mark(spec.as, 'loadout'); }
       this.policy[spec.as] = p[key];
     }
     if (Object.keys(applied).length) {
@@ -15531,6 +15562,9 @@ export class Autopilot {
 
   async passOnce() {
     const s = this.s;
+    // THE FARMING STRATEGY FIRST, so everything below this pass reads the file's posture. One stat
+    // when nothing changed; a no-op with none assigned. m59-strategy-engine.mjs.
+    await this.applyFarmStrategy('pass');
     // INSTALL THE OVERFARM POLICY ON THE SESSION, EVERY PASS. `lootFloor` defaults to it,
     // so this is what reaches the five call sites that are not in this file — the kill tick
     // in m59-decide.mjs, the keeper's own loot action, the `loot` tool, the loot-runner
@@ -15576,7 +15610,10 @@ export class Autopilot {
     if (await this.continueSurvivalDecision()) return;
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.
-    this.applyLoadoutPolicyOverlay();
+    // A loadout write lands on keys a strategy may govern: let the strategy answer for them again
+    // before this pass decides anything (it reasserts and says so; the loadout value is shadowed).
+    const fromLoadout = this.applyLoadoutPolicyOverlay();
+    if (fromLoadout && Object.keys(fromLoadout).length) await this.applyFarmStrategy('loadout');
     await this.useHealingWand();
     // ------------------------------------------------------------------
     // GOAP KEEPER (opt-in via policy.useGOAP)
@@ -18367,6 +18404,7 @@ export class Autopilot {
       this.tally.kills++;
       this.killTimes.push(Date.now());
       if (this.killTimes.length > 500) this.killTimes.shift();
+      this.farmStrategyHook('onKill', { creature: f.target, room: room?.num ?? null, looted });
       tougher.recordKill(this.who(), {
         creature: f.target, room: room?.name ?? null, room_num: room?.num ?? null,
         level: v?.health?.max ?? null, rounds: f.rounds, looted, from_safe_spot: holding,
@@ -22286,6 +22324,8 @@ export class Autopilot {
       // swing on the assigned room: empty hand, buff on, recast when the server said it stopped
       // or a swing read "Your punch". It never refuses the fight — a buff we cannot afford is a
       // reason on the status, and the character swings bare.
+      this.farmStrategyHook('beforeSwing', { target: engageName, target_id: claimedSwing ?? null,
+                                             room: room?.num ?? null });
       if (this.touchTrainingHere())
         await this.maintainTouchSpell(`before swinging at ${engageName}`)
           .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
@@ -22510,6 +22550,7 @@ export class Autopilot {
         this.tally.kills++;
         this.killTimes.push(Date.now());
         if (this.killTimes.length > 500) this.killTimes.shift();
+        this.farmStrategyHook('onKill', { creature: f.target, room: room?.num ?? null, looted });
         // ON THE FEED, WITH THE CREATURE AND THE ROOM. The tally counts; this remembers
         // what and where, which is what makes a max-health gain attributable to the thing
         // that paid for it. Ten per character, in memory — see m59-tougher.mjs.

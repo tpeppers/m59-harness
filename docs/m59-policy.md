@@ -66,6 +66,16 @@ of a quiet middle band — there is no setting that clears both. Written as an e
 every value warned about something, which reads the same as nothing. They are independent
 remarks and a value may collect both.
 
+## ONE TASK'S POSTURE IN ONE FILE — farming strategies, and who set each key
+
+A **farming strategy** (`substrate/farm-strategies/<name>.mjs`, assigned with
+`autopilot farm_strategy=<name>`) is the same four rules applied to a whole task: what to hunt and
+in what order, the weapons or touch spell, the loot filter, the confinement, plus small hooks. It
+is laid over the policy only while the keeper owns each key's faculty, refuses any survival or
+war key, keeps the previous good version when an edit breaks, and carries nothing but its name.
+Every writer of the policy now credits what it changed, so `autopilot status` answers "who set
+this key" as `policy_sources`. [`docs/m59-strategies.md`](m59-strategies.md) has all of it.
+
 ## A PROFILE IS THE OTHER HALF: NOT A NUMBER, BUT WHERE THE FLEET IS ALLOWED TO BE
 
 The local policy above overrides *thresholds*, and its surface is deliberately small. What

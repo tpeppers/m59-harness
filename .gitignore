@@ -123,6 +123,18 @@ node_modules/
 # substrate/strategies.example.mjs.
 /substrate/strategies/
 
+# FARMING STRATEGIES — a SIBLING of the travel strategies above, not part of them.
+#
+# `substrate/farm-strategies/<name>.mjs` is one task's farming orders: what to hunt and in what
+# order, the weapons or touch spell, the loot filter, the confinement, and small hooks. ASSIGNED to
+# a character by name (`autopilot farm_strategy=<name>`) and applied by tools/m59-strategy-engine.mjs
+# — not enumerated and run fleet-wide like a travel strategy, which is why it is its own directory
+# and its own loader (docs/m59-strategies.md). Orders and code, so this machine's, for the same
+# reason as everything above. The SHAPE is committed BESIDE it, as a directory of whole examples:
+# substrate/farm-strategies.example/. A copy of m59-private's sync wanting these needs its own carry
+# entry; it does not ride with strategy/strategies.
+/substrate/farm-strategies/
+
 # The measured cost of the blink race, per map, per exit — how long the walk from the blink
 # point to each common crossing actually takes. Measured on this server by these characters
 # against this movement epoch, which is exactly the kind of number that must not be averaged
