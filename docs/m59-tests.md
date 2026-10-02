@@ -832,7 +832,7 @@ the records it describes.
   self-defence, a player hunt, the client's own attack packet — swings at that player again in
   that room, that another player there still is, that leaving the room or ten minutes forgets
   it, and that the refused player hurting us takes no body from the keeper's survival ladder
-  while an attackable attacker still starts return fire. See `tools/m59-refused-targets.mjs`) and
+  while an attackable attacker still starts return fire, and that a hit FROM a refused player clears the refusal so return fire starts. See `tools/m59-refused-targets.mjs`) and
   `node tools/m59-purchase-funding-test.mjs` (**real shopping flow with simulated bank and
   merchant**: posted costs and quantities, exact shortfalls, reserved cash, failed and
   interrupted withdrawals, fresh merchant quotes after a price change, and separate bank

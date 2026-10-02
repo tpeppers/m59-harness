@@ -24,6 +24,8 @@
 // EXPIRY. An entry is forgotten when the character leaves that room (the operator's "in that
 // map"), and after REFUSED_TTL_MS as a backstop even if it never leaves: the same player becomes
 // attackable the moment they join a guild, pick up a token or a soldier shield, or turn murderer.
+// And at once if they ATTACK US there: AllowGuildAttack is symmetric, so a stroke of theirs that
+// reaches us proves the refusal stale (forgetRefused), and return fire runs as for anybody else.
 //
 // IT SUPPRESSES SWINGS, NOT THREAT. Nothing here hides a player from survival: a refused player
 // who is hurting us is still something the keeper's flee/rest ladder answers. Only OUR attack
@@ -87,6 +89,14 @@ export class RefusedTargets {
     return e;
   }
 
+  /** Drop the entry for this name in this room. Returns the entry dropped, or null. */
+  forget(name, room) {
+    const key = `${room}|${normName(name)}`;
+    const e = this.entries.get(key) ?? null;
+    if (e) this.entries.delete(key);
+    return e;
+  }
+
   list(at = this.now()) {
     return [...this.entries.values()].filter(e => at - e.at < this.ttl)
       .map(e => ({ room: e.room, name: e.name, why: e.why, at: e.at, count: e.count,
@@ -124,6 +134,25 @@ export function noteRefused(session, name, { why = 'guild_only', text = null, at
       why, text: r.entry.text, source }); } catch {}
   }
   return r;
+}
+
+/**
+ * THEY JUST ATTACKED US, SO THE REFUSAL IS STALE. AllowGuildAttack is symmetric: a player it
+ * refuses us cannot attack us in that room either. One whose stroke reaches us has since joined a
+ * guild, taken up a soldier shield or a token, or turned murderer -- and is fair game again.
+ * Called by whatever parses "X hit/missed you" (CombatMode.observePlayerCombat), BEFORE the return
+ * fire decision, so that path runs exactly as it would have for anybody else.
+ */
+export function forgetRefused(session, name, { source = null } = {}) {
+  const room = roomOf(session);
+  const e = refusedTargets(session)?.forget(name, room) ?? null;
+  if (e) {
+    try { (session.refusedLog ?? console.error)(`[combat] ${agentOf(session)}: ${e.name} attacked us in room ${room}; ` +
+      'the guild-only refusal is stale, attackable again'); } catch {}
+    try { session.recorder?.line?.('combat', { event: 'target_refusal_cleared', target: e.name, room,
+      why: 'they attacked us', source }); } catch {}
+  }
+  return e;
 }
 
 /** What the client last swung or cast at, as the client recorded it (M59Client.noteAttackTarget). */

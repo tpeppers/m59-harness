@@ -168,27 +168,33 @@ await test('war: a second, attackable enemy in the room is still engaged', async
 
 // ------------------------------------------------------------------ survival
 
-await test('survival: a refused player hitting us takes no body -- the keeper ladder answers it', async () => {
-  reset(); const f = fixture();
-  put(f, 3, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 3 }); await f.mode.tick();
+await test('a hit FROM a refused player clears the refusal: they are a target again and return fire starts', async () => {
+  // AllowGuildAttack is symmetric. A player it refuses us cannot hit us here either, so a stroke
+  // that lands means they joined a guild, took a shield or a token, or turned murderer.
+  reset(); const f = fixture({ war: false });
+  put(f, 3, P);
+  f.mode.issue({ action: 'attack', target: 'Stranger' }); await f.mode.tick();
   f.mode.event({ kind: 'message', text: SENTENCE });
-  f.c.hp = 30;
+  assert.ok(f.mode.targetRefused('Stranger'));
+  f.c.hp = 70;
   f.mode.event({ kind: 'message', text: "Stranger's scimitar cleaves you." });
-  assert.equal(f.mode.active, null, 'return fire is not started against somebody we cannot hit');
+  assert.equal(f.mode.targetRefused('Stranger'), null, 'the refusal is stale and forgotten');
+  assert.ok(f.logged.some(l => /Stranger attacked us in room 38; the guild-only refusal is stale/.test(l)), `${f.logged}`);
+  assert.ok(f.mode.active?.pvp, 'return fire starts, exactly as for anybody else');
   await f.mode.tick();
-  assert.equal(attacksAt(f, 3), 1);
+  assert.equal(attacksAt(f, 3), 2, `sent ${f.sent}`);
+  f.mode.stop('test');
 });
 
-await test('survival: an attackable attacker still starts return fire while a refused one is present', async () => {
+await test('survival: a refused player who has NOT attacked us is never swung at while an attacker is fought', async () => {
   reset(); const f = fixture();
   put(f, 3, P); put(f, 2, P, 5, 7);
   f.mode.refuseTarget('Stranger');
-  f.mode.event({ kind: 'message', text: "Stranger's scimitar cleaves you." });
-  assert.equal(f.mode.active, null);
   f.mode.event({ kind: 'message', text: "Morpheus's scimitar cleaves you." });
   assert.ok(f.mode.active?.pvp, 'return fire on the attacker we CAN hit');
   await f.mode.tick();
   assert.equal(attacksAt(f, 2), 1); assert.equal(attacksAt(f, 3), 0, `sent ${f.sent}`);
+  assert.ok(f.mode.targetRefused('Stranger'), 'somebody else hitting us clears nothing');
   f.mode.stop('test');
 });
 

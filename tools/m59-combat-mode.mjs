@@ -14,7 +14,7 @@ import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
-import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets } from './m59-refused-targets.mjs';
+import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -820,6 +820,10 @@ export class CombatMode {
     const result = parsePlayerCombat(ev.text, names);
     if (!result) return;
     if (result.direction === 'incoming') {
+      // THEIR STROKE REACHED US, so AllowGuildAttack (symmetric) no longer refuses them: a
+      // guild-only refusal of this player here is stale. Forgotten FIRST, so return fire below
+      // runs exactly as it would for anybody else (m59-refused-targets.mjs forgetRefused).
+      try { forgetRefused(this.s, result.character, { source: 'incoming_' + result.outcome }); } catch {}
       this.beginPvP(result, ev.at);
       // THE VICTIM IS THE ONLY ONE WHO HEARS THIS LINE, so it is the one fact the room does
       // not already share. Say it, so every fleet character in this map fights with us.

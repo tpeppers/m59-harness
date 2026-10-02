@@ -268,8 +268,10 @@ taken and sending one kind it never would.
   the next object change and the bots stood there swinging (operator, 2026-10-01).
   `tools/m59-refused-targets.mjs` is the one memory: keyed by `world.room.num` and the player's
   NAME (never the id), forgotten on leaving the room or after 10 minutes, consulted by every
-  path that swings at a player and by the client's own `attack`. It withholds swings only:
-  a refused player hurting us is still answered by the keeper's flee/rest ladder.
+  path that swings at a player and by the client's own `attack`. It withholds swings only.
+  And `AllowGuildAttack` is symmetric, so a refused player whose stroke reaches us has become
+  attackable (guild, shield, token or murderer): an incoming hit or miss clears the entry and
+  return fire runs as for anybody else.
   `node tools/m59-guild-refusal-test.mjs` (14) pins it.
 
 
