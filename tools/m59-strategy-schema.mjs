@@ -136,6 +136,12 @@ export const STRATEGY_FIELDS = Object.freeze([
     normalize: strList('weapons.priority') },
   { path: 'weapons.banned', keys: ['bannedWeapons'], faculty: 'work', arg: 'banned_weapons',
     normalize: strList('weapons.banned', { lower: true }) },
+  // CREATURES NEVER SWUNG AT, even when they attack (m59-spare.mjs). WHAT to fight, so it is `work`
+  // and yields to a bot holding the hunt. It is NOT one of the protected survival keys: the keeper
+  // still rests, flees and recovers exactly as before -- it just never picks a spared monster as a
+  // target, and the client refuses the packet if anything else tries.
+  { path: 'spare', keys: ['spareCreatures'], faculty: 'work', arg: 'spare_creatures',
+    normalize: strList('spare', { lower: true }) },
   { path: 'weapons.style', keys: ['trainingStyle'], faculty: 'work', arg: 'training_style',
     normalize: v => { if (!TRAINING_STYLES.includes(v))
       throw new Error(`weapons.style must be one of ${TRAINING_STYLES.join(', ')}`); return v; } },

@@ -59,7 +59,9 @@
 // touch (the central touch-spell state, read-only), memory (a per-file scratch object, reset on
 // reload), note(what, data), set(path, value) — a schema path such as 'huntPriority' or
 // 'weapons.touchSpell', validated, faculty-gated, credited 'strategy:<name>' with hook —
-// pack() (the pack by name and amount, a copy), and requestTouchRecast(why), which marks the
+// pack() (the pack by name and amount, a copy), contents() (the room: name, kind player/monster/
+// object, square, distance, spared/fleetmate -- a copy; ids are temporary handles), and
+// requestTouchRecast(why), which marks the
 // central touch state stale so the keeper recasts at the next opportunity under its own rate limit.
 
 import { statSync, readdirSync, existsSync } from 'node:fs';
@@ -68,6 +70,36 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateStrategy, fieldFor, fieldForKey, mergeOver, STRATEGY_NAME, STRATEGY_HOOKS } from './m59-strategy-schema.mjs';
 import { sameValue } from './m59-policy-sources.mjs';
 import { classifyCombatLine } from './m59-combatlog.mjs';
+import { OF } from './m59-parse.mjs';
+import { isSpared } from './m59-spare.mjs';
+import * as party from './m59-party.mjs';
+
+/**
+ * A hook's view of the room: every object but ourselves, as data. kind is 'player', 'monster'
+ * (attackable, not a player) or 'object' (items, ghosts, furniture). Players carry `fleetmate`
+ * (m59-party.mjs, the same answer the grudge book and the war response use); monsters carry
+ * `spared` (policy.spareCreatures). Sorted nearest first, like findCreature.
+ */
+export function roomContents(c, host = {}) {
+  if (!c?.room?.objects) return deepFreeze([]);
+  const me = c.self;
+  const spare = host.policy?.spareCreatures ?? null;
+  const out = [];
+  for (const o of c.room.objects.values()) {
+    if (o.id === c.selfId) continue;
+    const name = c.rsc?.get?.(o.nameRsc) || o.name || '';
+    const player = !!(o.flags & OF.PLAYER);
+    const kind = player ? 'player' : (o.flags & OF.ATTACKABLE) ? 'monster' : 'object';
+    const row = Number.isFinite(o.row) ? o.row : null, col = Number.isFinite(o.col) ? o.col : null;
+    const entry = { id: o.id, name, kind, row, col,
+      distance: me && row != null && col != null ? Math.hypot(row - me.row, col - me.col) : null };
+    if (kind === 'monster') entry.spared = !!(spare?.length && isSpared(c, o, spare));
+    if (player) { try { entry.fleetmate = !!party.isFleetmate(name); } catch {} }
+    out.push(entry);
+  }
+  out.sort((x, y) => (x.distance ?? 1e9) - (y.distance ?? 1e9));
+  return deepFreeze(out);
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FARM_STRATEGY_DIR = process.env.M59_FARM_STRATEGY_DIR
@@ -336,6 +368,11 @@ export class FarmStrategyEngine {
       pack: () => deepFreeze((c?.inventory ?? []).map(o => ({
         name: c?.rsc?.get?.(o.nameRsc) || o.name || '',
         amount: Number.isFinite(Number(o.amount)) && o.amount != null ? Number(o.amount) : 1 }))),
+      // THE ROOM, read on demand (operator, 2026-10-02: "pass room contents into the farm strategy
+      // hook ... there will probably be more unique strategies like this"). A copy: names, kinds and
+      // squares, never a handle a hook could act on. `id` is a TEMPORARY HANDLE (renumbered on every
+      // save, recycled within hours) -- count and compare by name.
+      contents: () => roomContents(c, h),
       note: (what, data) => this.noteOnce(`hooknote:${what}`, `farm strategy ${strategy}: ${String(what)}`,
         data, { every: 10_000 }),
       set: (path, value) => this.hookSet(path, value),

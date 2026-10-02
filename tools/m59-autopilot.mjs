@@ -1869,6 +1869,10 @@ export class Autopilot {
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
     if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
+    // THE SPARE LIST IS READ BY THE SESSION, because the attack veto and findCreature live there
+    // and every swing reaches them (m59-spare.mjs). Read live, so a push or a farm strategy applies
+    // on the next swing without a restart.
+    if (session) session.sparePatterns = () => this.policy?.spareCreatures ?? null;
     // AND EVERY equipBest ON THIS SESSION ASKS WHETHER THE HAND IS MEANT TO BE EMPTY. Ten call
     // sites equip — a gift, a rescue plea, a magic swap, `equip_best` — and a touch-spell trainer
     // on its own ground must not have any of them put a weapon back in its hand, because a
@@ -1987,6 +1991,10 @@ export class Autopilot {
       // (m59-loot-filter.mjs). Operator, 2026-10-02, for Kermit in Faronath.
       huntPriority: null,
       lootOnly: null,
+      // CREATURES NEVER SWUNG AT, even when they attack (m59-spare.mjs): ['spider'] keeps the Icky
+      // Cave's spiders alive so they fill its spawn cap and no orc can spawn (operator, 2026-10-02).
+      // A filter on targets and on the attack packet; survival (rest, flee, recover) is unchanged.
+      spareCreatures: null,
       // THE FARMING STRATEGY ASSIGNED TO THIS CHARACTER, by name: substrate/farm-strategies/<name>.mjs
       // (m59-strategy-engine.mjs). null is none. NOT `strategy` below, which picks a STRATEGIES
       // pattern like 'fieldrest'. Only this name is pushed and carried; the file's own keys are

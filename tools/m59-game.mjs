@@ -94,6 +94,7 @@ import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 // keeper process uses joinOnce directly -- so a broken method sat in the class until the
 // first outside caller found it.
 import { joinSessionOnce } from './m59-session-readiness.mjs';
+import { vetoSpared } from './m59-spare.mjs';
 
 // noteGeometryDrift is defined in m59-broker.mjs and used here for
 // drift logging. In the keeper process (no broker), it's undefined.
@@ -2313,7 +2314,8 @@ class Session {
     // A PLAYER THE SERVER REFUSED US IN THIS ROOM ("Only those in guilds may attack each other
     // here.") is remembered by room number and name, and no attack packet is sent at them again
     // while we stand here. See m59-refused-targets.mjs.
-    c.attackVeto = id => vetoAttack(this, c, id);
+    // AND A MONSTER THIS CHARACTER IS TOLD TO LEAVE ALIVE (policy.spareCreatures, m59-spare.mjs).
+    c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id);
     c.onEvent = ev => {
       // FIRST, so every consumer below -- the combat override included -- already knows.
       try { observeRefusal(this, c, ev); } catch { /* bookkeeping never costs an event */ }
