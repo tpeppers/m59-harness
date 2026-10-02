@@ -43,9 +43,19 @@ ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login rea
   const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('));
   const wait = body.indexOf('!c.selfId && Date.now() < until');
-  const firstRead = body.indexOf('await loginRead(() => c.roomContents())');
-  const statsRead = body.indexOf('await loginRead(() => c.stats(2))');
+  const firstRead = body.indexOf("await observe('room', () => c.roomContents())");
+  const statsRead = body.indexOf("await observe('stats 2', () => c.stats(2))");
   assert.ok(wait > 0 && wait < firstRead && firstRead < statsRead, 'the wait comes before every login read');
+});
+ok('THE CAUSE (t17, 2026-10-01): a preempted login read no longer aborts the login', () => {
+  // "join failed: body command preempted by combat override" left a live client with no group 2
+  // and combatReady false -- and the retry returned it as "already in game".
+  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
+  assert.ok(!/\n\s*await loginRead\(/.test(body), 'no login read is awaited bare: each goes through observe()');
+  assert.ok(/catch \(e\) \{\s*loginReadFailures\.push[\s\S]{0,120}this\.pacer\.submit\('read', fn\)/.test(body),
+    'a preempted read is recorded and re-sent under the current owner');
+  assert.ok(/\} finally \{\s*c\.combatReady = true;\s*\}/.test(body), 'combat readiness ALWAYS runs');
 });
 ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
   const login = 1_000_000;

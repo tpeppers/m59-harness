@@ -48,6 +48,8 @@ export function statTraceOf(client) {
     group2_got: iso(client.statTrace?.got?.[2]),
     group1_got: iso(client.statTrace?.got?.[1]),
     login_wait: client.loginWait ?? null,
+    login_read_failures: client.loginReadFailures ?? null,
+    combat_ready: client.combatReady ?? null,
   };
 }
 

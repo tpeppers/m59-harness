@@ -2440,17 +2440,39 @@ class Session {
       await new Promise(r => setTimeout(r, 50));
     c.loginWait = { waited_ms: Date.now() - waitFrom, self_before: hadSelf, self_after: c.selfId ?? null,
                     timed_out: !c.selfId, at: Date.now() };
-    await loginRead(() => c.roomContents());
-    await loginRead(() => c.players());
-    await loginRead(() => c.requestInventory());
-    await loginRead(() => c.stats(1));
-    await loginRead(() => c.stats(2));
-    // Existing poison survives logout but its icon needs this initial read.
-    // Without it, reconnecting recovery can mistake poison ticks for attacks
-    // and repeatedly restart the rest. Subsequent changes arrive as pushes.
-    await loginRead(() => c.requestEnchantments());
-    await new Promise(r => setTimeout(r, 600));
-    c.combatReady = true;
+    // A LOGIN READ THAT IS PREEMPTED MUST NOT ABORT THE LOGIN. These are observations, bound to
+    // the bootstrap's body command; a combat override that begins mid-login (an attack on
+    // arrival, the war response, the warband) preempts that command, and the read threw out of
+    // joinOnce. By then `this.client = c` was already live, so the keeper's retry got "already in
+    // game" (joinSessionOnce) and KEPT the half-built client -- with no attribute block (the karma
+    // loss, measured: t17 2026-10-01, `join failed: body command preempted by combat override`,
+    // trace `group2_asked: []`) and, worse, `combatReady` still false, which makes
+    // CombatMode.event ignore EVERYTHING: the war response and PvP survival deaf until the next
+    // login. So each read is caught; a preempted one is re-sent under whatever owns the body now,
+    // and the readiness below always runs.
+    const loginReadFailures = (c.loginReadFailures = []);
+    const observe = async (what, fn) => {
+      try { return await loginRead(fn); }
+      catch (e) {
+        loginReadFailures.push({ what, why: e?.message ?? String(e) });
+        try { return await this.pacer.submit('read', fn); }
+        catch (e2) { loginReadFailures.push({ what, why: `retry: ${e2?.message ?? e2}` }); return null; }
+      }
+    };
+    try {
+      await observe('room', () => c.roomContents());
+      await observe('players', () => c.players());
+      await observe('inventory', () => c.requestInventory());
+      await observe('stats 1', () => c.stats(1));
+      await observe('stats 2', () => c.stats(2));
+      // Existing poison survives logout but its icon needs this initial read.
+      // Without it, reconnecting recovery can mistake poison ticks for attacks
+      // and repeatedly restart the rest. Subsequent changes arrive as pushes.
+      await observe('enchantments', () => c.requestEnchantments());
+      await new Promise(r => setTimeout(r, 600));
+    } finally {
+      c.combatReady = true;
+    }
     for (const ev of loginCombatEvents) this.combat?.event(ev, c);
     this.combat?.event({ kind: 'room-contents' }, c);
 
