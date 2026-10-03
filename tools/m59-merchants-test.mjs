@@ -335,5 +335,61 @@ ok('an unknown name is reported as taught by nobody',
 ok('a missing catalogue does not throw', abilityWanted('block', null).ambiguous?.length === 0);
 ok('case does not matter', abilityWanted('BLOCK', CAT).num === 404);
 
+// ---------------------------------------------------------------------------------------
+// A MERCHANT IS ASKED FOR BY HIS NAME. 2026-10-03, prod: `merchants {show:"Morrigan"}` and
+// `{show:"Frisconar"}` answered "no merchant matches" while the committed catalogue held
+// both, because the lookup read `cls` and the room only. And `{here:true}` in 202 reported
+// Tova twice — `inRoom[0]` attached to every object, then its name overwrote the live one.
+console.log('\na merchant is found by the name people use, and the room maps each person to their own row');
+{
+  const { findMerchants, sellersOf, stockMatching, merchantForObject, loadMerchants } =
+    await import('./m59-merchants.mjs');
+  const { withShopsSeen, recordShopSeen, loadShopsSeen } = await import('./m59-shops-seen.mjs');
+  const { fileURLToPath } = await import('node:url');
+  const all = loadMerchants(path.join(path.dirname(fileURLToPath(import.meta.url)),
+                                      '..', 'substrate', 'm59-merchants.json')).merchants;
+
+  const morrigan = findMerchants(all, 'Morrigan')[0];
+  ok('Morrigan is found by name', morrigan?.name === 'Morrigan', JSON.stringify(morrigan?.cls));
+  ok('...standing in the Limping Toad, room 202', morrigan?.room === 202);
+  ok('...selling herbs and elderberry',
+     stockMatching(morrigan, 'herb').length > 0 && stockMatching(morrigan, 'elderberry').length > 0);
+  const fris = findMerchants(all, 'frisconar')[0];
+  ok('Frisconar is found by name, case-insensitively', fris?.name === 'Frisconar' && fris?.room === 53);
+  ok('...and sells herbs', stockMatching(fris, 'herbs').length > 0);
+  ok('the class name still works', findMerchants(all, 'MarionInnkeeper')[0]?.name === 'Morrigan');
+  ok('and a room number still works', findMerchants(all, '202').length === 2);
+  ok('a name nobody has is still nobody', findMerchants(all, 'Zzyzx').length === 0);
+
+  const herbSellers = sellersOf(all, 'herb').map(m => m.name);
+  ok('who sells herb names Morrigan AND Frisconar, not only Ravi and Joguer',
+     herbSellers.includes('Morrigan') && herbSellers.includes('Frisconar') &&
+     herbSellers.includes('Joguer'), herbSellers.join(', '));
+  ok('a display name finds a class name ("red mushroom" -> RedMushroom)',
+     sellersOf(all, 'red mushroom').some(m => m.name === 'Frisconar'));
+
+  const in202 = all.filter(m => m.room === 202);
+  ok('Morrigan\'s live object maps to Morrigan, not to the first row in 202',
+     merchantForObject(in202, 'Morrigan')?.cls === 'MarionInnkeeper');
+  ok('and Tova\'s to Tova', merchantForObject(in202, 'Tova')?.cls === 'MarionBartender');
+  ok('a live merchant the catalogue lacks maps to NOBODY, not to a neighbour',
+     merchantForObject(in202, 'Somebody New') === null);
+
+  // A shop seen at the counter is folded in: a match is marked, a stranger is added.
+  const tmp = path.join(process.env.TEMP || process.env.TMPDIR || '/tmp', `m59-shops-seen-test-${process.pid}.json`);
+  try { fs.unlinkSync(tmp); } catch {}
+  recordShopSeen({ name: 'Morrigan', room: 202, items: [{ name: 'herb', cost: 20, amount: 5 }] }, { file: tmp });
+  recordShopSeen({ name: 'Ottoline', room: 999, items: [{ name: 'sapphire', cost: 300 }] }, { file: tmp });
+  ok('an unnamed seller is not recorded', recordShopSeen({ name: '', room: 1, items: [{ name: 'x' }] }, { file: tmp }) === null);
+  const merged = withShopsSeen(all, loadShopsSeen(tmp));
+  ok('the catalogue row Morrigan matches is marked seen live',
+     !!findMerchants(merged, 'Morrigan')[0]?.seen_live);
+  ok('a merchant only ever seen live is found by name after one shop opening',
+     findMerchants(merged, 'Ottoline')[0]?.room === 999);
+  ok('...and by what she sells', sellersOf(merged, 'sapphire').some(m => m.name === 'Ottoline'));
+  ok('the built catalogue is not mutated', !all.some(m => m.seen_live));
+  try { fs.unlinkSync(tmp); } catch {}
+}
+
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);

@@ -860,7 +860,10 @@ async function outfit(row) {
       // a merchant declining is a sentence spoken to the room, never an error on the wire.
       const res = await call('shop', { agent: row.agent, seller: seller.id, buy_ids: [opt.id] })
                           .catch(e => ({ error: e.message }));
-      const got = Array.isArray(res?.got) ? res.got : [];
+      // `bought` is what reached the PACK (shop tool, 2026-10-03); `got` is only the frames, which
+      // a keeper-backed character — every prod character — usually never sees.
+      const got = Array.isArray(res?.bought) && res.bought.length ? res.bought
+        : Array.isArray(res?.got) ? res.got : [];
       money -= cost;
       if (got.length) log.push(`bought ${nameOf(opt)} @${cost}`);
       else log.push(`*** ASKED FOR ${nameOf(opt)} @${cost} AND GOT NOTHING` +
@@ -906,7 +909,7 @@ async function outfit(row) {
         const res = await call('shop', { agent: row.agent, seller: seller.id, buy_ids: [opt.id] })
                             .catch(() => ({}));
         money -= cost;
-        if (!(Array.isArray(res?.got) && res.got.length)) {
+        if (!((Array.isArray(res?.bought) && res.bought.length) || (Array.isArray(res?.got) && res.got.length))) {
           log.push(`spare ${nameOf(opt)} @${cost}: got nothing` +
                    (res?.messages?.length ? ` — ${res.messages.join('; ').slice(0, 60)}` : ''));
           break;   // a refusal will refuse the next one too; do not spend the trip on it

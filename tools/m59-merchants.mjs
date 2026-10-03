@@ -678,6 +678,62 @@ export function loadMerchants(file = OUT) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+// A MERCHANT IS ASKED FOR BY THE NAME PEOPLE CALL HIM, NOT BY HIS CLASS.
+//
+// 2026-10-03, prod: `merchants {show:"Morrigan"}` and `{show:"Frisconar"}` both answered
+// `no merchant matches`, and the operator concluded the catalogue did not have them. It
+// did — MarionInnkeeper "Morrigan" in 202 selling herbs and elderberry, TosApothecary
+// "Frisconar" in 53 — every row of it. The lookup compared the query against `cls` and the
+// room number only, so the one name anybody standing at the counter actually sees, and
+// the one `shop {seller:'Morrigan'}` resolves by, was the one name it never looked at.
+//
+// Item names have the same problem in a smaller way: the catalogue holds the kod CLASS
+// ("RedMushroom", "ElderBerry", "Herbs") and people type the display name ("red
+// mushroom", "elderberry", "herb"). Folding both to letters-and-digits makes those meet
+// without inventing a synonym table.
+export const foldName = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+const nameMatches = (m, q) => {
+  const f = foldName(q);
+  if (!f) return false;
+  return foldName(m.cls).includes(f) || (m.name != null && foldName(m.name).includes(f));
+};
+
+// Every merchant row the query names — by class, by the person's own name, or by room.
+// Stationary first and seen-in-the-world first, because a wanderer's room is a rumour
+// and a source-only row has no room at all.
+export function findMerchants(all, query) {
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  const byRoom = /^\d+$/.test(q);
+  const hits = (all ?? []).filter(m => byRoom ? String(m.room) === q : nameMatches(m, q));
+  const rank = m => (m.seen === false || m.room == null ? 2 : 0) + (m.wanders ? 1 : 0);
+  return hits.sort((a, b) => rank(a) - rank(b));
+}
+
+// The stock lines of one merchant that match an item query, folded the same way.
+export function stockMatching(m, query) {
+  const f = foldName(query);
+  if (!f) return [];
+  return (m?.sells ?? []).filter(x => foldName(x.cls).includes(f) || foldName(x.name).includes(f));
+}
+
+export function sellersOf(all, query) {
+  return (all ?? []).filter(m => stockMatching(m, query).length);
+}
+
+// WHICH CATALOGUE ROW IS THIS LIVE OBJECT. Room 202 holds two merchants, Tova and
+// Morrigan, and `merchants {here:true}` used to attach `inRoom[0]` to every buyable object
+// it could see — so both came back as Tova, MarionBartender, and the one selling herbs
+// was invisible from the room she was standing in. The live object carries the person's
+// NAME, which is what the catalogue keys people on; match on that and on nothing weaker.
+// A live merchant the catalogue does not know returns null rather than a neighbour's row.
+export function merchantForObject(inRoom, liveName) {
+  const f = foldName(liveName);
+  if (!f) return null;
+  return (inRoom ?? []).find(m => m.name != null && foldName(m.name) === f) ?? null;
+}
+
 const cat = m => `${m.name ? `${m.name} [${m.cls}]` : m.cls}${m.room != null ? ` (room ${m.room})` : ''}`;
 
 // A teacher is worth reaching only if he is where the catalogue says. Say which kind
@@ -763,10 +819,10 @@ if (import.meta.filename === process.argv[1]) {
 
   if (cmd === 'who-sells') {
     const q = rest.join(' ').toLowerCase();
-    const hits = data.merchants.filter(m => m.sells.some(s => (s.cls || '').toLowerCase().includes(q)));
+    const hits = sellersOf(data.merchants, q);
     console.log(hits.length ? `${hits.length} merchant(s) sell something matching "${q}":` : `nothing matches "${q}"`);
     for (const m of hits) {
-      const items = m.sells.filter(s => (s.cls || '').toLowerCase().includes(q));
+      const items = stockMatching(m, q);
       console.log(`  ${cat(m).padEnd(38)} ${items.map(i => i.cls + (i.quantity > 1 ? ` x${i.quantity}` : '')).join(', ')}` +
                   `${m.finite_stock ? `  <- FINITE, may be out (holds ${m.max_for_sale})` : ''}`);
     }
@@ -804,7 +860,7 @@ if (import.meta.filename === process.argv[1]) {
 
   if (cmd === 'show') {
     const q = rest.join(' ').toLowerCase();
-    const m = data.merchants.find(x => x.cls.toLowerCase().includes(q) || String(x.room) === q);
+    const m = findMerchants(data.merchants, q)[0];
     if (!m) { console.error(`no merchant matches "${q}"`); process.exit(1); }
     console.log(`${m.name ?? m.cls} [${m.cls}]  markup ${m.markup ?? '(default)'}`);
     console.log(whereabouts(m));
@@ -825,6 +881,6 @@ if (import.meta.filename === process.argv[1]) {
   }
 
   console.error('usage: m59-merchants.mjs build | enrich | who-sells <thing> | who-buys <thing> | ' +
-                'who-teaches <thing> | show <class|room>');
+                'who-teaches <thing> | show <name|class|room>');
   process.exit(1);
 }

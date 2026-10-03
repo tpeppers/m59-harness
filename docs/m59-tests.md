@@ -973,7 +973,15 @@ the records it describes.
   all that "cannot say" falls through to OFFERING. The two failure directions are not
   symmetric — a wasted offer costs a round trip, a wrongly withheld item costs the sale and
   is invisible) and
-  `node tools/m59-merchants-test.mjs` (77, dropping to 43 without `M59_ROOT`) and
+  `node tools/m59-merchants-test.mjs` (95, dropping to 61 without `M59_ROOT` — including that
+  `merchants {show:"Morrigan"}` finds the herb seller in 202 by NAME, that Frisconar is found,
+  that `{here:true}` maps each live object to its own row instead of the room's first, and that
+  a shop seen live at a counter is never "not found" again) and
+  `node tools/m59-shop-arrival-test.mjs` (28 — **did the purchase arrive**: a fake keeper whose
+  pack fills a few reads after the buy and sends no `got` frame; pins that 120 herbs in three
+  chunks are all sent and all counted, that a partial delivery reports asked/arrived/short and
+  why it stopped, and that the broker's `shop` tool counts the proxy's CURRENT client after a
+  fresh /state rather than the snapshot literal it started on) and
   `node tools/m59-city-matrix-test.mjs` (123 — the loopback/DM safety boundary, exact
   25-pair parallel schedule, 150-leg serial schedule, exact staging square, authoritative
   in-process broker/DM identity, fresh trace lifecycle, protected report paths,

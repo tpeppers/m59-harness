@@ -74,7 +74,9 @@ import { COLLISION_TRACE, TRACE_FILE as COLLISION_TRACE_FILE,
          traceMove } from './m59-collision-trace.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
-import { loadMerchants } from './m59-merchants.mjs';
+import { loadMerchants, findMerchants, stockMatching, merchantForObject } from './m59-merchants.mjs';
+import { loadShopsSeen, recordShopSeen, withShopsSeen } from './m59-shops-seen.mjs';
+import { buyInChunks, countByKey, itemKey } from './m59-shop-arrival.mjs';
 import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
 
 // THE SPELL COST TABLE, LOADED ONCE AND ALLOWED TO BE ABSENT.
@@ -9982,6 +9984,16 @@ const TOOLS = [
       }
       if (!shop) return { seller: t.id, items: [],
                           note: timedOut ? 'no reply' : said };
+      // WHAT WAS SEEN AT THE COUNTER IS KEPT, so `merchants` can never again answer "no
+      // merchant matches" about somebody a character has just bought from (m59-shops-seen.mjs).
+      // Best effort: a failed note must not cost the purchase.
+      try {
+        const sellerName = c.rsc?.get?.(t.nameRsc) || shop.seller?.name
+          || (typeof a.seller === 'string' && !/^\d+$/.test(a.seller) ? a.seller : null);
+        const room = s.world?.room;
+        recordShopSeen({ name: sellerName, room: room?.num ?? null, room_name: room?.name ?? null,
+                         items: shop.items });
+      } catch { /* an observation, not part of the sale */ }
       if (!a.buy_ids?.length) return { seller: shop.sellerId, items: shop.items };
       // A BUY NEEDS A QUANTITY, AND A BARE ID DOES NOT CARRY ONE.
       //
@@ -10112,72 +10124,67 @@ const TOOLS = [
       // arrives as a new object, or merges into a stack the character already carries — so
       // the shelf id is never in the pack afterwards and counting by it would always read
       // zero. The offer's names are what carry over.
-      const wantNames = new Set(rounds.map(r => (offer.get(r.id)?.name ?? '').toLowerCase())
-                                      .filter(Boolean));
-      const countOwn = async () => {
+      // THE PACK IS READ FRESH, AND ON A KEEPER THAT MEANS THE PROXY'S *CURRENT* CLIENT.
+      // `c` above is the literal built from the snapshot this tool started on; a fresh
+      // /state rebuilds `s.client`, never `c`. Counting `c.inventory` here is what made a
+      // 50-herb delivery read as "nothing arrived" on 2026-10-03 and stopped a 120-herb
+      // order after its first chunk — see m59-shop-arrival.mjs for the measurement.
+      const nameOf = id => offer.get(Number(id))?.name ?? null;
+      const keys = new Set(rounds.map(r => itemKey(nameOf(r.id) ?? '')).filter(Boolean));
+      const readCounts = async () => {
         try {
+          if (proxied) {
+            const st = await proxied._refreshState({ fresh: true });
+            const cur = st ? proxied.client : null;
+            if (!cur) return null;
+            return countByKey(cur.inventory, o => cur.rsc?.get?.(o.nameRsc) ?? o.nameRsc, keys);
+          }
           await s.pacer.submit('read', () => c.requestInventory());
           await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
-          const by = new Map();
-          for (const o of (c.inventory ?? [])) {
-            const nm = String(c.rsc?.get?.(o.nameRsc) ?? '').toLowerCase();
-            if (!wantNames.has(nm)) continue;
-            by.set(nm, (by.get(nm) ?? 0) + (Number(o.amount) || 1));
-          }
-          return by;
+          return countByKey(c.inventory, o => c.rsc?.get?.(o.nameRsc), keys);
         } catch { return null; }
       };
-      const got = [], messages = [];
-      let refusedAfter = null;
-      let held = await countOwn();
-      for (const [n, line] of rounds.entries()) {
-        let arrived = [], said = '';
+      const send = async (line) => {
         if (proxied) {
           const r = await proxied.shopBuy(shop.sellerId, [line]);
-          if (r?.error) { refusedAfter = `keeper refused: ${r.error}`; break; }
-          arrived = r.got ?? []; said = r.said ?? '';
-        } else {
-          const before = c.evSeq;
-          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
-          const after = await c.waitFor({ since: before, timeoutMs: 4000 });
-          arrived = (after.events ?? []).filter(e => e.kind === 'got').flatMap(e => e.items ?? []);
-          said = (after.events ?? []).map(e => e.text).filter(Boolean).join('; ');
+          if (r?.error) return { error: r.error };
+          return { got: r?.got ?? [], said: r?.said ?? '' };
         }
-        if (said) messages.push(said);
-        got.push(...arrived);
-        // STOP ON THE FIRST CHUNK THAT BRINGS NOTHING. Whatever ended it — the purse, a
-        // full pack, a merchant that has stopped answering — will end the next one too, and
-        // hammering a counter that has already said no is how a town trip runs for ever.
-        // But "brought nothing" has to mean the PACK did not move, not that a frame was late.
-        let delivered = arrived.length > 0;
-        if (!delivered && held) {
-          const now = await countOwn();
-          const grew = now
-            ? [...wantNames].filter(nm => (now.get(nm) ?? 0) > (held.get(nm) ?? 0))
-                            .map(nm => `${nm} +${(now.get(nm) ?? 0) - (held.get(nm) ?? 0)}`)
-            : [];
-          if (grew.length) {
-            delivered = true;
-            // Said as what it is, rather than inventing item rows the wire never sent.
-            messages.push(`chunk ${n + 1} delivered without a \`got\` frame (${grew.join(', ')})`);
-          }
-          held = now ?? held;
-        } else if (delivered) {
-          held = (await countOwn()) ?? held;
-        }
-        if (!delivered) {
-          refusedAfter = `chunk ${n + 1} of ${rounds.length} brought nothing`;
-          break;
-        }
-      }
-      return { seller: shop.sellerId, asked: wanted, got, bought: got,
-               chunks: rounds.length,
+        const before = c.evSeq;
+        await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
+        const after = await c.waitFor({ since: before, timeoutMs: 4000 });
+        return { got: (after.events ?? []).filter(e => e.kind === 'got').flatMap(e => e.items ?? []),
+                 said: (after.events ?? []).map(e => e.text).filter(Boolean).join('; ') };
+      };
+      const run = await buyInChunks({ rounds, nameOf, send, read: readCounts });
+      const arrivedAny = run.total_arrived > 0;
+      const short = run.received.filter(x => x.short);
+      // WHY IT STOPPED SHORT, AS FAR AS ANYTHING HERE CAN SAY. The clamp is ours and exact;
+      // a chunk that brought nothing is the counter's decision and its reason is whatever
+      // the merchant said, which is often nothing at all.
+      const shortfall = short.length ? short.map(x => ({
+        name: x.name, asked: x.asked, arrived: x.arrived, short: x.short,
+        why: run.refused_after
+          ? run.refused_after + (run.messages.length ? '' : ' — the merchant said nothing; the purse, ' +
+            'the weight and bulk ceilings, and a counter that has stopped answering all look like this')
+          : 'every chunk was sent and acknowledged; the pack did not grow by the full amount ' +
+            '(a late arrival may still land — re-read inventory)',
+      })) : null;
+      return { seller: shop.sellerId, asked: wanted,
+               received: run.received,
+               got: run.got, bought: run.received.filter(x => x.arrived > 0),
+               chunks: run.chunks_planned, chunks_sent: run.chunks_sent,
                ...(clamped.length ? { clamped } : {}),
-               ...(messages.length ? { messages } : {}),
-               ...(got.length ? {} : { note: messages.length
+               ...(run.messages.length ? { messages: run.messages } : {}),
+               ...(shortfall ? { shortfall } : {}),
+               ...(run.refused_after && arrivedAny ? { stopped_early: run.refused_after } : {}),
+               ...(run.pack_readable ? {} : { note_pack: 'the pack could not be read, so arrivals are ' +
+                 'counted from `got` frames only, which a keeper often misses — re-read inventory' }),
+               ...(arrivedAny ? {} : { note: run.messages.length
                  ? 'nothing arrived — the merchant said so'
-                 : 'nothing arrived and nothing was said; check the purse first' }),
-               ...(refusedAfter && got.length ? { stopped_early: refusedAfter } : {}) };
+                 : run.pack_readable
+                   ? 'nothing arrived in the pack and nothing was said; check the purse first'
+                   : 'no arrival could be confirmed and nothing was said; re-read inventory before retrying' }) };
     },
   },
   {
@@ -12967,14 +12974,16 @@ const TOOLS = [
       sells: { type: 'string', description: 'find merchants stocking items matching this' },
       teaches: { type: 'string', description: 'find merchants teaching a spell or skill matching this' },
       buys: { type: 'string', description: 'find merchants whose buying RULE mentions this (may be an exclusion)' },
-      show: { type: ['string', 'number'], description: 'one merchant by class name or room number' },
+      show: { type: ['string', 'number'], description: 'one merchant by name (Morrigan), class name or room number' },
       here: { type: 'boolean', description: 'just the merchants in this room' },
     }, required: ['agent'] },
     run: (a) => {
       const s = session(a.agent), c = s.need();
       if (!merchantCatalogue)
         throw new Error('no merchant catalogue — build it with: node tools/m59-merchants.mjs build');
-      const all = merchantCatalogue.merchants;
+      // The built catalogue plus every shop a character has actually opened (m59-shops-seen.mjs):
+      // a merchant seen at a counter is never answered "not found" again.
+      const all = withShopsSeen(merchantCatalogue.merchants, loadShopsSeen());
       const roomName = n => worldMap?.rooms?.[n]?.name ?? null;
       // A MERCHANT IS A CLASS; A PERSON CAN WEAR MORE THAN ONE. Jonas D'Accor is
       // RebelLiege standing in a bar and JealousGeneral walking a circuit, and on the
@@ -12989,6 +12998,7 @@ const TOOLS = [
                                also_note: m.also_note } : {}),
         sells: m.sells.map(x => x.cls + (x.quantity > 1 ? ` x${x.quantity}` : '')),
         teaches: m.teaches.map(t => t.spell || t.skill || `#${t.num}`),
+        ...(m.seen_live ? { seen_live: m.seen_live } : {}),
       });
 
       if (a.here) {
@@ -12999,20 +13009,28 @@ const TOOLS = [
         const visible = [...c.room.objects.values()].filter(o => o.flags & OF.BUYABLE);
         return {
           room: room ? { num: room.num, name: room.name } : null,
+          // MATCHED BY THE PERSON'S NAME, AND THE LIVE NAME WINS. This took `inRoom[0]` for
+          // every object, and the catalogue's `name` then overwrote the live one — so in 202
+          // Tova and Morrigan both came back as Tova, MarionBartender, and the herb seller was
+          // invisible from the room she stood in. An object the catalogue does not know says
+          // so rather than borrowing a neighbour's row.
           here: visible.map(o => {
-            const cat = inRoom.find(m => c.rsc.get(o.nameRsc) && true) || inRoom[0];
-            return { id: o.id, name: c.rsc.get(o.nameRsc), ...(cat ? brief(cat) : {}) };
+            const live = c.rsc.get(o.nameRsc);
+            const cat = merchantForObject(inRoom, live);
+            return { ...(cat ? brief(cat) : { catalogued: false }), id: o.id, name: live };
           }),
           note: visible.length ? 'ids above are live and usable with shop and sell' : 'nobody here buys or sells',
         };
       }
 
       if (a.show !== undefined) {
-        const q = String(a.show).toLowerCase();
-        const m = all.find(x => x.cls.toLowerCase().includes(q) || String(x.room) === q);
-        if (!m) return { found: false, note: `no merchant matches "${a.show}"` };
+        const found = findMerchants(all, a.show);
+        const m = found[0];
+        if (!m) return { found: false, note: `no merchant matches "${a.show}" by name, class or room` };
         return {
           ...brief(m),
+          ...(found.length > 1 ? { other_matches: found.slice(1, 8).map(x =>
+            ({ merchant: x.cls, name: x.name ?? null, room: x.room, room_name: roomName(x.room) })) } : {}),
           markup: m.markup,
           buying_rule: m.buying_rule
             ? { source: m.buying_rule.source, kod: m.buying_rule.kod }
@@ -13042,9 +13060,10 @@ const TOOLS = [
       }
 
       if (a.sells) {
-        const q = String(a.sells).toLowerCase();
-        const hits = all.filter(m => m.sells.some(x => (x.cls || '').toLowerCase().includes(q)));
-        return { matches: hits.map(brief) };
+        const hits = all.filter(m => stockMatching(m, a.sells).length)
+                        .sort((x, y) => (x.wanders ? 1 : 0) - (y.wanders ? 1 : 0));
+        return { matches: hits.map(m => ({ ...brief(m),
+          matching: stockMatching(m, a.sells).map(x => x.cls + (x.quantity > 1 ? ` x${x.quantity}` : '')) })) };
       }
 
       if (a.buys) {

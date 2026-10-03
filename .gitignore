@@ -103,6 +103,9 @@ node_modules/
 # slow crossing rather than a dangerous map. One server's characters and their journeys.
 /substrate/transits/
 /substrate/strategy-stats/
+# Every shop list a character has opened at a counter (m59-shops-seen.mjs): one server's
+# merchants as observed, consulted by `merchants` so a merchant seen live is never "not found".
+/substrate/m59-shops-seen.json
 
 # TRAVEL STRATEGIES, AND THE CODE OF THEM, NOT ONLY THEIR SETTINGS.
 #
