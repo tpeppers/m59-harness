@@ -9,6 +9,21 @@
 
 import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
+import * as party from './m59-party.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// THE ALLY IN THIS SUITE IS ONE OF OURS, AND IT HAS TO SAY SO. Since 2026-10-03 a buff goes only
+// to an ally by m59-ally.mjs's rule -- a fleet-mate or a named friend, never a stranger -- after
+// Beaker blessed Morpheus. So "Ally" is installed as a fleet-mate here, and the three books the
+// rule reads are pointed at an empty scratch directory so this checkout's own books cannot
+// change the answer. The hostile cases are in m59-ally-test.mjs.
+const BOOKS = mkdtempSync(join(tmpdir(), 'm59-buff-'));
+process.env.M59_GRUDGE_FILE = join(BOOKS, 'grudges.json');
+process.env.M59_WAR_FILE = join(BOOKS, 'war.json');
+process.env.M59_PVP_HOLD_DIR = join(BOOKS, 'holds');
+party.setRosterSource(() => new Set(['Ally']));
 
 let passed = 0, failed = 0;
 const ok = (what, cond) => {

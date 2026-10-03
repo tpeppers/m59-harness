@@ -92,6 +92,9 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
     const i = broker.indexOf("name: 'shop',");
     return i === -1 ? '' : broker.slice(i, i + 22000);
   })();
+  // The chunk loop and its arrival judgement moved into a pure module on 2026-10-03 so a
+  // fake keeper can drive it (m59-shop-arrival-test.mjs); the pins below read both halves.
+  const arrival = readFileSync(join(HERE, 'm59-shop-arrival.mjs'), 'utf8');
   ok('the shop tool was found', tool.length > 0);
   ok('it detects a keeper-backed session', /const proxied = s instanceof KeeperProxy \? s : null;/.test(tool));
   ok('and uses the forwarded list', /await proxied\.shopList\(t\.id\)/.test(tool));
@@ -122,11 +125,14 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
      /got: evs\.filter\(e => e\.kind === 'got'\)/.test(keeper) && /asked: wanted/.test(keeper));
   // `bought` IS `got`, not the order. They were the same field once and that is precisely
   // how an empty purchase read as a full one.
+  // Since 2026-10-03 `bought` is what the PACK received, per item — never the order, and
+  // no longer only the `got` frames, which a keeper usually misses.
   ok('and the tool reports an empty purchase as empty',
-     /bought: got,/.test(tool) && /asked: wanted, got, bought: got,/.test(tool));
+     /bought: run\.received\.filter\(x => x\.arrived > 0\)/.test(tool) && /asked: wanted,/.test(tool));
   ok('and says which kind of silence it was',
      /nothing arrived — the merchant said so/.test(tool) &&
-     /nothing arrived and nothing was said/.test(tool));
+     /nothing arrived in the pack and nothing was said/.test(tool) &&
+     /no arrival could be confirmed/.test(tool));
 
   // AN OFFER'S `amount` IS A SUGGESTED QUANTITY, NOT STOCK. Every apothecary lists
   // "Herbs x4" and none of them runs out. Read as stock it says the fleet can never buy
@@ -152,7 +158,7 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
      !/const SHOP_MAX_PER_BUY = Number/.test(broker));
   // Hammering a counter that has already said no is how a town trip runs for ever.
   ok('and it stops at the first chunk that brings nothing',
-     /if \(!delivered\) \{/.test(tool) && /brought nothing/.test(tool));
+     /if \(!arrived\) \{/.test(arrival) && /brought nothing/.test(arrival) && /await buyInChunks\(/.test(tool));
 
   // BUT "BROUGHT NOTHING" MUST MEAN THE PACK DID NOT MOVE, NOT THAT A FRAME WAS LATE.
   //
@@ -160,11 +166,14 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
   // answered `got: []` and this tool said "nothing arrived and nothing was said" every time,
   // while the pack went 0 -> 10 -> 35 -> 85. Paired with the stop-early rule above, an order
   // big enough to be split bought ONE chunk and then declared itself refused.
-  ok('a late `got` frame is not a refusal — the pack is asked before giving up',
-     /delivered without a \\?`got\\?` frame/.test(tool) && /const countOwn = async/.test(tool),
-     'the chunk loop still believes `got` alone');
+  // And 2026-10-03: the pack it asked was the FROZEN snapshot literal, so it never moved.
+  // On a keeper the count must come off the proxy's current client after a fresh /state.
+  ok('a late `got` frame is not a refusal — the pack is asked, and settled, before giving up',
+     /settleCounts\(read, held/.test(arrival) && /const readCounts = async/.test(tool) &&
+     /const cur = st \? proxied\.client : null/.test(tool),
+     'the chunk loop still believes `got` alone, or counts a frozen picture');
   ok('and it counts by NAME, because a purchase never lands as the shelf id',
-     /wantNames/.test(tool) && !/now\.get\(id\)/.test(tool));
+     /countByKey\(/.test(tool) && /itemKey\(nameOf\(r\.id\)/.test(tool) && !/now\.get\(id\)/.test(tool));
 }
 
 console.log('\nA STACKABLE BOUGHT AS A BARE ID BUYS NOTHING, SILENTLY');

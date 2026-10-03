@@ -24,6 +24,7 @@ import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import { classifyPvpDeath, pvpReturnDelayMs, readPvpDeath, writePvpDeath,
          pvpHoldState } from './m59-pvp-return.mjs';
 import { rememberedEnemy } from './m59-war.mjs';
+import { allyVerdict } from './m59-ally.mjs';
 import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,sameJamPocket,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
 import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
@@ -22814,14 +22815,18 @@ export class Autopilot {
     this._unhurtUntil ||= new Map();
     this._provenWholeAt ||= new Map();
     const now = Date.now();
+    // AN ALLY, NOT ANY PLAYER -- the same rule and the same incident as buffAllies: healing a
+    // player who is killing the fleet is the worst cast a keeper can make. See m59-ally.mjs.
     const candidates = [...c.room.objects.values()]
-      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER))
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) &&
+                   allyVerdict({ name: c.rsc.get(o.nameRsc) || '', flags: o.flags },
+                               { friends: this.policy?.buffAllies?.friends ?? [] }).ally)
       .sort((a, b) => (this._provenWholeAt.get(a.id) ?? 0) - (this._provenWholeAt.get(b.id) ?? 0));
     const other = candidates.find(o => !(this._unhurtUntil.get(o.id) > now)) ?? null;
     if (!other)
       return this.declinedCast(rung.name, candidates.length
         ? 'everyone here read as unhurt on a recent pass'
-        : 'nobody else in the room to heal');
+        : 'no ally in the room to heal');
 
     this.lastHealAt = Date.now();
     const manaBefore = c.vitals()?.mana?.value ?? null;
@@ -25207,7 +25212,8 @@ export class Autopilot {
     if (choice.cast.target === 'fleetmate') {
       this._practiceTargets ||= new Map();
       const mates = [...(c.room?.objects?.values?.() ?? [])]
-        .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) && party.isFleetmate(c.rsc.get(o.nameRsc) || ''))
+        .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) &&
+                     allyVerdict({ name: c.rsc.get(o.nameRsc) || '', flags: o.flags }).basis === 'fleetmate')
         .map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' }))
         .filter(o => !((this._practiceTargets.get(o.id) ?? 0) > now))
         .sort((a, b) => (this._practiceTargets.get(a.id) ?? 0) - (this._practiceTargets.get(b.id) ?? 0));
@@ -25255,11 +25261,27 @@ export class Autopilot {
     const gap = Number(cfg.gap_ms) > 0 ? Number(cfg.gap_ms) : 20_000;
     if (this.lastBuffAt && Date.now() - this.lastBuffAt < gap) return;
 
-    // Another player, not us, not a monster. Raw room objects carry flags, not the
+    // ONE OF OURS, NOT MERELY ANOTHER PLAYER. Raw room objects carry flags, not the
     // snapshot's derived booleans — the same note medic() makes, and for the same reason.
-    const others = [...c.room.objects.values()]
+    //
+    // This used to be every player-flagged object that was not us, and "another player" was
+    // the whole of the ally test. 2026-10-03: Beaker blessed MORPHEUS thirty seconds after he
+    // had killed six of the fleet in Castle Victoria, and the ledgers show twenty-odd strangers
+    // buffed the same way, most of them in the grudge book. `allyVerdict` (m59-ally.mjs) is the
+    // rule: hostile (war flag, war book, grudge book, a PvP killer) is never an ally whatever
+    // else is true; then a fleet-mate or a named friend is; anybody else is not.
+    const players = [...c.room.objects.values()]
       .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
-    if (!others.length) return this.declinedCast('buff', 'nobody else in the room to buff');
+    if (!players.length) return this.declinedCast('buff', 'nobody else in the room to buff');
+    const others = [], refused = [], basisOf = new Map();
+    for (const o of players) {
+      const name = c.rsc.get(o.nameRsc) || '';
+      const v = allyVerdict({ name, flags: o.flags }, { friends: cfg.friends ?? [] });
+      if (v.ally) { basisOf.set(o.id, v.basis); others.push(o); } else refused.push(`${name || '#' + o.id}: ${v.basis}`);
+    }
+    if (!others.length)
+      return this.declinedCast('buff', 'no ally in the room to buff',
+        { refused: refused.slice(0, 8), why: 'only fleet-mates and named friends are buffed; never a stranger or an enemy' });
 
     const wanted = [].concat(cfg.spells ?? Autopilot.BUFFS.map(b => b.name))
       .map(x => String(x).toLowerCase());
@@ -25312,7 +25334,7 @@ export class Autopilot {
       // `ok` means the cast went out. The reagents leaving the pack is the nearest thing
       // to a receipt and it is not read back here.
       this.recordCast(buff.name, { ok: true, target: c.rsc.get(target.nameRsc),
-        why: 'an ally in the room: buffs them, and casting is how the spell improves',
+        why: `an ally in the room (${basisOf.get(target.id) ?? 'ally'}): buffs them, and casting is how the spell improves`,
         mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
       this.note('buffed an ally', {
         target: c.rsc.get(target.nameRsc), spell: buff.name,

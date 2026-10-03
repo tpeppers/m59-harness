@@ -324,6 +324,23 @@ the protocol's bounded batches, and inventory gains confirm delivery. Offline re
 
 ## What each merchant deals in
 
+- **ASK FOR A MERCHANT BY THE NAME ON THE COUNTER, AND JUDGE A PURCHASE BY THE PACK — READ
+  FRESH.** Two defects, one afternoon (2026-10-03, prod). `merchants {show:"Morrigan"}` said
+  *no merchant matches* while the catalogue held her (MarionInnkeeper, 202, herbs and
+  elderberry) — the lookup read the class and the room and never the person's name; and
+  `{here:true}` in 202 reported Tova twice, because it attached the room's FIRST row to every
+  object and let that row's name overwrite the live one. `findMerchants` / `merchantForObject`
+  in `m59-merchants.mjs` are the lookups now, and every shop a character opens is kept in
+  `substrate/m59-shops-seen.json` (gitignored) so a merchant seen live is found next time
+  even if the built catalogue never had him. Separately, `shop` with `buy_ids` answered
+  *nothing arrived* for a 120-herb order that had delivered 50: on a keeper-backed session it
+  counted the pack off the snapshot literal the tool started with, which never moves, so
+  chunk 1 read as empty and chunks 2 and 3 were never sent. The loop is
+  `m59-shop-arrival.mjs` now — a fresh read off the proxy's CURRENT client, polled until the
+  pack settles — and the reply carries `received: [{name, asked, arrived, short}]` and a
+  `shortfall` naming why it stopped. `got` is still the raw frames and is still usually empty
+  on a keeper; read `received`.
+
 - **A SMITH DOES NOT BUY MUSHROOMS, AND OFFERING HIM ONE IS A SUCCESSFUL CALL THAT RETURNS
   A SILENCE.** What a merchant deals in is `ObjectDesired`, declared per class.
   `Monster.ObjectDesired` (`monster.kod:4707`) returns TRUE and its own docstring says

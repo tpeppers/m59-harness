@@ -651,6 +651,8 @@ Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-p
 - A keeper PROCESS has to hold its own roster source, or it calls the whole fleet strangers — and a fleet-mate you turn red by hand is then shot by everyone with a false grudge. Statler, 2026-08-27.
 - One or two of the five Underworld portals are unlit at any moment, not all of them, and an unlit one is silent.
 - **`approach` is dead on every keeper-backed character, which is every character on every fleet** — the World is in the keeper and the broker holds a snapshot, so it answered `s.world.approachSquare is not a function`. Getting near an NPC is `walk_to` for the distance then `crawl_to` for the last few squares; only `crawl_to` asks the keeper what it can step onto.
+- **"Another player" is not an ally.** A buff or heal goes only to a fleet-mate or a named friend, and never to anyone in the war book, the grudge book or a PvP-death record — `allyVerdict` in `tools/m59-ally.mjs`. Beaker blessed Morpheus thirty seconds after he killed six of ours, 2026-10-03.
+- `who` is a KEEPER op now (`/action who`, `KeeperProxy.who()`); it was `c.players is not a function` on every prod character. Read-only by contract, and `refreshed` / `last_refreshed_ms` say how fresh the list is.
 - A priestess sells NOTHING above level 2 until the character has done her school's DISCIPLE quest — say `disciple` to her from within FIVE squares, which is tighter than she can hear from. Four schools have one; Riija and Jala do not.
 
 Money, merchants and supply — [`docs/m59-economy.md`](docs/m59-economy.md):
