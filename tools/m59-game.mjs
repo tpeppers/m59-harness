@@ -2399,6 +2399,11 @@ class Session {
       throw error;
     }
     this.client = c;
+    // THE LOGIN IS NOT OVER WHEN THE CLIENT IS INSTALLED. `live` is true from here, but the login
+    // reads and combat readiness come later; anything that judges the client before
+    // `loginPhase === 'ready'` is judging a login in progress (suspected: the 2026-10-03 t9 reports).
+    c.loginStartedAt = Date.now();
+    c.loginPhase = 'installed';
     c.beforeGameMutation = () => bodyAuthority(this).guard();
     c.beforeMove = target => {
       const hazard = this.groundEffectBlock(c.self, target);
@@ -2489,6 +2494,7 @@ class Session {
         } catch (e2) { loginReadFailures.push({ what, why: `retry: ${e2?.message ?? e2}` }); return null; }
       }
     };
+    c.loginPhase = 'reads';
     try {
       await observe('room', () => c.roomContents());
       await observe('players', () => c.players());
@@ -2502,6 +2508,17 @@ class Session {
       await new Promise(r => setTimeout(r, 600));
     } finally {
       c.combatReady = true;
+      c.loginPhase = 'ready';
+      c.loginReadyAt = Date.now();
+      // ONE LINE PER LOGIN, with the clock: how long it took, what was asked and what came back,
+      // and any read that failed or was sent around the pacer. The 2026-10-03 hunt had nothing
+      // but a "joined" time to go on.
+      const t = c.statTrace ?? {};
+      console.error(`[session] ${this.name} ${new Date(c.loginReadyAt).toISOString()} login complete in ` +
+        `${c.loginReadyAt - c.loginStartedAt}ms` +
+        (this.lastRejoin && c.loginStartedAt - this.lastRejoin.at < 60_000 ? ` (rejoin: ${this.lastRejoin.why})` : '') +
+        ` | group2 asked ${(t.asked?.[2] ?? []).length} got ${t.got?.[2] ? 'yes' : 'no'}` +
+        ` | read failures ${JSON.stringify(loginReadFailures)}`);
     }
     for (const ev of loginCombatEvents) this.combat?.event(ev, c);
     this.combat?.event({ kind: 'room-contents' }, c);
@@ -2679,8 +2696,12 @@ class Session {
   // Drop the connection and log in again with the same credentials. The object id
   // is reissued at login, so this is what repairs a session whose selfId the server
   // renumbered underneath it.
-  async rejoin() {
+  async rejoin(why = 'unspecified') {
     if (!this.credentials) throw new Error('nothing to rejoin with — this session never joined');
+    // SAY IT. An in-process relog leaves no "joined as" line (that is the keeper's own join), so the
+    // 2026-10-03 investigation could not tell when, or why, a character had logged in again.
+    this.lastRejoin = { at: Date.now(), why: String(why) };
+    console.error(`[session] ${this.name} ${new Date().toISOString()} rejoin: ${why}`);
     // A recovery await begun before incoming PvP cannot disconnect the fighter.
     if (this.live) bodyAuthority(this).guard();
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }

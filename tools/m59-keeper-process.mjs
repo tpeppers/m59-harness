@@ -15,7 +15,7 @@ process.env.M59_KEEPER = '1';
 //   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
-import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
+import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 // WHO SET EACH POLICY KEY, and which faculty a strategy-governed key belongs to (a push that lands
 // while a bot holds that faculty is the bot's). See m59-policy-sources.mjs, m59-strategy-schema.mjs.
@@ -329,7 +329,8 @@ session.combat.pvpEligibility = () => joinWanted;
 // by any path; the broker then starts the replacement, whose login makes the server drop this
 // connection ("new connection overrides old one"), and the drop is this keeper's cue to save and
 // exit. If no replacement arrives before the deadline the handoff lapses and nothing changed.
-let attrHealTimer = null, attrHealReported = false, attrHealAskedAt = 0;   // tools/m59-attr-heal.mjs
+let attrHealTimer = null, attrHealAskedAt = 0;
+const attrHealReported = new WeakSet(), attrHealGuardLogged = new WeakSet();   // per client (per login); tools/m59-attr-heal.mjs
 const COMBAT_READY_GRACE_MS = 20_000;   // see the heal tick: a login buffer, never a state to stay in
 let handoff = null;                              // { since, deadline } while being replaced
 const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
@@ -590,27 +591,48 @@ async function joinGenerationOnce(generation) {
     // -20 followed a fresh in-process LOGIN whose own group-2 read never landed, so this is fast
     // right after a login and slow after; the first report per drop names any dropped stat message.
     attrHealTimer ??= setInterval(() => {
-      if (!inGame || !session.live || handoffActive()) return;
+      const cl = session.client, now = Date.now();
+      const since = cl?.loginStartedAt ?? session.loggedInAt ?? null;
+      const overdue = combatReadyOverdue(cl, { now, since, graceMs: COMBAT_READY_GRACE_MS });
+      const iso = new Date(now).toISOString();
+      if (!inGame || !session.live || handoffActive()) {
+        // A GUARD THAT HIDES A DEAF CLIENT SAYS SO. On 2026-10-03 t9 sat combat_ready:false after an
+        // in-process relog and the backstop below never fired; nothing said whether this guard was
+        // why. Once per client, past the grace.
+        if (overdue && !attrHealGuardLogged.has(cl)) {
+          attrHealGuardLogged.add(cl);
+          console.error(`[keeper] ${agent} ${iso} combat not ready ${Math.round((now - since) / 1000)}s after login, ` +
+            `but the heal is held: inGame=${inGame} live=${!!session.live} handoff=${handoffActive()} ` +
+            `phase=${cl.loginPhase ?? '?'} | trace ${JSON.stringify(statTraceOf(cl))}`);
+        }
+        return;
+      }
       // COMBAT READINESS IS A LOGIN BUFFER, NEVER A STATE TO STAY IN. While `combatReady` is false
       // CombatMode.event ignores everything -- war response, PvP survival, warband. A login that
       // never finished its reads left it false (t17, t4 on 2026-10-02). Past COMBAT_READY_GRACE_MS
       // after the login, a keeper that is in the world declares itself ready, once, and says so.
-      const cl = session.client;
-      if (cl && cl.combatReady === false && session.loggedInAt && Date.now() - session.loggedInAt > COMBAT_READY_GRACE_MS) {
+      if (overdue) {
         cl.combatReady = true;
-        console.error(`[keeper] ${agent} combat was not ready ${Math.round((Date.now() - session.loggedInAt) / 1000)}s ` +
-          `after login; declared ready | trace ${JSON.stringify(statTraceOf(cl))}`);
+        console.error(`[keeper] ${agent} ${iso} combat was not ready ${Math.round((now - since) / 1000)}s ` +
+          `after login (phase ${cl.loginPhase ?? '?'}); declared ready | trace ${JSON.stringify(statTraceOf(cl))}`);
       }
-      const bad = attributesIncomplete(session.client?.statsById);
-      if (!bad) { attrHealReported = false; return; }
-      const now = Date.now();
-      if (!attrHealDue({ now, loggedInAt: session.loggedInAt, lastAskAt: attrHealAskedAt })) return;
-      if (!attrHealReported) {
-        attrHealReported = true;
-        console.error(`[keeper] ${agent} attribute block incomplete (${bad.why}); re-asking group 2 | ` +
-          `${JSON.stringify(bad.snapshot)} | joined ${session.loggedInAt ? new Date(session.loggedInAt).toISOString() : '?'}` +
-          ` | dropped ${JSON.stringify(droppedStatMessages(session.client))}` +
-          ` | trace ${JSON.stringify(statTraceOf(session.client))}`);
+      // A LOGIN STILL IN PROGRESS IS NOT A DROP. The client is installed -- `live` -- before its
+      // login reads run, and this tick could judge it then -- the suspected reading of the 2026-10-03
+      // reports on t9 (nothing asked, nothing failed, combat not ready). Inside the grace, a client
+      // whose login has not reached 'ready' is left alone; `phase` in the report says which it was.
+      if (loginSettling(cl, { now, since, graceMs: COMBAT_READY_GRACE_MS })) return;
+      const bad = attributesIncomplete(cl?.statsById);
+      if (!bad) return;
+      if (!attrHealDue({ now, loggedInAt: since, lastAskAt: attrHealAskedAt })) return;
+      // ONCE PER CLIENT (per login), not once per drop: a second relog inside one drop was invisible.
+      if (!attrHealReported.has(cl)) {
+        attrHealReported.add(cl);
+        console.error(`[keeper] ${agent} ${iso} attribute block incomplete (${bad.why}); re-asking group 2 | ` +
+          `${JSON.stringify(bad.snapshot)} | joined ${since ? new Date(since).toISOString() : '?'}` +
+          ` phase ${cl?.loginPhase ?? '?'}` +
+          (session.lastRejoin ? ` | last rejoin ${new Date(session.lastRejoin.at).toISOString()} (${session.lastRejoin.why})` : '') +
+          ` | dropped ${JSON.stringify(droppedStatMessages(cl))}` +
+          ` | trace ${JSON.stringify(statTraceOf(cl))}`);
       }
       attrHealAskedAt = now;
       session.pacer?.submit('read', () => session.client?.stats?.(2))?.catch(() => {});

@@ -28,6 +28,22 @@ export const ATTR_HEAL_TICK_MS = 10_000;
 export const ATTR_HEAL_FAST_FOR_MS = 120_000;
 export const ATTR_HEAL_EVERY_MS = 60_000;
 
+/**
+ * A LOGIN STILL IN PROGRESS IS NOT A DROP. Session.joinOnce installs the client (so `live` is true)
+ * BEFORE its login reads run, and sets `loginPhase = 'ready'` when they are done. Within the grace,
+ * a client that has not reached 'ready' must not be judged. The suspected cause of the 2026-10-03
+ * reports on t9 (combat not ready, nothing asked, nothing failed, three relogs): a heal tick landing
+ * mid-login. `login_phase` in the report trace is what confirms or refutes that.
+ */
+export function loginSettling(client, { now, since, graceMs }) {
+  return !!(client?.loginPhase && client.loginPhase !== 'ready' && since && now - since <= graceMs);
+}
+
+/** Combat readiness is a login buffer; past the grace it is a deaf client to be declared ready. */
+export function combatReadyOverdue(client, { now, since, graceMs }) {
+  return !!(client && client.combatReady === false && since && now - since > graceMs);
+}
+
 /** Is a re-ask due now? Fast right after a login, then once a minute. */
 export function attrHealDue({ now, loggedInAt = null, lastAskAt = 0 }) {
   const fresh = Number.isFinite(loggedInAt) && now - loggedInAt < ATTR_HEAL_FAST_FOR_MS;
@@ -48,6 +64,9 @@ export function statTraceOf(client) {
     group2_got: iso(client.statTrace?.got?.[2]),
     group1_got: iso(client.statTrace?.got?.[1]),
     login_wait: client.loginWait ?? null,
+    login_phase: client.loginPhase ?? null,
+    login_started: iso(client.loginStartedAt),
+    login_ready: iso(client.loginReadyAt),
     login_read_failures: client.loginReadFailures ?? null,
     combat_ready: client.combatReady ?? null,
   };

@@ -4,7 +4,7 @@
 //   node tools/m59-attr-heal-test.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf } from './m59-attr-heal.mjs';
+import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue } from './m59-attr-heal.mjs';
 
 let n = 0;
 const ok = (name, fn) => { fn(); n++; console.log(`ok ${name}`); };
@@ -30,12 +30,37 @@ ok('the snapshot carries observed_at, so the log can tell "never arrived" from "
   assert.deepEqual(attributesIncomplete(block({ intellect: 0 })).snapshot.intellect, { value: 0, observed_at: 1000 });
 });
 ok('no client yet: nothing to judge', () => assert.equal(attributesIncomplete(null), null));
-ok('the keeper heals only in game, never during a handoff, once a minute, and logs once per drop', () => {
+ok('the keeper heals only in game, never during a handoff, once a minute, and reports once per LOGIN', () => {
   const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
-  assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) return;[\s\S]{0,1500}?const bad = attributesIncomplete/.test(src));
-  assert.ok(src.includes('if (!bad) { attrHealReported = false; return; }'));
+  assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) \{[\s\S]{0,700}?return;\s*\}[\s\S]{0,2500}?const bad = attributesIncomplete/.test(src));
+  assert.ok(/if \(!bad\) return;[\s\S]{0,400}?if \(!attrHealReported\.has\(cl\)\) \{\s*attrHealReported\.add\(cl\);/.test(src),
+    'keyed on the client, so a second relog inside one drop reports again');
   assert.ok(src.includes('}, ATTR_HEAL_TICK_MS);'));
-  assert.ok(src.includes('attrHealDue({ now, loggedInAt: session.loggedInAt, lastAskAt: attrHealAskedAt })'));
+  assert.ok(src.includes('attrHealDue({ now, loggedInAt: since, lastAskAt: attrHealAskedAt })'));
+});
+ok('A LOGIN IN PROGRESS IS NOT A DROP: the heal leaves it alone inside the grace', () => {
+  const login = 1_000_000, g = { since: login, graceMs: 20_000 };
+  assert.equal(loginSettling({ loginPhase: 'installed' }, { ...g, now: login + 300 }), true, 'installed, reads not yet run');
+  assert.equal(loginSettling({ loginPhase: 'reads' }, { ...g, now: login + 5_000 }), true);
+  assert.equal(loginSettling({ loginPhase: 'reads' }, { ...g, now: login + 25_000 }), false, 'past the grace it is judged');
+  assert.equal(loginSettling({ loginPhase: 'ready' }, { ...g, now: login + 300 }), false);
+  assert.equal(loginSettling({}, { ...g, now: login + 300 }), false, 'a client with no phase is judged as before');
+  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  assert.ok(/if \(loginSettling\(cl, [^)]*\)\) return;\s*const bad = attributesIncomplete/.test(src), 'checked before the block is judged');
+  assert.ok(src.includes('const since = cl?.loginStartedAt ?? session.loggedInAt'),
+    "timed from THIS client's login, so an in-process relog restarts the clock");
+  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  assert.ok(/this\.client = c;[\s\S]{0,400}?c\.loginStartedAt = Date\.now\(\);\s*c\.loginPhase = 'installed';/.test(game), 'stamped as it is installed');
+});
+ok('a deaf client the guard hides is reported, and every rejoin names its reason', () => {
+  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  assert.ok(/if \(overdue && !attrHealGuardLogged\.has\(cl\)\)[\s\S]{0,400}heal is held/.test(src));
+  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  assert.ok(/async rejoin\(why = 'unspecified'\)[\s\S]{0,600}this\.lastRejoin = \{/.test(game));
+  assert.ok(game.includes('login complete in'), 'each login says how long its reads took');
+  const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  assert.ok(ap.includes('this.s.rejoin(why)'), 'the autopilot passes its reason');
+  assert.equal(statTraceOf({ createdAt: 1, statTrace: {}, loginPhase: 'reads', loginStartedAt: 5 }).login_phase, 'reads');
 });
 ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login reads', () => {
   // c.login() resolves on AP_GAME, before the character is chosen; ToCliStats drops a request
@@ -55,7 +80,7 @@ ok('THE CAUSE (t17, 2026-10-01): a preempted login read no longer aborts the log
   assert.ok(!/\n\s*await loginRead\(/.test(body), 'no login read is awaited bare: each goes through observe()');
   assert.ok(/catch \(e\) \{\s*loginReadFailures\.push[\s\S]{0,120}this\.pacer\.submit\('read', fn\)/.test(body),
     'a preempted read is recorded and re-sent under the current owner');
-  assert.ok(/\} finally \{\s*c\.combatReady = true;\s*\}/.test(body), 'combat readiness ALWAYS runs');
+  assert.ok(/\} finally \{\s*c\.combatReady = true;\s*c\.loginPhase = 'ready';/.test(body), 'combat readiness ALWAYS runs');
 });
 ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent directly after a bound', () => {
   // trace: login_read_failures [], nothing asked, combat_ready false -- joinOnce parked on its first
@@ -69,7 +94,12 @@ ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent dir
 });
 ok('a keeper never stays combat-deaf: readiness is declared 20s after a login that did not set it', () => {
   const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
-  assert.ok(/cl\.combatReady === false && session\.loggedInAt && Date\.now\(\) - session\.loggedInAt > COMBAT_READY_GRACE_MS\) \{\s*cl\.combatReady = true;/.test(src));
+  assert.ok(/const overdue = combatReadyOverdue\(cl, [\s\S]{0,1800}?if \(overdue\) \{\s*cl\.combatReady = true;/.test(src));
+  const login = 1_000_000, g = { since: login, graceMs: 20_000 };
+  assert.equal(combatReadyOverdue({ combatReady: false }, { ...g, now: login + 21_000 }), true);
+  assert.equal(combatReadyOverdue({ combatReady: false }, { ...g, now: login + 19_000 }), false);
+  assert.equal(combatReadyOverdue({ combatReady: true }, { ...g, now: login + 99_000 }), false);
+  assert.equal(combatReadyOverdue(null, { ...g, now: login + 99_000 }), false);
   assert.ok(src.includes('combat_ready: c?.combatReady ?? null,'), '/state reports it, so deafness is visible');
 });
 ok('fast right after a login (every 10s for 2 min), then once a minute', () => {

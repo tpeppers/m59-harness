@@ -7616,7 +7616,7 @@ export class Autopilot {
   // never tested; and the next time it stands there it will do so believing it can
   // rest through anything.
   async reconnect(why) {
-    const r = await this.s.rejoin().then(() => ({ ok: true }), e => ({ ok: false, why: e.message }));
+    const r = await this.s.rejoin(why).then(() => ({ ok: true }), e => ({ ok: false, why: e.message }));
     // Stamped even on failure: if we do not know whether we came back, we certainly
     // do not know whether the monsters are awake.
     this.rejoinedAt = Date.now();
