@@ -53,6 +53,7 @@ import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { audioView } from './m59-audio-observations.mjs';
 import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { OF } from './m59-parse.mjs';
+import { readWho } from './m59-who.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
@@ -2260,6 +2261,17 @@ const server = createServer(async (req, res) => {
                       : `closed to ${t.d} square(s) but every one of ${refused} swing(s) was ` +
                         `refused as out of range — reach is shorter than the distance reported`,
                    ...(lastR ?? {}) });
+            return;
+          }
+          // WHO IS ONLINE. The broker's `who` tool called `c.players()` on the picture client and
+          // threw on every keeper-backed character; the request has to be made where the socket
+          // is. READ-ONLY by contract: m59-who.mjs sends BP_SEND_PLAYERS and nothing else, and
+          // m59-who-test.mjs pins that it never speaks to anybody.
+          case 'who': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            json(await readWho(c, { pacer: session.pacer,
+                                    timeoutMs: Math.max(500, Math.min(10_000, Number(args.timeout_ms ?? 3000) || 3000)) }));
             return;
           }
           // SPEECH, WHICH THE PROXY COULD NOT DO AT ALL.

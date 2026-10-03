@@ -60,6 +60,24 @@ These tests are offline. They do not execute a raid or shut down a server.
   releases them; a monster death and a delay of 0 hold nothing; the hold survives a restart;
   an explicit order, a movement lease, a busy holder and a recovery detour are never held;
   and the schema, setter, fleet row, policy_control reflection and local policy carry the key.
+- `m59-ally-test.mjs` (40): who a buff or a heal may go to (`tools/m59-ally.mjs`). A fleet-mate
+  is an ally, a stranger is not, a named friend is; a guildmate or a server-FRIEND alone is not;
+  the server war flag, the war book (even refused lately), a grudge-book row of any age and a
+  PvP-death killer record each refuse the buff even when the name is also a fleet-mate, a friend,
+  a guildmate and FRIEND; a fleet-mate source that throws fails closed. Then the real books,
+  written by their own writers in a scratch directory, and `buffAllies` / `medic` in the
+  2026-10-03 room: Morpheus and Kermit -> Kermit is buffed; Morpheus alone -> nothing is cast and
+  the refusal names him; naming Morpheus a friend by mistake still buffs nothing. Run against the
+  pre-fix autopilot it fails 9 (every cast went to Morpheus).
+- `m59-who-test.mjs` (38): the `who` tool on both paths (`tools/m59-who.mjs`). A live client
+  refreshes and returns `players`, `here` (monsters excluded, self marked), `refreshed`,
+  `last_refreshed_ms`; the ONLY call it makes is `players()`, through the pacer as a read, and no
+  say/tell/send of any kind; the keeper path (JSON across the process boundary) returns the same
+  reply as the in-process path; a keeper error, `unknown action` or an empty reply throws rather
+  than reading as "nobody online"; a list that does not come back says `refreshed:false` with the
+  age of the last full one; `name` answers online / in_room / partial matches; and the wiring --
+  the broker tool no longer calls `c.players()`, `KeeperProxy.who` forwards to `/action who`, the
+  keeper's case runs `readWho` and speaks to nobody.
 - `m59-chestroom-exit-test.mjs` (5): leaving the Bookmaker's hall from the chest side (section 4)
   against a mover that refuses what `moverStepLands` refuses. The shipped ceiling-door table is
   the step-mask version the runtime applies (a stale one is refused wholesale and no ceiling door

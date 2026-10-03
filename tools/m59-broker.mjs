@@ -230,6 +230,7 @@ import { COMMANDER_SCHEMA, COMMERCE_SCHEMA, COMMANDER_FACULTIES,
 import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { fallJumpsIn } from './m59-falljump.mjs';
+import { runWho } from './m59-who.mjs';
 
 const HOST = process.env.M59_HOST || '127.0.0.1';
 const PORT = Number(process.env.M59_PORT || 5959);
@@ -3346,6 +3347,11 @@ class KeeperProxy {
   // rebuilt from each `/state` snapshot and is a picture, not a wire; a method that sends
   // a packet does not belong on a picture.
   async roomContents(opts = {}) { return keeperAction(this.name, this._index, 'room_contents', opts); }
+  // WHO IS ONLINE, ASKED OF THE PROCESS THAT CAN HEAR THE ANSWER. The picture client has no
+  // `players()` -- it has no wire -- so the `who` tool threw `c.players is not a function` on
+  // every keeper-backed character. Read-only: the keeper sends BP_SEND_PLAYERS and nothing
+  // else. See m59-who.mjs.
+  async who(opts = {}) { return keeperAction(this.name, this._index, 'who', opts, { timeoutMs: 15_000 }); }
   async tradeStep(op, args = {}) { return keeperAction(this.name, this._index, 'trade', { op, ...args }); }
 
   // The errand hold, which used to be `autopilotIfAny(name).stop()` in the broker and has
@@ -10964,7 +10970,9 @@ const TOOLS = [
         gap_ms: { type: 'number', description: 'Minimum wait between casts. Default 20000.' },
         mana_floor: { type: 'number',
           description: 'Do not cast below this much mana. Defaults per spell to its cost plus 4.' },
-      }, description: 'cast the Kraanan personal enchantments on other players standing in the same room. super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
+        friends: { type: 'array', items: { type: 'string' },
+          description: 'Player names that are not ours but may be buffed (and healed by medic). Never overrides hostility: a name in the war book, the grudge book or a PvP-death record is refused regardless.' },
+      }, description: 'cast the Kraanan personal enchantments on ALLIES standing in the same room: fleet characters (menagerie hosts included) and names in `friends`, NEVER a stranger and never anybody in the war book, the grudge book or a PvP-death record (m59-ally.mjs). super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
       practice_spells: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         spells: { type: 'array', items: { type: ['string', 'object'] },
@@ -11968,7 +11976,9 @@ const TOOLS = [
             ...(spells && spells.length ? { spells } : {}),
             gap_ms: Math.max(2000, Math.min(600_000, Math.floor(Number(value.gap_ms) || 20_000))),
             ...(Number.isFinite(Number(value.mana_floor))
-              ? { mana_floor: Math.max(0, Math.floor(Number(value.mana_floor))) } : {}) };
+              ? { mana_floor: Math.max(0, Math.floor(Number(value.mana_floor))) } : {}),
+            ...(Array.isArray(value.friends) && value.friends.length
+              ? { friends: value.friends.map(x => String(x).trim()).filter(Boolean).slice(0, 64) } : {}) };
         }
       }
       if (a.farm_delivery !== undefined) {
@@ -17589,15 +17599,25 @@ const TOOLS = [
   },
   {
     name: 'who',
-    description: 'Everyone logged in, agents and humans alike, with their object ids.',
-    schema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
+    description: 'Everyone logged in, agents and humans alike, with their object ids, and the ' +
+      'players standing in this agent room (`here`). READ-ONLY: sends the server one ' +
+      'players-list request and nothing else -- never a tell, never speech. `refreshed` says ' +
+      'whether this call got a full list back; `last_refreshed_ms` is the age of the last full ' +
+      'list. Pass `name` to answer "is X online right now": `query.online` / `query.in_room`. ' +
+      'Works on keeper-backed characters (the request is made by the keeper process, which ' +
+      'holds the socket) and in-process ones, with the same reply shape.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      name: { type: 'string', description: 'optional: a player name to look for (case-insensitive)' },
+    }, required: ['agent'] },
     run: async (a) => {
-      const s = session(a.agent), c = s.need();
-      await s.pacer.submit('read', () => c.players());
-      await c.waitFor({ kinds: ['who'], timeoutMs: 3000 });
-      return { players: [...c.playersOnline.values()].map(p => ({ id: p.id, name: p.name })),
-               here: [...c.room.objects.values()].filter(o => o.flags & OF.PLAYER)
-                       .map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) })) };
+      // THE PICTURE CLIENT HAS NO WIRE. This called `c.players()` on whatever `s.need()`
+      // returned, which on a keeper-backed character -- every one on prod -- is KeeperProxy's
+      // snapshot: `error: c.players is not a function`, 2026-10-03, asked whether Morpheus was
+      // online. The keeper answers it now; m59-who.mjs is the one implementation of both paths.
+      const s = session(a.agent);
+      const keeper = s instanceof KeeperProxy ? s : null;
+      return runWho({ keeper, client: keeper ? null : s.need(), pacer: s.pacer, name: a.name ?? null });
     },
   },
   {

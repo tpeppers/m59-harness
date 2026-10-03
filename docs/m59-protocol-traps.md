@@ -274,6 +274,34 @@ taken and sending one kind it never would.
   return fire runs as for anybody else.
   `node tools/m59-guild-refusal-test.mjs` (14) pins it.
 
+- **"ANOTHER PLAYER" IS NOT AN ALLY, AND A SPELL CAST ON A PERSON IS HELP GIVEN TO HIM.**
+  `Autopilot.buffAllies` (and `medic`) picked their target from every room object carrying
+  `OF.PLAYER` that was not themselves, and logged it as *"an ally in the room"*. Nothing asked
+  whether the player was ours. 2026-10-03 12:53:23Z on prod: Beaker blessed **Morpheus** thirty
+  seconds after Morpheus had killed six of the fleet in Castle Victoria — a war-book member with
+  297 hits in the grudge book. The prod ledgers show at least twenty non-fleet players buffed the
+  same way (Morpheus 16, Sasquatch 93, Goblin 35, Gountrug 30, Roomba 16, Kage 14, Wenbo 5).
+  The fleet-mate roster source was not at fault — keeper processes install it, and the practice
+  desk's `fleetmate` target, which did ask, never blessed a stranger. The rule is now one function,
+  `allyVerdict` in `tools/m59-ally.mjs`: **hostile wins over everything** (server war flag, the
+  war book — refused or not —, a grudge-book row of ANY age, a PvP-death record naming him as a
+  killer), then a fleet-mate (menagerie hosts included) or a name in `buff_allies.friends` is an
+  ally, and **anybody else is not**: a stranger, a guildmate we do not run, a player the server
+  flags FRIEND. Wrong in the safe direction on purpose — a fleet-mate falsely in the grudge book
+  loses a buff; an enemy can never gain one. `node tools/m59-ally.mjs <name>` prints the verdict;
+  `node tools/m59-ally-test.mjs` (40) pins it, including the 2026-10-03 room.
+
+- **`who` WAS DEAD ON EVERY KEEPER-BACKED CHARACTER**, i.e. every character on prod: it called
+  `c.players()` on KeeperProxy's picture client, which has no wire, and answered
+  `c.players is not a function` — on the day the operator needed to know whether Morpheus was
+  online. The request is now made by the keeper (`/action who`, `KeeperProxy.who()`), and both
+  paths run `readWho` in `tools/m59-who.mjs`, so the reply has one shape: `players`, `here`,
+  `refreshed`, `last_refreshed_ms` (age of the last FULL list — `playersOnline` is also patched
+  incrementally, so a list is not proof of freshness), and with `name` a `query` block
+  (`online`, `in_room`, `matches`). **It is read-only by contract** — one BP_SEND_PLAYERS and no
+  speech; the keeper's `say` case also refreshes the list, but only on its way to a tell. A keeper
+  error is thrown, never reported as "nobody online". `node tools/m59-who-test.mjs` (38).
+
 
 ## DID THE CAST EVEN START? THE REAGENT ANSWERS; THE REPLY DOES NOT
 

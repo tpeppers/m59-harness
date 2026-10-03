@@ -12,7 +12,7 @@
 // of the window — so the offline suite can pin it without a keeper. The keeper half (where
 // the hold is enforced, and what it deliberately does not block) is in m59-autopilot.mjs,
 // `pvpReturnGate` and `holdOffTheFarm`. See docs/m59-policy.md, "The PvP return delay".
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
@@ -158,6 +158,35 @@ export function readPvpDeath(agent, env = process.env) {
     const r = JSON.parse(readFileSync(file, 'utf8'));
     return r && Number.isFinite(Number(r.died_at)) ? { ...r, died_at: Number(r.died_at) } : null;
   } catch { return null; }
+}
+
+/**
+ * EVERY PLAYER WHO HAS KILLED ONE OF OURS, as far as the hold records know: the `killers` of
+ * every character's last PvP death, folded to lower case. Asked by m59-ally.mjs so that a
+ * player who killed a fleet character is never treated as an ally (buffed, healed) however
+ * else he looks. A record is one character's LAST PvP death, so this is a floor, not a
+ * history -- the grudge book and the war book are the other two sources. Cached for a few
+ * seconds because a keeper asks it per player per pass. A directory that cannot be read is
+ * an empty set; the caller's other sources still apply.
+ */
+let killersCache = { dir: null, at: 0, set: new Set() };
+export function knownKillers(env = process.env, { now = Date.now(), ttlMs = 10_000 } = {}) {
+  if (offLimits(env)) return new Set();
+  const dir = pvpHoldDir(env);
+  if (killersCache.dir === dir && now - killersCache.at < ttlMs) return killersCache.set;
+  const set = new Set();
+  let files = [];
+  try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { files = []; }
+  for (const f of files) {
+    try {
+      const r = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      if (r?.pvp === false || r?.basis === 'fleetmate') continue;
+      for (const k of Array.isArray(r?.killers) ? r.killers : [])
+        if (k) set.add(String(k).trim().replace(/\s+/g, ' ').toLowerCase());
+    } catch { /* one bad file is not every file */ }
+  }
+  killersCache = { dir, at: now, set };
+  return set;
 }
 
 export function writePvpDeath(agent, record, env = process.env) {
