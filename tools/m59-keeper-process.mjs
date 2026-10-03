@@ -2748,6 +2748,17 @@ const server = createServer(async (req, res) => {
             json(await autopilot.hallMove(Array.isArray(args.moves) ? args.moves : []));
             return;
           }
+          // RIDE THE FLEET'S CHALICE TO THE GUILD HALL NOW, outside a town trip. The same stage
+          // machine and the same ticket as a town trip's ride; m59-chalice-ride.mjs has the
+          // refusals and why survival stays here. Answers when it has landed or refused.
+          case 'chalice_ride': {
+            if (typeof autopilot?.chaliceRideNow !== 'function') {
+              json({ ok: false, landed: false, refused: 'off', why: 'this keeper has no chalice ride' }, 409); return;
+            }
+            json(await autopilot.chaliceRideNow(args)
+              .catch(e => ({ ok: false, landed: false, refused: 'error', why: e?.message ?? String(e) })));
+            return;
+          }
           case 'hall_withdraw': {
             if (typeof autopilot?.hallWithdraw !== 'function') {
               json({ error: 'this keeper has no hall withdrawal' }, 409); return;

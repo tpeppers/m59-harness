@@ -70,6 +70,27 @@ export const GUILD_HALL_ROOM = 714;
 // that had not.
 export const PVP_TELEPORT_BLOCK_MS = 10 * 60_000;
 
+// WHAT THE SERVER SAYS TO A SIP, so a refusal is an ANSWER and not 45 seconds of waiting for a
+// Rescue that was never started. chalice.kod:28-31: a sip that took prints `chalice_use` (or
+// `chalice_empty` on the last one); the PvP lockout prints `chalice_cant_use_pkill`
+// (chalice.kod:175). The other refusal, PFLAG_NO_FIGHT (resting), is SILENT (chalice.kod:180),
+// which is why the drinker stands first. And a sip that took starts a Rescue 15-25s out; a
+// second sip while it is pending is a wasted charge (player.kod StartRescueTimer refuses a
+// second timer), so a sip is never repeated inside the landing window.
+export const SIP_TOOK = /sip a bit of the water out of the chalice|crumbles to dust in your hand as you sip/i;
+export const SIP_REFUSED_PVP = /walked the path of peace may partake of the chalice/i;
+
+/**
+ * 'sipped' | 'refused_pvp' | 'unknown', from the lines the drinker was told after applying the
+ * cup. Pure. Unknown is NOT a refusal: a message can be lost, so the landing is still awaited.
+ */
+export function sipVerdict(lines = []) {
+  const texts = [].concat(lines).map(l => String(typeof l === 'object' ? l?.text ?? '' : l ?? ''));
+  if (texts.some(t => SIP_REFUSED_PVP.test(t))) return 'refused_pvp';
+  if (texts.some(t => SIP_TOOK.test(t))) return 'sipped';
+  return 'unknown';
+}
+
 // Beside the harness, not the working directory: every keeper of one deploy must share one
 // file whatever directory it was started from.
 const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', '.chalice');
@@ -528,16 +549,16 @@ export function roleOf(character, cfg) {
 export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
                              carrying = false, duty = null, lastPlayerAttackAt = null,
                              humans = null, now = Date.now() } = {}) {
-  if (!cfg?.enabled) return { ride: false, why: 'chalice farming is off' };
-  if (role === 'holder') return { ride: false, why: 'the holder serves; its own trips are its own' };
+  if (!cfg?.enabled) return { ride: false, code: 'off', why: 'chalice farming is off' };
+  if (role === 'holder') return { ride: false, code: 'holder', why: 'the holder serves; its own trips are its own' };
   if (role === 'alternate' && carrying)
-    return { ride: false, why: 'the alternate is on duty with the cup' };
+    return { ride: false, code: 'holder', why: 'the alternate is on duty with the cup' };
   // A TRAVELLER HOLDING THE CUP OUTSIDE A RIDE IS HOLDING THE FLEET'S ONLY CUP. This used to
   // decline ("nobody needs to hand one over") and walk the town trip with it. 2026-09-27: Rizzo
   // handed Robin the cup for a ride, a keeper roll restarted Robin's keeper mid-ride, the fresh
   // trip asked again, declined, and walked it into Ukgoth toward the Jasper bank while Rizzo
   // marked it lost. The station comes first: take it back to whoever is serving.
-  if (carrying) return { ride: true, returning: true,
+  if (carrying) return { ride: true, returning: true, code: 'carrying',
     why: 'carrying the fleet\'s chalice outside a ride — take it back to the station first' };
   // THE SERVER WILL REFUSE THE SIP FOR TEN MINUTES AFTER WE SWING AT A PLAYER, so find out
   // here rather than at the counter. `chalice.kod:168-177` is the gate — not the spell's
@@ -562,18 +583,18 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
   if (Number.isFinite(since) && blockMs > 0) {
     const left = blockMs - (Number(now) - since);
     if (left > 0)
-      return { ride: false, wait_ms: left,
+      return { ride: false, code: 'pvp', wait_ms: left,
                why: `attacked a player ${Math.round((Number(now) - since) / 1000)}s ago — the ` +
                     `chalice refuses a sip for ${Math.round(blockMs / 60_000)} minutes after ` +
                     `that (chalice.kod:168), ${Math.ceil(left / 1000)}s left` };
   }
-  if (!Number.isFinite(stationHops)) return { ride: false, why: 'no route to the station' };
+  if (!Number.isFinite(stationHops)) return { ride: false, code: 'no_route', why: 'no route to the station' };
   if (stationHops > cfg.max_detour_hops)
-    return { ride: false, why: `the station is ${stationHops} hops away (limit ${cfg.max_detour_hops})` };
+    return { ride: false, code: 'too_far', why: `the station is ${stationHops} hops away (limit ${cfg.max_detour_hops})` };
   if (Number.isFinite(targetHops) && stationHops >= targetHops)
-    return { ride: false, why: 'the town is no further than the station' };
+    return { ride: false, code: 'not_on_the_way', why: 'the town is no further than the station' };
   const desk = servingDesk(duty, cfg, now, humans);
-  if (!desk) return { ride: false, why: 'nobody is on chalice duty right now' };
+  if (!desk) return { ride: false, code: 'no_holder', why: 'nobody is on chalice duty right now' };
   if (desk.human)
     return { ride: true, server: desk.server, human: true,
              why: `${desk.server} is on duty at ${cfg.station_room}, played by a person — asking by tell` };
@@ -1129,6 +1150,27 @@ function pidAlive(pid) {
 }
 
 /** The store a keeper should use, scoped to its fleet. */
+/**
+ * IS THE CUP IN USE BY SOMEBODY ELSE'S RIDE? Pure, over a `ChaliceStore.read()` state. A ride
+ * ticket from another traveller that a server has claimed, handed or seen dropped, or a live
+ * registered hand-off to another character, is a ride in flight. Returns
+ * `{busy, by, queued}` — `queued` counts OPEN ride tickets from other travellers. `servers`:
+ * names whose hand-offs are the cup going back to the desk, which is not a ride.
+ */
+export function cupInUse(state, me, now = Date.now(), { servers = [] } = {}) {
+  const tickets = Array.isArray(state?.tickets) ? state.tickets : [];
+  const rides = tickets.filter(t => t.kind === 'ride' && !sameName(t.traveller, me) && isLive(t));
+  const flying = rides.find(t => ['claimed', 'handed', 'dropped'].includes(t.status));
+  // A cup dropped back FOR A SERVER (the holder, the alternate) is going home, not riding.
+  const h = state?.handoff;
+  const handoff = h && Number(h.expires) > now && !sameName(h.rider, me)
+    && !servers.some(n => sameName(n, h.rider)) ? h : null;
+  const queued = rides.filter(t => t.status === 'open').length;
+  if (flying) return { busy: true, by: flying.traveller, queued, why: `${flying.traveller}'s ride is ${flying.status}` };
+  if (handoff) return { busy: true, by: handoff.rider, queued, why: `the cup is handed off to ${handoff.rider}` };
+  return { busy: false, by: null, queued };
+}
+
 export function chaliceStoreFor({ fleet = null, directory = null } = {}) {
   return new ChaliceStore({
     directory: directory || process.env.M59_CHALICE_DIR || DEFAULT_DIR,

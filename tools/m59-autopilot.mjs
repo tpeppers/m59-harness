@@ -79,7 +79,9 @@ import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide, sweepVerdict, actingDesk, moneyExcess, depositPlan,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
-         reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf } from './m59-chalice.mjs';
+         reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf,
+         sipVerdict, SIP_TOOK, SIP_REFUSED_PVP } from './m59-chalice.mjs';
+import { rideChaliceNow } from './m59-chalice-ride.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
@@ -23285,7 +23287,7 @@ export class Autopilot {
     if (!cfg || !c?.room?.objects) return false;
     // A TRAVELLER MID-RIDE IS THE RIDE CODE'S: it was handed the cup, drinks it, drops it for its
     // server and is rescued out of the room. Taking it back would carry it to Barloque.
-    const ride = this.townTrip?.chalice;
+    const ride = this.activeChaliceRide();
     if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
     // A server's own ride pickup takes it itself, with the ticket bookkeeping.
     if (this._chaliceServe?.kind === 'ride' && this._chaliceServe.stage === 'pickup') return false;
@@ -23400,7 +23402,7 @@ export class Autopilot {
     // a reason: 2026-09-28 Kermit was funded 700 for a 1000-shilling spell and handed it straight to
     // the desk five seconds before learn-skill's hold landed, then walked for the bank in Barloque.
     if (this.facultyHeld?.('economy')) return false;
-    const ride = this.townTrip?.chalice;
+    const ride = this.activeChaliceRide();
     if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
     if (now - (this._moneyHandInAt ?? 0) < 3 * 60_000) return false;
     const keep = Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan?.().required_purse ?? 0);
@@ -23472,9 +23474,18 @@ export class Autopilot {
     } catch { return null; }
   }
 
+  /** The ride stage machine in flight: a town trip's, or one asked for on demand. */
+  activeChaliceRide() { return this.townTrip?.chalice ?? this._rideNow?.chalice ?? null; }
+
+  /**
+   * RIDE THE CHALICE NOW, outside a town trip (operator, 2026-10-03). The same stage machine,
+   * driven to a landing or a refusal; the decisions and the loop are in m59-chalice-ride.mjs.
+   */
+  chaliceRideNow(opts = {}) { return rideChaliceNow(this, opts); }
+
   /** Is a chalice step in flight? Read by `commitment()` so DUM steps over the character. */
   chaliceBusy() {
-    const trip = this.townTrip?.chalice;
+    const trip = this.activeChaliceRide();
     // A holder WAITING for its cup back is not busy — the post keeps casting meanwhile.
     const serving = this._chaliceServe && this._chaliceServe.kind !== 'reclaim';
     // AND THE ALTERNATE WHILE IT CARRIES THE CUP: it is standing in for the holder, and a
@@ -24115,10 +24126,11 @@ export class Autopilot {
     const me = this.who();
     const skip = (why, detail = {}) => {
       if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: why }); } catch {}
-      st.stage = 'off';
+      st.stage = 'off'; st.why = why;
+      if (detail.code) st.code = detail.code;
       this.note('chalice ride skipped — walking instead', { why, ...detail });
-      this.chaliceEvent('ride_skipped', { why, ...detail });
-      return { skip: true, why };
+      this.chaliceEvent('ride_skipped', { why, ...detail, ...(trip.onDemand ? { on_demand: true } : {}) });
+      return { skip: true, why, ...(detail.code ? { code: detail.code } : {}) };
     };
     const pending = (ms = 1500) => { trip.nextTryAt = now + ms; return { pending: true }; };
 
@@ -24127,8 +24139,11 @@ export class Autopilot {
 
       case 'decide': {
         const stationHops = this.hereRoom() === cfg.station_room ? 0 : this.hopsTo(cfg.station_room);
-        const d = shouldRide({ cfg, role: this.chaliceRole(), stationHops,
-          targetHops: this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
+        // A RIDE ASKED FOR ON DEMAND (m59-chalice-ride.mjs) has no town to compare the station
+        // with, and carries its own detour limit; a town trip is decided exactly as before.
+        const d = shouldRide({ cfg: trip.onDemand ? { ...cfg, max_detour_hops: trip.maxHops ?? cfg.max_detour_hops } : cfg,
+          role: this.chaliceRole(), stationHops,
+          targetHops: trip.onDemand ? null : this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
           lastPlayerAttackAt: this.lastPlayerSwingAt(),
           duty: store.duty(), humans: store.humans(), now });
         if (!d.ride) {
@@ -24138,12 +24153,12 @@ export class Autopilot {
           // and correctly walked" from "never checked at all", and 105 chalice events in a day
           // contained not one ride decision. Which is the shape this game fails in anyway, and
           // not one a bot should add to.
-          st.stage = 'off'; st.why = d.why;
+          st.stage = 'off'; st.why = d.why; st.code = d.code ?? null;
           this.note('chalice ride declined — walking instead', { why: d.why, station_hops: stationHops });
           this.chaliceEvent('ride_declined', { why: d.why, station_hops: stationHops,
-            target_room: trip.target?.room ?? null,
+            target_room: trip.target?.room ?? null, ...(trip.onDemand ? { on_demand: true } : {}),
             ...(d.wait_ms ? { wait_ms: Math.round(d.wait_ms) } : {}) });
-          return { skip: true, why: d.why };
+          return { skip: true, why: d.why, code: d.code ?? null };
         }
         if (d.returning) {
           st.returning = true;
@@ -24167,7 +24182,7 @@ export class Autopilot {
         // ride's detour budget, and a failed walk is tried again rather than skipped — a skip
         // would walk the town trip with the cup still in the pack, which is the whole bug.
         const r = await this.travel(cfg.station_room,
-          st.returning ? {} : { maxHops: cfg.max_detour_hops + 2 })
+          st.returning ? {} : { maxHops: (trip.maxHops ?? cfg.max_detour_hops) + 2 })
           .catch(e => ({ arrived: false, reason: e.message }));
         if (r.arrived) { st.stage = next; return pending(0); }
         if (r.paused || r.cancelled || this.travelInterrupted()) return pending(5000);
@@ -24362,32 +24377,62 @@ export class Autopilot {
 
       case 'drink': {
         const c = this.s.client;
+        // DROP IT WHETHER OR NOT THE SIP TOOK. The cup is the fleet's, not this trip's: on
+        // the floor the holder picks it up (and the pick-up refills it); in this pack it
+        // would ride home with a farmer and the station would have nothing to hand out.
+        const putDown = async () => {
+          const still = this.chaliceInPack();
+          // REGISTERED FIRST, so every keeper that sees it lying there leaves it for our server.
+          if (still) {
+            let server = null;
+            try { server = store.ticket(st.ticket)?.by ?? null; } catch {}
+            try { store.setHandoff({ rider: server ?? cfg.holder, by: me, why: 'drunk' }); } catch {}
+            await this.s.pacer.submit('act', () => c.drop([still.id])).catch(() => {});
+          }
+          return still;
+        };
+        // NEVER A SECOND SIP INSIDE THE LANDING WINDOW. A Rescue is pending 15-25s after a sip that
+        // took, and another sip then spends a charge for nothing (StartRescueTimer refuses a second
+        // timer). A pass that threw after the apply re-enters this stage: it puts the cup down if it
+        // is still in hand, and goes on to wait.
+        if (st.sippedAt && Date.now() - st.sippedAt < cfg.landing_ms) {
+          await putDown();
+          try { store.mark(st.ticket, st.human ? 'done' : 'dropped'); } catch {}
+          st.drankAt ??= st.sippedAt; st.stage = 'landing';
+          this.chaliceEvent('drank', { ticket: st.ticket, resumed: true, why: 'the sip was already sent; not sipping twice' });
+          return pending(1000);
+        }
         const cup = this.chaliceInPack();
         if (!cup) return skip('the chalice left the pack before it was drunk');
         // RESTING SETS PFLAG_NO_FIGHT, AND THE CHALICE REFUSES A CHARACTER WITH IT SET
         // (chalice.kod:166), silently. Stand first.
         try { c.stand(); } catch {}
         await new Promise(r => setTimeout(r, 400));
+        const heardFrom = c.evSeq;
+        st.sippedAt = Date.now();
         await this.s.pacer.submit('act', () => c.apply(cup.id, c.selfId));
-        await new Promise(r => setTimeout(r, 1200));
-        // DROP IT WHETHER OR NOT THE SIP TOOK. The cup is the fleet's, not this trip's: on
-        // the floor the holder picks it up (and the pick-up refills it); in this pack it
-        // would ride home with a farmer and the station would have nothing to hand out.
-        const still = this.chaliceInPack();
-        // REGISTERED FIRST, so every keeper that sees it lying there leaves it for our server.
-        if (still) {
-          let server = null;
-          try { server = store.ticket(st.ticket)?.by ?? null; } catch {}
-          try { store.setHandoff({ rider: server ?? cfg.holder, by: me, why: 'drunk' }); } catch {}
-          await this.s.pacer.submit('act', () => c.drop([still.id])).catch(() => {});
-        }
+        // WHAT THE CUP SAID (sipVerdict): the sip, or the PvP lockout's refusal. Waited for up to
+        // 2.5s rather than slept a flat 1.2s, so a refusal is known HERE and not 45s from now.
+        const heard = await c.waitFor?.({ since: heardFrom, kinds: ['message'], timeoutMs: 2500,
+          match: e => SIP_TOOK.test(String(e?.text ?? '')) || SIP_REFUSED_PVP.test(String(e?.text ?? '')) })
+          ?.catch?.(() => null);
+        const sip = sipVerdict(heard?.events ?? []);
+        if (sip === 'unknown') await new Promise(r => setTimeout(r, 400));
+        const still = await putDown();
         // A KEEPER CLOSES ITS TICKET WHEN IT PICKS THE CUP UP. A person does not close anything,
         // so a person's ticket is closed here, or it would expire and read as a failure.
         try { store.mark(st.ticket, st.human ? 'done' : 'dropped',
                          st.human ? { note: 'drunk and dropped for the person to pick up' } : {}); } catch {}
+        if (sip === 'refused_pvp') {
+          // THE SERVER SAID NO, so this is a refusal now — not a landing that never comes.
+          this._lastPlayerAttackAt = Math.max(Number(this._lastPlayerAttackAt) || 0, Date.now() - 60_000);
+          return skip('the chalice refused the sip: "Only those who have walked the path of peace ' +
+                      'may partake" — attacked a player inside the PvP lockout (chalice.kod:175)',
+                      { code: 'pvp', sip });
+        }
         st.drankAt = Date.now();
         st.stage = 'landing';
-        this.chaliceEvent('drank', { ticket: st.ticket, cup_left_pack: !still || !this.chaliceInPack(),
+        this.chaliceEvent('drank', { ticket: st.ticket, cup_left_pack: !still || !this.chaliceInPack(), sip,
           ...(st.human ? { human: true } : {}) });
         return pending(1000);
       }
@@ -24406,13 +24451,15 @@ export class Autopilot {
           this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM,
             ...(st.human ? { human: true } : {}) });
           // STANDING BESIDE THE GUILD'S CHESTS: take on part of what the holder is short of.
-          if (here === GUILD_HALL_ROOM) await this.chaliceTakeCargo(cfg, store).catch(e =>
+          // NOT FOR A RIDE ON DEMAND: there is no trip home to carry the cargo to the holder, and
+          // no town stop whose standing order needs funding.
+          if (here === GUILD_HALL_ROOM && !trip.onDemand) await this.chaliceTakeCargo(cfg, store).catch(e =>
             this.note('could not draw the holder\'s restock', { why: e.message }));
           // AND A STANDING ORDER'S MONEY, WHILE THE CHESTS ARE A FEW STEPS AWAY. The town trip
           // funds it again later, but by then the character is in Barloque and the chests are
           // a walk back across the city: Rowlf's order of 2026-09-25 landed here and was left
           // unfunded there. The later call draws only if still short, so this cannot double.
-          if (here === GUILD_HALL_ROOM) await this.fundStandingOrder().catch(e =>
+          if (here === GUILD_HALL_ROOM && !trip.onDemand) await this.fundStandingOrder().catch(e =>
             this.note('could not fund the standing order at the hall', { why: e.message }));
           if (here === GUILD_HALL_ROOM) await this.chaliceDepositMoney(cfg).catch(e =>
             this.note('could not deposit money at the hall', { why: e.message }));
@@ -24496,7 +24543,8 @@ export class Autopilot {
     // whether anybody is serving at all.
     if (cup && (!this._chaliceDutySaidAt || now - this._chaliceDutySaidAt > 60_000)) {
       this._chaliceDutySaidAt = now;
-      try { store.setDuty({ with: me, lost: false, holder_away: role === 'alternate' }); } catch {}
+      // `room`: where the desk actually is, so a ride on demand can refuse a desk that is away.
+      try { store.setDuty({ with: me, lost: false, holder_away: role === 'alternate', room: this.hereRoom(), room_by: me }); } catch {}
     }
     if (role === 'holder' && Object.keys(cfg.holder_supply ?? {}).length
         && (!this._chaliceSupplySaidAt || now - this._chaliceSupplySaidAt > 60_000)) {

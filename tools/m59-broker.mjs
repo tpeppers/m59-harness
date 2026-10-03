@@ -14086,6 +14086,34 @@ const TOOLS = [
     },
   },
   {
+    name: 'chalice_ride',
+    description:
+      'RIDE THE FLEET\'S CHALICE OF THE RAIN TO THE GUILD HALL NOW, outside a town trip — the courier\'s ' +
+      'shortcut. The rider walks to the chalice station (room 2, Outside Castle Victoria) if it is within ' +
+      '`max_hops`, files a ride ticket, is handed the cup by whoever is on chalice duty, stands, drinks, ' +
+      'drops it for the desk, and is Rescued into the Bookmaker\'s hall (714) 15-25s later. It answers ' +
+      'when the rider has LANDED or the ride is refused: {ok, landed, room, guild_hall, ms, ticket} or ' +
+      '{ok:false, refused, why}. Refusals: off, holder, carrying, pvp (the teleport lockout after attacking ' +
+      'a player, checked before walking and read from the server\'s own refusal of the sip), no_route, ' +
+      'too_far, no_holder, holder_away, busy (only with queue:false), already_riding, hurt, dead, survival, ' +
+      'not_served, declined, no_landing, budget. Survival stays with the keeper throughout. Keeper-backed only.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      max_hops: { type: 'number', description: 'refuse when the station is further than this (default 3)' },
+      queue: { type: 'boolean', description: 'wait behind another rider\'s ride (default true); false refuses "busy"' },
+      budget_ms: { type: 'number', description: 'the whole ride, walk to landing (default 480000)' },
+      why: { type: 'string', description: 'recorded on the ledger with the ride' },
+    }, required: ['agent'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, landed: false, refused: 'off', why: 'chalice_ride needs a keeper-backed character' };
+      const budget = Math.max(30_000, Math.min(Number(a.budget_ms) || 480_000, 1_800_000));
+      return keeperAction(s.name, s._index, 'chalice_ride',
+        { max_hops: a.max_hops, queue: a.queue, budget_ms: budget, why: a.why ?? null },
+        { timeoutMs: budget + 150_000 });   // a landing is never cut short: up to landing_ms past the budget
+    },
+  },
+  {
     name: 'hall_move',
     description:
       'MOVE STOCK BETWEEN TWO NAMED GUILD CHESTS in the Bookmaker\'s hall (714), through this character\'s pack: ' +

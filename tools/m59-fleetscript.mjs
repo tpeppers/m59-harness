@@ -1378,6 +1378,23 @@ export const supply = (from, to, what, opts = {}) =>
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 
+// RIDE THE FLEET'S CHALICE TO THE GUILD HALL, ON DEMAND (operator, 2026-10-03: "Build the direct
+// ride the chalice now for couriers bit and enable that"). The keeper walks to the chalice station
+// if it is within `maxHops`, is handed the cup by whoever is on duty, drinks, and is Rescued into
+// the hall; m59-chalice-ride.mjs has the sequence and every refusal. It replaces `walk(714)` as an
+// errand's way INTO the hall:
+//
+//   { ...rideChalice({ why: 'the guild hall chests' }), optional: true },
+//   walk(714, { why: 'the guild hall chests (on foot, if the ride was refused)' }),
+//
+// Optional, because a refusal is ordinary (a PvP lockout, nobody on duty, the cup elsewhere) and
+// the walk after it is then the fallback — and costs nothing when the ride landed, because a walk
+// to the room the body is already in arrives at once.
+//
+// SUCCESS IS READ BACK FROM THE WORLD: the step passes only when `status` puts the rider in
+// `expect` (714), whatever the keeper's reply said. A rider already standing there passes at once.
+export const rideChalice = (opts = {}) => ({ do: 'ride_chalice', ...opts });
+
 // KILL SOMETHING, THROUGH THE KEEPER, AND JUDGE IT BY THE CORPSE.
 //
 // `act('fight', …)` does not work and cannot: it calls the BROKER's fight tool, and on a
@@ -3902,6 +3919,30 @@ async function runStep(ctx, agent, rawStep, state) {
                why: r?.error ?? (denied
                  ? (r.why ?? r.reason ?? `${step.tool} reported it did not happen`)
                  : undefined) };
+    }
+
+    // See `rideChalice` above. The reply is a claim; the room the world reports is the result.
+    case 'ride_chalice': {
+      const expect = Number(step.expect ?? 714);
+      const here = async () => { const o = await observe(agent); return o.ok ? Number(o.room) : null; };
+      if (await here() === expect) return { ok: true, room: expect, already: true };
+      const budget = Math.max(30_000, Math.min(Number(step.budgetMs ?? 480_000), 1_800_000));
+      const r = await call('chalice_ride', { agent, why: step.why ?? `fleet errand: ${ctx.name}`,
+        ...(step.maxHops != null ? { max_hops: Number(step.maxHops) } : {}),
+        ...(step.queue != null ? { queue: step.queue !== false } : {}), budget_ms: budget },
+        budget + 180_000).catch(e => ({ error: e.message }));
+      // A STATUS READ RIGHT AFTER A LANDING CAN BE THE KEEPER'S LAST SNAPSHOT, so a reported landing
+      // is given a few reads to show up before it is called a disagreement.
+      let room = await here();
+      for (let i = 0; room !== expect && r?.landed && i < 4; i++) { await sleep(1500); room = await here(); }
+      if (room === expect)
+        return { ok: true, room, ms: r?.ms ?? null, ticket: r?.ticket ?? null,
+                 ...(r?.landed ? {} : { note: `the keeper did not report a landing, but the world puts the rider in ${expect}` }) };
+      const why = r?.error ? `chalice_ride did not answer: ${r.error}`
+        : r?.refused ? `ride refused (${r.refused}): ${r.why}`
+        : r?.landed ? `the keeper reported a landing in ${r.room}, but the world puts the rider in ${room ?? 'an unreadable room'}`
+        : (r?.why ?? 'the ride did not happen');
+      return { ok: false, refused: r?.refused ?? null, room, why };
     }
 
     // See the `supply` step above for the four silent failures this exists to prevent.
