@@ -4,6 +4,7 @@
 //   node tools/m59-attr-heal-test.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { Pacer } from './m59-game.mjs';
 import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue } from './m59-attr-heal.mjs';
 
 let n = 0;
@@ -87,7 +88,7 @@ ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent dir
   // read behind a pacer job that never settled.
   const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
-  assert.ok(/const r = await delivered\(loginRead\(fn\)\);\s*return r === STALL \? sendDirect\(what, stalled, fn\) : r;/.test(body),
+  assert.ok(/const r = await delivered\(loginRead\(fn\)\);\s*if \(r\?\.held === true\)[^\n]*\n\s*return r === STALL \? sendDirect\(what, stalled, fn\) : r;/.test(body),
     'the first attempt is bounded and falls back to a direct send');
   assert.ok(/head: this\.pacer\.q\?\.\[0\]\?\.kind/.test(body), 'and the record names the job blocking the pacer');
   assert.match(src, /export const LOGIN_READ_STALL_MS = /);
@@ -101,6 +102,29 @@ ok('a keeper never stays combat-deaf: readiness is declared 20s after a login th
   assert.equal(combatReadyOverdue({ combatReady: true }, { ...g, now: login + 99_000 }), false);
   assert.equal(combatReadyOverdue(null, { ...g, now: login + 99_000 }), false);
   assert.ok(src.includes('combat_ready: c?.combatReady ?? null,'), '/state reports it, so deafness is visible');
+});
+ok('THE CAUSE (t9, 2026-10-03): a cast hold drops a read as {held:true} without sending it', () => {
+  // The two failures after the login-phase fix had phase 'ready', ~650ms logins, group 2 never
+  // asked and no read failures: t9 was practising poison fog, relogged mid-cast, and the PACER
+  // (which outlives the socket) still held the cast's trance.
+  const p = new Pacer();
+  p.holdForCast(15_000, 'casting poison fog');
+  let ran = false;
+  p.submit('read', () => { ran = true; });
+  assert.equal(ran, false, 'a read under a cast hold is never sent');
+  assert.equal(p.holdStatus().dropped.read, 1, 'it is counted as dropped, and resolves -- so no failure was recorded');
+  p.releaseCastHold();
+  assert.equal(p.holdStatus().active, false);
+});
+ok('so joinOnce releases an inherited hold, and a held login read is sent directly and recorded', () => {
+  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
+  const install = body.indexOf("c.loginPhase = 'installed';");
+  const release = body.indexOf('this.pacer.releaseCastHold();');
+  const reads = body.indexOf("await observe('room'");
+  assert.ok(install > 0 && install < release && release < reads, 'released after install, before the first read');
+  assert.ok(/if \(r\?\.held === true\) return sendDirect\(what,/.test(body), 'a held read is a failure, not a delivery');
+  assert.ok(body.includes('released cast hold'), 'and the login line says it released one');
 });
 ok('fast right after a login (every 10s for 2 min), then once a minute', () => {
   const login = 1_000_000;

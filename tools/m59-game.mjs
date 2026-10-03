@@ -2404,6 +2404,15 @@ class Session {
     // `loginPhase === 'ready'` is judging a login in progress (suspected: the 2026-10-03 t9 reports).
     c.loginStartedAt = Date.now();
     c.loginPhase = 'installed';
+    // A NEW CONNECTION HAS NO TRANCE TO PROTECT. The cast hold lives on the PACER, which outlives
+    // the socket, so a relog during a cast inherited it -- and the hold resolves every `read` as
+    // `{held:true}` without sending it. Measured 2026-10-03 on t9 practising poison fog: two
+    // "hit while resting" relogs logged in in ~650ms with group 2 never asked and no read
+    // failures, because to observe() a held read looked like a delivered one.
+    if (this.pacer?.holdStatus?.().active) {
+      c.loginHoldReleased = this.pacer.holdStatus();
+      this.pacer.releaseCastHold();
+    }
     c.beforeGameMutation = () => bodyAuthority(this).guard();
     c.beforeMove = target => {
       const hazard = this.groundEffectBlock(c.self, target);
@@ -2485,6 +2494,7 @@ class Session {
     const observe = async (what, fn) => {
       try {
         const r = await delivered(loginRead(fn));
+        if (r?.held === true) return sendDirect(what, `held by ${r.reason ?? 'a cast'}; sent directly`, fn);
         return r === STALL ? sendDirect(what, stalled, fn) : r;
       } catch (e) {
         loginReadFailures.push({ what, why: e?.message ?? String(e) });
@@ -2518,7 +2528,8 @@ class Session {
         `${c.loginReadyAt - c.loginStartedAt}ms` +
         (this.lastRejoin && c.loginStartedAt - this.lastRejoin.at < 60_000 ? ` (rejoin: ${this.lastRejoin.why})` : '') +
         ` | group2 asked ${(t.asked?.[2] ?? []).length} got ${t.got?.[2] ? 'yes' : 'no'}` +
-        ` | read failures ${JSON.stringify(loginReadFailures)}`);
+        ` | read failures ${JSON.stringify(loginReadFailures)}` +
+        (c.loginHoldReleased ? ` | released cast hold ${JSON.stringify(c.loginHoldReleased)}` : ''));
     }
     for (const ev of loginCombatEvents) this.combat?.event(ev, c);
     this.combat?.event({ kind: 'room-contents' }, c);
