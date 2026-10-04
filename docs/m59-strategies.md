@@ -12,7 +12,8 @@ node tools/m59-strategy-engine-test.mjs            # the guard (offline)
 
 ```text
 autopilot action=start agent=t9 mode=farm farm_strategy=qor-acid-touch-trees   # assign
-autopilot action=start agent=t9 farm_strategy=null                             # unassign
+autopilot action=start agent=t9 farm_strategy=null                             # unassign (and clear residue)
+autopilot action=start agent=t16 spare_creatures=null                          # clear a spare list
 autopilot action=status agent=t9            # farm_strategy {state, keys, hooks, refused}, policy_sources
 ```
 
@@ -228,6 +229,73 @@ carry: each keeper process re-derives them from the file on its first pass (and 
 `start()`). A carried copy of a file's keys would be a second, stale source for the same key that
 reads as a live push. The broker persists `policyForOrders()` — the policy with the overlay taken
 back out — for the same reason.
+
+### The leak this rule did not stop (2026-10-03/04), and the three seams that now do
+
+**Observed on prod.** Floyd (t16) was unassigned from `icky-cave-orc-clear` and retasked, and kept
+`spareCreatures ["spider"]` and `confineRooms [27]` for ever; Animal (t10) had done the same earlier.
+`autopilot status` showed per key `shadowing: {value: ["spider"], source: "carry"}` — the file's own
+value, underneath the file. The engine never wrote a key to the roster. **The broker did, by reading
+it back:**
+
+1. `m59-broker.mjs`, the `autopilot` tool, `action=start` on a keeper-backed character, seeded the shell
+   it assembles an order in with `p.policy = { ...live.autopilot_status.policy }` — the keeper's
+   EFFECTIVE policy, overlay included.
+2. It persisted that with `rememberAutopilot(..., p.policyForOrders?.() ?? ...)`. But the shell never
+   runs a pass, so it never converges a strategy, so its `policyForOrders()` is the overlay unchanged:
+   the file's values went into the roster as orders. (The rule above held only for an in-process
+   keeper; every prod character is keeper-backed.)
+3. `pushPolicyToKeeper` sent the whole object to the keeper's `POST /policy`, which merges it into its
+   ORDER COPY (`Object.assign(policy, fields)`, `m59-keeper-process.mjs`) — the copy the carry
+   captures and every rejoin re-imposes, credited `carry` at join.
+4. On the next rejoin or keeper restart a fresh engine took that value for what the file was
+   SHADOWING, so unassigning "gave back" the file's own value. And nothing could clear
+   `spareCreatures` from outside: the `autopilot` tool had no argument for it.
+
+**Fixed at each seam:**
+
+- **The keeper publishes its orders.** `autopilot_status.policy_orders` is `policyForOrders()` whenever a
+  strategy engine exists. The broker seeds from `ordersFromStatus(status)` (`m59-strategy-engine.mjs`),
+  which reads `policy_orders`, or — from a keeper that predates it — puts each APPLIED key back to its
+  `farm_strategy.keys[k].shadowing.value`, so the roster stops receiving the overlay on the broker
+  restart alone.
+- **The keeper refuses an echo.** `/policy` asks the engine (`pushEcho`) which pushed keys carry exactly
+  the value the FILE wrote (an echo: kept out of the order copy and out of the live policy) or exactly
+  what the file is shadowing (a restatement: into the order copy, not over the overlay, so the file does
+  not "reassert" on every push). The reply says so as `strategy_echo`. This is what protects against any
+  OTHER writer that pushes the effective policy back — an older broker, anything on the port.
+- **An unassignment clears old damage.** A roster or carry written before the fix still holds the file's
+  values. When `farm_strategy=null` arrives, every key the file declares whose ORDER still reads exactly
+  the file's value goes back to the Autopilot default (`strategyResidue`, defaults from `policyDefaults()`,
+  captured from the first orderless Autopilot) and the reply says so as `farm_strategy_released`
+  (`reset_to_default`, `kept_matching_the_file`). Three exceptions: an argument given in the same call
+  wins (that is an order, given now); `protect` is additive and never a replacement; and `hunt` is kept
+  and reported, because a farm with nothing to hunt is refused and a hunt that matches the file's is as
+  likely the operator's own order as a residue. Silence then means the behaviour that was there before
+  the file — the rule in CLAUDE.md — not the file's value wearing an order's clothes.
+
+### `spare_creatures`
+
+The `autopilot` tool now takes `spare_creatures` (a list, or `null`/`[]` to clear), normalised by the
+same function as a strategy's `spare` (whole words, lower-cased; a non-list is refused, not coerced).
+`spareCreatures` was already named in the Autopilot default object, so the keeper's push merge applies
+it and the session's attack veto reads it on the next swing (`m59-spare.mjs`); `policy_control` reflects
+it. While a strategy that declares `spare` is assigned and the keeper owns `work`, the file's value is the
+one in force and the argument is held underneath (`farm_strategy_shadows`).
+
+**Deploying it** needs a broker restart (the tool argument, the seeding and the residue clearing are the
+broker's) and a keeper restart (`policy_orders` and the echo filter are the keeper's) —
+`m59-service.mjs restart` then `restart-keepers`. The broker half alone already stops new damage, through
+`shadowing`; the keeper half is what holds against every other writer.
+
+### The Icky Cave: the strategy holds the room, an errand takes the chalice
+
+`icky-cave-orc-clear` (example) only REPORTS when room 27 is held. Taking the chalice is a sequence,
+so it is a FleetScript: `substrate/fleetscripts.example/icky-chalice.mjs` puts the clearers on this
+strategy (and then hands their lease back, since the file yields to whoever holds `work`), fetches one
+cast of dispel illusion reagents for the caster from the guild chests or the Barloque vault when the
+pack lacks them, waits for the hold, casts, and takes the chalice inside cave2's 30-second window.
+The kod it rests on is in its header; `m59-icky-chalice-test.mjs` pins it.
 
 ## Hot reload
 

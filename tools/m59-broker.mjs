@@ -165,7 +165,7 @@ import * as uptime from './m59-uptime.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
-         applyFightAboveVigor } from './m59-autopilot.mjs';
+         applyFightAboveVigor, policyDefaults } from './m59-autopilot.mjs';
 import { touchSpellName, TOUCH_SPELL_NAMES, touchCastTiming, TOUCH_CAST_TIMINGS } from './m59-touchspell.mjs';
 import { dropChatter, chatterIfAny, chatterFor, fleetChatter } from './m59-chatter.mjs';
 import * as parties from './m59-party.mjs';
@@ -186,8 +186,8 @@ import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
 import { huntPrioritySpec, huntPriorityProblems } from './m59-hunt-priority.mjs';
 import { lootOnlySpec } from './m59-loot-filter.mjs';
 // FARMING STRATEGY FILES: the assignment is validated here; the file is applied in the keeper.
-import { loadFarmStrategy } from './m59-strategy-engine.mjs';
-import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS } from './m59-strategy-schema.mjs';
+import { loadFarmStrategy, ordersFromStatus, strategyResidue } from './m59-strategy-engine.mjs';
+import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS, fieldFor as farmStrategyField } from './m59-strategy-schema.mjs';
 // The shelter helpers. The safe-spot book is RETIRED — removed outright on 2026-09-20 rather
 // than merely left unimported, because two operator chat verbs in this file were still writing
 // `verified` marks into it. There is nothing to import now. See tools/m59-safewall.mjs for the
@@ -11399,6 +11399,15 @@ const TOOLS = [
           'name hunt never produces is ignored and reported as hunt_priority.ignored. null or [] ' +
           'switches it off; a non-list is refused. autopilot status reports it as hunt_priority. ' +
           'See tools/m59-hunt-priority.mjs' },
+      spare_creatures: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
+        description: 'CREATURES THIS CHARACTER NEVER SWINGS AT, EVEN WHEN THEY ATTACK IT: e.g. ["spider"] ' +
+          '(m59-spare.mjs). A spared monster is never picked as a target and the attack packet at one is ' +
+          'refused, so fight-back cannot kill it either; survival is unchanged -- the character still ' +
+          'rests, flees at its flee line and recovers, it just walks away instead of swinging. Matched ' +
+          'by whole word, case-insensitive: "spider" spares "giant spider", never "spiderweb mushroom"; ' +
+          'players are never matched. null or [] clears it. The `spare` of a farm strategy sets the same ' +
+          'key (the Icky Cave hold); while one that declares it is assigned, the value in the file is in ' +
+          'force. autopilot status reports it as policy.spareCreatures' },
       loot_only: { type: ['object', 'null'], additionalProperties: { type: 'array', items: { type: 'string' } },
         description: 'PER-CREATURE LOOT ALLOW LIST: { creature: [item, ...] }, e.g. {"spider": ' +
           '["purple mushroom"]}. After killing a listed creature the keeper picks up ONLY those ' +
@@ -11671,7 +11680,12 @@ const TOOLS = [
           // from disk here would silently revert unrelated live overrides on Save.
           const live = await keeperState(a.agent, s._index, { fresh: true });
           if (!live?.autopilot_status?.policy) throw new Error('running keeper policy is unavailable; no order was changed');
-          p.policy = { ...live.autopilot_status.policy };
+          // THE ORDERS, NOT THE EFFECTIVE POLICY. Seeding from `policy` copied a farm strategy's
+          // overlay into this order, which was then persisted to the roster and pushed into the
+          // keeper's order copy as if somebody had ordered it -- and outlived the file's
+          // unassignment (Floyd's spareCreatures ["spider"], 2026-10-03). `ordersFromStatus` reads
+          // `policy_orders`, or puts each applied key back to what it shadows on an older keeper.
+          p.policy = ordersFromStatus(live.autopilot_status) ?? { ...live.autopilot_status.policy };
         } else if (savedAutopilot?.policy) Object.assign(p.policy, savedAutopilot.policy);
       }
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
@@ -12446,13 +12460,44 @@ const TOOLS = [
         try { p.policy.lootOnly = lootOnlySpec(a.loot_only, { resolveItem: n => resolveItemName(n) }); }
         catch (e) { return { started: false, reason: e.message }; }
       }
+      // THE SPARE LIST HAD NO WAY IN FROM HERE, so a value a strategy left behind could not be
+      // cleared by anybody (Floyd, 2026-10-03). Normalised by the same function the strategy
+      // schema uses for `spare`, so the two can never disagree; null or [] is the way off.
+      if (a.spare_creatures !== undefined) {
+        try { p.policy.spareCreatures = farmStrategyField('spare').normalize(a.spare_creatures ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
       // THE FARMING STRATEGY ASSIGNMENT. Loaded and validated HERE so a missing or broken file is
       // refused at the door with its reason rather than stored as an order that does nothing.
       // Only the name is stored; the keeper applies the file (m59-strategy-engine.mjs).
-      let farmStrategy = null;
+      let farmStrategy = null, farmStrategyReleased = null;
       if (a.farm_strategy !== undefined) {
-        if (a.farm_strategy == null || String(a.farm_strategy).trim() === '') p.policy.farmStrategy = null;
-        else {
+        if (a.farm_strategy == null || String(a.farm_strategy).trim() === '') {
+          // UNASSIGNING ALSO CLEARS WHAT AN EARLIER LEAK LEFT IN THE ORDERS. Before the fix above
+          // a file's own values were persisted and carried as orders, so the keeper's engine took
+          // them for what the file was shadowing and "gave back" the file's value. A key whose
+          // order still reads exactly the file's goes back to the default and the reply says so
+          // (m59-strategy-engine.mjs strategyResidue). An argument in this same call wins.
+          const was = typeof p.policy.farmStrategy === 'string' && p.policy.farmStrategy.trim()
+            ? p.policy.farmStrategy.trim() : null;
+          const prev = was ? await loadFarmStrategy(was).catch(() => null) : null;
+          const defaults = policyDefaults();
+          if (prev?.ok && defaults) {
+            const explicit = Object.entries(FARM_STRATEGY_ARG_KEYS)
+              .filter(([arg]) => a[arg] !== undefined).flatMap(([, keys]) => keys);
+            // The ORDERS: a keeper-backed shell was seeded with them above; an in-process keeper's
+            // live policy still carries the overlay, so it is asked for its orders view.
+            const r = strategyResidue({ orders: p.policyForOrders?.() ?? p.policy, desired: prev.strategy.desired,
+              defaults, explicit });
+            Object.assign(p.policy, r.reset);
+            farmStrategyReleased = { strategy: was, reset_to_default: r.reset,
+              ...(r.kept.length ? { kept_matching_the_file: r.kept } : {}),
+              ...(Object.keys(r.reset).length || r.kept.length ? { why: r.why } : {}) };
+          } else if (was) farmStrategyReleased = { strategy: was,
+            note: !prev?.ok ? `the file did not load (${prev?.why ?? 'unknown'}), so no residue could be checked`
+                            : 'the default policy is not known in this process, so no residue was cleared' };
+          p.policy.farmStrategy = null;
+        } else {
           const r = await loadFarmStrategy(String(a.farm_strategy).trim());
           if (!r.ok) return { started: false, reason: `farm_strategy refused: ${r.why}`,
                               ...(r.problems?.length ? { problems: r.problems } : {}),
@@ -12567,6 +12612,7 @@ const TOOLS = [
       if (farmStrategy?.ok) out.farm_strategy = { name: farmStrategy.name, file: farmStrategy.file,
         keys: Object.keys(farmStrategy.strategy.desired), hooks: Object.keys(farmStrategy.strategy.hooks),
         ...(farmStrategy.unrecognised?.length ? { unrecognised_not_applied: farmStrategy.unrecognised } : {}) };
+      if (farmStrategyReleased) out.farm_strategy_released = farmStrategyReleased;
       if (farmStrategyShadows.length) out.farm_strategy_shadows = { args: farmStrategyShadows,
         why: `farm strategy "${farmStrategy.name}" declares these, so while the keeper owns their faculty ` +
              'the value in the file is the one in force; yours is kept underneath and returns if the strategy ' +

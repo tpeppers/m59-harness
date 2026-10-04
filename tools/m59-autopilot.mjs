@@ -2355,6 +2355,13 @@ export class Autopilot {
       bankAbove: 500,
       ...policy,
     };
+    // THE PRISTINE DEFAULTS, once, from the first Autopilot built with no orders (autopilotFor).
+    // What a strategy key goes back to when an unassignment finds the file's own value sitting in
+    // the orders (m59-strategy-engine.mjs strategyResidue) -- read, never constructed, because an
+    // Autopilot has side effects (recorders, session hooks) a throwaway one would leave behind.
+    if (!POLICY_DEFAULTS && !Object.keys(policy ?? {}).length) {
+      try { POLICY_DEFAULTS = Object.freeze(JSON.parse(JSON.stringify(this.policy))); } catch {}
+    }
     // WHO SET EACH KEY (m59-policy-sources.mjs): one answer per key, reported as policy_sources.
     this.policySources = new PolicySourceBook();
     this.policySources.mark(Object.keys(policy ?? {}), 'roster');
@@ -2844,6 +2851,8 @@ export class Autopilot {
   }
   /** The policy as the ORDERS say it — the strategy's overlay taken back out — for anything that persists. */
   policyForOrders() { return this._farmStrategy ? this._farmStrategy.ordersView(this.policy) : { ...this.policy }; }
+  /** Which keys of an incoming push merely echo the strategy's overlay (m59-strategy-engine.mjs pushEcho). */
+  farmStrategyPushEcho(fields = {}) { return this._farmStrategy?.pushEcho(fields) ?? { echo: [], restated: [] }; }
 
   /** Is this character training its touch spell RIGHT HERE, right now? */
   touchTrainingHere(room = this.s?.world?.room) {
@@ -12225,6 +12234,11 @@ export class Autopilot {
       // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
       // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.
       farm_strategy: this.farmStrategyStatus(),
+      // THE ORDERS, WITH THE FILE'S OVERLAY TAKEN BACK OUT, whenever a strategy engine exists. The
+      // broker seeds an order from this, never from `policy` above: seeding from the effective
+      // policy is how a file's keys were persisted into the roster and carried after the file was
+      // unassigned (Floyd's spareCreatures, 2026-10-03 -- m59-strategy-engine.mjs ordersFromStatus).
+      ...(this._farmStrategy ? { policy_orders: this.policyForOrders() } : {}),
       policy_sources: this.policySources?.snapshot() ?? null,
       // WHO OWNS WHICH HALF OF THIS CHARACTER. Always present, never undefined: a reader
       // has to be able to tell "the keeper owns everything" from "this broker does not
@@ -30537,6 +30551,9 @@ export function spotHeldBy(agent) {
 
 // One keeper per agent, held by the broker.
 const pilots = new Map();
+let POLICY_DEFAULTS = null;
+/** The Autopilot's default policy object, or null before any orderless Autopilot was built. A copy. */
+export const policyDefaults = () => POLICY_DEFAULTS ? JSON.parse(JSON.stringify(POLICY_DEFAULTS)) : null;
 export function autopilotFor(session) {
   if (!pilots.has(session.name)) pilots.set(session.name, new Autopilot(session));
   return pilots.get(session.name);

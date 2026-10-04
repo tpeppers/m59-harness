@@ -4083,16 +4083,31 @@ const server = createServer(async (req, res) => {
       // `requireSafeWall` is adopted into `pullToSafeWall` so a push written before the
       // 2026-09-10 rename keeps meaning what it said.
       const coercedSpots = coerceSpotPair(fields);
+      // A FARM STRATEGY'S OWN VALUES ARE NOT ORDERS, even when a push carries them back. A writer
+      // that read the effective policy and sent it whole (every broker before the fix, the
+      // policy_control path, anything holding this port) hands the file's overlay back as if it
+      // had been ordered; merged into the order copy below it was carried across every rejoin and
+      // restart, credited 'carry', and survived the file's unassignment — Floyd's spareCreatures
+      // ["spider"], 2026-10-03 (m59-strategy-engine.mjs, "THE LEAK"). An ECHO of the file's value
+      // stays out of the order copy; a RESTATEMENT of what the file is shadowing goes into it but
+      // not over the live overlay, which would only make the file reassert on every push.
+      // `pushed` is everything the writer sent; `orderFields` is what reaches the order copy; and
+      // `fields`, trimmed in place, is what reaches the live policy.
+      const pushed = { ...fields };
+      const strategyEcho = autopilot?.farmStrategyPushEcho?.(pushed) ?? { echo: [], restated: [] };
+      const orderFields = { ...pushed };
+      for (const k of strategyEcho.echo) { delete orderFields[k]; delete fields[k]; }
+      for (const k of strategyEcho.restated) delete fields[k];
       // The boot orders move with the live ones. See the `let policy` / `let mode`
       // declarations: without this the push survives only until the next rejoin.
-      Object.assign(policy, fields);
+      Object.assign(policy, orderFields);
       if (wantMode) mode = wantMode;
       if (autopilot) {
         // Captured before the merge — a diff needs both sides and `Object.assign` destroys
         // the first one. Shallow is right: policy fields are compared by value below.
         const before = { ...autopilot.policy };
         Object.assign(autopilot.policy, fields);
-        applied.push(...Object.keys(fields));
+        applied.push(...Object.keys(pushed));
         // ONE ANSWER PER KEY: credit only what this push CHANGED (the broker sends the whole policy
         // every time), to the faculty holder when one holds it, else to the push and its writer.
         autopilot.policySources?.markChanged(
@@ -4136,7 +4151,7 @@ const server = createServer(async (req, res) => {
           .filter(r => Object.hasOwn(fields, r.key));
         log(`[keeper] ${agent} policy updated: ` +
             (rows.length ? formatPolicyDiff(rows) : 'no field changed value') +
-            ` | asked: ${JSON.stringify(fields)}` +
+            ` | asked: ${JSON.stringify(pushed)}` +
             ` | by ${writtenBy ?? 'unattributed (a keeper-policy push that named no writer)'}` +
             (modeChange ? ` | mode ${modeChange.from} -> ${modeChange.to}` : '') +
             (coercedSpots.length
@@ -4153,6 +4168,10 @@ const server = createServer(async (req, res) => {
              // Same argument as `applied`: a field that was accepted and then changed must
              // ride back, or the pusher believes it got what it asked for.
              ...(coercedSpots.length ? { coerced: coercedSpots } : {}),
+             // Keys this push carried that were the strategy's own values (or what it shadows):
+             // accepted, and kept out of the orders / the live overlay respectively.
+             ...(strategyEcho.echo.length || strategyEcho.restated.length
+               ? { strategy_echo: { not_orders: strategyEcho.echo, orders_underneath: strategyEcho.restated } } : {}),
              // A strategy is assigned: what it did with this push (applied, shadowed, yielded, refused).
              ...(autopilot?.policy?.farmStrategy ? { farm_strategy: autopilot.farmStrategyStatus?.() ?? null } : {}),
              no_autopilot: !autopilot });

@@ -351,6 +351,29 @@ export class FarmStrategyEngine {
     return out;
   }
 
+  /**
+   * WHICH KEYS OF A PUSH ARE NOT ORDERS. A writer that read the EFFECTIVE policy and sent it back
+   * whole hands the file's own values back as though somebody had ordered them — the leak of
+   * 2026-10-03 (see PUSH_ECHO below). So, per key the file currently holds:
+   *   echo      — the push carries the value the FILE wrote. Not an order: it must not enter the
+   *               keeper's order copy (and so the carry, the roster), and changes nothing live.
+   *   restated  — the push carries the value the file is SHADOWING. An order, and already the one
+   *               underneath: it belongs in the order copy, but writing it live would only make the
+   *               file reassert over it on every push.
+   * Anything else is a real change and goes through as before. Pure: reads, never writes.
+   */
+  pushEcho(fields = {}) {
+    const echo = [], restated = [];
+    if (!this.loaded?.ok) return { echo, restated };
+    for (const k of Object.keys(fields)) {
+      if (!this.wrote.has(k)) continue;
+      if (!sameValue(this.host.policy?.[k], this.wrote.get(k))) continue;   // not ours any more
+      if (sameValue(fields[k], this.wrote.get(k))) echo.push(k);
+      else if (this.base.has(k) && sameValue(fields[k], this.base.get(k).value)) restated.push(k);
+    }
+    return { echo, restated };
+  }
+
   // ------------------------------------------------------------------------------- hooks
   ctx() {
     const h = this.host, c = h.s?.client;
@@ -504,6 +527,77 @@ export class FarmStrategyEngine {
              're-derived from the file by each keeper process and never written to the roster',
     };
   }
+}
+
+// ------------------------------------------------------------------- the orders, from outside
+//
+// THE LEAK, 2026-10-03/04 (Floyd t16, Animal t10). A farm strategy was unassigned and its keys
+// stayed on the character for ever: spareCreatures ["spider"] and confineRooms [27], with status
+// showing `shadowing: {value: ["spider"], source: "carry"}` — the file's own value, underneath the
+// file. The engine never wrote a key to the roster; the BROKER did, by reading it back:
+//
+//   1. m59-broker.mjs, the `autopilot` tool, action=start on a keeper-backed character, seeds the
+//      shell it assembles the order in with `p.policy = { ...live.autopilot_status.policy }` —
+//      the keeper's EFFECTIVE policy, with the file's overlay laid over it;
+//   2. it persists that with `rememberAutopilot(..., p.policyForOrders?.() ?? ...)`, but the shell
+//      never converges a strategy (it never runs), so policyForOrders() is the overlay unchanged:
+//      the file's values went into the roster as orders;
+//   3. and `pushPolicyToKeeper` sends the whole object to the keeper's POST /policy, which merges
+//      it into its ORDER COPY (`Object.assign(policy, fields)`, m59-keeper-process.mjs) — the copy
+//      the carry captures and every rejoin re-imposes, credited 'carry' (markChanged at join);
+//   4. on the next rejoin or keeper restart a fresh engine took that value as what the file was
+//      SHADOWING, so unassigning "gave back" the file's own value. Nothing could clear
+//      spareCreatures from outside: the autopilot tool had no argument for it.
+//
+// Fixed at all three seams: the keeper publishes the orders view (`policy_orders`) and the broker
+// seeds from it (or derives it, below, from an older keeper's status); the keeper's /policy drops
+// an echo of the file's own values from its order copy (`pushEcho`); and an unassignment clears
+// what an earlier leak already wrote (`strategyResidue`).
+
+/**
+ * The ORDERS a keeper is running under, read from its `autopilot_status`: `policy_orders` when the
+ * keeper publishes it, otherwise the effective `policy` with each key the strategy has APPLIED put
+ * back to what it is shadowing (`farm_strategy.keys[k].shadowing`) — which an older keeper already
+ * reports, so the broker stops persisting the overlay without waiting for a keeper restart.
+ */
+export function ordersFromStatus(status) {
+  if (!status || typeof status !== 'object') return null;
+  const src = status.policy_orders ?? status.policy;
+  if (!src || typeof src !== 'object') return null;
+  const out = { ...src };
+  if (status.policy_orders) return out;
+  for (const [k, row] of Object.entries(status.farm_strategy?.keys ?? {}))
+    if (row?.applied && row.shadowing && Object.hasOwn(row.shadowing, 'value'))
+      out[k] = clone(row.shadowing.value);
+  return out;
+}
+
+/**
+ * WHAT AN EARLIER LEAK LEFT BEHIND, at the moment a strategy is unassigned. A key whose ORDER still
+ * reads exactly the file's value cannot be told from an order nobody gave — the leak above put it
+ * there — so it goes back to the DEFAULT, and says so. Never touched:
+ *   * a key the same call sets explicitly (`explicit`): that is somebody's order, given now;
+ *   * an ADDITIVE key (protect): the file's items are a union over the orders, never a replacement;
+ *   * `hunt`: a farm with nothing to hunt is refused, and a hunt that matches the file's is as
+ *     likely the operator's own order as a residue — it is reported (`kept`), not cleared;
+ *   * a key whose default is the file's value anyway.
+ *   -> { reset: { key: default }, kept: [key], why }
+ */
+export const RESIDUE_KEEP = Object.freeze(['hunt']);
+export function strategyResidue({ orders = {}, desired = {}, defaults = {}, explicit = [] } = {}) {
+  const reset = {}, kept = [];
+  for (const [k, v] of Object.entries(desired ?? {})) {
+    if (explicit.includes(k) || fieldForKey(k)?.merge === 'union') continue;
+    if (!sameValue(orders?.[k], v)) continue;
+    const dflt = defaults?.[k] ?? null;
+    if (sameValue(dflt, v)) continue;
+    if (RESIDUE_KEEP.includes(k)) { kept.push(k); continue; }
+    reset[k] = clone(dflt);
+  }
+  return { reset, kept,
+    why: 'these orders read exactly what the strategy file set, which is what a strategy key carried ' +
+         'into the roster looks like; silence is the behaviour that was there before the file, so ' +
+         'they go back to the default. Pass the argument in the same call to keep a value on purpose' };
 }
 
 // ------------------------------------------------------------------------------------ cli

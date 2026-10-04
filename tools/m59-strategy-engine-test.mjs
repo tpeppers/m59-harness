@@ -440,6 +440,161 @@ console.log('in the keeper: the policy key, the push, status, survival');
   ok('policy_control reflects it onto policy.farmStrategy', spec?.policy === 'farmStrategy');
 }
 
+// ------------------------------------------------------------------ the leak (2026-10-03/04)
+// Floyd (t16) and Animal (t10): icky-cave-orc-clear unassigned, spareCreatures ["spider"] and
+// confineRooms [27] stayed for ever, status showing shadowing {value: ["spider"], source: "carry"}.
+// The broker seeded its order from the EFFECTIVE policy, persisted it and pushed it whole; the
+// keeper merged it into its order copy; the next rejoin's engine took the file's value for what it
+// was shadowing. These cases drive that chain with a real Autopilot and the keeper's merge rule.
+console.log('the leak: a strategy\'s keys must not become orders');
+{
+  const { ordersFromStatus, strategyResidue, RESIDUE_KEEP } = engine;
+  const { policyDefaults } = await import('./m59-autopilot.mjs');
+  writeStrategy('ick', strat('ick', `hunt: ['orc'], spare: ['spider'],
+    confine: { station: 27, rooms: [27], roam: false }`));
+  const mkSession = () => ({ name: 't16', live: true, client: null, world: { room: { num: 27 } }, need: () => null,
+                             pacer: { submit: async (_k, fn) => fn() } });
+  // The keeper process: an order copy (`policy`, what the carry and every rejoin re-impose) and the
+  // Autopilot. `keeperPush` is the /policy merge exactly as m59-keeper-process.mjs does it now.
+  const roster = { hunt: 'living tree', assignedRoom: 536, roam: true };
+  let orderCopy = { ...roster };
+  let ap = new Autopilot(mkSession(), { mode: 'farm', policy: { ...orderCopy } });
+  const keeperPush = async (fields) => {
+    const pushed = { ...fields };
+    const echo = ap.farmStrategyPushEcho(pushed);
+    const orderFields = { ...pushed }, live = { ...pushed };
+    for (const k of echo.echo) { delete orderFields[k]; delete live[k]; }
+    for (const k of echo.restated) delete live[k];
+    Object.assign(orderCopy, orderFields);
+    Object.assign(ap.policy, live);
+    await ap.applyFarmStrategy('policy push');
+    return echo;
+  };
+  await keeperPush({ farmStrategy: 'ick' });
+  ok('assigned: the file is in force live', JSON.stringify(ap.policy.spareCreatures) === '["spider"]'
+     && JSON.stringify(ap.policy.confineRooms) === '[27]' && ap.policy.assignedRoom === 27 && ap.policy.roam === false);
+
+  // An OLD broker (or anything holding the port) read the effective policy and pushed it all back.
+  const effective = { ...ap.status().policy };
+  const echo = await keeperPush(effective);
+  ok('the keeper recognises the file\'s own values in a push as an echo, not orders',
+     ['spareCreatures', 'confineRooms', 'assignedRoom', 'roam', 'hunt'].every(k => echo.echo.includes(k)),
+     JSON.stringify(echo));
+  ok('...and keeps them out of its order copy (so out of the carry and the next rejoin)',
+     orderCopy.spareCreatures === undefined && orderCopy.confineRooms === undefined
+     && orderCopy.assignedRoom === 536 && orderCopy.roam === true && orderCopy.hunt === 'living tree',
+     JSON.stringify(orderCopy));
+  ok('...and the live overlay is untouched, with no reassert churn', ap.policy.assignedRoom === 27
+     && ap._farmStrategy.reasserts === 0);
+
+  // A restatement of what the file shadows is an order, and already the one underneath.
+  const re = await keeperPush({ assignedRoom: 536, hunt: 'living tree' });
+  ok('a push restating the shadowed order lands in the order copy, not over the overlay',
+     re.restated.includes('assignedRoom') && re.restated.includes('hunt') && ap.policy.assignedRoom === 27
+     && orderCopy.assignedRoom === 536 && ap._farmStrategy.reasserts === 0, JSON.stringify(re));
+
+  // The NEW broker seeds from the orders.
+  const st = ap.status();
+  ok('status publishes policy_orders: the orders with the overlay taken out', st.policy_orders
+     && st.policy_orders.spareCreatures == null && st.policy_orders.confineRooms == null
+     && st.policy_orders.assignedRoom === 536 && st.policy_orders.farmStrategy === 'ick',
+     JSON.stringify(st.policy_orders && { s: st.policy_orders.spareCreatures, a: st.policy_orders.assignedRoom }));
+  const fromNew = ordersFromStatus(st);
+  const { policy_orders: _po, ...oldShape } = st;          // what a keeper predating the fix reports
+  const fromOld = ordersFromStatus(oldShape);
+  ok('ordersFromStatus: policy_orders when present', fromNew.assignedRoom === 536 && fromNew.spareCreatures == null);
+  ok('ordersFromStatus: an OLDER keeper\'s status is undone through farm_strategy.keys[].shadowing',
+     fromOld.assignedRoom === 536 && fromOld.spareCreatures == null && fromOld.roam === true
+     && fromOld.hunt === 'living tree' && fromOld.farmStrategy === 'ick', JSON.stringify(
+       { a: fromOld.assignedRoom, s: fromOld.spareCreatures, r: fromOld.roam, h: fromOld.hunt }));
+  ok('ordersFromStatus: a yielded key (not applied) keeps its effective value',
+     ordersFromStatus({ policy: { hunt: 'zombie' }, farm_strategy: { keys: { hunt: { applied: false,
+       shadowing: { value: 'living tree' } } } } }).hunt === 'zombie');
+  ok('ordersFromStatus: no status is no orders, never an empty policy', ordersFromStatus(null) === null
+     && ordersFromStatus({}) === null);
+
+  // A REJOIN from the clean order copy, then unassign: everything goes back.
+  ap = new Autopilot(mkSession(), { mode: 'farm', policy: { ...orderCopy } });
+  await ap.applyFarmStrategy('join');
+  ok('after a rejoin the engine shadows the ORDERS, not the file', ap.status().farm_strategy.keys
+     .spareCreatures.shadowing.value == null && ap.status().farm_strategy.keys.assignedRoom.shadowing.value === 536);
+  await keeperPush({ ...ordersFromStatus(ap.status()), farmStrategy: null });
+  ok('unassigned: spareCreatures, confineRooms, the station and roam all come back',
+     ap.policy.spareCreatures == null && ap.policy.confineRooms == null && ap.policy.assignedRoom === 536
+     && ap.policy.roam === true && ap.policy.hunt === 'living tree' && ap.policy.farmStrategy === null,
+     JSON.stringify({ s: ap.policy.spareCreatures, c: ap.policy.confineRooms, a: ap.policy.assignedRoom }));
+  ok('...and the order copy never held the file\'s values', orderCopy.spareCreatures == null
+     && orderCopy.confineRooms == null && orderCopy.farmStrategy === null);
+
+  // THE OLD DAMAGE: an order copy that already carries the file's values (what prod had). The
+  // engine cannot know, so it "restores" the file's value — which is why the unassignment itself
+  // checks for residue.
+  orderCopy = { ...roster, spareCreatures: ['spider'], confineRooms: [27], farmStrategy: 'ick' };
+  ap = new Autopilot(mkSession(), { mode: 'farm', policy: { ...orderCopy } });
+  await ap.applyFarmStrategy('join');
+  ok('(the mechanism) a contaminated order copy is what the engine shadows, source roster/carry',
+     JSON.stringify(ap.status().farm_strategy.keys.spareCreatures.shadowing.value) === '["spider"]');
+  new Autopilot(mkSession());                         // autopilotFor builds one with no orders
+  const dflt = policyDefaults();
+  ok('policyDefaults(): the pristine default object, captured from an orderless Autopilot',
+     dflt && Object.hasOwn(dflt, 'spareCreatures') && dflt.spareCreatures === null && dflt.roam === false
+     && dflt.hunt === null, JSON.stringify(dflt && { s: dflt.spareCreatures, r: dflt.roam }));
+  const ick = (await loadFarmStrategy('ick')).strategy;
+  const res = strategyResidue({ orders: ordersFromStatus(ap.status()), desired: ick.desired, defaults: dflt });
+  ok('strategyResidue: the leaked spare and confine go back to the default',
+     Object.hasOwn(res.reset, 'spareCreatures') && res.reset.spareCreatures === null
+     && Object.hasOwn(res.reset, 'confineRooms') && res.reset.confineRooms === null, JSON.stringify(res.reset));
+  ok('...a station/roam the operator had (536, roam) is not residue', !Object.hasOwn(res.reset, 'assignedRoom')
+     && !Object.hasOwn(res.reset, 'roam'));
+  const res2 = strategyResidue({ orders: { hunt: ['orc'], spareCreatures: ['spider'], roam: false, protectedItems: ['wand'] },
+    desired: { hunt: ['orc'], spareCreatures: ['spider'], roam: false, protectedItems: ['wand'] },
+    defaults: dflt, explicit: ['spareCreatures'] });
+  ok('strategyResidue: an argument in the same call wins; hunt is kept and reported; protect is additive; ' +
+     'a key whose default IS the file\'s value is left alone',
+     !Object.hasOwn(res2.reset, 'spareCreatures') && res2.kept.includes('hunt') && RESIDUE_KEEP.includes('hunt')
+     && !Object.hasOwn(res2.reset, 'protectedItems') && !Object.hasOwn(res2.reset, 'roam'), JSON.stringify(res2));
+  Object.assign(orderCopy, res.reset);
+  await keeperPush({ ...ordersFromStatus(ap.status()), ...res.reset, farmStrategy: null });
+  ok('an unassignment that carries the residue reset clears the old damage live and in the orders',
+     ap.policy.spareCreatures == null && ap.policy.confineRooms == null && orderCopy.spareCreatures == null
+     && ap.policy.assignedRoom === 536, JSON.stringify({ s: ap.policy.spareCreatures, c: ap.policy.confineRooms }));
+
+  // spare_creatures: set and clear, round-tripped through the keeper push.
+  const spare = schema.fieldFor('spare');
+  ok('spare_creatures normalises like the strategy field: names lower-cased, [] and null clear',
+     JSON.stringify(spare.normalize(['Spider', 'spider '])) === '["spider"]' && spare.normalize([]) === null
+     && spare.normalize(null) === null);
+  let threw = false; try { spare.normalize('spider'); } catch { threw = true; }
+  ok('...and a non-list is refused, not coerced', threw);
+  const s2 = mkSession();
+  const ap2 = new Autopilot(s2, { mode: 'farm', policy: { hunt: 'orc' } });
+  ok('spareCreatures is NAMED in the default object (a keeper push of it is not dropped)',
+     Object.hasOwn(ap2.policy, 'spareCreatures'));
+  Object.assign(ap2.policy, { spareCreatures: spare.normalize(['spider']) });
+  ok('a pushed spare list reaches the session\'s attack veto', JSON.stringify(s2.sparePatterns()) === '["spider"]');
+  Object.assign(ap2.policy, { spareCreatures: spare.normalize([]) });
+  ok('a pushed [] clears it', s2.sparePatterns() === null);
+
+  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  ok('the broker seeds a keeper-backed order from the ORDERS, never the effective policy',
+     /p\.policy = ordersFromStatus\(live\.autopilot_status\)/.test(broker)
+     && !/p\.policy = \{ \.\.\.live\.autopilot_status\.policy \};/.test(broker));
+  ok('the broker declares spare_creatures and sets it through the strategy field\'s normaliser',
+     /spare_creatures: \{ type: \['array', 'null'\]/.test(broker)
+     && /p\.policy\.spareCreatures = farmStrategyField\('spare'\)\.normalize\(a\.spare_creatures \?\? null\)/.test(broker));
+  ok('an unassignment checks for residue and reports farm_strategy_released',
+     /strategyResidue\(\{ orders: p\.policyForOrders/.test(broker) && /out\.farm_strategy_released = farmStrategyReleased/.test(broker));
+  const { reflectPolicy } = await import('./m59-policy-controls.mjs');
+  const tool = { schema: { properties: { spare_creatures: { type: ['array', 'null'] } } },
+                 run: () => 'p.policy.spareCreatures = x' };
+  ok('policy_control reflects spare_creatures onto policy.spareCreatures',
+     reflectPolicy(tool, [ap2.policy]).find(sp => sp.id === 'spare_creatures')?.policy === 'spareCreatures');
+  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  ok('the keeper /policy keeps an echo out of its order copy and a restatement off the overlay',
+     /farmStrategyPushEcho\?\.\(pushed\)/.test(keeper) && /Object\.assign\(policy, orderFields\);/.test(keeper)
+     && /for \(const k of strategyEcho\.restated\) delete fields\[k\];/.test(keeper));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);

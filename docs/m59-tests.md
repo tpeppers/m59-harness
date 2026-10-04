@@ -30,7 +30,7 @@ These tests are offline. They do not execute a raid or shut down a server.
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
   spider junk left earlier is not; attribution by novelty against fight()'s floor snapshot;
   memory expiry, recycled ids and room scoping; malformed shapes and unknown items refused.
-- `m59-strategy-engine-test.mjs` (87): farming strategy files (`farm_strategy`,
+- `m59-strategy-engine-test.mjs` (116): farming strategy files (`farm_strategy`,
   `docs/m59-strategies.md`). The three committed examples load and mean today's orders; a file that
   will not parse, names a survival/war key at any depth, carries a bad value, a non-function hook,
   a name that is not its file, or nothing, is refused with its reason and NOTHING is applied; keys
@@ -40,7 +40,29 @@ These tests are offline. They do not execute a raid or shut down a server.
   edit keeps the previous good version; a throwing, rejecting or overrunning hook is disabled and
   the keeper carries on, hooks skip while `work` is held, `ctx.set` refuses survival keys; the key
   is in the default policy, round-trips through the push merge, is carried by NAME only, and the
-  broker validates and persists the orders without the overlay.
+  broker validates and persists the orders without the overlay. **The leak of 2026-10-03** (Floyd's
+  `spareCreatures ["spider"]` and `confineRooms [27]` outliving an unassignment) is driven end to end
+  with a real Autopilot and the keeper's `/policy` merge rule: a push that echoes the effective
+  policy back is recognised (`pushEcho`) and kept OUT of the keeper's order copy, a restatement of
+  the shadowed order lands in the copy and not over the overlay, `policy_orders` and
+  `ordersFromStatus` (also for an older keeper's status, via `shadowing`) give the broker the orders
+  rather than the overlay, a rejoin then shadows the orders and an unassignment gives back every key;
+  a copy contaminated BEFORE the fix is cleared by `strategyResidue` (to `policyDefaults()`, never
+  `hunt`, never an argument in the same call, never the additive `protect`). And `spare_creatures`:
+  normalised like the strategy's `spare` ([] and null clear, a non-list is refused), named in the
+  default object, round-tripped through the push into the session's attack veto, declared and set by
+  the broker, reflected by `policy_control`. **It should fail the day a broker seeds an order from
+  the effective policy again.**
+- `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
+  chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
+  eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s
+  illusion timer, the orc check in `OkayToGetChalice`, orc/spider 50/50; the chalice's refusal
+  sentence and vault refusal; the 7-square Manhattan get; a vault withdrawal being the same `@Buy`
+  as a purchase) and SKIP without `M59_ROOT`. Where the reagents come from — pack, hall chests, vault,
+  chests then vault, or a refusal naming the missing readings — and whether the cave is HELD (an
+  empty or foreign reading never is; `orc` is a whole word). Both roles compile, the run-time walks
+  declare candidates and pass `trapCheck`, they resolve to 714 / 114 / nowhere per source, and the
+  tidy-up steps are `always`.
 - `m59-touchspell-test.mjs` (76): touch spell training (`touch_spell`, `touch_spell_timing`). The kod's own start,
   stop, already and kill lines and the "Your acid touch …" / "Your punch …" combat log; on the
   assigned farm room a wielded weapon is unused, the touch is cast at the caster's numeric
