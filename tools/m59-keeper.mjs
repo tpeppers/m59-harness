@@ -86,7 +86,10 @@ async function main(argv) {
   const pickAt = argv.indexOf('--pick');
   const pickPath = pickAt >= 0 ? argv[pickAt + 1] : null;
   const fleetAt = argv.indexOf('--fleet');
-  const rest = argv.filter((a, i) => !a.startsWith('--') && i !== pickAt + 1 && i !== fleetAt + 1);
+  // A flag's VALUE is skipped only when the flag is there: an absent flag's index is -1, and -1 + 1
+  // is the first argument -- which silently dropped the character name whenever --pick was not given.
+  const valueOf = new Set([pickAt, fleetAt].filter(i => i >= 0).map(i => i + 1));
+  const rest = argv.filter((a, i) => !a.startsWith('--') && !valueOf.has(i));
   const fleet = fleetName(argv);
   const keepers = await scanKeepers({ fleet });
 
@@ -112,7 +115,10 @@ async function main(argv) {
   }
   if (flags.has('--port')) { console.log(k.port); return 0; }
 
-  const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  // GIT BASH REWRITES A LEADING-SLASH ARGUMENT INTO A WINDOWS PATH: `/live` arrives as
+  // `C:/Program Files/Git/live`. Undo it rather than send that to the keeper; `live` works too.
+  const unmangled = rawPath.replace(/^[A-Za-z]:[\\/](?:Program Files[\\/])?Git[\\/]/i, '/').replace(/\\/g, '/');
+  const path = unmangled.startsWith('/') ? unmangled : `/${unmangled}`;
   const url = new URL(`http://127.0.0.1:${k.port}${path}`);
   if (path === '/state' && !url.searchParams.has('fresh')) url.searchParams.set('fresh', '1');
   for (const p of kv) { const i = p.indexOf('='); if (i > 0) url.searchParams.set(p.slice(0, i), p.slice(i + 1)); }

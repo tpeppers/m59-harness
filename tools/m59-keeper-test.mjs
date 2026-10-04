@@ -74,5 +74,11 @@ await ok('the CLI is read-only: it never POSTs', () => {
   const src = readFileSync(new URL('./m59-keeper.mjs', import.meta.url), 'utf8');
   assert.ok(!/method:\s*'POST'/.test(src));
 });
+await ok('arguments: the name survives whichever flags are absent (--port without --pick dropped it)', () => {
+  const src = readFileSync(new URL('./m59-keeper.mjs', import.meta.url), 'utf8');
+  assert.ok(src.includes('[pickAt, fleetAt].filter(i => i >= 0)'), 'an absent flag skips nothing');
+  assert.ok(!src.includes('i !== pickAt + 1'));
+  assert.ok(src.includes("(?:Program Files[\\\\/])?Git[\\\\/]"), "Git Bash's /live -> C:/Program Files/Git/live is undone");
+});
 
 console.log(`\n${n} passed`);
