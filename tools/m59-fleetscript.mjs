@@ -173,6 +173,7 @@ import { combatOrder } from './m59-combat-order.mjs';
 import { moveOrigin, originLabel, preemptionsOf, describePreemption, postureConflict } from './m59-move-origin.mjs';
 import { createIncidentLog } from './m59-movement-incidents.mjs';
 import { epochId } from './m59-epoch.mjs';
+import { STALE_ID_REASON } from './m59-idgen.mjs';
 export { attackPlayer, killPlayer, ambushPlayer } from './m59-combat-orders.mjs';
 export { combatOrder } from './m59-combat-order.mjs';
 
@@ -4066,11 +4067,21 @@ async function runStep(ctx, agent, rawStep, state) {
       const target = step.amount == null ? Infinity : Number(step.amount);
       let moved = 0, rounds = 0, last = null;
 
+      // A PACK READ WHOSE IDS A SAVE HAS ALREADY RENUMBERED IS NOT A READ TO SEND FROM. The
+      // broker stamps every reply carrying ids with `ids_stale`; true means the keeper's
+      // post-save re-read has not landed yet, so wait a beat and read again rather than send
+      // numbers the server no longer uses.
+      const readFresh = async (who) => {
+        let r = await read(who);
+        for (let i = 0; i < 2 && r?.ids_stale === true; i++) { await sleep(2000); r = await read(who); }
+        return r;
+      };
+      let staleRetried = false;
       while (moved < target && rounds++ < (Number(step.rounds) || 6)) {
         // RESOLVED EVERY ROUND, NOT ONCE. A hand-over SPLITS the giver's stack, so the id and
         // the amount both change underneath a loop that cached them — and a `keep` floor has
         // to be measured against what is actually left rather than what was there first.
-        const donor = await read(step.from);
+        const donor = await readFresh(step.from);
         if (!donor?.items) return { ok: false, why: `could not read ${step.from}'s pack`, moved };
         const stacks = (donor.items)
           .filter(i => family.test(String(i.name ?? '')) && i.id != null)
@@ -4080,8 +4091,24 @@ async function runStep(ctx, agent, rawStep, state) {
         if (spare <= 0 || !stacks.length) break;
         const s0 = stacks[0];
         const send = Math.max(1, Math.min(bite, spare, target - moved, s0.amount || 1));
-        last = await call('supply', { from: step.from, to: step.to, what: [{ id: s0.id, amount: send }] },
+        // THE ID TRAVELS WITH ITS NAME AND ITS GENERATION. An object id is a handle for one
+        // server save; with the name and the read's `ids_as_of`, a save that lands between this
+        // read and the offer (the exchange may walk for minutes) is followed to the same stack
+        // by name instead of failing "carrying nothing matching those ids" — 2026-10-04 22:37Z.
+        last = await call('supply', { from: step.from, to: step.to,
+                                      what: [{ id: s0.id, amount: send, ...(s0.name ? { name: String(s0.name) } : {}) }],
+                                      ...(Number.isFinite(donor.ids_as_of) ? { ids_as_of: donor.ids_as_of } : {}) },
                           step.timeoutMs ?? 180_000).catch(e => ({ error: e.message }));
+        // AND A STALE-ID REFUSAL IS RETRIED ONCE, AFTER A FRESH READ, rather than ending the
+        // step. It is a refusal about the HANDLE, not about the goods: the stack is still there
+        // under a new number, and the next read will say which.
+        if (!last?.supplied && !staleRetried &&
+            STALE_ID_REASON.test(String(last?.reason ?? last?.error ?? ''))) {
+          staleRetried = true;
+          ctx.log?.(agent, `supply ${step.from} -> ${step.to}: ${last?.reason ?? last?.error} — re-reading and retrying once`);
+          rounds--;
+          continue;
+        }
         // A refusal here is the ordinary end of the loop, not a throw: the commonest one is
         // `receiver_full`, which is a true and useful answer about the RECEIVER.
         if (!last?.supplied) break;

@@ -310,5 +310,31 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
   ok('and assigning one to it stores nothing', /set beforeEquip\(_\)\s*\{\s*\/\*[^*]*\*\/\s*\}/.test(proxyBody));
 }
 
+// THE ID GENERATION CROSSES ALL THREE FILES, 2026-10-04. Every server save renumbers every object
+// id; the client records which save its ids belong to, the keeper publishes it in /state, and the
+// proxy's REBUILD has to carry it — the rebuild names each field explicitly, so a field the keeper
+// sends and this omits is absent on every prod character (CLAUDE.md, the three-file rule). Each
+// field is checked on all three sides, so adding one to two of them fails here.
+{
+  const keeper = read('m59-keeper-process.mjs');
+  for (const [clientField, wire, proxyField] of [
+    ['idsAsOf()', 'ids_as_of', 'idsAsOf'],
+    ['this.idGenerations', 'id_generations', 'idGenerations'],
+    ['this.saveHistory', 'saves', 'saveHistory'],
+  ]) {
+    ok(`the client keeps ${clientField}`, client.includes(clientField));
+    ok(`the keeper publishes ${wire} in /state`, new RegExp(`\\b${wire}:\\s*c\\?\\.`).test(keeper));
+    ok(`the proxy's rebuilt client carries ${proxyField} from s.${wire}`,
+       new RegExp(`${proxyField}:[^\\n]*s\\.${wire}`).test(proxyBody),
+       `KeeperProxy's client getter must map s.${wire} to ${proxyField}, or keeper-backed replies ` +
+       'cannot say which save their ids belong to');
+  }
+  ok('the keeper\'s /live carries the saves the broker\'s clock is fed from',
+     /saves:\s*session\.client\?\.saveHistory/.test(keeper));
+  ok('the proxy feeds the save clock from each /state snapshot', /saveClock\.observeAll\(candidate\.saves/.test(proxyBody));
+  ok('and from each /live poll', /saveClock\.observeAll\(reply\.value\.saves/.test(proxyBody));
+  ok('the broker stamps replies at its one door', /stampReply\(out,/.test(broker) && /judgeArgs\(args,/.test(broker));
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -22,6 +22,7 @@
 // broker hands it the real thing.
 import { OF, dropSpec } from './m59-parse.mjs';
 import * as skills from './m59-skills.mjs';
+import { checkIds, refusalText } from './m59-idgen.mjs';
 
 const num = (v, d) => (v === undefined || v === null ? d : Number(v));
 
@@ -305,6 +306,14 @@ export async function supplyBetween(a, deps) {
   // offer simply carries less than it says, and the amount check at the bottom then reports
   // a partial delivery with no explanation for it.
   const nameOf = o => give.client().rsc.get(o.nameRsc) || '';
+  // WHEN THE IDS IN `what` WERE READ. The caller may say (`ids_as_of`, from the inventory reply
+  // they came from); otherwise they are taken as current when this call began — the broker's
+  // door has already re-resolved any it handed out before the latest save. Either way the pick
+  // after the walk translates them through the generation they belong to, because a save can
+  // land in the middle of a five-minute walk and renumber the stack under the offer.
+  const idsReadAt = Number.isFinite(Number(a.ids_as_of)) && a.ids_as_of != null
+    ? Number(a.ids_as_of) : Date.now();
+  let idCheck = null;
   const pick = (inventory) => {
     if (Array.isArray(a.what)) {
       // Entries may be a bare id — meaning the WHOLE stack — or {id, amount} for part
@@ -312,12 +321,23 @@ export async function supplyBetween(a, deps) {
       // meal and emptying its purse are different acts, and without this the second
       // was the only one on offer. Waldorf lent Rizzo its entire 1,311 and was left
       // with nothing and no food, which is the problem moved rather than solved.
-      const want = new Map(a.what.map(w => typeof w === 'object' && w
-        ? [Number(w.id), Number(w.amount)] : [Number(w), null]));
-      return inventory.filter(o => want.has(o.id)).map(o => {
-        const cap = want.get(o.id);
-        if (cap == null || !(o.amount > 0)) return o;
-        return { ...o, amount: Math.max(1, Math.min(o.amount, cap)) };
+      //
+      // AND AN ID IS A HANDLE FOR ONE SAVE (m59-idgen.mjs checkIds). Matched against the pack
+      // through the generation it was read in: same id, same thing -> as before; renumbered ->
+      // the same stack by name; recycled or ambiguous -> refused, with the sentence, rather
+      // than offering whatever now answers to the number.
+      const gc = give.client();
+      idCheck = checkIds(a.what, {
+        inventory: inventory.map(o => ({ ...o, name: nameOf(o), _row: o })),
+        generations: Array.isArray(gc?.idGenerations) ? gc.idGenerations : [],
+        asOf: typeof gc?.idsAsOf === 'function' ? gc.idsAsOf() : null,
+        callerAsOf: idsReadAt,
+      });
+      if (!idCheck.ok) return [];
+      return idCheck.items.map(({ row, amount }) => {
+        const o = row._row;
+        if (amount == null || !(o.amount > 0)) return o;
+        return { ...o, amount: Math.max(1, Math.min(o.amount, Number(amount))) };
       });
     }
     if (a.what === 'all') return [...inventory];
@@ -389,9 +409,15 @@ export async function supplyBetween(a, deps) {
   };
   const nothingMatching = (inventory) => ({
     supplied: false,
-    reason: `${giverName} is carrying nothing matching ` +
-            `${Array.isArray(a.what) ? 'those ids' : (a.what || 'reagents')}`,
+    reason: idCheck && !idCheck.ok
+      ? `stale object id(s) for ${giverName}: ${refusalText(idCheck)}`
+      : `${giverName} is carrying nothing matching ` +
+        `${Array.isArray(a.what) ? 'those ids' : (a.what || 'reagents')}` +
+        (idCheck?.absent?.length ? ` (${idCheck.absent.join(', ')} ${idCheck.absent.length > 1 ? 'are' : 'is'} ` +
+          'not in the pack and no save this character remembers renumbered ' +
+          `${idCheck.absent.length > 1 ? 'them' : 'it'} — re-read the inventory)` : ''),
     carrying: inventory.map(nameOf),
+    ...(idCheck && !idCheck.ok ? { stale_ids: idCheck.refused } : {}),
   });
 
   // Asked before anything walks anywhere: a donor with nothing to give should not send

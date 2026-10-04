@@ -363,3 +363,53 @@ has a `castAndRead()` that tells the three outcomes apart.
 change, not the instrument's own account of itself.** The reagent is that value for a cast,
 the room number is that value for an edge crossing, and max mana is that value for a mana
 node.
+
+
+## AN ID IS GOOD UNTIL THE NEXT SAVE — AND THE HARNESS NOW SAYS WHICH SAVE
+
+Every system save (`GarbageCollecting`, `user.kod:2154`/`:2182`) renumbers every object id,
+and the server brackets it with BP_WAIT and BP_UNWAIT. CLAUDE.md's "an object id is a
+temporary handle" is the rule; this is how the harness now enforces it rather than relying on
+everyone remembering it.
+
+**What it cost, 2026-10-04 22:37Z.** A fleetscript `supply` step read Kermit's pack, took the
+shilling stack's id and sent it: *"Kermit is carrying nothing matching those ids"*. A retry
+seconds later worked. The same day `equipment` said an amulet was not worn while it was. Two
+faults stacked: (1) the broker's `inventory` and `equipment` tools on a keeper-backed character
+answered from the client object taken BEFORE their own fresh read — `KeeperProxy` rebuilds that
+object per snapshot, so the read they had just paid for was discarded and the reply was the
+previous caller's snapshot (the "retry worked" was the second call reading the first call's
+read); and (2) nothing recorded which save an id came from, so nothing could tell a stale id
+from a wrong one.
+
+What exists now (`tools/m59-idgen.mjs`, pinned by `m59-idgen-test.mjs`):
+
+- **The client re-reads after every save.** On BP_UNWAIT `M59Client` re-requests the pack (which
+  brings the use list) and the room, jittered up to 1.5s. On BP_WAIT it retires the pack as a
+  GENERATION — id → name, amount — so a pre-save id can be translated to what it named.
+  `client.idsAsOf()` says `{inventory_at, last_save_at, saving}`.
+- **Three files.** The keeper publishes `ids_as_of`, `id_generations` and `saves` in `/state`
+  (and `saves` on `/live`); `KeeperProxy`'s rebuild carries them as `idsAsOf()`,
+  `idGenerations`, `saveHistory`. `m59-keeperproxy-test.mjs` checks each field on all three sides.
+- **A fleet-wide save clock.** `SaveClock` in the broker dedupes the same save reported by every
+  keeper (by time, within 90s; the earliest end is the boundary) and keeps the cadence:
+  `/health` → `saves: {last_at, interval_ms, next_expected_at, held_ms, in_progress, ...}`.
+- **Every reply that carries ids is stamped**, at `callTool` — the one door — so a new tool is
+  stamped without knowing it: `ids_as_of` (ms, when the pack was last read off the wire),
+  `ids_stale` (true when a save has ended since, or the keeper's post-save re-read has not landed),
+  `last_save_at`, `next_save_expected_at`; stale entries carry `id_stale: true`.
+- **Every id passed IN is judged** against the same clock. The broker remembers each id it handed
+  to each agent, under what name and when (`IdRegistry`). An id handed out before the latest save
+  is re-resolved before the tool runs: kept if it still names the same thing, swapped for the one
+  thing that now carries its name (the reply lists `ids_reresolved`), or **refused with a sentence
+  naming the save** — never acted on as a recycled number. Which arguments hold object ids is a
+  per-tool table (`ID_ARGS_BY_TOOL`) because `to` is a player for `trade` and a ROOM for `travel`.
+- **`supply` translates through the generation** the ids were read in (`checkIds`), because a save
+  can land during its walk. Give entries their `name` and pass the inventory reply's `ids_as_of`.
+  The fleetscript `supply` step does both, re-reads when a pack read comes back `ids_stale`, and
+  retries a stale-id refusal ONCE after a fresh read.
+- **`resolve {agent, name}`** answers name → current id(s) off a fresh read of pack and room.
+
+What it does NOT cover: an id this broker never handed out (typed by hand, or carried across a
+broker restart) is left to the tool, apart from `supply`'s generation check; and room-object
+generations are not retired — a pre-save monster id is caught by the registry, not translated.

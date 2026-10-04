@@ -452,6 +452,43 @@ console.log('\nsupply: the step that did not exist, and the four ways it was han
     ok('nothing left the giver', inventory.a1[0].amount === 30);
   }
 
+  // A STALE ID IS A REFUSAL ABOUT THE HANDLE, NOT THE GOODS. 2026-10-04 22:37Z: a supply step
+  // read Kermit's pack, a server save renumbered every object id, and the offer came back
+  // "carrying nothing matching those ids" — the step failed while the stack sat in the pack
+  // under a new number, and a manual retry seconds later worked. So the step retries ONCE
+  // after a fresh read, and the id goes out with its name so the broker can follow it.
+  {
+    const inventory = { a1: [{ id: 16, name: 'orc tooth', amount: 30 }], a2: [] };
+    const calls = [];
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: ({ lines }) => {
+        calls.push(lines[0]);
+        if (calls.length === 1) {
+          inventory.a1[0].id = 160;     // the save: same stack, new number
+          return { supplied: false, reason: 'Kermit is carrying nothing matching those ids' };
+        }
+        return null;
+      } });
+    const r = await fleetScript({ name: 'stale', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth', { keep: 10 })], onLog: quiet });
+    ok('a stale-id refusal is retried after a fresh read, not taken as the end',
+       r.ok === true && inventory.a2[0]?.amount === 20, JSON.stringify(r.results?.a1));
+    ok('the retry sends the NEW id the fresh read found', calls[1]?.id === 160, JSON.stringify(calls));
+    ok('and every id travels with its name, so the broker can follow a renumbered stack',
+       calls.every(l => l.name === 'orc tooth'), JSON.stringify(calls));
+  }
+  {
+    // Only ONCE: a second stale refusal is an answer, not a reason to loop.
+    const inventory = { a1: [{ id: 17, name: 'orc tooth', amount: 30 }], a2: [] };
+    let n = 0;
+    fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: () => { n++; return { supplied: false, reason: 'Kermit is carrying nothing matching those ids' }; } });
+    const r = await fleetScript({ name: 'stale2', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth')], onLog: quiet });
+    ok('a stale-id refusal that survives the retry fails the step, after exactly two offers',
+       r.ok === false && n === 2, `offers ${n} ` + JSON.stringify(r.results?.a1));
+  }
+
   // NOTHING TO MOVE IS NOT A FAILURE TO REPORT AS A REFUSAL, but it is not a success either:
   // the receiver gained nothing, and a caller that goes on to cast is owed that.
   {

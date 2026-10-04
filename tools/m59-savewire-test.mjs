@@ -109,4 +109,56 @@ ok(WAIT === 21 && UNWAIT === 22,
      'the pause state resets, so the second save is a second boundary and not a continuation');
 }
 
+// ---------------------------------------------------------------- the ids the save renumbers
+{
+  // A SAVE RENUMBERS EVERY OBJECT ID, so the client retires the pack as it stood at BP_WAIT
+  // (id -> name) and, at BP_UNWAIT, re-reads the pack and the room. Without the re-read every
+  // id a keeper serves after a save is a pre-save one until something else happens to ask;
+  // that is what a fleetscript supply step walked into on 2026-10-04 ("carrying nothing
+  // matching those ids") and a fresh read seconds later did not.
+  const { c, seen } = bench();
+  const names = new Map([[1, 'shilling'], [2, 'herbs']]);
+  c.rsc = { get: k => names.get(k) ?? null };
+  c.inventory = [{ id: 9461, nameRsc: 1, amount: 1200 }, { id: 9462, nameRsc: 2, amount: 40 }];
+  c.inventoryAt = Date.now() - 60_000;
+  const sent = [];
+  c.state = 'game';
+  c.sock = { destroyed: false };
+  c.send = (op) => sent.push(op);
+  c.saveRefreshJitterMs = 0;
+  ok(c.idsAsOf().inventory_at != null && c.idsAsOf().last_save_at == null,
+     'before any save the pack read has no save to be older than');
+
+  c.onGameMessage(WAIT, Buffer.alloc(0));
+  eq(c.idGenerations.length, 1, 'BP_WAIT retires the pack as one generation');
+  eq(c.idGenerations[0].items.map(o => [o.id, o.name, o.amount]),
+     [[9461, 'shilling', 1200], [9462, 'herbs', 40]],
+     'with each id\'s NAME and amount — what lets a pre-save id be re-resolved afterwards');
+  eq(c.idsAsOf().saving, true, 'mid-save, idsAsOf says so');
+  eq(sent.length, 0, 'nothing is asked while the server is paused');
+
+  c.onGameMessage(UNWAIT, Buffer.alloc(0));
+  ok(c.idGenerations[0].ended != null, 'BP_UNWAIT closes the generation');
+  eq(sent, [BP.REQ_INVENTORY, BP.SEND_ROOM_CONTENTS],
+     'and immediately re-reads the pack (which brings the use list) and the room');
+  const asOf = c.idsAsOf();
+  ok(asOf.last_save_at != null && asOf.inventory_at < asOf.last_save_at && !asOf.saving,
+     'until the reply lands, the pack read is older than the save — and idsAsOf shows it');
+  eq(asOf.saves_seen, 1, 'one save seen');
+  const end = seen.filter(e => e.kind === 'server-save').pop();
+  eq(end.refresh, ['inventory', 'room'], 'the end event says what it re-read');
+  eq(c.saveHistory.length, 1, 'one save in the history, begin and end together');
+  ok(c.saveHistory[0].began != null && c.saveHistory[0].ended >= c.saveHistory[0].began,
+     'with both ends');
+}
+
+{
+  // A client with no socket (or one not yet in game) must not throw from the re-read.
+  const { c } = bench();
+  c.saveRefreshJitterMs = 0;
+  c.onGameMessage(WAIT, Buffer.alloc(0));
+  c.onGameMessage(UNWAIT, Buffer.alloc(0));
+  ok(true, 'a socketless client survives a save without sending');
+}
+
 console.log(`m59-savewire-test: ${n} assertions passed`);

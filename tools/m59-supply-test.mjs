@@ -85,6 +85,9 @@ function fakeKeeperSession(name, opts = {}) {
                                      tag: o.tag ?? null, flags: 0 })),
       waitFor: async () => ({ events: [], seq: null, timedOut: true, no_event_stream: true }),
       requestInventory: () => null,
+      // The id generation, as KeeperProxy carries it across its rebuild (m59-idgen.mjs).
+      idGenerations: s.idGenerations ?? [],
+      idsAsOf: () => s.idsAsOf ?? null,
       // What is worn, when the test says: ids, or undefined for "the use list is unknown".
       equipment: () => (opts.worn === undefined ? { known: false, equipped: [] }
         : { known: true, equipped: opts.worn.map(id => ({ id, name: 'worn' })) }),
@@ -308,6 +311,63 @@ section('A STACK IS OFFERED WITH ITS QUANTITY, BECAUSE A BARE ID MEANS ONE');
                                   deps({ g: giver, r: recv }));
   ok('one of a thing that does not stack is asked for as one, not as zero',
      out.amounts[0]?.asked === 1 && out.amounts[0]?.received === 1, JSON.stringify(out.amounts));
+}
+
+section('A SAVE BETWEEN THE CALL AND THE OFFER RENUMBERS THE STACK — AND THE OFFER FOLLOWS IT');
+{
+  // 2026-10-04 22:37Z: "Kermit is carrying nothing matching those ids". Every system save
+  // renumbers every object id, and the exchange re-reads the pack before it offers — so a save
+  // landing in between (a five-minute walk is plenty of time) left the offer holding an id the
+  // pack no longer had. Worse, the old number can come back naming something else: here 11 is
+  // a SAPPHIRE after the save, and offering "11" would hand over the wrong item and report it.
+  const { giver, recv } = twoInOneRoom({ nothingMoves: true });
+  const g = giver._fake;
+  const saveAt = Date.now() + 5;
+  const realRoom = giver.roomContents.bind(giver);
+  giver.roomContents = async () => {
+    // The save: BP_WAIT retires the pack as a generation, BP_UNWAIT ends it, the re-read
+    // brings back new numbers.
+    g.idGenerations = [{ from: null, began: saveAt, ended: saveAt + 3000,
+                         items: [{ id: 11, name: 'elderberry', amount: 46 }, { id: 12, name: 'herbs', amount: 118 }] }];
+    g.items = [{ id: 11, name: 'sapphire', amount: 3 }, { id: 511, name: 'elderberry', amount: 46 },
+               { id: 512, name: 'herbs', amount: 118 }];
+    g.idsAsOf = { inventory_at: saveAt + 4000, last_save_at: saveAt + 3000, saving: false };
+    g.rebuild();
+    return realRoom();
+  };
+  const out = await supplyBetween({ from: 'g', to: 'r', what: [{ id: 11, amount: 5 }], who_travels: 'neither' },
+                                  deps({ g: giver, r: recv }));
+  const offered = g.lastOffer?.items ?? [];
+  ok('the offer carries the elderberry stack\'s NEW id, not the recycled number',
+     offered.length === 1 && offered[0].id === 511 && offered[0].amount === 5, JSON.stringify(offered));
+  ok('and never the sapphire that now answers to 11',
+     !offered.some(i => (i?.id ?? i) === 11), JSON.stringify(out));
+}
+{
+  // An id read before anything this character remembers, with no name to go by, is refused
+  // with a sentence — not offered, and not reported as "carrying nothing".
+  const { giver, recv } = twoInOneRoom({ nothingMoves: true });
+  const g = giver._fake;
+  const now = Date.now();
+  g.idGenerations = [{ from: now - 60_000, began: now - 30_000, ended: now - 29_000,
+                       items: [{ id: 9, name: 'elderberry', amount: 46 }] }];
+  g.idsAsOf = { inventory_at: now - 1000, last_save_at: now - 29_000, saving: false };
+  g.rebuild();
+  const out = await supplyBetween({ from: 'g', to: 'r', what: [{ id: 11, amount: 5 }],
+                                    ids_as_of: now - 3_600_000, who_travels: 'neither' },
+                                  deps({ g: giver, r: recv }));
+  ok('an id older than every remembered save is refused', out.supplied === false && /stale object id/.test(out.reason),
+     JSON.stringify(out));
+  ok('and the refusal says why, in a field a caller can read', Array.isArray(out.stale_ids) && out.stale_ids.length === 1);
+  ok('nothing was offered', !g.lastOffer);
+}
+{
+  // With the name, the same old id is re-resolved instead.
+  const { giver, recv } = twoInOneRoom({ per: 5 });
+  const out = await supplyBetween({ from: 'g', to: 'r', what: [{ id: 77, amount: 5, name: 'elderberry' }],
+                                    who_travels: 'neither' }, deps({ g: giver, r: recv }));
+  ok('an unknown id carrying a name goes by the name', giver._fake.lastOffer?.items?.[0]?.id === 11,
+     JSON.stringify(out));
 }
 
 section('A NAME CANNOT ANSWER "DID THIS TRADE HAPPEN". AN AMOUNT CAN');

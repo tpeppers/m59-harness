@@ -26,6 +26,7 @@ import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
 import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
 import { AudioObservations } from './m59-audio-observations.mjs';
+import { retireGeneration, closeGeneration } from './m59-idgen.mjs';
 import {
   Reader, objId, MAX_ANGLE, KOD_FINENESS, OF,
   parseRoomContents, parseCreate, parseRemove, parseMove, parseTurn, parseChange,
@@ -328,6 +329,18 @@ export class M59Client {
     // indistinguishable. Increment only when an appearance record is installed.
     this.appearanceRevision = 0;
     this.inventory = [];
+    // OBJECT-ID GENERATIONS (m59-idgen.mjs). When the pack was last read off the wire, the
+    // saves this client has seen, and the pack as it stood at the start of each recent save —
+    // the record that lets a pre-save id be translated to what it named.
+    this.inventoryAt = null;
+    this.idsTrackedSince = Date.now();
+    this.idGenerations = [];
+    this.saveHistory = [];
+    this.saveCount = 0;
+    // How long after BP_UNWAIT the post-save re-read goes out: jittered so twenty-odd keepers
+    // do not ask in the same millisecond, and short, because until it lands every id served
+    // is a pre-save one (and `idsAsOf()` says so).
+    this.saveRefreshJitterMs = 1500;
     this.spells = [];
     this.skills = [];
     this.trade = null;               // the open offer, if any
@@ -1370,6 +1383,43 @@ export class M59Client {
   // cannot share a name — the assignment silently replaces the method, and the
   // next call fails with "not a function" long after the cause.
   requestInventory()    { this.send(BP.REQ_INVENTORY); }
+
+  /**
+   * WHICH GENERATION THE IDS THIS CLIENT HOLDS BELONG TO. `inventory_at` is the last time the
+   * pack was read off the wire; `last_save_at` the end of the last save this client saw. An
+   * inventory read older than the save — or any read while a save is running — holds ids the
+   * server has since renumbered. m59-idgen.mjs `idsCurrent` is the predicate; the keeper
+   * publishes this in /state and KeeperProxy carries it across its rebuild.
+   */
+  idsAsOf() {
+    const last = this.saveHistory[this.saveHistory.length - 1] ?? null;
+    return {
+      inventory_at: this.inventoryAt ?? null,
+      last_save_at: last ? (last.ended ?? last.began ?? null) : null,
+      last_save_began_at: last?.began ?? null,
+      saving: this.savePausedAt != null,
+      saves_seen: this.saveCount,
+    };
+  }
+
+  // THE POST-SAVE RE-READ. BP_UNWAIT means every id this client holds — pack, worn items, the
+  // room's objects — was renumbered under it. One inventory request brings back the pack and
+  // the use list (user.kod:955-957); one room-contents request the room (and its handler
+  // re-binds a renumbered selfId by name). Sent directly, like the keepalive, rather than
+  // through a pacer: they are reads, and until they land everything served is stale.
+  scheduleIdRefresh() {
+    clearTimeout(this._idRefreshTimer);
+    const jitter = Math.max(0, Number(this.saveRefreshJitterMs) || 0);
+    const run = () => {
+      this._idRefreshTimer = null;
+      if (this.state !== 'game' || !this.sock || this.sock.destroyed) return;
+      try { this.requestInventory(); this.roomContents(); }
+      catch (e) { this.log?.(`post-save re-read failed: ${e.message}`); }
+    };
+    if (!jitter) { run(); return; }
+    this._idRefreshTimer = setTimeout(run, Math.floor(Math.random() * jitter));
+    this._idRefreshTimer.unref?.();
+  }
   requestSpells()       { this.send(BP.SEND_SPELLS); }
   requestSkills()       { this.send(BP.SEND_SKILLS); }
   // Native RequestEnchantments(ENCHANT_PLAYER): the type byte is required.
@@ -1488,17 +1538,39 @@ export class M59Client {
       // EVERY LOGGED-IN CHARACTER RECEIVES THIS, so twenty-three keepers each emit one. That
       // is correct at this layer — a client reports what it saw — and the recorder dedupes on
       // the timestamp rather than this pretending to know about its siblings.
+      //
+      // AND THE SAVE RENUMBERS EVERY OBJECT ID. So the pack as it stands at BP_WAIT is retired
+      // as a GENERATION (id -> name, amount; see m59-idgen.mjs), which is what lets a caller
+      // holding a pre-save id be re-resolved by name instead of acting on a recycled number,
+      // and BP_UNWAIT re-reads the pack and the room so the ids this client serves are
+      // post-save ones again. `idsAsOf()` says which side of the last save they are on.
       case BP.WAIT:
         this.savePausedAt = Date.now();
+        try {
+          this.idGenerations = retireGeneration(this.idGenerations, {
+            began: this.savePausedAt, since: this.idsTrackedSince,
+            items: (this.inventory || []).map(o => ({ id: o.id, name: this.rsc.get(o.nameRsc) ?? '',
+                                                      amount: o.amount ?? 0 })),
+          });
+        } catch { /* bookkeeping never costs the save event */ }
+        this.saveHistory = [...this.saveHistory, { began: this.savePausedAt, ended: null }].slice(-6);
         this.emit('server-save', { phase: 'begin', at: this.savePausedAt });
         break;
       case BP.UNWAIT: {
         const began = this.savePausedAt ?? null;
+        const ended = Date.now();
         this.savePausedAt = null;
+        this.idGenerations = closeGeneration(this.idGenerations, ended);
+        const open = this.saveHistory[this.saveHistory.length - 1];
+        if (open && open.ended == null && began != null) this.saveHistory = [...this.saveHistory.slice(0, -1), { began, ended }];
+        else this.saveHistory = [...this.saveHistory, { began, ended }].slice(-6);
+        this.saveCount++;
         // The duration is worth carrying. A save that takes noticeably longer than usual is a
         // server under strain, which is a confounder for every rate measured around it.
-        this.emit('server-save', { phase: 'end', at: Date.now(), began,
-                                   held_ms: began ? Date.now() - began : null });
+        this.emit('server-save', { phase: 'end', at: ended, began,
+                                   held_ms: began ? ended - began : null,
+                                   refresh: ['inventory', 'room'] });
+        this.scheduleIdRefresh();
         break;
       }
       // The server does not start streaming the world on its own. It sends
@@ -1908,6 +1980,9 @@ export class M59Client {
         const res = parseObjectList(body);
         if (!this.check('INVENTORY', res)) break;
         this.inventory = res.objects;
+        // Stamped BEFORE the keepalive early-out: a keepalive's reply is a real read and its
+        // ids are as current as anybody's.
+        this.inventoryAt = Date.now();
         // A keepalive asks for the inventory purely to make noise on the socket.
         // Its reply is still worth keeping — it is a free refresh — but emitting
         // an event for it would put a heartbeat into the agent's event stream

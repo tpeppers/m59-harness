@@ -1286,6 +1286,16 @@ function state() {
       // in m59-items.mjs for why cursed (200) is not in that set.
       rarity: o.rarity ?? null,
     })).filter(o => o.name) : [],
+    // WHICH SAVE THESE IDS BELONG TO (m59-idgen.mjs). Every system save renumbers every object
+    // id, so an id is only meaningful with its generation: `ids_as_of` says when the pack was
+    // last read off the wire and when the last save ended; `id_generations` is the pack as it
+    // stood at the start of each recent save (id -> name), which is what lets the broker
+    // re-resolve a pre-save id by name; `saves` feeds the broker's fleet-wide save clock.
+    // THREE FILES: the client keeps them, this publishes them, KeeperProxy carries them across
+    // its rebuild — a field missing from any one of the three is missing from prod.
+    ids_as_of: c?.idsAsOf?.() ?? null,
+    id_generations: c?.idGenerations ?? [],
+    saves: c?.saveHistory ?? [],
     // Load is derived beside the live client because might and the authoritative
     // inventory both live here. The broker's KeeperProxy cannot reconstruct might;
     // publishing the measured result lets same-room transfers fail closed on receiver
@@ -1638,6 +1648,10 @@ const server = createServer(async (req, res) => {
         connected: !!session.live,
         connection_revision: connectionRevision,
         uptime_s: Math.floor((Date.now() - startedAt) / 1000),
+        // The saves this client has seen, for the broker's fleet-wide save clock. Cheap — a
+        // six-entry array already held — so it rides on the liveness poll the broker makes
+        // anyway, and the clock learns of a save within one poll rather than one tool call.
+        saves: session.client?.saveHistory ?? [],
       });
       return;
     }
@@ -1687,9 +1701,18 @@ const server = createServer(async (req, res) => {
       const wantFresh = url.searchParams.get('fresh') === '1';
       if (wantFresh && inGame) {
         try {
+          // WAIT FOR THE READ, NOT FOR AN EVENT. A reply that lands while a keepalive is
+          // pending is consumed as the keepalive's and emits no `inventory` event, so waiting
+          // on the event alone could time out on a read that had arrived — or return on an
+          // `equipment` event from before it. `inventoryAt` moves on every pack read.
+          const readBefore = session.client.inventoryAt ?? null;
           await session.pacer.submit('read', () => session.client.requestInventory());
-          await session.client.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 })
-                     .catch(() => null);
+          const until = Date.now() + 3000;
+          while (Date.now() < until && (session.client.inventoryAt ?? null) === readBefore) {
+            await session.client.waitFor({ kinds: ['inventory', 'equipment'],
+                                           timeoutMs: Math.max(50, Math.min(250, until - Date.now())) })
+                       .catch(() => null);
+          }
         } catch { /* a refused read still answers from the cache below */ }
         const fresh = stateSnapshot({ fresh: true });
         json({ ...fresh.value, as_of_ms: fresh.ageMs, fresh: fresh.refreshed });

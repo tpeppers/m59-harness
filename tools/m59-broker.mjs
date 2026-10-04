@@ -109,6 +109,8 @@ function spellCostLookups() {
 import * as skills from './m59-skills.mjs';
 import * as buyers from './m59-buyers.mjs';
 import { supplyBetween as supplyExchange } from './m59-supply.mjs';
+import { SaveClock, IdRegistry, stampReply, judgeArgs, reresolveRefs, rewriteArgs,
+         hhmmss } from './m59-idgen.mjs';
 import * as abilities from './m59-abilities.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import * as bankbook from './m59-bank.mjs';
@@ -893,6 +895,82 @@ const learningRefusals = new Map();
 const learnKey = (agent, ability) => `${agent}::${String(ability).toLowerCase()}`;
 
 const sessions = new Map();             // agent name -> Session
+
+// ---------------------------------------------------------------- object-id generations
+//
+// EVERY SYSTEM SAVE RENUMBERS EVERY OBJECT ID (CLAUDE.md, "an object id is a temporary
+// handle"). The operator, 2026-10-04: "track the rate/timing of system saves and mark IDs as
+// stale if the ID was last read older than the most recent system save timing, via all tools,
+// automatically." So:
+//
+//   saveClock   every save any character on this broker saw, deduped (each keeper sees the same
+//               one), fed from keeper /live polls, /state snapshots and in-process clients; its
+//               cadence is in /health as `saves`.
+//   idRegistry  every object id a tool reply handed to an agent, with its name and when it was
+//               read. callTool stamps each reply (`ids_as_of`, `ids_stale`) and, on the way in,
+//               re-resolves by name — or refuses — any id last handed out before the latest save.
+//
+// The decisions are pure and live in m59-idgen.mjs, pinned by m59-idgen-test.mjs.
+const saveClock = new SaveClock();
+const idRegistry = new IdRegistry();
+// The sentence every tool that takes an object id carries in its description.
+const ID_HANDLE_NOTE = '\nOBJECT IDS ARE PER-SAVE HANDLES: every server save renumbers them. Replies carrying ids ' +
+  'say `ids_as_of` and `ids_stale`; an id this broker handed out before the latest save is re-resolved ' +
+  'by name before this runs when exactly one thing carries that name (see `ids_reresolved` in the ' +
+  'reply), and refused with a sentence naming the save otherwise. Re-read (inventory, look) to be sure.';
+
+// Every save every session knows of, fed into the clock. Cheap: each is a six-entry array
+// already held (a keeper's last /state, or an in-process client's own history).
+function observeSessionSaves() {
+  for (const [name, s] of sessions) {
+    try {
+      const list = s?._state?.saves ?? s?.client?.saveHistory ?? null;
+      if (Array.isArray(list)) saveClock.observeAll(list, name);
+    } catch { /* a session mid-teardown has nothing to say */ }
+  }
+}
+
+// WHEN THE IDS THIS SESSION SERVES WERE READ, AND WHETHER A SAVE HAS RENUMBERED THEM SINCE.
+// `inventory_at` is the keeper's (or client's) last pack read off the wire; failing that, the
+// snapshot's own age. Stale when the clock's latest save ended after that read, or when the
+// session itself says its pack predates the save it saw (a keeper whose post-save re-read has
+// not landed yet).
+function idStampFor(s) {
+  let c = null;
+  try { c = s?.need?.(); } catch { return null; }
+  if (!c) return null;
+  const asOf = typeof c.idsAsOf === 'function' ? c.idsAsOf() : null;
+  if (Array.isArray(c.saveHistory)) saveClock.observeAll(c.saveHistory, s.name);
+  let readAt = Number.isFinite(asOf?.inventory_at) ? asOf.inventory_at : null;
+  if (readAt == null) {
+    const age = typeof s.snapshotAgeMs === 'function' ? s.snapshotAgeMs() : 0;
+    readAt = age == null ? null : Date.now() - age;
+  }
+  const sessionSaysStale = !!asOf && (asOf.saving === true ||
+    (Number.isFinite(asOf.last_save_at) && !(Number(asOf.inventory_at) >= asOf.last_save_at)));
+  return { readAt, stale: sessionSaysStale || (readAt != null && saveClock.isStale(readAt)) };
+}
+
+// A FRESH LOOK AT EVERYTHING AN ID COULD NOW NAME: the pack, re-read off the wire, and the
+// room. For a keeper-backed session the pacer's forced snapshot IS the fresh read (`?fresh=1`);
+// an in-process client asks for both itself.
+async function freshIdCandidates(s) {
+  try {
+    if (s instanceof KeeperProxy) await s.pacer.submit('read', () => null);
+    else {
+      await s.pacer.submit('read', () => s.need().requestInventory());
+      await s.need().waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+      await s.pacer.submit('read', () => s.need().roomContents()).catch(() => null);
+      await s.need().waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => null);
+    }
+  } catch { /* answer from whatever is held; the judgement below says what it found */ }
+  const c = s.need();
+  const nameOf = o => { try { return c.rsc.get(o.nameRsc) || o.name || ''; } catch { return o.name || ''; } };
+  return [
+    ...(c.inventory ?? []).map(o => ({ id: o.id, name: nameOf(o), where: 'pack' })),
+    ...[...(c.room?.objects?.values?.() ?? [])].map(o => ({ id: o.id, name: nameOf(o), where: 'room' })),
+  ].filter(o => Number.isSafeInteger(o.id) && o.id > 0);
+}
 
 // ---------------------------------------------------------------- keeper processes
 //
@@ -2585,6 +2663,15 @@ class KeeperProxy {
       // independent stats stream, so recomputing here used to return known:false and made
       // receiver capacity impossible to prove.
       carry: s.carry ?? null,
+      // WHICH SAVE THESE IDS BELONG TO — the third file of three (m59-client.mjs keeps it,
+      // m59-keeper-process.mjs publishes it, this carries it). Same method and field names as
+      // the real client, so `idStampFor` and the supply exchange cannot tell the two apart.
+      // A keeper too old to publish them answers null/[], which every reader treats as
+      // "unknown generation" and meets with a fresh read rather than a guess.
+      idsAsOf: () => s.ids_as_of ?? null,
+      inventoryAt: s.ids_as_of?.inventory_at ?? null,
+      idGenerations: Array.isArray(s.id_generations) ? s.id_generations : [],
+      saveHistory: Array.isArray(s.saves) ? s.saves : [],
       abilitiesAt: { skills: 0, spells: 0 },
       // WHERE THE BODY IS. `self` was null, and `c.self` is how nearly everything asks —
       // the status tool's `where`, the travel guard's "what is within two squares of us",
@@ -2908,6 +2995,7 @@ class KeeperProxy {
       this._state = candidate;
       this._stateAt = observedAt;
       this._client = null;
+      if (Array.isArray(candidate.saves)) saveClock.observeAll(candidate.saves, this.name);
       return this._state;
     })();
     const record = { fresh, promise: request };
@@ -2958,6 +3046,9 @@ class KeeperProxy {
                    processAlive: this._processAlive() };
         }
         this._identityConflict = null;
+        // The liveness poll is the broker's most regular contact with each keeper, so the
+        // save clock learns of a save here within one poll.
+        if (Array.isArray(reply.value?.saves)) saveClock.observeAll(reply.value.saves, this.name);
         const result = { accepted: true, legacy: reply.legacy,
           status: this._liveness.status({ processAlive: this._processAlive() }) };
         this._acceptedLivenessProof = {
@@ -7172,7 +7263,7 @@ const TOOLS = [
     description: 'The description of one object, by id or name — the prose a human would read. ' +
       'WORKS ON PEOPLE TOO, including yourself: looking at a player returns whatever description ' +
       'that character has set (see `describe`), plus the game\'s own line about where they are from ' +
-      'and what they are carrying visibly. That is the only way a description can be read back.',
+      'and what they are carrying visibly. That is the only way a description can be read back.' + ID_HANDLE_NOTE,
     schema: { type: 'object', properties: {
       agent: { type: 'string' }, target: { type: ['string', 'number'] } }, required: ['agent', 'target'] },
     run: async (a) => {
@@ -10247,7 +10338,7 @@ const TOOLS = [
       '  cancel    either side, any time.\n' +
       '  status    what is currently on the table.\n' +
       'Both players must be in the SAME ROOM. Pass items as ids, or as {id, amount} to hand over ' +
-      'PART of a stack — which is the only way to split money.',
+      'PART of a stack — which is the only way to split money.' + ID_HANDLE_NOTE,
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       action: { type: 'string', enum: ['offer', 'counter', 'accept', 'cancel', 'status'] },
@@ -10318,8 +10409,8 @@ const TOOLS = [
         return {
           accepted: true,
           carried_before: carriedBefore,
-          carried_after: c.inventory.length,
-          inventory: c.inventory.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc), amount: o.amount || undefined })),
+          carried_after: s.need().inventory.length,
+          inventory: s.need().inventory.map(o => ({ id: o.id, name: s.need().rsc.get(o.nameRsc), amount: o.amount || undefined })),
           messages: ev.events.filter(e => e.text).map(e => e.text),
           note: 'the accepting side is told nothing on success — the inventory above is the evidence',
         };
@@ -10354,13 +10445,21 @@ const TOOLS = [
                 'specifications. A NAME USED TO BE IGNORED: anything that was not an id ' +
                 'list, "all" or "food" silently fell through to elderberry+herb and reported ' +
                 'success, so `what: "sapphire"` answered `handed_over: ["elderberry","herb"]`. ' +
-                'Matched as a whole name, so "sapphire" does not also take a "sapphire ring"',
+                'Matched as a whole name, so "sapphire" does not also take a "sapphire ring". ' +
+                'IDS ARE PER-SAVE HANDLES: give each entry the `name` it had in the inventory reply ' +
+                '({id, amount, name}) and pass that reply\'s `ids_as_of`, and an id a server save ' +
+                'renumbered — before the call, or during the walk — is re-resolved to the same ' +
+                'stack by name instead of failing with "carrying nothing matching those ids"',
               items: { anyOf: [
                 { type: 'number' },
                 { type: 'object', properties: {
                     id: { type: 'number' }, amount: { type: 'number', minimum: 1 },
+                    name: { type: 'string', description: 'what the id named when it was read' },
                   }, required: ['id', 'amount'], additionalProperties: false },
               ] } },
+      ids_as_of: { type: 'number', description: 'the `ids_as_of` of the inventory reply the ids in ' +
+                   '`what` came from (ms). Lets a pre-save id be translated through the generation ' +
+                   'it was read in' },
       amount: { type: 'number', description: 'per reagent kind, default 2 of each — one casting' },
       who_travels: { type: 'string', enum: ['from', 'to', 'neither'],
                      description: 'default "from"' },
@@ -10483,7 +10582,7 @@ const TOOLS = [
       'see the price BEFORE committing, so call with confirm=false to get a quote and nothing else.\n' +
       'A merchant only buys what it deals in, and it refuses by SPEAKING, so the reason arrives as ' +
       'said-text rather than as a system message. Both of you must be in the same room, and a merchant ' +
-      'already serving another customer will say so.',
+      'already serving another customer will say so.' + ID_HANDLE_NOTE,
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       to: { type: ['string', 'number'], description: 'the merchant — one whose "can" list includes buy' },
@@ -10543,7 +10642,7 @@ const TOOLS = [
         offered_price: price,
         received: c.trade?.theirs || [],
         carried_before: carriedBefore,
-        carrying: c.inventory.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc), amount: o.amount || undefined })),
+        carrying: s.need().inventory.map(o => ({ id: o.id, name: s.need().rsc.get(o.nameRsc), amount: o.amount || undefined })),
         merchant_said: [...speech, ...after.events.filter(e => e.kind === 'said').map(e => e.text)],
         note: 'the accepting side is told nothing on success — the inventory above is the evidence',
       };
@@ -12876,7 +12975,7 @@ const TOOLS = [
       'and reagents — and refuses with the reason rather than spending the attempt, because a refused ' +
       'cast is often SILENT. Reagents are consumed on a successful cast.\n' +
       'Spells with one target need one; pass a creature or player name and it will be resolved and ' +
-      'faced first, since a single-target spell obeys the same view rule as a melee swing.',
+      'faced first, since a single-target spell obeys the same view rule as a melee swing.' + ID_HANDLE_NOTE,
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       spell: { type: 'string', description: 'spell name, partial is fine' },
@@ -13185,12 +13284,36 @@ const TOOLS = [
   },
   {
     name: 'inventory',
-    description: 'What the character is carrying, with ids usable by use/drop/offer/apply.',
-    schema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
+    description: 'What the character is carrying, with ids usable by use/drop/offer/apply.\n' +
+      'IDS ARE PER-SAVE HANDLES. Every server save renumbers every object id (and recycles old ' +
+      'numbers within hours), so an id is only good until the next save. Every reply that carries ' +
+      'ids says `ids_as_of` (ms, when they were read off the wire), `ids_stale` (true when a save has ' +
+      'happened since), `last_save_at` and `next_save_expected_at`. Pass an id back after a save and ' +
+      'the broker re-resolves it by NAME to the current id when exactly one thing carries that name ' +
+      '(the reply then lists `ids_reresolved`), or refuses with a sentence naming the save — it never ' +
+      'acts on a renumbered number. To be sure, re-read: this tool always asks the server.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      fresh: { type: 'boolean', description: 'default true: ask the server for the pack now. false answers ' +
+                                             'from the snapshot already held (cheaper, possibly seconds old — ' +
+                                             'and possibly from before a save; see ids_stale)' },
+    }, required: ['agent'] },
     run: async (a) => {
-      const s = session(a.agent), c = s.need();
-      await s.pacer.submit('read', () => c.requestInventory());
-      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
+      const s = session(a.agent);
+      let c = s.need();
+      if (a.fresh !== false) {
+        await s.pacer.submit('read', () => c.requestInventory());
+        // RE-READ THE CLIENT. On a keeper-backed character `c` is rebuilt from each snapshot and
+        // the pacer above just fetched a new one; the object taken before it is the PREVIOUS
+        // snapshot's pack. This tool answered from that, so the read it had just paid for was
+        // thrown away and the reply was whatever the last caller had seen — on 2026-10-04 a pack
+        // from before the save, whose shilling id no longer existed ("carrying nothing matching
+        // those ids"), with a retry seconds later "working" only because it read the first
+        // call's snapshot. (The wait stays on the OLD object: its event cursor is from before
+        // the read, so the reply is inside its window and it returns at once.)
+        await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
+        c = s.need();
+      }
       // BROKEN IS A PROPERTY OF THE ITEM AND IT IS NOT IN THE NAME.
       //
       // A ruined leather armor is called "leather armor". The only record that it is
@@ -13243,6 +13366,42 @@ const TOOLS = [
     },
   },
   {
+    name: 'resolve',
+    description: 'NAME -> THE OBJECT ID(S) IT HAS NOW, off a fresh read of the pack and the room. ' +
+      'Every server save renumbers every object id, so an id is good only until the next save ' +
+      '(`last_save_at` / `next_save_expected_at` in any reply carrying ids say when that was and ' +
+      'when the next is due). Ask this immediately before acting when you know what you mean by ' +
+      'name and not by number. An exact (case-insensitive) name match wins; failing that, every ' +
+      'name containing the text.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      name: { type: 'string', description: 'what to look for, e.g. "shilling" or "Rook"' },
+      where: { type: 'string', enum: ['pack', 'room', 'both'], description: 'default both' },
+    }, required: ['agent', 'name'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      s.need();
+      const rows = await freshIdCandidates(s);
+      const c = s.need();
+      const amountOf = new Map((c.inventory ?? []).map(o => [o.id, o.amount ?? 0]));
+      const norm = x => String(x ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const want = norm(a.name);
+      const where = a.where ?? 'both';
+      const pool = rows.filter(r => where === 'both' || r.where === where);
+      const exact = pool.filter(r => norm(r.name) === want);
+      const hits = exact.length ? exact : pool.filter(r => norm(r.name).includes(want));
+      return {
+        name: a.name,
+        exact: exact.length > 0,
+        matches: hits.map(r => ({ id: r.id, name: r.name, where: r.where,
+                                  ...(r.where === 'pack' ? { amount: amountOf.get(r.id) ?? 0 } : {}) })),
+        note: hits.length === 1 ? undefined
+          : hits.length ? `${hits.length} things answer to that — pick by where/amount, or be more exact`
+          : `nothing called "${a.name}" is in the ${where === 'both' ? 'pack or the room' : where}`,
+      };
+    },
+  },
+  {
     name: 'equipment',
     description:
       'WHAT THIS CHARACTER IS ACTUALLY WEARING AND WIELDING. The server\'s own list, not a guess.\n' +
@@ -13261,13 +13420,18 @@ const TOOLS = [
                                                'inventory request carries a fresh use list.' },
     }, required: ['agent'] },
     run: async (a) => {
-      const s = session(a.agent), c = s.need();
+      const s = session(a.agent);
+      let c = s.need();
       if (a.refresh !== false) {
         // BP_REQ_INVENTORY is answered with ToCliInventory AND ToCliUseList
         // (user.kod:955-957), so one request refreshes both. There is no opcode that
         // asks for the use list on its own.
         await s.pacer.submit('read', () => c.requestInventory());
         await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 });
+        // THE CLIENT IS RE-READ AFTER THE READ. A keeper-backed client is rebuilt per snapshot,
+        // so the one taken before the pacer's fresh read describes the PREVIOUS snapshot — which
+        // is how an amulet read "not worn" on 2026-10-04 while it was. See `inventory`.
+        c = s.need();
       }
       const eq = c.equipment();
       const weapons = eq.equipped.filter(e => e.name && skills.weaponScore(e.name) > 0);
@@ -13330,7 +13494,7 @@ const TOOLS = [
       'object carrying a count, and the server takes that count from a separate list ' +
       '(UserDropItems, user.kod:3775). Drop is the only verb here that has one: `amount` takes ' +
       'part of a stack, and leaving it out drops the whole thing. It is not possible to drop a ' +
-      'stack "by id" — that is what produces "You don\'t have that amount of X to drop."',
+      'stack "by id" — that is what produces "You don\'t have that amount of X to drop."' + ID_HANDLE_NOTE,
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       verb: { type: 'string', enum: ['use', 'unuse', 'get', 'drop', 'activate', 'eat', 'go'] },
@@ -18111,6 +18275,32 @@ async function callTool(name, args, caller) {
   const t0 = Date.now();
   try {
     const targetSession = args?.agent ? sessions.get(args.agent) : null;
+    // AN ID HANDED OUT BEFORE THE LATEST SAVE IS NOT AN ID ANY MORE. Every id this broker gave
+    // this agent is in `idRegistry` with when it was read; one passed back after a save has
+    // renumbered everything is re-resolved here by NAME from a fresh read when exactly one
+    // thing carries that name, and the call is refused with a sentence when not. The tool
+    // never sees the stale number. Ids this broker never handed out are left to the tool.
+    //
+    // WHOSE IDS. Nearly every tool names its character `agent`; `supply` names two, and the
+    // ids in its `what` are the GIVER's — the incident this exists for was exactly that call.
+    const idAgent = args?.agent ?? (name === 'supply' ? args?.from : null) ?? null;
+    const idSession = idAgent ? sessions.get(idAgent) ?? null : null;
+    let idsReresolved = null;
+    if (idSession && args && typeof args === 'object') {
+      const refs = judgeArgs(args, { tool: name, agent: idAgent, registry: idRegistry, clock: saveClock });
+      if (refs.length) {
+        const candidates = await freshIdCandidates(idSession).catch(() => []);
+        const rr = reresolveRefs(refs, { candidates, clock: saveClock });
+        if (!rr.ok)
+          throw new Error(`stale object id(s) — refused rather than acted on: ` +
+                          rr.refused.map(r => r.why).join('; '));
+        args = rewriteArgs(args, rr.subs);
+        idsReresolved = rr.subs.filter(x => x.from !== x.to)
+          .map(x => ({ from: x.from, to: x.to, name: x.name, why: x.why }));
+        const at = Date.now();
+        for (const x of rr.subs) idRegistry.note(idAgent, x.to, { name: x.name, at });
+      }
+    }
     const out = name !== 'combat' && targetSession?.runCommand
       ? await targetSession.runCommand(() => t.run(args || {}, caller))
       : await t.run(args || {}, caller);
@@ -18118,6 +18308,23 @@ async function callTool(name, args, caller) {
     // wrong is the one reading this reply.
     if (unrecognised && out && typeof out === 'object' && !Array.isArray(out))
       out.unrecognised_settings = unrecognised;
+    // STAMP EVERY REPLY THAT CARRIES OBJECT IDS with when they were read and whether a save
+    // has renumbered them since, and remember what was handed out so the next call that
+    // passes one back can be judged. One place, so a new tool is stamped without knowing it.
+    if (idSession && out && typeof out === 'object' && !Array.isArray(out)) {
+      try {
+        const st = idStampFor(idSession);
+        if (st) {
+          const { ids } = stampReply(out, { readAt: st.readAt, stale: st.stale, clock: saveClock });
+          idRegistry.noteAll(idAgent, ids, st.readAt ?? Date.now());
+        }
+        if (idsReresolved?.length) {
+          out.ids_reresolved = idsReresolved;
+          out.ids_reresolved_note = `object ids from before the ${hhmmss(saveClock.summary().last_at)} ` +
+            'save were re-resolved by name to their current ids before this ran';
+        }
+      } catch { /* stamping never costs a reply */ }
+    }
     const ms = Date.now() - t0;
     recordToolMs(name, ms);
     rec?.line('call', { tool: name, args: recordedArgs, ms });
@@ -18451,6 +18658,10 @@ function brokerHealth() {
     // is fae8bd3: before it, concurrent handoffs probed the same free port and one died
     // EADDRINUSE. m59-keeper-restart.mjs defaults to one at a time when this is absent.
     keeper_handoff: { tool: 'war_restart', port_reservation: true },
+    // THE SERVER'S SAVE CADENCE, as this fleet has observed it (m59-idgen.mjs SaveClock): the
+    // last save, the median gap between recent ones, and the next one that gap predicts. Every
+    // save renumbers every object id, so this is also "when did every id go stale".
+    saves: (() => { try { observeSessionSaves(); return saveClock.summary(); } catch { return null; } })(),
     pid: process.pid,
     root: BROKER_ROOT,
     fleet: FLEET || 'default',

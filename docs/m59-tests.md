@@ -16,6 +16,34 @@
 
 These tests are offline. They do not execute a raid or shut down a server.
 
+## Object ids across server saves
+
+- `node tools/m59-idgen-test.mjs` (64): every system save renumbers every object id
+  (`docs/m59-protocol-traps.md`, "an id is good until the next save"). Pins the pure half of
+  `m59-idgen.mjs`: a generation retired at BP_WAIT and closed at BP_UNWAIT, and which
+  generation a read at a given time belongs to (during a save still counts as before it;
+  older than everything kept is `unknown`, never guessed); `checkIds` translating a pre-save
+  pack id to the same stack by NAME, refusing a recycled id that now names something else when
+  nothing says which was meant, refusing two carriers of one name and two entries landing on
+  one stack; `SaveClock` collapsing one save reported by twenty keepers into one (earliest
+  start, earliest end as the boundary) and the cadence (median interval, next expected, a
+  prediction long past rolled forward); `stampReply` stamping `ids_as_of`/`ids_stale` and
+  `id_stale` per entry; and the input side — `judgeArgs` finds ids handed out before the save at
+  any depth under the tool's own id keys (never `amount`, never a travel `to`, which is a room),
+  `reresolveRefs` keeps an unchanged id, swaps a renumbered one, refuses an ambiguous one, and
+  `rewriteArgs` does not mutate the caller's arguments.
+- `node tools/m59-savewire-test.mjs` (27) now also pins the client half: BP_WAIT retires the pack
+  with names and amounts, BP_UNWAIT re-requests the pack and the room at once, `idsAsOf()` shows
+  the pack read older than the save until the reply lands, and a socketless client survives.
+- `node tools/m59-supply-test.mjs` (154) — a save landing between the call and the offer, with the
+  old number recycled as a sapphire, offers the elderberry stack's NEW id; an id older than every
+  remembered save is refused as `stale object id` with `stale_ids`, nothing offered.
+- `node tools/m59-fleetscript-test.mjs` (374) — the `supply` step retries a stale-id refusal once
+  after a fresh read, sends the new id, sends every id with its name, and stops after two.
+- `node tools/m59-keeperproxy-test.mjs` — `ids_as_of`, `id_generations` and `saves` are checked on
+  all three sides of the three-file rule (client keeps, keeper publishes, proxy rebuild carries),
+  plus the clock feeds and the stamp at `callTool`.
+
 ## Travel and combat regressions
 
 - `m59-move-origin-test.mjs` (18): **who ordered a move and who cancelled it**, and the movement
@@ -818,7 +846,7 @@ the records it describes.
   broker, autopilot, game and stats sources as TEXT to pin the wiring — importing
   `m59-broker.mjs` would run it — because a policy that dies in transport is this
   repository's signature failure) and
-  `node tools/m59-supply-test.mjs` (115 — **moving supplies between two characters one broker
+  `node tools/m59-supply-test.mjs` (154 — **moving supplies between two characters one broker
   is driving, on the architecture production actually runs**. `supplyBetween` was written when
   the broker WAS the keeper and the pacer and the socket; per-character keeper processes have
   been the default since the split, and on that arrangement the exchange could not move a
