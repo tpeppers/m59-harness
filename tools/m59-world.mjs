@@ -752,10 +752,23 @@ export class World {
       };
       return originFloods;
     };
+    // A STAGE THE WALKER CANNOT STAND ON GOES LAST, NOT FIRST BY A TIE.
+    //
+    // The flood that measures `steps` is the mover's (`moverStepLands`), but the walk that
+    // has to GET there is `walkTo`, whose coarse goal test and fine fallback both refuse a
+    // square whose centre is inside a pillar's clearance (`fineWalkable === false`). The two
+    // disagree about such a square, and when it tied for nearest it was published first, so
+    // every attempt to leave began with a walk that could not arrive. Measured 2026-10-04:
+    // Camilla in the Temple of Shal'ille (48) for five hours, the east exit staged at r8c31 --
+    // a statue -- with r8c32 and r7c32 one step away and reachable; the keeper's own
+    // `/findpath` answered `targetFineWalkable: false, no fine path` for r8c31 and found the
+    // other two at once. Demoted rather than dropped: a boundary whose every stage is
+    // fine-blocked still offers them, in the old order.
+    const fineBlocked = stage => (geo?.walls?.length > 0 && geo.fineWalkable?.(stage.row, stage.col) === false) ? 1 : 0;
     const rankedIn = (by, stages) => stages
       .map(stage => by.get(`${stage.col},${stage.row}`))
       .filter(Boolean)
-      .sort((a, b) => a.steps - b.steps);
+      .sort((a, b) => (fineBlocked(a) - fineBlocked(b)) || (a.steps - b.steps));
     const nearestIn = (by, stages) => rankedIn(by, stages)[0] ?? null;
     // FOUR CROSSINGS ON ONE WALL MUST NOT BECOME FOUR COPIES OF ONE SQUARE.
     //

@@ -1947,5 +1947,34 @@ console.log('\na deflected step lands only where the body can do what the stand 
   }
 }
 
+// THE STAGE IS A SQUARE THE WALKER CAN STAND ON. Camilla, the Temple of Shal'ille (48),
+// 2026-10-04: five hours unable to leave, because the east exit was staged at r8c31 -- a
+// statue, `fineWalkable` false, which walkTo can neither route to nor fine-walk onto -- tied
+// for nearest with r8c32, which it reaches at once. The keeper's `/findpath` said exactly that.
+{
+  const map = loadMap();
+  const temple = map?.rooms?.['48'];
+  if (!temple) {
+    skipped++; console.log('  --   the temple exit stages on a standable square — no room 48 on disk');
+  } else {
+    attachStepMasks(map);
+    const geo = sharedRoomGeometry(temple);
+    ok('r8c31 in the temple is a pillar square the walker refuses (the trap is still in the map)',
+       geo.fineWalkable(8, 31) === false && geo.fineWalkable(8, 32) === true);
+    const stagesFrom = (row, col, x, y) => new World({ room: { id: temple.objId, objects: new Map() },
+      self: { row, col, x: x ?? col * KOD_FINENESS + 32, y: y ?? row * KOD_FINENESS + 32 } }, map)
+      .exits().filter(e => e.kind === 'edge' && e.to === 534);
+    for (const [row, col, x, y] of [[10, 30, 1968, 672], [8, 32], [20, 31], [12, 20]]) {
+      const [east] = stagesFrom(row, col, x, y);
+      ok(`from r${row}c${col} the east exit is staged on a square the walker can stand on`,
+         east && geo.fineWalkable(east.stand_on.row, east.stand_on.col) !== false,
+         JSON.stringify(east?.stand_on));
+    }
+    const src = readFileSync(new URL('./m59-world.mjs', import.meta.url), 'utf8');
+    ok('a fine-blocked stage is demoted, not dropped',
+       /\.sort\(\(a, b\) => \(fineBlocked\(a\) - fineBlocked\(b\)\) \|\| \(a\.steps - b\.steps\)\)/.test(src));
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
 process.exit(failed ? 1 : 0);
