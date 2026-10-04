@@ -1465,9 +1465,23 @@ function keeperRtsCancelled(controlToken) {
     session.movementWasCancelled(job.generation, controlToken);
 }
 
+// A header value must be Latin-1 printable or Node throws; a character name that is not is sent
+// percent-encoded rather than crashing the reply. Muppet names never trigger it.
+const identityHeader = v => { const s = String(v ?? ''); return /^[\x20-\x7e]*$/.test(s) ? s : encodeURIComponent(s); };
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   const path = url.pathname;
+  // EVERY REPLY SAYS WHOSE KEEPER ANSWERED, at no extra request. Keeper ports move on every
+  // restart, and a caller holding a stale one gets a perfectly good answer about SOMEBODY ELSE:
+  // 2026-10-04, three `/state` reads aimed at Bunsen, Beaker and Robin came back as Lew, Statler
+  // and Gonzo after a broker restart, and were read as the farmers'. `/live` and the addressed
+  // reads already guard the tools; these headers make even a bare `curl -i` self-identifying.
+  // Set here, before any handler, because writeHead merges them into every response path.
+  // `tools/m59-keeper.mjs` checks them; the same names a caller SENDS to address a write.
+  res.setHeader('x-m59-agent', identityHeader(agent));
+  res.setHeader('x-m59-character', identityHeader(character));
+  res.setHeader('x-m59-keeper-pid', String(process.pid));
 
   const json = (data, status = 200) => {
     res.writeHead(status, { 'content-type': 'application/json' });
