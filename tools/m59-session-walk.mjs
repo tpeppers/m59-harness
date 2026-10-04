@@ -113,6 +113,7 @@ export function sessionWalkPrototype(deps) {
     MAX_STEP_HEIGHT,
     MIN_NOMOVEON,
     lanePastBodies,
+    stepOffBodies,
     perpWalkPastBodies,
     sameRoomDoorPlan,
   } = deps;
@@ -2041,6 +2042,26 @@ export function sessionWalkPrototype(deps) {
    * one step. Tried ONCE per blocked square, because a lane that does not work will not work
    * on the second ask either and the fall-through below is the real recovery.
    */
+  /** A body overlapping the square we stand on: the point to step to first. See stepOffBodies. */
+  stepOffOverlap(blocked, geo, c) {
+    try {
+      if (typeof geo?.floorBaseAtClient !== 'function') return null;
+      const me = c?.self;
+      if (!me) return null;
+      const to = geo.standPointWire?.(blocked.row, blocked.col)
+        ?? { x: blocked.col * KOD_FINENESS + 32, y: blocked.row * KOD_FINENESS + 32 };
+      const bodies = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0)
+                     && (Number.isFinite(o.x) || Number.isFinite(o.col)))
+        .map(o => ({ x: o.x ?? (o.col * KOD_FINENESS + 32), y: o.y ?? (o.row * KOD_FINENESS + 32) }));
+      const hasFloor = (x, y) => { try {
+        return Number.isFinite(geo.floorBaseAtClient(protocolToClient(x), protocolToClient(y)));
+      } catch { return false; } };
+      return stepOffBodies({ fromX: me.x ?? (me.col * KOD_FINENESS + 32), fromY: me.y ?? (me.row * KOD_FINENESS + 32),
+                             toX: to.x, toY: to.y, bodies, hasFloor });
+    } catch { return null; }
+  }
+
   laneAroundBody(was, blocked, geo, c) {
     try {
       if (typeof geo?.floorBaseAtClient !== 'function') return null;
@@ -2775,6 +2796,7 @@ export function sessionWalkPrototype(deps) {
     const sidestepped = new Set();     // squares we have already tried to go round, once each
     const lanedPast = new Set();
     const perpWalked = new Set();
+    const steppedOff = new Set();      // squares we stood on and stepped off an overlapping body, once each
     const blinkAsked = new Set();
     const killTried = new Set();
     const blockedSince = new Map();      // squares we have already tried to thread past, once each
@@ -3314,6 +3336,33 @@ export function sessionWalkPrototype(deps) {
         // be near. It is a different bug and it needs a different word.
         monsterBlocks++;
         blockedBy.add(`${next.row},${next.col}`);
+
+        // THE BODY MAY BE UNDERFOOT, NOT AHEAD. Standing inside another body's MIN_NOMOVEON
+        // square, the client allows only moves AWAY from it, so every step toward a goal on
+        // its far side is refused -- and everything below assumes the blocker is on `next`.
+        // Pepe, Limping Toad r3c1, 2026-10-03: ten minutes stacked with Statler, refused at
+        // all three ways out. Step straight off it first, once per square we stand on, then
+        // try `next` again. Guarded because `walkTo` is lifted out of this file by text.
+        const hereKey = was ? `${was.row},${was.col}` : null;
+        if (hereKey && !steppedOff.has(hereKey) && typeof this.stepOffOverlap === 'function') {
+          const off = this.stepOffOverlap(next, geo, c);
+          if (off) {
+            steppedOff.add(hereKey);
+            const moved = await this.stepFine(off.x, off.y).catch(() => null);
+            recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
+                           room: Number(this.world?.room?.num ?? 0),
+                           tactic: 'step_off_body', trigger: 'overlapping_body',
+                           worked: !!moved?.moved, ms: 0, hp_lost: 0, attempted: true,
+                           note: `${off.overlapping} body(ies) underfoot at ${hereKey}` +
+                                 `${off.stacked ? ' (exactly stacked)' : ''}; turn ${off.turn}` +
+                                 (moved?.moved ? '' : `; refused: ${moved?.reason ?? 'no reason'}`) });
+            if (moved?.moved) {
+              pulled = null; stalledOn = null; stalledTimes = 0;
+              queue.unshift(next);
+              continue;
+            }
+          }
+        }
 
         // Monsters wander. One retry costs a second and often clears it, which is
         // cheaper and less disruptive than routing the long way round.

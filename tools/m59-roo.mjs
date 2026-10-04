@@ -782,6 +782,80 @@ export function lanePastBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
 }
 
 /**
+ * STEP OFF A BODY YOU ARE STANDING IN, BEFORE ASKING TO GO ANYWHERE.
+ *
+ * MoveObjectAllowed (clientd3d/move.c) lets a mover inside an OF_MOVEON_NO body's
+ * MIN_NOMOVEON square go only where the distance to it GROWS ("Allowed to move away from
+ * object"); any other move is pushed to the body's edge, and in a corner the walls refuse
+ * that too. So two characters on one square are a trap for whichever one's way out passes
+ * the other: every step of its route closes the gap and every one is refused.
+ * Measured 2026-10-03: Pepe in the Limping Toad (202) at r3c1, a corner pocket, stacked
+ * with Statler, refused `object_blocked` at 4,2 / 4,1 / 3,2 for ten minutes and walked
+ * straight out once Statler was moved. Every recovery in the walker -- sidestep, lane,
+ * perp walk, blink -- assumes the blocker is on the NEXT square, so none of them ever
+ * looked at the one underfoot.
+ *
+ * The move that is always legal against the body is straight away from it. This returns
+ * the first such point with floor, PROTOCOL units in and out: directly away first, then
+ * rotated 45 and 90 degrees either side, the side nearer the goal first. Exactly on top
+ * of each other there is no "away", so the candidates are taken around the goal heading
+ * instead (any direction grows a zero distance). Null when nothing overlaps us.
+ */
+export function stepOffBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
+                                radius = MIN_NOMOVEON / (CLIENT_FINENESS / KOD_FINENESS), margin = 4 }) {
+  if (!bodies?.length || typeof hasFloor !== 'function') return null;
+  const over = bodies.filter(b => Math.hypot(b.x - fromX, b.y - fromY) < radius);
+  if (!over.length) return null;
+  const cx = over.reduce((s, b) => s + b.x, 0) / over.length;
+  const cy = over.reduce((s, b) => s + b.y, 0) / over.length;
+  let ax = fromX - cx, ay = fromY - cy;
+  const goal = Math.atan2(toY - fromY, toX - fromX);
+  const stacked = Math.hypot(ax, ay) < 1;
+  const base = stacked ? goal : Math.atan2(ay, ax);
+  // Turn toward the goal first: of the two sides, prefer the one whose heading is nearer it.
+  const toward = Math.sign(Math.sin(goal - base)) || 1;
+  const turns = stacked ? [0, 1, -1, 2, -2] : [0, toward, -toward, 2 * toward, -2 * toward];
+  for (const t of turns) {
+    const h = base + t * Math.PI / 4;
+    const ux = Math.cos(h), uy = Math.sin(h);
+    // Far enough that every overlapped body is behind us by the full radius plus a margin.
+    let dist = 0;
+    for (const b of over) {
+      const along = (b.x - fromX) * ux + (b.y - fromY) * uy;
+      const side = Math.abs(-(b.x - fromX) * uy + (b.y - fromY) * ux);
+      if (side >= radius) continue;
+      dist = Math.max(dist, along + Math.sqrt(radius * radius - side * side));
+    }
+    dist = Math.max(dist, 0) + margin;
+    const x = Math.round(fromX + ux * dist), y = Math.round(fromY + uy * dist);
+    if (!hasFloor(x, y)) continue;
+    // Not into another body: a point inside a body we were NOT overlapping is a new trap.
+    if (bodies.some(b => !over.includes(b) && Math.hypot(b.x - x, b.y - y) < radius)) continue;
+    return { x, y, turn: t * 45, overlapping: over.length, stacked };
+  }
+  return null;
+}
+
+/**
+ * A FLEET-MATE WE ARE ALREADY STANDING IN IS NOT AN OBSTACLE FOR THIS MOVE. CLIENT units.
+ *
+ * stepOffBodies is the client's own way out, and sometimes there is none: the Limping
+ * Toad's stand point for r3c1 is (96,224) wire, the exact corner of the floor, so with
+ * Statler a few units south-east of Pepe every direction that grows the distance has no
+ * floor and every direction with floor closes it. MoveObjectAllowed then freezes the body
+ * until the other one leaves -- for a person that is a wait; for two keepers each holding
+ * a square, it is ten minutes. The server does not test bodies (CanMoveInRoomFine is
+ * walls and the monster grid), so the client's rule is ours to keep, and we keep it in
+ * full for everyone else's bodies. For one of OUR OWN characters that we already overlap
+ * when the move begins, walking out of it harms nobody, and the alternative is a deadlock
+ * our own movement created.
+ */
+export function overlapExempt({ obstacle, fromX, fromY, isOurs, radius = MIN_NOMOVEON }) {
+  if (!obstacle || !isOurs) return false;
+  return Math.hypot(obstacle.x - fromX, obstacle.y - fromY) < radius;
+}
+
+/**
  * THE PERP WALK — past a line of blockers by hugging the wall side that has room.
  *
  * The operator's description, 2026-09-01: measure each blocker's distance to the nearby

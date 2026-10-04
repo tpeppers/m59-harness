@@ -28,6 +28,8 @@ import { recordCrossing } from './m59-crossings.mjs';
 import { finePath, fineRouteDetour, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { BP, M59Client } from './m59-client.mjs';
+import { isFleetmate } from './m59-party.mjs';
+import { overlapExempt } from './m59-roo.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
 
 import {
@@ -1252,7 +1254,10 @@ ok('the extracted edge-opening predicate compiled', typeof atEdgeOpening === 'fu
 for (const n of moduleScopeNames(brokerSource)) BROKER_SCOPE.add(n);
 const validateFineTarget = compileSessionMethod(brokerSource,
   'validateFineTarget(x, y, {', 'validateFineTarget',
-  { CLIENT_FINENESS, KOD_FINENESS, blocksMovement,
+  { CLIENT_FINENESS, KOD_FINENESS, blocksMovement, OF,
+    // The real fleet-mate exemption: a pure distance test and the roster lookup, which with
+    // no roster loaded answers false -- so every body here keeps the client's rule, as before.
+    overlapExempt, isFleetmate,
     // The declared-mutable list, as the real functions: both are pure lookups over a frozen
     // table in a module that imports without taking the fleet lock, so stubbing them would
     // be testing a different rule from the one that ships.

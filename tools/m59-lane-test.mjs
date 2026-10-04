@@ -20,7 +20,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { keepRightAim } from './m59-roo.mjs';
-import { lanePastBodies, perpWalkPastBodies, gapAlongLine, MIN_NOMOVEON, PLAYER_RADIUS,
+import { lanePastBodies, perpWalkPastBodies, gapAlongLine, MIN_NOMOVEON, PLAYER_RADIUS, stepOffBodies, overlapExempt, protocolToClient,
          CLIENT_FINENESS, KOD_FINENESS, sharedRoomGeometry } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
@@ -428,6 +428,65 @@ console.log('\nkeep right — two lanes in a one-square pipe');
          JSON.stringify({ e, w }));
     }
   }
+}
+
+// ---------------------------------------------------------------- a body underfoot
+//
+// Pepe (t2), the Limping Toad (202), 2026-10-03: ten minutes at r3c1 stacked with Statler,
+// every way out refused `object_blocked` at 4,2 / 4,1 / 3,2, out at once when Statler moved.
+console.log('\na body underfoot — the Limping Toad, r3c1');
+{
+  const toadMap = (() => { try { return loadMap(); } catch { return null; } })();
+  if (!toadMap?.rooms?.['202']) {
+    skip('the Limping Toad trap', 'no room 202 geometry on disk');
+  } else {
+    attachStepMasks(toadMap);
+    const geo = sharedRoomGeometry(toadMap.rooms['202']);
+    const C = v => v * PER_KOD;   // a wire-unit offset -> client units
+    const me = geo.standPointWire(3, 1);
+    const hasFloor = (x, y) => { try { return Number.isFinite(geo.floorBaseAtClient(protocolToClient(x), protocolToClient(y))); } catch { return false; } };
+    const exits = [[4, 2], [4, 1], [3, 2]].map(([r, c]) => geo.standPointWire(r, c));
+    const trace = (from, to, bodies) => geo.traceFineMoveClient(protocolToClient(from.x), protocolToClient(from.y),
+      protocolToClient(to.x), protocolToClient(to.y), { obstacles: bodies.map((b, i) => ({ id: i + 1, x: protocolToClient(b.x), y: protocolToClient(b.y) })) });
+
+    const statler = { x: me.x + 6, y: me.y + 6 };
+    ok('r3c1 is the exact corner of the floor: nothing north or west of the stand point',
+       !hasFloor(me.x - 4, me.y) && !hasFloor(me.x, me.y - 4) && hasFloor(me.x + 4, me.y + 4), JSON.stringify(me));
+    ok('REPRODUCED: with Statler a few units south-east, all three ways out are object_blocked',
+       exits.every(t => trace(me, t, [statler]).reason === 'object_blocked'),
+       exits.map(t => trace(me, t, [statler]).reason).join(' '));
+    ok('and no step off him exists either -- every direction away has no floor',
+       stepOffBodies({ fromX: me.x, fromY: me.y, toX: exits[0].x, toY: exits[0].y, bodies: [statler], hasFloor }) === null);
+    ok('so the fleet-mate exemption is what opens it: without his body every exit is walkable',
+       exits.every(t => trace(me, t, []).reason !== 'object_blocked'));
+    ok('overlapExempt: one of ours we stand in is set aside',
+       overlapExempt({ obstacle: { x: C(6), y: C(6) }, fromX: 0, fromY: 0, isOurs: true }) === true);
+    ok('a stranger we stand in is NOT -- the client rule holds for everyone else',
+       overlapExempt({ obstacle: { x: C(6), y: C(6) }, fromX: 0, fromY: 0, isOurs: false }) === false);
+    ok('and one of ours we are NOT overlapping still blocks',
+       overlapExempt({ obstacle: { x: C(20), y: C(0) }, fromX: 0, fromY: 0, isOurs: true }) === false);
+
+    const east = { x: me.x + 8, y: me.y };
+    ok('where a legal step off DOES exist (body due east), the walker finds it and it is walkable',
+       (() => { const off = stepOffBodies({ fromX: me.x, fromY: me.y, toX: exits[0].x, toY: exits[0].y, bodies: [east], hasFloor });
+                return off && trace(me, off, [east]).moved && trace(off, exits[1], [east]).reason !== 'object_blocked'; })());
+    const stacked = stepOffBodies({ fromX: me.x, fromY: me.y, toX: exits[0].x, toY: exits[0].y, bodies: [{ ...me }], hasFloor });
+    ok('exactly stacked: there is no "away", so it steps toward the goal', stacked?.stacked === true && stacked.turn === 0
+       && stacked.x > me.x && stacked.y > me.y, JSON.stringify(stacked));
+    ok('nothing underfoot: no step off', stepOffBodies({ fromX: me.x, fromY: me.y, toX: exits[0].x, toY: exits[0].y,
+       bodies: [{ x: me.x + 40, y: me.y + 40 }], hasFloor }) === null);
+    ok('a step off never lands inside a different body',
+       (() => { const other = { x: east.x - 8, y: east.y + 18 };
+                const off = stepOffBodies({ fromX: me.x, fromY: me.y, toX: exits[0].x, toY: exits[0].y, bodies: [east, other], hasFloor });
+                return !off || Math.hypot(off.x - other.x, off.y - other.y) >= NOMOVEON; })());
+  }
+  const game = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+  ok('the collision gate applies the exemption with the roster-backed isFleetmate',
+     /ours: isOurs\(object\) \}\)\)\s*\.filter\(o => !overlapExempt\(/.test(game) && game.includes("import { isFleetmate } from './m59-party.mjs';"));
+  const walk = readFileSync(join(HERE, 'm59-session-walk.mjs'), 'utf8');
+  const step = walk.indexOf('this.stepOffOverlap(next, geo, c)'), side = walk.indexOf('const side = this.sidestepAround(was, next,');
+  ok('the walker steps off a body underfoot before any recovery that assumes the blocker is ahead',
+     step > 0 && step < side);
 }
 
 console.log(`\n${pass} passed, ${fail} failed` + (skipped ? `, ${skipped} skipped` : ''));

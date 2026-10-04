@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
 import { checkCharacterName } from './m59-newchar.mjs';
+import { isFleetmate } from './m59-party.mjs';
 import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth,
          dropSpec } from './m59-parse.mjs';
 import { planPickup, normalizeOverfarm, unitCost } from './m59-overfarm.mjs';
@@ -36,7 +37,7 @@ import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPat
          from './m59-map.mjs';
 import { CLIENT_FINENESS, elideLoops, protocolToClient, loadRoo, buildAllRoomGeometry, sharedRoomGeometry,
          MAX_STEP_HEIGHT, MIN_NOMOVEON, PLAYER_HEIGHT,
-         lanePastBodies, perpWalkPastBodies, keepRightAim } from './m59-roo.mjs';
+         lanePastBodies, perpWalkPastBodies, stepOffBodies, overlapExempt, keepRightAim } from './m59-roo.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 // THE GATE THAT WAS NEVER WIRED IN. `traversable()` is the only thing that honours a
 // declaration's `requires: {running: true}`, and until now this module was imported by
@@ -3258,10 +3259,16 @@ class Session {
     const fromWireX = Number.isFinite(me.x) ? me.x : me.col * KOD_FINENESS + (KOD_FINENESS >> 1);
     const fromWireY = Number.isFinite(me.y) ? me.y : me.row * KOD_FINENESS + (KOD_FINENESS >> 1);
     const fromX = toClient(fromWireX), fromY = toClient(fromWireY);
+    // A FLEET-MATE WE ALREADY OVERLAP IS LEFT OUT (overlapExempt, m59-roo.mjs): two of ours
+    // stacked in a corner otherwise freeze each other -- Pepe and Statler, Limping Toad r3c1,
+    // 2026-10-03. Everyone else's body keeps the client's rule in full.
+    const isOurs = object => (object.flags & OF.PLAYER) !== 0
+      && isFleetmate(c.rsc?.get?.(object.nameRsc) ?? null);
     const obstacles = [...c.room.objects.values()]
       .filter(object => object.id !== c.selfId && blocksMovement(object.flags ?? 0)
         && Number.isFinite(object.x) && Number.isFinite(object.y))
-      .map(object => ({ id: object.id, x: toClient(object.x), y: toClient(object.y) }));
+      .map(object => ({ id: object.id, x: toClient(object.x), y: toClient(object.y), ours: isOurs(object) }))
+      .filter(o => !overlapExempt({ obstacle: o, fromX, fromY, isOurs: o.ours }));
     const vertical = this.collisionVertical;
     const now = Date.now();
     const motionZ = vertical?.roomId === c.room.id && vertical.settleAt > now
@@ -6364,6 +6371,7 @@ import {installIntentObservers,setIntentTarget,withIntent} from './m59-intent-ob
     MAX_STEP_HEIGHT,
     MIN_NOMOVEON,
     lanePastBodies,
+    stepOffBodies,
     perpWalkPastBodies,
     sameRoomDoorPlan,
   });
