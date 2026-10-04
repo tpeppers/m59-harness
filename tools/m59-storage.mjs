@@ -136,6 +136,14 @@ const writeJson = (path, value) => {
 // `Chest is StorageBox is Holder` sets viObject_flags = CONTAINER_YES and declares no
 // GETTABLE flag, so it is GETTABLE_NO (blakston.khd:62). It cannot be picked up and nothing
 // in the hall relocates it.
+// HOW CLOSE A TAKE HAS TO BE. UserGet (kod user.kod) refuses a get whose item is more than 7
+// squares away, row distance plus column distance, with a sentence and nothing on the wire; an
+// item in a chest is where the chest is. A put has no such check. So a withdrawal walks within
+// STOCKPILE_WALK_WITHIN first, the same 5 the armour and stash paths use, and refuses to ask from
+// beyond STOCKPILE_GET_REACH rather than reading the refusal as an empty chest.
+export const STOCKPILE_GET_REACH = 7;
+export const STOCKPILE_WALK_WITHIN = 5;
+
 export const chestKey = (o) => {
   const row = Number(o?.row), col = Number(o?.col);
   if (!Number.isInteger(row) || !Number.isInteger(col)) return null;

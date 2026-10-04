@@ -930,6 +930,59 @@ try {
     ok(r.travelled === true, 'it planned a draw from the seeded chest and set off for it');
   }
 
+  section('a draw walks within reach of the chest first, and every empty draw says why (Animal, 2026-10-04)');
+  // UserGet refuses a get from more than 7 squares away (user.kod), as a sentence and nothing on
+  // the wire; a put has no such check. Animal landed by chalice at r7c4, deposited into r18c2 from
+  // there, and took nothing from it: 13 squares. 203 of 234 cargo draws over four days came back
+  // "the chests gave nothing" while the chests held 1,255 orc teeth.
+  {
+    const storage = join(dir, 'storage-reach');
+    mkdirSync(join(storage, 'chests'), { recursive: true });
+    writeFileSync(join(storage, 'chests', 'r18c2.json'), JSON.stringify({ slot: 'r18c2', row: 18, col: 2,
+      room: GUILD_HALL_ROOM, items: [{ name: 'orc tooth', amount: 509 }] }));
+    const run = (scenario) => {
+      const probe = `
+        import { Autopilot } from ${JSON.stringify(new URL('./m59-autopilot.mjs', import.meta.url).href)};
+        const scenario = ${JSON.stringify(scenario)};
+        const ap = Object.create(Autopilot.prototype);
+        ap.policy = {}; ap.tally = {}; ap.note = () => {};
+        const chest = { id: 77, nameRsc: 9, row: 18, col: 2 };
+        const client = { guild: { id: 1, rank: 3 }, inventory: [], evSeq: 1,
+          self: { row: 7, col: 4 }, room: { objects: new Map([[77, chest]]) },
+          rsc: { get: (r) => r === 9 ? 'chest' : '' },
+          contents() {}, requestInventory() {},
+          waitFor: async () => ({ events: [{ kind: 'container', items: [{ id: 5, name: 'orc tooth', amount: 509 }] }] }) };
+        const walked = [];
+        ap.s = { name: 'probe', client, need() { return client; },
+                 pacer: { submit: async (kind, fn) => fn() },
+                 walkTo: async (col, row) => { walked.push([row, col]); if (scenario === 'walk-ok') client.self = { row: 17, col: 3 }; return {}; } };
+        ap.who = () => 'Animal';
+        ap.travel = async () => ({ arrived: true });
+        ap.reachHallChests = async () => scenario === 'door-shut'
+          ? { ok: false, why: 'guild door 3 trigger not reached', steps: [] } : { ok: true, chests: 3 };
+        let takeAt = null;
+        ap.takeFromChest = async () => { takeAt = { ...client.self }; return 29; };
+        ap.refreshChestCache = async () => {};
+        const r = await ap.withdrawFromStockpile([{ item: 'orc tooth', amount: 29 }]);
+        console.log(JSON.stringify({ walked, takeAt, why: r.why ?? null, took: r.took }));`;
+      const out = spawnSync(process.execPath, ['--input-type=module', '-e', probe],
+        { env: { ...process.env, M59_STORAGE_DIR: storage }, encoding: 'utf8', timeout: 60_000 });
+      const line = (out.stdout || '').trim().split(/\r?\n/).filter(l => l.startsWith('{')).pop() ?? '{}';
+      return JSON.parse(line);
+    };
+    const ok1 = run('walk-ok');
+    ok(ok1.walked?.length === 1 && ok1.walked[0][0] === 18 && ok1.walked[0][1] === 2,
+       `13 squares away, it walks to the chest first (${JSON.stringify(ok1.walked)})`);
+    ok(ok1.takeAt && Math.abs(ok1.takeAt.row - 18) + Math.abs(ok1.takeAt.col - 2) <= 7,
+       `and only then takes, from within the server's 7 (${JSON.stringify(ok1.takeAt)})`);
+    const far = run('walk-fails');
+    ok(far.takeAt === null, 'a walk that does not close the distance asks nothing (the server would refuse)');
+    ok(/r18c2 is 13 squares away/.test(far.why ?? ''), `and says so (${far.why})`);
+    const shut = run('door-shut');
+    ok(shut.walked?.length === 0 && shut.takeAt === null && /could not reach the hall chests: guild door 3/.test(shut.why ?? ''),
+       `a hall passage that failed stops the draw, with its reason (${shut.why})`);
+  }
+
   section('a draw that fails releases its pledge, so the next traveller still sees the shortfall');
   {
     const world = makeWorld();

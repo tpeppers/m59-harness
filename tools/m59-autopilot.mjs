@@ -100,7 +100,7 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest, reagentSource, REAGENT_MODES }
   from './m59-guildwants.mjs';
-import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
+import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN } from './m59-storage.mjs';
 import { TicketBook, TICKETS_FILE, readDeskOpen } from './m59-vault-broker.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
@@ -27441,7 +27441,7 @@ export class Autopilot {
     const g = this.s.client?.guild ?? null;
     const door = canEnterHall({ guildId: g?.id ?? null, rank: g?.rank ?? null,
                                 hallGuildId: g?.id ?? null });
-    if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0 }; }
+    if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0, why: `cannot use the stockpile: ${door.why}` }; }
 
     // A `const before = snapshot();` STOOD HERE from 5a487a5 (2026-09-17) until 2026-09-25, copied
     // from the deposit run -- where `snapshot` is a local of THAT method. Here it was undefined,
@@ -27454,11 +27454,16 @@ export class Autopilot {
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the stockpile', { why: trip.reason || 'travel refused' });
-      return { took: [], saved: 0 };
+      return { took: [], saved: 0, why: `could not reach the stockpile: ${trip.reason || 'travel refused'}` };
     }
 
     this.doing = 'trading';
     const s = this.s, c = s.need();
+    // EVERY WAY OUT THAT TAKES NOTHING SAYS WHY. This returned `{ took: [] }` bare from six
+    // places, and the chalice restock filed all of them as "the chests gave nothing": 203 of 234
+    // cargo draws from 2026-10-01 to -04, the chests holding 1,255 orc teeth and 401 purple
+    // mushrooms throughout, and not one row able to say which branch it was.
+    const misses = [];
     // THE WALL COMES BEFORE THE CHESTS. Room contents list what is IN the room, so a chest
     // behind a shut secret door still appears here — which is exactly why this is not
     // optional and not conditional on "can I see a chest". The reachability, not the
@@ -27481,6 +27486,12 @@ export class Autopilot {
     // So: step out of the box first, then speak, then WAIT -- a guild door is slower than an
     // ordinary one and the read that follows is what decides whether any chest exists.
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    // THE OTHER TWO CHEST PATHS STOP HERE WHEN THE PASSAGE FAILED, and this one walked on to ask
+    // chests on the far side of a shut door. Said, and given up, rather than read as empty chests.
+    if (!hall.ok) {
+      this.note('could not reach the hall chests', { why: hall.why, steps: hall.steps });
+      return { took: [], saved: 0, why: `could not reach the hall chests: ${hall.why ?? 'the passage did not open'}` };
+    }
     // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
     // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
     // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
@@ -27508,6 +27519,26 @@ export class Autopilot {
         this.note('no chest stands on that square', { chest: want.slot,
           chests_in_room: [...here.keys()],
           why: 'the stockpile expected a chest at that square and this room has none there' });
+        misses.push(`no chest at ${want.slot} (room has ${[...here.keys()].join(', ') || 'none'})`);
+        continue;
+      }
+
+      // WITHIN SEVEN SQUARES, OR THE SERVER WILL NOT HAND IT OVER. UserGet (user.kod) refuses a
+      // get whose item is more than 7 squares away, row distance plus column distance, and says
+      // so only as `user_err_get_dist` spoken to the player -- nothing on the wire. A PUT has no
+      // such check (storebox ReqNewHold), which is why a chalice rider landing at r7c4 deposited
+      // its money into r18c2 and then took nothing out of the same chest: Animal, 2026-10-04,
+      // 13 squares away. The armour and stash paths always walked within 5 first (`nearChest`);
+      // this one never did, and drew only when a rider happened to arrive close enough.
+      const dist = () => { const me = c.self;
+        return me ? Math.abs(me.row - target.row) + Math.abs(me.col - target.col) : Infinity; };
+      if (dist() > STOCKPILE_WALK_WITHIN)
+        await s.walkTo(target.col, target.row, { maxSteps: 40, hardCap: 50 }).catch(() => {});
+      if (dist() > STOCKPILE_GET_REACH) {
+        const d = dist();
+        this.note('could not get within reach of the chest', { chest: want.slot, squares: d,
+          why: `the server refuses a get from more than ${STOCKPILE_GET_REACH} squares` });
+        misses.push(`${want.slot} is ${d} squares away and the walk did not close it (a get reaches ${STOCKPILE_GET_REACH})`);
         continue;
       }
 
@@ -27517,6 +27548,9 @@ export class Autopilot {
                                       timeoutMs: 5000 }).catch(() => null);
       const box = (reply?.events ?? []).find(e => e.kind === 'container');
       const inside = (box?.items ?? []).filter(o => norm(o.name) === norm(want.item));
+      if (!box) { misses.push(`${want.slot} did not answer a contents request`); continue; }
+      if (!inside.length) { misses.push(`${want.slot} holds no ${want.item} (the cache said it did)`); continue; }
+      const tookBefore = took.length;
       await this.takeFromChest({ target, want, inside, onTook: (moved) => {
         // PRICES ARE OBSERVED, NEVER ASSUMED — a missing one contributes zero rather than a
         // guess, because a ledger that guessed would always justify the hall it is judging.
@@ -27527,6 +27561,8 @@ export class Autopilot {
         saved += entry.saved;
         took.push({ item: want.item, amount: moved, slot: want.slot });
       } });
+      if (took.length === tookBefore)
+        misses.push(`${want.slot}: the get moved nothing into the pack (${dist()} squares away)`);
       // WHAT IS LEFT IN THERE, read back now rather than guessed at by subtraction. The
       // reading taken above is already stale -- we have just emptied part of it -- and
       // subtracting what we took would quietly diverge from the chest every time another
@@ -27536,7 +27572,7 @@ export class Autopilot {
     }
     if (took.length) this.note('took reagents from the guild stockpile instead of buying', {
       took, saved, note: 'saved = buy price avoided + sell price forgone' });
-    return { took, saved };
+    return { took, saved, ...(misses.length ? { why: misses.join('; ') } : {}) };
   }
 
   /**
