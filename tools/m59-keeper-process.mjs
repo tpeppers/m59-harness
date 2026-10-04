@@ -46,13 +46,15 @@ import { recordTactic } from './m59-tactics.mjs';
 import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
-import { resolveFleet } from './m59-fleetpath.mjs';
+import { resolveFleet, fleetName as resolvedFleetName, ledgerDirFor } from './m59-fleetpath.mjs';
+import { createSightingsObserver, makeClassifier, TICK_MS as SIGHTINGS_TICK_MS } from './m59-sightings.mjs';
+import { hostileBasis } from './m59-ally.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsCastArityOk } from './m59-rts-safety.mjs';
 import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { audioView } from './m59-audio-observations.mjs';
 import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
-import { OF } from './m59-parse.mjs';
+import { OF, playerClassName } from './m59-parse.mjs';
 import { readWho } from './m59-who.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
@@ -392,6 +394,27 @@ setInterval(() => { session.combat.warbandTick?.().catch?.(() => {}); }, 250).un
 // fleetmate's fight reaches this character in milliseconds instead of on its next decision.
 try { war.watchAlarms(a => session.combat.onWarAlarm(a)); }
 catch (e) { console.error(`[keeper] ${agent} war alarm watch unavailable: ${e.message}`); }
+
+// SIGHTINGS (tools/m59-sightings.mjs): every non-fleet player login and logoff the server
+// advertises, written ONCE per fleet however many keepers hear it, plus a plain-text enemy alert.
+// Beside the fleet ledger (same `ledgerDirFor`), never in it: that file is keyed by OUR characters.
+// Fleet-mates and hosts are excluded through the roster source installed above -- the keeper's
+// own, per the 2026-08-27 correction. Off with M59_SIGHTINGS=0. A host is a sentinel too: it hears
+// the same broadcast and costs nothing.
+if (process.env.M59_SIGHTINGS !== '0') {
+  try {
+    session.sightings = createSightingsObserver({
+      dir: ledgerDirFor(resolvedFleetName()), agent, character,
+      isFleetmate: name => party.isFleetmate(name),
+      classify: makeClassifier({ hostileBasis, membership: war.membership, playerClassName }),
+      // A read, through the pacer like `who`: after a save renumbers ids, and after a watch gap.
+      refresh: () => session.pacer?.submit?.('read', () => session.client?.players?.())?.catch?.(() => {}),
+      log: m => console.error(`[keeper] ${agent} ${m}`),
+    });
+    setInterval(() => session.sightings?.tick(session.client, { watching: inGame && !!session.live }),
+      SIGHTINGS_TICK_MS).unref?.();
+  } catch (e) { console.error(`[keeper] ${agent} sightings unavailable: ${e.message}`); }
+}
 
 function cancelInitialJoinRetry() {
   if (initialJoinRetryTimer !== null) clearTimeout(initialJoinRetryTimer);
@@ -1033,6 +1056,7 @@ function state() {
     in_game: inGame,
     combat: session?.combat?.status(),
     player_evidence: session?.playerEvidence?.status()??{enabled:false},
+    sightings: session?.sightings?.status?.() ?? { enabled: false },
     connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //

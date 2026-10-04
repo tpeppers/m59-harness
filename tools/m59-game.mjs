@@ -2325,6 +2325,13 @@ class Session {
       if (ev.kind === 'message') this.noteToughness?.(ev, c);
       this.recorder.line('event', ev);
       this.playerEvidence?.event(ev,c);
+      // WHO ELSE LOGGED ON OR OFF (m59-sightings.mjs). Installed by the keeper process only; it
+      // takes `c` rather than `this.client` because the login's own full list arrives before
+      // `this.client = c`. It runs after the combat override, which keeps its own listener.
+      if (this.sightings && (ev.kind === 'logged-on' || ev.kind === 'logged-off' || ev.kind === 'who' ||
+          ev.kind === 'server-save')) {
+        try { this.sightings.event(ev, c); } catch { /* bookkeeping never costs an event */ }
+      }
       if (ev.kind === 'ability') this.noteAdvancement(ev);
       if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); }
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for

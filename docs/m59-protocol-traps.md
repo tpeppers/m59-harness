@@ -205,6 +205,20 @@ taken and sending one kind it never would.
 
 ## Players, flags and self-defence
 
+- **EVERY LOGIN IS BROADCAST TO EVERY LOGGED-ON PLAYER, BY TRUE NAME -- SO EVERY KEEPER HEARS IT.**
+  `SystemUserLogonAdvertise` (`system.kod:967`) loops `plUsers_logged_on` and sends each user
+  `SomeoneLogon`, which writes BP_PLAYER_ADD (137) with the object id and `GetTrueName`
+  (`user.kod:792`): an anonymity spell does not hide who it is. Logoff is the mirror,
+  `SomeoneLogoff` -> BP_PLAYER_REMOVE (138), and it carries **only the object id**
+  (`user.kod:824-843`) -- the name on our `logged-off` event is whatever that client's
+  `playersOnline` held, so a client that logged in after him, or whose ids a save renumbered,
+  cannot name him. A hidden DM is advertised to admins only (`user.kod:606-621`). Because each
+  keeper holds its own socket, one login arrives ~24 times, seconds apart; `m59-sightings.mjs`
+  records it ONCE (first writer wins under one lock, matched by position in that name's event
+  stream rather than by a time bucket). Its ledger is
+  `substrate/history/<fleet>/sightings-YYYY-MM-DD.jsonl` and its enemy alerts
+  `substrate/history/<fleet>/enemy-alerts.log`; `node tools/m59-sightings.mjs --online`.
+
 - **THE RED NAME IS ALREADY ON THE WIRE, AND `PF_*` IS AN ENUM RATHER THAN A BITMASK — SO
   THE OBVIOUS TEST OPENS FIRE ON EVERY DUNGEON MASTER.** The client colours a player's
   name from nothing but its object flags (`GetPlayerNameColor`, `clientd3d/color.c:619`):

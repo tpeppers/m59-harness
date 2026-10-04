@@ -2031,7 +2031,7 @@ export class M59Client {
           this.playersOnline.set(p.id, p);
         }
         this.log(`online: ${res.players.map(p => p.name).join(', ') || '(none)'}`);
-        this.emit('who', { players: res.players.map(p => ({ id: p.id, name: p.name })) });
+        this.emit('who', { players: res.players.map(p => ({ id: p.id, name: p.name, flags: p.flags })) });
         break;
       }
 
@@ -2040,7 +2040,8 @@ export class M59Client {
         if (!res.exact) break;
         this.rsc.set(res.nameRsc, res.name);
         this.playersOnline.set(res.id, res);
-        this.emit('logged-on', { id: res.id, name: res.name });
+        // `flags` rides along for m59-sightings.mjs (the PK class -- red, orange, DM -- at logon).
+        this.emit('logged-on', { id: res.id, name: res.name, flags: res.flags });
         break;
       }
 

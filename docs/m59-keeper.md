@@ -714,3 +714,30 @@ A resumed journey that ends short retains its original deadline and destination,
 with a five-second pause and the existing attempt/death guards. Fine-move collision
 refusals retain their original reason in keeper processes, allowing the walker to
 replan instead of failing with an unrelated raw-movement exception.
+
+## Twenty-four keepers hear every login; the sightings ledger writes it once
+
+The server advertises every login and logoff to every logged-on player
+([protocol traps](m59-protocol-traps.md#players-flags-and-self-defence)), so each keeper process
+receives each one. `m59-keeper-process.mjs` gives its session a `sightings` observer
+(`tools/m59-sightings.mjs`); `Session`'s event hook in `m59-game.mjs` feeds it `logged-on`,
+`logged-off`, `who` and `server-save`, after the combat override and without touching its
+listener. Fleet-mates and menagerie hosts are excluded through the keeper's own roster source.
+
+- **Exactly once, with no elected writer.** Every keeper may record; one per-fleet lock
+  (`sightings.lock`, O_EXCL) serialises the decision against `sightings-state.json`. A keeper's
+  copy of an event is matched to the EARLIEST recorded row of the same name and kind after the row
+  its own previous event for that name matched, within 30s. That is a position in the name's
+  event stream, which every socket receives in the same order -- not a time bucket, so there is no
+  boundary for a burst to straddle. A keeper with no history for the name ignores rows from more
+  than 10s before its own login list. A lock not taken in 50ms queues the observation for the
+  next tick (never written unlocked); a stale lock of a dead pid is broken. A logoff for someone the ledger has offline (or a logon for someone online) is HELD, in order, until a lagging peer writes the event before it, or 30s pass -- then it is written anyway, marked `inconsistent`, because a missed event must not be lost.
+- **Gaps are said, not filled.** Each watching keeper heartbeats every 30s. If nobody has for
+  120s, the next observation writes `watch_resumed {gap_from, gap_to}` and asks for a full list;
+  sessions open across it end `between` two times rather than at an invented one. A list that
+  disagrees with the ledger waits 60s (a peer keeper may merely be behind) before it becomes a
+  `present` or `absent` row.
+- **Files**, beside the fleet ledger (`ledgerDirFor`): `sightings-YYYY-MM-DD.jsonl`,
+  `enemy-alerts.log` (one line per enemy row: `ENEMY ONLINE|OFFLINE|PRESENT|GONE`), and the
+  cursor `sightings-state.json`. `node tools/m59-sightings.mjs --online | --enemy | --player <name>`
+  reads them. `M59_SIGHTINGS=0` turns the observer off; `/state` reports `sightings` counters.

@@ -100,6 +100,21 @@ These tests are offline. They do not execute a raid or shut down a server.
   age of the last full one; `name` answers online / in_room / partial matches; and the wiring --
   the broker tool no longer calls `c.players()`, `KeeperProxy.who` forwards to `/action who`, the
   keeper's case runs `readWho` and speaks to nobody.
+- `m59-sightings-test.mjs` (15): non-fleet logins and logoffs, written exactly once
+  (`tools/m59-sightings.mjs`). 24 simulated keepers -- 0-5s jittered delivery in per-socket
+  order, +-3s clock skew, three late joiners, a fast relog (logoff and logon 400ms apart) and a
+  handoff with both processes alive for 20s -- give exactly the server's sequence of logon/logoff
+  rows per name (three seeds), no `absent`, `present` only for who was online when the watch
+  began, and one alert line per enemy event; 8 child processes racing for the real lock give one
+  row per event and no lock left behind; a keeper 5s behind a 400ms relog absorbs all three copies
+  (with "closest row" matching it wrote two duplicates); a keeper that logged in just AHEAD of a lagging peer holds a logoff the ledger cannot yet place until the peer writes the logon (found by the 15s soak: one duplicate in forty seeds), and alone records it after 30s marked `inconsistent`; one event heard either side of UTC
+  midnight is one row; fleet-mates and hosts are excluded; the war-book/grudge class and the alert
+  text; a logoff with only an id is named through the open session; a busy lock defers and a
+  dead writer's stale lock is broken; a list read seconds ahead of a lagging peer writes nothing
+  the peer's wire row explains; and the reader -- pairing, open sessions, unknown start, an end
+  across a watch gap reported as `between` rather than invented, reader-side collapse, last seen,
+  `watching:false` on a stale heartbeat, and the CLI. `SIGHT_SEEDS=150 SIGHT_DELAY=15000` is the
+  soak.
 - `m59-chestroom-exit-test.mjs` (5): leaving the Bookmaker's hall from the chest side (section 4)
   against a mover that refuses what `moverStepLands` refuses. The shipped ceiling-door table is
   the step-mask version the runtime applies (a stale one is refused wholesale and no ceiling door
