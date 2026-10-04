@@ -42,6 +42,7 @@ import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
 import { floorSnapshot } from './m59-loot-filter.mjs';
+import { withMoveOrder, keeperOrigin } from './m59-move-origin.mjs';
 
 // The merchant index resolves a live object id to the class whose buying rule applies.
 // Read once and kept: it is a built artefact that changes when somebody rebuilds it, and
@@ -2023,8 +2024,13 @@ export async function confirmRefugePosition(s) {
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
                                            routeFirst = false, avoidSquares = null } = {}) {
   const decision=currentSurvivalDecision(s);
-  const result=await traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance, routeFirst },
-    () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares }));
+  // A SHELTER APPROACH IS A MOVE ORDER OF THE KEEPER'S OWN (m59-move-origin.mjs), so whatever
+  // cancels it is recorded as having pre-empted `keeper:shelter`, and while it runs `status`
+  // says the keeper, not the journey it interrupted, is steering the body.
+  const result=await withMoveOrder(s, { kind: 'shelter', origin: keeperOrigin('shelter'),
+      to: spot?.room != null ? `${spot.room} r${spot.row}c${spot.col}` : `r${spot?.row}c${spot?.col}` },
+    () => traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance, routeFirst },
+      () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares })));
   if(result?.cancelled && decision && currentSurvivalDecision(s)?.id===decision.id)
     cancelSurvivalDecision(s,result.why??result.reason??'shelter approach cancelled');
   return result;

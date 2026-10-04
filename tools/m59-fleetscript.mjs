@@ -170,6 +170,9 @@ import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m5
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 import { dispatchCombatOrders, oneCombatOrder } from './m59-combat-orders.mjs';
 import { combatOrder } from './m59-combat-order.mjs';
+import { moveOrigin, originLabel, preemptionsOf, describePreemption, postureConflict } from './m59-move-origin.mjs';
+import { createIncidentLog } from './m59-movement-incidents.mjs';
+import { epochId } from './m59-epoch.mjs';
 export { attackPlayer, killPlayer, ambushPlayer } from './m59-combat-orders.mjs';
 export { combatOrder } from './m59-combat-order.mjs';
 
@@ -347,8 +350,22 @@ export const isTransportFailure = (e) =>
   (e.name === 'TypeError' || TRANSPORT_FAILURE.test(String(e?.message ?? '')) ||
    TRANSPORT_FAILURE.test(String(e?.cause?.message ?? '')));
 
+// EVERY MOVE THIS FILE SENDS SAYS WHO SENT IT (m59-move-origin.mjs). A fleetScript run stamps
+// its own `{source: 'fleetscript', name, run_id}` on the steps it compiles; anything else that
+// drives through this `call` — a standalone tool, a helper module — is an operator's script and
+// is named after it. Explicit `args.origin` always wins.
+const MOVE_TOOLS = new Set(['travel', 'walk_to', 'crawl_to', 'cancel_movement']);
+let callOrigin = null;
+const scriptOrigin = () => moveOrigin({ source: 'operator',
+  name: String(process.argv[1] ?? 'a script').replace(/\\/g, '/').split('/').pop() || 'a script' });
+/** Set the issuer stamped on moves this process sends; returns the previous one, for restoring. */
+export function setCallOrigin(origin) { const prev = callOrigin; callOrigin = origin ? moveOrigin(origin) : null; return prev; }
+export const currentCallOrigin = () => callOrigin ?? scriptOrigin();
+
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
 export async function call(name, args = {}, ms = 180_000) {
+  if (MOVE_TOOLS.has(name) && args && typeof args === 'object' && args.origin == null)
+    args = { ...args, origin: currentCallOrigin() };
   // A buy is a buy however it is spelled: `shop` is not on the list above, but naming the
   // condition here means a read that later grows a mutating argument cannot slip through.
   const mutates = !RETRYABLE_READS.has(name) || Array.isArray(args?.buy_ids) && args.buy_ids.length;
@@ -623,6 +640,12 @@ export async function observe(agent) {
     // A character in the Underworld is dead however its hit points read on the way in.
     dead: vit?.value === 0 || /underworld/i.test(roomName),
     busy: s?.busy ?? null,
+    // WHERE ON THE SQUARE GRID, when the status says (a keeper-backed one does, as `you`).
+    you: s?.you ?? s?.position ?? null,
+    // WHO IS STEERING THE BODY, AND WHO LAST TOOK A MOVE FROM ITS ORDERER. A walk step reads
+    // this to say "cancelled by keeper:shelter" instead of "did not reach in three attempts".
+    movement: s?.movement ?? null,
+    ordered_by: s?.ordered_by ?? null,
   };
 }
 
@@ -2220,12 +2243,46 @@ const UNREADABLE_WAIT_MS = Number(process.env.M59_UNREADABLE_WAIT_MS ?? 60_000);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
 // The walk, with the errand's own-walk marker cleared however it ends (see holdKeeper's take-back).
+// A WALK THAT FAILED LEAVES A MOVEMENT INCIDENT (m59-movement-incidents.mjs) — where it set out
+// from, where it was going, who cancelled it — so the failure is a chunk a script can replay
+// rather than a sentence in one run's log.
 async function compiledWalk(ctx, agent, to, opts) {
-  try { return await compiledWalkInner(ctx, agent, to, opts); }
-  finally { ctx.holds?.get(agent)?.endOwnWalk?.(); }
+  const trace = { first: null, startedAt: Date.now() };
+  let r = null;
+  try { return (r = await compiledWalkInner(ctx, agent, to, { ...opts, trace })); }
+  finally {
+    ctx.holds?.get(agent)?.endOwnWalk?.();
+    if (r && r.ok === false && !r.unreachable && !r.fragile) recordWalkIncident(ctx, agent, to, r, trace);
+  }
 }
 
-async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null }) {
+const incidentLogs = new Map();
+function recordWalkIncident(ctx, agent, to, r, trace) {
+  try {
+    const fleet = ctx.fleet ?? null;
+    if (!incidentLogs.has(fleet)) incidentLogs.set(fleet, createIncidentLog({ fleet }));
+    const at = trace.first ?? {};
+    const last = (r.preempted_by ?? []).at(-1) ?? null;
+    incidentLogs.get(fleet).record({
+      agent, kind: 'fleetscript_walk_failed', source: 'fleetscript', fleet,
+      reason: r.why ?? null,
+      room: at.room != null ? { num: at.room, name: at.roomName ?? null } : null,
+      from: at.room ?? null,
+      start: at.you ? { room: at.room, row: at.you.row, col: at.you.col, x: at.you.x, y: at.you.y } : null,
+      target: { room: Number(to) },
+      refusals: (r.refusals ?? []).length ? r.refusals.map(why => ({ why: String(why).slice(0, 160) })) : null,
+      origin: ctx.origin ?? currentCallOrigin(),
+      cancel: last ? { by: last.origin, by_label: last.by, why: last.why, at: last.at, summary: last.summary,
+                       preempted: null } : null,
+      vitals: at.hpText ? { health: Number(String(at.hpText).split('/')[0]) || null,
+                            max_health: at.maxHealth ?? null } : null,
+      ms: Date.now() - trace.startedAt,
+      epoch: (() => { try { return epochId('movement'); } catch { return null; } })(),
+    });
+  } catch { /* a record never fails the errand */ }
+}
+
+async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null, trace = {} }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -2272,6 +2329,35 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
   // distinction being right.
   let launched = 0, waitedOnOwn = false;
   const sends = [];
+  // WHO TOOK THE WALK, when somebody did. Each entry is a cancel of THIS step's order by another
+  // issuer — the keeper's shelter rung, a bot, an operator — read off `status.movement`.
+  const mine = ctx.origin ?? currentCallOrigin();
+  const preempted = [];
+  const notePreemptions = (now, since) => {
+    for (const p of preemptionsOf(now?.movement, { mine, to, since })) {
+      if (preempted.some(q => q.at === p.at && q.by_label === p.by_label)) continue;
+      preempted.push(p);
+      ctx.log(agent, `the walk to ${to} was CANCELLED BY ANOTHER ISSUER: ${p.summary ?? describePreemption(p)}`);
+    }
+  };
+  // WILL THE KEEPER'S POSTURE FIGHT THIS WALK? A claim takes work and movement, not survival,
+  // and a survival rung that hands the body back mid-walk steers it toward the keeper's own
+  // room. Said once, before setting out — a warning and a recorded cause, never a silent change
+  // of the character's orders (docs/m59-boundary.md). The 2026-10-04 buy-spell walk to 714 was
+  // fought this way by an assigned room of 48.
+  const posture = await call('autopilot', { agent, action: 'status' }, 30_000)
+    .then(st => postureConflict(st, to)).catch(() => null);
+  if (posture) ctx.log(agent, `WARNING: ${posture}`);
+  const withCause = (why) => preempted.length
+    ? `${why}. ${preempted.length === 1 ? 'Its journey was' : `Its journey was ${preempted.length} times`} ` +
+      `cancelled by another issuer: ${preempted.map(p => p.summary ?? describePreemption(p)).join('; ')}` +
+      (posture ? ` (${posture})` : '')
+    : why;
+  const preemptedFields = () => preempted.length
+    ? { preempted_by: preempted.map(p => ({ by: p.by_label, origin: p.by, why: p.why, at: p.at,
+                                            summary: p.summary ?? describePreemption(p) })),
+        ...(posture ? { posture } : {}) }
+    : {};
   for (let attempt = 0; attempt < 3; attempt++) {
     let at = await observe(agent);
     // UNREADABLE IS A MOMENT, NOT A VERDICT — ASK AGAIN BEFORE REFUSING. Unknown health is still
@@ -2283,6 +2369,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
       at = await observe(agent);
     }
     if (!at.ok) return { ok: false, why: 'could not read the character' };
+    trace.first ??= at;
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
     if (at.dead) return { ok: false, why: 'died', dead: true };
@@ -2389,9 +2476,10 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
       // walk to ..." refusal comes from the broker's job slot, which that does not always clear —
       // on the 2026-09-25 rehearsal a raider was dropped from the muster refused three times by a
       // journey to a room it was not going to. cancel_movement ends the broker's.
-      await call('cancel_movement', { agent, why: `clearing the way for the errand's own walk to ${to}` }, 30_000)
+      await call('cancel_movement', { agent, why: `clearing the way for the errand's own walk to ${to}`,
+                                      origin: mine }, 30_000)
         .catch(() => {});
-      return call('travel', { agent, to, background: true, run_errands: false,
+      return call('travel', { agent, to, background: true, run_errands: false, origin: mine,
                               // A step that names a hazard room says WHY, and the keeper
                               // refuses the flag without it. See `walk(to, { despiteHazard })`.
                               ...(despiteHazard ? { despite_hazard: { reason: String(despiteHazard) } } : {}),
@@ -2435,13 +2523,15 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
                refused: sent?.refused ?? null, never_started: true };
     }
     launched++;
+    const launchedAt = Date.now() - 2000;   // a little slack for clock skew between processes
 
     const until = Date.now() + budget;
     while (Date.now() < until) {
       await sleep(ctx.pollMs);
       const now = await observe(agent);
-      if (Number(now.room) === to) return { ok: true, room: to };
-      if (now.dead) return { ok: false, why: 'died en route', dead: true };
+      if (Number(now.room) === to) return { ok: true, room: to, ...preemptedFields() };
+      notePreemptions(now, launchedAt);
+      if (now.dead) return { ok: false, why: withCause('died en route'), dead: true, ...preemptedFields() };
     }
   }
   if (!launched)
@@ -2449,10 +2539,18 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
              why: `never even set out for ${to}: every attempt was refused before a packet was ` +
                   `sent (${[...new Set(sends)].join('; ')}). This is CONTENTION, not a mover ` +
                   `failure — do not read it as one, and do not record it as one` };
-  return { ok: false, launched, refusals: sends,
-           why: `did not reach ${to} in three attempts (${launched} of them actually set out` +
+  // A PRE-EMPTED WALK SAYS WHO PRE-EMPTED IT, FIRST. "did not reach 714 in three attempts" was
+  // the whole account of a walk the keeper's shelter rung cancelled three times (2026-10-04).
+  const last = preempted[preempted.length - 1];
+  const cancelText = p => (p.summary ?? describePreemption(p)).replace(/^walk to \S+( ordered by \S+)? /, '');
+  return { ok: false, launched, refusals: sends, ...preemptedFields(),
+           why: (last ? `walk to ${to} ${cancelText(last)}; ` : '') +
+                `did not reach ${to} in three attempts (${launched} of them actually set out` +
                 `${sends.length ? `, ${sends.length} refused before sending a packet: ` +
-                  `${[...new Set(sends)].join('; ')}` : ''})` };
+                  `${[...new Set(sends)].join('; ')}` : ''})` +
+                (preempted.length > 1 ? `; cancelled ${preempted.length} times by another issuer: ` +
+                  preempted.map(cancelText).join('; ') : '') +
+                (last && posture ? `; ${posture}` : '') };
 }
 
 /**
@@ -2660,7 +2758,9 @@ export async function holdKeeper(ctx, agent, fleet) {
   const cancelNow = async () => {
     const send = () => fetch(`http://127.0.0.1:${who.port}/cancel`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
+      body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid,
+                             why: `fleetscript ${ctx.name} taking the body`.slice(0, 80),
+                             origin: ctx.origin ?? currentCallOrigin() }),
       signal: AbortSignal.timeout(20_000) }).then(r => r.json())
       .catch(e => ({ error: e.message, ...(refused(e) ? { unreachable: true } : {}) }));
     const r = await send();
@@ -4855,8 +4955,12 @@ They are driven by tools/m59-menagerie.mjs and ` +
         (control.declared ? (control.wildcard ? ' (declared: whole fleet)' : ' (declared)')
                           : ' (derived from agents — undeclared control is warned, not refused)'));
 
+  // WHO THIS RUN IS, on every move it sends (m59-move-origin.mjs): the script's name and a run
+  // id, so a cancel can be told apart from one by an earlier run of the same script.
+  const runId = `${Date.now().toString(36)}-${process.pid}`;
+  const origin = moveOrigin({ source: 'fleetscript', name, run_id: runId });
   const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs,
-                reviveMs, packSettleMs, learnSettleMs, name,
+                reviveMs, packSettleMs, learnSettleMs, name, runId, origin,
                 // THE DECLARATION AND THE NAMES THAT COUNT AS CHARACTERS. Carried on ctx so
                 // the check happens at ONE door (runStep) rather than in each verb — the
                 // same argument m59-menagerie-guard.mjs makes: a rule enforced per-verb is
@@ -5275,11 +5379,14 @@ They are driven by tools/m59-menagerie.mjs and ` +
     }
   };
 
-  ctx.log(`${name}: ${agents.length} agent(s), ${parallel ? 'in parallel' : 'one at a time'}`);
+  ctx.log(`${name}: ${agents.length} agent(s), ${parallel ? 'in parallel' : 'one at a time'}` +
+          ` — moves ordered as ${originLabel(origin)}`);
+  const previousOrigin = setCallOrigin(origin);
   try {
     if (parallel) await Promise.all(agents.map(runOne));
     else for (const a of agents) await runOne(a);
   } finally {
+    setCallOrigin(previousOrigin);
     await freeAll();
     dropSignalHandlers();
     claim.release();

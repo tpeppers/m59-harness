@@ -68,6 +68,8 @@ const SUITES = [
    'room 2600 on the way to 2601 is worked by two keepers on one beat, judged by the door, never by a stale read'],
   ['m59-qor-temple-test.mjs',
    'a code exit is a transit only from a door that walks to its trigger, and a shut lift is waited for'],
+  ['m59-move-origin-test.mjs',
+   'every move order names its issuer, a cancel names whose move it took, and a failure leaves one replayable incident'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

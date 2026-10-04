@@ -11,6 +11,7 @@ import { dropSpec } from './m59-parse.mjs';
 import { hallPassword } from './m59-hallsecret.mjs';
 import { guildPassage } from './m59-guild-passage.mjs';
 import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
   coopFundingAmount, coopRemainingPlan, coopSupplyOutcome, coopFallbackDecision } from './m59-reagent-coop.mjs';
 
@@ -390,7 +391,7 @@ export function reagentCoopCommand(k, s, args, fleet) {
         plan: mode === 'supply' ? k.shoppingPlan({ kind: 'reagents' }) : null,
         bankable: Math.max(0, k.purseNow() - Math.max(Number(args.keep ?? 0),
           Number(k.policy.walkingMoney ?? 400), k.shoppingPlan().required_purse)),
-      }, fleet, (to, opts) => k.travel(to, { ...opts, movementGeneration }));
+      }, fleet, (to, opts) => k.travel(to, { origin: keeperOrigin('reagent_coop'), ...opts, movementGeneration }));
     } finally {
       clearInterval(timer);
       if (hold && k.inert === hold) k.revive('reagent coop command paused or finished');

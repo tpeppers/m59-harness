@@ -36,7 +36,7 @@ export async function resumeReplayJourney(keeper,destination,why) {
   try {
     // The keeper wrapper adds hop-boundary recovery and journey accounting.
     // Calling Session.travel directly silently drops those production behaviors.
-    outcome=await keeper.travel(destination);return outcome;
+    outcome=await keeper.travel(destination,{origin:{source:'operator',name:'replay_journey'}});return outcome;
   }finally{
     if(keeper.inert===owner){
       const here=Number(keeper.s.world?.room?.num);

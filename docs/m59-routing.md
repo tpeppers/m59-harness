@@ -1834,3 +1834,54 @@ the keepers only log blocks over 1.5 s. The stall column charges only what OUR c
 the window (`code_ms`, the heaviest of our frames): on a machine running two fleets most late
 timers are `(idle)` — the process was descheduled, not computing — and a planning fix cannot
 move those.
+
+## The movement incident log
+
+```bash
+node tools/m59-movement-incidents.mjs                              # last 24h, newest first
+node tools/m59-movement-incidents.mjs --room 48 --kind preempted --since 7d
+node tools/m59-movement-incidents.mjs --agent t9 --json
+node tools/m59-movement-incidents.mjs --export mi-3f2a9c01d4e7 --out tools/fixtures/<name>.json
+```
+
+Operator, 2026-10-04: *"a log (with saves of locations, & 'failing to reach'-targets) of these
+errors that require corrections ... chunks that we can work with using scripts like the
+mana-node/movement fleetscripts/fleetscratches."* **One self-contained record per movement
+failure that needs correcting**, in `substrate/history/<fleet>/movement-incidents-YYYY-MM-DD.jsonl`
+(beside the fleet ledger, gitignored with it, and redirected by `M59_LEDGER_DIR`).
+
+| kind | written by | when |
+|---|---|---|
+| `preempted` | keeper, `Autopilot.travel` | the journey was cancelled by ANOTHER issuer (`docs/m59-boundary.md`, provenance) |
+| `cancelled` | keeper | cancelled by its own issuer, or by one that did not say |
+| `exits_exhausted` | keeper | every candidate stage of a crossing refused |
+| `refused`, `died`, `not_arrived` | keeper | the other ways a journey ends short |
+| `wedge` | keeper | the wedge gate gave up on a journey |
+| `stall` | keeper | `STALL_NO_LEVER` was declared |
+| `fleetscript_walk_failed` | FleetScript | a walk step failed (not one refused up front as unreachable or fragile) |
+
+Each record (`m59-movement-incident/1`) carries the room, the **start** position as a square AND
+a fine point (`{square: {row, col}, fine: {x, y, units: 'kod'}}`, 64 to the square — never an
+unlabeled pair, per [`docs/m59-coordinates.md`](m59-coordinates.md)), the **end** position, the
+**target** (destination room and, for a crossing, the `exit_stage` square it was failing to
+reach — the first refusal's `stand_on`, else the current hop's), the planned **route** and the
+hop it was on, `kind`/`reason`, the compact travel `refusals`, `ordered_by` and `cancelled_by`
+with full provenance, the keeper's last position pulses as a **trail**, health and the
+attackable **threats** in the room, and `code` (harness sha, deploy tag, `#movement` epoch).
+
+**One incident per failure, not one per retry tick.** Camilla failed 48 -> 714 thirteen times in
+two minutes on one stage; that is one incident seen thirteen times. A repeat of the same dedupe
+key (agent, kind, from, to, target square, canceller, reason with digits folded) inside ten
+minutes (`M59_INCIDENT_DEDUPE_MS`) writes a one-line `repeat` row, and the reader folds those into
+`repeats` and `last_at`. A FleetScript walk that fails because the keeper pre-empted it leaves two
+records — the keeper's `preempted` and the script's `fleetscript_walk_failed` — because they are
+two processes' views of it and each carries what only it knew.
+
+**`--export` writes a committable fixture** (`m59-movement-incident-fixture/1`), shaped beside the
+jam fixtures (`m59-jam/1`): `subject` redacted to `player A` and every string scrubbed of this
+machine's character names (`--keep-names` to keep them), `journey`, `target`, `failure`, `code`,
+and a `replay` block — `walk: {to}` is the FleetScript step that reproduces it, `start_square` is
+where to stand first, and `aim` is the stage square a `crawlTo`/mana-node style approach would
+aim at. `tools/fixtures/` is where a promoted one goes. `node tools/m59-move-origin-test.mjs`
+pins the write from a simulated failed journey and a pre-empted walk, the dedupe, and the export.
+

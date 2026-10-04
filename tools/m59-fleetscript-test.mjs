@@ -93,7 +93,11 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // the thing that matters here: speech that is DISCARDED sends nothing,
                       // and looks exactly like an NPC with no answer.
                       npcs = [], onSay = null,
-                      healthState = undefined } = {}) {
+                      healthState = undefined,
+                      // WHO TOOK THE WALK (m59-move-origin.mjs). `movementFor` is handed
+                      // {agent, sent} and returns what `status.movement` says; `autopilotStatus`
+                      // is what `autopilot action=status` answers, for the posture warning.
+                      movementFor = null, autopilotStatus = null } = {}) {
   const sent = [], rested = [], saidLines = [];
   const chatLog = [];
   globalThis.fetch = async (_url, opts) => {
@@ -115,7 +119,10 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       payload = { where: { num: rooms[agent], name: dead.has(agent) ? 'The Underworld' : 'room' },
                   // Production returns null here — the money is a `shilling` stack in the
                   // pack, not a scalar on the character. Mirroring that is the point.
-                  hp, gold: null, you: positions[agent] ?? null };
+                  hp, gold: null, you: positions[agent] ?? null,
+                  ...(movementFor ? { movement: movementFor({ agent, sent }) } : {}) };
+    } else if (name === 'autopilot' && a.action === 'status' && autopilotStatus) {
+      payload = autopilotStatus;
     } else if (name === 'travel') {
       // A refused destination leaves the character where it was, which is what the real
       // thing does: travel is a request, and arriving is a separate observation.
@@ -1095,6 +1102,50 @@ console.log('a leg that fails is not an errand that fails');
   // in that room, which on this route is a blacksmith who buys weapons.
   ok('the deposit that needed that room is skipped too',
      !sent.some(c => c.name === 'container'));
+}
+
+console.log('a walk CANCELLED BY ANOTHER ISSUER says who did it (2026-10-04, buy-spell -> 714)');
+{
+  // Camilla's errand walked to the guild hall three times and three times reported "did not
+  // reach 714 in three attempts". The keeper's shelter rung had cancelled each journey. The
+  // status now carries `movement.last_preempted`, and the step must say so in its failure.
+  const SHELTER = 'chosen shelter approach interrupted: route uses the fallback walker';
+  const sent = fakeBroker({
+    rooms: { a1: 48 }, unreachable: new Set([714]),
+    autopilotStatus: { mode: 'survive', policy: { assignedRoom: 48 } },
+    movementFor: ({ sent }) => {
+      const ours = sent.filter(c => c.name === 'travel').at(-1)?.origin ?? null;
+      if (!ours) return null;
+      const at = Date.now();
+      const rec = { why: SHELTER, at, by: { source: 'keeper', name: 'shelter' }, by_label: 'keeper:shelter',
+                    preempted: { kind: 'travel', to: 714, origin: ours,
+                                 ordered_by: `${ours.source}:${ours.name}#${ours.run_id}` },
+                    self_cancel: false };
+      rec.summary = `walk to 714 ordered by ${rec.preempted.ordered_by} cancelled by keeper:shelter (${SHELTER}) at 22:03:22Z`;
+      return { order: null, last_preempted: rec, preemptions: [rec] };
+    },
+  });
+  const logs = [];
+  const r = await fleetScript({
+    name: 'buy-spell', fleet: 'testfleet', agents: ['a1'], onLog: (...x) => logs.push(x.join(' ')),
+    pollMs: 5, budgetFloorMs: 20, budgetCapMs: 60, steps: [walk(714)],
+  });
+  const why = r.results.a1.why ?? '';
+  ok('the walk fails', r.results.a1.ok === false, JSON.stringify(r.results.a1));
+  const named = why.indexOf('walk to 714 cancelled by keeper:shelter (chosen shelter approach interrupted');
+  ok('and its failure names the canceller FIRST, not "did not reach in three attempts"',
+     named >= 0 && (why.indexOf('did not reach') < 0 || named < why.indexOf('did not reach')), why);
+  ok('with the time it happened', /at 22:03:22Z/.test(why), why);
+  ok('and the step result carries the canceller as data', r.results.a1.preempted_by?.[0]?.by === 'keeper:shelter' ||
+     JSON.stringify(r.results.a1).includes('"by":"keeper:shelter"'), JSON.stringify(r.results.a1));
+  ok("every move the run sent carries the run's own origin",
+     sent.filter(c => ['travel', 'cancel_movement'].includes(c.name))
+       .every(c => c.origin?.source === 'fleetscript' && c.origin?.name === 'buy-spell' && c.origin?.run_id),
+     JSON.stringify(sent.filter(c => c.name === 'travel').map(c => c.origin)));
+  ok('the keeper posture that fights the walk is WARNED about, once, before setting out',
+     logs.filter(l => /WARNING: the keeper's posture will fight a walk to 714: its assigned room is 48/.test(l)).length === 1,
+     logs.filter(l => /posture/.test(l)).join(' | '));
+  ok('and the cancel is logged as it happens', logs.some(l => /CANCELLED BY ANOTHER ISSUER: walk to 714/.test(l)));
 }
 
 console.log('a step marked `anywhere` survives a skipped leg');

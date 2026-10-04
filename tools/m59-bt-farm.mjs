@@ -37,6 +37,7 @@ import { gearUpgradeNode } from './m59-bt-gear.mjs';
 import * as skills from './m59-skills.mjs';
 import { beginPullProgress } from './m59-pull-progress.mjs';
 import * as party from './m59-party.mjs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 
 // The combat/rest skill set, shaped the way the nodes below consume it. This is
 // the module that used to be m59-combat.mjs -- it was renamed to m59-skills.mjs
@@ -215,7 +216,7 @@ export function roomInvalidNode(keeper) {
     const hold = await keeper.leaveHold('travelling to a room that generates our prey');
     if (hold.refused) return RUNNING;
 
-    const r0 = await keeper.travel(target.room, { maxHops: 14 })
+    const r0 = await keeper.travel(target.room, { origin: keeperOrigin('bt_farm'), maxHops: 14 })
                          .catch(e => ({ arrived: false, reason: e.message }));
     if (r0.arrived) {
       keeper.homeRoom = target.room;
@@ -289,7 +290,7 @@ export function capBlockedNode(keeper) {
         await keeper.leaveHold('leaving a room whose spawn cap cannot recover',
                                { force: true }).catch(() => {});
         const go = elsewhere[0];
-        const moved = await keeper.travel(go.room, { maxHops: 14 })
+        const moved = await keeper.travel(go.room, { origin: keeperOrigin('bt_farm'), maxHops: 14 })
                                 .catch(e => ({ arrived: false, reason: e.message }));
         if (moved.arrived) {
           keeper.homeRoom = go.room;
@@ -448,7 +449,7 @@ export function noTargetFoundNode(keeper) {
         keeper.note('this room spawns nothing at all -- going back to work', {
           room: room?.name, going_to: home });
         keeper.doing = 'travelling';
-        const moved = await keeper.travel(home, { maxHops: 20 })
+        const moved = await keeper.travel(home, { origin: keeperOrigin('bt_farm_home'), maxHops: 20 })
                               .catch(e => ({ arrived: false, reason: e.message }));
         if (moved.arrived) { keeper.emptyPasses = 0; keeper.progress('left a room that spawns nothing'); return SUCCESS; }
       }

@@ -75,6 +75,7 @@ function _compendiumLevel(roomNum, mobName) {
   return null;
 }
 import { affordances, OF } from './m59-parse.mjs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 
 // ROOMS THAT HAVE SHOPS. A shop is any room where a merchant with a buy
@@ -324,7 +325,7 @@ export class GOAPKeeper {
       // so a multi-room journey is a chain of single-hop travels, each re-planned. This
       // is how we get past the broker's maxHops limit: we don't ask it to route the whole
       // journey, we ask it for one room at a time.
-      travelResult = await this.session.travel(to, { maxHops: 1 });
+      travelResult = await this.session.travel(to, { origin: keeperOrigin('goap'), maxHops: 1 });
       // BOTH NAMES, ON PURPOSE. This returned only `sent`, and the idle-wander caller
       // tested `r?.arrived` -- which is never present, so a hop that WORKED reported
       // "no wander" and the keeper scored the pass as nothing happening. JayB stood in
@@ -601,7 +602,7 @@ export class GOAPKeeper {
             // If the nearest hunt room IS the current room, pick the next closest
             if (neighbors && neighbors.room === resolved && otherRooms.length > 0) {
               const next = otherRooms[0];
-              const travelResult = await this.session.travel(next.room, { maxHops: 1 });
+              const travelResult = await this.session.travel(next.room, { origin: keeperOrigin('goap_explore'), maxHops: 1 });
               if (travelResult?.arrived) {
                 console.error(`[goap] ${this.policy.agent} unstuck: moved to room ${next.room} (${next.creature} lv${next.level})`);
                 this._travelInFlight = true;
@@ -610,7 +611,7 @@ export class GOAPKeeper {
                 return { acted: true, action: 'unstuck_travel', reason: 'stuck detection: moved to different hunt room' };
               }
             } else if (neighbors) {
-              const travelResult = await this.session.travel(neighbors.room, { maxHops: 1 });
+              const travelResult = await this.session.travel(neighbors.room, { origin: keeperOrigin('goap_explore'), maxHops: 1 });
               if (travelResult?.arrived) {
                 console.error(`[goap] ${this.policy.agent} unstuck: arrived in room ${neighbors.room}`);
                 this._travelInFlight = true;

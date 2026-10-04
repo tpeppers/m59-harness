@@ -76,7 +76,7 @@ export function keeperDriver(keeper) {
   return {
     stop:   (_agent, why)  => typeof k.stop === 'function' ? k.stop(why) : Promise.resolve(false),
     revive: (_agent, why)  => typeof k.revive === 'function' ? k.revive(why) : Promise.resolve(false),
-    travel: (_agent, to)   => typeof k.travel === 'function' ? k.travel(to, {}) : Promise.resolve(false),
+    travel: (_agent, to)   => typeof k.travel === 'function' ? k.travel(to, { origin: keeperOrigin('atomics') }) : Promise.resolve(false),
     setPolicy: (_agent, fields) => {
       // The BT executes strategy; GOAP decides it. Mutating the keeper's live
       // policy object is the in-process analog of `autopilot set`. Guarded: a
@@ -218,6 +218,7 @@ export async function armOwnership(ctx, { agent, by, kind = 'arm', label = 'armi
 }
 
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 
 // ---------------------------------------------------------------------------
 // The atomic registry

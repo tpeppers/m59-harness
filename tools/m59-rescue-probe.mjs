@@ -45,7 +45,7 @@ try{
     evidence.before=await itemState();
     const option=await travelRescueOption(s,714);
     if(option?.kind!=='rescue'||option.capability.kind!=='chalice')throw Error('dynamic shortcut not selected');
-    const first=await s.travel(714);
+    const first=await s.travel(714,{origin:{source:'operator',name:'rescue_probe'}});
     evidence.phases.push({kind:'chalice_rescue',result:first,state:await itemState()});
     if(!first.arrived||evidence.phases.at(-1).state.charges!==1)throw Error('Rescue or charge consumption failed');
     const reserve=await performRescue(s,option.capability,{destination:39});

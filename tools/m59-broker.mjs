@@ -231,6 +231,22 @@ import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { runWho } from './m59-who.mjs';
+import { moveOrigin, originLabel, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+
+// WHO ORDERED THIS MOVE, as an MCP caller says it (m59-move-origin.mjs). A caller that names
+// nobody is `mcp:unattributed` — the honest default for a tool call, never empty and never a guess.
+const MOVE_ORIGIN_SCHEMA = { type: 'object',
+  description: 'WHO IS ORDERING THIS MOVE: {source: fleetscript|keeper|operator|bot|mcp, name, ' +
+    'run_id?}. Lands on the journey ledger and in status/fleet as `ordered_by`, and on a journey ' +
+    'this one cancels as `cancelled_by_origin`. Omitted is recorded as mcp:unattributed.',
+  properties: { source: { type: 'string' }, name: { type: 'string' }, run_id: { type: 'string' } } };
+const mcpOrigin = (a) => moveOrigin(a?.origin ?? null,
+  { source: 'mcp', name: 'unattributed', ...(a?.agent ? { agent: a.agent } : {}) });
+// The movement report for either kind of session: the keeper publishes its own on /state.
+const WALK_ORDERS_REGISTERED = new WeakSet();
+const movementOf = (s) => s instanceof KeeperProxy
+  ? (s._state?.movement ?? s._state?.autopilot_status?.movement ?? null)
+  : movementReport(s);
 
 const HOST = process.env.M59_HOST || '127.0.0.1';
 const PORT = Number(process.env.M59_PORT || 5959);
@@ -2820,6 +2836,8 @@ class KeeperProxy {
       to: dest, toRoomNum: dest,
       where: opts.where, max_hops: opts.maxHops, control_token: opts.controlToken,
       run_errands: opts.runErrands !== false,
+      // WHO ORDERED IT, carried to the keeper, which is where a cancel can name it.
+      ...(opts.origin ? { origin: opts.origin } : {}),
       // Deliberately entering a NEVER_ENTER room. The keeper refuses the flag without a
       // reason, so both travel together or neither does.
       ...(opts.allowHazard ? { allow_hazard: true, hazard_why: opts.hazardWhy } : {}),
@@ -3139,9 +3157,10 @@ class KeeperProxy {
   }
   // The `why` travels with it. A cancel that cannot say who asked for it is the single
   // commonest way a journey ends here, and it used to be the only one that recorded nothing.
-  async cancelMovement(token, why = null) {
+  async cancelMovement(token, why = null, opts = {}) {
     return keeperAction(this.name, this._index, 'cancel',
-                        { ...(token ? { control_token: token } : {}), ...(why ? { why } : {}) });
+                        { ...(token ? { control_token: token } : {}), ...(why ? { why } : {}),
+                          ...(opts?.origin ? { origin: opts.origin } : {}) });
   }
   // THE GUILD VERBS, FORWARDED FOR THE SAME REASON AS SHOPPING.
   //
@@ -6885,6 +6904,7 @@ const TOOLS = [
       to: { type: ['string', 'number'], description: 'room name or number' },
       max_hops: { type: 'number' },
       control_token: { type: 'string', description: 'optional owner token that can invalidate stale movement' },
+      origin: MOVE_ORIGIN_SCHEMA,
       background: { type: 'boolean', description: 'return at once and walk in the background; ' +
         'watch for it under `busy` in status/fleet, and the outcome under `last_action`' },
       // A HEALTH FLOOR IS NOW ENFORCED FOR EVERY CALLER, and these two are how a caller that
@@ -7001,7 +7021,9 @@ const TOOLS = [
       // Both the slot and the keeper hold now live on `Session.travelJob`, because this
       // tool having its own private copy of them is precisely why every other caller in
       // the file had neither. ONE definition, two ways to wait for it.
+      const origin = mcpOrigin(a);
       const startTravel = () => s.travelJob(dest, {
+        origin,
         // Straight through to the gate in `travelJob`; see m59-travelgate.mjs for the decision.
         healthFloor: a.health_floor,
         ...(Array.isArray(a.avoid) && a.avoid.length ? { avoid: a.avoid.map(Number) } : {}),
@@ -7040,7 +7062,7 @@ const TOOLS = [
         // acknowledgement so a busy refusal cannot masquerade as a launched walk.
         if (s instanceof KeeperProxy) {
           const accepted = await job.promise;
-          if (accepted?.started !== true) return { destination: where, ...accepted };
+          if (accepted?.started !== true) return { destination: where, ordered_by: originLabel(origin), ...accepted };
         }
         // `route()` returns { found, hops: [...] }, NOT an array — see the note in
         // m59-autopilot.mjs. Taking `.length` off it has always produced undefined, so this
@@ -7048,11 +7070,15 @@ const TOOLS = [
         // here, which is honest: the route lives in the keeper process.
         const plan = s.world?.route?.(dest);
         const hops = Array.isArray(plan?.hops) ? plan.hops.length : null;
-        return { started: true, destination: where, hops,
-                 note: 'walking now; poll `fleet` or `status` — do not re-issue while busy' };
+        return { started: true, destination: where, hops, ordered_by: originLabel(origin),
+                 note: 'walking now; poll `fleet` or `status` — do not re-issue while busy. ' +
+                       'If something else cancels it, `status.movement.last_preempted` says who' };
       }
       const r = await startTravel().promise;
-      return { destination: { num: dest, name: worldMap.rooms[dest].name }, ...r, now: arrivalReport(s) };
+      return { destination: { num: dest, name: worldMap.rooms[dest].name }, ordered_by: originLabel(origin),
+               ...r, now: arrivalReport(s),
+               // A journey that did not arrive because something else took it says so here.
+               ...(r?.cancelled ? { movement: movementOf(s) } : {}) };
     },
   },
   {
@@ -7068,14 +7094,16 @@ const TOOLS = [
           '`cancelled_by`, and a cancellation is the commonest way a journey ends here — so ' +
           'a caller that does not say leaves the fleet unable to explain its own biggest ' +
           'failure mode. "the cancel_movement tool" is what an anonymous one looks like.' },
+      origin: MOVE_ORIGIN_SCHEMA,
     }, required: ['agent'] },
     run: (a) => {
       const s = session(a.agent);
       const why = (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
         : 'the cancel_movement tool, caller unnamed';
       const keeper = s instanceof KeeperProxy ? null : autopilotIfAny(a.agent);
-      return keeper?.cancelJourney ? keeper.cancelJourney(why, a.control_token)
-        : s.cancelMovement(a.control_token, why);
+      const origin = mcpOrigin(a);
+      return keeper?.cancelJourney ? keeper.cancelJourney(why, a.control_token, origin)
+        : s.cancelMovement(a.control_token, why, { origin });
     },
   },
   {
@@ -7714,7 +7742,7 @@ const TOOLS = [
           (!a.token || item.id === Number(a.token)));
         if (!held) throw new Error('no real Council token is carried');
         if ((s.world?.room?.num ?? null) !== join.room) {
-          const traveled = await s.travelExclusive(join.room, { maxHops: 25 });
+          const traveled = await s.travelExclusive(join.room, { origin: { source: 'mcp', name: 'faction_join' }, maxHops: 25 });
           if (!traveled.arrived) return { delivered: false, faction: own.faction, token: held,
             reason: `could not reach ${join.leader}: ${traveled.reason ?? 'travel did not arrive'}` };
         }
@@ -7731,7 +7759,7 @@ const TOOLS = [
           report = await factionSpeech(s, council.councilor);
           const weak = report.some(line => /suspected to be a weak believer/i.test(line));
           if (weak) {
-            const traveled = await s.travelExclusive(council.room, { maxHops: 25 });
+            const traveled = await s.travelExclusive(council.room, { origin: { source: 'mcp', name: 'faction_council' }, maxHops: 25 });
             if (!traveled.arrived) return { delivered: false, faction: own.faction, token: held,
               councilor_report: report,
               reason: `could not reach weak councilor ${council.councilor}: ${traveled.reason ?? 'travel did not arrive'}` };
@@ -8316,9 +8344,20 @@ const TOOLS = [
       stride: { type: 'number', description: 'kod fine units to reach per step, default 48 of 64 units per square' },
       x: { type: 'number', description: 'fine x/column-axis destination in kod units, instead of a square; x/y take precedence' },
       y: { type: 'number', description: 'fine y/row-axis destination in kod units, instead of a square; x/y take precedence' },
+      origin: MOVE_ORIGIN_SCHEMA,
     }, required: ['agent'] },
-    run: async (a) => {
+    run: async function walkToRun(a) {
       const s = session(a.agent);
+      // A WALK IS A MOVE ORDER TOO (m59-move-origin.mjs). A keeper-backed walk is registered in
+      // the keeper, where the cancels happen, by passing `origin` through; an in-process one is
+      // registered here, once, around this whole call.
+      const origin = mcpOrigin(a);
+      if (!(s instanceof KeeperProxy) && !WALK_ORDERS_REGISTERED.has(a)) {
+        WALK_ORDERS_REGISTERED.add(a);
+        return withMoveOrder(s, { kind: 'walk', origin,
+          to: a.x != null && a.y != null ? `x${a.x},y${a.y} (kod)` : `r${a.row}c${a.col}` },
+          () => walkToRun(a));
+      }
       // A SQUARE IS A PLACE THE BODY MAY NEVER OCCUPY, AND ON A LEDGE IT USUALLY IS NOT.
       //
       // `col`/`row` aims at the square's CENTRE, which is right in a room and wrong on a
@@ -8338,20 +8377,20 @@ const TOOLS = [
           ...(a.stride != null ? { stride: num(a.stride) } : {}),
           holdShelf: a.hold_shelf === true,
           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
-          controlToken: a.control_token,
+          controlToken: a.control_token, origin,
         });
         return r ?? { arrived: false, reason: 'the mover said nothing' };
       }
       const fine = a.fine ?? s.fine;
       if (!fine) return s.walkTo(num(a.col), num(a.row), {
-        maxSteps: num(a.max_steps, 30), controlToken: a.control_token,
+        maxSteps: num(a.max_steps, 30), controlToken: a.control_token, origin,
       });
       const half = KOD_FINENESS >> 1;
       return s.walkFine(num(a.col) * KOD_FINENESS + half, num(a.row) * KOD_FINENESS + half,
                         { maxSteps: num(a.max_steps, 120), stride: num(a.stride, 48),
                           holdShelf: a.hold_shelf === true,
                           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
-                          controlToken: a.control_token });
+                          controlToken: a.control_token, origin });
     },
   },
   {
@@ -9436,7 +9475,7 @@ const TOOLS = [
       if (job.kind === 'move' || job.kind === 'context:rest_here' ||
           job.kind === 'context:recover_here' || job.kind === 'context:approach' ||
           job.kind === 'context:grab_nearby' || job.kind === 'context:take')
-        return s.cancelMovement(token, `a cancel of the ${job.kind} job in flight`);
+        return s.cancelMovement(token, `a cancel of the ${job.kind} job in flight`, { origin: mcpOrigin(a) });
       if (job.kind.startsWith('context:')) {
         job.cancelled = true;
         job.cancelRequestedAt = Date.now();
@@ -13423,6 +13462,8 @@ const TOOLS = [
                attributes, karma: karma ? { value: karma.value, min: -100, max: 100 } : undefined,
                attributes_unallocated: unbuilt || undefined,
                ...(s.jobReport() ?? {}),
+               // WHO IS STEERING THE BODY, AND WHO LAST TOOK A MOVE FROM ITS ORDERER.
+               movement: movementOf(s),
                ...(a.brief ? { spells_known: (c.spells || []).length, skills_known: (c.skills || []).length }
                            : { spells: c.spells.map(x => ({ id: x.id, name: c.rsc.get(x.nameRsc), targets: x.numTargets })),
                                skills: c.skills.map(x => ({ id: x.id, name: c.rsc.get(x.nameRsc) })) }),
@@ -15679,7 +15720,7 @@ const TOOLS = [
       const log = [];
       let out = false;
       for (let attempt = 0; attempt < 3 && !out; attempt++) {
-        const t = await s.travelExclusive(MUSEUM_ROOM, { maxHops: 8, where: "the Grand Museum" }).catch(e => ({ arrived: false, reason: e.message }));
+        const t = await s.travelExclusive(MUSEUM_ROOM, { origin: { source: 'mcp', name: 'museum' }, maxHops: 8, where: "the Grand Museum" }).catch(e => ({ arrived: false, reason: e.message }));
         log.push({ step: 'to the Grand Museum', ...t });
         // The bounce does not always put you back on the square you left, so step
         // off and on again rather than assuming position.
@@ -15693,7 +15734,7 @@ const TOOLS = [
 
       if (out && a.then_travel_to != null && worldMap) {
         const dest = resolveRoom(worldMap, a.then_travel_to);
-        if (dest != null) log.push({ step: 'onward', ...(await s.travelExclusive(dest, { maxHops: 18 }).catch(e => ({ arrived: false, reason: e.message }))) });
+        if (dest != null) log.push({ step: 'onward', ...(await s.travelExclusive(dest, { origin: { source: 'mcp', name: 'museum_onward' }, maxHops: 18 }).catch(e => ({ arrived: false, reason: e.message }))) });
       }
       return { left: out, log, now: arrivalReport(s),
                note: out ? 'one-way — you cannot walk back into Raza'
@@ -16743,7 +16784,7 @@ const TOOLS = [
             // slot, but it held no keeper and dropped the movement generation — so the
             // keeper went on steering underneath it and `cancel_movement` could not reach
             // it. Claiming the slot is only half of not being driven by two things.
-            try { s.travelJob(o.room, { where: o.room_name, maxHops: 20 }); }
+            try { s.travelJob(o.room, { origin: { source: 'mcp', name: 'spread' }, where: o.room_name, maxHops: 20 }); }
             catch { /* already busy — the assignment alone will carry it there */ }
           }
         }
@@ -17211,6 +17252,11 @@ const TOOLS = [
           // bucket the seconds landed in; this says what is happening.
           activity: st?.activity ?? (ap ? ap.activity() : 'no keeper'),
           suspended_journey: st?.suspended_journey ?? null,
+          // WHO ORDERED THE CURRENT MOVE, AND THE LAST TIME ONE ISSUER'S MOVE WAS TAKEN BY
+          // ANOTHER — the column that would have shown the 2026-10-04 buy-spell walk being
+          // cancelled by keeper:shelter. Summaries only; `status` carries the full records.
+          ordered_by: st?.movement?.order?.ordered_by ?? null,
+          last_preempted: st?.movement?.last_preempted?.summary ?? null,
           // Why a healthy character is sitting in an inn: a player killed it inside the PvP
           // return delay. Passed through from the keeper's status; null when there is none.
           pvp_return_hold: st?.pvp_return_hold ?? null,

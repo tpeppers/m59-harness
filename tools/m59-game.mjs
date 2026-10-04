@@ -89,6 +89,7 @@ import { lapsedWeapon } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
+import { moveOrigin, originLabel, recordMovementCancel, describePreemption, installMoveOrders } from './m59-move-origin.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
 // BROKER imports it, and ESM modules do not share scope, so the reference here was free
 // and `join()` threw ReferenceError wherever it was called. Nothing called it -- the
@@ -1853,11 +1854,16 @@ class Session {
 
   hazardSquares() { return groundEffectSquares(this.client); }
 
-  startJob(kind, label, fn, { controlToken = null, leaseToken = null } = {}) {
+  startJob(kind, label, fn, { controlToken = null, leaseToken = null, origin = null, to = null } = {}) {
     if (this.combat?.active) throw new Error(`${this.name}: combat override owns the body`);
-    if (this.job && !this.job.done) throw new Error(`${this.name} is busy: ${this.job.label}`);
+    // THE REFUSAL NAMES WHO HOLDS THE BODY. "is busy: walk to X" told a caller something was
+    // walking; the origin says whose walk it is, which decides whether to wait or to cancel.
+    if (this.job && !this.job.done) throw new Error(`${this.name} is busy: ${this.job.label}` +
+      (this.job.origin ? ` (ordered by ${originLabel(this.job.origin)})` : ''));
     const generation = this.movementGeneration;
     const job = { kind, label, startedAt: Date.now(), done: false, generation,
+                  ...(origin ? { origin: moveOrigin(origin) } : {}),
+                  ...(to != null ? { to } : {}),
                   ...(controlToken ? { controlToken } : {}),
                   ...(leaseToken ? { leaseToken } : {}) };
     this.job = job;
@@ -1928,6 +1934,9 @@ class Session {
   // job label rather than only in whatever asked for it.
   travelJob(dest, { where = `room ${dest}`, runErrands = true, ...opts } = {}) {
     const keeper = autopilotIfAny(this.name);
+    // WHO ORDERED IT. Every journey through here is somebody's order; one that does not say is
+    // recorded as `unattributed`, which is a named hole rather than a guess.
+    opts.origin = moveOrigin(opts.origin ?? null);
     return this.startJob('travel', `walk to ${where}${opts.allowHazard ? ' (HAZARD ROOM, on purpose)' : ''}`, async movementGeneration => {
       let ours = null;
       // READ BEFORE THE WALK, BECAUSE THE ONLY USE FOR IT IS A COMPARISON. Read afterwards
@@ -2145,6 +2154,8 @@ class Session {
           } else if (!ours.cancelled && !arrived && dest != null && here !== Number(dest)) {
             keeper.suspendedJourney = {
               to: Number(dest), why: `travelling to ${where}`, at: Date.now(),
+              // The order it belongs to, so a resume is still that issuer's journey.
+              origin: opts.origin,
               // Keep a stable executor diagnosis visible to status/polling callers. This
               // field is reporting metadata, not retry policy; the generic sentence remains
               // the backward-compatible fallback for every older failure shape.
@@ -2157,7 +2168,7 @@ class Session {
           keeper.revive('travel finished');
         }
       }
-    });
+    }, { origin: opts.origin, to: dest });
   }
 
   // The same thing for a caller that wants to WAIT. `travelJob` for one that does not.
@@ -2211,6 +2222,10 @@ class Session {
              cancelled_by: this.lastMovementCancel?.why ?? 'unattributed',
              cancelled_ms_ago: this.lastMovementCancel
                ? Date.now() - this.lastMovementCancel.at : null,
+             // AND WHO, AS AN ORIGIN RATHER THAN A SENTENCE: `keeper:shelter`,
+             // `fleetscript:buy-spell#…`, `mcp:unattributed`. See m59-move-origin.mjs.
+             cancelled_by_origin: this.lastMovementCancel?.by ?? null,
+             cancelled_by_label: this.lastMovementCancel?.by_label ?? 'unattributed',
              ...extra };
   }
 
@@ -2224,13 +2239,25 @@ class Session {
   // `unattributed` is kept as the default deliberately rather than being made to guess: a
   // guessed attribution is worse than an admitted gap, and it now shows up in the journey
   // ledger as a named hole to go and close rather than as a plausible-looking caller.
+  //
+  // AND WHO, NOT ONLY WHY. `survival.origin` is the canceller's provenance (m59-move-origin.mjs):
+  // `{source: 'keeper', name: 'shelter'}`, a FleetScript run, an MCP caller. It is recorded
+  // here, BEFORE the generation moves, so the order being ended is still live and is named on
+  // the same record: both sides of a preemption, written at the one place they meet. A cancel
+  // with no origin is `unattributed`, for the reason given above.
   cancelMovement(controlToken, why = 'unattributed', survival = {}) {
     try { bodyAuthority(this).guard(); }
     catch { return { cancelled: false, reason: 'combat override owns this body or caller was preempted' }; }
     this.replayRecorder?.capture('before_movement_cancel',{why});
     const job = this.job && !this.job.done ? this.job : null;
-    this.lastMovementCancel = { why, at: Date.now(),
-                                room: this.world?.room?.num ?? null };
+    const cancelRecord = recordMovementCancel(this, { why, origin: survival?.origin ?? null, job });
+    this.lastMovementCancel = cancelRecord;
+    if (job) job.cancelledBy = cancelRecord;
+    // THE KEEPER LOG LINE. A move taken from one issuer by another is said out loud, once, with
+    // both names — the line that would have answered the 2026-10-04 buy-spell walk in a glance.
+    if (cancelRecord.preempted && !cancelRecord.self_cancel) {
+      try { console.error(`[move] ${this.name}: ${describePreemption(cancelRecord)}`); } catch {}
+    }
     // Release the old cast's pacing pause before a new controller takes over.
     // Its asynchronous finally must not change a new owner's pause later.
     if(this._blinkFreeze) {
@@ -2252,7 +2279,8 @@ class Session {
       job.cancelRequestedAt = Date.now();
       job.cancelled = true;
     }
-    traceSurvival(this, 'movement_cancelled', { why,
+    traceSurvival(this, 'movement_cancelled', { why, by: cancelRecord.by_label,
+      preempted: cancelRecord.preempted?.ordered_by ?? null,
       previous_generation: this.movementGeneration - 1,
       next_generation: this.movementGeneration, token_present: !!controlToken,
       survival_decision_id: replacement?.id ?? null,
@@ -2260,6 +2288,8 @@ class Session {
     return {
       cancelled: true,
       interrupted: job ? { kind: job.kind, label: job.label } : null,
+      cancelled_by: cancelRecord.by_label,
+      ...(cancelRecord.preempted ? { preempted: cancelRecord.preempted } : {}),
       note: job
         ? 'the active movement will stop after its current paced server step'
         : 'any in-flight foreground walk will stop after its current paced server step',
@@ -6320,6 +6350,10 @@ class Session {
 // behaviour — and it silently omitted the `ok.size === asked -> null` rule that is the most
 // consequential line in doorsLandingNear.
 installIntentObservers(Session.prototype);
+// EVERY JOURNEY IS A MOVE ORDER WITH AN ORIGIN (m59-move-origin.mjs). Wrapped like the intent
+// observers above, so `travel`'s body and the tests that read it are untouched; a call with no
+// `origin` inside a live order inherits it, and one with none at all is `unattributed`.
+installMoveOrders(Session.prototype, { methods: { travel: 'travel' } });
 export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };
 
 import {installIntentObservers,setIntentTarget,withIntent} from './m59-intent-observations.mjs';

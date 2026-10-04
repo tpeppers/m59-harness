@@ -66,6 +66,7 @@
 // Environment still wins where it is set, so a one-off run can override without editing a file.
 //   { "WATCHDOG_PINNED_MS": 2147483647 }
 import { readFileSync } from 'node:fs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 
 const LOCAL = (() => {
   try {
@@ -541,7 +542,7 @@ export function tick(host) {
       w.rescues = (w.rescues ?? 0) + 1;
       host.tally.inert_rescues = (host.tally.inert_rescues || 0) + 1;
       const stopped = (() => {
-        try { return host.s.cancelMovement(null, 'the watchdog rescuing a stalled driver'); }
+        try { return host.s.cancelMovement(null, 'the watchdog rescuing a stalled driver', { origin: keeperOrigin('watchdog') }); }
         catch (e) { return { cancelled: false, why: e.message }; }
       })();
       const was = host.inert?.why ?? 'inert';
@@ -700,7 +701,7 @@ export function tick(host) {
     }
     host.tally.watchdog_wedges_recorded = (host.tally.watchdog_wedges_recorded || 0) + 1;
     const broke = cancelling ? (() => {
-      try { return s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
+      try { return s.cancelMovement(null, 'the watchdog breaking a healthy wedge', { origin: keeperOrigin('watchdog') }); }
       catch (e) { return { cancelled: false, why: e.message }; }
     })() : { cancelled: false, interrupted: null,
              why: 'cancels are off here; this arm is recording the wedge so a ladder can run' };
@@ -742,7 +743,7 @@ export function tick(host) {
   w.interrupts++;
   host.tally.watchdog_interrupts = (host.tally.watchdog_interrupts || 0) + 1;
   const stopped = (() => {
-    try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk'); }
+    try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk', { origin: keeperOrigin('watchdog') }); }
     catch (e) { return { cancelled: false, why: e.message }; }
   })();
   host.note('WATCHDOG — pulled the character out of a blind walk', {

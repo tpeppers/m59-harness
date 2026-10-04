@@ -159,6 +159,9 @@ import { lootOnlyStatus } from './m59-loot-filter.mjs';
 // FARMING STRATEGY FILES: the engine applies a file; the keeper only binds it (applyFarmStrategy).
 import { FarmStrategyEngine } from './m59-strategy-engine.mjs';
 import { PolicySourceBook } from './m59-policy-sources.mjs';
+import { keeperOrigin, claimantOrigin, moveOrigin, originLabel, liveMoveOrder, movementReport,
+         journeyProvenance, installMoveOrders, describePreemption } from './m59-move-origin.mjs';
+import { recordMovementIncident, classifyJourneyFailure } from './m59-movement-incidents.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1864,6 +1867,45 @@ export function splitBySourcing(requests = [], { policy = null, plan = null } = 
   return { buy, stockpile, off };
 }
 
+// THE MOVEMENT INCIDENT a failed keeper journey, a wedge given up on, or a stall with no lever
+// leaves behind (m59-movement-incidents.mjs). A module function rather than only a method, so a
+// test's stand-in keeper running `Autopilot.prototype.travel` reaches it too.
+function journeyIncident(ap, { kind = null, outcome = {}, to = null, startedIn = null, startedAt = 0,
+                            startAt = null, origin = null, route = null, legs = null,
+                            hpStart = null, hpMax = null } = {}) {
+  try {
+    const s = ap?.s, c = s?.client, me = c?.self;
+    const cancel = (s?.lastMovementCancel?.at ?? 0) >= startedAt ? s.lastMovementCancel : null;
+    const hops = Array.isArray(route?.hops) ? route.hops : [];
+    const stage = (Array.isArray(outcome?.refusals) ? outcome.refusals : []).find(r => r?.stand_on)?.stand_on
+      ?? (Number.isFinite(Number(legs)) ? hops[Number(legs)]?.stand_on : null) ?? null;
+    const here = s?.world?.room ?? null;
+    const objs = [...(c?.room?.objects?.values?.() ?? [])]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER));
+    const v = c?.vitals?.() ?? {};
+    recordMovementIncident({
+      agent: ap?.name ?? s?.name ?? null, character: c?.me?.name ?? null,
+      kind: kind ?? classifyJourneyFailure(outcome, cancel), source: 'keeper',
+      reason: outcome?.reason ?? outcome?.why ?? null,
+      room: here ? { num: here.num, name: here.name ?? null } : null,
+      from: startedIn, start: startAt,
+      end: me ? { room: here?.num ?? null, row: me.row, col: me.col, x: me.x, y: me.y } : null,
+      target: { room: to, name: hops.at(-1)?.to_name ?? null,
+                ...(stage ? { row: stage.row, col: stage.col, kind: 'exit_stage' } : {}) },
+      route: { planned: hops.length ? [hops[0]?.from, ...hops.map(h => h?.to)] : null,
+               legs_done: legs, hop_index: legs, next_hop: hops[Number(legs)]?.to ?? null },
+      refusals: Array.isArray(outcome?.refusals) ? compactRefusals(outcome.refusals) : null,
+      origin, cancel: cancel ? { ...cancel, summary: describePreemption(cancel) } : null,
+      trail: ap?.watch?.pulses ?? null,
+      vitals: { health: v.health?.value ?? null, max_health: hpMax ?? v.health?.max ?? null,
+                health_at_start: hpStart, vigor: v.vigor?.value ?? null },
+      threats: { count: objs.length,
+                 names: [...new Set(objs.map(o => c?.rsc?.get?.(o.nameRsc) ?? o.name).filter(Boolean))] },
+      ms: startedAt ? Date.now() - startedAt : null,
+      epoch: epochId('movement'),
+    });
+  } catch (e) { if (process.env.M59_INCIDENT_DEBUG) console.error('[incident]', e); }
+}
 
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
@@ -5635,7 +5677,7 @@ export class Autopilot {
   // Only survival call sites may transfer an episode to the new movement generation.
   cancelForSurvival(token,why,options={}) {
     const e=this.rememberSurvivalJam(),generation=this.s.movementGeneration;
-    const result=this.s.cancelMovement(token,why,options);
+    const result=this.s.cancelMovement(token,why,{...options,origin:options.origin??keeperOrigin('survival')});
     if(e && result?.cancelled && this.s.movementGeneration===generation+1) {
       e.generation=this.s.movementGeneration;
       this.ledgerEvent('survival_jam',{phase:'transferred',episode_id:e.id,
@@ -5666,7 +5708,7 @@ export class Autopilot {
     const next=chooseSurvivalDecision(s,choice,{because:reason,outcome:'interrupted'});
     this.suspendJourney(reason);
     this.revive(reason);
-    this.cancelForSurvival(controlToken,reason,{preserveId:next.id});
+    this.cancelForSurvival(controlToken,reason,{preserveId:next.id,origin:keeperOrigin('shelter')});
     await this.continueSurvivalDecision();
     return true;
   }
@@ -5899,7 +5941,7 @@ export class Autopilot {
       const why='shelter approach made no confirmed route progress';
       this.note(why,{to:{row:spot.row,col:spot.col},room,
         stalled_ms:Date.now()-progress.progressedAt,remaining_steps:progress.best});
-      this.cancelForSurvival(null,why);
+      this.cancelForSurvival(null,why,{origin:keeperOrigin('shelter')});
     },500);
     timer.unref?.();
     return ()=>{
@@ -6169,7 +6211,7 @@ export class Autopilot {
       // takes the controls back mid-hop (tour 15, the sewers). The ladder IS the keeper.
       if (this.inert) this.inert.at = Date.now();
       const crossed = await traceSurvivalOperation(s, 'refuge_exit', { destination: hop.to,
-        selected: traceRefuge(spot) }, () => this.s.travel(hop.to, { maxHops: 1 }))
+        selected: traceRefuge(spot) }, () => this.s.travel(hop.to, { origin: keeperOrigin('safe_spot'), maxHops: 1 }))
                                 .catch(e => ({ arrived: false, why: e.message }));
       if (interrupted()) return cancelled();
       if (this.inert) this.inert.at = Date.now();
@@ -7233,7 +7275,7 @@ export class Autopilot {
     if (room?.num !== e.room) {
       this.doing = 'travelling';
       if ((await this.leaveHold('setting out to provision someone')).refused) return true;
-      const r = await this.travel(e.room, { maxHops: 14 }).catch(x => ({ arrived: false, reason: x.message }));
+      const r = await this.travel(e.room, { origin: keeperOrigin('provision'), maxHops: 14 }).catch(x => ({ arrived: false, reason: x.message }));
       if (!r.arrived) {
         e.failures = (e.failures || 0) + 1;
         this.note('could not reach the supplicant', { to_room: e.room, why: r.reason, attempt: e.failures });
@@ -7417,7 +7459,7 @@ export class Autopilot {
     if (room?.num !== e.room) {
       this.doing = 'travelling';
       if ((await this.leaveHold('taking a signet ring back to its owner')).refused) return true;
-      const r = await this.travel(e.room, { maxHops: 20 })
+      const r = await this.travel(e.room, { origin: keeperOrigin('signet_return'), maxHops: 20 })
                       .catch(x => ({ arrived: false, reason: x.message }));
       if (!r.arrived) {
         e.failures = (e.failures || 0) + 1;
@@ -7503,7 +7545,7 @@ export class Autopilot {
     if (room?.num !== e.room) {
       this.doing = 'travelling';
       if ((await this.leaveHold('setting out on a loot run')).refused) return true;
-      const r = await this.travel(e.room, { maxHops: 14 }).catch(x => ({ arrived: false, reason: x.message }));
+      const r = await this.travel(e.room, { origin: keeperOrigin('errand'), maxHops: 14 }).catch(x => ({ arrived: false, reason: x.message }));
       if (!r.arrived) {
         e.failures = (e.failures || 0) + 1;
         this.note('could not reach the loot run', { to_room: e.room, why: r.reason, attempt: e.failures });
@@ -9251,13 +9293,13 @@ export class Autopilot {
     if (!this.suspendedJourney) this.suspendJourney('recovery detour');
     if (this.inert?.travelling) {
       this.cancelForSurvival(null,'recovery detour retains the destination',
-        {preserveId:currentSurvivalDecision(this.s)?.id});
+        {preserveId:currentSurvivalDecision(this.s)?.id,origin:keeperOrigin('recovery_detour')});
       this.revive('recovery detour retains the destination');
     }
     this.ledgerEvent('travel_recovery_detour', {
       to: room, resume_to: this.suspendedJourney?.to ?? null,
     });
-    return this.travel(room, { ...opts, recoveryDetour: true });
+    return this.travel(room, { ...opts, recoveryDetour: true, origin: opts?.origin ?? keeperOrigin('recovery_detour') });
   }
 
   async travel(room, opts) {
@@ -9379,7 +9421,7 @@ export class Autopilot {
           this.suspendedJourney ??= { to: Number(room), why: `travelling to ${room}`,
             at: Date.now(), trigger: why, attempts: (this.inert?.attempts ?? 0) + 1,
             deaths_at: this.tally?.deaths ?? 0 };
-          this.s.cancelMovement?.(null, why);
+          this.s.cancelMovement?.(null, why, { origin: keeperOrigin('wedge_shelter') });
           this.revive(why);
           this.note('journey paused at the wall after a wedge', { to: Number(room) });
           return { arrived: false, paused: true, wedged: true, sheltered: true, reason: why };
@@ -9392,7 +9434,12 @@ export class Autopilot {
         }
         this.note('could not find shelter from the wedge', { why: left?.why ?? 'no answer' });
       }
-      if (wedge?.refused) return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
+      if (wedge?.refused) {
+        journeyIncident(this, { kind: 'wedge', outcome: { refused: true, wedged: true, reason: wedge.why },
+                                     to: room, startedIn: Number(this.s?.world?.room?.num ?? NaN) || null,
+                                     startedAt: Date.now(), origin: this.s?.moveOrder?.origin ?? null });
+        return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
+      }
     }
 
     // AND SET OUT FIT, IF THIS IS SOMEWHERE FIT CAN BE HAD FOR FREE. Above the journey
@@ -9451,6 +9498,11 @@ export class Autopilot {
     // route; two characters asked for the same room from different places are not making the
     // same trip, and comparing them as if they were is how a road looks safe on average.
     const startedIn = Number(this.s?.world?.room?.num ?? NaN) || null;
+    // WHO ORDERED THIS JOURNEY. The prototype wrapper (installMoveOrders, bottom of this file)
+    // has registered it as the live move order; read it here, before anything can cancel it.
+    const journeyOrigin = this.s?.moveOrder?.origin ?? moveOrigin(opts?.origin ?? null);
+    // WHERE THE BODY STOOD WHEN IT SET OUT, square and fine point, for the incident log.
+    const startAt = (me => me ? { room: startedIn, row: me.row, col: me.col, x: me.x, y: me.y } : null)(this.s.client?.self);
     const v0 = this.s.client?.vitals?.()?.health;
     const hpStart = v0?.value ?? null, hpMax = v0?.max ?? null;
     const detailed = detailSettings(this.policy, 'travel');
@@ -9572,6 +9624,8 @@ export class Autopilot {
       });
       outcome = await this.s.travel(room, {
         ...sessionOpts,
+        // The same order one layer down: same issuer, same room, so it is inherited, not re-issued.
+        origin: journeyOrigin,
         movementGeneration,
         ...(wantSide ? { arriveNear: wantSide } : {}),
         // A ROOM THAT IS WORKED RATHER THAN WALKED ends the walk on arrival and hands the body
@@ -9671,9 +9725,18 @@ export class Autopilot {
         // for one night that was the entire account the fleet could give of 46 of 46 failed
         // journeys. Session.cancelMovement has always recorded a `why`; this carries it onto
         // the row so the question is a COLUMN rather than an investigation.
-        cancelled_by: this.s?.lastMovementCancel?.why ?? null,
-        cancelled_ms_ago: this.s?.lastMovementCancel?.at
+        //
+        // ONLY A CANCEL DURING THIS JOURNEY. This used to carry whatever the last cancel had been,
+        // so an arrived journey could name the clear-the-way cancel issued before it set out.
+        cancelled_by: (this.s?.lastMovementCancel?.at ?? 0) >= startedAt
+          ? this.s.lastMovementCancel.why ?? null : null,
+        cancelled_ms_ago: (this.s?.lastMovementCancel?.at ?? 0) >= startedAt
           ? Date.now() - this.s.lastMovementCancel.at : null,
+        // AND WHO, ON BOTH SIDES (m59-move-origin.mjs): `origin`/`ordered_by` is this journey's
+        // issuer, `cancelled_by_origin` the canceller's. The 2026-10-04 buy-spell walk to 714 was
+        // cancelled by `keeper:shelter` three times and the row could only say so in prose.
+        ...journeyProvenance({ origin: journeyOrigin, cancel: this.s?.lastMovementCancel,
+                               startedAt }),
         stumbles: Number.isFinite(outcome?.stumbles) ? outcome.stumbles : null,
         ms: Date.now() - startedAt,
         // The A/B field retains its old budget-clock meaning. The inclusive recovery time
@@ -9690,6 +9753,11 @@ export class Autopilot {
         // alive to write this line. It is joined afterwards, from the postmortem's own
         // `travel_arm`, which is why that field exists.
       });
+      // AND A MOVEMENT INCIDENT, when it did not arrive: one self-contained chunk a script can
+      // replay (m59-movement-incidents.mjs). A hand-off to a worked room is not a failure.
+      if (!outcome?.arrived && !outcome?.handed_off)
+        journeyIncident(this, { outcome, to: room, startedIn, startedAt, startAt,
+                                     origin: journeyOrigin, route: initialRoute, legs, hpStart, hpMax });
       if (travelKind === 'travel') {
         this.detailEvent('travel', 'trip', {
           to: room, arrived: outcome?.arrived ?? false, reason: outcome?.reason ?? null,
@@ -10848,7 +10916,8 @@ export class Autopilot {
     const blocked = this.passStartedAt ? now - this.passStartedAt : 0;
     let broke = null;
     if (blocked >= PULSE_MS) {
-      try { broke = this.s.cancelMovement(null, 'under attack and not swinging — the fight-back edict'); }
+      try { broke = this.s.cancelMovement(null, 'under attack and not swinging — the fight-back edict',
+                                               { origin: keeperOrigin('fight_back') }); }
       catch (e) { broke = { cancelled: false, why: e.message }; }
     }
     this.note('WATCHDOG — under attack for ' + Math.round((now - w.attack.since) / 1000) +
@@ -10979,7 +11048,8 @@ export class Autopilot {
     const blocked = this.passStartedAt ? now - this.passStartedAt : 0;
     let broke = null;
     if (blocked >= PULSE_MS) {
-      try { broke = this.s.cancelMovement(null, 'a creature is blocking the walk — clear_path'); }
+      try { broke = this.s.cancelMovement(null, 'a creature is blocking the walk — clear_path',
+                                               { origin: keeperOrigin('clear_path') }); }
       catch (e) { broke = { cancelled: false, why: e.message }; }
     }
     this.note('WATCHDOG — covered no ground for ' + Math.round(pinnedFor / 1000) +
@@ -11701,6 +11771,11 @@ export class Autopilot {
     // see WHICH loop rather than that there is one.
     if (!lever && this.stallRepeats >= STALL_NO_LEVER_REPEATS) {
       if (!this.refusals?.has('STALL_NO_LEVER'))
+        journeyIncident(this, { kind: 'stall', outcome: { reason: `stalled with no lever: ${reason}` },
+          to: this.suspendedJourney?.to ?? this.inert?.to ?? null,
+          startedIn: Number(this.s?.world?.room?.num ?? NaN) || null, startedAt: Date.now(),
+          origin: this.s?.moveOrder?.origin ?? null });
+      if (!this.refusals?.has('STALL_NO_LEVER'))
         this.note('STALLED WITH NO LEVER', {
           why: reason, repeats: this.stallRepeats, passes: this.idlePasses,
           room: this.s?.world?.room?.num ?? null,
@@ -12048,6 +12123,12 @@ export class Autopilot {
   // restarts, and the broker restarts often. An audit of what a character decided over
   // a week cannot live there. Bookkeeping must never break play, so this swallows
   // everything: a character with no name yet is simply not recorded.
+  // ONE MOVEMENT INCIDENT (m59-movement-incidents.mjs): where the body stood, what it was trying
+  // to reach, the route and the hop, why it failed and WHO cancelled it, the last few positions,
+  // health and the crowd. Deduped in the log, so a retry loop is one incident with a count.
+  // Never throws: the record must not break the play it is recording.
+  recordJourneyIncident(args = {}) { return journeyIncident(this, args); }
+
   ledgerEvent(kind, detail = {}) {
     const who = this.s.client?.me?.name;
     if (!who) return;
@@ -12390,8 +12471,14 @@ export class Autopilot {
       // A record that cannot answer a question is worse than one that says "I do not know",
       // because it answers anyway.
       blink_rung: this.s.blinkRungStats ?? null,
+      // WHO IS STEERING THE BODY, AND WHO LAST TOOK A MOVE FROM SOMEBODY ELSE.
+      // `movement.order.ordered_by` is the current move's issuer; `movement.last_preempted` is
+      // the last time one issuer's move was cancelled by another — what, by whom, when, why.
+      movement: movementReport(this.s),
+      last_preempted: movementReport(this.s)?.last_preempted ?? null,
       suspended_journey: this.suspendedJourney
         ? { to: this.suspendedJourney.to,
+            ordered_by: this.suspendedJourney.origin ? originLabel(this.suspendedJourney.origin) : null,
             trigger: this.suspendedJourney.trigger ?? null,
             attempts: this.suspendedJourney.attempts ?? 0,
             age_s: Math.round((Date.now() - (this.suspendedJourney.at ?? Date.now())) / 1000) }
@@ -12903,7 +12990,7 @@ export class Autopilot {
               {because:why,outcome});
             this.suspendJourney(why);
             this.revive(why);
-            this.cancelForSurvival(null,why,{preserveId:next.id});
+            this.cancelForSurvival(null,why,{preserveId:next.id,origin:keeperOrigin('shelter')});
             await this.continueSurvivalDecision();
             return true;
           };
@@ -13175,7 +13262,7 @@ export class Autopilot {
     const claimant = `busy: ${doing} — ${held.by ?? 'an unnamed holder'}`.slice(0, 80);
     const interrupted = beginning
       ? (() => {
-          try { return this.s?.cancelMovement?.(null, claimant) ?? null; }
+          try { return this.s?.cancelMovement?.(null, claimant, { origin: claimantOrigin(held.by) }) ?? null; }
           catch (e) { return { cancelled: false, why: e.message }; }
         })()
       : null;
@@ -13496,7 +13583,7 @@ export class Autopilot {
     this.clearSurvivalJam('keeper stopped');
     if (currentSurvivalDecision(this.s)) {
       const options={replacement:{strategy:'yield_to_controller',reason:why??'keeper stopped',status:'yielded',reason_code:'keeper_stop'}};
-      if(this.s.cancelMovement)this.s.cancelMovement(null,why??'keeper stopped',options);
+      if(this.s.cancelMovement)this.s.cancelMovement(null,why??'keeper stopped',{...options,origin:keeperOrigin('keeper_stop')});
       else cancelSurvivalDecision(this.s,why??'keeper stopped',options);
     }
     if (!hard) { this.goInert(why); return this.status(); }
@@ -13648,9 +13735,13 @@ export class Autopilot {
     if (this.suspendedJourney) return true; // a recovery detour cannot replace its parent
     const journey = this.travelling;
     if (journey?.to == null) return false;
+    // The order this journey belongs to, so a resume is still that issuer's journey and a
+    // FleetScript walk can recognise its own order coming back.
+    const order = liveMoveOrder(this.s) ?? this.s?.moveOrder ?? null;
     this.suspendedJourney = {
       to: journey.to, why: journey.why ?? 'travelling', at: Date.now(), trigger,
       attempts: (journey.attempts ?? 0) + 1, deaths_at: this.tally?.deaths ?? 0,
+      ...(order?.origin && Number(order.to) === Number(journey.to) ? { origin: order.origin } : {}),
     };
     return true;
   }
@@ -14225,7 +14316,7 @@ export class Autopilot {
           attempts: (journey.attempts ?? 0) + 1,
           deaths_at: this.tally?.deaths ?? 0,
         };
-        try { this.cancelForSurvival(null, 'wedged below the flee line while travelling'); } catch {}
+        try { this.cancelForSurvival(null, 'wedged below the flee line while travelling', { origin: keeperOrigin('watchdog') }); } catch {}
         // Mend at a wall FORWARD on the route rather than idling where it was dying — the
         // same landing the watchdog's other rescue takes, and for the same reason.
         this.wantsForwardShelter = 'wedged below the flee line while travelling';
@@ -14254,7 +14345,7 @@ export class Autopilot {
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.inert_rescues = (this.tally.inert_rescues || 0) + 1;
         const stopped = (() => {
-          try { return this.cancelForSurvival(null, 'the watchdog rescuing a stalled driver'); } catch (e) { return { cancelled: false, why: e.message }; }
+          try { return this.cancelForSurvival(null, 'the watchdog rescuing a stalled driver', { origin: keeperOrigin('watchdog') }); } catch (e) { return { cancelled: false, why: e.message }; }
         })();
         const was = this.inert?.why ?? `movement held by ${this.facultyOwner('movement')}`;
         // A RESCUED JOURNEY IS PAUSED, NOT CANCELLED.
@@ -14434,7 +14525,7 @@ export class Autopilot {
       // WEDGE_LADDER_MS, so the only evidence the ladder is being fed at all was the note.
       this.tally.watchdog_wedges_recorded = (this.tally.watchdog_wedges_recorded || 0) + 1;
       const broke = cancelling ? (() => {
-        try { return this.s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
+        try { return this.s.cancelMovement(null, 'the watchdog breaking a healthy wedge', { origin: keeperOrigin('watchdog') }); }
         catch (e) { return { cancelled: false, why: e.message }; }
       })() : { cancelled: false, interrupted: null,
                why: 'cancels are off here; this arm is recording the wedge so the ladder can run' };
@@ -14510,7 +14601,7 @@ export class Autopilot {
     w.interrupts++;
     this.tally.watchdog_interrupts = (this.tally.watchdog_interrupts || 0) + 1;
     const stopped = (() => {
-      try { return this.cancelForSurvival(null, 'the watchdog pulling us out of a blind walk below the flee line'); } catch (e) { return { cancelled: false, why: e.message }; }
+      try { return this.cancelForSurvival(null, 'the watchdog pulling us out of a blind walk below the flee line', { origin: keeperOrigin('watchdog') }); } catch (e) { return { cancelled: false, why: e.message }; }
     })();
     this.note('WATCHDOG — pulled the character out of a blind walk', {
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
@@ -14838,7 +14929,7 @@ export class Autopilot {
       // this runs at the gate BEFORE the real journey is issued. `maxStumbles` is low for the
       // same reason: if the door we came in by will not take us back, that is the finding,
       // and the answer is the hold below rather than grinding on it.
-      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2, movementGeneration, controlToken })
+      const t = await s.travel(prev, { origin: keeperOrigin('unstick'), maxHops: 2, maxStumbles: 2, movementGeneration, controlToken })
         .catch(e => ({ arrived: false, reason: e.message }));
       const at = this.wedgePlace();
       tried.push({ rung: 3, how: 'back through the door, into the previous room', room: prev,
@@ -16072,7 +16163,7 @@ export class Autopilot {
           this.s.cancelMovement(null,
             `below the flee line (${Math.round(danger.frac * 100)}%) and still losing ` +
             `${Math.abs(danger.rate)}/s — the survival rung is choosing a different ` +
-            'destination, so this walk is already void');
+            'destination, so this walk is already void', { origin: keeperOrigin('survival_preempt') });
           this.tally.survival_preempt_cancels = (this.tally.survival_preempt_cancels || 0) + 1;
         } catch { /* a handbrake that throws must not stop the rescue */ }
       }
@@ -16906,7 +16997,7 @@ export class Autopilot {
           health: v?.health?.pct ?? null, mana: v?.mana?.pct ?? null, vigor: vigorOf(v),
           why: 'just came back from the dead with nothing on us. Resting in a room that ' +
                'spawns is the thing that turns a recovery into the next death' });
-        const t = await this.travel(safe.room, { maxHops: 6 })
+        const t = await this.travel(safe.room, { origin: keeperOrigin('underworld_escape'), maxHops: 6 })
                         .catch(e => ({ arrived: false, reason: e.message }));
         if (t.arrived) { this.progress('reached somewhere safe to recover'); return HANDLED; }
         this.note('could not reach somewhere safe', { to_room: safe.room, why: t.reason });
@@ -16998,7 +17089,7 @@ export class Autopilot {
     // about, and it is the same argument here.
     const takeBack = (what, why, detail = {}, { abandon = false } = {}) => {
       const stopped = (() => {
-        try { return this.cancelForSurvival(null, 'a travel guard rung taking the character back'); } catch (e) { return { cancelled: false, why: e.message }; }
+        try { return this.cancelForSurvival(null, 'a travel guard rung taking the character back', { origin: keeperOrigin('travel_guard') }); } catch (e) { return { cancelled: false, why: e.message }; }
       })();
       const was = held.why ?? 'travelling';
       this.tally.travel_takebacks = (this.tally.travel_takebacks || 0) + 1;
@@ -18301,7 +18392,7 @@ export class Autopilot {
       });
       this.doing = 'converging';
 
-      const tResult = await this.travel(cf.room, { maxHops })
+      const tResult = await this.travel(cf.room, { origin: keeperOrigin('conflict_response'), maxHops })
         .catch(() => ({ arrived: false }));
 
       if (!(tResult?.arrived)) {
@@ -19590,7 +19681,7 @@ export class Autopilot {
         // produces silence.
         if (door.at && Number.isFinite(door.at.row) && Number.isFinite(door.at.col))
           await this.s.walkTo(door.at.col, door.at.row, { maxSteps: 12 }).catch(() => null);
-        const went = await this.s.travel(door.to, { maxHops: 1 })
+        const went = await this.s.travel(door.to, { origin: keeperOrigin('follow'), maxHops: 1 })
           .catch(e => ({ arrived: false, why: e.message }));
         if (went?.arrived || this.s.client?.room?.id !== undefined) {
           // Through, or at least moved. Start a fresh trail on the far side: the leader is
@@ -20791,7 +20882,10 @@ export class Autopilot {
     const ours = this.inert;
     let outcome = null;
     try {
-      outcome = await this.travel(j.to, { maxHops: 30 });
+      outcome = await this.travel(j.to, { maxHops: 30,
+        // STILL THE ORIGINAL ISSUER'S JOURNEY: a resume carries the order it suspended, and says
+        // the keeper picked it back up. One the keeper started itself is its own.
+        origin: j.origin ? { ...j.origin, resumed_by: 'keeper:resume_journey' } : keeperOrigin('resume_journey') });
     } catch (e) {
       this.note('resumed journey failed', { to: j.to, why: e.message });
     } finally {
@@ -20812,7 +20906,10 @@ export class Autopilot {
     return HANDLED;
   }
 
-  cancelJourney(why = 'external movement cancellation', controlToken = null) {
+  // `origin` is the CALLER's provenance (m59-move-origin.mjs). Everything that reaches this is
+  // external — the cancel_movement tool, POST /cancel, a FleetScript clearing the way — so a
+  // caller that names nobody is `mcp:unattributed`, never the keeper.
+  cancelJourney(why = 'external movement cancellation', controlToken = null, origin = null) {
     this.pendingBlockerLure=null;
     this.clearSurvivalJam('external cancellation');
     // A watchdog pauses a route through Session.cancelMovement. An external
@@ -20822,7 +20919,8 @@ export class Autopilot {
     this.suspendedJourney = null;
     if (this.inert?.travelling) this.inert.cancelled = true;
     const result = this.s.cancelMovement(controlToken, why, {replacement:{
-      strategy:'yield_to_controller',reason:why,reason_code:'explicit_cancellation',status:'yielded'}});
+      strategy:'yield_to_controller',reason:why,reason_code:'explicit_cancellation',status:'yielded'},
+      origin: moveOrigin(origin, { source: 'mcp', name: 'unattributed' })});
     this.note('journey cancelled by its caller', { to, why });
     return { ...result, retired_destination: to };
   }
@@ -21015,7 +21113,7 @@ export class Autopilot {
             const p = this.placement;
             p.relocations++;
             if (mine != null) p.aimed_at_assignment += (target.room === mine ? 1 : 0);
-            const r0 = await this.travel(target.room, { maxHops: 14 })
+            const r0 = await this.travel(target.room, { origin: keeperOrigin('hunt_relocation'), maxHops: 14 })
                              .catch(e => ({ arrived: false, reason: e.message }));
             // HANDED TO THE LEVER PUZZLE IS NOT A MISS. Counting it would blacklist the assigned
             // room after three passes (relocFails -> unreachable) for a journey that is going fine.
@@ -21226,7 +21324,7 @@ export class Autopilot {
             await this.leaveHold('leaving a room whose spawn cap cannot recover',
                                  { force: true }).catch(() => {});
             const go = elsewhere[0];
-            const moved = await this.travel(go.room, { maxHops: 14 })
+            const moved = await this.travel(go.room, { origin: keeperOrigin('spawn_cap_relocation'), maxHops: 14 })
                                     .catch(e => ({ arrived: false, reason: e.message }));
             if (moved.arrived) {
               this.homeRoom = go.room;
@@ -21526,7 +21624,7 @@ export class Autopilot {
                    'something that cannot happen. This is not roaming; roam guards against ' +
                    'leaving GOOD ground, and this is not that.' });
             this.doing = 'travelling';
-            const moved = await this.travel(home, { maxHops: 20 })
+            const moved = await this.travel(home, { origin: keeperOrigin('station_return'), maxHops: 20 })
                                   .catch(e => ({ arrived: false, reason: e.message }));
             if (moved.arrived) { this.emptyPasses = 0; this.progress('left a room that spawns nothing'); return HANDLED; }
             this.note('could not get back to the assigned room', { going_to: home, why: moved.reason });
@@ -21962,7 +22060,7 @@ export class Autopilot {
             // here is not the shelter the refusal exists to protect.
             await this.leaveHold('leaving a room with no wall in it', { force: true }).catch(() => {});
             const go = elsewhere[0];
-            const moved = await this.travel(go.room, { maxHops: 14 })
+            const moved = await this.travel(go.room, { origin: keeperOrigin('wall_relocation'), maxHops: 14 })
                                     .catch(e => ({ arrived: false, reason: e.message }));
             if (moved.arrived) {
               this.homeRoom = go.room;
@@ -22206,7 +22304,7 @@ export class Autopilot {
             partner: this.policy.partner, they_are_in: mate.room, waited_passes: this.waitedForMate,
             why: 'the wait assumed they were walking to meet us and they are not — 640 passes ' +
                  'of waiting was the record before this was bounded' });
-          const t = await this.travel(mate.room, { maxHops: 8 })
+          const t = await this.travel(mate.room, { origin: keeperOrigin('partner'), maxHops: 8 })
                               .catch(e => ({ arrived: false, reason: e.message }));
           if (t.arrived) { this.waitedForMate = 0; this.progress('joined my partner'); return HANDLED; }
           this.note('could not reach my partner', { why: t.reason ?? 'refused' });
@@ -23774,7 +23872,7 @@ export class Autopilot {
         if (this.travelInterrupted() || this.suspendedJourney) break;
         if (budget <= 0) break;
         if (this.hereRoom() !== stop.room) {
-          const walked = await this.travel(stop.room, { maxHops: 12 })
+          const walked = await this.travel(stop.room, { origin: keeperOrigin('chalice_cargo_buy'), maxHops: 12 })
             .catch(error => ({ arrived: false, reason: error.message }));
           if (!walked?.arrived) {
             this.note('could not reach a counter for the holder', { room: stop.room, why: walked?.reason });
@@ -23871,7 +23969,7 @@ export class Autopilot {
     const hops = this.hereRoom() === cfg.station_room ? 0 : this.hopsTo(cfg.station_room);
     if (!Number.isFinite(hops) || hops > cfg.max_detour_hops + 8) return false;   // not on our road yet
     if (hops > 0) {
-      const r = await this.travel(cfg.station_room, { maxHops: hops + 4 }).catch(e => ({ arrived: false }));
+      const r = await this.travel(cfg.station_room, { origin: keeperOrigin('chalice_delivery'), maxHops: hops + 4 }).catch(e => ({ arrived: false }));
       if (!r.arrived) { cargo.tries++; return true; }
     }
     if (!this.playerHere(server)) { cargo.tries++; return false; }
@@ -24209,7 +24307,7 @@ export class Autopilot {
         // ride's detour budget, and a failed walk is tried again rather than skipped — a skip
         // would walk the town trip with the cup still in the pack, which is the whole bug.
         const r = await this.travel(cfg.station_room,
-          st.returning ? {} : { maxHops: (trip.maxHops ?? cfg.max_detour_hops) + 2 })
+          st.returning ? { origin: keeperOrigin('chalice_ride') } : { origin: keeperOrigin('chalice_ride'), maxHops: (trip.maxHops ?? cfg.max_detour_hops) + 2 })
           .catch(e => ({ arrived: false, reason: e.message }));
         if (r.arrived) { st.stage = next; return pending(0); }
         if (r.paused || r.cancelled || this.travelInterrupted()) return pending(5000);
@@ -24673,7 +24771,7 @@ export class Autopilot {
     if (role !== 'alternate' || !cup) return false;
     const park = cfg.post_room ?? cfg.station_room;
     if (this.hereRoom() !== park) {
-      await this.travel(park, { maxHops: 6, chalice: true }).catch(() => {});
+      await this.travel(park, { origin: keeperOrigin('chalice_park'), maxHops: 6, chalice: true }).catch(() => {});
       return true;
     }
     if (!this.hold) await this.takeRecoverySpot('on chalice duty while the holder is away').catch(() => {});
@@ -24689,7 +24787,7 @@ export class Autopilot {
     };
     const goto = async (room, next) => {
       if (this.hereRoom() === Number(room)) { st.stage = next; st.since = now; return true; }
-      const r = await this.travel(Number(room), { maxHops: 8, chalice: true, chaliceRoom: Number(room) })
+      const r = await this.travel(Number(room), { origin: keeperOrigin('chalice'), maxHops: 8, chalice: true, chaliceRoom: Number(room) })
         .catch(e => ({ arrived: false, reason: e.message }));
       if (r.arrived) { st.stage = next; st.since = Date.now(); }
       else if (!(r.paused || r.cancelled)) {
@@ -26094,7 +26192,7 @@ export class Autopilot {
     const funded = await this.ensurePurchaseFunds(this.shoppingPlan({ kind: 'delivery' }));
     if (!funded.ready) return funded;
     if (s.world?.room?.num !== REAGENT_SHOP.room) {
-      const walked = await this.travel(REAGENT_SHOP.room, { maxHops: 12 })
+      const walked = await this.travel(REAGENT_SHOP.room, { origin: keeperOrigin('farm_supply_buy'), maxHops: 12 })
         .catch(error => ({ arrived: false, reason: error.message }));
       if (!walked?.arrived) {
         this.coordination.delivery.failed++;
@@ -26221,7 +26319,7 @@ export class Autopilot {
     if (this.s.world?.room?.num !== p.room) {
       this.doing = 'travelling';
       if ((await this.leaveHold('returning with the shared farm delivery')).refused) return true;
-      const walked = await this.travel(p.room, { maxHops: 24 })
+      const walked = await this.travel(p.room, { origin: keeperOrigin('farm_supply_delivery'), maxHops: 24 })
         .catch(error => ({ arrived: false, reason: error.message }));
       if (!walked?.arrived) {
         p.failures = (p.failures || 0) + 1;
@@ -26295,7 +26393,7 @@ export class Autopilot {
       for (const stop of stops) {
         if (!left()) break;
         if ((await this.leaveHold('carrying the rest of the delivery to the next room')).refused) break;
-        const walked = await this.travel(stop, { maxHops: 6 })
+        const walked = await this.travel(stop, { origin: keeperOrigin('farm_supply_delivery'), maxHops: 6 })
           .catch(error => ({ arrived: false, reason: error.message }));
         if (!walked?.arrived) {
           this.note('could not reach a nearby farmer with the rest of the delivery',
@@ -26538,7 +26636,7 @@ export class Autopilot {
       this.note('bank withdrawal is required before shopping', {
         expected_cost: plan.expected_cost, reserve: plan.reserve, purse: funding.purse,
         shortfall: funding.shortfall, bank: bank.room, account: bank.account });
-      const r = await this.travel(bank.room, { maxHops: 30 });
+      const r = await this.travel(bank.room, { origin: keeperOrigin('purchase_funds'), maxHops: 30 });
       if (!r?.arrived || Number(s.world?.room?.num) !== bank.room)
         return pending(r?.reason ?? 'bank journey still pending');
     }
@@ -27003,7 +27101,7 @@ export class Autopilot {
       const alreadyThere = Number(this.s.world?.room?.num) === Number(trip.target.room);
       const r = alreadyThere
         ? { arrived: true }
-        : await this.travel(trip.target.room, { maxHops: Math.max(12, trip.target.hops + 4) })
+        : await this.travel(trip.target.room, { origin: keeperOrigin('town_trip'), maxHops: Math.max(12, trip.target.hops + 4) })
           .catch(e => ({ arrived: false, reason: e.message }));
       if (!alreadyThere) this.money.trips++;
       if (!r.arrived || this.travelInterrupted()) {
@@ -27380,7 +27478,7 @@ export class Autopilot {
     this.vaultTripAt = Date.now();
     this.doing = 'travelling';
     if (this.s.world?.room?.num !== BARLOQUE_VAULT.room) {
-      const walked = await this.travel(BARLOQUE_VAULT.room, {
+      const walked = await this.travel(BARLOQUE_VAULT.room, { origin: keeperOrigin('vault_run'),
         maxHops: Math.max(6, (route?.hops?.length ?? 2) + 3),
       }).catch(e => ({ arrived: false, reason: e.message }));
       if (!walked.arrived) {
@@ -27458,7 +27556,7 @@ export class Autopilot {
     // Loial, for eight days. The value was never read. Found by running this against prod's
     // chest cache with travel stubbed out.
     this.doing = 'travelling';
-    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
+    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { origin: keeperOrigin('stockpile_withdraw'), maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the stockpile', { why: trip.reason || 'travel refused' });
@@ -27967,7 +28065,7 @@ export class Autopilot {
     const funded = await this.ensurePurchaseFunds(plan);
     if (!funded.ready) return funded;
     if (s.world?.room?.num !== REAGENT_SHOP.room) {
-      const r = await this.travel(REAGENT_SHOP.room, { maxHops: 12 })
+      const r = await this.travel(REAGENT_SHOP.room, { origin: keeperOrigin('reagent_shopping'), maxHops: 12 })
                           .catch(e => ({ arrived: false, reason: e.message }));
       if (!r?.arrived) {
         this.note('could not reach the apothecary', { to: REAGENT_SHOP.name, have, want, why: r?.reason });
@@ -28124,7 +28222,7 @@ export class Autopilot {
         if (this.travelInterrupted() || this.suspendedJourney)
           return { pending: true, reason: 'paused for survival' };
         const target = shops[Math.min(i, shops.length - 1)];
-        got = await this.travel(target.room, { maxHops: 14 })
+        got = await this.travel(target.room, { origin: keeperOrigin('food_shopping'), maxHops: 14 })
                         .catch(e => ({ arrived: false, reason: e.message }));
         if (got?.arrived) break;
       }
@@ -28213,7 +28311,7 @@ export class Autopilot {
       const stop = trip.marketStops[trip.marketIndex];
       if (this.travelInterrupted() || this.suspendedJourney) return { pending: true };
       if (Number(this.s.world?.room?.num) !== stop.room) {
-        const result = await this.travel(stop.room, { maxHops: 20 });
+        const result = await this.travel(stop.room, { origin: keeperOrigin('sell_circuit'), maxHops: 20 });
         if (!result.arrived || this.travelInterrupted()) return { pending: true };
       }
       const sale = await this.sellInTown({ maxStack: stop.maxStack });
@@ -28314,7 +28412,7 @@ export class Autopilot {
     }
 
     this.doing = 'travelling';
-    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
+    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { origin: keeperOrigin('guild_wants'), maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the guild hall to contribute', {
@@ -28436,7 +28534,7 @@ export class Autopilot {
     if (!items.size) return { contributed: 0, why: 'nothing to give' };
     const room = Number(desk?.meet_room) || 106;
     this.doing = 'travelling';
-    const trip = await this.travel(room, { maxHops: 14 })
+    const trip = await this.travel(room, { origin: keeperOrigin('desk_deposit'), maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) return { contributed: 0, room, why: `could not reach room ${room}: ${trip.reason || 'travel refused'}` };
     const count = name => this.packAsItems().filter(x => norm(x.name) === name)
@@ -28480,7 +28578,7 @@ export class Autopilot {
     }
 
     this.doing = 'travelling';
-    const trip = await this.travel(700, { maxHops: 12 })
+    const trip = await this.travel(700, { origin: keeperOrigin('guild_tithe'), maxHops: 12 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the guildmaster for tithe', { amount: plan.amount,
@@ -28744,7 +28842,7 @@ export class Autopilot {
         mitigation:'already logged back in and turned at this wall; preserve the running health timer'},
         {because:'logoff already accomplished; continue healing'});
       this.survivalInterruptedPass=this.passes;
-      s.cancelMovement?.(null,'continue healing at the safe wall',{preserveId:currentSurvivalDecision(s)?.id});
+      s.cancelMovement?.(null,'continue healing at the safe wall',{preserveId:currentSurvivalDecision(s)?.id,origin:keeperOrigin('play_dead')});
       return false;
     }
     const declined=this.logoffDeclined(why,atWall);
@@ -28759,7 +28857,7 @@ export class Autopilot {
       if (rest?.strategy==='rest_safe' && this.rejoinedAt>(this.turnedAt??0))
         updateSurvivalDecision(s,rest.id,{phase:'turn_required'});
       this.survivalInterruptedPass=this.passes;
-      s.cancelMovement?.(null,'rest at the safe wall instead of logging off',{preserveId:currentSurvivalDecision(s)?.id});
+      s.cancelMovement?.(null,'rest at the safe wall instead of logging off',{preserveId:currentSurvivalDecision(s)?.id,origin:keeperOrigin('play_dead')});
       return false;
     }
     let d=currentSurvivalDecision(s);
@@ -28962,7 +29060,7 @@ export class Autopilot {
     // Invalidate the outstanding walk BEFORE reconnecting. Otherwise its next leg
     // immediately wakes the monsters the reconnect just put to sleep.
     this.survivalInterruptedPass = this.passes;
-    s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId});
+    s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId,origin:keeperOrigin('play_dead')});
 
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
@@ -29768,7 +29866,7 @@ export class Autopilot {
     // that produced a kill, that is where to be.
     if (this.homeRoom != null && room?.num !== this.homeRoom) {
       this.note('heading back to where the hunting was', { from: room?.name, to_room: this.homeRoom });
-      const back = await this.travel(this.homeRoom, { maxHops: 8 }).catch(e => ({ arrived: false, reason: e.message }));
+      const back = await this.travel(this.homeRoom, { origin: keeperOrigin('roam_home'), maxHops: 8 }).catch(e => ({ arrived: false, reason: e.message }));
       this.emptyPasses = 0;
       if (back.arrived) {
         this.tally.rooms_moved++;
@@ -29812,7 +29910,7 @@ export class Autopilot {
         spawn_chance: target.chance, also_here: target.also_here,
       });
       this.doing = 'travelling';
-      const r = await this.travel(target.room, { maxHops: 12 })
+      const r = await this.travel(target.room, { origin: keeperOrigin('roam'), maxHops: 12 })
                        .catch(e => ({ arrived: false, reason: e.message }));
       this.emptyPasses = 0;
       if (r.arrived) {
@@ -30007,7 +30105,7 @@ export class Autopilot {
         one_hit_reserve: maxHit != null && hp?.value != null
           ? hp.value <= maxHit : null,
       };
-      try { s.cancelMovement?.(); } catch { /* the failed result below is enough */ }
+      try { s.cancelMovement?.(null, 'guarded retreat deadline', { origin: keeperOrigin('retreat') }); } catch { /* the failed result below is enough */ }
     }, guardMs);
     try {
       // An emergency retreat must keep moving toward the sanctuary. Ordinary journeys
@@ -30612,3 +30710,14 @@ export function dropAutopilot(name) {
 }
 export const autopilotIfAny = (name) => pilots.get(name) || null;
 export const allAutopilots = () => [...pilots.entries()].map(([name, p]) => ({ name, ...p.status() }));
+
+// EVERY KEEPER JOURNEY IS A MOVE ORDER WITH AN ORIGIN (m59-move-origin.mjs). Wrapped rather than
+// edited into `travel`'s body, the way Session's walkers carry their intent observers, so the
+// body and the source-shape tests that read it are untouched. A caller inside the keeper names
+// its subsystem (`keeperOrigin('town_trip')`); one that names none inherits a live order, and
+// with nothing to inherit it is `keeper:unattributed` — an admitted gap, not a guess.
+installMoveOrders(Autopilot.prototype, {
+  methods: { travel: 'travel' },
+  sessionOf: ap => ap?.s,
+  defaultOrigin: ap => keeperOrigin('unattributed', ap?.doing ? { why: `doing: ${ap.doing}` } : {}),
+});

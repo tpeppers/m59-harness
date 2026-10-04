@@ -18,6 +18,25 @@ These tests are offline. They do not execute a raid or shut down a server.
 
 ## Travel and combat regressions
 
+- `m59-move-origin-test.mjs` (18): **who ordered a move and who cancelled it**, and the movement
+  incident log (`docs/m59-boundary.md`, provenance; `docs/m59-routing.md`, the incident log). A
+  cancel by another issuer records BOTH sides on `Session.cancelMovement` — the canceller's origin
+  and the order it pre-empted — and `status.movement.last_preempted` says `walk to 714 ordered by
+  fleetscript:buy-spell#r1 cancelled by keeper:shelter (…) at HH:MM:SSZ`; a script clearing its
+  own walk is `self_cancel`, not a preemption; a cancel with no origin is `unattributed`, never the
+  keeper; the job report carries `ordered_by`/`cancelled_by` and a busy refusal names whose walk
+  holds the body. Through `Autopilot.travel` on a stand-in keeper: the `travel_journey` row carries
+  `origin`/`ordered_by` and `cancelled_by_origin`, a cancel from BEFORE the journey is not blamed
+  for it, and a journey with no origin is `keeper:unattributed`. The failed journey writes exactly
+  one incident with start square and fine point, the stage square it failed to reach, route, trail,
+  threats and canceller; a retry loop dedupes into one incident with a count; `--export` is a
+  redacted fixture with a `replay` block. And a SOURCE SWEEP over the keeper and broker that fails,
+  by file and line, on any `.travel(` or `cancelMovement(` call naming no origin.
+  `m59-fleetscript-test.mjs` carries the step half: a walk whose journey the keeper pre-empts fails
+  with the canceller FIRST and the time, every move the run sends carries its own
+  `fleetscript:<name>#<run>` origin, and a keeper posture that will fight the walk is warned about
+  once.
+
 - `m59-hunt-priority-test.mjs` (42): `hunt_priority`, an order over the `hunt` set. A spider is
   chosen over a nearer tree; with no engageable spider the tree is; the ordering never adds a
   creature, keeps the wounded/pulled foe first, matches like `hunt` (spider is not black

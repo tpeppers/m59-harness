@@ -24,6 +24,7 @@
 //
 // No broker, no I/O -- the nodes call keeper methods that do the I/O.
 
+import { keeperOrigin } from './m59-move-origin.mjs';
 import {
   Selector, Sequence, Condition, Action,
   SUCCESS, FAILURE, RUNNING,
@@ -226,7 +227,7 @@ export function travelRefugeNode(keeper) {
         why_not_local: 'a few squares from a crowd is still inside its vision and its chase',
       });
 
-      const r = await keeper.travel(dest.inn, { reason: 'retreat' })
+      const r = await keeper.travel(dest.inn, { origin: keeperOrigin('bt_retreat'), reason: 'retreat' })
                          .catch(e => ({ arrived: false, error: String(e) }));
       if (r?.arrived) {
         keeper.progress(`reached ${dest.preferred ? 'monster-free retreat' : 'safety'} at ${dest.innName}`);

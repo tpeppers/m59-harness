@@ -15,6 +15,7 @@ import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
+import { keeperOrigin } from './m59-move-origin.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -954,7 +955,7 @@ export class CombatMode {
       s.combatEpoch = (s.combatEpoch ?? 0) + 1;
       s.fightGeneration = (s.fightGeneration ?? 0) + 1;
       const id = randomUUID();
-      withBodyCommand(s, () => s.cancelMovement(null, 'PvP survival: return fire', { preserveId: decision.id }), id);
+      withBodyCommand(s, () => s.cancelMovement(null, 'PvP survival: return fire', { preserveId: decision.id, origin: keeperOrigin('pvp_survival') }), id);
       s._router?.clear?.();
       if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = this.now(); }
       const keeper = this.keeper();
@@ -1023,7 +1024,7 @@ export class CombatMode {
     if (present.length && p.shelter?.status === 'approaching') {
       this.interruptPvPShelter(o, 'player attacker present; return fire takes priority');
       withBodyCommand(s, () => s.cancelMovement(null, 'PvP attacker interrupted monster shelter',
-        { preserveId: p.decision_id }), o.id);
+        { preserveId: p.decision_id, origin: keeperOrigin('pvp_survival') }), o.id);
       o.phaseRevision++; s.pacer.wake?.();
     } else if (present.length) this.interruptPvPShelter(o, 'player attacker present; return fire takes priority');
     if (!present.length && this.now() - p.last_attacked_at >= PVP_DANGER_MS) {
@@ -1139,7 +1140,7 @@ export class CombatMode {
     this.stop('replaced by a newer combat order');
     s.combatEpoch = (s.combatEpoch ?? 0) + 1;
     s.fightGeneration = (s.fightGeneration ?? 0) + 1;
-    withBodyCommand(s, () => s.cancelMovement(null, 'combat override accepted'), input.command_id ?? 'combat-accept');
+    withBodyCommand(s, () => s.cancelMovement(null, 'combat override accepted', { origin: keeperOrigin('combat_override') }), input.command_id ?? 'combat-accept');
     s._router?.clear?.();
     // The old job retains its own completion promise. It no longer owns the body.
     if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = this.now(); }
@@ -1422,7 +1423,7 @@ export class CombatMode {
       p.end_reason = reason; this.lastPvP = p;
       finishSurvivalDecision(this.s, p.decision_id, p.outcome, reason);
     }
-    withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId }), o.id);
+    withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId, origin: keeperOrigin('combat_mode') }), o.id);
     this.active = null; this.s.combatEpoch = (this.s.combatEpoch ?? 0) + 1;
     // AFTER the epoch bump, like restoreSafety: started before it, the unequip is preempted as
     // part of the fight being stopped.
@@ -1456,7 +1457,7 @@ export class CombatMode {
     if (!visible && o.phase === 'waiting') return;
     if (!visible && o.watchId) { this.stop('target no longer visible; normal behavior resumed'); return; }
     withBodyCommand(this.s, () => this.s.cancelMovement(null, 'combat visibility changed',
-      { preserveId: o.pvp?.decision_id }), o.id);
+      { preserveId: o.pvp?.decision_id, origin: keeperOrigin('combat_mode') }), o.id);
     o.phaseRevision++;
     o.phase = visible ? 'engaging' : 'waiting';
     o.targetId = visible ? t.id : null; o.targetName = visible ? exactName(o.client, t) : null;
@@ -1570,7 +1571,7 @@ export class CombatMode {
         await this.stand(o);
         // Ordinary validated router, under this order's packet and survival guards.
         this.armTimer();
-        const result = await s.travel(o.order.map, { movementGeneration: s.movementGeneration, controlToken: o.id });
+        const result = await s.travel(o.order.map, { origin: keeperOrigin('combat_order', { run_id: o.id }), movementGeneration: s.movementGeneration, controlToken: o.id });
         this.guard(o);
         demand(result?.arrived && s.world.room.num === o.order.map, result?.reason ?? 'ambush map was not reached');
       }

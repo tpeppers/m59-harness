@@ -163,3 +163,62 @@ bot's next heartbeat quietly takes the character back thirty seconds later.
 Consumers ask `isTakeable(committed)`, never `!committed`. Those were the same question
 for exactly as long as the only commitments were operations; `m59-commitment.mjs` has the
 argument and `m59-commitment-test.mjs` (71) pins the regression.
+
+### Every move order says who gave it, and a cancel says whose move it took
+
+`tools/m59-move-origin.mjs`. **A move order carries an ORIGIN**, and so does every cancel:
+
+```js
+{ source: 'fleetscript' | 'keeper' | 'operator' | 'bot' | 'mcp' | 'unattributed',
+  name,      // script name, keeper subsystem ('shelter', 'town_trip', 'chalice', 'watchdog'), tool
+  run_id?,   // one FleetScript run, so two runs of one script are told apart
+  at }
+```
+
+The incident it exists for, prod 2026-10-04: a FleetScript errand walked t9 to the guild hall
+714 three times and reported *"did not reach 714 in three attempts"*. Each journey had been
+**cancelled by another issuer** — once by the errand's own clear-the-way cancel, then by the
+keeper's survive-mode shelter logic (*"chosen shelter approach interrupted: route uses the
+fallback walker"*) steering her toward her assigned room 48. The ledger said so in free text;
+the errand and the operator were told nothing.
+
+- **Where an origin is set.** `Session.travel` and `Autopilot.travel` are wrapped
+  (`installMoveOrders`, the way the walkers carry intent observers), so every journey is a
+  *move order* on `session.moveOrder`. A call inside a live order with no origin of its own
+  INHERITS it; one with none at all is `unattributed` (Session) or `keeper:unattributed`
+  (keeper). Every keeper call site names its subsystem (`keeperOrigin('town_trip')`); a shelter
+  approach (`returnToSpot`) is its own `keeper:shelter` order. The broker's `travel`, `walk_to`
+  and `cancel_movement` take an `origin` argument and default to `mcp:unattributed`; FleetScript
+  stamps `fleetscript:<script>#<run>` on every move it sends, and a standalone tool driving
+  through its `call` is `operator:<script file>`. A resumed journey keeps its original issuer and
+  adds `resumed_by`.
+- **Where a cancel is recorded — both sides, in one place.** `Session.cancelMovement(token, why,
+  { origin })` records `{why, by, preempted}` BEFORE the movement generation moves, so the order
+  it ends is still live and is named on the same record. A cancel by a DIFFERENT issuer is a
+  **preemption** and is kept as `last_preempted`; a script clearing its own earlier walk is
+  `self_cancel` and is not.
+- **Where it surfaces.** (a) the keeper log line `[move] <agent>: walk to 714 ordered by
+  fleetscript:buy-spell#… cancelled by keeper:shelter (…) at 22:03:22Z`; (b) the
+  `travel_journey` row: `origin`/`ordered_by` and `cancelled_by_origin`/`cancelled_by_label`
+  beside the old `cancelled_by` why — and only for a cancel made DURING that journey, where the
+  row used to carry whatever the last cancel had been; (c) `status.movement` (`order`,
+  `last_cancel`, `last_preempted`, `preemptions`), `autopilot status` (`movement`,
+  `last_preempted`), the job report's `ordered_by`/`cancelled_by`, a busy refusal's
+  `(ordered by …)`, and the `fleet` row's `ordered_by` and `last_preempted`; (d) a FleetScript
+  walk step whose journey was pre-empted now fails with **`walk to 714 cancelled by keeper:shelter
+  (chosen shelter approach interrupted…) at 22:03:22Z; did not reach 714 in three attempts (…)`**
+  and carries `preempted_by`; the cancel is also logged as it happens.
+- **A posture that will fight the walk is WARNED about, not changed.** Before setting out, a
+  FleetScript walk asks `autopilot status` whether the keeper's assigned room or confinement
+  differs from the destination and logs `WARNING: the keeper's posture will fight a walk to 714:
+  its assigned room is 48 (mode survive)…`. A claim takes work and movement, not survival, and a
+  survival rung that hands the body back mid-walk steers it home; silently re-pointing
+  `assignedRoom` would be a change of orders the lease model does not grant, so the warning and
+  the recorded cause are the whole of it.
+- **And the failure becomes a replayable chunk.** Every failed journey, pre-empted walk, wedge
+  given up on, stall with no lever and failed FleetScript walk step writes one
+  **movement incident** — see [`docs/m59-routing.md`](m59-routing.md#the-movement-incident-log).
+
+`node tools/m59-move-origin-test.mjs` pins both sides of the cancel, the ledger row, the job
+report, the busy refusal, the incident record, and a SOURCE SWEEP that fails by file and line
+when a `.travel(` or `cancelMovement(` call in the keeper or broker names no origin.

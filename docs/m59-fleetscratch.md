@@ -821,6 +821,14 @@ This is the worked example, and it is the shape for the Marco Polo work.
   which creatures existed, so the pull that would have walked them never ran. And a debug
   `/findpath` from a wall square can answer `expanded: 1` because it plans from the square CENTRE,
   which on a sliver has no floor; that is the probe, not the room.
+- **Start from a recorded failure, not a remembered one.** Every failed journey, pre-empted walk,
+  wedge, stall and failed FleetScript walk step leaves one movement incident
+  (`node tools/m59-movement-incidents.mjs --room <n>`), and `--export <id>` turns it into a fixture
+  whose `replay` block is the pad's setup: `start_room`/`start_square` (where to teleport to),
+  `walk.to` (the journey to re-run) and `aim` (the stage square it failed to reach). Its
+  `cancelled_by` says whether the mover failed at all — a journey the keeper's shelter rung
+  pre-empted is a contention finding, not a pathing one. See
+  [`docs/m59-routing.md`](m59-routing.md#the-movement-incident-log).
 
 ---
 

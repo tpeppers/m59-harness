@@ -71,6 +71,15 @@ import { planAccountLeases } from './runtime/account-leases.mjs';
 import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
+import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+
+// EVERYTHING THAT REACHES THIS PROCESS OVER HTTP IS SOMEBODY ELSE'S ORDER. The broker forwards
+// the MCP caller's origin; a caller that names none is recorded as such (m59-move-origin.mjs).
+const callerOrigin = (args, name = 'unattributed') =>
+  moveOrigin(args?.origin ?? null, { source: 'mcp', name });
+// A walk ordered from outside is a move order, registered here where the cancels happen.
+const asWalkOrder = (args, to, fn) =>
+  withMoveOrder(session, { kind: 'walk', to, origin: callerOrigin(args) }, fn);
 
 // ---------------------------------------------------------------- args
 
@@ -1363,6 +1372,9 @@ function state() {
       all: doorStates(),
     },
     job: rtsJobReport(session.job) ?? null,
+    // WHO IS STEERING THE BODY, AND WHO LAST TOOK A MOVE FROM ITS ORDERER (m59-move-origin.mjs).
+    // Published here as well as in autopilot_status so a keeper with no autopilot still answers.
+    movement: movementReport(session),
     // AND WHETHER SOMEBODY ELSE IS HOLDING IT STILL. `KeeperProxy.status()` reported
     // `inert: null` unconditionally, so a character standing still because a supply
     // exchange had deliberately stopped its keeper was indistinguishable on the board from
@@ -2090,7 +2102,8 @@ const server = createServer(async (req, res) => {
               return;
             }
             if (job.kind === 'move' || job.kind.startsWith('context:')) {
-              json(session.cancelMovement(job.controlToken, 'RTS controller cancellation'));
+              json(session.cancelMovement(job.controlToken, 'RTS controller cancellation',
+                                          { origin: moveOrigin(args.origin ?? null, { source: 'operator', name: 'rts_controller' }) }));
               return;
             }
             job.cancelled = true;
@@ -2125,6 +2138,7 @@ const server = createServer(async (req, res) => {
             // now — and a caller whose request times out re-issues the journey into itself (Kermit,
             // 2026-09-28: a DUM travel order sat 29.5 min in a pre-journey overdrive).
             const job = session.travelJob(dest, {
+              origin: callerOrigin(args),
               where: args.where, maxHops: Number(args.max_hops ?? args.maxHops ?? 25),
               controlToken: args.control_token ?? args.controlToken,
               runErrands: args.run_errands !== false && args.runErrands !== false,
@@ -2132,12 +2146,13 @@ const server = createServer(async (req, res) => {
               ...(Array.isArray(args.avoid) && args.avoid.length ? { avoid: args.avoid.map(Number).filter(Number.isFinite) } : {}),
             });
             if (args.background === false) { json({ ...(await job.promise), destination: dest }); return; }
-            json({ started: true, destination: dest,
+            json({ started: true, destination: dest, ordered_by: job.origin ? `${job.origin.source}:${job.origin.name}` : null,
                    note: 'walking now; poll /state — do not re-issue while busy' });
             return;
           }
           case 'walk': {
-            const r = await session.walkTo(Number(args.col), Number(args.row), args);
+            const r = await asWalkOrder(args, `r${args.row}c${args.col}`,
+              () => session.walkTo(Number(args.col), Number(args.row), args));
             json(r ?? { ok: true });
             return;
           }
@@ -2408,9 +2423,10 @@ const server = createServer(async (req, res) => {
             const askedWhy = typeof args.why === 'string' && args.why.trim()
               ? args.why.trim().slice(0, 80)
               : 'the keeper /action endpoint, caller unnamed';
+            const origin = callerOrigin(args);
             const r = autopilot?.cancelJourney
-              ? autopilot.cancelJourney(askedWhy, args.control_token)
-              : session.cancelMovement?.(args.control_token, askedWhy);
+              ? autopilot.cancelJourney(askedWhy, args.control_token, origin)
+              : session.cancelMovement?.(args.control_token, askedWhy, { origin });
             json({ cancelled: true, ...(r ?? {}) });
             return;
           }
@@ -2437,7 +2453,7 @@ const server = createServer(async (req, res) => {
             // fields out by hand. `holdShelf` was added to `walkFine` and passed by the
             // broker, and would have arrived, been ignored, and left the caller believing a
             // guard was on that was not.
-            const r = await session.walkFine(Number(args.x), Number(args.y), {
+            const r = await asWalkOrder(args, `x${args.x},y${args.y} (kod)`, () => session.walkFine(Number(args.x), Number(args.y), {
               maxSteps: Number(args.max_steps ?? args.maxSteps ?? 60),
               stride: args.stride != null ? Number(args.stride) : undefined,
               holdShelf: (args.hold_shelf ?? args.holdShelf) === true,
@@ -2449,7 +2465,7 @@ const server = createServer(async (req, res) => {
               ...(args.arrive_within != null || args.arriveWithin != null
                   ? { arriveWithin: Number(args.arrive_within ?? args.arriveWithin) } : {}),
               controlToken: args.control_token ?? args.controlToken,
-            });
+            }));
             json(r ?? { ok: true });
             return;
           }
@@ -4295,8 +4311,9 @@ const server = createServer(async (req, res) => {
       const why = typeof asked.why === 'string' && asked.why.trim()
         ? asked.why.trim().slice(0, 80)
         : 'POST /cancel with no caller named';
-      if (autopilot?.cancelJourney) autopilot.cancelJourney(why, asked.control_token ?? null);
-      else session.cancelMovement(asked.control_token ?? null, why);
+      const origin = moveOrigin(asked.origin ?? null, { source: 'unattributed', name: 'POST /cancel' });
+      if (autopilot?.cancelJourney) autopilot.cancelJourney(why, asked.control_token ?? null, origin);
+      else session.cancelMovement(asked.control_token ?? null, why, { origin });
       json({ ok: true, cancelled: true, why });
       return;
     }
@@ -4312,7 +4329,8 @@ const server = createServer(async (req, res) => {
         let result;
         switch (name) {
           case 'walk':
-            result = await session.walkTo(args.col, args.row, args);
+            result = await asWalkOrder(args, `r${args.row}c${args.col}`,
+              () => session.walkTo(args.col, args.row, args));
             break;
           case 'travel': {
             // EVERY NAME THE PROXY HAS USED, AND A LOUD REFUSAL WHEN THERE IS NONE.
@@ -4330,7 +4348,7 @@ const server = createServer(async (req, res) => {
               break;
             }
             const maxHops = args.maxHops ?? 5;
-            result = await session.travel(dest, { maxHops });
+            result = await session.travel(dest, { maxHops, origin: callerOrigin(args) });
             break;
           }
           case 'go': {

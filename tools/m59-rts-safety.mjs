@@ -26,6 +26,8 @@
 // client has no business emitting either. That check stays, and it is now all this part does.
 // Every identity and staleness check at the call sites stays too: those guard against a spell or
 // target changing underfoot between intent and packet, which retiring a policy does not make safe.
+import { originLabel, describePreemption } from './m59-move-origin.mjs';
+
 export function rtsCastArityOk(targets, hasTarget) {
   if (!Number.isSafeInteger(targets) || targets < 0) return false;
   return targets === 0 ? !hasTarget : !!hasTarget;
@@ -85,6 +87,10 @@ export function rtsCleanupAuthorityCheck({ packet, endpoint, keeper, room, owner
 // cancellation is authoritative even when the underlying helper returned an ordinary
 // result (attack stops its loop) or threw while unwinding (recovery cleanup can lose
 // authority). Never let those races turn a user-requested stop into `ok` or `failed`.
+const cancelReport = rec => ({ by: rec.by_label ?? originLabel(rec.by), origin: rec.by ?? null,
+                               why: rec.why ?? null, at: rec.at ?? null,
+                               summary: describePreemption(rec) });
+
 export function rtsJobReport(job, now = Date.now()) {
   if (!job) return undefined;
   const elapsed = Math.max(0, Math.round(((job.finishedAt || now) - job.startedAt) / 1000));
@@ -92,7 +98,11 @@ export function rtsJobReport(job, now = Date.now()) {
     return {
       busy: job.label,
       running_for_s: elapsed,
+      // WHO ORDERED THE MOVE IN FLIGHT (m59-move-origin.mjs), so the UI and an agent reading
+      // `status` can tell a keeper's town trip from a script's walk from an operator's order.
+      ...(job.origin ? { ordered_by: originLabel(job.origin), origin: job.origin } : {}),
       ...(job.cancelled || job.cancelRequestedAt ? { stopping: true } : {}),
+      ...(job.cancelledBy ? { cancelled_by: cancelReport(job.cancelledBy) } : {}),
     };
   }
   const cancelled = job.cancelled === true || job.cancelRequestedAt != null ||
@@ -112,6 +122,9 @@ export function rtsJobReport(job, now = Date.now()) {
   return {
     last_action: job.label,
     took_s: elapsed,
+    ...(job.origin ? { ordered_by: originLabel(job.origin), origin: job.origin } : {}),
+    // A CANCELLED JOB SAYS BY WHOM, not only that it was: the canceller's origin and its why.
+    ...(cancelled && job.cancelledBy ? { cancelled_by: cancelReport(job.cancelledBy) } : {}),
     // `ok` MEANT "THE FUNCTION RETURNED", WHICH IS NOT WHAT ANY READER THINKS IT MEANS.
     //
     // A journey that gives up resolves normally -- `{arrived:false, reason:'...'}` is a
