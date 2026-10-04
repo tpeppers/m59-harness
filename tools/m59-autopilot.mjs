@@ -95,7 +95,7 @@ import { purchasePlan, purchaseKey, PURCHASE_BANKS, accountBalance } from './m59
 import { runReagentCoop } from './m59-reagent-coop-runtime.mjs';
 import { readBankerLine, balancesFor } from './m59-bank.mjs';
 import { completeTownIncome, recordTownTrade } from './m59-town-income.mjs';
-import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
+import { travelJourneyMetrics, withTravelJourneyMetrics, compactRefusals } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest, reagentSource, REAGENT_MODES }
@@ -9654,6 +9654,14 @@ export class Autopilot {
         ended_in: Number(this.s?.world?.room?.num ?? NaN) || null,
         arrived: outcome?.arrived ?? false,
         reason: outcome?.reason ?? null,
+        // WHICH STEP OF WHICH CROSSING REFUSED, not only that the exits ran out. The travel
+        // result has carried `refusals` (each candidate's stand_on, stage and reason) since the
+        // exhausted-exit work, and only the caller ever saw it: on 2026-10-04 Camilla failed
+        // 48 -> 714 thirteen times in two minutes standing ON the corrected stage, and every row
+        // here said `route_progressing_exits_exhausted` and nothing else. Failed journeys only,
+        // compacted, and capped so one stuck room cannot bloat the ledger.
+        ...(!(outcome?.arrived) && Array.isArray(outcome?.refusals) && outcome.refusals.length
+          ? { refusals: compactRefusals(outcome.refusals) } : {}),
         // A THIRD OUTCOME: the road ended at a room the keeper works rather than walks (the
         // lever puzzle in 2600). Not a failure, and a reader splitting by `arrived` alone would
         // file it as one — so it says so. Absent on every other row.

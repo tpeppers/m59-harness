@@ -7,7 +7,9 @@ import {
   travelJourneyMetrics,
   withTravelJourneyMetrics,
   tripStopPhrase,
+  compactRefusals,
 } from './m59-trip-telemetry.mjs';
+import { readFileSync } from 'node:fs';
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -60,7 +62,25 @@ await test('a result without keeper journey telemetry retains truthful rest word
   assert.equal(tripStopPhrase({ arrived: true }, 2), '2 rest stops');
 });
 
-await test('Autopilot.travel returns its stop snapshot after clearing live counters', async () => {
+await test('a failed journey row names each refused crossing step (Camilla, room 48, 2026-10-04)', () => {
+  const tried = [
+    { stand_on: { row: 8, col: 32 }, stage: 'edge', crossing_packet_sent: false, why: 'ground_effect_blocked' },
+    { stand_on: { row: 9, col: 32 }, stage: 'walk', why: 'x'.repeat(400) },
+  ];
+  const c = compactRefusals(tried);
+  assert.deepEqual(c[0], { at: 'r8c32', stage: 'edge', sent: false, why: 'ground_effect_blocked' });
+  assert.equal(c[1].why.length, 160, 'a long reason is cut');
+  assert.equal('sent' in c[1], false, 'absent stays absent');
+  const many = compactRefusals(Array.from({ length: 9 }, (_, i) => ({ stand_on: { row: i, col: 1 }, why: 'w' })));
+  assert.equal(many.length, 7);
+  assert.deepEqual(many.at(-1), { more: 3 });
+  assert.deepEqual(compactRefusals(null), []);
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  assert.ok(/refusals: compactRefusals\(outcome\.refusals\)/.test(src), 'the journey row carries them');
+  assert.ok(src.includes('!(outcome?.arrived) && Array.isArray(outcome?.refusals)'), 'failed journeys only');
+});
+
+console.log(`\n${passed} passed, 0 failed`);await test('Autopilot.travel returns its stop snapshot after clearing live counters', async () => {
   const detail = [];
   const ledger = [];
   let clocksBeforeReturn = null;
@@ -147,4 +167,4 @@ await test('arriving whole at a route refuge walks on without counting a stop', 
   assert.equal(keeper.travelRouteStops, 0);
 });
 
-console.log(`\n${passed} passed, 0 failed`);
+

@@ -57,3 +57,19 @@ export function tripStopPhrase(outcome, keeperRestStops = 0) {
   const rests = wholeAtLeastZero(keeperRestStops);
   return rests ? `${rests} rest stop${rests === 1 ? '' : 's'}` : 'no rest stops';
 }
+
+/**
+ * A failed journey's exit refusals, small enough for the always-on journey row: which square,
+ * which stage of the crossing, whether the outward packet went, and why. At most `max`, each
+ * reason cut to `whyChars`; the count of any dropped is kept so a reader knows the list is short.
+ */
+export function compactRefusals(refusals, { max = 6, whyChars = 160 } = {}) {
+  const list = (Array.isArray(refusals) ? refusals : []).map(r => {
+    const s = r?.stand_on;
+    const at = s && Number.isFinite(Number(s.row)) && Number.isFinite(Number(s.col)) ? `r${s.row}c${s.col}` : null;
+    return { at, stage: r?.stage ?? null,
+             ...(r?.crossing_packet_sent != null ? { sent: !!r.crossing_packet_sent } : {}),
+             why: String(r?.why ?? r?.reason ?? 'no reason reported').slice(0, whyChars) };
+  });
+  return list.length > max ? [...list.slice(0, max), { more: list.length - max }] : list;
+}
