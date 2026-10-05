@@ -13,6 +13,10 @@
 //   depositWithRecovery(call, agent, deposit) the other direction: put the named things (name substrings,
 //                                             as hall_withdraw's `deposit`) into the chests, the same retry,
 //                                             and the pack says what LEFT.
+//   hallWithdrawRetrying(call, args, ms)      a DROP-IN for `call('hall_withdraw', args, ms)`: same
+//                                             arguments, same reply shape, same throw -- with the passage
+//                                             retry and the survival wait. For scripts whose own logic reads
+//                                             the raw reply and should not change.
 //   hallDrawSteps({ wants, holder, why })     the standard approach as fleetscript steps: the chalice
 //                                             ride first when a holder is named (it lands past the
 //                                             doors), the walk in as the fallback, then the recovering
@@ -57,6 +61,21 @@ const countIn = (inv, item) => (inv?.items ?? [])
   // The inventory reports an UNSTACKABLE item (a wand, an axe) as amount 0, meaning one — so 0 counts
   // as 1, as everywhere else in this repository. A stack is never listed at zero.
   .reduce((n, i) => n + (Number(i.amount) || 1), 0);
+
+/**
+ * Drop-in for the raw broker call. A thrown call throws as before (it is not a passage refusal); a
+ * passage refusal is retried after pauseBefore; the LAST reply is returned unchanged, with `attempts`.
+ */
+export async function hallWithdrawRetrying(call, args, timeoutMs = 620_000, { retries = 1, pauseMs = 15_000, sleepFn = sleep, recovery = {} } = {}) {
+  let r = null;
+  for (let attempts = 0; attempts <= retries; attempts++) {
+    if (attempts) await pauseBefore(call, args?.agent, r?.why ?? r?.error, { pauseMs, sleepFn, recovery });
+    r = await call('hall_withdraw', args, timeoutMs);
+    if (r && typeof r === 'object') r.attempts = attempts + 1;
+    if (r?.ok || !PASSAGE_REFUSAL.test(String(r?.why ?? r?.error ?? ''))) break;
+  }
+  return r;
+}
 
 /**
  * One hall withdrawal, retried once on a passage refusal. Never throws.

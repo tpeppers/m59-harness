@@ -2,7 +2,7 @@
 //
 //   node tools/m59-hall-access-test.mjs
 import assert from 'node:assert/strict';
-import { withdrawWithRecovery, depositWithRecovery, hallDrawSteps, PASSAGE_REFUSAL, healthFraction } from './m59-hall-access.mjs';
+import { withdrawWithRecovery, depositWithRecovery, hallDrawSteps, PASSAGE_REFUSAL, healthFraction, hallWithdrawRetrying } from './m59-hall-access.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
@@ -85,6 +85,18 @@ await ok('the status tool has two shapes, and either reads as a fraction', async
   assert.equal(healthFraction({ hp: { value: 36, max: 50 } }), 0.72);
   assert.equal(healthFraction({ vitals: { health: { value: 50, max: 50 } } }), 1);
   assert.equal(healthFraction({}), null);
+});
+await ok('the drop-in returns the raw reply, retried on a passage refusal', async () => {
+  const b = broker([{ ok: false, why: 'guild door 55 trigger not reached' }, { ok: true, took: { shilling: 5 }, short: {} }]);
+  const r = await hallWithdrawRetrying(b.call, { agent: 't3', wants: [{ item: 'shilling', amount: 5 }] }, 620_000, { sleepFn: nap });
+  assert.deepEqual(r.took, { shilling: 5 }); assert.equal(r.attempts, 2);
+});
+await ok('the drop-in still throws what the raw call threw, and does not retry other refusals', async () => {
+  const thrower = async () => { throw new Error('broker restarting'); };
+  await assert.rejects(hallWithdrawRetrying(thrower, { agent: 't3', wants: [] }, 1, { sleepFn: nap }), /broker restarting/);
+  const b = broker([{ ok: false, why: 'guild chest key unavailable' }]);
+  const r = await hallWithdrawRetrying(b.call, { agent: 't3', wants: [] }, 1, { sleepFn: nap });
+  assert.equal(r.attempts, 1); assert.match(r.why, /chest key/);
 });
 await ok('hallDrawSteps: chalice first when a holder is named, then the walk, then the draw', async () => {
   assert.deepEqual(hallDrawSteps({ wants: [], holder: 'Loial the Ogier' }).map(s => s.do), ['ride_chalice', 'walk', 'verify']);
