@@ -94,8 +94,20 @@ export function agentLockFiles(fleet) {
 // EXPORTED, because it is the checksum that tells a live claim from a stale number and three
 // callers now need it. It was already copied into m59-which.mjs; m59-intent.mjs would have been a
 // third copy, and a liveness test that drifts between copies is worse than one place to fix.
+//
+// TWO ANSWERS NEED NO CHILD PROCESS, AND THEY ARE THE COMMON ONES. On Windows the only reader
+// of a start time is a PowerShell, and every `takeRunLock` used to spawn one to ask about ITSELF
+// — measured 2026-10-05: four training loops, each relaunching m59-fleet-repl every ~35s, made a
+// steady stream of PowerShells that existed only to read a number node already has. Our own
+// start time is `now - uptime` (node's clock starts a few ms after the process does, far inside
+// START_TOLERANCE_MS). And a pid that `kill(pid, 0)` says does not exist cannot have a start
+// time. Only a pid that is ALIVE and is not us needs the expensive question, because only then
+// is "is it the same process" still open. EPERM means it exists and is somebody else's.
 export function readProcessStartMs(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (pid === process.pid) return Math.round(Date.now() - process.uptime() * 1000);
+  try { process.kill(pid, 0); }
+  catch (e) { if (e?.code === 'ESRCH') return null; }
   try {
     if (process.platform === 'win32') {
       const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
