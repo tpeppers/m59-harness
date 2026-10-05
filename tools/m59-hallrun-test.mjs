@@ -110,5 +110,15 @@ section('the snapshot cannot break the deposit it describes');
   ok(chestFullness([{ name: 'orc tooth', amount: 10 }]).bulk > 0, 'and more than 0 for a full one');
 }
 
+{
+  // A REFUSED hallWithdraw is short of everything it was asked for, never `short: {}` -- which is the
+  // shape of a full draw, and is what a mushroom courier logged on 2026-10-04 beside a 0 -> 0 pack.
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const hw = src.slice(src.indexOf('async hallWithdraw('), src.indexOf('async hallWithdraw(') + 3000);
+  ok(/not in the hall[^\n]*short: allShort\(\)/.test(hw), 'the not-in-the-hall refusal reports every want as short');
+  ok(/if \(!hall\.ok\) return \{[^\n]*short: allShort\(\)/.test(hw), 'the hall-passage refusal reports every want as short');
+  ok(!/ok: false[^\n]*short: \{\}/.test(hw), 'no refusal in hallWithdraw reports short: {}');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

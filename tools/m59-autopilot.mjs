@@ -27773,10 +27773,16 @@ export class Autopilot {
         .reduce((n, o) => n + (Number(o.amount) || 1), 0);
     };
     const roomNum = Number(s.world?.room?.num ?? NaN);   // the SESSION's world; `this.world` is undefined and read NaN on prod
+    // A REFUSAL IS SHORT OF EVERYTHING IT WAS ASKED FOR. These two returned `short: {}`, which is
+    // the shape of a draw that got all it wanted: on 2026-10-04 a mushroom courier walked to the hall,
+    // its withdrawal refused, and the script logged `short {}` -- "nothing missing" -- beside a pack
+    // that went 0 -> 0. Every want is short on a refusal, and `why` says which refusal it was.
+    const allShort = () => Object.fromEntries((wants ?? []).map(w => [String(w.item ?? ''), Number(w.amount) || 0])
+      .filter(([k, n]) => k && n > 0));
     if (roomNum !== BOOKMAKERS_HALL_ROOM)
-      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})`, took: {}, short: {} };
+      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})`, took: {}, short: allShort() };
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
-    if (!hall.ok) return { ok: false, why: hall.why, steps: hall.steps, took: {}, short: {} };
+    if (!hall.ok) return { ok: false, why: hall.why, steps: hall.steps, took: {}, short: allShort() };
     const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));
     const nearChest = async (chest) => {
       const me = c.self;
