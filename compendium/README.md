@@ -9,12 +9,34 @@ sprite files, and every quantitative claim carries a `file:line` citation into
 ## Read it
 
 ```bash
-node tools/serve.mjs          # http://127.0.0.1:8099/ , loopback only
+node tools/serve.mjs          # http://127.0.0.1:8099/ , this computer only
 ```
 
 If you have the harness's fleet running, `node ../tools/m59-compendium.mjs --open
 --agent t1` serves it instead and loads a **real character** into the bestiary — or
 just press `C` in the fleet terminal on whichever character you are looking at.
+
+### Reading it from another device
+
+Both servers take `--access <mode>` (or `M59_COMPENDIUM_ACCESS`), and the default is
+`local`:
+
+| mode | who can connect | who can write |
+|---|---|---|
+| `local` | this computer only | this computer |
+| `lan-read` | anything on the network | this computer only — the LAN is refused with 403 |
+| `lan-write` | anything on the network | anything on the network |
+
+"Write" means the harness server's planner: saving a loadout or a guild plan, and the
+hand-overs to the fleet. Those are **instructions the keepers obey**, so `lan-write` is a
+deliberate choice. `lan-read` still shows every live character — their equipment and
+levels — to anyone on the network, because the harness server reads the broker for
+whoever asks.
+
+In either LAN mode the server prints its LAN URLs; open `http://<this-PC-LAN-IP>:8099/` on
+the other device, and allow inbound TCP 8099 on the private network in Windows Firewall if
+it cannot connect. A server that is already running keeps the mode it started with —
+restart it to change it. `--status` says which mode a running one is in.
 
 1,003 pages: 186 spells, 323 items, 267 zones, 171 creatures and NPCs, 22 skills,
 23 guides, and nine catalogue indexes. 5,355 sprites decoded from the client's

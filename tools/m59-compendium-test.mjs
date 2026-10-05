@@ -20,7 +20,8 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildFromCharacter, COOKIE, importUrl } from './m59-compendium.mjs';
+import { buildFromCharacter, COOKIE, importUrl, parseAccess, accessHost, allowRequest, createServer } from './m59-compendium.mjs';
+import { networkInterfaces } from 'node:os';
 import { proficiencyFor, WEAPON_PROFICIENCY } from './m59-skills.mjs';
 
 let pass = 0, fail = 0;
@@ -174,6 +175,60 @@ console.log('\nthe import URL');
   ok('carries the agent', /agent=t1/.test(u));
   ok('and the destination, encoded', /to=%2Fcreatures%2F/.test(u), u);
   eq('the cookie has a stable name', COOKIE, 'm59char');
+}
+
+console.log('\nwho may connect, and who may write');
+{
+  eq('the default is this computer only', parseAccess(undefined), 'local');
+  eq('an empty setting is the default too', parseAccess(''), 'local');
+  eq('modes are case-insensitive', parseAccess('LAN-Read'), 'lan-read');
+  let threw = false; try { parseAccess('lan-wirte'); } catch { threw = true; }
+  ok('a misspelt mode is refused, not read as the nearest one', threw);
+  eq('local binds loopback', accessHost('local'), '127.0.0.1');
+  eq('lan-read binds every interface', accessHost('lan-read'), '0.0.0.0');
+  eq('lan-write binds every interface', accessHost('lan-write'), '0.0.0.0');
+  const lan = '192.168.1.50';
+  for (const mode of ['local', 'lan-read', 'lan-write'])
+    for (const addr of ['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+      ok(`${mode}: this computer (${addr}) may write`, allowRequest(mode, 'POST', addr).ok);
+  ok('local: the LAN may not even read', !allowRequest('local', 'GET', lan).ok);
+  ok('lan-read: the LAN may read', allowRequest('lan-read', 'GET', lan).ok);
+  ok('lan-read: the LAN may HEAD', allowRequest('lan-read', 'HEAD', lan).ok);
+  for (const m of ['POST', 'PUT', 'DELETE', 'PATCH'])
+    ok(`lan-read: the LAN may not ${m}`, !allowRequest('lan-read', m, lan).ok);
+  ok('lan-read: the refusal says how to allow it', /lan-write/.test(allowRequest('lan-read', 'POST', lan).why));
+  ok('lan-write: the LAN may write', allowRequest('lan-write', 'POST', lan).ok);
+  ok('a mapped IPv4 LAN address is not loopback', !allowRequest('lan-read', 'POST', '::ffff:192.168.1.50').ok);
+}
+
+// THE SAME THING OVER A REAL SOCKET, from this machine's own LAN address, so the request
+// genuinely arrives as non-loopback. Skipped (and said so) on a machine with no LAN address.
+console.log('\nover a real socket, from the LAN side');
+{
+  const lanIp = Object.values(networkInterfaces()).flat()
+    .find(a => a && a.family === 'IPv4' && !a.internal)?.address;
+  if (!lanIp) console.log('  skip no non-loopback IPv4 address on this machine');
+  else {
+    const call = (port, method, host = lanIp) => fetch(`http://${host}:${port}/_guildplan`,
+      { method, body: method === 'POST' ? '{}' : undefined }).then(r => r.status, () => 'refused');
+    for (const mode of ['lan-read', 'lan-write']) {
+      const server = createServer({ access: mode });
+      await new Promise(r => server.listen(0, accessHost(mode), r));
+      const port = server.address().port;
+      const get = await call(port, 'GET'), post = await call(port, 'POST');
+      const local = await call(port, 'POST', '127.0.0.1');
+      ok(`${mode}: a LAN GET is answered (${get})`, get !== 403 && get !== 'refused');
+      if (mode === 'lan-read') ok(`lan-read: a LAN POST is refused with 403 (${post})`, post === 403);
+      else ok(`lan-write: a LAN POST gets past the guard (${post})`, post !== 403 && post !== 'refused');
+      ok(`${mode}: a loopback POST gets past the guard (${local})`, local !== 403 && local !== 'refused');
+      await new Promise(r => server.close(r));
+    }
+    const server = createServer({ access: 'local' });
+    await new Promise(r => server.listen(0, accessHost('local'), r));
+    const st = await call(server.address().port, 'GET');
+    ok(`local: the LAN address cannot connect at all (${st})`, st === 'refused');
+    await new Promise(r => server.close(r));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

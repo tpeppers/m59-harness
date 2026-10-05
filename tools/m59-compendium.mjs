@@ -11,11 +11,26 @@
 // by hand, and the fleet is right there. So this serves the tree and adds one endpoint
 // that hands the page a live character.
 //
-// LOOPBACK ONLY, and that is not a default to be talked out of. The pages are
-// harmless, but this process reads the broker on behalf of whoever asks, so anything
-// that can reach it can enumerate the fleet's characters, their equipment and their
-// levels. `compendium/tools/serve.mjs` binds every interface, which is fine for a
-// static tree and would not be fine here.
+//   node tools/m59-compendium.mjs --access lan-read   ...and let the LAN read it
+//
+// THREE ACCESS MODES, AND THE DEFAULT IS THIS COMPUTER ONLY. `--access <mode>` or
+// M59_COMPENDIUM_ACCESS=<mode>:
+//
+//   local       listens on 127.0.0.1. Nothing else on the network can connect. (default)
+//   lan-read    listens on every interface. Another device may read every page AND every
+//               live character — this process reads the broker on behalf of whoever asks,
+//               so that is the fleet's characters, equipment and levels — but a request
+//               that WRITES (any method other than GET/HEAD: the planner's loadout and
+//               guild-plan saves, the hand-overs to the fleet) is refused unless it comes
+//               from this computer.
+//   lan-write   listens on every interface and lets the LAN write too. A loadout or guild
+//               plan saved from a phone is an INSTRUCTION the keeper obeys, and the
+//               hand-over endpoints move items between characters, so this is a deliberate
+//               choice and never a default.
+//
+// The mode is a closed list: an unrecognised one is refused rather than read as the
+// nearest thing, because "lan-wirte" quietly meaning `local` and "loacl" quietly meaning
+// anything wider are both the kind of setting that does nothing while looking set.
 //
 // WHY A COOKIE. The alternative is a query string, and a query string is in every
 // link the reader clicks afterwards, in their history, and in the address bar of a
@@ -28,6 +43,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { networkInterfaces } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // The server's own names for the weapon proficiencies. Imported rather than duplicated:
@@ -47,6 +63,27 @@ const REPO = path.join(HERE, '..');
 const ROOT = path.join(REPO, 'compendium');
 
 export const COMPENDIUM_PORT = Number(process.env.M59_COMPENDIUM_PORT || 8099);
+export const ACCESS_MODES = ['local', 'lan-read', 'lan-write'];
+export function parseAccess(value) {
+  const mode = String(value ?? 'local').trim().toLowerCase() || 'local';
+  if (!ACCESS_MODES.includes(mode))
+    throw new Error(`unknown compendium access "${value}" — use one of ${ACCESS_MODES.join(', ')}`);
+  return mode;
+}
+export const accessHost = mode => (mode === 'local' ? '127.0.0.1' : '0.0.0.0');
+const isLoopback = addr => /^(127\.|::1$|::ffff:127\.)/.test(String(addr ?? ''));
+const isRead = method => method === 'GET' || method === 'HEAD';
+// THE WHOLE POLICY, pure so it can be tested without a socket. `local` still checks the
+// address even though its listener cannot be reached from outside: a guard that relies on
+// the bind alone is one config change from being no guard.
+export function allowRequest(mode, method, remoteAddress) {
+  if (isLoopback(remoteAddress)) return { ok: true };
+  if (mode === 'lan-write') return { ok: true };
+  if (mode === 'lan-read' && isRead(method)) return { ok: true };
+  return { ok: false, why: mode === 'lan-read'
+    ? 'this compendium is LAN-readable only; writing is allowed from this computer (start it with --access lan-write to change that)'
+    : 'this compendium is local-only (start it with --access lan-read or lan-write to allow the network)' };
+}
 const BROKER_PORT = process.env.M59_BROKER_PORT || '8901';
 const BROKER = `http://127.0.0.1:${BROKER_PORT}/`;
 export const COOKIE = 'm59char';
@@ -265,8 +302,7 @@ const json = (res, body, code = 200) => {
 };
 
 // A shopping list is a few kilobytes. Bounded so a stuck or hostile client cannot make this
-// process hold an unbounded string — the socket is loopback, which limits who can try it,
-// not how much they can send. One copy, because both writing endpoints need the same bound
+// process hold an unbounded string. One copy, because both writing endpoints need the same bound
 // and a second copy of a limit is how the two come to differ.
 function readBody(req, res, then) {
   let body = '', tooBig = false;
@@ -283,13 +319,21 @@ function readBody(req, res, then) {
   });
 }
 
-export function createServer() {
-  return http.createServer(async (req, res) => {
+export function createServer({ access = 'local' } = {}) {
+  const mode = parseAccess(access);
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
+
+    const allowed = allowRequest(mode, req.method, req.socket.remoteAddress);
+    if (!allowed.ok) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      return res.end(allowed.why);
+    }
 
     if (url.pathname === '/_health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, ident: IDENT, pid: process.pid, root: ROOT }));
+      return res.end(JSON.stringify({ ok: true, ident: IDENT, pid: process.pid, root: ROOT,
+        host: server.address()?.address, access: mode }));
     }
 
     // THE HANDOVER. Fetch the character, set the cookie, and send the reader on to the
@@ -347,7 +391,8 @@ export function createServer() {
     //
     // THREE ENDPOINTS, AND ONE OF THEM WRITES. That is a first for this tree — everything
     // else here is a static site that happens to be served — so it is worth being explicit
-    // about what bounds it: the listener is 127.0.0.1 only (see the header of this file),
+    // about what bounds it: only this computer may write unless the server was started
+    // `--access lan-write` (see the header of this file and `allowRequest`),
     // the path is `substrate/loadouts/<slug>.json` with the slug computed by
     // m59-loadout.mjs and nothing else, and the body is run through the same `normalise`
     // the tool uses before a byte is written. A loadout holds no credential — it is a
@@ -599,6 +644,7 @@ export function createServer() {
 
     serveStatic(req, res, url.pathname);
   });
+  return server;
 }
 
 // Is one already up, and is it OURS? A port that answers is not the same as the thing
@@ -616,12 +662,16 @@ export async function probe(port = COMPENDIUM_PORT, ms = 1200) {
 
 // Start one if there is not one already. Returns how it went, so a caller can say
 // "started it" or "it was already up" rather than guessing.
-export async function ensureServing(port = COMPENDIUM_PORT) {
+// An already-running server keeps the access mode it was started with; `access` here only
+// applies to one this call starts, and `already` reports what the running one says.
+export async function ensureServing(port = COMPENDIUM_PORT, { access = process.env.M59_COMPENDIUM_ACCESS } = {}) {
   const up = await probe(port);
-  if (up && !up.foreign) return { already: true, pid: up.pid, port };
+  if (up && !up.foreign) return { already: true, pid: up.pid, port, access: up.access };
   if (up?.foreign)
     throw new Error(`something else is already listening on ${port} — set M59_COMPENDIUM_PORT`);
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--port', String(port)],
+  const mode = parseAccess(access);
+  const child = spawn(process.execPath,
+                      [fileURLToPath(import.meta.url), '--port', String(port), '--access', mode],
                       { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
   // Wait for it rather than assuming: a browser opened against a socket that is not
@@ -629,7 +679,7 @@ export async function ensureServing(port = COMPENDIUM_PORT) {
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 150));
     const ok = await probe(port, 400);
-    if (ok && !ok.foreign) return { started: true, pid: ok.pid, port };
+    if (ok && !ok.foreign) return { started: true, pid: ok.pid, port, access: ok.access };
   }
   throw new Error(`started a compendium server on ${port} but it never answered /_health`);
 }
@@ -650,31 +700,47 @@ export const importUrl = (agent, to = '/creatures/', port = COMPENDIUM_PORT) =>
   `http://127.0.0.1:${port}/_import?agent=${encodeURIComponent(agent)}&to=${encodeURIComponent(to)}`;
 
 // ---------------------------------------------------------------------- cli
+function printLanUrls(port, access) {
+  if (!access || access === 'local') return;
+  for (const addresses of Object.values(networkInterfaces()))
+    for (const address of addresses || [])
+      if (address.family === 'IPv4' && !address.internal)
+        console.log(`  LAN (${access}): http://${address.address}:${port}/`);
+}
+
 if (process.argv[1] && path.basename(process.argv[1]) === 'm59-compendium.mjs') {
   const argv = process.argv.slice(2);
   const arg = (n, d) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; };
   const port = Number(arg('--port', COMPENDIUM_PORT));
   const agent = arg('--agent', null);
   const to = arg('--to', '/creatures/');
+  let access;
+  try { access = parseAccess(arg('--access', process.env.M59_COMPENDIUM_ACCESS)); }
+  catch (e) { console.error(e.message); process.exit(2); }
 
   if (argv.includes('--status')) {
     const up = await probe(port);
     console.log(up ? (up.foreign ? `port ${port}: something else is listening`
-                                 : `up — pid ${up.pid} on http://127.0.0.1:${port}/`)
+                                 : `up — pid ${up.pid} on http://127.0.0.1:${port}/  (access: ${up.access ?? 'unknown'})`)
                    : `not running on ${port}`);
+    printLanUrls(port, up?.access);
     process.exit(up && !up.foreign ? 0 : 1);
   }
 
   if (argv.includes('--open') && !argv.includes('--serve')) {
-    const how = await ensureServing(port);
+    const how = await ensureServing(port, { access });
     const url = agent ? importUrl(agent, to, port) : `http://127.0.0.1:${port}${to}`;
     openBrowser(url);
-    console.log(`${how.already ? 'already serving' : 'started'} on ${port} (pid ${how.pid}); opened ${url}`);
+    console.log(`${how.already ? 'already serving' : 'started'} on ${port} (pid ${how.pid}, access: ${how.access ?? 'unknown'}); opened ${url}`);
+    if (how.already && how.access && how.access !== access)
+      console.log(`  note: it was already running as ${how.access}; restart it to change that`);
+    printLanUrls(port, how.access);
     process.exit(0);
   }
 
-  createServer().listen(port, '127.0.0.1', () => {
-    console.log(`compendium on http://127.0.0.1:${port}/  (loopback only)`);
+  createServer({ access }).listen(port, accessHost(access), () => {
+    console.log(`compendium on http://127.0.0.1:${port}/  (access: ${access})`);
+    printLanUrls(port, access);
     if (agent) {
       const url = importUrl(agent, to, port);
       if (argv.includes('--open')) openBrowser(url);

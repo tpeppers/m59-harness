@@ -254,7 +254,7 @@ estimated — every page is compiled from the server's own Blakod source, and ev
 quantitative claim carries a `file:line` citation into `M59_ROOT`.
 
 ```bash
-cd compendium && node tools/serve.mjs      # http://localhost:8099/
+cd compendium && node tools/serve.mjs      # http://localhost:8099/  (--access lan-read for the LAN)
 ```
 
 The pages are committed. **The 5,355 sprites are not** — they are the client's
