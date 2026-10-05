@@ -51,15 +51,25 @@ failure modes; and no single answer to "what plan are we in, and what does it re
     "B": {
       "why": "PvP lockdown",
       "extends": null,
-      "postures": { "*": { "mode": "survive", "lock": "where-they-stand", "errands": "off" } },
-      "loops": [],
+      // LOCK WHERE YOU STAND, never "walk to an inn": the first lockdown walked to inns and about ten
+      // died to Morpheus on those roads. Posts and hosts are named, never swept up by "*".
+      "postures": { "*": { "mode": "survive", "lock": "where-they-stand", "errands": "off" },
+                    "@posts": "keep" },
+      "sweeps": ["clear-arrival-doors"],   // e.g. Cibilo Creek's arrival square is its only door
+      // NOT zero loops: anyone who can practise without travelling keeps casting until out of
+      // reagents or able to buy the next level (operator rule).
+      "loops": [ { "script": "practice-in-place", "agents": "@can-practise-here", "until": "reagents-out|next-level-affordable" } ],
       "routing": { "travel": "forbidden" }
     }
   },
   "transitions": [
-    { "from": "A", "to": "B", "when": "pvp_hit OR monster_deaths_since_A > 9 + floor(toughers/2)" },
+    { "from": "A", "to": "B", "when": "pvp_death OR monster_deaths > 9 + floor(toughers/2)",
+      "since": { "pvp_death": "armed_at", "monster_deaths": "A.started_at", "toughers": "A.started_at" } },
     { "from": "B", "to": "A", "when": "operator" }
-  ]
+    // NO transition on an enemy LOGGING IN: the standing rule is to let them score the first kill,
+    // and the fleet keeps a predictable routine.
+  ],
+  "posts": { "@posts": { "t4": 2, "hk3": 202, "<marco polo>": 106 } }   // part of EVERY plan
 }
 ```
 
@@ -87,6 +97,28 @@ failure modes; and no single answer to "what plan are we in, and what does it re
   assumes. DUM never switches plans; it may *propose* a transition the conductor evaluates. The clock
   boundary stays as it is: survival is the keeper's, always.
 
+### What the first lockdowns taught the conductor (prod-deploy-84, 2026-10-05)
+
+These are requirements, not notes; each one cost a death or a silent failure.
+
+1. **A PvP death is classified from the post-mortem, not from grudge rows or `pvp_survival`.** Lew's
+   23:21 death to Morpheus fired neither. Read `death_attribution.was_killed_by_player`, or any non-fleet
+   capitalised name in `hits[].by`. Operator ruling: any player in the hit log makes it a PvP death.
+2. **Every trigger carries its own `since`, persisted across restarts.** Monster deaths and toughers
+   count from the plan's start; the PvP check from the moment it was *armed*. Otherwise a restarted
+   watcher re-fires on old rows (Zoot, Lew).
+3. **Deaths appear two or three times in the ledger** (`death_cost`, the summary, a later
+   re-attribution). Dedupe on character plus `death_at` to the second.
+4. **A tougher is a `gains[]` entry in `substrate/tougher/<char>.json`**, counted from the same baseline.
+5. **Plan B has loops**: practice that needs no travel continues (above).
+6. **Lock where you stand, and clear arrival doors.** Never route a lockdown through roads.
+7. **Every posture push is read back, and a refused key fails loudly.** `guild_tithe {enabled:false}`
+   was refused and silently failed the WHOLE push; the right value is `null`. The conductor's `check`
+   compares effective values, not the push's reply.
+8. **Posts and hosts are declared in every plan** (Loial at 2, Raphael at 202, Marco Polo at 106) and
+   are never matched by `"*"`.
+9. **No transition on enemy logins.**
+
 ### What it deliberately does not do
 
 - It does not move the keeper's one-second decisions anywhere. A plan changes postures and loops; the
@@ -106,11 +138,10 @@ failure modes; and no single answer to "what plan are we in, and what does it re
 
 Each step is useful on its own and reversible; step 1 is a read-only report.
 
-## Open questions for the operator
+## Decisions (proposed; prod-deploy-84 concurs, operator to confirm)
 
-1. Should the plan file live with the harness roster (this machine's `substrate/`), or with DUM's
-   `doctrines/local/`? (Proposal: harness `substrate/plans/`, because postures and loops are harness
-   concepts; DUM reads it.)
-2. Who may switch plans automatically — only the conductor's declared transitions, or DUM proposals too?
-3. Should a plan be able to declare *conditions* on loops beyond supply (e.g. "only while no war enemy is
-   online"), or is that a Plan C?
+1. Plan files live in the harness, `substrate/plans/` (gitignored, with an example beside it); DUM reads them.
+2. Only declared `transitions` switch automatically. DUM may PROPOSE a switch; the conductor logs the
+   proposal and asks the operator.
+3. Conditions on a loop (e.g. "only while no war enemy is online") go in that loop's own `requires`,
+   not in a new plan.
