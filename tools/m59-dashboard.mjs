@@ -360,7 +360,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
       <td class="ev ${e.kind === 'died' || e.kind === 'level_lost' ? 'bad' : e.kind === 'level_up' ? 'good' : ''}">${esc(e.kind.replace(/_/g, ' '))}</td>
       <td class="dim">${esc(Object.entries(e)
         .filter(([k]) => !['t', 'iso', 'type', 'character', 'kind'].includes(k))
-        .map(([k, v]) => `${k}: ${v}`).join(' · '))}</td>
+        .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · '))}</td>
     </tr>`).join('');
 
   return `<!doctype html>
