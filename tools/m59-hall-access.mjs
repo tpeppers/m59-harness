@@ -10,6 +10,9 @@
 //   withdrawWithRecovery(call, agent, wants)  one draw; a PASSAGE refusal (a door trigger, outside the
 //                                             passage) is retried once after a pause, everything else is
 //                                             returned as it came. The result always says why.
+//   depositWithRecovery(call, agent, deposit) the other direction: put the named things (name substrings,
+//                                             as hall_withdraw's `deposit`) into the chests, the same retry,
+//                                             and the pack says what LEFT.
 //   hallDrawSteps({ wants, holder, why })     the standard approach as fleetscript steps: the chalice
 //                                             ride first when a holder is named (it lands past the
 //                                             doors), the walk in as the fallback, then the recovering
@@ -45,6 +48,41 @@ export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pa
   const gotAny = Object.values(arrived).some(n => n > 0);
   return { ok: !!r?.ok && gotAny, took: r?.took ?? {}, short: r?.short ?? {}, arrived,
            why: r?.ok ? (gotAny ? null : 'the keeper reported a draw but nothing arrived in the pack') : (r?.why ?? r?.error ?? 'no reason given'),
+           attempts: Math.min(attempts + 1, retries + 1) };
+}
+
+// What a deposit list names in a pack: case-insensitive substrings, as the keeper matches them
+// (`id:<n>` entries name one object). Worn items are counted too; they never leave, so a fall is still
+// the evidence and a pack holding only worn matches reads as "nothing to put in".
+const countMatching = (inv, deposit) => {
+  const names = deposit.map(d => String(d).toLowerCase()).filter(d => !/^id:\d+$/.test(d));
+  const ids = new Set(deposit.map(d => /^id:(\d+)$/i.exec(String(d))?.[1]).filter(Boolean).map(Number));
+  return (inv?.items ?? []).filter(i => ids.has(Number(i.id)) || names.some(d => String(i.name ?? '').toLowerCase().includes(d)))
+    .reduce((n, i) => n + (Number(i.amount) || 1), 0);
+};
+
+/**
+ * One deposit into the hall chests, retried once on a passage refusal. Never throws.
+ * @returns {{ ok, before, left, why, attempts, reply }} — `left` is how many matching items left the pack.
+ */
+export async function depositWithRecovery(call, agent, deposit, { retries = 1, pauseMs = 15_000, sleepFn = sleep } = {}) {
+  const inv0 = await call('inventory', { agent }, 60_000).catch(() => null);
+  const before = inv0 ? countMatching(inv0, deposit) : null;
+  if (before === 0) return { ok: true, before, left: 0, why: 'nothing in the pack matches the deposit list', attempts: 0, reply: null };
+  let r = null, attempts = 0;
+  for (; attempts <= retries; attempts++) {
+    if (attempts) await sleepFn(pauseMs);
+    r = await call('hall_withdraw', { agent, wants: [], deposit }, 620_000).catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    const why = String(r?.why ?? r?.error ?? '');
+    if (!PASSAGE_REFUSAL.test(why)) break;
+  }
+  const inv1 = await call('inventory', { agent }, 60_000).catch(() => null);
+  const left = before != null && inv1 ? Math.max(0, before - countMatching(inv1, deposit)) : null;
+  const refused = r?.ok === false || r?.error;
+  return { ok: !refused && left !== 0, before, left, reply: r,
+           why: refused ? (r?.why ?? r?.error ?? 'no reason given')
+              : left === 0 ? 'the keeper reported a deposit but nothing left the pack'
+              : left == null ? 'deposit reported; the pack could not be read back' : null,
            attempts: Math.min(attempts + 1, retries + 1) };
 }
 

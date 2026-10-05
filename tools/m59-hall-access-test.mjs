@@ -2,7 +2,7 @@
 //
 //   node tools/m59-hall-access-test.mjs
 import assert from 'node:assert/strict';
-import { withdrawWithRecovery, hallDrawSteps, PASSAGE_REFUSAL } from './m59-hall-access.mjs';
+import { withdrawWithRecovery, depositWithRecovery, hallDrawSteps, PASSAGE_REFUSAL } from './m59-hall-access.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
@@ -15,7 +15,8 @@ const broker = (replies, pack = { emerald: 0 }) => {
     // Like the real pack: an emptied stack is absent, never listed at amount 0 (0 means ONE unstackable).
     if (name === 'inventory') return { items: Object.entries(pack).filter(([, a]) => a > 0).map(([name, amount]) => ({ name, amount })) };
     if (name === 'hall_withdraw') { const r = replies.shift() ?? { ok: false, why: 'no more replies' };
-      for (const [k, v] of Object.entries(r.give ?? {})) pack[k] = (pack[k] ?? 0) + v; return r; }
+      for (const [k, v] of Object.entries(r.give ?? {})) pack[k] = (pack[k] ?? 0) + v;
+      for (const [k, v] of Object.entries(r.take ?? {})) pack[k] = (pack[k] ?? 0) - v; return r; }
     throw new Error(`unexpected ${name}`);
   };
   return { call, calls };
@@ -53,6 +54,22 @@ await ok('the passage refusals it recognises', async () => {
   for (const w of ['guild door 59 trigger not reached', 'guild position is outside the known passage', 'not in the hall (room 101, want 714)'])
     assert.ok(PASSAGE_REFUSAL.test(w), w);
   assert.ok(!PASSAGE_REFUSAL.test('guild chest key unavailable'));
+});
+await ok('a deposit: a passage refusal is retried, and the pack says what left', async () => {
+  const b = broker([{ ok: false, why: 'guild door 55 trigger not reached' }, { ok: true, take: { 'entroot berry': 120 } }],
+                   { 'entroot berry': 120, 'iron sword': 0 });
+  const r = await depositWithRecovery(b.call, 't3', ['entroot berry'], { sleepFn: nap });
+  assert.equal(r.ok, true); assert.equal(r.attempts, 2); assert.equal(r.left, 120);
+});
+await ok('a deposit with nothing to put in is not a walk-in failure, and calls nothing', async () => {
+  const b = broker([], { 'iron sword': 1 });
+  const r = await depositWithRecovery(b.call, 't3', ['entroot berry', 'wand'], { sleepFn: nap });
+  assert.equal(r.ok, true); assert.equal(r.left, 0); assert.ok(!b.calls.includes('hall_withdraw'));
+});
+await ok('a deposit the keeper calls fine but the pack never moved is a failure', async () => {
+  const b = broker([{ ok: true }], { 'entroot berry': 40 });
+  const r = await depositWithRecovery(b.call, 't3', ['berry'], { sleepFn: nap });
+  assert.equal(r.ok, false); assert.match(r.why, /nothing left/);
 });
 await ok('hallDrawSteps: chalice first when a holder is named, then the walk, then the draw', async () => {
   assert.deepEqual(hallDrawSteps({ wants: [], holder: 'Loial the Ogier' }).map(s => s.do), ['ride_chalice', 'walk', 'verify']);
