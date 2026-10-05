@@ -179,7 +179,13 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
       k.note?.('guild door trigger not reached', { sector: door.sector, reason: approach?.reason,
         at: { row: c.self.row, col: c.self.col }, target: { row: trigger[0], col: trigger[1] } });
-      throw new Error(`guild door ${door.sector} trigger not reached`);
+      // THE REASON TRAVELS WITH THE REFUSAL. The note above goes to a keeper buffer nobody can read
+      // after the fact; on 2026-10-05 three hall draws failed "door 55 trigger not reached" with no way
+      // to tell a refused route from a body in the way from a stale position. The caller's `why` now
+      // carries where the walk stopped and what it said.
+      throw new Error(`guild door ${door.sector} trigger not reached ` +
+        `(stopped at r${c.self.row}c${c.self.col}, wanted r${trigger[0]}c${trigger[1]}` +
+        `${approach?.reason ? `: ${approach.reason}` : ''}${approach?.steps != null ? `, ${approach.steps} step(s)` : ''})`);
     }
     let crossed = false, refused = 0;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {

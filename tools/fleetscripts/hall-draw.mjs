@@ -21,6 +21,7 @@
 // wants come to roughly 1,550 weight and 1,900 bulk — inside one pack, not inside a full one.
 import { walk, verify } from '../m59-fleetscript.mjs';
 import { chaliceRide } from './ghost-outfit.mjs';
+import { withdrawWithRecovery } from '../m59-hall-access.mjs';
 
 const HALL = 714;
 const DEFAULT_WANTS = JSON.stringify([
@@ -62,14 +63,16 @@ export const script = {
         return true;
       }, 'the chalice ride, if the cup is here'),
       walk(HALL, { why: 'the chests are in the hall; a no-op if the chalice already landed us' }),
+      // THE SHARED DRAW (m59-hall-access.mjs): a passage refusal — a walk-in stopping short of a door
+      // trigger, the 2026-10-05 failure — is retried once; the pack, not the reply, says what arrived.
       verify(async ({ call }) => {
-        const r = await call('hall_withdraw', { agent, wants }, 620_000).catch(e => ({ ok: false, why: e.message }));
-        out.took = r?.took ?? {}; out.short = r?.short ?? {};
-        console.log(`  ${agent} HALL took ${JSON.stringify(out.took)}` +
+        const r = await withdrawWithRecovery(call, agent, wants);
+        out.took = r.arrived; out.short = r.short ?? {};
+        console.log(`  ${agent} HALL arrived ${JSON.stringify(out.took)} in ${r.attempts} attempt(s)` +
                     (Object.keys(out.short).length ? `  SHORT ${JSON.stringify(out.short)}` : '') +
-                    (r?.ok ? '' : `  REFUSED: ${r?.why ?? r?.error ?? '?'}`));
-        if (!r?.ok) throw new Error(`hall_withdraw: ${r?.why ?? r?.error ?? 'no answer'}`);
-        return Object.values(out.took).some(n => n > 0) || 'the chests gave nothing';
+                    (r.why ? `  ${r.ok ? 'NOTE' : 'REFUSED'}: ${r.why}` : ''));
+        if (!r.ok) throw new Error(`hall_withdraw: ${r.why}`);
+        return true;
       }, 'taking the wants out of the chests, read back off the pack'),
       walk(Number(p.home), { why: 'bring it to the raid' }),
     ];
