@@ -87,6 +87,41 @@ function keeper({ cash = 50, balance = 5000, herbPrice = 14, refuse = false } = 
   return k;
 }
 
+// A capacity refusal must release the town scheduler instead of retrying its
+// pending purchase every five seconds. Exercise the food path with Solomon's line.
+for (const kind of ['said', 'message', 'stale', 'other speaker', 'silent']) {
+  const k = keeper({ cash: 20000 });
+  const c = k.s.client;
+  k.policy.buyFood = true;
+  k.policy.buyReagents = false;
+  k.purchaseFoodGap = () => 2000;
+  k.s.world.room = { num: 103 };
+  k.townTrip = { target: { room: 103 }, nextService: 7, startedAt: Date.now() };
+  k.sellerHere = async () => ({ seller: { id: 99, nameRsc: 99 } });
+  const wait = c.waitFor;
+  c.waitFor = async options => options.kinds.includes('shop')
+    ? { events: [{ kind: 'shop', sellerId: 99, items: [{ id: 4, name: 'loaf of bread', cost: 108 }] }] }
+    : wait.call(c, options);
+  const refusal = { seq: 1, kind: kind === 'message' ? 'message' : 'said',
+    speaker: kind === 'other speaker' ? 100 : 99,
+    text: "I'm unable to give you the loaves of bread.  Perhaps you carry too much?" };
+  const events = kind === 'stale' ? [refusal] : [];
+  c.evSeq = 1;
+  c.eventsSince = since => events.filter(e => e.seq > since);
+  c.buyItems = (_seller, lines) => {
+    k.actions.push(['buy', lines]);
+    if (kind !== 'stale' && kind !== 'silent') events.push({ ...refusal, seq: ++c.evSeq });
+  };
+  await k.continueTownTrip();
+  assert.equal(k.actions.filter(a => a[0] === 'buy').length, 1, 'stop before another purchase chunk');
+  if (kind === 'said' || kind === 'message') {
+    assert.equal(k.townTrip, null, 'capacity refusal completes the step instead of retrying forever');
+    assert.ok(k.notes.some(n => n.what === 'shopping stopped — merchant refused the carried load'));
+  } else {
+    assert.equal(k.townTrip.nextService, 7, `${kind} cannot turn a missing receipt into a capacity refusal`);
+  }
+}
+
 {
   const k = keeper();
   const plan = k.shoppingPlan();

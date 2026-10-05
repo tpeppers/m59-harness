@@ -29348,6 +29348,7 @@ export class Autopilot {
       if (this.purseNow() < item.unit_cost * line.amount + plan.reserve)
         return pending('purchase funding changed', got);
       const held = count(item.item);
+      const purchaseBefore = c.evSeq;
       await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
       const inventoryBefore = c.evSeq;
       await s.pacer.submit('read', () => c.requestInventory());
@@ -29360,7 +29361,18 @@ export class Autopilot {
           from: seller?.nameRsc ? c.rsc.get(seller.nameRsc) : null,
           why: 'the posted shopping list, funded before purchase' });
       }
-      if (gained < line.amount) return pending('merchant did not deliver the requested quantity', got);
+      if (gained < line.amount) {
+        const refusal = (c.eventsSince?.(purchaseBefore) ?? []).find(e =>
+          (e.kind === 'message' || (e.kind === 'said' && e.speaker === shop.sellerId)) &&
+          /unable to give you[\s\S]*perhaps you carry too much/i.test(e.text ?? ''));
+        if (refusal) {
+          // Pending repeats this step every five seconds with the same full pack.
+          // A confirmed capacity refusal ends this visit; missing receipts still retry.
+          this.note('shopping stopped — merchant refused the carried load', { item: item.item, said: refusal.text });
+          return got;
+        }
+        return pending('merchant did not deliver the requested quantity', got);
+      }
     }
     this.postShoppingPlan(this.shoppingPlan());
     if (got.length) this.note('restocked from the funded shopping list', { bought: got });
