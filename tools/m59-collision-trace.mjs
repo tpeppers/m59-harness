@@ -34,6 +34,8 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rememberMoveAttempt } from './m59-movement-attempts.mjs';
+export { recentMoveAttempts } from './m59-movement-attempts.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -51,34 +53,6 @@ export const TRACE_FILE = process.env.M59_COLLISION_TRACE_FILE
 // THE DEFAULT, AND THE ONLY THING THE TEST CARES ABOUT. Read once: this is consulted in a
 // hot loop, and re-reading process.env per move is itself a cost worth not paying.
 export const COLLISION_TRACE = process.env.M59_COLLISION_TRACE === '1';
-
-// Always retain a small in-memory window for incident/death capture. The full
-// disk trace remains opt-in. This records local attempts, not server arrivals.
-const attemptWindows=new Map(),ATTEMPT_WINDOW=32,MAX_WINDOW_AGENTS=64;
-const point=p=>p&&typeof p==='object'?Object.fromEntries(['row','col','x','y'].filter(k=>Number.isFinite(p[k])).map(k=>[k,p[k]])):null;
-const finite=v=>Number.isFinite(v)?v:null;
-function rememberAttempt(d,at) {
-  if(typeof d?.agent!=='string'||!d.agent)return;
-  const key=d.agent.slice(0,80);
-  if(!attemptWindows.has(key)&&attemptWindows.size>=MAX_WINDOW_AGENTS)attemptWindows.delete(attemptWindows.keys().next().value);
-  const w=attemptWindows.get(key)??{total:0,attempts:[]};
-  w.attempts.push({at,seq:++w.total,kind:String(d.kind??'unknown').slice(0,40),
-    room:finite(typeof d.room==='number'?d.room:d.room?.num),
-    from:point(d.from??d.fine),square:point(d.square),requested:point(d.requested??d.aimed??d.target),
-    to:point(d.to),sent:typeof d.sent==='boolean'?d.sent:null,
-    reason:String(d.reason??d.validation?.reason??'').slice(0,160)||null,
-    object_id:finite(d.objectId??d.validation?.objectId),
-    movement_generation:finite(d.movement_generation),
-    blocked:typeof d.validation?.blocked==='boolean'?d.validation.blocked:null,
-    slid:typeof d.validation?.slid==='boolean'?d.validation.slid:null});
-  if(w.attempts.length>ATTEMPT_WINDOW)w.attempts.shift();attemptWindows.set(key,w);
-}
-export function recentMoveAttempts(agent) {
-  const w=attemptWindows.get(agent);
-  return {scope:'process-local bounded local attempts; sent does not confirm arrival',
-    units:'named square row/col; fine x/y in KOD/protocol units (64 per square)',
-    evicted:w?w.total-w.attempts.length:0,attempts:structuredClone(w?.attempts??[])};
-}
 
 // THE ROW THE OFFLINE VERIFIER REPLAYS. Keep construction separate from writing so the
 // contract can be exercised without a socket or a trace file. `room.num` is the stable map
@@ -328,7 +302,7 @@ export function traceUnsafeWireMove(detail) {
  */
 export function traceMove(detail) {
   const at = Date.now();
-  rememberAttempt(detail,at);
+  rememberMoveAttempt(detail,at);
   if (!COLLISION_TRACE) return;
   if (resumeProblem) {
     if (!complained) {

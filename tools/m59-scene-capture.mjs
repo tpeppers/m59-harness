@@ -2,7 +2,7 @@
 import {makeScene,observed,unknownField} from './m59-scene.mjs';
 import {OF} from './m59-parse.mjs';
 import {currentSurvivalDecision} from './m59-survival-decision.mjs';
-import {recentMoveAttempts} from './m59-collision-trace.mjs';
+import {recentMoveAttempts} from './m59-movement-attempts.mjs';
 
 export const CAPTURE_LIMITS=Object.freeze({actors:2048,inventory:512,abilities:512});
 const number=x=>Number.isFinite(x)?x:null;

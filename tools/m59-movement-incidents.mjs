@@ -40,7 +40,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 import { originLabel } from './m59-move-origin.mjs';
-import { recentMoveAttempts } from './m59-collision-trace.mjs';
+import { recentMoveAttempts } from './m59-movement-attempts.mjs';
 
 export const FORMAT = 'm59-movement-incident/1';
 export const FIXTURE_FORMAT = 'm59-movement-incident-fixture/1';

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {Autopilot} from './m59-autopilot.mjs';
+import {Session} from './m59-game.mjs';
 import {returnToSpot} from './m59-skills.mjs';
 import {buildIncident,exportIncident} from './m59-movement-incidents.mjs';
 import {heldMonsterPlacementPlan} from './m59-scene-staging.mjs';
@@ -10,6 +12,14 @@ function keeper() {
  const s={name:'fixture',client:{selfId:1,self:{row:37,col:14,predicted:false},room:{objects:new Map()}},world:{room:{num:534},geometry:{walkable:()=>true}}};
  return Object.assign(Object.create(Autopilot.prototype),{s,policy:{unreachableSpotMs:1000},wallHere:()=>({ok:true,row:37,col:14})});
 }
+test('keep-right offsets stay in the requested square, including a shelter beside a room edge',()=>{
+ const home={x:2208,y:3040},from={x:2144,y:2976,row:46,col:33};
+ for(const [lane,expected] of [[{x:2152,y:3096},home],[{x:2192,y:3048},{x:2192,y:3048}]]) {
+  const s={world:{geometry:{standPointWire:()=>home,traceFineMoveClient:()=>({arrived:true})}},
+   bodiesInSquare:()=>[],keepRightLane:()=>lane};
+  assert.deepEqual(Session.prototype.aimInto.call(s,from,47,34),expected);
+ }
+});
 test('fresh failed rest cannot be re-adopted as logoff-safe; temporary exclusion expires',t=>{
  t.mock.timers.enable({apis:['Date'],now:10000});const k=keeper();
  assert.ok(k.currentRecoveryWall());k.noteFailedRestSpot(534,14,37);
@@ -45,6 +55,15 @@ test('attempt journal stays bounded, preserves fine points/body ID and isolates 
  assert.equal(r.attempts[0].from.x,800);assert.equal(r.attempts[0].object_id,7);
  r.attempts[0].from.x=1;assert.equal(recentMoveAttempts('journal-fixture').attempts[0].from.x,800);
  assert.equal(typeof r.attempts[0].at,'number');
+});
+test('scene capture loads before lab config without caching the wrong disk trace destination',()=>{
+ const script=`process.env.M59_COLLISION_TRACE_FILE='before-lab';
+ await import(${JSON.stringify(new URL('./m59-scene-capture.mjs',import.meta.url).href)});
+ process.env.M59_COLLISION_TRACE_FILE='isolated-lab';
+ const {TRACE_FILE}=await import(${JSON.stringify(new URL('./m59-collision-trace.mjs',import.meta.url).href)});
+ if(TRACE_FILE!=='isolated-lab')throw Error('scene import cached a pre-lab trace path');`;
+ const result=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',windowsHide:true});
+ assert.equal(result.status,0,result.stderr);
 });
 test('exact held placement restores a monster in an otherwise inaccessible square, never player placement',()=>{
  const scene={actors:[{key:'self',kind:'player'},{key:'tree',kind:'monster',at:{v:{row:37,col:14,x:928,y:2400}}}]};

@@ -3884,7 +3884,12 @@ class Session {
     const bodies = typeof this.bodiesInSquare === 'function' ? this.bodiesInSquare(row, col) : [];
     // KEEP RIGHT IN A CORRIDOR, bodies or not. Guarded like the rest of this method: it is
     // lifted by text into fixtures that inject only what they have.
-    const lane = typeof this.keepRightLane === 'function' ? this.keepRightLane(from, home) : null;
+    const laneCandidate = typeof this.keepRightLane === 'function' ? this.keepRightLane(from, home) : null;
+    // A corridor offset must still enter the square the planner requested.
+    // Near an edge, an otherwise legal rightward offset can cross the boundary
+    // instead of arriving at the selected shelter.
+    const lane = laneCandidate && Math.floor(laneCandidate.x / KOD_FINENESS) === col
+      && Math.floor(laneCandidate.y / KOD_FINENESS) === row ? laneCandidate : null;
     const laned = aim => typeof this.noteLane === 'function' ? this.noteLane(aim, row, col) : aim;
     if (!bodies.length) {
       if (lane && reaches(lane.x, lane.y)) return laned(lane);
