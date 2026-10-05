@@ -18291,7 +18291,10 @@ async function callTool(name, args, caller) {
       const refs = judgeArgs(args, { tool: name, agent: idAgent, registry: idRegistry, clock: saveClock });
       if (refs.length) {
         const candidates = await freshIdCandidates(idSession).catch(() => []);
-        const rr = reresolveRefs(refs, { candidates, clock: saveClock });
+        // The session's own id, read now: a character's own object is never a stale handle to it.
+        let selfId = null;
+        try { selfId = Number(idSession.need?.()?.me?.id) || null; } catch { selfId = null; }
+        const rr = reresolveRefs(refs, { candidates, clock: saveClock, selfId });
         if (!rr.ok)
           throw new Error(`stale object id(s) — refused rather than acted on: ` +
                           rr.refused.map(r => r.why).join('; '));

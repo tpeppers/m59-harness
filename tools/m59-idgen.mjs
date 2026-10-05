@@ -465,10 +465,19 @@ export function judgeArgs(args, { tool, agent, registry, clock, now = Date.now()
  * room). The same id still carrying the same name is kept; otherwise exactly one carrier of the
  * name is substituted; anything else is refused with a sentence.
  */
-export function reresolveRefs(refs, { candidates = [], clock = null } = {}) {
+export function reresolveRefs(refs, { candidates = [], clock = null, selfId = null } = {}) {
   const subs = [], refused = [];
   const when = hhmmss(clock?.summary?.().last_at);
   for (const r of refs ?? []) {
+    // THE CHARACTER'S OWN OBJECT IS ALWAYS CURRENT. Its id is re-read with every snapshot, and it is
+    // handed out with no name (`look.you.object_id`, `status.you.id`), so the by-name re-resolution
+    // below could never vouch for it: after the first save every self-cast in the fleet was refused
+    // here, silently to a loop that read only `messages` (Pepe and Statler, 2026-10-05: 67 and 69
+    // remove curses, then ~1,400 misses each with full mana, emeralds and the amulet on).
+    if (Number.isSafeInteger(selfId) && selfId > 0 && r.id === selfId) {
+      subs.push({ path: r.path, from: r.id, to: r.id, name: r.name ?? 'self', how: 'self' });
+      continue;
+    }
     const saw = `id ${r.id} was read at ${hhmmss(r.read_at)}, before the ${when} save that renumbers every object id`;
     if (!r.name) {
       refused.push({ id: r.id, path: r.path, why: `${saw}, and it was handed out without a name — re-read and pass the new id` });
