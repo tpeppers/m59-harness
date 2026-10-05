@@ -61,7 +61,7 @@ failure modes; and no single answer to "what plan are we in, and what does it re
                            "shelter": [ { "if": "in-inn|in-room:714", "do": "stay" },
                                         { "if": "in-room:2,38,39", "do": "walk:714" },
                                         { "else": "walk:nearest-inn-by-hops" } ] } },
-      "sweeps": ["clear-arrival-doors"],   // runs on ARRIVAL at the shelter; e.g. Cibilo Creek's arrival square is its only door
+      "sweeps": ["clear-doors:watch"],   // a WATCH for as long as B holds (exit AND arrival squares); e.g. Cibilo Creek's arrival square is its only door
       // NOT zero loops: anyone who can practise without travelling keeps casting until out of
       // reagents or able to buy the next level (operator rule).
       "loops": [ { "script": "practice-in-place", "agents": "@can-practise-here", "until": "reagents-out|next-level-affordable" } ],
@@ -121,6 +121,13 @@ These are requirements, not notes; each one cost a death or a silent failure.
    stand"): stay if already in an inn or the hall; Castle Victoria rooms (2/38/39) walk into the hall; the
    rest walk to the nearest inn by hops; posts keep their post; Familiars are excluded. The door-clearing
    sweep runs on arrival. A posture is therefore a small ordered rule list, not one value for `"*"`.
+6a. **Never block a door, for the whole lockdown, not just on arrival** (operator, 2026-10-05: "all
+   lockdowns should always ensure they don't block the door"). At 16:3x three of ours stood on Cibilo Creek's
+   only door (r4c2 arrival, r3c1 exit) after a lockdown whose one-shot sweep had already run: two arrived
+   after it, one was moved there later. So a plan's `sweeps` are WATCHES that run while the plan is in force
+   and stop when it is lifted, and a door is an exit square OR an arrival square (every edge/go exit INTO
+   the room). Sweeps in parallel claim their target squares, or two characters pick the same one. Today:
+   the local `door-sweep` fleetscript (`watch=1`), launched once per lockdown by `lockdown`.
 7. **Every posture push is read back, and a refused key fails loudly.** `guild_tithe {enabled:false}`
    was refused and silently failed the WHOLE push; the right value is `null`. The conductor's `check`
    compares effective values, not the push's reply.
