@@ -5399,6 +5399,32 @@ export class Autopilot {
   // was "drop scimitars as needed, but deposit 20+ in the guild chest" — scimitars are banned
   // for them, so without this every one was dropped. Now only the co-op's own reagent list
   // is excluded, and everything else the plan is short of is protected while it is short.
+  // WHAT A MERCHANT MAY NOT HAVE, which is a little more than what may not leave the pack.
+  //
+  // Operator, 2026-10-05: purple mushrooms "never sell unless overstocked versus plan on the hall
+  // chests". guildWantedNames already says exactly that -- except for the co-op's own reagents,
+  // which it leaves to the co-op because the co-op deposits them. But the co-op deposits only
+  // when it visits the hall, and a co-op member standing at Joguer or Herbutte with purple in
+  // its pack could sell them while the hall was 388 short of the plan (38 of 426).
+  //
+  // So the SALE paths also hold back every co-op reagent the plan is short of. Only the sale
+  // paths: protectedItemNames() is also the co-op's deposit filter, and adding them THERE is the
+  // 2026-09-17 deadlock (unsellable and undepositable). Over the plan, they sell as before.
+  saleProtectedNames() {
+    const base = this.protectedItemNames();
+    if (!this.policy.reagentCoop?.enabled) return base;
+    try {
+      const plan = guildPlan();
+      if (!plan) return base;
+      const coop = new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r)));
+      const store = new StorageCache();
+      const test = guildKeepTest({ plan, chests: store.allChests(), rent: store.readRent() });
+      const short = [...(test.shortfall ?? new Map())].filter(([item, n]) => n > 0 && coop.has(norm(item)))
+        .map(([item]) => item);
+      return [...new Set([...base, ...short])];
+    } catch { return base; }
+  }
+
   guildWantedNames() {
     if (!this.policy.guildWants?.enabled) return [];
     const plan = guildPlan();
@@ -26153,7 +26179,7 @@ export class Autopilot {
     let sold = null;
     if (buyer) {
       sold = await skills.sellAll(s, { merchant: buyer, loadout: this.loadout(),
-        protect: this.protectedItemNames(), maxWeapons: this.policy.maxWeapons,
+        protect: this.saleProtectedNames(), maxWeapons: this.policy.maxWeapons,
         weaponPriority: this.weaponPriorityNow() }).catch(e => ({ error: e.message }));
     }
     // Still tight, or nobody here buys: shed what is provably worthless.
@@ -28286,7 +28312,7 @@ export class Autopilot {
     if (!buyer) return null;
     this.doing = 'trading';
     const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(), keep: MARKET_KEEP,
-                                       protect: this.protectedItemNames(),
+                                       protect: this.saleProtectedNames(),
                                        maxWeapons: this.policy.maxWeapons,
                                        weaponPriority: this.weaponPriorityNow(), maxStack })
                           .catch(e => ({ error: e.message }));
@@ -29567,7 +29593,7 @@ export class Autopilot {
       // guards — money, worn gear, anything a crewmate is short of — still apply; this adds
       // this character's floors and its sell list on top.
       const sold = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(),
-                                            protect: this.protectedItemNames(),
+                                            protect: this.saleProtectedNames(),
                                             maxWeapons: this.policy.maxWeapons,
                                             weaponPriority: this.weaponPriorityNow() })
                                .catch(e => ({ error: e.message }));

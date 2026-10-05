@@ -4746,7 +4746,7 @@ const server = createServer(async (req, res) => {
             if (!merchant) { result = { error: `no merchant matching "${ref}" in this room` }; break; }
             const merchId = merchant.id;
             const salePlan = () => skills.inventorySalePlan(session, {
-              keep: args.keep ?? FLEET_KEEP, protect: autopilot?.protectedItemNames?.() ?? [],
+              keep: args.keep ?? FLEET_KEEP, protect: autopilot?.saleProtectedNames?.() ?? autopilot?.protectedItemNames?.() ?? [],
               loadout: args.ignore_loadout ? null : autopilot?.loadout?.(),
               maxWeapons: args.max_weapons, weaponPriority: args.weapon_priority ?? autopilot?.policy?.weaponPriority,
             }).items;
