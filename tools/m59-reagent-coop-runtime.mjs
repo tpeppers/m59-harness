@@ -113,6 +113,9 @@ async function transfer(k, box, item, amount, direction, cfg, receipt) {
   const moved = Math.max(0, Math.min(fromPack, intoBox, amount));
   receipt({ direction, slot: box.slot, item: name, requested: amount, amount: moved,
     pack_delta: fromPack, chest_delta: intoBox });
+  // AND INTO THE OPEN TOWN TRIP'S BOOK (m59-towntrip-ledger.mjs) -- the tithe's shillings included.
+  if (moved > 0) try { k.tradeFact?.({ [direction === 'deposit' ? 'guild_deposited' : 'withdrawn']: [{ name, amount: moved }] }); }
+  catch { /* bookkeeping only */ }
   // An inconsistent receipt must not be retried from the old plan.
   if (fromPack !== intoBox || moved !== fromPack) throw new Error('coop transfer receipt disagrees');
   return moved;

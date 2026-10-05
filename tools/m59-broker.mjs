@@ -207,6 +207,7 @@ import { withCompendiumRequest } from './m59-compendium-links.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
 import { renderTravel } from './m59-travel-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
+import { renderTownTrips } from './m59-towntrips-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
 import { communicationsReport, renderCommunications, fleetCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
@@ -19984,6 +19985,17 @@ function serveDashboard(port) {
     // Deliberately NOT awaited into the pure renderer's signature: renderEconomy works
     // with `live: null` and says so on the row, which is what a future standalone reader
     // of this record would get.
+    // EVERY TOWN TRIP, ITEM BY ITEM (m59-towntrips-page.mjs). Read-only, off the history files.
+    if (url.pathname === '/economy/trips') {
+      try {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(renderTownTrips({ fleet: FLEET, label: FLEET, query: url.searchParams }));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        res.end('/economy/trips failed: ' + e.message);
+      }
+      return;
+    }
     if (url.pathname === '/economy') {
       const hours = Number(url.searchParams.get('hours')) || 168;
       const tool = TOOLS.find(t => t.name === 'fleet');

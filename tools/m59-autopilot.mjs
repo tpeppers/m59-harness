@@ -162,6 +162,7 @@ import { PolicySourceBook } from './m59-policy-sources.mjs';
 import { keeperOrigin, claimantOrigin, moveOrigin, originLabel, liveMoveOrder, movementReport,
          journeyProvenance, installMoveOrders, describePreemption } from './m59-move-origin.mjs';
 import { recordMovementIncident, classifyJourneyFailure } from './m59-movement-incidents.mjs';
+import { packCounts, newTripTrade, addTradeFact, tripLedgerFields } from './m59-towntrip-ledger.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -26181,6 +26182,8 @@ export class Autopilot {
       sold = await skills.sellAll(s, { merchant: buyer, loadout: this.loadout(),
         protect: this.saleProtectedNames(), maxWeapons: this.policy.maxWeapons,
         weaponPriority: this.weaponPriorityNow() }).catch(e => ({ error: e.message }));
+      // A SALE TO MAKE ROOM IS STILL A SALE, and was the one path that told no ledger.
+      if (sold?.sold?.length) this.tradeFact({ earned: sold.total_received, sold: sold.sold });
     }
     // Still tight, or nobody here buys: shed what is provably worthless.
     const dead = skills.junkAndBroken(c);
@@ -26685,11 +26688,15 @@ export class Autopilot {
     }
     if (this.travelInterrupted() || this.suspendedJourney) return pending('paused for survival');
     const withdrawBefore = c.evSeq;
+    const purseBeforeWithdraw = this.purseNow();
     await s.pacer.submit('bank', () => c.withdraw(gap));
     await c.waitFor({ since: withdrawBefore, kinds: ['message'], timeoutMs: 3000 });
     const refreshBefore = c.evSeq;
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ since: refreshBefore, kinds: ['inventory'], timeoutMs: 3000 });
+    // WHAT CAME OUT OF THE BANK, read off the purse rather than the amount asked for.
+    const drewFromBank = this.purseNow() - purseBeforeWithdraw;
+    if (drewFromBank > 0) this.tradeFact({ bank_withdrawn: drewFromBank });
     const now = this.postShoppingPlan(plan);
     this.note('purchase funding checked after withdrawal', {
       asked_for: gap, purse: now.purse, required_purse: plan.required_purse,
@@ -27048,7 +27055,12 @@ export class Autopilot {
     const trigger = sellCall.trigger ?? (starving ? 'food' : 'bank');
     const purpose = TRIP_PURPOSE[trigger] ?? (supplyTrip ? 'restock' : starving ? 'food' : 'other');
     const value = this.packSaleValue();
+    // THE PACK GOING IN, and a book for what the trade paths say they did on the way (see
+    // m59-towntrip-ledger.mjs). Both close into `town_trip_completed` beside the pack coming out.
+    let packIn = null;
+    try { packIn = Array.isArray(this.s.client?.inventory) ? packCounts(this.packAsItems()) : null; } catch { packIn = null; }
     this.townTrip = { target, nextService: -1, startedAt, trigger, purpose,
+      packIn, trade: newTripTrade(),
       estimatedValue: value.value,
       marketStops: wantsMarket ? MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
     try {
@@ -27062,6 +27074,7 @@ export class Autopilot {
         // WHICH ITEMS COULD NOT BE WEIGHED, so the weight table can be filled from the kod rather
         // than an unweighable pack sending a hunter to town whatever it is worth.
         unweighed: sellCall.unweighed ?? null,
+        pack_in: packIn,
         supply_trip: !!supplyTrip, needs_cash_first: !!needsCashFirst,
         broke_with_goods: !!brokeWithGoods,
         room: this.s.world?.room?.num ?? null });
@@ -27249,9 +27262,12 @@ export class Autopilot {
           completed_at: this.lastTownServiceAt, room: this.s.world?.room?.num ?? null,
           purse: Array.isArray(this.s.client.inventory) ? this.purseNow() : null,
           accounts: balancesFor(who) });
+        let packOut = null;
+        try { packOut = Array.isArray(this.s.client?.inventory) ? packCounts(this.packAsItems()) : null; } catch { packOut = null; }
         if (income) this.ledgerEvent('town_trip_completed', { ...income,
           trigger: trip.trigger ?? null, purpose: trip.purpose ?? null,
-          estimated_value_at_open: trip.estimatedValue ?? null });
+          estimated_value_at_open: trip.estimatedValue ?? null,
+          ...tripLedgerFields({ packIn: trip.packIn ?? null, packOut, trade: trip.trade ?? null }) });
       }
     } catch { /* never let accounting interrupt play */ }
     this.progress('finished the shopping trip');
@@ -27280,6 +27296,8 @@ export class Autopilot {
 
   tradeFact(fact = {}) {
     try { recordTownTrade(this.s.client?.me?.name, fact); } catch { /* bookkeeping only */ }
+    // AND INTO THE OPEN TRIP'S OWN BOOK, item by item (m59-towntrip-ledger.mjs).
+    try { if (this.townTrip?.trade) addTradeFact(this.townTrip.trade, fact); } catch { /* bookkeeping only */ }
     this.passTrade ??= { earned: 0, spent: 0, banked: 0, sold: [], bought: [], deposited: [] };
     for (const key of ['earned', 'spent', 'banked'])
       this.passTrade[key] += Number(fact[key]) || 0;
@@ -27860,6 +27878,7 @@ export class Autopilot {
           await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
           if (!(c.inventory ?? []).some(x => x.id === o.id) || (c.inventory ?? []).length < before) {
             stashed++; spare.splice(spare.indexOf(o), 1);
+            this.tradeFact({ guild_deposited: [{ name: nameOf(o), amount: Number(o.amount) || 1 }] });
           } else break;                          // this chest is full or refusing; try the next
         }
       }
@@ -27916,6 +27935,9 @@ export class Autopilot {
       if (still > 0) short[item] = still; else delete short[item];
     }
     this.note('hall withdrawal for an errand', { took, short, stashed, diag });
+    // WHAT CAME OUT OF THE CHESTS, into an open town trip's book like any other trade.
+    const drawn = Object.entries(took).filter(([, n]) => n > 0).map(([name, amount]) => ({ name, amount }));
+    if (drawn.length) this.tradeFact({ withdrawn: drawn });
     return { ok: true, took, short, stashed, chests: chests.length, diag };
   }
 
@@ -28533,6 +28555,7 @@ export class Autopilot {
           // a unit here and again there would double the volume the hall is judged on.
           if (moved) book.deposit({ item: give.item, amount: moved, slot: chest.slot,
                                     by: this.name ?? s.name });
+          if (moved) this.tradeFact({ guild_deposited: [{ name: give.item, amount: moved }] });
           if (!moved) break;                      // it refused; stop hammering the chest
         }
         done.push({ slot: chest.slot, item: give.item, wanted: give.amount,

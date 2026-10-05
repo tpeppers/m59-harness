@@ -21,8 +21,9 @@ import { titheFleet } from './m59-tithe.mjs';
 // count went to /inventory with the stores they describe — an import left behind is a reader
 // being told this page still knows about chests.
 import { StorageCache } from './m59-storage.mjs';
+import { tripsSummaryHtml } from './m59-towntrips-page.mjs';
 
-const { label: FLEET_LABEL } = resolveFleet();
+const { label: FLEET_LABEL, fleet: FLEET_NAME } = resolveFleet();
 
 const EXTRA_STYLE = `
   /* THE TREND, AS SMALL AS IT CAN BE AND STILL MEAN SOMETHING. A stock with no history
@@ -561,6 +562,11 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
     (<code>node tools/m59-service.mjs restart --fleet ${esc(FLEET_LABEL)}</code>) and the
     column fills in within five minutes. The bank and reagent columns do not depend on it.
   </div>` : ''}
+
+  <h2>Town trips</h2>
+  <div class="sub">What each trip took to town, sold, bought, deposited and drew, and came home with —
+    <a href="/economy/trips">every trip, filterable</a>.</div>
+  ${tripsSummaryHtml({ fleet: FLEET_NAME, since: '24h' })}
 
   <h2>What the money bought</h2>
   ${e.spend.total ? `
