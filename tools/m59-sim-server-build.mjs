@@ -74,7 +74,7 @@ export function parseBuildArgs(argv = process.argv.slice(2), env = process.env) 
 function run(executable, args, {
   cwd = REPOSITORY_ROOT, stdio = 'pipe', timeout = 30000, trim = true,
 } = {}) {
-  const result = spawnSync(executable, args, { cwd, encoding: 'utf8', stdio, timeout });
+  const result = spawnSync(executable, args, { cwd, encoding: 'utf8', stdio, timeout, windowsHide: true });
   if (result.error) throw new Error(`${executable} could not run: ${result.error.message}`);
   if (result.status !== 0) {
     const detail = String(result.stderr || result.stdout || '').trim().slice(-1000);

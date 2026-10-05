@@ -197,7 +197,7 @@ function serviceInstall(fleet, passthrough) {
   const name = `m59-prodwatch-${fleet}`;
   const cmd = `"${process.execPath}" "${self}" service start --fleet ${fleet} ${passthrough.join(' ')}`.trim();
   try {
-    execFileSync('schtasks', ['/Create', '/F', '/SC', 'ONLOGON', '/TN', name, '/TR', cmd], { stdio: 'pipe' });
+    execFileSync('schtasks', ['/Create', '/F', '/SC', 'ONLOGON', '/TN', name, '/TR', cmd], { stdio: 'pipe', windowsHide: true });
     console.log(`registered scheduled task "${name}" — it starts the watcher at logon`);
     console.log(`  remove it with:  schtasks /Delete /F /TN ${name}`);
     return 0;
@@ -258,7 +258,7 @@ if (import.meta.filename === process.argv[1]) {
   const onAlert = arg('--on-alert', null);
   const runHook = (kind, v) => {
     if (!onAlert) return;
-    try { spawn(onAlert, { shell: true, stdio: 'ignore', detached: true,
+    try { spawn(onAlert, { shell: true, stdio: 'ignore', detached: true, windowsHide: false /* visible on purpose */,
                            env: { ...process.env, M59_ALERT: kind, M59_FLEET: fleet,
                                   M59_DOWN_FOR_S: String(Math.round(v.down_for_ms / 1000)) } }).unref(); }
     catch { /* a hook that will not run must not stop the watch */ }

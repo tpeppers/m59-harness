@@ -315,7 +315,7 @@ function copyToDesktop(written) {
       chmodSync(to, WIN ? 0o600 : 0o700);
       // KDE and GNOME refuse to run a .desktop they do not trust, silently or with
       // a dialog. Nothing here depends on this working — it is a courtesy.
-      if (!WIN) spawnSync('gio', ['set', to, 'metadata::trusted', 'true'], { timeout: 10000 });
+      if (!WIN) spawnSync('gio', ['set', to, 'metadata::trusted', 'true'], { timeout: 10000, windowsHide: true });
       out.push(to);
     } catch { /* a read-only Desktop is not a failure of the shortcut */ }
   }

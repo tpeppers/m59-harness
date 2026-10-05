@@ -104,7 +104,7 @@ function launch(entry) {
   // Detached, so the viewer outlives this command. The client is a GUI process and
   // has nothing useful to say on stdio.
   const child = spawn(CLIENT, args,
-    { cwd: path.dirname(CLIENT), detached: true, stdio: 'ignore' });
+    { cwd: path.dirname(CLIENT), detached: true, stdio: 'ignore', windowsHide: false /* visible on purpose */ });
   child.unref();
   return { pid: child.pid, character: entry.character, account: entry.account,
            through: `${PROXY_HOST}:${PROXY_PORT}` };

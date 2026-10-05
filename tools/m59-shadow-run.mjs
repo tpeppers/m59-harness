@@ -167,7 +167,7 @@ const tool = (name, args = {}, ms = 30000) => new Promise(res => {
 
 const sh = (cmd, args, { cwd = REPO, env = {}, label = '' } = {}) => new Promise((res) => {
   if (DRY) { say(`  [dry] ${label || cmd} ${args.join(' ')}`); return res({ code: 0, out: '' }); }
-  const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, shell: false });
+  const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, shell: false, windowsHide: true });
   let out = '';
   child.stdout.on('data', d => { out += d; process.stdout.write(d); });
   child.stderr.on('data', d => { out += d; });

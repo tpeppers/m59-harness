@@ -182,7 +182,7 @@ function roomsBetween(h, t0, t1) {
 
 function runOnce(cmd, stdinLine = null, env = {}, { watch = null } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd[0], cmd.slice(1), { cwd: CWD, env: { ...process.env, ...env },
+    const child = spawn(cmd[0], cmd.slice(1), { windowsHide: true, cwd: CWD, env: { ...process.env, ...env },
       stdio: [stdinLine ? 'pipe' : 'ignore', watch ? 'pipe' : 'inherit', 'inherit'] });
     if (stdinLine) { child.stdin.write(`${stdinLine}\n`); child.stdin.end(); }
     // Tee, so the log reads exactly as before, and remember whether the goal line went past.

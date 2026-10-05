@@ -126,7 +126,7 @@ export function readProcessStartMs(pid) {
       return Math.round((btime + ticks / 100) * 1000);
     }
     const out = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='],
-      { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      { windowsHide: true, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     const ms = Date.parse(out);
     return Number.isFinite(ms) ? ms : null;
   } catch { return null; }

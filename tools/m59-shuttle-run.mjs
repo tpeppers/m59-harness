@@ -145,7 +145,7 @@ if (!NO_RESTART && !DRY) {
   console.log(`what makes the run test the code that is on disk right now`);
   const r = spawnSync(NODE, [join(HERE, 'm59-service.mjs'), 'restart',
                              '--fleet', FLEET, '--http', String(PORT), '--dashboard', String(DASH)],
-                      { cwd: REPO, encoding: 'utf8' });
+                      { cwd: REPO, encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) {
     console.error(r.stdout ?? ''); console.error(r.stderr ?? '');
     console.error('shuttle-run: the broker would not restart. Nothing was changed.');
@@ -308,5 +308,5 @@ console.log(`\n=== running the shuttle: ${A} <-> ${B}, ${LAPS} lap(s), ${MAXMS /
 const run = spawnSync(NODE, [join(HERE, 'm59-shuttle.mjs'),
                              '--laps', String(LAPS), '--max-ms', String(MAXMS),
                              '--port', String(PORT), '--a', String(A), '--b', String(B)],
-                      { cwd: REPO, stdio: 'inherit' });
+                      { cwd: REPO, stdio: 'inherit', windowsHide: true });
 process.exit(run.status ?? 0);

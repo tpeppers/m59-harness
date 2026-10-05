@@ -241,7 +241,7 @@ function cmdlineOf(pid) {
   }
   try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim(); }
   catch {
-    const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', timeout: 15000 });
+    const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
     return (r.stdout || '').trim();
   }
 }

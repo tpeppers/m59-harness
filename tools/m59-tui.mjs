@@ -796,7 +796,7 @@ function launchViaSteam({ row, clientDir, steam, args, stdio }) {
   }
   // Detached, unlike the Windows branch: there is no console to inherit and nothing to
   // stay attached for, so quitting the TUI never takes the client with it.
-  const child = spawn('steam', ['-applaunch', STEAM_APPID, ...args], { stdio, detached: true });
+  const child = spawn('steam', ['-applaunch', STEAM_APPID, ...args], { stdio, detached: true, windowsHide: false /* visible on purpose */ });
   child.unref();
   child.on('error', e => {
     S.status = e.code === 'ENOENT'
@@ -937,7 +937,7 @@ function commander() {
     const inner = [process.execPath, launcher.path, '--choice', FLEET_LABEL];
     if (PORT !== '8901') inner.push('--broker-port', PORT);
     const term = ['x-terminal-emulator', 'konsole', 'gnome-terminal', 'xfce4-terminal', 'xterm']
-      .find(t => { try { return spawnSync('command', ['-v', t], { shell: true }).status === 0; } catch { return false; } });
+      .find(t => { try { return spawnSync('command', ['-v', t], { shell: true, windowsHide: true }).status === 0; } catch { return false; } });
     if (term) {
       file = term;
       args = term === 'gnome-terminal' ? ['--', ...inner] : ['-e', ...inner];
@@ -946,7 +946,7 @@ function commander() {
       args = inner.slice(1);
     }
   }
-  const child = spawn(file, args, { cwd: BOSWARS, stdio: 'ignore', detached: true });
+  const child = spawn(file, args, { cwd: BOSWARS, stdio: 'ignore', detached: true, windowsHide: false /* visible on purpose */ });
   child.unref();
   child.on('error', e => { S.status = c.red('could not open the commander: ' + e.message); draw(); });
   S.status = c.green(`opening the commander on ${FLEET_LABEL}…`) + ' ' +

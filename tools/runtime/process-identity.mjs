@@ -62,7 +62,7 @@ export function processImageName(pid, { exec = execFileSync } = {}) {
       return name && !/^INFO:/i.test(name) ? name : null;
     }
     const out = exec('ps', ['-p', String(pid), '-o', 'comm='],
-      { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+      { windowsHide: true, encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
     return String(out).trim() || null;
   } catch { return null; }
 }
@@ -99,7 +99,7 @@ export function processStartTimes(pids, { exec = execFileSync } = {}) {
       return out;
     }
     const text = exec('ps', ['-o', 'pid=,lstart=', '-p', wanted.join(',')],
-      { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
+      { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of String(text).split(/\r?\n/)) {
       const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
       if (!m) continue;

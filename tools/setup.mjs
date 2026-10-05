@@ -70,7 +70,7 @@ const c = {
 // a quoting problem.
 function have(cmd, args = ['--version']) {
   try {
-    const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000 });
+    const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000, windowsHide: true });
     if (r.error) return null;
     if (r.status !== 0 && !r.stdout) return null;
     return (r.stdout || r.stderr || '').split('\n')[0].trim();
@@ -78,7 +78,7 @@ function have(cmd, args = ['--version']) {
 }
 
 function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { stdio: 'inherit', ...opts });
+  const r = spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true, ...opts });
   if (r.error) { console.error(`  cannot run ${cmd}: ${r.error.message}`); return false; }
   return r.status === 0;
 }

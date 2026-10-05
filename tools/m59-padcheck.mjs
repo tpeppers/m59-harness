@@ -1089,7 +1089,7 @@ export function consultCorpus(pad, { dir = RESEARCH_DIR, run = null } = {}) {
     return { asked: false, rows: [], why: `M59_RESEARCH_DIR is set to ${dir}, which does not exist` };
 
   const ask = run ?? ((term) => execFileSync('python', ['bin/m59.py', 'find', term],
-                                             { cwd: dir, encoding: 'utf8',
+                                             { cwd: dir, encoding: 'utf8', windowsHide: true,
                                                stdio: ['ignore', 'pipe', 'ignore'] }));
   const rows = [];
   for (const term of terms) {

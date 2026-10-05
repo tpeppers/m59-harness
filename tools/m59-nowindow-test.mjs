@@ -42,8 +42,17 @@ let n = 0;
 const ok = (c, why) => { n++; assert.ok(c, why); };
 
 // Anything that starts a PROGRAM. A bare `exec(...)` on some local helper is not one of these,
-// which is why the call text has to name an executable or `process.execPath`.
+// which is why an `exec`/`execSync` call has to name an executable or `process.execPath`.
+//
+// THE OTHER FOUR ARE child_process NAMES AND ARE CHECKED WHATEVER THEY START. Until 2026-10-05
+// every call had to name its program literally, so `spawn(cmd[0], ...)` was invisible — and that
+// is the call m59-keep-training.mjs makes every round to relaunch `node m59-fleet-repl.mjs`. Run
+// detached with no console, each relaunch got a new window that Windows Terminal (the default
+// terminal) put on the desktop every couple of minutes, from three loops at once. A launch that
+// should be seen says so with `windowsHide: false` and a reason (the game client, Steam, a
+// terminal the operator asked for), which is a decision on the page rather than an omission.
 const CALL = /\b(execFileSync|spawnSync|execFile|spawn|execSync|exec)\s*\(/g;
+const ALWAYS_A_LAUNCH = new Set(['execFileSync', 'spawnSync', 'execFile', 'spawn']);
 // tasklist/taskkill are here because a keeper restart runs them: the ownership checks in
 // tools/runtime/ read process identity with tasklist on every adoption or handoff.
 const LAUNCHES = /(process\.execPath|['"`](powershell|pwsh|cmd|cmd\.exe|node|npm|git|docker|tar|ssh|tasklist|taskkill)['"`.])/;
@@ -100,7 +109,7 @@ for (const f of SCANNED) {
     // actually recurs — an options object somebody wrote and left this out of.
     if (!span) continue;
     const call = s.slice(m.index, span[1]);
-    if (!LAUNCHES.test(call)) continue;
+    if (!ALWAYS_A_LAUNCH.has(m[1]) && !LAUNCHES.test(call)) continue;
     checked++;
     if (/windowsHide/.test(s.slice(span[0], span[1]))) continue;
     offenders.push(`${f}:${s.slice(0, m.index).split('\n').length}  ${m[1]}`);

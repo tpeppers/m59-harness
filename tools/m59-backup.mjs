@@ -175,7 +175,7 @@ function lockDown(dir) {
       if (!who) return 'no USERNAME in the environment — permissions left as inherited';
       // /inheritance:r drops inherited ACEs, so "Users" cannot read it afterwards.
       execFileSync('icacls', [dir, '/inheritance:r', '/grant:r', `${who}:(OI)(CI)F`],
-                   { stdio: 'pipe' });
+                   { stdio: 'pipe', windowsHide: true });
       return `restricted to ${who}`;
     }
     fs.chmodSync(dir, 0o700);
