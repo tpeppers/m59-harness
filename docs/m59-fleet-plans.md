@@ -51,15 +51,21 @@ failure modes; and no single answer to "what plan are we in, and what does it re
     "B": {
       "why": "PvP lockdown",
       "extends": null,
-      // LOCK WHERE YOU STAND, never "walk to an inn": the first lockdown walked to inns and about ten
-      // died to Morpheus on those roads. Posts and hosts are named, never swept up by "*".
-      "postures": { "*": { "mode": "survive", "lock": "where-they-stand", "errands": "off" },
-                    "@posts": "keep" },
-      "sweeps": ["clear-arrival-doors"],   // e.g. Cibilo Creek's arrival square is its only door
+      // SHELTER BY WHERE YOU ARE (operator, 2026-10-05; supersedes "lock where you stand"). In order:
+      // already in an inn, or in the guild hall -> stay; in 2/38/39 -> walk INTO the hall (their nearest
+      // inn is 8-10 rooms through Ukgoth); everyone else -> the nearest inn by findPath hops. Posts keep
+      // their post (Loial at 2); Familiars are excluded. The first version walked EVERYONE to inns and
+      // about ten died to Morpheus on those roads -- hence the hall for the Castle Victoria rooms.
+      "postures": { "@posts": "keep", "@familiars": "exclude",
+                    "*": { "mode": "survive", "errands": "off",
+                           "shelter": [ { "if": "in-inn|in-room:714", "do": "stay" },
+                                        { "if": "in-room:2,38,39", "do": "walk:714" },
+                                        { "else": "walk:nearest-inn-by-hops" } ] } },
+      "sweeps": ["clear-arrival-doors"],   // runs on ARRIVAL at the shelter; e.g. Cibilo Creek's arrival square is its only door
       // NOT zero loops: anyone who can practise without travelling keeps casting until out of
       // reagents or able to buy the next level (operator rule).
       "loops": [ { "script": "practice-in-place", "agents": "@can-practise-here", "until": "reagents-out|next-level-affordable" } ],
-      "routing": { "travel": "forbidden" }
+      "routing": { "travel": "shelter-only" }   // the shelter walk itself, nothing else
     }
   },
   "transitions": [
@@ -91,7 +97,7 @@ failure modes; and no single answer to "what plan are we in, and what does it re
   refusals recovered, the pack as evidence), with the rules learned this week built in — two low reads
   before anyone walks, skip characters held by another run lock, never the same courier twice running.
 - **Loops read the active plan** instead of hard-coding a mode: `curse-cycle`'s travel-for-stock rule
-  becomes `plan.routing.travel !== "forbidden"`, so nothing written during a lockdown keeps acting like one.
+  becomes `plan.routing.travel === "allowed"`, so nothing written during a lockdown keeps acting like one.
 - **DUM** reads the active plan's `routing`, `rules` and `claim`-relevant parts for its minute-scale
   decisions (where to send a character, which errands are allowed), and a doctrine can name the plan it
   assumes. DUM never switches plans; it may *propose* a transition the conductor evaluates. The clock
@@ -111,7 +117,10 @@ These are requirements, not notes; each one cost a death or a silent failure.
    re-attribution). Dedupe on character plus `death_at` to the second.
 4. **A tougher is a `gains[]` entry in `substrate/tougher/<char>.json`**, counted from the same baseline.
 5. **Plan B has loops**: practice that needs no travel continues (above).
-6. **Lock where you stand, and clear arrival doors.** Never route a lockdown through roads.
+6. **Shelter by where you are, not one rule for all** (operator, 2026-10-05, superseding "lock where you
+   stand"): stay if already in an inn or the hall; Castle Victoria rooms (2/38/39) walk into the hall; the
+   rest walk to the nearest inn by hops; posts keep their post; Familiars are excluded. The door-clearing
+   sweep runs on arrival. A posture is therefore a small ordered rule list, not one value for `"*"`.
 7. **Every posture push is read back, and a refused key fails loudly.** `guild_tithe {enabled:false}`
    was refused and silently failed the WHOLE push; the right value is `null`. The conductor's `check`
    compares effective values, not the push's reply.
