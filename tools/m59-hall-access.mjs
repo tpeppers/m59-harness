@@ -23,7 +23,35 @@ export const HALL = 714;
 // A refusal of the PASSAGE, not of the chests: worth one more try from wherever the body now stands.
 export const PASSAGE_REFUSAL = /guild door \d+ trigger not reached|outside the known passage|not in the hall/i;
 
+// A passage walk the KEEPER cancelled for survival (playing dead, resting at the wall): the body is
+// hurt and the ladder is doing its job. Retrying 15 seconds later walks straight into the same cancel
+// -- the 2026-10-05 rerun stopped at r13c18 after two steps, Statler at 72% after a road fight. So the
+// retry waits for health first.
+export const SURVIVAL_CANCEL = /cancelled by keeper:(play_dead|rest|shelter|flee|retreat|recover)|rest at the safe wall|playing dead/i;
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// The status tool has two shapes (keeper-backed and in-process); read either.
+export const healthFraction = st => {
+  const h = st?.hp ?? st?.health ?? st?.vitals?.health ?? null;
+  if (h && Number(h.max) > 0) return Number(h.value) / Number(h.max);
+  if (Number(st?.max_health) > 0) return Number(st.health) / Number(st.max_health);
+  return null;
+};
+// Wait until health is back to `atLeast` (or the clock runs out). Never throws; returns the last reading.
+export async function waitForRecovery(call, agent, { atLeast = 0.95, maxMs = 8 * 60_000, everyMs = 20_000, sleepFn = sleep, now = Date.now } = {}) {
+  const until = now() + maxMs; let frac = null;
+  for (;;) {
+    frac = healthFraction(await call('status', { agent }, 60_000).catch(() => null));
+    if (frac != null && frac >= atLeast) return { recovered: true, health: frac };
+    if (now() >= until) return { recovered: false, health: frac };
+    await sleepFn(everyMs);
+  }
+}
+// One pause between attempts: a survival cancel waits out the rest; anything else waits pauseMs.
+async function pauseBefore(call, agent, why, { pauseMs, sleepFn, recovery }) {
+  if (SURVIVAL_CANCEL.test(String(why ?? ''))) return waitForRecovery(call, agent, { sleepFn, ...recovery });
+  await sleepFn(pauseMs); return null;
+}
 const countIn = (inv, item) => (inv?.items ?? [])
   .filter(i => String(i.name ?? '').toLowerCase().replace(/s$/, '') === String(item).toLowerCase().replace(/s$/, ''))
   // The inventory reports an UNSTACKABLE item (a wand, an axe) as amount 0, meaning one — so 0 counts
@@ -35,11 +63,11 @@ const countIn = (inv, item) => (inv?.items ?? [])
  * @returns {{ ok, took, short, why, attempts, arrived: {item: n} }} — `arrived` is read off the pack,
  *          which is the evidence; `took` is the keeper's own account.
  */
-export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pauseMs = 15_000, sleepFn = sleep } = {}) {
+export async function withdrawWithRecovery(call, agent, wants, { retries = 1, pauseMs = 15_000, sleepFn = sleep, recovery = {} } = {}) {
   const before = await call('inventory', { agent }, 60_000).catch(() => null);
   let r = null, attempts = 0;
   for (; attempts <= retries; attempts++) {
-    if (attempts) await sleepFn(pauseMs);
+    if (attempts) await pauseBefore(call, agent, r?.why ?? r?.error, { pauseMs, sleepFn, recovery });
     r = await call('hall_withdraw', { agent, wants }, 620_000).catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     if (r?.ok || !PASSAGE_REFUSAL.test(String(r?.why ?? ''))) break;
   }
@@ -65,13 +93,13 @@ const countMatching = (inv, deposit) => {
  * One deposit into the hall chests, retried once on a passage refusal. Never throws.
  * @returns {{ ok, before, left, why, attempts, reply }} — `left` is how many matching items left the pack.
  */
-export async function depositWithRecovery(call, agent, deposit, { retries = 1, pauseMs = 15_000, sleepFn = sleep } = {}) {
+export async function depositWithRecovery(call, agent, deposit, { retries = 1, pauseMs = 15_000, sleepFn = sleep, recovery = {} } = {}) {
   const inv0 = await call('inventory', { agent }, 60_000).catch(() => null);
   const before = inv0 ? countMatching(inv0, deposit) : null;
   if (before === 0) return { ok: true, before, left: 0, why: 'nothing in the pack matches the deposit list', attempts: 0, reply: null };
   let r = null, attempts = 0;
   for (; attempts <= retries; attempts++) {
-    if (attempts) await sleepFn(pauseMs);
+    if (attempts) await pauseBefore(call, agent, r?.why ?? r?.error, { pauseMs, sleepFn, recovery });
     r = await call('hall_withdraw', { agent, wants: [], deposit }, 620_000).catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     const why = String(r?.why ?? r?.error ?? '');
     if (!PASSAGE_REFUSAL.test(why)) break;

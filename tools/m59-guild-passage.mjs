@@ -185,7 +185,12 @@ export async function guildPassage(k, destination, isInterrupted) {
       // carries where the walk stopped and what it said.
       throw new Error(`guild door ${door.sector} trigger not reached ` +
         `(stopped at r${c.self.row}c${c.self.col}, wanted r${trigger[0]}c${trigger[1]}` +
-        `${approach?.reason ? `: ${approach.reason}` : ''}${approach?.steps != null ? `, ${approach.steps} step(s)` : ''})`);
+        `${approach?.reason ? `: ${approach.reason}` : ''}${approach?.steps != null ? `, ${approach.steps} step(s)` : ''}` +
+        // AND WHO CANCELLED IT. On the 2026-10-05 rerun it was the keeper's own recovery rung ("rest at the
+        // safe wall") resting a body that had arrived hurt -- correct, and a reason to wait, not to retry.
+        `${approach?.cancelled_by_label && approach.cancelled_by_label !== 'unattributed'
+          ? `; cancelled by ${approach.cancelled_by_label}${approach.cancelled_by ? ` (${approach.cancelled_by})` : ''}`
+          : approach?.cancelled_by ? `; cancelled by ${approach.cancelled_by}` : ''})`);
     }
     let crossed = false, refused = 0;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
