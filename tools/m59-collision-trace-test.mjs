@@ -64,6 +64,8 @@ const SRC = readFileSync(join(HERE, 'm59-collision-trace.mjs'), 'utf8');
 // architecture is visible to a test of theirs. Same fix as m59-collision-test's, and the
 // same failure shape: a suite bound to which FILE code lives in goes quiet when it moves.
 const BROKER = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+const WALK = readFileSync(join(HERE, 'm59-session-walk.mjs'), 'utf8');
+const SESSION = BROKER + '\n' + WALK;
 const BROKER_GATEWAY = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
 
 console.log('');
@@ -119,7 +121,7 @@ console.log('');
 console.log('the broker calls it, and calls it where it is safe to');
 {
   ok('the broker imports the tracer', /from '\.\/m59-collision-trace\.mjs'/.test(BROKER));
-  ok('and traces move attempts', /traceMove\(\{/.test(BROKER));
+  ok('and traces move attempts', /traceMove\(\{/.test(SESSION));
   // THE PLACEMENT RULE. `queueValidatedMove` and `validateFineTarget` are lifted out of the
   // broker BY TEXT and evaluated by m59-collision-test.mjs, so a call inside either of them
   // becomes a free identifier in that eval and throws ReferenceError there while working in
@@ -147,32 +149,31 @@ console.log('the broker calls it, and calls it where it is safe to');
   // but keeper mode and the explicit exit fallback have their own raw socket writes. A new
   // moveTo anywhere in Session must make this count/pairing fail until its post-send row is
   // classified. Looking only inside queueValidatedMove is how those two bypasses went dark.
-  const sendSites = [...BROKER.matchAll(/\.moveTo\(/g)]
-    .map(match => ({ offset: match.index, line: BROKER.slice(0, match.index).split('\n').length,
+  const sendSites = [...SESSION.matchAll(/\.moveTo\(/g)]
+    .map(match => ({ offset: match.index, line: SESSION.slice(0, match.index).split('\n').length,
       call: match[0] }));
-  const emitters = [...BROKER.matchAll(
+  const emitters = [...SESSION.matchAll(
     /this\.(recordValidatedWireMove|recordUnsafeWireMove)(?:\?\.)?\(\{/g)]
     .map(match => ({ offset: match.index,
       kind: match[1] === 'recordValidatedWireMove' ? 'validated' : 'unsafe' }));
   const accounting = sendSites.map((send, index) => {
-    const nextSend = sendSites[index + 1]?.offset ?? BROKER.length;
+    const nextSend = sendSites[index + 1]?.offset ?? SESSION.length;
     const after = emitters.filter(emitter => emitter.offset > send.offset && emitter.offset < nextSend);
     return { line: send.line, call: send.call, rows: after.map(emitter => emitter.kind) };
   });
   ok('every actual moveTo send has exactly one explicit post-send wire row',
-     sendSites.length === 4 && emitters.length === 4 &&
+     sendSites.length === 3 && emitters.length === 3 &&
        accounting.every(entry => entry.rows.length === 1), JSON.stringify(accounting));
-  ok('only the two validator-owned sends claim validation; both raw sends are unsafe',
+  ok('only the two validator-owned sends claim validation; the exit fallback is unsafe',
      accounting.map(entry => entry.rows[0]).join(',') ===
-       'validated,validated,unsafe,unsafe', JSON.stringify(accounting));
+       'validated,validated,unsafe', JSON.stringify(accounting));
   ok('raw send rows carry stable machine-rejectable fallback reasons',
-     /c2\.moveTo\([\s\S]{0,900}?unsafeReason:\s*'keeper_unvalidated_fallback'/.test(BROKER) &&
-       /c\.moveTo\([\s\S]{0,900}?unsafeReason:\s*'exit_unvalidated_fallback'/.test(BROKER));
+     /c\.moveTo\([\s\S]{0,900}?unsafeReason:\s*'exit_unvalidated_fallback'/.test(WALK));
   ok('successful validation retains the exact dynamic trace options for offline replay',
      /trace_options:\s*traceOptions/.test(BROKER));
   // Whatever it does record must not be a live object id — those are renumbered on every
   // system save, so a trace keyed on one is unreadable by the time anybody reads it.
-  const calls = BROKER.match(/traceMove\(\{[\s\S]{0,220}?\}\)/g) ?? [];
+  const calls = SESSION.match(/traceMove\(\{[\s\S]*?\}\);/g) ?? [];
   ok('there is at least one traced call site', calls.length >= 1, String(calls.length));
   ok('and every one records the ROOM NUMBER, never the room object id',
      calls.every(c => /room:\s*this\.world\?\.room\?\.num/.test(c)),

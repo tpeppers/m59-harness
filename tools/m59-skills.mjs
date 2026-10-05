@@ -2048,6 +2048,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
     why:result?.why ?? result?.reason ?? s.lastMovementCancel?.why ?? 'shelter approach ownership changed' });
   let attemptNumber = 0;
   const attempt = async (kind, previous, run) => {
+    if(isTerminalMovementReason(previous?.reason))return previous;
     if (interrupted(previous)) return stopped(previous);
     const result = await traceSurvivalOperation(s, kind, {
     target: tracePoint(spot), attempt: ++attemptNumber,
@@ -2146,10 +2147,12 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
         () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                  .catch(e => ({ arrived: false, reason: e.message }));
       if (interrupted(w)) return stopped(w);
+      if (isTerminalMovementReason(w?.reason)) return w;
       if (!w.arrived) {
         const square = await attempt('walk_to', w, () => s.walkTo(spot.col, spot.row, { maxSteps, avoidSquares }))
                               .catch(e => ({ arrived: false, reason: e.message }));
         if (interrupted(square)) return stopped(square);
+        if (isTerminalMovementReason(square?.reason)) return square;
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
@@ -2157,11 +2160,13 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
       w = await attempt('walk_to', null, () => s.walkTo(spot.col, spot.row, { maxSteps, avoidSquares }))
         .catch(e => ({ arrived: false, reason: e.message }));
       if (interrupted(w)) return stopped(w);
+      if (isTerminalMovementReason(w?.reason)) return w;
       if (!w.arrived && typeof s.approachFine === 'function') {
         const fine = await attempt('approach_fine', w,
           () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                             .catch(e => ({ arrived: false, reason: e.message }));
         if (interrupted(fine)) return stopped(fine);
+        if (isTerminalMovementReason(fine?.reason)) return fine;
         if (fine.arrived) w = fine;
         else w = { ...w, fine_tried: fine.reason ?? 'fine approach did not arrive' };
       }
@@ -2178,6 +2183,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
       () => s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance }))
            .catch(() => null);
     if (interrupted(fine)) return stopped(fine);
+    if (isTerminalMovementReason(fine?.reason)) return fine;
   }
   const confirmedEnd = await confirmPrediction();
   if (interrupted()) return stopped();

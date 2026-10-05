@@ -2,6 +2,7 @@
 import {makeScene,observed,unknownField} from './m59-scene.mjs';
 import {OF} from './m59-parse.mjs';
 import {currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {recentMoveAttempts} from './m59-collision-trace.mjs';
 
 export const CAPTURE_LIMITS=Object.freeze({actors:2048,inventory:512,abilities:512});
 const number=x=>Number.isFinite(x)?x:null;
@@ -92,7 +93,7 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
     froze_at:k?.frozeAt,freezes_without_gain:k?.freezesWithoutGain,
     posture_command:c?.lastPostureCommand??null,
     position_reads:{requested:c?.roomContentsRequested,received:c?.roomContentsReceived,lost:c?.roomContentsLost??0},
-    movement_generation:s.movementGeneration,decision:currentSurvivalDecision(s),
+    movement_generation:s.movementGeneration,movement_attempts:recentMoveAttempts(s.name),decision:currentSurvivalDecision(s),
     pvp_survival:s.combat?.pvpStatus?.()??null,
     variant:k?.replayVariant??null,start_actions:k?.replayStartActions??null},0,controllerGaps);
   scene.capture.controller_gaps=[...new Set(controllerGaps)];

@@ -59,6 +59,22 @@ Both shared release paths reconcile player regeneration with the server's normal
 
 With explicit `labScenery`, ordinary items created by room-entry hooks are included in the prepared scene and reported as `include_entry_lab_item`. Extra players and monsters still fail verification. Faithful scenery loads retain their strict actor check.
 
+For a reconstructed scene whose monster already occupied a square it could not legally
+walk into again, the staging API accepts `reload: {exactMonsterPlacement: true}`.
+This requires a natively held lab room and consistent captured coarse/fine coordinates.
+It restores monster placement directly through the room holder, then runs the ordinary
+exact placement check before release. It does not change live player movement or monster
+physics. The preparation receipt lists every restored actor. Scenery/loadout approximations
+remain separate assumptions; successful placement does not make those faithful.
+
+New cached scene controllers and movement incidents include `movement_attempts`: the last
+32 local attempts per agent, retained in memory even with disk tracing off. Named fine
+origins/aims, local send/refusal results, blocking body IDs and movement generation help
+separate a local collision refusal from a sent move. `evicted` reports omitted earlier
+attempts; this process-local window does not survive a keeper restart. A sent attempt is
+not an authoritative arrival. Full wire validation receipts still require explicit
+`M59_COLLISION_TRACE=1` during a supervised lab run.
+
 ```text
 node tools/m59-scene.mjs save t4 --name before-raid
 node tools/m59-scene.mjs load substrate/scenes/before-raid.json --require-native-hold

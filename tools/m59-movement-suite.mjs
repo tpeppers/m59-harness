@@ -34,6 +34,10 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-movement-recovery-test.mjs',
+   'failed shelter recovery and terminal approaches stop retrying; incident clocks and bounded attempt evidence survive'],
+  ['m59-collision-trace-test.mjs',
+   'move attempts preserve time and loss markers; full disk tracing stays opt-in'],
   ['m59-death-prevention-test.mjs',
    'poison cannot mask attacks, arsenic is not medicine, and refuge retries need confirmed progress'],
   ['m59-blockedpath-test.mjs',

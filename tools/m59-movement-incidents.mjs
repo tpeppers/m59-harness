@@ -40,6 +40,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 import { originLabel } from './m59-move-origin.mjs';
+import { recentMoveAttempts } from './m59-collision-trace.mjs';
 
 export const FORMAT = 'm59-movement-incident/1';
 export const FIXTURE_FORMAT = 'm59-movement-incident-fixture/1';
@@ -153,7 +154,7 @@ export function buildIncident(input = {}, { now = Date.now(), fleet = null } = {
       summary: cancel.summary ?? null,
     } : null,
     trail: Array.isArray(input.trail) && input.trail.length
-      ? input.trail.slice(-8).map(p => ({ at: num(p.at), ...positionOf(p, p.room) ?? {},
+      ? input.trail.slice(-8).map(p => ({ ...positionOf(p, p.room) ?? {}, at: num(p.at),
                                           ...(p.health != null ? { health: num(p.health) } : {}),
                                           ...(p.doing ? { doing: String(p.doing).slice(0, 60) } : {}) }))
       : null,
@@ -164,6 +165,7 @@ export function buildIncident(input = {}, { now = Date.now(), fleet = null } = {
                                nearest: input.threats.nearest ?? null,
                                names: Array.isArray(input.threats.names) ? input.threats.names.slice(0, 8) : null } : null,
     ms: num(input.ms),
+    movement_attempts: recentMoveAttempts(input.agent),
     // The code it ran on. The #movement epoch is passed by the caller (the keeper and FleetScript
     // already hold `epochId('movement')`), so this module never runs the epoch's git scan itself.
     code: input.code ?? { ...codeProvenance(), movement_epoch: input.epoch ?? null },
@@ -314,7 +316,8 @@ export function exportIncident(rec, { keepNames = false, names = null } = {}) {
                ordered_by: rec.ordered_by },
     target: t,
     failure: { kind: rec.kind, reason: rec.reason, refusals: rec.refusals, cancelled_by: rec.cancelled_by,
-               threats: rec.threats, ms: rec.ms, repeats: rec.repeats ?? 0, last_at: rec.last_at ?? rec.t },
+               threats: rec.threats, movement_attempts: rec.movement_attempts ?? null,
+               ms: rec.ms, repeats: rec.repeats ?? 0, last_at: rec.last_at ?? rec.t },
     code: rec.code,
     // WHAT A SCRIPT DOES WITH IT. `walk` is the FleetScript step that reproduces the journey; a
     // stage square is what a `crawlTo` / mana-node style approach aims at (the 5x5 meld box is

@@ -11,6 +11,23 @@ import {restorePlayerLoadout,verifyPlayerLoadout,capturePlayerLoadout,loadoutFor
 const creatureClasses=()=>JSON.parse(readFileSync(new URL('../substrate/m59-spawns.json',import.meta.url))).creatures;
 const className=s=>typeof s==='string'&&/^[A-Za-z][A-Za-z0-9_]*$/.test(s);
 const isMonster=o=>o.properties?.pihit_points!=null;
+// UtilGoNearSquare applies monster movement gates even during reconstruction.
+// A recorded monster may already occupy a square it cannot enter again (including
+// a player's shelter). Restore that held placement directly, then verify it.
+export function heldMonsterPlacementPlan(scene,bindings,actual) {
+  if(actual.properties?.pbsceneheld?.value!==1)throw Error('exact monster placement requires a natively held room');
+  return scene.actors.filter(a=>a.kind==='monster').map(a=>{
+    const id=bindings.get(a.key??a.name),p=a.at?.v;
+    if(!Number.isInteger(id)||![p?.row,p?.col,p?.x,p?.y].every(Number.isInteger)
+        ||p.row<1||p.col<1||Math.floor(p.x/64)!==p.col||Math.floor(p.y/64)!==p.row)
+      throw Error('exact monster placement requires bound, consistent fine coordinates');
+    const present=actual.actors.some(o=>o.id===id);
+    return sendMsg(actual.room_object,present?'SomethingMoved':'NewHold',{
+      what:['OBJECT',id],new_row:['INT',p.row],new_col:['INT',p.col],
+      fine_row:['INT',p.y%64],fine_col:['INT',p.x%64],
+      ...(!present?{new_angle:['INT',a.angle?.v??0]}:{})});
+  });
+}
 // Raw saved-stat assignments do not run Player.NewHealth/NewMana. A character
 // loaded from full to wounded can otherwise have no regeneration timer at all,
 // even after a legitimate turn sets MOVED_SINCE_ENTRY. Arm normal server timers
@@ -152,6 +169,15 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
     const loadouts=[],loadoutHandles=[];
     const loaded=await executeLoad(scene,{pause:false,env,dmFn,resolveActor:a=>bindings.get(a.key??a.name),
       verify:async(sc,map)=>{
+        if(options.exactMonsterPlacement===true) {
+          const before=await readAdminRoom(sc.room.num,{env,dmFn});
+          const placement=heldMonsterPlacementPlan(sc,map,before);
+          if(placement.length) {
+            const response=await dmFn(placement,{env});
+            if(rejections(response).length)return {ok:false,mismatches:['held monster placement rejected']};
+          }
+          changes.push({kind:'restore_exact_held_monster_placement',actors:sc.actors.filter(a=>a.kind==='monster').map(a=>a.key??a.name)});
+        }
         const commands=sc.actors.flatMap(a=>nativeMonsterPlan(a,map.get(a.key??a.name),map));
         if(commands.length) {
           const response=await dmFn(commands,{env});

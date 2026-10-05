@@ -1121,8 +1121,10 @@ export function sessionWalkPrototype(deps) {
     // as a character teleporting between two distant squares. Both ends are recorded now:
     // `at` is the body, `target` is the aim, and a loop is the pair repeating.
     traceMove({ agent: this.name, room: this.world?.room?.num ?? null, kind: 'step',
+                from: queued.before ?? before, movement_generation:this.movementGeneration,
                 square: c.self ? { col: c.self.col, row: c.self.row } : null,
                 target: { col, row }, to: { x: aim.x, y: aim.y }, sent: !!queued.sent,
+                objectId: queued.validation?.objectId ?? null,
                 reason: queued.validation?.reason ?? null });
     if (!queued.sent) {
       const validation = queued.validation ?? {};
@@ -1131,6 +1133,7 @@ export function sessionWalkPrototype(deps) {
       return { moved: false, position: at, left_room: leftRoom,
                geometry_blocked: validation.blocked !== false,
                ...(validation.animation ? { animation: validation.animation } : {}),
+               ...(validation.objectId != null ? { objectId: validation.objectId } : {}),
                reason: validation.reason ?? 'geometry_blocked', note: validation.note };
     }
     this._moveGapMs = owed;
@@ -1723,6 +1726,7 @@ export function sessionWalkPrototype(deps) {
         // the FINE coordinates, because a square number is exactly the resolution that hides
         // what happens inside one.
         traceMove({ agent: this.name, room: this.world?.room?.num, kind: 'fine',
+                    objectId:r.objectId??null,movement_generation:this.movementGeneration,
                     square: c.self ? { col: c.self.col, row: c.self.row } : null,
                     fine: { x: Math.round(me.x), y: Math.round(me.y) },
                     aimed: { x: Math.round(me.x + Math.cos(a) * reach),

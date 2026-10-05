@@ -5753,14 +5753,25 @@ export class Autopilot {
   }
 
   currentRecoveryWall() {
-    // Exactly the safeWalls membership rule, evaluated only at our current square — and it
-    // has to STAY exactly that, which is why the `free_shots > 0` test that used to be on
-    // this line is gone. This is the square a hurt character RECOVERS on; demanding a firing
+    // Start with safeWalls membership at our current square. Recent failed recovery
+    // excludes it temporarily, just as the recovery selector does. No firing-line
+    // requirement: this is the square a hurt character RECOVERS on; demanding a firing
     // line from it was asking a resting spot to be a gun position, and the free shots it
     // promised were disproved in play (0.192 incoming/s while swinging from a wall, against
     // 0.067/s standing idle in the open — tools/m59-wallproof.mjs, 2026-09-20).
     if(this.s.client?.self?.predicted)return null;
     const wall=this.wallHere(),geo=this.s.world?.geometry;
+    if(wall?.ok) {
+      const room=this.s.world?.room?.num;
+      const failed=this.failedRestSpots?.get(room)?.get(`${wall.col},${wall.row}`);
+      if(failed!=null && Date.now()-failed<=(this.policy.unreachableSpotMs??UNREACHABLE_SPOT_MS))return null;
+      // The exposure disc excludes its origin. A monster already on our square
+      // needs no approach through the wall, so geometry alone cannot shelter us.
+      for(const body of this.s.client?.room?.objects?.values?.()??[]) {
+        if(body.id!==this.s.client.selfId && (body.flags&OF.ATTACKABLE) && !(body.flags&OF.PLAYER)
+            && body.row===wall.row && body.col===wall.col)return null;
+      }
+    }
     return wall?.ok && geo?.walkable?.(wall.row,wall.col) ? wall : null;
   }
 
@@ -16467,7 +16478,8 @@ export class Autopilot {
               net_squares: net,
               // Ground covered that went nowhere. High gross with low net is the shuffle.
               shuffled: net != null && gross >= 4 && net <= 1,
-              rooms_crossed: new Set(f.map(x => x.num)).size - 1,
+              rooms_crossed: f.slice(1).filter((x,i)=>x.num!==f[i].num).length,
+              distinct_rooms: new Set(f.map(x => x.num)).size,
               per_pass: steps.slice(-8),
             };
           })(),

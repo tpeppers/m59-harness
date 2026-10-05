@@ -1,4 +1,5 @@
-// DEBUGGING INSTRUMENTATION FOR THE MOVEMENT PATH. OFF UNLESS SOMEBODY TURNS IT ON.
+// Full disk debugging trace is off unless explicitly enabled. A small bounded
+// attempt window stays in memory for movement incidents and death captures.
 //
 //   M59_COLLISION_TRACE=1 node tools/m59-service.mjs restart --fleet shadow --http 8971 ...
 //   node tools/m59-collision-trace.mjs            read back what it caught
@@ -50,6 +51,34 @@ export const TRACE_FILE = process.env.M59_COLLISION_TRACE_FILE
 // THE DEFAULT, AND THE ONLY THING THE TEST CARES ABOUT. Read once: this is consulted in a
 // hot loop, and re-reading process.env per move is itself a cost worth not paying.
 export const COLLISION_TRACE = process.env.M59_COLLISION_TRACE === '1';
+
+// Always retain a small in-memory window for incident/death capture. The full
+// disk trace remains opt-in. This records local attempts, not server arrivals.
+const attemptWindows=new Map(),ATTEMPT_WINDOW=32,MAX_WINDOW_AGENTS=64;
+const point=p=>p&&typeof p==='object'?Object.fromEntries(['row','col','x','y'].filter(k=>Number.isFinite(p[k])).map(k=>[k,p[k]])):null;
+const finite=v=>Number.isFinite(v)?v:null;
+function rememberAttempt(d,at) {
+  if(typeof d?.agent!=='string'||!d.agent)return;
+  const key=d.agent.slice(0,80);
+  if(!attemptWindows.has(key)&&attemptWindows.size>=MAX_WINDOW_AGENTS)attemptWindows.delete(attemptWindows.keys().next().value);
+  const w=attemptWindows.get(key)??{total:0,attempts:[]};
+  w.attempts.push({at,seq:++w.total,kind:String(d.kind??'unknown').slice(0,40),
+    room:finite(typeof d.room==='number'?d.room:d.room?.num),
+    from:point(d.from??d.fine),square:point(d.square),requested:point(d.requested??d.aimed??d.target),
+    to:point(d.to),sent:typeof d.sent==='boolean'?d.sent:null,
+    reason:String(d.reason??d.validation?.reason??'').slice(0,160)||null,
+    object_id:finite(d.objectId??d.validation?.objectId),
+    movement_generation:finite(d.movement_generation),
+    blocked:typeof d.validation?.blocked==='boolean'?d.validation.blocked:null,
+    slid:typeof d.validation?.slid==='boolean'?d.validation.slid:null});
+  if(w.attempts.length>ATTEMPT_WINDOW)w.attempts.shift();attemptWindows.set(key,w);
+}
+export function recentMoveAttempts(agent) {
+  const w=attemptWindows.get(agent);
+  return {scope:'process-local bounded local attempts; sent does not confirm arrival',
+    units:'named square row/col; fine x/y in KOD/protocol units (64 per square)',
+    evicted:w?w.total-w.attempts.length:0,attempts:structuredClone(w?.attempts??[])};
+}
 
 // THE ROW THE OFFLINE VERIFIER REPLAYS. Keep construction separate from writing so the
 // contract can be exercised without a socket or a trace file. `room.num` is the stable map
@@ -255,7 +284,7 @@ function appendBatch(current = '') {
   return true;
 }
 
-function markCap() {
+function markCap(at) {
   if (!capWritten && !capLine) {
     const seq = attempted + 1;
     capLine = JSON.stringify({
@@ -268,7 +297,7 @@ function markCap() {
       // consumers must treat the range as open-ended, never as one missing move.
       lostThroughSeq: null,
       lostCount: null,
-      at: Date.now(),
+      at,
       seq,
     }) + '\n';
   }
@@ -291,13 +320,15 @@ export function traceUnsafeWireMove(detail) {
 }
 
 /**
- * One move attempt. No-op — and cheap — unless the trace is on.
+ * One move attempt. Retains a bounded in-memory window; disk writes are opt-in.
  *
  * `sent` is the whole point: false means the local validator refused and NOTHING went to
  * the wire, true means a packet left and the body still did not arrive. Everything else is
  * context for reading a run back afterwards.
  */
 export function traceMove(detail) {
+  const at = Date.now();
+  rememberAttempt(detail,at);
   if (!COLLISION_TRACE) return;
   if (resumeProblem) {
     if (!complained) {
@@ -316,7 +347,7 @@ export function traceMove(detail) {
   if (attempted >= MAX_ATTEMPTS) {
     // A cap reached during an outage must not strand already accepted rows forever. Calls
     // after the cap retry both those rows and the durable, open-ended cap marker.
-    markCap();
+    markCap(at);
     if (!complained) {
       complained = true;
       console.error(`[collision-trace] stopped at ${MAX_LINES} lines — ${TRACE_FILE}`);
@@ -325,7 +356,6 @@ export function traceMove(detail) {
   }
 
   const seq = ++attempted;
-  const at = Date.now();
   let line;
   try {
     // SPREAD FIRST, CLOCK AND SEQUENCE LAST, so caller fields can never take their names.
