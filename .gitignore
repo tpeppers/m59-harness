@@ -278,6 +278,11 @@ __pycache__/
 /substrate/loadouts/
 /substrate/loadouts/*.tmp
 
+# AN ERRAND SET ASIDE BY HAND. substrate/errands-saved/<agent>.json is a session's note of
+# the errands it switched off, with the operator's reason, so they can be put back with
+# `autopilot start`. It is an order to one character on this machine, like a loadout.
+/substrate/errands-saved/
+
 # TACTICS, CHANGED MID-SESSION. substrate/tuning.json is the live overlay read by
 # tools/m59-tuning.mjs — whether to chase a flagged attacker, which weapons a named
 # character prefers, the flee and rest fractions, which rooms it may be in at all. It is
