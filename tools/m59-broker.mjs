@@ -216,6 +216,8 @@ import { renderInventory } from './m59-inventory-page.mjs';
 import { communicationsReport, renderCommunications, fleetCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
+import { renderPvp } from './m59-pvp-page.mjs';
+import { pvpReport } from './m59-pvp.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
 import { renderDumBoard, renderHarnessBoard } from './m59-observability-page.mjs';
 import { strategyStatsReport } from './m59-strategy-stats.mjs';
@@ -20253,6 +20255,28 @@ function serveDashboard(port, { handle = null } = {}) {
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('/players failed: ' + e.message);
+      }
+    }
+    // /pvp — battles against players. Names them, so loopback only, for the reason above.
+    if (url.pathname === '/pvp') {
+      if (!isLocal(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('/pvp names real people and is served on loopback only');
+      }
+      try {
+        const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7));
+        const gap = Number(url.searchParams.get('gap'));
+        const opts = { days, characters: fleetCharacters(), stateFile: STATE_FILE,
+          ...(gap > 0 ? { gapMs: gap * 60_000 } : {}) };
+        if (url.searchParams.get('format') === 'json') {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(JSON.stringify(pvpReport(opts)));
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(renderPvp(opts));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        return res.end('/pvp failed: ' + e.message);
       }
     }
     if (url.pathname !== '/' && !url.pathname.startsWith('/fleet')) {

@@ -100,3 +100,19 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). What each page can honestly answer, an
 
 
 - **Communications** (/communications) retains incoming player, NPC/world-object, system and unknown messages by UTC day, with recipient/channel/text filters. It is loopback-only. See [incoming communications](m59-communications.md) for source evidence, retention, and receiver activation.
+
+- **PVP** (/pvp) is every battle between this fleet and a player: our deaths to them, our kills of
+  them, and every return-fire volley, refusal and hit between. Battles are grouped by time (ten minutes
+  of quiet ends one, `?gap=` overrides it) and by shared enemy, and a battle may cross maps. It is
+  loopback-only, because it names real players. **Our kills were recorded nowhere before it.** The server's
+  kill line ("### Rick Deckard of the Human Resistance has been slaughtered by Gonzo of the The Second
+  Swines in guild combat.", with the doubled article, system.kod:60) is a `message`, which the flight
+  recorder refuses on purpose. Only a postmortem ever held one, and a postmortem is written when WE die.
+  So each keeper now appends to `substrate/pvp/<fleet>/<UTC day>.jsonl` (gitignored), via
+  `tools/m59-pvp.mjs`. It writes a death broadcast only when the line names that keeper's own
+  character, so the line every keeper hears is written once. It also writes the PvP milestones of the
+  combat mode. Our deaths come from the ledger as far back as it goes. War alarms are context: an
+  enemy SEEN is not a battle, and a week of `war_flag` alone once read as forty battles in which
+  nothing was hit. A battle rebuilt by hand from evidence that has since rotated away goes in
+  `substrate/pvp/<fleet>/reconstructed/` and says what it was rebuilt from. The 0.49 s Rick Deckard
+  volley of 2026-10-06 is the first.

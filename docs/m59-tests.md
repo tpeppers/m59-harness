@@ -996,6 +996,11 @@ the records it describes.
   engagement never turns safety off and a server refusal suspends the memory, that a zone
   alarm pulls in fleetmates in the SAME map and only that map, that one look leader looks at a
   stranger, and that a corrupt war book is never overwritten) and
+  `node tools/m59-pvp-test.mjs` (13 — **the PvP record behind /pvp**: that a death broadcast is
+  written only by the keeper it names and never for a monster or a fleetmate, that "of the The Second
+  Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
+  that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
+  that a test fake without a real Recorder writes nothing) and
   `node tools/m59-guild-refusal-test.mjs` (14 — **"Only those in guilds may attack each other
   here."** (room.kod `room_guild_combat`, a ROOM_GUILD_PK_ONLY refusal of one TARGET, not the
   room): that after it no path — operator order, war scan or alarm, return fire, fight-back,

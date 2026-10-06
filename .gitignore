@@ -369,6 +369,9 @@ __pycache__/
 # killed each character and who. Runtime state that must survive a keeper restart, names real
 # players and our characters, and is one fleet's.
 /substrate/pvp-holds/
+# The PvP log and reconstructed battles (tools/m59-pvp.mjs): every kill and death between this
+# fleet and a named player, with where and when. Names real players; one fleet's record.
+/substrate/pvp/
 /substrate/pvp-holds-*/
 # Who holds which lever in a two-person lever room (tools/m59-leverpuzzle.mjs): live claims that
 # expire in a minute, one fleet's, and meaningless to anybody else.

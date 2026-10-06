@@ -14,6 +14,8 @@ import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
+import * as pvplog from './m59-pvp.mjs';
+import { Recorder } from './m59-recorder.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import * as swarm from './m59-swarm-follow.mjs';
@@ -1546,6 +1548,7 @@ export class CombatMode {
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'said' || ev.kind === 'message') this.observeLeash(ev);
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
+    if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
     const requested = this.safetyRequest;
@@ -1749,9 +1752,40 @@ export class CombatMode {
   }
 
   record(event, o) {
+    const pvp = o.pvp ? this.pvpStatus() : null;
     this.s.recorder?.line?.('combat', { event, order_id: o.id, target: o.order.target,
       action: o.order.action, phase: o.phase, room: this.s.world?.room?.num, reason: o.reason,
-      attacks: o.attacks, casts: o.casts, ...(o.pvp ? { pvp_survival: this.pvpStatus() } : {}) });
+      attacks: o.attacks, casts: o.casts, ...(pvp ? { pvp_survival: pvp } : {}) });
+    // THE RECORDINGS ROTATE IN HALF AN HOUR; A BATTLE HAS TO OUTLIVE THEM. The PvP milestones go
+    // to the durable log as well (tools/m59-pvp.mjs) — the Rick Deckard volley of 2026-10-06 was
+    // gone from every recording before anybody asked to see it.
+    if (pvp && this.pvpLogging()) {
+      const row = pvplog.combatRow(event, { at: this.now(), observer: this.pvpObserver(),
+        room: this.s.world?.room?.num ?? null, target: o.order.target ?? null, pvp, reason: o.reason ?? null });
+      if (row) pvplog.appendPvp(row);
+    }
+  }
+
+  // Only a session with a REAL flight recorder writes the durable log: a live keeper has one, and
+  // the offline suites' fake sessions do not — so running a test never writes a battle that
+  // did not happen into substrate/pvp/.
+  pvpLogging() { return this.s.recorder instanceof Recorder; }
+
+  pvpObserver(client = this.s.client) {
+    return client?.me?.name ?? this.character?.() ?? this.s.name ?? null;
+  }
+
+  // A death broadcast that names THIS character on either side — our death to a player, or our
+  // kill of one. Every keeper hears every broadcast; only the one it is about writes it, so the
+  // log holds each line once. Our kills were recorded nowhere before this.
+  recordPvpDeath(ev, client) {
+    if (!this.pvpLogging()) return;
+    try {
+      const row = pvplog.deathRowFromMessage(ev.text, { me: this.pvpObserver(client),
+        isOurs: n => this.isOurs(n), at: Number.isFinite(ev.at) ? ev.at : this.now(),
+        room: this.s.world?.room?.num ?? null });
+      if (row) pvplog.appendPvp(row);
+    } catch { /* evidence, never a reason to stop fighting */ }
   }
 
   async tick() {

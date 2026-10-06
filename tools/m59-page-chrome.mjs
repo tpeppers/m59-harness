@@ -81,6 +81,7 @@ export const TABS = [
   { key: 'stats', href: '/stats', label: 'Stats' },
   { key: 'communications', href: '/communications', label: 'Communications' },
   { key: 'players', href: '/players', label: 'Players' },
+  { key: 'pvp', href: '/pvp', label: 'PVP' },
 ];
 
 export const NAV = (here) => `
