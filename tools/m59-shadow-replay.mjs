@@ -1,24 +1,20 @@
 // One isolated shadow character, real Session/Autopilot, and the shared scene loader.
 // No production RPC. Credentials are read locally, never emitted or put in a bundle.
 import {readFile} from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {dm,resolve} from './m59-dm.mjs';
 import {comparePlayerState} from './m59-scene-admin.mjs';
-import {captureCachedScene} from './m59-scene-capture.mjs';
 import {prepareScene} from './m59-scene-staging.mjs';
 import {runtimeProvenance} from './m59-replay-worker.mjs';
 import {AccountLeaseRegistry} from './runtime/account-leases.mjs';
 import {claimFleetLock} from './runtime/fleet-lock.mjs';
 import {configureLabEnvironment} from './runtime/lab-environment.mjs';
-import {installLabGameGlobals} from './runtime/lab-game-globals.mjs';
-import {attachSurvivalDecisions,currentSurvivalDecision,restoreSurvivalDecisionForReplay} from './m59-survival-decision.mjs';
-import {installReplayVariant,REPLAY_STRATEGIES} from './m59-replay-variants.mjs';
+import {attachSurvivalDecisions} from './m59-survival-decision.mjs';
 import {resetNativeScene,inspectSceneContainer} from './m59-scene-reset.mjs';
 import {createReplayPlayers,replayPlayerPlan} from './m59-replay-players.mjs';
 import {loadoutForActor} from './m59-scene-loadout.mjs';
-import {restoreReplayJourney,replayJourneyDestination,resumeReplayJourney} from './m59-replay-journey.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -36,13 +32,13 @@ export function replayEnvironmentReceipt(runtime,trialSequence,operationSequence
     // The default isolated adapter starts a fresh worker for every trial.
     reused_in_process:operationSequence>1};
 }
-export function attachReplayDecisionRecording(s,k,{execution,source,record}) {
+export function attachReplayDecisionRecording(s,k,{execution,source,record,attachDecisions=attachSurvivalDecisions}) {
   const code={commit:execution?.harness?.commit??null,
     source_sha256:execution?.harness?.source_sha256??null,dirty:execution?.harness?.dirty??null};
   const sourceCommit=source?.harness?.commit??null;
   // The capture identifies the old scene. New decisions belong to the code
   // executing this replay; resumed historical decisions retain their own epoch.
-  attachSurvivalDecisions(s,{epoch:code.commit,
+  attachDecisions(s,{epoch:code.commit,
     onCancel:(why,d)=>k.replacementSurvivalChoice(why,d),
     record:event=>record({...event,replay_execution:{...code},source_scene_commit:sourceCommit})});
 }
@@ -61,8 +57,26 @@ export function assertShadowReplayConfig(config,entry) {
   if(config.admin_port!=null&&Number(config.admin_port)!==admin)throw Error('replay maintenance port must match its lab game port');
   if(config.admin_host!=null&&config.admin_host!=='127.0.0.1')throw Error('replay maintenance must be loopback');
 }
-export async function createShadowReplayAdapter({configFile,isolate=true,terminateAfterTrial=false}={}) {
+export async function createShadowReplayAdapter({configFile,isolate=true,terminateAfterTrial=false,engineRoot=null}={}) {
   if(!configFile)throw Error('a shadow replay config is required; no fleet or character is chosen implicitly');
+  if(engineRoot&&isolate)throw Error('an explicit historical engine requires an in-process adapter inside its own fresh trial worker');
+  const engine=engineRoot?path.resolve(engineRoot):root;
+  const engineImport=file=>import(pathToFileURL(path.join(engine,'tools',file)));
+  // Test infrastructure uses today's verified loader; gameplay, ownership globals,
+  // decision state and journey callbacks all come from ONE selected engine tree.
+  const [decisionModule,journeyModule,variantModule,globalsModule,environmentModule,captureModule]=await Promise.all([
+    engineImport('m59-survival-decision.mjs'),engineImport('m59-replay-journey.mjs'),engineImport('m59-replay-variants.mjs'),
+    engineImport('runtime/lab-game-globals.mjs'),engineImport('runtime/lab-environment.mjs'),engineImport('m59-scene-capture.mjs')]);
+  const {attachSurvivalDecisions,currentSurvivalDecision,restoreSurvivalDecisionForReplay}=decisionModule;
+  const {restoreReplayJourney,replayJourneyDestination,resumeReplayJourney}=journeyModule;
+  const {installReplayVariant,REPLAY_STRATEGIES}=variantModule;
+  const {installLabGameGlobals}=globalsModule;
+  const {captureCachedScene}=captureModule;
+  const configureReplayEnvironment=selection=>{
+    const runtime=environmentModule.configureLabEnvironment(selection,process.env,{scope:`replay-${process.pid}`,fresh:true});
+    process.env.M59_SURVIVAL_DECISION_DIR=path.join(runtime.runtimeDir,'decisions');
+    process.env.M59_REPLAY_DIR=path.join(runtime.runtimeDir,'replays');return runtime;
+  };
   const config=JSON.parse(await readFile(configFile,'utf8'));
   const fleetFile=path.resolve(path.dirname(configFile),config.fleet_file);
   const roster=JSON.parse(await readFile(fleetFile,'utf8')),entry=roster[config.agent];
@@ -73,7 +87,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
   }
   const containerLab=Number(entry.credentials.port)===17959;
   const env={...process.env,M59_ADMIN_HOST:'127.0.0.1',M59_ADMIN_PORT:containerLab?'17998':'19998'};
-  let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null,executionProvenance=null;
+  let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null,executionProvenance=null,driverProvenance=null;
   let claim=null,leases=null,s=null,k=null,task=null,variantControl=null,staged=null,players=null,labState=null;
   const assumedHealth=new Map();let trialSequence=0,operationSequence=0,runtimeEnvironment=null;
   async function acquire() {
@@ -109,7 +123,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       done=await Promise.race([task.then(()=>true,()=>true),sleep(12000).then(()=>false)]);
     }
     if(s){s.client?.stopKeepalive?.();s.client?.sock?.destroy?.();s.recorder?.stop?.();await s.replayRecorder?.close?.();await s.playerEvidence?.close?.();}
-    if(k){const {dropAutopilot}=await import('./m59-autopilot.mjs');dropAutopilot(config.agent);}
+    if(k){const {dropAutopilot}=await engineImport('m59-autopilot.mjs');dropAutopilot(config.agent);}
     s=null;k=null;task=null;
     try {await staged?.cleanup();staged=null;}finally{await players?.close();players=null;}
     if(!done)throw Error('previous trial did not stop; socket closed and refusing further trials');
@@ -125,13 +139,13 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     containerInfo=null;
   }
   return {
-    attest:async()=>runtimeProvenance(root),
+    attest:async()=>runtimeProvenance(engine),
     async reset(){await acquire();await stopTrial();await resetNativeWorld();},
     async capture() {
       await acquire();await stopTrial();
-      const {Session}=await import('./m59-game.mjs');s=new Session(config.agent);
+      const {Session}=await engineImport('m59-game.mjs');s=new Session(config.agent);
       await s.join(entry.credentials);await s.firstAbilityRead;
-      return captureCachedScene(s,null,{provenance:runtimeProvenance(root)});
+      return captureCachedScene(s,null,{provenance:runtimeProvenance(engine)});
     },
     async run({scene,variant,horizonMs,frame,onPrepared,onStarted,onStopping,shouldStop,sceneDm,pvp=null}) {
       const playerOptions=pvp??config.pvp??{},playerPlan=replayPlayerPlan(scene,playerOptions);
@@ -141,12 +155,12 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       await stopTrial();lap('previous_cleanup_ms');
       await resetNativeWorld();lap('native_restore_ms');trialSequence++;
       const runtime_environment=replayEnvironmentReceipt(runtimeEnvironment,trialSequence,operationSequence);
-      const {Session}=await import('./m59-game.mjs');
-      const {autopilotFor}=await import('./m59-autopilot.mjs');
-      const skills=await import('./m59-skills.mjs');
+      const {Session}=await engineImport('m59-game.mjs');
+      const {autopilotFor}=await engineImport('m59-autopilot.mjs');
+      const skills=await engineImport('m59-skills.mjs');
       lap('engine_import_ms');
       // Cache with the imported engine, not with a later mutable checkout HEAD.
-      executionProvenance??=runtimeProvenance(root);lap('execution_provenance_ms');
+      executionProvenance??=runtimeProvenance(engine);driverProvenance??=engineRoot?runtimeProvenance(root):executionProvenance;lap('execution_provenance_ms');
       s=new Session(config.agent);s.replayFastReads=containerLab&&config.fast_reads!==false;
       await s.join(entry.credentials);lap('login_and_initial_reads_ms');
       const abilityRead=await s.firstAbilityRead;
@@ -158,6 +172,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       k.applyLoadoutPolicyOverlay=()=>null; // the saved effective policy is this trial's input
       const decisions=[],suppressed=[],assumptions=[];
       attachReplayDecisionRecording(s,k,{execution:executionProvenance,source:scene.provenance,
+        attachDecisions:attachSurvivalDecisions,
         record:r=>{decisions.push(r);s.replayRecorder?.decision(r);}});
       const input=structuredClone(scene);
       const victim=input.actors.find(a=>a.mine),victimLoadout=loadoutForActor(victim,playerOptions.loadouts);
@@ -198,7 +213,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       if(!loaded.ok)return {outcome:'invalid_load',loaded,decisions,assumptions,runtime_environment};
       await s.pacer.submit('read',()=>s.client.roomContents());
       await s.pacer.submit('read',()=>s.client.stats(1));await sleep(250);
-      if(victimLoadout){s.client.abilities.clear();await (await import('./m59-abilities.mjs')).readLive(s);
+      if(victimLoadout){s.client.abilities.clear();await (await engineImport('m59-abilities.mjs')).readLive(s);
         await s.pacer.submit('read',()=>s.client.requestInventory());}
       await players?.sync({target:s});
       lap('client_scene_sync_ms');
@@ -285,7 +300,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const hp=s.client?.vitals?.()?.health;
       if(outcome!=='died'&&decisions.some(r=>r.event==='finished'&&r.decision.outcome==='recovered'))outcome='recovered';
       const result={outcome: error?'error':outcome,error,elapsed_ms:elapsed,death_room:outcome==='died'?lastRoom:null,
-        execution_provenance:structuredClone(executionProvenance),source_scene_provenance:structuredClone(scene.provenance??null),
+        execution_provenance:structuredClone(executionProvenance),driver_provenance:structuredClone(driverProvenance),source_scene_provenance:structuredClone(scene.provenance??null),
         final_hp:hp,loaded,release,player_state,controller_restore,replayed_journey,
         decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,runtime_environment,
         pvp_survival:s.combat.pvpStatus(),

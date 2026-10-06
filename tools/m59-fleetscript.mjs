@@ -5426,3 +5426,5 @@ They are driven by tools/m59-menagerie.mjs and ` +
 export {estimatePlayer as estimatePlayerCombat} from './m59-player-evidence.mjs';
 export {readEvidence as readPlayerEvidence} from './m59-player-evidence-store.mjs';
 export {modeledLoadout as modelPlayerLoadout} from './m59-player-intel.mjs';
+
+export {scanTravelDeaths,runMovementDeathReview,summarizeMovementDeathReview} from './m59-movement-death-review.mjs';
