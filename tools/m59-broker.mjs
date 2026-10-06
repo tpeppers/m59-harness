@@ -15954,9 +15954,14 @@ const TOOLS = [
       'action=plan shows exactly what would be asked for and changes nothing. action=verify creates a ' +
       'character on a SPARE account and reports the stats it actually came back with — run this before ' +
       'trusting any of it. action=reroll is destructive and has no undo: it suicides the character ' +
-      '(which is what sets IsFirstTime and lets a new one be made) and replaces it.',
+      '(which is what sets IsFirstTime and lets a new one be made) and replaces it.\n' +
+      'action=add DELETES NOTHING: it adds a new character slot to the account over the server\'s admin ' +
+      'socket (`create user`) and creates the character there, beside the ones it already has. Loopback ' +
+      'lab servers only, because only they have an admin socket we run; on a remote server a new character ' +
+      'needs a free slot or a reroll.',
     schema: { type: 'object', properties: {
-      action: { type: 'string', enum: ['plan', 'verify', 'reroll'] },
+      action: { type: 'string', enum: ['plan', 'verify', 'reroll', 'add'] },
+      admin_port: { type: 'number', description: 'add: the lab server\'s admin port (default M59_ADMIN_PORT, else 19998)' },
       agent: { type: 'string', description: 'the session to re-roll, or the spare to verify on' },
       name: { type: 'string', description: 'name for the new character' },
       stats: { description: 'preset name (melee, caster, archer, balanced) OR a custom object with keys might/intellect/stamina/agility/mysticism/aim, each 1..50, summing to at most 200. Default melee.' },
@@ -16024,6 +16029,40 @@ const TOOLS = [
           if (!/^\d+\.\d+$/.test(k)) st[k] = v?.text !== undefined ? v.text : v?.value;
         return { character: c.me?.name, stamina: st.stamina, max_health: c.vitals?.()?.health?.max };
       })();
+
+      // ADD, NEVER DELETE (operator, 2026-10-06: "fix the harness's character creation flow to not
+      // delete"). The suicide below is the only IN-GAME way to make a first-time slot; a lab server's
+      // admin socket has a second one -- `create user <account id>` adds an empty slot -- so on a
+      // loopback server a new character can be made BESIDE the existing ones. Memphis was made this
+      // way on the shadow world (account t0 kept TESTER). joinAsNewCharacter then picks the one
+      // first-time slot, which is the new one.
+      if (a.action === 'add') {
+        const creds = s.credentials;
+        if (!creds?.account || !creds?.password)
+          return { done: false, plan, note: 'add needs account and password, or a session that has already joined' };
+        if (!['127.0.0.1', 'localhost', '::1'].includes(String(creds.host ?? HOST)))
+          return { done: false, plan, note: 'add needs the game server\'s admin socket, which only a loopback lab ' +
+                   'server has; on a remote server use a free character slot or action=reroll' };
+        const { dm, setProp } = await import('./m59-dm.mjs');
+        const env = { ...process.env, ...(a.admin_port ? { M59_ADMIN_PORT: String(a.admin_port) } : {}) };
+        const esc = String(creds.account).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const slots = out => [...String(out).matchAll(/^\s*:?\s*\d+\s+(\d+)\s+User\b/gm)].map(m => Number(m[1]));
+        const shown = await dm([`show account ${creds.account}`], { env });
+        const acct = Number(new RegExp(`^\\s*:?\\s*(\\d+)\\s+${esc}\\b`, 'm').exec(shown)?.[1]);
+        if (!acct) return { done: false, plan, note: `no account ${creds.account} on the admin socket's server` };
+        const had = slots(shown);
+        const fresh = slots(await dm([`create user ${acct}`, `show account ${creds.account}`], { env }))
+          .filter(id => !had.includes(id));
+        if (fresh.length !== 1) return { done: false, plan, note: `create user did not add exactly one slot (${fresh.length})` };
+        await dm([setProp(fresh[0], 'piLastLoginTime', 0), setProp(fresh[0], 'piLast_Restart_time', 0)], { env });
+        s.credentials = { ...creds, character: a.name };
+        requireBrokerAccountLease(a.agent, s.credentials);
+        try { s.client?.sock?.destroy(); } catch { /* joinAsNewCharacter opens its own */ }
+        const made = await s.joinAsNewCharacter(plan, { userField: a.user_field == null ? null : Number(a.user_field) })
+          .catch(e => ({ created: false, error: e.message }));
+        return { done: !!made.created, action: 'add', account_id: acct, slot: fresh[0],
+                 kept: had.length, deleted: 0, result: made };
+      }
 
       if (a.action === 'reroll' && !a.confirm)
         return { done: false, plan, before,
