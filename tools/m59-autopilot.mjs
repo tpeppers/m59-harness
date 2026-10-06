@@ -25954,25 +25954,11 @@ export class Autopilot {
                why: `out of ${supply.missing.join(' and ')} — cannot make food, so vigor is ` +
                     `capped at what resting gives` };
 
-    // POVERTY IS A JUDGEMENT AND IS OFF UNLESS ASKED FOR. It also never outranks an open
-    // window: a round trip to a market is most of a 35-minute shift, and the shift is the
-    // thing the money was going to buy readiness for.
-    if (this.policy.sellWhenBroke === true && !windowOpen) {
-      const money = carried + banked;
-      const spare = inv.filter(o => !/shilling/i.test(c.rsc.get(o.nameRsc) || '')).length;
-      const under = this.policy.sellWhenBrokeUnder ?? 500;
-      const need = this.policy.sellWhenBrokeStacks ?? 8;
-      // AND IT IS STILL A SELL TRIP, so it carries the same $10k floor as load and stacks. With the
-      // money flow on, a chalice rider hands its shillings to the guild hall and is "broke" by design:
-      // 2026-09-28 Floyd and Animal opened six broke trips to Barloque in an hour with ~7.5k aboard.
-      const worth = money < under && spare >= need ? this.packSaleValue() : null;
-      if (worth && worth.value < this.minSellTripValue()) return { sell: false, trigger: null, fullness,
-        why: `${money} to its name, but the pack would fetch about ${worth.value}, under the ` +
-             `${this.minSellTripValue()} a sell trip should carry` };
-      if (money < under && spare >= need)
-        return { sell: true, trigger: 'broke', money, spare, estimated_value: worth?.value,
-                 why: `${money} to its name and ${spare} stacks aboard, and nothing is spawning` };
-    }
+    // BEING BROKE IS NEVER A REASON TO SELL (operator, 2026-10-06: "we never want to sell because
+    // we're broke"). The `broke` trigger that stood here (sell_when_broke, off by default since the
+    // fleet-wide stampede it caused) is removed; the setting is still ACCEPTED so doctrines that send
+    // it keep working, and `true` is overridden to false with a warning (m59-broker.mjs). A pack is
+    // sold because it is heavy, never because its carrier is poor.
     return { sell: false, trigger: null, fullness,
              why: windowOpen && fullness < at
                ? `${Math.round(fullness * 100)}% loaded and the window is open — the shift is worth more`
@@ -26826,7 +26812,7 @@ export class Autopilot {
     // exactly that and never wired to this trigger.
     const poor = this.poorFarmingActive();
     const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
-    const packFull = sellCall.sell && !['broke', 'supply'].includes(sellCall.trigger);
+    const packFull = sellCall.sell && sellCall.trigger !== 'supply';
 
     // AND AN EMPTY LARDER IS THE THIRD REASON, FOR EXACTLY THE REASON THE PACK WAS THE
     // SECOND: the food is in town and the only doors to town were money and a full pack.
@@ -26904,64 +26890,9 @@ export class Autopilot {
     const needsCashFirst = (starving && spendable < 60 && canFetch) ||
                            (supplyTrip && carried < supplyBill && canFetch);
 
-    // BROKE WHILE CARRYING A FORTUNE IN LOOT, WHICH IS THE SAME SHAPE AS THE LAST TWO.
-    //
-    // A bank trip needs 500 shillings and the pack trip needs a full pack, so a character
-    // with 103 shillings, nothing banked and ten stacks of goods opens neither door and
-    // never sells. Measured this pass: Scooter carrying 110 elderberry, 36 red mushroom,
-    // 28 purple, 24 mushroom, 10 sapphire and 3 emerald, unable to buy the 480 leather it
-    // needs; Bunsen and Beaker the same. They are not poor, they are holding stock.
-    //
-    // The door that fixes the condition required the condition already fixed — the same
-    // trap as "cannot afford food because it never goes to the shop that sells it" and
-    // "cannot re-arm because the check cannot see broken gear". Being unable to replace
-    // your armour is exactly when selling matters, so that is the trigger.
-    //
-    // A MARKET, NOT A BANK: Roq buys, a banker takes and gives nothing back. And unlike
-    // the food trip this one cannot spin, because it always achieves something — the goods
-    // become money on arrival and the condition clears itself. The cooldown is here anyway,
-    // because a character that reaches Roq and sells nothing (everything protected, or the
-    // walk failed) must not turn round and set off again on the next pass.
-    const SELL_TRIP_COOLDOWN_MS = 600_000;
-    const soldRecently = Date.now() - (this.sellTripAt ?? 0) < SELL_TRIP_COOLDOWN_MS;
-    // What a replacement piece of armour costs at the dearest counter the router might
-    // pick, which is the bill this trip exists to make payable.
-    const tooPoorToReplaceGear = carried + balance < 500;
-    // Only worth a walk if there is something aboard to sell. This is a PROXY — stacks
-    // that are not money — and deliberately not a call to skills.sellable, which judges one
-    // item at a time and needs the worn list and the keep regex to answer. Getting that
-    // exactly right here would duplicate sellAll's decision in a second place, and a
-    // quantity with two homes in this repository has always ended up with two answers.
-    //
-    // Being wrong costs a walk that sells less than hoped, which sellAll reports honestly;
-    // the trip is still the right call for a character that cannot replace its armour.
-    const spare = (c.inventory || [])
-      .filter(o => !/shilling/i.test(c.rsc.get(o.nameRsc) || '')).length;
-    // OFF BY DEFAULT NOW, AND THE POLICY LIVES IN DUM.
-    //
-    // `spare >= 4` is four stacks — four kinds of mushroom clears it — and `< 500` catches
-    // most of the fleet the moment a moot or a hand-out moves money around. Both were true
-    // for nearly everyone at once, so twenty characters set off for the same NPC carrying
-    // almost nothing. The trip is not wrong in principle; the threshold made it fire when
-    // there was nothing worth selling, and it competed with the thing the fleet was
-    // actually for, which is being ready for the next window.
-    //
-    // Selling when the pack is genuinely HEAVY is now the default, above. Selling because
-    // a character is poor is a judgement about what the fleet is saving for, which is
-    // exactly the kind of decision that belongs in a doctrine rather than in the keeper —
-    // see `market` in meridian59-dum-bot. `sell_when_broke: true` restores the old
-    // behaviour for anyone who wants it.
-    const brokeWithGoods = sellCall.trigger === 'broke' && !soldRecently && !starving;
-    if (poor && !packFull && !brokeWithGoods) return false;
-    if (brokeWithGoods && !this.notedBroke) {
-      this.notedBroke = true;
-      this.note('out of money with a pack worth selling — going to market', {
-        purse: carried, banked: balance, sellable_stacks: spare, to: MARKETS[0]?.name,
-        why: 'a bank trip needs 500 and a pack trip needs a full pack; with neither, a ' +
-             'character carrying loot it could sell stands in a field unable to replace ' +
-             'its armour' });
-    }
-    if (!brokeWithGoods) this.notedBroke = false;
+    // NO "BROKE WITH GOODS" DOOR: being broke never opens a sell trip (operator, 2026-10-06; see
+    // checkIfShouldSell). A heavy pack is the only reason to go and sell.
+    if (poor && !packFull) return false;
     if (starving && !this.notedStarving) {
       this.notedStarving = true;
       this.note('out of food and cannot cook — going to town for some', {
@@ -26971,7 +26902,7 @@ export class Autopilot {
     }
     if (!starving) this.notedStarving = false;
 
-    if (carried <= above && !packFull && !starving && !brokeWithGoods && !supplyTrip) {
+    if (carried <= above && !packFull && !starving && !supplyTrip) {
       // Say what we saw, occasionally. A threshold that never trips is indistinguishable
       // from one that is never checked, and that cost an eight-minute run to find out.
       if (carried > 0 && (!this.notedPurse || Date.now() - this.notedPurse > 120_000)) {
@@ -26993,11 +26924,8 @@ export class Autopilot {
     // the bread shop — but only when hunger is the ONLY reason. A character that is also
     // rich or also full has business at the counter that pays, and buyFoodInTown runs at
     // the end of that trip anyway, so it gets both out of one walk.
-    // A full pack goes to the market, money goes to the bank, an empty larder to the bread
-    // shop — and a broke character with goods goes to the market too, for the same reason
-    // the full pack does: Roq is the one who pays, and a banker takes and gives nothing.
     const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull,
-                                            brokeWithGoods, richEnoughToBank: carried > above })
+                                            richEnoughToBank: carried > above })
       .filter(b => !this.bansDestination(b.room));
     if (!destinations.length) {
       if (!this.warnedBannedTrip) {
@@ -27027,7 +26955,7 @@ export class Autopilot {
     // Claim the return cargo while the destination is still unambiguous: this is the
     // farming room the seller is leaving, not whichever shop the town leg ends in.
     this.prepareFarmDelivery(room.num);
-    if (packFull || brokeWithGoods) await this.farmCleanupBeforeSale().catch(error => {
+    if (packFull) await this.farmCleanupBeforeSale().catch(error => {
       this.coordination.cleanup.refused++;
       this.note('farm clean-up could not finish', { why: error.message, consequence: 'selling trip continues' });
     });
@@ -27037,7 +26965,6 @@ export class Autopilot {
     // nothing from repeating, and "bought nothing" is the case that would otherwise never
     // set it.
     if (starving) this.foodTripAt = Date.now();
-    if (brokeWithGoods) this.sellTripAt = Date.now();
     if (supplyTrip) this.supplyTripAt = Date.now();
     // SAY WHICH ERRAND THIS IS, BECAUSE THE LABEL WAS PART OF WHAT HID THE LOOP.
     //
@@ -27051,7 +26978,7 @@ export class Autopilot {
         ? (needsCashFirst ? 'going to the bank to pay for reagents' : 'going to the apothecary')
       : starving && !packFull && carried <= above ? 'going to town for food'
       : needsCashFirst ? 'going to the bank for food money'
-      : (packFull || brokeWithGoods) && carried <= above ? 'going to market'
+      : packFull && carried <= above ? 'going to market'
       : 'going to the bank';
     this.note(errand, {
       carrying: carried, to: target.name, hops: target.hops, keeping: this.policy.walkingMoney ?? 400,
@@ -27062,7 +26989,7 @@ export class Autopilot {
           'buying, so this needs a counter and the money to spend at one'
         : starving && !packFull && carried <= above
         ? 'no food and not both reagents, so the only vigor above the resting cap is bought'
-        : (packFull || brokeWithGoods) && carried <= above
+        : packFull && carried <= above
         ? 'make pack room at the equipment, gem and reagent specialists'
         : 'everything carried is dropped on death and usually unrecoverable; a balance is not' });
     // The shopping objective survives every recovery stop. Save the exact service
@@ -27070,10 +26997,10 @@ export class Autopilot {
     // THE CIRCUIT IS ATTACHED ON THE PACK, NOT ON WHICHEVER NEED OPENED THE TRIP. A reagent
     // run and a full pack are not alternatives — a character is routinely both, and it is
     // already walking past the specialists. See `packWantsMarket`.
-    const wantsMarket = packFull || brokeWithGoods || this.packWantsMarket();
+    const wantsMarket = packFull || this.packWantsMarket();
     this.openTownTrip(target, { sellCall, errand, wantsMarket, supplyTrip, starving,
-      needsCashFirst, brokeWithGoods });
-    if (wantsMarket && !packFull && !brokeWithGoods)
+      needsCashFirst });
+    if (wantsMarket && !packFull)
       this.note('carrying enough to be worth the circuit while we are here', {
         trigger: sellCall.trigger, stops: MARKET_STOPS.map(m => m.name),
         why: 'the trip was opened by something other than the pack, and the pack is at its ' +

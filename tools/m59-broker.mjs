@@ -11298,7 +11298,7 @@ const TOOLS = [
           'until weight and bulk are below this fraction. Intended for confined shelter farming; ' +
           'food, reagents, equipped/protected items and useful gear are retained. null disables it' },
       sell_when_broke: { type: 'boolean',
-        description: 'also sell a useful-sized pack when cash-poor and no timed window is open' },
+        description: 'REMOVED 2026-10-06: accepted for compatibility, always false; true is reported in coerced' },
       sell_when_broke_under: { type: 'number',
         description: 'cash-plus-bank threshold for sell_when_broke, default 500' },
       sell_when_broke_stacks: { type: 'number',
@@ -12474,7 +12474,13 @@ const TOOLS = [
       if (a.drop_at_load !== undefined)
         p.policy.dropAtLoad = a.drop_at_load == null ? null
           : Math.max(0.05, Math.min(0.99, Number(a.drop_at_load) || 0.75));
-      if (a.sell_when_broke !== undefined) p.policy.sellWhenBroke = !!a.sell_when_broke;
+      // NEVER SELL BECAUSE BROKE (operator, 2026-10-06). The keeper no longer has the trigger; the key
+      // is still accepted so doctrines that send it keep working, and `true` comes back as coerced.
+      let sellWhenBrokeAsked = null;
+      if (a.sell_when_broke !== undefined) {
+        if (a.sell_when_broke === true || a.sell_when_broke === 'true') sellWhenBrokeAsked = true;
+        p.policy.sellWhenBroke = false;
+      }
       if (a.sell_when_broke_under !== undefined)
         p.policy.sellWhenBrokeUnder = Math.max(0, Number(a.sell_when_broke_under) || 0);
       if (a.sell_when_broke_stacks !== undefined)
@@ -12707,6 +12713,8 @@ const TOOLS = [
       // anything reads the new one. Both happen here, before the policy is persisted OR
       // pushed, so the roster and the keeper cannot disagree about either.
       const coerced = coerceSpotPair(p.policy);
+      if (sellWhenBrokeAsked) coerced.push({ key: 'sellWhenBroke', from: true, to: false,
+        why: 'being broke is never a reason to sell (operator, 2026-10-06); the broke sell trigger was removed' });
       for (const c of coerced)
         console.error(`[autopilot] ${a.agent} policy ${c.key} ${c.from} -> ${c.to} (coerced: ${c.why})`);
       // Persist the instruction, not the running object: on the far side of a

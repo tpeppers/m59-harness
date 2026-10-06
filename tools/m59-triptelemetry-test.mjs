@@ -57,12 +57,15 @@ ok('a truly full pack goes whatever it is worth', SELL_REGARDLESS_AT > 0.9 && SE
   const items = [{ name: 'shilling', amount: 400 }, ...Array.from({ length: 9 }, () => ({ name: 'long sword', amount: 1 }))];
   const stub = r => Object.assign(r, { standingOrderUnstarted: () => null, overfarmHoldsTrip: () => null,
     supplyShortfall: () => ({ short: false }) });
+  // 2026-10-06, operator: "we never want to sell because we're broke". The trigger is gone: even with
+  // sellWhenBroke set (a stale doctrine) and a pack that clears any value floor, poverty sells nothing.
   const { r } = rig({ items, policy: { sellWhenBroke: true } });
   const cheap = stub(r).checkIfShouldSell();
   ok('a broke character whose pack is worth under the floor stays', cheap.sell === false, JSON.stringify(cheap));
   const { r: low } = rig({ items, policy: { sellWhenBroke: true, minSellTripValue: 250 } });
   const go = stub(low).checkIfShouldSell();
-  ok('and goes once the pack clears it', go.sell === true && go.trigger === 'broke', JSON.stringify(go));
+  ok('and STILL stays when the pack clears it: being broke is never a reason to sell',
+     go.trigger !== 'broke' && go.sell === false, JSON.stringify(go));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
