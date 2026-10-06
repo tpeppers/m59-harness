@@ -583,8 +583,8 @@ export class CombatMode {
    * The strategies are loaded once per process, like Session._askStrategies -- an edited
    * strategy takes effect when the keeper restarts.
    */
-  async decideWandVolley(o, ctx) {
-    const builtin = () => ({ ...gear.chooseWandVolley(ctx), strategy: 'builtin' });
+  /** This machine's private strategies, loaded once per process; the volley and the opener share them. */
+  async combatStrategies() {
     let loaded = this.wandStrategies;
     if (loaded === undefined) {
       loaded = this.wandStrategies = null;
@@ -593,8 +593,14 @@ export class CombatMode {
         loaded = this.wandStrategies = await mod.load();
         const problems = loaded?.problems ?? [];
         if (problems.length) console.error('[strategies] ' + problems.map(p => `${p.file}: ${p.why}`).join('; '));
-      } catch (e) { console.error(`[strategies] could not load for the wand volley: ${e.message}`); }
+      } catch (e) { console.error(`[strategies] could not load for combat: ${e.message}`); }
     }
+    return loaded;
+  }
+
+  async decideWandVolley(o, ctx) {
+    const builtin = () => ({ ...gear.chooseWandVolley(ctx), strategy: 'builtin' });
+    const loaded = await this.combatStrategies();
     const asked = (loaded?.strategies ?? []).filter(st => st.enabled && typeof st.pvpWand === 'function');
     for (const st of asked) {
       let answer;
@@ -606,6 +612,75 @@ export class CombatMode {
       return { ...checked, strategy: st.name };
     }
     return builtin();
+  }
+
+  // ------------------------------------------------------------------ the pvpOpener seam
+  //
+  // A PRIVATE STRATEGY MAY CLAIM A FIGHT BEAT BEFORE THE GEAR, THE VOLLEY AND THE SWING -- a caster
+  // opening with a spell at the enemy before it does anything else. It answers ABOUT the target
+  // this fight already chose; it never chooses one. Who is fought is decided above this (war
+  // book, grudge book, an incoming hit, an operator's order) and nothing here widens it.
+  //   ctx    = { agent, character, target: { id, name, player, dist }, mana, max_mana,
+  //             spells: [known, lowercase], pack: { item: count }, now, last_cast_at, last_spell,
+  //             pvp, warband, room }
+  //   answer = { cast: '<spell it knows>' }   cast it at the target this beat
+  //          | { wait: true }                 send nothing this beat, and do not fall through
+  //          | null                           decline: the fight goes on as it always did
+  // Never throws. A fault (a throw, an unknown spell, a malformed answer) is reported once per
+  // fight and the fight goes on as if the strategy had declined.
+  async pvpOpener(o, target) {
+    if (this.pvpForbiddenHere()) return false;
+    const loaded = await this.combatStrategies();
+    const asked = (loaded?.strategies ?? []).filter(st => st.enabled && typeof st.pvpOpener === 'function');
+    if (!asked.length) return false;
+    const c = o.client, me = c.self;
+    if (!me || !target) return false;
+    const known = (c.spells ?? []).map(sp => exactName(c, sp)).filter(Boolean);
+    const pack = {};
+    for (const it of c.inventory ?? []) {
+      const n = exactName(c, it);
+      if (n) pack[n] = (pack[n] ?? 0) + (Number(it.amount) || 1);
+    }
+    const mana = c.vitals?.()?.mana ?? null;
+    const ctx = { agent: this.agentId ?? null, character: this.character?.() ?? characterName(this.s, c),
+      target: { id: target.id, name: o.targetName ?? null, player: !!(target.flags & OF.PLAYER),
+                dist: Math.hypot(target.row - me.row, target.col - me.col) },
+      mana: mana?.value ?? null, max_mana: mana?.max ?? null, spells: known, pack, now: this.now(),
+      last_cast_at: o.openerAt ?? null, last_spell: o.openerSpell ?? null,
+      pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null };
+    for (const st of asked) {
+      let answer;
+      try { answer = await st.pvpOpener(ctx); }
+      catch (e) { this.noteOpenerFault(o, st.name, `threw: ${e.message}`); continue; }
+      if (answer == null) continue;
+      if (answer.wait === true && answer.cast == null) { o.openerWaiting = st.name; return true; }
+      const name = typeof answer.cast === 'string' ? answer.cast.trim().toLowerCase() : null;
+      const spell = name && (c.spells ?? []).find(sp => exactName(c, sp) === name);
+      if (!spell) { this.noteOpenerFault(o, st.name, name ? `named a spell it does not know: ${name}` : 'answered neither cast nor wait'); continue; }
+      o.openerAt = this.now(); o.openerSpell = name; o.openerWaiting = null;
+      await this.stand(o);
+      await this.s.pacer.submit('cast', () => {
+        const live = c.room.objects.get(o.targetId);
+        if (!live) return;
+        c.cast(spell.id, [live.id]);
+        o.casts++; o.openerCasts = (o.openerCasts ?? 0) + 1;
+        if (o.pvp) { o.pvp.opener_casts = (o.pvp.opener_casts ?? 0) + 1; o.pvp.opener = { strategy: st.name, spell: name }; }
+        if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
+        try { this.s.lastPlayerAttackAt = this.now(); } catch {}
+        this.record('opener_cast', o);
+      }, 1050);
+      return true;
+    }
+    return false;
+  }
+
+  noteOpenerFault(o, strategy, why) {
+    o.openerFaults ??= new Set();
+    if (o.openerFaults.has(strategy)) return;
+    o.openerFaults.add(strategy);
+    console.error(`[strategies] ${strategy} pvpOpener ${why}; the fight goes on without it`);
+    if (o.pvp) o.pvp.opener_fault = { strategy, why };
+    this.record('opener_strategy_fault', o);
   }
 
   noteWandStrategyFault(o, strategy, why) {
@@ -1867,8 +1942,12 @@ export class CombatMode {
     if (!target || exactName(c, target) !== o.targetName) { this.refreshTarget(o); return; }
     await this.prepareSafety(o);
     if (o.pvp || this.targetAtWar(o) || o.order.warband) {
+      // THE OPENER (pvpOpener, above) goes first, and its first cast goes even before the gear: an
+      // opening spell lands on the beat the target appears, not after a gear swap.
+      if (!o.pvpGearOn && !o.openerFirst) { o.openerFirst = true; if (await this.pvpOpener(o, target)) return; }
       // PVP GEAR ON, ONCE PER FIGHT, inside this fight's own packet scope (m59-pvp-gear.mjs).
       if (!o.pvpGearOn) await this.pvpGearOn(o);
+      if (await this.pvpOpener(o, target)) return;
       // THE VOLLEY. 'hold' means a lightning wand is carried: no swing between beats, because a
       // swing would take the attack timer the next zap needs.
       if (await this.wandVolley(o) === 'hold') return;

@@ -217,6 +217,19 @@ stranger's pack.
 PvP *plays* (placement, timing, who musters where) are FleetScripts in the private repository's
 `strategy/pvp/`, installed at `substrate/fleetscripts/pvp/` and listed by the fleet REPL.
 
+**What a fighter does on each beat is partly private, too.** Two `combat` strategy hooks
+(`tools/m59-strategies.mjs`) are asked inside every PvP, war and warband fight, about the target
+the fight already chose -- neither can choose one:
+
+| hook | asked | answer |
+|---|---|---|
+| `pvpOpener` | first, before the PvP gear, the volley and the swing (its first cast even before the gear goes on) | `{ cast: '<a spell the character knows>' }`, `{ wait: true }` (send nothing, do not fall through to the chase), or `null` |
+| `pvpWand` | after the opener declines | which wand to zap and whether to hold the swing (`m59-pvp-gear.mjs chooseWandVolley`) |
+
+With no strategy, or one that declines, throws or names something the character does not have,
+the fight is exactly what it was; a fault is reported once per fight. `m59-pvp-gear-test.mjs`
+pins both seams.
+
 ## The swarm: a wedge behind you, through the doors you take
 
 ```bash

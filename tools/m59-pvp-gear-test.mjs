@@ -692,5 +692,80 @@ await test('checkWandAnswer accepts an unidentified wand the character holds, an
   assert.ok(gear.checkWandAnswer({ fire: 10 }, ctx).invalid);
 });
 
+// ------------------------------------------------------------------ the pvpOpener seam
+//
+// A private strategy may open a fight with a spell at the target the fight already chose, before
+// the gear, the volley and the swing; `wait` holds the beat without falling through to the chase.
+// It never picks a target, and every way it can fail leaves the fight exactly as it was.
+
+const opener = (pvpOpener, { name = 'private-opener', enabled = true } = {}) =>
+  ({ strategies: [{ name, kind: 'combat', enabled, pvpOpener }], problems: [] });
+const withSpell = f => {
+  f.c.rsc.set(900, 'stun');
+  f.c.spells = [{ id: 900, nameRsc: 900 }];
+  f.c.cast = (id, targets) => f.sent.push(`cast:${f.c.rsc.get(id)}->${targets.join(',')}`);
+  return f;
+};
+
+await test('an opener casts at the fight\'s own target before the gear goes on and before any swing', async () => {
+  const f = withSpell(fixture({ items: ['plate armor'] }));
+  f.c.inventory.push({ id: 950, nameRsc: 950, amount: 4 }); f.c.rsc.set(950, 'purple mushroom');
+  const asked = [];
+  f.mode.wandStrategies = opener(ctx => { asked.push(ctx); return { cast: 'stun' }; });
+  f.mode.agentId = 't7';
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.deepEqual(f.sent.filter(x => x !== 'stand'), ['cast:stun->2'], `sent ${f.sent}`);
+  assert.equal(asked[0].agent, 't7'); assert.equal(asked[0].target.id, 2); assert.equal(asked[0].target.player, true);
+  assert.deepEqual(asked[0].spells, ['stun']); assert.equal(asked[0].pack['purple mushroom'], 4);
+  assert.equal(asked[0].last_cast_at, null);
+  assert.equal(f.mode.active.pvp.opener_casts, 1);
+  f.advance(1100); await f.mode.tick();
+  assert.ok(f.sent.includes('use:plate armor'), `the gear goes on after the first cast: ${f.sent}`);
+  assert.equal(f.sent.filter(x => x === 'cast:stun->2').length, 2, 'and the opener keeps the beat after it');
+  assert.ok(!f.sent.some(x => x.startsWith('attack:')));
+  assert.ok(asked.at(-1).last_cast_at != null && asked.at(-1).last_spell === 'stun');
+  f.mode.stop('test');
+});
+
+await test('wait sends nothing and does not fall through to the swing', async () => {
+  const f = withSpell(fixture());
+  f.mode.wandStrategies = opener(() => ({ wait: true }));
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick(); f.advance(1100); await f.mode.tick();
+  assert.ok(!f.sent.some(x => /^(cast|attack|apply):/.test(x)), `sent ${f.sent}`);
+  f.mode.stop('test');
+});
+
+for (const [why, strategies, faulty] of [
+  ['declines (null)', opener(() => null), false],
+  ['is disabled', opener(() => ({ cast: 'stun' }), { enabled: false }), false],
+  ['throws', opener(() => { throw new Error('boom'); }), true],
+  ['names a spell the character does not know', opener(() => ({ cast: 'fireball' })), true],
+  ['answers neither cast nor wait', opener(() => ({ maybe: true })), true],
+]) {
+  await test(`an opener that ${why} leaves the fight swinging as before`, async () => {
+    const f = withSpell(fixture());
+    f.mode.wandStrategies = strategies;
+    const errors = [], err = console.error;
+    console.error = (...a) => errors.push(a.join(' '));
+    try { f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick(); f.advance(1100); await f.mode.tick(); }
+    finally { console.error = err; }
+    assert.ok(!f.sent.some(x => x.startsWith('cast:')), `sent ${f.sent}`);
+    assert.ok(f.sent.some(x => x.startsWith('attack:')), 'the fight goes on: it swings');
+    assert.equal(errors.length, faulty ? 1 : 0, `a fault is reported once per fight, a decline never: ${errors}`);
+    f.mode.stop('test');
+  });
+}
+
+await test('an opener is never asked in a room that forbids the fight', async () => {
+  const f = withSpell(fixture());
+  let asked = 0;
+  f.mode.wandStrategies = opener(() => { asked++; return { cast: 'stun' }; });
+  f.mode.pvpForbiddenHere = () => true;
+  assert.equal(await f.mode.pvpOpener({ client: f.c, targetId: 2 }, f.c.room.objects.get(2)), false);
+  assert.equal(asked, 0);
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${tests} passed`);
