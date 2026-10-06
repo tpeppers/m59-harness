@@ -283,6 +283,13 @@ __pycache__/
 # `autopilot start`. It is an order to one character on this machine, like a loadout.
 /substrate/errands-saved/
 
+# A LOCKDOWN'S OWN STATE. substrate/lockdown-saved/<agent>.json is every character's plan-A errand
+# settings, saved by the local `lockdown` fleetscript so `unlockdown` can put them back -- losing it
+# loses the fleet's normal orders. lockdown-doorwatch.* is the door watch it launches. One machine's
+# orders, like loadouts/ above.
+/substrate/lockdown-saved/
+/substrate/lockdown-doorwatch.*
+
 # TACTICS, CHANGED MID-SESSION. substrate/tuning.json is the live overlay read by
 # tools/m59-tuning.mjs — whether to chase a flagged attacker, which weapons a named
 # character prefers, the flee and rest fractions, which rooms it may be in at all. It is
