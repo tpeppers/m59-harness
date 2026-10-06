@@ -16,6 +16,8 @@ import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
+import * as swarm from './m59-swarm-follow.mjs';
+import { squareCentre } from './m59-coords.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
@@ -691,6 +693,153 @@ export class CombatMode {
     }
     await this.keepoffTick();
     if (!this.active) await this.warbandBuff().catch(e => { this.warbandError = e.message; });
+    if (!this.active) await this.swarmFollowTick().catch(e => { this.swarmFollowError = e.message; });
+  }
+
+  // ------------------------------------------------------------------ SWARM FOLLOW
+  //
+  // tools/m59-swarm-follow.mjs has the argument. A member of the swarm holds a WEDGE slot behind
+  // the leader while he is in its room, goes through the door he took when he leaves it, walks to
+  // the room the driver last saw him in when it never saw him go, and walks back to the room it
+  // joined from when the swarm ends. It runs only when nothing else owns the body: a fight order,
+  // a PvP fight and a buff all come first, and a body below its own flee line is left to survival.
+  //
+  // `this.swarmContext()` is installed by the keeper process: membership, the leader's character,
+  // the members' characters, the driver's sighting of the leader's room, and this agent's home.
+  async swarmFollowTick() {
+    const ctx = this.swarmContext?.();
+    if (!ctx?.member || this.swarmMoving) return;
+    // PACED. A follow leg is at most one a second: back-to-back legs at a slot the body cannot
+    // quite reach kept a lab keeper's packet pacer so busy that its own fresh state reads starved
+    // and the broker could not see the character at all.
+    if (this.now() - (this.swarmLegAt ?? 0) < swarm.LEG_GAP_MS) return;
+    const s = this.s, c = s.client, me = c?.self, room = s.world?.room?.num;
+    if (!me || !(room > 1) || this.active) return;
+    const hp = c.vitals?.()?.health;
+    const flee = Number(this.keeper?.()?.policy?.fleeBelow ?? 0.45);
+    if (hp?.max > 0 && hp.value / hp.max < flee) { this.swarmFollow = { at: this.now(), why: 'below the flee line' }; return; }
+
+    // EVERY LEG HAS A DEADLINE, and missing it cancels that leg's own token and nothing else. A
+    // lab follower started a walk from a pocket it could not leave; the walk never returned, the
+    // "moving" flag stayed up, and the follower ignored its leader for the rest of the swarm.
+    const leg = async (ms, fn) => {
+      const token = `swarm-follow-${randomUUID()}`;
+      let timer;
+      const late = new Promise(resolve => { timer = setTimeout(() => {
+        s.cancelledMovementTokens?.add?.(token);
+        resolve({ arrived: false, moved: false, reason: `swarm leg over its ${Math.round(ms / 1000)}s deadline` });
+      }, ms); });
+      try { return await Promise.race([fn(token), late]); } finally { clearTimeout(timer); }
+    };
+    const go = async (dest, why) => {
+      this.swarmLegAt = this.now();
+      this.swarmMoving = true;
+      this.swarmFollow = { at: this.now(), travelling_to: dest, why };
+      try {
+        const r = await leg(swarm.TRAVEL_LEG_MS, token => s.travel(dest, { origin: keeperOrigin('swarm_follow', { leader: ctx.leader }),
+                                         movementGeneration: s.movementGeneration, controlToken: token }));
+        this.swarmFollow = { at: this.now(), arrived: !!r?.arrived, room: s.world?.room?.num, why,
+                             ...(r?.arrived ? {} : { reason: r?.reason ?? null }) };
+      } finally { this.swarmMoving = false; }
+    };
+
+    if (ctx.phase === 'returning') {
+      if (ctx.home > 1 && room !== ctx.home) await go(ctx.home, 'swarm ended: back where it joined');
+      return;
+    }
+
+    const wanted = String(ctx.leaderCharacter ?? '').toLowerCase();
+    const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+    const players = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
+    const leader = wanted ? players.find(o => nameOf(o) === wanted) : null;
+
+    if (leader) {
+      const at = { row: leader.row, col: leader.col };
+      const prev = this.swarmLeaderSeen;
+      // HEADING FROM HIS FEET, not from his facing: a moved leader faces where he walked, and the
+      // squares are unambiguous where an angle convention is not.
+      let heading = prev?.room === room ? prev.heading : null;
+      if (prev?.room === room && swarm.chebyshev(prev, at) >= 1) heading = swarm.headingBetween(prev, at) ?? heading;
+      const memberChars = new Map([...ctx.members].map(([a, ch]) => [String(ch ?? '').toLowerCase(), a]));
+      const present = players.map(o => memberChars.get(nameOf(o))).filter(Boolean);
+      if (!heading) {
+        const followers = players.filter(o => memberChars.has(nameOf(o))).map(o => ({ row: o.row, col: o.col }));
+        heading = swarm.restingHeading(at, [...followers, { row: me.row, col: me.col }]);
+      }
+      this.swarmLeaderSeen = { room, row: at.row, col: at.col, heading, at: this.now() };
+      const index = swarm.slotIndex(ctx.me, present);
+      const slot = swarm.wedgeSlot(at, heading, index);
+      // NEVER "IN SLOT" ON HIS SQUARE. Slack is a square, so a follower standing on the leader --
+      // which is where everyone lands after following him through a door, the arrival square --
+      // counted as in position, and the whole swarm stood stacked in the doorway (lab, 2026-10-06).
+      const onLeader = me.row === at.row && me.col === at.col;
+      if (!onLeader && swarm.chebyshev(me, slot) <= swarm.SLACK) { this.swarmFollow = { at: this.now(), in_slot: slot }; return; }
+      // ITS OWN SLOT FIRST, THEN THE REST OF THE WEDGE, THEN ANYWHERE BY HIM. A slot can sit on
+      // ground this body cannot walk to from where it stands -- behind a counter, or out of a
+      // pocket the fine grid will not plan through -- and a follower that only ever tried its own
+      // slot would stand still for the whole swarm.
+      const candidates = [slot, ...[1, 2, 3, 4].map(k => swarm.wedgeSlot(at, heading, index + 2 * k)), at];
+      // A STEP THE MOVER REFUSED IS NOT RETRIED for a few seconds. The planner does not see bodies
+      // and the mover does, so the obvious step can be a square somebody is standing on; asking
+      // for it again every 250 ms is a follower that never moves (measured in the lab).
+      const refused = (this.swarmRefused ??= new Map());
+      for (const [k, until] of refused) if (until < this.now()) refused.delete(k);
+      let next = null, goal = null;
+      for (const g of candidates) {
+        next = safeCombatStep(s, { row: g.row, col: g.col, exact: false });
+        if (next && !(next.row === at.row && next.col === at.col) && !refused.has(`${g.row},${g.col}`)) { goal = g; break; }
+        next = null;
+      }
+      if (!next || (next.row === at.row && next.col === at.col)) {
+        // SAY WHY, because "stuck" is the question this status exists to answer: where it stands,
+        // and what the planner said about the slot from there.
+        const geo = s.world?.geometry;
+        let plan = null;
+        try { const p = geo?.path?.(me.row, me.col, slot.row, slot.col); plan = p ? { found: !!p.found, steps: p.steps?.length ?? null, reason: p.reason ?? null } : null; }
+        catch (e) { plan = { error: e.message }; }
+        this.swarmFollow = { at: this.now(), slot, from: { row: me.row, col: me.col }, plan,
+                             why: 'no safe step toward the wedge or the leader from here' };
+        return;
+      }
+      // THE FINE MOVER, NOT A SQUARE STEP. `s.step` to the next square reported `moved: true` while
+      // the body stayed put (lab, two followers overlapping on one square): a square step is a
+      // summary, and the body moves in fine units. `walkFine` to the goal square's CENTRE is the
+      // validated walk the jump work relies on; a short leg, so a moving leader is re-aimed each tick.
+      const centre = squareCentre(goal.row, goal.col);
+      const fromXY = { x: me.x, y: me.y };
+      const before = Math.hypot(Number(me.x) - centre.x, Number(me.y) - centre.y);
+      this.swarmLegAt = this.now();
+      this.swarmMoving = true;
+      let r = null;
+      try {
+        r = await leg(swarm.ROOM_LEG_MS, token => withBodyCommand(s, () => s.walkFine(centre.x, centre.y, {
+          maxSteps: 6, arriveWithin: 24, controlToken: token }), 'swarm-follow'));
+      } finally { this.swarmMoving = false; }
+      const moved = Number.isFinite(fromXY.x) && (c.self?.x !== fromXY.x || c.self?.y !== fromXY.y);
+      // PROGRESS, NOT MOTION. A leg that moved the body without bringing it closer to the goal
+      // (sliding along a body or a wall) is as stuck as one that did not move, and the next slot
+      // is tried instead -- the lab follower that "moved" every leg and never arrived.
+      const after = Math.hypot(Number(c.self?.x) - centre.x, Number(c.self?.y) - centre.y);
+      const closer = Number.isFinite(after) && after < before - 8;
+      if (!closer) refused.set(`${goal.row},${goal.col}`, this.now() + 8_000);
+      this.swarmFollow = { at: this.now(), stepping_to: goal, slot, moved,
+                           ...(moved ? {} : { refused: r?.reason ?? r?.why ?? r?.error ?? null }) };
+      return;
+    }
+
+    // NOT HERE. The door we saw him take beats the driver's sighting: it is ours, and it is now.
+    const seen = this.swarmLeaderSeen;
+    let dest = null, why = null;
+    if (seen?.room === room && this.now() - seen.at < 20_000) {
+      const exit = swarm.inferExit(s.world?.map?.rooms?.[String(room)], seen);
+      if (exit) { dest = exit.to; why = `followed him through the ${exit.via}`; }
+    }
+    if (dest == null && ctx.leaderRoom > 1 && ctx.leaderRoom !== room) {
+      dest = ctx.leaderRoom; why = 'walking to the room he was last seen in';
+    }
+    if (dest == null) { this.swarmFollow = { at: this.now(), why: 'leader not here and not located' }; return; }
+    this.swarmLeaderSeen = null;
+    await go(dest, why);
   }
 
   // ------------------------------------------------------------------ the keep-off lock

@@ -290,6 +290,12 @@ __pycache__/
 /substrate/lockdown-saved/
 /substrate/lockdown-doorwatch.*
 
+# THE SWARM'S RUNTIME STATE (tools/m59-swarm-follow.mjs): the driver's state and every keeper's
+# sighting, and the driver's log and output. One machine's live play, rewritten every second.
+/substrate/swarm/
+/substrate/swarm-*.log
+/substrate/swarm-*.out
+
 # TACTICS, CHANGED MID-SESSION. substrate/tuning.json is the live overlay read by
 # tools/m59-tuning.mjs — whether to chase a flagged attacker, which weapons a named
 # character prefers, the flee and rest fractions, which rooms it may be in at all. It is

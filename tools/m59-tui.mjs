@@ -850,22 +850,22 @@ async function swarm(row) {
   // once the client takes the connection, and it is the only thing in the system that can
   // read the operator REQ_ATTACK and tell the swarm what to focus fire on.
   await launch(row, { viaProxy: true });
-  const others = S.rows.filter(x => x.agent !== row.agent && x.in_game !== false);
-  let took = 0, failed = [];
-  for (const o of others) {
-    const res = await call('autopilot', {
-      agent: o.agent, action: 'claim',
-      faculties: ['movement', 'work'],
-      by: `swarm/${row.agent}@terminal`,
-      // Leases fail BACK to the keeper rather than open, so a swarm whose driver dies
-      // returns each character to the thing that knows how to keep it alive.
-      lease_ms: 120000,
-    }, 6000);
-    if (res?.__error) failed.push(o.agent); else took++;
-  }
-  S.status += ' ' + c.bold(c.cyan(`· SWARM: ${took} following ${row.character ?? row.agent}`)) +
-    (failed.length ? c.red(` · ${failed.length} refused (${failed.slice(0, 3).join(',')})`) : '') +
-    c.dim(' · movement+work only; the keeper keeps the survival floor');
+  // THE DRIVER, NOT A ONE-SHOT CLAIM. This used to claim movement+work for every in-game
+  // character everywhere, with a 120 s lease nothing renewed and nothing to move them: the
+  // fleet froze wherever it stood and the swarm ended silently after two minutes. The driver
+  // (tools/m59-swarm.mjs) admits whoever is in this character's room and anyone who walks into
+  // it later, never a body under 30 maximum health, keeps every claim alive with a heartbeat,
+  // and ends when this client exits by walking each member back to the room it joined from.
+  // Each member's keeper holds a wedge behind the leader and follows him through doors.
+  // Detached, so quitting the terminal does not end a swarm the operator is still playing.
+  const out = openSync(join(REPO, 'substrate', `swarm-${FLEET ?? 'default'}.out`), 'a');
+  const child = spawn(process.execPath,
+    [join(REPO, 'tools', 'm59-swarm.mjs'), 'start', '--leader', row.agent, '--fleet', FLEET ?? 'default', '--url', URL_],
+    { cwd: REPO, detached: true, windowsHide: true, stdio: ['ignore', out, out] });
+  child.unref();
+  S.status += ' ' + c.bold(c.cyan(`· SWARM: following ${row.character ?? row.agent}`)) +
+    c.dim(' · your room joins, and anyone who walks in · under 30 max health never · ' +
+          'ends when this client closes · node tools/m59-swarm.mjs status');
 }
 
 // ------------------------------------------------------------- the commander

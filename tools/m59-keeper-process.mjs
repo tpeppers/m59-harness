@@ -55,6 +55,7 @@ import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { audioView } from './m59-audio-observations.mjs';
 import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { OF, playerClassName } from './m59-parse.mjs';
+import * as swarmFollow from './m59-swarm-follow.mjs';
 import { readWho } from './m59-who.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
@@ -399,6 +400,48 @@ session.combat.leaderCharacter = () => {
   return m ? fleet?.[m[1]]?.credentials?.character ?? menagerieRoster?.[m[1]]?.credentials?.character ?? null : null;
 };
 setInterval(() => { session.combat.warbandTick?.().catch?.(() => {}); }, 250).unref?.();
+// SWARM FOLLOW (m59-swarm-follow.mjs): the driver's state, read at most once a second, and this
+// keeper's SIGHTING written once a second while a swarm is on -- the room it is in, whether it sees
+// the leader, its maximum health. Only a keeper that sees the leader knows his room NUMBER, and
+// sightings are how the driver admits whoever walks into his room. Nothing is written when no
+// swarm is running, and a host or a noncombatant says so, so the driver can refuse it by name.
+const swarmCharOf = a => fleet?.[a]?.credentials?.character ?? menagerieRoster?.[a]?.credentials?.character ?? null;
+let swarmCache = { at: 0, state: null };
+const swarmState = () => {
+  const now = Date.now();
+  if (now - swarmCache.at > 1000) swarmCache = { at: now, state: swarmFollow.readState(resolvedFleetName()) };
+  return swarmCache.state;
+};
+session.combat.swarmContext = () => {
+  const st = swarmState();
+  const m = swarmFollow.membership(st, agent);
+  if (!m.on) return null;
+  return { ...m, me: agent, leaderCharacter: swarmCharOf(st.leader), leaderRoom: st.leader_room ?? null,
+           members: new Map(Object.keys(st.members ?? {}).map(a => [a, st.members[a]?.character ?? swarmCharOf(a)])) };
+};
+setInterval(() => {
+  try {
+    const st = swarmState();
+    if (!st || st.ended_at || !inGame) return;
+    const c = session.client, room = session.world?.room?.num;
+    if (!c?.self || !(room > 0)) return;
+    const wanted = String(swarmCharOf(st.leader) ?? '').toLowerCase();
+    let leaderSquare = null;
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (!(o.flags & OF.PLAYER) || o.id === c.selfId) continue;
+      if (wanted && String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase() === wanted) leaderSquare = { row: o.row, col: o.col };
+    }
+    swarmFollow.writeSighting(resolvedFleetName(), agent, {
+      // The leader's own keeper (a bot leader, or the lab) IS the leader's room; a human-piloted
+      // leader has no keeper, and his room comes only from the followers who can see him.
+      agent, character, at: Date.now(), room, sees_leader: !!leaderSquare || agent === st.leader,
+      leader_square: leaderSquare ?? (agent === st.leader ? { row: c.self.row, col: c.self.col } : null),
+      max_health: c.vitals?.()?.health?.max ?? null, host: isHostCharacter,
+      noncombatant: !!war.isNoncombatant(character), piloted: false,
+      following: session.combat.swarmFollow ?? null,
+    });
+  } catch { /* a sighting is evidence for the driver; failing to write one never costs the body */ }
+}, 1000).unref?.();
 // The zone alarm: one line in a shared file, watched rather than polled by a keeper pass, so a
 // fleetmate's fight reaches this character in milliseconds instead of on its next decision.
 try { war.watchAlarms(a => session.combat.onWarAlarm(a)); }

@@ -20,6 +20,7 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import { SWARM_MIN_MAX_HEALTH } from './m59-swarm-follow.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import { classifyPvpDeath, pvpReturnDelayMs, readPvpDeath, writePvpDeath,
          pvpHoldState } from './m59-pvp-return.mjs';
@@ -19662,6 +19663,14 @@ export class Autopilot {
       this.note('told to hold', { by: order.leaderName, walked_behind_for_s:
         Math.round((Date.now() - this.follow.since) / 1000) });
       this.follow = null;
+    } else if (order?.order === 'follow' &&
+               !(Number(c.vitals?.()?.health?.max) >= SWARM_MIN_MAX_HEALTH)) {
+      // UNDER 30 MAXIMUM HEALTH DOES NOT FOLLOW (operator, 2026-10-06: "I'd like the swarm to not
+      // include characters below 30 HP"). Said after a "follow me" walked Loial (20) off his post,
+      // Marco Polo (20) across town and Raphael (25) out into the Twisted Wood. Maximum, not
+      // current: the same rule as the swarm and as lockdown's hall, one constant for all three.
+      this.note('heard "follow me" and stayed', { by: order.leaderName,
+        why: `max health ${c.vitals?.()?.health?.max ?? 'unread'} is under ${SWARM_MIN_MAX_HEALTH}` });
     } else if (order?.order === 'follow') {
       this.follow = { leaderId: order.leaderId, leaderName: order.leaderName,
                       trail: [], since: Date.now(), missing: 0 };

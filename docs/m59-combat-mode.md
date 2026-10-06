@@ -217,6 +217,49 @@ stranger's pack.
 PvP *plays* (placement, timing, who musters where) are FleetScripts in the private repository's
 `strategy/pvp/`, installed at `substrate/fleetscripts/pvp/` and listed by the fleet REPL.
 
+## The swarm: a wedge behind you, through the doors you take
+
+```bash
+# the terminal's S key does this for you, launching your character through the proxy first
+node tools/m59-swarm.mjs start  --leader t21 --fleet prod
+node tools/m59-swarm.mjs status --fleet prod
+node tools/m59-swarm.mjs stop   --fleet prod          # members walk back where they joined
+node tools/m59-swarm.mjs stop   --here --fleet prod   # released where they stand
+```
+
+**Who is in it.** Whoever is in your room when you press `S`, plus any fleet character who later
+walks into the room you are in. **Never a character under 30 MAXIMUM health** (operator,
+2026-10-06), never a menagerie host, a war noncombatant, or a character a human client holds.
+Every refusal is logged once with its reason in `substrate/swarm-<fleet>.log`. The 30 line is one
+constant, `SWARM_MIN_MAX_HEALTH`, shared with the chat order below.
+
+**What it does.** Each member's keeper holds a slot in a WEDGE behind you, a square apart,
+oriented by the way you last walked. When you leave the room it takes the door you were last seen
+beside, or failing that walks to the room the swarm last saw you in. It still focus-fires your
+target and buffs, exactly as the warband always did. A follower never stands on your square, and
+it follows only while nothing else owns its body: a fight comes first, and a body below its own
+flee line is left to survival. Legs are paced to one a second and each has a deadline.
+
+**It overrides lockdown for its members only.** A member follows you out of an inn or the hall,
+because following you is the point. When the swarm ends (your client closes, or `stop`), each
+member walks back to the room it joined from and is released there, so its lockdown posture
+resumes where it was. Non-members are never touched.
+
+**How it fails.** The driver holds each member's movement and work with a 60 s lease and a 20 s
+heartbeat. A dead driver stops renewing, and within a minute every member is its keeper's again,
+standing wherever it is. That is a member stuck where the swarm left it, never one walking off.
+
+**Before 2026-10-06**, `S` claimed every in-game character everywhere with a 120 s lease nothing
+renewed, and nothing moved them: the fleet froze in place and the swarm silently ended after two
+minutes. The argument for each piece, and the four bugs a two-keeper lab rehearsal found, are in
+`tools/m59-swarm-follow.mjs` and the follow tick (`CombatMode.swarmFollowTick`).
+`node tools/m59-swarm-follow-test.mjs` (11) pins the rules.
+
+**"follow me" in chat is a different, older order** (`m59-follow.mjs`, `passFollow`): every fleet
+member in the room who hears it walks your trail. It is not the swarm, and it ignores lockdown.
+Since 2026-10-06 it too is ignored by anyone under 30 maximum health, after it walked Loial (20)
+off his post, Marco Polo (20) across town and Raphael (25) into the Twisted Wood. "stop" ends it.
+
 ## FleetScratch
 
 ```

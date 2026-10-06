@@ -7,6 +7,11 @@
 - `node tools/runtime/fleet-lock-test.mjs` and
   `node tools/runtime/account-leases-test.mjs`: guarded ownership, exact-roster
   adoption and consistent exclusion of positively identified recycled PIDs.
+- `node tools/m59-swarm-follow-test.mjs` (11): the swarm. The 30 MAXIMUM-health line (29 out, 30 in,
+  unread out); hosts, noncombatants, human-held characters and the leader never join; the leader's
+  room comes from the freshest keeper that sees him; every follower in a room computes the same slot
+  from the same view; the wedge trails behind his walking direction, never on his square; the door
+  he took is inferred from his last square, and nowhere near a door means no guess.
 - `node tools/runtime/broker-handover-test.mjs` (26): the live broker handover. A lock
   TRANSFER keeps every keeper guard (a running keeper verifies against its new broker without
   being touched), only the current owner can make one, and it rolls back with the successor's
