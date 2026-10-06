@@ -758,6 +758,38 @@ for (const [why, strategies, faulty] of [
   });
 }
 
+await test('an opener may cast a room spell at nothing, or a buff at itself', async () => {
+  for (const [target, want] of [['none', 'cast:stun->'], ['self', 'cast:stun->1']]) {
+    const f = withSpell(fixture());
+    f.mode.wandStrategies = opener(() => ({ cast: 'stun', target }));
+    f.mode.event({ kind: 'appeared', id: 2 });
+    await f.mode.tick();
+    assert.ok(f.sent.includes(want), `${target}: sent ${f.sent}`);
+    f.mode.stop('test');
+  }
+  const f = withSpell(fixture());
+  const errors = [], err = console.error;
+  console.error = (...a) => errors.push(a.join(' '));
+  f.mode.wandStrategies = opener(() => ({ cast: 'stun', target: 'everyone' }));
+  try { f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick(); } finally { console.error = err; }
+  assert.ok(!f.sent.some(x => x.startsWith('cast:')) && errors.length === 1, `an unknown target is a fault: ${f.sent} ${errors}`);
+  f.mode.stop('test');
+});
+
+await test('ctx.heard carries what was said in this room, colour stripped, and not another room', async () => {
+  const f = withSpell(fixture());
+  const asked = [];
+  f.mode.wandStrategies = opener(ctx => { asked.push(ctx); return null; });
+  f.s.world.room.num = 37;
+  f.mode.event({ kind: 'message', text: 'somewhere else' });
+  f.s.world.room.num = 38;
+  f.mode.event({ kind: 'said', name: 'darkness', text: '~kA curtain of darkness is drawn across the room.' });
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.deepEqual(asked[0].heard.map(h => h.text), ['A curtain of darkness is drawn across the room.'], JSON.stringify(asked[0].heard));
+  f.mode.stop('test');
+});
+
 await test('an opener is never asked in a room that forbids the fight', async () => {
   const f = withSpell(fixture());
   let asked = 0;

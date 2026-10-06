@@ -22,6 +22,9 @@ import * as swarm from './m59-swarm-follow.mjs';
 import { squareCentre } from './m59-coords.mjs';
 
 export const PVP_DANGER_MS = 30_000;
+// What a keeper heard, for the pvpOpener's ctx.heard: long enough to span a room enchantment.
+export const HEARD_MS = 5 * 60_000;
+export const HEARD_MAX = 60;
 // One look at a stranger per keeper per this long, and only by the room's look leader unless
 // the stranger has gone unread for WAR_LOOK_FALLBACK_MS. Twenty characters in one room must not
 // all look at the same entrant.
@@ -622,8 +625,13 @@ export class CombatMode {
   // book, grudge book, an incoming hit, an operator's order) and nothing here widens it.
   //   ctx    = { agent, character, target: { id, name, player, dist }, mana, max_mana,
   //             spells: [known, lowercase], pack: { item: count }, now, last_cast_at, last_spell,
-  //             pvp, warband, room }
-  //   answer = { cast: '<spell it knows>' }   cast it at the target this beat
+  //             pvp, warband, room, heard: [{ at, kind, text }] }
+  //   heard  = what this keeper heard in THIS room over the last few minutes (messages and room
+  //             speech, colour codes stripped): a room enchantment announces itself going up and
+  //             coming down, and that is the only way to know it is up.
+  //   answer = { cast: '<spell it knows>', target?: 'target' | 'self' | 'none' }
+  //                                           cast it this beat; at the fight's target by default,
+  //                                           at nothing for a room spell, at itself for a buff
   //          | { wait: true }                 send nothing this beat, and do not fall through
   //          | null                           decline: the fight goes on as it always did
   // Never throws. A fault (a throw, an unknown spell, a malformed answer) is reported once per
@@ -647,7 +655,8 @@ export class CombatMode {
                 dist: Math.hypot(target.row - me.row, target.col - me.col) },
       mana: mana?.value ?? null, max_mana: mana?.max ?? null, spells: known, pack, now: this.now(),
       last_cast_at: o.openerAt ?? null, last_spell: o.openerSpell ?? null,
-      pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null };
+      pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
+      heard: this.heardHere() };
     for (const st of asked) {
       let answer;
       try { answer = await st.pvpOpener(ctx); }
@@ -657,12 +666,14 @@ export class CombatMode {
       const name = typeof answer.cast === 'string' ? answer.cast.trim().toLowerCase() : null;
       const spell = name && (c.spells ?? []).find(sp => exactName(c, sp) === name);
       if (!spell) { this.noteOpenerFault(o, st.name, name ? `named a spell it does not know: ${name}` : 'answered neither cast nor wait'); continue; }
+      const aim = answer.target ?? 'target';
+      if (!['target', 'self', 'none'].includes(aim)) { this.noteOpenerFault(o, st.name, `target must be target, self or none, not ${aim}`); continue; }
       o.openerAt = this.now(); o.openerSpell = name; o.openerWaiting = null;
       await this.stand(o);
       await this.s.pacer.submit('cast', () => {
         const live = c.room.objects.get(o.targetId);
         if (!live) return;
-        c.cast(spell.id, [live.id]);
+        c.cast(spell.id, aim === 'none' ? [] : [aim === 'self' ? c.selfId : live.id]);
         o.casts++; o.openerCasts = (o.openerCasts ?? 0) + 1;
         if (o.pvp) { o.pvp.opener_casts = (o.pvp.opener_casts ?? 0) + 1; o.pvp.opener = { strategy: st.name, spell: name }; }
         if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
@@ -672,6 +683,20 @@ export class CombatMode {
       return true;
     }
     return false;
+  }
+
+  /** What this keeper heard, kept briefly for the opener: a room enchantment says so out loud. */
+  hear(ev) {
+    if (!ev.text) return;
+    this.heard ??= [];
+    this.heard.push({ at: this.now(), room: this.s.world?.room?.num ?? null, kind: ev.kind,
+                      text: String(ev.text).replace(/~[A-Za-z]/g, '').trim() });
+    if (this.heard.length > HEARD_MAX) this.heard.splice(0, this.heard.length - HEARD_MAX);
+  }
+
+  heardHere() {
+    const room = this.s.world?.room?.num ?? null, since = this.now() - HEARD_MS;
+    return (this.heard ?? []).filter(h => h.at >= since && h.room === room).map(h => ({ at: h.at, kind: h.kind, text: h.text }));
   }
 
   noteOpenerFault(o, strategy, why) {
@@ -1621,7 +1646,7 @@ export class CombatMode {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observeWar(ev, client);
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
-    if (ev.kind === 'said' || ev.kind === 'message') this.observeLeash(ev);
+    if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);
     this.observePlayerCombat(ev, client);
