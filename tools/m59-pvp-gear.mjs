@@ -111,13 +111,43 @@ export const UNIDENTIFIED_SIGNATURES = Object.freeze([
   { as: 'lightning wand', name: 'wand', translation: XLAT_TO_YELLOW },
 ]);
 
-/** The name this item should be treated as: its own, or what its wire signature proves it is. */
+/**
+ * The name this item should be treated as: its own, or what its wire signature proves it is.
+ *
+ * KNOWN GAP, LEFT AS SHIPPED ON PURPOSE (2026-10-06). The wire does not carry viColor: it carries
+ * EncodeTwoColorXLAT(viColor, label) = XLAT_BASE_VALUE + 11*primary + label (spelitem.kod:145,
+ * util.kod:271), so a lightning wand arrives as 223 and the raw comparison with 8 below matches
+ * no real wand. Correcting it here would start the whole fleet firing unidentified lightning
+ * wands at the next deploy, which is a fleet's rollout decision, not a mechanic. So the decoded
+ * reading is offered to the private `pvpWand` strategy instead (ctx.unidentified, built from
+ * `unidentifiedWandsIn` below), and the operator turns it on where and for whom they choose.
+ */
 export function effectiveName(c, o) {
   const name = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '');
   const bare = name.trim().toLowerCase();
   for (const sig of UNIDENTIFIED_SIGNATURES)
     if (bare === sig.name && Number(o.translation) === sig.translation) return sig.as;
   return name;
+}
+
+// THE DECODER, as util.kod DecodePrimaryColor. Pure; used by the shadow import
+// (m59-shadow-fidelity.mjs) and by `unidentifiedWandsIn`.
+export const XLAT_BASE_VALUE = 0x87;
+/** The primary colour of an encoded wire translation; null when none was sent or it is not an encoding. */
+export function decodePrimaryColour(encoded) {
+  const x = Number(encoded);
+  if (!Number.isFinite(x) || x <= 0) return null;          // 0 / absent: no translation was sent
+  if (x > 120 && x < 125) return 0x0B;                      // XLAT_TO_DGREEN, skin-paired
+  if (x > 124 && x < 128) return 0x0C;                      // XLAT_TO_BLACK, skin-paired
+  if (x < XLAT_BASE_VALUE) return null;                     // not a two-colour encoding
+  return Math.floor((x - XLAT_BASE_VALUE) / 11);
+}
+
+/** Bare "wand" rows in the pack, with their decoded colour. A spent id is skipped. */
+export function unidentifiedWandsIn(c, { spent = new Set() } = {}) {
+  return (c.inventory ?? [])
+    .filter(o => !spent.has(o.id) && nameOf(c, o).trim().toLowerCase() === 'wand')
+    .map(o => ({ o, id: o.id, translation: Number(o.translation) || 0, colour: decodePrimaryColour(o.translation) }));
 }
 
 /** Is this item one the character wears ONLY in a PvP fight? */
@@ -156,8 +186,10 @@ export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / 
 //   ctx (built by CombatMode.wandContext; plain data, safe to keep):
 //     { character, now, volley_ms, beat, lastVolleyBeat, lastFireAt,
 //       wands:  [{ id, name, timer }],               // live volley wands, config order, spent ones gone
+//       unidentified: [{ id, translation, colour }], // bare "wand" rows, colour DECODED (8 = yellow,
+//                                                    // lightning); a strategy may fire one by id
 //       target: { id, name, player, row, col, dist },
-//       me:     { row, col },
+//       me:     { row, col, hp, max_hp },
 //       shots:  [{ at, wand, refused }],              // this fight, oldest first, at most SHOT_HISTORY
 //       pvp, warband, room }
 //
@@ -189,8 +221,8 @@ export function chooseWandVolley(ctx) {
 export function checkWandAnswer(answer, ctx) {
   if (!answer || typeof answer !== 'object') return { invalid: 'answer is not an object' };
   const fire = answer.fire ?? null;
-  if (fire !== null && !(ctx?.wands ?? []).some(w => w.id === fire))
-    return { invalid: `fire names ${fire}, which is not a live volley wand` };
+  if (fire !== null && ![...(ctx?.wands ?? []), ...(ctx?.unidentified ?? [])].some(w => w.id === fire))
+    return { invalid: `fire names ${fire}, which is not a live volley wand or an unidentified wand in the pack` };
   if (answer.hold !== undefined && typeof answer.hold !== 'boolean') return { invalid: 'hold is not a boolean' };
   if (answer.face !== undefined && typeof answer.face !== 'boolean') return { invalid: 'face is not a boolean' };
   return { fire, hold: !!answer.hold, face: !!answer.face, why: answer.why == null ? null : String(answer.why) };

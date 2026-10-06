@@ -42,6 +42,7 @@
 //    previous snapshot gave it and puts newcomers in the lowest free one.
 import { readFileSync, existsSync } from 'node:fs';
 import { resolveItemClass, itemClassIndex, KODDB } from './m59-itemclass.mjs';
+import { decodePrimaryColour } from './m59-pvp-gear.mjs';
 
 // ---------------------------------------------------------------- the prod read gate
 //
@@ -89,12 +90,17 @@ export function equippedNames(eq, inv = null) {
   }).filter(Boolean);
 }
 
-/** The pack, row by row, from the `inventory` tool's reply. `amount: 0` = one non-stack. */
+/**
+ * The pack, row by row, from the `inventory` tool's reply. `amount: 0` = one non-stack.
+ * A non-zero palette `translation` is kept: it is the only thing that tells one unidentified
+ * "wand" from another (see wandClassByTranslation).
+ */
 export function packRows(inv) {
   return (inv?.items ?? inv?.inventory ?? [])
     .filter(x => x?.name)
     .map(x => ({ name: x.name, amount: Number(x.amount ?? 0) || 0,
-                 ...(x.rarity_name && x.rarity_name !== 'normal' ? { rarity: x.rarity_name } : {}) }));
+                 ...(x.rarity_name && x.rarity_name !== 'normal' ? { rarity: x.rarity_name } : {}),
+                 ...(Number(x.translation) ? { translation: Number(x.translation) } : {}) }));
 }
 
 const MONEY_NAMES = new Set(['shilling', 'shillings']);
@@ -218,6 +224,47 @@ function loadFamilies() {
 export function itemSubclassCount(cls) { if (SUBCLASSES == null) loadFamilies(); return SUBCLASSES.get(lc(cls)) ?? 0; }
 export function labelledSubclassCount(cls) { if (LABELLED == null) loadFamilies(); return LABELLED.get(lc(cls)) ?? 0; }
 
+// A BARE "wand" IS NAMED BY ITS TINT, WHEN THE TINT IS ONE CLASS'S ALONE. Every Wand subclass
+// calls itself "wand" until identified (wand.kod:19, HideHiddenAttributes) and shares one
+// icon, but each keeps its own `viColor`, which the server sends per object as the palette
+// translation. So the snapshot's prod farmers carried their lightning wands as plain "wand"
+// rows, `dress` refused them as ambiguous, and a shadow PvP rehearsal ran with no volley
+// wands at all while prod fights with them (2026-10-06).
+//
+// The table is read from koddb, never written here: a tint resolves only when exactly ONE
+// Wand-family class carries it. Measured: yellow 8 -> LightningWand, blue 6 -> IdentifyWand;
+// grey, purple, orange and sky are each shared and stay refused.
+//
+// THE WIRE VALUE IS ENCODED: XLAT_BASE_VALUE 0x87 + 11*viColor + label colour (spelitem.kod:145,
+// util.kod:271), so a lightning wand arrives as 223 and is decoded to 8 before the lookup
+// (pvp-gear decodePrimaryColour, the one decoder both paths use). A wire value that decodes to
+// nothing -- 0 / absent, or a raw byte below the base -- never resolves. Red decodes to 0 and
+// is shared by the base Wand and MarkOfDishonorWand, so it is refused as shared.
+let WAND_TINTS = null;
+function loadWandTints() {
+  WAND_TINTS = new Map();
+  try {
+    const db = JSON.parse(readFileSync(KODDB, 'utf8'));
+    for (const c of Object.values(db.classes ?? {})) {
+      const chain = c.chain ?? [];
+      if (!chain.some(x => lc(x) === 'wand')) continue;
+      const t = Number(c.classvars?.viColor?.value);
+      if (!Number.isFinite(t)) continue;
+      WAND_TINTS.set(t, [...(WAND_TINTS.get(t) ?? []), chain[0]]);
+    }
+  } catch { /* no koddb: no tint resolves, and every bare "wand" stays refused */ }
+}
+/** wire translation -> { ok, class } when one Wand class has its primary colour, else { ok: false, why, candidates }. */
+export function wandClassByTranslation(translation) {
+  if (WAND_TINTS == null) loadWandTints();
+  const t = decodePrimaryColour(translation);
+  if (t == null) return { ok: false, why: `translation ${translation ?? 'absent'} decodes to no colour`, candidates: [] };
+  const hits = WAND_TINTS.get(t) ?? [];
+  if (hits.length === 1) return { ok: true, class: hits[0], stack: false };
+  return { ok: false, why: hits.length ? `colour ${t} is shared by ${hits.length} wands` : `no wand has colour ${t}`,
+           candidates: hits };
+}
+
 /**
  * What one holder should end up with, by CLASS. `rows` are {name, amount, rarity?};
  * `wear` is a list of names that must also be worn/wielded. Returns
@@ -229,8 +276,8 @@ export function labelledSubclassCount(cls) { if (LABELLED == null) loadFamilies(
  */
 export function wantedHoldings(rows = [], wear = [], index = defaultIndex(), subclasses = itemSubclassCount) {
   const byClass = new Map(), unknown = [], approximated = [];
-  const add = (name, n, rarity) => {
-    const r = resolveItemClass(name, index);
+  const add = (name, n, rarity, resolved = null) => {
+    const r = resolved ?? resolveItemClass(name, index);
     if (!r.ok) { if (!unknown.some(u => lc(u.name) === lc(name))) unknown.push({ name, why: r.why, candidates: r.candidates ?? [] }); return null; }
     const k = lc(r.class);
     const cur = byClass.get(k) ?? { class: r.class, stack: r.stack, count: 0, wear: 0, names: [] };
@@ -242,6 +289,10 @@ export function wantedHoldings(rows = [], wear = [], index = defaultIndex(), sub
   };
   for (const row of rows) {
     const amt = Number(row.amount) || 0;
+    if (lc(row.name).trim() === 'wand' && row.translation) {
+      const t = wandClassByTranslation(row.translation);
+      if (t.ok) { add(row.name, 1, row.rarity ?? 'unidentified', t); continue; }
+    }
     const r = resolveItemClass(row.name, index);
     const family = r.ok ? Math.max(labelledSubclassCount(r.class),
                                    lc(row.rarity) === 'unidentified' ? subclasses(r.class) : 0) : 0;
