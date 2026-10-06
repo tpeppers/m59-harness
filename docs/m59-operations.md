@@ -144,11 +144,56 @@ concurrency 3). A broker with the port reservation advertises
 `keeper_handoff: {port_reservation: true}` on `/health`, and only then does the default rise
 to three.
 
-**A broker restart is not a keeper restart.** `m59-service.mjs restart` stops the broker, and
-the broker's orderly shutdown stops every keeper it holds — so the whole fleet leaves the world
-until the resume brings it back. That is still the only way to load new *broker* code; use it
-only when the broker changed. Deliberate logoffs stay where they are for their own reasons:
-`leave`, `m59-service.mjs stop`, and `m59-shutdown.mjs`.
+### Restarting the broker: hand it over, do not log it off
+
+```bash
+node tools/m59-service.mjs restart --fleet prod          # live handover; nobody leaves
+node tools/m59-service.mjs restart --cold --fleet prod   # the old way: every character logs off
+```
+
+**A broker restart no longer stops a keeper.** `restart` asks the running broker
+(`/control/handoff`, loopback only) to start its successor warm beside itself — same program,
+argv, environment and log, on a private IPC channel — and to give it the fleet. The successor
+loads everything while owning nothing and serving nothing; then the predecessor freezes, HOLDS
+new requests, transfers the fleet lock and every account lease to the successor's pid
+(`transferFleetLock`, a compare-and-swap that keeps every keeper guard), sends a snapshot of
+what only lives in its memory, waits while the successor adopts every running keeper in place,
+and finally passes it the listening sockets themselves. The port never closes; held requests
+are forwarded to the successor; the old broker drains what it had already accepted and exits
+without touching a keeper. `runtime/broker-handover.mjs` has the protocol and its argument.
+It reports `pid A -> B`, how many keepers were adopted in place, and how long requests were
+held — measured on the lab fleet, about a second with keepers, 19 ms without.
+
+**Until it commits, the old broker is still the broker.** Any failure — a successor that never
+warms, cannot adopt a running keeper, or cannot serve on the sockets — kills the successor,
+transfers ownership back with the tokens the predecessor itself generated, unfreezes, and runs
+the held requests where they arrived. An aborted handover therefore exits non-zero and does
+**not** fall back to a cold restart: the fleet is still fully up, and a cold restart is exactly
+the outage this exists to avoid. `--cold` is the operator saying otherwise.
+
+**A broker older than this cannot hand over**, so the first restart onto this code is cold, once.
+Every restart after it is live. `/health` advertises `broker_handoff` when a broker can do it.
+
+**Keepers are spawned DETACHED, and before 2026-10-06 they were not, which made every keeper die
+with its broker however the broker ended.** On Windows libuv puts each non-detached child into
+one job object created with `KILL_ON_JOB_CLOSE`, so an orderly exit, a crash and `taskkill /F`
+all killed the whole fleet with the broker. This file and the broker's comments said keepers
+"deliberately survive a broker-only kill" and guarded adoption was built on it; no prod log ever
+contained `adopted guarded surviving`, and the lab rehearsal of the handover found why — both
+keepers adopted in place, then gone the instant the old broker exited. Detached, a keeper now
+outlives a crashed broker and the next one adopts it. The orderly `stop` still stops every
+keeper explicitly. The handover refuses while any keeper was started attached (by older code),
+because those would still die with the old broker — `restart-keepers` replaces them first.
+
+Deliberate logoffs stay where they are for their own reasons: `leave`, `m59-service.mjs stop`,
+`restart --cold`, and `m59-shutdown.mjs`.
+
+**Rehearsing it.** `M59_HANDOFF_FAULT=install|adopt|listen` in the environment a LAB broker was
+started with makes its successors refuse at that stage, which is how the rollback was proven on
+real processes: the old pid kept the fleet, the lock named it again, and the keepers never
+noticed. Nothing sets it by default. Timeouts: `M59_HANDOFF_WARM_MS` (240 s),
+`M59_HANDOFF_ADOPT_MS` (90 s), `M59_HANDOFF_DRAIN_MS` (120 s, how long a retired broker waits
+for its in-flight requests), `M59_HANDOFF_ADOPT_CONCURRENCY` (24).
 
 ## The two front ends, and the one command that starts everything
 

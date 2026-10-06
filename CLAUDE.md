@@ -305,7 +305,7 @@ cited file changes), applied to an operation instead of a document, and for the 
 ```bash
 node tools/m59-service.mjs start   --fleet prod     # detached, survives this terminal
 node tools/m59-service.mjs status  --fleet prod     # up/down, pid, how many are in game
-node tools/m59-service.mjs restart --fleet prod     # the BROKER: logs every character off
+node tools/m59-service.mjs restart --fleet prod     # the BROKER: live handover, nobody leaves
 node tools/m59-service.mjs restart-keepers --fleet prod   # keepers onto new code, nobody leaves
 node tools/m59-service.mjs stop    --fleet prod
 node tools/m59-service.mjs logs    --fleet prod --follow
@@ -335,6 +335,23 @@ before login. A broker restarting the exact same roster may atomically adopt ver
 guarded survivors; a lab or copied/alias roster cannot. Claims predating keeper guards fail
 closed and use the one-time `M59_ALLOW_UNGUARDED_TAKEOVER=1` migration in
 [`docs/INSTALL.md`](docs/INSTALL.md#when-it-does-not-work), never lock deletion.
+
+**A BROKER RESTART IS A LIVE HANDOVER NOW, AND NOBODY LEAVES THE WORLD.** `restart` starts the
+next broker warm beside the running one, transfers the fleet lock and every account lease to it
+while both are alive (keeper guards kept, so no keeper notices), lets it adopt every running
+keeper in place, and hands it the listening sockets — the port never closes, requests arriving
+meanwhile are HELD and then forwarded, never refused. Until it commits the old broker is still
+the broker, so any failure rolls back to exactly where it was, and an aborted handover never
+falls back to a cold restart on its own (`--cold` is the old way). This existed because a broker
+restart used to log all 24 characters off and back on one at a time, which in a fight is a
+massacre. `runtime/broker-handover.mjs`; `node tools/runtime/broker-handover-test.mjs` (26);
+[`docs/m59-operations.md`](docs/m59-operations.md#restarting-the-broker-hand-it-over-do-not-log-it-off).
+
+**AND A KEEPER USED TO DIE WITH ITS BROKER, WHATEVER THIS FILE SAID.** On Windows libuv puts every
+non-detached child into one kill-on-close job object, so the "guarded survivors" above never
+survived anything — not an orderly exit, not a crash, not `taskkill /F`. Found 2026-10-06 when
+the handover rehearsal adopted both keepers in place and then watched them die with the old
+broker. Keepers are spawned `detached` since; the orderly `stop` still stops them explicitly.
 
 Everything else about running it — the loopback-only buttons on the fleet page, the
 piloted-client check it does before logging anybody in, why the roster never shrinks by

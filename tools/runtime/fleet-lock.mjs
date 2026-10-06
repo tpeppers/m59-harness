@@ -737,6 +737,76 @@ export function finalizeFleetLockAdoption(lockPath, {
   return Object.freeze({ ok: true, path, finalized: true, lock: next });
 }
 
+/**
+ * Hand a LIVE claim to a named successor, keeping every guard.
+ *
+ * Guarded adoption above needs the owner DEAD, which is what made every broker restart a
+ * gap: the successor could not take the fleet until its predecessor had finished dying. A
+ * transfer is the owner itself rewriting the record to name the successor's pid and token,
+ * so ownership moves while both processes are alive and nothing is ever unowned.
+ *
+ * Authority is the CURRENT owner's pid, token and kind, checked against the bytes on disk;
+ * the rewrite is a compare-and-swap against exactly those bytes, so a guard registered
+ * between the read and the write makes this retry rather than drop it. Guards, their start
+ * times and the subject are carried unchanged: keepers prove ownership against their OWN pid
+ * in `guards`, so a keeper never notices its broker changed. The same call with `from` and
+ * `to` exchanged is the rollback, which needs the successor's token and nothing from the
+ * successor process itself — it works whether the successor is alive, wedged or dead.
+ */
+export function transferFleetLock(lockPath, {
+  from,
+  to,
+  now = Date.now,
+  attempts = 8,
+} = {}) {
+  const path = exactPath(lockPath);
+  const fromPid = safePid(from?.pid);
+  const fromToken = safeToken(from?.token);
+  const fromKind = claimKind(from?.kind);
+  const toPid = safePid(to?.pid);
+  const toToken = safeToken(to?.token);
+  if (!fromPid || !fromToken || !fromKind || !toPid || !toToken)
+    throw new TypeError('transfer requires from {pid, token, kind} and to {pid, token}');
+  if (toPid === fromPid && toToken === fromToken)
+    throw new TypeError('transfer must name a different owner');
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const before = readExact(path);
+    if (before.state === 'free') return Object.freeze({ ok: false, path, reason: 'free' });
+    if (before.state) return Object.freeze({ ok: false, path, reason: 'unverifiable', found: before });
+    const lock = before.lock;
+    if (lock.pid !== fromPid || lock.token !== fromToken || lock.kind !== fromKind)
+      return Object.freeze({ ok: false, path, reason: 'ownership-mismatch' });
+    const at = now();
+    const record = Object.freeze({
+      pid: toPid, at: Number.isSafeInteger(at) && at >= 0 ? at : lock.at, kind: lock.kind,
+      token: toToken,
+      ...(lock.subject ? { subject: lock.subject } : {}),
+      ...(Object.hasOwn(lock, 'guards') ? { guards: lock.guards } : {}),
+      ...(lock.guard_started ? { guard_started: lock.guard_started } : {}),
+      ...(lock.predecessors ? { predecessors: lock.predecessors } : {}),
+    });
+    const replaced = replaceGuardedOwner(path, before, record);
+    if (replaced.ok) return Object.freeze({ ok: true, path, lock: record, from: lock });
+    if (!replaced.retry) return Object.freeze({ ok: false, path, reason: replaced.reason });
+  }
+  return Object.freeze({ ok: false, path, reason: `lock changed during ${attempts} transfer attempts` });
+}
+
+/**
+ * The claim object `claimFleetLock` returns, for a record this process received by transfer
+ * rather than created. Verifies the file names it before handing back a `release`.
+ */
+export function claimFromTransfer(lockPath, { pid = process.pid, token, kind, isPidLive = isProcessLive,
+                                              tokenFactory = randomUUID } = {}) {
+  const path = exactPath(lockPath);
+  const read = readExact(path);
+  if (read.state || read.lock.pid !== safePid(pid) || read.lock.token !== safeToken(token) ||
+      read.lock.kind !== claimKind(kind))
+    return Object.freeze({ ok: false, path, reason: read.state === 'free' ? 'free' : 'ownership-mismatch' });
+  const release = () => releaseFleetLock(path, { pid, token, kind, tokenFactory, isPidLive });
+  return Object.freeze({ ok: true, path, lock: read.lock, release });
+}
+
 /** Verify the exact token claim names this child before it is allowed to open a socket. */
 export function verifyFleetLockGuard(lockPath, {
   pid,

@@ -7,6 +7,15 @@
 - `node tools/runtime/fleet-lock-test.mjs` and
   `node tools/runtime/account-leases-test.mjs`: guarded ownership, exact-roster
   adoption and consistent exclusion of positively identified recycled PIDs.
+- `node tools/runtime/broker-handover-test.mjs` (26): the live broker handover. A lock
+  TRANSFER keeps every keeper guard (a running keeper verifies against its new broker without
+  being touched), only the current owner can make one, and it rolls back with the successor's
+  token alone — successor alive, wedged or dead; a successor that dies after the transfer is
+  recovered by ordinary guarded adoption; account leases move transactionally and are
+  re-derived from the roster on import; the predecessor never freezes before the successor is
+  warm, never commits before it serves, and every abort ends unfrozen, owning, with its held
+  requests run locally; the successor touches nothing before it owns the fleet, and binds the
+  ports itself if the predecessor vanishes after the transfer.
 - `node tools/m59-checkpoint-test.mjs`: postconditions, unknown observations,
   bounded establishment and checkpoint invalidation.
 - `node tools/m59-resistance-test.mjs` and `node tools/m59-mirror-test.mjs`:

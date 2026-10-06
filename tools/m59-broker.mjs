@@ -39,7 +39,7 @@ import { mayStartJourney, floorFor, floorSource } from './m59-travelgate.mjs';
 import { nativeContextReader } from './m59-native-context-read.mjs';
 const readNativeContext = nativeContextReader();
 import os from 'node:os';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PolicyControls } from './m59-policy-controls.mjs';
 import { REAGENT_COOP_SCHEMA, coopConfig } from './m59-reagent-coop.mjs';
 import { ChatControls } from './m59-chat-controls.mjs';
@@ -123,11 +123,15 @@ import {
   BROKER_FLEET_LOCK_KIND,
   addFleetLockGuard,
   claimFleetLock,
+  claimFromTransfer,
   finalizeFleetLockAdoption,
   inspectFleetLock,
   isProcessLive,
+  transferFleetLock,
   verifyFleetLockGuard,
 } from './runtime/fleet-lock.mjs';
+import { HANDOVER_PROTOCOL, RequestHold, handOver, judgeAdoption, successorOf, successorSpawnSpec,
+         takeOver } from './runtime/broker-handover.mjs';
 import {
   AccountLeaseRegistry,
   assertCanonicalAccountLeaseNamespace,
@@ -1449,7 +1453,19 @@ async function spawnKeeperInner(agent, index, credentials) {
         // `M59_KEEPER_WINDOWS=1` brings them back, and that is worth having rather than
         // hard-coding the hide: watching one keeper's log scroll live in its own window is a
         // genuinely good way to debug it. It is the DEFAULT that was wrong, not the option.
-        windowsHide: process.env.M59_KEEPER_WINDOWS !== '1' });
+        windowsHide: process.env.M59_KEEPER_WINDOWS !== '1',
+        // DETACHED, OR A KEEPER DIES WITH ITS BROKER — HOWEVER THE BROKER ENDS. On Windows
+        // libuv puts every non-detached child into one job object created with
+        // KILL_ON_JOB_CLOSE, so the moment the broker process is gone — an orderly exit, a
+        // crash, `taskkill /F` — every keeper is killed with it. This file said for months
+        // that keepers "deliberately survive a broker-only kill" and built guarded adoption
+        // on that; the job object made it false, which is why no prod log ever contained
+        // "adopted guarded surviving". Found 2026-10-06 rehearsing the live broker handover:
+        // both keepers were adopted in place, then died the instant the old broker exited.
+        // Detached they outlive it, and stdio still goes to the keeper log. The orderly stop
+        // still stops them explicitly (killAllKeepers), so only an exit that MEANT to leave
+        // them running now does.
+        detached: true });
     // Spawn failures are EventEmitter errors, not necessarily thrown exceptions. Attach the
     // listener before yielding so a bad executable/stdio setup cannot crash the broker.
     child.once('error', error => {
@@ -1489,7 +1505,7 @@ async function spawnKeeperInner(agent, index, credentials) {
       // Even a partially guarded child is retained as an overlap barrier. Its own startup
       // gate requires both guards before constructing Session, so it cannot log in.
       keeperProcesses.set(agent, {
-        pid: child.pid, port, startedAt: Date.now(), child, failedGuard: true,
+        pid: child.pid, port, startedAt: Date.now(), child, failedGuard: true, detached: true,
       });
       keeperPorts.set(agent, port);
     }
@@ -1497,7 +1513,7 @@ async function spawnKeeperInner(agent, index, credentials) {
   }
   // Not explicitly detached, but a Windows broker-only taskkill can still leave child
   // keepers alive. Their dual ownership guards are what makes that survivor case safe.
-  keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child });
+  keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child, detached: true });
   console.error(`[keeper] spawned ${agent} pid=${child.pid} port=${port}`);
   // Wait for the keeper to be ready. POLLED FOUR TIMES A SECOND, not once: the old loop
   // slept a full second BEFORE its first check, so a keeper that was ready in 300ms was
@@ -1667,7 +1683,9 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
          '--fleet', FLEET ?? '-'],
         { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
           env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url') },
-          windowsHide: process.env.M59_KEEPER_WINDOWS !== '1' });
+          windowsHide: process.env.M59_KEEPER_WINDOWS !== '1',
+          // Detached for the reason at the other keeper spawn: attached, it dies with the broker.
+          detached: true });
       child.once('error', e => console.error(`[war-restart] ${agent} replacement spawn failed: ${e.message}`));
     } finally { try { closeSync(logFd); } catch {} }
     if (!Number.isInteger(child?.pid)) { await undo(); return { agent, ok: false, why: 'replacement spawn returned no pid' }; }
@@ -1700,7 +1718,7 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
 
     // THE SWAP. The old keeper exits on its own when its connection drops; the broker now talks
     // only to the replacement.
-    keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child });
+    keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child, detached: true });
     keeperPorts.set(agent, port);
     const previous = sessions.get(agent);
     const proxy = makeKeeperProxy(agent, index);
@@ -4292,6 +4310,7 @@ function listen(name, s) {
 const LEDGER_INTERVAL_MS = Number(process.env.M59_LEDGER_INTERVAL_MS || 5 * 60 * 1000);
 function startLedger() {
   const tick = async () => {
+    if (brokerQuiet()) return;
     try {
       const tool = TOOLS.find(t => t.name === 'fleet');
       const out = await tool.run({});
@@ -4309,7 +4328,7 @@ function startLedger() {
   // call at the site that knows. `travel`, `leaveVia`, `leaveViaAny`, `validateFineTarget`
   // and `queueValidatedMove` are all extracted by text and evaluated by tests, so none of
   // them may name a module-scope function; they queue onto their session and this drains.
-  const gaps = setInterval(() => { try { drainExitGaps(); } catch { /* never fatal */ } }, 15_000);
+  const gaps = setInterval(() => { if (brokerQuiet()) return; try { drainExitGaps(); } catch { /* never fatal */ } }, 15_000);
   gaps.unref?.();
   startSavelog();
 }
@@ -4383,6 +4402,23 @@ let brokerOwnershipDropped = false;
 let brokerOwnershipHandlersInstalled = false;
 let brokerStopping = false;
 let brokerShutdownPromise = null;
+// THE LIVE HANDOVER (runtime/broker-handover.mjs). `handoverHold` is what makes a request
+// that arrives while the fleet changes hands wait rather than fail; `brokerRetired` is this
+// process after it committed the fleet to a successor -- it serves nothing new, acts on
+// nothing, and exits once its in-flight requests have drained.
+const handoverHold = new RequestHold();
+let brokerRetired = false;
+let handoverInFlight = null;
+let pendingFleetTransfer = null;
+let carriedMenagerieToken = null;
+let rpcServer = null;
+let rpcServerPort = null;
+let dashboardServer = null;
+let dashboardServerPort = null;
+let rpcInFlight = 0;
+// A broker that is changing hands or has handed over does not run its own timers: anything
+// they would decide after the snapshot was taken would be decided twice, or lost.
+const brokerQuiet = () => brokerRetired || handoverHold.state !== 'open';
 const brokerAccountLeases = new AccountLeaseRegistry({
   kind: BROKER_FLEET_LOCK_KIND,
   defaultHost: HOST,
@@ -4633,7 +4669,7 @@ function keeperOwnershipIsGuarded(agent, guardPid) {
   return fleet.ok && brokerAccountLeases.verifyGuard(agent, guardPid).ok;
 }
 
-async function resumeFleet() {
+async function resumeFleet({ adopting = false } = {}) {
   if (!fleetClaimStillOurs())
     throw new Error(`refusing fleet resume: this broker does not own ${LOCK_FILE}`);
   let saved;
@@ -4721,7 +4757,12 @@ async function resumeFleet() {
   // wall-clock win already is: at 6 the same fleet is four waves of ~8s rather than
   // twenty-one of them. M59_KEEPER_CONCURRENCY=1 restores exactly the old behaviour, which
   // is the switch to reach for if a resume ever starts failing in a way this might explain.
-  const CONCURRENCY = Math.max(1, Number(process.env.M59_KEEPER_CONCURRENCY || 6));
+  // ADOPTING IS NOT LOGGING IN. A successor taking a live fleet asks each running keeper who
+  // it is and logs nobody in, so the stampede the cap guards against does not exist; a keeper
+  // that turns out to be dead is the one exception, and it is a handful at most.
+  const CONCURRENCY = adopting
+    ? Math.max(1, Number(process.env.M59_HANDOFF_ADOPT_CONCURRENCY || 24))
+    : Math.max(1, Number(process.env.M59_KEEPER_CONCURRENCY || 6));
 
   const resumeOne = async (agent, credentials, autopilot, index) => {
     try {
@@ -5786,6 +5827,7 @@ function startControlChatWatch() {
   });
   let polling = false;
   controlChatTimer = setInterval(async () => {
+    if (brokerQuiet()) return;
     if (polling || ![...piloted.keys()].some(a => pilotOf(a))) return;
     polling = true;
     try {
@@ -5823,6 +5865,7 @@ function startPilotWatch() {
   // meant to remove rather than move.
   let looking = false;
   const t = setInterval(() => {
+    if (brokerQuiet()) return;
     // ALWAYS, and it costs nothing: this is a signal 0, not a process spawn. A claim
     // whose client has exited must be released whether or not the watch is armed.
     for (const [agent, p] of [...piloted]) {
@@ -5974,7 +6017,7 @@ function serviceWeaponRequests() {
 }
 
 function startWeaponErrands() {
-  const t = setInterval(() => { try { serviceWeaponRequests(); } catch { /* never a fatal */ } },
+  const t = setInterval(() => { if (brokerQuiet()) return; try { serviceWeaponRequests(); } catch { /* never a fatal */ } },
                         WEAPON_ERRAND_POLL);
   t.unref?.();
 }
@@ -6001,6 +6044,7 @@ function startAbilitySweep() {
     return;
   }
   const t = setInterval(async () => {
+    if (brokerQuiet()) return;
     try {
       const due = [...sessions.values()]
         .filter(s => s.live && !abilities.isFresh(s.client, { maxAgeMs: ABILITY_MAX_AGE_MS }))
@@ -18734,6 +18778,10 @@ function brokerHealth() {
     // is fae8bd3: before it, concurrent handoffs probed the same free port and one died
     // EADDRINUSE. m59-keeper-restart.mjs defaults to one at a time when this is absent.
     keeper_handoff: { tool: 'war_restart', port_reservation: true },
+    // THE NO-LOGOFF BROKER RESTART. m59-service.mjs restart reads this to choose a live
+    // handover over the cold stop/start; a broker without it can only be restarted cold.
+    broker_handoff: { protocol: HANDOVER_PROTOCOL, control: '/control/handoff',
+                      retired: brokerRetired, holding: handoverHold.state },
     // THE SERVER'S SAVE CADENCE, as this fleet has observed it (m59-idgen.mjs SaveClock): the
     // last save, the median gap between recent ones, and the next one that gap predicts. Every
     // save renumbers every object id, so this is also "when did every id go stale".
@@ -18832,7 +18880,11 @@ function mintMenagerieToken() {
     menagerieToken = null;
     return null;
   }
-  menagerieToken = randomBytes(32).toString('hex');
+  // A LIVE HANDOVER CARRIES THE TOKEN, because the menagerie driver read it from the file
+  // and is still holding it: minting a new one would lock the driver out of a broker that
+  // holds exactly the characters the old token authorised.
+  menagerieToken = carriedMenagerieToken ?? randomBytes(32).toString('hex');
+  carriedMenagerieToken = null;
   try {
     mkdirSync(dirname(MENAGERIE_TOKEN_FILE), { recursive: true });
     // 0600, and rewritten every start: a token that outlives the process that minted it is
@@ -19076,9 +19128,21 @@ async function brokerRtsRead(url) {
   };
 }
 
-function serveHttp(port, dashboardPort = null) {
+function serveHttp(port, dashboardPort = null, { handle = null } = {}) {
   const audioPending=new Map();
   const server = http.createServer(withCompendiumRequest(async (req, res) => {
+    // CHANGING HANDS. Held while the fleet moves; once it has moved, forwarded to the broker
+    // that now owns it. Before anything else, so no request is served from a snapshot.
+    if (handoverHold.state !== 'open') {
+      if (!brokerLoopbackRequest(req)) {
+        // Forwarding would launder a LAN request into a loopback one on the far side.
+        res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+        return res.end(JSON.stringify({ ok: false, note: 'broker handover in progress; retry' }));
+      }
+      if (await handoverHold.admit() === 'forward') return forwardToSuccessor(req, res, port);
+    }
+    rpcInFlight++;
+    res.once('close', () => { rpcInFlight--; });
     // A page for the human, on the same port everything else runs on. Read-only: it
     // renders the ledger and drives nothing, so it is safe to leave open in a tab.
     if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/fleet'))) {
@@ -19232,10 +19296,39 @@ function serveHttp(port, dashboardPort = null) {
   // and anyone who can reach it can drive every character. Set M59_BIND=0.0.0.0 to
   // expose it deliberately — behind something that does authenticate.
   const bind = process.env.M59_BIND || '127.0.0.1';
-  server.listen(port, bind, () =>
-    console.error(`m59 broker on http://${bind}:${port} — ${TOOLS.length} tools, ` +
-                  `${resources.size} resources; ${gameServerBanner()}` +
-                  (bind === '127.0.0.1' ? '' : '  [WARNING: bound beyond loopback and UNAUTHENTICATED]')));
+  rpcServer = server;
+  rpcServerPort = port;
+  return new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    const announce = () => {
+      server.off('error', rejectListen);
+      console.error(`m59 broker on http://${bind}:${port} — ${TOOLS.length} tools, ` +
+                    `${resources.size} resources; ${gameServerBanner()}` +
+                    (handle ? '  [socket handed over from the previous broker]' : '') +
+                    (bind === '127.0.0.1' ? '' : '  [WARNING: bound beyond loopback and UNAUTHENTICATED]'));
+      resolveListen(server);
+    };
+    if (handle) server.listen(handle, announce);
+    else server.listen(port, bind, announce);
+  });
+}
+
+// A REQUEST THAT REACHED A BROKER WHICH HAS HANDED OVER, passed to the one that took over.
+// It can still arrive: a keep-alive connection opened before the commit keeps talking to the
+// process that accepted it. This process no longer accepts on the shared socket, so a fresh
+// loopback connection to the same port can only reach the successor.
+function forwardToSuccessor(req, res, port) {
+  const upstream = http.request({ host: '127.0.0.1', port, method: req.method, path: req.url,
+                                  headers: { ...req.headers, connection: 'close' } }, reply => {
+    res.writeHead(reply.statusCode ?? 502, reply.headers);
+    reply.pipe(res);
+  });
+  upstream.on('error', e => {
+    if (res.headersSent) return res.destroy();
+    res.writeHead(502, { 'content-type': 'application/json', 'retry-after': '1' });
+    res.end(JSON.stringify({ ok: false, note: `handed over, and the successor did not answer: ${e.message}` }));
+  });
+  req.pipe(upstream);
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -19554,11 +19647,25 @@ const isLocal = (req) => {
 //
 // Rejoin is different — it is just the reconciler, running now instead of at the next
 // tick — so it is answered here and needs nothing external.
-function handleControl(action, res) {
+async function handleControl(action, res) {
   const reply = (code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   };
+  // THE LIVE BROKER HANDOVER. Answers when it has committed or aborted, never before, so the
+  // caller (m59-service.mjs restart) learns which broker owns the fleet from the reply itself.
+  if (action === 'handoff') {
+    if (handoverInFlight || brokerRetired)
+      return reply(409, { ok: false, note: brokerRetired ? 'this broker has already handed over'
+                                                          : 'a handover is already in progress' });
+    handoverInFlight = runBrokerHandover();
+    const result = await handoverInFlight.finally(() => { handoverInFlight = null; });
+    reply(result.ok ? 200 : 500, result);
+    if (result.ok) exitWhenDrained();
+    return;
+  }
+  if (handoverInFlight || brokerRetired)
+    return reply(409, { ok: false, note: 'broker handover in progress or complete; controls are refused here' });
   if (action === 'rejoin') {
     if (!REJOIN) return reply(409, { ok: false, note: 'rejoining is disabled on this broker (--no-rejoin)' });
     // Kick it off and answer immediately: joining twenty characters takes longer than
@@ -19595,15 +19702,16 @@ function handleControl(action, res) {
     // Answered before we are killed, which is the last useful thing this process does.
     return reply(200, { ok: true,
       note: action === 'restart'
-        ? 'restarting — every character logs out and back in; this page returns in a few seconds'
+        ? 'restarting — handed to a warm successor, nobody logs off; this page answers throughout'
         : 'stopping — start it again with: node tools/m59-service.mjs start' +
           (FLEET ? ` --fleet ${FLEET}` : '') });
   }
   return reply(404, { ok: false, note: `no such control "${action}"` });
 }
 
-function serveDashboard(port) {
+function serveDashboard(port, { handle = null } = {}) {
   const server = http.createServer(withCompendiumRequest(async (req, res) => {
+    if (brokerRetired && isLocal(req)) return forwardToSuccessor(req, res, port);
     const url0 = new URL(req.url, 'http://x');
     // THE ONLY WRITES THIS SERVER ACCEPTS, and only from the machine it runs on.
     //
@@ -20164,12 +20272,22 @@ function serveDashboard(port) {
   // Bound to every interface ON PURPOSE. Unlike the broker port there is nothing
   // here to abuse: no tools, no sessions, no writes.
   const bind = process.env.M59_DASHBOARD_BIND || '0.0.0.0';
-  server.listen(port, bind, () => {
-    const nets = os.networkInterfaces();
-    const lan = Object.values(nets).flat()
-      .filter(n => n && n.family === 'IPv4' && !n.internal).map(n => n.address);
-    console.error(`m59 dashboard (read-only) on http://${bind}:${port}` +
-                  (lan.length ? ` — reachable at ${lan.map(a => `http://${a}:${port}/fleet`).join(' ')}` : ''));
+  dashboardServer = server;
+  dashboardServerPort = port;
+  return new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    const announce = () => {
+      server.off('error', rejectListen);
+      const nets = os.networkInterfaces();
+      const lan = Object.values(nets).flat()
+        .filter(n => n && n.family === 'IPv4' && !n.internal).map(n => n.address);
+      console.error(`m59 dashboard (read-only) on http://${bind}:${port}` +
+                    (handle ? ' [socket handed over]' : '') +
+                    (lan.length ? ` — reachable at ${lan.map(a => `http://${a}:${port}/fleet`).join(' ')}` : ''));
+      resolveListen(server);
+    };
+    if (handle) server.listen(handle, announce);
+    else server.listen(port, bind, announce);
   });
 }
 
@@ -20256,6 +20374,287 @@ async function selftest(account, password) {
   console.log('\nselftest finished');
 }
 
+// ---------------------------------------------------------------- live handover
+//
+// The two halves of runtime/broker-handover.mjs, given hands. The module decides the order
+// and every abort; these functions are what freezing, transferring, snapshotting, adopting
+// and committing mean for THIS broker. Read the module's header before changing either.
+
+// WHAT A SUCCESSOR NEEDS THAT IT CANNOT READ FROM DISK. Everything else — the roster, the
+// menagerie, the safe-spot book, every keeper's own state — is on disk or in the keepers,
+// which never stop. Each entry is cloned on its own, so one value that cannot cross is named
+// in the log rather than failing the handover.
+function buildHandoverSnapshot() {
+  const out = {};
+  const put = (name, value) => {
+    try { out[name] = structuredClone(value); }
+    catch (e) { console.error(`[handover] not carried: ${name} (${e.message})`); }
+  };
+  put('keeperProcesses', new Map([...keeperProcesses].map(([agent, r]) =>
+    [agent, { pid: r.pid, port: r.port, startedAt: r.startedAt }])));
+  put('keeperPorts', keeperPorts);
+  put('portsLostToOthers', portsLostToOthers);
+  put('commanderLeases', commanderLeases.records);
+  put('commerceQuotes', commerceQuotes.records);
+  put('combat', { revision: combatDispatch.revision, commands: combatDispatch.commands });
+  put('piloted', piloted);
+  put('rejoinState', rejoinState);
+  put('leftOnPurpose', leftOnPurpose);
+  put('forgotten', forgotten);
+  put('learningRefusals', learningRefusals);
+  put('learningErrands', learningErrands);
+  put('weaponErrands', weaponErrands);
+  put('saves', saveClock.saves);
+  put('ids', idRegistry.byAgent);
+  put('menagerieToken', menagerieToken);
+  return out;
+}
+
+function restoreHandoverSnapshot(s) {
+  const refill = (target, source) => {
+    if (!source) return;
+    target.clear();
+    if (target instanceof Set) for (const v of source) target.add(v);
+    else for (const [k, v] of source) target.set(k, v);
+  };
+  // Adopted survivors: no ChildProcess handle, and spawnKeeperInner's "tracked" path proves
+  // each one's identity and guard before believing it.
+  if (s.keeperProcesses) for (const [agent, r] of s.keeperProcesses)
+    keeperProcesses.set(agent, { ...r, adopted: true });
+  refill(keeperPorts, s.keeperPorts);
+  refill(portsLostToOthers, s.portsLostToOthers);
+  refill(commanderLeases.records, s.commanderLeases);
+  refill(commerceQuotes.records, s.commerceQuotes);
+  if (s.combat) {
+    combatDispatch.revision = s.combat.revision ?? combatDispatch.revision;
+    refill(combatDispatch.commands, s.combat.commands);
+  }
+  refill(piloted, s.piloted);
+  refill(rejoinState, s.rejoinState);
+  refill(leftOnPurpose, s.leftOnPurpose);
+  refill(forgotten, s.forgotten);
+  refill(learningRefusals, s.learningRefusals);
+  refill(learningErrands, s.learningErrands);
+  refill(weaponErrands, s.weaponErrands);
+  if (Array.isArray(s.saves)) saveClock.saves = s.saves;
+  if (s.ids instanceof Map) idRegistry.byAgent = s.ids;
+  carriedMenagerieToken = typeof s.menagerieToken === 'string' ? s.menagerieToken : null;
+}
+
+async function settled(predicate, ms) {
+  const deadline = Date.now() + ms;
+  while (!predicate()) {
+    if (Date.now() > deadline) return false;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return true;
+}
+
+function runBrokerHandover() {
+  let beat = null;
+  return handOver({
+    log: line => console.error(line),
+    canHandOver() {
+      if (SESSION_DRIVER !== 'keeper-process')
+        return { ok: false, why: 'in-process sessions hold their sockets in this broker; restart it cold' };
+      if (!rpcServer) return { ok: false, why: 'only an --http broker can hand over (this one serves stdio)' };
+      // A --no-resume broker is building a fleet, not playing it; its successor would resume.
+      if (argv.includes('--no-resume')) return { ok: false, why: 'a --no-resume broker is restarted cold' };
+      if (brokerStopping || brokerRetired) return { ok: false, why: 'this broker is already stopping' };
+      if (!fleetClaimStillOurs()) return { ok: false, why: `this broker does not own ${LOCK_FILE}` };
+      if (keeperHandoffs.size) return { ok: false, why: `${keeperHandoffs.size} keeper handoff(s) in progress` };
+      // A keeper this process spawned ATTACHED (by code from before keepers were detached)
+      // is in this process's kill-on-close job and dies the moment it exits: the handover
+      // would commit and then log every one of them off. `restart-keepers` replaces them
+      // with detached ones, nobody leaving; adopted survivors are already outside the job.
+      const attached = [...keeperProcesses].filter(([, r]) => r.child && !r.detached).map(([a]) => a);
+      if (attached.length)
+        return { ok: false, why: `${attached.length} keeper(s) were started attached and would die with ` +
+                                 `this broker (${attached.join(', ')}); run restart-keepers first` };
+      return { ok: true };
+    },
+    spawnSuccessor() {
+      const spec = successorSpawnSpec({
+        execPath: process.execPath, execArgv: process.execArgv, argv: process.argv.slice(1),
+        env: process.env, cwd: process.cwd(), predecessorPid: process.pid });
+      return spawn(spec.command, spec.args, spec.options);
+    },
+    async freeze() {
+      handoverHold.begin();
+      brokerStopping = true;
+      suspendKeeperLivenessSweep();
+      if (reconcileTimer !== null) clearTimeout(reconcileTimer);
+      reconcileTimer = null;
+      const quiet = await settled(() => !reconcileInFlight && keeperSpawning.size === 0 &&
+                                        keeperHandoffs.size === 0, 15_000);
+      if (!quiet) return { ok: false, why: 'keeper spawns or a rejoin sweep did not settle within 15s' };
+      beat = uptime.pauseBeat();
+      return { ok: true };
+    },
+    unfreeze() {
+      brokerStopping = false;
+      beat?.resume();
+      ensureKeeperLivenessSweep();
+      if (REJOIN) scheduleReconcile(RECONCILE_MS);
+    },
+    transferOwnership(toPid) {
+      const accounts = brokerAccountLeases.transferAll(toPid);
+      if (!accounts.ok)
+        return { ok: false, why: `account lease for ${accounts.agent}: ${accounts.reason}` +
+                                 (accounts.rolled_back ? '' : ' — AND THE ROLLBACK WAS INCOMPLETE') };
+      const token = randomUUID();
+      const fleet = transferFleetLock(LOCK_FILE, { from: brokerFleetClaim.lock, to: { pid: toPid, token } });
+      if (!fleet.ok) {
+        const back = brokerAccountLeases.transferBack();
+        return { ok: false, why: `fleet lock: ${fleet.reason}` +
+                                 (back.ok ? '' : ' — AND THE ACCOUNT ROLLBACK WAS INCOMPLETE') };
+      }
+      pendingFleetTransfer = { toPid, token, kind: fleet.lock.kind, previous: brokerFleetClaim.lock };
+      return { ok: true, ownership: { fleet: { path: LOCK_FILE, token, kind: fleet.lock.kind },
+                                      accounts: accounts.rows } };
+    },
+    transferBack() {
+      const t = pendingFleetTransfer;
+      const fleet = t ? transferFleetLock(LOCK_FILE, {
+        from: { pid: t.toPid, token: t.token, kind: t.kind }, to: t.previous }) : { ok: true };
+      const accounts = brokerAccountLeases.transferBack();
+      pendingFleetTransfer = null;
+      return { ok: fleet.ok && accounts.ok,
+               why: [fleet.ok ? null : `fleet lock: ${fleet.reason}`,
+                     accounts.ok ? null : 'account leases'].filter(Boolean).join('; ') || null };
+    },
+    snapshot: buildHandoverSnapshot,
+    listeners: () => [
+      rpcServer && { name: 'rpc', server: rpcServer },
+      dashboardServer && { name: 'dashboard', server: dashboardServer },
+    ].filter(Boolean),
+    commit() {
+      brokerRetired = true;
+      pendingFleetTransfer = null;
+      // Nothing of the fleet's is ours any more. No release (the successor holds every claim),
+      // no liveness-file removal (it is the successor's now), and no keeper may be signalled
+      // on exit — clearing the table is what makes the exit handler touch none of them.
+      brokerOwnershipDropped = true;
+      brokerUptimeStarted = false;
+      keeperProcesses.clear();
+      for (const server of [rpcServer, dashboardServer]) {
+        if (!server) continue;
+        server.close();                    // stop accepting; the shared socket stays open in the successor
+        server.closeIdleConnections?.();   // and push idle keep-alive clients onto it
+      }
+    },
+    releaseHeld: verdict => handoverHold.release(verdict),
+  }, {
+    warmMs: Number(process.env.M59_HANDOFF_WARM_MS || 240_000),
+    adoptMs: Number(process.env.M59_HANDOFF_ADOPT_MS || 90_000),
+  });
+}
+
+// A RETIRED BROKER LEAVES WHEN IT HAS FINISHED WHAT IT WAS ALREADY DOING. Requests it accepted
+// before the commit run to completion against the keepers, which never stopped; past the
+// deadline the stragglers are cut and their callers read back what happened, which is what a
+// fleetscript does with every journey anyway.
+function exitWhenDrained() {
+  const deadline = Date.now() + Number(process.env.M59_HANDOFF_DRAIN_MS || 120_000);
+  const t = setInterval(() => {
+    if (rpcInFlight > 0 && Date.now() < deadline) return;
+    clearInterval(t);
+    console.error(`[handover] retired broker pid ${process.pid} exiting` +
+                  (rpcInFlight > 0 ? ` with ${rpcInFlight} request(s) cut at the drain deadline` : ', drained'));
+    process.exit(0);
+  }, 250);
+}
+
+async function runAsSuccessor() {
+  if (!argv.includes('--http')) {
+    console.error('[handover] a successor must be an --http broker');
+    process.exit(3);
+  }
+  const port = Number(argv[argv.indexOf('--http') + 1] || 8899);
+  const di = argv.indexOf('--dashboard');
+  const dashboardPort = di >= 0 ? Number(argv[di + 1] || 8902) : null;
+  let expected = new Map();
+  // REHEARSAL ONLY: make this successor refuse at one stage, to prove on real processes that
+  // the predecessor ends owning the fleet again. Inherited from the predecessor's environment,
+  // so set it when starting a LAB broker; nothing sets it by default.
+  const fault = process.env.M59_HANDOFF_FAULT || null;
+  console.error(`[handover] pid ${process.pid} warm as successor to pid ${successorOf()}; ` +
+                'owning nothing until the fleet is handed over');
+  const result = await takeOver(process, {
+    log: line => console.error(line),
+    install(handover) {
+      if (fault === 'install') return { ok: false, why: 'M59_HANDOFF_FAULT=install (rehearsal)' };
+      const fleet = handover?.ownership?.fleet;
+      if (!fleet || resolve(fleet.path) !== resolve(LOCK_FILE))
+        return { ok: false, why: `the handover names ${fleet?.path ?? 'no roster lock'}, this broker guards ${LOCK_FILE}` };
+      const claim = claimFromTransfer(LOCK_FILE, { pid: process.pid, token: fleet.token, kind: fleet.kind });
+      if (!claim.ok) return { ok: false, why: `fleet lock: ${claim.reason}` };
+      let saved = {};
+      try { saved = JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { /* an empty roster imports nothing */ }
+      loadMenagerieState();
+      for (const [agent, entry] of menagerieState) saved[agent] = entry;
+      const imported = brokerAccountLeases.importTransferred(rosterAccountEntries(saved),
+                                                             handover.ownership.accounts);
+      if (!imported.ok)
+        return { ok: false, why: `account leases: ${imported.reason}${imported.agent ? ` (${imported.agent})` : ''}` };
+      brokerFleetClaim = claim;
+      brokerOwnershipDropped = false;
+      installBrokerOwnershipHandlers();
+      restoreHandoverSnapshot(handover.snapshot ?? {});
+      expected = new Map(handover.snapshot?.keeperProcesses ?? []);
+      console.error(`[handover] own the fleet: ${imported.imported} account lease(s); ` +
+                    `${expected.size} running keeper(s) to adopt`);
+      return { ok: true };
+    },
+    async adopt() {
+      await resumeFleet({ adopting: true });
+      let adopted = 0;
+      const unadopted_live = [], replaced = [], gone = [];
+      for (const [agent, was] of expected) {
+        const now = keeperProcesses.get(agent);
+        if (now?.pid === was.pid && sessions.has(agent)) adopted++;
+        else if (isProcessLive(was.pid)) unadopted_live.push(agent);
+        else if (now) replaced.push(agent);
+        else gone.push(agent);
+      }
+      if (fault === 'adopt') unadopted_live.push('(M59_HANDOFF_FAULT=adopt rehearsal)');
+      return { expected: expected.size, adopted, unadopted_live, replaced, gone,
+               sessions: sessions.size };
+    },
+    adoptionAcceptable: judgeAdoption,
+    listen(name, handle) {
+      if (fault === 'listen') return Promise.reject(new Error('M59_HANDOFF_FAULT=listen (rehearsal)'));
+      if (name === 'rpc') return serveHttp(port, dashboardPort, { handle });
+      if (name === 'dashboard' && dashboardPort != null) return serveDashboard(dashboardPort, { handle });
+      return Promise.reject(new Error(`no listener called ${name}`));
+    },
+    async listenFresh() {
+      await serveHttp(port, dashboardPort);
+      if (dashboardPort != null) await serveDashboard(dashboardPort);
+    },
+    started() {
+      startLedger();
+      startReconciling();
+      startPilotWatch();
+      startAbilitySweep();
+      startWeaponErrands();
+    },
+  }, {
+    warmMs: Number(process.env.M59_HANDOFF_WARM_MS || 240_000),
+    adoptMs: Number(process.env.M59_HANDOFF_ADOPT_MS || 90_000),
+  });
+  if (!result.ok) {
+    console.error(`[handover] successor pid ${process.pid} giving up: ${result.why}`);
+    process.exit(3);
+  }
+  const r = result.report;
+  console.error(`[handover] pid ${process.pid} is the broker` +
+                (result.orphaned ? ' (its predecessor vanished mid-handover)' : '') +
+                (r ? `: ${r.adopted} of ${r.expected} keeper(s) adopted in place` +
+                     (r.replaced?.length ? `, ${r.replaced.length} respawned (${r.replaced.join(', ')})` : '') +
+                     (r.gone?.length ? `, ${r.gone.length} not running (${r.gone.join(', ')})` : '') : ''));
+}
+
 // ---------------------------------------------------------------- main
 
 // Guard: only start the server when this file is run directly, not when
@@ -20277,6 +20676,8 @@ if (argv.includes('--selftest')) {
   if (!acct || !pw) { console.error('usage: m59-broker.mjs --selftest <account> <password>'); process.exit(1); }
   try { await selftest(acct, pw); process.exit(0); }
   catch (e) { console.error(`selftest failed: ${e.message}`); process.exit(1); }
+} else if (isMainModule && successorOf() && typeof process.send === 'function') {
+  await runAsSuccessor();
 } else if (isMainModule) {
   // OWNERSHIP PRECEDES THE LISTENER. Starting an empty-looking broker and discovering the
   // collision only when resume runs leaves a live API that can still accept a manual join.

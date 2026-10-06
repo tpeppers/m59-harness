@@ -16,9 +16,11 @@ import {
   BROKER_FLEET_LOCK_KIND,
   addFleetLockGuard,
   claimFleetLock,
+  claimFromTransfer,
   finalizeFleetLockAdoption,
   inspectFleetLock,
   isProcessLive,
+  transferFleetLock,
   verifyFleetLockGuard,
 } from './fleet-lock.mjs';
 import { isNodeProcessName, processImageName } from './process-identity.mjs';
@@ -395,6 +397,7 @@ export class AccountLeaseRegistry {
   #byKey = new Map();
   #guardedAdoption = false;
   #unguardedRecovery = false;
+  #transferred = null;
 
   constructor({
     leaseDir = DEFAULT_ACCOUNT_LEASE_DIR,
@@ -752,6 +755,97 @@ export class AccountLeaseRegistry {
     // and a judgement buried one level down is a judgement nobody reads.
     return Object.freeze({ ok: true, finalized: this.#byKey.size, coverage,
       ...(coverage.recycled_guards ? { recycled_guards: coverage.recycled_guards } : {}) });
+  }
+
+  // ----------------------------------------------------------- live broker handover
+  //
+  // A broker handing the fleet to a warm successor moves every account claim it holds
+  // without releasing any of them: a release, even for a millisecond, is a window in which
+  // another runtime could log the same account in and kick a keeper that is mid-fight.
+
+  /**
+   * Rewrite every held claim to name `toPid`, with a fresh token per claim. Transactional:
+   * if any transfer fails, the ones already done are transferred back before returning.
+   * On success this registry no longer holds anything (the rows belong to the successor),
+   * and the returned rows are what the successor imports.
+   */
+  transferAll(toPid, { tokenFactory = this.tokenFactory } = {}) {
+    const rows = [...this.#byKey.values()];
+    const done = [];
+    for (const row of rows) {
+      const to = { pid: toPid, token: tokenFactory() };
+      const result = transferFleetLock(row.identity.path, { from: row.claim.lock, to, now: this.now });
+      if (!result.ok) {
+        const undone = done.map(d => transferFleetLock(d.path,
+          { from: { pid: toPid, token: d.token, kind: d.kind }, to: d.previous, now: this.now }));
+        return Object.freeze({
+          ok: false, reason: result.reason, agent: row.identity.agent,
+          rolled_back: undone.every(u => u.ok), rollback: Object.freeze(undone),
+        });
+      }
+      done.push({ agent: row.identity.agent, path: row.identity.path, key: row.identity.key,
+                  token: to.token, kind: row.claim.lock.kind, previous: row.claim.lock,
+                  identity: row.identity });
+    }
+    const moved = done.map(d => Object.freeze({ agent: d.agent, path: d.path, key: d.key,
+                                                 token: d.token, kind: d.kind }));
+    // Kept so `transferBack` can undo a handover the successor never completed.
+    this.#transferred = Object.freeze({ toPid, rows: Object.freeze(done) });
+    this.#byAgent.clear();
+    this.#byKey.clear();
+    return Object.freeze({ ok: true, rows: Object.freeze(moved) });
+  }
+
+  /** Undo the last transferAll: every claim goes back to this process under its old token. */
+  transferBack() {
+    const t = this.#transferred;
+    if (!t) return Object.freeze({ ok: false, reason: 'nothing-transferred' });
+    const results = [];
+    for (const d of t.rows) {
+      const back = transferFleetLock(d.path, {
+        from: { pid: t.toPid, token: d.token, kind: d.kind }, to: d.previous, now: this.now });
+      results.push({ agent: d.agent, ok: back.ok, reason: back.reason ?? null });
+      if (!back.ok) continue;
+      const claim = claimFromTransfer(d.path, { pid: this.pid, token: d.previous.token,
+        kind: d.previous.kind, isPidLive: this.isPidLive, tokenFactory: this.tokenFactory });
+      if (!claim.ok) { results.at(-1).ok = false; results.at(-1).reason = claim.reason; continue; }
+      const row = { identity: d.identity, claim };
+      this.#byKey.set(d.identity.key, row);
+      this.#byAgent.set(d.identity.agent, row);
+    }
+    this.#transferred = null;
+    return Object.freeze({ ok: results.every(r => r.ok), results: Object.freeze(results) });
+  }
+
+  /**
+   * Successor side: take ownership of claims a predecessor transferred to this pid. Every
+   * row is re-derived from the roster entry for its agent, so a predecessor cannot hand this
+   * process a claim for an account the roster does not name, and every file is read back to
+   * prove it names this pid and token before it is believed.
+   */
+  importTransferred(entries, rows) {
+    if (this.#byKey.size)
+      return Object.freeze({ ok: false, reason: 'registry-not-empty' });
+    const plan = this.plan(entries);
+    const byAgent = new Map(plan.map(identity => [identity.agent, identity]));
+    const staged = [];
+    for (const row of rows ?? []) {
+      const identity = byAgent.get(row.agent);
+      if (!identity) return Object.freeze({ ok: false, reason: 'agent-not-in-roster', agent: row.agent });
+      if (resolve(row.path) !== resolve(identity.path) || row.key !== identity.key)
+        return Object.freeze({ ok: false, reason: 'identity-mismatch', agent: row.agent });
+      const claim = claimFromTransfer(identity.path, { pid: this.pid, token: row.token, kind: row.kind,
+        isPidLive: this.isPidLive, tokenFactory: this.tokenFactory });
+      if (!claim.ok) return Object.freeze({ ok: false, reason: claim.reason, agent: row.agent });
+      if (claim.lock.subject !== identity.subject)
+        return Object.freeze({ ok: false, reason: 'account-subject-mismatch', agent: row.agent });
+      staged.push({ identity, claim });
+    }
+    for (const row of staged) {
+      this.#byKey.set(row.identity.key, row);
+      this.#byAgent.set(row.identity.agent, row);
+    }
+    return Object.freeze({ ok: true, imported: staged.length });
   }
 
   releaseAgent(agent) {

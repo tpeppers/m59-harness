@@ -561,7 +561,8 @@ if (mode === '--cut') {
     const fleetArg = `--fleet ${process.env.M59_FLEET ?? 'prod'}`;
     console.log(`\ncut and applied: prod is now ${tag}. Load the new keeper code with a handoff:`);
     console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart-keepers ${fleetArg}`);
-    console.log('Only if the broker itself changed (this logs every character off):');
+    console.log('Only if the broker itself changed (a live handover: nobody leaves the world;');
+    console.log('a broker older than the handover restarts cold, once):');
     console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart ${fleetArg}`);
   }
   process.exit(0);

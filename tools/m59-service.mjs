@@ -3,7 +3,8 @@
 //
 //   node tools/m59-service.mjs start   [--fleet prod]
 //   node tools/m59-service.mjs stop    [--fleet prod]
-//   node tools/m59-service.mjs restart [--fleet prod]           # the BROKER: logs everyone off
+//   node tools/m59-service.mjs restart [--fleet prod]           # the BROKER: live handover, nobody leaves
+//   node tools/m59-service.mjs restart --cold [--fleet prod]    # the old way: logs everyone off
 //   node tools/m59-service.mjs restart-keepers [--fleet prod]   # KEEPERS only: handed off, nobody leaves
 //   node tools/m59-service.mjs status  [--fleet prod]
 //   node tools/m59-service.mjs logs    [--fleet prod] [--lines 80] [--follow]
@@ -300,6 +301,60 @@ function killPid(pid) {
 }
 
 // ---------------------------------------------------------------- commands
+
+// 'done' | 'failed' | 'unsupported'. Unsupported is the only answer that permits a cold restart.
+async function liveHandoff() {
+  const found = await findBroker();
+  if (found.foreign) { console.error(c.bad(found.why)); return 'failed'; }
+  if (!found.running) return 'unsupported';
+  if (found.elsewhere || !found.health?.broker_handoff?.protocol) {
+    console.log(c.dim('  this broker predates the live handover, so this restart is cold: every character'));
+    console.log(c.dim('  logs off once more. The next restart, from the code it loads, will not.'));
+    return 'unsupported';
+  }
+  const dashId = await fetchJson(`http://127.0.0.1:${DASH_PORT}/health`, { timeoutMs: 3000 });
+  if (!dashId || Number(dashId.pid) !== Number(found.pid)) {
+    console.error(c.bad(`refusing the handover: the broker on ${HTTP_PORT} is pid ${found.pid}, but the ` +
+      `dashboard on ${DASH_PORT} ${dashId ? `belongs to pid ${dashId.pid}` : 'did not answer'}`));
+    return 'failed';
+  }
+  console.log(`handing "${LABEL}" from pid ${found.pid} to a warm successor (nobody logs off)...`);
+  let result = null;
+  try {
+    const res = await fetch(`http://127.0.0.1:${DASH_PORT}/control/handoff`,
+      { method: 'POST', signal: AbortSignal.timeout(6 * 60_000) });
+    result = await res.json();
+  } catch (e) { result = { ok: false, stage: 'request', why: e.message }; }
+  if (!result?.ok) {
+    console.error(c.bad(`handover aborted at ${result?.stage ?? '?'}: ${result?.why ?? result?.note ?? 'no reason given'}`));
+    console.error(`  pid ${found.pid} is still the broker and still holds the fleet` +
+                  (result?.rolled_back === false ? ' — BUT OWNERSHIP ROLLBACK WAS INCOMPLETE; read the log' : '.'));
+    console.error(`  Read ${LOG_FILE}. \`restart --cold\` restarts it the old way (everyone logs off).`);
+    return 'failed';
+  }
+  const pid = result.successor_pid;
+  writeFileSync(PID_FILE, JSON.stringify({ pid, fleet: LABEL, at: Date.now(), http: HTTP_PORT,
+                                           dashboard: DASH_PORT, handed_over_from: found.pid }, null, 2));
+  // VERIFY THE VALUE, NOT THE REPLY: the port must now answer as the successor.
+  let h = null;
+  for (let i = 0; i < 20 && Number(h?.pid) !== Number(pid); i++) {
+    h = await health();
+    if (Number(h?.pid) !== Number(pid)) await new Promise(r => setTimeout(r, 500));
+  }
+  if (Number(h?.pid) !== Number(pid)) {
+    console.error(c.bad(`the handover reported success to pid ${pid}, but ${HTTP_PORT} answers as pid ${h?.pid ?? 'nobody'}`));
+    return 'failed';
+  }
+  const r = result.report ?? {};
+  console.log(c.ok('handed over'));
+  console.log(`  pid        ${found.pid} -> ${pid}`);
+  console.log(`  keepers    ${r.adopted ?? '?'} of ${r.expected ?? '?'} adopted in place` +
+              (r.replaced?.length ? `; respawned ${r.replaced.join(', ')}` : '') +
+              (r.gone?.length ? `; not running ${r.gone.join(', ')}` : ''));
+  console.log(`  held       ${result.frozen_ms}ms of requests, forwarded, none refused`);
+  console.log(`  total      ${Math.round(result.total_ms / 1000)}s (mostly the successor loading)`);
+  return 'done';
+}
 
 async function cmdStart() {
   const found = await findBroker();
@@ -887,6 +942,18 @@ if (goapMode) {
     break;
   }
   case 'restart': {
+    // A LIVE HANDOVER FIRST. A broker that advertises `broker_handoff` starts its successor
+    // warm beside itself and gives it the fleet without a gap: no keeper stops, nobody logs
+    // off, and requests arriving meanwhile are held and forwarded rather than refused (see
+    // runtime/broker-handover.mjs). A broker too old to offer it falls through to the cold
+    // restart below — which is how the FIRST deploy carrying this code still goes. An ABORTED
+    // handover does not fall through: the old broker is still serving the whole fleet, and a
+    // cold restart is the very outage this exists to avoid, so that is the operator's call
+    // (`--cold`).
+    if (!has('--cold')) {
+      const live = await liveHandoff();
+      if (live !== 'unsupported') { code = live === 'done' ? 0 : 1; break; }
+    }
     // A BROKER RESTART IS NOT A KEEPER RESTART, AND IT LOGS EVERYBODY OFF. The broker's orderly
     // shutdown stops every keeper it holds (killAllKeepers), so the whole fleet leaves the world
     // and comes back through the resume. That is still the only way to load new BROKER code;
