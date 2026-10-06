@@ -137,8 +137,10 @@ export const ACTIVE_FILE = process.env.M59_ACTIVE_FILE ||
 export const BEAT_MS = 30_000;
 
 let beatTimer = null;
+let lastRunning = null;
 
 export function markRunning(agents = [], meta = {}) {
+  lastRunning = { agents, meta };
   try {
     mkdirSync(dirname(ACTIVE_FILE), { recursive: true });
     const write = () => {
@@ -154,6 +156,17 @@ export function markRunning(agents = [], meta = {}) {
     beatTimer = setInterval(write, BEAT_MS);
     beatTimer.unref?.();                       // never hold the process open for this
   } catch { /* bookkeeping must not break a broker */ }
+}
+
+// A LIVE BROKER HANDOVER STOPS THE BEAT WITHOUT REMOVING THE FILE. The successor's startup
+// reads it, finds this process still alive, leaves it alone, and overwrites it with its own
+// pid -- so a handover is never recorded as a crash, while a successor that dies before it
+// starts beating leaves THIS pid in the file, which correctly reads as a crash once this
+// process exits. `resume()` is the rollback: the beat restarts as it was.
+export function pauseBeat() {
+  const was = beatTimer ? lastRunning : null;
+  if (beatTimer) { clearInterval(beatTimer); beatTimer = null; }
+  return { resume() { if (was && !beatTimer) markRunning(was.agents, was.meta); } };
 }
 
 // Clean shutdown. The absence of this file is the whole signal, so it must be removed
