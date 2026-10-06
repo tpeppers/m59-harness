@@ -2929,6 +2929,12 @@ const server = createServer(async (req, res) => {
             }));
             return;
           }
+          case 'autopilot_town_trip': {
+            // Sets state and returns; the pass loop drives the trip (m59-town-favors.mjs).
+            if (!autopilot || typeof autopilot.townTripCommand !== 'function') { json({ error: 'no autopilot in this keeper' }, 409); return; }
+            json(autopilot.townTripCommand(args));
+            return;
+          }
           case 'autopilot_busy': {
             if (!autopilot?.running) { json({ error: 'keeper is not running' }, 409); return; }
             json(autopilot.declareBusy({ by: args.by ?? null,

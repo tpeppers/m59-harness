@@ -10989,7 +10989,23 @@ const TOOLS = [
       agent: { type: 'string' },
       action: { type: 'string',
                 enum: ['start', 'stop', 'inert', 'revive', 'status', 'list', 'park', 'unpark', 'release',
-                       'claim', 'heartbeat', 'yield', 'busy', 'free'] },
+                       'claim', 'heartbeat', 'yield', 'busy', 'free', 'town_trip'] },
+      // TOWN TRIPS ON DEMAND (m59-town-favors.mjs). action=town_trip with op=start|drop|allow|favor|
+      // drop_favor|status. start: `town` market|bank|food|supply. drop: `hold_ms` (default 30 min) keeps
+      // new trips from opening. favor: `item`, `amount`, `deliver_to` (names), optional `deliver_room`,
+      // `source` any|hall|buy, `shop_room` (needed to buy), `key` (one open favor per key).
+      op: { type: 'string', enum: ['start', 'drop', 'allow', 'favor', 'drop_favor', 'status'],
+            description: 'town_trip: what to do' },
+      town: { type: 'string', enum: ['market', 'bank', 'food', 'supply'], description: 'town_trip start: where to go' },
+      hold_ms: { type: 'number', description: 'town_trip drop: hold new trips this long (0 = no hold)' },
+      item: { type: 'string', description: 'town_trip favor: the item, e.g. "purple mushroom"' },
+      amount: { type: 'number', description: 'town_trip favor: how many in total' },
+      deliver_to: { type: 'string', description: 'town_trip favor: recipients, comma-separated character names' },
+      deliver_room: { type: 'number', description: 'town_trip favor: where to hand it over (default: the courier\'s assigned room)' },
+      source: { type: 'string', enum: ['any', 'hall', 'buy'], description: 'town_trip favor: guild hall chests, a shop, or chests first' },
+      shop_room: { type: 'number', description: 'town_trip favor: the room of a shop that sells it' },
+      favor_id: { type: 'string', description: 'town_trip drop_favor: which favor' },
+      key: { type: 'string', description: 'town_trip favor: dedupe key; one open favor per key' },
       kind: { type: 'string', description: 'busy: what sort of operation, e.g. "crate-check"' },
       label: { type: 'string', description: 'busy: one short phrase for the board' },
       // PER-FACULTY OWNERSHIP. `inert` is the whole character; these are halves of one.
@@ -11282,7 +11298,7 @@ const TOOLS = [
           'until weight and bulk are below this fraction. Intended for confined shelter farming; ' +
           'food, reagents, equipped/protected items and useful gear are retained. null disables it' },
       sell_when_broke: { type: 'boolean',
-        description: 'also sell a useful-sized pack when cash-poor and no timed window is open' },
+        description: 'REMOVED 2026-10-06: accepted for compatibility, always false; true is reported in coerced' },
       sell_when_broke_under: { type: 'number',
         description: 'cash-plus-bank threshold for sell_when_broke, default 500' },
       sell_when_broke_stacks: { type: 'number',
@@ -11836,6 +11852,15 @@ const TOOLS = [
       // Authority belongs to the process executing the pass loop. Recording a claim
       // or busy errand on this dormant shell leaves the real keeper free to recall
       // a town runner home between travel legs.
+      // TOWN TRIPS ON DEMAND go to whichever process runs the pass loop: the keeper's own, or this one.
+      if (a.action === 'town_trip') {
+        if (s instanceof KeeperProxy) {
+          const result = await keeperAction(a.agent, s._index, 'autopilot_town_trip', { ...a, by: a.by ?? 'operator' });
+          if (result?.error) throw new Error(result.error);
+          return result;
+        }
+        return p.townTripCommand({ ...a, by: a.by ?? 'operator' });
+      }
       if (s instanceof KeeperProxy && ['claim', 'heartbeat', 'yield', 'busy', 'free'].includes(a.action)) {
         const result = await keeperAction(a.agent, s._index, `autopilot_${a.action}`, {
           ...a, mayYield: fleetMayYield(),
@@ -12449,7 +12474,13 @@ const TOOLS = [
       if (a.drop_at_load !== undefined)
         p.policy.dropAtLoad = a.drop_at_load == null ? null
           : Math.max(0.05, Math.min(0.99, Number(a.drop_at_load) || 0.75));
-      if (a.sell_when_broke !== undefined) p.policy.sellWhenBroke = !!a.sell_when_broke;
+      // NEVER SELL BECAUSE BROKE (operator, 2026-10-06). The keeper no longer has the trigger; the key
+      // is still accepted so doctrines that send it keep working, and `true` comes back as coerced.
+      let sellWhenBrokeAsked = null;
+      if (a.sell_when_broke !== undefined) {
+        if (a.sell_when_broke === true || a.sell_when_broke === 'true') sellWhenBrokeAsked = true;
+        p.policy.sellWhenBroke = false;
+      }
       if (a.sell_when_broke_under !== undefined)
         p.policy.sellWhenBrokeUnder = Math.max(0, Number(a.sell_when_broke_under) || 0);
       if (a.sell_when_broke_stacks !== undefined)
@@ -12682,6 +12713,8 @@ const TOOLS = [
       // anything reads the new one. Both happen here, before the policy is persisted OR
       // pushed, so the roster and the keeper cannot disagree about either.
       const coerced = coerceSpotPair(p.policy);
+      if (sellWhenBrokeAsked) coerced.push({ key: 'sellWhenBroke', from: true, to: false,
+        why: 'being broke is never a reason to sell (operator, 2026-10-06); the broke sell trigger was removed' });
       for (const c of coerced)
         console.error(`[autopilot] ${a.agent} policy ${c.key} ${c.from} -> ${c.to} (coerced: ${c.why})`);
       // Persist the instruction, not the running object: on the far side of a

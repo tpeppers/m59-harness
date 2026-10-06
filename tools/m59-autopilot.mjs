@@ -163,6 +163,7 @@ import { keeperOrigin, claimantOrigin, moveOrigin, originLabel, liveMoveOrder, m
          journeyProvenance, installMoveOrders, describePreemption } from './m59-move-origin.mjs';
 import { recordMovementIncident, classifyJourneyFailure } from './m59-movement-incidents.mjs';
 import { packCounts, newTripTrade, addTradeFact, tripLedgerFields } from './m59-towntrip-ledger.mjs';
+import * as townFavors from './m59-town-favors.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1558,6 +1559,8 @@ const BANKS = [
 export const TRIP_PURPOSE = Object.freeze({
   load: 'sell', stacks: 'sell', unweighable: 'sell', broke: 'sell',
   supply: 'restock', food: 'food', standing_order: 'order', policy: 'policy', bank: 'bank',
+  // Opened on demand (m59-town-favors.mjs): by the operator, or by a private `townTrip` strategy.
+  operator: 'operator', strategy: 'strategy',
 });
 // Operator, 2026-09-27: "town trips should aim to be $10k+ if their purpose is for selling".
 // Overridable per character as policy.minSellTripValue.
@@ -12623,6 +12626,7 @@ export class Autopilot {
       deferred_shopping: this.deferredShoppingTrip ? {
         to: this.deferredShoppingTrip.target.room, next_service: this.deferredShoppingTrip.nextService,
       } : null,
+      town_trip_control: this.townTripControlStatus(),
       guild_tithe: this.policy.guildTithe?.enabled ? {
         daily_amount: this.policy.guildTithe.daily_amount,
         paid_today: new TitheBook({ agent: this.name ?? this.s.name,
@@ -20488,6 +20492,11 @@ export class Autopilot {
       this.note('farm delivery failed', { why: error.message });
       return false;
     })) return HANDLED;
+    // And any "while you're in town" favors this trip carried home (m59-town-favors.mjs).
+    if (await this.deliverTownFavors().catch(error => {
+      this.note('town favor delivery failed', { why: error.message });
+      return false;
+    })) return HANDLED;
 
     // Someone else is standing here and we can mend them: do that first. It costs a
     // second and it is the only action available that helps another character.
@@ -25995,25 +26004,11 @@ export class Autopilot {
                why: `out of ${supply.missing.join(' and ')} — cannot make food, so vigor is ` +
                     `capped at what resting gives` };
 
-    // POVERTY IS A JUDGEMENT AND IS OFF UNLESS ASKED FOR. It also never outranks an open
-    // window: a round trip to a market is most of a 35-minute shift, and the shift is the
-    // thing the money was going to buy readiness for.
-    if (this.policy.sellWhenBroke === true && !windowOpen) {
-      const money = carried + banked;
-      const spare = inv.filter(o => !/shilling/i.test(c.rsc.get(o.nameRsc) || '')).length;
-      const under = this.policy.sellWhenBrokeUnder ?? 500;
-      const need = this.policy.sellWhenBrokeStacks ?? 8;
-      // AND IT IS STILL A SELL TRIP, so it carries the same $10k floor as load and stacks. With the
-      // money flow on, a chalice rider hands its shillings to the guild hall and is "broke" by design:
-      // 2026-09-28 Floyd and Animal opened six broke trips to Barloque in an hour with ~7.5k aboard.
-      const worth = money < under && spare >= need ? this.packSaleValue() : null;
-      if (worth && worth.value < this.minSellTripValue()) return { sell: false, trigger: null, fullness,
-        why: `${money} to its name, but the pack would fetch about ${worth.value}, under the ` +
-             `${this.minSellTripValue()} a sell trip should carry` };
-      if (money < under && spare >= need)
-        return { sell: true, trigger: 'broke', money, spare, estimated_value: worth?.value,
-                 why: `${money} to its name and ${spare} stacks aboard, and nothing is spawning` };
-    }
+    // BEING BROKE IS NEVER A REASON TO SELL (operator, 2026-10-06: "we never want to sell because
+    // we're broke"). The `broke` trigger that stood here (sell_when_broke, off by default since the
+    // fleet-wide stampede it caused) is removed; the setting is still ACCEPTED so doctrines that send
+    // it keep working, and `true` is overridden to false with a warning (m59-broker.mjs). A pack is
+    // sold because it is heavy, never because its carrier is poor.
     return { sell: false, trigger: null, fullness,
              why: windowOpen && fullness < at
                ? `${Math.round(fullness * 100)}% loaded and the window is open — the shift is worth more`
@@ -26785,6 +26780,11 @@ export class Autopilot {
 
   async bankRun() {
     if (this.townTrip) return this.continueTownTrip();
+    // DROPPED MEANS DROPPED (m59-town-favors.mjs): no resumed trip and no new one while the hold lasts.
+    if (this.townTripHeld()) return false;
+    // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
+    await this.askTownStrategy().catch(() => null);
+    if (this.operatorTripRequest) return this.openRequestedTownTrip();
     if (this.deferredShoppingTrip && this.poorShoppingRetryReady()) {
       this.townTrip = this.deferredShoppingTrip;
       this.deferredShoppingTrip = null;
@@ -26862,7 +26862,7 @@ export class Autopilot {
     // exactly that and never wired to this trigger.
     const poor = this.poorFarmingActive();
     const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
-    const packFull = sellCall.sell && !['broke', 'supply'].includes(sellCall.trigger);
+    const packFull = sellCall.sell && sellCall.trigger !== 'supply';
 
     // AND AN EMPTY LARDER IS THE THIRD REASON, FOR EXACTLY THE REASON THE PACK WAS THE
     // SECOND: the food is in town and the only doors to town were money and a full pack.
@@ -26940,64 +26940,9 @@ export class Autopilot {
     const needsCashFirst = (starving && spendable < 60 && canFetch) ||
                            (supplyTrip && carried < supplyBill && canFetch);
 
-    // BROKE WHILE CARRYING A FORTUNE IN LOOT, WHICH IS THE SAME SHAPE AS THE LAST TWO.
-    //
-    // A bank trip needs 500 shillings and the pack trip needs a full pack, so a character
-    // with 103 shillings, nothing banked and ten stacks of goods opens neither door and
-    // never sells. Measured this pass: Scooter carrying 110 elderberry, 36 red mushroom,
-    // 28 purple, 24 mushroom, 10 sapphire and 3 emerald, unable to buy the 480 leather it
-    // needs; Bunsen and Beaker the same. They are not poor, they are holding stock.
-    //
-    // The door that fixes the condition required the condition already fixed — the same
-    // trap as "cannot afford food because it never goes to the shop that sells it" and
-    // "cannot re-arm because the check cannot see broken gear". Being unable to replace
-    // your armour is exactly when selling matters, so that is the trigger.
-    //
-    // A MARKET, NOT A BANK: Roq buys, a banker takes and gives nothing back. And unlike
-    // the food trip this one cannot spin, because it always achieves something — the goods
-    // become money on arrival and the condition clears itself. The cooldown is here anyway,
-    // because a character that reaches Roq and sells nothing (everything protected, or the
-    // walk failed) must not turn round and set off again on the next pass.
-    const SELL_TRIP_COOLDOWN_MS = 600_000;
-    const soldRecently = Date.now() - (this.sellTripAt ?? 0) < SELL_TRIP_COOLDOWN_MS;
-    // What a replacement piece of armour costs at the dearest counter the router might
-    // pick, which is the bill this trip exists to make payable.
-    const tooPoorToReplaceGear = carried + balance < 500;
-    // Only worth a walk if there is something aboard to sell. This is a PROXY — stacks
-    // that are not money — and deliberately not a call to skills.sellable, which judges one
-    // item at a time and needs the worn list and the keep regex to answer. Getting that
-    // exactly right here would duplicate sellAll's decision in a second place, and a
-    // quantity with two homes in this repository has always ended up with two answers.
-    //
-    // Being wrong costs a walk that sells less than hoped, which sellAll reports honestly;
-    // the trip is still the right call for a character that cannot replace its armour.
-    const spare = (c.inventory || [])
-      .filter(o => !/shilling/i.test(c.rsc.get(o.nameRsc) || '')).length;
-    // OFF BY DEFAULT NOW, AND THE POLICY LIVES IN DUM.
-    //
-    // `spare >= 4` is four stacks — four kinds of mushroom clears it — and `< 500` catches
-    // most of the fleet the moment a moot or a hand-out moves money around. Both were true
-    // for nearly everyone at once, so twenty characters set off for the same NPC carrying
-    // almost nothing. The trip is not wrong in principle; the threshold made it fire when
-    // there was nothing worth selling, and it competed with the thing the fleet was
-    // actually for, which is being ready for the next window.
-    //
-    // Selling when the pack is genuinely HEAVY is now the default, above. Selling because
-    // a character is poor is a judgement about what the fleet is saving for, which is
-    // exactly the kind of decision that belongs in a doctrine rather than in the keeper —
-    // see `market` in meridian59-dum-bot. `sell_when_broke: true` restores the old
-    // behaviour for anyone who wants it.
-    const brokeWithGoods = sellCall.trigger === 'broke' && !soldRecently && !starving;
-    if (poor && !packFull && !brokeWithGoods) return false;
-    if (brokeWithGoods && !this.notedBroke) {
-      this.notedBroke = true;
-      this.note('out of money with a pack worth selling — going to market', {
-        purse: carried, banked: balance, sellable_stacks: spare, to: MARKETS[0]?.name,
-        why: 'a bank trip needs 500 and a pack trip needs a full pack; with neither, a ' +
-             'character carrying loot it could sell stands in a field unable to replace ' +
-             'its armour' });
-    }
-    if (!brokeWithGoods) this.notedBroke = false;
+    // NO "BROKE WITH GOODS" DOOR: being broke never opens a sell trip (operator, 2026-10-06; see
+    // checkIfShouldSell). A heavy pack is the only reason to go and sell.
+    if (poor && !packFull) return false;
     if (starving && !this.notedStarving) {
       this.notedStarving = true;
       this.note('out of food and cannot cook — going to town for some', {
@@ -27007,7 +26952,7 @@ export class Autopilot {
     }
     if (!starving) this.notedStarving = false;
 
-    if (carried <= above && !packFull && !starving && !brokeWithGoods && !supplyTrip) {
+    if (carried <= above && !packFull && !starving && !supplyTrip) {
       // Say what we saw, occasionally. A threshold that never trips is indistinguishable
       // from one that is never checked, and that cost an eight-minute run to find out.
       if (carried > 0 && (!this.notedPurse || Date.now() - this.notedPurse > 120_000)) {
@@ -27029,11 +26974,8 @@ export class Autopilot {
     // the bread shop — but only when hunger is the ONLY reason. A character that is also
     // rich or also full has business at the counter that pays, and buyFoodInTown runs at
     // the end of that trip anyway, so it gets both out of one walk.
-    // A full pack goes to the market, money goes to the bank, an empty larder to the bread
-    // shop — and a broke character with goods goes to the market too, for the same reason
-    // the full pack does: Roq is the one who pays, and a banker takes and gives nothing.
     const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull,
-                                            brokeWithGoods, richEnoughToBank: carried > above })
+                                            richEnoughToBank: carried > above })
       .filter(b => !this.bansDestination(b.room));
     if (!destinations.length) {
       if (!this.warnedBannedTrip) {
@@ -27063,7 +27005,7 @@ export class Autopilot {
     // Claim the return cargo while the destination is still unambiguous: this is the
     // farming room the seller is leaving, not whichever shop the town leg ends in.
     this.prepareFarmDelivery(room.num);
-    if (packFull || brokeWithGoods) await this.farmCleanupBeforeSale().catch(error => {
+    if (packFull) await this.farmCleanupBeforeSale().catch(error => {
       this.coordination.cleanup.refused++;
       this.note('farm clean-up could not finish', { why: error.message, consequence: 'selling trip continues' });
     });
@@ -27073,7 +27015,6 @@ export class Autopilot {
     // nothing from repeating, and "bought nothing" is the case that would otherwise never
     // set it.
     if (starving) this.foodTripAt = Date.now();
-    if (brokeWithGoods) this.sellTripAt = Date.now();
     if (supplyTrip) this.supplyTripAt = Date.now();
     // SAY WHICH ERRAND THIS IS, BECAUSE THE LABEL WAS PART OF WHAT HID THE LOOP.
     //
@@ -27087,7 +27028,7 @@ export class Autopilot {
         ? (needsCashFirst ? 'going to the bank to pay for reagents' : 'going to the apothecary')
       : starving && !packFull && carried <= above ? 'going to town for food'
       : needsCashFirst ? 'going to the bank for food money'
-      : (packFull || brokeWithGoods) && carried <= above ? 'going to market'
+      : packFull && carried <= above ? 'going to market'
       : 'going to the bank';
     this.note(errand, {
       carrying: carried, to: target.name, hops: target.hops, keeping: this.policy.walkingMoney ?? 400,
@@ -27098,7 +27039,7 @@ export class Autopilot {
           'buying, so this needs a counter and the money to spend at one'
         : starving && !packFull && carried <= above
         ? 'no food and not both reagents, so the only vigor above the resting cap is bought'
-        : (packFull || brokeWithGoods) && carried <= above
+        : packFull && carried <= above
         ? 'make pack room at the equipment, gem and reagent specialists'
         : 'everything carried is dropped on death and usually unrecoverable; a balance is not' });
     // The shopping objective survives every recovery stop. Save the exact service
@@ -27106,10 +27047,10 @@ export class Autopilot {
     // THE CIRCUIT IS ATTACHED ON THE PACK, NOT ON WHICHEVER NEED OPENED THE TRIP. A reagent
     // run and a full pack are not alternatives — a character is routinely both, and it is
     // already walking past the specialists. See `packWantsMarket`.
-    const wantsMarket = packFull || brokeWithGoods || this.packWantsMarket();
+    const wantsMarket = packFull || this.packWantsMarket();
     this.openTownTrip(target, { sellCall, errand, wantsMarket, supplyTrip, starving,
-      needsCashFirst, brokeWithGoods });
-    if (wantsMarket && !packFull && !brokeWithGoods)
+      needsCashFirst });
+    if (wantsMarket && !packFull)
       this.note('carrying enough to be worth the circuit while we are here', {
         trigger: sellCall.trigger, stops: MARKET_STOPS.map(m => m.name),
         why: 'the trip was opened by something other than the pack, and the pack is at its ' +
@@ -27157,6 +27098,245 @@ export class Autopilot {
         room: this.s.world?.room?.num ?? null });
     } catch { /* never let accounting interrupt play */ }
     return this.townTrip;
+  }
+
+  // ================================================================== TOWN TRIPS ON DEMAND
+  //
+  // Start, drop, hold, and "while you're in town" favors. The rules and the operator's order are in
+  // m59-town-favors.mjs (pure, tested); this is the half that touches the trip and the game.
+  // Commands only SET STATE and return: the trip is driven by the pass loop (passErrand -> bankRun ->
+  // continueTownTrip) as every other trip is, so a command never holds the keeper's command lock
+  // through a walk.
+
+  townTripHeld(now = Date.now()) { return townFavors.holdActive(this.townTripHold, now); }
+
+  townTripCommand(args = {}) {
+    const cmd = townFavors.normalizeTripCommand(args);
+    if (!cmd.ok) return { ok: false, why: cmd.why, status: this.townTripControlStatus() };
+    const by = String(args.by ?? 'operator');
+    const now = Date.now();
+    this.townFavorList ??= [];
+    switch (cmd.op) {
+      case 'start': {
+        if (this.townTrip) return { ok: true, started: false, why: 'already on a town trip', status: this.townTripControlStatus() };
+        this.townTripHold = null;
+        this.operatorTripRequest = { town: cmd.town, why: cmd.why, by, at: now };
+        this.note('town trip requested', { town: cmd.town, by, why: cmd.why ?? null });
+        return { ok: true, started: false, queued: true,
+                 note: 'opens on the next keeper pass, through the same trip machinery as any other', status: this.townTripControlStatus() };
+      }
+      case 'drop': return { ok: true, ...this.dropTownTrip({ why: cmd.why, holdMs: cmd.holdMs, by }), status: this.townTripControlStatus() };
+      case 'allow': {
+        const was = this.townTripHold; this.townTripHold = null;
+        return { ok: true, lifted: was, status: this.townTripControlStatus() };
+      }
+      case 'favor': {
+        const f = townFavors.normalizeFavor(args, { now, by });
+        if (!f.ok) return { ok: false, why: f.why, status: this.townTripControlStatus() };
+        const r = townFavors.addFavors(this.townFavorList, [f.favor]);
+        if (r.added.length) this.note('town favor added', { id: f.favor.id, item: f.favor.item, amount: f.favor.amount, to: f.favor.to, by });
+        return { ok: r.added.length > 0, ...r, status: this.townTripControlStatus() };
+      }
+      case 'drop_favor': {
+        const f = this.townFavorList.find(x => x.id === cmd.id);
+        if (!f) return { ok: false, why: `no favor ${cmd.id}`, status: this.townTripControlStatus() };
+        f.status = 'dropped'; f.notes.push(`dropped by ${by}${cmd.why ? `: ${cmd.why}` : ''}`);
+        return { ok: true, dropped: cmd.id, status: this.townTripControlStatus() };
+      }
+      default: return { ok: true, status: this.townTripControlStatus() };
+    }
+  }
+
+  /** End the trip and the set-aside one, cancel the walk, and hold new trips. */
+  dropTownTrip({ why = null, holdMs = townFavors.DEFAULT_HOLD_MS, by = 'operator' } = {}) {
+    const now = Date.now();
+    const had = { active: this.townTrip ? { to: this.townTrip.target?.room ?? null, purpose: this.townTrip.purpose,
+                                            started_at: this.townTrip.startedAt } : null,
+                  deferred: !!this.deferredShoppingTrip, requested: !!this.operatorTripRequest };
+    this.townTrip = null;
+    this.deferredShoppingTrip = null;
+    this.operatorTripRequest = null;
+    if (this.purchaseFunding) this.purchaseFunding = { ...this.purchaseFunding, pending: false, status: 'trip dropped' };
+    this.townTripHold = holdMs > 0 ? { until: now + holdMs, why, by, at: now } : null;
+    let cancelled = null;
+    try { cancelled = this.s.cancelMovement?.(null, `town trip dropped${why ? `: ${why}` : ''}`, { origin: keeperOrigin('town_trip_drop') }) ?? null; }
+    catch (e) { cancelled = { error: e.message }; }
+    this.note('town trip dropped', { by, why, had, hold_until: this.townTripHold?.until ?? null });
+    try { this.ledgerEvent('town_trip_dropped', { by, why, had, hold_ms: holdMs, room: this.hereRoom() }); } catch {}
+    return { dropped: had, hold: this.townTripHold, walk_cancelled: !!cancelled?.cancelled };
+  }
+
+  townTripControlStatus(now = Date.now()) {
+    return {
+      trip: this.townTrip ? { to: this.townTrip.target?.room ?? null, purpose: this.townTrip.purpose,
+                              trigger: this.townTrip.trigger, next_service: this.townTrip.nextService } : null,
+      deferred: !!this.deferredShoppingTrip,
+      requested: this.operatorTripRequest ?? null,
+      hold: this.townTripHeld(now) ? this.townTripHold : null,
+      favors: townFavors.favorSummary(this.townFavorList),
+    };
+  }
+
+  /**
+   * ASK A PRIVATE `townTrip` STRATEGY. Throttled (60 s) when merely considering; asked once, unthrottled,
+   * as a trip opens (`opening`). It may start a trip and/or add favors. Never throws.
+   */
+  async askTownStrategy({ opening = null } = {}) {
+    const now = Date.now();
+    if (!opening && this._townAskAt && now - this._townAskAt < 60_000) return null;
+    if (!opening) this._townAskAt = now;
+    let answer = null;
+    try {
+      answer = await this.s?._askStrategies?.('townTrip', {
+        agent: this.s?.name ?? null, character: this.who(), room: this.hereRoom(),
+        assigned_room: this.policy.assignedRoom ?? null, purse: this.purseNow?.() ?? null,
+        opening, held: this.townTripHeld(now), favors: townFavors.favorSummary(this.townFavorList),
+      });
+    } catch { answer = null; }
+    if (!answer?.answer) return null;
+    const by = `strategy:${answer.strategy}`;
+    const t = townFavors.normalizeTownAnswer(answer.answer, { now, by });
+    if (t.problems.length) this.note('townTrip strategy answer problems', { strategy: answer.strategy, problems: t.problems });
+    if (t.favors.length) {
+      this.townFavorList ??= [];
+      const r = townFavors.addFavors(this.townFavorList, t.favors);
+      if (r.added.length) this.note('town favors added by a strategy', { strategy: answer.strategy, added: r.added, refused: r.refused });
+    }
+    // A strategy may start a trip, but never through an operator's hold.
+    if (t.start && !opening && !this.townTrip && !this.townTripHeld(now) && !this.operatorTripRequest)
+      this.operatorTripRequest = { town: t.start.town, why: t.start.why, by, at: now };
+    return t;
+  }
+
+  /** Open the requested trip: the same destination table, opener and shopping plan as any other trip. */
+  async openRequestedTownTrip() {
+    const req = this.operatorTripRequest;
+    this.operatorTripRequest = null;
+    const town = req.town ?? 'market';
+    const destinations = townDestinations({ packFull: town === 'market', richEnoughToBank: town === 'bank',
+                                            starving: town === 'food', supplyTrip: town === 'supply' })
+      .filter(b => !this.bansDestination(b.room));
+    const options = destinations
+      .map(b => { const r = this.s.world?.route?.(b.room); return { ...b, hops: r?.found ? r.hops.length : Infinity }; })
+      .sort((x, y) => x.hops - y.hops);
+    const target = options[0];
+    if (!target || !Number.isFinite(target.hops)) {
+      this.note('requested town trip cannot start', { town, by: req.by, why: target ? 'no route' : 'every destination is banned' });
+      return false;
+    }
+    const trigger = String(req.by).startsWith('strategy:') ? 'strategy' : 'operator';
+    await this.askTownStrategy({ opening: { purpose: TRIP_PURPOSE[trigger], trigger, to: target.room } });
+    this.doing = 'travelling';
+    this.openTownTrip(target, { sellCall: { trigger, why: req.why ?? `${trigger} asked for a ${town} trip` },
+      errand: `going to town (${req.by})`, wantsMarket: town === 'market' || this.packWantsMarket(),
+      supplyTrip: town === 'supply', starving: town === 'food' });
+    this.postShoppingPlan(this.shoppingPlan());
+    return this.continueTownTrip();
+  }
+
+  // ------------------------------------------------------------------ favors: in town, and home
+
+  /** How many of `item` the pack holds, singular or plural. */
+  countNamed(item) {
+    const c = this.s.client; const want = String(item).toLowerCase().replace(/s$/, '');
+    return (c?.inventory || []).filter(o => String(c.rsc.get(o.nameRsc) || '').toLowerCase().replace(/s$/, '') === want)
+      .reduce((n, o) => n + (o.amount || 1), 0);
+  }
+
+  /** The trip step: load every open favor, from the hall chests and/or a shop. Never blocks the trip. */
+  async gatherTownFavors() {
+    const open = (this.townFavorList ?? []).filter(f => f.status === 'open');
+    for (const f of open) {
+      let need = f.amount - f.loaded;
+      if (need > 0 && f.source !== 'buy') {
+        const before = this.countNamed(f.item);
+        const r = await this.withdrawFromStockpile([{ item: f.item, amount: need }]).catch(e => ({ took: [], why: e.message }));
+        await this.s.pacer.submit('read', () => this.s.need().requestInventory()).catch(() => {});
+        await this.s.need().waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        const got = Math.max(0, this.countNamed(f.item) - before);
+        f.loaded += got; need -= got;
+        f.notes.push(`hall: ${got} of ${got + need}${r?.why && !got ? ` (${String(r.why).slice(0, 80)})` : ''}`);
+      }
+      if (need > 0 && f.source !== 'hall' && f.shop_room != null) {
+        const got = await this.buyFavorCargo(f, need).catch(e => { f.notes.push(`buy failed: ${e.message}`); return 0; });
+        f.loaded += got; need -= got;
+      }
+      f.status = f.loaded > 0 ? 'loaded' : 'unloaded';
+      if (need > 0) f.notes.push(`short by ${need}`);
+      this.note('town favor loaded', { id: f.id, item: f.item, wanted: f.amount, loaded: f.loaded, to: f.to });
+    }
+    return null;
+  }
+
+  async buyFavorCargo(f, need) {
+    const s = this.s, c = s.need();
+    if (this.hereRoom() !== f.shop_room) {
+      const walked = await this.travel(f.shop_room, { origin: keeperOrigin('town_favor_buy'), maxHops: 16 })
+        .catch(error => ({ arrived: false, reason: error.message }));
+      if (!walked?.arrived) { f.notes.push(`could not reach shop room ${f.shop_room}: ${walked?.reason ?? '?'}`); return 0; }
+    }
+    const re = new RegExp(`^${f.item.replace(/s$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?$`, 'i');
+    const pick = await this.sellerHere({ want: re }).catch(() => null);
+    if (!pick) { f.notes.push(`nobody in room ${f.shop_room} sells ${f.item}`); return 0; }
+    const start = c.evSeq;
+    await s.pacer.submit('buy', () => c.buy(pick.seller.id ?? pick.seller));
+    const ev = await c.waitFor({ since: start, kinds: ['shop'], timeoutMs: 4000 }).catch(() => ({ events: [] }));
+    const shop = ev.events?.find(row => row.kind === 'shop');
+    const entry = shop?.items?.find(item => re.test(String(item.name ?? '').trim()));
+    if (!entry) { f.notes.push(`room ${f.shop_room}'s counter does not list ${f.item}`); return 0; }
+    const unit = entry.cost || 0, floor = this.policy.walkingMoney ?? 400;
+    const take = Math.min(need, unit > 0 ? Math.max(0, Math.floor((this.purseNow() - floor) / unit)) : need);
+    if (!take) { f.notes.push(`cannot afford ${f.item} at ${unit} above the ${floor} float`); return 0; }
+    const before = this.countNamed(f.item);
+    for (const line of buyLines([{ id: entry.id, amount: take }])) {
+      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
+      await new Promise(resolve => setTimeout(resolve, 700));
+      for (let n = 0; n < line.amount; n++)
+        this.recordPurchase(entry.name, entry.cost, { why: `town favor ${f.id} for ${f.to.join(', ')}` });
+    }
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+    const got = Math.max(0, this.countNamed(f.item) - before);
+    f.notes.push(`bought ${got} at ${unit} in room ${f.shop_room}`);
+    return got;
+  }
+
+  /**
+   * HOME AGAIN: hand each loaded favor to its recipients, in its room. Called from passErrand once no
+   * trip is in flight. A recipient who is not there is retried later (60 s), never skipped silently.
+   * Returns true when it did something this pass.
+   */
+  async deliverTownFavors() {
+    const now = Date.now();
+    const due = (this.townFavorList ?? []).filter(f => f.status === 'loaded' && !(f.nextTryAt > now));
+    if (!due.length || this.townTrip) return false;
+    for (const f of due) {
+      const room = f.room ?? this.policy.assignedRoom ?? null;
+      if (room != null && this.hereRoom() !== room) {
+        const walked = await this.travel(room, { origin: keeperOrigin('town_favor_deliver'), maxHops: 20 })
+          .catch(error => ({ arrived: false, reason: error.message }));
+        if (!walked?.arrived) { f.nextTryAt = now + 60_000; f.notes.push(`could not reach room ${room}: ${walked?.reason ?? '?'}`); return true; }
+      }
+      const c = this.s.need();
+      for (const [name, n] of Object.entries(townFavors.sharesFor(f, this.countNamed(f.item)))) {
+        if (!this.playerHere(name)) { f.notes.push(`${name} is not in room ${this.hereRoom()}`); continue; }
+        const stack = (c.inventory || []).find(o => String(c.rsc.get(o.nameRsc) || '').toLowerCase().replace(/s$/, '') === f.item.replace(/s$/, ''));
+        if (!stack) break;
+        const before = this.countNamed(f.item);
+        const r = await this.chaliceGive(name, [{ id: stack.id, amount: n }], { stillHave: () => this.countNamed(f.item) >= before });
+        const gave = Math.max(0, before - this.countNamed(f.item));
+        if (gave) f.delivered[name] = (f.delivered[name] ?? 0) + gave;
+        f.notes.push(r.gave ? `gave ${name} ${gave}` : `${name}: ${r.why}`);
+      }
+      // Nothing left to hand over (given out, eaten by a death, traded away) also closes it.
+      if (!townFavors.favorDone(f) && this.countNamed(f.item) === 0) f.notes.push('nothing left in the pack to give');
+      if (townFavors.favorDone(f) || this.countNamed(f.item) === 0) {
+        f.status = 'delivered'; f.delivered_at = Date.now();
+        this.note('town favor delivered', { id: f.id, item: f.item, delivered: f.delivered });
+        try { this.ledgerEvent('town_favor_delivered', { id: f.id, item: f.item, delivered: f.delivered, by: f.by }); } catch {}
+      } else f.nextTryAt = Date.now() + 60_000;
+    }
+    return true;
   }
 
   // WHAT THE PACK WOULD FETCH, ESTIMATED. Shillings excluded. ITEM_VALUE prices 89 of 249 items, so
@@ -27261,6 +27441,8 @@ export class Autopilot {
       ["draw the holder's restock", () => this.chaliceTownCargo()],
       ["buy the holder's restock", () => this.chaliceBuyCargo()],
       ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
+      // "WHILE YOU'RE IN TOWN" (m59-town-favors.mjs): last of the buying, out of what is left.
+      ['town favors', () => this.gatherTownFavors()],
       ['vault', () => this.vaultRunIfPassing()],
     ];
     const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents',
