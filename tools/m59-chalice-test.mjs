@@ -240,7 +240,7 @@ section("a ride is refused while the server's teleport ban is running");
   // refuses the sip, and the item cast SKIPS `Rescue.CanPayCosts`, so this gate is the one
   // that matters. util/settings.kod:88 makes the delay ten minutes.
   const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2 });
-  const duty = { with: 'Rizzo', seen_at: Date.now() };
+  const duty = { with: 'Loial the Ogier', seen_at: Date.now() };
   const base = { cfg, role: 'traveller', stationHops: 1, targetHops: 9, carrying: false, duty };
   eq(PVP_TELEPORT_BLOCK_MS, 10 * 60_000, 'ten minutes, from the kod');
   const now = 5_000_000;
@@ -257,7 +257,7 @@ section("a ride is refused while the server's teleport ban is running");
   eq(shouldRide({ ...base, now, lastPlayerAttackAt: null }).ride, true, 'never swung at anybody: ride');
   eq(shouldRide({ ...base, now }).ride, true, 'and an absent field is the same as null');
   // A shard that removed the ban can say so.
-  const off = normalizeChalice({ holder: 'x', station_room: 2, pvp_block_ms: 0 });
+  const off = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, pvp_block_ms: 0 });
   eq(shouldRide({ ...base, cfg: off, now, lastPlayerAttackAt: now - 1000 }).ride, true,
      'pvp_block_ms 0 switches the check off');
 }

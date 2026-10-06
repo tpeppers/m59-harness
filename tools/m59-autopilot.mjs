@@ -81,7 +81,7 @@ import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide, sweepVerdict, actingDesk, moneyExcess, depositPlan,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf,
-         sipVerdict, SIP_TOOK, SIP_REFUSED_PVP } from './m59-chalice.mjs';
+         sipVerdict, SIP_TOOK, SIP_REFUSED_PVP, dutyEligible, passTo, draftAlternate } from './m59-chalice.mjs';
 import { rideChaliceNow } from './m59-chalice-ride.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
@@ -23413,9 +23413,29 @@ export class Autopilot {
     if (!this._chaliceActing || now - this._chaliceActing.at > 5_000) {
       let d = null;
       try { d = this.chaliceStore().duty(); } catch {}
-      this._chaliceActing = { at: now, yes: sameName(actingDesk(d), me) };
+      this._chaliceActing = { at: now, yes: sameName(actingDesk(d), me) || sameName(d?.drafted, me) };
     }
-    return this._chaliceActing.yes ? 'alternate' : r;
+    // Only a duty-pool member: a stale record naming a farmer (Janice) does not draft it.
+    return this._chaliceActing.yes && this.chaliceDutyEligible() ? 'alternate' : r;
+  }
+
+  /** Holder, alternate, or max health under duty_max_health (dutyEligible). */
+  chaliceDutyEligible() {
+    const max = this.s?.client?.vitals?.()?.health?.max ?? null;
+    return dutyEligible({ name: this.who(), maxHealth: max, cfg: this.chaliceCfg });
+  }
+
+  // THE POOL REGISTERS ITSELF: no keeper can read another character's max health, so each one
+  // under duty_max_health says so on the store (and withdraws when it is not). Every 5 minutes.
+  chalicePoolCheckIn(now = Date.now()) {
+    if (!this.chaliceCfg || (this._chalicePoolAt && now - this._chalicePoolAt < 5 * 60_000)) return;
+    const max = this.s?.client?.vitals?.()?.health?.max ?? null;
+    if (!Number.isFinite(Number(max)) || Number(max) <= 0) return;
+    this._chalicePoolAt = now;
+    const member = this.chaliceDutyEligible();
+    if (!member && !this._chalicePoolMember) return;
+    this._chalicePoolMember = member;
+    try { this.chaliceStore().setPool(this.who(), member ? { max_health: Number(max) } : null, now); } catch {}
   }
 
   chaliceInPack() {
@@ -23449,6 +23469,7 @@ export class Autopilot {
     const cfg = this.chaliceCfg;
     const c = this.s?.client;
     if (!cfg || !c?.room?.objects) return false;
+    this.chalicePoolCheckIn(now);
     // A TRAVELLER MID-RIDE IS THE RIDE CODE'S: it was handed the cup, drinks it, drops it for its
     // server and is rescued out of the room. Taking it back would carry it to Barloque.
     const ride = this.activeChaliceRide();
@@ -23457,6 +23478,7 @@ export class Autopilot {
     if (this._chaliceServe?.kind === 'ride' && this._chaliceServe.stage === 'pickup') return false;
     const floor = this.chaliceOnFloor();
     const cup = floor ? null : this.chaliceInPack();
+    if (!cup) this._chaliceOffDutySaid = false;
     if (!floor && !cup) { this._chaliceFloorSince = null; return false; }
     const me = this.who();
     const players = [...c.room.objects.values()].filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
@@ -23475,17 +23497,28 @@ export class Autopilot {
       // A RETURN THAT WAS NOT TAKEN IS NOT TRIED AGAIN FOR A WHILE. On prod 2026-09-28 01:19-01:31 the
       // holder stood in room 2 with its keeper held by a fleetscript: every drop for it lay 20 s,
       // expired, and was picked up and dropped again. The cup was on the floor more than it was in
-      // a pack. After one failed return this character runs the desk; the holder asks for the cup
-      // back (a `return` ticket, handed by trade) once its keeper is working again.
+      // a pack. After one failed return this character keeps it for ten minutes, then tries again.
       const backoff = now < (this._chaliceReturnBackoffUntil ?? 0);
-      const to = backoff ? null : [cfg.holder, cfg.alternate].find(n => n && fleetHere.some(x => sameName(x, n)));
+      // HAND IT BACK TO THE DESK RUNNER; NEVER BECOME THE DESK. Operator, 2026-10-06: "people not
+      // running the service desk ... just hand the chalice back to the desk runner if the person
+      // holding the chalice isn't taking a ride and the service desk manager is available in the
+      // map." This used to register whoever picked the cup up as the ACTING DESK when nobody on duty
+      // was beside it, which parked them at the station as the alternate: Janice swept it off the
+      // floor and stood in room 2 for seven hours instead of practising hold. Drafting an alternate
+      // is the HOLDER's decision, made when it has to leave on an errand (chaliceNextJob, relief).
+      let duty = {};
+      try { duty = store.duty(); } catch {}
+      const to = backoff ? null : passTo({ cfg, fleetHere, duty });
       if (!to) {
-        // NOBODY ON DUTY IS AT THE DESK: this character runs it until the holder is back
-        // (operator, 2026-09-28). Registered, so it serves as the alternate and the holder asks
-        // for the cup back on its return (chaliceNextJob, `reclaim`).
-        try { store.setDuty({ with: me, acting: me, acting_since: now, lost: false, holder_away: true }); } catch { return false; }
-        this._chaliceActing = null;
-        this.chaliceEvent('acting_desk', { room: this.hereRoom(), by: me });
+        if (sameName(duty?.acting, me) || !sameName(duty?.with, me)) {
+          try { store.setDuty({ with: me, acting: null, lost: false }); } catch {}
+          this._chaliceActing = null;
+        }
+        if (!this._chaliceOffDutySaid) {
+          this._chaliceOffDutySaid = true;
+          this.chaliceEvent('carrying_off_duty', { room: this.hereRoom(), by: me,
+            why: 'nobody running the desk is here; kept safe and handed back when they are' });
+        }
         return false;
       }
       if (this._chaliceReturnedAt && now - this._chaliceReturnedAt < 30_000) return false;
@@ -23526,7 +23559,8 @@ export class Autopilot {
     this._chaliceRefused = null;
     // Whoever lifts it is who has it; an acting desk it ended is over (the next pass
     // re-registers one if this character is to run the desk).
-    try { store.setDuty({ with: me, lost: false, acting: null }); } catch {}
+    try { store.setDuty({ with: me, lost: false, acting: null,
+      ...(this.chaliceRole() === 'holder' ? { drafted: null } : {}) }); } catch {}
     this._chaliceActing = null;
     if (handoff && sameName(handoff.rider, me)) try { store.clearHandoff(me); } catch {}
     const unreturned = this._chaliceReturnedTo && now - this._chaliceReturnedTo.at < 120_000;
@@ -24760,9 +24794,23 @@ export class Autopilot {
          expires: now + (ticket?.human ? cfg.human_max_wait_ms + cfg.serve_ms : cfg.serve_ms * 2), ...extra });
     if (cup) {
       // THE HOLDER IS ABOUT TO LEAVE: hand the cup over first, at the holder's own post.
-      if (role === 'holder' && cfg.alternate && this.chaliceCastsLeft() <= cfg.handover_below_casts) {
-        const t = store.request(me, { room: this.hereRoom(), kind: 'relief', ...ttl });
-        return job('relief', 'await', t);
+      // With no alternate configured the holder DRAFTS one from the duty pool (under
+      // duty_max_health), preferring one standing here; nobody in the pool, it keeps the cup.
+      if (role === 'holder' && this.chaliceCastsLeft() <= cfg.handover_below_casts) {
+        let pool = [];
+        try { pool = store.pool(now); } catch {}
+        const c = this.s?.client;
+        const fleetHere = [...(c?.room?.objects?.values?.() ?? [])]
+          .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER)).map(o => c.rsc?.get(o.nameRsc) || '');
+        const alt = draftAlternate({ cfg, pool, fleetHere });
+        if (alt) {
+          if (!cfg.alternate) {
+            try { store.setDuty({ drafted: alt, drafted_at: now }); } catch {}
+            this.chaliceEvent('drafted', { alternate: alt, casts_left: this.chaliceCastsLeft() });
+          }
+          const t = store.request(me, { room: this.hereRoom(), kind: 'relief', ...ttl });
+          return job('relief', 'await', t, { alt });
+        }
       }
       // THE HOLDER IS BACK: the alternate returns the cup to it.
       if (role === 'alternate') {
@@ -24807,7 +24855,8 @@ export class Autopilot {
     }
     // A HOLDER WITHOUT THE CUP, BACK AND STOCKED, ASKS FOR IT. Once per minute at most.
     const duty = store.duty();
-    if (role === 'holder' && ((cfg.alternate && sameName(duty.with, cfg.alternate)) || actingDesk(duty))
+    if (role === 'holder' && ((cfg.alternate && sameName(duty.with, cfg.alternate)) || actingDesk(duty)
+        || (duty.drafted && sameName(duty.with, duty.drafted)))
         && this.chaliceCastsLeft() > cfg.handover_below_casts
         && (cfg.post_room == null || this.hereRoom() === cfg.post_room)
         && (!this._chaliceAskedAt || now - this._chaliceAskedAt > 60_000)) {
@@ -25038,14 +25087,15 @@ export class Autopilot {
       case 'relief:await': {
         const t = store.ticket(st.ticket);
         if (!t || t.status === 'abandoned') return done('abandoned');
-        if (!this.playerHere(cfg.alternate)) return true;
+        const alt = st.alt ?? cfg.alternate;
+        if (!this.playerHere(alt)) return true;
         const cup = this.chaliceInPack();
         if (!cup) return done();
-        const r = await this.chaliceGive(cfg.alternate, [cup.id], { stillHave: () => !!this.chaliceInPack() });
+        const r = await this.chaliceGive(alt, [cup.id], { stillHave: () => !!this.chaliceInPack() });
         if (!r.gave) return true;
-        try { store.setDuty({ with: cfg.alternate, holder_away: true }); } catch {}
-        this.chaliceEvent('relieved', { to: cfg.alternate, casts_left: this.chaliceCastsLeft() });
-        this.note('handed the chalice to the alternate before the supply trip', { to: cfg.alternate });
+        try { store.setDuty({ with: alt, holder_away: true }); } catch {}
+        this.chaliceEvent('relieved', { to: alt, casts_left: this.chaliceCastsLeft() });
+        this.note('handed the chalice to the alternate before the supply trip', { to: alt });
         return done();
       }
       // ---- the alternate goes to the holder to take the cup
@@ -25065,7 +25115,7 @@ export class Autopilot {
         if (!cup) return done();
         const r = await this.chaliceGive(cfg.holder, [cup.id], { stillHave: () => !!this.chaliceInPack() });
         if (!r.gave) return true;
-        try { store.setDuty({ with: cfg.holder, holder_away: false, acting: null }); } catch {}
+        try { store.setDuty({ with: cfg.holder, holder_away: false, acting: null, drafted: null }); } catch {}
         this._chaliceActing = null;
         this.chaliceEvent('returned', { to: cfg.holder });
         return done();
@@ -25073,7 +25123,7 @@ export class Autopilot {
       // ---- the holder waits for its cup
       case 'reclaim:await':
         if (this.chaliceInPack()) {
-          try { store.setDuty({ with: me, holder_away: false }); } catch {}
+          try { store.setDuty({ with: me, holder_away: false, drafted: null, acting: null }); } catch {}
           this.chaliceEvent('reclaimed', {});
           return done();
         }

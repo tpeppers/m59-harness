@@ -14,12 +14,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
-import { ChaliceStore, normalizeChalice, GUILD_HALL_ROOM } from './m59-chalice.mjs';
+import { ChaliceStore, normalizeChalice, GUILD_HALL_ROOM, servingDesk } from './m59-chalice.mjs';
 import * as party from './m59-party.mjs';
 
 // THE FLEET, for the human desk's fleetmate gate. Stranger is deliberately absent.
 party.setRosterSource(() => new Set(['Loial the Ogier', 'Rizzo', 'Kermit', 'Pepe', 'Gonzo', 'Zoot',
-  'Beaker', 'Bunsen', 'Animal', 'Floyd', 'Janice', 'Lew', 'Scooter', 'Statler', 'Clifford', 'Rowlf', 'Robin']));
+  'Beaker', 'Bunsen', 'Animal', 'Floyd', 'Janice', 'Lew', 'Scooter', 'Statler', 'Clifford', 'Rowlf', 'Robin',
+  'Raphael son of Mephistopheles', 'Marco Polo']));
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; console.log('  ok  ', what); } else { fail++; console.log('  FAIL', what); } };
@@ -1048,8 +1049,9 @@ try {
     const store = new ChaliceStore({ directory: dir, namespace: ns });
     const cfg = normalizeChalice({ holder: 'Loial the Ogier', alternate: 'Rizzo', station_room: 2,
       post_room: 2, floor_grace_ms: 150, ...extra });
-    const k = (name, room = 2) => {
+    const k = (name, room = 2, maxHealth = 60) => {
       const P = world.add(name, { room });
+      P.client.vitals = () => ({ health: { value: maxHealth, max: maxHealth } });
       const ap = keeper(world, P, { cfg, store });
       ap.chaliceMakeRoom = async () => {};
       return { P, ap };
@@ -1071,7 +1073,7 @@ try {
     ok(store.duty()?.with === 'Loial the Ogier', 'and the duty record says who has it');
   }
 
-  section('a loose cup, nobody on duty here: any fleet character takes it and runs the desk');
+  section('a loose cup, nobody on duty here: whoever is here keeps it safe, and is NOT drafted');
   {
     const { world, store, k, cupDown } = guardWorld('g-anyone');
     const G = k('Gonzo');
@@ -1080,13 +1082,14 @@ try {
     ok(has(world, G.P, /chalice/i), 'taken at once');
     ok(G.ap.events.some(e => e.what === 'swept' && e.why === 'nobody on duty is here'), 'and says why');
     await G.ap.chaliceGuard();
-    ok(store.duty()?.acting === 'Gonzo' && store.duty()?.holder_away === true, 'registered as the acting desk');
-    ok(G.ap.chaliceRole() === 'alternate', 'and serves as the alternate');
-    ok(G.ap.events.some(e => e.what === 'acting_desk'), 'the role change is ledgered');
-    // The holder comes back to its post and asks for the cup back.
+    ok(!store.duty()?.acting && G.ap.chaliceRole() === 'traveller' && !G.ap.chaliceBusy(), 'not registered as a desk, not parked');
+    ok(G.ap.events.some(e => e.what === 'carrying_off_duty'), 'the carry is ledgered');
+    // The holder comes back to the room: the cup goes straight back to it.
     const L = k('Loial the Ogier');
-    const job = L.ap.chaliceNextJob(G.ap.chaliceCfg, 'holder', null, store, 'Loial the Ogier', Date.now());
-    ok(job?.kind === 'reclaim', 'the holder, back at its post, asks the acting desk for the cup');
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i) && store.handoff()?.rider === 'Loial the Ogier', 'handed back to the desk runner once it is here');
+    await L.ap.chaliceGuard();
+    ok(has(world, L.P, /chalice/i), 'the holder has it');
   }
 
   section('a registered hand-off: only its rider may lift the cup');
@@ -1142,10 +1145,10 @@ try {
     ok(store.duty()?.with === 'Loial the Ogier' && !store.duty()?.acting, 'no acting desk left behind');
   }
 
-  section('a return the holder does not take is not bounced: the picker runs the desk instead');
+  section('a return the holder does not take is not bounced: the picker keeps it and tries again later');
   {
     const { world, store, k } = guardWorld('g-bounce');
-    const L = k('Loial the Ogier'), G = k('Gonzo');
+    k('Loial the Ogier'); const G = k('Gonzo');
     G.P.client.inventory.push(world.item('chalice of the rain'));
     await G.ap.chaliceGuard();
     ok(!has(world, G.P, /chalice/i), 'dropped for the holder once');
@@ -1158,9 +1161,10 @@ try {
     G.ap._chaliceReturnedAt = 0;
     await G.ap.chaliceGuard();
     ok(has(world, G.P, /chalice/i), 'and it is NOT dropped again');
-    ok(store.duty()?.acting === 'Gonzo', 'Gonzo runs the desk');
-    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', null, store, 'Loial the Ogier', Date.now());
-    ok(job?.kind === 'reclaim', 'the holder, when it works again, asks for it back by ticket');
+    ok(!store.duty()?.acting && G.ap.chaliceRole() === 'traveller', 'and Gonzo is not drafted onto the desk');
+    G.ap._chaliceReturnBackoffUntil = 0;
+    await G.ap.chaliceGuard();
+    ok(!has(world, G.P, /chalice/i), 'once the backoff lapses it is offered to the holder again');
   }
 
   // Operator, 2026-09-28: "Send excess shillings back to the guild hall ... drop excess $$ to whoever
@@ -1244,6 +1248,59 @@ try {
     // The altar opens (illusion dispelled, no orcs): the next try after the backoff takes it.
     G.ap.s.lootFloor = lift;
     ok(await G.ap.chaliceGuard(t0 + 61_000 + 121_000) === true && has(world, G.P, /chalice/i), 'once it can be lifted, it is');
+  }
+
+  // Operator, 2026-10-06: "Chalice duty should be defaulted to pass between the characters under
+  // 30hp". Janice (71 max) swept the cup, became the acting desk and was parked at 2 for hours.
+  // Operator, 2026-10-06: Janice (71 max) swept the cup, became the acting desk and was parked at 2
+  // for hours. "An alternate service desk manager can/should be drafted (preferring under 30hp mules)
+  // if the desk manager needs to personally run an errand, but that should be extremely rare".
+  section('a stale record naming a farmer as the desk no longer drafts her');
+  {
+    const { world, store, k } = guardWorld('g-legacy', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), J = k('Janice', 2, 71);
+    J.P.client.inventory.push(world.item('chalice of the rain'));
+    store.setDuty({ with: 'Janice', acting: 'Janice', acting_since: Date.now() - 6 * 3600_000, holder_away: true });
+    ok(J.ap.chaliceRole() === 'traveller' && !J.ap.chaliceBusy(), 'the record is not enough to make her the alternate');
+    await J.ap.chaliceGuard();
+    ok(!has(world, J.P, /chalice/i) && store.handoff()?.rider === 'Loial the Ogier', 'she hands it to the holder beside her');
+    await L.ap.chaliceGuard();
+    ok(has(world, L.P, /chalice/i) && store.duty()?.with === 'Loial the Ogier' && !store.duty()?.acting, 'the holder has it back');
+  }
+
+  section('the duty pool: under-30 keepers register themselves, nobody else does');
+  {
+    const { store, k } = guardWorld('g-pool', { alternate: null });
+    const J = k('Janice', 2, 71), R = k('Raphael son of Mephistopheles', 2, 25);
+    await R.ap.chaliceGuard(); await J.ap.chaliceGuard();
+    ok(store.pool().includes('Raphael son of Mephistopheles') && !store.pool().includes('Janice'), JSON.stringify(store.pool()));
+  }
+
+  section('the holder leaving on an errand drafts an under-30 mule, never a farmer');
+  {
+    const { world, store, k } = guardWorld('g-draft', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), J = k('Janice', 2, 71), R = k('Raphael son of Mephistopheles', 2, 25);
+    await R.ap.chaliceGuard(); await J.ap.chaliceGuard();
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;                                             // under handover_below_casts: about to leave
+    const cup = L.ap.chaliceInPack();
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', cup, store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'relief' && job.alt === 'Raphael son of Mephistopheles', 'relief, to the pool member', JSON.stringify(job));
+    ok(store.duty()?.drafted === 'Raphael son of Mephistopheles' && L.ap.events.some(e => e.what === 'drafted'), 'the draft is recorded and ledgered');
+    R.ap._chaliceActing = null;
+    ok(R.ap.chaliceRole() === 'alternate', 'the drafted mule is the alternate');
+    J.ap._chaliceActing = null;
+    ok(J.ap.chaliceRole() === 'traveller', 'Janice is not');
+  }
+
+  section('with nobody in the pool, the holder keeps the cup');
+  {
+    const { world, store, k } = guardWorld('g-nodraft', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20); k('Janice', 2, 71);
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind !== 'relief' && !store.duty()?.drafted, 'no relief, nobody drafted', JSON.stringify(job));
   }
 
   section('a cup somewhere else is somebody else\'s floor');
