@@ -64,7 +64,7 @@ export const DEFAULT_GAP_MS = 10 * 60_000;
 // Bookkeeping rows: they mark the END of a decision, not contact, so they never extend a battle.
 const BOOKKEEPING = new Set(['finished', 'waiting', 'visible', 'pvp_offline', 'pvp_restored']);
 // What the combat tee writes. Anything else the combat mode records is movement or gear.
-export const COMBAT_EVENTS = new Set(['pvp_attacked', 'triggered', 'wand_volley', 'wand_refused',
+export const COMBAT_EVENTS = new Set(['pvp_attacked', 'triggered', 'wand_volley', 'wand_refused', 'opener_cast',
   'pvp_outcome', 'pvp_rebound', 'pvp_retargeted', 'finished']);
 
 let fleetCache;
@@ -134,6 +134,7 @@ export function combatRow(event, { at = Date.now(), observer, room = null, targe
       incoming_hits: a.incoming_hits ?? 0, incoming_misses: a.incoming_misses ?? 0,
       outgoing_hits: a.outgoing_hits ?? 0, outgoing_misses: a.outgoing_misses ?? 0 })),
     zaps: pvp.zaps ?? null, wand: pvp.last_wand ?? null,
+    opener_casts: pvp.opener_casts ?? null, opener: pvp.opener?.spell ?? null,
     last_outcome: lo ? { character: lo.character, direction: lo.direction, outcome: lo.outcome,
       weapon: lo.weapon ?? null, verb: lo.verb ?? null, text: lo.text ?? null, at: lo.at ?? null } : null };
 }
