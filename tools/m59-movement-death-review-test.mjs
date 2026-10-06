@@ -12,6 +12,10 @@ const stuckFrames=[frame('earlier',30000,30,{inert:{travelling:true,to:9}},{row:
 assert.equal(selectTravelCheckpoint({...bundle,frames:stuckFrames}).id,'stall','recorded blockage precedes an earlier map entrance or later shelter');
 const predicted=structuredClone(stalled);predicted.id='predicted';predicted.at=65000;predicted.scene.actors[0].at.v.predicted=true;
 assert.equal(selectTravelCheckpoint({...bundle,frames:[predicted,...stuckFrames.slice(1)]}).id,'stall','a predicted onset must yield to the confirmed blocked pose');
+const continuing=[frame('entry',85000,62,{inert:{travelling:true,to:9}}),frame('expected',89000,62,{inert:{travelling:true,to:9}},{row:3,col:7,x:480,y:224,predicted:true}),frame('middle',93000,62,{inert:{travelling:true,to:9}}),frame('expected-again',97000,29,{inert:{travelling:true,to:9}},{row:3,col:7,x:480,y:224,predicted:true}),frame('one-hit-left',98800,8,{inert:{travelling:true,to:9}})];
+assert.equal(selectTravelCheckpoint({...bundle,frames:continuing}).id,'entry','predictions break stall proof, not continuous travel ownership');
+const newerJourney=frame('new-journey',99500,20,{inert:{travelling:true,to:10}});
+assert.equal(selectTravelCheckpoint({...bundle,frames:[...continuing,newerJourney]}).id,'new-journey','a changed objective really starts a new active episode');
 const captured={commit:'abc',files:{'tools/m59-world.mjs':'a','tools/m59-game.mjs':'b'},source_sha256:'original'};
 assert(sourceAssessment(captured,{...captured}).ok);
 assert(!sourceAssessment(captured,{...captured,commit:'other'}).ok);

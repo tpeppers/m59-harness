@@ -23,10 +23,19 @@ export function selectTravelCheckpoint(bundle,{frameId=null,deathRoom=null}={}) 
  const active=f=>{const c=f.scene.controller,d=c.decision;return c.inert?.travelling&&(!d||['ended','yielded'].includes(d.status));};
  const pose=f=>f.scene.actors.find(a=>a.mine).at.v;
  const nearby=f=>f.scene.actors.some(a=>a.kind==='monster'&&a.at?.v&&Math.hypot(a.at.v.x-pose(f).x,a.at.v.y-pose(f).y)<=3*64);
- let start=null,last=null,stall=null,episode=null;
- for(const f of rows){if(!active(f)||pose(f).predicted){start=null;last=null;continue;}
+ let start=null,last=null,stall=null,episode=null,episodeLast=null;
+ for(const f of rows){
+  if(!active(f)){start=null;last=null;episodeLast=null;continue;}
+  // Predictions cannot prove a stall, but they do not restart the journey.
+  // Otherwise its final confirmed pose can win with one hit of HP remaining.
+  const sameEpisode=episodeLast&&f.at-episodeLast.at<=5000
+    &&travelObjective(f.scene.controller)===travelObjective(episodeLast.scene.controller)
+    &&f.scene.room.num===episodeLast.scene.room.num;
+  if(!sameEpisode)episode=null;
+  if(!pose(f).predicted&&!episode)episode=f;
+  episodeLast=f;
+  if(pose(f).predicted){start=null;last=null;continue;}
   const continuous=last&&f.at-last.at<=5000&&travelObjective(f.scene.controller)===travelObjective(last.scene.controller)&&f.scene.room.num===last.scene.room.num;
-  if(!continuous)episode=f;
   if(!continuous||Math.hypot(pose(f).x-pose(start).x,pose(f).y-pose(start).y)>8)start=f;
   if(f.at-start.at>=2000&&nearby(f)&&bundle.death.at-start.at>=5000)stall=start;
   last=f;
