@@ -136,6 +136,9 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // The holder hands the cup to the alternate once its own supply falls this low — a
   // holder that is about to leave must not leave with the fleet's only chalice.
   handover_below_casts: 12,
+  // WHO MAY RUN THE DESK besides the holder and alternate: characters whose MAX health is under
+  // this (operator, 2026-10-06). Anybody else who ends up with the cup passes it on. 0 = nobody.
+  duty_max_health: 30,
   // EMERALDS THE HOLDER NEVER SPENDS ON FORCES OF LIGHT, because they are his way out. His
   // supply trip starts with a Rescue from the post (DUM's `caster-rescue-to-shop`), which
   // costs one emerald (rescue.kod:56) and which DUM refuses unless one survives its own
@@ -253,7 +256,7 @@ export const HUMAN_FRESH_MS = 90_000;
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
-  floor_grace_ms: [0, 600_000], handoff_ttl_ms: [1_000, 120_000],
+  floor_grace_ms: [0, 600_000], handoff_ttl_ms: [1_000, 120_000], duty_max_health: [0, 10_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
   restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
@@ -537,6 +540,48 @@ export function roleOf(character, cfg) {
   return 'traveller';
 }
 
+/**
+ * MAY THIS CHARACTER RUN THE DESK? Pure. The holder and the alternate always may; anybody else
+ * only while its max health is under `duty_max_health`. Operator, 2026-10-06: "Chalice duty should
+ * be defaulted to pass between the characters under 30hp" — Janice (71 max) swept the cup off the
+ * floor, became the acting desk, and was parked at the station for hours instead of practising.
+ * Unknown health is not eligible: a desk nobody meant to staff is the failure being fixed.
+ */
+export function dutyEligible({ name, maxHealth, cfg } = {}) {
+  if (!cfg || !name) return false;
+  if (sameName(name, cfg.holder) || sameName(name, cfg.alternate)) return true;
+  const cap = Number(cfg.duty_max_health ?? CHALICE_DEFAULTS.duty_max_health);
+  const max = Number(maxHealth);
+  return Number.isFinite(max) && max > 0 && max < cap;
+}
+
+/**
+ * WHOM A CHARACTER CARRYING THE CUP SHOULD HAND IT TO, of those standing here. Pure.
+ * Operator, 2026-10-06: "people not running the service desk ... just hand the chalice back to the
+ * desk runner" — whoever the duty record says is serving (the holder, or an alternate standing in
+ * while the holder is on an errand), else the holder, else the configured or drafted alternate.
+ * Never another mule: that is how a cup gets handed round and a farmer gets drafted. null if none.
+ */
+export function passTo({ cfg, fleetHere = [], duty = null } = {}) {
+  const here = n => n && fleetHere.find(x => sameName(x, n));
+  return here(servingDesk(duty, cfg)?.server) ?? here(cfg?.holder) ?? here(cfg?.alternate)
+    ?? here(duty?.drafted) ?? null;
+}
+
+/**
+ * WHOM THE HOLDER DRAFTS AS ALTERNATE when it has to leave on an errand and none is configured.
+ * Pure. Operator: "An alternate service desk manager can/should be drafted (preferring under 30hp
+ * mules) if the desk manager needs to personally run an errand, but that should be extremely rare".
+ * Only duty-pool members (under `duty_max_health`, registered by their own keepers); one standing
+ * here first, then by name so the choice is stable. null = nobody to draft: the holder keeps it.
+ */
+export function draftAlternate({ cfg, pool = [], fleetHere = [] } = {}) {
+  if (cfg?.alternate) return cfg.alternate;
+  const cands = [...pool].filter(n => !sameName(n, cfg?.holder))
+    .sort((a, b) => String(a).localeCompare(String(b)));
+  return cands.find(n => fleetHere.some(x => sameName(x, n))) ?? cands[0] ?? null;
+}
+
 // ------------------------------------------------------------------------------ plans
 
 /**
@@ -640,6 +685,10 @@ export function servingDesk(duty, cfg, now = Date.now(), humans = null) {
   if (d.paused) return null;                         // its body is somebody else's right now
   // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
   if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
+  // A CARRIER WHO IS NOT ON DUTY IS NOT A DESK: somebody over duty_max_health keeping the cup safe
+  // until the holder or a pool member is there to take it. Riders walk instead of waiting on her.
+  if (!sameName(d.with, cfg?.holder) && !sameName(d.with, cfg?.alternate) && !sameName(d.with, d.drafted)
+      && !actingDesk(d)) return null;
   return { server: d.with, human: false, ...(actingDesk(d) ? { acting: true } : {}) };
 }
 
@@ -967,6 +1016,22 @@ export class ChaliceStore {
 
   // ---- duty
   duty() { return this.read().duty ?? {}; }
+
+  // ---- the duty pool: characters under duty_max_health, each registered by its OWN keeper,
+  // because no keeper can read another character's max health. Stale after 30 minutes.
+  pool(now = Date.now()) {
+    return Object.entries(this.read().pool ?? {})
+      .filter(([, p]) => now - (p?.at ?? 0) < 30 * 60_000).map(([name]) => name);
+  }
+
+  setPool(name, member, now = Date.now()) {
+    return this.update(s => {
+      s.pool ??= {};
+      for (const k of Object.keys(s.pool)) if (sameName(k, name)) delete s.pool[k];
+      if (member) s.pool[name] = { max_health: member.max_health ?? null, at: now };
+      return null;
+    }, now);
+  }
 
   // ---- a hand-off in flight: who alone may lift the cup off the floor, and until when.
   // REGISTERED, NOT INFERRED: whoever drops the cup for somebody says so here FIRST, so every
