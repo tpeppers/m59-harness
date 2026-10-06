@@ -54,7 +54,9 @@ import { bakeRoom, components, compositionRisk, exitAnchors, replay,
 import { loadMap, selectedEdgeAt, findPath, edgeExitsOf, edgeCandidatesOf,
          AVOID_IN_TRANSIT } from './m59-map.mjs';
 import { anchorFor } from './m59-routes.mjs';
-import { World } from './m59-world.mjs';
+import { World, spreadEdges } from './m59-world.mjs';
+import { fineReachableSquares } from './m59-finepath.mjs';
+import { Session } from './m59-session.mjs';
 import { crossingBook, WALKS_DIR } from './m59-crossings.mjs';
 import { attachStepMasks, bakedPath, stepMaskCurrent } from './m59-routes.mjs';
 
@@ -1364,6 +1366,57 @@ console.log('\nthe executable first hop — hard through fallbacks, local to exp
        northOffers.length > 0 &&
        northOffers.every(x => Math.abs(Number(at(x).col) - anchor.col) <= 2),
        JSON.stringify(northOffers.map(x => `r${at(x).row}c${at(x).col}`)));
+
+    // Piggy, 2026-10-06: the live body oscillated at r8c16 while travelling north.
+    // World prefers r1c45, but leaveViaAny flattened its nearer island alternates
+    // and sorted them ahead of the already-present, unflagged baked anchor.
+    const piggy = { id: 1, row: 8, col: 16, x: 1072, y: 535 };
+    const client = { roomNameRsc: realMap.rooms['567'].nameRsc,
+      roomRsc: realMap.rooms['567'].roomRsc,
+      room: { id: realMap.rooms['567'].objId, objects: new Map([[1, piggy]]) },
+      selfId: 1, self: piggy, rsc: { get: () => '' } };
+    const piggyWorld = new World(client, realMap);
+    const offered = piggyWorld.exits().filter(x => Number(x.to) === 566);
+    ok('567 excludes the disconnected western openings from all normal crossing candidates',
+       offered.length > 0 && spreadEdges(offered).every(x =>
+         Math.floor(x.fine_stand_on.x / KOD_FINENESS) >= 44) &&
+       offered.some(x => x.excluded_openings?.some(p => p.col <= 17)),
+       JSON.stringify(offered));
+    const geometry = piggyWorld.geometry;
+    const reachable = fineReachableSquares(geometry, {
+      x: (45 - 0.5) * CLIENT_FINENESS, y: 0.5 * CLIENT_FINENESS,
+    }, { maxMs: 10000 });
+    ok('fine connectivity exhausts the accessible component without reaching the phantom island',
+       reachable.complete && reachable.squares.has('1,45') &&
+       !reachable.squares.has('1,16'), JSON.stringify({ ...reachable, squares: reachable.squares.size }));
+    const bounded = fineReachableSquares(geometry, {
+      x: (45 - 0.5) * CLIENT_FINENESS, y: 0.5 * CLIENT_FINENESS,
+    }, { maxNodes: 1 });
+    ok('fine connectivity budget exhaustion is unknown, not proof of an unreachable exit',
+       !bounded.complete && bounded.reason === 'fine connectivity budget exhausted');
+    let first;
+    const crossing = { client, world: piggyWorld, movementGeneration: 0,
+      movementWasCancelled: () => false,
+      cancelledMovement: () => ({ left: false, cancelled: true }),
+      async leaveVia(exit) { first = exit; return { cancelled: true }; } };
+    // Retain the old input shape independently of the new connectivity filter,
+    // so removing anchor priority cannot be hidden by removing this alternative.
+    const island = { ...offered[0], stand_on: { row: 1, col: 16 },
+      fine_stand_on: { x: 1056, y: 96 }, edge_target: { x: 1056, y: 63 },
+      steps_away: 10, alternates: undefined };
+    const oldShape = [{ ...offered[0], alternates: [{ row: 1, col: 16,
+      fine_stand_on: island.fine_stand_on, edge_target: island.edge_target, steps: 10 }] }];
+    await Session.prototype.leaveViaAny.call(crossing, oldShape);
+    ok('567 crossing keeps the existing northeast anchor ahead of nearer island alternatives',
+       first?.stand_on?.row === 1 && first?.stand_on?.col === 45 &&
+       first?.fine_stand_on?.x === offered[0]?.fine_stand_on?.x &&
+       first?.edge_target?.x === offered[0]?.edge_target?.x,
+       JSON.stringify(first));
+    // Exact callers select a particular door deliberately; anchor priority must
+    // not widen their request or force a different crossing.
+    await Session.prototype.leaveViaAny.call(crossing, [island], { exact: true });
+    ok('exact crossing selection still keeps the caller-selected square',
+       first?.stand_on?.col === 16, JSON.stringify(first));
   }
 }
 

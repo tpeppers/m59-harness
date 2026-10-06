@@ -23,7 +23,7 @@
 // are 64-units-per-square kod wire points unless explicitly labelled client/BSP.
 
 import { sharedRoomGeometry, roomHasDeclaredFallJump, protocolToClient } from './m59-roo.mjs';
-import { finePath, pointOfSquare, boundsAround, CLIENT_PER_SQUARE } from './m59-finepath.mjs';
+import { finePath, fineReachableSquares, pointOfSquare, boundsAround, CLIENT_PER_SQUARE } from './m59-finepath.mjs';
 import { exitsOf, findPath, inferredExits, codeExits, edgeExitsOf, edgeCandidatesOf, LEAVE,
          AVOID_IN_TRANSIT, selectedEdgeAt, routingRevision } from './m59-map.mjs';
 import { inRegion, describeWhen } from './m59-codeexits.mjs';
@@ -39,6 +39,7 @@ import { gatedEntrance } from './m59-gated-entrances.mjs';
 const CODE_EXIT_TRANSIT = new WeakMap();
 import { resolveRoomWire } from './m59-room-wire.mjs';
 import { groundEffects, groundEffect } from './m59-ground-effects.mjs';
+import { isMutableGeometry } from './m59-mutable.mjs';
 
 // Marks used on the minimap. Chosen so the picture stays readable in a terminal and
 // so the important things are the ones that stand out: you, then players, then
@@ -657,7 +658,12 @@ export class World {
     // + room.roo as a guard against a World being reused across rooms. Portal objects are
     // per-client observations and are appended after the cached static result.
     if (origin && Number.isFinite(origin.row) && Number.isFinite(origin.col)) {
-      const key = `${room.num}|${room.roo ?? ''}|${origin.row},${origin.col}`;
+      // Connectivity of a body inside a narrow tile can change across its wall.
+      // Keep fine-origin answers separate rather than sharing an exclusion with
+      // another actor merely because both occupy the same coarse square.
+      const fineOriginKey = Number.isFinite(me?.x) && Number.isFinite(me?.y)
+        ? `|${me.x},${me.y}` : '';
+      const key = `${room.num}|${room.roo ?? ''}|${origin.row},${origin.col}${fineOriginKey}`;
       const shared = sharedExitCache(this.map);
       // Existing offline fixtures clear `_exitCache` explicitly to force one fresh compute.
       // Preserve that hook without clearing the fleet-wide cache for every other World.
@@ -704,6 +710,7 @@ export class World {
     // and breadth-first ordering so this is a scheduling change only: every exit sees the
     // exact same stages and distances it did when it owned an identical private flood.
     let originFloods = null;
+    let fineOriginReach = null;
     const exitFloods = () => {
       if (originFloods) return originFloods;
       const flood = collision => {
@@ -991,6 +998,34 @@ export class World {
       //
       // NO TABLE, OR A ROOM IT DOES NOT COVER, MEANS THE ORDER THAT WAS ALWAYS USED.
       const anchor = anchorFor(activeRoutes(), Number(room?.num ?? 0), Number(e.to));
+      // A boundary trace only proves the last outward step. Coarse fallback can
+      // connect an isolated patch of floor to the room through walls: 567's west
+      // island is nearer than its real northeast opening. When this boundary has
+      // a mover-reachable opening, test the live body's directed connectivity before
+      // offering coarse-only alternatives. Fine gaps survive; an incomplete search
+      // says nothing and preserves the old fallback. Never remove the whole exit.
+      const excludedOpenings = [];
+      const connected = precise.find(c => !c.grid_only);
+      if (connected && precise.some(c => c.grid_only)
+          && !isMutableGeometry(room.num)
+          && Number.isFinite(me?.x) && Number.isFinite(me?.y)) {
+        // One search per origin, shared by all its boundaries. Starting at the
+        // exit itself would reverse the question on a one-way drop.
+        const reach = fineOriginReach ??= fineReachableSquares(geo, {
+          x: protocolToClient(me.x), y: protocolToClient(me.y),
+        });
+        if (reach.complete) {
+          for (let i = precise.length - 1; i >= 0; i--) {
+            const candidate = precise[i];
+            const row = Math.floor(candidate.fine_stand_on.y / KOD_FINENESS);
+            const col = Math.floor(candidate.fine_stand_on.x / KOD_FINENESS);
+            if (!candidate.grid_only || reach.squares.has(`${row},${col}`)) continue;
+            excludedOpenings.push({ row, col,
+              reason: 'fine_disconnected_from_live_origin' });
+            precise.splice(i, 1);
+          }
+        }
+      }
       const anchored = c => anchor
         && ((c.row === anchor.row && c.col === anchor.col)
             || (Math.floor(c.fine_stand_on.y / KOD_FINENESS) === anchor.row
@@ -1050,6 +1085,7 @@ export class World {
         // the nearest is blocked, which is what makes a wide edge reliable instead of a
         // coin flip on whichever square happened to be closest.
         ...(alternates.length ? { alternates } : {}),
+        ...(excludedOpenings.length ? { excluded_openings: excludedOpenings } : {}),
         ...(viableCount ? { standable_on_this_boundary: viableCount } : {}),
         how: approach
           ? `walk_to {"col":${approach.col},"row":${approach.row}} (r${approach.row}c${approach.col}), fine-position at ` +

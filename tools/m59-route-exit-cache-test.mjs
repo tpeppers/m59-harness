@@ -170,6 +170,16 @@ try {
     variantWorld.exits();
     ok('a World backed by another map object computes independently',
        variantReads === 1);
+
+    const fineMap = makeWorldMap();
+    const fineWorld = makeWorld(fineMap);
+    let fineReads = 0;
+    fineWorld._computeExits = () => { fineReads++; return []; };
+    fineWorld.c.self.x = 288; fineWorld.c.self.y = 288;
+    fineWorld.exits(); fineWorld.exits();
+    fineWorld.c.self.x = 303; // still r4c4, potentially on another side of a wall
+    fineWorld.exits();
+    ok('fine-origin exclusions are cached only for the same body position', fineReads === 2);
   }
 
   console.log('\nretiring an inferred edge invalidates exits, routes, and World projections');

@@ -5763,6 +5763,20 @@ export function sessionWalkPrototype(deps) {
         if (!corrected || corrected.col !== exit.stand_on.col || corrected.row !== exit.stand_on.row)
           return { left: false, stage: 'walk', reason: correction.reason ?? 'geometry_blocked',
                    note: correction.note ?? 'local collision could not place the character on the exact exit square' };
+        // The local endpoint is prediction. Confirm the final tile too: Jasper's
+        // neighboring locked door must not receive go intended for the tavern.
+        at = await this.confirmPosition();
+        const stoppedAfterFinalDoorConfirm = await stopAfterAwait();
+        if (stoppedAfterFinalDoorConfirm) return stoppedAfterFinalDoorConfirm;
+        if (!at) {
+          this.finePositionUnknown = true;
+          return { left: false, stage: 'walk', reason: 'position_confirmation_timeout',
+            note: 'the final doorway correction was not confirmed, so go was not sent' };
+        }
+        if (at.row !== exit.stand_on.row || at.col !== exit.stand_on.col)
+          return { left: false, stage: 'walk', reason: 'doorway_position_not_confirmed',
+            predicted_position: corrected, confirmed_position: at,
+            note: 'the server did not place the character on the requested doorway tile' };
         leaned = true;
       }
       // Wait for the ROOM CHANGE specifically. A door announces itself first —
@@ -7376,9 +7390,17 @@ export function sessionWalkPrototype(deps) {
         }
       } catch (err) { why = `anchorFor threw: ${err.message}`; }
       if (!anchor || anchor.row == null) { anchorTrace.push(why ?? `anchor had no row for ${e.to}`); continue; }
-      const already = spread.some(x => Number(x.to) === Number(e.to) &&
-                                       x.stand_on?.row === anchor.row && x.stand_on?.col === anchor.col);
-      if (already) continue;
+      const already = spread.filter(x => Number(x.to) === Number(e.to) &&
+                                         x.stand_on?.row === anchor.row && x.stand_on?.col === anchor.col);
+      if (already.length) {
+        // World may already prefer the anchor. Keep that preference after flattening
+        // and distance-sorting its alternatives: in 567, failing to flag r1c45 put
+        // the nearer northwest island ahead of the northeast doorway. Preserve the
+        // existing crossing's fine coordinates instead of synthesizing another one.
+        for (let i = 0; i < spread.length; i++)
+          if (already.includes(spread[i])) spread[i] = { ...spread[i], from_anchor: true };
+        continue;
+      }
       const me = this.client?.self;
       spread.unshift({ ...e, stand_on: { col: anchor.col, row: anchor.row },
                        steps_away: me ? Math.max(Math.abs(anchor.row - me.row), Math.abs(anchor.col - me.col)) : 0,

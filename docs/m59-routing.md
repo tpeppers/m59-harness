@@ -1885,3 +1885,27 @@ where to stand first, and `aim` is the stage square a `crawlTo`/mana-node style 
 aim at. `tools/fixtures/` is where a promoted one goes. `node tools/m59-move-origin-test.mjs`
 pins the write from a simulated failed journey and a pre-empted walk, the dedupe, and the export.
 
+## Disconnected boundary openings
+
+A BSP-valid outward step does not prove a player can reach its starting point.
+In room 567, the north boundary publishes northwest island openings as well as the
+real northeast doorway at r1c45. Coarse fallback joined the island through walls;
+flattening exit alternatives then ranked the nearer island ahead of the doorway.
+`leaveViaAny` now preserves anchor priority even when the anchor already exists.
+
+When a boundary has a collision-reachable opening, `World.exits()` checks its
+coarse-only alternatives against a directed fine-lattice flood from the live body.
+An exhausted search excludes disconnected opening squares and reports them in
+`excluded_openings` with reason `fine_disconnected_from_live_origin`. The search
+uses the ordinary fine-path collision predicate, stays inside the room, and is
+limited to 20,000 nodes and 500 ms per origin. Missing geometry, invalid origins,
+budget exhaustion and declared moving rooms preserve the existing fallbacks.
+This is a bounded model check, not proof about a different server's geometry.
+Fine-origin cache keys prevent one side of a narrow tile from borrowing the other
+side's exclusion. No entire room transition is deleted by this check.
+
+For `go` doors, a final corrective step must be server-confirmed before `go` is
+sent. A mismatch reports `doorway_position_not_confirmed` with predicted and
+confirmed positions. West Jasper's tavern at r64c20/r64c21 is beside a locked door
+at r64c22: a locked response does not prove the intended tavern tile was reached.
+

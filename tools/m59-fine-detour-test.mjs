@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { sharedRoomGeometry, protocolToClient } from './m59-roo.mjs';
-import { finePath, fineRouteDetour, pointOfSquare, boundsAround, squareOf, ARRIVE_WITHIN } from './m59-finepath.mjs';
+import { finePath, fineReachableSquares, fineRouteDetour, pointOfSquare, boundsAround, squareOf, ARRIVE_WITHIN } from './m59-finepath.mjs';
 const map=loadMap(); attachStepMasks(map);
 const geo=sharedRoomGeometry(map.rooms[537]);
 const from={row:38,col:16};
@@ -38,4 +38,15 @@ assert.equal(finePath(geo,byDoor,doorCenter,{maxNodes:4000}).found,false);
 const doorPath=finePath(geo,byDoor,doorCenter,{maxNodes:4000,goalSquare:doorway});
 assert.equal(doorPath.found,true, 'the Faronath door has a reachable edge, not a reachable center');
 assert.deepEqual(squareOf(doorPath.points.at(-1).x,doorPath.points.at(-1).y),doorway);
+const doorReach = fineReachableSquares(geo, byDoor, { maxMs: 10000 });
+assert.ok(doorReach.squares.has(`${doorway.row},${doorway.col}`),
+  'connectivity retains a reachable doorway sliver even when its center is blocked');
+const directed = { collisionReady: true, rows: 2, cols: 3,
+  traceFineMoveClient(x, y, tx, ty) {
+    // A one-way ledge between the two halves of this little room.
+    return x >= 1024 && tx < 1024 ? { x, y } : { x: tx, y: ty };
+  } };
+assert.ok(fineReachableSquares(directed, { x: 512, y: 512 }).squares.has('1,3'));
+assert.ok(!fineReachableSquares(directed, { x: 1536, y: 512 }).squares.has('1,1'),
+  'connectivity follows movement forward and never assumes a ledge can be climbed back');
 console.log('fine detours reach usable square edges and bypass solid intermediate squares using validated ground');

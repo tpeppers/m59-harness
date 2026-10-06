@@ -137,6 +137,42 @@ export function finePath(geo, from, to, { bounds = null, maxNodes = 20000, goalS
   return { found: false, reason: 'no fine route', nodes };
 }
 
+// Directed connectivity on the same body-sized lattice as finePath. Only a fully
+// exhausted, room-bounded search can rule out a square; budget exhaustion is unknown.
+// This does not equate coarse components, or reverse a one-way movement edge.
+export function fineReachableSquares(geo, from, { maxNodes = 20000, maxMs = 500 } = {}) {
+  const squares = new Set();
+  const result = (complete, reason, nodes) => ({ complete, reason, nodes, squares });
+  if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function'
+      || !Number.isFinite(from?.x) || !Number.isFinite(from?.y))
+    return result(false, 'no collision geometry or origin', 0);
+  const inside = p => p.x >= 0 && p.y >= 0
+    && p.x < geo.cols * CLIENT_PER_SQUARE && p.y < geo.rows * CLIENT_PER_SQUARE;
+  if (!inside(from)) return result(false, 'origin outside room', 0);
+  if (typeof geo._occupiable === 'function' && !geo._occupiable(from.x, from.y))
+    return result(false, 'origin has no occupiable floor', 0);
+  const queue = [{ x: from.x, y: from.y }], seen = new Set([key(from.x, from.y)]);
+  const started = Date.now();
+  for (let i = 0; i < queue.length; i++) {
+    if (i >= maxNodes || (i % 64 === 0 && Date.now() - started >= maxMs))
+      return result(false, 'fine connectivity budget exhausted', i);
+    const cur = queue[i], square = squareOf(cur.x, cur.y);
+    squares.add(`${square.row},${square.col}`);
+    for (const m of MOVES) {
+      const aim = { x: cur.x + m.dx, y: cur.y + m.dy };
+      if (!inside(aim)) continue;
+      let landed;
+      try { landed = moveLands(geo, cur.x, cur.y, aim.x, aim.y); }
+      catch { return result(false, 'fine connectivity unavailable', i); }
+      if (!landed || !inside(landed)) continue;
+      const k = key(landed.x, landed.y);
+      if (seen.has(k)) continue;
+      seen.add(k); queue.push(landed);
+    }
+  }
+  return result(true, 'fine component exhausted', queue.length);
+}
+
 /**
  * Trim a fine route to the corners that matter.
  *

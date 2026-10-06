@@ -2657,6 +2657,37 @@ console.log('\nterminal movement propagation and edge packet authority');
        unknownDoorSession.finePositionUnknown === true &&
        fineCorrections === 0 && goPackets === 0,
        JSON.stringify({ unknownDoor, fineCorrections, goPackets }));
+
+    // West Jasper -> Pietro's: the adjacent locked door at r64c22 makes a
+    // predicted correction to r64c21 misleading when the server refused it.
+    const correctedDoor = async reply => {
+      let reads = 0, packets = 0;
+      const s = { ...unknownDoorSession,
+        client: { room: { id: 1 }, self: { row: 64, col: 22 }, evSeq: 0,
+          go() { packets++; }, eventsSince: () => [],
+          waitFor: async () => ({ events: [], timedOut: true }) },
+        pacer: { submit: async (_kind, fn) => fn() },
+        confirmPosition: async () => ++reads === 1 ? { row: 64, col: 22 } : reply,
+        stepFine: async () => ({ moved: true, position: { row: 64, col: 21 } }),
+      };
+      const result = await leaveVia.call(s, { kind: 'go',
+        stand_on: { row: 64, col: 21 }, steps_away: 1 });
+      return { result, reads, packets };
+    };
+    const refusedCorrection = await correctedDoor({ row: 64, col: 22 });
+    ok('a predicted door correction cannot send go from a different server-confirmed square',
+       refusedCorrection.reads === 2 && refusedCorrection.packets === 0 &&
+       refusedCorrection.result.reason === 'doorway_position_not_confirmed',
+       JSON.stringify(refusedCorrection));
+    const lostCorrection = await correctedDoor(null);
+    ok('a final doorway correction confirmation timeout sends no go',
+       lostCorrection.reads === 2 && lostCorrection.packets === 0 &&
+       lostCorrection.result.reason === 'position_confirmation_timeout',
+       JSON.stringify(lostCorrection));
+    const acceptedCorrection = await correctedDoor({ row: 64, col: 21 });
+    ok('a server-confirmed final doorway correction still permits go',
+       acceptedCorrection.reads === 2 && acceptedCorrection.packets > 0,
+       JSON.stringify(acceptedCorrection));
   }
 
   if (typeof leaveViaAny !== 'function') {
