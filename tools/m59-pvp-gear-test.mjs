@@ -550,7 +550,7 @@ await test('a private strategy decides: no zap and no hold means the character s
   assert.equal(ctx.character, 'Kermit');
   assert.deepEqual(ctx.wands.map(w => [w.name, w.timer]), [['lightning wand', true]]);
   assert.equal(ctx.target.id, 2); assert.equal(ctx.target.player, true); assert.equal(ctx.target.dist, 1);
-  assert.deepEqual(ctx.me, { row: 5, col: 5 });
+  assert.deepEqual(ctx.me, { row: 5, col: 5, hp: 100, max_hp: 100 });
   assert.equal(ctx.beat, gear.beatOf(12_000_000, 2000)); assert.equal(ctx.pvp, true);
   f.mode.stop('test');
 });
@@ -618,6 +618,78 @@ await test('a no-combat room is checked before any strategy is asked', async () 
   assert.equal(await f.mode.wandVolley(o), null);
   assert.equal(asked, 0);
   assert.ok(!f.sent.some(x => x.startsWith('apply:')));
+});
+
+// ------------------------------------------------------------------ the decoded tint, offered privately
+//
+// The wire carries XLAT_BASE_VALUE 0x87 + 11*viColor + label (util.kod:271): a lightning wand is
+// 223, a wand of identification 201 (measured on prod 2026-10-06). effectiveName still compares
+// the raw byte with 8 -- deliberately unchanged -- and the decoded reading goes to a private
+// pvpWand strategy as ctx.unidentified, so the rollout is the operator's.
+const WIRE_YELLOW = 0x87 + 11 * gear.XLAT_TO_YELLOW, WIRE_BLUE = 0x87 + 11 * 0x06;
+
+await test('decodePrimaryColour: the encoded pair, as util.kod DecodePrimaryColor', () => {
+  assert.equal(WIRE_YELLOW, 223); assert.equal(WIRE_BLUE, 201);
+  assert.equal(gear.decodePrimaryColour(223), 8);
+  assert.equal(gear.decodePrimaryColour(201), 6);
+  assert.equal(gear.decodePrimaryColour(223 + 5), 8, 'a label colour does not change the primary');
+  assert.equal(gear.decodePrimaryColour(0), null); assert.equal(gear.decodePrimaryColour(undefined), null);
+  assert.equal(gear.decodePrimaryColour(8), null, 'a raw 8 is not an encoding the server sends');
+  assert.equal(gear.decodePrimaryColour(122), 0x0B); assert.equal(gear.decodePrimaryColour(126), 0x0C);
+});
+
+await test('effectiveName is unchanged: a real yellow wand (223) is still just "wand" in public code', () => {
+  assert.equal(gear.effectiveName({}, { name: 'wand', translation: WIRE_YELLOW }), 'wand');
+});
+
+await test('unidentifiedWandsIn: bare "wand" rows with their decoded colour; a spent one is skipped', () => {
+  const names = new Map([[100, 'wand'], [101, 'Wand '], [102, 'lightning wand'], [103, 'herb']]);
+  const c = { rsc: names, inventory: [{ id: 100, nameRsc: 100, translation: WIRE_YELLOW },
+    { id: 101, nameRsc: 101, translation: WIRE_BLUE }, { id: 102, nameRsc: 102 }, { id: 103, nameRsc: 103 }] };
+  assert.deepEqual(gear.unidentifiedWandsIn(c).map(u => [u.id, u.colour]), [[100, 8], [101, 6]]);
+  assert.deepEqual(gear.unidentifiedWandsIn(c, { spent: new Set([100]) }).map(u => u.id), [101]);
+});
+
+const yellowPack = () => {
+  const f = fixture({ items: ['wand', 'wand'] });
+  f.c.inventory[0].translation = WIRE_BLUE; f.c.inventory[1].translation = WIRE_YELLOW;
+  return { f, blue: f.c.inventory[0].id, yellow: f.c.inventory[1].id };
+};
+
+await test('no strategy: an unidentified yellow wand is never fired and melee runs, exactly as before', async () => {
+  const { f } = yellowPack();
+  f.at(20_000_000);
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.ok(!f.sent.some(x => x.startsWith('apply:')), `sent ${f.sent}`);
+  assert.ok(f.sent.some(x => x.startsWith('attack:')), 'the built-in never holds for an unidentified wand');
+  f.mode.stop('test');
+});
+
+await test('a strategy sees ctx.unidentified (decoded) and max health, and may fire the yellow one', async () => {
+  const { f, blue, yellow } = yellowPack();
+  const asked = [];
+  f.mode.wandStrategies = strategy(ctx => {
+    asked.push(ctx);
+    const y = ctx.unidentified.find(u => u.colour === 8);
+    return ctx.beat === ctx.lastVolleyBeat ? { fire: null, hold: true } : { fire: y.id, hold: true, face: true };
+  });
+  f.at(22_000_000);
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.deepEqual(asked[0].unidentified.map(u => [u.id, u.colour]), [[blue, 6], [yellow, 8]]);
+  assert.deepEqual(asked[0].wands, [], 'public effectiveName did not promote it to a volley wand');
+  assert.equal(asked[0].me.max_hp, 100); assert.equal(asked[0].me.hp, 100);
+  assert.ok(f.sent.includes('apply:wand->2') && f.sent.includes('face'), `sent ${f.sent}`);
+  assert.ok(!f.sent.some(x => x.startsWith('attack:')), 'holding: no melee');
+  assert.equal(f.mode.active.pvp.last_wand, 'wand');
+  f.mode.stop('test');
+});
+
+await test('checkWandAnswer accepts an unidentified wand the character holds, and still refuses a stranger id', () => {
+  const ctx = { wands: [], unidentified: [{ id: 9, translation: 223, colour: 8 }] };
+  assert.equal(gear.checkWandAnswer({ fire: 9, hold: true }, ctx).fire, 9);
+  assert.ok(gear.checkWandAnswer({ fire: 10 }, ctx).invalid);
 });
 
 rmSync(dir, { recursive: true, force: true });

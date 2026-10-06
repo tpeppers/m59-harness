@@ -114,6 +114,33 @@ const u = F.wantedHoldings([{ name: 'flask', amount: 0 }, { name: 'wand', amount
 same(u.unknown.map(x => x.name), ['flask', 'wand', 'widget'], 'ambiguous and unknown names are REPORTED, never guessed');
 ok(u.unknown[0].candidates.length === 3, 'with the candidates named');
 same(u.want.map(x => x.class), ['Herbs'], 'and nothing is created for them');
+
+console.log('\na bare "wand" is named by its tint, when the tint is one class\'s alone');
+// WIRE VALUES: 0x87 + 11*viColor + label (util.kod:271). 223 and 201 are what prod's wands sent
+// on 2026-10-06 (Beaker/Kermit/Raphael and Floyd/Loial).
+const wire = colour => 0x87 + 11 * colour;
+same(F.packRows({ items: [{ id: 1, name: 'wand', amount: 0, rarity_name: 'unidentified', translation: 223 },
+                          { id: 2, name: 'herb', amount: 3, rarity_name: 'normal', translation: 0 }] }),
+     [{ name: 'wand', amount: 0, rarity: 'unidentified', translation: 223 }, { name: 'herb', amount: 3 }],
+     'the snapshot keeps a non-zero translation, and omits a zero one');
+same(F.wandClassByTranslation(223), { ok: true, class: 'LightningWand', stack: false }, 'wire 223 = yellow -> LightningWand (koddb viColor)');
+same(F.wandClassByTranslation(201), { ok: true, class: 'IdentifyWand', stack: false }, 'wire 201 = blue -> IdentifyWand');
+same(F.wandClassByTranslation(223 + 5), { ok: true, class: 'LightningWand', stack: false }, 'a label colour does not change it');
+for (const [t, what] of [[9, 'grey: four Qor wands'], [7, 'purple: four'], [4, 'orange: two'], [10, 'sky: two'], [0, 'red: Wand and MarkOfDishonorWand']])
+  ok(!F.wandClassByTranslation(wire(t)).ok && F.wandClassByTranslation(wire(t)).candidates.length > 1, `${what} -- shared, refused`);
+ok(!F.wandClassByTranslation(0).ok && !F.wandClassByTranslation(undefined).ok, '0 / absent never resolves');
+ok(!F.wandClassByTranslation(8).ok, 'a raw 8 is not a wire value and does not resolve');
+const wt = F.wantedHoldings([
+  { name: 'wand', amount: 0, rarity: 'unidentified', translation: 223 },
+  { name: 'wand', amount: 0, rarity: 'unidentified', translation: 223 },
+  { name: 'wand', amount: 0, rarity: 'unidentified', translation: wire(9) },
+  { name: 'wand', amount: 0, rarity: 'unidentified' }]);
+const lw = wt.want.find(x => x.class === 'LightningWand');
+ok(lw?.count === 2 && !lw.stack, 'two yellow wands -> two LightningWand objects', JSON.stringify(wt.want));
+ok(wt.approximated.some(a => a.class === 'LightningWand' && a.rarity === 'unidentified'),
+   'and APPROXIMATED: charges are rolled fresh, not copied');
+ok(wt.unknown.some(x => x.name === 'wand') && wt.want.length === 1,
+   'the grey and the untinted wand are still REPORTED, nothing created for them');
 const two = F.wantedHoldings([{ name: 'chain armor', amount: 0 }, { name: 'chain armor', amount: 0 }], ['chain armor']);
 ok(two.want[0].count === 2 && two.want[0].wear === 1, 'two chain armours carried, one worn');
 const oldSnap = F.wantedHoldings([], ['hammer']);

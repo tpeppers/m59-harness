@@ -518,8 +518,12 @@ export class CombatMode {
     // before any strategy is asked: no strategy may fire into a room that refuses it.
     if (this.pvpForbiddenHere()) return null;
     const wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
-    if (!wands.length) return null;
-    const ctx = this.wandContext(o, wands, cfg);
+    // Bare "wand" rows are offered to a private strategy (ctx.unidentified); the built-in never
+    // fires them, so a fleet with no pvpWand strategy behaves exactly as before.
+    const unidentified = gear.unidentifiedWandsIn(c, { spent: this.spentWands })
+      .filter(u => !wands.some(w => w.o.id === u.id));
+    if (!wands.length && !unidentified.length) return null;
+    const ctx = this.wandContext(o, wands, cfg, unidentified);
     const decision = await this.decideWandVolley(o, ctx);
     const hold = decision.hold ? 'hold' : null;
     if (decision.fire == null) return hold;
@@ -527,7 +531,8 @@ export class CombatMode {
     // o.running), so claiming after the decision's own await is still exclusive.
     this.lastVolleyBeat = ctx.beat;
     this.lastWandFireAt = ctx.now;
-    const pick = wands.find(w => w.o.id === decision.fire);
+    const pick = wands.find(w => w.o.id === decision.fire)
+      ?? { ...unidentified.find(u => u.id === decision.fire), name: 'wand' };
     await this.stand(o);
     if (decision.face) await s.pacer.submit('turn', () => {
       const live = c.room.objects.get(o.targetId), me = c.self;
@@ -550,17 +555,19 @@ export class CombatMode {
   }
 
   /** The question a `pvpWand` strategy is asked: plain data, documented at gear.chooseWandVolley. */
-  wandContext(o, wands, cfg) {
+  wandContext(o, wands, cfg, unidentified = []) {
     const c = o.client, now = this.now();
+    const health = c.vitals?.()?.health ?? null;
     const t = c.room?.objects?.get(o.targetId), me = c.self;
     return {
       character: this.character?.() ?? characterName(this.s, c),
       now, volley_ms: cfg.volley_ms, beat: gear.beatOf(now, cfg.volley_ms),
       lastVolleyBeat: this.lastVolleyBeat ?? null, lastFireAt: this.lastWandFireAt ?? null,
       wands: wands.map(w => ({ id: w.o.id, name: w.name, timer: !!w.timer })),
+      unidentified: unidentified.map(u => ({ id: u.id, translation: u.translation, colour: u.colour })),
       target: t ? { id: t.id, name: o.targetName ?? null, player: !!(t.flags & OF.PLAYER), row: t.row, col: t.col,
                     dist: me ? Math.hypot(t.row - me.row, t.col - me.col) : null } : null,
-      me: me ? { row: me.row, col: me.col } : null,
+      me: me ? { row: me.row, col: me.col, hp: health?.value ?? null, max_hp: health?.max ?? null } : null,
       shots: (o.wandShots ?? []).map(x => ({ ...x })),
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
     };
