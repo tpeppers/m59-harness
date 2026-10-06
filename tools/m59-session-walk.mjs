@@ -294,6 +294,8 @@ export function sessionWalkPrototype(deps) {
         if (r.left_room) return { done: false, legs, singles, left_room: true };
         if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         const now = c.self;
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return { done: false, legs, singles, cancelled: true };
         if (!now) return { done: false, legs, singles, why: 'own_position_unknown' };
         if (now.col === target.col && now.row === target.row) {
           if (advances) legsSinceShelter++;
@@ -354,6 +356,14 @@ export function sessionWalkPrototype(deps) {
         if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         if (c.room.id !== roomId) return { done: false, legs, singles, left_room: true };
         const now2 = c.self;
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return { done: false, legs, singles, cancelled: true };
+        // A blocked or displaced short leg invalidates this pulled route. Let
+        // walkTo confirm the body and replan now, within the same walk, rather
+        // than spending the pivot budget on the same stale waypoint.
+        if (!now2) return { done: false, legs, singles, why: 'own_position_unknown' };
+        if (now2.col !== one.col || now2.row !== one.row)
+          return { done: false, legs, singles, why: r.reason ?? 'pivot step landed off plan' };
         if (now2 && now2.col === one.col && now2.row === one.row) {
           if (advances) legsSinceShelter++;
           if (one.shelter && typeof shelter?.onArrive === 'function') {
@@ -407,6 +417,11 @@ export function sessionWalkPrototype(deps) {
             return { done: false, legs, singles, left_room: true };
           singles++;
           if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
+          if (this.movementWasCancelled(movementGeneration, controlToken))
+            return { done: false, legs, singles, cancelled: true };
+          if (!c.self) return { done: false, legs, singles, why: 'own_position_unknown' };
+          if (c.self.col !== nextSq.col || c.self.row !== nextSq.row)
+            return { done: false, legs, singles, why: r.reason ?? 'pivot step landed off plan' };
           if (c.self && c.self.col === nextSq.col && c.self.row === nextSq.row) {
             if (advances) legsSinceShelter++;
             if (nextSq.shelter && typeof shelter?.onArrive === 'function') {

@@ -1909,3 +1909,18 @@ sent. A mismatch reports `doorway_position_not_confirmed` with predicted and
 confirmed positions. West Jasper's tavern at r64c20/r64c21 is beside a locked door
 at r64c22: a locked response does not prove the intended tavern tile was reached.
 
+
+## Replan within the current walk after a blocked pivot
+
+A body-clamped or damage-clamped pivot step that is refused or lands away from
+its planned square returns immediately to `walkTo`. It must not repeat the stale
+waypoint until the pivot budget is exhausted. `walkTo` confirms the server position,
+rebuilds the route from that position and continues toward the same destination
+under the existing movement owner. Cancellation, room transitions and survival
+diversions still take priority. This avoids requiring the keeper to issue a new
+travel request for a recoverable local obstacle; it cannot guarantee arrival time
+when an exit is sealed or threats require shelter.
+
+The continuity regression covers both short-step branches, displacement and
+cancellation, plus an entire walk that reaches its original goal after one
+blocked pivot and a confirmed-position detour.
