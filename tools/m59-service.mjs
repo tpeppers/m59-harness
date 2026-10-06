@@ -350,7 +350,9 @@ async function liveHandoff() {
   console.log(`  pid        ${found.pid} -> ${pid}`);
   console.log(`  keepers    ${r.adopted ?? '?'} of ${r.expected ?? '?'} adopted in place` +
               (r.replaced?.length ? `; respawned ${r.replaced.join(', ')}` : '') +
-              (r.gone?.length ? `; not running ${r.gone.join(', ')}` : ''));
+              (r.gone?.length ? `; not running ${r.gone.join(', ')}` : '') +
+              (r.identity_mismatch?.length ? `; PLAYING ANOTHER CHARACTER (fix the roster): ` +
+                r.identity_mismatch.map(m => `${m.agent} is "${m.running}", roster says "${m.roster}"`).join(', ') : ''));
   console.log(`  held       ${result.frozen_ms}ms of requests, forwarded, none refused`);
   console.log(`  total      ${Math.round(result.total_ms / 1000)}s (mostly the successor loading)`);
   return 'done';

@@ -20633,16 +20633,30 @@ async function runAsSuccessor() {
     async adopt() {
       await resumeFleet({ adopting: true });
       let adopted = 0;
-      const unadopted_live = [], replaced = [], gone = [];
+      const unadopted_live = [], replaced = [], gone = [], identity_mismatch = [];
       for (const [agent, was] of expected) {
         const now = keeperProcesses.get(agent);
-        if (now?.pid === was.pid && sessions.has(agent)) adopted++;
-        else if (isProcessLive(was.pid)) unadopted_live.push(agent);
-        else if (now) replaced.push(agent);
-        else gone.push(agent);
+        if (now?.pid === was.pid && sessions.has(agent)) { adopted++; continue; }
+        if (!isProcessLive(was.pid)) { (now ? replaced : gone).push(agent); continue; }
+        // A KEEPER PLAYING A DIFFERENT CHARACTER THAN THE ROSTER NAMES was never manageable: the
+        // predecessor refuses its identity on every probe, exactly as this process just did. Counting
+        // it as "running and not adopted" aborted the first live handover on prod (hk2, whose account
+        // now holds Zheng He while the roster still says Marco Polo) for a keeper that is no worse off
+        // here than it was there. Named loudly instead, and still refused anything until the roster
+        // is corrected. Any OTHER unadopted running keeper still aborts the handover.
+        let live = null;
+        try { const reply = await keeperLiveAt(was.port, { timeoutMs: 3000 }); live = reply?.ok ? reply.value : null; } catch {}
+        const rostered = keeperCharacterIdentity(rosterEntry(agent)?.credentials?.character);
+        const running = keeperCharacterIdentity(live?.character);
+        if (live && String(live.agent ?? '') === String(agent) && rostered && running && running !== rostered) {
+          identity_mismatch.push({ agent, roster: rosterEntry(agent)?.credentials?.character ?? null, running: live.character });
+          console.error(`[handover] ${agent}'s keeper is playing "${live.character}", not the roster's ` +
+                        `"${rosterEntry(agent)?.credentials?.character}"; it was unmanaged before and stays so until ` +
+                        'the roster is corrected');
+        } else unadopted_live.push(agent);
       }
       if (fault === 'adopt') unadopted_live.push('(M59_HANDOFF_FAULT=adopt rehearsal)');
-      return { expected: expected.size, adopted, unadopted_live, replaced, gone,
+      return { expected: expected.size, adopted, unadopted_live, replaced, gone, identity_mismatch,
                sessions: sessions.size };
     },
     adoptionAcceptable: judgeAdoption,
@@ -20676,7 +20690,9 @@ async function runAsSuccessor() {
                 (result.orphaned ? ' (its predecessor vanished mid-handover)' : '') +
                 (r ? `: ${r.adopted} of ${r.expected} keeper(s) adopted in place` +
                      (r.replaced?.length ? `, ${r.replaced.length} respawned (${r.replaced.join(', ')})` : '') +
-                     (r.gone?.length ? `, ${r.gone.length} not running (${r.gone.join(', ')})` : '') : ''));
+                     (r.gone?.length ? `, ${r.gone.length} not running (${r.gone.join(', ')})` : '') +
+                     (r.identity_mismatch?.length ? `, ${r.identity_mismatch.length} playing another character ` +
+                       `(${r.identity_mismatch.map(m => `${m.agent}: ${m.running}`).join(', ')})` : '') : ''));
 }
 
 // ---------------------------------------------------------------- main
