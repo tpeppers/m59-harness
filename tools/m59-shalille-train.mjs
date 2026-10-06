@@ -11,7 +11,7 @@
 // the wearer and does no damage; trying to take it OFF hurts him. Either way he becomes
 // something to heal, and healing is the only thing that moves a Shal'ille spell's ability.
 // `--mode curse` drills remove curse (level 2) and cannot hurt anybody; `--mode heal` drills
-// the heal ladder — minor heal at level 1, holy touch at 2, hospice at 3 — and is the one the
+// the heal ladder — minor heal at level 1 and hospice at 3 — and is the one the
 // health floors exist for, because the server refuses a heal on somebody with nothing to heal.
 //
 // TWO SHAPES, AND THE DIFFERENCE IS KARMA RATHER THAN TRAINING.
@@ -296,8 +296,8 @@ const countOf = (items, rx) => items.filter(i => rx.test(i.name || ''))
 // Reagent costs are per cast and he is carrying 178 emeralds and 250 herbs, so the binding
 // constraint is mana (25) and not supply: two level-2 casts per pool, then a rest.
 const HEALS = [
-  // level 2 — what actually unlocks hospice and rescue
-  { name: 'holy touch', level: 2, mana: 12, reagent: /emerald/i, need: 2 },
+  // Holy touch is a TouchAttackSpell, not a heal (holytch.kod). Never use it
+  // to answer damage from the amulet; practice its enchantment separately.
   // level 3, once he has it: practising THIS is what unlocks forces of light
   { name: 'hospice', level: 3, mana: 10, reagent: /herb/i, need: 3 },
   // level 1 — the fallback, and only when nothing better is affordable
@@ -356,6 +356,8 @@ console.log(`         amulet: ${amulet ? `#${amulet.id} ${amulet.name}` : 'NOT I
 console.log(`floors   patient never takes a hit below ${Math.round(FLOOR * 100)}%; run aborts below ${Math.round(ABORT * 100)}%`);
 
 const problems = [];
+if (MODE === 'curse' && !healer0.spells.includes(CURE.name))
+  problems.push(`${HEALER} must learn remove curse before starting the curse drill`);
 if (!amulet) problems.push(`${PATIENT} is not carrying an Amulet of Shadows — the loop has no engine`);
 if (!healer0.spells.some(s => HEALS.some(h => h.name === s) || s === CURE.name))
   problems.push(`${HEALER} knows none of: ${[...HEALS.map(h => h.name), CURE.name].join(', ')}`);
