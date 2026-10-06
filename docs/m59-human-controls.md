@@ -64,6 +64,23 @@ tell the serving bot `services?` for its menu, then the service name (`Remove Cu
 the controls left anybody unserved. Full spec: m59-research
 `design/research-spec-human-service-bot.md`.
 
+### Wand duty: playing the bank
+
+When you play the wand bank (Raphael, standing Outside Castle Victoria), farmers ask you the same
+way the chalice desk does, and every wait is the same 60 seconds (`wait_ms`):
+
+- **`~B~k[Service Request] ~b wand duty dropoff (offer back nothing and accept the wands)`**: a
+  farmer is leaving Castle Victoria. It offers you every wand it carries; **counter with nothing**
+  and it accepts.
+- **`~B~k[Service Request] ~b wand duty pickup: offer me 2 wands, I will offer back nothing and accept`**:
+  a farmer is arriving to farm the castle short of wands. **Offer it the wands** (one if that is
+  all there is); it counters with nothing and you accept.
+
+Nobody answering costs the farmer the wait and nothing else: it gives the stop up and carries on.
+When a keeper plays the bank it does both itself and publishes how many it holds, so a farmer
+never walks to an empty bank; while you are at the controls that count is not believed. Ledger
+rows are `kind: wand_duty`. The argument and the rules are in `tools/m59-wand-duty.mjs`.
+
 ### Practising at the desk
 
 A desk character can build its spells in the time between tickets: `practice_spells` on the

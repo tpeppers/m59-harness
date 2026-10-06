@@ -7,6 +7,11 @@
 - `node tools/runtime/fleet-lock-test.mjs` and
   `node tools/runtime/account-leases-test.mjs`: guarded ownership, exact-roster
   adoption and consistent exclusion of positively identified recycled PIDs.
+- `node tools/m59-wand-duty-test.mjs` (43): the wand bank at Castle Victoria's gate. Who drops off
+  (leaving the region, never a trip that stays, never the bank) and who picks up (a Castle Victoria
+  farmer short of 2, one attempt per visit, never to an empty bank, but a person at the bank overrides
+  a published zero); the request wording parses back; and the real Autopilot stage machines move every
+  wand on a drop-off, take 1 when only 1 is there and carry on, and give a silent person up after the wait.
 - `node tools/m59-swarm-follow-test.mjs` (11): the swarm. The 30 MAXIMUM-health line (29 out, 30 in,
   unread out); hosts, noncombatants, human-held characters and the leader never join; the leader's
   room comes from the freshest keeper that sees him; every follower in a room computes the same slot

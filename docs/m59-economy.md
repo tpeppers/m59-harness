@@ -615,6 +615,35 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
   PACK and never off the counter's reply — `buyItems` completes the handshake whether or not
   the purse could cover it.
 
+## Wand duty: the wand bank at Castle Victoria's gate
+
+Operator, 2026-10-06: every character **arriving and farming at Castle Victoria carries 2
+lightning wands for PvP readiness**, and every character **leaving** — walking home or riding the
+chalice — **hands its wands to Raphael first**. Raphael stands Outside Castle Victoria (room 2),
+which is also the chalice station, so a chalice rider is already standing beside him.
+
+- **Configured like the chalice**: a private strategy answers the `wandDuty` hook
+  (`substrate/strategies/wand-duty.mjs` names the bank). Defaults and every rule are in
+  `tools/m59-wand-duty.mjs`; `carry` 2, `wait_ms` 60 s, `station_room` 2, region 2/38/39.
+- **Leaving** is a stage in `continueTownTrip` immediately before the chalice decision, and in an
+  on-demand chalice ride. The farmer walks to the station, sends the service tell, offers every
+  wand, and accepts the bank's empty counter. Verified by what left the pack.
+- **Arriving** is a stage in `passErrand` beside chalice duty: a Castle Victoria farmer short of
+  `carry` steps to the station, asks for the difference, and counters the bank's offer with
+  nothing. One attempt per visit. One wand when two were wanted is a success, and the farm goes
+  on. An empty bank (the bank's own published count, in `substrate/.wand-duty/`) is never walked
+  to.
+- **The bank** is either a keeper — it answers pickup tells by offering, and `acceptDonations`
+  already takes every fleetmate's wand — or a person playing it, who answers the same tells by
+  hand (see `docs/m59-human-controls.md`). The farmer's side is identical either way.
+- **Nothing is dropped** except by the bank's own `drop_for_space` to make room.
+- **A wand is a wand**: an unidentified `wand` counts the same as a `lightning wand`, because a
+  living tree's treasure table holds exactly one wand, the lightning wand.
+- A confined farmer may walk to the wand station, the same exception chalice duty has.
+
+`node tools/m59-wand-duty-test.mjs` (43) pins the rules and runs both flows on the real Autopilot
+stage machines, against a keeper-run bank, a person, and a person who never answers.
+
 ## Standing orders: one-time tasks for the next town stop
 
 `tools/m59-standing-orders.mjs`. An order in `substrate/town-orders.json` (private, it names
