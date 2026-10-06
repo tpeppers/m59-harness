@@ -65,11 +65,13 @@ export async function scanTravelDeaths({postmortemDir,rosterFile=null,since=Date
 export function sourceAssessment(captured,actual,{patched=false,allowedFiles=MOVEMENT_PATCH_FILES}={}) {
  const want=captured?.files,got=actual?.files,reasons=[];
  if(!want||!Object.keys(want).length||!got)return {ok:false,reasons:['source file manifests unavailable'],changed:[]};
- const missing=Object.keys(want).filter(f=>!want[f]||!got[f]);
+ const missing=Object.keys(want).filter(f=>!want[f]||!got[f]).concat(Object.keys(got).filter(f=>!(f in want)&&!got[f]));
  const extra=Object.keys(got).filter(f=>!(f in want));
  const changed=Object.keys(want).filter(f=>want[f]&&got[f]&&want[f]!==got[f]);
  if(missing.length)reasons.push('unknown/missing captured source files: '+missing.join(', '));
- if(extra.length)reasons.push('uncaptured source files: '+extra.join(', '));
+ const unapprovedExtra=extra.filter(f=>!patched||!allowedFiles.includes(f));
+ if(unapprovedExtra.length)reasons.push('uncaptured source files: '+unapprovedExtra.join(', '));
+ if(patched)changed.push(...extra.filter(f=>allowedFiles.includes(f)));
  if(actual.commit!==captured.commit)reasons.push('executing commit differs from captured commit');
  if(patched){if(!changed.length)reasons.push('movement patch did not change executing code');if(changed.some(f=>!allowedFiles.includes(f)))reasons.push('unrelated source changes');}
  else if(changed.length)reasons.push('original source differs from capture');
