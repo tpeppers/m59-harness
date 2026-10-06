@@ -27397,6 +27397,8 @@ export class Autopilot {
     let packIn = null;
     try { packIn = Array.isArray(this.s.client?.inventory) ? packCounts(this.packAsItems()) : null; } catch { packIn = null; }
     this.townTrip = { target, nextService: -1, startedAt, trigger, purpose,
+      // The connection this trip was judged on; a different one means "ask again" (reassessTownTrip).
+      client: this.s.client ?? null,
       packIn, trade: newTripTrade(),
       estimatedValue: value.value,
       marketStops: wantsMarket ? MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
@@ -27464,6 +27466,75 @@ export class Autopilot {
       }
       default: return { ok: true, status: this.townTripControlStatus() };
     }
+  }
+
+  // IS THE REASON THIS TRIP WAS OPENED STILL TRUE? Asked when the trip resumes on a NEW CONNECTION.
+  //
+  // Operator, 2026-10-06: "cancel Statler's plans for a town trip, I took the mushrooms off him. In
+  // fact, we probably want it to re-assess making a town trip vs 'continuing to farm' if I log into a
+  // character interrupting the town trip and modify their inventory then log out." On a keeper-backed
+  // character a person logging in only bumps the keeper's socket; the keeper process lives on with the
+  // trip in memory and resumes it when the client closes. Statler opened a sell trip at 98% load
+  // (21:52Z), the operator emptied his mushrooms, and the trip carried on to Barloque regardless.
+  //
+  // A new client object is every reconnect, a pilot's or the server's, and each is a moment the pack
+  // may have changed under us. The pack is read FRESH first: a reconnect that has not been sent its
+  // inventory yet reads as empty, and an empty pack drops every sell trip. Only the needs this keeper
+  // opened on its own are re-judged; an operator's, a strategy's or a standing order's trip was asked
+  // for on purpose and is left alone. A dropped trip sets NO hold: the next pass may open a new one
+  // the ordinary way if the pack still calls for it.
+  townTripStillWanted(trip) {
+    switch (trip.purpose) {
+      case 'sell': {
+        const call = this.checkIfShouldSell();
+        return call.sell && call.trigger !== 'supply' && TRIP_PURPOSE[call.trigger] === 'sell'
+          ? { wanted: true } : { wanted: false, why: `the pack no longer calls for a market (${call.why ?? call.trigger ?? 'no trigger'})` };
+      }
+      case 'restock': {
+        const call = this.checkIfShouldSell();
+        return call.sell && call.trigger === 'supply' ? { wanted: true }
+          : { wanted: false, why: 'no longer short of its own supply floor' };
+      }
+      case 'food': {
+        const c = this.s.client, reag = this.reagentCount();
+        const needs = hungerNeedsTown(this.wantedFightFloor(), c?.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP);
+        if (!needs) return { wanted: false, why: 'its fight floor is one resting reaches' };
+        if (this.larder(c).length) return { wanted: false, why: 'it has food now' };
+        if (reag.elderberry >= 2 && reag.herbs >= 2) return { wanted: false, why: 'it can cook now' };
+        return { wanted: true };
+      }
+      case 'bank': {
+        const above = this.policy.bankAbove;
+        return above && this.purseNow() > above ? { wanted: true }
+          : { wanted: false, why: `the purse is no longer over the banking threshold (${above})` };
+      }
+      default: return { wanted: true, why: 'opened on purpose; not re-judged' };
+    }
+  }
+
+  async reassessTownTrip(trip) {
+    const s = this.s, c = s.client;
+    try {
+      const before = c.evSeq;
+      await s.pacer.submit('read', () => c.requestInventory());
+      const got = await c.waitFor({ since: before, kinds: ['inventory'], timeoutMs: 3000 });
+      // No fresh pack, no verdict: judge again on the next pass rather than on a guess.
+      if (!(got?.events ?? []).length && !Array.isArray(c.inventory)) return 'unknown';
+    } catch { return 'unknown'; }
+    trip.client = c;
+    const still = this.townTripStillWanted(trip);
+    if (still.wanted) {
+      this.note('town trip still wanted after reconnecting', { purpose: trip.purpose, trigger: trip.trigger, to: trip.target?.room ?? null });
+      return 'kept';
+    }
+    const had = { to: trip.target?.room ?? null, purpose: trip.purpose, trigger: trip.trigger, started_at: trip.startedAt };
+    this.townTrip = null;
+    if (this.deferredShoppingTrip === trip) this.deferredShoppingTrip = null;
+    if (this.purchaseFunding) this.purchaseFunding = { ...this.purchaseFunding, pending: false, status: 'trip no longer wanted' };
+    try { s.cancelMovement?.(null, `town trip no longer wanted: ${still.why}`, { origin: keeperOrigin('town_trip_reassessed') }); } catch {}
+    this.note('town trip dropped: no longer wanted after reconnecting', { why: still.why, had });
+    try { this.ledgerEvent('town_trip_dropped', { by: 'reassessed', why: still.why, had, hold_ms: 0, room: this.hereRoom() }); } catch {}
+    return 'dropped';
   }
 
   /** End the trip and the set-aside one, cancel the walk, and hold new trips. */
@@ -27682,6 +27753,11 @@ export class Autopilot {
     if (!trip) return false;
     if (this.travelInterrupted() || this.suspendedJourney || this.inert?.travelling)
       return true; // still pending; the survival ladder owns this pass
+    // A NEW CONNECTION SINCE THIS TRIP WAS LAST JUDGED: ask again whether it is still wanted.
+    if (trip.client !== undefined && trip.client !== this.s.client && this.s.client) {
+      const still = await this.reassessTownTrip(trip);
+      if (still === 'dropped') return false;
+    }
     if (Date.now() < (trip.nextTryAt ?? 0)) return true;
     if (trip.nextService < 0) {
       // A sale can raise the cash first. Every other shopping approach must fund

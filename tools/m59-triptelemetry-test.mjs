@@ -107,5 +107,51 @@ ok('a floor above the resting cap does', hungerNeedsTown(120, 200));
      parked.r.deferredShoppingTrip === null && !parked.opened.length && !parked.r.townTrip);
 }
 
+// 2026-10-06, Statler: a sell trip opened at 98% load, the operator logged in and took his mushrooms,
+// logged out, and the keeper -- alive all along -- resumed the walk to Barloque. A trip resumed on a
+// NEW CONNECTION is re-judged against a fresh pack; one the operator asked for is never re-judged.
+{
+  const resumed = ({ purpose = 'sell', trigger = 'load', sell = { sell: false, trigger: null, why: 'pack 40%' },
+                     inventory = true, policy = {} } = {}) => {
+    const { r, events } = rig({ items: [{ name: 'shilling', amount: 100 }], policy });
+    const oldClient = r.s.client, newClient = { ...oldClient, evSeq: 1,
+      requestInventory() {}, waitFor: async () => ({ events: inventory ? [{ kind: 'inventory' }] : [] }),
+      vitals: () => ({ vigor: { value: 70, scale_max: 200 } }) };
+    if (!inventory) newClient.inventory = undefined;
+    const cancelled = [];
+    Object.assign(r.s, { client: newClient, pacer: { submit: async (k, fn) => fn() },
+                         cancelMovement: (...a) => { cancelled.push(a[1]); return { cancelled: true }; } });
+    Object.assign(r, { checkIfShouldSell: () => sell, travelInterrupted: () => false, suspendedJourney: null, inert: null,
+      larder: () => [], reagentCount: () => ({ elderberry: 0, herbs: 0 }), hereRoom: () => 38,
+      townTrip: { target: { room: 113 }, nextService: -1, startedAt: 1, trigger, purpose, client: oldClient } });
+    return { r, events, cancelled, newClient };
+  };
+  const statler = resumed();
+  const went = await statler.r.continueTownTrip();
+  ok('Statler: a sell trip whose pack was emptied while a person held him is dropped on the new connection',
+     went === false && statler.r.townTrip === null && statler.cancelled.length === 1, JSON.stringify(statler.r.townTrip));
+  const dropped = statler.events.find(e => e.kind === 'town_trip_dropped');
+  ok('and the ledger says it was reassessed, with no hold on the next trip',
+     dropped?.by === 'reassessed' && dropped.hold_ms === 0 && /no longer calls for a market/.test(dropped.why), JSON.stringify(dropped));
+  ok('without setting a town-trip hold', !statler.r.townTripHold);
+
+  const full = resumed({ sell: { sell: true, trigger: 'load', why: 'pack is 98% of capacity' } });
+  ok('a pack that still calls for a market keeps its trip, judged on the new connection',
+     await full.r.reassessTownTrip(full.r.townTrip) === 'kept' && full.r.townTrip?.client === full.newClient);
+  const asked = resumed({ purpose: 'operator', trigger: 'operator' });
+  ok('a trip the operator asked for is never re-judged', await asked.r.reassessTownTrip(asked.r.townTrip) === 'kept');
+  const hungry = resumed({ purpose: 'food', trigger: 'food', policy: { vigorFloor: 40 } });
+  ok('a food trip whose floor resting reaches is dropped too', await hungry.r.reassessTownTrip(hungry.r.townTrip) === 'dropped');
+  const blind = resumed({ inventory: false });
+  ok('no fresh pack, no verdict: an unread pack never drops a trip',
+     await blind.r.reassessTownTrip(blind.r.townTrip) === 'unknown' && blind.r.townTrip !== null);
+  const same = resumed();
+  same.r.townTrip.client = same.r.s.client;
+  let judged = 0; same.r.reassessTownTrip = async () => { judged++; return 'kept'; };
+  same.r.continueTownTrip = Autopilot.prototype.continueTownTrip;
+  await same.r.continueTownTrip().catch(() => {});
+  ok('the same connection is not re-judged on every pass', judged === 0);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
