@@ -1224,6 +1224,28 @@ try {
     ok(calls.length === 0, 'an unknown chest count deposits nothing');
   }
 
+  section('a cup the server will not let go of (the Icky Cave altar) never spends the pass');
+  {
+    // Fozzie, 2026-10-06: the altar's own Chalice of the Rain in room 27 is GETTABLE on the wire
+    // and refused by the server. Every failed grab returned true, the pass ended before the
+    // survival ladder, and he stood on the altar square to death twice.
+    const { world, k, cupDown } = guardWorld('g-altar');
+    const G = k('Gonzo', 27);
+    cupDown(27);
+    let grabs = 0;
+    const lift = G.ap.s.lootFloor;
+    G.ap.s.lootFloor = async () => { grabs++; return { taken: [] }; };   // "it mystically clings"
+    const t0 = Date.now();
+    ok(await G.ap.chaliceGuard(t0) === false, 'a refused grab falls through to the ladder');
+    ok(grabs === 1 && G.ap.events.some(e => e.what === 'grab_refused'), 'tried once, and ledgered', `grabs=${grabs}`);
+    ok(await G.ap.chaliceGuard(t0 + 30_000) === false && grabs === 1, 'not tried again inside the backoff', `grabs=${grabs}`);
+    ok(await G.ap.chaliceGuard(t0 + 61_000) === false && grabs === 2, 'tried again once it lapses', `grabs=${grabs}`);
+    ok(await G.ap.chaliceGuard(t0 + 61_000 + 90_000) === false && grabs === 2, 'and the backoff doubles', `grabs=${grabs}`);
+    // The altar opens (illusion dispelled, no orcs): the next try after the backoff takes it.
+    G.ap.s.lootFloor = lift;
+    ok(await G.ap.chaliceGuard(t0 + 61_000 + 121_000) === true && has(world, G.P, /chalice/i), 'once it can be lifted, it is');
+  }
+
   section('a cup somewhere else is somebody else\'s floor');
   {
     const { world, k, cupDown } = guardWorld('g-elsewhere');

@@ -23504,11 +23504,26 @@ export class Autopilot {
     try { handoff = store.handoff(now); } catch {}
     const v = sweepVerdict({ me, cfg, handoff, fleetHere, strangers, lyingMs });
     if (!v.grab) return false;
+    // A CUP THE SERVER WILL NOT LET GO OF IS NOT A CUP ON THE FLOOR. The Icky Cave (27) keeps
+    // the original Chalice of the Rain on its altar, GETTABLE on the wire and refused by
+    // OkayToGetChalice while the illusion stands or any orc lives ("it mystically clings to the
+    // stone altar"). A failed grab used to return true, which spends the pass BEFORE the ladder:
+    // Fozzie stood on the altar square at 2/60 with a 0.67 flee line, never fled, never swung,
+    // and died to orcs twice on 2026-10-06. So a refused grab backs off that object (60s, doubling
+    // to 10 min) and falls through to the ladder; when the altar does open, the next try takes it.
+    const refused = this._chaliceRefused?.key === key ? this._chaliceRefused : null;
+    if (refused && now < refused.until) return false;
     if (this.chaliceRole() === 'alternate') await this.chaliceMakeRoom();
     await this.s.lootFloor({ ids: [floor.id], maxItems: 1, overfarm: null }).catch(() => {});
     await this.s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
     await new Promise(r => setTimeout(r, 800));
-    if (!this.chaliceInPack()) return true;              // tried; the next pass tries again
+    if (!this.chaliceInPack()) {
+      const n = (refused?.n ?? 0) + 1;
+      this._chaliceRefused = { key, n, until: now + Math.min(60_000 * 2 ** (n - 1), 10 * 60_000) };
+      if (n === 1) this.chaliceEvent('grab_refused', { room: this.hereRoom(), backoff_s: 60 });
+      return false;
+    }
+    this._chaliceRefused = null;
     // Whoever lifts it is who has it; an acting desk it ended is over (the next pass
     // re-registers one if this character is to run the desk).
     try { store.setDuty({ with: me, lost: false, acting: null }); } catch {}
