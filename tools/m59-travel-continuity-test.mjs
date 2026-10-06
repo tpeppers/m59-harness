@@ -53,6 +53,51 @@ for(const proved of [false,true])await test((proved?'proved hit-clamped':'unprov
  await Session.prototype.walkPivots.call(s,route,geo,{shelter,maxMoves:5});
  assert.equal(events.filter(e=>e.kind==='arrive').length,1);assert.equal(events.filter(e=>e.kind==='divert'&&e.stop).length,1);
 });
+for(const branch of ['body','damage'])for(const landing of ['refused','off-plan'])await test(branch+' pivot '+landing+' hands the same walk back after one step',async()=>{
+ const c={self:{row:10,col:10,x:672,y:672},room:{id:598}},route=[{row:10,col:11},{row:10,col:12},{row:10,col:15}];
+ const geo={standPoint:(row,col)=>clientPoint({x:col*64+32,y:row*64+32}),
+  stringPull:points=>({points:[points[0],points.at(-1)],proved:[true]})};
+ let attempts=0;
+ const s={client:c,need:()=>c,movementGeneration:0,movementWasCancelled:()=>false,
+  damagedAt:branch==='damage'?Date.now():null,bodiesInSquare:()=>[{x:864,y:672}],_wallOk:()=>()=>true,
+  moveSpeed:()=>assert.fail('off-plan pivot continued using its stale proof'),
+  step:async()=>{attempts++;if(landing==='off-plan')c.self={row:11,col:10,x:672,y:736};
+   return {moved:landing==='off-plan',reason:landing==='refused'?'object_blocked':null};}};
+ const r=await Session.prototype.walkPivots.call(s,route,geo,{maxMoves:6,shelter:branch==='damage'?{need:()=>false}:null});
+ assert.equal(r.done,false);assert.equal(attempts,1,'a repeated stale waypoint must not consume the full movement budget');
+ assert.equal(r.why,landing==='refused'?'object_blocked':'pivot step landed off plan');
+});
+for(const branch of ['body','damage'])await test(branch+' pivot cancellation is returned before fallback',async()=>{
+ const c={self:{row:10,col:10,x:672,y:672},room:{id:598}},route=[{row:10,col:11},{row:10,col:15}];
+ const geo={standPoint:(row,col)=>clientPoint({x:col*64+32,y:row*64+32}),stringPull:points=>({points:[points[0],points.at(-1)],proved:[true]})};
+ const s={client:c,need:()=>c,movementGeneration:0,movementWasCancelled:g=>g!==s.movementGeneration,
+  damagedAt:branch==='damage'?Date.now():null,bodiesInSquare:()=>[{x:864,y:672}],_wallOk:()=>()=>true,
+  step:async()=>{s.movementGeneration++;return {moved:false,reason:'object_blocked'};}};
+ const r=await Session.prototype.walkPivots.call(s,route,geo,{maxMoves:6,shelter:branch==='damage'?{need:()=>false}:null});
+ assert.equal(r.cancelled,true);assert.equal(r.singles,1);
+});
+await test('one walk confirms displacement and replans to its original goal after a blocked pivot',async()=>{
+ const from={row:34,col:16,x:1068,y:2198},route=[{row:34,col:17},{row:34,col:18},{row:34,col:19}],paths=[],calls=[];
+ let confirmed=false;
+ const geo={collisionReady:true,num:598,standable:()=>true,
+  path:(row,col)=>{paths.push({row,col});return {found:true,steps:confirmed?[{row:35,col:17},{row:34,col:18},{row:34,col:19}]:route};},
+  standPoint:(row,col)=>clientPoint({x:col*64+32,y:row*64+32}),
+  stringPull:points=>confirmed?null:{points:[points[0],points.at(-1)],proved:[true]},
+  moverStepLands:()=>true,traceFineMoveClient:(_x,_y,x,y)=>({x,y})};
+ const c={self:{...from},room:{id:598,objects:new Map()},vitals:()=>({health:{value:49,max:49}})};
+ const s={client:c,live:true,movementGeneration:7,world:{geometry:geo,room:{num:598}},need:()=>c,threatsHere:()=>[],
+  movementWasCancelled:g=>g!==s.movementGeneration,cancelledMovement:()=>({cancelled:true}),
+  bodiesInSquare:()=>[{x:1184,y:2198}],_wallOk:()=>()=>true,
+  walkPivots:(...args)=>Session.prototype.walkPivots.call(s,...args),
+  confirmPosition:async()=>{if(!confirmed){confirmed=true;c.self={row:35,col:16,x:1056,y:2272};}return {...c.self};},
+  step:async(col,row)=>{calls.push({row,col});if(!confirmed)return {moved:false,reason:'object_blocked'};
+   Object.assign(c.self,{row,col,x:col*64+32,y:row*64+32});return {moved:true,position:{...c.self}};}};
+ const r=await Session.prototype.walkTo.call(s,19,34,{movementGeneration:7});
+ assert.equal(r.arrived,true);assert.deepEqual(r.position,{row:34,col:19});
+ assert.equal(s.movementGeneration,7,'replanning retains the original movement owner');
+ assert.ok(paths.some(p=>p.row===35&&p.col===16),'fresh path starts at the confirmed server position');
+ assert.ok(calls.length<=4,'one blocked step is enough to trigger the replan');
+});
 function keeperFixture(){
  const notes=[],events=[],work=[],s={name:null,movementGeneration:0,world:{room:{num:598}},
   client:{self:{row:33,col:15},room:{id:598,objects:new Map()},vitals:()=>({health:{value:49,max:49},vigor:{value:80,scale_max:200}})},
