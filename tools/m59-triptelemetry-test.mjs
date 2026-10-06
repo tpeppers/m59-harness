@@ -7,7 +7,7 @@
 // telemetry/bookkeeping method ... town trips should aim to be $10k+ if their purpose is for
 // selling". Measured the same day: a hunter making a ~300-shilling sell trip every twenty minutes,
 // and 7 of 27 crew "town trips" that bought and sold nothing, all indistinguishable in the ledger.
-import { Autopilot, TRIP_PURPOSE, MIN_SELL_TRIP_VALUE, SELL_REGARDLESS_AT } from './m59-autopilot.mjs';
+import { Autopilot, TRIP_PURPOSE, MIN_SELL_TRIP_VALUE, SELL_REGARDLESS_AT, hungerNeedsTown } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => { if (cond) { passed++; console.log(`  ok   ${what}`); }
@@ -66,6 +66,45 @@ ok('a truly full pack goes whatever it is worth', SELL_REGARDLESS_AT > 0.9 && SE
   const go = stub(low).checkIfShouldSell();
   ok('and STILL stays when the pack clears it: being broke is never a reason to sell',
      go.trigger !== 'broke' && go.sell === false, JSON.stringify(go));
+}
+
+// 2026-10-06, Clifford: ten `trigger: "food"` trips in a day, each ten apples off a small withdrawal,
+// with a fight floor of 80 that resting reaches on its own. An empty larder is a reason to go to town
+// only when the character's floor is above what resting delivers (80 of 200).
+ok('a floor resting reaches needs no food trip', !hungerNeedsTown(80, 200) && !hungerNeedsTown(40, 200));
+ok('a floor above the resting cap does', hungerNeedsTown(120, 200));
+{
+  const hungry = policy => {
+    const opened = [];
+    const { r } = rig({ items: [{ name: 'shilling', amount: 40 }, { name: 'long sword', amount: 2 }],
+                        policy: { bankAbove: 1_000_000, hungryFloor: 100, ...policy } });
+    const c = r.s.client;
+    Object.assign(c, { waitFor: async () => ({}), vitals: () => ({ vigor: { value: 74, scale_max: 200 } }) });
+    Object.assign(r.s, { need: () => c, pacer: { submit: async () => {} },
+                         bankKnown: () => ({ balance: 7000 }),
+                         world: { room: { num: 38 }, route: () => ({ found: true, hops: [1, 2, 3] }) } });
+    Object.assign(r, { townTrip: null, poorSupply: null, larder: () => [],
+      reagentCount: () => ({ elderberry: 0, herbs: 0 }),
+      checkIfShouldSell: () => ({ sell: false, trigger: null }),
+      prepareFarmDelivery: () => {}, packWantsMarket: () => false,
+      shoppingPlan: () => ({}), postShoppingPlan: () => ({}),
+      openTownTrip: (target, o) => { opened.push({ target, ...o }); },
+      continueTownTrip: async () => true });
+    return { r, opened };
+  };
+  const cliff = hungry({ vigorFloor: 40, fightAboveVigor: 40 });
+  const went = await cliff.r.bankRun();
+  ok('Clifford: no food, 7,000 banked, floor 80 -- stays and farms', went === false && !cliff.opened.length,
+     JSON.stringify(cliff.opened));
+  const fed = hungry({ vigorFloor: 140 });
+  await fed.r.bankRun();
+  ok('a floor of 140 with no food still goes to town for some',
+     fed.opened.length === 1 && fed.opened[0].starving === true, JSON.stringify(fed.opened));
+  const parked = hungry({ vigorFloor: 40 });
+  parked.r.deferredShoppingTrip = { purpose: 'food', target: { room: 151 } };
+  await parked.r.bankRun();
+  ok('and a parked hunger trip is dropped rather than resumed',
+     parked.r.deferredShoppingTrip === null && !parked.opened.length && !parked.r.townTrip);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

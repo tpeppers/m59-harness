@@ -1673,6 +1673,23 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
   return BANKS;
 }
 
+// IS AN EMPTY LARDER A REASON TO WALK TO TOWN? Only when the character's own fight floor is
+// above what resting reaches. Resting stops at 80 of 200 (REST_VIGOR_CAP) and fightFloor()
+// already falls back to STARVED_FIGHT_VIGOR with no food, so a character whose floor resting
+// covers loses nothing by having no food -- it rests and swings. Sending it across the world
+// for 450 shillings of apples is pure cost.
+//
+// Clifford, 2026-10-06: floor 80 (MIN_FIGHT_VIGOR; his own vigorFloor is 40), bank about
+// 7,000 and falling, no reagents. TEN `trigger: "food"` trips in one day, every one "6%
+// loaded, nothing to do", each buying ten apples or three meat pies off a small withdrawal,
+// eaten before the next pass -- an hour on the road per trip, skeletons at Castle Victoria
+// never farmed long enough to earn the next one. Food is still bought at the end of any
+// trip opened for another reason, and a `townTrip` strategy or the operator can still ask
+// for a food trip outright.
+export function hungerNeedsTown(wantedFloor, vigorMax = 200) {
+  return Number(wantedFloor) > REST_VIGOR_CAP * (Number(vigorMax) || 200);
+}
+
 export const MODES = ['survive', 'farm', 'idle', 'tick'];
 
 // Farming patterns, as a table rather than scattered conditionals, so that adding a
@@ -2670,12 +2687,17 @@ export class Autopilot {
   // and they disagreed. provision() climbed to vigorFloor while the fight gate let the
   // character swing at fightAboveVigor, so `wellfed` ate its way to 120 and then
   // engaged at 70 anyway, and the whole strategy comparison was measuring nothing.
-  fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
+  // The floor this character WANTS, before an empty larder or poor farming lowers it.
+  wantedFightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     const p = this.policy;
-    if (this.poorFarmingActive()) return this.poorVigorFloor();
     // fightAboveVigor was the old single knob; it still works, as the floor.
-    const want = Math.max(MIN_FIGHT_VIGOR,
+    return Math.max(MIN_FIGHT_VIGOR,
       p.vigorFloor ?? plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
+  }
+
+  fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
+    if (this.poorFarmingActive()) return this.poorVigorFloor();
+    const want = this.wantedFightFloor(plan);
     // An empty larder puts the floor out of reach — resting stops at 80 — so holding
     // out for it would idle the character for ever. Fall back to what resting can
     // deliver, and COUNT it: this is the food supply failing, not a fighting decision,
@@ -26794,6 +26816,10 @@ export class Autopilot {
     // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
     await this.askTownStrategy().catch(() => null);
     if (this.operatorTripRequest) return this.openRequestedTownTrip();
+    // A hunger trip parked as unaffordable is dropped, not resumed, once food is no reason to go.
+    if (this.deferredShoppingTrip?.purpose === 'food' && !hungerNeedsTown(this.wantedFightFloor(),
+          this.s.client?.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP))
+      this.deferredShoppingTrip = null;
     if (this.deferredShoppingTrip && this.poorShoppingRetryReady()) {
       this.townTrip = this.deferredShoppingTrip;
       this.deferredShoppingTrip = null;
@@ -26924,7 +26950,11 @@ export class Autopilot {
     // illiquid — and withdrawForFood() is now the thing that fixes that, at a counter.
     const balance = s.bankKnown?.()?.balance ?? 0;
     const canFetch = balance >= 200;
-    const starving = !poor && purchaseEnabled(this.policy, 'food') &&
+    // ...and only when food is what stands between this character and its fight floor. See
+    // hungerNeedsTown: a floor resting reaches makes an empty larder no reason to travel.
+    const needsFood = hungerNeedsTown(this.wantedFightFloor(),
+                                      c.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP);
+    const starving = !poor && needsFood && purchaseEnabled(this.policy, 'food') &&
                      !this.larder(c).length && !canCook &&
                      (spendable >= 60 || canFetch) && !triedRecently;
     // AND THE SAME QUESTION FOR REAGENTS, WHICH IS THE ONE NOBODY ASKED.
