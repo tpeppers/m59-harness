@@ -145,6 +145,57 @@ export function volleyWandsIn(c, { spent = new Set(), cfg = pvpGearConfig() } = 
 
 export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / ms);
 
+// THE VOLLEY DECISION, SEPARATED FROM THE PACKETS. What a character does with its wands each
+// tick of a PvP fight is a fleet's bet, not a mechanic: which wand, whether to hold the swing,
+// when to give up on a target that keeps refusing. So CombatMode.wandVolley asks an enabled
+// private strategy answering `pvpWand` first (substrate/strategies/, m59-strategies.mjs), and
+// falls back to `chooseWandVolley` below when there is none, it declines, it throws, or its
+// answer does not check out. No strategies directory is exactly the behaviour shipped before
+// the seam existed.
+//
+//   ctx (built by CombatMode.wandContext; plain data, safe to keep):
+//     { character, now, volley_ms, beat, lastVolleyBeat, lastFireAt,
+//       wands:  [{ id, name, timer }],               // live volley wands, config order, spent ones gone
+//       target: { id, name, player, row, col, dist },
+//       me:     { row, col },
+//       shots:  [{ at, wand, refused }],              // this fight, oldest first, at most SHOT_HISTORY
+//       pvp, warband, room }
+//
+//   answer: { fire: <wand id> | null, hold: boolean, face: boolean, why?: string }
+//     fire  the wand to apply at the target now, or null for no zap this tick
+//     hold  true = no melee and no approach this tick (the caller returns before both)
+//     face  turn to the target before the zap (a lightning wand needs rough facing)
+//
+// `refused` on a shot is set when "You point your wand but nothing happens" arrives after it:
+// the server refused the bolt (attack timer, line of sight, a no-combat room, a resist) and
+// spent no charge. See m59-research reports/lightning-wand.md for every refusal path.
+export const SHOT_HISTORY = 20;
+
+/** The built-in answer: one zap per wall-clock beat, best wand first, hold while a timer wand is carried. */
+export function chooseWandVolley(ctx) {
+  const wands = ctx?.wands ?? [];
+  if (!wands.length) return { fire: null, hold: false, face: false, why: 'no volley wand' };
+  const hold = wands.some(w => w.timer);
+  if (ctx.beat === ctx.lastVolleyBeat) return { fire: null, hold, face: false, why: 'this beat already fired' };
+  const pick = wands[0];
+  return { fire: pick.id, hold, face: !!pick.timer, why: 'on the beat' };
+}
+
+/**
+ * A strategy's answer, checked before anything is sent. Returns the answer normalised, or
+ * { invalid: why } -- and the caller then uses the built-in decision, because an answer that
+ * names a wand the character does not hold must not turn into a packet.
+ */
+export function checkWandAnswer(answer, ctx) {
+  if (!answer || typeof answer !== 'object') return { invalid: 'answer is not an object' };
+  const fire = answer.fire ?? null;
+  if (fire !== null && !(ctx?.wands ?? []).some(w => w.id === fire))
+    return { invalid: `fire names ${fire}, which is not a live volley wand` };
+  if (answer.hold !== undefined && typeof answer.hold !== 'boolean') return { invalid: 'hold is not a boolean' };
+  if (answer.face !== undefined && typeof answer.face !== 'boolean') return { invalid: 'face is not a boolean' };
+  return { fire, hold: !!answer.hold, face: !!answer.face, why: answer.why == null ? null : String(answer.why) };
+}
+
 // THE SWARM LEADER'S TARGET, as m59-proxy.mjs writes it from the operator's own REQ_ATTACK:
 // { target: <object id>, how, at, room_object_id, player_object_id }. The proxy writes into ITS
 // checkout's substrate/, so run the terminal from the checkout the keepers run from, or point

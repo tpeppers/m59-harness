@@ -51,6 +51,8 @@ function fixture({ name = 'Kermit', items = [], clock0 = 1_000_000 } = {}) {
   const keeper = { policy: { fleeBelow: 0.4 }, revive() {} };
   const mode = s.combat = new CombatMode(s, { keeper: () => keeper, now: () => clock, schedule: () => 0, unschedule: () => {} });
   mode.character = () => name; mode.fleetmate = () => false; mode.warEligibility = () => true;
+  // No private strategies: this machine's substrate/strategies/ must not change these results.
+  mode.wandStrategies = { strategies: [], problems: [] };
   c.room.objects.set(2, { id: 2, nameRsc: 2, row: 5, col: 6, flags: P | OF.ENEMY });
   return { s, c, sent, mode, advance(ms) { clock += ms; }, at(ms) { clock = ms; }, get clock() { return clock; } };
 }
@@ -506,6 +508,117 @@ await test('pvpGearConfig parses expect_incoming and accept_if_missing, and defa
     f.mode.stop('test');
   });
 }
+
+// ------------------------------------------------------------------ the pvpWand seam
+//
+// The volley decision is a fleet's bet, so a private `pvpWand` strategy answers it first and
+// gear.chooseWandVolley is the fallback. These pin both halves and every way back to built-in.
+
+const strategy = (pvpWand, { name = 'private-volley', enabled = true } = {}) =>
+  ({ strategies: [{ name, kind: 'combat', enabled, pvpWand }], problems: [] });
+
+await test('chooseWandVolley: nothing, holding, fired-this-beat and on-the-beat', () => {
+  assert.deepEqual(gear.chooseWandVolley({ wands: [] }), { fire: null, hold: false, face: false, why: 'no volley wand' });
+  const wands = [{ id: 7, name: 'lightning wand', timer: true }, { id: 8, name: 'wand of vampiric shock', timer: false }];
+  assert.deepEqual(gear.chooseWandVolley({ wands, beat: 5, lastVolleyBeat: 4 }),
+    { fire: 7, hold: true, face: true, why: 'on the beat' });
+  assert.deepEqual(gear.chooseWandVolley({ wands, beat: 5, lastVolleyBeat: 5 }),
+    { fire: null, hold: true, face: false, why: 'this beat already fired' });
+  assert.deepEqual(gear.chooseWandVolley({ wands: [wands[1]], beat: 5, lastVolleyBeat: 4 }),
+    { fire: 8, hold: false, face: false, why: 'on the beat' });
+});
+
+await test('checkWandAnswer: a wand the character does not hold, or a non-boolean, is refused', () => {
+  const ctx = { wands: [{ id: 7, name: 'lightning wand', timer: true }] };
+  assert.deepEqual(gear.checkWandAnswer({ fire: 7, hold: true }, ctx), { fire: 7, hold: true, face: false, why: null });
+  assert.deepEqual(gear.checkWandAnswer({ hold: false }, ctx), { fire: null, hold: false, face: false, why: null });
+  assert.ok(gear.checkWandAnswer({ fire: 99 }, ctx).invalid);
+  assert.ok(gear.checkWandAnswer({ fire: 7, hold: 'yes' }, ctx).invalid);
+  assert.ok(gear.checkWandAnswer('fire', ctx).invalid);
+});
+
+await test('a private strategy decides: no zap and no hold means the character swings', async () => {
+  const f = fixture({ items: ['lightning wand'] });
+  const asked = [];
+  f.mode.wandStrategies = strategy(ctx => { asked.push(ctx); return { fire: null, hold: false }; });
+  f.at(12_000_000);
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.ok(!f.sent.some(x => x.startsWith('apply:')), `sent ${f.sent}`);
+  assert.ok(f.sent.some(x => x.startsWith('attack:')), 'not holding: melee runs');
+  const ctx = asked[0];
+  assert.equal(ctx.character, 'Kermit');
+  assert.deepEqual(ctx.wands.map(w => [w.name, w.timer]), [['lightning wand', true]]);
+  assert.equal(ctx.target.id, 2); assert.equal(ctx.target.player, true); assert.equal(ctx.target.dist, 1);
+  assert.deepEqual(ctx.me, { row: 5, col: 5 });
+  assert.equal(ctx.beat, gear.beatOf(12_000_000, 2000)); assert.equal(ctx.pvp, true);
+  f.mode.stop('test');
+});
+
+await test('a private strategy picks the wand: the vampiric one, not the lightning one listed first', async () => {
+  const f = fixture({ items: ['lightning wand', 'wand of vampiric shock'] });
+  f.mode.wandStrategies = strategy(ctx => ({ fire: ctx.wands.find(w => !w.timer).id, hold: false }));
+  f.at(14_000_000);
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  assert.ok(f.sent.includes('apply:wand of vampiric shock->2'), `sent ${f.sent}`);
+  assert.ok(!f.sent.includes('apply:lightning wand->2'));
+  assert.ok(!f.sent.includes('face') || f.sent.indexOf('face') > f.sent.indexOf('apply:wand of vampiric shock->2'),
+    'face was not asked for before the zap');
+  assert.equal(f.mode.active.pvp.wand_strategy, 'private-volley');
+  f.mode.stop('test');
+});
+
+for (const [why, wandStrategies] of [
+  ['declines (null)', strategy(() => null)],
+  ['is disabled', strategy(() => ({ fire: null, hold: false }), { enabled: false })],
+  ['throws', strategy(() => { throw new Error('boom'); })],
+  ['names a wand it does not hold', strategy(() => ({ fire: 4242, hold: false }))],
+]) {
+  await test(`a strategy that ${why} leaves the built-in volley firing`, async () => {
+    const f = fixture({ items: ['lightning wand'] });
+    f.mode.wandStrategies = wandStrategies;
+    const errors = [], err = console.error;
+    console.error = (...a) => errors.push(a.join(' '));
+    try {
+      f.at(16_000_000);
+      f.mode.event({ kind: 'appeared', id: 2 });
+      await f.mode.tick();
+      f.advance(2100); await f.mode.tick();
+    } finally { console.error = err; }
+    assert.equal(f.sent.filter(x => x === 'apply:lightning wand->2').length, 2, `sent ${f.sent}`);
+    assert.ok(!f.sent.some(x => x.startsWith('attack:')), 'built-in: a lightning wand holds the swing');
+    assert.equal(f.mode.active.pvp.wand_strategy, 'builtin');
+    const faulty = /throws|does not hold/.test(why);
+    assert.equal(errors.length, faulty ? 1 : 0, `a fault is reported once per fight, a decline never: ${errors}`);
+    f.mode.stop('test');
+  });
+}
+
+await test('a refusal is marked on the shot it answers, and the next ask sees it', async () => {
+  const f = fixture({ items: ['lightning wand'] });
+  const asked = [];
+  f.mode.wandStrategies = strategy(ctx => { asked.push(ctx); return null; });
+  f.at(18_000_000);
+  f.mode.event({ kind: 'appeared', id: 2 });
+  await f.mode.tick();
+  f.mode.event({ kind: 'message', text: 'You point your wand but nothing happens.' });
+  f.advance(2100); await f.mode.tick();
+  assert.deepEqual(asked.at(-1).shots.map(x => [x.wand, x.refused]), [['lightning wand', true]]);
+  assert.deepEqual(f.mode.active.wandShots.map(x => x.refused), [true, false], 'the second shot stands unrefused');
+  f.mode.stop('test');
+});
+
+await test('a no-combat room is checked before any strategy is asked', async () => {
+  const f = fixture({ items: ['lightning wand'] });
+  let asked = 0;
+  f.mode.wandStrategies = strategy(ctx => { asked++; return { fire: ctx.wands[0].id, hold: true }; });
+  f.mode.pvpForbiddenHere = () => true;
+  const o = { client: f.c, targetId: 2 };
+  assert.equal(await f.mode.wandVolley(o), null);
+  assert.equal(asked, 0);
+  assert.ok(!f.sent.some(x => x.startsWith('apply:')));
+});
 
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${tests} passed`);

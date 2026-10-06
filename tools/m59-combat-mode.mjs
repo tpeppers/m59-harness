@@ -503,25 +503,33 @@ export class CombatMode {
   }
 
   /**
-   * One volley per wall-clock beat, fired by every keeper in the fight on the same beat.
-   * @returns {'hold'|null} 'hold' while a timer (lightning) wand is carried: no melee this tick.
+   * The wand volley. WHAT to do is decided by `decideWandVolley` -- a private `pvpWand`
+   * strategy if this machine has one, else gear.chooseWandVolley (one zap per wall-clock beat,
+   * every keeper in the fight on the same beat). This method only builds the question and
+   * sends the packets.
+   * @returns {'hold'|null} 'hold' = no melee and no approach this tick.
    */
   async wandVolley(o) {
     const c = o.client, s = this.s;
     const cfg = gear.pvpGearConfig();
     this.spentWands ??= new Set();
     // A wand zap is an attack too (ReqSomethingAttack via CanPayCosts / ReqNewApply), so in a
-    // no-combat room every beat is refused and the volley would keep firing into it.
+    // no-combat room every beat is refused and the volley would keep firing into it. Checked
+    // before any strategy is asked: no strategy may fire into a room that refuses it.
     if (this.pvpForbiddenHere()) return null;
     const wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
     if (!wands.length) return null;
-    const hold = wands.some(w => w.timer) ? 'hold' : null;
-    const beat = gear.beatOf(this.now(), cfg.volley_ms);
-    if (beat === this.lastVolleyBeat) return hold;
-    this.lastVolleyBeat = beat;                       // claimed before any await: one zap per beat
-    const pick = wands[0];
+    const ctx = this.wandContext(o, wands, cfg);
+    const decision = await this.decideWandVolley(o, ctx);
+    const hold = decision.hold ? 'hold' : null;
+    if (decision.fire == null) return hold;
+    // Claimed before any await: one zap per beat. advance() never overlaps itself (tick's
+    // o.running), so claiming after the decision's own await is still exclusive.
+    this.lastVolleyBeat = ctx.beat;
+    this.lastWandFireAt = ctx.now;
+    const pick = wands.find(w => w.o.id === decision.fire);
     await this.stand(o);
-    if (pick.timer) await s.pacer.submit('turn', () => {
+    if (decision.face) await s.pacer.submit('turn', () => {
       const live = c.room.objects.get(o.targetId), me = c.self;
       if (!live || !me) return;
       c.face((Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360);
@@ -532,12 +540,70 @@ export class CombatMode {
       c.apply(pick.o.id, live.id);
       this.lastWandId = pick.o.id;
       o.zaps = (o.zaps ?? 0) + 1;
-      if (o.pvp) { o.pvp.zaps = (o.pvp.zaps ?? 0) + 1; o.pvp.last_wand = pick.name; }
+      o.wandShots = [...(o.wandShots ?? []), { at: this.now(), wand: pick.name, refused: false }].slice(-gear.SHOT_HISTORY);
+      if (o.pvp) { o.pvp.zaps = (o.pvp.zaps ?? 0) + 1; o.pvp.last_wand = pick.name; o.pvp.wand_strategy = decision.strategy; }
       if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
       try { this.s.lastPlayerAttackAt = this.now(); } catch {}
       this.record('wand_volley', o);
     }, 1050);
     return hold;
+  }
+
+  /** The question a `pvpWand` strategy is asked: plain data, documented at gear.chooseWandVolley. */
+  wandContext(o, wands, cfg) {
+    const c = o.client, now = this.now();
+    const t = c.room?.objects?.get(o.targetId), me = c.self;
+    return {
+      character: this.character?.() ?? characterName(this.s, c),
+      now, volley_ms: cfg.volley_ms, beat: gear.beatOf(now, cfg.volley_ms),
+      lastVolleyBeat: this.lastVolleyBeat ?? null, lastFireAt: this.lastWandFireAt ?? null,
+      wands: wands.map(w => ({ id: w.o.id, name: w.name, timer: !!w.timer })),
+      target: t ? { id: t.id, name: o.targetName ?? null, player: !!(t.flags & OF.PLAYER), row: t.row, col: t.col,
+                    dist: me ? Math.hypot(t.row - me.row, t.col - me.col) : null } : null,
+      me: me ? { row: me.row, col: me.col } : null,
+      shots: (o.wandShots ?? []).map(x => ({ ...x })),
+      pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
+    };
+  }
+
+  /**
+   * Private strategy first, built-in otherwise. NEVER THROWS: a strategy that throws, answers
+   * nonsense or is missing leaves the fight on the built-in volley, and says so once per fight.
+   * The strategies are loaded once per process, like Session._askStrategies -- an edited
+   * strategy takes effect when the keeper restarts.
+   */
+  async decideWandVolley(o, ctx) {
+    const builtin = () => ({ ...gear.chooseWandVolley(ctx), strategy: 'builtin' });
+    let loaded = this.wandStrategies;
+    if (loaded === undefined) {
+      loaded = this.wandStrategies = null;
+      try {
+        const mod = await import('./m59-strategies.mjs');
+        loaded = this.wandStrategies = await mod.load();
+        const problems = loaded?.problems ?? [];
+        if (problems.length) console.error('[strategies] ' + problems.map(p => `${p.file}: ${p.why}`).join('; '));
+      } catch (e) { console.error(`[strategies] could not load for the wand volley: ${e.message}`); }
+    }
+    const asked = (loaded?.strategies ?? []).filter(st => st.enabled && typeof st.pvpWand === 'function');
+    for (const st of asked) {
+      let answer;
+      try { answer = await st.pvpWand(ctx); }
+      catch (e) { this.noteWandStrategyFault(o, st.name, `threw: ${e.message}`); continue; }
+      if (answer == null) continue;
+      const checked = gear.checkWandAnswer(answer, ctx);
+      if (checked.invalid) { this.noteWandStrategyFault(o, st.name, checked.invalid); continue; }
+      return { ...checked, strategy: st.name };
+    }
+    return builtin();
+  }
+
+  noteWandStrategyFault(o, strategy, why) {
+    o.wandStrategyFaults ??= new Set();
+    if (o.wandStrategyFaults.has(strategy)) return;
+    o.wandStrategyFaults.add(strategy);
+    console.error(`[strategies] ${strategy} pvpWand ${why}; using the built-in volley`);
+    if (o.pvp) o.pvp.wand_strategy_fault = { strategy, why };
+    this.record('wand_strategy_fault', o);
   }
 
   // ------------------------------------------------------------------ WARBAND COMBAT
@@ -783,7 +849,12 @@ export class CombatMode {
   noteWandMessage(text) {
     if (/is broken|has no more charges|shatters into pieces|is out of charges/i.test(text) && this.lastWandId != null)
       this.spentWands?.add(this.lastWandId);
-    if (/point your wand but nothing happens/i.test(text) && this.active) this.record('wand_refused', this.active);
+    if (/point your wand but nothing happens/i.test(text) && this.active) {
+      // Marked on the shot it answers, so a strategy can see a refusal streak (gear.SHOT_HISTORY).
+      const last = this.active.wandShots?.at(-1);
+      if (last) last.refused = true;
+      this.record('wand_refused', this.active);
+    }
   }
 
   targetAtWar(o) {
