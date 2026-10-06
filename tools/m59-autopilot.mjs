@@ -27096,6 +27096,12 @@ export class Autopilot {
     // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
     await this.askTownStrategy().catch(() => null);
     if (this.operatorTripRequest) return this.openRequestedTownTrip();
+    // NO TOWN TRIPS OF ITS OWN (policy.townTrips === false). Operator, 2026-10-06: "Set Raphael to not
+    // do any town trips, selling, etc., we want him to be locked in room 2 if I'm not logged in on him
+    // for now." The thresholds below each have their own number and none of them means "never"; the
+    // town-trip hold (m59-town-favors.mjs) does, but it lives in this process and is gone at the next
+    // keeper restart. This is the roster's answer. An operator's or a strategy's request, above, still opens.
+    if (this.policy.townTrips === false) { this.deferredShoppingTrip = null; return false; }
     // A hunger trip parked as unaffordable is dropped, not resumed, once food is no reason to go.
     if (this.deferredShoppingTrip?.purpose === 'food' && !hungerNeedsTown(this.wantedFightFloor(),
           this.s.client?.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP))
@@ -27527,14 +27533,19 @@ export class Autopilot {
       this.note('town trip still wanted after reconnecting', { purpose: trip.purpose, trigger: trip.trigger, to: trip.target?.room ?? null });
       return 'kept';
     }
+    this.abandonTownTrip(trip, still.why, 'reassessed');
+    return 'dropped';
+  }
+
+  /** Drop one trip with NO hold, cancel its walk, and say why in the ledger. */
+  abandonTownTrip(trip, why, by) {
     const had = { to: trip.target?.room ?? null, purpose: trip.purpose, trigger: trip.trigger, started_at: trip.startedAt };
-    this.townTrip = null;
+    if (this.townTrip === trip) this.townTrip = null;
     if (this.deferredShoppingTrip === trip) this.deferredShoppingTrip = null;
     if (this.purchaseFunding) this.purchaseFunding = { ...this.purchaseFunding, pending: false, status: 'trip no longer wanted' };
-    try { s.cancelMovement?.(null, `town trip no longer wanted: ${still.why}`, { origin: keeperOrigin('town_trip_reassessed') }); } catch {}
-    this.note('town trip dropped: no longer wanted after reconnecting', { why: still.why, had });
-    try { this.ledgerEvent('town_trip_dropped', { by: 'reassessed', why: still.why, had, hold_ms: 0, room: this.hereRoom() }); } catch {}
-    return 'dropped';
+    try { this.s.cancelMovement?.(null, `town trip dropped (${by}): ${why}`, { origin: keeperOrigin(`town_trip_${by}`) }); } catch {}
+    this.note(`town trip dropped (${by})`, { why, had });
+    try { this.ledgerEvent('town_trip_dropped', { by, why, had, hold_ms: 0, room: this.hereRoom() }); } catch {}
   }
 
   /** End the trip and the set-aside one, cancel the walk, and hold new trips. */
@@ -27753,6 +27764,11 @@ export class Autopilot {
     if (!trip) return false;
     if (this.travelInterrupted() || this.suspendedJourney || this.inert?.travelling)
       return true; // still pending; the survival ladder owns this pass
+    // A TRIP OF ITS OWN UNDER A ROSTER THAT NOW SAYS NONE (see bankRun) is dropped, not finished.
+    if (this.policy.townTrips === false && !['operator', 'strategy'].includes(trip.purpose)) {
+      this.abandonTownTrip(trip, 'policy.townTrips is false: no town trips of its own', 'policy');
+      return false;
+    }
     // A NEW CONNECTION SINCE THIS TRIP WAS LAST JUDGED: ask again whether it is still wanted.
     if (trip.client !== undefined && trip.client !== this.s.client && this.s.client) {
       const still = await this.reassessTownTrip(trip);

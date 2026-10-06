@@ -153,5 +153,44 @@ ok('a floor above the resting cap does', hungerNeedsTown(120, 200));
   ok('the same connection is not re-judged on every pass', judged === 0);
 }
 
+// 2026-10-06, Raphael: "not do any town trips, selling, etc., we want him to be locked in room 2".
+// policy.townTrips === false closes every door of its own; an operator's request still opens.
+{
+  const posted = ({ policy = {}, sell = { sell: true, trigger: 'load', why: 'pack is 99% of capacity' } } = {}) => {
+    const opened = [];
+    const { r, events } = rig({ items: [{ name: 'shilling', amount: 5000 }], policy: { bankAbove: 500, ...policy } });
+    const c = r.s.client;
+    Object.assign(c, { waitFor: async () => ({}), vitals: () => ({ vigor: { value: 74, scale_max: 200 } }) });
+    Object.assign(r.s, { need: () => c, pacer: { submit: async () => {} }, bankKnown: () => ({ balance: 0 }),
+                         cancelMovement: () => ({ cancelled: true }),
+                         world: { room: { num: 2 }, route: () => ({ found: true, hops: [1, 2] }) } });
+    Object.assign(r, { townTrip: null, poorSupply: null, larder: () => [{}], reagentCount: () => ({ elderberry: 0, herbs: 0 }),
+      checkIfShouldSell: () => sell, prepareFarmDelivery: () => {}, packWantsMarket: () => false,
+      farmCleanupBeforeSale: async () => {}, shoppingPlan: () => ({}), postShoppingPlan: () => ({}), hereRoom: () => 2,
+      travelInterrupted: () => false, suspendedJourney: null, inert: null,
+      openTownTrip: (target, o) => { opened.push({ target, ...o }); }, continueTownTrip: async () => true });
+    return { r, opened, events };
+  };
+  const raphael = posted({ policy: { townTrips: false } });
+  ok('townTrips false: a full pack and a purse over bankAbove open no trip',
+     await raphael.r.bankRun() === false && !raphael.opened.length, JSON.stringify(raphael.opened));
+  const control = posted();
+  await control.r.bankRun();
+  ok('and the same character without it does go', control.opened.length === 1);
+  const asked = posted({ policy: { townTrips: false } });
+  let requested = 0;
+  asked.r.operatorTripRequest = { town: 'market', by: 'operator', at: 1 };
+  asked.r.openRequestedTownTrip = async () => { requested++; return true; };
+  await asked.r.bankRun();
+  ok('an operator\'s request still opens one', requested === 1);
+  const under = posted({ policy: { townTrips: false } });
+  under.r.townTrip = { target: { room: 113 }, nextService: -1, startedAt: 1, trigger: 'load', purpose: 'sell', client: under.r.s.client };
+  under.r.continueTownTrip = Autopilot.prototype.continueTownTrip;
+  const went = await under.r.continueTownTrip();
+  const row = under.events.find(e => e.kind === 'town_trip_dropped');
+  ok('a trip of its own already under way is dropped with no hold',
+     went === false && under.r.townTrip === null && row?.by === 'policy' && row.hold_ms === 0, JSON.stringify(row));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

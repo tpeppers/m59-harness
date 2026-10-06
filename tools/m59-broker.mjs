@@ -11473,6 +11473,10 @@ const TOOLS = [
         description: 'THE KARMA SCHOOL THIS CHARACTER IS PROTECTING (policy.karma): evil kills only ' +
           'creatures with karma > 0, good only < 0. On its own it narrows what is HUNTED and CLEARED ' +
           'and nothing else; null clears it' },
+      town_trips: { type: 'boolean',
+        description: 'TOWN TRIPS OF ITS OWN (default true). false: this character never opens a town trip by itself -- ' +
+          'no bank, sell, food or restock trip -- and drops one already under way at its next pass, with no hold. ' +
+          'A trip the operator or a townTrip strategy asks for still opens. For a character kept at a post' },
       hold_for_courier: { type: 'boolean',
         description: 'HOLD THE FULL-PACK TOWN TRIP FOR THE COURIER (default false): the load and stack sell ' +
           'triggers wait, so a crew hunter unloads to its courier at the stage room instead of walking to ' +
@@ -12604,6 +12608,7 @@ const TOOLS = [
       if (a.karma !== undefined) p.policy.karma = ['evil', 'good', 'neutral'].includes(a.karma) ? a.karma : null;
       if (a.karma_strict !== undefined) p.policy.karmaStrict = !!a.karma_strict;
       if (a.hold_for_courier !== undefined) p.policy.holdForCourier = !!a.hold_for_courier;
+      if (a.town_trips !== undefined) p.policy.townTrips = a.town_trips !== false;
       if (a.overdrive !== undefined) p.policy.overdrive = a.overdrive && typeof a.overdrive === 'object'
         ? { enabled: a.overdrive.enabled !== false, target: Number(a.overdrive.target) || 200,
             maxMinutes: Number(a.overdrive.maxMinutes) || 30,
