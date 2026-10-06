@@ -20,6 +20,10 @@ assert(sourceAssessment(captured,{...captured,files:{...captured.files,'tools/m5
 assert(!sourceAssessment(captured,{...captured,files:{...captured.files,'tools/m59-game.mjs':'c'}},{patched:true}).ok);
 assert(!sourceAssessment(captured,captured,{patched:true}).ok);
 assert(!sourceAssessment(captured,{...captured,files:{...captured.files,'extra':'d'}}).ok);
+assert(!sourceAssessment(captured,{...captured,files:{...captured.files,'tools/new-movement-helper.mjs':'d'}},{patched:true}).ok);
+assert(sourceAssessment(captured,{...captured,files:{...captured.files,'tools/new-movement-helper.mjs':'d'}},{patched:true,allowedFiles:['tools/new-movement-helper.mjs']}).ok,'explicit movement patch dependency can be added without weakening original attestation');
+assert(!sourceAssessment(captured,{...captured,files:{...captured.files,'tools/new-movement-helper.mjs':'d'}},{allowedFiles:['tools/new-movement-helper.mjs']}).ok,'original must never gain an extra source file');
+assert(!sourceAssessment(captured,{...captured,files:{...captured.files,'tools/new-movement-helper.mjs':null}},{patched:true,allowedFiles:['tools/new-movement-helper.mjs']}).ok,'an approved dependency still requires its source hash');
 const trial=(arm,outcome='died',room=4)=>({arm,assessment:{usable:true},outcome,death_room:room,trace:{arrived_alive:false}});
 assert.equal(classifyMovementComparison([trial('original'),{...trial('patched','survived_window')}],{baselineRuns:1,patchedRuns:1,minimumBaselineDeaths:1}).classification,'plausible');
 assert.equal(classifyMovementComparison([trial('original','survived_window'),trial('patched','survived_window')],{baselineRuns:1,patchedRuns:1,minimumBaselineDeaths:1}).classification,'baseline_not_reproduced');
