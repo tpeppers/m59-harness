@@ -163,6 +163,7 @@ import { keeperOrigin, claimantOrigin, moveOrigin, originLabel, liveMoveOrder, m
          journeyProvenance, installMoveOrders, describePreemption } from './m59-move-origin.mjs';
 import { recordMovementIncident, classifyJourneyFailure } from './m59-movement-incidents.mjs';
 import { packCounts, newTripTrade, addTradeFact, tripLedgerFields } from './m59-towntrip-ledger.mjs';
+import * as townFavors from './m59-town-favors.mjs';
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
 // object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
@@ -1558,6 +1559,8 @@ const BANKS = [
 export const TRIP_PURPOSE = Object.freeze({
   load: 'sell', stacks: 'sell', unweighable: 'sell', broke: 'sell',
   supply: 'restock', food: 'food', standing_order: 'order', policy: 'policy', bank: 'bank',
+  // Opened on demand (m59-town-favors.mjs): by the operator, or by a private `townTrip` strategy.
+  operator: 'operator', strategy: 'strategy',
 });
 // Operator, 2026-09-27: "town trips should aim to be $10k+ if their purpose is for selling".
 // Overridable per character as policy.minSellTripValue.
@@ -12623,6 +12626,7 @@ export class Autopilot {
       deferred_shopping: this.deferredShoppingTrip ? {
         to: this.deferredShoppingTrip.target.room, next_service: this.deferredShoppingTrip.nextService,
       } : null,
+      town_trip_control: this.townTripControlStatus(),
       guild_tithe: this.policy.guildTithe?.enabled ? {
         daily_amount: this.policy.guildTithe.daily_amount,
         paid_today: new TitheBook({ agent: this.name ?? this.s.name,
@@ -20488,6 +20492,11 @@ export class Autopilot {
       this.note('farm delivery failed', { why: error.message });
       return false;
     })) return HANDLED;
+    // And any "while you're in town" favors this trip carried home (m59-town-favors.mjs).
+    if (await this.deliverTownFavors().catch(error => {
+      this.note('town favor delivery failed', { why: error.message });
+      return false;
+    })) return HANDLED;
 
     // Someone else is standing here and we can mend them: do that first. It costs a
     // second and it is the only action available that helps another character.
@@ -26735,6 +26744,11 @@ export class Autopilot {
 
   async bankRun() {
     if (this.townTrip) return this.continueTownTrip();
+    // DROPPED MEANS DROPPED (m59-town-favors.mjs): no resumed trip and no new one while the hold lasts.
+    if (this.townTripHeld()) return false;
+    // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
+    await this.askTownStrategy().catch(() => null);
+    if (this.operatorTripRequest) return this.openRequestedTownTrip();
     if (this.deferredShoppingTrip && this.poorShoppingRetryReady()) {
       this.townTrip = this.deferredShoppingTrip;
       this.deferredShoppingTrip = null;
@@ -27109,6 +27123,245 @@ export class Autopilot {
     return this.townTrip;
   }
 
+  // ================================================================== TOWN TRIPS ON DEMAND
+  //
+  // Start, drop, hold, and "while you're in town" favors. The rules and the operator's order are in
+  // m59-town-favors.mjs (pure, tested); this is the half that touches the trip and the game.
+  // Commands only SET STATE and return: the trip is driven by the pass loop (passErrand -> bankRun ->
+  // continueTownTrip) as every other trip is, so a command never holds the keeper's command lock
+  // through a walk.
+
+  townTripHeld(now = Date.now()) { return townFavors.holdActive(this.townTripHold, now); }
+
+  townTripCommand(args = {}) {
+    const cmd = townFavors.normalizeTripCommand(args);
+    if (!cmd.ok) return { ok: false, why: cmd.why, status: this.townTripControlStatus() };
+    const by = String(args.by ?? 'operator');
+    const now = Date.now();
+    this.townFavorList ??= [];
+    switch (cmd.op) {
+      case 'start': {
+        if (this.townTrip) return { ok: true, started: false, why: 'already on a town trip', status: this.townTripControlStatus() };
+        this.townTripHold = null;
+        this.operatorTripRequest = { town: cmd.town, why: cmd.why, by, at: now };
+        this.note('town trip requested', { town: cmd.town, by, why: cmd.why ?? null });
+        return { ok: true, started: false, queued: true,
+                 note: 'opens on the next keeper pass, through the same trip machinery as any other', status: this.townTripControlStatus() };
+      }
+      case 'drop': return { ok: true, ...this.dropTownTrip({ why: cmd.why, holdMs: cmd.holdMs, by }), status: this.townTripControlStatus() };
+      case 'allow': {
+        const was = this.townTripHold; this.townTripHold = null;
+        return { ok: true, lifted: was, status: this.townTripControlStatus() };
+      }
+      case 'favor': {
+        const f = townFavors.normalizeFavor(args, { now, by });
+        if (!f.ok) return { ok: false, why: f.why, status: this.townTripControlStatus() };
+        const r = townFavors.addFavors(this.townFavorList, [f.favor]);
+        if (r.added.length) this.note('town favor added', { id: f.favor.id, item: f.favor.item, amount: f.favor.amount, to: f.favor.to, by });
+        return { ok: r.added.length > 0, ...r, status: this.townTripControlStatus() };
+      }
+      case 'drop_favor': {
+        const f = this.townFavorList.find(x => x.id === cmd.id);
+        if (!f) return { ok: false, why: `no favor ${cmd.id}`, status: this.townTripControlStatus() };
+        f.status = 'dropped'; f.notes.push(`dropped by ${by}${cmd.why ? `: ${cmd.why}` : ''}`);
+        return { ok: true, dropped: cmd.id, status: this.townTripControlStatus() };
+      }
+      default: return { ok: true, status: this.townTripControlStatus() };
+    }
+  }
+
+  /** End the trip and the set-aside one, cancel the walk, and hold new trips. */
+  dropTownTrip({ why = null, holdMs = townFavors.DEFAULT_HOLD_MS, by = 'operator' } = {}) {
+    const now = Date.now();
+    const had = { active: this.townTrip ? { to: this.townTrip.target?.room ?? null, purpose: this.townTrip.purpose,
+                                            started_at: this.townTrip.startedAt } : null,
+                  deferred: !!this.deferredShoppingTrip, requested: !!this.operatorTripRequest };
+    this.townTrip = null;
+    this.deferredShoppingTrip = null;
+    this.operatorTripRequest = null;
+    if (this.purchaseFunding) this.purchaseFunding = { ...this.purchaseFunding, pending: false, status: 'trip dropped' };
+    this.townTripHold = holdMs > 0 ? { until: now + holdMs, why, by, at: now } : null;
+    let cancelled = null;
+    try { cancelled = this.s.cancelMovement?.(null, `town trip dropped${why ? `: ${why}` : ''}`, { origin: keeperOrigin('town_trip_drop') }) ?? null; }
+    catch (e) { cancelled = { error: e.message }; }
+    this.note('town trip dropped', { by, why, had, hold_until: this.townTripHold?.until ?? null });
+    try { this.ledgerEvent('town_trip_dropped', { by, why, had, hold_ms: holdMs, room: this.hereRoom() }); } catch {}
+    return { dropped: had, hold: this.townTripHold, walk_cancelled: !!cancelled?.cancelled };
+  }
+
+  townTripControlStatus(now = Date.now()) {
+    return {
+      trip: this.townTrip ? { to: this.townTrip.target?.room ?? null, purpose: this.townTrip.purpose,
+                              trigger: this.townTrip.trigger, next_service: this.townTrip.nextService } : null,
+      deferred: !!this.deferredShoppingTrip,
+      requested: this.operatorTripRequest ?? null,
+      hold: this.townTripHeld(now) ? this.townTripHold : null,
+      favors: townFavors.favorSummary(this.townFavorList),
+    };
+  }
+
+  /**
+   * ASK A PRIVATE `townTrip` STRATEGY. Throttled (60 s) when merely considering; asked once, unthrottled,
+   * as a trip opens (`opening`). It may start a trip and/or add favors. Never throws.
+   */
+  async askTownStrategy({ opening = null } = {}) {
+    const now = Date.now();
+    if (!opening && this._townAskAt && now - this._townAskAt < 60_000) return null;
+    if (!opening) this._townAskAt = now;
+    let answer = null;
+    try {
+      answer = await this.s?._askStrategies?.('townTrip', {
+        agent: this.s?.name ?? null, character: this.who(), room: this.hereRoom(),
+        assigned_room: this.policy.assignedRoom ?? null, purse: this.purseNow?.() ?? null,
+        opening, held: this.townTripHeld(now), favors: townFavors.favorSummary(this.townFavorList),
+      });
+    } catch { answer = null; }
+    if (!answer?.answer) return null;
+    const by = `strategy:${answer.strategy}`;
+    const t = townFavors.normalizeTownAnswer(answer.answer, { now, by });
+    if (t.problems.length) this.note('townTrip strategy answer problems', { strategy: answer.strategy, problems: t.problems });
+    if (t.favors.length) {
+      this.townFavorList ??= [];
+      const r = townFavors.addFavors(this.townFavorList, t.favors);
+      if (r.added.length) this.note('town favors added by a strategy', { strategy: answer.strategy, added: r.added, refused: r.refused });
+    }
+    // A strategy may start a trip, but never through an operator's hold.
+    if (t.start && !opening && !this.townTrip && !this.townTripHeld(now) && !this.operatorTripRequest)
+      this.operatorTripRequest = { town: t.start.town, why: t.start.why, by, at: now };
+    return t;
+  }
+
+  /** Open the requested trip: the same destination table, opener and shopping plan as any other trip. */
+  async openRequestedTownTrip() {
+    const req = this.operatorTripRequest;
+    this.operatorTripRequest = null;
+    const town = req.town ?? 'market';
+    const destinations = townDestinations({ packFull: town === 'market', richEnoughToBank: town === 'bank',
+                                            starving: town === 'food', supplyTrip: town === 'supply' })
+      .filter(b => !this.bansDestination(b.room));
+    const options = destinations
+      .map(b => { const r = this.s.world?.route?.(b.room); return { ...b, hops: r?.found ? r.hops.length : Infinity }; })
+      .sort((x, y) => x.hops - y.hops);
+    const target = options[0];
+    if (!target || !Number.isFinite(target.hops)) {
+      this.note('requested town trip cannot start', { town, by: req.by, why: target ? 'no route' : 'every destination is banned' });
+      return false;
+    }
+    const trigger = String(req.by).startsWith('strategy:') ? 'strategy' : 'operator';
+    await this.askTownStrategy({ opening: { purpose: TRIP_PURPOSE[trigger], trigger, to: target.room } });
+    this.doing = 'travelling';
+    this.openTownTrip(target, { sellCall: { trigger, why: req.why ?? `${trigger} asked for a ${town} trip` },
+      errand: `going to town (${req.by})`, wantsMarket: town === 'market' || this.packWantsMarket(),
+      supplyTrip: town === 'supply', starving: town === 'food' });
+    this.postShoppingPlan(this.shoppingPlan());
+    return this.continueTownTrip();
+  }
+
+  // ------------------------------------------------------------------ favors: in town, and home
+
+  /** How many of `item` the pack holds, singular or plural. */
+  countNamed(item) {
+    const c = this.s.client; const want = String(item).toLowerCase().replace(/s$/, '');
+    return (c?.inventory || []).filter(o => String(c.rsc.get(o.nameRsc) || '').toLowerCase().replace(/s$/, '') === want)
+      .reduce((n, o) => n + (o.amount || 1), 0);
+  }
+
+  /** The trip step: load every open favor, from the hall chests and/or a shop. Never blocks the trip. */
+  async gatherTownFavors() {
+    const open = (this.townFavorList ?? []).filter(f => f.status === 'open');
+    for (const f of open) {
+      let need = f.amount - f.loaded;
+      if (need > 0 && f.source !== 'buy') {
+        const before = this.countNamed(f.item);
+        const r = await this.withdrawFromStockpile([{ item: f.item, amount: need }]).catch(e => ({ took: [], why: e.message }));
+        await this.s.pacer.submit('read', () => this.s.need().requestInventory()).catch(() => {});
+        await this.s.need().waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        const got = Math.max(0, this.countNamed(f.item) - before);
+        f.loaded += got; need -= got;
+        f.notes.push(`hall: ${got} of ${got + need}${r?.why && !got ? ` (${String(r.why).slice(0, 80)})` : ''}`);
+      }
+      if (need > 0 && f.source !== 'hall' && f.shop_room != null) {
+        const got = await this.buyFavorCargo(f, need).catch(e => { f.notes.push(`buy failed: ${e.message}`); return 0; });
+        f.loaded += got; need -= got;
+      }
+      f.status = f.loaded > 0 ? 'loaded' : 'unloaded';
+      if (need > 0) f.notes.push(`short by ${need}`);
+      this.note('town favor loaded', { id: f.id, item: f.item, wanted: f.amount, loaded: f.loaded, to: f.to });
+    }
+    return null;
+  }
+
+  async buyFavorCargo(f, need) {
+    const s = this.s, c = s.need();
+    if (this.hereRoom() !== f.shop_room) {
+      const walked = await this.travel(f.shop_room, { origin: keeperOrigin('town_favor_buy'), maxHops: 16 })
+        .catch(error => ({ arrived: false, reason: error.message }));
+      if (!walked?.arrived) { f.notes.push(`could not reach shop room ${f.shop_room}: ${walked?.reason ?? '?'}`); return 0; }
+    }
+    const re = new RegExp(`^${f.item.replace(/s$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?$`, 'i');
+    const pick = await this.sellerHere({ want: re }).catch(() => null);
+    if (!pick) { f.notes.push(`nobody in room ${f.shop_room} sells ${f.item}`); return 0; }
+    const start = c.evSeq;
+    await s.pacer.submit('buy', () => c.buy(pick.seller.id ?? pick.seller));
+    const ev = await c.waitFor({ since: start, kinds: ['shop'], timeoutMs: 4000 }).catch(() => ({ events: [] }));
+    const shop = ev.events?.find(row => row.kind === 'shop');
+    const entry = shop?.items?.find(item => re.test(String(item.name ?? '').trim()));
+    if (!entry) { f.notes.push(`room ${f.shop_room}'s counter does not list ${f.item}`); return 0; }
+    const unit = entry.cost || 0, floor = this.policy.walkingMoney ?? 400;
+    const take = Math.min(need, unit > 0 ? Math.max(0, Math.floor((this.purseNow() - floor) / unit)) : need);
+    if (!take) { f.notes.push(`cannot afford ${f.item} at ${unit} above the ${floor} float`); return 0; }
+    const before = this.countNamed(f.item);
+    for (const line of buyLines([{ id: entry.id, amount: take }])) {
+      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
+      await new Promise(resolve => setTimeout(resolve, 700));
+      for (let n = 0; n < line.amount; n++)
+        this.recordPurchase(entry.name, entry.cost, { why: `town favor ${f.id} for ${f.to.join(', ')}` });
+    }
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+    const got = Math.max(0, this.countNamed(f.item) - before);
+    f.notes.push(`bought ${got} at ${unit} in room ${f.shop_room}`);
+    return got;
+  }
+
+  /**
+   * HOME AGAIN: hand each loaded favor to its recipients, in its room. Called from passErrand once no
+   * trip is in flight. A recipient who is not there is retried later (60 s), never skipped silently.
+   * Returns true when it did something this pass.
+   */
+  async deliverTownFavors() {
+    const now = Date.now();
+    const due = (this.townFavorList ?? []).filter(f => f.status === 'loaded' && !(f.nextTryAt > now));
+    if (!due.length || this.townTrip) return false;
+    for (const f of due) {
+      const room = f.room ?? this.policy.assignedRoom ?? null;
+      if (room != null && this.hereRoom() !== room) {
+        const walked = await this.travel(room, { origin: keeperOrigin('town_favor_deliver'), maxHops: 20 })
+          .catch(error => ({ arrived: false, reason: error.message }));
+        if (!walked?.arrived) { f.nextTryAt = now + 60_000; f.notes.push(`could not reach room ${room}: ${walked?.reason ?? '?'}`); return true; }
+      }
+      const c = this.s.need();
+      for (const [name, n] of Object.entries(townFavors.sharesFor(f, this.countNamed(f.item)))) {
+        if (!this.playerHere(name)) { f.notes.push(`${name} is not in room ${this.hereRoom()}`); continue; }
+        const stack = (c.inventory || []).find(o => String(c.rsc.get(o.nameRsc) || '').toLowerCase().replace(/s$/, '') === f.item.replace(/s$/, ''));
+        if (!stack) break;
+        const before = this.countNamed(f.item);
+        const r = await this.chaliceGive(name, [{ id: stack.id, amount: n }], { stillHave: () => this.countNamed(f.item) >= before });
+        const gave = Math.max(0, before - this.countNamed(f.item));
+        if (gave) f.delivered[name] = (f.delivered[name] ?? 0) + gave;
+        f.notes.push(r.gave ? `gave ${name} ${gave}` : `${name}: ${r.why}`);
+      }
+      // Nothing left to hand over (given out, eaten by a death, traded away) also closes it.
+      if (!townFavors.favorDone(f) && this.countNamed(f.item) === 0) f.notes.push('nothing left in the pack to give');
+      if (townFavors.favorDone(f) || this.countNamed(f.item) === 0) {
+        f.status = 'delivered'; f.delivered_at = Date.now();
+        this.note('town favor delivered', { id: f.id, item: f.item, delivered: f.delivered });
+        try { this.ledgerEvent('town_favor_delivered', { id: f.id, item: f.item, delivered: f.delivered, by: f.by }); } catch {}
+      } else f.nextTryAt = Date.now() + 60_000;
+    }
+    return true;
+  }
+
   // WHAT THE PACK WOULD FETCH, ESTIMATED. Shillings excluded. ITEM_VALUE prices 89 of 249 items, so
   // this is a floor, and `unpriced` says how many stacks it could not price.
   packSaleValue() {
@@ -27211,6 +27464,8 @@ export class Autopilot {
       ["draw the holder's restock", () => this.chaliceTownCargo()],
       ["buy the holder's restock", () => this.chaliceBuyCargo()],
       ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
+      // "WHILE YOU'RE IN TOWN" (m59-town-favors.mjs): last of the buying, out of what is left.
+      ['town favors', () => this.gatherTownFavors()],
       ['vault', () => this.vaultRunIfPassing()],
     ];
     const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents',

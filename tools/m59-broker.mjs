@@ -10989,7 +10989,23 @@ const TOOLS = [
       agent: { type: 'string' },
       action: { type: 'string',
                 enum: ['start', 'stop', 'inert', 'revive', 'status', 'list', 'park', 'unpark', 'release',
-                       'claim', 'heartbeat', 'yield', 'busy', 'free'] },
+                       'claim', 'heartbeat', 'yield', 'busy', 'free', 'town_trip'] },
+      // TOWN TRIPS ON DEMAND (m59-town-favors.mjs). action=town_trip with op=start|drop|allow|favor|
+      // drop_favor|status. start: `town` market|bank|food|supply. drop: `hold_ms` (default 30 min) keeps
+      // new trips from opening. favor: `item`, `amount`, `deliver_to` (names), optional `deliver_room`,
+      // `source` any|hall|buy, `shop_room` (needed to buy), `key` (one open favor per key).
+      op: { type: 'string', enum: ['start', 'drop', 'allow', 'favor', 'drop_favor', 'status'],
+            description: 'town_trip: what to do' },
+      town: { type: 'string', enum: ['market', 'bank', 'food', 'supply'], description: 'town_trip start: where to go' },
+      hold_ms: { type: 'number', description: 'town_trip drop: hold new trips this long (0 = no hold)' },
+      item: { type: 'string', description: 'town_trip favor: the item, e.g. "purple mushroom"' },
+      amount: { type: 'number', description: 'town_trip favor: how many in total' },
+      deliver_to: { type: 'string', description: 'town_trip favor: recipients, comma-separated character names' },
+      deliver_room: { type: 'number', description: 'town_trip favor: where to hand it over (default: the courier\'s assigned room)' },
+      source: { type: 'string', enum: ['any', 'hall', 'buy'], description: 'town_trip favor: guild hall chests, a shop, or chests first' },
+      shop_room: { type: 'number', description: 'town_trip favor: the room of a shop that sells it' },
+      favor_id: { type: 'string', description: 'town_trip drop_favor: which favor' },
+      key: { type: 'string', description: 'town_trip favor: dedupe key; one open favor per key' },
       kind: { type: 'string', description: 'busy: what sort of operation, e.g. "crate-check"' },
       label: { type: 'string', description: 'busy: one short phrase for the board' },
       // PER-FACULTY OWNERSHIP. `inert` is the whole character; these are halves of one.
@@ -11836,6 +11852,15 @@ const TOOLS = [
       // Authority belongs to the process executing the pass loop. Recording a claim
       // or busy errand on this dormant shell leaves the real keeper free to recall
       // a town runner home between travel legs.
+      // TOWN TRIPS ON DEMAND go to whichever process runs the pass loop: the keeper's own, or this one.
+      if (a.action === 'town_trip') {
+        if (s instanceof KeeperProxy) {
+          const result = await keeperAction(a.agent, s._index, 'autopilot_town_trip', { ...a, by: a.by ?? 'operator' });
+          if (result?.error) throw new Error(result.error);
+          return result;
+        }
+        return p.townTripCommand({ ...a, by: a.by ?? 'operator' });
+      }
       if (s instanceof KeeperProxy && ['claim', 'heartbeat', 'yield', 'busy', 'free'].includes(a.action)) {
         const result = await keeperAction(a.agent, s._index, `autopilot_${a.action}`, {
           ...a, mayYield: fleetMayYield(),
