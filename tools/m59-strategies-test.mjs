@@ -77,7 +77,8 @@ rmSync(join(dir, 'broken.mjs'));
 
 // ---------------------------------------------------------------- unusable
 write('nameless.mjs', `export default { kind: 'travel', enabled: true, async whenStuck() { return null; } };`);
-write('wrongkind.mjs', `export default { name: 'wk', kind: 'combat', enabled: true, async whenStuck() { return null; } };`);
+// 'combat' was the example of an unknown kind until it became one (2026-10-05, pvpWand).
+write('wrongkind.mjs', `export default { name: 'wk', kind: 'diplomacy', enabled: true, async whenStuck() { return null; } };`);
 write('nohook.mjs', `export default { name: 'nh', kind: 'travel', enabled: true };`);
 write('notastrategy.mjs', 'export const something = 1;');
 {
@@ -96,6 +97,20 @@ write('notastrategy.mjs', 'export const something = 1;');
 }
 for (const f of ['nameless.mjs', 'wrongkind.mjs', 'nohook.mjs', 'notastrategy.mjs'])
   rmSync(join(dir, f));
+
+// ---------------------------------------------------------------- combat
+write('volley.mjs', `export default { name: 'volley', kind: 'combat', enabled: true,
+  async pvpWand(ctx) { return { fire: ctx.wands[0].id, hold: true }; } };`);
+{
+  const loaded = await load({ dir });
+  const v = loaded.strategies.find(s => s.name === 'volley');
+  ok('a combat strategy answering pvpWand loads, with no problem reported',
+     !!v && v.hooks.join() === 'pvpWand' && !loaded.problems.some(p => p.file === 'volley.mjs'),
+     JSON.stringify(loaded.problems));
+  const got = await firstAnswer(loaded, 'pvpWand', { wands: [{ id: 7 }] });
+  ok('and it is the one asked for pvpWand', got?.strategy === 'volley' && got.answer.fire === 7, JSON.stringify(got));
+}
+rmSync(join(dir, 'volley.mjs'));
 
 // ---------------------------------------------------------------- unrecognised
 write('typo.mjs', `export default {

@@ -77,11 +77,18 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // Return the configuration, `normalizeChalice`'s shape, or null for "not here". The
 //     // names of the holder and alternate are why this lives in a private strategy.
 //     async chalice(ctx) { return null; },
+//     // COMBAT hooks --------------------------------------------------------------
+//     // Asked on every tick of a PvP fight in which the character carries a volley wand:
+//     // which wand to zap, if any, and whether to hold the swing and the approach. Return null
+//     // to decline and the built-in volley runs. ctx and the answer's shape are documented
+//     // beside the built-in, m59-pvp-gear.mjs chooseWandVolley. Asked ten times a second, so
+//     // it must be cheap: no I/O, no waiting.
+//     async pvpWand(ctx) { return null; },
 //     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
@@ -89,7 +96,8 @@ export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice'];
 // 'convoy' is travel too, but it is about a GROUP and it is asked on a different question:
 // not 'how do I get through' but 'should we all go now'. Keeping it a separate kind is what
 // lets a convoy strategy be listed, enabled and audited without the solo mover consulting it.
-export const KINDS = ['travel', 'town', 'convoy'];
+// 'combat' (2026-10-05) is asked inside a fight, by CombatMode, about the wand volley.
+export const KINDS = ['travel', 'town', 'convoy', 'combat'];
 const KNOWN = new Set([...REQUIRED, ...HOOKS, 'describe', 'settings']);
 
 /**
