@@ -864,3 +864,6 @@ substrate/magic-keep.json
 /substrate/operator-access.json
 /substrate/operator-gateway.pid
 /substrate/operator-gateway.log
+
+# Video capture working files (tools/m59-pvp-capture.mjs): a ring of client-window segments.
+/substrate/pvp-capture/
