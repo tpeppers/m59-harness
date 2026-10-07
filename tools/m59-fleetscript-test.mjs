@@ -97,7 +97,13 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // WHO TOOK THE WALK (m59-move-origin.mjs). `movementFor` is handed
                       // {agent, sent} and returns what `status.movement` says; `autopilotStatus`
                       // is what `autopilot action=status` answers, for the posture warning.
-                      movementFor = null, autopilotStatus = null } = {}) {
+                      movementFor = null, autopilotStatus = null,
+                      // WHAT `inventory` AND `sell_all` ANSWER, when a case needs the pack read
+                      // to fail or the counter to pay. `onInventory` is handed {agent, items, n}
+                      // (n counts the reads) and returns a payload or undefined for the default;
+                      // `onSellAll` is handed {agent, items} and returns the sale reply.
+                      onInventory = null, onSellAll = null } = {}) {
+  const invReads = {};
   const sent = [], rested = [], saidLines = [];
   const chatLog = [];
   globalThis.fetch = async (_url, opts) => {
@@ -164,10 +170,13 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
           : { supplied: false, reason: 'the offer never reached them' };
       }
     }
-    else if (name === 'inventory') payload = { items: inventory[agent] ?? [] };
+    else if (name === 'inventory') {
+      invReads[agent] = (invReads[agent] ?? 0) + 1;
+      payload = onInventory?.({ agent, items: inventory[agent] ?? [], n: invReads[agent] }) ?? { items: inventory[agent] ?? [] };
+    }
     else if (name === 'shop') payload = a.buy_ids ? { bought: [] } : { items: shopItems };
     else if (name === 'bank') payload = { banker_said: ['Skivlat hands it over.'] };
-    else if (name === 'sell_all') payload = { sold: [], not_offered: [] };
+    else if (name === 'sell_all') payload = onSellAll?.({ agent, items: inventory[agent] ?? (inventory[agent] = []) }) ?? { sold: [], not_offered: [] };
     else if (name === 'container') payload = { ok: true };
     else if (name === 'vault') payload = vault ?? {
       ok: true, action: 'deposit', vaultman: "Obert Cair'bre",
@@ -2808,6 +2817,50 @@ console.log('\nthe errand renews the busy window, not just the keeper claim');
   ok('and the lease is short enough that a crash costs minutes, not the 15-minute ceiling',
      busies.every(b => Number(b.lease_ms) <= 5 * 60_000),
      JSON.stringify(busies.map(b => b.lease_ms)));
+}
+
+
+console.log('');
+console.log('a sale is judged on the purse, and a purse that could not be read is unknown, not empty');
+{
+  // Fozzie, 2026-10-07: "earned -36288sh, shed 40 stack(s)" for eight long swords that paid. The
+  // read after the sale came back as the broker's error TEXT, `|| []` made that an empty pack,
+  // and the whole purse was reported lost.
+  const pack = () => [{ id: 1, name: 'shilling', amount: 424 },
+                      ...Array.from({ length: 8 }, (_, k) => ({ id: 10 + k, name: 'long sword', amount: 1 })),
+                      { id: 30, name: 'pork', amount: 40 }];
+  const sell1 = items => { for (let k = items.length - 1; k >= 0; k--) if (items[k].name === 'long sword') items.splice(k, 1);
+                           items.find(x => x.name === 'shilling').amount += 2400;
+                           return { sold: [{ name: 'long sword', price: 300 }], not_offered: [], total_received: 2400 }; };
+  {
+    let failAfter = true;
+    fakeBroker({ rooms: { a1: 113 }, inventory: { a1: pack() },
+      onSellAll: ({ items }) => sell1(items),
+      // every read after the sale fails, the way a keeper mid-handoff answers
+      onInventory: ({ n }) => (n > 1 && failAfter ? 'keeper t12 did not answer /state within 30000ms' : undefined) });
+    const log = [];
+    const r = await fleetScript({ name: 'sell-unread', fleet: 'testfleet', agents: ['a1'],
+      steps: [sell('smith', { noVault: true })], onLog: (...a) => log.push(a.join(' ')) });
+    const res = r.results.a1;
+    const step = Object.values(res.state?.results ?? {}).find(x => 'earned' in (x ?? {})) ?? {};
+    const line = log.find(l => /step 0 \(sell\) ok/.test(l)) ?? '';
+    ok('a failed read after the sale is not a sale that lost the purse',
+       !/earned -/.test(line), line);
+    ok('it says the purse was unread, and what the counter paid', /unknown/.test(line) && /2400/.test(line), line);
+    ok('and the errand is not failed for it', res.ok === true, JSON.stringify(res).slice(0, 200));
+  }
+  {
+    // A first read that fails, then answers: retried, not believed.
+    fakeBroker({ rooms: { a1: 113 }, inventory: { a1: pack() },
+      onSellAll: ({ items }) => sell1(items),
+      onInventory: ({ n }) => (n === 2 ? 'socket hang up' : undefined) });
+    const log = [];
+    await fleetScript({ name: 'sell-retry', fleet: 'testfleet', agents: ['a1'],
+      steps: [sell('smith', { noVault: true })], onLog: (...a) => log.push(a.join(' ')) });
+    const line = log.find(l => /step 0 \(sell\) ok/.test(l)) ?? '';
+    ok('a read that failed once is retried and the true earnings reported', /earned 2400sh/.test(line), line);
+    ok('and stacks shed are the ids that left, not a difference of lengths', /shed 8 stack/.test(line), line);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -3639,9 +3639,25 @@ async function runStep(ctx, agent, rawStep, state) {
     }
 
     case 'sell': {
-      const before = await call('inventory', { agent }, 60_000).catch(() => ({ items: [] }));
-      const purse0 = (before.items || []).filter(i => /shilling/i.test(i.name || ''))
-        .reduce((n, i) => n + (i.amount || 1), 0);
+      // A READ THAT FAILED IS NOT AN EMPTY PACK. `call` hands back the broker's error TEXT when a
+      // tool fails, so `inventory.items` was undefined, `|| []` made it an empty pack, and the
+      // step then reported the whole purse as lost: Fozzie, 2026-10-07, "earned -36288sh, shed
+      // 40 stack(s)" for a sale the ledger shows was eight long swords that PAID -- he bought 90
+      // fairy wings and 76 purple mushrooms with the proceeds and drew no cash. So a read counts
+      // only when it carries an items list whose ids a save has not just renumbered; otherwise it
+      // is retried, and a step that still could not read says `unknown` rather than a number.
+      const readPack = async () => {
+        for (let i = 0; i < 3; i++) {
+          const inv = await call('inventory', { agent }, 60_000).catch(() => null);
+          if (Array.isArray(inv?.items) && inv.ids_stale !== true) return inv;
+          await sleep(2000);
+        }
+        return null;
+      };
+      const purseOf = inv => inv ? inv.items.filter(i => /shilling/i.test(i.name || ''))
+        .reduce((n, i) => n + (i.amount || 1), 0) : null;
+      const before = await readPack();
+      const purse0 = purseOf(before);
       const r = await call('sell_all', {
         agent, merchant: step.merchant,
         // The reagents this errand exists to fetch must never be sold back at the counter
@@ -3661,19 +3677,33 @@ async function runStep(ctx, agent, rawStep, state) {
         // piece for an empty armour slot, which is the shape a farmer should walk home in.
         max_weapons: step.maxWeapons ?? 2,
       }, 600_000).catch(e => ({ error: e.message }));
-      const after = await call('inventory', { agent }, 60_000).catch(() => ({ items: [] }));
-      const purse1 = (after.items || []).filter(i => /shilling/i.test(i.name || ''))
-        .reduce((n, i) => n + (i.amount || 1), 0);
+      // THE MONEY ARRIVES ON AN EVENT, like a shop's goods (see `case 'shop'`), so the read right
+      // after the counter can be a read of the past. Wait for the purse to move, bounded.
+      const received = Number.isFinite(Number(r?.total_received)) ? Number(r.total_received) : null;
+      let after = await readPack();
+      const until = Date.now() + (ctx.packSettleMs ?? 15_000);
+      while (after && purse0 != null && received > 0 && purseOf(after) <= purse0 && Date.now() < until) {
+        await sleep(Math.min(1500, ctx.pollMs ?? 1500));
+        after = (await readPack()) ?? after;
+      }
+      const purse1 = purseOf(after);
       // JUDGED ON THE PURSE, not on the reply. A merchant that will not deal answers with a
       // SENTENCE spoken to the room, and `sold: []` with no error looks identical to a
-      // successful sale of nothing — so the money is the only honest evidence.
-      const earned = purse1 - purse0;
-      const shed = (before.items || []).length - (after.items || []).length;
+      // successful sale of nothing — so the money is the only honest evidence. The counter's
+      // own total rides beside it as a second witness, and stands in only when the purse
+      // could not be read.
+      const earned = purse0 != null && purse1 != null ? purse1 - purse0 : null;
+      // Stacks SHED are the ids that left, not a difference of list lengths: the counter's
+      // shillings arrive as a new stack, and one bad read made the length difference 40.
+      const shed = before && after
+        ? before.items.filter(i => !after.items.some(j => j.id === i.id)).length : null;
+      const unread = earned == null ? `the purse could not be read ${purse0 == null ? 'before' : 'after'} the sale` : null;
       return {
         ok: true,                       // selling nothing is disappointing, not a failure
-        earned, shed,
+        earned, shed, received,
         refused: r?.not_offered?.length ?? 0,
-        why: earned <= 0 ? `${step.merchant} bought nothing` : undefined,
+        why: unread ? `${unread}${received != null ? `; the counter says it paid ${received}` : ''}`
+          : earned <= 0 ? `${step.merchant} bought nothing` : undefined,
       };
     }
 
@@ -5355,7 +5385,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
         }
         ctx.log(agent, `step ${at} (${step.do}) ok` +
           (r.gained ? ` — ${r.gained.map(g => `${g.match} +${g.got}/${g.asked}`).join(', ')}` : '') +
-          (r.earned !== undefined ? ` — earned ${r.earned}sh, shed ${r.shed} stack(s)` : '') +
+          (r.earned !== undefined ? ` — earned ${r.earned ?? 'unknown'}sh` +
+            `${r.received != null && r.received !== r.earned ? ` (counter paid ${r.received})` : ''}` +
+            `, shed ${r.shed ?? 'unknown'} stack(s)${r.earned == null && r.why ? ` — ${r.why}` : ''}` : '') +
           (r.vaulted !== undefined ? ` — vaulted ${r.vaulted}/${r.offered ?? 0}` : ''));
       }
       // SAY WHETHER THE CARGO IS STILL ABOARD. The operator's question after a failed supply
