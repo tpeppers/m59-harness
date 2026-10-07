@@ -267,5 +267,21 @@ console.log('\nan abandoned rung that throws later cannot crash the keeper');
 }
 
 
+console.log('an unfinished portal escape owns the dead body');
+{
+  const {ap,calls}=harness({});
+  let release;const pending=new Promise(r=>{release=r;});
+  ap.passUnderworld=async()=>{calls.push('escape');await pending;return HANDLED;};
+  process.env.M59_STAGE_DEADLINE_MS='20';
+  const dead={s:ap.s,c:ap.s?.client,room:{num:1,name:'The Underworld'}};
+  await ap.runPassLadder(dead);calls.length=0;
+  const stopped=await ap.runPassLadder(dead);
+  ok('the next pass waits on the same escape rather than arming underneath it',stopped==='passUnderworld'&&calls.length===0);
+  ok('its in-flight age remains observable',ap.stageFlightStartedAt?.has('passUnderworld'));
+  release();await pending;await new Promise(r=>setTimeout(r,5));
+  ok('the age is cleared when the escape settles',!ap.stageFlightStartedAt?.has('passUnderworld'));
+  delete process.env.M59_STAGE_DEADLINE_MS;
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

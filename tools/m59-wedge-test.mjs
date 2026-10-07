@@ -210,7 +210,7 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
       if (!walkWorks) return { arrived: false, reason: 'every heading refused' };
       self.col = c; self.row = r; return { arrived: true };
     },
-    enteredVia,
+    enteredVia: enteredVia ? { ...enteredVia, landing: { room: enteredVia.room, ...enteredVia.door } } : null,
     // Rung 3. The fake actually changes the room, so "did it end up next door" is a real
     // question — a fixture that only records the call would agree with itself.
     travel: async (to, opts) => {

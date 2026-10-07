@@ -34,6 +34,14 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-death-prevention-test.mjs', 'poisoned recovery and refuge approaches, including exits, retain confirmed progress and cancel stalled movement'],
+  ['m59-escape-test.mjs', 'a missed shifting portal window still tries other fixed portals'],
+  ['m59-travel-test.mjs', 'entry memory separates source doors from destination landings; failed hops retain evidence'],
+  ['m59-survival-escalation-test.mjs', 'local retreats use an observed landing in this room; cancellation forbids further rungs'],
+  ['m59-survival-jam-test.mjs', 'blocked travel recovery preserves the objective and exact body identity'],
+  ['m59-passorder-test.mjs', 'an unfinished Underworld escape retains ownership while its stage age remains visible'],
+  ['m59-travel-recovery-arm-test.mjs', 'suspended travel respects its original arming guard without requiring a weapon factory'],
+  ['m59-pilgrimage-report-test.mjs', 'tail reports retain censored attempts and stop aging terminal refusals'],
   ['m59-underworld-node-test.mjs',
    'Underworld checked activation approaches avoid portal triggers; the unlit-only puzzle solver and special node verdict agree with source'],
   ['m59-node-path-test.mjs',

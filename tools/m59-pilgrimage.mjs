@@ -5,6 +5,7 @@
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --seed 7 --timeout 600
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --one-pass  # one crossing, then stop
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --cycle     # accepted compatibility spelling
+//   node tools/m59-pilgrimage.mjs --observations substrate/tour-sim/new-journeys.jsonl --out substrate/tour-sim/new-result.json
 //   node tools/m59-pilgrimage.mjs --dry-run
 //   node tools/m59-pilgrimage.mjs --fleet shadow --reverse --out substrate/tour-sim/reverse.json
 //
@@ -25,10 +26,14 @@
 // is a lab-server power; the same run against prod would need the fleet to walk to the inns
 // first, and that is a different experiment.
 //
+// Optional --observations saves cached fleet snapshots every poll, including pending handoffs
+// and unfinished leg clocks. Keep raw observations private, like recordings and roster state.
+// Summarize saved results with tools/m59-pilgrimage-report.mjs to retain censored slow trips.
+//
 // Everything it reports is measured from the character, not from the request: `arrived`
 // means the room read back as the destination. See docs/m59-operations.md.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -60,7 +65,7 @@ const flag = (name, fallback = null) => {
 const has = name => argv.includes('--' + name);
 
 const KNOWN = new Set(['fleet', 'to', 'port', 'timeout', 'seed', 'agents', 'inns', 'no-retry',
-                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse', 'out']);
+                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse', 'out', 'observations']);
 for (const a of argv) {
   if (!a.startsWith('--')) continue;
   if (!KNOWN.has(a.slice(2))) {
@@ -87,6 +92,9 @@ const TIMEOUT = Number(flag('timeout', 600)) * 1000;
 const RETRY = !has('no-retry');
 const DRY = has('dry-run');
 const OUT = flag('out');
+const OBSERVATIONS = flag('observations');
+if (has('observations') && (!OBSERVATIONS || OBSERVATIONS.startsWith('--') || existsSync(resolve(OBSERVATIONS))))
+  throw Error('--observations must name a new private JSONL file');
 if (has('out') && (!OUT || OUT.startsWith('--') || existsSync(resolve(OUT)))) {
   console.error('--out must name a new result file');
   process.exit(2);
@@ -332,7 +340,19 @@ async function watchAll(outs) {
   while (live.size && Date.now() - began < TIMEOUT) {
     await sleep(5000);
     const snap = await call('fleet', {}, 60000);
-    if (snap?._error) continue;
+    if (snap?._error) {
+      if (OBSERVATIONS) appendFileSync(resolve(OBSERVATIONS), JSON.stringify({at:Date.now(),error:snap._error})+'\n');
+      continue;
+    }
+    // One already-cached fleet read supplies both control and evidence. Retain
+    // unfinished legs as well as arrivals; a timeout must not disappear from p90.
+    if (OBSERVATIONS) appendFileSync(resolve(OBSERVATIONS), JSON.stringify({at:Date.now(),
+      measurement_began_at:measurementBegan, rows:(snap.fleet??[]).filter(r=>live.has(r.agent)).map(r=>{
+        const o=live.get(r.agent);return {agent:r.agent,character:r.character,room_num:r.room_num,
+          health:r.health,mana:r.mana,vigor:r.vigor,activity:r.activity,busy:r.busy,
+          position:r.position??r.pos??null,committed:r.committed,
+          from:o.legFrom??o.inn,to:o.to,leg_began:o.legBegan,completed:o.legs.length,
+          deaths:o.deaths??0,pending_dispatch:o.pendingDispatch};})})+'\n');
     for (const row of (snap.fleet ?? [])) {
       const o = live.get(row.agent);
       if (!o) continue;
@@ -469,6 +489,7 @@ const results = await watchAll(launched);
 if (OUT) writeFileSync(resolve(OUT), JSON.stringify({
   schema: 'm59-pilgrimage-result/v1', fleet: FLEET, seed: SEED,
   direction: REVERSE ? 'reverse' : 'forward', cycle: CYCLE, retry_after_death: RETRY,
+  observations_file:OBSERVATIONS?resolve(OBSERVATIONS):null,
   ring: RING, requested_window_ms: TIMEOUT, measurement_began_at: measurementBegan,
   finished_at: Date.now(), provenance,
   initial_profiles: order.map(r => ({ agent: r.agent, character: r.character, health: r.health, mana: r.mana })),

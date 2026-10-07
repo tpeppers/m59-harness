@@ -274,7 +274,7 @@ const statementAt = (lines, i) => lines.slice(i, i + 4).join(' ');
 await test('no .travel( or cancelMovement( call in the keeper or broker is unattributed', () => {
   const missing = [];
   for (const f of SWEPT) {
-    const lines = readFileSync(join(HERE, f), 'utf8').split('\n');
+    const lines = readFileSync(join(HERE, f), 'utf8').split(/\r?\n/);
     lines.forEach((l, i) => {
       const code = l.replace(/\/\/.*$/, '');
       if (/^\s*\*/.test(l) || !/(\.travel\(|cancelMovement\??\.?\()/.test(code)) return;

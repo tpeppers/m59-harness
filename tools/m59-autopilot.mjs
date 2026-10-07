@@ -6325,9 +6325,15 @@ export class Autopilot {
       // ladder can push it past its deadline, and then "reviving myself — nobody came back"
       // takes the controls back mid-hop (tour 15, the sewers). The ladder IS the keeper.
       if (this.inert) this.inert.at = Date.now();
+      // The exit is also a refuge approach. A short geometric path can stall on
+      // a live crowd just like a wall approach; retain the same confirmed-progress
+      // memory and cancellation lease instead of spending an entire escape on it.
+      const stopProgressWatch = recovery || source === 'travel'
+        ? this.watchRecoveryApproach(spot) : () => {};
       const crossed = await traceSurvivalOperation(s, 'refuge_exit', { destination: hop.to,
         selected: traceRefuge(spot) }, () => this.s.travel(hop.to, { origin: keeperOrigin('safe_spot'), maxHops: 1 }))
-                                .catch(e => ({ arrived: false, why: e.message }));
+                                .catch(e => ({ arrived: false, why: e.message }))
+                                .finally(stopProgressWatch);
       if (interrupted()) return cancelled();
       if (this.inert) this.inert.at = Date.now();
       this.movedAt = Date.now();
@@ -12536,6 +12542,18 @@ export class Autopilot {
       // the headline: it is how long the decide loop has gone inside a single await, and
       // it is the number the whole watchdog exists to bound the damage from. Null before
       // the keeper has started, never absent while it is running.
+      entry: this.s?.enteredVia ?? null,
+      ladder: {
+        stage: this.passStage ?? null,
+        stage_age_ms: this.passStageAt ? Date.now() - this.passStageAt : null,
+        in_flight: [...(this.stageInFlight?.keys() ?? [])].map(stage => ({
+          stage, age_ms: this.stageFlightStartedAt?.has(stage)
+            ? Date.now() - this.stageFlightStartedAt.get(stage) : null,
+          deadline_ms: stageDeadlineMs(stage),
+        })),
+        overruns: this.tally.stage_overran ?? 0,
+        skipped_in_flight: this.tally.stage_skipped_in_flight ?? 0,
+      },
       watchdog: this.watchTimer ? {
         ticks: this.watch.ticks, frames_written: this.watch.frames,
         interrupts: this.watch.interrupts,
@@ -13924,6 +13942,7 @@ export class Autopilot {
     const order = liveMoveOrder(this.s) ?? this.s?.moveOrder ?? null;
     this.suspendedJourney = {
       to: journey.to, why: journey.why ?? 'travelling', at: Date.now(), trigger,
+      guard: { ...this.travelGuard(this.inert?.travelling ? this.inert.guard : null) },
       attempts: (journey.attempts ?? 0) + 1, deaths_at: this.tally?.deaths ?? 0,
       ...(order?.origin && Number(order.to) === Number(journey.to) ? { origin: order.origin } : {}),
     };
@@ -14903,7 +14922,7 @@ export class Autopilot {
   //   1. breadcrumbs   — undo the last few validated steps. Cheap, local, already existed,
   //                      and it is enough for an ordinary bounce.
   //   2. the entry     — walk back to the square this character ENTERED the room by. Not a
-  //                      guess: `enteredVia.door` is a square we have already stood on and
+  //                      guess: `enteredVia.landing` is a square observed in THIS room and
   //                      which we know connects to the room next door.
   //   3. the last room — cross back through it, and let the journey re-plan from there.
   //
@@ -15091,8 +15110,14 @@ export class Autopilot {
     // crossing, so it is only usable while it still describes the room we are standing in.
     const back = s?.enteredVia;
     const entryIsHere = back && Number(back.room) === Number(from?.room) && back.door;
-    if (canContinue() && rung >= 2 && !escaped() && entryIsHere && typeof s?.walkTo === 'function') {
-      const d = back.door;
+    const landing = entryIsHere && Number(back.landing?.room) === Number(from?.room)
+      && Number.isFinite(back.landing?.row) && Number.isFinite(back.landing?.col)
+      ? back.landing : null;
+    if (canContinue() && rung >= 2 && !escaped() && entryIsHere && !landing) {
+      tried.push({ rung: 2, how: 'the door we came in by', skipped: 'no observed landing in this room' });
+    }
+    if (canContinue() && rung >= 2 && !escaped() && landing && typeof s?.walkTo === 'function') {
+      const d = landing;
       const already = from && d.col === from.col && d.row === from.row;
       if (already) {
         tried.push({ rung: 2, how: 'the door we came in by', skipped: 'already standing on it' });
@@ -15161,7 +15186,8 @@ export class Autopilot {
       // completely different fixes.
       coarse_walkable: (geo && from && typeof geo.walkable === 'function')
         ? geo.walkable(from.row, from.col) : null,
-      entered_via: entryIsHere ? { door: back.door, from: back.from } : null,
+      entered_via: entryIsHere ? { door: back.door, landing: back.landing ?? null,
+                                  from: back.from } : null,
       // WHO ASKED. A back-up done for the mover and one done to get out of a fight that is
       // killing us are the same walk and completely different evidence: `survival` rows are
       // the ones where a character was below the flee line with something in reach, and they
@@ -16228,9 +16254,11 @@ export class Autopilot {
     const running = (async () => this[stage](ctx))();
     this.stageInFlight ??= new Map();
     const startedAt = Date.now();
+    this.stageFlightStartedAt ??= new Map();
+    this.stageFlightStartedAt.set(stage, startedAt);
     const settled = running.then(
-      v => { this.stageInFlight.delete(stage); return v; },
-      e => { this.stageInFlight.delete(stage); throw e; });
+      v => { this.stageInFlight.delete(stage); this.stageFlightStartedAt.delete(stage); return v; },
+      e => { this.stageInFlight.delete(stage); this.stageFlightStartedAt.delete(stage); throw e; });
     // Attached BEFORE the race, because the race is what may stop observing it.
     settled.catch(() => {});
     this.stageInFlight.set(stage, settled);
@@ -16384,6 +16412,14 @@ export class Autopilot {
       // two retreats, on one character — which is worse than the hang.
       if (this.stageInFlight?.has(stage)) {
         this.tally.stage_skipped_in_flight = (this.tally.stage_skipped_in_flight || 0) + 1;
+        // A portal escape still owns a dead body. Ordinary arming/resting below
+        // must not steer or spend mana underneath the unfinished escape.
+        if (stage === 'passUnderworld' && (Number(ctx.room?.num) === UNDERWORLD
+            || /underworld/i.test(ctx.room?.name ?? ctx.c?.room?.name ?? '')
+            || Number(ctx.c?.room?.id) === UNDERWORLD_ROOM_OBJECT_ID)) {
+          this.traceThisPass(ctx, ran, stage);
+          return stage;
+        }
         continue;
       }
       // One assignment per stage, no allocation, no I/O. Read by `postMortem`.
@@ -17890,6 +17926,17 @@ export class Autopilot {
     // Deliberate bare-hand practice is not a broken loadout. It is allowed only on
     // the assigned farm ground; after a death or during travel the ordinary arm-first
     // survival rule remains in force.
+    // An interrupted road retains the road's guard. Requiring a weapon while its
+    // parent is suspended deadlocks unarmed travellers on conjuring/policy loops,
+    // even though the same journey deliberately allows walking unarmed when active.
+    // Later flee/rest/ownership/resume gates still decide whether it may set off.
+    if (this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true) {
+      this.clearRefusal('UNARMED_NO_DONOR');
+      this.clearRefusal('UNARMED_CANNOT_CAST');
+      if (['MANA_FOR_CREATE_WEAPON', 'VIGOR_FOR_CREATE_WEAPON'].includes(this.waitingOn?.code))
+        this.doneWaiting?.();
+      return CONTINUE;
+    }
     const practice = this.trainingStyleFor();
     if (practice === 'unarmed' && this.mode === 'farm' &&
         room?.num === this.policy.assignedRoom) {
@@ -21081,7 +21128,7 @@ export class Autopilot {
       why: 'the survival ladder ended the movement, not the objective',
     });
     recordEvent(this.who(), 'travel_resumed', { to: j.to, trigger: j.trigger, attempts: j.attempts });
-    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts });
+    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard });
     const ours = this.inert;
     let outcome = null;
     try {

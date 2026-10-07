@@ -1680,6 +1680,10 @@ console.log('A SPLIT BOUNDARY HAS SQUARES THAT LEAD SOMEWHERE ELSE, AND THEY ARE
   }
 }
 
+// Routine monsters must not create categorical routing exclusions.
+ok('routine monster maps remain eligible for transit',
+   [534,598,599].every(n => !AVOID_IN_TRANSIT.has(n)));
+
 // ------------------------------------------------ AVOID_IN_TRANSIT, AND THE BAR FOR JOINING IT
 //
 // The set had no test at all, which is how a preference that silently reshapes every journey in

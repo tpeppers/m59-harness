@@ -16,7 +16,7 @@ function fixture() {
     movementWasCancelled: g => g !== k.s.movementGeneration,
     client: { self, vitals: () => ({ health: { value: 6, max: 49 } }) },
     world: { room: { num: 39 } },
-    enteredVia: { room: 39, from: 38, door: { row: 2, col: 19 } },
+    enteredVia: { room: 39, from: 38, door: { row: 2, col: 19 }, landing: { room: 39, row: 2, col: 19 } },
     retreatAlongBreadcrumbs: async opts => {
       calls.push(['crumbs', opts]); return { moved: false, reason: 'breadcrumb_trail_broken' };
     },
@@ -161,4 +161,22 @@ test('terminal geometry failures neither retry another mover nor advance history
   assert.equal(out.terminal_reason, 'collision_geometry_unavailable');
   assert.deepEqual(calls, []);
   assert.equal(JSON.stringify(k.backUps), before);
+});
+
+test('local retreat uses the landing, never the source-map doorway square', async () => {
+  const {k,calls,self}=fixture(); seedThirdRung(k);
+  k.s.enteredVia={room:39,from:38,door:{row:99,col:100},landing:{room:39,row:2,col:19}};
+  k.s.walkTo=async(col,row)=>{calls.push(['entry',{col,row}]);self.col=col;self.row=row;return {arrived:true};};
+  await escape(k);
+  assert.deepEqual(calls.find(([name])=>name==='entry')[1],{col:19,row:2});
+  assert.equal(calls.some(([name])=>name==='previous'),false);
+});
+test('legacy or stale landing memory skips a local target but retains the return-room fallback', async () => {
+  for(const landing of [null,{room:38,row:2,col:19}]){
+    const {k,calls}=fixture();seedThirdRung(k);k.s.enteredVia.landing=landing;
+    const r=await escape(k);
+    assert.equal(calls.some(([name])=>name==='entry'),false);
+    assert.equal(calls.some(([name])=>name==='previous'),true);
+    assert.equal(r.tried.find(t=>t.rung===2).skipped,'no observed landing in this room');
+  }
 });

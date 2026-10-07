@@ -1,10 +1,10 @@
-// Offline regressions for the September 24–25 poison/rest and shelter deaths.
+// Offline regressions for the September 24ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“25 poison/rest and shelter deaths.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate as immediate } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
 import { healUp, restUntil, isHealingFlaskDescription } from './m59-skills.mjs';
-import { Autopilot } from './m59-autopilot.mjs';
+const { Autopilot } = await import(process.env.M59_TEST_AUTOPILOT ?? './m59-autopilot.mjs');
 import { Session } from './m59-game.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { observeRefugeProgress, REFUGE_PROGRESS_MS } from './m59-recovery-refuge.mjs';
@@ -202,4 +202,28 @@ test('a real recovery selector routes first, cancels a stuck await and then sele
   const next=await k.takeRecoverySpot('replacement');
   assert.equal(next.took,true);assert.equal(attempts.length,2);
   assert.notDeepEqual(attempts[0],attempts[1]);
+});
+
+for (const crossing of ['blocked','arrived']) test('exit-as-refuge approach is bounded and cleans up: '+crossing,async t=>{
+  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+  const {k,s,c,geo,target}=approachFixture();
+  k.checkFreeze=()=>false;k.travelInterrupted=()=>false;k.onwardExit=()=>target;
+  k.searchSafeSpot=()=>({...target,kind:'exit',steps_away:3});k.recordSurvivalPath=()=>{};
+  s.world.route=()=>({found:true,hops:[{to:583}]});
+  let release;const blocked=new Promise(r=>{release=r;});
+  const cancel=s.cancelMovement.bind(s);s.cancelMovement=(...args)=>{const r=cancel(...args);release({arrived:false,cancelled:true});return r;};
+  s.travel=async()=>{
+    if(crossing==='arrived'){s.world.room={num:583};return {arrived:true};}
+    return blocked;
+  };
+  k.takeSafeSpot=async()=>({took:true,spot:{row:7,col:23}});
+  const p=k.takeSafeSpotObserved('escape a blocked travel exit',null,{source:'travel',recovery:true,recoveryRoute:true,destination:110});
+  await immediate();
+  if(crossing==='blocked')t.mock.timers.tick(REFUGE_PROGRESS_MS+1000);
+  if(crossing==='blocked')assert.equal(s.movementGeneration,1,'blocked exit must cancel before awaiting its original travel budget');
+  const r=await p;
+  assert.equal(r.took,crossing==='arrived');
+  assert.equal(s.movementGeneration,crossing==='arrived'?0:1);
+  const generation=s.movementGeneration;t.mock.timers.tick(REFUGE_PROGRESS_MS*2);
+  assert.equal(s.movementGeneration,generation,'settled crossing leaves no cancellation timer');
 });

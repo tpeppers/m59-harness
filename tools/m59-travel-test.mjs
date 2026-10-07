@@ -172,6 +172,31 @@ const travel = new Function('orderExits', 'BARRED_ON_ENTRY', 'readHealth', 'near
 
 
 // ---------------------------------------------------------------------------
+
+console.log('entry memory keeps source-door and observed landing coordinate frames separate');
+{
+  const s = fakeSession({ rooms: [583, 584] });
+  s.client.self = { row: 35, col: 28, x: 1824, y: 2272 };
+  s.stepInland = async () => { s.client.self = { row: 35, col: 27, x: 1760, y: 2272 }; };
+  const r = await travel.call(s, 584, {});
+  ok('the crossing arrived', r.arrived === true);
+  ok('source square remains available for choosing the return door', s.enteredVia?.door?.row === 1 && s.enteredVia?.door?.col === 1);
+  ok('local retreat remembers the observed position after stepping inland',
+    s.enteredVia?.landing?.room === 584 && s.enteredVia.landing.row === 35 && s.enteredVia.landing.col === 27);
+  const missing = fakeSession({ rooms: [583, 584] });
+  await travel.call(missing, 584, {});
+  ok('missing position does not invent a destination-room landing', missing.enteredVia?.landing === null);
+  const delayed = fakeSession({ rooms: [583, 584] });
+  delayed.client.waitFor = async ({kinds}) => {
+    if (kinds?.includes('room-contents')) delayed.client.self = {row:35,col:26,x:1696,y:2272};
+    return {events:[]};
+  };
+  await travel.call(delayed,584,{});
+  ok('a delayed self packet is captured after room contents settle',
+    delayed.enteredVia?.landing?.col===26 && delayed.enteredVia.landing.observed_after==='arrival_settle');
+
+}
+
 console.log('an internal door is opened when the exit cannot be walked to');
 {
   // THE CASTLE VICTORIA CASE, in miniature. The last hop's exit is real, published and
