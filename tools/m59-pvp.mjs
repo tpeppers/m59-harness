@@ -90,6 +90,34 @@ export function appendPvp(row, { dir = pvpDirFor() } = {}) {
   } catch { return false; }
 }
 
+// TWO SIDE FILES, BESIDE THE BATTLE LOG AND NEVER IN IT. The battle reader (readPvpLog) and the
+// clip recorder (m59-pvp-capture.mjs) read exactly `<day>.jsonl`; a shot or a chat line in there
+// would stretch battles and open captures. These carry the evidence for ONE question — why a zap
+// was refused (tools/m59-wand-shot.mjs) — and every server line heard while a fight was on.
+function appendSide(prefix, row, dir) {
+  try {
+    const at = Number.isFinite(row?.at) ? row.at : Date.now();
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, `${prefix}-${dayOf(at)}.jsonl`), JSON.stringify({ ...row, at }) + '\n');
+    return true;
+  } catch { return false; }
+}
+/** One finished wand-shot row (m59-wand-shot.mjs). Never throws. */
+export function appendShot(row, { dir = pvpDirFor() } = {}) { return appendSide('shots', row, dir); }
+/** One server line heard during a PvP window. Never throws. */
+export function appendFightMessage(row, { dir = pvpDirFor() } = {}) { return appendSide('messages', row, dir); }
+
+/** Shot rows between two times, oldest first. */
+export function readShots({ dir = pvpDirFor(), since = 0, until = Date.now() } = {}) {
+  const out = [];
+  for (const d of daysBetween(since, until)) {
+    const f = join(dir, `shots-${d}.jsonl`);
+    if (!existsSync(f)) continue;
+    for (const r of jsonl(readFileSync(f, 'utf8'))) if (r.at >= since && r.at <= until) out.push(r);
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
 // ------------------------------------------------------------------ what a keeper writes
 
 /**
@@ -491,7 +519,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const r = pvpReport({ days: Number(arg('--days', 7)), gapMs: Number(arg('--gap', 10)) * 60_000, stateFile });
   if (argv.includes('--json')) { console.log(JSON.stringify(r, (k, v) => k === 'events' ? undefined : v, 2)); process.exit(0); }
   const t = r.totals;
-  console.log(`${t.battles} battles in ${r.days}d: ${t.kills} kills, ${t.our_deaths} deaths, ${t.hits_out} hits landed, ${t.volleys} volleys (${t.refused} refused)`);
+  console.log(`${t.battles} battles in ${r.days}d: ${t.kills} kills, ${t.our_deaths} deaths, ${t.hits_out} hits landed, ${t.volleys} volleys (${t.refused} refused${t.volleys ? `, ${Math.round(100 * t.refused / t.volleys)}% of volleys` : ''})`);
   for (const b of r.battles) {
     const foes = b.enemies.map(f => f.name).join(', ') || '?';
     console.log(`${new Date(b.start).toISOString()}  ${(b.duration_ms / 1000).toFixed(1).padStart(7)}s  ${b.result.padEnd(8)} ` +

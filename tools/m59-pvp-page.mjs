@@ -140,7 +140,7 @@ function battleHtml(b, i) {
       <span><b class="bad">${b.our_deaths}</b> death${b.our_deaths === 1 ? '' : 's'}</span>
       <span><b>${b.hits_out}</b> hits landed</span>
       <span><b>${b.hits_in}</b> taken</span>
-      <span><b>${b.volleys}</b> volleys${b.refused ? `, ${b.refused} refused` : ''}</span>
+      <span><b>${b.volleys}</b> volleys${b.refused ? `, ${b.refused} refused (${Math.round(100 * b.refused / Math.max(1, b.volleys))}%)` : ''}</span>
       <span><b>${b.ours.length}</b> of ours</span>
     </div>
     ${rec?.title ? `<p class="rtitle">${esc(rec.title)}</p>` : ''}
@@ -207,7 +207,7 @@ ${NAV('pvp')}
   <div class="card"><div class="k">Deaths</div><div class="v bad">${t.our_deaths}</div><div class="n">ours killed by players</div></div>
   <div class="card"><div class="k">K : D</div><div class="v">${kd}</div><div class="n">kills to deaths</div></div>
   <div class="card"><div class="k">Hits landed</div><div class="v">${t.hits_out}</div><div class="n">${t.hits_in} taken</div></div>
-  <div class="card"><div class="k">Volleys</div><div class="v">${t.volleys}</div><div class="n">${t.refused} refused</div></div>
+  <div class="card"><div class="k">Volleys</div><div class="v">${t.volleys}</div><div class="n">${t.refused} refused${t.volleys ? ` (${Math.round(100 * t.refused / t.volleys)}%)` : ''}</div></div>
 </div>
 <div class="caveat">Kills, hits and volleys are recorded only from the build that added the PvP log (tools/m59-pvp.mjs); before it, the
   server's kill line was kept nowhere, so older battles show our deaths alone and read as losses whether or not they were.

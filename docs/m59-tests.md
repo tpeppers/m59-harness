@@ -1005,6 +1005,13 @@ the records it describes.
   Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
   that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
   that a test fake without a real Recorder writes nothing) and
+  `node tools/m59-wand-shot-test.mjs` (15 — **why a wand zap was refused**: that the server's
+  "behind you" test and staircase line of sight are transcribed, that a stale target square is
+  charged to `stale` and a missing one to `other_room` ahead of every other gate, that any zap,
+  cast or swing inside 2 s predicts `timer`, that "You can't see your selected target." names
+  `facing` itself, that a refusal nothing predicted is `unexplained` and a hit despite a
+  prediction is `unexpected`, that the rate is refused over SHOTS, that shot and fight-message
+  rows never enter the battle log, and that PvP replay seals evict oldest-first under a budget) and
   `node tools/m59-guild-refusal-test.mjs` (14 — **"Only those in guilds may attack each other
   here."** (room.kod `room_guild_combat`, a ROOM_GUILD_PK_ONLY refusal of one TARGET, not the
   room): that after it no path — operator order, war scan or alarm, return fire, fight-back,

@@ -1190,6 +1190,11 @@ export class M59Client {
   // target still sends an empty list.
   cast(spellId, targets = []) {
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
+    // Every cast arms the server's attack timer (spell.kod:760) — read by the wand-shot record.
+    try {
+      const sp = this.spells?.find(s => objId(s.id) === objId(spellId));
+      this.lastCastSent = { at: Date.now(), id: objId(spellId), name: sp?.name ?? this.rsc?.get?.(sp?.nameRsc) ?? null };
+    } catch { /* recording must not change whether a cast is sent */ }
     if ([].concat(targets).length === 1) this.noteAttackTarget([].concat(targets)[0], 'cast');
     try {
       const spell = this.spells?.find(s => objId(s.id) === objId(spellId));
@@ -1201,6 +1206,7 @@ export class M59Client {
   // BP_REQ_APPLY {4,OBJECT} {4,OBJECT} — use one item on another.
   apply(what, onWhat) {
     this.send(BP.REQ_APPLY, u32(objId(what)), u32(objId(onWhat)));
+    this.lastApplySent = { at: Date.now(), what: objId(what), on: objId(onWhat) };
     this.noteAttackTarget(onWhat, 'apply');
   }
 
@@ -1656,8 +1662,12 @@ export class M59Client {
         }
         const request = ++this.roomContentsReceived;
         this.room.id = res.roomId;
+        const contentsAt = Date.now();
         this.room.objects = new Map(res.objects.map(o => {
           o.appearanceRevision = ++this.appearanceRevision;
+          // WHEN THE SERVER LAST SAID WHERE THIS IS (posAt), so a shot aimed at a square can say
+          // how old that square was. Set wherever the server reports a position, never by us.
+          o.posAt = contentsAt;
           return [o.id, o];
         }));
         // SELF-HEAL A STALE selfId. selfId is set only by the BP.PLAYER packet (one per
@@ -1690,6 +1700,7 @@ export class M59Client {
         const res = parseCreate(body);
         if (!this.check('CREATE', res)) break;
         res.object.appearanceRevision = ++this.appearanceRevision;
+        res.object.posAt = Date.now();
         this.room.objects.set(res.object.id, res.object);
         this.emit('appeared', { id: res.object.id, what: describeObject(res.object, this.lookup) });
         break;
@@ -1711,7 +1722,7 @@ export class M59Client {
         // Anything the SERVER says about this object supersedes a prediction, so the flag
         // is cleared here rather than left to rot — a stale `predicted: true` on a
         // confirmed position would make every later reader distrust a good reading.
-        if (o) Object.assign(o, { x: res.x, y: res.y, col: res.col, row: res.row, predicted: false });
+        if (o) Object.assign(o, { x: res.x, y: res.y, col: res.col, row: res.row, predicted: false, posAt: Date.now() });
         // WRITE DOWN WHERE EVERY BODY ACTUALLY WENT.
         //
         // This packet is the only ground truth about walkable space this repository has, and
@@ -1827,7 +1838,7 @@ export class M59Client {
         const o = this.room.objects.get(res.object.id);
         // Keep position: BP_CHANGE carries appearance only.
         if (o) Object.assign(o, res.object, {
-          x: o.x, y: o.y, col: o.col, row: o.row, angle: o.angle,
+          x: o.x, y: o.y, col: o.col, row: o.row, angle: o.angle, posAt: o.posAt,
           appearanceRevision: ++this.appearanceRevision,
         });
         if (o) this.emit('changed', { id: o.id });
