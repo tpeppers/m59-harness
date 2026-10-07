@@ -107,7 +107,11 @@ const war = block(broker, broker.indexOf(') {', broker.indexOf('\nasync function
 await test('broker: warRestartKeeper refuses a busy agent, then marks it before its first await', () => {
   before(war, 'if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) return', 'keeperHandoffs.add(agent)');
   before(war, 'keeperHandoffs.add(agent)', 'await ', 'the mark is taken before the first await');
-  assert.match(war, /if \(pilotOf\(agent\)\) return/, 'a piloted character is never handed off');
+  // A PILOTED CHARACTER IS STILL NEVER HANDED OFF -- the replacement's login would bump the person.
+  // Since 2026-10-07 it is not skipped either: it is replaced DORMANT (no /handoff is told), and one
+  // played through the keeper's own connection is refused (m59-dormancy-shape-test.mjs pins both).
+  assert.match(war, /if \(!dormantSwap && !\(await tell\(/, 'a dormant swap (every piloted character) is never told to hand off');
+  assert.match(war, /if \(piloted \|\| dormancyOf\(agent\)\)/, 'and a piloted character always takes that path');
 });
 
 await test('broker: the replacement port is reserved in handoffPorts before the probe await, and taken() sees reservations', () => {

@@ -163,6 +163,10 @@ node_modules/
 # No secret in it — one name — but it is one machine's answer, and committing it would
 # point a stranger's tools at a roster they do not have.
 /substrate/fleet-default
+# Which characters are held OUT of the world, why, and until when (m59-dormancy.mjs). It names
+# characters and it is an instruction to them -- a hold arriving from somebody else's checkout
+# would keep a stranger's character offline, silently.
+/substrate/dormancy-*.json
 /commissions/
 
 # The account passwords for a fleet made by tools/m59-makefleet.mjs. This is the

@@ -104,6 +104,51 @@ answering "not in game". Three things it will not do:
 
 `--no-rejoin` or `M59_REJOIN=0` turns it off.
 
+### Keeping a character OUT on purpose: dormancy
+
+```bash
+node tools/m59-dormant.mjs                      # who is held out, why, until when, penalty deadline
+node tools/m59-dormant.mjs hold t20 --for 15    # out for 15 minutes (logs it off if it is in)
+node tools/m59-dormant.mjs hold t20             # out until `wake`
+node tools/m59-dormant.mjs wake t20
+```
+
+The sweep above exists to put back characters that FALL out, and until 2026-10-07 it could not
+tell a fall from a decision, so it undid every deliberate absence within a lap. A **dormancy**
+(`tools/m59-dormancy.mjs`) is a keeper that is alive and wants to be offline, with a `reason`
+(`pilot`, `operator`, `evade`), a `wake` rule (`pilot_released`, `deadline`, `manual`), and --
+once the character has actually left an unsafe room -- the server's `penalty` window. The keeper
+process holds the record and acts on it; the broker keeps a copy in
+`substrate/dormancy-<fleet>.json` (gitignored), so a keeper that crashes or is replaced comes back
+dormant instead of logging in. The sweep reads that file before anything else and wakes a character
+only when `dormancyVerdict` says so, and then through the keeper's `/wake`, never `/rejoin` (which
+a dormant keeper answers with 423). An unreadable file stops the lap's rejoins, and a keeper spawned
+while it is unreadable starts dormant-until-told: reading garbage as "nobody is held" would log every
+held character in at once.
+
+- **Logging off to escape.** Logging off is the one move in this game that breaks a fight -- the
+  ghost it leaves cannot be attacked (`logghost.kod` has no combat handler) -- and the sweep used
+  to log the keeper straight back in, onto the square you left. **Hold the character first, then
+  log off.** The moment your client goes is stamped as the logoff (room unknown, treated as unsafe).
+- **The server's clock outranks every reason.** A logoff outside an inn, an adventurers' hall or
+  your guild hall's interior leaves a ghost that is struck 540-660 s later (items dropped, spell and
+  skill points lost, scaled by recent unsafe logoffs; `user.kod:665-689`, `logghost.kod`). A hold
+  brings the character back by `earliest - 60 s` unless it says `--accept-penalty`. Logging back on
+  for under 120 s does NOT reset that clock (`user.kod:680`), and the arithmetic knows it.
+  `SAFE_LOGOFF_ROOMS` lists the 23 rooms that carry `ROOM_SAFELOGOFF`.
+- **A person playing a character no longer leaves its keeper on old code.** `restart-keepers`
+  used to skip a piloted character ("being played by a person"), and when the person logged out the
+  OLD keeper was told to rejoin. Now a piloted character whose keeper is disconnected is replaced
+  DORMANT: no handoff (there is no connection to hand), the replacement starts with a `pilot`
+  record, the old keeper is stopped, and the sweep wakes the new one when the person is done. A
+  person playing THROUGH the keeper's own socket (`--proxy`) is still refused, because there the
+  keeper's connection is theirs.
+
+**Not built yet, and shaped for:** a keeper that logs ITSELF off to survive (`reason: 'evade'`).
+The playbook verbs `logoff` and `call_for_help` already promise "stay off for `stay_off_s`" and say
+the broker honours the window; it never did, and `breakOut` reconnects rather than staying off. The
+keeper's `goDormant()` and the record's `must_wake_by` are what those verbs should call and read.
+
 ### Restarting keepers: hand them off, do not log them off
 
 ```bash

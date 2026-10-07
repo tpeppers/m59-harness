@@ -1812,3 +1812,19 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
 - `node tools/m59-communications-test.mjs` (97): decoded speech/system capture, source classification, fleet isolation, persistence and reconnect, filters/pagination, partial records, write failure isolation and HTML escaping. No game connection.
 
 - `node tools/m59-proxy-communications-test.mjs`: passive human-proxy receipt, login and reconnect attribution, shared bot history, wire preservation, credential exclusion. No game connection.
+
+## Keeper dormancy — a keeper that wants to be offline
+
+- `node tools/m59-dormancy-test.mjs` (47): the model in `m59-dormancy.mjs`. The server's
+  logoff-penalty window as kod states it (540-660 s, a safe-logoff room leaving no ghost, and the
+  clock NOT resetting on a relog under 120 s -- including a logoff inside the old window, where the
+  earliest strike that cannot be ruled out is now); every reason waking on its own rule with the
+  penalty guard outranking all of them; a deadline wake without a deadline refused rather than read
+  as "for ever"; an unreadable hand-over failing CLOSED; and a corrupt store throwing instead of
+  reading as "nobody is held". Temp directory only.
+- `node tools/m59-dormancy-shape-test.mjs` (18): that the keeper and the broker CONSULT it where
+  forgetting to is the bug -- join, the autopilot's reconnect, `/join` and `/rejoin` refuse a dormant
+  keeper (423, never the 409 a broker reads as a stranger's port), a dormant spawn never logs in, the
+  rejoin sweep reads the store before any `/rejoin` and stops the lap if it cannot, `restart-keepers`
+  replaces a piloted character dormant instead of skipping it, and a person logging off under a hold
+  starts the penalty clock. Source text only, like `m59-handoff-shape-test.mjs`.

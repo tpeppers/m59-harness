@@ -45,6 +45,8 @@ import { REAGENT_COOP_SCHEMA, coopConfig } from './m59-reagent-coop.mjs';
 import { ChatControls } from './m59-chat-controls.mjs';
 import { DeskChat } from './m59-desk-chat.mjs';
 import { chaliceStoreFor } from './m59-chalice.mjs';
+import { DormancyStore, DORMANCY_ENV, encodeDormancy, normalizeDormancy, dormancyVerdict, withLogoff,
+         PENALTY_MARGIN_MS } from './m59-dormancy.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
@@ -1285,6 +1287,82 @@ function keeperHeapArgs(env = process.env) {
   return Number.isFinite(mb) && mb > 0 ? [`--max-old-space-size=${Math.round(mb)}`] : [];
 }
 
+// ============================================================================ DORMANCY
+//
+// A KEEPER THAT WANTS TO BE OFFLINE (tools/m59-dormancy.mjs). The record lives in two places on
+// purpose: in the keeper process, which acts on it without asking anybody, and in this per-fleet
+// file, which outlives the keeper -- so a keeper that crashes, or is replaced by restart-keepers,
+// comes back DORMANT rather than logging in onto the square somebody logged it off to escape. The
+// rejoin sweep reads the file first and wakes a character only when dormancyVerdict says so.
+let _dormancyStore = null;
+const dormancyStore = () => (_dormancyStore ??= DormancyStore.forFleet(FLEET ?? null));
+const dormancyOf = agent => { try { return dormancyStore().get(agent); } catch { return null; } };
+/**
+ * The spawn env that makes a keeper start dormant, or {} when the character may log in. An
+ * unreadable store starts it dormant-until-told: a keeper that waits is recoverable, one that logs
+ * in where somebody logged it off to escape is not.
+ */
+const dormancyEnvFor = agent => {
+  let d;
+  try { d = dormancyStore().get(agent); }
+  catch (e) {
+    console.error(`[dormancy] ${agent}: ${e.message}; starting it dormant until told`);
+    d = normalizeDormancy({ reason: 'operator', wake: 'manual', by: 'broker', note: `dormancy store unreadable: ${e.message}` });
+  }
+  return d ? { [DORMANCY_ENV]: encodeDormancy(d) } : {};
+};
+
+/**
+ * END A DORMANCY: clear the record, then tell a live keeper to log in. With no live keeper the
+ * record is simply gone and the next sweep spawns one normally. Never throws.
+ */
+async function wakeDormant(agent, why, by = 'broker') {
+  try { dormancyStore().clear(agent, { why, by }); }
+  catch (e) { return { ok: false, why: `could not clear the dormancy record: ${e.message}` }; }
+  const rec = keeperProcesses.get(agent);
+  if (!rec || !recordedKeeperAlive(rec)) {
+    console.error(`[dormancy] ${agent} woken (${why}); no live keeper, the sweep will start one`);
+    return { ok: true, woke: true, keeper: 'none live; the sweep starts one' };
+  }
+  try {
+    const target = await verifiedKeeperWriteTarget(agent, agentIndices.get(agent));
+    const r = await fetch(`http://127.0.0.1:${target.port}/wake`, {
+      method: 'POST', headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, { why, by }), signal: AbortSignal.timeout(30_000),
+    });
+    const body = await r.json().catch(() => ({}));
+    console.error(`[dormancy] ${agent} woken (${why}) by ${by}: keeper HTTP ${r.status}` +
+                  (body?.error ? ` -- ${body.error}` : ''));
+    return { ok: r.ok, woke: true, ...body };
+  } catch (e) {
+    console.error(`[dormancy] ${agent} woken (${why}) but the keeper was not reached: ${e.message}`);
+    return { ok: false, woke: true, why: `record cleared; keeper not reached (${e.message})` };
+  }
+}
+
+/**
+ * PUT A CHARACTER TO SLEEP: write the record first (so no sweep can rejoin it in between), then
+ * tell a live keeper. A keeper that is not running simply starts dormant when the sweep spawns it.
+ */
+async function sleepDormant(agent, request) {
+  const rec = normalizeDormancy(request);
+  dormancyStore().set(agent, rec);
+  const kp = keeperProcesses.get(agent);
+  if (!kp || !recordedKeeperAlive(kp)) return { ok: true, dormancy: rec, keeper: 'none live; it will start dormant' };
+  const target = await verifiedKeeperWriteTarget(agent, agentIndices.get(agent));
+  const r = await fetch(`http://127.0.0.1:${target.port}/dormant`, {
+    method: 'POST', headers: keeperIdentityHeaders(target.identity),
+    body: keeperEnvelope(target.identity, rec), signal: AbortSignal.timeout(30_000),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, dormancy: rec, why: body?.error ?? `keeper HTTP ${r.status}`,
+                      note: 'the record is written, so the sweep will not rejoin it; the keeper did not take it' };
+  // The keeper's copy is the richer one once it has logged off: where, and the penalty window.
+  if (body?.dormancy) { try { dormancyStore().set(agent, body.dormancy); } catch {} }
+  console.error(`[dormancy] ${agent} dormant (${rec.reason}, wakes ${rec.wake}) by ${rec.by}`);
+  return { ok: true, dormancy: body?.dormancy ?? rec };
+}
+
 function spawnKeeper(agent, index, credentials) {
   if (brokerStopping) return Promise.resolve(false);
   const existing = keeperSpawning.get(agent);
@@ -1445,6 +1523,8 @@ async function spawnKeeperInner(agent, index, credentials) {
         env: {
           ...process.env,
           M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(ownershipPermit), 'utf8').toString('base64url'),
+          // A character held offline comes back dormant, never logged in (see DORMANCY above).
+          ...dormancyEnvFor(agent),
         },
         // HIDDEN, BECAUSE TWENTY-ONE OF THESE IS TWENTY-ONE CONSOLE WINDOWS.
         //
@@ -1630,10 +1710,37 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
   if (!credentials) return { agent, ok: false, why: 'not in a loaded roster' };
   if (!old || !recordedKeeperAlive(old)) return { agent, ok: false, why: 'no live keeper to hand off from' };
   if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) return { agent, ok: false, why: 'already being brought up or handed off' };
-  if (pilotOf(agent)) return { agent, ok: false, why: 'being played by a person' };
+  // A CHARACTER OUT OF THE WORLD ON PURPOSE IS REPLACED DORMANT, NOT SKIPPED. This used to refuse
+  // every piloted character ("being played by a person"), which was right about the handoff -- the
+  // replacement's login would bump the person -- and wrong about what came next: the old keeper,
+  // disconnected but alive, was told to /rejoin the moment the person logged out, on OLD code, and
+  // stayed there until somebody ran this again (operator, 2026-10-07, t20). Its socket is already
+  // gone, so there is nothing to hand off: the replacement starts DORMANT (m59-dormancy.mjs), the
+  // old keeper is stopped, and the rejoin sweep wakes the new one when the person is done.
+  // A person playing THROUGH this keeper's own connection (a proxied client) is the one case that
+  // is still refused: there the keeper's socket is theirs, and replacing it would bump them.
+  const piloted = !!pilotOf(agent);
+  let dormantSwap = false, createdDormancy = false;
   keeperHandoffs.add(agent);
   let child = null, reservedPort = null;
   try {
+    // Inside the try, so the finally releases the mark however this ends.
+    if (piloted || dormancyOf(agent)) {
+      const live = await keeperLiveAt(old.port, { timeoutMs: 3000 }).catch(() => ({ ok: false }));
+      const connected = live.ok ? !!live.value?.connected : null;
+      if (connected === true)
+        return { agent, ok: false, why: piloted
+          ? 'being played by a person through this keeper\'s own connection (a proxied client); replacing it would bump them'
+          : 'a dormancy record says this character is out, but its keeper is in the world; wake it or clear the record first' };
+      if (connected === null)
+        return { agent, ok: false, why: `${piloted ? 'being played by a person' : 'held dormant'}, and the old keeper did not say whether it is connected` };
+      dormantSwap = true;
+      if (!dormancyOf(agent)) {
+        dormancyStore().set(agent, normalizeDormancy({ reason: 'pilot', by: 'restart-keepers',
+          note: 'replacement keeper waits for the person playing this character' }));
+        createdDormancy = true;
+      }
+    }
     const target = await verifiedKeeperWriteTarget(agent, index);
     const tell = async (body) => fetch(`http://127.0.0.1:${target.port}/handoff`, {
       method: 'POST', headers: keeperIdentityHeaders(target.identity),
@@ -1652,9 +1759,10 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     // the spawn (below) — still on the old connection — so a walk that ended in the meantime is
     // not resurrected. See carriedTravel in m59-keeper-restart.mjs for what is and is not carried.
     const walkNow = async () => (await keeperState(agent, index).catch(() => null))?.job ?? null;
-    const captured = carriedTravel(await walkNow());
+    // A dormant swap has no walk in flight (the keeper is out of the world) and nobody to hand to.
+    const captured = dormantSwap ? { carry: null } : carriedTravel(await walkNow());
     let legacy = false;
-    if (!(await tell({ timeout_ms: timeoutMs + 30_000 }))) {
+    if (!dormantSwap && !(await tell({ timeout_ms: timeoutMs + 30_000 }))) {
       legacy = true;
       await post('/pause', { why: 'war restart: handing off to a replacement keeper' });
     }
@@ -1679,7 +1787,14 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       else handoffPorts.delete(p);
     }
     reservedPort = port;
-    const undo = async () => { if (legacy) await post('/resume', {}); else await tell({ cancel: true }); };
+    const undo = async () => {
+      // Rolled back: the old keeper is untouched, and only a record THIS call wrote is removed.
+      if (dormantSwap) {
+        if (createdDormancy) try { dormancyStore().clear(agent, { why: 'restart-keepers rolled back', by: 'restart-keepers' }); } catch {}
+        return;
+      }
+      if (legacy) await post('/resume', {}); else await tell({ cancel: true });
+    };
     if (port == null) { await undo(); return { agent, ok: false, why: 'no free keeper port in the band' }; }
 
     let carry = captured.carry ? captured : null;
@@ -1693,7 +1808,9 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
         [...keeperHeapArgs(), join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port),
          '--fleet', FLEET ?? '-'],
         { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
-          env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url') },
+          env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url'),
+                 // Only a dormant swap starts dormant; an ordinary handoff's replacement must log in.
+                 ...(dormantSwap ? dormancyEnvFor(agent) : {}) },
           windowsHide: process.env.M59_KEEPER_WINDOWS !== '1',
           // Detached for the reason at the other keeper spawn: attached, it dies with the broker.
           detached: true });
@@ -1707,9 +1824,11 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       await undo();
       return { agent, ok: false, why: `replacement guard failed: ${guarded.reason}` };
     }
-    console.error(`[war-restart] ${agent}: replacement pid=${child.pid} port=${port}; old pid=${old.pid} port=${old.port} handing off`);
+    console.error(`[war-restart] ${agent}: replacement pid=${child.pid} port=${port}; old pid=${old.pid} port=${old.port} ` +
+                  (dormantSwap ? 'replaced DORMANT (out of the world on purpose)' : 'handing off'));
 
     // READY MEANS IN THE WORLD, NOT MERELY LISTENING: in_game and connected, with this exact pid.
+    // For a dormant swap it means the opposite, deliberately: answering, ours, dormant, and OUT.
     const deadline = Date.now() + timeoutMs;
     let ready = false;
     while (!brokerStopping && Date.now() < deadline && !spawnedChildExited(child)) {
@@ -1718,13 +1837,16 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       if (!reply.ok) continue;
       const id = validateKeeperSample(reply.value, { agent, character: credentials.character ?? null, pid: child.pid });
       if (!id.ok) break;
-      if (reply.value.in_game && reply.value.connected) { ready = true; break; }
+      if (dormantSwap ? (reply.value.dormancy && !reply.value.in_game)
+                      : (reply.value.in_game && reply.value.connected)) { ready = true; break; }
     }
     if (!ready) {
       try { child.kill('SIGTERM'); } catch {}
       await waitForSpawnedChildExit(child);
       await undo();
-      return { agent, ok: false, why: 'the replacement did not reach the world in time; the old keeper carries on' };
+      return { agent, ok: false, why: dormantSwap
+        ? 'the dormant replacement did not come up in time; the old keeper is untouched'
+        : 'the replacement did not reach the world in time; the old keeper carries on' };
     }
 
     // THE SWAP. The old keeper exits on its own when its connection drops; the broker now talks
@@ -1737,14 +1859,21 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     sessions.set(agent, proxy);
     try { previous?.dispose?.(); } catch {}
     // A pre-handoff keeper does not exit by itself: stop it now, while its socket is already gone.
-    if (legacy) await post('/stop', {});
+    // Nor does a dormant swap's: it was never handed anything, and its socket went with the person.
+    if (legacy || dormantSwap) await post('/stop', {});
     ensureKeeperLivenessSweep();
-    console.error(`[war-restart] ${agent}: now pid=${child.pid} port=${port} (old pid ${old.pid} ${legacy ? 'stopped' : 'exits on its own'})`);
+    console.error(`[war-restart] ${agent}: now pid=${child.pid} port=${port} (old pid ${old.pid} ` +
+                  `${legacy || dormantSwap ? 'stopped' : 'exits on its own'})` +
+                  (dormantSwap ? `; dormant, wakes ${dormancyOf(agent)?.wake ?? '?'}` : ''));
     const carried = carry ? await resumeCarriedWalk(agent, index, carry) : null;
     return { agent, ok: true, pid: child.pid, port, old_pid: old.pid,
+             ...(dormantSwap ? { dormant: true, wakes: dormancyOf(agent)?.wake ?? null } : {}),
              ...(carried ? { carried_walk: carried } : {}) };
   } catch (e) {
     if (child && !spawnedChildExited(child)) { try { child.kill('SIGTERM'); } catch {} }
+    // A dormancy this call wrote for a swap that never happened is not left behind for the old keeper.
+    if (createdDormancy && keeperProcesses.get(agent)?.pid !== child?.pid)
+      try { dormancyStore().clear(agent, { why: `restart-keepers failed: ${e.message}`, by: 'restart-keepers' }); } catch {}
     return { agent, ok: false, why: e.message };
   } finally {
     keeperHandoffs.delete(agent);
@@ -5087,9 +5216,14 @@ async function reconcileFleet() {
   // bounded 3s window, not 100 windows in series. Gates are checked both here and again
   // after the await; a leave or pilot claim that arrives while probes are in flight wins.
   const livenessProofs = new Map();
+  // Read once per lap: one small file, and every decision below in this lap uses the same answer.
+  // UNREADABLE MEANS STAND STILL: rejoining blind would log every held character in at once.
+  let dormant;
+  try { dormant = dormancyStore().all(); }
+  catch (e) { console.error(`[dormancy] ${e.message} -- no rejoins this lap`); return; }
   await Promise.all([...sessions.entries()]
     .filter(([agent, s]) => s instanceof KeeperProxy &&
-      inAnyRoster(agent) && !leftOnPurpose.has(agent) &&
+      inAnyRoster(agent) && !leftOnPurpose.has(agent) && !dormant[agent] &&
       !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent))
     .map(async ([agent, proxy]) => {
       const proof = await proxy.refreshLiveness({ force: true });
@@ -5117,6 +5251,17 @@ async function reconcileFleet() {
     // character out from under a hand that is on the keys, and the login would bump
     // them straight out of the world.
     if (pilotOf(agent)) continue;
+    // OUT ON PURPOSE (m59-dormancy.mjs). Not missing either -- and this sweep, which exists to put
+    // back characters that FELL out, is exactly what used to undo every deliberate absence within
+    // a lap: a person who logged off to survive was logged straight back in onto the attacker's
+    // square. The record decides: it wakes only when its rule (a person done, a deadline, the
+    // server's logoff-penalty guard) says so, and then through /wake, never /rejoin.
+    const dorm = dormant[agent];
+    if (dorm) {
+      const v = dormancyVerdict(dorm, { pilotHeld: false });
+      if (v.wake) await wakeDormant(agent, v.why, 'rejoin sweep');
+      continue;
+    }
 
     let existing = sessions.get(agent);
     if (existing instanceof KeeperProxy) {
@@ -5586,6 +5731,22 @@ function releasePilot(agent, why = 'released') {
   // a lapse noticed by the pilot watch -- so this is the one place to remember it ended.
   if (p.lease) pilotGraveyard.bury(agent, p.lease, why, Date.now());
   unmarkHumanDesk(agent, p, why);
+  // A PERSON WHO LOGS OFF UNDER A HOLD STARTS THE SERVER'S CLOCK, and nothing of ours saw them go:
+  // it was their client that left the world, not a keeper. So the moment the claim ends is stamped
+  // as the logoff, room unknown and therefore treated as unsafe -- the penalty guard then brings the
+  // character back before the earliest strike unless the hold said accept_penalty. A pilot-only
+  // record is left alone: it wakes now anyway (dormancyVerdict, pilot_released).
+  try {
+    const held = dormancyOf(agent);
+    if (held && held.wake !== 'pilot_released' && !held.logoff) {
+      const stamped = withLogoff(held, { at: Date.now(), room: null, safe: null });
+      dormancyStore().set(agent, stamped);
+      console.error(`[dormancy] ${agent}: the person logged off under a ${held.reason} hold; ` +
+        (stamped.penalty && !stamped.accept_penalty
+          ? `back on by ${new Date(stamped.penalty.earliest - PENALTY_MARGIN_MS).toISOString()} to beat the logoff penalty (room unknown, assumed unsafe)`
+          : 'accept_penalty: staying off past the logoff penalty'));
+    }
+  } catch (e) { console.error(`[dormancy] ${agent}: could not stamp the logoff: ${e.message}`); }
   // A CLIENT JUST STOPPED BEING THERE, which is the commonest moment for one to start
   // being there again — closing a client and opening it as somebody else is how an
   // evening of this actually goes. Worth exactly one more look; if that finds nothing
@@ -18346,6 +18507,56 @@ const TOOLS = [
     },
   },
   {
+    name: 'dormancy',
+    description:
+      'KEEP A CHARACTER OUT OF THE WORLD ON PURPOSE, or let it back (tools/m59-dormancy.mjs). ' +
+      '`list` shows every held character, why, what ends it and when the server\'s logoff penalty ' +
+      'forces it back. `hold` takes it out (logging it off if its keeper is in the world) and keeps ' +
+      'the rejoin sweep from putting it back: with `minutes` until then, without until `wake`. Hold a ' +
+      'character you are PLAYING before you log off to escape something, and its keeper will not log ' +
+      'straight back in onto the attacker. A logoff outside an inn or your guild hall leaves a ghost ' +
+      'the server punishes 540-660 s later, so a hold brings the character back before that unless ' +
+      '`accept_penalty` is set. `wake` ends a hold now.',
+    schema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['list', 'hold', 'wake'] },
+      agent: { type: 'string' },
+      minutes: { type: 'number', description: 'hold: how long; omit to hold until `wake`' },
+      note: { type: 'string', description: 'why, kept on the record and in the store\'s log' },
+      accept_penalty: { type: 'boolean',
+        description: 'hold: stay off past the logoff-penalty deadline (items, spell and skill points)' },
+      by: { type: 'string', description: 'who is asking; defaults to "dormancy tool"' },
+    }, required: ['action'] },
+    run: async (a) => {
+      const store = dormancyStore();
+      if (a.action === 'list') {
+        const s = store.read();
+        return { dormant: Object.entries(s.agents).map(([agent, rec]) => ({ agent, ...rec,
+                   verdict: dormancyVerdict(rec, { pilotHeld: !!pilotOf(agent) }) })),
+                 log: s.log.slice(-20), file: store.file };
+      }
+      if (!a.agent || !inAnyRoster(a.agent)) return { error: `${a.agent ?? '(no agent)'} is not in a loaded roster` };
+      const by = String(a.by ?? 'dormancy tool');
+      if (a.action === 'wake') {
+        if (!dormancyOf(a.agent)) return { woke: false, note: `${a.agent} is not dormant` };
+        return wakeDormant(a.agent, a.note ?? 'asked to wake', by);
+      }
+      if (a.action !== 'hold') return { error: `unknown action "${a.action}"` };
+      // A person playing THROUGH the keeper's own socket would be logged off by this, without
+      // having asked. Holding a character somebody plays directly is fine: its keeper is already out.
+      if (pilotOf(a.agent)) {
+        const kp = keeperProcesses.get(a.agent);
+        const live = kp ? await keeperLiveAt(kp.port, { timeoutMs: 3000 }).catch(() => ({ ok: false })) : { ok: false };
+        if (live.ok && live.value?.connected)
+          return { error: `${a.agent} is being played through its keeper's own connection; holding it would log that person off` };
+      }
+      try {
+        return await sleepDormant(a.agent, { reason: 'operator', by, note: a.note ?? null,
+          accept_penalty: a.accept_penalty === true,
+          ...(a.minutes != null ? { for_ms: Number(a.minutes) * 60_000 } : {}) });
+      } catch (e) { return { error: e.message }; }
+    },
+  },
+  {
     name: 'leave',
     description:
       'Log the character out and free the session. It STAYS IN THE ROSTER by default, so a broker ' +
@@ -18433,6 +18644,8 @@ const SNAPSHOT_OPTIONAL_TOOLS = new Set([
   'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
   // Its whole reason to exist is a slot whose keeper the broker refuses to read (an identity conflict).
   'rename_character',
+  // Its subject is a keeper deliberately OUT of the world, which has no live world to project.
+  'dormancy',
 ]);
 
 async function callTool(name, args, caller) {

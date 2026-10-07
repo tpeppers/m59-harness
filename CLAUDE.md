@@ -25,6 +25,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | parse a packet, read a stat, trust a reply, or hit a player | [`docs/m59-protocol-traps.md`](docs/m59-protocol-traps.md) |
 | touch a board, the compendium or the planner | [`docs/m59-boards.md`](docs/m59-boards.md) |
 | run, back up, restore, lend out or shut down the fleet | [`docs/m59-operations.md`](docs/m59-operations.md) |
+| keep a character OUT of the world on purpose, or log off to escape a fight (`m59-dormant.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#keeping-a-character-out-on-purpose-dormancy) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |

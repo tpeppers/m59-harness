@@ -73,6 +73,7 @@ import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
 
 // EVERYTHING THAT REACHES THIS PROCESS OVER HTTP IS SOMEBODY ELSE'S ORDER. The broker forwards
 // the MCP caller's origin; a caller that names none is recorded as such (m59-move-origin.mjs).
@@ -329,7 +330,16 @@ let startedAt = Date.now();
 // declaring a freshly rejoined character phantom.
 let connectionRevision = 0;
 let initialJoinRetryTimer = null;
-let joinWanted = true;
+// DORMANT: THIS KEEPER WANTS TO BE OFFLINE (tools/m59-dormancy.mjs). `joinWanted` was always the
+// switch, but it had no reason, no end and no wake rule, and nothing outside this process could
+// see it -- so the broker's rejoin sweep read every deliberate absence as a drop and undid it. A
+// record says why (a person is playing, an operator asked, or the keeper is evading), what ends
+// it, and -- once the character has actually left an unsafe room -- when the SERVER will start
+// punishing the abandoned body. A broker can hand one over at spawn (M59_KEEPER_DORMANT), so a
+// replacement keeper never logs in at all until it is told it may.
+let dormancy = decodeDormancy(process.env[DORMANCY_ENV]);
+let lastPenalty = null;                // the latest unsafe logoff's window, for the server's 120 s rule
+let joinWanted = !dormancy;
 let joinGeneration = 0;
 let keeperJoinInFlight = null;
 session.combat.pvpEligibility = () => joinWanted;
@@ -354,6 +364,7 @@ const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
   const rejoinOriginal = typeof session.rejoin === 'function' ? session.rejoin.bind(session) : null;
   if (rejoinOriginal) session.rejoin = async (...args) => {
     if (handoffActive()) throw new Error('keeper is handing off to its replacement; not reconnecting');
+    if (dormancy) throw new Error(`keeper is dormant (${dormancy.reason}); not reconnecting`);
     return rejoinOriginal(...args);
   };
 }
@@ -505,6 +516,51 @@ function assertJoinIntent(generation) {
   inGame = false;
   throw new Error('keeper join was superseded by a newer leave/rejoin intent');
 }
+
+// GO DORMANT: leave the world if we are in it, and stay out until the record says otherwise. A
+// logoff from inside the world is RECORDED -- room, time, and the server's penalty window -- because
+// that window is the deadline every later decision about this character has to respect.
+async function goDormant(rec) {
+  const wasIn = !!(inGame && session.live);
+  const room = session.world?.room?.num ?? null;
+  const lastLoginAt = session.loggedInAt ?? null;
+  changeJoinIntent(false);
+  if (autopilot) autopilot.stop(`dormant: ${rec.reason}`);
+  if (session.client) { try { session.client.close(); } catch {} }
+  await keeperJoinInFlight?.promise?.catch(() => null);
+  if (session.client) { try { session.client.close(); } catch {} }
+  inGame = false;
+  dormancy = wasIn ? withLogoff(rec, { at: Date.now(), room, lastLoginAt, prior: lastPenalty }) : rec;
+  if (dormancy.penalty) lastPenalty = dormancy.penalty;
+  log(`[keeper] ${agent} DORMANT (${dormancy.reason}, wakes ${dormancy.wake}` +
+      (dormancy.until ? ` at ${new Date(dormancy.until).toISOString()}` : '') + `) by ${dormancy.by}` +
+      (wasIn ? `; left room ${room ?? '?'}` + (dormancy.penalty
+        ? `, penalty window ${new Date(dormancy.penalty.earliest).toISOString()}..${new Date(dormancy.penalty.latest).toISOString()}`
+        : ', a safe-logoff room') : '; was not in the world'));
+  return dormancy;
+}
+
+// WAKE: the one way back from dormancy. Clears the record FIRST, so the join it starts is allowed.
+async function wakeFromDormancy(why, by = 'unattributed') {
+  const was = dormancy;
+  if (!was) return { woke: false, why: 'not dormant' };
+  dormancy = null;
+  changeJoinIntent(true);
+  log(`[keeper] ${agent} waking from ${was.reason} dormancy: ${why} (by ${by})`);
+  try { await join(); }
+  catch (e) { scheduleInitialJoinRetry(); throw e; }
+  return { woke: true, was: was.reason, why };
+}
+
+// THE KEEPER'S OWN CLOCK. A deadline and the penalty guard are decided HERE as well as by the
+// broker, so a broker that is down or restarting cannot leave an abandoned body to the server's
+// strike. A pilot wait is not: only the broker knows whether a person is at the controls, so it
+// is passed as held and never ends on this clock.
+setInterval(() => {
+  if (!dormancy) return;
+  const v = dormancyVerdict(dormancy, { pilotHeld: dormancy.wake === 'pilot_released' });
+  if (v.wake) wakeFromDormancy(v.why, 'keeper clock').catch(e => log(`[keeper] ${agent} wake failed: ${e.message}`));
+}, 1000).unref?.();
 
 // ------------------------------------------------------- the errand hold
 //
@@ -1047,6 +1103,7 @@ async function joinGenerationOnce(generation) {
 // rejoin intent behind an older attempt. A leave increments joinGeneration and waits for
 // the old attempt to observe that invalidation before it can report the character out.
 async function join() {
+  if (dormancy) throw new Error(`keeper is dormant (${dormancy.reason}): not logging in until woken`);
   if (!joinWanted) throw new Error('keeper is intentionally left out of game');
   if (handoffActive()) throw new Error('keeper is handing off to its replacement; not logging in');
   const generation = joinGeneration;
@@ -1124,6 +1181,10 @@ function state() {
     // — see the rawmove note below — so a reader that treats one false sample as death
     // will rejoin healthy characters. Judge them together, with hysteresis.
     connected: !!session.live,
+    // OUT ON PURPOSE (m59-dormancy.mjs), with the verdict as this process sees it: why, what ends
+    // it, and `must_wake_by` -- the server's logoff-penalty deadline -- for anything planning around it.
+    dormancy,
+    dormancy_verdict: dormancy ? dormancyVerdict(dormancy, { pilotHeld: dormancy.wake === 'pilot_released' }) : null,
     intent_observation: intentObservation(session),
     // Stable room RID and live room object id are different namespaces. The latter is
     // renumbered by server saves and is the generation guard used by RTS packets.
@@ -1690,6 +1751,9 @@ const server = createServer(async (req, res) => {
         in_game: inGame,
         connected: !!session.live,
         connection_revision: connectionRevision,
+        // OUT ON PURPOSE. A dormant keeper is alive and deliberately not in the world; the record
+        // says why and what ends it (m59-dormancy.mjs). null when it is not dormant.
+        dormancy,
         uptime_s: Math.floor((Date.now() - startedAt) / 1000),
         // The saves this client has seen, for the broker's fleet-wide save clock. Cheap — a
         // six-entry array already held — so it rides on the liveness poll the broker makes
@@ -4119,9 +4183,46 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // A DORMANT KEEPER IS NOT LOGGED IN BY A JOIN OR A REJOIN, only by /wake. Answered 423 and
+    // never 409: a broker reads 409 from /rejoin as "this port belongs to somebody else" and retires
+    // it, while any other refusal leaves a live keeper alone -- so even a broker that predates
+    // dormancy does the right thing with a keeper that is deliberately out.
+    const refuseWhileDormant = () => {
+      if (!dormancy) return false;
+      json({ ok: false, dormant: true, dormancy,
+        error: `keeper is dormant (${dormancy.reason}, wakes ${dormancy.wake}); POST /wake to bring it back` }, 423);
+      return true;
+    };
+
+    // GO DORMANT. The body is a dormancy request (m59-dormancy.mjs normalizeDormancy) inside the
+    // usual addressed envelope; a malformed one is refused with its reason and changes nothing.
+    if (req.method === 'POST' && path === '/dormant') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
+      const { agent: _a, character: _c, keeper_pid: _p, ...request } = asked;
+      let rec;
+      try { rec = normalizeDormancy(request); }
+      catch (e) { json({ ok: false, error: e.message }, 400); return; }
+      json({ ok: true, dormancy: await goDormant(rec) });
+      return;
+    }
+
+    if (req.method === 'POST' && path === '/wake') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
+      try {
+        const r = await wakeFromDormancy(String(asked.why ?? 'asked to wake'), String(asked.by ?? 'unattributed'));
+        json({ ok: true, ...r, in_game: inGame, connected: !!session.live });
+      } catch (e) {
+        json({ ok: false, woke: true, error: `woke, but the login failed: ${e.message}; retrying` }, 502);
+      }
+      return;
+    }
+
     if (req.method === 'POST' && path === '/join') {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
+      if (refuseWhileDormant()) return;
       if (!joinWanted) changeJoinIntent(true);
       await join();
       json({ ok: true });
@@ -4154,6 +4255,7 @@ const server = createServer(async (req, res) => {
       // connection overrides old one` line in the server log.
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
+      if (refuseWhileDormant()) return;
       changeJoinIntent(true);
       if (autopilot) autopilot.stop('rejoin');
       if (session.client) {
@@ -5351,6 +5453,11 @@ server.listen(port, '127.0.0.1', () => {
     };
     const t0 = setTimeout(tick, EVERY_MS);
     if (typeof t0.unref === 'function') t0.unref();
+  }
+  // SPAWNED DORMANT: no login at all. The broker (or this process's own clock) wakes it.
+  if (dormancy) {
+    log(`[keeper] ${agent} starting DORMANT (${dormancy.reason}, wakes ${dormancy.wake}) by ${dormancy.by}; not logging in`);
+    return;
   }
   join().catch(e => {
     log(`[keeper] ${agent} initial join failed: ${e.message}`);
