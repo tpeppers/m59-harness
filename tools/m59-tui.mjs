@@ -10,8 +10,8 @@
 //
 // So this is the same information with the last step joined on: arrow keys to pick a
 // character, Enter for its full sheet, L to LAUNCH the client logged in as it with the
-// agent DLL injected, C to open the COMPENDIUM with that character's real numbers in
-// it. No copying, no pasting.
+// agent DLL injected, V to make it a PVP CAMERA that films every fight in its room, C to
+// open the COMPENDIUM with that character's real numbers in it. No copying, no pasting.
 //
 // THE CLIENT L STARTS IS THE PATCHED ONE WHEN THERE IS ONE. `m59-devclient.mjs` names the
 // build tree's own meridian.exe — the binary with clientd3d/m59dbg.c in it and without
@@ -28,7 +28,7 @@
 import { stdin, stdout, env, exit, argv } from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
-import { readFileSync, openSync, existsSync } from 'node:fs';
+import { readFileSync, openSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -116,6 +116,7 @@ const c = {
   red: s => `${ESC}31m${s}${ESC}0m`,
   yellow: s => `${ESC}33m${s}${ESC}0m`,
   blue: s => `${ESC}34m${s}${ESC}0m`,
+  magenta: s => `${ESC}35m${s}${ESC}0m`,
   cyan: s => `${ESC}36m${s}${ESC}0m`,
   inv: s => `${ESC}7m${s}${ESC}0m`,
 };
@@ -378,7 +379,7 @@ function listView() {
       ? c.bold(c.yellow('X')) + c.dim(' TAKE ') + c.yellow(cur.character ?? cur.agent) +
         c.dim(' off ' + cut(curHeld.label ?? 'fleet work', 24))
       : c.bold(c.yellow('X')) + c.dim(' leave override');
-  L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') +
+  L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') + c.magenta('V pvp rec') + c.dim(' · ') +
          c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') + c.cyan('D DBFST') + c.dim(' · ') +
          c.cyan('G geometry') +
          c.dim(' · C compendium · P plan · ') + xSays +
@@ -464,6 +465,7 @@ function heroView() {
   L.push('');
   L.push(c.dim('  ⏎/q back · ') + c.bold(c.yellow('L')) + c.dim(' LAUNCH the client as this character · ') +
          c.bold(c.cyan('S')) + c.dim(' SWARM — launch and the fleet follows · ') +
+         c.bold(c.magenta('V')) + c.dim(' PVP RECORDING — this character films every fight in its room (V again stops) · ') +
          c.bold(c.cyan('B')) + c.dim(` BOARD — the whole ${FLEET_LABEL} fleet in the commander · `) +
          c.bold(c.cyan('F')) + c.dim(' FIELD COMMAND — the same fleet on a map, in a browser · ') +
          c.bold(c.cyan('D')) + c.dim(' DBFST — edit live fleet orders · ') +
@@ -567,7 +569,7 @@ const GATE_LOGIN_PORT = String(env.M59_PROXY_PORT || 5961);
 const gateCreds = (row) => ({ creds: { account: row.agent, password: 'm59-gate',
                                         host: '127.0.0.1', port: GATE_LOGIN_PORT }, why: null });
 
-async function launch(row, { viaProxy = false } = {}) {
+async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   const { creds, why } = GATE ? gateCreds(row) : rosterFor(row.agent);
   if (GATE) viaProxy = false;
   if (!creds) { S.status = c.red(why ?? ('no credentials on file for ' + row.agent)); return; }
@@ -692,8 +694,10 @@ async function launch(row, { viaProxy = false } = {}) {
   // Nothing is lost by staying attached. The client is started by Start-Process, which
   // makes it a process of its own that outlives all of this regardless, and unref lets
   // the TUI exit whenever it likes. Only the ~20s launcher is tied to us now.
+  // extraEnv reaches the client: PowerShell -> dev.bat -> meridian.exe all inherit it, and dev.bat
+  // only fills in what is not already set. V uses it for M59_ANNOTATE_PORT.
   const child = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-                      { stdio, windowsHide: true });
+                      { stdio, windowsHide: true, ...(extraEnv ? { env: { ...env, ...extraEnv } } : {}) });
   child.unref();
   child.on('error', e => { S.status = c.red('could not start powershell: ' + e.message); draw(); });
   S.status = c.green(`launching ${row.character ?? row.agent}…`) + ' ' +
@@ -866,6 +870,74 @@ async function swarm(row) {
   S.status += ' ' + c.bold(c.cyan(`· SWARM: following ${row.character ?? row.agent}`)) +
     c.dim(' · your room joins, and anyone who walks in · under 30 max health never · ' +
           'ends when this client closes · node tools/m59-swarm.mjs status');
+}
+
+// ------------------------------------------------------------- PVP recording mode
+//
+// V — THIS CHARACTER BECOMES A CAMERA, AND EVERY PVP FIGHT IN ITS ROOM IS FILMED.
+//
+// Operator, 2026-10-06, of Raphael in Castle Victoria: "just sit still and function as camera
+// man from a safe spot", with video of every PvP fight there. Three pieces, started together:
+//
+//   * the patched client, launched as L launches it — through the proxy, pilot-claimed, so the
+//     keeper stands down and the character stays put — with M59_ANNOTATE_PORT set, which opens
+//     the client's loopback socket for `turn=<angle>` (clientd3d/m59dbg.c);
+//   * tools/m59-cameraman.mjs, which reads where the enemy is from a fleet keeper in the same
+//     room and turns the client to face them. It only ever turns;
+//   * tools/m59-pvp-capture.mjs, which records the client window into a ring and keeps the two
+//     minutes either side of every PvP event in the watched rooms, under VideosNVIDIAMeridian 59.
+//
+// The watched rooms are the character's own room — Castle Victoria counts as 38 and 39 together —
+// or M59_PVP_ROOMS. V again stops the camera and the recorder and leaves the client open. Both
+// are detached, so quitting the terminal does not stop a recording.
+const PVP_CAPTURE_DIR = join(REPO, 'substrate', 'pvp-capture');
+// One annotation port per character, so two cameras never share a socket. Stable, so a client
+// relaunched by hand with the same port keeps working.
+function annotatePortFor(agent) {
+  let h = 0;
+  for (const ch of String(agent)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return 8930 + (h % 60);
+}
+function pvpPidAlive(file) {
+  try {
+    const pid = JSON.parse(readFileSync(file, 'utf8')).pid;
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch { return false; }
+}
+function pvpRooms(row) {
+  if (env.M59_PVP_ROOMS) return env.M59_PVP_ROOMS;
+  const room = Number(row.room_num ?? NaN);
+  if (room === 38 || room === 39 || !(room > 1)) return '38,39';
+  return String(room);
+}
+async function pvpRecord(row) {
+  const agent = row.agent, who = row.character ?? agent;
+  const dir = join(PVP_CAPTURE_DIR, agent.replace(/[^A-Za-z0-9_-]/g, '_'));
+  const fleetArgs = FLEET ? ['--fleet', FLEET] : [];
+  const tool = name => join(REPO, 'tools', name);
+  if (pvpPidAlive(join(dir, 'capture.pid')) || pvpPidAlive(join(dir, 'cameraman.pid'))) {
+    for (const t of ['m59-cameraman.mjs', 'm59-pvp-capture.mjs'])
+      spawnSync(process.execPath, [tool(t), '--agent', agent, '--stop', ...fleetArgs], { cwd: REPO, windowsHide: true });
+    S.status = c.yellow(`PVP recording off for ${who}`) + c.dim(' · the client stays open · clips are in Videos\NVIDIA\Meridian 59');
+    return;
+  }
+  const rooms = pvpRooms(row), port = annotatePortFor(agent);
+  await launch(row, { viaProxy: true, extraEnv: { M59_ANNOTATE_PORT: String(port) } });
+  mkdirSync(dir, { recursive: true });
+  const start = (t, args, log) => {
+    const out = openSync(join(dir, log), 'a');
+    const child = spawn(process.execPath, [tool(t), '--agent', agent, '--rooms', rooms, ...args, ...fleetArgs],
+      { cwd: REPO, detached: true, windowsHide: true, stdio: ['ignore', out, out] });
+    child.unref();
+  };
+  // Both wait for the client on their own: the recorder until a client logged in as this
+  // account exists, the camera until a keeper in the room can see the character.
+  start('m59-cameraman.mjs', ['--annotate-port', String(port)], 'cameraman.log');
+  start('m59-pvp-capture.mjs', [], 'capture.out');
+  S.status += ' ' + c.bold(c.magenta(`· PVP RECORDING: ${who} films rooms ${rooms}`)) +
+    c.dim(` · turns to face enemies (udp ${port}) · V again stops · substrate/pvp-capture/${agent}/`);
 }
 
 // ------------------------------------------------------------- the commander
@@ -1235,6 +1307,7 @@ function onKey(str, key) {
     } else if (str === 'X' || str === 'x') override(S.rows[S.sel]).then(draw, oops);
     else if (str === 'L' || str === 'l') launch(S.rows[S.sel]).then(draw, fail);
     else if (str === 'S' || str === 's') swarm(S.rows[S.sel]).then(draw, fail);
+    else if (str === 'V' || str === 'v') pvpRecord(S.rows[S.sel]).then(draw, fail);
     // B is about the FLEET, not the row under the cursor — the board draws all of them.
     else if (str === 'B' || str === 'b') commander();
     else if (str === 'F' || str === 'f') fieldCommand();
@@ -1248,6 +1321,7 @@ function onKey(str, key) {
     } else if (str === 'X' || str === 'x') override(S.hero).then(draw, oops);
     else if (str === 'L' || str === 'l') launch(S.hero).then(draw, fail);
     else if (str === 'S' || str === 's') swarm(S.hero).then(draw, fail);
+    else if (str === 'V' || str === 'v') pvpRecord(S.hero).then(draw, fail);
     else if (str === 'B' || str === 'b') commander();
     else if (str === 'F' || str === 'f') fieldCommand();
     else if (str === 'G' || str === 'g') geometryMaps();

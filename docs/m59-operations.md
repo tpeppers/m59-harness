@@ -648,3 +648,28 @@ every checkout has that version, the recipe above is the one to reach for.
 is a child of the broker and runs the broker's checkout's code, so a rehearsal meant to test a
 change has to be driven by a broker started from the checkout that HAS it. Starting one from a
 stale tree gives a green run against the old code and nothing says so.
+
+## PVP recording mode — the terminal's `V` key
+
+`V` on a character makes it a camera for PvP fights in its room. Castle Victoria counts as rooms 38
+and 39 together, and `M59_PVP_ROOMS` overrides the room. It starts three things:
+- **The client:** the patched client is launched as `L` launches it, through the proxy and
+  pilot-claimed. It also gets `M59_ANNOTATE_PORT`, which opens its loopback `turn=<0..4095>` command
+  (`clientd3d/m59dbg.c`).
+- **The camera:** `tools/m59-cameraman.mjs` reads the enemy's position from a fleet keeper in the
+  same room and turns the client to face them. It sends nothing but turns.
+- **The recorder:** `tools/m59-pvp-capture.mjs` records the window into a ring of segments with
+  ffmpeg/NVENC. It keeps the two minutes either side of every PvP event in those rooms, under
+  `Videos\NVIDIA\Meridian 59\`.
+
+`V` again stops the camera and the recorder and leaves the client open. Their pids, logs and ring
+are in `substrate/pvp-capture/<agent>/`.
+
+Three things that were tried first and do not work:
+- **The NVIDIA app's recorder ignores synthesized hotkeys.** It is hooked into the client, but
+  Alt+F9 sent as virtual keys or as scan codes saves nothing, and it has no command line.
+- **The proxy's `/turn` killed the client.** It forges `BP_TURN` towards the client, and the
+  client died on the first forged packet, twice, on 2026-10-06.
+- **A client launched outside the terminal is not pilot-claimed automatically.** Its `/H:` is the
+  proxy, and the broker's host check refuses it. So the broker logs the keeper back in over it.
+  Claim it with the broker's `pilot claim` and the client's pid.

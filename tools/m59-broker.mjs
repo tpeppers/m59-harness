@@ -11166,6 +11166,8 @@ const TOOLS = [
         mana_floor: { type: 'number', description: 'Do not cast below this much mana.' },
         assume_ability: { type: 'number',
           description: 'Ability to assume until the server has told us the real one. Default 20.' },
+        rooms: { type: 'array', items: { type: 'number' },
+          description: 'Cast ONLY in these room numbers -- at a post or on a chalice visit. Omitted or empty: any room, as before.' },
       }, description: 'STAND STILL AND KEEP A ROOM ENCHANTMENT UP. `forces of light` makes everyone in the room miss less, which is what feeds the 75-swing improvement counter — so one posted caster raises the earning rate of every farmer standing with it, and it covers whoever walks in next. NOT buff_allies: that casts AT a player and stops when the room is empty, this casts at the ROOM (no target at all) and must keep going when it empties, because the enchantment is what the farmers walk back INTO. It never moves the caster. Reagents come from the caster own pack — forces of light is 2 elderberry AND 1 emerald per cast (forceslt.kod:57-58), so a caster holding 32 emeralds and 24 elderberries gets TWELVE casts and the elderberries are what bind. null disables it' },
       buff_allies: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
@@ -12162,8 +12164,18 @@ const TOOLS = [
           const spells = Array.isArray(value.spells)
             ? value.spells.map(x => String(x).trim().toLowerCase()).filter(Boolean)
             : undefined;
+          // A room limit that silently dropped an entry would cast in a room nobody named, or
+          // stop casting in one somebody did, so a bad entry refuses the whole push.
+          let rooms;
+          if (value.rooms != null) {
+            if (!Array.isArray(value.rooms)) throw new Error('room_enchant.rooms must be an array of room numbers');
+            const bad = value.rooms.filter(r => !(Number.isInteger(Number(r)) && Number(r) > 0));
+            if (bad.length) throw new Error('room_enchant.rooms: not room numbers: ' + JSON.stringify(bad));
+            rooms = [...new Set(value.rooms.map(Number))];
+          }
           p.policy.roomEnchant = { enabled: true,
             ...(spells && spells.length ? { spells } : {}),
+            ...(rooms && rooms.length ? { rooms } : {}),
             // Shaves the recast window so a lapse is re-covered rather than waited out.
             margin_ms: Math.max(0, Math.min(60_000, Math.floor(Number(value.margin_ms) || 8000))),
             ...(Number.isFinite(Number(value.mana_floor))
