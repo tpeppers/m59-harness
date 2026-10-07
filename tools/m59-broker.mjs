@@ -7001,6 +7001,8 @@ const TOOLS = [
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       character: { type: 'string', description: 'the new character name, exactly as the game spells it' },
+      port: { type: 'number', description: 'the keeper port, when this broker has no record of it (a keeper a ' +
+        'handover refused to adopt for exactly this mismatch); the keeper must still prove the name' },
       confirm: { type: 'boolean', description: 'required: the roster change is permanent' },
     }, required: ['agent', 'character', 'confirm'] },
     run: async (a) => {
@@ -7014,7 +7016,7 @@ const TOOLS = [
         return { renamed: false, agent: a.agent, character: want, why: 'the roster already names that character' };
       // PROOF FROM THE GAME: the keeper holding this account says who it is logged in as.
       const rec = keeperProcesses.get(a.agent);
-      const port = Number(rec?.port ?? keeperPorts.get(a.agent));
+      const port = Number(rec?.port ?? keeperPorts.get(a.agent) ?? a.port);
       if (!Number.isInteger(port) || port <= 0) throw new Error(`${a.agent} has no running keeper to prove the new name`);
       const live = await fetch(`http://127.0.0.1:${port}/state`, { signal: AbortSignal.timeout(8000) })
         .then(r => r.json()).catch(() => null);
@@ -7032,7 +7034,22 @@ const TOOLS = [
       saveFleetState();
       console.error(`[roster] ${a.agent} renamed "${was}" -> "${want}" (proved by its keeper on port ${port})`);
       // 2. Stop the keeper (graceful now that its identity matches), drop the session, release the lease.
-      const stopped = await stopKeeper(a.agent).catch(e => ({ stopped: false, note: e.message }));
+      // A keeper this broker never adopted (a handover refuses one playing another character) has no
+      // record to stop through; it is stopped by the addressed /stop it accepts from anyone who names
+      // its agent, character and pid exactly -- which the proof above just read off it.
+      const stopped = rec ? await stopKeeper(a.agent).catch(e => ({ stopped: false, note: e.message }))
+        : await (async () => {
+          const body = { agent: a.agent, character: want, keeper_pid: Number(live.pid) };
+          const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST',
+            headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+            signal: AbortSignal.timeout(8000) }).then(x => x.json()).catch(e => ({ error: e.message }));
+          if (!r?.ok) return { stopped: false, note: `addressed /stop refused: ${r?.error ?? '?'}` };
+          for (let i = 0; i < 100; i++) {
+            try { process.kill(Number(live.pid), 0); } catch { return { stopped: true, reason: 'addressed-stop' }; }
+            await new Promise(res => setTimeout(res, 100));
+          }
+          return { stopped: false, note: `pid ${live.pid} acknowledged /stop but is still running after 10s` };
+        })();
       if (!stopped?.stopped)
         return { renamed: true, agent: a.agent, from: was, to: want, keeper_stopped: false,
                  note: `the roster is renamed, but the keeper did not stop (${stopped?.note ?? stopped?.reason ?? '?'}); ` +
@@ -18401,6 +18418,8 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // `/live` proof before writing.
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
   'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
+  // Its whole reason to exist is a slot whose keeper the broker refuses to read (an identity conflict).
+  'rename_character',
 ]);
 
 async function callTool(name, args, caller) {
