@@ -35,7 +35,7 @@ import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
 import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS,
-         planDoorEscape } from './m59-recovery-refuge.mjs';
+         planDoorEscape, hostilesBeyondDoor } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
@@ -1691,6 +1691,10 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
 export function hungerNeedsTown(wantedFloor, vigorMax = 200) {
   return Number(wantedFloor) > REST_VIGOR_CAP * (Number(vigorMax) || 200);
 }
+
+// The most hostiles a farmer will walk in on through a same-room door (bridgeToQuarry). Two is a
+// fight; the east chamber of room 38 held five to ten. Policy `internalDoorMaxHostiles`.
+export const INTERNAL_DOOR_MAX_HOSTILES = 2;
 
 export const MODES = ['survive', 'farm', 'idle', 'tick'];
 
@@ -5260,6 +5264,31 @@ export class Autopilot {
     if (internal?.doors?.length) {
       const generation = s.movementGeneration;
       const door = internal.doors[0];
+      // NOT INTO A CROWD. A chamber's monsters cannot follow us out, which is what makes the
+      // door an escape — and cannot be drawn out either, so a chamber holding several of them
+      // is fought all at once from its landing square. That is the room-38 east chamber, five
+      // deaths in an hour. Defer this quarry and fight what this side offers.
+      const max = Number.isFinite(Number(this.policy.internalDoorMaxHostiles))
+        ? Number(this.policy.internalDoorMaxHostiles) : INTERNAL_DOOR_MAX_HOSTILES;
+      const geo = s.world?.geometry;
+      const beyond = geo ? hostilesBeyondDoor(
+        reachableFrom(geo, { row: door.arriveRow, col: door.arriveCol }),
+        s.client?.room?.objects, s.client?.selfId) : 0;
+      if (beyond > max) {
+        this.deferPullTarget(room.num, quarry.id, `${beyond} hostiles behind the internal door`);
+        const key = `${room.num}:${door.row},${door.col}:${beyond}`;
+        if (this._crowdedDoorNoted !== key) {
+          this._crowdedDoorNoted = key;
+          this.note('not taking an internal door into a crowd', {
+            room: room.num, door: { row: door.row, col: door.col },
+            lands: { row: door.arriveRow, col: door.arriveCol }, hostiles_beyond: beyond, max,
+            target_id: quarry.id,
+            why: 'monsters in a chamber cannot be pulled out of it, so walking in fights all of ' +
+                 'them at once from the landing square; this quarry is deferred instead',
+          });
+        }
+        return false;
+      }
       // A shelter belongs to the side we are leaving. Retain the ordinary health
       // gate, then let the existing executor stand, approach and confirm the go.
       const released = await this.leaveHold('taking an internal door to the quarry');

@@ -5,7 +5,8 @@ import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 import { sameRoomDoorPlan } from './m59-world.mjs';
-import { Autopilot, quarryPermittedByConfinement } from './m59-autopilot.mjs';
+import { Autopilot, quarryPermittedByConfinement, INTERNAL_DOOR_MAX_HOSTILES } from './m59-autopilot.mjs';
+import { OF } from './m59-parse.mjs';
 
 const map = loadMap();
 attachStepMasks(map);
@@ -87,6 +88,34 @@ for (const option of ['fails', 'cancel', 'refused']) {
   assert.equal(crossed.length, option === 'refused' ? 0 : 1);
   assert.equal(deferred.length, option === 'fails' ? 1 : 0,
     'door refusal cools the target; cancellation and recovery do not');
+}
+// NOT INTO A CROWD (2026-10-07). Rizzo, assigned to room 38, walked from a wall at r9c33 through
+// r9c32 into the east chamber after a skeleton, with five undead in it -- the walk that killed
+// Waldorf, Statler, Sweetums, Zoot and Gonzo the night before.
+{
+  const undead = n => new Map(Array.from({ length: n }, (_, i) =>
+    [500 + i, { id: 500 + i, row: 5 + (i % 3), col: 31 + (i % 3), flags: OF.ATTACKABLE }]));
+  const east = { id: 600, row: 7, col: 33, flags: OF.ATTACKABLE };
+  for (const [n, crosses] of [[5, false], [INTERNAL_DOOR_MAX_HOSTILES - 1, true]]) {
+    const { k, crossed, deferred } = keeper();
+    k.s.client.self = body({ row: 9, col: 33 });
+    k.s.client.room = { objects: undead(n) };
+    k.s.client.room.objects.set(east.id, east);
+    const handled = await k.bridgeToQuarry(east);
+    assert.equal(crossed.length, crosses ? 1 : 0, `${n + 1} hostiles beyond the door`);
+    if (!crosses) {
+      assert.equal(handled, false, 'the pass goes on to fight this side');
+      assert.equal(deferred.length, 1, 'the quarry behind the crowd is deferred');
+      assert.match(deferred[0][2], /hostiles behind the internal door/);
+    }
+  }
+  // A player standing in the chamber is not a hostile.
+  const { k, crossed } = keeper();
+  k.s.client.self = body({ row: 9, col: 33 });
+  k.s.client.room = { objects: new Map([[600, east],
+    ...[1, 2, 3, 4].map(i => [700 + i, { id: 700 + i, row: 5, col: 30 + i, flags: OF.PLAYER | OF.ATTACKABLE }])]) };
+  await k.bridgeToQuarry(east);
+  assert.equal(crossed.length, 1, 'fleetmates in the chamber do not make it a crowd');
 }
 // A neighbouring-room shortcut must not exclude a confined target reachable
 // through a self-room door. This fixture makes both alternatives explicit.
