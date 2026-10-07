@@ -103,6 +103,8 @@ export function rtsJobReport(job, now = Date.now()) {
       ...(job.origin ? { ordered_by: originLabel(job.origin), origin: job.origin } : {}),
       ...(job.cancelled || job.cancelRequestedAt ? { stopping: true } : {}),
       ...(job.cancelledBy ? { cancelled_by: cancelReport(job.cancelledBy) } : {}),
+      // How to send this job again on another process: what a keeper handoff carries over.
+      ...(job.resume ? { kind: job.kind, started_at: job.startedAt, resume: job.resume } : {}),
     };
   }
   const cancelled = job.cancelled === true || job.cancelRequestedAt != null ||

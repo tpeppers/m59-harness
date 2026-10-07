@@ -1854,7 +1854,7 @@ class Session {
 
   hazardSquares() { return groundEffectSquares(this.client); }
 
-  startJob(kind, label, fn, { controlToken = null, leaseToken = null, origin = null, to = null } = {}) {
+  startJob(kind, label, fn, { controlToken = null, leaseToken = null, origin = null, to = null, resume = null } = {}) {
     if (this.combat?.active) throw new Error(`${this.name}: combat override owns the body`);
     // THE REFUSAL NAMES WHO HOLDS THE BODY. "is busy: walk to X" told a caller something was
     // walking; the origin says whose walk it is, which decides whether to wait or to cancel.
@@ -1865,7 +1865,11 @@ class Session {
                   ...(origin ? { origin: moveOrigin(origin) } : {}),
                   ...(to != null ? { to } : {}),
                   ...(controlToken ? { controlToken } : {}),
-                  ...(leaseToken ? { leaseToken } : {}) };
+                  ...(leaseToken ? { leaseToken } : {}),
+                  // HOW TO START THIS JOB AGAIN, for a job that must outlive this process. A keeper
+                  // handoff replaces the process the job runs in; the broker reads this off /state
+                  // and re-issues it on the replacement (m59-keeper-restart.mjs carriedTravel).
+                  ...(resume ? { resume } : {}) };
     this.job = job;
     // KEPT SO A FOREGROUND CALLER CAN AWAIT THE SLOT IT JUST CLAIMED.
     //
@@ -2168,7 +2172,12 @@ class Session {
           keeper.revive('travel finished');
         }
       }
-    }, { origin: opts.origin, to: dest });
+    }, { origin: opts.origin, to: dest,
+         // Everything the keeper's `travel` action needs to send this walk again, verbatim. Not
+         // `runErrands`: a resumed walk is mid-journey and the errands were settled at its start.
+         resume: { to: dest, where, maxHops: opts.maxHops ?? null, controlToken: opts.controlToken ?? null,
+                   allowHazard: !!opts.allowHazard, hazardWhy: opts.hazardWhy ?? null,
+                   ...(Array.isArray(opts.avoid) && opts.avoid.length ? { avoid: [...opts.avoid] } : {}) } });
   }
 
   // The same thing for a caller that wants to WAIT. `travelJob` for one that does not.

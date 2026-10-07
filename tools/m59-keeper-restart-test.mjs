@@ -13,8 +13,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   decideRestartMode, defaultHandoffConcurrency, measureKeeperRssBytes, logoffKeepers,
-  DEFAULT_KEEPER_RSS_MB, DEFAULT_MARGIN_MB,
+  DEFAULT_KEEPER_RSS_MB, DEFAULT_MARGIN_MB, carriedTravel, stillTheSameWalk,
 } from './m59-keeper-restart.mjs';
+import { rtsJobReport } from './m59-rts-safety.mjs';
 import { brokerLacksHandoff } from './m59-war-restart.mjs';
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
@@ -172,6 +173,50 @@ ok(!brokerLacksHandoff(Error('fetch failed')), 'an unreachable broker is a failu
   const wr = src('m59-war-restart.mjs');
   ok(/defaultHandoffConcurrency\(h\)/.test(wr), 'the CLI concurrency default comes from what the broker advertises');
   ok(!/concurrency:\s*Number\(opt\('concurrency'\) \?\? 1\)/.test(wr), 'not a constant');
+}
+
+// ---- a handoff carries the walk in flight (t12 Fozzie, deploy-2026-10-07-7: lost ~3 min)
+{
+  const FS = { source: 'fleetscript', name: 'supply-line', run_id: 'sl-muxqpiim', at: 1 };
+  // What the keeper's own job report says about a fleetScript walk, built the real way.
+  const job = { kind: 'travel', label: 'walk to Castle Victoria', startedAt: 1000, done: false, origin: FS,
+                resume: { to: 38, where: 'Castle Victoria', maxHops: 25, controlToken: 'tok-1',
+                          allowHazard: false, hazardWhy: null } };
+  const rep = rtsJobReport(job, 5000);
+  eq(rep.resume.to, 38, 'the /state job report carries how to start the walk again');
+  eq(rep.kind, 'travel', 'and what kind of job it is');
+  const c = carriedTravel(rep);
+  eq(c.carry, { to: 38, where: 'Castle Victoria', max_hops: 25, control_token: 'tok-1', origin: rep.origin,
+                run_errands: false, background: true },
+     'carried with the SAME origin and control token, errands not re-run, in the background');
+  eq(c.started_at, 1000, 'and remembers which walk it was');
+  ok(stillTheSameWalk(c, rep), 'the same walk read again is still the same walk');
+  ok(stillTheSameWalk(c, null), 'an old keeper that no longer answers leaves the capture standing');
+  ok(!stillTheSameWalk(c, rtsJobReport({ ...job, done: true, finishedAt: 2000 }, 3000)), 'a walk that ended is not resurrected');
+  ok(!stillTheSameWalk(c, rtsJobReport({ ...job, startedAt: 4000 }, 5000)), 'a different walk to the same room is not this one');
+  ok(!stillTheSameWalk(c, rtsJobReport({ ...job, cancelRequestedAt: 4500 }, 5000)), 'a walk being cancelled is not carried');
+
+  eq(carriedTravel(rtsJobReport({ ...job, origin: { source: 'keeper', name: 'town_trip' } }, 5000)).carry, null,
+     "the keeper's own journey is re-decided by the replacement, never carried");
+  eq(carriedTravel(rtsJobReport({ ...job, kind: 'commerce:sell', resume: undefined }, 5000)).carry, null, 'only walks');
+  eq(carriedTravel(null).carry, null, 'no job, nothing to carry');
+  eq(carriedTravel(rtsJobReport({ ...job, resume: { ...job.resume, allowHazard: true, hazardWhy: 'boss raid', avoid: [583] } }, 5000)).carry,
+     { to: 38, where: 'Castle Victoria', max_hops: 25, control_token: 'tok-1', allow_hazard: true, hazard_why: 'boss raid',
+       avoid: [583], origin: rep.origin, run_errands: false, background: true },
+     'a hazard override travels with its reason, and the avoid list with it');
+  eq(carriedTravel(rtsJobReport({ ...job, resume: { ...job.resume, allowHazard: true, hazardWhy: null } }, 5000)).carry.allow_hazard,
+     undefined, 'a hazard flag without a reason is not carried (the keeper would refuse it)');
+
+  // The wiring, read from source: the game records the spec, the broker reads before the spawn.
+  const game = src('m59-game.mjs'), broker = src('m59-broker.mjs');
+  ok(/resume: \{ to: dest, where, maxHops/.test(game), 'travelJob records how to restart itself on the job');
+  const wr = broker.slice(broker.indexOf('async function warRestartKeeper'), broker.indexOf('async function warRestartFleet'));
+  ok(wr.indexOf('carriedTravel(await walkNow())') < wr.indexOf("import('node:child_process')"),
+     'captured BEFORE the replacement exists — its login kills the walk');
+  ok(wr.indexOf('stillTheSameWalk(carry, await walkNow())') < wr.indexOf("import('node:child_process')"),
+     're-checked on the old connection, still before the spawn');
+  ok(wr.indexOf('resumeCarriedWalk(agent, index, carry)') > wr.indexOf('sessions.set(agent, proxy)'),
+     're-issued only after the broker is talking to the replacement');
 }
 
 console.log(`m59-keeper-restart-test: ${n} assertions passed`);
