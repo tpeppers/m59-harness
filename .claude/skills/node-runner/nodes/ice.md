@@ -43,6 +43,15 @@ Measured against main `15aaf141`, on the owned native `m59-replay-lab` server:
   Trying to return to the outside trigger r24c10 through the closed door is a
   different, unreachable objective in that door state.
 
+- The explicit `--quiet` full entrance run subsequently completed **r46c25 ->
+  r24c10 -> r25c20 -> r24c11 -> r46c25** in **447,822 ms (7m28s)**, with
+  health **59/59 throughout**. Both sector-1 openings used normal `go`, and
+  approach/return endpoints were server-confirmed. Receipt
+  `node-path-1791335783277.json` records success and owned baseline restoration;
+  `quiet-validation-summary.json` verifies the attested core files match the
+  committed repair. This verifies geometry and door timing with monster
+  generation disabled, not survival against the yeti.
+
 No jump, activation, yeti kill or administrative sector opening was used.
 Sector 2 (**MANA_DOOR**) retains its independent yeti-kill condition. Monsters
 were initially cleared during scene setup, but generation resumed after release
