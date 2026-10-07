@@ -36,6 +36,17 @@ try {
   // SEVERAL SKILLS FROM ONE TEACHER: `learn` is a list and `price` is per skill.
   const wc3 = { id: 'wc3-1', characters: ['Fozzie'], learn: ['fencing', 'axe wielding', 'hammer wielding'],
                 teacher: 'Rook', teacher_room: 154, price: 2000 };
+  // A GATED ORDER (2026-10-07): nothing is funded until watch has seen the gate open.
+  const gated = { id: 'parry-gated', characters: ['Lew'], learn: 'parry', teacher: 'Rook',
+                  teacher_room: 154, price: 4000, gate: true };
+  ok(pendingOrderFor('Lew', { orders: [gated], dir: state }) === null, 'a gated order is not pending before the gate is checked');
+  writeState('Lew', 'parry-gated', { learnable: false, why: '25 short' }, state);
+  ok(pendingOrderFor('Lew', { orders: [gated], dir: state }) === null, 'nor while the gate says short');
+  writeState('Lew', 'parry-gated', { learnable: true }, state);
+  ok(pendingOrderFor('Lew', { orders: [gated], dir: state })?.order.id === 'parry-gated', 'and is pending once learnable');
+  ok(pendingOrderFor('Lew', { orders: [{ ...gated, gate: false }], dir: join(dir, 'fresh') })?.order.id === 'parry-gated',
+     'an ungated order is pending at once, as before');
+
   ok(validOrder(wc3), 'a list of skills is an order');
   ok(orderSkills(wc3).length === 3 && orderPrice(wc3) === 6000, 'and it costs the price of each (6000)');
   ok(orderSkills(parry).join() === 'parry' && orderPrice(parry) === 4000, 'a single skill is still a list of one');

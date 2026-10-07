@@ -31,6 +31,15 @@
 //
 // Per-character progress lives in `substrate/town-orders-state/<character>.json`, one file per
 // character so no two keeper processes ever write the same file.
+//
+// A GATED ORDER WAITS FOR THE CHARACTER TO BE ALLOWED TO LEARN IT. Operator, 2026-10-07: "make
+// sure everyone gets to level 4 weaponcraft first" -- eleven characters, none of them yet past
+// Parry's gate. An ungated order is funded at the next town trip (4,000 out of the guild chest,
+// carried while farming) and its teacher leg then finds the skill ABSENT from Rook's list, which
+// is what a skill you may not learn looks like, and is marked failed-not-retried. So
+// `gate: true` holds the order back: `watch` asks the broker's remaining_required_to_learn_new_skills
+// (its reproduction of PlayerCanLearn) and writes `learnable: true` only once the first skill
+// still to learn is open; until then nothing is funded and nobody walks.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -87,6 +96,7 @@ export function pendingOrderFor(character, { orders = loadOrders(), dir = STATE_
     if (!o.characters.some(c => same(c, character))) continue;
     const st = state[o.id]?.status;
     if (st === 'done' || st === 'failed') continue;
+    if (o.gate === true && state[o.id]?.learnable !== true) continue;   // not allowed yet: no funding
     return { order: o, state: state[o.id] ?? null };
   }
   return null;
@@ -136,6 +146,32 @@ if (process.argv[1]?.endsWith('m59-standing-orders.mjs')) {
     }
     return false;
   };
+  // THE GATE CHECK, at most every GATE_EVERY_MS per character: one broker call each, and the
+  // ability it waits on moves by a point every few minutes at best.
+  const GATE_EVERY_MS = Number(flag('gate-minutes', 10)) * 60_000;
+  const gateCheckedAt = new Map();
+  const { call } = await import('./m59-fleetscript.mjs');
+  const checkGate = async (o, c, st) => {
+    const key = `${o.id}:${c}`;
+    if (Date.now() - (gateCheckedAt.get(key) ?? 0) < GATE_EVERY_MS) return;
+    gateCheckedAt.set(key, Date.now());
+    const agent = agentOf(c);
+    if (!agent) return;
+    const learned = new Set((st?.learned ?? []).map(x => x.toLowerCase()));
+    const next = orderSkills(o).find(x => !learned.has(x.toLowerCase()));
+    if (!next) return;
+    try {
+      const r = await call('remaining_required_to_learn_new_skills', { agent, name: next, kind: 'both' }, 60_000);
+      const j = typeof r === 'string' ? JSON.parse(r) : r;
+      const row = j?.candidates?.find(x => same(x.name, next)) ?? j?.candidates?.[0];
+      if (row?.can_learn === true) {
+        writeState(c, o.id, { learnable: true, why: `${next} is learnable (have ${row.have}/${row.need})` });
+        console.log(`${new Date().toISOString()} ${c} (${agent}): ${next} is now learnable — funded at the next town trip`);
+      } else if (row) {
+        writeState(c, o.id, { learnable: false, why: `${next}: ${row.remaining_required} short (have ${row.have}/${row.need})` });
+      }
+    } catch (e) { console.log(`  gate check for ${c} failed: ${e.message}`); }
+  };
   const untilMs = Date.now() + Number(flag('hours', 24)) * 3600e3;
   console.log(`watching ${orders.length} order(s) for fleet ${fleet} until ${new Date(untilMs).toISOString()}`);
   while (Date.now() < untilMs) {
@@ -144,6 +180,7 @@ if (process.argv[1]?.endsWith('m59-standing-orders.mjs')) {
       const st = readState(c)[o.id];
       if (st?.status === 'done' || st?.status === 'failed') continue;
       pending++;
+      if (o.gate === true && st?.learnable !== true) { await checkGate(o, c, st); continue; }
       if (st?.status !== 'funded' || !tripDoneSince(c, st.at - 1)) continue;
       const agent = agentOf(c);
       if (!agent) { writeState(c, o.id, { status: 'failed', why: 'not on the roster' }); continue; }
