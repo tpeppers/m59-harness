@@ -872,3 +872,5 @@ substrate/magic-keep.json
 /substrate/feed-me-more.json
 /substrate/hp-duty.json
 /substrate/hp-duty-state.json
+/substrate/masters.json
+/substrate/masters-demand.json
