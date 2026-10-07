@@ -1541,6 +1541,21 @@ a DIFFERENT room resolves nothing.
 **It should fail the day a position read is answered from a cache, a bench credits a change across a
 single keeper pid, or a fake starts speaking a protocol no server does.**
 
+## Faction join and the soldier shield
+
+**`m59-faction-shield-test.mjs` (20 groups) — the sentences, the cover check, and the plan.**
+`tools/fleetscripts/faction-shield.mjs` joins a faction through the liege's join quest and then
+earns the soldier shield (questengine.kod templates 1-4, 199-200, 208-216). The liege's replies
+are built from the kod's own assign hints (read from `M59_ROOT` when present) and run through
+the parsers, so a reworded resource fails here instead of at a liege. It pins that Jonas asks
+for a **helm** — `SimpleHelm`'s spoken name — which the table had as "simple helm" and so could
+never have matched; that the Duke's ruby and all six of Jonas's items have no reliable seller,
+so the run refuses to say "join" without them (a failed ask costs 24h of logged-in time); the
+fixed kill order per liege; the hunt order (starting holdings, then the nearest other wilderness
+flag rooms, never a town pole); and that the plan compiles for all three lieges with every
+dynamic walk declared and a clean trap check, every `say` is one of four fixed lines, and a
+character already carrying its shield walks nowhere.
+
 ## The disciple gate — the level-3 spell quest
 
 **`m59-disciple-test.mjs` (174) — three groups, none of which is about whether the errand runs.**

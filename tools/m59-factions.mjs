@@ -27,7 +27,9 @@ export const FACTION_JOIN = Object.freeze({
     id: 'rebel', title: 'The Rebels', leader: "Jonas D'Accor", room: 371,
     assignments: Object.freeze([
       { item: 'plate armor', target: "Jonas D'Accor", room: 371 },
-      { item: 'simple helm', target: "Jonas D'Accor", room: 371 },
+      // `SimpleHelm` SPEAKS AS "helm" (simphelm.kod:19), and Jonas names the cargo by its
+      // spoken name, so "simple helm" here never matched his sentence or the pack.
+      { item: 'helm', target: "Jonas D'Accor", room: 371 },
       { item: "knight's shield", target: "Jonas D'Accor", room: 371 },
       { item: 'gauntlets', target: "Jonas D'Accor", room: 371 },
       { item: 'mystic sword', target: "Jonas D'Accor", room: 371 },
@@ -56,6 +58,19 @@ export const FACTION_SOLDIER = Object.freeze({
       Object.freeze({ target: "soldier of the Duke's army", rooms: Object.freeze([586, 596, 585]) }),
     ]) }),
 });
+
+// THE DEFAULT ROOMS ABOVE ARE A GUESS ABOUT WHO HOLDS WHICH FLAG, AND THE GUESS AGES.
+//
+// Troops spawn only at a flagpole their faction currently holds (flag.kod GenerateTroops),
+// and holdings change hands in the territory game. These are every non-town flag room
+// `TerritoryGame.Recreate` builds (territry.kod plFlagRIDs, RID_* from blakston.khd); the
+// five town flags (RID_TOS, RID_MARION, RID_JASWEST, RID_CORNOTH, RID_BAR_NORTH) never
+// spawn troops and are left out. A soldier hunt that finds nobody at the defaults widens
+// to these, nearest first.
+export const WILDERNESS_FLAG_ROOMS = Object.freeze([
+  552, 562, 563, 583, 593, 603, 534, 544, 554, 564, 574, 584, 535, 545, 575, 585,
+  526, 536, 546, 556, 566, 576, 586, 596, 537, 547, 557, 567, 587, 597, 568,
+]);
 
 // STAYING IN A FACTION IS A SUBSCRIPTION, AND THE NOTICE THAT IT HAS LAPSED IS PROSE ON
 // A TWENTY-MINUTE REPEAT WITH FOUR HOURS BEHIND IT.
