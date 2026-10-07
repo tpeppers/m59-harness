@@ -108,25 +108,3 @@ export function planDoorEscape({ doors = [], component = null, reach, farRefuge 
   }
   return { escape: best, counts };
 }
-
-// HOW MANY THINGS ARE WAITING ON THE FAR SIDE OF AN INTERNAL DOOR.
-//
-// The other half of the east-chamber deaths. Escaping through the door is planDoorEscape; this
-// is about walking IN. `bridgeToQuarry` took the door at r9c32 whenever the chosen quarry stood
-// in the chamber, and the chamber held five to ten undead that cannot leave it: the character
-// landed on r7c32 inside reach of all of them. Rizzo did it again within twenty seconds of being
-// assigned to room 38 on 2026-10-07, from a good wall at r9c33, on a quarry he could not see the
-// crowd behind.
-//
-//   component  Set of "row,col" the landing reaches without a door (reachableFrom the landing)
-//   objects    the room's objects; a hostile is ATTACKABLE and not a PLAYER
-export function hostilesBeyondDoor(component, objects, selfId = null) {
-  if (!component) return 0;
-  let n = 0;
-  for (const o of objects?.values?.() ?? []) {
-    if (!o || o.id === selfId || !Number.isFinite(o.row) || !Number.isFinite(o.col)) continue;
-    if (!(o.flags & OF.ATTACKABLE) || (o.flags & OF.PLAYER)) continue;
-    if (component.has(`${o.row},${o.col}`)) n++;
-  }
-  return n;
-}

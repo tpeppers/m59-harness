@@ -35,7 +35,7 @@ import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
 import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS,
-         planDoorEscape, hostilesBeyondDoor } from './m59-recovery-refuge.mjs';
+         planDoorEscape } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
@@ -1691,10 +1691,6 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
 export function hungerNeedsTown(wantedFloor, vigorMax = 200) {
   return Number(wantedFloor) > REST_VIGOR_CAP * (Number(vigorMax) || 200);
 }
-
-// The most hostiles a farmer will walk in on through a same-room door (bridgeToQuarry). Two is a
-// fight; the east chamber of room 38 held five to ten. Policy `internalDoorMaxHostiles`.
-export const INTERNAL_DOOR_MAX_HOSTILES = 2;
 
 export const MODES = ['survive', 'farm', 'idle', 'tick'];
 
@@ -5264,31 +5260,6 @@ export class Autopilot {
     if (internal?.doors?.length) {
       const generation = s.movementGeneration;
       const door = internal.doors[0];
-      // NOT INTO A CROWD. A chamber's monsters cannot follow us out, which is what makes the
-      // door an escape — and cannot be drawn out either, so a chamber holding several of them
-      // is fought all at once from its landing square. That is the room-38 east chamber, five
-      // deaths in an hour. Defer this quarry and fight what this side offers.
-      const max = Number.isFinite(Number(this.policy.internalDoorMaxHostiles))
-        ? Number(this.policy.internalDoorMaxHostiles) : INTERNAL_DOOR_MAX_HOSTILES;
-      const geo = s.world?.geometry;
-      const beyond = geo ? hostilesBeyondDoor(
-        reachableFrom(geo, { row: door.arriveRow, col: door.arriveCol }),
-        s.client?.room?.objects, s.client?.selfId) : 0;
-      if (beyond > max) {
-        this.deferPullTarget(room.num, quarry.id, `${beyond} hostiles behind the internal door`);
-        const key = `${room.num}:${door.row},${door.col}:${beyond}`;
-        if (this._crowdedDoorNoted !== key) {
-          this._crowdedDoorNoted = key;
-          this.note('not taking an internal door into a crowd', {
-            room: room.num, door: { row: door.row, col: door.col },
-            lands: { row: door.arriveRow, col: door.arriveCol }, hostiles_beyond: beyond, max,
-            target_id: quarry.id,
-            why: 'monsters in a chamber cannot be pulled out of it, so walking in fights all of ' +
-                 'them at once from the landing square; this quarry is deferred instead',
-          });
-        }
-        return false;
-      }
       // A shelter belongs to the side we are leaving. Retain the ordinary health
       // gate, then let the existing executor stand, approach and confirm the go.
       const released = await this.leaveHold('taking an internal door to the quarry');
@@ -30433,9 +30404,10 @@ export class Autopilot {
         if (spareOf && n === spareOf && !spareKept) { spareKept = true; continue; }
         candidates.push(o);
       }
-      if (!candidates.length) return;
       const generation = s.movementGeneration;
       const cancelled = () => s.movementGeneration !== generation || (this.threat?.().landing ?? 0) > 0;
+      await this.capFieldWeapons({ nameOf, worn, spareOf, cancelled }).catch(() => null);
+      if (!candidates.length) return;
       const eligible = o => {
         const eq = c.equipment?.();
         return eq?.known === true && !eq.equipped.some(e => e.id === o.id) && !this.wontDrop?.has(o.id) &&
@@ -30452,6 +30424,52 @@ export class Autopilot {
                'one spare of the training weapon are kept' });
       }
     } finally { this._conjureShedBusy = false; }
+  }
+
+  // AND NOT A PILE OF LOOTED ONES EITHER. The same night it turned out the 20-29 long swords each
+  // farmer carried were not conjured at all: Castle Victoria's skeletons drop worn long swords
+  // ("well worn and may not last much longer"), and Lew looted 32 in one day. `maxWeapons` (2) was
+  // only applied when SELLING on a town trip or clearing a FULL pack, so below the 85% selectivity
+  // line and with town trips rare, they rode along indefinitely. In the field it now holds too:
+  // beyond the weapon in hand, one spare of the training weapon and protected names, at most
+  // `maxWeapons` spare weapons are carried; extras go, duplicates of a name first, then the
+  // lowest-scored. A dropped worn sword is a few shillings; a pack that never fills is the trips.
+  async capFieldWeapons({ nameOf, worn, spareOf, cancelled }) {
+    const max = Number(this.policy.maxWeapons);
+    if (!Number.isFinite(max) || max < 0) return;
+    const c = this.s.client;
+    let spareSeen = false;
+    const spares = [];
+    for (const o of c.inventory ?? []) {
+      const n = nameOf(o);
+      if (worn.has(o.id) || !isWeaponName(n)) continue;
+      if (skills.itemIsProtected(n, this.protectedItemNames())) continue;
+      if (spareOf && n === spareOf && !spareSeen) { spareSeen = true; continue; }
+      spares.push(o);
+    }
+    const extra = spares.length - max;
+    if (extra <= 0) return;
+    const seen = new Map();
+    const ranked = spares.map(o => {
+      const n = nameOf(o), k = seen.get(n) ?? 0;
+      seen.set(n, k + 1);
+      return { o, dup: k, score: skills.weaponScore(n) };
+    }).sort((x, y) => (y.dup > 0) - (x.dup > 0) || x.score - y.score);
+    const dropped = [];
+    for (const { o } of ranked.slice(0, Math.min(extra, 10))) {
+      if (cancelled()) break;
+      if (!(c.inventory ?? []).some(x => x.id === o.id)) continue;
+      await this.s.pacer.submit('drop', () => c.drop([this.dropSpec(o)]));
+      dropped.push(nameOf(o));
+      await new Promise(r => setTimeout(r, 400));
+    }
+    if (dropped.length) {
+      await this.s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      this.tally.weapons_shed = (this.tally.weapons_shed || 0) + dropped.length;
+      this.note('dropped spare weapons over maxWeapons', { dropped: dropped.length,
+        names: [...new Set(dropped)], max_weapons: max, still_over: Math.max(0, extra - dropped.length),
+        why: 'looted spares beyond maxWeapons only fill the pack between rare town trips' });
+    }
   }
 
   async sweepWeaponMagic() {
