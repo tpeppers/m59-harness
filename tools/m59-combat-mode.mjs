@@ -15,6 +15,7 @@ import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import * as pvplog from './m59-pvp.mjs';
+import * as wandShot from './m59-wand-shot.mjs';
 import { Recorder } from './m59-recorder.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
@@ -45,6 +46,8 @@ export const WAR_SIGHTING_EVERY_MS = 15_000;
 // override owned the body. 73 rooms carry NO_COMBAT, Marion (200) among them.
 export const ROOM_NO_COMBAT = 0x0002;
 export const ROOM_NO_PK = 0x0004;
+// How often a long fight's replay ring is sealed: inside the ring's 120 frames, so nothing is lost between seals.
+export const PVP_SEAL_EVERY_MS = 100_000;
 // The sentences ReqSomethingAttack answers with when the ROOM forbids it (room.kod resources
 // room_no_attack, room_no_pk_allowed). A room refusal says nothing about the target.
 //
@@ -541,15 +544,22 @@ export class CombatMode {
     const pick = wands.find(w => w.o.id === decision.fire)
       ?? { ...unidentified.find(u => u.id === decision.fire), name: 'wand' };
     await this.stand(o);
+    let faceDeg = null;
     if (decision.face) await s.pacer.submit('turn', () => {
       const live = c.room.objects.get(o.targetId), me = c.self;
       if (!live || !me) return;
-      c.face((Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360);
+      faceDeg = (Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360;
+      c.face(faceDeg);
     });
+    const queuedAt = Date.now();
     await s.pacer.submit('cast', () => {
       const live = c.room.objects.get(o.targetId);
       if (!live) return;
+      // THE SHOT RECORD (tools/m59-wand-shot.mjs): every input the server's gates will read,
+      // taken the instant before the packet goes, so a refusal can be named afterwards.
+      const shot = this.buildWandShot(o, { live, pick, decision, ctx, faceDeg, queuedAt });
       c.apply(pick.o.id, live.id);
+      if (shot) this.openWandShot(shot);
       this.lastWandId = pick.o.id;
       o.zaps = (o.zaps ?? 0) + 1;
       o.wandShots = [...(o.wandShots ?? []), { at: this.now(), wand: pick.name, refused: false }].slice(-gear.SHOT_HISTORY);
@@ -1101,9 +1111,114 @@ export class CombatMode {
     return true;
   }
 
+  // ------------------------------------------------------------------ wand-shot telemetry
+  //
+  // One row per zap in substrate/pvp/<fleet>/shots-<day>.jsonl (pvplog.appendShot): the inputs
+  // every refusal gate reads, the server's lines for REPLY_WINDOW_MS after it, and a named cause.
+  // Bookkeeping only — nothing here may stop a zap, so every step is guarded.
+
+  buildWandShot(o, { live, pick, decision, ctx, faceDeg, queuedAt }) {
+    if (!this.pvpLogging()) return null;
+    try {
+      const c = o.client, me = c.self, now = Date.now();
+      const flags = this.roomFlagsHere();
+      const swings = (c.attackLog ?? []).filter(a => !a.vetoed);
+      const unid = (ctx?.unidentified ?? []).find(u => u.id === pick.o?.id);
+      const shot = wandShot.buildShot({
+        now, shotId: `${this.pvpObserver(c) ?? 'agent'}-${now}-${(this.shotSeq = (this.shotSeq ?? 0) + 1)}`,
+        fight: o.pvp?.decision_id ?? o.id ?? null, character: this.pvpObserver(c), room: this.s.world?.room?.num ?? null,
+        roomFlags: { noCombat: !!(flags & ROOM_NO_COMBAT), guildPkOnly: !!(flags & 0x0008) },
+        me: me ? { row: me.row, col: me.col, x: me.x, y: me.y, posAt: me.posAt, angle: me.angle, degrees: me.degrees } : null,
+        target: { id: live.id, name: o.targetName ?? exactName(c, live) ?? null, row: live.row, col: live.col,
+                  x: live.x, y: live.y, posAt: live.posAt, inRoom: c.room?.objects?.get?.(live.id) === live },
+        wand: { id: pick.o?.id ?? null, name: pick.name ?? null, colour: unid?.colour ?? null,
+                decoded: /decoded/i.test(String(decision.why ?? '')) },
+        strategy: decision.strategy ?? null, why: decision.why ?? null, beat: ctx?.beat ?? null,
+        face: !!decision.face, faceDeg,
+        geo: this.s.world?.geometry ?? null,
+        lastAcceptedZapAt: this.lastAcceptedZapAt ?? null,
+        lastCast: c.lastCastSent ?? null,
+        lastSwingAt: swings.at(-1)?.at ?? null,
+        lastApplyAt: c.lastApplySent?.at ?? null,
+      });
+      shot.sent_at = now;
+      shot.queued_ms = Number.isFinite(queuedAt) ? now - queuedAt : null;
+      return shot;
+    } catch (e) { this.shotError = e.message; return null; }
+  }
+
+  openWandShot(shot) {
+    this.closeWandShot();                          // a beat never overlaps the last window, but be sure
+    this.openShot = shot;
+    const t = setTimeout(() => this.closeWandShot(shot), wandShot.REPLY_WINDOW_MS);
+    t.unref?.();
+  }
+
+  closeWandShot(only = null) {
+    const shot = this.openShot;
+    if (!shot || (only && shot !== only)) return;
+    this.openShot = null;
+    try {
+      wandShot.finishShot(shot);
+      if (!shot.refused) this.lastAcceptedZapAt = shot.sent_at;
+      pvplog.appendShot(shot);
+      this.lastShot = { at: shot.at, cause: shot.cause, refused: shot.refused };
+    } catch (e) { this.shotError = e.message; }
+  }
+
+  // EVERY SERVER LINE WHILE A FIGHT IS ON, and for 30 s after: "You can't see your selected
+  // target.", guild refusals, resist lines and the kill broadcast all arrive here and nowhere
+  // durable. System prose only — chat ('said') is not taken.
+  noteFightMessage(text) {
+    try {
+      const now = Date.now();
+      if (this.openShot && now - this.openShot.sent_at <= wandShot.REPLY_WINDOW_MS) wandShot.addReply(this.openShot, text, now);
+      if (!this.pvpLogging()) return;
+      if (!(this.active?.pvp || now < (this.pvpTailUntil ?? 0))) return;
+      pvplog.appendFightMessage({ kind: 'message', at: now, observer: this.pvpObserver(),
+        room: this.s.world?.room?.num ?? null, fight: this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        shot: this.openShot?.shot_id ?? null, text: String(text) });
+    } catch { /* never stop the event loop for a log line */ }
+  }
+
+  // SEAL THE REPLAY RING ON PVP, not only on our death. The ring holds the last 120 one-second
+  // frames, every visible body's square and facing; on 2026-10-07 the frames of the Morpheus
+  // volleys were overwritten within minutes because nobody of ours died in them. ONE keeper per
+  // room seals — every keeper's frames show the whole room, and a ring is up to 16 MB — chosen as
+  // the alphabetically first fleet character present. Sealed mid-fight every PVP_SEAL_EVERY_MS
+  // (inside the ring's 120 s, so a long fight is covered end to end) and once when it finishes.
+  pvpSealer() {
+    try {
+      const c = this.s.client, mine = this.pvpObserver(c);
+      if (!mine || !c?.room?.objects) return false;
+      const ours = [mine];
+      for (const o of c.room.objects.values()) {
+        if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
+        const n = c.rsc?.get?.(o.nameRsc) ?? o.name;
+        if (n && this.isOurs(n)) ours.push(String(n));
+      }
+      return ours.sort((a, b) => a.localeCompare(b))[0] === mine;
+    } catch { return false; }
+  }
+
+  sealPvp(why, o = this.active) {
+    const rr = this.s.replayRecorder;
+    if (!rr?.seal || !this.pvpLogging()) return;
+    const now = Date.now();
+    if (why !== 'finished' && now - (this.lastPvpSealAt ?? 0) < PVP_SEAL_EVERY_MS) return;
+    if (!this.pvpSealer()) return;
+    this.lastPvpSealAt = now;
+    try {
+      rr.seal('pvp', { why, fight: o?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        observer: this.pvpObserver(), room: this.s.world?.room?.num ?? null, target: o?.order?.target ?? null });
+    } catch (e) { this.sealError = e.message; }
+  }
+
   // A wand that has run out stays in the pack (a broken SpecialWand) or is deleted (a SpellItem
-  // wand); either way it must not be picked again. "Nothing happens" is the attack timer refusing
-  // a zap -- no charge spent -- and is only recorded.
+  // wand); either way it must not be picked again. "Nothing happens" is NOT only the attack timer:
+  // it answers a target out of sight or in another room, the timer, a no-combat room, and (after
+  // "You can't see your selected target.") a target behind us — see tools/m59-wand-shot.mjs, whose
+  // per-shot row is what tells them apart.
   noteWandMessage(text) {
     if (/is broken|has no more charges|shatters into pieces|is out of charges/i.test(text) && this.lastWandId != null)
       this.spentWands?.add(this.lastWandId);
@@ -1647,6 +1762,7 @@ export class CombatMode {
     this.observeWar(ev, client);
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
+    if (ev.kind === 'message' && ev.text) this.noteFightMessage(ev.text);
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);
     this.observePlayerCombat(ev, client);
@@ -1863,6 +1979,9 @@ export class CombatMode {
       const row = pvplog.combatRow(event, { at: this.now(), observer: this.pvpObserver(),
         room: this.s.world?.room?.num ?? null, target: o.order.target ?? null, pvp, reason: o.reason ?? null });
       if (row) pvplog.appendPvp(row);
+      this.lastPvpFight = pvp.decision_id ?? this.lastPvpFight ?? null;
+      if (event === 'finished') { this.pvpTailUntil = Date.now() + 30_000; this.closeWandShot(); this.sealPvp('finished', o); }
+      else if (pvplog.COMBAT_EVENTS.has(event)) this.sealPvp('during', o);
     }
   }
 

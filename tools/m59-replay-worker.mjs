@@ -1,5 +1,5 @@
 import {parentPort,workerData} from 'node:worker_threads';
-import {mkdir,writeFile,rename} from 'node:fs/promises';
+import {mkdir,writeFile,rename,readdir,stat,unlink} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -23,8 +23,25 @@ export function runtimeProvenance(root) {
     rng_state:null,timers:null};
 }
 
+// Total bytes allowed under one seal directory; the oldest files go first. 3 GB is about 180 full
+// rings — weeks of fights at one sealer per room.
+export const SEAL_BUDGET_BYTES=3*1024*1024*1024;
+export async function pruneSeals(sub,budget=SEAL_BUDGET_BYTES) {
+  let files;
+  try {files=(await readdir(sub)).filter(f=>f.endsWith('.json'));}catch{return 0;}
+  const rows=[];
+  for(const f of files){try{const st=await stat(path.join(sub,f));rows.push({f,size:st.size,t:st.mtimeMs});}catch{}}
+  let total=rows.reduce((n,r)=>n+r.size,0),removed=0;
+  for(const r of rows.sort((a,b)=>a.t-b.t)){
+    if(total<=budget)break;
+    try{await unlink(path.join(sub,r.f));total-=r.size;removed++;}catch{}
+  }
+  return removed;
+}
+
 if(parentPort&&workerData) {
   const {dir,maxFrames,maxBytes}=workerData;
+  const sealBudget=workerData.sealBudget??SEAL_BUDGET_BYTES;
   const provenance=runtimeProvenance(workerData.root);
   if(workerData.server)provenance.server={...workerData.server,attestation:'verified isolated container image and loopback ports'};
   const frames=[];let bytes=0,evicted=0,lastBundle=null;
@@ -39,6 +56,18 @@ if(parentPort&&workerData) {
         const encoded=JSON.stringify(m.frame),size=Buffer.byteLength(encoded);
         frames.push({frame:m.frame,size});bytes+=size;
         while(frames.length>maxFrames||bytes>maxBytes){bytes-=frames.shift().size;evicted++;}
+      }else if(m.type==='seal') {
+        // The ring, verbatim, for a moment that is not a death (a PvP fight). Its own directory,
+        // and a byte budget there that evicts the OLDEST seals first — death bundles are never touched.
+        const sub=path.join(dir,m.seal.kind);await mkdir(sub,{recursive:true});
+        const payload={schema:'m59-seal-replay/v1',id:m.seal.id,kind:m.seal.kind,provenance,seal:m.seal,
+          frames:frames.map(f=>f.frame),capture:{...m.capture_status,ring_evicted:evicted,bytes,
+            first_at:frames[0]?.frame.at??null,last_at:frames.at(-1)?.frame.at??null}};
+        const json=JSON.stringify(payload),sha256=createHash('sha256').update(json).digest('hex');
+        const file=path.join(sub,`${m.seal.id}.json`),temp=file+'.tmp';
+        await writeFile(temp,JSON.stringify({sha256,payload}));await rename(temp,file);
+        await pruneSeals(sub,sealBudget);
+        parentPort.postMessage({type:'saved',file,sha256,kind:m.seal.kind});
       }else if(m.type==='death') {
         const payload=lastBundle?.id===m.death.id ? {...lastBundle,
           death:{...lastBundle.death,detail:{...m.death.detail,...lastBundle.death.detail,

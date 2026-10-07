@@ -61,6 +61,15 @@ export function attachReplayRecorder(s,k,{enabled=s.replayCaptureEnabled===true,
       return {id:lastDeath.id,file:path.join(dir,`${lastDeath.id}.json`),status:queued?'queued':'dropped',
         captured_at:now,kind:'client-observed-scene',requires_baseline_reproduction:true};
     },
+    // A NAMED SEAL THAT IS NOT A DEATH: the ring as it stands, written under <dir>/<kind>/ so no
+    // reader of death bundles ever sees one. Used for PvP (CombatMode.sealPvp); budgeted in the worker.
+    seal:(kind='pvp',detail={})=>{
+      const now=Date.now(),safe=String(kind).replace(/[^a-z0-9_-]/gi,'_');
+      capture(`seal_${safe}`,null);
+      const id=`${prefix}-${safe}-${now}`;
+      const queued=post({type:'seal',seal:{id,kind:safe,at:now,detail},capture_status:{...stats,provenance:undefined}},true);
+      return {id,file:path.join(dir,safe,`${id}.json`),status:queued?'queued':'dropped'};
+    },
     status:()=>({...stats,provenance:stats.provenance?{harness:stats.provenance.harness}:null,
       average_capture_ms:stats.frames?stats.capture_ms_total/stats.frames:0}),
     flush:async(timeoutMs=5000)=>{
