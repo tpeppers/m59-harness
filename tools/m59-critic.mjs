@@ -548,7 +548,7 @@ export const MOVER_VERDICT = Object.freeze({
           note: 'reached anyway. Melded 2026-09-09; the route is a jump nobody has declared.' },
   39:   { off: 0,  note: 'reachable from the EAST doorway only; 22 squares short from the other.' },
   45:   { off: 3,  note: 'ONE square outside the meld box, from r60c46.' },
-  515:  { off: 5,  note: 'no measurement beyond the walking flood.' },
+  515:  { off: 5,  note: 'Checked upper-stair candidate fall reaches the node in a quiet native trial; normal entrance-to-stair boarding remains unresolved. See nodes/peak.md and m59-node-jump-audit.mjs.' },
   579:  { off: 0,  note: 'four declared falls carry it.' },
   589:  { off: 0,  note: 'only across the declared fall r35c16 -> r38c19, entered from 599.' },
   750:  { off: null, note: 'The September coarse flood ignored the gates. Checked Ice approach '

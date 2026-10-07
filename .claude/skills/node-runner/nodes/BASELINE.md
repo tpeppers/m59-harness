@@ -15,8 +15,8 @@
 > "impossible" or "one remaining defect" conclusions below. Ancient's current
 > boundary was declared landing clearance; the
 > [timed-fall follow-up](../../../../docs/reproductions/ancient-timed-fall-2026-09-28.md)
-> now has three complete Ancient arrivals and one first-time meld. Peak still has
-> no verified arrival.
+> now has three complete Ancient arrivals and one first-time meld. Peak now has a quiet native upper-stair-to-node-to-entry proof (2026-10-06),
+> but still no verified normal entrance-to-node approach; see nodes/peak.md.
 
 > **THIS FILE IS MAINTAINED ON `main`, AND A SECOND COPY EXISTS ON THE PROD DEPLOY LINE.**
 > They have diverged and the prod copy is the SMALLER and OLDER of the two — measured

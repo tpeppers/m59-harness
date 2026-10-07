@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Offline regression: Ice route corners, wire rounding, and final-step server confirmation.
+// Offline regression: node route corners, Peak candidate falls, wire rounding and confirmed arrivals.
 import assert from 'node:assert/strict';
 import {sessionWalkPrototype} from './m59-session-walk.mjs';
 import {MAX_STEP_HEIGHT} from './m59-roo.mjs';
-import {fineRouter,checkedWalkWaypoints} from './m59-fineroute.mjs';
+import {fineRouter,checkedWalkWaypoints,proveCandidateFall} from './m59-fineroute.mjs';
 import {auditNodeWalk} from './m59-node-route-audit.mjs';
 import {previewOpenedDoor} from './m59-ceiling-doors.mjs';
 import {readFileSync} from 'node:fs';
@@ -65,5 +65,38 @@ await test('timed-door preview leaves live geometry closed and preserves the sep
   assert.equal(closed.plan({row:25,col:20},{row:24,col:10},{maxJumps:0}).ok,false);
   assert.equal(closed.plan({row:25,col:20},{row:24,col:11},{maxJumps:0}).ok,true);
   assert.equal(previewOpenedDoor(map,750,999),null);
+});
+await test('Vale normal entry reaches the exact spawn square and has a checked walking return',()=>{
+  const R=fineRouter(532,{exactWalk:true}),out=R.plan({x:29184,y:512},{row:23,col:30},{maxJumps:0});
+  assert.equal(auditNodeWalk(out,R.geo).ok,true);assert.equal(out.jumps,0);
+  const back=R.plan(out.legs[0].waypoints.at(-1),{row:1,col:29},{maxJumps:0});
+  assert.equal(auditNodeWalk(back,R.geo).ok,true);
+});
+const peak=fineRouter(515,{exactWalk:true});
+await test('failed low takeoffs do not erase all Peak landing proposals from higher shelves',()=>{
+  const seen=peak.closure({x:31232,y:50688}),audit={};
+  const c=peak.candidateJumps(seen,peak.footing(20,17),{audit,prove:false});
+  // The old landing-key cache marked every landing tried BEFORE its first failed arc.
+  assert.ok(c.length>0);assert.ok(c.some(p=>peak.floorAt(p.fromFine.x,p.fromFine.y)===8896));
+  assert.ok(audit.rejections.fall_span_exceeds_budget>0);
+});
+await test('candidate falls reject void endpoints and walls rather than accepting footprint heights',()=>{
+  const noFloor=proveCandidateFall(peak.geo,{fromFine:{x:9984,y:19552},toFine:{x:10376,y:20498}});
+  assert.equal(noFloor.reason,'endpoint_has_no_floor');
+  const wall=proveCandidateFall(peak.geo,{fromFine:{x:9216,y:19456},toFine:{x:10240,y:19456}});
+  assert.equal(wall.model_proved,false);assert.equal(wall.trace.arrived,false);
+});
+await test('shared physical bounds permit a checked small uphill fall but reject a larger rise',()=>{
+  const a={x:27936,y:30400},b={x:28660,y:29676};
+  const valid=proveCandidateFall(peak.geo,{fromFine:a,toFine:b});
+  assert.equal(valid.to_floor_client-valid.from_floor_client,128);assert.equal(valid.model_proved,true);
+  const high=proveCandidateFall(peak.geo,{fromFine:{x:9984,y:21760},toFine:{x:9984,y:22192}});
+  assert.equal(high.reason,'fall_span_exceeds_actual_floor_budget');
+});
+await test('Peak upper-stair candidate plan contains a proved fall and checked walk chords',()=>{
+  const p=peak.plan({x:5824,y:24000},{row:20,col:17},{allowCandidates:true,maxJumps:1,branch:24});
+  assert.equal(p.ok,true,p.why);assert.equal(p.jumps,1);assert.equal(p.all_declared,false);
+  assert.equal(auditNodeWalk(p,peak.geo).ok,true);
+  assert.ok(p.legs.filter(l=>l.kind==='jump').every(j=>proveCandidateFall(peak.geo,j).model_proved));
 });
 console.log(count+' checked node path assertions passed');
