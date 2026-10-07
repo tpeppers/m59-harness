@@ -61,4 +61,35 @@ await test('stands down while something is hitting us, and when dropJunk is off'
   assert.deepEqual(r.drops, []);
 });
 
+// THE LOOTED PILE (2026-10-07): Castle Victoria's skeletons drop worn long swords; maxWeapons was
+// applied only when selling or clearing a full pack, so 20-29 rode along in every pack.
+await test('field cap: spares over maxWeapons go, duplicates first, and are remembered as shed', async () => {
+  const items = [[1, 'axe'], [2, 'axe'], ...Array.from({ length: 6 }, (_, i) => [10 + i, 'long sword']), [20, 'mace']];
+  const desc = Object.fromEntries(items.map(([id]) => [id, 'A real weapon.']));     // none conjured
+  const { k, drops } = rig({ items, equipped: [1], descriptions: desc });
+  k.policy.maxWeapons = 2;
+  await k.shedUnusedConjures();
+  // spares: axe#2 is the kept training spare; 6 swords + mace = 7 counted, cap 2 -> 5 dropped
+  assert.equal(drops.length, 5, `dropped ${drops.length}`);
+  assert.ok(!drops.includes(1) && !drops.includes(2), 'hand and training spare kept');
+  assert.ok(!drops.includes(20), 'the single mace outranks a fifth duplicate sword');
+  assert.ok(drops.every(id => k.s._shedIds.has(id)), 'every shed id is remembered for the looter');
+  assert.equal(k.fieldSpareWeapons().length, 2);
+  const cap = k.fieldWeaponCap();
+  assert.equal(cap.max, 2); assert.equal(cap.count(), 2, 'the looter sees the cap is reached');
+});
+
+await test('no cap configured, or dropJunk off: nothing is shed by the cap and the looter is not limited', async () => {
+  const items = Array.from({ length: 5 }, (_, i) => [i + 1, 'long sword']);
+  const desc = Object.fromEntries(items.map(([id]) => [id, 'A real weapon.']));
+  let r = rig({ items, descriptions: desc });
+  delete r.k.policy.maxWeapons;
+  await r.k.shedUnusedConjures();
+  assert.deepEqual(r.drops, []); assert.equal(r.k.fieldWeaponCap(), null);
+  r = rig({ items, descriptions: desc });
+  r.k.policy.maxWeapons = 1; r.k.policy.dropJunk = false;
+  await r.k.shedUnusedConjures();
+  assert.deepEqual(r.drops, []); assert.equal(r.k.fieldWeaponCap(), null);
+});
+
 console.log(`${passed} conjure-shed cases passed`);

@@ -21164,6 +21164,7 @@ export class Autopilot {
     // Every mode reads its weapons, not only farm (see the idle branch in passErrand): a
     // `survive` character — Raphael, the troll crew's dedicator — skips the farm block below.
     this.sweepWeaponMagic().catch(() => {});
+    this.s._fieldWeaponCap = this.fieldWeaponCap();
     this.shedUnusedConjures().catch(() => {});
     // 4. Work. Only in farm mode, and only on what we were told to hunt.
     //
@@ -30415,6 +30416,7 @@ export class Autopilot {
       };
       const cleanup = await clearConjureHoard(s, candidates, { eligible, cancelled, maxInspections: 8 });
       for (const id of cleanup.ordinary ?? []) knownOrdinary.add(id);
+      for (const id of cleanup.dropped ?? []) (this.s._shedIds ??= new Map()).set(id, Date.now());
       if (cleanup.dropped?.length) {
         this.tally.conjures_shed = (this.tally.conjures_shed || 0) + cleanup.dropped.length;
         this.note('dropped conjured weapons nobody is using', {
@@ -30434,19 +30436,37 @@ export class Autopilot {
   // beyond the weapon in hand, one spare of the training weapon and protected names, at most
   // `maxWeapons` spare weapons are carried; extras go, duplicates of a name first, then the
   // lowest-scored. A dropped worn sword is a few shillings; a pack that never fills is the trips.
-  async capFieldWeapons({ nameOf, worn, spareOf, cancelled }) {
-    const max = Number(this.policy.maxWeapons);
-    if (!Number.isFinite(max) || max < 0) return;
-    const c = this.s.client;
+  /** Spare weapons counted against maxWeapons: not in hand, not protected, past one training spare. */
+  fieldSpareWeapons(c = this.s.client) {
+    const nameOf = o => String(c?.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+    const eq = c?.equipment?.();
+    const worn = new Set((eq?.known ? eq.equipped : []).map(e => e.id));
+    const spareOf = String(this.policy.trainingWeapon ?? '').trim().toLowerCase();
     let spareSeen = false;
     const spares = [];
-    for (const o of c.inventory ?? []) {
+    for (const o of c?.inventory ?? []) {
       const n = nameOf(o);
-      if (worn.has(o.id) || !isWeaponName(n)) continue;
+      if (worn.has(o.id) || skills.weaponScore(n) <= 0) continue;
       if (skills.itemIsProtected(n, this.protectedItemNames())) continue;
       if (spareOf && n === spareOf && !spareSeen) { spareSeen = true; continue; }
       spares.push(o);
     }
+    return spares;
+  }
+
+  /** What the floor looter needs to stop at the cap; null when there is no cap or no equipment read. */
+  fieldWeaponCap() {
+    const max = Number(this.policy.maxWeapons);
+    if (this.policy.dropJunk === false || !Number.isFinite(max) || max < 0) return null;
+    if (this.s.client?.equipment?.()?.known !== true) return null;
+    return { max, count: () => this.fieldSpareWeapons().length };
+  }
+
+  async capFieldWeapons({ nameOf, cancelled }) {
+    const max = Number(this.policy.maxWeapons);
+    if (!Number.isFinite(max) || max < 0) return;
+    const c = this.s.client;
+    const spares = this.fieldSpareWeapons(c);
     const extra = spares.length - max;
     if (extra <= 0) return;
     const seen = new Map();
@@ -30460,6 +30480,7 @@ export class Autopilot {
       if (cancelled()) break;
       if (!(c.inventory ?? []).some(x => x.id === o.id)) continue;
       await this.s.pacer.submit('drop', () => c.drop([this.dropSpec(o)]));
+      (this.s._shedIds ??= new Map()).set(o.id, Date.now());
       dropped.push(nameOf(o));
       await new Promise(r => setTimeout(r, 400));
     }

@@ -4751,6 +4751,25 @@ class Session {
         emptyWandsSkipped.push(name); return false;
       });
     }
+    // NOT WHAT WE JUST THREW AWAY, AND NOT ANOTHER SPARE WEAPON PAST THE CAP. The keeper sheds
+    // spare weapons over `maxWeapons` in the field (Autopilot.capFieldWeapons, operator 2026-10-07:
+    // "we don't want inventories filling up with unaccountable garbage"); without this the same
+    // floor pass would pick each one straight back up. `_shedIds` is what it dropped (30 min), and
+    // `_fieldWeaponCap` says how many spares are carried against the cap.
+    const shedSkipped = [];
+    if (!ids?.length || !explicitIdsOverride) {
+      const shed = this._shedIds, cap = this._fieldWeaponCap, now = Date.now();
+      let spares = cap ? Number(cap.count?.()) || 0 : 0;
+      cands = cands.filter(o => {
+        const name = c.rsc.get(o.nameRsc) || '';
+        if ((shed?.get?.(o.id) ?? 0) > now - 1_800_000) { shedSkipped.push(name); return false; }
+        if (cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
+          if (spares >= cap.max) { shedSkipped.push(name); return false; }
+          spares++;
+        }
+        return true;
+      });
+    }
     if (ids?.length) { const w = new Set(ids.map(Number)); cands = cands.filter(o => w.has(o.id)); }
     else if (only) { const q = String(only).toLowerCase(); cands = cands.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(q)); }
     cands.sort((a, b) => manhattan(a) - manhattan(b));
@@ -4892,6 +4911,9 @@ class Session {
       refused.push({ item: n, why: 'BROKEN — the server says it has been shattered. It cannot be ' +
                                    'wielded or sold, and its name does not say so, which is why the ' +
                                    'fleet used to carry them for ever. Left on the floor.' });
+    for (const n of [...new Set(shedSkipped)])
+      refused.push({ item: n, why: 'a spare weapon past maxWeapons, or one this character just shed — ' +
+                                   'left on the floor rather than carried until a rare town trip' });
     for (const n of cursedSkipped)
       refused.push({ item: n, why: 'CURSED — it equips itself, cannot be removed without an ' +
                                    'uncurse spell, and makes you easier to hit. Leave it.' });
