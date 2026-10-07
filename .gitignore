@@ -867,3 +867,8 @@ substrate/magic-keep.json
 
 # Video capture working files (tools/m59-pvp-capture.mjs): a ring of client-window segments.
 /substrate/pvp-capture/
+
+# m59-feed-me-more and m59-hp-duty: this machine's orders and progress (they name characters)
+/substrate/feed-me-more.json
+/substrate/hp-duty.json
+/substrate/hp-duty-state.json

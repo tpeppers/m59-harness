@@ -58,7 +58,12 @@ export function guildPlan(file = GUILD_PLAN_FILE) {
 
 export function saveGuildPlan(raw, file = GUILD_PLAN_FILE) {
   const normalised = normalisePlan(raw);
-  const out = { chests: Object.fromEntries([...normalised.chests]
+  // THE PLANNER SHEET EDITS CHESTS AND NOTHING ELSE, so everything else on disk is kept.
+  // This wrote `{chests}` alone, which silently dropped `reagents` (the chest-versus-buy
+  // policy), its notes, and `coop_caps` -- one save from the sheet switched all three off.
+  let existing = {};
+  try { if (existsSync(file)) existing = JSON.parse(readFileSync(file, 'utf8')) ?? {}; } catch { existing = {}; }
+  const out = { ...existing, ...raw, chests: Object.fromEntries([...normalised.chests]
     .map(([slot, items]) => [slot, { items }])) };
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
@@ -146,20 +151,28 @@ export function normalisePlan(raw) {
       const item = norm(it?.item ?? it?.name);
       const target = Math.max(0, Math.floor(Number(it?.target ?? it?.amount) || 0));
       if (!item) { problems.push(`chest ${slot} has an entry with no item name`); continue; }
+      // OTHER NAMES THE SAME THING ARRIVES UNDER. A lightning wand drops UNIDENTIFIED and is
+      // carried and stored as a plain "wand" (docs/m59-economy.md, the wand bank), so a target
+      // on "lightning wand" alone would never count the forty sitting in the chest and the
+      // fleet would keep filling it. `also` names are counted toward this entry's target,
+      // deposited against it, held back from sale for it, and kept by eviction under it.
+      const also = [...new Set([].concat(it?.also ?? []).map(norm).filter(a => a && a !== item))];
       const already = items.find(x => x.item === item);
       // TWO LINES FOR ONE ITEM ARE A CONTRADICTION, NOT A SUM. Adding them would invent a
       // target nobody typed; the larger is kept and the collision is reported.
       if (already) {
         problems.push(`chest ${slot} lists "${item}" twice (${already.target} and ${target}) — kept the larger`);
         already.target = Math.max(already.target, target);
+        if (also.length) already.also = [...new Set([...(already.also ?? []), ...also])];
         continue;
       }
-      items.push({ item, target });
+      items.push(also.length ? { item, target, also } : { item, target });
     }
     chests.set(slot, items);
   }
   const reagents = normaliseReagents(raw, problems);
-  return { chests, problems, reagents,
+  const coopCaps = normaliseCoopCaps(raw, problems);
+  return { chests, problems, reagents, coop_caps: coopCaps,
            empty: [...chests.values()].every(items => !items.length) };
 }
 
@@ -289,6 +302,39 @@ const countIn = (items, item) => (items || [])
   .filter(i => norm(i.name ?? i.item) === item)
   .reduce((n, i) => n + (Number(i.amount) || 1), 0);
 
+/** Every name a plan entry is held under: its own, then its `also` aliases. */
+export const entryNames = (entry) => [entry.item, ...(entry.also ?? [])];
+/** How much of a plan entry a list of items holds, aliases included. */
+export const countWanted = (items, entry) => entryNames(entry).reduce((n, name) => n + countIn(items, name), 0);
+
+// COOP CAPS. The reagent co-op deposits against its own equal share per reagent type and never
+// read the plan, so lowering a plan target did not stop co-op members refilling that reagent.
+// `coop_caps: { "r18c2": { "mushroom": 43 } }` (a chest's square, or its old slot number) caps
+// the co-op's target for that reagent in that chest. Written by m59-feed-me-more.mjs for the
+// reagents it gives space up from. Absent means the co-op's own share, exactly as before.
+function normaliseCoopCaps(raw, problems) {
+  const out = new Map();
+  for (const [key, caps] of Object.entries(raw?.coop_caps ?? {})) {
+    let slot = String(key);
+    if (/^[1-9][0-9]*$/.test(slot)) slot = BOOKMAKERS_CHEST_SQUARES[Number(slot) - 1] ?? null;
+    if (!slot || !parseChestKey(slot)) { problems.push(`coop_caps: "${key}" is not a chest and was ignored`); continue; }
+    const m = new Map();
+    for (const [item, n] of Object.entries(caps ?? {})) {
+      const v = Math.floor(Number(n));
+      if (!Number.isFinite(v) || v < 0) { problems.push(`coop_caps ${slot} "${item}": not a count`); continue; }
+      m.set(norm(item), v);
+    }
+    out.set(slot, m);
+  }
+  return out;
+}
+
+/** The co-op cap for one reagent in one chest from a loaded plan, or null for none. */
+export function coopCapFor(plan, slot, item) {
+  const v = plan?.coop_caps?.get?.(slot)?.get?.(norm(item));
+  return Number.isFinite(v) ? v : null;
+}
+
 /**
  * What THIS character should hand over on this town trip.
  *
@@ -327,22 +373,29 @@ export function contributionPlan({ plan, chests = [], pack = [], keepFloor = () 
     }
     let roomBulk = Math.max(0, CHEST_BULK_MAX - (chestFullness(chest.items).bulk || 0));
     const give = [];
-    for (const { item, target } of items) {
-      const have = countIn(chest.items, item);
-      const short = Math.max(0, target - have);
-      if (!short) continue;
-      const canGive = Math.min(short, spareOf(item));
-      if (canGive <= 0) continue;
-      // Bulk-bounded, per item, against what is left in this chest after earlier lines.
-      const each = weighPack([{ name: item, amount: 1 }]).bulk || 0;
-      const fits = each > 0 ? Math.min(canGive, Math.floor(roomBulk / each)) : canGive;
-      if (fits <= 0) {
-        give.push({ item, amount: 0, short, why: 'the chest has no room left for this' });
-        continue;
+    for (const entry of items) {
+      const { target } = entry;
+      const have = countWanted(chest.items, entry);
+      let short = Math.max(0, target - have);
+      // One line per NAME actually carried, so the hand-over moves real stacks: a plan for
+      // "lightning wand" with also ["wand"] takes the unidentified wands as "wand".
+      for (const item of entryNames(entry)) {
+        if (!short) break;
+        const canGive = Math.min(short, spareOf(item));
+        if (canGive <= 0) continue;
+        // Bulk-bounded, per item, against what is left in this chest after earlier lines.
+        const each = weighPack([{ name: item, amount: 1 }]).bulk || 0;
+        const fits = each > 0 ? Math.min(canGive, Math.floor(roomBulk / each)) : canGive;
+        if (fits <= 0) {
+          give.push({ item, amount: 0, short, why: 'the chest has no room left for this' });
+          continue;
+        }
+        roomBulk -= fits * each;
+        spare.set(item, spareOf(item) - fits);
+        give.push({ item, amount: fits, short, chest_had: have, target,
+                    ...(item !== entry.item ? { counts_as: entry.item } : {}) });
+        short -= fits;
       }
-      roomBulk -= fits * each;
-      spare.set(item, spareOf(item) - fits);
-      give.push({ item, amount: fits, short, chest_had: have, target });
     }
     const total = give.reduce((n, g) => n + g.amount, 0);
     out.push({ slot, give, total });
@@ -379,13 +432,15 @@ export function guildKeepTest({ plan, chests = [], rent = null } = {}) {
   const shortfall = new Map();
   for (const [slot, items] of want) {
     const chest = bySlot.get(slot);
-    for (const { item, target } of items) {
+    for (const entry of items) {
       // An unopened chest counts its whole target as short: the safe direction is to keep
       // the item until somebody has looked, because selling it is not reversible.
       const have = (chest && !chest.never_opened && Array.isArray(chest.items))
-        ? countIn(chest.items, item) : 0;
-      const short = Math.max(0, target - have);
-      if (short > 0) shortfall.set(item, (shortfall.get(item) || 0) + short);
+        ? countWanted(chest.items, entry) : 0;
+      const short = Math.max(0, entry.target - have);
+      // An alias is held back for the entry it counts toward, under its own name.
+      if (short > 0) for (const name of entryNames(entry))
+        shortfall.set(name, (shortfall.get(name) || 0) + short);
     }
   }
   const test = (name) => shortfall.get(norm(name)) > 0;

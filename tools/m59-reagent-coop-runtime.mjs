@@ -14,6 +14,9 @@ import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
   coopFundingAmount, coopRemainingPlan, coopSupplyOutcome, coopFallbackDecision } from './m59-reagent-coop.mjs';
+import { guildPlan, coopCapFor } from './m59-guildwants.mjs';
+// The guild plan's coop_caps for one chest and reagent; null when the plan sets none (m59-feed-me-more).
+const planCoopCap = (slot, item) => { try { return coopCapFor(guildPlan(), slot, item); } catch { return null; } };
 
 const pending = reason => ({ pending: true, ready: false, reason });
 const interrupted = k => k.travelInterrupted() || k.suspendedJourney ||
@@ -149,14 +152,14 @@ async function transact(k, state, cfg, fleet) {
       for (const box of boxes.filter(b => cfg.chest_keys.includes(b.slot))) {
         await readBox(k, box, cfg);
         const planned = coopDepositPlan({ config: cfg, chests: [box], pack: pack(k),
-          saleItems: sale(k), keepFloor: name => ownFloor(k, name) });
+          saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCap });
         for (const line of planned.plan) {
           let left = line.amount;
           for (const item of [...c.inventory].filter(i => coopKey(c.rsc.get(i.nameRsc)) === line.item)) {
             if (!left) break;
             await readBox(k, box, cfg);
             const current = coopDepositPlan({ config: cfg, chests: [box], pack: pack(k),
-              saleItems: sale(k), keepFloor: name => ownFloor(k, name) }).plan.find(p => p.item === line.item);
+              saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCap }).plan.find(p => p.item === line.item);
             const amount = Math.min(left, item.amount || 1, current?.amount ?? 0);
             if (!amount) break;
             const moved = await transfer(k, box, item, amount, 'deposit', cfg, receipt);

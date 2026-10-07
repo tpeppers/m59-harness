@@ -173,7 +173,9 @@ export function coopFallbackDecision({ rows = [], agent = null, attempts = COOP_
            why: `${unreachable} of ${attempts} consecutive failures` };
 }
 
-export function coopDepositPlan({ config, chests, pack, saleItems, keepFloor = () => 0 }) {
+// `capFor(slot, item)` is the guild plan's coop_caps (m59-guildwants coopCapFor): a number lowers
+// this reagent's target in that chest, null leaves the equal share alone.
+export function coopDepositPlan({ config, chests, pack, saleItems, keepFloor = () => 0, capFor = null }) {
   const names = new Set(config.reagents), spare = new Map();
   for (const item of saleItems) {
     const key = coopKey(item.name);
@@ -188,7 +190,9 @@ export function coopDepositPlan({ config, chests, pack, saleItems, keepFloor = (
     if (!load.exact) continue; // Unknown bulk cannot be treated as free capacity.
     let free = Math.max(0, CHEST_BULK_MAX - load.bulk);
     for (const [item, available] of spare) {
-      const bulk = weighItem(item).bulk, target = Math.floor(perTypeBulk / bulk);
+      const bulk = weighItem(item).bulk, share = Math.floor(perTypeBulk / bulk);
+      const cap = capFor?.(chest.slot, item);
+      const target = Number.isFinite(cap) ? Math.min(share, cap) : share;
       const amount = Math.max(0, Math.min(available, target - coopCount(chest.items, item), Math.floor(free / bulk)));
       if (!amount) continue;
       plan.push({ slot: chest.slot, item, amount, target, reserved_bulk: perTypeBulk });

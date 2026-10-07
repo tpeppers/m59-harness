@@ -68,12 +68,21 @@ const defaultPriceOf = (name) => {
 export function evictionOrder(chest, planItems = null,
                               { bulkOf = defaultBulkOf, priceOf = defaultPriceOf } = {}) {
   const held = tally(chest?.items);
-  const target = new Map((planItems ?? []).map(p => [norm(p.item), Number(p.target) || 0]));
+  // An entry's `also` names share ITS target: forty unidentified "wand" kept under a plan for
+  // "lightning wand" are planned stock, not unplanned clutter to throw out first.
+  const budget = new Map(), entryOf = new Map();
+  for (const p of planItems ?? []) {
+    const key = norm(p.item);
+    budget.set(key, Number(p.target) || 0);
+    for (const n of [key, ...(p.also ?? []).map(norm)]) if (!entryOf.has(n)) entryOf.set(n, key);
+  }
   const rows = [], kept = [];
   for (const [name, amount] of held) {
     if (NEVER_EVICT.includes(name)) { kept.push({ name, amount, why: 'never evicted' }); continue; }
-    const planned = target.has(name);
-    const want = planned ? target.get(name) : 0;
+    const owner = entryOf.get(name);
+    const planned = owner != null;
+    const want = planned ? Math.min(amount, budget.get(owner)) : 0;
+    if (planned) budget.set(owner, budget.get(owner) - want);
     const evict = Math.max(0, amount - want);
     if (planned && want > 0)
       kept.push({ name, amount: Math.min(amount, want), why: `plan target ${want}` });
