@@ -155,3 +155,22 @@ export function planDoorChain(map, roomNum, from, targets, plans,
   }
   return null;
 }
+/** Prepare a private, conditional door state without changing the live room. */
+export function previewOpenedDoor(map, roomNum, sector, { observed = new Map() } = {}) {
+  const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum],room=map?.rooms?.[roomNum];
+  if(!def||!room?.roo)return null;
+  const selected=def.doors.find(d=>(d.ids??[d.id]).includes(Number(sector)));if(!selected)return null;
+  const heights=def.doors.map(d=>{
+    if(d===selected)return d.open;
+    const seen=(d.ids??[d.id]).map(id=>observed.get(id));
+    return seen[0]?.type===5&&seen.every(x=>x?.type===5&&x.height===seen[0].height)?seen[0].height:(d.shipped??d.closed);
+  });
+  const key=heights.join(','),state=def.states[key];if(!state)return null;
+  const geometry=RoomGeometry.fromJSON(room.roo);if(geometry.security!==def.security)return null;
+  geometry.roomNum=Number(roomNum);geometry.exitSquares=exitSquaresOf(room);
+  const mask=Buffer.from(state.mask,'base64'),result=applySectorHeights(geometry,state.sectors,{mask});
+  if(result.why&&result.why!=='already at that height')return null;
+  if(!geometry.attachStepMask(mask))return null;
+  return {geometry,state:key,sector:Number(sector),conditional:true,
+    requires:'matching normal server opening and live collision checks before each move'};
+}

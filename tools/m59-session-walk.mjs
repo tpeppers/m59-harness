@@ -1444,6 +1444,8 @@ export function sessionWalkPrototype(deps) {
     // every careful walk careless. A caller that took the default gets to run.
     strideMax = stride >= FINE_STRIDE ? Math.max(FINE_STRIDE_MAX, stride) : stride,
     arriveWithin = 40,
+    // Checked rails must reach each bend, even when the bend is inside one square.
+    exactArrival = false,
     // DO NOT WALK OFF THE SHELF YOU ARE ON. OFF BY DEFAULT, AND THAT IS DELIBERATE.
     //
     // The fan exists to find a way round geometry, and it is judged purely on DISTANCE: the
@@ -1573,7 +1575,7 @@ export function sessionWalkPrototype(deps) {
       // square, it is there — the alternative is spending the whole step budget shaving
       // units off a number that a body's own width makes meaningless.
       if (remaining < closest - 1) { closest = remaining; sinceCloser = 0; }
-      else if (++sinceCloser >= 4 && closest <= KOD_FINENESS)
+      else if (++sinceCloser >= 4 && !exactArrival && closest <= KOD_FINENESS)
         return { arrived: true, position: { col: me.col, row: me.row, x: me.x, y: me.y },
                  steps: i, log, note: 'as close as fine movement gets — ' +
                    Math.round(closest) + ' units, inside one square' };
@@ -1839,6 +1841,24 @@ export function sessionWalkPrototype(deps) {
       } else { bodyStreak = 0; bodyStart = null; }
     }
     me = c.self;
+    // The last permitted move can reach the goal. There is no next iteration
+    // to notice it, so confirm that endpoint before declaring budget failure.
+    if (maxSteps > 0 && me && Math.hypot(destX - me.x, destY - me.y) <= arriveWithin) {
+      const confirmed = await this.confirmPosition?.().catch(() => null);
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ steps: maxSteps, log });
+      if (c.room.id !== startRoom) return { arrived: false, left_room: true, steps: maxSteps, log };
+      // confirmPosition returns square fields; the fresh fine coordinates are in c.self.
+      const endpoint = confirmed ? c.self : null;
+      if (endpoint && Math.hypot(destX - endpoint.x, destY - endpoint.y) <= arriveWithin) {
+        const landedFloor = shelfGeo ? floorOf(endpoint.x, endpoint.y) : null;
+        if (!shelfGeo || (landedFloor != null && destFloor != null &&
+            Math.abs(landedFloor - destFloor) <= MAX_STEP_HEIGHT))
+          return { arrived: true, position: { col: endpoint.col, row: endpoint.row, x: endpoint.x, y: endpoint.y },
+            steps: maxSteps, log, ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}) };
+      }
+      me = c.self;
+    }
     return { arrived: false, reason: 'ran out of steps',
              ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
                ...(shelfUnavailable ? { shelf_guard: 'REQUESTED BUT UNAVAILABLE — no geometry in this session; the walk was NOT guarded' } : {}),

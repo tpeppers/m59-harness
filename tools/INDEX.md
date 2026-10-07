@@ -158,6 +158,8 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `fineclimb` | FOLLOW A FINE ROUTE EXACTLY, OR STOP AND SAY WHERE IT CAME OFF. |
 | `finepath` | WALKING WHERE THE SQUARE LATTICE CANNOT EXPRESS THE ROUTE. |
 | `finepos` | WHERE IS THIS BODY, ACTUALLY — and never ask a movement verb. |
+| `node-route-audit` | Check emitted fine-route chords and integer-wire rounding without moving a character. |
+| `node-path-lab` | Owned local movement-only approach, normal door and return trial with a full receipt. |
 | `fineroute` | A ROUTE THROUGH GROUND THE SQUARE GRID CANNOT DESCRIBE — PLANNED, NEVER WALKED. |
 | `fleet-repl` | COMMAND THE FLEET BY NAME, ONE LINE AT A TIME. |
 | `fleet-report` | THE OPERATOR'S STANDING REPORT: deaths, kills, max health, vigor and food, in one page. |
