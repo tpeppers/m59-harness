@@ -102,7 +102,10 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // to fail or the counter to pay. `onInventory` is handed {agent, items, n}
                       // (n counts the reads) and returns a payload or undefined for the default;
                       // `onSellAll` is handed {agent, items} and returns the sale reply.
-                      onInventory = null, onSellAll = null } = {}) {
+                      onInventory = null, onSellAll = null,
+                      // WHAT `look` SAYS ABOUT POSITION. undefined: `positions` (or 0,0); a function:
+                      // its answer, read live (a keeper world that moves); null: no position at all.
+                      lookAt = undefined, lookRoom = undefined } = {}) {
   const invReads = {};
   const sent = [], rested = [], saidLines = [];
   const chatLog = [];
@@ -197,9 +200,10 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       payload = { arrived: walkLands };
     }
     else if (name === 'look') {
-      const at = positions[agent] ?? { col: 0, row: 0 };
-      payload = { room: { num: rooms[agent] ?? 39, name: 'room' },
-                  you: { col: at.col, row: at.row },
+      const at = typeof lookAt === 'function' ? lookAt({ agent }) : lookAt === null ? null
+        : (positions[agent] ?? { col: 0, row: 0 });
+      payload = { room: { num: lookRoom ?? rooms[agent] ?? 39, name: 'room' },
+                  you: at ? { col: at.col, row: at.row } : null,
                   objects: npcs.map(n => ({ id: n.id ?? 1, name: n.name, col: n.col, row: n.row,
                                             is_player: false })) };
     }
@@ -2379,7 +2383,8 @@ console.log('\ncrawl_to REFUSES when the status reply carries no position');
   // is what makes it survivable and invisible.
   const world = { at: { row: 10, col: 10 }, refuse: () => null };
   // No `positions` entry for a1, so the fake answers `you: null` exactly as production does.
-  const sent = fakeBroker({ rooms: { a1: 39 },
+  // And `look` is blind too: the case below is the one where it is not.
+  const sent = fakeBroker({ rooms: { a1: 39 }, lookAt: null,
     onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
   const restore = fakeKeeper({ world });
   const r = await fleetScript({ name: 'crawl-blind', fleet: 'testfleet', agents: ['a1'],
@@ -2860,6 +2865,42 @@ console.log('a sale is judged on the purse, and a purse that could not be read i
     const line = log.find(l => /step 0 \(sell\) ok/.test(l)) ?? '';
     ok('a read that failed once is retried and the true earnings reported', /earned 2400sh/.test(line), line);
     ok('and stacks shed are the ids that left, not a difference of lengths', /shed 8 stack/.test(line), line);
+  }
+}
+
+
+console.log('\ncrawl_to completes a withheld position from `look`, in the same room only');
+{
+  // Bunsen, 2026-10-07, in 598 under the Qor lift: `status` withheld `you` on every read ("keeper state
+  // and room view carry different room_wire tuples") while `look` answered r6c17 in 598. Twelve lift
+  // attempts were skipped as position_unreadable.
+  {
+    const world = { at: { row: 10, col: 10 }, refuse: () => null };
+    const sent = fakeBroker({ rooms: { a1: 598 }, lookAt: () => world.at,
+      onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+    const restore = fakeKeeper({ world });
+    const r = await fleetScript({ name: 'crawl-look', fleet: 'testfleet', agents: ['a1'],
+      steps: [crawlTo(13, 10, { blindTries: 3, blindWaitMs: 5, deadlineMs: 20000, settleMs: 5, maxSteps: 30 })],
+      onLog: quiet });
+    restore();
+    const out = r.results.a1.state['0:crawl_to'];
+    ok('a position `status` withheld is read from `look`, and the crawl arrives',
+       r.results.a1.ok === true && out.outcome === 'arrived', JSON.stringify(out).slice(0, 200));
+    ok('and it hopped to get there', sent.some(x => x.name === 'short_hop'));
+  }
+  {
+    // `look` answering from a DIFFERENT room is not believed.
+    const world = { at: { row: 10, col: 10 }, refuse: () => null };
+    fakeBroker({ rooms: { a1: 598 }, lookAt: () => world.at, lookRoom: 599,
+      onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+    const restore = fakeKeeper({ world });
+    const r = await fleetScript({ name: 'crawl-look-wrong-room', fleet: 'testfleet', agents: ['a1'],
+      steps: [crawlTo(13, 10, { blindTries: 3, blindWaitMs: 5, deadlineMs: 20000, settleMs: 5, maxSteps: 30 })],
+      onLog: quiet });
+    restore();
+    const out = r.results.a1.state['0:crawl_to'];
+    ok('but a `look` from another room is not believed: still position_unreadable',
+       out.outcome === 'position_unreadable', String(out.outcome));
   }
 }
 

@@ -3001,6 +3001,23 @@ const DYNAMIC_FIELDS = Object.freeze({
   gate: ['key'],
 });
 
+// A POSITION THE BROKER WITHHELD, ASKED OF `look` INSTEAD. `status` drops `you` whenever the keeper's
+// state and its room view carry different room_wire tuples ("bound provenance withheld"), and on some
+// rooms that is every read: Bunsen, 2026-10-07, in 598 under the Qor lift, twelve lift attempts in a row
+// skipped because no crawl could aim -- while `look` answered r6c17 in 598 the whole time. So a status
+// with no position is completed from `look`, and only when `look` names the SAME room: a position from
+// another room is worse than none.
+async function statusWithPosition(agent) {
+  const st = await call('status', { agent, brief: true }, 30_000).catch(() => null);
+  if (!st || (Number.isFinite(st?.you?.row) && Number.isFinite(st?.you?.col))) return st;
+  const lk = await call('look', { agent }, 30_000).catch(() => null);
+  const room = Number(st?.where?.num ?? st?.room?.num ?? st?.room_num ?? NaN);
+  const lroom = Number(lk?.room?.num ?? NaN);
+  if (Number.isFinite(lk?.you?.row) && Number.isFinite(lk?.you?.col) && Number.isFinite(room) && lroom === room)
+    return { ...st, you: { ...(st.you ?? {}), col: lk.you.col, row: lk.you.row }, you_source: 'look' };
+  return st;
+}
+
 export function resolveStep(step, state) {
   const fields = DYNAMIC_FIELDS[step?.do];
   if (!fields) return step;
@@ -4183,7 +4200,7 @@ async function runStep(ctx, agent, rawStep, state) {
       const within = step.within ?? 0;
       const deadline = Date.now() + (step.deadlineMs ?? 240_000);
       const stallMs = step.stallMs ?? 45_000;
-      const square = () => call('status', { agent, brief: true }, 30_000).catch(() => null);
+      const square = () => statusWithPosition(agent);
       const posOf = s => ({ row: s?.you?.row ?? null, col: s?.you?.col ?? null,
                             room: Number(s?.where?.num ?? s?.room?.num ?? s?.room_num ?? NaN) });
       const issue = () => call('walk_to', { agent, col: step.col, row: step.row,
@@ -4283,8 +4300,7 @@ async function runStep(ctx, agent, rawStep, state) {
 
       const posOf = s => ({ row: s?.you?.row ?? null, col: s?.you?.col ?? null,
                             room: Number(s?.where?.num ?? s?.room?.num ?? s?.room_num ?? NaN) });
-      const read = async () => posOf(await call('status', { agent, brief: true }, 30_000)
-        .catch(() => null));
+      const read = async () => posOf(await statusWithPosition(agent));
       const start = await read();
       const wantRoom = step.room ?? start.room;
 
@@ -4324,7 +4340,7 @@ async function runStep(ctx, agent, rawStep, state) {
                    why: `ran out of time ${chebyshev(p, goal)} square(s) from r${goal.row}c${goal.col}` };
         }
 
-        const st = await call('status', { agent, brief: true }, 30_000).catch(() => null);
+        const st = await statusWithPosition(agent);
         const p = posOf(st);
         if (Number.isFinite(p.room) && Number.isFinite(wantRoom) && p.room !== wantRoom)
           return { ok: false, outcome: 'left_the_room', room: p.room,
