@@ -5983,10 +5983,10 @@ export function sessionWalkPrototype(deps) {
       // `edge_target` moves with it, because the outward packet has to leave from the
       // opening we are in rather than aim diagonally across a wall at another one.
       //
-      // This can only ever reduce the distance the gate measures — a strictly-nearer test,
-      // and no change at all when the ranked opening already is the nearest. `wrongDoor` is
-      // the same set the approach walk avoids, so a split boundary cannot be re-anchored
-      // onto a crossing that fires the other room.
+      // Prefer the nearest opening with a fully proved live crossing chord. If no
+      // such chord is available yet, retain the approach's nearer-opening rule.
+      // `wrongDoor` is the same set the approach walk avoids, so a split boundary
+      // cannot be re-anchored onto a crossing that fires the other room.
       const reanchorToNearestOpening = () => {
         const me = c.self;
         if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.y)) return;
@@ -5996,8 +5996,27 @@ export function sessionWalkPrototype(deps) {
         if (!Array.isArray(published) || !published.length) return;
         const horizontal = exit.direction === 'north' || exit.direction === 'south';
         const along = pt => (horizontal ? pt.x : pt.y);
-        let best = null, bestGap = Math.abs(along(exit.fine_stand_on) - along(me));
-        for (const cand of published) {
+        // Vale r1c28 is next to an opening, but its nearest outward chord hits
+        // the doorway corner. Prefer an exactly proved live chord when one is
+        // already within the boundary gate. Distance alone kept selecting the
+        // same blocked point even while trying different coarse stages.
+        const allowed = published.filter(cand => {
+          if (!cand?.fine_stand_on || !cand?.edge_target) return false;
+          const row = Math.floor(cand.fine_stand_on.y / KOD_FINENESS);
+          const col = Math.floor(cand.fine_stand_on.x / KOD_FINENESS);
+          return !wrongDoor?.has?.(`${row},${col}`);
+        });
+        const proved = typeof this.validateFineTarget === 'function' ? allowed.filter(cand => {
+          if (!atEdgeOpening(me, cand.fine_stand_on, exit.direction)) return false;
+          const target = cand.edge_target;
+          const v = this.validateFineTarget(target.x, target.y, {slide:false, fall:false});
+          return v?.available && v.moved && v.arrived && !v.blocked
+            && v.reason !== 'recovered_from_no_floor'
+            && v.target?.x === target.x && v.target?.y === target.y;
+        }) : [];
+        let best = null, bestGap = proved.length ? Infinity
+          : Math.abs(along(exit.fine_stand_on) - along(me));
+        for (const cand of (proved.length ? proved : allowed)) {
           if (!cand?.fine_stand_on || !cand?.edge_target) continue;
           const row = Math.floor(cand.fine_stand_on.y / KOD_FINENESS);
           const col = Math.floor(cand.fine_stand_on.x / KOD_FINENESS);
@@ -6157,8 +6176,8 @@ export function sessionWalkPrototype(deps) {
       // server's rather than dead reckoning. The step-in and the nudge both move the body,
       // and `confirmPosition` is the first moment this function knows where it really is —
       // which is exactly the moment to decide which opening it is standing in. Re-anchoring
-      // is strictly-nearer, so this can only shrink the distance the gate is about to
-      // measure; where the ranked opening was already the nearest it changes nothing.
+      // selects a proved live chord inside the same boundary gate when possible;
+      // otherwise it only shrinks the along-edge distance to the opening.
       reanchorToNearestOpening();
 
       // THE OUTWARD PACKET IS AUTHORIZED ONLY FROM THE PROVED OPENING.
