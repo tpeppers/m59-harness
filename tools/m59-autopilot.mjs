@@ -25069,6 +25069,12 @@ export class Autopilot {
         // THE ROOM THE TICKET NAMES, when it is one this holder lights; otherwise fol_room. A
         // person's "fol in 39" must not walk a 20-health caster somewhere nobody configured.
         st.folRoom = folRoomsOf(cfg).includes(Number(st.room)) ? Number(st.room) : cfg.fol_room;
+        // NOR A ROOM HIS OWN ORDERS FORBID. The walk is the risk and the cast would be refused
+        // on arrival, so the visit is never started (roomEnchantAllows).
+        if (!this.roomEnchantAllows(st.folRoom)) {
+          this.chaliceEvent('fol_refused', { room: st.folRoom, why: 'not in room_enchant.rooms' });
+          return done('abandoned', { note: `room ${st.folRoom} is not in this caster's room_enchant.rooms` });
+        }
         return goto(st.folRoom, 'cast');
       case 'fol:cast': {
         // HURT IS OUT. The post is the refuge; a second cast is never worth a death.
@@ -25614,9 +25620,23 @@ export class Autopilot {
     return true;
   }
 
+  // WHERE A ROOM ENCHANTMENT MAY BE CAST AT ALL. Operator, 2026-10-07: "limit Loial's forces
+  // of light to only being cast in map 38". `roomEnchant.rooms` names the rooms; absent or empty
+  // means any room, which is the behaviour that was already there. It binds every path that
+  // casts — the posted caster, and a chalice holder's forces-of-light visit — because the gap it
+  // closes is the one where the chalice config is not loaded yet (the first seconds after a
+  // keeper restart) and the post's own order would light the room he waits in.
+  roomEnchantAllows(room, cfg = this.policy?.roomEnchant) {
+    const rooms = Array.isArray(cfg?.rooms) ? cfg.rooms.map(Number).filter(Number.isInteger) : [];
+    return !rooms.length || rooms.includes(Number(room));
+  }
+
   async roomEnchant({ remote = false } = {}) {
     const cfg = this.policy.roomEnchant;
     if (!cfg || cfg.enabled === false) return;
+    const here = this.s.world?.room?.num;
+    if (!this.roomEnchantAllows(here, cfg))
+      return remote ? { cast: false, why: `room ${here} is not in room_enchant.rooms` } : undefined;
     // A CHALICE HOLDER WITH A FORCES-OF-LIGHT ROOM casts only there, on request, by stepping
     // in from its post (`chaliceDuty`, job `fol`). Standing at the post it casts nothing —
     // lighting the room it waits in would spend the reagents on nobody.
