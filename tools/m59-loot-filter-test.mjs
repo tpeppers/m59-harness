@@ -181,6 +181,21 @@ console.log('through Session.lootFloor');
   ok('with no loot_only policy a spider kill loots everything, as before', w.gets.length === 3);
 }
 {
+  // NEVER A SECOND CHALICE (operator, 2026-10-07): chalice.kod NewOwner pours a cup into the one
+  // already held and deletes it. Two on the floor, empty hands: one. One in the pack: none, by id too.
+  const w = world([{ id: 41, name: 'Chalice of the Rain' }, { id: 42, name: 'Chalice of the Rain' }, { id: 43, name: 'emerald' }]);
+  const r = await w.s.lootFloor({});
+  ok('two cups on the floor and empty hands: exactly one is lifted',
+     w.gets.filter(n => /chalice/i.test(n)).length === 1 && w.gets.includes('emerald'), JSON.stringify(w.gets));
+  ok('...and the other is refused with the reason', (r.refused ?? []).some(x => /already carrying a chalice/.test(x.why)));
+  const h = world([{ id: 51, name: 'Chalice of the Rain' }]);
+  h.drop(99, 'Chalice of the Rain');
+  const mine = h.c.room.objects.get(99); h.c.room.objects.delete(99); h.c.inventory.push(mine);
+  await h.s.lootFloor({});
+  await h.s.lootFloor({ ids: [51], maxItems: 1 });
+  ok('a character already carrying one lifts none, not even by explicit id', h.gets.length === 0, JSON.stringify(h.gets));
+}
+{
   // Memory expiry and room scoping.
   const mem = lf.newLootOnlyMemory();
   const spec = lf.lootOnlySpec(KERMIT);

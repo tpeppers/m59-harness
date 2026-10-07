@@ -1293,6 +1293,59 @@ try {
     ok(J.ap.chaliceRole() === 'traveller', 'Janice is not');
   }
 
+  // Operator, 2026-10-07: never put two chalices on one person. chalice.kod NewOwner pours the
+  // newcomer into the cup already held and deletes it; two cups dropped in a Shal'ille room both refill.
+  section('the mule draft skips a pool member already carrying a cup');
+  {
+    const { world, store, k } = guardWorld('g-draft2', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), R = k('Raphael son of Mephistopheles', 2, 25), P = k('Pepe', 2, 22);
+    R.P.client.inventory.push(world.item('chalice of the rain'));
+    await R.ap.chaliceGuard(); await P.ap.chaliceGuard();
+    ok(store.carriers().includes('Raphael son of Mephistopheles') && !store.carriers().includes('Pepe'),
+       'each keeper registers whether it carries one', JSON.stringify(store.carriers()));
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'relief' && job.alt === 'Pepe', 'relief goes to the empty-handed mule', JSON.stringify(job));
+  }
+
+  section('a cup is never given to somebody already carrying one');
+  {
+    const { world, store, k } = guardWorld('g-give2');
+    const L = k('Loial the Ogier'), R = k('Rizzo');
+    R.P.client.inventory.push(world.item('chalice of the rain'));
+    await R.ap.chaliceGuard();
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    const cup = L.ap.chaliceInPack();
+    const r = await L.ap.chaliceGive('Rizzo', [cup.id], { stillHave: () => !!L.ap.chaliceInPack() });
+    ok(r.gave === false && r.code === 'second_cup', 'refused before any offer goes out', JSON.stringify(r));
+    ok(has(world, L.P, /chalice/i) && R.P.client.inventory.filter(x => /chalice/i.test(world.nameOf(x))).length === 1,
+       'both still have exactly one');
+    ok(L.ap.events.some(e => e.what === 'give_refused_second_cup'), 'and it is ledgered');
+    const offer = { theirs: [{ id: 1, name: 'Chalice of the Rain' }] };
+    ok(R.ap.offerWouldDoubleChalice(offer) && !L.ap.offerWouldDoubleChalice({ theirs: [{ id: 2, name: 'shilling' }] }),
+       'and the receiving side recognises an offer that would double up');
+  }
+
+  section('a carrier never sweeps a second cup off the floor, and an extra cup does not take the desk record');
+  {
+    const { world, store, k, cupDown } = guardWorld('g-sweep2');
+    const L = k('Loial the Ogier'), G = k('Gonzo');
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    await L.ap.chaliceGuard();
+    store.setDuty({ with: 'Loial the Ogier', seen_at: Date.now() });
+    G.P.client.inventory.push(world.item('chalice of the rain'));
+    cupDown();
+    await G.ap.chaliceGuard();
+    ok((world.floor.get(2) ?? []).length === 1, 'the floor cup is left lying for an empty-handed sweep');
+    ok(G.P.client.inventory.filter(x => /chalice/i.test(world.nameOf(x))).length === 1, 'Gonzo still carries exactly one');
+    world.floor.set(2, []);
+    await G.ap.chaliceGuard();
+    ok(G.P.client.inventory.filter(x => /chalice/i.test(world.nameOf(x))).length === 1 && !store.handoff(),
+       'nor does he hand his to a holder who already has one');
+    ok(store.duty()?.with === 'Loial the Ogier', 'and the duty record still names the desk cup', JSON.stringify(store.duty()));
+  }
+
   section('with nobody in the pool, the holder keeps the cup');
   {
     const { world, store, k } = guardWorld('g-nodraft', { alternate: null });

@@ -120,6 +120,8 @@ import { observeRefusal, vetoAttack, isGuildOnlyRefusal } from './m59-refused-ta
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
+// One per pack: a second is poured into the first and deleted (chalice.kod NewOwner). See lootFloor.
+const CHALICE_OF_THE_RAIN = /chalice of the rain/i;
 
 // MAY THIS CHARACTER LOOT THIS CURSED ITEM? Only when its policy names it (`pickupCursed`), and
 // only ONE: not while one of that name is already carried or worn (`held`), and not a second in
@@ -4782,6 +4784,21 @@ class Session {
     if (ids?.length) { const w = new Set(ids.map(Number)); cands = cands.filter(o => w.has(o.id)); }
     else if (only) { const q = String(only).toLowerCase(); cands = cands.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(q)); }
     cands.sort((a, b) => manhattan(a) - manhattan(b));
+    // NEVER A SECOND CHALICE OF THE RAIN, NOT EVEN BY ID. A cup arriving in a pack that already
+    // holds one is POURED INTO it and deleted (chalice.kod NewOwner: `post(self,@Delete)`), or
+    // refused outright when the held one is full (ReqNewOwner). Two cups dropped in a Shal'ille
+    // room both refill; one merged cup is strictly worse (operator, 2026-10-07: "Two chalices are
+    // always better than the single resulting chalice of pouring them together"). So: none while
+    // one is carried, and at most one per pass when none is.
+    const chaliceSkipped = [];
+    {
+      let cupHeld = (c.inventory ?? []).some(i => CHALICE_OF_THE_RAIN.test(c.rsc.get(i.nameRsc) || ''));
+      cands = cands.filter(o => {
+        if (!CHALICE_OF_THE_RAIN.test(c.rsc.get(o.nameRsc) || '')) return true;
+        if (cupHeld) { chaliceSkipped.push(o.id); return false; }
+        cupHeld = true; return true;
+      });
+    }
     cands = cands.slice(0, maxItems);
 
     // DO NOT PICK UP A WEAPON THAT IS ALREADY BROKEN.
@@ -4926,6 +4943,9 @@ class Session {
     for (const n of cursedSkipped)
       refused.push({ item: n, why: 'CURSED — it equips itself, cannot be removed without an ' +
                                    'uncurse spell, and makes you easier to hit. Leave it.' });
+    for (const id of chaliceSkipped)
+      refused.push({ id, item: 'Chalice of the Rain', why: 'already carrying a chalice — a second one ' +
+                                   'would be poured into the first and destroyed (chalice.kod NewOwner)' });
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
       setIntentTarget(this,{kind:'pickup',object_id:o.id});

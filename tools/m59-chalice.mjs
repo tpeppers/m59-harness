@@ -253,6 +253,18 @@ export const CHALICE_DEFAULTS = Object.freeze({
 // telling a person who logged off hours ago.
 export const HUMAN_FRESH_MS = 90_000;
 
+// A CARRIER RECORD IS LIVE FOR TEN MINUTES; every keeper re-registers its own every two.
+export const CARRIER_FRESH_MS = 10 * 60_000;
+
+/**
+ * IS `name` ALREADY CARRYING A CHALICE, per the carrier register? Pure. Such a character must
+ * never be handed, offered, drafted for or passed a second one: chalice.kod NewOwner pours a
+ * cup into the one already held and deletes it, and two cups dropped in a Shal'ille room both
+ * refill. Operator, 2026-10-07: "Two chalices are always better than the single resulting
+ * chalice of pouring them together."
+ */
+export const carriesCup = (carriers, name) => !!name && (carriers ?? []).some(n => sameName(n, name));
+
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
@@ -561,9 +573,12 @@ export function dutyEligible({ name, maxHealth, cfg } = {}) {
  * desk runner" — whoever the duty record says is serving (the holder, or an alternate standing in
  * while the holder is on an errand), else the holder, else the configured or drafted alternate.
  * Never another mule: that is how a cup gets handed round and a farmer gets drafted. null if none.
+ * NEVER ANYBODY ALREADY CARRYING A CUP (`carriers`, carriesCup): that one is skipped and the next
+ * in line asked, and with nobody left this character keeps its cup — the fleet then has two.
  */
-export function passTo({ cfg, fleetHere = [], duty = null } = {}) {
-  const here = n => n && fleetHere.find(x => sameName(x, n));
+export function passTo({ cfg, fleetHere = [], duty = null, carriers = [] } = {}) {
+  // undefined, never false, for a skipped name: the `??` chain below must fall through it.
+  const here = n => (n && !carriesCup(carriers, n) ? fleetHere.find(x => sameName(x, n)) : undefined);
   return here(servingDesk(duty, cfg)?.server) ?? here(cfg?.holder) ?? here(cfg?.alternate)
     ?? here(duty?.drafted) ?? null;
 }
@@ -579,11 +594,14 @@ export function passTo({ cfg, fleetHere = [], duty = null } = {}) {
  * Loial trying to hand Raphael (who I'm logged in) the chalice of the rain on prod?" -- Raphael was the
  * pool member standing in room 2, and nothing asked whether anybody was at his controls. A configured
  * alternate a person is playing is no answer either: null, and the holder keeps the cup.
+ *
+ * NOR ONE ALREADY CARRYING A CUP (`carriers`). Handing it ours pours ours into theirs and deletes
+ * it (chalice.kod NewOwner). A configured alternate that carries one: null, the holder keeps its cup.
  */
-export function draftAlternate({ cfg, pool = [], fleetHere = [], humans = null, now = Date.now(), alive } = {}) {
+export function draftAlternate({ cfg, pool = [], fleetHere = [], humans = null, now = Date.now(), alive, carriers = [] } = {}) {
   const played = n => !!humanMark(humans, n, now, ...(alive ? [alive] : []));
-  if (cfg?.alternate) return played(cfg.alternate) ? null : cfg.alternate;
-  const cands = [...pool].filter(n => !sameName(n, cfg?.holder) && !played(n))
+  if (cfg?.alternate) return played(cfg.alternate) || carriesCup(carriers, cfg.alternate) ? null : cfg.alternate;
+  const cands = [...pool].filter(n => !sameName(n, cfg?.holder) && !played(n) && !carriesCup(carriers, n))
     .sort((a, b) => String(a).localeCompare(String(b)));
   return cands.find(n => fleetHere.some(x => sameName(x, n))) ?? cands[0] ?? null;
 }
@@ -599,7 +617,7 @@ export function draftAlternate({ cfg, pool = [], fleetHere = [], humans = null, 
  */
 export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
                              carrying = false, duty = null, lastPlayerAttackAt = null,
-                             humans = null, now = Date.now() } = {}) {
+                             humans = null, now = Date.now(), carriers = [] } = {}) {
   if (!cfg?.enabled) return { ride: false, code: 'off', why: 'chalice farming is off' };
   if (role === 'holder') return { ride: false, code: 'holder', why: 'the holder serves; its own trips are its own' };
   if (role === 'alternate' && carrying)
@@ -609,6 +627,11 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
   // handed Robin the cup for a ride, a keeper roll restarted Robin's keeper mid-ride, the fresh
   // trip asked again, declined, and walked it into Ukgoth toward the Jasper bank while Rizzo
   // marked it lost. The station comes first: take it back to whoever is serving.
+  // UNLESS WHOEVER IS SERVING ALREADY HAS A CUP: then ours is a SECOND one, and handing it over
+  // pours it into theirs and deletes it (chalice.kod NewOwner). Keep it; the fleet has two.
+  if (carrying && carriesCup(carriers, servingDesk(duty, cfg, now, humans)?.server ?? cfg.holder))
+    return { ride: false, code: 'second_cup',
+      why: 'carrying a chalice and the desk already has one — two cups are not poured into one' };
   if (carrying) return { ride: true, returning: true, code: 'carrying',
     why: 'carrying the fleet\'s chalice outside a ride — take it back to the station first' };
   // THE SERVER WILL REFUSE THE SIP FOR TEN MINUTES AFTER WE SWING AT A PLAYER, so find out
@@ -1035,6 +1058,24 @@ export class ChaliceStore {
       s.pool ??= {};
       for (const k of Object.keys(s.pool)) if (sameName(k, name)) delete s.pool[k];
       if (member) s.pool[name] = { max_health: member.max_health ?? null, at: now };
+      return null;
+    }, now);
+  }
+
+  // ---- who is CARRYING a cup right now, each registered by its OWN keeper (no keeper can read
+  // another's pack). A carrier is never handed, drafted for, or passed a second cup: chalice.kod
+  // NewOwner pours the newcomer into the held one and deletes it. Stale after 10 minutes, and a
+  // stale entry reads as NOT carrying — the receiving keeper refuses the offer itself anyway.
+  carriers(now = Date.now()) {
+    return Object.entries(this.read().carrying ?? {})
+      .filter(([, p]) => Number(p?.cups) > 0 && now - (p?.at ?? 0) < CARRIER_FRESH_MS).map(([name]) => name);
+  }
+
+  setCarrying(name, cups, now = Date.now()) {
+    return this.update(s => {
+      s.carrying ??= {};
+      for (const k of Object.keys(s.carrying)) if (sameName(k, name)) delete s.carrying[k];
+      if (Number(cups) > 0) s.carrying[name] = { cups: Number(cups), at: now };
       return null;
     }, now);
   }

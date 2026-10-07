@@ -83,7 +83,7 @@ import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide, sweepVerdict, actingDesk, moneyExcess, depositPlan,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf,
-         sipVerdict, SIP_TOOK, SIP_REFUSED_PVP, dutyEligible, passTo, draftAlternate } from './m59-chalice.mjs';
+         sipVerdict, SIP_TOOK, SIP_REFUSED_PVP, dutyEligible, passTo, draftAlternate, carriesCup } from './m59-chalice.mjs';
 import { rideChaliceNow } from './m59-chalice-ride.mjs';
 import * as wandDuty from './m59-wand-duty.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
@@ -22984,7 +22984,14 @@ export class Autopilot {
     //    nothing — countering is what grants the other side permission to accept.
     //    Only ever counter EMPTY, so this can never give our own things away.
     const t = c.trade;
-    if (t && t.withId && (t.theirs?.length) && !(t.ours?.length)) {
+    // EXCEPT A SECOND CHALICE: accepting it destroys one of the two (chalice.kod NewOwner).
+    if (t && t.withId && (t.theirs?.length) && !(t.ours?.length) && this.offerWouldDoubleChalice(t)) {
+      if (this._secondCupDeclined !== t.revision) {
+        this._secondCupDeclined = t.revision;
+        await s.pacer.submit('trade', () => c.cancelOffer()).catch(() => {});
+        this.note('declined a chalice', { from: t.withName, why: 'already carrying one — two cups are better than one poured together' });
+      }
+    } else if (t && t.withId && (t.theirs?.length) && !(t.ours?.length)) {
       try {
         await s.pacer.submit('trade', () => c.counterOffer([]));
         this.note('accepted a gift', { from: t.withName,
@@ -23313,6 +23320,10 @@ export class Autopilot {
     };
 
     if (!offered.length) return refuse('an empty offer is a trade window, not a donation');
+    // A SECOND CUP IS NEVER ACCEPTED, from anybody: chalice.kod NewOwner pours it into ours and
+    // deletes it. The giver's keeper should not have offered (chaliceGive), but a register can be stale.
+    if (this.offerWouldDoubleChalice(t))
+      return refuse('already carrying a chalice — a second would be poured into it and destroyed');
     // EXPECTED INCOMING IS ALWAYS TAKEN (m59-pvp-gear.mjs): the PvP kit this character does not
     // carry yet, and the fleet's expect_incoming list. The operator hands characters their kit
     // and they take it -- whoever is handing it over, and whatever the take list says.
@@ -23629,6 +23640,31 @@ export class Autopilot {
     return (c?.inventory || []).find(o => CHALICE.match.test(String(c.rsc.get(o.nameRsc) || ''))) ?? null;
   }
 
+  chalicesInPack() {
+    const c = this.s?.client;
+    return (c?.inventory || []).filter(o => CHALICE.match.test(String(c.rsc.get(o.nameRsc) || ''))).length;
+  }
+
+  // THE CARRIER REGISTER, kept by every keeper for itself: written the pass the count changes and
+  // refreshed every two minutes while it holds one. Read by everybody choosing whom to give a cup.
+  chaliceCarryCheckIn(now = Date.now()) {
+    if (!this.chaliceCfg || !this.s?.client?.inventory) return;
+    const cups = this.chalicesInPack();
+    const last = this._chaliceCarrySaid;
+    if (last && last.cups === cups && (cups === 0 || now - last.at < 2 * 60_000)) return;
+    try { this.chaliceStore().setCarrying(this.who(), cups, now); this._chaliceCarrySaid = { cups, at: now }; } catch {}
+  }
+
+  chaliceCarriers(now = Date.now()) {
+    try { return this.chaliceStore().carriers(now); } catch { return []; }
+  }
+
+  /** Would accepting this trade put a second chalice in our pack? Then it must be refused. */
+  offerWouldDoubleChalice(t) {
+    return !!this.chaliceInPack()
+      && (t?.theirs || []).some(i => CHALICE.match.test(String(i?.name || '')));
+  }
+
   chaliceOnFloor() {
     const c = this.s?.client;
     return [...(c?.room?.objects?.values?.() ?? [])].find(o => (o.flags & OF.GETTABLE) && !(o.flags & OF.PLAYER)
@@ -23656,14 +23692,19 @@ export class Autopilot {
     const c = this.s?.client;
     if (!cfg || !c?.room?.objects) return false;
     this.chalicePoolCheckIn(now);
+    this.chaliceCarryCheckIn(now);
     // A TRAVELLER MID-RIDE IS THE RIDE CODE'S: it was handed the cup, drinks it, drops it for its
     // server and is rescued out of the room. Taking it back would carry it to Barloque.
     const ride = this.activeChaliceRide();
     if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
     // A server's own ride pickup takes it itself, with the ticket bookkeeping.
     if (this._chaliceServe?.kind === 'ride' && this._chaliceServe.stage === 'pickup') return false;
-    const floor = this.chaliceOnFloor();
-    const cup = floor ? null : this.chaliceInPack();
+    // A CARRIER NEVER SWEEPS A SECOND CUP. This used to ignore the cup in the pack whenever one lay
+    // on the floor and grab it — which pours the floor cup into ours and deletes it (chalice.kod
+    // NewOwner). It is left for somebody with empty hands; ours is handled as if the floor were bare.
+    const held = this.chaliceInPack();
+    const floor = held ? null : this.chaliceOnFloor();
+    const cup = floor ? null : held;
     if (!cup) this._chaliceOffDutySaid = false;
     if (!floor && !cup) { this._chaliceFloorSince = null; return false; }
     const me = this.who();
@@ -23694,9 +23735,14 @@ export class Autopilot {
       // is the HOLDER's decision, made when it has to leave on an errand (chaliceNextJob, relief).
       let duty = {};
       try { duty = store.duty(); } catch {}
-      const to = backoff ? null : passTo({ cfg, fleetHere, duty });
+      const carriers = this.chaliceCarriers(now);
+      const to = backoff ? null : passTo({ cfg, fleetHere, duty, carriers });
       if (!to) {
-        if (sameName(duty?.acting, me) || !sameName(duty?.with, me)) {
+        // A SECOND CUP DOES NOT TAKE OVER THE DUTY RECORD. When whoever the record says has the cup
+        // still has one, ours is an extra: keep it, and leave `with` naming the desk's cup.
+        const deskHas = servingDesk(duty, cfg, now, null)?.server ?? duty?.with;
+        const deskCup = !sameName(deskHas, me) && carriesCup(carriers, deskHas);
+        if (!deskCup && (sameName(duty?.acting, me) || !sameName(duty?.with, me))) {
           try { store.setDuty({ with: me, acting: null, lost: false }); } catch {}
           this._chaliceActing = null;
         }
@@ -24491,6 +24537,19 @@ export class Autopilot {
     const s = this.s, c = s.need();
     const them = this.playerHere(toName);
     if (!them) return { gave: false, why: `${toName} is not in the room` };
+    // NEVER A CUP TO SOMEBODY ALREADY CARRYING ONE. Every hand-off of the cup comes through here
+    // (relief, return, ride, reclaim), so this is the one gate: chalice.kod NewOwner pours ours into
+    // theirs and deletes it. Their own keeper refuses the offer too (offerWouldDoubleChalice).
+    const ids = new Set([].concat(items).map(i => Number(i?.id ?? i)));
+    const givingCup = (c.inventory || []).some(o => ids.has(Number(o.id)) && CHALICE.match.test(String(c.rsc.get(o.nameRsc) || '')));
+    if (givingCup && carriesCup(this.chaliceCarriers(), toName)) {
+      const said = this._chaliceSecondCupSaid;
+      if (!said || !sameName(said.to, toName) || Date.now() - said.at > 5 * 60_000) {
+        this._chaliceSecondCupSaid = { to: toName, at: Date.now() };
+        this.chaliceEvent('give_refused_second_cup', { to: toName });
+      }
+      return { gave: false, code: 'second_cup', why: `${toName} already carries a chalice — a second would be poured in and destroyed` };
+    }
     const before = c.evSeq;
     await s.pacer.submit('trade', () => c.offer(them.id, items));
     const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: counterMs })
@@ -24551,7 +24610,7 @@ export class Autopilot {
           role: this.chaliceRole(), stationHops,
           targetHops: trip.onDemand ? null : this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
           lastPlayerAttackAt: this.lastPlayerSwingAt(),
-          duty: store.duty(), humans: store.humans(), now });
+          duty: store.duty(), humans: store.humans(), now, carriers: this.chaliceCarriers(now) });
         if (!d.ride) {
           // SAY SO. This used to be the one decision in the whole sequence that left no trace:
           // every later stage reports through `skip()`, but a decline HERE set the stage to
@@ -25013,7 +25072,7 @@ export class Autopilot {
         const c = this.s?.client;
         const fleetHere = [...(c?.room?.objects?.values?.() ?? [])]
           .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER)).map(o => c.rsc?.get(o.nameRsc) || '');
-        const alt = draftAlternate({ cfg, pool, fleetHere, humans, now });
+        const alt = draftAlternate({ cfg, pool, fleetHere, humans, now, carriers: this.chaliceCarriers(now) });
         if (alt) {
           if (!cfg.alternate) {
             try { store.setDuty({ drafted: alt, drafted_at: now }); } catch {}
@@ -25265,6 +25324,14 @@ export class Autopilot {
         // THE TRAVELLER'S SERVICES FIRST: it is holding the cup and will not drink until
         // these are answered or it gives up waiting. Each one restarts the pickup clock.
         if (await this.chaliceServeServices(st.traveller, store)) { st.since = Date.now(); return true; }
+        // ALREADY HOLDING A CUP (a second one came our way while the rider drank): the dropped one is
+        // left for an empty-handed fleetmate's sweep, never lifted into ours to be poured away.
+        if (this.chaliceInPack()) {
+          this.chaliceEvent('second_cup_left', { ticket: st.ticket, for: st.traveller });
+          if (st.ticket) try { store.mark(st.ticket, 'done', { note: 'server already holds a cup; the dropped one is left for a sweep' }); } catch {}
+          st.ticket = null; st.stage = 'back';
+          return true;
+        }
         const floor = this.chaliceOnFloor();
         if (floor) {
           await this.chaliceMakeRoom();

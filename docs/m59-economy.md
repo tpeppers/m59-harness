@@ -540,6 +540,13 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
 - **IT LANDS IN THE HALL** because room 2 and every mainland hall share `RID_DEFAULT`
   (`room.kod:900-943`; only halls 12/13/15 are Ko'catan). `Session.travel` already walks out
   of 714 through the passage, so nothing downstream changed.
+- **NEVER TWO CUPS ON ONE PERSON.** A cup arriving in a pack that already holds one is poured
+  into it and deleted (`chalice.kod` `NewOwner`), or refused when the held one is full
+  (`ReqNewOwner`). Two cups dropped in a refill room both refill, so two always beat one merged
+  (operator, 2026-10-07). Every keeper registers whether it carries one (`ChaliceStore.carriers`);
+  a carrier is never drafted (`draftAlternate`), passed to (`passTo`), returned to (`shouldRide`
+  `second_cup`) or given one (`chaliceGive`), refuses an offer of one (`acceptDonations`,
+  `social`), and `Session.lootFloor` lifts no second cup even by explicit id, and at most one per pass.
 - **THE CONFIGURATION IS A PRIVATE STRATEGY** — hook `chalice`, because it names characters.
   No strategy, or one that answers null, is the old behaviour exactly.
 - **A SKIP IS NEVER A FAILED TRIP.** No server on duty, a station too far off the route

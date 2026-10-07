@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
          servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS,
          reagentFloor, castsAbove, servingDesk, humanMark, HUMAN_FRESH_MS, deskMenu, formatDeskMenu,
-         parseDeskRequest, parseDeskReply, serviceTellText, cargoWants, folRoomsOf } from './m59-chalice.mjs';
+         parseDeskRequest, parseDeskReply, serviceTellText, cargoWants, folRoomsOf,
+         passTo, draftAlternate, carriesCup, CARRIER_FRESH_MS } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -464,6 +465,47 @@ console.log('forces of light in several rooms');
   ok(AP.includes('store.litFol({ room: st.folRoom ?? cfg.fol_room'), 'and records the lit clock for that room');
   ok(AP.includes('if (!cfg || !folRoomsOf(cfg).includes(here)) return;'), 'occupants of every lit room may ask');
   ok(AP.includes('...folRoomsOf(this.chaliceCfg), opts.chaliceRoom]'), 'the post confinement admits every lit room');
+}
+
+// ---------------------------------------------------------------------------------------
+// Operator, 2026-10-07: never put two chalices on one person. chalice.kod NewOwner pours a cup
+// into the one already held and deletes it; two cups dropped in a Shal'ille room both refill.
+section('a character already carrying a cup is never handed, drafted for, or passed another');
+{
+  const cfgNoAlt = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+  eq(carriesCup(['rizzo'], 'Rizzo'), true, 'the register is read case-insensitively');
+  eq(carriesCup([], 'Rizzo'), false, 'an empty register carries nothing');
+  eq(draftAlternate({ cfg: CFG, carriers: ['Rizzo'] }), null, 'a configured alternate who carries a cup is not handed ours');
+  eq(draftAlternate({ cfg: CFG }), 'Rizzo', 'and is when empty-handed');
+  eq(draftAlternate({ cfg: cfgNoAlt, pool: ['Beaker', 'Pepe'], fleetHere: ['Beaker'], carriers: ['Beaker'] }), 'Pepe',
+     'a pool mule standing here with a cup is skipped for one without');
+  eq(draftAlternate({ cfg: cfgNoAlt, pool: ['Beaker', 'Pepe'], carriers: ['Beaker', 'Pepe'] }), null,
+     'every mule carrying one: nobody is drafted and the holder keeps its cup');
+  const duty = { with: 'Janice' };
+  eq(passTo({ cfg: CFG, fleetHere: ['Loial the Ogier', 'Rizzo'], duty, carriers: ['Loial the Ogier'] }), 'Rizzo',
+     'a holder already holding a cup is skipped; the next desk runner is asked');
+  eq(passTo({ cfg: CFG, fleetHere: ['Loial the Ogier', 'Rizzo'], duty, carriers: ['Loial the Ogier', 'Rizzo'] }), null,
+     'everybody here carrying one: the cup is kept, and the fleet has two');
+  eq(passTo({ cfg: CFG, fleetHere: ['Loial the Ogier'], duty }), 'Loial the Ogier', 'an empty-handed holder is handed it as before');
+
+  const base = { cfg: CFG, role: 'traveller', stationHops: 1, targetHops: 9, carrying: true,
+                 duty: { with: 'Loial the Ogier', seen_at: Date.now() } };
+  const d = shouldRide({ ...base, carriers: ['Loial the Ogier'] });
+  eq(d.ride, false, 'a traveller with a cup does not return it to a desk that already has one');
+  eq(d.code, 'second_cup', 'and says why');
+  eq(shouldRide(base).returning, true, 'a desk without a cup is still given it back');
+
+  const dir = mkdtempSync(join(tmpdir(), 'chalice-carry-'));
+  try {
+    const a = new ChaliceStore({ directory: dir, namespace: 'prod' });
+    const b = new ChaliceStore({ directory: dir, namespace: 'prod' });
+    a.setCarrying('Rizzo', 1, 1000);
+    eq(b.carriers(2000).join(), 'Rizzo', 'a carrier registered by one keeper is read by another');
+    a.setCarrying('rizzo', 0, 3000);
+    eq(b.carriers(4000).length, 0, 'putting it down clears the entry, whatever the case');
+    a.setCarrying('Pepe', 1, 1000);
+    eq(b.carriers(1000 + CARRIER_FRESH_MS + 1).length, 0, 'a stale entry is not a carrier');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -365,6 +365,10 @@ export async function cupRide(rider, holder, { hall = 714, waitMs = 5 * 60_000 }
   let hr = await roomOf(holder), rr = await roomOf(rider);
   while (hr !== rr && Date.now() < meetBy) { await sleep(5000); hr = await roomOf(holder); rr = await roomOf(rider); }
   if (hr !== rr) return { ok: false, why: `${holder} (the cup) is in room ${hr} and ${rider} in room ${rr} — the cup is not dropped` };
+  // A RIDER ALREADY CARRYING A CUP IS NEVER DROPPED ANOTHER: lifting it would pour one into the
+  // other and delete it (chalice.kod NewOwner). It has its own; the holder keeps the fleet's.
+  if ((await freshItems(rider)).some(i => /chalice/i.test(String(i.name ?? ''))))
+    return { ok: false, why: `${rider} already carries a chalice — the holder's is not dropped for it` };
   const cup = (await freshItems(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
   registerHandoff(rider, holder, 'cupRide');
   if (!cup) {
