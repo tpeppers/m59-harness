@@ -7001,6 +7001,8 @@ const TOOLS = [
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       character: { type: 'string', description: 'the new character name, exactly as the game spells it' },
+      keeper_character: { type: 'string', description: 'the name the RUNNING keeper was launched as, which ' +
+        'its stop is addressed to; defaults to the roster\u2019s old name, and is required when the roster is already renamed' },
       port: { type: 'number', description: 'the keeper port, when this broker has no record of it (a keeper a ' +
         'handover refused to adopt for exactly this mismatch); the keeper must still prove the name' },
       confirm: { type: 'boolean', description: 'required: the roster change is permanent' },
@@ -7012,53 +7014,64 @@ const TOOLS = [
       const want = String(a.character ?? '').trim();
       if (!want || want.length > 64 || /[\u0000-\u001f]/.test(want)) throw new Error('character must be a plain name');
       const was = entry.credentials?.character ?? null;
-      if (keeperCharacterIdentity(was) === keeperCharacterIdentity(want))
-        return { renamed: false, agent: a.agent, character: want, why: 'the roster already names that character' };
+      const newCreds = { ...entry.credentials, character: want };
+      // THE LEASE IS PART OF THE NAME. An account lease's subject binds agent AND character, and a keeper
+      // refuses a permit whose subject does not match the credentials it reads -- so a roster that already
+      // names the new character over a lease minted for the old one is NOT done: no keeper can log in, and
+      // a broker handover refuses with account-subject-mismatch. Measured on prod 2026-10-07 after the
+      // first version renamed the roster and returned early when the keeper would not stop.
+      const planned = brokerAccountLeases.plan([{ agent: a.agent, credentials: newCreds }])[0]?.subject ?? null;
+      const held = brokerAccountLeases.permitForAgent(a.agent)?.subject ?? null;
+      const leaseStale = !!held && !!planned && held !== planned;
+      const rosterDone = keeperCharacterIdentity(was) === keeperCharacterIdentity(want);
+      if (rosterDone && !leaseStale)
+        return { renamed: false, agent: a.agent, character: want, why: 'the roster and the account lease already name that character' };
       // PROOF FROM THE GAME: the keeper holding this account says who it is logged in as.
       const rec = keeperProcesses.get(a.agent);
       const port = Number(rec?.port ?? keeperPorts.get(a.agent) ?? a.port);
-      if (!Number.isInteger(port) || port <= 0) throw new Error(`${a.agent} has no running keeper to prove the new name`);
+      if (!Number.isInteger(port) || port <= 0) throw new Error(`${a.agent} has no running keeper to prove the new name; pass port`);
       const live = await fetch(`http://127.0.0.1:${port}/state`, { signal: AbortSignal.timeout(8000) })
         .then(r => r.json()).catch(() => null);
       if (String(live?.agent ?? '') !== a.agent || keeperCharacterIdentity(live?.character) !== keeperCharacterIdentity(want))
         throw new Error(`refusing: ${a.agent}'s keeper on port ${port} reports "${live?.character ?? 'nothing'}"` +
                         `${live?.agent && live.agent !== a.agent ? ` for agent ${live.agent}` : ''}, not "${want}"`);
       // 1. Expect the new name everywhere this process checks identity.
-      fleetState.set(a.agent, { ...entry, credentials: { ...entry.credentials, character: want } });
+      if (!rosterDone) {
+        fleetState.set(a.agent, { ...entry, credentials: newCreds });
+        saveFleetState();
+        console.error(`[roster] ${a.agent} renamed "${was}" -> "${want}" (proved by its keeper on port ${port})`);
+      }
       const s = sessions.get(a.agent);
       if (s instanceof KeeperProxy) {
         if (s._liveness) s._liveness.character = want;
         s._identityConflict = null;
       }
       if (s?.credentials) s.credentials = { ...s.credentials, character: want };
-      saveFleetState();
-      console.error(`[roster] ${a.agent} renamed "${was}" -> "${want}" (proved by its keeper on port ${port})`);
-      // 2. Stop the keeper (graceful now that its identity matches), drop the session, release the lease.
-      // A keeper this broker never adopted (a handover refuses one playing another character) has no
-      // record to stop through; it is stopped by the addressed /stop it accepts from anyone who names
-      // its agent, character and pid exactly -- which the proof above just read off it.
-      const stopped = rec ? await stopKeeper(a.agent).catch(e => ({ stopped: false, note: e.message }))
-        : await (async () => {
-          const body = { agent: a.agent, character: want, keeper_pid: Number(live.pid) };
-          const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST',
-            headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-            signal: AbortSignal.timeout(8000) }).then(x => x.json()).catch(e => ({ error: e.message }));
-          if (!r?.ok) return { stopped: false, note: `addressed /stop refused: ${r?.error ?? '?'}` };
-          for (let i = 0; i < 100; i++) {
-            try { process.kill(Number(live.pid), 0); } catch { return { stopped: true, reason: 'addressed-stop' }; }
-            await new Promise(res => setTimeout(res, 100));
-          }
-          return { stopped: false, note: `pid ${live.pid} acknowledged /stop but is still running after 10s` };
-        })();
-      if (!stopped?.stopped)
-        return { renamed: true, agent: a.agent, from: was, to: want, keeper_stopped: false,
-                 note: `the roster is renamed, but the keeper did not stop (${stopped?.note ?? stopped?.reason ?? '?'}); ` +
-                       'its account lease still carries the old subject until the next keeper restart' };
+      // 2. STOP THE KEEPER, ADDRESSED TO THE NAME IT WAS LAUNCHED UNDER. Its /state reports the character
+      // the game logged it into, but it checks an order against the credentials it was STARTED with, so
+      // a stop addressed to the new name is refused 409 ("this keeper holds character Marco Polo, not
+      // Zheng He"). `keeper_character` names that launch name; it defaults to the roster's old name.
+      const launchedAs = String(a.keeper_character ?? (rosterDone ? '' : was) ?? '').trim();
+      if (!launchedAs) throw new Error('the roster is already renamed: pass keeper_character, the name the running keeper was launched as');
+      const body = { agent: a.agent, character: launchedAs, keeper_pid: Number(live.pid) };
+      const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000) }).then(x => x.json()).catch(e => ({ error: e.message }));
+      let stopped = false;
+      if (r?.ok) for (let i = 0; i < 100 && !stopped; i++) {
+        try { process.kill(Number(live.pid), 0); await new Promise(res => setTimeout(res, 100)); } catch { stopped = true; }
+      }
+      if (!stopped)
+        return { renamed: !rosterDone, agent: a.agent, from: was, to: want, keeper_stopped: false, lease_stale: true,
+                 note: `the keeper did not stop (${r?.ok ? `pid ${live.pid} still running after 10s` : `addressed /stop refused: ${r?.error ?? '?'}`}); ` +
+                       'the account lease still carries the old subject. Run again with the right keeper_character.' };
+      // 3. Forget the keeper, drop the session, release the lease; the rejoin sweep re-takes it.
+      if (keeperProcesses.get(a.agent)?.pid === Number(live.pid)) keeperProcesses.delete(a.agent);
       const old = sessions.get(a.agent);
       if (old) { try { old.dispose?.(); } catch {} sessions.delete(a.agent); }
       const released = brokerAccountLeases.releaseAgent(a.agent);
       rejoinState.set(a.agent, { failures: 0, nextTryAt: 0, lastJoinAt: null });
-      return { renamed: true, agent: a.agent, from: was, to: want, keeper_stopped: true,
+      return { renamed: !rosterDone, agent: a.agent, from: was, to: want, keeper_stopped: true,
                lease_released: released?.released ?? null,
                note: `the rejoin sweep logs ${a.agent} back in as "${want}" under a fresh account lease within about a minute` };
     },
