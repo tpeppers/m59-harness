@@ -5298,6 +5298,17 @@ class Session {
       return true;
     };
 
+    // The entry packet can precede our position in room contents. Capture once
+    // after the inland nudge, or after contents settle if it was still unknown.
+    // `door` remains in the source room for choosing the return door.
+    const rememberEntryLanding = (observedAfter) => {
+      const entry = this.enteredVia, me = this.world?.self ?? this.client?.self;
+      if (!entry || entry.landing || entry.room !== Number(this.world?.room?.num)
+          || !Number.isFinite(me?.col) || !Number.isFinite(me?.row)) return;
+      entry.landing = { room: entry.room, col: me.col, row: me.row,
+        x: me.x ?? null, y: me.y ?? null, observed_after: observedAfter };
+    };
+
     // Every completed crossing pays the same recovery checks, including tracks.
     const finishHop = async () => {
       if (this.movementWasCancelled(movementGeneration, controlToken))
@@ -5310,6 +5321,7 @@ class Session {
         return this.cancelledMovement({ log });
       await this.pacer.submit('read', () => this.client.roomContents());
       await this.client.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
+      rememberEntryLanding('arrival_settle');
 
       // THE PAUSE POINT. One per room, with the room already visible.
       if (this.movementWasCancelled(movementGeneration, controlToken))
@@ -6325,13 +6337,14 @@ class Session {
       if (exit?.stand_on && Number.isFinite(leavingRoom))
         this.enteredVia = { room: Number(this.world?.room?.num ?? NaN), from: leavingRoom,
                             door: { col: exit.stand_on.col, row: exit.stand_on.row },
-                            at: Date.now() };
+                            landing: null, at: Date.now() };
       // AND GET OFF THE DOORWAY BEFORE DOING ANYTHING ELSE. See stepInland: a crossing lands
       // on the far room's boundary, and the next movement from there is one square from
       // leaving again — sometimes into a different room than the one we came from.
       // Guarded: `travel` is lifted out of this file by text and evaluated against a fake
       // session elsewhere, and a bare call there is a TypeError rather than a no-op.
       if (typeof this.stepInland === 'function') await this.stepInland().catch(() => false);
+      rememberEntryLanding('step_inland');
       cameFromRoom = Number.isFinite(leavingRoom) ? leavingRoom : null;
       const interrupted = await finishHop();
       if (interrupted) return interrupted;

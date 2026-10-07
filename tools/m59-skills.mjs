@@ -2990,21 +2990,23 @@ export { RIP_DESTINATIONS, readRipDestination, UNDERWORLD_PORTALS, nearestCity,
          citiesByDistance, CITY_INNS, KOCATAN_IS_DEATH_ONLY } from './m59-underworld.mjs';
 
 // Which teleporters in this room are which. The rip announces itself by name, so it
-// costs nothing; the fixed ones have to be looked at, and each look is a request out of
-// a budget of five a second — so they are looked at in the order most likely to end the
-// search, not all of them up front.
+// costs nothing. In the native Underworld the fixed squares prove their destinations
+// from server construction; only objects outside that mapping need a description.
 async function identifyPortals(s, found, { want = null, maxLooks = 6 } = {}) {
   const c = s.need();
   const rows = found.map(o => {
     const name = c.rsc.get(o.nameRsc) || '';
     const expected = UW.UNDERWORLD_PORTALS.find(
-      p => p.clientCol === o.col && p.clientRow === o.row) ?? null;
-    return { o, name, rip: UW.RIP_NAME.test(name), expected, city: null, desc: null };
+      p => p.objectCol === o.col && p.objectRow === o.row) ?? null;
+    const fixed = UW.fixedPortalAt(s.world?.room, o, name);
+    return { o, name, rip: UW.RIP_NAME.test(name), expected,
+      city: fixed?.city ?? null, desc: null,
+      identity_source: fixed ? 'uworld.kod:649-662 fixed square in room 1' : null };
   });
 
   // The rip needs no look to be identified, and looking at it here would be wasted —
   // its answer expires in seconds and is only useful immediately before stepping on.
-  const toLook = rows.filter(r => !r.rip);
+  const toLook = rows.filter(r => !r.rip && !r.city);
 
   // Best first: the portal whose square matches the one we want, then everything else
   // by how far it is to walk. The coordinates are only a hint — the description is what
@@ -3028,6 +3030,7 @@ async function identifyPortals(s, found, { want = null, maxLooks = 6 } = {}) {
     r.desc = ev.events.find(e => e.id === r.o.id)?.description || '';
     const sign = UW.readPortalSign(r.desc, r.name);
     r.city = sign.city;
+    r.identity_source = sign.city ? 'portal description' : null;
     r.shifting = sign.shifting;
     // A description that reads as the rip's, on an object not named "rip in space".
     // Believe the description: the name can be a resource we failed to resolve.
@@ -3214,12 +3217,12 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
       if (step.left)
         return { left: true, stood_up: true, arrived_in: step.arrived_in, room: step.room,
                  wanted, city: wanted, chosen_because: chosenBecause,
-                 via: `the fixed ${wanted} portal`,
+                 via: `the fixed ${wanted} portal`, identity_source: match.identity_source,
                  ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
                  note: 'a fixed portal, so this is repeatable — no waiting and no luck involved' };
       if (step.terminal)
         return { left: false, stood_up: true, reason: step.reason, note: step.note };
-      cityAttempts.push({ portal: `fixed ${wanted}`, why: step.why });
+      cityAttempts.push({ portal: `fixed ${wanted}`, identity_source: match.identity_source, why: step.why });
     } else {
       cityAttempts.push({
         portal: `fixed ${wanted}`,
@@ -3293,14 +3296,18 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
         const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 5000 });
         const entered = arr.events.find(e => e.kind === 'room-entered');
         const now = whereAmI();
-        return (entered || now.id !== wasIn)
-          ? { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
+        if (entered || now.id !== wasIn)
+          return { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
               wanted, city: wanted, chosen_because: chosenBecause, via: 'the rip in space',
               ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
-              ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen }
-          : { left: false, stood_up: true,
-              reason: 'stepped on it as it read right, but nothing happened — it may have swapped first',
-              saw: seen, note: 'try again; the window is 5-10 seconds and unknown which' };
+              ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen };
+        // A missed shifting window is not evidence that all fixed portals fail.
+        // Fall through now instead of restarting the same preferred-city attempt
+        // on every pass (and repeatedly stepping onto a rip we already occupy).
+        cityAttempts.push({ portal: 'rip in space',
+          why: 'stepped on it as it read right, but nothing happened — trying the fixed portals' });
+        ripUnreachable = true;
+        break;
       }
       await sleep(1200);
     }
@@ -3308,7 +3315,7 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     // it did not ask for is enormously better than another spell in the Underworld.
     // Fall through to the nearest working portal, and say plainly that the city was not
     // the one wanted so the walk back is not a surprise.
-    cityAttempts.push({ portal: 'rip in space', why: `never showed ${wanted} in ${maxSeconds}s; saw ` +
+    if (!ripUnreachable) cityAttempts.push({ portal: 'rip in space', why: `never showed ${wanted} in ${maxSeconds}s; saw ` +
                                                      JSON.stringify(seen) });
   }
 

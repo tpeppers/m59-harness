@@ -56,12 +56,11 @@ export const CITIES = Object.keys(CITY_INNS);
 // The five fixed portals, from uworld.kod:649-662 — the Create() call gives the
 // destination and the NewHold beside it gives the position.
 //
-// COORDINATES ARE KOD'S, WHICH ARE 1-BASED; the client reports the same squares
-// 0-based, because a client col is floor(x/64) and x is (col_kod - 1) * 64 + fine
-// (m59-pilot.mjs:118). `clientCol`/`clientRow` are that subtraction, done once here so
-// nobody has to remember which convention they are holding. They are a HINT for
-// ordering and cross-checking only — identification is by description, below, which
-// does not depend on any of this being right.
+// Portal object squares use the NewHold row/col unchanged. Native wire reads
+// confirm Tos at r3c7 (x=480,y=192), Cornoth r2c25, Barloque r21c30,
+// Marion r32c16 and Jasper r21c2. The old clientRow/clientCol fields subtract
+// one and remain legacy hints for callers; use objectRow/objectCol for identity.
+// ResetPuzzle/SetAnimation change availability, never piDest_room (portal.kod).
 export const UNDERWORLD_PORTALS = [
   { city: 'Tos',      kodRow: 3,  kodCol: 7,  rsc: 'portal_tos',
     desc: 'Looking in the portal, you see the bustling bar of Familiars.' },
@@ -73,11 +72,20 @@ export const UNDERWORLD_PORTALS = [
     desc: 'Through the portal, you see the laid-back atmosphere of the Limping Toad.' },
   { city: 'Jasper',   kodRow: 21, kodCol: 2,  rsc: 'portal_jasper',
     desc: 'The quiet Yonder Inn of Jasper lies through this portal.' },
-].map(p => ({ ...p, clientRow: p.kodRow - 1, clientCol: p.kodCol - 1,
+].map(p => ({ ...p, objectRow: p.kodRow, objectCol: p.kodCol, clientRow: p.kodRow - 1, clientCol: p.kodCol - 1,
               inn: CITY_INNS[p.city].inn, innName: CITY_INNS[p.city].innName }));
 
 export const portalFor = (city) =>
   UNDERWORLD_PORTALS.find(p => p.city.toLowerCase() === String(city || '').toLowerCase()) ?? null;
+
+// Source-proven identity is scoped to the native Underworld. HellPortal is placed at
+// r10c6, separately from all five fixed portals (uworld.kod:631). A named rip must
+// still use its fresh reading even in a custom scene that puts it on a fixed square.
+export function fixedPortalAt(room, object, name = '') {
+  if (room?.num !== 1 || RIP_NAME.test(name)) return null;
+  return UNDERWORLD_PORTALS.find(p => p.objectCol === object?.col
+    && p.objectRow === object?.row) ?? null;
+}
 
 // NOT EVERY PORTAL IS ALIGHT. ResetPuzzle (uworld.kod:460) turns one or two of the five
 // off at random, and an unlit portal is SILENT — Portal.SomethingMoved returns
@@ -290,7 +298,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log('The pentagram — fixed destinations, 1 or 2 unlit at random:');
     for (const p of UNDERWORLD_PORTALS)
       console.log(`  ${p.city.padEnd(9)} kod row ${String(p.kodRow).padStart(2)}, col ${String(p.kodCol).padStart(2)}` +
-                  `   (client ${p.clientRow},${p.clientCol})  -> room ${p.inn} ${p.innName}`);
+                  `   (object r${p.objectRow}c${p.objectCol})  -> room ${p.inn} ${p.innName}`);
     console.log('\nThe rip in space — re-rolls every 5-10s among those same five inns.');
     console.log(`\nKo'catan: ${KOCATAN_IS_DEATH_ONLY}`);
     const t = cityTable();

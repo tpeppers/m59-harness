@@ -30,7 +30,7 @@ function fixture() {
     retreatAlongBreadcrumbs:async()=>({moved:false,reason:'object_blocked'}),
     walkTo:async()=>({arrived:false,reason:'object_blocked'}),
     travel:async()=>({arrived:false,reason:'object_blocked'}),
-    enteredVia:{room:584,from:585,door:{row:35,col:25}}};
+    enteredVia:{room:584,from:585,door:{row:35,col:25},landing:{room:584,row:35,col:25}}};
   const k=Object.assign(Object.create(Autopilot.prototype),{s,policy:{},tally:{},passes:1,watch:freshState(),
     recordFrame:()=>{},note:()=>{},ledgerEvent:(kind,x)=>events.push({kind,...x}),progress:()=>{},who:()=>null,
     holdWorks:()=>false,currentRecoveryWall:()=>k.wall??null,checkFreeze:()=>false,

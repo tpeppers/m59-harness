@@ -20,9 +20,9 @@
 //
 // The fakes below model those server behaviours and nothing else.
 
-import { escapeUnderworld, standUp, fight } from './m59-skills.mjs';
+const { escapeUnderworld, standUp, fight } = await import(process.env.M59_TEST_SKILLS ?? './m59-skills.mjs');
 import { MOVEON, OF } from './m59-parse.mjs';
-import { readPortalSign, UNDERWORLD_PORTALS, nearestCity } from './m59-underworld.mjs';
+import { readPortalSign, UNDERWORLD_PORTALS, nearestCity, fixedPortalAt } from './m59-underworld.mjs';
 import { edgeExitsOf, exitsOf, LEAVE } from './m59-map.mjs';
 
 function underworld({ resting = false, deaf = false, portals = [], unwalkable = [] } = {}) {
@@ -241,10 +241,9 @@ console.log('\nthe five fixed portals');
      UNDERWORLD_PORTALS.every(p => Number.isFinite(p.inn)));
   ok('Ko\'catan is NOT among them, because it is not in the pentagram',
      !UNDERWORLD_PORTALS.some(p => /ko/i.test(p.city)));
-  // kod is 1-based and the client is 0-based; getting this backwards would put every
-  // portal one square from where it is.
+  // Read native object positions; old subtraction hints were one square off.
   const tos = UNDERWORLD_PORTALS.find(p => p.city === 'Tos');
-  ok('kod coordinates are converted for the client', tos.kodCol === 7 && tos.clientCol === 6);
+  ok('native object coordinates preserve the source square', tos.objectCol === 7 && tos.objectRow === 3);
 }
 
 console.log('\nasking for a city takes that city\'s own portal');
@@ -264,6 +263,38 @@ console.log('\nasking for a city takes that city\'s own portal');
   // The whole point. The old code polled the anomaly for up to three minutes for this.
   ok('the rip was never polled at all', !log.includes('look 3'), JSON.stringify(log));
   ok('and it says the result is repeatable rather than lucky', /repeatable/.test(r.note || ''), r.note);
+}
+
+{
+  const { s, log } = underworld({ portals: [
+    { name: 'portal', col: 7, row: 3, desc: '', live: true, arriveRoom: 52, arriveName: INN.Tos },
+    { name: 'portal', col: 2, row: 21, desc: '', live: true, arriveRoom: 370, arriveName: INN.Jasper },
+  ] });
+  s.world.room.num = 1;
+  const r = await escapeUnderworld(s, { city: 'Jasper', allowRip: false });
+  ok('unreadable native portals still choose the requested inn', r.city === 'Jasper' && r.arrived_in === INN.Jasper);
+  ok('missing wording does not force an arbitrary nearest-portal escape', /fixed Jasper/.test(r.via || ''));
+  ok('proven destination does not spend look budget', !log.some(x => x.startsWith('look ')));
+}
+
+// Missing wording is not missing identity when native code fixes all destinations.
+for (const portal of UNDERWORLD_PORTALS) {
+  const { s, log } = underworld({ portals: [
+    { name: 'portal', col: portal.objectCol, row: portal.objectRow,
+      desc: '', live: true, arriveRoom: portal.inn, arriveName: portal.innName },
+  ] });
+  s.world.room.num = 1;
+  const r = await escapeUnderworld(s, { city: portal.city });
+  ok(`missing description still selects fixed ${portal.city}`, r.left && r.city === portal.city);
+  ok(`fixed ${portal.city} identity records its source`, /uworld.kod/.test(r.identity_source || ''));
+  ok(`fixed ${portal.city} needs no look`, !log.some(x => x.startsWith('look ')));
+}
+{
+  const square = { col: 7, row: 3 };
+  ok('fixed square cannot identify a portal in another room', fixedPortalAt({ num: 52 }, square) === null);
+  ok('a rip at a fixed square is still shifting', fixedPortalAt({ num: 1 }, square, 'rip in space') === null);
+  ok('fixed destination does not depend on animation or missing wording',
+    fixedPortalAt({ num: 1 }, square, 'portal')?.inn === 52);
 }
 
 console.log('\nthe wanted city\'s portal is one of the unlit ones');
@@ -549,6 +580,20 @@ console.log('\nthe Temple of Qor has its code-defined south exit');
      exits.every(e => e.synthetic && e.dynamic_destination));
   ok('an ordinary room does not inherit the Temple exit',
      edgeExitsOf({ num: 801, edgeExits: [] }).length === 0);
+}
+
+// A preferred portal is unlit and the matching rip window fails. Other fixed
+// portals must still be tried in the SAME escape, rather than restarting forever.
+{
+  const {s,log}=underworld({portals:[
+    {name:'Barloque portal',col:4,row:4,live:false,desc:'Gazing into the portal, you see an expensive inn in a bustling city.'},
+    {name:'rip in space',col:6,row:6,live:false,desc:'Gazing through the anomaly, you can see an expensive inn in a bustling city.'},
+    {name:'Tos portal',col:8,row:8,live:true,arriveName:'Familiars',desc:'Through it you glimpse the bustling bar of Familiars.'},
+  ]});
+  const r=await escapeUnderworld(s,{city:'Barloque',maxSeconds:1});
+  ok('a missed rip window still tries a working fixed portal',r.left===true&&r.via==='Tos portal',JSON.stringify(r));
+  ok('the fallback records the failed rip rather than claiming its timer expired',
+     r.could_not_use?.some(a=>/trying the fixed portals/.test(a.why))===true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

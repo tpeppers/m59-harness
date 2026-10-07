@@ -935,22 +935,13 @@ export function codeExits(roomNum) {
   }));
 }
 
-// ROOMS TO WALK AROUND WHEN THERE IS ANY OTHER WAY, MEASURED RATHER THAN GUESSED.
+// AVOID MECHANICALLY UNAVAILABLE THROUGH-ROUTES, NOT ROUTINE MONSTER MAPS.
 //
-// Deep Woods of Ileria is not the deadliest room because the fleet hunts there. Of the
-// fleet's 24 recorded deaths, 8 are in 534 — and SIX OF THOSE EIGHT happened with the
-// keeper `travelling`, against eight travelling deaths in the whole world. So three
-// quarters of every death this fleet has suffered in transit happened in one room, which
-// is the room every route between the hunting grounds and town happens to cross.
+// Earlier travel deaths led to a global preference against Deep Woods room 534.
+// The October world-tour review removes it: improve maneuvering and survival in
+// those maps rather than excluding them categorically. Ordinary collision,
+// directional reachability and the hard puzzle/operator exclusions still apply.
 //
-// It is a corridor, not a destination: Piggy walked into it at 42 of 43 health and was
-// dead four samples later, with FOUR living trees and two spiders on her and ten threats
-// counted at once. Nothing about that is a hunting decision — she was passing through on
-// the way somewhere else, and the room she was passing through chose the fight.
-//
-// Checked before adding it: 534 is NOT a cut vertex. Valley -> bread shop, Source of the
-// Ille -> bread shop and Valley -> Jasper bank all still connect with it removed, so
-// avoiding it costs hops rather than reachability.
 // 802, THE TEMPLE OF QOR — A DOOR THE GAME SHUTS HALF THE TIME, ADDED THE DAY IT BECAME
 // ROUTABLE AND FOR THAT EXACT REASON.
 //
@@ -981,12 +972,14 @@ export function codeExits(roomNum) {
 // crosses it still routes with it removed, at a cost of two to four hops and no loss of
 // reachability. A character sent to the temple ON PURPOSE is unaffected — this is a transit
 // preference, and the disciple quest names 802 as its destination.
-export const AVOID_IN_TRANSIT = new Set([534, 802]);
+// Routine monsters are a movement challenge, not a categorical map exclusion.
+// Keep the timed Temple of Qor exit preference: its doors physically close.
+export const AVOID_IN_TRANSIT = new Set([802]);
 
 // ROOMS THAT KILL BY A RULE, NOT BY A FIGHT — AND THE BLOCK ON THEM IS NOT NEGOTIABLE.
 //
-// `AVOID_IN_TRANSIT` is a PREFERENCE: findPath tries to route around 534 and, if there is
-// no other way, goes through it anyway. That is right for a room that is merely dangerous
+// `AVOID_IN_TRANSIT` is a PREFERENCE: findPath tries to route around its listed rooms and,
+// if there is no other way, goes through them anyway. That is right for a room that is merely dangerous
 // — a corridor full of monsters is survivable, and refusing to cross it would strand a
 // character. It is exactly wrong for a room whose hazard is arithmetic.
 //
