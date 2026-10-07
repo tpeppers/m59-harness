@@ -5,7 +5,7 @@ import { Autopilot, releaseSpot } from './m59-autopilot.mjs';
 import { RoomGeometry } from './m59-roo.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { OF, MOVEON } from './m59-parse.mjs';
-import { recoveryRefugeReach } from './m59-recovery-refuge.mjs';
+import { recoveryRefugeReach, planDoorEscape } from './m59-recovery-refuge.mjs';
 import { attachSurvivalTrace, survivalTraceSnapshot } from './m59-survival-trace.mjs';
 
 let passed = 0;
@@ -181,6 +181,94 @@ await test('concurrent recovery claims remain exclusive before either walker arr
     release.forEach(r=>r()); await Promise.all([first,second]);
     assert.equal(a.hold.quarry_id,null); assert.equal(b.hold.quarry_id,null);
   } finally { release.forEach(r=>r()); releaseSpot(a.s.name); releaseSpot(b.s.name); }
+});
+
+// ---- OUT THROUGH AN INTERNAL DOOR. Waldorf, Statler, Sweetums, Zoot and Gonzo, 2026-10-06/07:
+// room 38's east chamber (r4-8 c30-34), standing on r7c32 with the door out at r8c32 one square
+// south, and the recovery search answering "eligible 0" once a second until they died.
+
+await test('door escape plan: our side only, onto new ground, clear to walk, wall beyond, nearest total', () => {
+  const doors = [
+    { row: 8, col: 32, arriveRow: 10, arriveCol: 32 },   // ours, lands outside: the way out
+    { row: 9, col: 32, arriveRow: 7, arriveCol: 32 },    // the other side's door: not ours
+    { row: 5, col: 30, arriveRow: 6, arriveCol: 31 },    // ours, but lands on our own ground
+    { row: 4, col: 34, arriveRow: 20, arriveCol: 20 },   // ours, lands outside, further walk
+  ];
+  const component = new Set(['8,32', '5,30', '6,31', '4,34', '7,32']);
+  const reach = (col, row) => ({ reachable: true, steps: Math.abs(row - 7) + Math.abs(col - 32) });
+  const farRefuge = l => ({ spot: { row: l.row, col: l.col + 1 }, steps: l.row === 10 ? 2 : 1 });
+  let r = planDoorEscape({ doors, component, reach, farRefuge });
+  assert.deepEqual({ row: r.escape.door.row, col: r.escape.door.col }, { row: 8, col: 32 });
+  assert.equal(r.escape.total, 3);
+  assert.deepEqual(r.counts, { doors: 4, on_our_side: 3, in_reach: 2, onto_new_ground: 2, with_refuge: 2 });
+  // A body on the near door: the further door wins rather than nothing.
+  r = planDoorEscape({ doors, component, farRefuge,
+    reach: (col, row) => row === 8 ? { reachable: false } : reach(col, row) });
+  assert.deepEqual({ row: r.escape.door.row, col: r.escape.door.col }, { row: 4, col: 34 });
+  // No free wall beyond any door: no escape, and the counts say which filter emptied it.
+  r = planDoorEscape({ doors, component, reach, farRefuge: () => null });
+  assert.equal(r.escape, null); assert.equal(r.counts.with_refuge, 0); assert.equal(r.counts.in_reach, 2);
+});
+
+function chamberKeeper() {
+  const k = keeper(38, { row: 7, col: 32 });
+  k.s.name = 'offline-door-escape';
+  const objects = k.s.client.room.objects;
+  // The four chamber walls, each with an undead on it, and two more on the floor beside us.
+  [[8,30],[8,31],[8,33],[8,34],[6,31],[7,33]].forEach(([row, col], i) =>
+    objects.set(100 + i, { id: 100 + i, row, col, flags: OF.ATTACKABLE | MOVEON.NO }));
+  return k;
+}
+
+await test('chamber with every wall taken: crosses the internal door and takes a wall in the hall', async () => {
+  const k = chamberKeeper(), crossed = [];
+  k.s.crossSameRoomDoor = async door => {
+    crossed.push({ row: door.row, col: door.col });
+    k.s.client.self = { ...k.s.client.self, row: door.arriveRow, col: door.arriveCol };
+    return { crossed: true, at: { row: door.arriveRow, col: door.arriveCol } };
+  };
+  try {
+    const r = await k.takeSafeSpot('below the flee line in the east chamber', null,
+      { recovery: true, source: 'recovery', nearestOnly: true });
+    assert.deepEqual(crossed, [{ row: 8, col: 32 }], 'the door one square south');
+    assert.equal(r.took, true, r.why);
+    assert.ok(k.hold.row >= 9, `a wall outside the chamber, got r${k.hold.row}c${k.hold.col}`);
+    assert.ok(k.journal.some(n => n.what === 'no wall on this side — leaving through an internal door'));
+    const planned = survivalTraceSnapshot(k.s).events.find(e => e.kind === 'refuge_door_planned');
+    assert.deepEqual(planned.detail.escape.door, { row: 8, col: 32 });
+  } finally { releaseSpot(k.s.name); }
+});
+
+await test('a body on the door square: no crossing, and the refusal names the door filter', async () => {
+  const k = chamberKeeper();
+  k.s.client.room.objects.set(200, { id: 200, row: 8, col: 32, flags: OF.ATTACKABLE | MOVEON.NO });
+  k.s.crossSameRoomDoor = async () => assert.fail('the door is occupied');
+  try {
+    const r = await k.takeSafeSpot('below the flee line', null, { recovery: true, source: 'recovery' });
+    assert.equal(r.took, false);
+    assert.match(r.why, /more defensible than open floor/);
+    assert.match(r.why, /no internal door leads to a free wall .*clear to walk 0/);
+  } finally { releaseSpot(k.s.name); }
+});
+
+await test('a failed crossing reports why and takes no second door', async () => {
+  const k = chamberKeeper(); let tries = 0;
+  k.s.crossSameRoomDoor = async () => { tries++; return { crossed: false, reason: 'not_on_door_square' }; };
+  try {
+    const r = await k.takeSafeSpot('below the flee line', null, { recovery: true, source: 'recovery' });
+    assert.equal(tries, 1); assert.equal(r.took, false);
+    assert.match(r.why, /internal-door escape did not complete: not_on_door_square/);
+  } finally { releaseSpot(k.s.name); }
+});
+
+await test('combat (non-recovery) searches never take an internal door for shelter', async () => {
+  const k = chamberKeeper();
+  k.s.crossSameRoomDoor = async () => assert.fail('only recovery escapes through a door');
+  try {
+    // Whatever it settles on, it settles on it from this side of the door.
+    await k.takeSafeSpot('a wall for the next quarry', null, { source: 'fight' });
+    assert.ok(!survivalTraceSnapshot(k.s).events.some(e => e.kind === 'refuge_door_planned'));
+  } finally { releaseSpot(k.s.name); }
 });
 
 // Existing target-first combat is exercised independently by m59-pullspot-test.mjs.

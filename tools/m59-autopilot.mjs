@@ -34,7 +34,8 @@ import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
-import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS } from './m59-recovery-refuge.mjs';
+import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS,
+         planDoorEscape } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
@@ -56,7 +57,7 @@ import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING, creatureByName } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
-import { sameRoomDoorPlan, sameRoomIslandBridgePlan } from './m59-world.mjs';
+import { sameRoomDoorPlan, sameRoomIslandBridgePlan, sameRoomDoors } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -67,7 +68,7 @@ import { recordRest } from './m59-restwatch.mjs';
 // uses. Imported so the survival ladder can ask the geometry directly instead of asking the
 // safe-spot book what used to work -- see wallHere().
 import { nearestSafeSpot, coarseCombatReachFrom, PLAYER_REACH,
-         exposureAt }
+         exposureAt, reachableFrom }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
 import { beginPullProgress, samplePullProgress } from './m59-pull-progress.mjs';
@@ -6020,7 +6021,7 @@ export class Autopilot {
                                            nearestOnly = false, afterExit = false, recovery = false,
                                            recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null,
-                                           candidateFilter = null } = {}) {
+                                           candidateFilter = null, doorCrossings = 0 } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
@@ -6226,12 +6227,32 @@ export class Autopilot {
       // about this room every time: a wall is a wall, and a pull that does not convert is a
       // fact about the pull — about where the quarry was and what lay between — not a verdict
       // on the square somebody was standing on.
+      // NO WALL ON THIS SIDE IS NOT NO WALL. In a room split by its own `go` doors the search
+      // above sees only the chamber the body is standing in, and a monster cannot follow
+      // through the door — so the door is the refuge and the wall beyond it is where to heal.
+      // See planDoorEscape. One crossing per take: a second empty side is a different room's
+      // problem, and a chain of doors under attack is a walk, not a retreat.
+      let doorWhy = '';
+      if (recovery && doorCrossings < 1) {
+        const escaped = await this.escapeThroughDoor(why, geo, me, room,
+          { within, los, movementGeneration, interrupted });
+        if (escaped.cancelled) return cancelled();
+        if (escaped.crossed) {
+          // The blocker retreat's filter and any onward exit were drawn for the side we just
+          // left; both are recomputed (or dropped) from the landing.
+          return this.takeSafeSpotObserved(why, null, { source, nearQuarry, nearestOnly, afterExit,
+            recovery, recoveryRoute, decisionId, shouldInterrupt, shelterOnly,
+            destination: destinationGiven, doorCrossings: doorCrossings + 1,
+            candidateFilter: null, onward: null });
+        }
+        if (escaped.why) doorWhy = '; ' + escaped.why;
+      }
       const c = spotStats;
       const counted = Number.isFinite(c.considered)
         ? ` (walls considered ${c.considered}, reachable from here ${Math.max(0, (c.considered ?? 0) - (c.unreachable_to_us ?? 0))}, ` +
           `one-way ${c.one_way ?? 0}, eligible ${c.eligible ?? 0})`
         : '';
-      return { took: false, why: 'nothing in this room is more defensible than open floor' + counted };
+      return { took: false, why: 'nothing in this room is more defensible than open floor' + counted + doorWhy };
     }
 
     if (spot.predicted_unreachable_by_quarry)
@@ -8301,6 +8322,72 @@ export class Autopilot {
   // Extracted from takeSafeSpot only so the search can be re-run at a higher share cap
   // without duplicating the option block — a second copy of these arguments is exactly
   // how the two would come to disagree about `los` or the book.
+  // WHICH INTERNAL DOOR TO LEAVE BY WHEN THIS SIDE HAS NO WALL. Pure planning — see
+  // planDoorEscape for the incident and the rule. The far-side wall is found with the same
+  // recovery selector as any other (unoccupied, exclusive, a route that avoids bodies), only
+  // asked from the landing square instead of from here.
+  planRecoveryDoorEscape(geo, me, room, { within, los = 0 } = {}) {
+    const doors = sameRoomDoors(room);
+    if (!doors.length || !geo || !me) return { escape: null, counts: { doors: 0 } };
+    const s = this.s;
+    return planDoorEscape({
+      doors,
+      component: reachableFrom(geo, me),
+      reach: recoveryRefugeReach(geo, me, s.client?.room?.objects, s.client?.selfId,
+        s.client?.playersOnline),
+      farRefuge: landing => {
+        const spot = this.searchSafeSpot(geo, landing, room, { within, los, quarry: null,
+          recovery: true, exclusiveClaim: true, shareCap: 1, stats: {} });
+        return spot ? { spot, steps: spot.steps_away } : null;
+      },
+    });
+  }
+
+  // Cross it. Returns {crossed} / {cancelled} / {why}; the caller searches again from the
+  // landing, because the plan's far-side wall was chosen from a square we were not on.
+  async escapeThroughDoor(why, geo, me, room, { within, los, movementGeneration, interrupted }) {
+    const s = this.s;
+    let plan;
+    try { plan = this.planRecoveryDoorEscape(geo, me, room, { within, los }); }
+    catch (e) { return { why: 'internal-door escape could not be planned: ' + e.message }; }
+    traceSurvival(s, 'refuge_door_planned', { escape: plan.escape ? {
+      door: { row: plan.escape.door.row, col: plan.escape.door.col },
+      landing: plan.escape.landing, refuge: traceRefuge(plan.escape.refuge),
+      steps_to_door: plan.escape.steps_to_door, steps_beyond: plan.escape.steps_beyond,
+    } : null, counts: plan.counts });
+    if (!plan.escape) {
+      if (!plan.counts?.doors) return {};
+      return { why: `no internal door leads to a free wall (doors ${plan.counts.doors}, ` +
+        `on this side ${plan.counts.on_our_side}, to new ground ${plan.counts.onto_new_ground}, ` +
+        `clear to walk ${plan.counts.in_reach}, with a wall beyond ${plan.counts.with_refuge})` };
+    }
+    const { door, landing, refuge } = plan.escape;
+    if (typeof s.crossSameRoomDoor !== 'function')
+      return { why: 'this session cannot take an internal door' };
+    if (this.hold) this.releaseHold('leaving through an internal door to a wall on the far side');
+    this.doing = 'escaping through an internal door';
+    this.note('no wall on this side — leaving through an internal door', {
+      why, room: room.num,
+      door: { col: door.col, row: door.row }, lands: { col: landing.col, row: landing.row },
+      wall_beyond: { col: refuge.col, row: refuge.row },
+      steps_to_door: plan.escape.steps_to_door, steps_beyond: plan.escape.steps_beyond,
+      note: 'monsters cannot operate a same-room door, so crossing it ends the attack the way ' +
+            'leaving the room does; the wall over there is where to heal',
+    });
+    const result = await traceSurvivalOperation(s, 'refuge_door_crossing', {
+      door: { row: door.row, col: door.col }, landing,
+    }, () => s.crossSameRoomDoor(door, { movementGeneration }))
+      .catch(e => ({ crossed: false, reason: e.message }));
+    this.movedAt = Date.now();
+    if (result?.cancelled || interrupted?.()) return { cancelled: true };
+    if (!result?.crossed) {
+      // Not remembered as failed: a body that stood on the door square for a second is the
+      // commonest reason, and trying the one way out again next pass is still an action.
+      return { why: 'internal-door escape did not complete: ' + (result?.reason ?? 'no reason given') };
+    }
+    return { crossed: true, at: result.at };
+  }
+
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
                                   exclusiveClaim = false, onward = null, forwardBias = 1,

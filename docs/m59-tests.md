@@ -299,6 +299,10 @@ Travel shelter count regressions are in
 recovery at 0, 1, 5, 6 and 14 monsters) and
 `node tools/m59-recovery-refuge-test.mjs` (actual geometry, occupied refuges
 and blocked approaches). Monster proximity alone must not veto travel shelter.
+The same suite pins the internal-door escape: a body in Castle Victoria's east
+chamber (room 38, r7c32) whose four walls are taken crosses the door at r8c32
+and takes a wall in the hall; a body on the door square, a failed crossing and a
+combat (non-recovery) search all leave it on its own side.
 
 Refuge arrival regressions in `node tools/m59-refuge-posture-test.mjs` and
 `node tools/m59-recovery-refuge-test.mjs` cover zero-step predicted positions,

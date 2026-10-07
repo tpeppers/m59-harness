@@ -54,3 +54,57 @@ export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = 
     } catch { return { reachable: false, why: 'recovery route unavailable' }; }
   };
 }
+
+// OUT THROUGH A DOOR THE MONSTERS CANNOT USE.
+//
+// Castle Victoria's room 38 is one room to the server and twenty-three regions to a body:
+// small chambers joined to the hall only by `go` doors back into the room itself
+// (castle1.kod:88-98). A monster cannot operate those doors, so crossing one ends every
+// attack exactly as crossing a room boundary does — and the east chamber (r4-8 c30-34, 25
+// squares, four walls) is where Waldorf, Statler, Sweetums, Zoot and Gonzo died inside one
+// hour on 2026-10-06/07. Each stood on r7c32, the door's landing square, with the way out at
+// r8c32 ONE SQUARE SOUTH, while the recovery search reported "walls considered 112,
+// eligible 0" at one-second intervals for 35-50 seconds. The search looked only inside the
+// chamber, the chamber's four walls were occupied or had just failed, and the door was not
+// a candidate for anything. Nothing moved until they died.
+//
+// So when there is no wall on this side, a door whose far side HAS one is the refuge: walk
+// to the door, cross, and take the wall over there. This only plans. The caller crosses and
+// then searches again from where the body actually landed, because a plan made from this
+// side of a wall is a guess about the other.
+//
+//   doors      the room's same-room doors (sameRoomDoors), each {row,col,arriveRow,arriveCol}
+//   component  Set of "row,col" this body can walk to without a door (reachableFrom). A door
+//              must be on our side of the wall, and its landing must NOT be — a door that
+//              lands on ground we can already walk to leads nowhere new.
+//   reach      (col,row) -> {reachable, steps}, the recovery route from here: it avoids bodies,
+//              so a monster standing on the door square makes that door unavailable.
+//   farRefuge  ({row,col}) -> {spot, steps} | null — the best wall reachable from a landing.
+//
+// Ranked by the whole walk, door then wall, and nothing else: the same distance-only rule
+// every recovery choice uses (m59-safespots.mjs, "THE NEAREST ONE").
+export function planDoorEscape({ doors = [], component = null, reach, farRefuge } = {}) {
+  const counts = { doors: doors.length, on_our_side: 0, in_reach: 0, onto_new_ground: 0, with_refuge: 0 };
+  let best = null;
+  for (const door of doors) {
+    const here = `${door.row},${door.col}`, there = `${door.arriveRow},${door.arriveCol}`;
+    if (component && !component.has(here)) continue;
+    counts.on_our_side++;
+    if (component && component.has(there)) continue;
+    counts.onto_new_ground++;
+    const toDoor = reach?.(door.col, door.row);
+    if (!toDoor?.reachable) continue;
+    counts.in_reach++;
+    const landing = { row: door.arriveRow, col: door.arriveCol };
+    const beyond = farRefuge?.(landing);
+    if (!beyond?.spot) continue;
+    counts.with_refuge++;
+    const stepsToDoor = Number.isFinite(toDoor.steps) ? toDoor.steps : 0;
+    const stepsBeyond = Number.isFinite(beyond.steps) ? beyond.steps : 0;
+    const total = stepsToDoor + stepsBeyond;
+    if (!best || total < best.total)
+      best = { door, landing, refuge: beyond.spot, steps_to_door: stepsToDoor,
+               steps_beyond: stepsBeyond, total };
+  }
+  return { escape: best, counts };
+}
