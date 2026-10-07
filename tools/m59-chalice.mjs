@@ -574,10 +574,16 @@ export function passTo({ cfg, fleetHere = [], duty = null } = {}) {
  * mules) if the desk manager needs to personally run an errand, but that should be extremely rare".
  * Only duty-pool members (under `duty_max_health`, registered by their own keepers); one standing
  * here first, then by name so the choice is stable. null = nobody to draft: the holder keeps it.
+ *
+ * NEVER A CHARACTER A PERSON IS PLAYING (`humans`, the desk's own marks). Operator, 2026-10-06: "Why is
+ * Loial trying to hand Raphael (who I'm logged in) the chalice of the rain on prod?" -- Raphael was the
+ * pool member standing in room 2, and nothing asked whether anybody was at his controls. A configured
+ * alternate a person is playing is no answer either: null, and the holder keeps the cup.
  */
-export function draftAlternate({ cfg, pool = [], fleetHere = [] } = {}) {
-  if (cfg?.alternate) return cfg.alternate;
-  const cands = [...pool].filter(n => !sameName(n, cfg?.holder))
+export function draftAlternate({ cfg, pool = [], fleetHere = [], humans = null, now = Date.now(), alive } = {}) {
+  const played = n => !!humanMark(humans, n, now, ...(alive ? [alive] : []));
+  if (cfg?.alternate) return played(cfg.alternate) ? null : cfg.alternate;
+  const cands = [...pool].filter(n => !sameName(n, cfg?.holder) && !played(n))
     .sort((a, b) => String(a).localeCompare(String(b)));
   return cands.find(n => fleetHere.some(x => sameName(x, n))) ?? cands[0] ?? null;
 }

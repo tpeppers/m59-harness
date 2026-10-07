@@ -1303,6 +1303,56 @@ try {
     ok(job?.kind !== 'relief' && !store.duty()?.drafted, 'no relief, nobody drafted', JSON.stringify(job));
   }
 
+  // Operator, 2026-10-06: "Why is Loial trying to hand Raphael (who I'm logged in) the chalice of the rain
+  // on prod?" Loial, short of elderberries, drafted the pool member standing beside him.
+  section('a pool member a PERSON is playing is never drafted');
+  {
+    const { world, store, k } = guardWorld('g-draft-human', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), R = k('Raphael son of Mephistopheles', 2, 25), M = k('Marco Polo', 2, 20);
+    await R.ap.chaliceGuard(); await M.ap.chaliceGuard();
+    store.setHuman('Raphael son of Mephistopheles', { agent: 'hk3', pid: process.pid });
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'relief' && job.alt === 'Marco Polo', 'the other pool member is drafted, not the played one', JSON.stringify(job));
+  }
+  {
+    const { world, store, k } = guardWorld('g-draft-human-only', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), R = k('Raphael son of Mephistopheles', 2, 25);
+    await R.ap.chaliceGuard();
+    store.setHuman('Raphael son of Mephistopheles', { agent: 'hk3', pid: process.pid });
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind !== 'relief' && !store.duty()?.drafted, 'only the played one in the pool: nobody drafted, the holder keeps it', JSON.stringify(job));
+  }
+
+  section('a holder that cannot leave keeps the cup however short it is');
+  for (const [why, policy] of [['confined to its post', { confineRooms: [2] }], ['no town trips', { townTrips: false }]]) {
+    const { world, store, k } = guardWorld(`g-stays-${why.replace(/\W+/g, '-')}`, { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), R = k('Raphael son of Mephistopheles', 2, 25);
+    await R.ap.chaliceGuard();
+    Object.assign(L.ap.policy, policy);
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind !== 'relief' && !store.duty()?.drafted, `${why}: no relief, nobody drafted`, JSON.stringify(job));
+    ok(L.ap.events.filter(e => e.what === 'short_staying').length === 1, `${why}: and it says so once`);
+    L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(L.ap.events.filter(e => e.what === 'short_staying').length === 1, `${why}: once, not every job pick`);
+  }
+  {
+    const { world, store, k } = guardWorld('g-stays-bot', { alternate: null });
+    const L = k('Loial the Ogier', 2, 20), R = k('Raphael son of Mephistopheles', 2, 25);
+    await R.ap.chaliceGuard();
+    L.ap.policy.confineRooms = [2];
+    L.ap.facultyHeld = f => f === 'economy';                     // a bot will Rescue him to the shop
+    L.P.client.inventory.push(world.item('chalice of the rain'));
+    L.ap._casts = 5;
+    const job = L.ap.chaliceNextJob(L.ap.chaliceCfg, 'holder', L.ap.chaliceInPack(), store, 'Loial the Ogier', Date.now());
+    ok(job?.kind === 'relief', 'confined, but a bot holds his economy: the Rescue can take him, so he hands over', JSON.stringify(job));
+  }
+
   section('a cup somewhere else is somebody else\'s floor');
   {
     const { world, k, cupDown } = guardWorld('g-elsewhere');

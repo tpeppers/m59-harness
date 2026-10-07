@@ -24853,13 +24853,31 @@ export class Autopilot {
       // THE HOLDER IS ABOUT TO LEAVE: hand the cup over first, at the holder's own post.
       // With no alternate configured the holder DRAFTS one from the duty pool (under
       // duty_max_health), preferring one standing here; nobody in the pool, it keeps the cup.
-      if (role === 'holder' && this.chaliceCastsLeft() <= cfg.handover_below_casts) {
-        let pool = [];
+      // A HOLDER THAT CANNOT LEAVE DOES NOT HAND OVER (operator, 2026-10-06). The low-supply test is a
+      // proxy for "about to leave on a supply run", and a holder confined to its post or with
+      // policy.townTrips false is not going anywhere: Loial, confined to room 2 with no elderberries,
+      // drafted an alternate and filed a relief ticket on every job pick for a departure that could
+      // never happen. It keeps the cup and says once that it is short.
+      // UNLESS A BOT HOLDS ITS MOVEMENT OR ECONOMY: the holder's supply run starts with a Rescue that
+      // DUM casts (caster-rescue-to-shop), which no confinement stops, and then the cup must not leave.
+      const botMayMove = this.facultyHeld?.('movement') || this.facultyHeld?.('economy');
+      const stays = !botMayMove && (this.policy.townTrips === false
+        || (Array.isArray(this.policy.confineRooms) && this.policy.confineRooms.length > 0));
+      if (role === 'holder' && this.chaliceCastsLeft() <= cfg.handover_below_casts && stays) {
+        if (!this._chaliceShortNoted) {
+          this._chaliceShortNoted = true;
+          this.chaliceEvent('short_staying', { casts_left: this.chaliceCastsLeft(),
+            why: 'low on forces of light reagents, but confined to the post or no town trips: keeping the cup' });
+        }
+      } else this._chaliceShortNoted = false;
+      if (role === 'holder' && this.chaliceCastsLeft() <= cfg.handover_below_casts && !stays) {
+        let pool = [], humans = null;
         try { pool = store.pool(now); } catch {}
+        try { humans = store.humans(); } catch {}
         const c = this.s?.client;
         const fleetHere = [...(c?.room?.objects?.values?.() ?? [])]
           .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER)).map(o => c.rsc?.get(o.nameRsc) || '');
-        const alt = draftAlternate({ cfg, pool, fleetHere });
+        const alt = draftAlternate({ cfg, pool, fleetHere, humans, now });
         if (alt) {
           if (!cfg.alternate) {
             try { store.setDuty({ drafted: alt, drafted_at: now }); } catch {}
