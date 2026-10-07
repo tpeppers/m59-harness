@@ -89,4 +89,6 @@ async function main() {
   return 2;
 }
 
-main().then(code => process.exit(code ?? 0), e => { console.error(e.message); process.exit(1); });
+// exitCode, never process.exit(): on Windows, exiting while fetch's sockets are still closing trips
+// a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src\win\async.c) after the output.
+main().then(code => { process.exitCode = code ?? 0; }, e => { console.error(e.message); process.exitCode = 1; });
