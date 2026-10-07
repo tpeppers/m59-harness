@@ -120,3 +120,11 @@ unknown candidates, so a geometry assertion became a machine-speed assertion.
 uses a ten-second deadline, as its independent component check already did. Live
 callers retain the default 500-ms deadline and unknown-on-exhaustion behavior.
 The bounded-search assertion remains, and no global known-red exception was added.
+
+Final merged validation: `node tools/m59-movement-suite.mjs` at `cec2798f`
+(with default evidence paths) completed **21 suites, zero regressions**, retaining
+19 previously named failures (`movement-merged-final.txt`). No known-red entries
+were added. The repaired routing suite also passes all 200 checks in the
+history-bearing development checkout (`routing-budget-fixed.txt`). The native
+quiet trial attests the unchanged core movement/door files; the later optional
+World budget parameter changes only the explicitly configured offline fixture.
