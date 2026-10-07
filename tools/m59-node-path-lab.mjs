@@ -1,27 +1,29 @@
 #!/usr/bin/env node
 // Held, movement-only native lab trial. Explicit config and authored scene required.
 // node tools/m59-node-path-lab.mjs --config FILE --scene FILE --to r25c20 --via r24c10 --door --return r46c25 --out DIR
-// No production fleet, attacks, activation, or inferred jumps. The replay adapter enforces local ownership.
+// No production fleet, attacks or activation. Candidate falls require explicit opt-in and model proof; local ownership is enforced.
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createShadowReplayAdapter} from './m59-shadow-replay.mjs';
-import {fineRouter} from './m59-fineroute.mjs';
+import {fineRouter,proveCandidateFall} from './m59-fineroute.mjs';
 import {previewOpenedDoor} from './m59-ceiling-doors.mjs';
 import {doorsFor} from './m59-doorplan.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
-import {quantizeRailPoint} from './m59-railfollow.mjs';
+import {quantizeRailPoint,landingCheck} from './m59-railfollow.mjs';
 import {parseNodeSquare,auditNodeWalk} from './m59-node-route-audit.mjs';
 const args=process.argv.slice(2),has=n=>args.includes('--'+n),flag=n=>args[args.indexOf('--'+n)+1];
-if(has('help')){console.log('Explicit --config FILE --scene FILE --to rNcM --out DIR; optional --via rNcM --door --return rNcM --horizon-ms N --quiet');process.exit(0);}
+if(has('help')){console.log('Explicit --config FILE --scene FILE --to rNcM --out DIR; optional --via rNcM --door --return rNcM --horizon-ms N --quiet --candidate-jumps 1..3');process.exit(0);}
 for(const n of ['config','scene','to','out'])if(!has(n))throw Error('--'+n+' required');
 const scene=JSON.parse(readFileSync(flag('scene'),'utf8')),goal=parseNodeSquare(flag('to')),
   via=has('via')?parseNodeSquare(flag('via')):null,back=has('return')?parseNodeSquare(flag('return')):null;
 if(has('door')&&!via)throw Error('--door requires --via at the normal door trigger');
 const horizonMs=Number(has('horizon-ms')?flag('horizon-ms'):600000);
 if(!Number.isSafeInteger(horizonMs)||horizonMs<1||horizonMs>1800000)throw Error('horizon-ms must be 1..1800000');
+const candidateJumps=Number(has('candidate-jumps')?flag('candidate-jumps'):0);
+if(!Number.isInteger(candidateJumps)||candidateJumps<0||candidateJumps>3)throw Error('candidate-jumps must be 0..3');
 const out=resolve(flag('out'));mkdirSync(out,{recursive:true});
-const receipt={format:'m59-node-path-lab/1',at:new Date().toISOString(),goal,via,return_to:back,quiet:has('quiet'),legs:[],poses:[],finished:false};
+const receipt={format:'m59-node-path-lab/1',at:new Date().toISOString(),goal,via,return_to:back,quiet:has('quiet'),candidate_jumps:candidateJumps,scope:'Authored start to target; a partial high-start trial does not prove entrance access or acquisition.',legs:[],poses:[],finished:false};
 let adapter,timer,result,active,aborted=false;
 try{
   adapter=await createShadowReplayAdapter({configFile:resolve(flag('config')),isolate:false,terminateAfterTrial:true,engineRoot:resolve(fileURLToPath(new URL('..',import.meta.url)))});
@@ -39,21 +41,47 @@ try{
         if(!await s.confirmPosition())return {arrived:false,reason:'position_not_confirmed'};
         if(Number(s.world.room.num)!==room)return {arrived:false,reason:'room_changed'};
         const start=protocolToClient(s.client.self),g=s.world.geometry;
-        const plan=prepared?.plan??fineRouter(room,{geometry:g,worldMap:s.world.map,exactWalk:true}).plan({...s.client.self,...start},target,{maxJumps:0});
-        const audit=auditNodeWalk(plan,g),leg={label,target,plan,audit,prepared:prepared?{state:prepared.state,at:prepared.at}:null,at:Date.now(),attempts:[]};receipt.legs.push(leg);
+        const plan=prepared?.plan??fineRouter(room,{geometry:g,worldMap:s.world.map,exactWalk:true}).plan({...s.client.self,...start},target,{maxJumps:candidateJumps,allowCandidates:candidateJumps>0,branch:24});
+        const audit=auditNodeWalk(plan,g),leg={label,target,plan,audit,observed_sector_heights:[...(s.client.room.sectorHeights??[])],prepared:prepared?{state:prepared.state,at:prepared.at}:null,at:Date.now(),attempts:[]};receipt.legs.push(leg);
         const first=plan.legs?.[0]?.waypoints?.[0];
         if(prepared&&first&&Math.hypot(first.x-start.x,first.y-start.y)>48)return {arrived:false,reason:'prepared_route_origin_changed'};
         console.log(JSON.stringify({label,planned:plan.ok,waypoints:plan.legs?.[0]?.waypoints.length,audit_failures:audit.failures.length}));
         if(!audit.ok)return {arrived:false,reason:'route_not_proved',audit};
-        for(const [index,p] of plan.legs[0].waypoints.entries()){
-          if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled',index};
-          if(Number(s.world.room.num)!==room)return {arrived:false,reason:'room_changed',index};
-          const wire=quantizeRailPoint(p,{floorAt:(x,y)=>g.floorBaseAtClient(x,y,g.leafAtClient(x,y)),edge:(a,b)=>g.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
-          if(!wire.ok)return {arrived:false,reason:wire.reason,index};
-          const before={...s.client.self},reply=await s.walkFine(wire.protocol.x,wire.protocol.y,{maxSteps:10,stride:32,arriveWithin:3,exactArrival:true,holdShelf:true,movementGeneration:generation});
-          leg.attempts.push({at:Date.now(),index,before,target_client:p,target_protocol:wire.protocol,reply,after:{...s.client.self}});
-          if(index%24===0)console.log(JSON.stringify({label,index,position:{row:s.client.self.row,col:s.client.self.col}}));
-          if(!reply.arrived)return {...reply,failed_waypoint:index};
+        for(const [routeIndex,routeLeg] of plan.legs.entries()){
+          if(routeLeg.kind==='jump'){
+            if(!candidateJumps||routeLeg.declared)return {arrived:false,reason:'trial_requires_explicit_candidate_fall'};
+            if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled'};
+            const settling=s.collisionVertical?{...s.collisionVertical}:null;
+            const waitMs=settling?Math.max(0,Math.min(5000,settling.settleAt-Date.now())):0;
+            if(waitMs)await new Promise(r=>setTimeout(r,waitMs+20));
+            if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled'};
+            if(!await s.confirmPosition()||Number(s.world.room.num)!==room)return {arrived:false,reason:'jump_origin_not_confirmed'};
+            const origin=protocolToClient(s.client.self),proof=proveCandidateFall(g,routeLeg);
+            if(!proof.model_proved||Math.hypot(origin.x-routeLeg.fromFine.x,origin.y-routeLeg.fromFine.y)>48)return {arrived:false,reason:'jump_origin_or_model_not_proved',proof,origin};
+            // Recheck from the server's exact body, then use the existing paced fall verb.
+            const liveProof=proveCandidateFall(g,{fromFine:origin,toFine:proof.to_wire.client});
+            if(!liveProof.model_proved)return {arrived:false,reason:'live_origin_fall_not_proved',liveProof};
+            const before={...s.client.self},aim=liveProof.to_wire.protocol;
+            const reply=await s.step(routeLeg.to.col,routeLeg.to.row,{fall:true,timedFall:true,aimX:aim.x,aimY:aim.y});
+            // A predicted destination is not a landing. Allow vertical settling, then read it.
+            await new Promise(r=>setTimeout(r,5500));
+            const confirmed=await s.confirmPosition(),actual=protocolToClient(s.client.self),floor=g.floorBaseAtClient(actual.x,actual.y,g.leafAtClient(actual.x,actual.y));
+            const landing=landingCheck(actual,liveProof.to_wire.client,{floor,wantedFloor:liveProof.to_wire.floor});
+            leg.attempts.push({at:Date.now(),kind:'candidate_fall',routeIndex,settling,wait_ms:waitMs,before,proof,liveProof,reply,confirmed:!!confirmed,landing,after:{...s.client.self}});
+            console.log(JSON.stringify({label,routeIndex,fall_sent:reply.moved,landing}));
+            if(aborted||s.movementWasCancelled(generation)||!reply.moved||!confirmed||Number(s.world.room.num)!==room||!landing.ok)return {arrived:false,reason:'candidate_landing_not_confirmed',landing};
+            continue;
+          }
+          for(const [index,p] of routeLeg.waypoints.entries()){
+            if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled',index};
+            if(Number(s.world.room.num)!==room)return {arrived:false,reason:'room_changed',index};
+            const wire=quantizeRailPoint(p,{floorAt:(x,y)=>g.floorBaseAtClient(x,y,g.leafAtClient(x,y)),edge:(a,b)=>g.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
+            if(!wire.ok)return {arrived:false,reason:wire.reason,index};
+            const before={...s.client.self},reply=await s.walkFine(wire.protocol.x,wire.protocol.y,{maxSteps:10,stride:32,arriveWithin:3,exactArrival:true,holdShelf:true,movementGeneration:generation});
+            leg.attempts.push({at:Date.now(),routeIndex,index,before,target_client:p,target_protocol:wire.protocol,reply,after:{...s.client.self}});
+            if(index%24===0)console.log(JSON.stringify({label,index,position:{row:s.client.self.row,col:s.client.self.col}}));
+            if(!reply.arrived)return {...reply,failed_waypoint:index};
+          }
         }
         if(!await s.confirmPosition())return {arrived:false,reason:'endpoint_not_confirmed'};
         const position={...s.client.self};return {arrived:Number(s.world.room.num)===room&&position.row===target.row&&position.col===target.col,position};

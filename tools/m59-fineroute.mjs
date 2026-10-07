@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { sharedRoomGeometry, CLIENT_FINENESS as F, MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
+import { quantizeRailPoint } from './m59-railfollow.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -60,6 +61,27 @@ const REPO = join(HERE, '..');
 // The fall arithmetic is shared with `m59-jumpfinder.mjs` — both files used to carry their
 // own copy and both had the same bug. See m59-falljump-physics.mjs.
 import { RUN_SPEED, reachFor, fallenBy, maxSpan } from './m59-falljump-physics.mjs';
+
+/** Check an undeclared fall on actual centre floors and integer wire endpoints. */
+export function proveCandidateFall(geo, candidate) {
+  const floor=p=>geo.floorBaseAtClient(p.x,p.y,geo.leafAtClient(p.x,p.y));
+  const a=candidate.fromFine,b=candidate.toFine,fa=floor(a),fb=floor(b);
+  const span=Math.hypot(b.x-a.x,b.y-a.y),budget=maxSpan(fa-fb);
+  let reason=!Number.isFinite(fa)||!Number.isFinite(fb)?'endpoint_has_no_floor'
+    :span>budget?'fall_span_exceeds_actual_floor_budget':null;
+  const trace=reason?null:geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{fall:true,timedFall:true});
+  if(!reason&&trace?.arrived!==true)reason=trace?.reason??'timed_fall_not_proved';
+  const quantize=p=>quantizeRailPoint(p,{floorAt:(x,y)=>floor({x,y}),
+    edge:(a,b)=>geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
+  const fromWire=reason?null:quantize(a),toWire=reason?null:quantize(b);
+  if(!reason&&(!fromWire.ok||!toWire.ok))reason='wire_endpoint_not_proved';
+  const wireSpan=fromWire?.ok&&toWire?.ok?Math.hypot(toWire.client.x-fromWire.client.x,toWire.client.y-fromWire.client.y):null;
+  if(!reason&&wireSpan>maxSpan(fromWire.floor-toWire.floor))reason='wire_fall_span_exceeds_budget';
+  const wireTrace=reason?null:geo.traceFineMoveClient(fromWire.client.x,fromWire.client.y,toWire.client.x,toWire.client.y,{fall:true,timedFall:true});
+  if(!reason&&wireTrace?.arrived!==true)reason=wireTrace?.reason??'wire_timed_fall_not_proved';
+  return {model_proved:!reason,reason,from_floor_client:fa,to_floor_client:fb,
+    span_client:span,max_span_client:budget,trace,from_wire:fromWire,to_wire:toWire,wire_trace:wireTrace};
+}
 
 /** Keep corners unless the mover proves the replacement chord reaches its endpoint. */
 export function checkedWalkWaypoints(geo, points, { maxGap = F * 0.75, allowUnprovedEdges = false } = {}) {
@@ -349,8 +371,16 @@ export function fineRouter(roomNum, {
   }).filter(Boolean);
 
   /** Candidate hops off the edge of a closure — invented, not walked. */
-  function candidatesFrom(seen, goalPt) {
+  function candidatesFrom(seen, goalPt, { audit = null, prove = true } = {}) {
     const out = [], tried = new Set();
+    const refuse = (reason, from, to, hFrom, hTo) => {
+      if (!audit) return;
+      audit.rejections ??= {}; audit.examples ??= [];
+      audit.rejections[reason] = (audit.rejections[reason] ?? 0) + 1;
+      if (audit.examples.length < 48) audit.examples.push({ reason, from, to,
+        from_footprint_floor_client: hFrom, to_footprint_floor_client: hTo,
+        span_client: Math.hypot(to.x-from.x,to.y-from.y), max_span_client: maxSpan(hFrom-hTo) });
+    };
     for (const p of seen.values()) {
       const hp = standAt(p.x, p.y);
       if (hp == null) continue;
@@ -364,9 +394,25 @@ export function fineRouter(roomNum, {
           if (hn == null) continue;
           const k = key(nx, ny);
           if (tried.has(k)) continue;
+          const aim = { x: nx, y: ny };
+          if (Math.hypot(nx-p.x,ny-p.y) > maxSpan(hp-hn)) {
+            refuse('fall_span_exceeds_budget', {x:p.x,y:p.y}, aim, hp, hn); continue;
+          }
+          if (!clearBetween(p, aim, hp, hn)) {
+            refuse('intermediate_floor_above_fall_arc', {x:p.x,y:p.y}, aim, hp, hn); continue;
+          }
+          const candidate={fromFine:{x:p.x,y:p.y},toFine:aim};
+          const proof=prove?proveCandidateFall(geo,candidate):null;
+          if(proof&&!proof.model_proved){
+            refuse(proof.reason,candidate.fromFine,aim,hp,hn);continue;
+          }
+          // Check walls BEFORE remembering a landing or spending the branch budget.
+          // A failed approach does not disprove the landing from another takeoff.
+          // Peak's entrance (5056) poisoned every landing before its 8896 shelf
+          // was examined, leaving zero proposed jumps. Remember only a proposal.
           tried.add(k);
-          if (!clearBetween(p, { x: nx, y: ny }, hp, hn)) continue;
-          out.push({ fromFine: { x: p.x, y: p.y }, toFine: { x: nx, y: ny }, d, hTo: hn });
+          out.push({ fromFine: proof?.from_wire.client??candidate.fromFine,
+            toFine: proof?.to_wire.client??aim, d, hTo: hn });
         }
       }
     }
@@ -530,7 +576,8 @@ export function fineRouter(roomNum, {
           // the physics here is a model and the model is the thing that has been wrong before.
           // Candidates get the full test, because nothing else vouches for them.
           if (!c.declared) {
-            if (fa - fb <= 0) continue;                        // a fall does not go up
+            // maxSpan(drop + step) permits level and small uphill landings too.
+            // A second downhill-only rule contradicted the shared fall arithmetic.
             if (!clearBetween(fromPt, toPt, fa, fb)) continue;
           }
           next.push({ at: toPt, path: [...node.path, { ...c, fromFine: fromPt, toFine: toPt }] });
@@ -552,7 +599,7 @@ export function fineRouter(roomNum, {
   // for the closure's own start point, and the report confidently said a reachable square was
   // unreachable. An undefined-shaped lookup that cannot fail loudly is the commonest bug in
   // this repository, so the key is part of the API now.
-  return { plan, closure, footing, floorAt, standAt, declared, geo, room, key, step,
+  return { plan, closure, candidateJumps: candidatesFrom, footing, floorAt, standAt, declared, geo, room, key, step,
            inClosure: (set, x, y) => set.has(key(x, y)) };
 }
 
