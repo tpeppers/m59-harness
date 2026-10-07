@@ -21193,6 +21193,7 @@ export class Autopilot {
     // Every mode reads its weapons, not only farm (see the idle branch in passErrand): a
     // `survive` character — Raphael, the troll crew's dedicator — skips the farm block below.
     this.sweepWeaponMagic().catch(() => {});
+    this.shedUnusedConjures().catch(() => {});
     // 4. Work. Only in farm mode, and only on what we were told to hunt.
     //
     // AND ONLY IF NOBODY ELSE OWNS IT. This is the seam the carve-out is cut along: every
@@ -30395,6 +30396,64 @@ export class Autopilot {
   // A LOOK PER UNREAD WEAPON, at most two a sweep, on a one-minute clock (immediately after a
   // lapse). Same id-checked shape as sweepGearCondition: a look reply carrying another id is
   // discarded, never recorded against this one.
+  // DROP CONJURED WEAPONS NOBODY IS USING. Operator, 2026-10-07: "make them drop conjured weapons
+  // they're not using! we don't want inventories filling up with unaccountable garbage."
+  //
+  // A `create weapon` result is ItemAttMade: temporary, and refused by every merchant
+  // (CanBeGivenToNPC), so a town trip cannot sell it and it rides in the pack until it expires.
+  // The only cleanup that existed ran for weapons the character is BANNED from, so an allowed
+  // weapon from a missed roll — a long sword, when the bout wanted an axe — was never shed: the
+  // fleet carried 20 to 29 each on 2026-10-07, ~1,750 bulk a pack, which kept every pack near full
+  // while the overfarm trip trigger (bulk SIFTED this lap) barely moved.
+  //
+  // Same safety as the banned-hoard path: clearConjureHoard drops only what a fresh LOOK proves is
+  // conjured ("It shimmers insubstantially"); a looted weapon of the same name is sale stock and is
+  // remembered as ordinary so it is looked at once. Never the weapon in hand, never a protected
+  // name, and one spare of this character's training weapon is kept so a bout need not re-roll.
+  // Every 5 minutes at most, a few looks at a time, and not while anything is hitting us.
+  async shedUnusedConjures() {
+    if (this.policy.dropJunk === false || this._conjureShedBusy) return;
+    if (Date.now() - (this._conjureShedAt ?? 0) < (this.policy.conjureShedMs ?? 300_000)) return;
+    const s = this.s, c = s.client;
+    const equipment = c?.equipment?.();
+    if (!c || equipment?.known !== true) return;
+    if ((this.threat?.().landing ?? 0) > 0) return;
+    this._conjureShedBusy = true;
+    this._conjureShedAt = Date.now();
+    try {
+      const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+      const knownOrdinary = (this.ordinaryBannedIds ??= new Set());
+      const worn = new Set(equipment.equipped.map(e => e.id));
+      const spareOf = String(this.policy.trainingWeapon ?? '').trim().toLowerCase();
+      let spareKept = false;
+      const candidates = [];
+      for (const o of c.inventory ?? []) {
+        const n = nameOf(o);
+        if (worn.has(o.id) || knownOrdinary.has(o.id) || !CONJURABLE_WEAPONS.includes(n)) continue;
+        if (spareOf && n === spareOf && !spareKept) { spareKept = true; continue; }
+        candidates.push(o);
+      }
+      if (!candidates.length) return;
+      const generation = s.movementGeneration;
+      const cancelled = () => s.movementGeneration !== generation || (this.threat?.().landing ?? 0) > 0;
+      const eligible = o => {
+        const eq = c.equipment?.();
+        return eq?.known === true && !eq.equipped.some(e => e.id === o.id) && !this.wontDrop?.has(o.id) &&
+          !skills.itemIsProtected(nameOf(o), this.protectedItemNames());
+      };
+      const cleanup = await clearConjureHoard(s, candidates, { eligible, cancelled, maxInspections: 8 });
+      for (const id of cleanup.ordinary ?? []) knownOrdinary.add(id);
+      if (cleanup.dropped?.length) {
+        this.tally.conjures_shed = (this.tally.conjures_shed || 0) + cleanup.dropped.length;
+        this.note('dropped conjured weapons nobody is using', {
+          dropped: cleanup.dropped.length, still_to_check: Math.max(0, candidates.length - 8),
+          ordinary_kept: cleanup.ordinary?.length || undefined,
+          why: 'a create-weapon result cannot be sold and only fills the pack; the one in hand and ' +
+               'one spare of the training weapon are kept' });
+      }
+    } finally { this._conjureShedBusy = false; }
+  }
+
   async sweepWeaponMagic() {
     const gapMs = this._magicSwapDue ? 0 : 60_000;
     if (Date.now() - (this._weaponMagicAt ?? 0) < gapMs) return;
