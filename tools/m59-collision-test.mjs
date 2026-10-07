@@ -2167,6 +2167,31 @@ console.log('\nterminal movement propagation and edge packet authority');
        ukgothOptions?.offMap?.opening?.x === 1824,
        JSON.stringify({ ukgothTarget, opening: ukgothOptions?.offMap?.opening }));
 
+    // Actual Vale doorway: nearest x1842 clips wall 296 from x1824/y96;
+    // x1888 is within the same boundary gate and its complete chord arrives.
+    const valeRoom = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url))).rooms['532'];
+    const valeGeometry = sharedRoomGeometry(valeRoom);
+    const valeOpenings = valeGeometry.edgeApproachCandidates('north');
+    const valeFixture = fakeBrokerSession(valeGeometry, {x:1824,y:96,roomId:532,roomSecurity:valeGeometry.security});
+    const valeSession = {...terminalSession,...valeFixture.session,
+      world:{room:{num:532},geometry:valeGeometry,exits:()=>[]},
+      async walkTo(){return {arrived:true};},
+      async walkFine(){return {arrived:false,reason:'stalled'};},
+      async step(){return {moved:false};},
+      async confirmPosition(){return {...this.client.self};},
+    };
+    valeSession.client.rsc={get:()=> 'Feys Crossing'};
+    valeSession.client.waitFor=async()=>({events:[{kind:'room-entered'}]});
+    const nearest = valeOpenings.find(c=>c.fine_stand_on.x===1842);
+    const blocked = valeSession.validateFineTarget(nearest.edge_target.x,nearest.edge_target.y,{slide:false});
+    ok('Vale closest candidate is blocked from the actual recorded boundary position',
+      blocked.blocked===true && blocked.target?.y!==63,JSON.stringify(blocked));
+    const valeExit={kind:'edge',direction:'north',to:531,stand_on:{col:28,row:1},...nearest};
+    const valeResult=await leaveVia.call(valeSession,valeExit,{});
+    ok('Vale chooses the slightly farther fully proved chord and sends one ordinary edge packet',
+      valeResult.left===true && valeFixture.packets.length===1 &&
+      valeFixture.packets[0].x===1888 && valeFixture.packets[0].y===63,JSON.stringify({valeResult,packets:valeFixture.packets}));
+
     // A SPLIT BOUNDARY IS NEVER RE-ANCHORED ONTO THE OTHER ROOM'S CROSSING. Western border
     // of the Twisted Wood declares east->586 for row<19 and east->597 for row>20 on one
     // wall, and `wrongExitSquares` is the set the approach walk already avoids. Re-anchoring

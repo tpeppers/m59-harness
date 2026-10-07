@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Offline regression: node route corners, Peak candidate falls, wire rounding and confirmed arrivals.
 import assert from 'node:assert/strict';
+import {runNodeJourney} from './m59-node-journey.mjs';
+import {findPath} from './m59-map.mjs';
 import {sessionWalkPrototype} from './m59-session-walk.mjs';
 import {MAX_STEP_HEIGHT} from './m59-roo.mjs';
 import {fineRouter,checkedWalkWaypoints,proveCandidateFall} from './m59-fineroute.mjs';
@@ -107,5 +109,33 @@ await test('Peak upper-stair candidate plan contains a proved fall and checked w
   assert.equal(p.ok,true,p.why);assert.equal(p.jumps,1);assert.equal(p.all_declared,false);
   assert.equal(auditNodeWalk(p,peak.geo).ok,true);
   assert.ok(p.legs.filter(l=>l.kind==='jump').every(j=>proveCandidateFall(peak.geo,j).model_proved));
+});
+await test('connected node arrival requires a fresh endpoint in the destination room',async()=>{
+  const fixture=(finalRoom,confirm=true,cancel=false)=>{
+    const s={world:{room:{num:200}},client:{self:{row:56,col:39,x:2528,y:3616}},movementGeneration:1,
+      movementWasCancelled:()=>cancel,confirmPosition:async()=>confirm,
+      async travel(to,{onHop}){this.world.room.num=finalRoom;await onHop({room:{num:finalRoom},hop:1});return {arrived:true};}};
+    return s;
+  };
+  assert.equal((await runNodeJourney(fixture(532),532)).arrived,true);
+  assert.equal((await runNodeJourney(fixture(531),532)).arrived,false);
+  assert.equal((await runNodeJourney(fixture(532,false),532)).arrived,false);
+  assert.equal((await runNodeJourney(fixture(532,true,true),532)).arrived,false);
+});
+await test('connected node trial preserves evidence of every ordinary travel crossing',async()=>{
+  const seen=[],s={world:{room:{num:200}},client:{self:{row:56,col:39,x:2528,y:3616}},movementGeneration:1,
+    movementWasCancelled:()=>false,confirmPosition:async()=>true,
+    async travel(to,{onHop}){for(const [i,room] of [534,533,542,541,531,532].entries()){
+      this.world.room.num=room;await onHop({room:{num:room},hop:i+1});}return {arrived:true,hops:6,total_stumbles:0};}};
+  const result=await runNodeJourney(s,532,{onHop:h=>seen.push(h.position.room)});
+  assert.equal(result.arrived,true);assert.equal(result.start.room,200);assert.equal(result.end.room,532);
+  assert.deepEqual(seen,[534,533,542,541,531,532]);assert.equal(result.hops.length,6);
+});
+await test('Marion-to-Vale graph includes the coded town exit and actual forest crossings',()=>{
+  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+  const out=findPath(map,200,532),back=findPath(map,532,200);
+  assert.equal(out.found,true);assert.deepEqual(out.hops.map(h=>h.to),[534,533,542,541,531,532]);
+  assert.equal(out.hops[0].kind,'region');assert.equal(back.found,true);
+  assert.deepEqual(back.hops.map(h=>h.to),[531,541,542,533,534,200]);
 });
 console.log(count+' checked node path assertions passed');

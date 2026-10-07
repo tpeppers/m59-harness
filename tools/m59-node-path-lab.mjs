@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// Held, movement-only native lab trial. Explicit config and authored scene required.
+// Held native node path trial, optionally from town through ordinary travel. Explicit config and scene required.
 // node tools/m59-node-path-lab.mjs --config FILE --scene FILE --to r25c20 --via r24c10 --door --return r46c25 --out DIR
 // No production fleet, attacks or activation. Candidate falls require explicit opt-in and model proof; local ownership is enforced.
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {findPath} from './m59-map.mjs';
+import {runNodeJourney} from './m59-node-journey.mjs';
+import {readAdminRoom} from './m59-scene-admin.mjs';
+import {dm,sendMsg,rejections} from './m59-dm.mjs';
 import {createShadowReplayAdapter} from './m59-shadow-replay.mjs';
 import {fineRouter,proveCandidateFall} from './m59-fineroute.mjs';
 import {previewOpenedDoor} from './m59-ceiling-doors.mjs';
@@ -13,7 +17,7 @@ import {protocolToClient} from './m59-finepos.mjs';
 import {quantizeRailPoint,landingCheck} from './m59-railfollow.mjs';
 import {parseNodeSquare,auditNodeWalk} from './m59-node-route-audit.mjs';
 const args=process.argv.slice(2),has=n=>args.includes('--'+n),flag=n=>args[args.indexOf('--'+n)+1];
-if(has('help')){console.log('Explicit --config FILE --scene FILE --to rNcM --out DIR; optional --via rNcM --door --return rNcM --horizon-ms N --quiet --candidate-jumps 1..3');process.exit(0);}
+if(has('help')){console.log('Explicit --config FILE --scene FILE --to rNcM --out DIR; optional --via rNcM --door --return rNcM --horizon-ms N --quiet --candidate-jumps 1..3 --travel-to ROOM --return-town ROOM --quiet-rooms 521,522');process.exit(0);}
 for(const n of ['config','scene','to','out'])if(!has(n))throw Error('--'+n+' required');
 const scene=JSON.parse(readFileSync(flag('scene'),'utf8')),goal=parseNodeSquare(flag('to')),
   via=has('via')?parseNodeSquare(flag('via')):null,back=has('return')?parseNodeSquare(flag('return')):null;
@@ -22,20 +26,57 @@ const horizonMs=Number(has('horizon-ms')?flag('horizon-ms'):600000);
 if(!Number.isSafeInteger(horizonMs)||horizonMs<1||horizonMs>1800000)throw Error('horizon-ms must be 1..1800000');
 const candidateJumps=Number(has('candidate-jumps')?flag('candidate-jumps'):0);
 if(!Number.isInteger(candidateJumps)||candidateJumps<0||candidateJumps>3)throw Error('candidate-jumps must be 0..3');
+const travelTo=has('travel-to')?Number(flag('travel-to')):null,returnTown=has('return-town')?Number(flag('return-town')):null;
+for(const value of [travelTo,returnTown])if(value!=null&&(!Number.isSafeInteger(value)||value<1))throw Error('invalid journey room');
+if(returnTown!=null&&travelTo==null)throw Error('--return-town requires --travel-to');
+const quietExtraRooms=has('quiet-rooms')?flag('quiet-rooms').split(',').map(Number):[];
+if(quietExtraRooms.length&&(!has('quiet')||travelTo==null||quietExtraRooms.some(n=>!Number.isSafeInteger(n)||n<1)))throw Error('--quiet-rooms requires a quiet connected trial and room numbers');
 const out=resolve(flag('out'));mkdirSync(out,{recursive:true});
-const receipt={format:'m59-node-path-lab/1',at:new Date().toISOString(),goal,via,return_to:back,quiet:has('quiet'),candidate_jumps:candidateJumps,scope:'Authored start to target; a partial high-start trial does not prove entrance access or acquisition.',legs:[],poses:[],finished:false};
+const receipt={format:'m59-node-path-lab/1',at:new Date().toISOString(),goal,via,return_to:back,travel_to:travelTo,return_town:returnTown,quiet_extra_rooms:quietExtraRooms,quiet:has('quiet'),candidate_jumps:candidateJumps,scope:travelTo!=null?'Connected authored town start, ordinary Session.travel, then checked room-local spawn-location approach; quiet planned rooms do not prove monster survival or acquisition.':'Authored start to target; a partial high-start trial does not prove entrance access or acquisition.',legs:[],poses:[],finished:false};
 let adapter,timer,result,active,aborted=false;
 try{
+  if(travelTo!=null){
+    const config=JSON.parse(readFileSync(flag('config'),'utf8')),
+      roster=JSON.parse(readFileSync(resolve(resolve(flag('config'),'..'),config.fleet_file),'utf8'));
+    if(Number(roster[config.agent]?.credentials?.port)!==17959)throw Error('connected node trial requires the isolated 17959 lab');
+  }
   adapter=await createShadowReplayAdapter({configFile:resolve(flag('config')),isolate:false,terminateAfterTrial:true,engineRoot:resolve(fileURLToPath(new URL('..',import.meta.url)))});
   result=await adapter.run({scene,frame:{at:Date.now(),scene},horizonMs,
     variant:{id:'node-path',kind:'baseline',reload:{labScenery:true,exactMonsterPlacement:true,noMonsters:has('quiet')}},
-    onPrepared:async(s,k)=>{k.startWatchdog=()=>{};k.loop=()=>new Promise(()=>{});},
+    onPrepared:async(s,k)=>{
+      k.startWatchdog=()=>{};k.loop=()=>new Promise(()=>{});
+      if(travelTo!=null&&has('quiet')){
+        const routes=[findPath(s.world.map,scene.room.num,travelTo),...(returnTown!=null?[findPath(s.world.map,travelTo,returnTown)]:[])];
+        if(routes.some(r=>!r.found))throw Error('connected node route missing');
+        const rooms=new Set([scene.room.num,...routes.flatMap(r=>r.hops.flatMap(h=>[h.from,h.to])),...quietExtraRooms]);
+        const env={...process.env,M59_ADMIN_HOST:'127.0.0.1',M59_ADMIN_PORT:'17998'};
+        receipt.quiet_rooms=[];
+        for(const num of rooms){
+          const room=await readAdminRoom(num,{env}),monsters=room.actors.filter(o=>o.properties?.pihit_points!=null),commands=[];
+          if(room.properties.pbgeneratemonsters!=null)commands.push(sendMsg(room.room_object,'SetMonsterGeneration',{bValue:['INT',0]}));
+          commands.push(...monsters.map(o=>sendMsg(o.id,'Delete')));
+          if(rejections(await dm(commands,{env})).length)throw Error('connected quiet room setup rejected');
+          const actual=await readAdminRoom(num,{env});
+          if(actual.actors.some(o=>o.properties?.pihit_points!=null)||actual.properties.pbgeneratemonsters?.value>0)throw Error('quiet room setup not verified');
+          receipt.quiet_rooms.push({room:num,removed:monsters.map(o=>({class:o.class,id:o.id})),generation_before:room.properties.pbgeneratemonsters?.value??null});
+        }
+      }
+    },
     onStarted:async(s)=>{
-      const room=Number(s.world.room.num),began=Date.now(),generation=s.movementGeneration;
+      let room=Number(s.world.room.num);const began=Date.now(),generation=s.movementGeneration;
       const sample=()=>{const p=s.client.self,c=p?protocolToClient(p):null,g=s.world.geometry;
         receipt.poses.push({ms:Date.now()-began,room:s.world.room.num,row:p?.row,col:p?.col,x:p?.x,y:p?.y,
-          hp:s.client.vitals()?.health?.value,floor_client:c?g.floorBaseAtClient(c.x,c.y,g.leafAtClient(c.x,c.y)):null});};
+          hp:s.client.vitals()?.health?.value,floor_client:c&&g?g.floorBaseAtClient(c.x,c.y,g.leafAtClient(c.x,c.y)):null});};
       sample();timer=setInterval(sample,500);
+      if(travelTo!=null){
+        receipt.edge_attempts=[];const queue=s.queueValidatedMove.bind(s);
+        s.queueValidatedMove=async(x,y,options)=>{
+          const before=options?.offMap?{room:s.world.room?.num,row:s.client.self?.row,col:s.client.self?.col,x:s.client.self?.x,y:s.client.self?.y}:null;
+          const reply=await queue(x,y,options);
+          if(before)receipt.edge_attempts.push({at:Date.now(),before,target:{x,y},opening:options.offMap,reply});
+          return reply;
+        };
+      }
       const walk=async(target,label,prepared=null)=>{
         if(aborted||s.movementWasCancelled(generation))return {arrived:false,reason:'trial_cancelled'};
         if(!await s.confirmPosition())return {arrived:false,reason:'position_not_confirmed'};
@@ -99,7 +140,15 @@ try{
         console.log(JSON.stringify({[field]:receipt[field]}));
         return receipt[field].opened?{ok:true,prepared}:{ok:false,reason:'door_did_not_open'};
       };
+      const journey=async(destination,label)=>{
+        const result=await runNodeJourney(s,destination,{movementGeneration:generation,isInterrupted:()=>aborted,
+          onHop:h=>console.log(JSON.stringify({label,hop:h.hop,room:h.position.room,position:h.position,ms:h.ms}))});
+        receipt[label]=result;sample();return result;
+      };
       active=(async()=>{
+        receipt.start={room,row:s.client.self.row,col:s.client.self.col};
+        if(travelTo!=null){const r=await journey(travelTo,'outbound_journey');if(!r.arrived)return r;
+          room=Number(s.world.room.num);receipt.connected_entry={room,row:s.client.self.row,col:s.client.self.col,x:s.client.self.x,y:s.client.self.y};}
         if(via){const r=await walk(via,'door-approach');receipt.staging=r;if(!r.arrived)return r;}
         let prepared=null;
         if(has('door')){const opened=await openFor(goal,'door');if(!opened.ok)return {arrived:false,reason:opened.reason};prepared=opened.prepared;}
@@ -119,7 +168,10 @@ try{
           }
           receipt.return=await walk(back,'return',prepared);if(!receipt.return.arrived)return receipt.return;
         }
-        return {arrived:true,approach_verified:true,return_verified:back?true:null};
+        if(returnTown!=null){const r=await journey(returnTown,'return_journey');if(!r.arrived)return r;}
+        return {arrived:true,approach_verified:true,return_verified:back?true:null,
+          connected_approach_verified:travelTo!=null?true:null,connected_return_verified:returnTown!=null?true:null,
+          start_room:receipt.start.room,end_room:s.world.room.num};
       })().then(r=>{receipt.result=r;receipt.elapsed_ms=Date.now()-began;sample();receipt.finished=true;},e=>{receipt.error=e.stack;receipt.finished=true;});
     },onStopping:()=>{aborted=true;clearInterval(timer);},shouldStop:()=>receipt.finished});
 }catch(e){result={outcome:'error',error:e.stack};}
