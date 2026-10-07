@@ -115,6 +115,7 @@ export function classifyNode(animation) {
  * message was truncated, and the right move is to read max mana rather than believe either.
  */
 export const MELD_MARKERS = Object.freeze([
+  { verdict: 'melded',    marker: 'feel the course of magic flow', rsc: 'corpsenode_meld' },
   { verdict: 'melded',    marker: 'reality expands',    rsc: 'mananode_meld' },
   { verdict: 'dead',      marker: 'you are disappointed', rsc: 'mananode_failed_meld' },
   { verdict: 'already',   marker: 'already bonded',     rsc: 'mananode_already_melded' },

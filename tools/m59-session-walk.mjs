@@ -1568,7 +1568,8 @@ export function sessionWalkPrototype(deps) {
       // overshoots, the next step overshoots back, and a two-square walk dithers until it
       // runs out of steps — which is what happened the moment the skid fix let short walks
       // reach their target at all. The step is capped at what is left.
-      const reach = Math.max(8, Math.min(stride, remaining));
+      // Checked corners need the requested endpoint, including corrections shorter than 8.
+      const reach = exactArrival ? Math.min(stride, remaining) : Math.max(8, Math.min(stride, remaining));
       // AND CLOSE ENOUGH IS ARRIVED. Position is confirmed by the server and our own moves
       // are still settling, so the last few units cannot be closed by aiming harder. If the
       // walk has stopped improving on its closest approach and that approach is inside a

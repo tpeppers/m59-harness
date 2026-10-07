@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join,relative,isAbsolute} from 'node:path';
 import {tmpdir} from 'node:os';
-import {configureReplayEnvironment,replayEnvironmentReceipt} from './m59-shadow-replay.mjs';
+import {configureReplayEnvironment,replayEnvironmentReceipt,replayDeathDetected} from './m59-shadow-replay.mjs';
 
 const root=mkdtempSync(join(tmpdir(),'m59-replay-env-'));
 try {
@@ -37,3 +37,13 @@ try {
   rmSync(root,{recursive:true,force:true});
 }
 console.log('Replay environment: fresh same-PID scopes, preserved evidence, baseline hashes and process reuse PASS');
+
+const checkpoint={startRoom:1,lastRoom:1,room:1,hp:0,deaths:0,initialDeaths:0};
+assert.equal(replayDeathDetected(checkpoint),false,'an existing dead character can finish Underworld activities');
+assert.equal(replayDeathDetected({...checkpoint,hp:59}),false);
+assert.equal(replayDeathDetected({...checkpoint,startRoom:515,lastRoom:515}),true,'ordinary replay entering Underworld is a death');
+assert.equal(replayDeathDetected({...checkpoint,lastRoom:52}),true,'returning to Underworld after leaving is a new death');
+assert.equal(replayDeathDetected({...checkpoint,deaths:1}),true,'explicit new death always wins');
+assert.equal(replayDeathDetected({...checkpoint,room:52}),true,'zero health outside Underworld remains terminal');
+assert.equal(replayDeathDetected({...checkpoint,room:52,hp:59}),false);
+console.log('Replay Underworld continuation: 7 assertions passed');

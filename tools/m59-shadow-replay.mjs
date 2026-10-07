@@ -48,6 +48,12 @@ export function rebaseReplayTimes(value,delta) {
   return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,
     Number.isFinite(v)&&v>1e11&&/(?:at|since|until)$/i.test(key)?v+delta:rebaseReplayTimes(v,delta)]));
 }
+/** Continuing an authored Underworld scene is not a new death. A return is. */
+export function replayDeathDetected({startRoom,lastRoom,room,hp,deaths,initialDeaths}) {
+  if(deaths>initialDeaths)return true;
+  const continuingUnderworld=Number(startRoom)===1&&Number(lastRoom)===1&&Number(room)===1;
+  return !continuingUnderworld&&(Number(room)===1||hp===0);
+}
 export function assertShadowReplayConfig(config,entry) {
   if(!config?.fleet_file||!config.agent)throw Error('replay config needs fleet_file and agent');
   const c=entry?.credentials;
@@ -291,7 +297,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         const room=s.world?.room?.num,hp=s.client?.vitals?.()?.health;
         if(players&&hpTrace.at(-1)?.hp!==(hp?.value??null))hpTrace.push({at:Date.now(),hp:hp?.value??null,
           room,row:s.client?.self?.row??null,col:s.client?.self?.col??null});
-        if(room===1||hp?.value===0||(k.tally.deaths??0)>deaths){outcome='died';elapsed=Date.now()-before;break;}
+        if(replayDeathDetected({startRoom:scene.room.num,lastRoom,room,hp:hp?.value,deaths:k.tally.deaths??0,initialDeaths:deaths})){outcome='died';elapsed=Date.now()-before;break;}
         if(room!=null)lastRoom=room;
         if(error)break;
         await sleep(100);

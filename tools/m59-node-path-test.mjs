@@ -38,6 +38,15 @@ await test('checked bends cannot succeed twenty wire units short of a three-unit
   const {s}=fixture({stuck:true});const r=await walk.call(s,100,100,{maxSteps:8,stride:80,arriveWithin:3,exactArrival:true});
   assert.equal(r.arrived,false);
 });
+await test('a precise corner correction stays inside a narrow legal corridor',async()=>{
+  const {s,c}=fixture();c.self.x=97;c.self.y=99;
+  const valid=(x,y)=>x>=97&&x<=100&&y>=99&&y<=100;
+  s.validateFineTarget=(x,y)=>({moved:valid(x,y),target:{x,y}});
+  s.stepFine=async(x,y)=>{if(!valid(x,y))return {moved:false,reason:'wall'};
+    c.self={...c.self,x,y};return {moved:true,position:{...c.self}};};
+  const r=await walk.call(s,100,100,{maxSteps:1,stride:32,arriveWithin:3,exactArrival:true});
+  assert.equal(r.arrived,true);assert.equal(c.self.x,100);assert.equal(c.self.y,100);
+});
 await test('compression keeps a necessary right-angle corner',()=>{
   const geo={traceFineMoveClient:(ax,ay,bx,by)=>({arrived:ax===bx||ay===by})};
   const p=[{x:0,y:0},{x:0,y:10},{x:10,y:10}];assert.deepEqual(checkedWalkWaypoints(geo,p).points,p);

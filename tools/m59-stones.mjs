@@ -117,8 +117,9 @@ export const STONES = Object.freeze({
 
   // ---- the Underworld's own, which every character visits by dying
   corpse:   { room: 1,    node: 'NODE_CORPSENODE', row: 16, col: 16, where: 'The Underworld',
-              appears: 'placed by uworld.kod maintenance; a CorpseNode rather than a stone on ' +
-                       'a hill' },
+              conditional: true, puzzle: 'underworld-braziers',
+              appears: 'uworld.kod PuzzleSolved creates a central rip for 60 seconds after all five braziers are lit',
+              note: 'already-in-Underworld activity: activate the central rip within 2 squares to bond, then step onto it to return; use m59-underworld-node.mjs' },
 
   // ---- CONDITIONAL: there is nothing to stand on until something else happens
   martyr:   { room: 47,   node: 'NODE_Q',        row: 57, col: 45,

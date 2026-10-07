@@ -473,6 +473,22 @@ export function fineRouter(roomNum, {
     return { kind: 'walk', waypoints, biggest_drop: worst, walk_proof: { checked: unproved.length === 0, unproved } };
   }
 
+  // Plan to a measured fine point without replacing its shelf with a square representative.
+  function planWalkToPoint(from, to) {
+    const start = snapToFloor(from);
+    if (!start || floorAt(to.x, to.y) == null)
+      return { ok: false, why: 'fine walk endpoint has no floor', room: roomNum };
+    const seen = closure(start), end = seen.get(key(to.x, to.y));
+    if (!end || end.x !== to.x || end.y !== to.y)
+      return { ok: false, why: 'exact fine destination outside walking closure', room: roomNum };
+    const points = pathWithin(seen, end);
+    if (!points) return { ok: false, why: 'fine walk to exact destination is not proved', room: roomNum };
+    const leg = walkLeg(points);
+    if (!leg.walk_proof.checked) return { ok: false, why: 'fine destination has unproved walk edges', room: roomNum };
+    return { ok: true, room: roomNum, from, to, jumps: 0, all_declared: true,
+      confidence: 'checked walking closure to the exact fine destination', legs: [leg] };
+  }
+
   function plan(from, to, { maxJumps = 4, allowCandidates = false, branch = 12 } = {}) {
     const startPt = from.x != null && from.y != null
       ? snapToFloor({ x: from.x, y: from.y }) : footing(from.row, from.col);
@@ -599,7 +615,7 @@ export function fineRouter(roomNum, {
   // for the closure's own start point, and the report confidently said a reachable square was
   // unreachable. An undefined-shaped lookup that cannot fail loudly is the commonest bug in
   // this repository, so the key is part of the API now.
-  return { plan, closure, candidateJumps: candidatesFrom, footing, floorAt, standAt, declared, geo, room, key, step,
+  return { plan, planWalkToPoint, closure, candidateJumps: candidatesFrom, footing, floorAt, standAt, declared, geo, room, key, step,
            inClosure: (set, x, y) => set.has(key(x, y)) };
 }
 

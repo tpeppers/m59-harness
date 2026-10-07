@@ -34,6 +34,8 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-underworld-node-test.mjs',
+   'Underworld checked activation approaches avoid portal triggers; the unlit-only puzzle solver and special node verdict agree with source'],
   ['m59-node-path-test.mjs',
    'node routes preserve narrow bends and wire rounding; final-step arrivals require server confirmation'],
   ['m59-movement-recovery-test.mjs',
