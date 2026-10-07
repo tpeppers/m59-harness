@@ -6988,6 +6988,65 @@ const TOOLS = [
     },
   },
   {
+    name: 'rename_character',
+    description:
+      'PERMANENT: a roster slot\'s account now plays a DIFFERENT character, and the roster still names ' +
+      'the old one -- so every keeper write is refused as an identity conflict (hk2, 2026-10-07: "Marco ' +
+      'Polo (hk2) has been replaced by the character Zheng He, it is a permanent change"). This renames ' +
+      'the slot, and only on proof: the slot\'s own running keeper must report the new name from the ' +
+      'game. Then, in this order: the roster and the keeper proxy expect the new name (which clears the ' +
+      'conflict), the keeper is stopped gracefully, the account lease -- whose subject binds agent AND ' +
+      'character -- is released, the roster is saved, and the rejoin sweep logs the character back in ' +
+      'within about a minute under a fresh lease. The account and password are untouched. confirm:true.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      character: { type: 'string', description: 'the new character name, exactly as the game spells it' },
+      confirm: { type: 'boolean', description: 'required: the roster change is permanent' },
+    }, required: ['agent', 'character', 'confirm'] },
+    run: async (a) => {
+      if (a.confirm !== true) throw new Error('rename_character changes the roster for good; pass confirm:true');
+      const entry = fleetState.get(a.agent);
+      if (!entry) throw new Error(`${a.agent} is not in this fleet's roster`);
+      const want = String(a.character ?? '').trim();
+      if (!want || want.length > 64 || /[\u0000-\u001f]/.test(want)) throw new Error('character must be a plain name');
+      const was = entry.credentials?.character ?? null;
+      if (keeperCharacterIdentity(was) === keeperCharacterIdentity(want))
+        return { renamed: false, agent: a.agent, character: want, why: 'the roster already names that character' };
+      // PROOF FROM THE GAME: the keeper holding this account says who it is logged in as.
+      const rec = keeperProcesses.get(a.agent);
+      const port = Number(rec?.port ?? keeperPorts.get(a.agent));
+      if (!Number.isInteger(port) || port <= 0) throw new Error(`${a.agent} has no running keeper to prove the new name`);
+      const live = await fetch(`http://127.0.0.1:${port}/state`, { signal: AbortSignal.timeout(8000) })
+        .then(r => r.json()).catch(() => null);
+      if (String(live?.agent ?? '') !== a.agent || keeperCharacterIdentity(live?.character) !== keeperCharacterIdentity(want))
+        throw new Error(`refusing: ${a.agent}'s keeper on port ${port} reports "${live?.character ?? 'nothing'}"` +
+                        `${live?.agent && live.agent !== a.agent ? ` for agent ${live.agent}` : ''}, not "${want}"`);
+      // 1. Expect the new name everywhere this process checks identity.
+      fleetState.set(a.agent, { ...entry, credentials: { ...entry.credentials, character: want } });
+      const s = sessions.get(a.agent);
+      if (s instanceof KeeperProxy) {
+        if (s._liveness) s._liveness.character = want;
+        s._identityConflict = null;
+      }
+      if (s?.credentials) s.credentials = { ...s.credentials, character: want };
+      saveFleetState();
+      console.error(`[roster] ${a.agent} renamed "${was}" -> "${want}" (proved by its keeper on port ${port})`);
+      // 2. Stop the keeper (graceful now that its identity matches), drop the session, release the lease.
+      const stopped = await stopKeeper(a.agent).catch(e => ({ stopped: false, note: e.message }));
+      if (!stopped?.stopped)
+        return { renamed: true, agent: a.agent, from: was, to: want, keeper_stopped: false,
+                 note: `the roster is renamed, but the keeper did not stop (${stopped?.note ?? stopped?.reason ?? '?'}); ` +
+                       'its account lease still carries the old subject until the next keeper restart' };
+      const old = sessions.get(a.agent);
+      if (old) { try { old.dispose?.(); } catch {} sessions.delete(a.agent); }
+      const released = brokerAccountLeases.releaseAgent(a.agent);
+      rejoinState.set(a.agent, { failures: 0, nextTryAt: 0, lastJoinAt: null });
+      return { renamed: true, agent: a.agent, from: was, to: want, keeper_stopped: true,
+               lease_released: released?.released ?? null,
+               note: `the rejoin sweep logs ${a.agent} back in as "${want}" under a fresh account lease within about a minute` };
+    },
+  },
+  {
     name: 'scene_capture',
     description: 'Read a bounded scene from the keeper cache, including fine positions and replay state. Sends no game requests.',
     schema: {type:'object',properties:{agent:{type:'string'}},required:['agent']},
