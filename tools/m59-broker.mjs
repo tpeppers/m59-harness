@@ -241,6 +241,7 @@ import './m59-navgeom.mjs';   // installs the height model + lenient fine path o
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
 
 // WHO ORDERED THIS MOVE, as an MCP caller says it (m59-move-origin.mjs). A caller that names
 // nobody is `mcp:unattributed` — the honest default for a tool call, never empty and never a guess.
@@ -1646,6 +1647,12 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       method: 'POST', headers: keeperIdentityHeaders(target.identity),
       body: keeperEnvelope(target.identity, body), signal: AbortSignal.timeout(5000),
     }).then(r => r.ok).catch(() => false);
+    // THE WALK IN FLIGHT, READ NOW, because it dies the moment the replacement logs in: the server
+    // drops the old connection and the old keeper's journey fails with it. Read again just before
+    // the spawn (below) — still on the old connection — so a walk that ended in the meantime is
+    // not resurrected. See carriedTravel in m59-keeper-restart.mjs for what is and is not carried.
+    const walkNow = async () => (await keeperState(agent, index).catch(() => null))?.job ?? null;
+    const captured = carriedTravel(await walkNow());
     let legacy = false;
     if (!(await tell({ timeout_ms: timeoutMs + 30_000 }))) {
       legacy = true;
@@ -1675,6 +1682,8 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     const undo = async () => { if (legacy) await post('/resume', {}); else await tell({ cancel: true }); };
     if (port == null) { await undo(); return { agent, ok: false, why: 'no free keeper port in the band' }; }
 
+    let carry = captured.carry ? captured : null;
+    if (carry && !stillTheSameWalk(carry, await walkNow())) carry = null;
     const { spawn } = await import('node:child_process');
     const HERE = dirname(fileURLToPath(import.meta.url));
     const permit = keeperOwnershipPermit(agent);
@@ -1731,7 +1740,9 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     if (legacy) await post('/stop', {});
     ensureKeeperLivenessSweep();
     console.error(`[war-restart] ${agent}: now pid=${child.pid} port=${port} (old pid ${old.pid} ${legacy ? 'stopped' : 'exits on its own'})`);
-    return { agent, ok: true, pid: child.pid, port, old_pid: old.pid };
+    const carried = carry ? await resumeCarriedWalk(agent, index, carry) : null;
+    return { agent, ok: true, pid: child.pid, port, old_pid: old.pid,
+             ...(carried ? { carried_walk: carried } : {}) };
   } catch (e) {
     if (child && !spawnedChildExited(child)) { try { child.kill('SIGTERM'); } catch {} }
     return { agent, ok: false, why: e.message };
@@ -1739,6 +1750,30 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     keeperHandoffs.delete(agent);
     if (reservedPort != null) handoffPorts.delete(reservedPort);
   }
+}
+
+// SEND THE CAPTURED WALK AGAIN, ON THE REPLACEMENT. Same origin and control token, so its owner
+// sees no preemption and a cancel by token still reaches it. The replacement's autopilot can win
+// the body in the second it has been up (a town trip, a shelter walk -- its OWN journeys, which
+// are never carried); that is the race FleetScript already wins by cancelling and re-issuing, so
+// this does the same, once. Never throws: a walk that cannot be carried is reported, and the
+// handoff itself has already succeeded.
+async function resumeCarriedWalk(agent, index, carry) {
+  const send = () => keeperAction(agent, index, 'travel', carry.carry);
+  let r = await send().catch(e => ({ error: e?.message ?? String(e) }));
+  // Both shapes: "<agent> is busy: walk to X" (startJob) and "busy: walk to X" (the keeper's verbs).
+  if (r?.started !== true && /\bbusy\b/i.test(String(r?.error ?? r?.why ?? ''))) {
+    await sessions.get(agent)?.cancelMovement?.(null,
+      `resuming ${carry.ordered_by ?? 'an ordered'} walk carried across a keeper handoff`,
+      { origin: { source: 'operator', name: 'war_restart' } }).catch(() => null);
+    r = await send().catch(e => ({ error: e?.message ?? String(e) }));
+  }
+  const ok = r?.started === true;
+  console.error(`[war-restart] ${agent}: ${ok ? 'carried' : 'COULD NOT carry'} the walk in flight ` +
+                `(${carry.label}, ordered by ${carry.ordered_by ?? 'unattributed'})` +
+                (ok ? '' : `: ${r?.error ?? r?.why ?? 'not started'}`));
+  return { ok, to: carry.carry.to, label: carry.label, ordered_by: carry.ordered_by,
+           ...(ok ? {} : { why: String(r?.error ?? r?.why ?? 'not started') }) };
 }
 
 async function warRestartFleet({ agents = null, concurrency = 3, timeoutMs = 90_000 } = {}) {

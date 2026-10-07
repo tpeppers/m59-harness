@@ -193,3 +193,63 @@ export async function logoffKeepers(identities, { fetchImpl = globalThis.fetch, 
   }
   return results;
 }
+
+// ============================================================================ CARRYING A WALK
+//
+// A HANDOFF REPLACES THE PROCESS A WALK RUNS IN, AND THE WALK USED TO DIE WITH IT.
+//
+// Prod, 2026-10-07 06:50 UTC, deploy-2026-10-07-7: t12 Fozzie was on a supply-line trip. Its
+// fleetScript lease lives in the RUNNER, so it survived the keeper handoff; its travel job
+// lived in the KEEPER, so it did not. The replacement came up idle at the Barloque gate, the
+// runner went on polling for an arrival nothing was walking towards, and the trip resumed only
+// when the step's budget ran out three minutes later. Every walk in flight during a roll paid
+// that, and a long journey pays its whole budget.
+//
+// So the broker reads the old keeper's job before the handoff and sends it again on the
+// replacement, with the SAME origin and control token: to its owner the walk never stopped,
+// and a cancel by that token still reaches it. These two functions are the whole decision;
+// m59-broker.mjs warRestartKeeper does the I/O.
+//
+// NOT CARRIED: the keeper's OWN journeys (origin source 'keeper' -- a town trip, a shelter
+// approach). The replacement's autopilot re-decides those from the world as it finds it, and
+// re-issuing one under its old origin would only race it for the body.
+
+/** The keeper `travel` action args that restart the walk in this /state job, or null + why. */
+export function carriedTravel(job) {
+  if (!job || !job.busy) return { carry: null, why: 'no job in flight' };
+  if (job.kind !== 'travel' || !job.resume) return { carry: null, why: `the job in flight is not a resumable walk (${job.busy})` };
+  const r = job.resume;
+  const to = Number(r.to);
+  if (!Number.isFinite(to)) return { carry: null, why: 'the walk in flight has no destination room' };
+  if (job.stopping) return { carry: null, why: 'the walk in flight was already being cancelled' };
+  const source = job.origin?.source ?? 'unattributed';
+  if (source === 'keeper') return { carry: null, why: `the keeper's own journey (${job.busy}); the replacement re-decides it` };
+  return {
+    carry: {
+      to, where: r.where ?? undefined,
+      ...(Number.isFinite(Number(r.maxHops)) ? { max_hops: Number(r.maxHops) } : {}),
+      ...(r.controlToken ? { control_token: r.controlToken } : {}),
+      ...(r.allowHazard && r.hazardWhy ? { allow_hazard: true, hazard_why: r.hazardWhy } : {}),
+      ...(Array.isArray(r.avoid) && r.avoid.length ? { avoid: r.avoid } : {}),
+      ...(job.origin ? { origin: job.origin } : {}),
+      // Mid-journey: the errands were settled when it first set out.
+      run_errands: false,
+      background: true,
+    },
+    label: job.busy, started_at: job.started_at ?? null, ordered_by: job.ordered_by ?? null,
+  };
+}
+
+/**
+ * Is the job the old keeper reports NOW still the one captured before the handoff? A walk that
+ * arrived, or that its owner cancelled while the replacement was logging in, must not be
+ * resurrected. `now` null means the old keeper no longer answers -- its connection was dropped,
+ * which is the handoff working -- and the captured walk stands.
+ */
+export function stillTheSameWalk(captured, now) {
+  if (!captured) return false;
+  if (now === null || now === undefined) return true;
+  if (!now.busy) return false;
+  return now.kind === 'travel' && Number(now.resume?.to) === Number(captured.carry?.to) &&
+         (now.started_at ?? null) === (captured.started_at ?? null) && !now.stopping;
+}
