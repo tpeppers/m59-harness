@@ -132,7 +132,9 @@ rl.on('line', (line) => queue(async () => {
             say(`  ${i}. ${step.do}${step.to != null ? ` -> room ${step.to}` : ''}` +
                 `${step.seller ? ` at ${step.seller}` : ''}` +
                 `${step.action ? ` ${step.action} ${step.amount}` : ''}` +
-                `${step.lines ? ` [${step.lines.map(l => `${l.match} x${l.amount}`).join(', ')}]` : ''}`);
+                // `lines` may be a function of the run state (DYNAMIC_FIELDS.shop): decided at run time.
+                `${typeof step.lines === 'function' ? ' [decided at run time]'
+                  : step.lines ? ` [${step.lines.map(l => `${l.match} x${l.amount}`).join(', ')}]` : ''}`);
           say('  (nothing was sent)');
         }
       }
