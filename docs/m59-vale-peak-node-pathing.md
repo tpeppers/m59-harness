@@ -16,7 +16,8 @@ that trial began at an explicitly authored high staircase point.
 | Dreaded Caves of Ice, 750 | Previous investigation verified the big chamber approach and return; actual meld requires the yeti's mana gate. |
 | Ukgoth | Relic of Qor, spoken words, opening window and game-hour gate. Existing conditional recipe; not a casual terrain-only acquisition. |
 | Avar / Martyr | Faction swing / portal activation prerequisites; no new casual acquisition claimed. |
-| Underworld / guest demonstration | Separate death/guest contexts; not new nodes to route the living fleet toward. |
+| Underworld | Separate already-in-Underworld brazier puzzle and timed rip; see [the subsequent investigation](m59-underworld-node.md). |
+| Guest demonstration | Guest-only context; no normal acquisition. |
 
 No new acquisition is auto-promoted into the circuit. Vale remains conditional;
 Peak lacks a normal entrance approach. No activation, faction alteration, yeti

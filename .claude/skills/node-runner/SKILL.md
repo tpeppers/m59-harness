@@ -207,6 +207,7 @@ from the square a body lands on coming in. Anything at 2 or less is already insi
 | **45** | Badlands | 3 | none | one square outside the box, from `r60c46` |
 | **27** | Icky Cave | 4 | **none** | MELDED ANYWAY, 2026-09-09. The route is a jump nobody has declared |
 | **515** | Seafarer's Peak | 5 | none | upper-stair one-fall section verified locally; normal entrance boarding still missing (nodes/peak.md) |
+| **1** | Underworld | — | none | already-in-room brazier puzzle, special rip activation and timed return locally verified without jumps; see nodes/corpse.md |
 | **1006** | Mausoleum | 10 | none | and no route to the room from Tos at all |
 
 Every `off` above is a statement about WALKING and nothing else. `reachableFrom` floods with
