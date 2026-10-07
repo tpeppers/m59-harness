@@ -3411,7 +3411,8 @@ const server = createServer(async (req, res) => {
             // so out loud and returns nothing, which is indistinguishable from success on the
             // wire — so the deposit is verified by what left the pack, never by the absence
             // of an error.
-            const r = await skills.depositInVault(session, { vaultman: vaultman.id, items })
+            const keep = args.keep && typeof args.keep === 'object' ? args.keep : null;
+            const r = await skills.depositInVault(session, { vaultman: vaultman.id, items, keep })
               .catch(e => ({ deposited: [], error: e.message }));
             json({ op, vaultman: name, seq: c.evSeq, ...r });
             return;

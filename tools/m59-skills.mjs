@@ -3706,14 +3706,30 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
 // Deposit matching inventory into a VAULTMAN in one server transaction. Success is
 // established by the post-request inventory delta because this protocol deliberately
 // sends no OFFERED/ACCEPT result. A refusal remains visible with the server's messages.
-export async function depositInVault(s, { vaultman, items = [] } = {}) {
+// `keep` is { name: count }: that many matching objects STAY in the pack. Operator, 2026-10-07: a
+// wand top-up must not vault the 2 lightning wands a fleet character carries as personal gear.
+// Matched with the same itemIsProtected test as `items`, kept singletons first-come.
+export async function depositInVault(s, { vaultman, items = [], keep = null } = {}) {
   const c = s.need();
   const wanted = [...new Set([].concat(items || []).map(String).map(x => x.trim()).filter(Boolean))];
   if (!wanted.length) return { deposited: [], protected: [], reason: 'no protected items configured' };
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
-  const before = (c.inventory || []).filter(o => itemIsProtected(c.rsc.get(o.nameRsc) || '', wanted));
-  if (!before.length) return { deposited: [], protected: wanted, reason: 'none of the protected items are carried' };
+  let before = (c.inventory || []).filter(o => itemIsProtected(c.rsc.get(o.nameRsc) || '', wanted));
+  const kept = [];
+  for (const [name, n] of Object.entries(keep ?? {})) {
+    let left = Math.max(0, Math.floor(Number(n) || 0));
+    if (!left) continue;
+    before = before.filter(o => {
+      if (left <= 0 || !itemIsProtected(c.rsc.get(o.nameRsc) || '', [name])) return true;
+      const amount = o.amount || 1;
+      if (amount > left) return true;            // a stack bigger than the keep is not split here
+      left -= amount; kept.push({ id: o.id, name: c.rsc.get(o.nameRsc) || name, amount });
+      return false;
+    });
+  }
+  if (!before.length) return { deposited: [], kept, protected: wanted,
+    reason: kept.length ? 'everything matching is kept back as personal carry' : 'none of the protected items are carried' };
 
   const quantities = new Map(before.map(o => [o.id, o.amount || 1]));
   const names = new Map(before.map(o => [o.id, c.rsc.get(o.nameRsc) || 'unknown item']));

@@ -65,6 +65,21 @@ client.depositItems = function (_vaultman, specs) {
 const partial = await depositInVault(session, { vaultman: 9001, items: ['dark angel feather'] });
 assert.deepEqual(partial.deposited, [{ name: 'dark angel feather', amount: 1 }]);
 assert.deepEqual(partial.refused, ['dark angel feather']);
+// KEEP: personal carry stays in the pack (operator 2026-10-07: 2 lightning wands per fleet character).
+names.set(4, 'wand');
+client.inventory = [71, 72, 73, 74, 75].map(id => ({ id, nameRsc: 4, amount: 0 }));
+client.depositItems = function (_vaultman, specs) {
+  assert.deepEqual(specs, [73, 74, 75], 'the first two wands are kept, the rest offered');
+  this.inventory = this.inventory.filter(o => !specs.includes(o.id));
+};
+const keepTwo = await depositInVault(session, { vaultman: 9001, items: ['wand'], keep: { wand: 2 } });
+assert.equal(keepTwo.deposited.reduce((n, d) => n + d.amount, 0), 3);
+assert.equal(client.inventory.length, 2, 'two wands still carried');
+client.inventory = [71, 72].map(id => ({ id, nameRsc: 4, amount: 0 }));
+client.depositItems = () => assert.fail('nothing to deposit when everything is kept');
+const allKept = await depositInVault(session, { vaultman: 9001, items: ['wand'], keep: { wand: 2 } });
+assert.deepEqual(allKept.deposited, []); assert.equal(allKept.kept.length, 2);
+client.inventory = [{ id: 72, nameRsc: 2, amount: 0 }];
 client.depositItems = () => {};
 const refused = await depositInVault(session, { vaultman: 9001, items: ['dark angel feather'] });
 assert.equal(refused.verified, false);

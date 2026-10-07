@@ -14591,6 +14591,9 @@ const TOOLS = [
       action: { type: 'string', enum: ['deposit', 'list'], description: 'default deposit' },
       items: { type: 'array', items: { type: 'string' },
         description: 'names to store. Omit to use the character\'s own vault_items policy.' },
+      keep: { type: 'object', additionalProperties: { type: 'number' },
+        description: '{ name: count } left in the pack, e.g. {"wand": 2} keeps two wands as personal ' +
+                     'carry and vaults the rest. Omitted: everything matching `items` is stored.' },
     }, required: ['agent'] },
     run: async (a) => {
       const s = session(a.agent), c = s.need();
@@ -14619,7 +14622,7 @@ const TOOLS = [
       let r;
       if (proxied) {
         r = await proxied.vaultOp(action === 'list' ? 'list' : 'deposit',
-                                  action === 'list' ? {} : { items: wanted });
+                                  action === 'list' ? {} : { items: wanted, ...(a.keep ? { keep: a.keep } : {}) });
         if (r?.error) return { ok: false, action, reason: r.error, room: r.room ?? null };
       } else {
         const vaultman = [...c.room.objects.values()].find(o =>
@@ -14638,7 +14641,7 @@ const TOOLS = [
                                                        cost: i.cost ?? null })),
                 said: (reply.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) };
         } else {
-          r = await skills.depositInVault(s, { vaultman: vaultman.id, items: wanted });
+          r = await skills.depositInVault(s, { vaultman: vaultman.id, items: wanted, keep: a.keep ?? null });
           r.vaultman = c.rsc.get(vaultman.nameRsc) ?? null;
         }
       }

@@ -3722,7 +3722,8 @@ async function runStep(ctx, agent, rawStep, state) {
     // the pack rather than what it sent - so the arithmetic below is the tool's now, and this
     // step is thin on purpose.
     case 'vault': {
-      const r = await call('vault', { agent, action: 'deposit', items: step.items },
+      const r = await call('vault', { agent, action: 'deposit', items: step.items,
+                                      ...(step.keep ? { keep: step.keep } : {}) },
                            300_000).catch(e => ({ error: e.message }));
       const stored = Number(r?.stored ?? 0);
       // ok when something was stored OR when there was nothing to store. A pack with no
