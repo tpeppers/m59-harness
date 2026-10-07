@@ -282,13 +282,18 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     if (!(item in (result.targets[slot] ??= {}))) result.targets[slot][item] = b ?? 0;
   const next = applyToPlan(raw, { targets: result.targets, caps: result.caps, demands: state.demands,
                                   clearCaps: slots, baseline: state.baseline });
+  // The backup goes under substrate/history/ (gitignored), never beside the plan: an untracked
+  // file in the deploy checkout makes `m59-deploy.mjs --cut` refuse, which is how this was found.
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  copyFileSync(planFile, `${planFile}.before-feed-me-more-${stamp}`);
+  const backupDir = join(dirname(planFile), 'history', 'feed-me-more');
+  mkdirSync(backupDir, { recursive: true });
+  const backup = join(backupDir, `guild-plan.before-${stamp}.json`);
+  copyFileSync(planFile, backup);
   writeFileSync(planFile + '.tmp', JSON.stringify(next, null, 2) + '\n');
   renameSync(planFile + '.tmp', planFile);
   state.written = planTargets(next);
   mkdirSync(dirname(stateFile), { recursive: true });
   writeFileSync(stateFile + '.tmp', JSON.stringify(state, null, 2) + '\n');
   renameSync(stateFile + '.tmp', stateFile);
-  console.log(`\nwrote ${planFile} (backup .before-feed-me-more-${stamp}) and ${stateFile}`);
+  console.log(`\nwrote ${planFile} (backup ${backup}) and ${stateFile}`);
 }
