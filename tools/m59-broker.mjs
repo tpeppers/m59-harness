@@ -8380,6 +8380,7 @@ const TOOLS = [
       from_row: { type: 'number', description: 'start row' },
       to_col: { type: 'number', description: 'destination column' },
       to_row: { type: 'number', description: 'destination row' },
+      exact_walk: { type: 'boolean', description: 'prove reusable integer-wire walking edges; default false for legacy rail repair' },
       max_jumps: { type: 'number', description: 'how many jumps the search may chain, default 4' },
       allow_candidates: { type: 'boolean', description: 'also consider hops nobody has walked; ' +
         'they cannot be executed by `jump` and are marked CANDIDATE' },
@@ -8391,12 +8392,12 @@ const TOOLS = [
         const s = session(a.agent);
         const me = s.client?.self;
         room = room ?? Number(s.world?.room?.num ?? NaN);
-        if (me) from = { row: me.row, col: me.col };
+        if (me) from = { row: me.row, col: me.col, ...(a.exact_walk===true && Number(room)===Number(s.world?.room?.num) && Number.isFinite(me.x) && Number.isFinite(me.y) ? {x:protocolToClient(me.x),y:protocolToClient(me.y)} : {}) };
       }
       if (a.from_row != null && a.from_col != null) from = { row: a.from_row, col: a.from_col };
       if (!Number.isFinite(Number(room))) throw new Error('route_fine: need a room, or an agent that is in one');
       if (!from) throw new Error('route_fine: need from_row/from_col, or an agent to take them from');
-      const R = fineRouter(Number(room), { worldMap });
+      const R = fineRouter(Number(room), { worldMap, exactWalk: a.exact_walk === true });
       const out = R.plan(from, { row: a.to_row, col: a.to_col },
                          { maxJumps: Number(a.max_jumps ?? 4),
                            allowCandidates: a.allow_candidates === true });
@@ -8404,8 +8405,9 @@ const TOOLS = [
       // rather than leaving a caller to guess that x/y beat col/row on `walk_to`.
       return { ...out,
         how_to_execute: out.ok
-          ? "walk legs: walk_to { agent, x, y } for each waypoint IN ORDER — pass x/y, not " +
-            "col/row, because a square centre is the wrong place on this ground. jump legs: " +
+          ? "Waypoints x/y are CLIENT units. Quantize with quantizeRailPoint, or convert to KOD " +
+            "wire units using clientToProtocol before walk_to { agent, x, y }. Follow in order; " +
+            "use hold_shelf and exact_arrival for checked corners. jump legs: " +
             "jump { agent, to_row, to_col }. Re-plan from where you actually are if a leg ends short."
           : undefined };
     },
@@ -8475,6 +8477,7 @@ const TOOLS = [
       arrive_within: { type: 'number', description: 'how close counts as arrived, in kod units ' +
         '(64 to a square). Default 40, which is two thirds of a square — fine for walking ' +
         'somewhere, far too coarse for standing on a jump take-off.' },
+      exact_arrival: { type: 'boolean', description: 'honor arrive_within without accepting a stalled endpoint inside one square' },
       hold_shelf: { type: 'boolean', description: 'refuse any step that drops off the ledge ' +
         'you are standing on, instead of counting it as progress because it got closer. For ' +
         'walking a route that only makes sense on one shelf — a staircase of slivers, a climb ' +
@@ -8513,7 +8516,7 @@ const TOOLS = [
         const r = await s.walkFine(num(a.x), num(a.y), {
           maxSteps: num(a.max_steps, 60),
           ...(a.stride != null ? { stride: num(a.stride) } : {}),
-          holdShelf: a.hold_shelf === true,
+          holdShelf: a.hold_shelf === true, exactArrival: a.exact_arrival === true,
           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
           controlToken: a.control_token, origin,
         });
@@ -8526,7 +8529,7 @@ const TOOLS = [
       const half = KOD_FINENESS >> 1;
       return s.walkFine(num(a.col) * KOD_FINENESS + half, num(a.row) * KOD_FINENESS + half,
                         { maxSteps: num(a.max_steps, 120), stride: num(a.stride, 48),
-                          holdShelf: a.hold_shelf === true,
+                          holdShelf: a.hold_shelf === true, exactArrival: a.exact_arrival === true,
                           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
                           controlToken: a.control_token, origin });
     },

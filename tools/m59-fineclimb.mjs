@@ -57,6 +57,7 @@ import http from 'node:http';
 import { rosterGameEndpoint,stateFileFor } from './m59-fleetpath.mjs';
 import {railIdentityProblem} from './m59-node-tour-policy.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
+import { auditNodeWalk } from './m59-node-route-audit.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
 import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint } from './m59-railfollow.mjs';
 import { exactFloor } from './m59-noderails.mjs';
@@ -72,7 +73,7 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
+                       'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -225,7 +226,7 @@ if (RAIL && Number(RAIL.room) !== ROOM) {
 // into the valley under a ledge is at r37c34 with floor 3392 while the footing search says
 // r37c34 means the 7040 shelf. Planning from the shelf for a body in the valley produces a
 // route it cannot take a single step of. `look` gives x/y in kod PROTOCOL units.
-const R = fineRouter(ROOM);
+const R = fineRouter(ROOM, { exactWalk: has('exact-walk') });
 const bodyFloor = exactFloor(R.geo);
 const fromPt = (at0.x != null && at0.y != null)
   ? { row: at0.row, col: at0.col, x: toClient(at0.x), y: toClient(at0.y) }
@@ -243,6 +244,10 @@ const plan = RAIL
   : R.plan(fromPt, { row: toRow, col: toCol },
            { maxJumps: Number(flag('max-jumps', 4)),
              allowCandidates: has('allow-candidates') });
+if (has('exact-walk')) {
+  const audit=auditNodeWalk(plan,R.geo);
+  if(!audit.ok){console.error(JSON.stringify({reason:'route_not_proved',audit}));process.exit(2);}
+}
 const total = (plan.legs ?? []).filter(l => l.kind === 'walk')
   .reduce((a, l) => a + l.waypoints.length, 0);
 console.log(`room ${ROOM} — ${R.room.name}`);
@@ -406,7 +411,7 @@ for (const [li, leg] of plan.legs.entries()) {
     if(!wire.ok){came_off={leg:li+1,waypoint:wi+1,why:wire.reason,asked:wp};receipt(came_off);console.log(JSON.stringify(came_off));break outer;}
     const w = await call('walk_to', { agent: AGENT, ...wire.protocol,
                                       max_steps: STEPS, stride: STRIDE,
-                                      arrive_within: 3, hold_shelf: true }, 60000);
+                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000);
     receipt({kind:'walk',leg:li+1,waypoint:wi+1,aim:wp,wire,reply:w});
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
@@ -422,6 +427,10 @@ for (const [li, leg] of plan.legs.entries()) {
     if (w?._error) {
       console.log(`  leg ${li + 1}  waypoint ${wi + 1}/${leg.waypoints.length}: ${w._error}`);
       came_off = { leg: li + 1, waypoint: wi + 1, why: w._error }; break outer;
+    }
+    if (has('exact-walk') && w?.arrived !== true) {
+      came_off={leg:li+1,waypoint:wi+1,why:w?.reason??'exact_waypoint_not_reached',got:pos};
+      break outer;
     }
     // DISTANCE ALONE CANNOT TELL "NEARLY THERE" FROM "FELL OFF".
     //

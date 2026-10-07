@@ -551,8 +551,9 @@ export const MOVER_VERDICT = Object.freeze({
   515:  { off: 5,  note: 'no measurement beyond the walking flood.' },
   579:  { off: 0,  note: 'four declared falls carry it.' },
   589:  { off: 0,  note: 'only across the declared fall r35c16 -> r38c19, entered from 599.' },
-  750:  { off: 1,  note: 'INSIDE the meld box by walking alone. Filed as needing new jumping '
-                       + 'mechanics; it needs none.' },
+  750:  { off: null, note: 'The September coarse flood ignored the gates. Checked Ice approach '
+                       + 'uses the timed YETI_DOOR; MANA_DOOR still requires killing the yeti. '
+                       + 'A maze endpoint outside the main chamber is not an approach.' },
   // No route from anywhere, and that is the DESIGN — see the exemption in nodeCandidates.
   1006: { off: 10, note: 'no route from anywhere, by design: the guest demonstration stone.' },
 });

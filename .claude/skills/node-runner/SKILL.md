@@ -203,7 +203,7 @@ from the square a body lands on coming in. Anything at 2 or less is already insi
 | **39** | Castle Victoria | 0 | over 599's fall | reachable from the EAST doorway only; 22 short from the other |
 | **579** | Ancient Place | 0 | four | carried by the declared falls |
 | **589** | Sentinel | 0 | one | only across `r35c16 -> r38c19`, and only entered from 599 |
-| **750** | Ice Caves | 1 | none | INSIDE the box by walking. Filed as needing new mechanics; it needs none |
+| **750** | Ice Caves | — | none | checked maze plus timed YETI_DOOR approach; September coarse box claim superseded; see nodes/ice.md |
 | **45** | Badlands | 3 | none | one square outside the box, from `r60c46` |
 | **27** | Icky Cave | 4 | **none** | MELDED ANYWAY, 2026-09-09. The route is a jump nobody has declared |
 | **515** | Seafarer's Peak | 5 | none | nothing measured beyond the walking flood |

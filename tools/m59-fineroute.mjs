@@ -50,6 +50,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sharedRoomGeometry, CLIENT_FINENESS as F, MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
+import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -59,6 +60,28 @@ const REPO = join(HERE, '..');
 // The fall arithmetic is shared with `m59-jumpfinder.mjs` — both files used to carry their
 // own copy and both had the same bug. See m59-falljump-physics.mjs.
 import { RUN_SPEED, reachFor, fallenBy, maxSpan } from './m59-falljump-physics.mjs';
+
+/** Keep corners unless the mover proves the replacement chord reaches its endpoint. */
+export function checkedWalkWaypoints(geo, points, { maxGap = F * 0.75, allowUnprovedEdges = false } = {}) {
+  if (!points?.length) return { ok: true, points: [] };
+  const lands = (a, b) => geo.traceFineMoveClient(a.x, a.y, b.x, b.y, { slide: true })?.arrived === true;
+  const out = [points[0]], unproved = [];
+  for (let i = 1; i < points.length; i++) {
+    const anchor = out.at(-1), point = points[i];
+    if (Math.hypot(point.x - anchor.x, point.y - anchor.y) <= maxGap && lands(anchor, point)) continue;
+    const corner = points[i - 1];
+    if (corner.x !== anchor.x || corner.y !== anchor.y) out.push(corner);
+    if (!lands(corner, point)) {
+      const failure = { reason: 'fine_walk_edge_not_proved', index: i, from: corner, to: point,
+        trace: geo.traceFineMoveClient(corner.x, corner.y, point.x, point.y) };
+      if (!allowUnprovedEdges) return { ok: false, ...failure };
+      unproved.push(failure);out.push(point);
+    }
+  }
+  const last = points.at(-1), anchor = out.at(-1);
+  if (last.x !== anchor.x || last.y !== anchor.y) out.push(last);
+  return { ok: true, points: out, unproved };
+}
 
 /**
  * A planner bound to one room. Built once and reused: the floor cache is the expensive part
@@ -99,12 +122,16 @@ export function fineRouter(roomNum, {
   // Validate every flood edge with the mover's own fine trace. On by default: a plan the mover
   // refuses is not a plan. Off makes the flood a pure height model, which is what it was.
   strict = true,
+  // Checked callers need reusable straight edges; legacy rails repair clipped slides.
+  exactWalk = false,
   worldMap = null,
+  geometry = null,     // live animated sectors, when supplied by a Session
 } = {}) {
   const world = worldMap ?? JSON.parse(readFileSync(join(REPO, 'substrate', 'm59-map.json'), 'utf8'));
   const room = world.rooms?.[roomNum] ?? world.rooms?.[String(roomNum)];
   if (!room) throw new Error(`no room ${roomNum} in the map`);
-  const geo = sharedRoomGeometry(room);
+  if (exactWalk && !strict) throw new Error('exactWalk requires collision tracing');
+  const geo = geometry ?? sharedRoomGeometry(room);
   if (!geo?.collisionReady) throw new Error(`room ${roomNum} has no collision geometry`);
   // THE MASK FIRST. Without one, `neighbors({collision:true})` silently falls back to the
   // SERVER'S COARSE GRID, which holds a veto the mover does not — that is the trap that made a
@@ -226,8 +253,11 @@ export function fineRouter(roomNum, {
         const len = Math.hypot(dx, dy) || 1;
         const ux = -dy / len, uy = dx / len;          // unit perpendicular to this direction
         for (const off of PERP) {
-          const nx = Math.round(cur.x + dx + ux * off);
-          const ny = Math.round(cur.y + dy + uy * off);
+          let nx = Math.round(cur.x + dx + ux * off);
+          let ny = Math.round(cur.y + dy + uy * off);
+          // Rounding a corner after planning can move its chord into a wall.
+          // Search the integer wire lattice in checked mode, using the shared conversion.
+          if (exactWalk) ({ x: nx, y: ny } = protocolToClient(clientToProtocol({ x: nx, y: ny })));
           if (nx < 0 || ny < 0 || nx > room.cols * F || ny > room.rows * F) continue;
           // NOT `seen.has(aimedKey)`, which was its own bug: a cell already reached by some
           // other aim says nothing about whether THIS aim lands somewhere new, and skipping
@@ -250,8 +280,10 @@ export function fineRouter(roomNum, {
           let px = nx, py = ny;
           if (strict) {
             const t = geo.traceFineMoveClient(cur.x, cur.y, nx, ny, { slide: true });
-            if (!t || !t.moved) continue;
-            px = Math.round(t.x); py = Math.round(t.y);
+            // Following a new aim at a slide's endpoint is a different command;
+            // it need not retrace the original slide around the wall.
+            if (!t || !t.moved || (exactWalk && t.arrived !== true)) continue;
+            px = exactWalk ? nx : Math.round(t.x); py = exactWalk ? ny : Math.round(t.y);
             if (Math.hypot(px - cur.x, py - cur.y) < step / 4) continue;   // went nowhere
             const hs = standAt(px, py);
             if (hs == null || hs < hc - maxDescend || hs > hc + MAX_STEP_HEIGHT) continue;
@@ -275,30 +307,12 @@ export function fineRouter(roomNum, {
     const back = [];
     while (k != null) { const n = seen.get(k); if (!n) break; back.push({ x: n.x, y: n.y }); k = n.from; }
     back.reverse();
-    // DECIMATED TO SOMETHING A WALKER CAN BE TOLD, AND NO FURTHER.
-    //
-    // One waypoint every quarter-square is a packet storm; one waypoint for the whole leg is
-    // the square router's mistake again. But the gap is also the LATITUDE the follower has to
-    // wander in, and that turned out to be the thing that mattered: at a square and a half,
-    // with the walker allowed 24 steps to cover it, a character following a correct plan up
-    // the Ancient Place ended on r37c34 — a square the plan never visits — and jittered there
-    // until it was killed. The plan was right and the walk was free.
-    //
-    // Three quarters of a square is close enough that the walker has nowhere to go but the
-    // next point, and `maxGap` is the knob if that proves too chatty on easier ground.
-    const out = [];
-    let lastDir = null;
-    for (let i = 0; i < back.length; i++) {
-      const p = back[i], prev = out[out.length - 1];
-      if (!prev) { out.push(p); continue; }
-      const dir = Math.round(Math.atan2(p.y - prev.y, p.x - prev.x) * 8 / Math.PI);
-      const far = Math.hypot(p.x - prev.x, p.y - prev.y) >= maxGap;
-      if (dir !== lastDir || far) { out.push(p); lastDir = dir; }
-    }
-    const last = back[back.length - 1];
-    if (last && (out.length === 0 || out[out.length - 1].x !== last.x || out[out.length - 1].y !== last.y))
-      out.push(last);
-    return out.map(p => snapToFloor(p)).filter(Boolean);
+    // A moved slide is not a straight edge to its clipped endpoint. The closure
+    // in exactWalk mode records only arrived edges. Legacy rails retain clipped
+    // slides for their repair pass; both modes preserve proved corners.
+    // Ice Caves emitted 33 refused chords after skipping its narrow bends.
+    const checked = checkedWalkWaypoints(geo, back, { maxGap, allowUnprovedEdges: !exactWalk });
+    return checked.ok ? checked.points : null;
   }
 
   // YOU CANNOT JUMP THROUGH A CLIFF, AND CHECKING ONLY THE ENDS SAYS YOU CAN.
@@ -406,7 +420,11 @@ export function fineRouter(roomNum, {
       const b = standAt(waypoints[i].x, waypoints[i].y);
       if (a != null && b != null && a - b > worst) worst = a - b;
     }
-    return { kind: 'walk', waypoints, biggest_drop: worst };
+    const unproved = waypoints.slice(1).flatMap((p, i) => {
+      const from = waypoints[i], trace = geo.traceFineMoveClient(from.x, from.y, p.x, p.y);
+      return trace?.arrived === true ? [] : [{ index: i + 1, from, to: p, trace }];
+    });
+    return { kind: 'walk', waypoints, biggest_drop: worst, walk_proof: { checked: unproved.length === 0, unproved } };
   }
 
   function plan(from, to, { maxJumps = 4, allowCandidates = false, branch = 12 } = {}) {
@@ -455,7 +473,8 @@ export function fineRouter(roomNum, {
           let walkSeen = closure(startPt), here = startPt;
           for (const j of node.path) {
             const wp = pathWithin(walkSeen, j.fromFine);
-            legs.push(walkLeg(wp ?? [j.fromFine]));
+            if (!wp) return { ok: false, why: 'fine walk to takeoff is not proved', trace, ms: Date.now() - t0 };
+            legs.push(walkLeg(wp));
             legs.push({ kind: 'jump', from: j.from, to: j.to, fromFine: j.fromFine, toFine: j.toFine,
                         declared_from: j.declaredFrom ?? j.fromFine,
                         declared_to: j.declaredTo ?? j.toFine,
@@ -464,7 +483,8 @@ export function fineRouter(roomNum, {
             walkSeen = closure(here);
           }
           const wp = pathWithin(walkSeen, end);
-          legs.push(walkLeg(wp ?? [end]));
+          if (!wp) return { ok: false, why: 'fine walk to goal is not proved', trace, ms: Date.now() - t0 };
+          legs.push(walkLeg(wp));
           void cursor;
           const jumps = legs.filter(l => l.kind === 'jump');
           return { ok: true, room: roomNum, from, to, legs, trace,
@@ -556,7 +576,7 @@ if (import.meta.url === `file://${process.argv[1]}` ||
   const from = flag('from') ? pair(flag('from')) : null;
   const to = flag('to') ? pair(flag('to')) : null;
   if (!from || !to) { console.error('need --from row,col and --to row,col'); process.exit(2); }
-  const R = fineRouter(ROOM);
+  const R = fineRouter(ROOM, { exactWalk: has('exact-walk') });
   const out = R.plan(from, to, { maxJumps: Number(flag('max-jumps', 4)),
                                  allowCandidates: has('allow-candidates') });
   if (has('json')) { console.log(JSON.stringify(out, null, 1)); process.exit(out.ok ? 0 : 2); }

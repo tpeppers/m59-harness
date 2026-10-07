@@ -9,6 +9,56 @@ So success for this stone is **within 5 coarse squares of r25c23**, and the meld
 question for somebody who means to fight for it. `objective: 'approach'` in
 `tools/m59-stones.mjs` is that, and `m59-node-run.mjs` judges the leg on it.
 
+## 2026-10-06: checked maze, timed door and chamber-side return
+
+The September coarse-flood conclusions below are historical. They did not prove a
+fine route through the maze or account for the live door state. A square inside the
+five-square approach box can still be outside the main chamber: r21c20 is one such
+false finish. The current movement-only goal is **r25c20 inside the main chamber**,
+three squares from the node at r25c23. This is an approach, not a meld.
+
+Measured against main `15aaf141`, on the owned native `m59-replay-lab` server:
+
+- Normal coarse movement from r46c25 stopped at r30c30 with `no_ground_gained`.
+- The old fine plan to r21c20 emitted **33 unproved chords**. Its follower stopped
+  at waypoint 36 against wall 392. Compression skipped necessary maze bends;
+  clipped slide endpoints were also being reused as different movement commands.
+- A checked float-coordinate route to the real trigger r24c10 still contained
+  **four refused integer-wire chords**. Search now quantizes before tracing each
+  edge, rather than rounding its answers afterward.
+- A last-budget-step arrival was reported as `ran out of steps`. `walkFine` now
+  confirms the final server endpoint before accepting success. Checked callers
+  can require their actual tolerance with `exactArrival`, avoiding the legacy
+  one-square stalled-arrival shortcut.
+- The repaired initially cleared route reached r21c20 in 244 seconds, with health 59/59.
+  That is a maze verification, **not** the main-chamber approach.
+- Walking to r24c10 and pressing `go` normally opened **YETI_DOOR, sector 1**.
+  Planning afterward consumed 4.6 seconds after the 4.35-second animation; the
+  ten-second timer then closed the door at waypoint 3. Prepare the conditional
+  route on a private geometry copy **before** pressing. Require the real opening
+  event and retain live collision validation when executing it.
+- With that change, the door-start trial reached r25c20, returned to the normally
+  reachable inside trigger **r24c11**, reopened sector 1 with `go`, and walked
+  back to r46c25. Approach plus return took 243 seconds; health remained 59/59.
+  Trying to return to the outside trigger r24c10 through the closed door is a
+  different, unreachable objective in that door state.
+
+No jump, activation, yeti kill or administrative sector opening was used.
+Sector 2 (**MANA_DOOR**) retains its independent yeti-kill condition. Monsters
+were initially cleared during scene setup, but generation resumed after release
+in those first trials. The complete entrance run reached r25c20, then a respawned
+yeti killed the character while returning at r20c15. Receipt
+`node-path-1791335203484.json` preserves the attack messages and health trace.
+`labScenery` retains scenery; it does **not** disable monster generation. Use the
+runner's explicit `--quiet` flag (existing scene option `noMonsters`) for a
+pathing-only experiment. A respawn-enabled trial is not a quiet trial. Ice remains conditional and is **not** promoted to `get-all-nodes`.
+
+Reusable tools and full reproduction details: [Ice pathing investigation](../../../../docs/m59-ice-node-pathing.md).
+`m59-node-route-audit` names invalid fine and wire chords without moving anyone;
+`m59-node-path-lab` runs the held native approach, normal door operation and return.
+Raw receipts remain private under the production checkout's
+`substrate/replay-smoke/ice-node-2026-10-06/`; preserve unsuccessful runs too.
+
 ## What the geometry says, and why it is not the whole answer
 
 **The walking flood reaches the stone.** That is true and it was the first thing measured here,
