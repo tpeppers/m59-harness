@@ -1375,7 +1375,11 @@ console.log('\nthe executable first hop — hard through fallbacks, local to exp
       roomRsc: realMap.rooms['567'].roomRsc,
       room: { id: realMap.rooms['567'].objId, objects: new Map([[1, piggy]]) },
       selfId: 1, self: piggy, rsc: { get: () => '' } };
-    const piggyWorld = new World(client, realMap);
+    // This asserts geometry, not that a loaded machine finishes a 500-ms live
+    // budget. The unchanged implementation timed out at this fixture, retained
+    // its documented unknown fallback, and failed intermittently under the suite.
+    // Keep the separate bounded-search assertion below for exhaustion semantics.
+    const piggyWorld = new World(client, realMap, { fineConnectivityBudget: { maxMs: 10000 } });
     const offered = piggyWorld.exits().filter(x => Number(x.to) === 566);
     ok('567 excludes the disconnected western openings from all normal crossing candidates',
        offered.length > 0 && spreadEdges(offered).every(x =>

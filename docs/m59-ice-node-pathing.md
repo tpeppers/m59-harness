@@ -87,6 +87,9 @@ Private evidence is in
 | `node-path-1791334396567.json` | Door opened normally, but post-press planning exhausted its window. |
 | `node-path-1791334892946.json` | Door-start approach to r25c20 and walking return to r46c25 succeeded, 243 seconds, 59/59 HP; spawns permitted. |
 | `node-path-1791335203484.json` | Entrance-to-chamber succeeded; respawned yeti killed the character on the return at r20c15, after 249 seconds. |
+| `node-path-1791335783277.json` | Explicit quiet entrance-to-chamber-to-entrance run succeeded in 447,822 ms (7m28s), health 59/59 throughout; owned baseline restored. |
+
+The explicit quiet run verifies the full r46c25 -> r24c10 -> r25c20 -> r24c11 -> r46c25 path, with both normal sector-1 openings and server-confirmed endpoints. Its recorded core-source hashes match the committed repair. `quiet-validation-summary.json` summarizes the source match, health and baseline restoration.
 
 The door-start success includes the full return maze, but starts at the door.
 Keep that count distinct from an entrance-to-chamber-to-entrance run. Initial
@@ -104,12 +107,16 @@ server corrections, cancellation, room changes, wrong-shelf landings, exact arri
 private door previews, the independent mana gate and the inside return trigger.
 The node circuit checks pass, including Ancient transit. The default Ancient
 three-jump route also bakes completely with zero unvalidated edges and passes
-1,470 retraced lattice steps. Eleven new checks, 10 existing ceiling-door checks,
-151 rail-follow checks and 17 tour-policy checks pass. The portable full movement
-run executes 21 suites with zero regressions against 19 named existing failures. Full movement checks
-retain their named existing failures. With this machine's shared private walk logs,
-the map-567 exclusion assertion fails on **both unchanged main and this repair**;
-see `routing-main-matching-evidence.txt` and `routing-fixed-idle.txt`. An isolated
-original checkout without those optional logs passes. Keep portable fixture runs
-and local-history runs distinct; do not mark this as a new Ice regression or hide
-it by adding a new global known-red entry.
+1,470 retraced lattice steps. Eleven new checks, 15 existing session-walk seam
+checks, 131 critic checks, 10 ceiling-door checks, 151 rail-follow checks and 17
+tour-policy checks pass.
+
+The map-567 exclusion assertion also failed intermittently on unchanged main.
+Instrumenting that baseline measured `fine connectivity budget exhausted`, not
+an exhausted component: its 500-ms live deadline expired after finding 780
+squares (`routing-baseline-budget-measure.txt`). The documented fallback retained
+unknown candidates, so a geometry assertion became a machine-speed assertion.
+`World` now accepts an optional `fineConnectivityBudget`; this one offline fixture
+uses a ten-second deadline, as its independent component check already did. Live
+callers retain the default 500-ms deadline and unknown-on-exhaustion behavior.
+The bounded-search assertion remains, and no global known-red exception was added.

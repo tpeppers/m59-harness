@@ -476,9 +476,11 @@ export function sameRoomIslandBridgePlan(map, roomNum, geo, from, target) {
 
 export class World {
   // `client` is an M59Client; `map` is the parsed substrate/m59-map.json.
-  constructor(client, map) {
+  constructor(client, map, { fineConnectivityBudget } = {}) {
     this.c = client;
     this.map = map;
+    // Offline geometry evaluations may wait longer; live callers retain the 500-ms default.
+    this.fineConnectivityBudget = fineConnectivityBudget;
   }
 
   // Which room are we in, as a room NUMBER? The protocol never says. BP_PLAYER
@@ -1013,7 +1015,7 @@ export class World {
         // exit itself would reverse the question on a one-way drop.
         const reach = fineOriginReach ??= fineReachableSquares(geo, {
           x: protocolToClient(me.x), y: protocolToClient(me.y),
-        });
+        }, this.fineConnectivityBudget);
         if (reach.complete) {
           for (let i = precise.length - 1; i >= 0; i--) {
             const candidate = precise[i];
