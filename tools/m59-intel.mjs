@@ -30,7 +30,7 @@
 //   node tools/m59-intel.mjs --heatmap <name>    — room frequency for one player
 
 import { readFileSync, writeFileSync, existsSync,
-         mkdirSync, appendFileSync, readdirSync } from 'node:fs';
+         mkdirSync, appendFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
@@ -116,17 +116,78 @@ function appendHistory(name, record) {
   appendFileSync(historyPath(name), JSON.stringify(record) + '\n', 'utf8');
 }
 
-// Read full history for a player. Returns array of records, newest first.
+// A HISTORY FILE IS APPEND-ONLY (appendHistory above), SO IT IS READ ONCE AND THEN ONLY ITS TAIL.
+//
+// The /players page read every file in full, synchronously, again and again: each player's own file
+// six times for its panels, and -- in followingDetection -- once more per fleet candidate, with every
+// candidate's file read once per player. On prod (456 MB of history, 2026-10-08) one render blocked
+// the broker's event loop for ~100 s, every two minutes while the page was open, and every tool call
+// timed out behind it. So a file is parsed once and extended from where the last read stopped; only a
+// file that SHRANK (truncated, replaced) is read again from the start. The offset only advances past a
+// complete line, so a record half-written by a concurrent append is picked up whole on the next read.
+function readTail(path, from) {
+  const size = statSync(path).size;
+  if (size <= from) return { size, text: '', next: size === from ? from : 0, restart: size < from };
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(size - from);
+    const n = readSync(fd, buf, 0, buf.length, from);
+    const text = buf.toString('utf8', 0, n);
+    const last = text.lastIndexOf('\n');
+    return { size, text: last < 0 ? '' : text.slice(0, last + 1), next: last < 0 ? from : from + Buffer.byteLength(text.slice(0, last + 1)), restart: false };
+  } finally { closeSync(fd); }
+}
+const parseLines = text => text.split('\n').filter(Boolean)
+  .map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+// The full records, for the panels that need them: a SMALL cache (one render reads one player's file
+// several times in a row), so the broker never holds every player's history at once.
+const HISTORY_CACHE_MAX = 8;
+const historyCache = new Map();                     // path -> { offset, records (oldest first) }
+function cachedRecords(path) {
+  let c = historyCache.get(path);
+  if (c) historyCache.delete(path);                 // re-inserted below: most recently used last
+  c ??= { offset: 0, records: [] };
+  let t = readTail(path, c.offset);
+  if (t.restart) { c = { offset: 0, records: [] }; t = readTail(path, 0); }   // shrank: start over
+  for (const r of t.text ? parseLines(t.text) : []) c.records.push(r);      // no spread: a big tail would overflow the stack
+  c.offset = t.next;
+  historyCache.set(path, c);
+  while (historyCache.size > HISTORY_CACHE_MAX) historyCache.delete(historyCache.keys().next().value);
+  return c.records;
+}
+
+// Read full history for a player. Returns array of records, newest first (a fresh array each call).
 export function readHistory(name) {
   const path = historyPath(name);
   if (!existsSync(path)) return [];
+  try { return cachedRecords(path).slice().reverse(); } catch { return []; }
+}
+
+// THE COMPACT INDEX followingDetection needs: every (room, at) move, oldest first, and per room the
+// sorted times. Kept for EVERY file it has been asked about, because it is small (two numbers a move)
+// and the page asks about the same fleet characters for every player.
+const movesCache = new Map();                       // path -> { offset, rooms[], ats[], byRoom|null }
+export function historyMoves(name) {
+  const path = historyPath(name);
+  if (!existsSync(path)) return { rooms: [], ats: [], byRoom: {} };
+  let c = movesCache.get(path) ?? { offset: 0, rooms: [], ats: [], byRoom: null };
   try {
-    return readFileSync(path, 'utf8')
-      .split('\n').filter(Boolean)
-      .map(l => { try { return JSON.parse(l); } catch { return null; } })
-      .filter(Boolean)
-      .reverse();
-  } catch { return []; }
+    let t = readTail(path, c.offset);
+    if (t.restart) { c = { offset: 0, rooms: [], ats: [], byRoom: null }; t = readTail(path, 0); }
+    if (t.text) {
+      for (const r of parseLines(t.text)) if (r.room != null && r.at != null) { c.rooms.push(r.room); c.ats.push(r.at); }
+      c.byRoom = null;                              // rebuilt lazily, only when it changed
+    }
+    c.offset = t.next;
+  } catch { /* unreadable this time: answer with what is already indexed */ }
+  if (!c.byRoom) {
+    c.byRoom = {};
+    for (let i = 0; i < c.rooms.length; i++) (c.byRoom[c.rooms[i]] ??= []).push(c.ats[i]);
+    for (const k of Object.keys(c.byRoom)) c.byRoom[k].sort((a, b) => a - b);
+  }
+  movesCache.set(path, c);
+  return c;
 }
 
 // Compute room frequency heatmap from full history.
@@ -476,43 +537,41 @@ export function zonePattern(name, zoneMap = ZONE_MAP) {
 // Returns: { following, confidence, matches, fleet_moves, evidence: [...] }
 // evidence is capped at 10 entries.
 export function followingDetection(name, fleetHistory) {
-  let fleet;
+  const none = { following: false, confidence: 0, matches: 0, fleet_moves: 0, evidence: [] };
+  // The fleet side as two parallel lists, NEWEST FIRST -- the order the array form has always been
+  // walked in, so `evidence` (capped at 10) names the same, most recent, matches it always did.
+  let fRooms, fAts;
   if (Array.isArray(fleetHistory)) {
-    fleet = fleetHistory;
+    const moves = fleetHistory.filter(f => f.room != null && f.at != null);
+    fRooms = moves.map(f => f.room); fAts = moves.map(f => f.at);
   } else if (typeof fleetHistory === 'string') {
-    fleet = readHistory(fleetHistory);
-  } else {
-    return { following: false, confidence: 0, matches: 0, fleet_moves: 0, evidence: [] };
-  }
+    const m = historyMoves(fleetHistory);           // compact and incremental (see historyMoves)
+    fRooms = m.rooms.slice().reverse(); fAts = m.ats.slice().reverse();
+  } else return none;
 
-  const player = readHistory(name);
-  if (!player.length || !fleet.length) {
-    return { following: false, confidence: 0, matches: 0, fleet_moves: 0, evidence: [] };
-  }
+  const playerByRoom = historyMoves(name).byRoom;   // per room, sorted times
+  if (!Object.keys(playerByRoom).length || !fRooms.length) return none;
 
-  // Index player room changes by room for quick lookup.
-  const playerByRoom = {};
-  for (const r of player) {
-    if (r.room == null || r.at == null) continue;
-    (playerByRoom[r.room] ??= []).push(r.at);
-  }
-  for (const room of Object.keys(playerByRoom)) playerByRoom[room].sort((a, b) => a - b);
-
+  // The FIRST player time within +/- 60 s of t, by binary search over the sorted list (the linear
+  // .find this replaced was the same answer, at the cost of a scan per fleet move).
+  const within = (sorted, t) => {
+    let lo = 0, hi = sorted.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < t - 60_000) lo = mid + 1; else hi = mid; }
+    return lo < sorted.length && sorted[lo] <= t + 60_000 ? sorted[lo] : null;
+  };
   let matches = 0;
   const evidence = [];
-  for (const f of fleet) {
-    if (f.room == null || f.at == null) continue;
-    const candidates = playerByRoom[f.room];
+  for (let i = 0; i < fRooms.length; i++) {
+    const candidates = playerByRoom[fRooms[i]];
     if (!candidates) continue;
-    // Find a player entry within +/- 60s of the fleet entry.
-    const hit = candidates.find(t => Math.abs(t - f.at) <= 60_000);
+    const hit = within(candidates, fAts[i]);
     if (hit != null) {
       matches += 1;
-      if (evidence.length < 10) evidence.push({ at: hit, room: f.room, fleet_at: f.at });
+      if (evidence.length < 10) evidence.push({ at: hit, room: fRooms[i], fleet_at: fAts[i] });
     }
   }
 
-  const fleet_moves  = fleet.filter(f => f.room != null && f.at != null).length;
+  const fleet_moves  = fRooms.length;
   const confidence   = fleet_moves > 0 ? matches / fleet_moves : 0;
   return {
     following:   confidence > 0.3 && matches >= 3,

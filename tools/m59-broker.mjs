@@ -217,7 +217,7 @@ import { renderTownTrips } from './m59-towntrips-page.mjs';
 import { renderInventory } from './m59-inventory-page.mjs';
 import { communicationsReport, renderCommunications, fleetCommunications } from './m59-communications-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
-import { renderPlayers } from './m59-players-page.mjs';
+import { renderPlayersOffThread } from './m59-players-worker.mjs';
 import { renderPvp } from './m59-pvp-page.mjs';
 import { pvpReport } from './m59-pvp.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -20611,13 +20611,16 @@ function serveDashboard(port, { handle = null } = {}) {
         res.writeHead(403, { 'content-type': 'text/plain' });
         return res.end('/players names real people and is served on loopback only');
       }
-      try {
+      // OFF THE EVENT LOOP (m59-players-worker.mjs). Rendered inline, this page blocked the broker for
+      // ~100 s a refresh on prod, 2026-10-08, and every tool call timed out behind an open browser tab.
+      renderPlayersOffThread().then(html => {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(renderPlayers());
-      } catch (e) {
+        res.end(html);
+      }, e => {
         res.writeHead(500, { 'content-type': 'text/plain' });
-        return res.end('/players failed: ' + e.message);
-      }
+        res.end('/players failed: ' + e.message);
+      });
+      return;
     }
     // /pvp — battles against players. Names them, so loopback only, for the reason above.
     if (url.pathname === '/pvp') {
