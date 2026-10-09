@@ -96,7 +96,7 @@ These tests are offline. They do not execute a raid or shut down a server.
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
   spider junk left earlier is not; attribution by novelty against fight()'s floor snapshot;
   memory expiry, recycled ids and room scoping; malformed shapes and unknown items refused.
-- `m59-buddy-test.mjs` (58): the buddy system (`m59-buddy.mjs`, `Autopilot.passBuddy`) and the private
+- `m59-buddy-test.mjs` (60): the buddy system (`m59-buddy.mjs`, `Autopilot.passBuddy`) and the private
   farming-strategy directories. Pairs are exclusive and validated; the tag is an UNTOUCHED monster (no
   player within two squares) of the quarry; a landed blow is a tag and a miss or a full resist is not;
   the shared per-character record reads stale as absent. The tagger takes a corner, tags only with its

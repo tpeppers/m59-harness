@@ -20858,8 +20858,12 @@ export class Autopilot {
     // A farming wall is still doing its job while a quarry is being pulled or
     // monsters are in contact. Full health does not finish that fight. Releasing
     // here preempts passFarm's contact-clear hysteresis and reconnects every lap.
+    // A BUDDY-SYSTEM TAGGER'S CORNER IS ITS JOB, NOT A REST STOP (live, 2026-10-09: every tagger took its
+    // corner, and the next pass released it here as "rested to the ceiling" at full health -- a corner
+    // taken and given up every second, and not one tag in four minutes).
     if (!onARoad && (this.pendingPull || this.inReachOfUs()?.length
-        || (this.mode === 'farm' && opensFightFromWall(this.policy)))) return false;
+        || (this.mode === 'farm' && opensFightFromWall(this.policy))
+        || (this.mode === 'farm' && this.buddyRole?.()?.role === 'tag'))) return false;
     const floor = onARoad
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);

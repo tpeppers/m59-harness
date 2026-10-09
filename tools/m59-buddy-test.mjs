@@ -188,6 +188,22 @@ console.log('\nthe keeper: the tagger');
   ok('a wait past wait_s gives up rather than standing in a fight for ever', k.ap.buddyTag === null);
 }
 
+console.log('\nthe keeper: a tagger\'s corner is not a rest stop');
+{
+  const vitals = () => ({ health: { value: 65, max: 65 }, vigor: { value: 120, scale_max: 200 } });
+  const k = keeper('t5', { hold: { col: 2, row: 2 } });
+  k.client.vitals = vitals;
+  Object.assign(k.ap, { inReachOfUs: () => [], isRoomEnchantPost: () => false, restVigorCeiling: () => 0.4,
+    leaveHold: async () => { k.ap.hold = null; return { left: true }; } });
+  ok('at full health and vigor the tagger keeps its corner', await k.ap.releaseRestedHold() === false && k.ap.hold !== null);
+  const k2 = keeper('t1', { hold: { col: 2, row: 2 } });
+  k2.client.vitals = vitals;
+  Object.assign(k2.ap, { inReachOfUs: () => [], isRoomEnchantPost: () => false, restVigorCeiling: () => 0.4,
+    leaveHold: async () => { k2.ap.hold = null; return { left: true }; } });
+  k2.ap.policy.buddy = null; k2.ap.mode = 'survive';
+  ok('anyone else leaves a rested wall as before', await k2.ap.releaseRestedHold() === true);
+}
+
 console.log('\nthe keeper: the killer');
 {
   buddy.writeBuddyRecord('t5', { role: 'tag', partner: 't4', room: 38, hold: { col: 2, row: 2 },
