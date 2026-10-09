@@ -1,12 +1,107 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import {Autopilot} from './m59-autopilot.mjs';
 import {Session} from './m59-game.mjs';
 import {returnToSpot} from './m59-skills.mjs';
 import {buildIncident,exportIncident} from './m59-movement-incidents.mjs';
 import {heldMonsterPlacementPlan} from './m59-scene-staging.mjs';
 import {traceMove,recentMoveAttempts} from './m59-collision-trace.mjs';
+import {TERMINAL_MOVEMENT_REASONS} from './m59-movement.mjs';
+import {geometryFor} from './m59-safespots.mjs';
+
+function fineApproachFixture({waypoints=5}={}) {
+ const c={self:{row:10,col:10,x:672,y:672},room:{id:10}},calls=[];
+ const s=Object.assign(Object.create(Session.prototype),{client:c,movementGeneration:0,
+  need:()=>c,movementWasCancelled:g=>g!==s.movementGeneration,
+  world:{room:{num:597},geometry:{collisionReady:true,finePathProtocol:()=>({found:true,
+   waypoints:Array.from({length:waypoints},(_,i)=>({x:680+i*8,y:680}))})}},
+  stepFine:async(x,y)=>{calls.push({kind:'waypoint',x,y});return {moved:true};},
+  walkFine:async(_x,_y,options)=>{calls.push({kind:'fallback',...options});return {arrived:false,steps:options.maxSteps,reason:'ran out of steps'};}});
+ return {s,c,calls};
+}
+
+test('fine waypoint and sliding fallback attempts share the caller budget and report all attempts',async()=>{
+ for(const [waypoints,maxSteps,expected] of [[5,2,5],[1,4,4],[0,3,3],[5,0,0]]) {
+  const {s,calls}=fineApproachFixture({waypoints});
+  const r=await s.approachFine(12,12,{maxSteps});
+  assert.equal(r.steps,expected);assert.equal(r.arrived,false);
+  assert.equal(calls.filter(x=>x.kind==='waypoint').length,maxSteps===0?0:waypoints);
+  const fallback=calls.find(x=>x.kind==='fallback');
+  assert.equal(fallback?.maxSteps??0,Math.max(0,expected-waypoints));
+ }
+});
+
+test('successful fine routes use exactly their existing waypoints and no fallback',async()=>{
+ const {s,c,calls}=fineApproachFixture({waypoints:2});
+ s.stepFine=async(x,y)=>{calls.push({kind:'waypoint',x,y});
+  if(calls.length===2)c.self={row:12,col:12,x:800,y:800};return {moved:true};};
+ const r=await s.approachFine(12,12,{maxSteps:2});
+ assert.equal(r.arrived,true);assert.equal(r.steps,2);assert.equal(calls.length,2);
+});
+
+test('a long real-geometry detour keeps its full planned route despite a short default budget',async()=>{
+ const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+ const room=map.rooms[597],geo=geometryFor(room),target={row:4,col:23};
+ const from={row:7,col:25,...geo.standPointWire(7,25)},goal=geo.standPointWire(target.row,target.col);
+ const path=geo.finePathProtocol(from.x,from.y,goal.x,goal.y,{step:8,margin:256,maxNodes:4000});
+ assert.ok(path.found&&path.waypoints.length>24,'fixture exercises a planned detour beyond the caller default');
+ const c={selfId:1,self:{...from},room:{id:597,security:geo.security,flags:0,overrideDepths:[0,0,0,0],objects:new Map()}};
+ c.room.objects.set(1,c.self);const calls=[];
+ const s=Object.assign(Object.create(Session.prototype),{client:c,world:{room,geometry:geo},
+  movementGeneration:0,movementWasCancelled:()=>false,need:()=>c,moveSpeed:()=>18,
+  stepFine:async(x,y)=>{
+   const r=s.validateFineTarget(x,y,{slide:true});calls.push({x,y});
+   if(r.moved&&r.target){c.self={...r.target,row:Math.floor(r.target.y/64),col:Math.floor(r.target.x/64)};c.room.objects.set(1,c.self);}
+   return {...r,left_room:false};
+  },walkFine:async()=>assert.fail('a healthy planned route needs no fan fallback')});
+ const r=await s.approachFine(target.col,target.row,{maxSteps:24});
+ assert.equal(r.arrived,true);assert.ok(r.steps>24);assert.equal(r.steps,calls.length);
+ assert.deepEqual(calls,path.waypoints.slice(0,calls.length).map(({x,y})=>({x,y})));
+});
+
+test('every terminal waypoint failure propagates its receipt before any more movement',async()=>{
+ for(const reason of TERMINAL_MOVEMENT_REASONS) {
+  const {s,calls}=fineApproachFixture();
+  s.stepFine=async()=>{calls.push('refused');return {moved:false,reason,note:'original detail',animation:{tag:3}};};
+  const r=await s.approachFine(12,12,{maxSteps:5});
+  assert.equal(r.reason,reason);assert.equal(r.note,'original detail');assert.equal(r.animation.tag,3);
+  assert.equal(r.steps,1);assert.equal(r.cancelled,undefined);assert.deepEqual(calls,['refused']);
+ }
+});
+
+test('terminal exceptions and fallback refusals retain their reason and total attempts',async()=>{
+ const f=fineApproachFixture();f.s.stepFine=async()=>{throw Error('room_geometry_mismatch');};
+ assert.equal((await f.s.approachFine(12,12)).reason,'room_geometry_mismatch');assert.equal(f.calls.length,0);
+ const g=fineApproachFixture({waypoints:1});
+ g.s.walkFine=async()=>({steps:2,reason:'position_confirmation_timeout',note:'no confirmed start'});
+ const r=await g.s.approachFine(12,12,{maxSteps:4});
+ assert.equal(r.steps,3);assert.equal(r.reason,'position_confirmation_timeout');assert.equal(r.note,'no confirmed start');
+});
+
+test('takeover during the last waypoint or fallback cannot certify a stale arrival',async()=>{
+ for(const phase of ['waypoint','fallback']) {
+  const {s,c,calls}=fineApproachFixture({waypoints:phase==='waypoint'?1:0});
+  const takeOver=async()=>{calls.push(phase);c.self={row:12,col:12,x:800,y:800};s.movementGeneration++;return {moved:true,arrived:true,steps:1};};
+  if(phase==='waypoint')s.stepFine=takeOver;else s.walkFine=takeOver;
+  const r=await s.approachFine(12,12,{maxSteps:2});
+  assert.equal(r.arrived,false);assert.equal(r.cancelled,true);assert.equal(r.steps,1);assert.deepEqual(calls,[phase]);
+ }
+});
+
+test('square and fine shelter strategies both receive the requested attempt budget',async()=>{
+ for(const routeFirst of [true,false]) {
+  const {s,c,calls}=fineApproachFixture({waypoints:5});c.self.predicted=false;
+  s.standBeforeGo=async()=>{};
+  s.walkTo=async(_col,_row,opts)=>{calls.push({kind:'square',maxSteps:opts.maxSteps});return {arrived:false,reason:'geometry_blocked'};};
+  s.approachFine=async(col,row,opts)=>{calls.push({kind:'fine-budget',maxSteps:opts.maxSteps});return Session.prototype.approachFine.call(s,col,row,opts);};
+  const r=await returnToSpot(s,{row:12,col:12},{maxSteps:2,routeFirst});
+  assert.equal(r.arrived,false);assert.equal(calls.find(x=>x.kind==='square').maxSteps,2);
+  assert.equal(calls.find(x=>x.kind==='fine-budget').maxSteps,2);
+  assert.equal(calls.filter(x=>x.kind==='waypoint').length,5);assert.equal(calls.some(x=>x.kind==='fallback'),false);
+ }
+});
 
 function keeper() {
  const s={name:'fixture',client:{selfId:1,self:{row:37,col:14,predicted:false},room:{objects:new Map()}},world:{room:{num:534},geometry:{walkable:()=>true}}};

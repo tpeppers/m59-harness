@@ -21,8 +21,18 @@ new client/life clears it. The existing recovery ladder selects the replacement.
 The watcher cannot cancel another decision, human control or PvP. Shelter departure
 and emergency-route ranking are unchanged.
 
+An external director's busy errand leaves survival, recovery and defensive combat
+with the keeper unless it explicitly claims those faculties. The first busy
+declaration, or a change of busy owner, cancels old movement; renewing the same
+errand does not cancel replacement recovery or disable its progress clock. Pending
+recovery, blocker memory and defensive clearance continue under that busy errand.
+Inert human control and explicit survival/recovery/combat claims still yield.
+
 `node tools/m59-death-prevention-test.mjs` exercises these paths offline, including
-the real recovery selector, cancellation and selection of a different wall.
+the real recovery selector, cancellation and selection of a different wall during
+a busy errand. `m59-survival-jam-test.mjs` covers its defensive blocker clearance.
+The [survival and arrival validation](m59-survival-arrival-validation-2026-10-09.md)
+records the build comparison and its geometry, local replay and historical limits.
 
 ## Survival does not wait for the ordinary heartbeat
 

@@ -156,7 +156,7 @@ test('a new recovery episode and a completed arrival do not inherit an expired a
   stop=k.watchRecoveryApproach(target);t.mock.timers.tick(4000);
   assert.equal(s.movementGeneration,0);stop();
 });
-for(const change of ['human','pvp','generation','decision','client','room','life','arrived'])
+for(const change of ['human','pvp','generation','decision','client','room','life','arrived','survival','recovery','combat'])
   test('an old approach watcher cannot cancel after '+change,t=>{
     t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
     const {k,s,c,target}=approachFixture();const stop=k.watchRecoveryApproach(target);
@@ -168,11 +168,12 @@ for(const change of ['human','pvp','generation','decision','client','room','life
     if(change==='room')s.world.room.num=39;
     if(change==='life')s.lifeBoundary=1;
     if(change==='arrived')c.self={...target};
+    if(['survival','recovery','combat'].includes(change))k.facultyHeld=f=>f===change;
     const before=s.movementGeneration;t.mock.timers.tick(10000);
     assert.equal(s.movementGeneration,before);assert.equal(k.unreachableIn(38),null);stop();
   });
 
-test('a real recovery selector routes first, cancels a stuck await and then selects another wall',async t=>{
+for(const busy of [false,true]) test('real recovery cancels a stuck await and selects another wall, busy='+busy,async t=>{
   t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:100000});
   const {s,c,k}=approachFixture();
   const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
@@ -185,6 +186,10 @@ test('a real recovery selector routes first, cancels a stuck await and then sele
   Object.assign(k,{claims:new Map(),passes:1,journal:[],mode:'farm',
     safety:()=>({fleeAt:0.68}),book:{get:()=>null,discredited:()=>false},
     playDead:async()=>true});
+  if(busy) {
+    k.claims.set('movement',{owner:'script',at:Date.now(),until:Date.now()+60000});
+    k.declareBusy({by:'script',kind:'test errand',leaseMs:60000});
+  }
   s.need=()=>c;s.standBeforeGo=async()=>{};
   s.approachFine=async()=>assert.fail('cancelled route cannot fall through to the fine fan');
   const attempts=[];let blocked=true;
@@ -198,10 +203,46 @@ test('a real recovery selector routes first, cancels a stuck await and then sele
   const first=await advance(t,k.takeRecoverySpot('stuck near a wall'));
   assert.equal(first.cancelled,true);assert.equal(attempts.length,1);
   assert.ok(k.unreachableIn(39).has(`${attempts[0].col},${attempts[0].row}`));
+  if(busy)k.declareBusy({by:'script',kind:'test errand',leaseMs:60000});
   blocked=false;
   const next=await k.takeRecoverySpot('replacement');
   assert.equal(next.took,true);assert.equal(attempts.length,2);
   assert.notDeepEqual(attempts[0],attempts[1]);
+});
+
+test('busy renewal preserves recovery; a new busy owner invalidates the old approach',t=>{
+  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+  const {k,s,target}=approachFixture();
+  k.claims=new Map([['movement',{owner:'script',at:Date.now(),until:Date.now()+60000}]]);
+  k.declareBusy({by:'script',kind:'errand',leaseMs:60000});
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',status:'approaching',chosen_refuge:target});
+  let generation=s.movementGeneration,stop=k.watchRecoveryApproach(target);
+  t.mock.timers.tick(4000);k.declareBusy({by:'script',kind:'errand',leaseMs:60000});
+  assert.equal(s.movementGeneration,generation,'renewal cannot cancel recovery');
+  t.mock.timers.tick(REFUGE_PROGRESS_MS-4000);
+  assert.equal(s.movementGeneration,generation+1,'renewal cannot disable stalled recovery detection');stop();
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',status:'approaching',chosen_refuge:target});
+  stop=k.watchRecoveryApproach(target);
+  k.claims.set('movement',{owner:'new script',at:Date.now(),until:Date.now()+60000});
+  k.declareBusy({by:'new script',kind:'new errand',leaseMs:60000});
+  generation=s.movementGeneration;t.mock.timers.tick(REFUGE_PROGRESS_MS+1000);
+  assert.equal(s.movementGeneration,generation,'old watcher cannot cancel a newly declared owner');stop();
+});
+
+test('pending survival executes while an errand is busy, but yields protected faculties and human control',async()=>{
+  for(const owner of ['script','human','survival','recovery','combat']) {
+    const {k,s,target}=approachFixture();let calls=0;
+    k.busy={by:'script',at:Date.now(),until:Date.now()+60000};
+    k.checkFreeze=()=>false;k.inReachOfUs=()=>[];k.escapeIfWedgedAndHurt=async()=>false;
+    k.blinkPastSurvivalJam=async()=>false;k.armedForSure=()=>false;
+    k.takeRecoverySpot=async()=>{calls++;chooseSurvivalDecision(s,{strategy:'nearest_refuge',status:'approaching',chosen_refuge:target});};
+    chooseSurvivalDecision(s,{strategy:'nearest_refuge',status:'pending'});
+    if(owner==='human')k.inert={by:'human'};
+    if(['survival','recovery','combat'].includes(owner))k.facultyHeld=f=>f===owner;
+    await k.continueSurvivalDecision();
+    assert.equal(calls,owner==='script'?1:0,owner);
+    assert.equal(currentSurvivalDecision(s).strategy,owner==='script'?'nearest_refuge':'yield_to_controller',owner);
+  }
 });
 
 for (const crossing of ['blocked','arrived']) test('exit-as-refuge approach is bounded and cleans up: '+crossing,async t=>{

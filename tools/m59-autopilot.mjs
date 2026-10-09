@@ -5830,7 +5830,7 @@ export class Autopilot {
     const observed=recoveryObservationKey(this);
     const d0=currentSurvivalDecision(this.s);
     const owned=d0 && d0.strategy!=='yield_to_controller' && !this.stopping
-      && !(this.busy?.until>Date.now()) && !(this.inert&&!this.inert.travelling)
+      && !(this.inert&&!this.inert.travelling)
       && !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat');
     if(owned && this._survivalReplan?.key===observed && this._survivalReplan.geometry===this.s.world?.geometry
         && Date.now()<this._survivalReplan.until)return true;
@@ -5874,11 +5874,12 @@ export class Autopilot {
       finishSurvivalDecision(s,d.id,'recovered','health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain
-    // with this keeper. Only an actual handoff (busy/inert or a protected faculty)
-    // may end this recovery. A routine movement claim must not cancel it every pass.
-    const faculty=d.status==='recovering'?'recovery':'survival';
-    if (this.stopping || (this.busy?.until>Date.now()) ||
-        (this.inert && !this.inert.travelling) || this.facultyHeld(faculty)) {
+    // with this keeper. Busy announces the holder's errand; it does not lease
+    // these protected faculties. Its initial declaration already cancels old
+    // movement. Only inert/human control or an explicit protected handoff yields
+    // the replacement recovery; renewing an errand must not strand it.
+    if (this.stopping || (this.inert && !this.inert.travelling)
+        || this.facultyHeld('survival') || this.facultyHeld('recovery') || this.facultyHeld('combat')) {
       chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
     }
@@ -5991,7 +5992,7 @@ export class Autopilot {
       // An older await must never cancel a replacement, a human, or PvP.
       if(s.client!==client || s.world?.room?.num!==room || s.movementGeneration!==generation
           || (s.lifeBoundary??0)!==life || currentSurvivalDecision(s)?.id!==decision.id
-          || this.stopping || s.combat?.active?.pvp || this.busy?.until>Date.now()
+          || this.stopping || s.combat?.active?.pvp
           || (this.inert&&!this.inert.travelling) || this.facultyHeld('survival')
           || this.facultyHeld('recovery') || this.facultyHeld('combat')) {
         clearInterval(timer);return;
@@ -14979,7 +14980,7 @@ export class Autopilot {
           || s.world?.room?.num === 1 || client?.vitals?.()?.health?.value <= 0)
         return interrupted = 'death during retreat';
       if (owner === 'survival' && ((this._survivalOwnerRevision??0)!==ownerRevision
-          || this.stopping || this.busy?.until>Date.now() || (this.inert&&!this.inert.travelling)
+          || this.stopping || (this.inert&&!this.inert.travelling)
           || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')))
         return interrupted = 'survival owner changed';
       return null;
@@ -15505,7 +15506,7 @@ export class Autopilot {
     const p=this.pendingBlockerLure,s=this.s,c=s.client;
     if(!p)return;
     if(c!==p.client || s.movementGeneration!==p.generation || s.world?.room?.num!==p.room
-        || Date.now()>p.until || this.stopping || (this.busy?.until>Date.now())
+        || Date.now()>p.until || this.stopping
         || (this.inert&&!this.inert.travelling) || this.facultyHeld('survival')
         || this.facultyHeld('combat') || this.facultyHeld('recovery')
         || (c.vitals()?.health?.value??0)<=0) {this.pendingBlockerLure=null;return;}
@@ -15577,7 +15578,7 @@ export class Autopilot {
       mode:strong?'lure':'weak_fight',...detail});
     const ownerRevision=this._survivalOwnerRevision??0;
     const cancelled=()=>this.stopping || (this._survivalOwnerRevision??0)!==ownerRevision || s.client!==c || s.world?.room?.num!==room
-      || this.busy?.until>Date.now() || (this.inert && !this.inert.travelling)
+      || (this.inert && !this.inert.travelling)
       || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')
       || this.checkFreeze() || this.currentRecoveryWall()
       || s.movementWasCancelled?.(generation);

@@ -84,6 +84,19 @@ test('low health interrupts a productive fight and reaches a refuge',async()=>{
   assert.ok(f.events.some(e=>e.phase==='retreat'&&e.took));
   assert.equal(f.k.survivalJam(),null);
 });
+
+test('busy errand retains the jam and its defensive recovery',async()=>{
+  const f=fixture();await handoff(f);const {k,s,c,health}=f;let swings=0;
+  k.claims=new Map([['movement',{owner:'script',at:Date.now(),until:Date.now()+60000}]]);
+  k.declareBusy({by:'script',kind:'errand',leaseMs:60000});
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge'});
+  k.rememberSurvivalJam({failed:true});k.survivalJamEpisode.measured=true;
+  assert.ok(k.survivalJam(),'busy is not a protected faculty handoff');
+  k.fightNow=async()=>{swings++;c.room.objects.delete(2);health.value=55;return {fought:true,landed_hits:1};};
+  await k.continueSurvivalDecision();assert.equal(swings,1);
+  assert.equal(currentSurvivalDecision(s),null);
+  assert.ok(f.events.some(e=>e.phase==='clearance'));
+});
 test('replacement decisions preserve failed survival retreat rungs in the same pocket',async()=>{
   const f=fixture();await handoff(f);f.health.value=10;const rungs=[];
   const backup=f.k.backUpToUnstick.bind(f.k);
