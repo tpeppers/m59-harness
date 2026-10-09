@@ -77,7 +77,7 @@ export function normalizeBuddy(v) {
       ? v.quarry.map(q => q.trim().toLowerCase())
       : (() => { throw new Error('buddy.quarry must be a list of creature names'); })();
   return { enabled: v.enabled !== false, pairs: out, wait_s: num('wait_s', 10, 900, 120),
-           tries: num('tries', 1, 10, 3), reach: num('reach', 1, 6, 2), quarry };
+           tries: num('tries', 1, 20, 12), reach: num('reach', 1, 6, 2), quarry };
 }
 
 /** This slot's part in the system: { role: 'tag'|'kill', partner } or null. */

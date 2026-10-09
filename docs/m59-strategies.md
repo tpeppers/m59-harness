@@ -330,7 +330,7 @@ One value for every member; each keeper finds its own role (`pairs` maps TAGGER 
   that wall, `pull()`s the nearest UNTOUCHED quarry (no player within two squares — creature health is not
   on the wire), and then swings at nothing else: the session's `attackVeto` refuses every other id while a
   tag is out, and the tag itself once a landed blow has been read from the combat log. An unlanded tag that
-  follows it in is swung at again, up to `tries`. The tag leaving the room ends the wait; `wait_s` gives up.
+  follows it in is swung at again, up to `tries` (default 12, at most 20). The tag leaving the room ends the wait; `wait_s` gives up.
 - **killer** — walks beside its tagger's wall, kills the tag once it has landed (or after 20s), and clears
   anything else at the wall. With its tagger not in the room it farms as usual.
 

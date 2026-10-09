@@ -27,7 +27,7 @@ const throws = (fn) => { try { fn(); return false; } catch { return true; } };
 console.log('\nthe policy value');
 {
   const v = buddy.normalizeBuddy({ pairs: { t5: 't4', t6: 't10' } });
-  ok('pairs are kept, defaults filled', v.pairs.t5 === 't4' && v.wait_s === 120 && v.tries === 3 && v.reach === 2);
+  ok('pairs are kept, defaults filled', v.pairs.t5 === 't4' && v.wait_s === 120 && v.tries === 12 && v.reach === 2);
   ok('null and false are off', buddy.normalizeBuddy(null) === null && buddy.normalizeBuddy(false) === null);
   ok('a character in two pairs is refused (exclusive, like m59-party)',
      throws(() => buddy.normalizeBuddy({ pairs: { t5: 't4', t6: 't4' } })));
@@ -180,6 +180,9 @@ console.log('\nthe keeper: the tagger');
   ok('an unlanded tag may still be swung at', k.ap.buddyVetoes(11) === false);
   await k.ap.passBuddy(k.ctx);
   ok('and when it has followed us in, it is swung at once more (the same target keeps the tag)', k.calls.fight[0] === 11);
+  for (let i = 0; i < 20; i++) await k.ap.passBuddy(k.ctx);
+  ok('it keeps swinging at an unlanded tag until tries (default 12) is spent, then stops', k.calls.fight.length === 11 && k.ap.buddyTag?.tries === 12);
+  ok('a tries above 20 is refused', throws(() => buddy.normalizeBuddy({ pairs: { t5: 't4' }, tries: 21 })));
   k.ap.buddyTag.at = Date.now() - 10 * 60_000;
   await k.ap.passBuddy(k.ctx);
   ok('a wait past wait_s gives up rather than standing in a fight for ever', k.ap.buddyTag === null);
