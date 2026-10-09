@@ -297,6 +297,47 @@ cast of dispel illusion reagents for the caster from the guild chests or the Bar
 pack lacks them, waits for the hold, casts, and takes the chalice inside cave2's 30-second window.
 The kod it rests on is in its header; `m59-icky-chalice-test.mjs` pins it.
 
+## Private strategy directories
+
+A strategy file is an order, so it is this machine's — and some orders belong in a PRIVATE repository
+rather than in this machine's gitignored `substrate/farm-strategies/`. The engine searches, in order:
+
+1. `substrate/farm-strategies/` (or `M59_FARM_STRATEGY_DIR`) — this machine's own;
+2. every directory in `M59_FARM_STRATEGY_PATH` (platform delimiter, `;` on Windows);
+3. every directory listed in `substrate/farm-strategy-dirs.json` — `{ "dirs": ["C:/code/m59-private/strategy/farm-strategies"] }` (gitignored).
+
+The FIRST directory holding `<name>.mjs` wins, so a local file of the same name OVERRIDES the private
+one. The dirs file is re-read on every lookup (no keeper restart to add a directory); a directory that does
+not exist is skipped. `node tools/m59-strategy-engine.mjs` lists every directory searched. Assignment,
+hot reload, yielding and the residue rules are unchanged: only where the file is found has moved.
+
+## The buddy system (`buddy`)
+
+Operator, 2026-10-09 — the "Qor buddy system": a karma-locked disciple gains max health from monsters
+somebody else kills. `tools/m59-buddy.mjs` has the kod for each clause; in short, `SomethingKilled`
+reaches everyone in the room, a non-killer whose LAST target was the victim and who did DAMAGE to it gets
+the advancement roll (only when the monster's level is above its base max health), attacking anything
+else resets it, and karma moves only for the killer.
+
+```js
+buddy: { pairs: { t5: 't4', t6: 't10' }, wait_s: 120, tries: 3, reach: 2, quarry: ['skeleton'] }
+```
+
+One value for every member; each keeper finds its own role (`pairs` maps TAGGER -> KILLER, exclusive).
+`Autopilot.passBuddy` (pass stage directly above `passFarm`, inert unless the slot is named):
+
+- **tagger** — takes a corner (`takeSafeSpot`), waits until its killer's record shows it within `reach`+1 of
+  that wall, `pull()`s the nearest UNTOUCHED quarry (no player within two squares — creature health is not
+  on the wire), and then swings at nothing else: the session's `attackVeto` refuses every other id while a
+  tag is out, and the tag itself once a landed blow has been read from the combat log. An unlanded tag that
+  follows it in is swung at again, up to `tries`. The tag leaving the room ends the wait; `wait_s` gives up.
+- **killer** — walks beside its tagger's wall, kills the tag once it has landed (or after 20s), and clears
+  anything else at the wall. With its tagger not in the room it farms as usual.
+
+Survival is untouched: the stage is below `passFleeAndRest` and the veto refuses only attack packets.
+The two keepers share `substrate/.buddy/<slot>.json` (one writer each; `M59_BUDDY_DIR`) because the party
+register in `m59-party.mjs` is per process and every prod keeper is its own process.
+
 ## Hot reload
 
 Every converge stats the file. A changed mtime is re-imported under a fresh URL (`?v=<mtime>`, which

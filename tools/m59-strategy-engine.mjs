@@ -64,8 +64,8 @@
 // requestTouchRecast(why), which marks the
 // central touch state stale so the keeper recasts at the next opportunity under its own rate limit.
 
-import { statSync, readdirSync, existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { statSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateStrategy, fieldFor, fieldForKey, mergeOver, STRATEGY_NAME, STRATEGY_HOOKS } from './m59-strategy-schema.mjs';
 import { sameValue } from './m59-policy-sources.mjs';
@@ -104,6 +104,32 @@ export function roomContents(c, host = {}) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FARM_STRATEGY_DIR = process.env.M59_FARM_STRATEGY_DIR
   || join(HERE, '..', 'substrate', 'farm-strategies');
+// MORE PLACES A STRATEGY MAY LIVE, searched AFTER this machine's own directory. Operator, 2026-10-09:
+// "We're going to want this as a private combat strategy file (put hooks into the harness for private
+// hunting/farming strategies with various overrides...)". A private repository (m59-private) keeps its
+// strategies under version control without this public tree ever naming them, and a file of the same
+// name in substrate/farm-strategies/ OVERRIDES the private one -- this machine's answer first, as with
+// every other local file here. Two sources, both optional, both this machine's:
+//   M59_FARM_STRATEGY_PATH             directories separated by the platform delimiter (; on Windows)
+//   substrate/farm-strategy-dirs.json  { "dirs": ["C:/code/m59-private/strategy/farm-strategies"] }
+// The file is re-read on every lookup, so adding a directory needs no keeper restart. A directory that
+// does not exist is skipped, not an error.
+export const FARM_STRATEGY_DIRS_FILE = process.env.M59_FARM_STRATEGY_DIRS_FILE
+  || join(HERE, '..', 'substrate', 'farm-strategy-dirs.json');
+export function farmStrategyDirs({ env = process.env, file = FARM_STRATEGY_DIRS_FILE } = {}) {
+  const out = [FARM_STRATEGY_DIR];
+  const add = d => {
+    if (typeof d !== 'string' || !d.trim()) return;
+    const r = resolve(d.trim());
+    if (!out.some(o => resolve(o).toLowerCase() === r.toLowerCase())) out.push(r);
+  };
+  for (const d of String(env?.M59_FARM_STRATEGY_PATH ?? '').split(delimiter)) add(d);
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    for (const d of (Array.isArray(j?.dirs) ? j.dirs : [])) add(d);
+  } catch { /* absent or unreadable: only this machine's own directory */ }
+  return out;
+}
 // BESIDE the directory, never inside it: an example inside is an assignable order nobody gave.
 export const FARM_STRATEGY_EXAMPLES = join(HERE, '..', 'substrate', 'farm-strategies.example');
 
@@ -117,10 +143,14 @@ const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o
   Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); } return o; };
 
 /** The file for a name, or a thrown reason. Never a path the name could escape through. */
-export function strategyFile(name, dir = FARM_STRATEGY_DIR) {
+export function strategyFile(name, dir = null) {
   if (typeof name !== 'string' || !STRATEGY_NAME.test(name))
     throw new Error(`farm_strategy must be a strategy name (${STRATEGY_NAME}), not ${JSON.stringify(name)}`);
-  return join(dir, `${name}.mjs`);
+  // A list (or null: every directory this machine searches) answers with the FIRST that has the file,
+  // and with the first directory when none does, so a refusal names where it should have been.
+  const dirs = dir == null ? farmStrategyDirs() : [].concat(dir);
+  for (const d of dirs) { const f = join(d, `${name}.mjs`); if (existsSync(f)) return f; }
+  return join(dirs[0], `${name}.mjs`);
 }
 
 function mtimeOf(path) { try { return statSync(path).mtimeMs; } catch { return null; } }
@@ -139,7 +169,7 @@ async function itemResolver() {
  * A changed file is re-imported under a fresh URL (`?v=<mtime>`), which is what makes a hot
  * reload real: Node's module cache would otherwise hand back the first version for ever.
  */
-export async function loadFarmStrategy(name, { dir = FARM_STRATEGY_DIR, resolveItem } = {}) {
+export async function loadFarmStrategy(name, { dir = null, resolveItem } = {}) {
   let file;
   try { file = strategyFile(name, dir); }
   catch (e) { return { ok: false, name, file: null, mtime: null, why: e.message, problems: [], unrecognised: [] }; }
@@ -161,12 +191,15 @@ export async function loadFarmStrategy(name, { dir = FARM_STRATEGY_DIR, resolveI
 }
 
 /** Every strategy this machine has (CLI). Leading-underscore files are helpers, as in the travel dir. */
-export async function listFarmStrategies({ dir = FARM_STRATEGY_DIR, resolveItem } = {}) {
-  if (!existsSync(dir)) return { dir, present: false, strategies: [] };
-  const names = readdirSync(dir).filter(n => n.endsWith('.mjs') && !n.startsWith('_')).map(n => n.slice(0, -4)).sort();
+export async function listFarmStrategies({ dir = null, resolveItem } = {}) {
+  const dirs = dir == null ? farmStrategyDirs() : [].concat(dir);
+  const present = dirs.filter(d => existsSync(d));
+  if (!present.length) return { dir: dirs[0], dirs, present: false, strategies: [] };
+  const names = [...new Set(present.flatMap(d => readdirSync(d)
+    .filter(n => n.endsWith('.mjs') && !n.startsWith('_')).map(n => n.slice(0, -4))))].sort();
   const strategies = [];
-  for (const n of names) strategies.push(await loadFarmStrategy(n, { dir, resolveItem }));
-  return { dir, present: true, strategies };
+  for (const n of names) strategies.push(await loadFarmStrategy(n, { dir: dirs, resolveItem }));
+  return { dir: dirs[0], dirs, present: true, strategies };
 }
 
 /**
@@ -176,7 +209,7 @@ export async function listFarmStrategies({ dir = FARM_STRATEGY_DIR, resolveItem 
  *   s.client (eventsSince, evSeq, vitals), s.world.room.num, s.name, touchState()
  */
 export class FarmStrategyEngine {
-  constructor(host, { dir = FARM_STRATEGY_DIR, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now() } = {}) {
+  constructor(host, { dir = null, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now() } = {}) {
     this.host = host;
     this.dir = dir;
     this.resolveItem = resolveItem;
@@ -621,7 +654,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     process.exit(r.strategies.every(s => s.ok) ? 0 : 1);
   }
   if (args[0] === 'check' && args[1]) {
-    const dir = args.includes('--examples') ? FARM_STRATEGY_EXAMPLES : FARM_STRATEGY_DIR;
+    const dir = args.includes('--examples') ? FARM_STRATEGY_EXAMPLES : null;
     const r = await loadFarmStrategy(args[1], { dir });
     show(r);
     process.exit(r.ok ? 0 : 1);
@@ -634,7 +667,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.log('  autopilot action=start agent=<a> mode=farm farm_strategy=<name>\n');
     process.exit(0);
   }
-  console.log(`\nfarming strategies in ${r.dir}:\n`);
+  console.log(`\nfarming strategies in ${(r.dirs ?? [r.dir]).join(' then ')}:\n`);
   for (const s of r.strategies) show(s);
   console.log('');
   process.exit(r.strategies.every(s => s.ok) ? 0 : 1);

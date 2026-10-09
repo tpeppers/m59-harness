@@ -878,3 +878,7 @@ substrate/magic-keep.json
 /substrate/hp-duty-state.json
 /substrate/masters.json
 /substrate/masters-demand.json
+
+# Extra directories the farming-strategy engine searches after substrate/farm-strategies/ (a private
+# repository, say). This machine's answer, like the strategies themselves. See m59-strategy-engine.mjs.
+/substrate/farm-strategy-dirs.json

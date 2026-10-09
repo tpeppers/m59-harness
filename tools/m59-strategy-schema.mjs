@@ -35,6 +35,7 @@ import { lootOnlySpec } from './m59-loot-filter.mjs';
 import { touchSpellName, touchCastTiming } from './m59-touchspell.mjs';
 import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
+import { normalizeBuddy } from './m59-buddy.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -157,6 +158,9 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'vigor.fightAbove', keys: ['fightAboveVigor', 'vigorFloor'], faculty: 'work', arg: 'fight_above_vigor',
     normalize: normFightAbove },
   { path: 'practice', keys: ['practiceSpells'], faculty: 'work', arg: 'practice_spells', normalize: normPractice },
+  // THE BUDDY SYSTEM (m59-buddy.mjs): { pairs: { tagger: killer }, wait_s, tries, reach, quarry }. One
+  // value for every member, each keeper finds its own role in it, so one file can be assigned to all.
+  { path: 'buddy', keys: ['buddy'], faculty: 'work', arg: 'buddy', normalize: v => normalizeBuddy(v) },
 ]);
 
 /** The file's value laid over another writer's: replaced, or (merge 'union') added to it. */

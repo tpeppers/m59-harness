@@ -11894,6 +11894,13 @@ const TOOLS = [
           'name hunt never produces is ignored and reported as hunt_priority.ignored. null or [] ' +
           'switches it off; a non-list is refused. autopilot status reports it as hunt_priority. ' +
           'See tools/m59-hunt-priority.mjs' },
+      buddy: { type: ['object', 'null'],
+        description: 'THE BUDDY SYSTEM (m59-buddy.mjs): { pairs: { tagger_slot: killer_slot }, wait_s, tries, reach, quarry }. ' +
+          'A tagger lands one blow on an untouched monster, walks back to its wall and swings at nothing else ' +
+          'while its fixed partner, standing beside that wall, kills it: the tagger gets the max-health roll ' +
+          '(last target, did damage, still in the room) and its karma does not move. Every member is given ' +
+          'the same value and finds its own role. Farm mode only; null switches it off. A farm strategy ' +
+          'may declare it as `buddy`. autopilot status reports it as policy.buddy' },
       spare_creatures: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
         description: 'CREATURES THIS CHARACTER NEVER SWINGS AT, EVEN WHEN THEY ATTACK IT: e.g. ["spider"] ' +
           '(m59-spare.mjs). A spared monster is never picked as a target and the attack packet at one is ' +
@@ -12984,6 +12991,10 @@ const TOOLS = [
       // THE SPARE LIST HAD NO WAY IN FROM HERE, so a value a strategy left behind could not be
       // cleared by anybody (Floyd, 2026-10-03). Normalised by the same function the strategy
       // schema uses for `spare`, so the two can never disagree; null or [] is the way off.
+      if (a.buddy !== undefined) {
+        try { p.policy.buddy = farmStrategyField('buddy').normalize(a.buddy ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
       if (a.spare_creatures !== undefined) {
         try { p.policy.spareCreatures = farmStrategyField('spare').normalize(a.spare_creatures ?? null); }
         catch (e) { return { started: false, reason: e.message }; }

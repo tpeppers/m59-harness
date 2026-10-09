@@ -583,8 +583,11 @@ console.log('THE RUNG THAT RESUMES HAS TO GET A TURN, AND FOR A DAY IT DID NOT')
   // between this repository and a bot is not allowed to do.
   ok('passFarm is still last', PASS_STAGES[PASS_STAGES.length - 1] === 'passFarm',
      PASS_STAGES.join(','));
-  ok('and passErrand is still the one before it',
-     PASS_STAGES[PASS_STAGES.length - 2] === 'passErrand', PASS_STAGES.join(','));
+  // Only the buddy system (a farm for a paired character, inert otherwise) may sit between the
+  // errand and the farm; nothing directional moved above survival.
+  ok('and passErrand is still the last thing before the farm (the buddy system aside)',
+     PASS_STAGES.slice(PASS_STAGES.indexOf('passErrand') + 1, -1).every(n => n === 'passBuddy')
+     && PASS_STAGES.indexOf('passFleeAndRest') < PASS_STAGES.indexOf('passErrand'), PASS_STAGES.join(','));
 }
 
 console.log('');

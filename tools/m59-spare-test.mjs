@@ -55,7 +55,7 @@ await ok('the attack veto refuses the packet at a spared monster, and only at on
   assert.equal(vetoSpared(s, c, 5), false, 'a player is never this veto\'s business');
   assert.equal(vetoSpared({ sparePatterns: () => null }, c, 3), false, 'nothing spared, nothing vetoed');
   const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
-  assert.ok(src.includes('c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id);'),
+  assert.ok(src.includes('c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id) || !!this.buddyVeto?.(id);'),
     'the session installs it on every client, so every path that reaches c.attack is covered');
 });
 
