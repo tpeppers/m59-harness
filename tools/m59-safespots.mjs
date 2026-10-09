@@ -102,17 +102,20 @@ export const MAX_ATTACKERS = MONSTER_DISC.length;
 // sight from A to B is not always sight from B to A. The direction that matters is the
 // attacker's, so callers pass the attacker's square first.
 export function lineOfSight(geo, fromRow, fromCol, toRow, toCol, { fine = false } = {}) {
+  if (![fromRow, fromCol, toRow, toCol].every(Number.isSafeInteger)) return false;
   let r = fromRow, c = fromCol, r2 = r, c2 = c;
   const rs = toRow - fromRow >= 0 ? 1 : -1;
   const cs = toCol - fromCol >= 0 ? 1 : -1;
-  // Bounded because the caller's squares come from a disc, so the walk is at most six
-  // steps; the guard is against a malformed geometry, not against the algorithm.
-  for (let guard = 0; (r !== toRow || c !== toCol) && guard < 64; guard++) {
+  // Ranged attacks also use this, across an entire room. A fixed 64-step guard
+  // returned true without checking the rest of a long line. Each iteration
+  // advances exactly one axis; the Manhattan distance is the complete bound.
+  const steps = Math.abs(toRow - fromRow) + Math.abs(toCol - fromCol);
+  for (let guard = 0; (r !== toRow || c !== toCol) && guard < steps; guard++) {
     if (Math.abs(r - toRow) > Math.abs(c - toCol)) r2 += rs; else c2 += cs;
     if (!geo.canMove(r, c, r2, c2, { fine })) return false;
     r = r2; c = c2;
   }
-  return true;
+  return r === toRow && c === toCol;
 }
 
 // How exposed one square is: how many squares something could hit you from, and how

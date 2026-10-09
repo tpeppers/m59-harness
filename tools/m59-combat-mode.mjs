@@ -2,7 +2,7 @@
 // No script compiler, snapshot fetch, external planner or keeper pass is on the
 // arrival -> first attack path. All packets still use the ordinary server pacer.
 import { randomUUID } from 'node:crypto';
-import { OF } from './m59-parse.mjs';
+import { OF, blocksMovement } from './m59-parse.mjs';
 import { withBodyCommand } from './m59-body-command.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
 import { effectsAt, groundEffectSquares, groundEffectOnSegment } from './m59-ground-effects.mjs';
@@ -21,6 +21,10 @@ import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRef
 import { keeperOrigin } from './m59-move-origin.mjs';
 import * as swarm from './m59-swarm-follow.mjs';
 import { squareCentre } from './m59-coords.mjs';
+import { lineOfSight } from './m59-safespots.mjs';
+import { loadCatalogue } from './m59-deskpractice.mjs';
+import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
+import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
 
 export const PVP_DANGER_MS = 30_000;
 // What a keeper heard, for the pvpOpener's ctx.heard: long enough to span a room enchantment.
@@ -154,10 +158,16 @@ export function combatTarget(client, target, { anyAttackable = false } = {}) {
 
 // One short ordinary move, then re-evaluate the live hazard and target. Never
 // loosen BSP collision or choose a dangerous destination to escape a hazard.
-export function safeCombatStep(session, destination) {
+export function safeCombatStep(session, destination, { avoidSquares = new Set(), fineBody = false } = {}) {
   const c = session.client, geo = session.world?.geometry, me = c?.self;
   if (!me || !geo) return null;
   const avoid = groundEffectSquares(c);
+  for (const key of avoidSquares) avoid.add(key);
+  for (const object of c.room?.objects?.values?.() ?? []) {
+    if (object.id === c.selfId || !blocksMovement(object.flags)) continue;
+    if (object.row === me.row && object.col === me.col) continue;
+    avoid.add(`${object.row},${object.col}`);
+  }
   const goals = [];
   for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
     const row = destination.row + dr, col = destination.col + dc;
@@ -165,13 +175,48 @@ export function safeCombatStep(session, destination) {
     if (!destination.exact && Math.hypot(dr, dc) > 2) continue;
     if (row < 1 || col < 1 || row > geo.rows || col > geo.cols || avoid.has(`${row},${col}`)) continue;
     if (!geo.standable(row, col)) continue;
+    if (destination.sight && geo.canMove && !lineOfSight(geo, row, col, destination.row, destination.col)) continue;
+    if (!destination.exact && !dr && !dc) continue; // never walk onto the target
     goals.push({ row, col, distance: Math.hypot(row - me.row, col - me.col) });
   }
   goals.sort((a, b) => a.distance - b.distance);
+  const deadline = Date.now() + 100;
   for (const goal of goals) {
-    const path = geo.path(me.row, me.col, goal.row, goal.col, { avoid });
-    const next = path?.steps?.find(p => p.row !== me.row || p.col !== me.col);
-    if (path?.found && next && !avoid.has(`${next.row},${next.col}`)) return next;
+    if (Date.now() > deadline) break;
+    const path = geo.path(me.row, me.col, goal.row, goal.col, { avoid, collision: true, maxNodes: 4000 });
+    const nextSquare = path?.found && path.steps.find(p => p.row !== me.row || p.col !== me.col);
+    // Start on the actual body, not the square's theoretical stand point. Share
+    // the fine router with sameRoomDoorPlan, and keep its node/time budget local.
+    // Square-only callers (ambush staging and swarm formation) keep their
+    // documented square result; pursuit opts into consuming a fine waypoint.
+    if (fineBody && !avoid.size && geo.collisionReady && Number.isFinite(me.x) && Number.isFinite(me.y) && typeof session.stepFine === 'function') {
+      const origin = { x: protocolToClient(me.x), y: protocolToClient(me.y) };
+      // The square route supplies the long detour. Prove only its next short leg
+      // from the live body; a full fine search across a large room exhausts the
+      // tactical budget before making any progress.
+      const fineGoal = nextSquare || goal;
+      const fine = finePath(geo, origin, pointOfSquare(geo, fineGoal.row, fineGoal.col),
+        { bounds: boundsAround([me, fineGoal], 4), maxNodes: 1000, goalSquare: fineGoal });
+      // Coalesce a straight prefix up to one ordinary square step. Sending only
+      // the first quarter-square lattice point through the 1s movement pacer
+      // would make pursuit four times slower. Never skip a bend through a wall.
+      let p = null;
+      if (fine?.found) for (const point of fine.points) {
+        const distance = Math.hypot(point.x - origin.x, point.y - origin.y);
+        if (distance <= 1) continue;
+        if (distance > 1.5 * 1024) break;
+        const trace = geo.traceFineMoveClient(origin.x, origin.y, point.x, point.y, { slide: true });
+        if (!trace.arrived) break;
+        p = point;
+      }
+      if (p) {
+        const x = clientToProtocol(p.x), y = clientToProtocol(p.y);
+        const next = { row: Math.floor(y / 64), col: Math.floor(x / 64), x, y, fine: true };
+        if (!groundEffectOnSegment(c, me, next)) return next;
+      }
+      continue; // a disproved fine leg must not borrow a coarse shortcut
+    }
+    if (nextSquare && !avoid.has(`${nextSquare.row},${nextSquare.col}`)) return nextSquare;
   }
   return null;
 }
@@ -234,6 +279,7 @@ export class CombatMode {
       last_outcome: o.lastOutcome ?? null,
       expires_at: o.expiresAt, finished_at: o.finishedAt ?? null,
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
+      attack_readiness: o.lastReadiness ?? null, last_approach: o.lastApproach ?? null,
       pvp_survival: this.pvpStatus(), keep_safety: !!o.keepSafety, war: this.warStatus(),
       ...(refused_targets?.length ? { refused_targets } : {}),
       ...(watch ? { watch } : {}) };
@@ -517,7 +563,7 @@ export class CombatMode {
    * strategy if this machine has one, else gear.chooseWandVolley (one zap per wall-clock beat,
    * every keeper in the fight on the same beat). This method only builds the question and
    * sends the packets.
-   * @returns {'hold'|null} 'hold' = no melee and no approach this tick.
+   * @returns {'hold'|'approach'|null} hold reserves melee; approach requires sight first.
    */
   async wandVolley(o) {
     const c = o.client, s = this.s;
@@ -536,29 +582,50 @@ export class CombatMode {
     const ctx = this.wandContext(o, wands, cfg, unidentified);
     const decision = await this.decideWandVolley(o, ctx);
     const hold = decision.hold ? 'hold' : null;
-    if (decision.fire == null) return hold;
-    // Claimed before any await: one zap per beat. advance() never overlaps itself (tick's
-    // o.running), so claiming after the decision's own await is still exclusive.
-    this.lastVolleyBeat = ctx.beat;
-    this.lastWandFireAt = ctx.now;
-    const pick = wands.find(w => w.o.id === decision.fire)
-      ?? { ...unidentified.find(u => u.id === decision.fire), name: 'wand' };
+    if (decision.fire == null && !hold) return null;
+    const picked = wands.find(w => w.o.id === decision.fire);
+    const unid = unidentified.find(u => u.id === decision.fire);
+    // An opaque bare wand is not proof of SpecialWand's exceptions. Until a
+    // type is identified, retain the ordinary Wand sight/timer prerequisites.
+    const pick = picked ?? (unid ? { ...unid, name: 'wand', timer: true } : null);
+    // A private hold can arrive without a fire id (e.g. the same volley beat). It still
+    // cannot pin a lightning holder behind a wall. SpecialWand vampiric shock needs
+    // only the same room; do not impose the SpellItem's sight/timer gates on it.
+    const needsSight = pick ? pick.timer !== false : wands.some(w => w.timer) || unidentified.length > 0;
+    let live = c.room.objects.get(o.targetId);
+    const ready = this.attackReadiness(o, live, { sight: needsSight, timer: needsSight });
+    o.lastReadiness = { action: 'wand', ...ready };
+    if (!ready.positioned) {
+      return 'approach';
+    }
+    if (!pick || !ready.ready) return hold ?? (needsSight ? 'hold' : null);
     await this.stand(o);
     let faceDeg = null;
-    if (decision.face) await s.pacer.submit('turn', () => {
+    const face = needsSight || decision.face;
+    if (face) await s.pacer.submit('turn', () => {
       const live = c.room.objects.get(o.targetId), me = c.self;
       if (!live || !me) return;
       faceDeg = (Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360;
       c.face(faceDeg);
+      o.faceDeg = faceDeg;
     });
     const queuedAt = Date.now();
     await s.pacer.submit('cast', () => {
       const live = c.room.objects.get(o.targetId);
-      if (!live) return;
+      // The target can move behind a wall or behind our back while this is paced.
+      // Do not count a skipped packet, consume its beat, or advance the cooldown.
+      const ready = this.attackReadiness(o, live, { sight: needsSight, timer: needsSight, facing: face });
+      o.lastReadiness = { action: 'wand', ...ready };
+      if (!ready.ready) return;
+      if (!c.inventory?.some(w => w.id === pick.o.id) || this.spentWands.has(pick.o.id)) return;
+      const sentCtx = { ...ctx, beat: gear.beatOf(this.now(), cfg.volley_ms) };
       // THE SHOT RECORD (tools/m59-wand-shot.mjs): every input the server's gates will read,
       // taken the instant before the packet goes, so a refusal can be named afterwards.
-      const shot = this.buildWandShot(o, { live, pick, decision, ctx, faceDeg, queuedAt });
+      const shot = this.buildWandShot(o, { live, pick, decision: { ...decision, face }, ctx: sentCtx, faceDeg, queuedAt });
       c.apply(pick.o.id, live.id);
+      this.lastVolleyBeat = sentCtx.beat;
+      this.lastWandFireAt = this.now();
+      if (needsSight) this.attackReadyAt = this.now() + wandShot.ATTACK_TIMER_MS;
       if (shot) this.openWandShot(shot);
       this.lastWandId = pick.o.id;
       o.zaps = (o.zaps ?? 0) + 1;
@@ -586,8 +653,60 @@ export class CombatMode {
                     dist: me ? Math.hypot(t.row - me.row, t.col - me.col) : null } : null,
       me: me ? { row: me.row, col: me.col, hp: health?.value ?? null, max_hp: health?.max ?? null } : null,
       shots: (o.wandShots ?? []).map(x => ({ ...x })),
+      readiness: this.attackReadiness(o, t, { sight: true }),
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
     };
+  }
+
+  // Packet prerequisites belong to the socket owner, even when a strategy chooses
+  // the weapon. LOS is directional (Room.LineOfSight, LOS_OLD). Lightning has no
+  // hard distance limit; melee has radius 2. A received position's age alone does
+  // not mean it is stale: a stationary enemy may send no movement for minutes.
+  attackReadiness(o, target, { sight = false, range = null, timer = true, facing = false } = {}) {
+    const c = o.client, me = c.self, geo = this.s.world?.geometry;
+    const visible = !!(target && c.room?.objects?.get(target.id) === target &&
+      target.id === o.targetId && exactName(c, target) === o.targetName && (target.flags & OF.ATTACKABLE));
+    const distance = me && target ? Math.hypot(target.row - me.row, target.col - me.col) : null;
+    let los = null;
+    if (visible && me && geo?.canMove) {
+      try { los = lineOfSight(geo, me.row, me.col, target.row, target.col); } catch {}
+    }
+    const swings = (c.attackLog ?? []).filter(a => !a.vetoed);
+    const until = Math.max(this.attackReadyAt ?? 0,
+      c.lastCastSent?.at != null ? c.lastCastSent.at + this.spellTimerMs(c.lastCastSent.name) : 0,
+      swings.at(-1)?.at != null ? swings.at(-1).at + 1000 : 0);
+    const timerRemaining = Math.max(0, until - this.now());
+    const degrees = Number.isFinite(me?.degrees) ? me.degrees : o.faceDeg;
+    const angle = Number.isFinite(degrees) ? Math.round(degrees * 4096 / 360) : me?.angle;
+    const behind = facing ? wandShot.behindYou(me, target, angle) : false;
+    const positioned = visible && Number.isFinite(distance) && (range == null || distance <= range) && (!sight || los === true);
+    const reason = !visible ? 'target_not_visible' : !Number.isFinite(distance) ? 'position_unknown' :
+      range != null && distance > range ? 'range' : sight && los !== true ? (los === false ? 'line_of_sight' : 'sight_unknown') :
+      timer && timerRemaining > 0 ? 'cooldown' : facing && behind !== false ? 'facing' : null;
+    return { ready: reason === null, positioned, reason, los, distance, timer_remaining_ms: timerRemaining };
+  }
+
+  spellTimerMs(name) {
+    const sp = loadCatalogue().get(String(name ?? '').toLowerCase());
+    if (Number.isFinite(sp?.post_cast_ms)) return sp.post_cast_ms;
+    // Older catalogues omit overrides (Hold is a direct Spell subclass with a
+    // 2s timer). Do not infer a subclass's timer from its parent name alone.
+    return 2000;
+  }
+
+  async approachCombat(o, target, { sight = false } = {}) {
+    if (!target || !o.client.self) return;
+    o.lastReadiness = this.attackReadiness(o, target, { sight, range: sight ? null : 2 });
+    // Door planning must precede the square router even at close range. The fine
+    // same-room planner carries Castle Victoria's exact trigger/landing fixes.
+    if (await this.crossDoorToward(o, target)) return;
+    const next = safeCombatStep(this.s, { ...target, sight }, { fineBody: true });
+    demand(next, 'no safe approach to player');
+    await this.stand(o);
+    const before = { row: o.client.self.row, col: o.client.self.col, x: o.client.self.x, y: o.client.self.y };
+    const result = next.fine ? await this.s.stepFine(next.x, next.y) :
+      await this.s.step(next.col, next.row, { confirm: true });
+    o.lastApproach = { at: this.now(), from: before, toward: next, reason: result?.reason ?? null };
   }
 
   /**
@@ -666,24 +785,39 @@ export class CombatMode {
       mana: mana?.value ?? null, max_mana: mana?.max ?? null, spells: known, pack, now: this.now(),
       last_cast_at: o.openerAt ?? null, last_spell: o.openerSpell ?? null,
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
+      readiness: this.attackReadiness(o, target, { sight: true }),
       heard: this.heardHere() };
     for (const st of asked) {
       let answer;
       try { answer = await st.pvpOpener(ctx); }
       catch (e) { this.noteOpenerFault(o, st.name, `threw: ${e.message}`); continue; }
       if (answer == null) continue;
-      if (answer.wait === true && answer.cast == null) { o.openerWaiting = st.name; return true; }
+      if (answer.wait === true && answer.cast == null) {
+        o.openerWaiting = st.name;
+        if (o.openerAim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned)
+          await this.approachCombat(o, target, { sight: true });
+        return true;
+      }
       const name = typeof answer.cast === 'string' ? answer.cast.trim().toLowerCase() : null;
       const spell = name && (c.spells ?? []).find(sp => exactName(c, sp) === name);
       if (!spell) { this.noteOpenerFault(o, st.name, name ? `named a spell it does not know: ${name}` : 'answered neither cast nor wait'); continue; }
       const aim = answer.target ?? 'target';
       if (!['target', 'self', 'none'].includes(aim)) { this.noteOpenerFault(o, st.name, `target must be target, self or none, not ${aim}`); continue; }
-      o.openerAt = this.now(); o.openerSpell = name; o.openerWaiting = null;
+      o.lastReadiness = { action: 'opener', ...this.attackReadiness(o, target, { sight: aim === 'target' }) };
+      if (aim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned) {
+        await this.approachCombat(o, target, { sight: true }); return true;
+      }
+      if (this.attackReadiness(o, target).timer_remaining_ms > 0) return true;
       await this.stand(o);
+      if (aim === 'target') await this.faceCombatTarget(o);
       await this.s.pacer.submit('cast', () => {
         const live = c.room.objects.get(o.targetId);
-        if (!live) return;
+        const ready = this.attackReadiness(o, live, { sight: aim === 'target', facing: aim === 'target' });
+        o.lastReadiness = { action: 'opener', ...ready };
+        if (!ready.ready) return;
         c.cast(spell.id, aim === 'none' ? [] : [aim === 'self' ? c.selfId : live.id]);
+        o.openerAt = this.now(); o.openerSpell = name; o.openerAim = aim; o.openerWaiting = null;
+        this.attackReadyAt = this.now() + this.spellTimerMs(name);
         o.casts++; o.openerCasts = (o.openerCasts ?? 0) + 1;
         if (o.pvp) { o.pvp.opener_casts = (o.pvp.opener_casts ?? 0) + 1; o.pvp.opener = { strategy: st.name, spell: name }; }
         if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
@@ -2092,11 +2226,21 @@ export class CombatMode {
       // PVP GEAR ON, ONCE PER FIGHT, inside this fight's own packet scope (m59-pvp-gear.mjs).
       if (!o.pvpGearOn) await this.pvpGearOn(o);
       if (await this.pvpOpener(o, target)) return;
-      // THE VOLLEY. 'hold' means a lightning wand is carried: no swing between beats, because a
-      // swing would take the attack timer the next zap needs.
-      if (await this.wandVolley(o) === 'hold') return;
+      // A wand hold reserves the shared attack timer, not the feet. Close the
+      // gap during the cooldown so targeted openers and melee can become usable.
+      const volley = await this.wandVolley(o);
+      if (volley) {
+        const live = c.room.objects.get(o.targetId);
+        if (volley === 'approach' || live && Math.hypot(live.row - c.self.row, live.col - c.self.col) > 2)
+          await this.approachCombat(o, live, { sight: volley === 'approach' });
+        return;
+      }
     }
-    if (this.now() < o.nextAt) return;
+    if (this.now() < o.nextAt) {
+      if (o.order.sequence[o.index]?.do === 'attack' && Math.hypot(target.row - c.self.row, target.col - c.self.col) > 2)
+        await this.approachCombat(o, target);
+      return;
+    }
     if (o.pendingAdvance) {
       o.pendingAdvance = false;
       this.nextAction(o);
@@ -2104,36 +2248,29 @@ export class CombatMode {
     }
     const step = o.order.sequence[o.index];
     if (step.do === 'wait') { o.nextAt = this.now() + step.ms; this.nextAction(o); return; }
-    if (step.do === 'attack' && Math.hypot(target.row - c.self.row, target.col - c.self.col) > 2) {
-      // THROUGH A SAME-ROOM DOOR WHEN ONE IS NEEDED. Castle Victoria (38) is one room number and
-      // many regions joined only by `go` doors back into itself (m59-world.mjs sameRoomDoors), so an
-      // enemy who steps through one is still visible and still "in the room" but has no floor path
-      // to him. The monster chase has crossed these since bridgeToQuarry; a PvP approach demanded a
-      // floor path and stood still, which Morpheus used (2026-09-30). One door per tick; the next
-      // tick re-plans from wherever the door put us.
-      // ASKED FIRST, NOT AS A FALLBACK. safeCombatStep plans on the COARSE grid, which joins
-      // Castle Victoria's chambers through stand points a body cannot use -- r7c26 toward r12c26
-      // returns a detour step via r2c34 -- so "no floor step" never happens there and the door was
-      // never tried. sameRoomDoorPlan uses the live body's FINE position and returns doors only
-      // when the walk really needs one; with no doors needed it returns none and we fall through.
-      if (await this.crossDoorToward(o, target)) return;
-      const next = safeCombatStep(s, target);
-      demand(next, 'no safe approach to player');
-      await this.stand(o); await s.step(next.col, next.row); return;
+    o.lastReadiness = { action: step.do, ...this.attackReadiness(o, target,
+      { range: step.do === 'attack' ? 2 : null, sight: step.do === 'cast' && step.target === 'target' }) };
+    if (step.do === 'attack' && !this.attackReadiness(o, target, { range: 2 }).positioned) {
+      // One shared approach for melee, targeted spells and blocked wand sight.
+      await this.approachCombat(o, target); return;
     }
+    if (step.do === 'cast' && step.target === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned) {
+      await this.approachCombat(o, target, { sight: true }); return;
+    }
+    if (this.attackReadiness(o, target).timer_remaining_ms > 0) return;
     await this.stand(o);
     if (step.do === 'attack') {
-      await s.pacer.submit('turn', () => {
-        const live = c.room.objects.get(o.targetId), me = c.self;
-        const degrees = (Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360;
-        c.face(degrees);
-      });
+      await this.faceCombatTarget(o);
       await s.pacer.submit('attack', () => {
         // Range can change while facing or pacing; do not spend an attack on a
         // stale position. The next event/tick will plan the next short approach.
         const live = c.room.objects.get(o.targetId);
-        if (Math.hypot(live.row - c.self.row, live.col - c.self.col) > 2) return;
-        c.attack(live.id);
+        const ready = this.attackReadiness(o, live, { range: 2, facing: true });
+        o.lastReadiness = { action: 'attack', ...ready };
+        if (!ready.ready) return;
+        if (c.attack(live.id) === false) return;
+        this.attackReadyAt = this.now() + 1000;
+        o.nextAt = this.attackReadyAt;
         if (o.firstAttackAt == null) {
           o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt);
         }
@@ -2145,12 +2282,15 @@ export class CombatMode {
           try { this.s.lastPlayerAttackAt = this.now(); } catch {} }
         if (--o.remaining <= 0) this.nextAction(o);
       }, 1050);
-      o.nextAt = this.now() + 1000;
     } else {
       const spell = (c.spells ?? []).find(sp => exactName(c, sp) === step.spell.toLowerCase());
       demand(spell, 'spell is no longer known');
+      if (step.target === 'target') await this.faceCombatTarget(o);
       await s.pacer.submit('cast', () => {
-        c.cast(spell.id, step.target === 'none' ? [] : [step.target === 'self' ? c.selfId : target.id]);
+        const live = c.room.objects.get(o.targetId);
+        if (!this.attackReadiness(o, live, { sight: step.target === 'target', facing: step.target === 'target' }).ready) return;
+        c.cast(spell.id, step.target === 'none' ? [] : [step.target === 'self' ? c.selfId : live.id]);
+        this.attackReadyAt = this.now() + this.spellTimerMs(step.spell);
         o.casts++; o.pendingAdvance = true;
         o.nextAt = this.now() + step.hold_ms;
       }, 1050);
@@ -2170,5 +2310,14 @@ export class CombatMode {
     if (o.standing) return;
     await this.s.pacer.submit('rest', () => { o.client.stand(); o.firstPacketAt ??= this.now(); });
     o.standing = true;
+  }
+
+  async faceCombatTarget(o) {
+    await this.s.pacer.submit('turn', () => {
+      const live = o.client.room.objects.get(o.targetId), me = o.client.self;
+      if (!live || !me) return;
+      const degrees = (Math.round(Math.atan2(live.row - me.row, live.col - me.col) * 180 / Math.PI) + 360) % 360;
+      o.client.face(degrees); o.faceDeg = degrees;
+    });
   }
 }

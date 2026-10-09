@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-pvp-readiness-test.mjs', 'PvP wand holds retain pursuit; sight, facing and shared cooldown are rechecked at dispatch; Castle chamber doors are shared'],
   ['m59-death-prevention-test.mjs', 'poisoned recovery and refuge approaches, including exits, retain confirmed progress and cancel stalled movement'],
   ['m59-escape-test.mjs', 'a missed shifting portal window still tries other fixed portals'],
   ['m59-travel-test.mjs', 'entry memory separates source doors from destination landings; failed hops retain evidence'],

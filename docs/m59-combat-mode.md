@@ -17,6 +17,34 @@ sent, not hits or kills; server outcome messages are reported separately.
 
 ## Immediate chat orders
 
+### Attack prerequisites and pursuit
+
+The harness checks the live exact target at the packet boundary. Lightning wand
+applies require directional `LOS_OLD` sight and facing; targeted opener/sequence
+casts establish sight and face first. Melee retains its server range/facing
+checks (the player melee rule does not require LOS). Room/self spells and
+vampiric shock retain their different prerequisites.
+
+A wand strategy's `hold` reserves melee's shared attack timer, not movement.
+The bot closes the gap during cooldowns and routes around blocked sight before
+firing. Every approach consults the existing fine same-room door planner first,
+including Castle Victoria's chamber triggers. It takes one door or one short
+collision-validated movement step, then reassesses the live target. There is no
+fixed distance cap on the lightning wand; its LOS gate is what blocks a distant
+shot. Movement still respects body ownership, hazards and map confinement.
+
+Cooldown bookkeeping starts when a packet is actually sent. Skipped queued
+actions consume no volley beat, attack count or sequence step. Lightning uses
+2s and melee 1s; spells use the KOD-derived `post_cast_ms` catalogue field,
+including subclass overrides. Rebuild older catalogues with
+`node tools/m59-spells.mjs build`; absent timing metadata reserves 2s and cannot
+certify the timing of longer custom spell timers. Strategy contexts include
+`readiness`; combat status includes `attack_readiness` and `last_approach`.
+
+See [the 2026-10-09 investigation](m59-pvp-readiness-2026-10-09.md) and
+`node tools/m59-pvp-readiness-test.mjs` for the recorded blocked-sight position,
+queued target changes, shared timers and two-door Castle route.
+
 ### Farm normally and swarm on sight
 
 Use a standing farm watch when the target should interrupt farming only while

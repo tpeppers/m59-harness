@@ -42,7 +42,7 @@ function fixture({ name = 'Kermit', items = [], clock0 = 1_000_000 } = {}) {
     apply(id, on) { sent.push(`apply:${names.get(id)}->${on}`); },
     look() {}, safety(on) { sent.push('safety:' + on); } };
   const s = { name, client: c, live: true, combatEpoch: 0, movementGeneration: 0, fightGeneration: 0, job: null, need: () => c,
-    world: { room: { num: 38 }, geometry: { rows: 50, cols: 70, standable: () => true,
+    world: { room: { num: 38 }, geometry: { rows: 50, cols: 70, canMove: () => true, standable: () => true,
       path: (r, col, tr, tc) => ({ found: true, steps: [{ row: r + Math.sign(tr - r), col: col + Math.sign(tc - col) }] }) } },
     cancelMovement() { this.movementGeneration++; },
     async step() {} };
@@ -468,13 +468,10 @@ await test('pvpGearConfig parses expect_incoming and accept_if_missing, and defa
     assert.equal(f.crossed.length, 0);
   });
 
-  // DOCUMENTED, NOT ENDORSED: on the real bake the COARSE approach from the chamber is not null,
-  // so advance() takes safeCombatStep's step and never reaches crossDoorToward for this pair. The
-  // door fallback only fires when safeCombatStep returns null. Pinned so a change is noticed.
-  await test('real bake: safeCombatStep from r7c26 toward r12c26 is NOT null (door fallback not reached here)', () => {
+  await test('real bake: safeCombatStep does not borrow a coarse shortcut out of a Castle chamber', () => {
     const next = safeCombatStep({ client: { self: { row: 7, col: 26 }, room: { objects: new Map() } },
       world: { geometry: geo38 } }, { row: 12, col: 26 });
-    assert.ok(next, 'coarse grid has a path out of the chamber');
+    assert.equal(next, null, 'collision routing requires the internal door');
   });
 
   await test('advance(): a PvP approach with no floor step crosses a door instead of failing', async () => {
@@ -701,6 +698,7 @@ await test('checkWandAnswer accepts an unidentified wand the character holds, an
 const opener = (pvpOpener, { name = 'private-opener', enabled = true } = {}) =>
   ({ strategies: [{ name, kind: 'combat', enabled, pvpOpener }], problems: [] });
 const withSpell = f => {
+  f.mode.spellTimerMs = () => 1000; // synthetic base Spell, like Hold
   f.c.rsc.set(900, 'stun');
   f.c.spells = [{ id: 900, nameRsc: 900 }];
   f.c.cast = (id, targets) => f.sent.push(`cast:${f.c.rsc.get(id)}->${targets.join(',')}`);
@@ -715,7 +713,7 @@ await test('an opener casts at the fight\'s own target before the gear goes on a
   f.mode.agentId = 't7';
   f.mode.event({ kind: 'appeared', id: 2 });
   await f.mode.tick();
-  assert.deepEqual(f.sent.filter(x => x !== 'stand'), ['cast:stun->2'], `sent ${f.sent}`);
+  assert.deepEqual(f.sent.filter(x => x !== 'stand'), ['face', 'cast:stun->2'], `sent ${f.sent}`);
   assert.equal(asked[0].agent, 't7'); assert.equal(asked[0].target.id, 2); assert.equal(asked[0].target.player, true);
   assert.deepEqual(asked[0].spells, ['stun']); assert.equal(asked[0].pack['purple mushroom'], 4);
   assert.equal(asked[0].last_cast_at, null);

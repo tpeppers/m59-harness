@@ -37,7 +37,7 @@ function fixture({ realPacer = false } = {}) {
   const s = { name: 'test', client: c, live: true, combatEpoch: 0, movementGeneration: 0, fightGeneration: 0,
     job: { kind: 'travel', done: false }, need: () => c,
     world: { room: { num: 38 }, map: { rooms: { 38: { rows: 50, cols: 70 }, 39: { rows: 50, cols: 70 } } },
-      geometry: { rows: 50, cols: 70, standable: (r, col) => r > 0 && col > 0 && r < 50 && col < 70,
+      geometry: { rows: 50, cols: 70, canMove: () => true, standable: (r, col) => r > 0 && col > 0 && r < 50 && col < 70,
         path(r, col, tr, tc, { avoid }) {
           const next = { row: r + Math.sign(tr - r), col: col + Math.sign(tc - col) };
           return { found: !avoid.has(`${next.row},${next.col}`), steps: [next] };
@@ -55,6 +55,7 @@ function fixture({ realPacer = false } = {}) {
   const keeper = { policy: { fleeBelow: 0.4 }, revive() {} };
   s.combat = new CombatMode(s, { keeper: () => keeper, now: () => clock,
     schedule(fn) { const id = ++timerId; timers.set(id, fn); return id; }, unschedule: id => timers.delete(id) });
+  s.combat.spellTimerMs = () => 2000; // Hold overrides Spell's 1s timer
   return { s, c, sent, keeper, timers, mode: s.combat, advance(ms) { clock += ms; } };
 }
 const attack = { action: 'attack', target: 'Exact Player' };
@@ -162,7 +163,7 @@ await test('expiry interrupts a pending travel without waiting for it', async ()
 await test('scripted cast, wait and attacks finish and restore ordinary behavior', async () => {
   const f = fixture(); f.mode.issue({ ...attack, repeat: false,
     sequence: [{ do: 'cast', spell: 'hold' }, { do: 'wait', ms: 100 }, { do: 'attack', swings: 2 }] });
-  await f.mode.tick(); f.advance(1001); await f.mode.tick();
+  await f.mode.tick(); f.advance(2001); await f.mode.tick();
   f.advance(101); await f.mode.tick(); f.advance(1001); await f.mode.tick();
   assert.equal(f.mode.status().reason, 'sequence completed');
   assert.deepEqual(f.sent.filter(x => /attack|cast/.test(x)), ['cast:4:2', 'attack:2', 'attack:2']);
@@ -372,6 +373,7 @@ await test('a sighting preempts farming and losing sight returns the body to nor
   await withBodyCommand(f.s, () => f.s.pacer.submit('attack', () => f.sent.push('farm:monster')));
   assert.equal(f.sent.at(-1), 'farm:monster');
   f.c.room.objects.set(22, { ...target, id: 22 }); f.mode.event({ kind: 'appeared', id: 22 });
+  f.advance(1000); // reacquisition retains the shared attack timer
   await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:22');
   assert.equal(f.mode.status().watch.engagements, 2); f.mode.issue({ action: 'stop' });
 });

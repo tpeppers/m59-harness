@@ -77,10 +77,10 @@ export function karmaAllows(school, level, karma) {
 // declares SID_FORESIGHT while forsight.kod writes SID_Foresight. A case-sensitive
 // lookup silently drops those spells from the catalogue, which is worse than failing
 // — the spell simply appears not to exist.
-function constantTable() {
+function constantTable(root = M59_ROOT) {
   const nums = new Map();
   try {
-    const khd = fs.readFileSync(path.join(M59_ROOT, 'kod/include/blakston.khd'), 'utf8');
+    const khd = fs.readFileSync(path.join(root, 'kod/include/blakston.khd'), 'utf8');
     for (const m of khd.matchAll(/^\s*((?:SID|SKID|SS)_\w+)\s*=\s*(-?\d+)/gm))
       nums.set(m[1].toUpperCase(), Number(m[2]));
   } catch { /* without it, numbers stay symbolic */ }
@@ -134,9 +134,10 @@ function canPayCosts(text) {
   return (end ? rest.slice(0, end.index + end[0].length) : rest.slice(0, 1500)).trimEnd();
 }
 
-function compile() {
-  const consts = constantTable();
+export function compile(root = M59_ROOT) {
+  const consts = constantTable(root);
   const spells = [];
+  const classes = new Map();
   const walk = dir => {
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -147,6 +148,8 @@ function compile() {
       const text = fs.readFileSync(full, 'utf8');
       const head = /^(\w+)\s+is\s+(\w+)/m.exec(text);
       if (!head) continue;
+      classes.set(head[1].toLowerCase(), { parent: head[2].toLowerCase(),
+        postCast: classVar(text, 'viPostCast_time', consts) });
       const num = classVar(text, 'viSpell_num', consts);
       if (num === null || typeof num !== 'number') continue;
 
@@ -158,7 +161,7 @@ function compile() {
 
       spells.push({
         num, cls: head[1], parent: head[2],
-        file: path.relative(M59_ROOT, full).split(path.sep).join('/'),
+        file: path.relative(root, full).split(path.sep).join('/'),
         school: schoolNum, school_name: schoolNum != null ? SCHOOLS[schoolNum] ?? String(school) : null,
         level: levelNum,
         mana: typeof mana === 'number' ? mana : null,
@@ -171,7 +174,25 @@ function compile() {
       });
     }
   };
-  walk(path.join(M59_ROOT, 'kod/object/passive/spell'));
+  walk(path.join(root, 'kod/object/passive/spell'));
+  // Spell itself is outside spell/. Its inherited timer is essential: Enfeeble
+  // uses 1s; Hold overrides it to 2s; Lightning inherits 2s through AttackSpell.
+  try {
+    const base = fs.readFileSync(path.join(root, 'kod/object/passive/spell.kod'), 'utf8');
+    classes.set('spell', { parent: null, postCast: classVar(base, 'viPostCast_time', consts) });
+  } catch {}
+  for (const sp of spells) {
+    let cls = sp.cls.toLowerCase();
+    const seen = new Set();
+    sp.post_cast_ms = null;
+    while (cls && !seen.has(cls)) {
+      seen.add(cls);
+      const entry = classes.get(cls);
+      if (!entry) break;
+      if (Number.isFinite(entry.postCast)) { sp.post_cast_ms = entry.postCast * 1000; break; }
+      cls = entry.parent;
+    }
+  }
 
   // Names come from the same SID_ constants the merchant catalogue uses, so a spell
   // found here lines up with a merchant that teaches it.

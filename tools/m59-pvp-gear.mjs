@@ -195,8 +195,12 @@ export const beatOf = (now, ms = pvpGearConfig().volley_ms) => Math.floor(now / 
 //
 //   answer: { fire: <wand id> | null, hold: boolean, face: boolean, why?: string }
 //     fire  the wand to apply at the target now, or null for no zap this tick
-//     hold  true = no melee and no approach this tick (the caller returns before both)
+//     hold  true = reserve the attack timer from melee; blocked wand sight still approaches
 //     face  turn to the target before the zap (a lightning wand needs rough facing)
+//   The harness enforces sight, facing and the actual shared cooldown at send time,
+//   including for decoded lightning selected privately. ctx.readiness reports
+//   ready, positioned, reason, los, distance and timer_remaining_ms. Strategies
+//   choose the wand; hold cannot suppress the movement required to fire it.
 //
 // `refused` on a shot is set when "You point your wand but nothing happens" arrives after it:
 // the server refused the bolt (attack timer, line of sight, a no-combat room, a resist) and

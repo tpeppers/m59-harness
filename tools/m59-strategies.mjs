@@ -79,7 +79,8 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     async chalice(ctx) { return null; },
 //     // COMBAT hooks --------------------------------------------------------------
 //     // Asked on every tick of a PvP fight in which the character carries a volley wand:
-//     // which wand to zap, if any, and whether to hold the swing and the approach. Return null
+//     // which wand to zap, if any, and whether to hold melee. The harness still approaches
+//     // and enforces sight/facing/cooldown at dispatch. Return null
 //     // to decline and the built-in volley runs. ctx and the answer's shape are documented
 //     // beside the built-in, m59-pvp-gear.mjs chooseWandVolley. Asked ten times a second, so
 //     // it must be cheap: no I/O, no waiting.

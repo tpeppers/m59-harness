@@ -111,6 +111,7 @@ await test('another player in the same room is still attacked', async () => {
   f.mode.issue({ action: 'attack', target: 'Stranger' }); await f.mode.tick();
   f.mode.event({ kind: 'message', text: SENTENCE });
   assert.equal(f.mode.issue({ action: 'attack', target: 'Morpheus' }).accepted, true);
+  f.advance(1001); // a new order does not reset the character's attack timer
   await f.mode.tick();
   assert.equal(attacksAt(f, 2), 1, `sent ${f.sent}`);
   f.mode.stop('test');
@@ -122,6 +123,7 @@ await test('leaving the room forgets it: the same player is attacked in a differ
   f.mode.issue({ action: 'attack', target: 'Stranger' }); await f.mode.tick();
   f.mode.event({ kind: 'message', text: SENTENCE });
   moveTo(f, 39);                                   // Upstairs in Castle Victoria
+  f.advance(1001);
   assert.equal(f.mode.targetRefused('Stranger'), null);
   assert.equal(f.mode.issue({ action: 'attack', target: 'Stranger' }).accepted, true);
   await f.mode.tick();
@@ -161,6 +163,7 @@ await test('war: a second, attackable enemy in the room is still engaged', async
   put(f, 3, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 3 }); await f.mode.tick();
   f.mode.event({ kind: 'message', text: SENTENCE });
   put(f, 2, P | OF.ENEMY, 5, 7); f.mode.event({ kind: 'appeared', id: 2 });
+  f.advance(1001);
   assert.ok(f.mode.active?.pvp); await f.mode.tick();
   assert.equal(attacksAt(f, 2), 1, `sent ${f.sent}`);
   f.mode.stop('test');
@@ -181,6 +184,7 @@ await test('a hit FROM a refused player clears the refusal: they are a target ag
   assert.equal(f.mode.targetRefused('Stranger'), null, 'the refusal is stale and forgotten');
   assert.ok(f.logged.some(l => /Stranger attacked us in room 38; the guild-only refusal is stale/.test(l)), `${f.logged}`);
   assert.ok(f.mode.active?.pvp, 'return fire starts, exactly as for anybody else');
+  f.advance(1001);
   await f.mode.tick();
   assert.equal(attacksAt(f, 3), 2, `sent ${f.sent}`);
   f.mode.stop('test');
