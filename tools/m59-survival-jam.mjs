@@ -12,7 +12,7 @@ export function validJamOwner(k,e,now=Date.now()) {
   const o=jamObservation(k),hp=k.s?.client?.vitals?.()?.health?.value;
   return !!e && e.client===o.client && e.generation===o.generation && e.deaths===o.deaths && e.lifeBoundary===o.lifeBoundary
     && sameJamPocket(e,o) && now<e.expires && hp!==0 && o.room!==1
-    && !k.stopping && !(k.busy?.until>now) && !(k.inert&&!k.inert.travelling)
+    && !k.stopping && !(k.inert&&!k.inert.travelling)
     && !k.facultyHeld('survival') && !k.facultyHeld('combat') && !k.facultyHeld('recovery')
     && !k.hold && !k.holdWorks() && !k.currentRecoveryWall();
 }

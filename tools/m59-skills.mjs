@@ -2023,6 +2023,9 @@ export async function confirmRefugePosition(s) {
 
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
                                            routeFirst = false, avoidSquares = null } = {}) {
+  // maxSteps supplies each strategy's budget; a finite planned detour may raise
+  // it, as in walkTo. approachFine shares it between waypoints and sliding fan; the
+  // final adjustment to a remembered fine point retains its separate six steps.
   const decision=currentSurvivalDecision(s);
   // A SHELTER APPROACH IS A MOVE ORDER OF THE KEEPER'S OWN (m59-move-origin.mjs), so whatever
   // cancels it is recorded as having pre-empted `keeper:shelter`, and while it runs `status`
@@ -2144,7 +2147,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
     let w;
     if (fineOwnsIt) {
       w = await attempt('approach_fine', null,
-        () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
+        () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y, maxSteps }))
                  .catch(e => ({ arrived: false, reason: e.message }));
       if (interrupted(w)) return stopped(w);
       if (isTerminalMovementReason(w?.reason)) return w;
@@ -2163,7 +2166,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
       if (isTerminalMovementReason(w?.reason)) return w;
       if (!w.arrived && typeof s.approachFine === 'function') {
         const fine = await attempt('approach_fine', w,
-          () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
+          () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y, maxSteps }))
                             .catch(e => ({ arrived: false, reason: e.message }));
         if (interrupted(fine)) return stopped(fine);
         if (isTerminalMovementReason(fine?.reason)) return fine;

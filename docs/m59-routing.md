@@ -157,6 +157,18 @@ Three things hold this up and each fails in the dangerous direction if inverted:
   while `finePathProtocol` found each in five to seven waypoints — a wall square is
   standable only in a sliver, and a coarse lattice cannot land on a sliver. Do not read the broker `safe_spots` tool's default `limit: 8` as
   the room's supply of walls — it is a display cap.
+- **A fine approach spends one budget across both strategies.** A finite planned
+  detour can raise the caller's `maxSteps`, as the square router already does, so a
+  healthy route is not cut short by a default limit. Each attempted protocol waypoint
+  consumes one step; the sliding fallback receives only the remaining budget, and
+  the result includes both counts. A zero budget sends no movement. A fallback step is
+  one `walkFine` iteration, which may try several headings, not one wire packet.
+  `returnToSpot` forwards its requested budget to the fine approach in either
+  route order. The square and fine strategies retain separate budgets, and a final
+  adjustment to a remembered fine point retains its existing six steps. Terminal
+  geometry/confirmation failures return immediately with their original receipt;
+  cancellation or client replacement during the last await cannot certify arrival.
+  Healthy waypoint paths retain their movement requests and packet pacing.
 - **The mask may only ever PREFER.** It is a model of somebody else's server and it is
   stricter than the world — on room 579's north boundary it offers no reachable staging
   square at all from 19 of 35 starting squares. So `exits()` floods twice and falls back to

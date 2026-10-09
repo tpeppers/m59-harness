@@ -1380,7 +1380,7 @@ const walkFine = compileSessionMethod(brokerSource,
 // before any straight-line fanning, and that no path means the old line-walk.
 let fakeFinePath = () => ({ found: false });
 const approachFine = compileSessionMethod(brokerSource,
-  'async approachFine(col, row, {', 'approachFine', { KOD_FINENESS });
+  'async approachFine(col, row, {', 'approachFine', { KOD_FINENESS, isTerminalMovementReason });
 const walkTo = compileSessionMethod(brokerSource,
   'async walkTo(col, row, {', 'walkTo', {
     provedSquares,

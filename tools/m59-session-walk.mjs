@@ -1376,6 +1376,17 @@ export function sessionWalkPrototype(deps) {
       : (geo.standPointWire?.(row, col)
          ?? { x: col * KOD_FINENESS + (KOD_FINENESS >> 1),
               y: row * KOD_FINENESS + (KOD_FINENESS >> 1) });
+    // Waypoints and the sliding fallback spend one attempt budget. A finite
+    // planned detour may raise it, as in walkTo; cutting a healthy route short
+    // because of the caller's default loses arrivals. A failed waypoint still
+    // spends an attempt, and the fallback never receives a fresh budget.
+    let taken = 0;
+    let budget = maxSteps;
+    const interrupted = () => this.movementWasCancelled(movementGeneration, controlToken)
+      || this.client !== undefined && this.client !== c;
+    const exhausted = () => ({ arrived: false, steps: taken, reason: 'ran out of steps',
+      position: c.self ? { col: c.self.col, row: c.self.row } : null });
+    if (budget <= 0) return exhausted();
 
     // A WALL SQUARE IS ONE THE MOVER REFUSES TO ENTER FROM ITS COARSE NEIGHBOURS. That is
     // not an obstacle to the safe-spot search, it is the DEFINITION of what it looks for
@@ -1399,13 +1410,19 @@ export function sessionWalkPrototype(deps) {
       const path = geo.finePathProtocol(me.x, me.y, goal.x, goal.y,
         { step: 8, margin: 4 * KOD_FINENESS, maxNodes: 4000 });
       if (path?.found && Array.isArray(path.waypoints) && path.waypoints.length) {
-        let taken = 0;
+        budget = Math.max(budget, path.waypoints.length);
         for (const wp of path.waypoints) {
-          if (this.movementWasCancelled(movementGeneration, controlToken))
+          if (interrupted())
             return this.cancelledMovement({ steps: taken, log: [] });
-          const step = await this.stepFine(wp.x, wp.y).catch(() => null);
+          if (taken >= budget) return exhausted();
+          const step = await this.stepFine(wp.x, wp.y)
+            .catch(e => ({ moved: false, reason: e.message }));
           taken++;
+          if (interrupted() || step?.cancelled)
+            return this.cancelledMovement({ steps: taken, log: [] });
           if (step?.left_room) return { arrived: false, left_room: true, steps: taken };
+          if (isTerminalMovementReason(step?.reason))
+            return { ...step, arrived: false, steps: taken };
           if (step?.reason === 'object_blocked') break;
           const at = c.self;
           if (at && at.col === col && at.row === row)
@@ -1414,17 +1431,23 @@ export function sessionWalkPrototype(deps) {
         }
       }
     }
+    if (interrupted()) return this.cancelledMovement({ steps: taken, log: [] });
+    if (taken >= budget) return exhausted();
     const r = await this.walkFine(goal.x, goal.y,
-      { maxSteps, stride, arriveWithin: KOD_FINENESS >> 1, movementGeneration, controlToken })
+      { maxSteps: budget - taken, stride, arriveWithin: KOD_FINENESS >> 1, movementGeneration, controlToken })
       .catch(e => ({ arrived: false, reason: e.message }));
-    if (r?.left_room) return { arrived: false, left_room: true, steps: r.steps ?? 0 };
+    taken += r?.steps ?? 0;
+    if (interrupted() || r?.cancelled)
+      return this.cancelledMovement({ steps: taken, log: r?.log ?? [] });
+    if (r?.left_room) return { arrived: false, left_room: true, steps: taken };
+    if (isTerminalMovementReason(r?.reason)) return { ...r, arrived: false, steps: taken };
     const at = c.self;
     // ON THE SQUARE IS THE ONLY THING THAT COUNTS. `walkFine` answers "as close as fine
     // movement gets", which is the right answer to its own question and not to this one:
     // the hold belongs to a square, and `observe()` revokes one taken on the wrong square
     // a pass later.
     const landed = !!at && at.col === col && at.row === row;
-    return { arrived: landed, steps: r?.steps ?? 0,
+    return { arrived: landed, steps: taken,
              position: at ? { col: at.col, row: at.row } : null,
              ...(landed ? {} : { reason: r?.reason ?? 'fine approach ended off the square' }) };
   }
