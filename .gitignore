@@ -882,3 +882,13 @@ substrate/magic-keep.json
 # Extra directories the farming-strategy engine searches after substrate/farm-strategies/ (a private
 # repository, say). This machine's answer, like the strategies themselves. See m59-strategy-engine.mjs.
 /substrate/farm-strategy-dirs.json
+
+# The red-alert posture and the ally-tactics checkboxes: this machine's orders and live state (they name
+# this fleet's enemies and characters; the private repository keeps the copies).
+/substrate/red-alert.json
+/substrate/red-alert-state.json
+/substrate/red-alert-saved/
+/substrate/red-alert.log
+/substrate/red-alert.out
+/substrate/red-alert.err
+/substrate/tactics.json
