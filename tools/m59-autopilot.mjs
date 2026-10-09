@@ -6529,7 +6529,15 @@ export class Autopilot {
     // refuses walking OUT to fetch another monster; it never refuses taking shelter.
     // forFighting: a crowd of things that cannot advance this body is not a reason to refuse
     // to go and fight. See `advancingThreatCountHere`.
-    if (this.crowded({ forFighting: true })) {
+    // EXCEPT A BUDDY-SYSTEM TAGGER AT FULL HEALTH (operator, 2026-10-09: "Drop the pull's crowd safety check,
+    // as long as the puller is full health"). Its walk out is to an UNTOUCHED monster, its partner is standing
+    // at the wall it walks back to, and Castle Victoria with twenty of our own in it read as a crowd on nearly
+    // every pass -- one tag in four minutes. Below full health the guard is back; the flee-line refusal just
+    // below, the survival ladder above this stage and the watchdog during the walk are all unchanged.
+    const fullHealth = (() => { const h = s?.client?.vitals?.()?.health;
+      return !!(h && Number(h.max) > 0 && Number(h.value) >= Number(h.max)); })();
+    const buddyCrowdOk = fullHealth && this.mode === 'farm' && this.buddyRole?.()?.role === 'tag';
+    if (!buddyCrowdOk && this.crowded({ forFighting: true })) {
       this.noteCrowdRefusal('pulling quarry to the wall');
       return { pulled: false, why: 'too many things in this room to walk out and back through' };
     }

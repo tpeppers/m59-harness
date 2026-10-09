@@ -204,6 +204,24 @@ console.log('\nthe keeper: a tagger\'s corner is not a rest stop');
   ok('anyone else leaves a rested wall as before', await k2.ap.releaseRestedHold() === true);
 }
 
+console.log('\nthe keeper: the pull\'s crowd guard');
+{
+  const real = Autopilot.prototype.pull;
+  const tryPull = async (agent, hp, mode = 'farm') => {
+    const k = keeper(agent, { hold: { col: 2, row: 2 } });
+    k.ap.mode = mode;
+    k.client.vitals = () => ({ health: { value: hp, max: 65 } });
+    Object.assign(k.ap, { crowded: () => true, noteCrowdRefusal: () => {}, pull: real });
+    return k.ap.pull({ id: 404 });           // id 404 is not in the room: past the guard, it stops there
+  };
+  const full = await tryPull('t5', 65);
+  ok('a buddy tagger at FULL health walks out through a crowd', /not in the room/.test(full.why));
+  const hurt = await tryPull('t5', 60);
+  ok('a buddy tagger below full health is still refused by the crowd guard', /too many things/.test(hurt.why));
+  const other = await tryPull('t1', 65);
+  ok('so is anyone who is not a tagger, at any health', /too many things/.test(other.why));
+}
+
 console.log('\nthe keeper: the killer');
 {
   buddy.writeBuddyRecord('t5', { role: 'tag', partner: 't4', room: 38, hold: { col: 2, row: 2 },

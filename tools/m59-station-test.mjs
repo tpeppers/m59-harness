@@ -197,8 +197,10 @@ console.log('\nthe pull refuses a crowd and refuses to run below the flee line')
   // not a reason to refuse to go and fight. Operator: "the fight your way out should not
   // block/skip because of other monsters being nearby if they're lower level (no
   // advancement)". The gate is still asked — what changed is what it counts.
+  // The one exception (2026-10-09): a buddy-system tagger at FULL health is not refused by it --
+  // m59-buddy-test pins that a hurt tagger and every non-tagger still are.
   ok('it asks crowded() before walking anywhere',
-     body.includes('if (this.crowded({ forFighting: true }))'));
+     body.includes('if (!buddyCrowdOk && this.crowded({ forFighting: true }))'));
   ok('...and asks it about what can actually advance us, not every body in the room',
      /crowded\(\{\s*forFighting:\s*true\s*\}\)/.test(body));
   ok('...and says so in the ledger rather than refusing in silence',
