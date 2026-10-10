@@ -118,7 +118,23 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(first.room?.num===2502&&to===2503)await walkHollowsOut(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2505&&to===2000)await approachIslandDoor(ctx,{budgetMs,onSample:sample});
   // Both mainland exits are detours from this measured cave expedition.
-  const request=()=>call('travel',{agent,to,background:true,max_hops:1,avoid:[5,587],run_errands:false},30000);
+  const request=async()=>{
+    const by=originLabel(ctx.origin??currentCallOrigin());let reply;
+    for(let attempt=0;attempt<6;attempt++){
+      reply=await call('travel',{agent,to,background:true,max_hops:1,avoid:[5,587],run_errands:false},30000);
+      // Room entry can precede the previous hop's job cleanup. Wait only for
+      // this controller's own busy job; never replace another owner's order.
+      if(!reply.error?.includes(' is busy:')||reply.ordered_by!==by||!reply.error.includes('(ordered by '+by+')'))return reply;
+      leg.handoff_waits=(leg.handoff_waits??0)+1;
+      const l=await call('look',{agent}),p=sample(l);
+      checkIslandCancellation(ctx,await call('status',{agent,brief:true}));
+      if(p.room===to)return {...reply,arrived:true};
+      if(p.room!==first.room.num)throw Error('travel_handoff_unexpected_room');
+      if(Date.now()-start>=budgetMs)break;
+      await pause(pollMs);
+    }
+    return reply;
+  };
   leg.request=await request();leg.retries=0;
   let attemptStarted=Date.now();
   for(;;){

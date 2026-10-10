@@ -118,6 +118,9 @@ from monsters. A successful quiet convoy must be followed by a populated-cave
 trial and a tested escort or control strategy before sending fragile characters.
 Light does not repel shadow beasts. Their presence and the keeper's recovery
 behavior must be measured rather than inferred from an empty geometry trial.
+An arrival can precede cleanup of the previous travel job. The next hop waits
+and retries a bounded number of times when that busy job has the same order
+owner; an unrelated busy order does not qualify.
 
 The chalice recipe requires exactly one Chalice of the Rain whose current
 description says it is filled to the brim. From map 27 it first enters the
