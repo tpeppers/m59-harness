@@ -519,6 +519,24 @@ ten minutes) so the next tree kill, a clean-up sweep or the `loot` tool does not
 anyway. Something dropped during the fight by another source reads as this kill's — it fails
 toward leaving loot, never toward carrying spider junk. An explicit id list is never filtered.
 
+### Say the word: stock no shop list shows
+
+Some merchants sell an item only after its NAME is said to them. `InitCondSale` registers a
+`LIBACT_CONDITIONAL` trigger (`util/library.kod`): saying the item's name adds it to that
+merchant's buy list (`AddToConditionalList`) and the merchant speaks a sales line. Until then a
+`shop` listing does not show it, and `m59-merchants.json` — built from standard inventories —
+never will. The trigger is the item's `GetName` as created, which for a stack is the PLURAL.
+
+| merchant | room | say | sells | price |
+|---|---|---|---|---|
+| Tova, the Limping Toad | Marion 202 | `entroot berries` | entroot berry | 200 each (`mrbart.kod`) |
+| Ran er'Hoth, the elder | Marion (`marion.kod` 200) | `orc teeth` | orc tooth | 350 (`MrElder.kod`) |
+
+Measured 2026-10-10: "entroot berry" (singular) listed nothing; "entroot berries" listed it, and
+200 were bought in fifties with no stock cap. The elder answered no `shop` call in room 200 that
+day ("no reply", no objects in the room), so his half is from the kod only.
+`substrate/fleetscripts/zheng-he-run.mjs` (local) says the trigger before buying.
+
 ## Chalice farming: a free Rescue home instead of the walk
 
 Operator's plan, 2026-09-23. One named HOLDER carries the fleet's Chalice of the Rain at a
@@ -540,6 +558,11 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
 - **IT LANDS IN THE HALL** because room 2 and every mainland hall share `RID_DEFAULT`
   (`room.kod:900-943`; only halls 12/13/15 are Ko'catan). `Session.travel` already walks out
   of 714 through the passage, so nothing downstream changed.
+  **BUT ONLY FOR A GUILD MEMBER.** `rescue.kod` `CastSpell` sends the drinker to its guild's hall
+  only when `GetGuild` answers one that has a hall; anyone else goes to its HOME room (`% Default:
+  Go to our home room`). Measured 2026-10-10: Zheng He, a courier outside the guild, drank at the
+  gate and woke in the Cibilo Creek Inn, Cor Noth (153) — his home — and a script expecting 714
+  stopped there. Check a rider's guild before promising it the hall.
 - **NEVER TWO CUPS ON ONE PERSON.** A cup arriving in a pack that already holds one is poured
   into it and deleted (`chalice.kod` `NewOwner`), or refused when the held one is full
   (`ReqNewOwner`). Two cups dropped in a refill room both refill, so two always beat one merged

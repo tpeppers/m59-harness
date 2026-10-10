@@ -466,6 +466,22 @@ There is also **atrophy**: when the advancement window rolls over, skills and
 spells you have not used can decay (`AdvancementTimer`, `player.kod:7680`). What
 you neglect, you lose.
 
+### Some spells have targets you cannot farm
+
+**Defile (Qor, level 3) is castable ONLY on the corpse of a player who died with POSITIVE
+karma.** `defile.kod` `CanPayCosts` wants one target that `IsClass(target, &DeadBody)` and
+`WasGoodPlayer`, and a corpse is "good" only when `player.kod` built it with `#good=(piKarma>0)`
+(`body.kod` `pbWas_good_player`). Every monster corpse is created without `#good`
+(`monster.kod`, `Create(&DeadBody, ...)`), so a skeleton or zombie corpse is refused with
+*"Qor may only harvest the souls of the good at heart."* — and so is a negative-karma player,
+murderer or not. The test is the dead player's karma, not their murderer flag.
+
+So defile cannot be drilled in a farming room, however many corpses it holds. Three more rules
+from the same file: the cast is refused at **3 × max mana**; it deletes the corpse; and a body
+whose NAME was defiled recently anywhere on the server (`plRecent`, `DEFILE_RECENT_LIST`) neither
+improves the spell nor moves the caster's karma. Found 2026-10-10, when the Qor disciples were about
+to be handed fairy wings for "defile on the skeleton corpses in Castle Victoria".
+
 ### Skills and spells — learning new ones is shopping
 
 This surprises people. You do not find a teacher and train; you **buy** the skill
