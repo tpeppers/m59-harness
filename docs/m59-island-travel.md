@@ -75,6 +75,9 @@ Observed body refusals remain traffic waits even when the shelf guard's reply
 also says its step budget ended. A predicted arrival that disagrees with the
 fresh body gets bounded rereads and retries; prediction alone never completes
 a waypoint.
+The shelf guard preserves a blocked-body reason even when it refuses before
+sending a step. Exact small strides halve after a refusal instead of being
+raised to the ordinary 24-unit minimum.
 Positions come from the selected fleet's fresh
 keeper read, rather than the square summary in `look`. A waiting follower
 continues health and cancellation checks, and the crossing queue shares the
