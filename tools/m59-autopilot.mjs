@@ -21307,6 +21307,12 @@ export class Autopilot {
         // It followed us in and nothing has landed yet: the same target, so a swing keeps the tag.
         t.tries = (t.tries ?? 0) + 1;
         this.doing = 'buddy: tagging';
+        // A TOUCH SPELL IN TRAINING IS THE WEAPON HERE TOO. passFarm keeps the buff on before every
+        // swing; the tagger swings through fightNow and pull() instead, so without this the hand was
+        // emptied and the buff never cast — Bunsen tagged with his fists (2026-10-10).
+        if (this.touchTrainingHere())
+          await this.maintainTouchSpell(`before tagging ${t.name}`)
+            .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
         await this.fightNow({ target: t.name, exactTargetId: t.id, preferId: t.id, rounds: 1,
           holdPosition: true, reach: PLAYER_REACH, loot: false, disengageAt: this.safety().fleeAt,
           match: () => true, weaponPriority: this.weaponPriorityNow?.(t.name),
@@ -21350,6 +21356,11 @@ export class Autopilot {
     this.buddyTagged.set(want.id, Date.now());
     if (Number.isFinite(c.evSeq)) this._buddyCursor = c.evSeq;
     this._buddyPendingName = want.name;
+    if (this.touchTrainingHere()) {
+      await this.touchOnTarget(want, want.name).catch(() => null);
+      await this.maintainTouchSpell(`before pulling ${want.name}`)
+        .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });
+    }
     const p = await this.pull(want).catch(e => ({ pulled: false, why: e.message }));
     const landed = this.buddyReadLanded();
     this._buddyPendingName = null;

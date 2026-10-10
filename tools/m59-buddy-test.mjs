@@ -247,6 +247,16 @@ console.log('\nthe keeper: the killer');
   ok('with its tagger in another room it farms as usual (CONTINUE)', await k4.ap.passBuddy(k4.ctx) === CONTINUE);
 }
 
+{
+  // The tagger swings through pull() and fightNow, not passFarm, so the touch spell has to be kept
+  // on here as well — without it the hand was emptied and the buff never cast (2026-10-10).
+  const tagBody = String(Autopilot.prototype.passBuddyTag);
+  ok('the tagger keeps a training touch spell on before it pulls',
+     /touchOnTarget\(want/.test(tagBody) && /maintainTouchSpell\(`before pulling/.test(tagBody));
+  ok('and before it swings again at an unlanded tag', /maintainTouchSpell\(`before tagging/.test(tagBody));
+  ok("and starts no pull while Kara'hol's curse or a hold is on it", /kara'\?hol\|\^hold\$/.test(tagBody));
+}
+
 rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
