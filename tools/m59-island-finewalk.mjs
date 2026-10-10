@@ -125,22 +125,7 @@ export function shelteredIslandAim(waypoints,body,{fromIndex=0,aim,squares,edge}
 }
 export const islandFineStepBudget=(body,aim)=>Math.ceil(Math.hypot(aim.x-body.x,aim.y-body.y)/(16*48))+2;
 export function cutIslandRail(body,goal,options){
-  const first=cutRail(body,goal,options);
-  if(first.bridgeOk)return first;
-  // The closest rounded grid point can lie across a wall. Try nearby seeds only
-  // after proving the entire bridge from the observed body to each candidate.
-  const lattice=options.lattice??128,candidates=[];
-  for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++){
-    const seed={x:first.seed.x+dx*lattice,y:first.seed.y+dy*lattice};
-    const distance=Math.hypot(seed.x-body.x,seed.y-body.y);
-    if(distance===0||seed.x<0||seed.y<0||seed.x>=options.bounds.w||seed.y>=options.bounds.h)continue;
-    if(chordWalkable(body,seed,{edge:options.edge,lattice}).ok)candidates.push({seed,distance});
-  }
-  for(const {seed} of candidates.sort((a,b)=>a.distance-b.distance).slice(0,8)){
-    const cut=cutRail(seed,goal,options);
-    if(cut.ok&&cut.bridgeOk)return {...cut,bridgeOk:true,waypoints:[{...body,f:options.floorAt?.(body.x,body.y)},...cut.waypoints],alternateSeed:true};
-  }
-  return first;
+  return cutRail(body,goal,options);
 }
 export const islandTrafficRefusal=reply=>reply?.reason==='object_blocked'||reply?.geometry_rejections?.includes('object_blocked')===true;
 export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250}={}){

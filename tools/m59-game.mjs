@@ -3080,6 +3080,7 @@ class Session {
                            `retired them so the next read can succeed`);
       return null;
     }
+    this.releaseConfirmedPassage?.();
     return c.self ? { col: c.self.col, row: c.self.row } : null;
   }
 
@@ -3642,6 +3643,9 @@ class Session {
       if (typeof beforeMutation === 'function') beforeMutation('move', { x, y });
       const hazard = this.groundEffectBlock?.(c.self, validation.target);
       if (hazard) return { sent: false, validation: hazard };
+      // Atomic passage admission at the send boundary for steps, rails and jumps.
+      const admission = this.claimPassageMove?.(validation.target);
+      if (admission) return { sent: false, validation: admission };
       const eventSeq = c.evSeq;
       // BREADCRUMBS — the only record of how this character got where it is standing.
       //
@@ -5917,6 +5921,8 @@ class Session {
           .catch(e => ({ ran: false, error: e?.message ?? String(e) }));
         if (legged?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
           return this.cancelledMovement({ log });
+        if (legged?.refused || (legged?.error && this.safeLegPolicy?.required === true))
+          return { arrived:false, reason:'safe_legs_required', why:legged.fallback ?? legged.error, log };
         if (legged) log.push({ from: String(nextHop.from), to: nextHop.to_name, via: 'safe_legs',
                                legs: legged.legs ?? 0, walls: legged.walls ?? [],
                                planned_legs: legged.planned_legs ?? null,

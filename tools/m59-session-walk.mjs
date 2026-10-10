@@ -45,6 +45,7 @@ import { planSafeLegs, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m
 const SAFE_LEG_CORRIDORS = new Map();
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
+import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation} from './m59-passage-admission.mjs';
 
 /**
  * Build the walking half of a Session. Returns a prototype whose methods m59-game.mjs
@@ -121,6 +122,9 @@ export function sessionWalkPrototype(deps) {
   // The class exists only to hold the methods in the syntax they were written in. It is
   // never instantiated: its prototype is copied onto Session's.
   class SessionWalk {
+  claimPassageMove(target) { return claimPassageMove(this, target); }
+  releaseConfirmedPassage() { return releaseConfirmedPassage(this); }
+  passageExitNeedsConfirmation(target) { return passageExitNeedsConfirmation(this, target); }
   // WALK THE ROUTE THAT WAS PROVED, NOT THE LATTICE IT WAS DERIVED FROM.
   //
   // THIS IS THE ANSWER TO "WHY DOES THE FLEET DEVIATE FROM ITS PLAN AT ALL". Almost
@@ -1147,6 +1151,7 @@ export function sessionWalkPrototype(deps) {
       const at = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : before;
       return { moved: false, position: at, left_room: leftRoom,
                geometry_blocked: validation.blocked !== false,
+               ...(validation.traffic ? {traffic:validation.traffic,zone:validation.zone} : {}),
                ...(validation.animation ? { animation: validation.animation } : {}),
                ...(validation.objectId != null ? { objectId: validation.objectId } : {}),
                reason: validation.reason ?? 'geometry_blocked', note: validation.note };
@@ -1174,7 +1179,7 @@ export function sessionWalkPrototype(deps) {
     // caller that passes it genuinely needs to know where it ended up — and
     // confirmPosition(), before crossing out of a room, is the other place we still pay
     // for the truth on purpose.
-    if (confirm) {
+    if (confirm || this.passageExitNeedsConfirmation?.(target)) {
       const confirmed = await this.confirmPosition();
       if (!confirmed) return { moved: false, position: null, left_room: false,
                                reason: 'position_confirmation_timeout', predicted: true };
@@ -1184,6 +1189,7 @@ export function sessionWalkPrototype(deps) {
       // with a slightly older object map, which is the state it was already in.
       this.pacer.submit('read', () => c.roomContents()).catch(() => {});
     }
+    this.releaseConfirmedPassage?.();
     const after = c.self;
     return {
       moved: !!after && (!before || after.x !== before.x || after.y !== before.y),
@@ -1249,6 +1255,7 @@ export function sessionWalkPrototype(deps) {
         moved: false, position: p0 ? { x: p0.x, y: p0.y, col: p0.col, row: p0.row } : null,
         left_room: c.room.id !== startRoom,
         geometry_blocked: validation.blocked !== false,
+        ...(validation.traffic ? {traffic:validation.traffic,zone:validation.zone} : {}),
         reason: validation.reason,
         ...(validation.animation ? { animation: validation.animation } : {}),
         ...(validation.objectId != null ? { objectId: validation.objectId } : {}),
@@ -1276,6 +1283,7 @@ export function sessionWalkPrototype(deps) {
       || target.x !== Math.round(x) || target.y !== Math.round(y);
     this._finePredicted = (this._finePredicted ?? 0) + 1;
     const mustConfirm = roomChanged || clipped
+      || this.passageExitNeedsConfirmation?.(target)
       || this._finePredicted >= FINE_CONFIRM_EVERY
       || FINE_CONFIRM_EVERY <= 1;
 
@@ -1307,6 +1315,7 @@ export function sessionWalkPrototype(deps) {
         note: 'the endpoint was safe, but no further fine move is allowed until position is re-observed' };
     }
     this.finePositionUnknown = false;
+    this.releaseConfirmedPassage?.();
     const p1 = c.self;
     const sentFrom = queued.before ?? before;
     const after = p1 ? { x: p1.x, y: p1.y, col: p1.col, row: p1.row } : null;
@@ -1572,7 +1581,7 @@ export function sessionWalkPrototype(deps) {
     const BODY_BLOCK_STREAK = 3;
     let bodyStreak = 0, bodyStart = null, baseReason = null, baseBlockedId = null;
 
-    for (let i = 0; i < maxSteps; i++) {
+    walkSteps: for (let i = 0; i < maxSteps; i++) {
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return this.cancelledMovement({ steps: i, log });
       me = c.self ?? await this.selfOrResync();
@@ -1734,6 +1743,12 @@ export function sessionWalkPrototype(deps) {
           }
         }
         const r = await this.stepFine(aimX, aimY);
+        if (r.traffic === 'passage_admission') {
+          geometryRejections.add('object_blocked');
+          log.push({step:i,traffic:r.traffic,zone:r.zone});
+          await new Promise(resolve=>setTimeout(resolve,1000));
+          continue walkSteps; // never fan into another part of the same passage
+        }
         // AND CHECK WHERE IT ACTUALLY WENT. The trace is a model and the body is the fact: if
         // this step has put us off the shelf, stop here. Walking on is how one missed tread
         // becomes thirty-five waypoints walked along the valley underneath the climb, with the
@@ -3050,6 +3065,12 @@ export function sessionWalkPrototype(deps) {
       // The re-aim used to be duplicated here. `step` owns it now — it is the primitive every
       // fall passes through, and two homes for one heuristic is how they drift apart.
       const r = await this.step(next.col, next.row, { beforeMutation, fall: !!next.fall });
+      if (r.traffic === 'passage_admission') {
+        taken += hop;
+        queue.unshift(next);
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        continue; // bounded by maxSteps; do not learn a hole or sidestep admission
+      }
       // Every packetless result yields (see _yieldIfPacketless): the guard below yields every
       // twenty-fifth, which was tuned for refusals of a tenth of a millisecond — with a clocked
       // needle in each one, twenty-five is ten seconds without a turn of the event loop.
@@ -6625,7 +6646,9 @@ export function sessionWalkPrototype(deps) {
     const room = this.world?.room;
     const geo = this.world?.geometry;
     const goal = exit?.stand_on;
-    if (!room || !geo?.collisionReady || !goal || !safeLegsFor(room.num, policy)) return null;
+    if (!room || !safeLegsFor(room.num, policy)) return null;
+    if (!geo?.collisionReady || !goal) return policy?.required === true
+      ? {ran:false, refused:true, fallback:'safe_leg_geometry_unavailable'} : null;
     const opts = { ...(policy && typeof policy === 'object' ? policy : {}) };
     const roomId = c.room?.id;
     const started = Date.now();
@@ -6661,6 +6684,7 @@ export function sessionWalkPrototype(deps) {
       if (hit) { corridor = hit.set; avoid = hit.off; out.corridor = corridor.size; }
     } catch { corridor = null; avoid = null; }
     const note = () => {
+      if (opts.required === true && !out.handed_over && !out.left_room) out.refused = true;
       out.ms = Date.now() - started;
       console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} room ${room.num} done: ${out.legs} leg(s) ` +
         `${out.walls.join(' ')}, ${out.failed} failed, ${out.rested} rest(s), worst plan ${out.plan_ms_max}ms, ` +

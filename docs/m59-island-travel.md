@@ -24,6 +24,8 @@ island-walk agents=shadow01 direction=out
 island-walk agents=shadow01 direction=back
 island-walk agents=shadow01 roundtrip=true
 island-chalice agents=shadow01
+island-home agents=shadow01
+island-trip agents=shadow01 outbound=chalice task=island-bows taskParams={"bows":1,"arrows":200}
 ```
 
 The walking recipe requires the correct starting endpoint, readable health,
@@ -159,7 +161,8 @@ Offline checks: `node tools/m59-island-test.mjs` and `npm run test:movement`.
 
 ## Shadow validation, 2026-10-10
 
-The final quiet convoy completed all 24 roundtrips: 336 observed one-room
+Before the shared-admission change (main `c912e2c0`), the final quiet convoy
+completed all 24 roundtrips: 336 observed one-room
 hops, zero damage, zero deaths, and no maximum-health loss. Both 20 HP
 travelers stayed at 20 HP through all 14 of their hops. This used the
 shadow wrapper's initial health/vigor fixture and monster suppression;
@@ -184,3 +187,54 @@ or maximum-health loss was observed.
 These results do not establish a safe populated-cave walking convoy.
 Keep walking experimental until the monster exposure and any required
 escort or control strategy have been tested with fragile travelers.
+
+## Composition and shared movement guards
+
+`island-trip` starts with a full cup in the cave region (or `outbound=walk`
+from map 27), performs the compulsory jungle refill after a ride, executes a
+named Island FleetScript, walks the asymmetric return, and goes home to Tos
+(52). `island-bows` uses the ordinary verified shop step at Hanla zax'Ta in
+2100 and returns to Ko'catan town. `taskParams` is a JSON object; a task's
+parameters compile before departure. The parent keeps its driver and health
+floors, and a task that waives expedition guarantees is refused.
+
+The named `icky-chalice` script supplies the committed acquisition recipe's
+clear-orcs, hold-ten-spiders, dispel and grab stage. Use `home=0`, then
+ordinary verified trade if the courier is different from the caster. A
+full cup remains the entry requirement; acquisition does not imply that a
+previously consumed cup is ready. Production requires normal Dispel casting.
+
+`island-home` and `island-trip` default to `requireSafeLegs=true`. This uses a
+general safe-leg policy key, `safe_legs.required`: when an enabled room lacks
+geometry, a complete wall chain, or walkable legs, ordinary travel ends with
+`safe_legs_required`. It does not continue onto a direct crossing. The normal
+safe-leg default remains advisory; `island-walk` retains that default for
+explicit geometry experiments. Requiring a chain prevents that fallback; it
+does not guarantee an absence of attacks during an otherwise valid leg.
+
+The nearest-seed repair now belongs to the shared `cutRail`, so every rail
+consumer checks alternate body-to-lattice bridges. The Island wrapper no
+longer implements its own cutter. The shared packet send boundary also
+admits one keeper at a time to detected connected one-square passages,
+including bends. Admission covers grid steps, fine steps and declared jumps,
+uses the fleet/server atomic claim store, checks visible human occupants,
+and applies in both directions. A predicted exit cannot release a claim:
+the exit is read back first. An incumbent may leave, and cancellation does
+not erase a claim while its body still occupies the passage. Keeper survival
+remains active; a traffic refusal spends the walker's existing bounded body
+waits rather than occupying a second walkway square or altering geometry.
+Detection uses the current walkable grid and invalidates with its step mask;
+isolated wall pockets and broad staging areas are not passage reservations.
+Sub-square ledges still need checked fine rails and the existing body guard.
+
+The private `island-courier` profile requires a safe-leg chain and composes
+$40,000 funding, the full ride/refill, bow/arrow purchases and the return.
+It currently refuses before funding because populated 20 HP roundtrip
+survival has not passed. Its deployment note records the tests needed to
+enable dispatch; the quiet convoy is not that evidence. No production
+deployment or dispatch accompanies these changes.
+
+Additional offline checks: `m59-passage-admission-test.mjs` exercises the
+real send boundary, opposing traffic, confirmed exits, human occupancy and
+a race between OS processes; `m59-island-composition-test.mjs` covers task
+validation, retained ownership/health floors and required-route refusal.

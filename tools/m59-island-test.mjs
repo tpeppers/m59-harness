@@ -19,7 +19,7 @@ const sectors=JSON.parse(readFileSync(new URL('../substrate/m59-variable-sectors
 // on the same floor has a fully proved connection and reaches the takeoff.
 const ledgeGeo=roomGeometry(2502),ledgeBody=protocolToClient({x:3413,y:2878}),ledgeGoal=protocolToClient({x:2201,y:2650});
 const ledgeOptions={edge:(a,b)=>ledgeGeo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true,bounds:{w:ledgeGeo.cols*1024,h:ledgeGeo.rows*1024},floorAt:(x,y)=>floorAt(ledgeGeo,x,y),lattice:128};
-assert.equal(cutRail(ledgeBody,ledgeGoal,ledgeOptions).bridgeOk,false);
+assert.equal(cutRail(ledgeBody,ledgeGoal,{...ledgeOptions,alternateSeeds:false}).bridgeOk,false);
 const ledgeCut=cutIslandRail(ledgeBody,ledgeGoal,ledgeOptions);
 assert(ledgeCut.ok&&ledgeCut.bridgeOk&&ledgeCut.alternateSeed);
 assert(chordWalkable(ledgeBody,ledgeCut.waypoints[1],ledgeOptions).ok);
@@ -190,6 +190,8 @@ cancelled=false;await assert.rejects(ordinaryHop({agent:'fixture',call:async nam
 let policy={safeLegs:{rooms:[599,38],maxLeg:10}};
 const policyCtx={agent:'fixture',call:async(name,args)=>{assert.equal(name,'autopilot');if(args.action==='start')policy={safeLegs:args.safe_legs};return {policy};}};
 await withIslandSafeLegs(policyCtx,async()=>{assert(policy.safeLegs.rooms.includes(38));assert(ISLAND_SAFE_LEGS.rooms.every(r=>policy.safeLegs.rooms.includes(r)));assert.equal(policy.safeLegs.maxLeg,10);});
+assert.deepEqual(policy.safeLegs,{rooms:[599,38],maxLeg:10});
+await withIslandSafeLegs(policyCtx,async()=>{assert.equal(policy.safeLegs.required,true);},{required:true});
 assert.deepEqual(policy.safeLegs,{rooms:[599,38],maxLeg:10});
 await assert.rejects(withIslandSafeLegs(policyCtx,async()=>{throw Error('crossing failed');}),/crossing failed/);assert.deepEqual(policy.safeLegs,{rooms:[599,38],maxLeg:10});
 await withIslandSafeLegs(policyCtx,async()=>{policy={safeLegs:false};});assert.equal(policy.safeLegs,false);
