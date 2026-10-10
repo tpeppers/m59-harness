@@ -238,3 +238,14 @@ Additional offline checks: `m59-passage-admission-test.mjs` exercises the
 real send boundary, opposing traffic, confirmed exits, human occupancy and
 a race between OS processes; `m59-island-composition-test.mjs` covers task
 validation, retained ownership/health floors and required-route refusal.
+
+The shared-admission working tree subsequently passed a simultaneous Konima
+smoke test: both a 75 HP traveler and a 20 HP traveler entered Ko'catan,
+with zero damage, in 205 and 339 seconds respectively. This used explicit
+quiet geometry mode and initial health/vigor fixtures, with no healing or
+relocation during either measured crossing. It checks the new shared walker;
+it does not replace the missing populated full-roundtrip survival evidence.
+The completed offline run reported 34 movement suites with zero new
+regressions (existing baseline reds retained), 392 FleetScript checks with
+zero failures, and passing shared-wall, rail, library, acquisition and epoch
+checks.
