@@ -4453,6 +4453,20 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
     packets===0&&result.shelf_refusals===5,JSON.stringify({packets,result}));
 }
 
+// A guarded body refusal happens before stepFine; its reason must still reach
+// the caller, and exact microsteps must shrink without exceeding the request.
+{
+  let packets=0;const reaches=[];
+  const client={selfId:1,self:{x:100,y:100,row:1,col:1},room:{id:1,objects:new Map()}};
+  const geometry={leafAtClient:()=>({sector:{}}),floorBaseAtClient:()=>6400};
+  const session={client,world:{geometry,room:{num:1}},need(){return client;},movementWasCancelled(){return false;},
+    validateFineTarget(x,y){reaches.push(Math.hypot(x-100,y-100));return {available:true,moved:false,reason:'object_blocked',blocked:2};},
+    async stepFine(){packets++;throw Error('guard should refuse first');}};
+  const result=await walkFine.call(session,100,200,{holdShelf:true,stride:8,maxSteps:4,arriveWithin:3,exactArrival:true});
+  ok('shelf guard preserves unsent body refusals for traffic waits',packets===0&&result.geometry_rejections.includes('object_blocked'),JSON.stringify(result));
+  ok('exact stalled microsteps shrink below the requested ceiling',Math.max(...reaches)<=8.000001&&Math.min(...reaches)<2,JSON.stringify(reaches));
+}
+
 // Ancient's third fall must fit below the overhang after losing height, while
 // the ordinary single-command trace remains conservative and refuses it.
 {

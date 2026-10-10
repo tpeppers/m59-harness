@@ -1715,6 +1715,9 @@ export function sessionWalkPrototype(deps) {
             const prediction = this.validateFineTarget(aimX, aimY, { slide: true });
             if (!prediction?.moved || !prediction.target) {
               shelfRefusals++;
+              // The guard can refuse a body before stepFine sends anything.
+              // Preserve that reason so callers can wait for traffic to clear.
+              if(prediction?.reason)geometryRejections.add(prediction.reason);
               if (isTerminalMovementReason(prediction?.reason))
                 return { arrived:false, reason:prediction.reason, note:prediction.note,
                   position:{col:me.col,row:me.row,x:me.x,y:me.y},steps:i,log,
@@ -1828,10 +1831,11 @@ export function sessionWalkPrototype(deps) {
         // Nine headings refused in a row sent nothing; let the timers and the HTTP server run.
         await new Promise(res => setTimeout(res, 40));
         // Halve the reach and try again: a tight gap may only admit a short step.
-        // Floor at 24 (37% of a cell) — below that the walk burns steps
-        // without meaningful progress, and the budget was calculated for
-        // the initial stride.
-        stride = Math.max(24, Math.round(stride / 2));
+        // Ordinary walks floor at 24 (37% of a cell): smaller retries burn
+        // their initial-stride budget without meaningful progress.
+        // Exact corners may have explicitly requested a stride below 24.
+        // A refused 8-unit step must get smaller, never jump up to 24.
+        stride = Math.max(exactArrival ? 1 : 24, Math.round(stride / 2));
         if (stalls >= 4)
           return { arrived: false, reason: 'blocked — every heading refused, at every reach tried',
                    ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
