@@ -9553,8 +9553,11 @@ export class Autopilot {
       ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, ...folRoomsOf(this.chaliceCfg), opts.chaliceRoom]
           .filter(r => r != null).map(Number)
       : [];
-    // AND WAND DUTY, to its station only: a confined Castle Victoria farmer has to reach the bank.
-    if (opts?.wandDuty && this.wandDutyCfg) chaliceRooms.push(Number(this.wandDutyCfg.station_room));
+    // WAND DUTY USED TO BE THE SECOND EXCEPTION ("a confined Castle Victoria farmer has to reach the
+    // bank"), and it was the leak. Operator, 2026-10-10: "Lock everyone over 30HP into room 38" -- and
+    // 199 of 204 journeys from 38 to the gate in the next two hours were keeper:wand_duty, every farmer
+    // confined to [38] walking out to a station at 2 where Morpheus camps. A confinement is the operator's
+    // and outranks an errand's convenience: wandDutyStep now stands down when the station is outside it.
     if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
@@ -25751,6 +25754,18 @@ export class Autopilot {
   async wandDutyStep() {
     const cfg = this.wandDutyCfg;
     if (!cfg || this.townTrip || this.travelInterrupted() || this.suspendedJourney) return false;
+    // A STATION OUTSIDE THE CONFINEMENT IS A STATION THIS CHARACTER DOES NOT VISIT. travel() refuses the
+    // walk anyway (it no longer exempts wand duty); standing down here keeps the errand from opening a
+    // visit it cannot make every pass. Said once per station, not per pass.
+    const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms.map(Number) : null;
+    if (confine?.length && !confine.includes(Number(cfg.station_room))) {
+      if (this._wandConfinedSaid !== cfg.station_room) {
+        this._wandConfinedSaid = cfg.station_room;
+        this.note('wand duty stands down: the station is outside the confinement',
+          { station: cfg.station_room, confined_to: confine });
+      }
+      return false;
+    }
     return wandDuty.roleOf(cfg, this.who()) === 'holder' ? this.wandBank(cfg) : this.wandPickup(cfg);
   }
 

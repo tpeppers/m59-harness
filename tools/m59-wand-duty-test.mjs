@@ -274,10 +274,25 @@ freshBank();
 }
 
 {
-  // The confinement exception: a farmer confined to 38/39 may still walk to the wand station.
+  // NO CONFINEMENT EXCEPTION ANY MORE (operator, 2026-10-10: "Lock everyone over 30HP into room 38";
+  // 199 of 204 journeys out of 38 in the next two hours were keeper:wand_duty to a station at the gate).
   const ap = Object.create(Autopilot.prototype);
-  ap._wandDutyCfg = CFG(); ap._wandDutyCfgAt = Date.now() + 1e9;
-  ok(ap.wandDutyCfg?.station_room === 2, 'the station the confinement lets a wand-duty journey reach');
+  ap._wandDutyCfg = CFG(); ap._wandDutyCfgAt = Date.now() + 1e9;   // station 2
+  ap.policy = { confineRooms: [38] };
+  ap.townTrip = null; ap.suspendedJourney = null; ap.travelInterrupted = () => false;
+  ap.who = () => 'Zoot'; ap.notes = []; ap.note = (what, d) => ap.notes.push({ what, ...d });
+  let visited = false; ap.wandPickup = async () => { visited = true; return true; }; ap.wandBank = ap.wandPickup;
+  const used = await ap.wandDutyStep();
+  ok(used === false && !visited, 'a farmer confined to 38 does not start a visit to a wand station at 2');
+  ok(ap.notes.some(n => /outside the confinement/.test(n.what)), 'and says why, once');
+  await ap.wandDutyStep();
+  ok(ap.notes.filter(n => /outside the confinement/.test(n.what)).length === 1, 'not once per pass');
+  ap.policy = { confineRooms: [38, 2] };
+  ok(await ap.wandDutyStep() === true && visited, 'a confinement that includes the station keeps wand duty as it was');
+  ap.policy = {}; visited = false;
+  ok(await ap.wandDutyStep() === true && visited, 'and no confinement is the old behaviour exactly');
+  const src = String(Autopilot.prototype.travel);
+  ok(!/opts\?\.wandDuty/.test(src), 'travel() no longer exempts a wand-duty journey from the confinement');
 }
 
 rmSync(dir, { recursive: true, force: true });

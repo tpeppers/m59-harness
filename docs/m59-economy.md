@@ -669,7 +669,7 @@ which is also the chalice station, so a chalice rider is already standing beside
 - **Nothing is dropped** except by the bank's own `drop_for_space` to make room.
 - **A wand is a wand**: an unidentified `wand` counts the same as a `lightning wand`, because a
   living tree's treasure table holds exactly one wand, the lightning wand.
-- A confined farmer may walk to the wand station, the same exception chalice duty has.
+- **A confined farmer does NOT walk to a wand station outside its confinement** (it used to, by the same exception chalice duty has). Operator, 2026-10-10: "Lock everyone over 30HP into room 38" -- 199 of 204 journeys out of 38 in the next two hours were `keeper:wand_duty` to a station at the gate. `wandDutyStep` stands down and `travel()` refuses the walk; put the station inside the confinement (Raphael in 38) to keep the service.
 
 `node tools/m59-wand-duty-test.mjs` (43) pins the rules and runs both flows on the real Autopilot
 stage machines, against a keeper-run bank, a person, and a person who never answers.
