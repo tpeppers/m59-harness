@@ -54,11 +54,12 @@ export async function waitIslandOutbound(ctx,agents,{phase='return',room=ISLAND,
   }
   return {ok:true,outbound_complete:wave.participants.filter(a=>wave.done.get(a)),outbound_failed:wave.participants.filter(a=>!wave.done.get(a))};
 }
-export async function withIslandSafeLegs(ctx,fn){
+export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   const {agent,call}=ctx,before=await call('autopilot',{agent,action:'status'});
   if(!before.policy||typeof before.policy!=='object')throw Error('traveller_policy_unreadable');
   const prior=before.policy.safeLegs??null;
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
+  if(required)installed.required=true;
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});
   try{
@@ -197,7 +198,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(leg.end.room===to){leg.ok=true;delete leg.reason;}
   return leg;
 }
-export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=120,evidenceDir='substrate/island-trials'}={}){
+export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=120,requireSafeLegs=false,evidenceDir='substrate/island-trials'}={}){
   if(!['out','back'].includes(direction))throw Error('direction must be out or back');
   const {agent,call,state}=ctx,chain=MAIN_CAVES;
   state.islandCancelFence??=Date.now();
@@ -224,6 +225,6 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
     }
     record.end=location(await call('look',{agent}));record.complete=record.end.room===route.at(-1);save();
     return {ok:record.complete,evidence:file};
-    });
+    },{required:requireSafeLegs});
   }catch(e){record.failure=e.message;record.failure_detail=state.islandFineFailure;save();throw e;}
 }

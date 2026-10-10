@@ -53,6 +53,7 @@ import { safeSpots, hasAnyFooting } from './m59-safespots.mjs';
 export const SAFE_LEG_ROOMS = Object.freeze([599]);
 
 export const SAFE_LEG_DEFAULTS = Object.freeze({
+  required: false, // refuse a failed chain instead of taking a direct crossing
   // The longest leg, in mover steps. About eight to ten seconds of walking at the fleet's pace
   // (MOVE_INTERVAL ~0.6-0.8s a step with slides), which is roughly one troll swing cycle's worth
   // of exposure, and long enough that a room with walls every dozen squares has a chain at all.

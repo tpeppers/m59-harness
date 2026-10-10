@@ -307,3 +307,29 @@ export function fileSpotHeldBy(agent, { snapshot = null } = {}) {
   const r = snapshot.claims.find(x => x.agent === String(agent));
   return r ? { room: Number(r.room), col: Number(r.col), row: Number(r.row) } : null;
 }
+
+// Passage claims use the same fleet/server namespace and atomic store as walls.
+// No timeout can evict a live body from a passage. Only its owner releases it
+// after a confirmed exit; dead-process claims are removed by records().
+export function reserveFilePassage(agent, room, zone) {
+  if (!fileSpotClaimsEnabled()) return null;
+  return withLock(dir => {
+    const all = records(dir, 'passage');
+    const conflict = all.find(r => r.room === room && r.zone === zone && r.agent !== String(agent));
+    if (conflict) return { ok: false, agent: conflict.agent };
+    const own = all.find(r => r.agent === String(agent));
+    if (own?.room === room && own.zone === zone) return { ok: true };
+    if (own) return { ok: false, reason: 'passage_exit_unconfirmed' };
+    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone,
+      pid: process.pid, updated_at: Date.now() });
+    return { ok: true };
+  });
+}
+export function releaseFilePassage(agent) {
+  if (!fileSpotClaimsEnabled()) return null;
+  return withLock(dir => {
+    for (const r of records(dir, 'passage'))
+      if (r.agent === String(agent) && r.pid === process.pid) remove(r._path);
+    return true;
+  });
+}

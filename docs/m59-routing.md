@@ -1,5 +1,22 @@
 # Movement, collision and routing
 
+Shared narrow-passage admission now runs at the validated packet send
+boundary (`m59-passage-admission.mjs`). Connected one-square grid passages
+have one incumbent, claimed atomically across keeper processes in the
+fleet/server namespace. Confirmed departure releases admission; a predicted
+move or cancelled controller does not evict a body still inside. Visible
+human occupants also block entry. Incumbents can leave, and existing bounded
+traffic handling and keeper survival remain armed. Broad staging areas and
+isolated safe-wall pockets are excluded. Sub-square ledges continue to use
+fine collision and body guards.
+
+Safe-leg routing can now be mandatory: `safe_legs.required=true` refuses a
+failed chain with `safe_legs_required` rather than falling back to the direct
+walk. This is an opt-in transport constraint for protected cargo, not a claim
+that every valid leg is immune to attacks. `cutRail` also checks alternate
+nearby lattice seeds when the closest rounded seed cannot bridge from the
+observed body. Both fixes apply to general movement consumers.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Read this before touching `m59-movement.mjs`, `m59-routes.mjs`, `m59-roo.mjs`, `m59-routebake.mjs` or the mover inside `m59-broker.mjs`.
 
 **Coordinate legend:** MCP tools use named `col`/`row` fields; positional

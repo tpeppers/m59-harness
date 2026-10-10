@@ -86,12 +86,29 @@ export function chainTo(parent, goal) {
  * stepped, and the original hand-cut rails were all built and "verified" this way, with ONE trace
  * across spans up to 24,320 units. That is a claim about an endpoint, not about a path.
  */
-export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE } = {}) {
+export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, alternateSeeds = true } = {}) {
   const seed = { x: snap(body.x, lattice), y: snap(body.y, lattice) };
   const target = { x: snap(goal.x, lattice), y: snap(goal.y, lattice) };
   const bridge = Math.hypot(seed.x - body.x, seed.y - body.y);
   // The bridge must itself be walkable, or the rail starts with a step the body cannot take.
   const bridgeOk = bridge === 0 || edge(body, seed);
+  // A nearest rounded seed across a wall is not the body's starting point. Check
+  // nearby bridges before flooding; this repair applies to every rail consumer.
+  if (!bridgeOk && alternateSeeds) {
+    const candidates = [];
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+      const p = { x: seed.x + dx * lattice, y: seed.y + dy * lattice };
+      const distance = Math.hypot(p.x - body.x, p.y - body.y);
+      if (!distance || p.x < 0 || p.y < 0 || p.x >= bounds.w || p.y >= bounds.h) continue;
+      if (chordWalkable(body, p, { edge, lattice }).ok) candidates.push({ p, distance });
+    }
+    for (const { p } of candidates.sort((a, b) => a.distance - b.distance).slice(0, 8)) {
+      const cut = cutRail(p, goal, { edge, bounds, floorAt, lattice, alternateSeeds: false });
+      if (cut.ok && cut.bridgeOk) return { ...cut, bridgeOk: true, alternateSeed: true,
+        waypoints: [{ ...body, f: floorAt?.(body.x, body.y) ?? null }, ...cut.waypoints],
+        legs: cut.legs + 1 };
+    }
+  }
   const parent = flood(seed, { edge, bounds, lattice, stopAt: target });
   const chain = chainTo(parent, target);
   if (!chain) return { ok: false, why: 'the flood did not reach the goal', visited: parent.size,
