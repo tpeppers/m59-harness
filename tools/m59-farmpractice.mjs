@@ -33,7 +33,7 @@
 //   REAGENTS       spent freely (operator, 2026-10-04: "Spend freely"); what a spell needs and
 //                  what is on hand is REPORTED, because a spell short of its reagent is silently
 //                  skipped every time and the list then drills the next one down.
-import { loadCatalogue, spellCost } from './m59-deskpractice.mjs';
+import { loadCatalogue, spellCost, catalogueEntry } from './m59-deskpractice.mjs';
 
 // The kod parents a practice cast may target ON ITSELF (or on nothing). See the header.
 export const SELF_SAFE_PARENTS = Object.freeze(new Set(['PersonalEnchantment', 'TouchAttackSpell', 'RoomEnchantment']));
@@ -73,7 +73,7 @@ export function planFarmPractice({ school, known = [], policy = {}, maxMana = nu
   for (const s of inSchool) {
     const name = String(s.name).toLowerCase();
     if (onlySet && !onlySet.has(fold(name))) continue;
-    const kod = catalogue.get(name);
+    const kod = catalogueEntry(name, catalogue);
     if (!kod) { report.push(`${name}: not in the kod spell catalogue, left out`); continue; }
     if (!SELF_SAFE_PARENTS.has(kod.parent)) {
       report.push(`${name}: a ${kod.parent} -- practice would cast it on our own character or needs a creature, left out`);

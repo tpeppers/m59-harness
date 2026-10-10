@@ -15,7 +15,7 @@
 //   * a reserve at or above max mana is said out loud rather than read as "no mana yet".
 import {
   PRACTICE_DEFAULTS, SERVICE_SPELLS, choosePractice, deskReserve, loadCatalogue,
-  normalizePractice, offeredServices, reagentName, spellCost, pickCreatureTarget,
+  normalizePractice, offeredServices, reagentName, spellCost, pickCreatureTarget, catalogueEntry,
 } from './m59-deskpractice.mjs';
 
 let pass = 0, fail = 0;
@@ -423,6 +423,28 @@ console.log('\nmana-full sessions, and the skeleton somebody is fighting');
   ok('an unknown vigor is not vigor to spare', choosePractice({ ...base, vigor: null }).cast === null);
   ok('a bad min_vigor is reported, not applied',
      normalizePractice({ spells: [{ name: 'relay', target: 'fleetmate', min_vigor: 5 }] }).problems.some(p => /min_vigor must be 16..200/.test(p)));
+}
+
+console.log('\nthe Qor drills: the game\'s punctuation, the kod\'s lower-case cons, and a berry floor');
+{
+  ok("kara'hol's curse (the wire's name) finds karahols curse (the SID's)",
+     catalogueEntry("kara'hol's curse")?.cls === 'KaraholsCurse' && catalogueEntry('Kara’hol’s curse')?.cls === 'KaraholsCurse');
+  ok("kara'hol's curse costs 2 entroot berries",
+     JSON.stringify(spellCost("kara'hol's curse")?.reagents) === JSON.stringify([['entroot berry', 2]]));
+  ok('acid touch costs an entroot berry (acidtch.kod: two-space indent, lower-case cons)',
+     JSON.stringify(spellCost('acid touch')?.reagents) === JSON.stringify([['entroot berry', 1]]));
+  ok('vampiric drain costs shaman blood (vampdrn.kod: lower-case cons)',
+     JSON.stringify(spellCost('vampiric drain')?.reagents) === JSON.stringify([['shaman blood', 1]]));
+  const cfg = normalizePractice({ spells: [{ name: "kara'hol's curse", target: 'self' }], keep: { 'Entroot Berry': 10 } });
+  ok('keep is normalised to lower-case pack names', cfg.keep['entroot berry'] === 10 && !cfg.problems.length, JSON.stringify(cfg));
+  const reserve = deskReserve({ practice: cfg, services: [], known: ["kara'hol's curse"], keep: {} });
+  const base = { practice: cfg, spells: [{ name: "kara'hol's curse", targets: 0 }], mana: { value: 60, max: 60 }, reserve, now: 1 };
+  ok('12 berries with 10 kept: one curse (2) is affordable',
+     choosePractice({ ...base, have: i => (i === 'entroot berry' ? 12 : 0) }).cast?.name === "kara'hol's curse");
+  const r = choosePractice({ ...base, have: i => (i === 'entroot berry' ? 11 : 0) });
+  ok('11 berries with 10 kept: no curse, and the reason names the floor', r.cast === null && /10 kept/.test(r.why), r.why);
+  ok('a bad keep count is reported, not applied',
+     normalizePractice({ spells: ['cloak'], keep: { 'entroot berry': -1 } }).problems.some(p => /keep\./.test(p)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

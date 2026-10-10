@@ -1,5 +1,5 @@
 {
- "builtAt": "2026-10-09T23:03:36.585Z",
+ "builtAt": "2026-10-10T00:15:02.723Z",
  "spells": [
   {
    "num": 0,
@@ -821,7 +821,12 @@
    "level": 2,
    "mana": 10,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "EntrootBerry",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": -20,
    "extra_cost_rule": null,
@@ -908,7 +913,12 @@
    "level": 3,
    "mana": 10,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "ShamanBlood",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": -30,
    "extra_cost_rule": null,
@@ -1135,7 +1145,12 @@
    "level": 4,
    "mana": 10,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "EntrootBerry",
+     "count": 2
+    }
+   ],
    "prerequisites": [],
    "required_karma": -40,
    "extra_cost_rule": null,
@@ -1819,7 +1834,16 @@
    "level": 4,
    "mana": 5,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "Mushroom",
+     "count": 3
+    },
+    {
+     "item": "PurpleMushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,
@@ -1976,7 +2000,12 @@
    "level": 1,
    "mana": 6,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "BlueMushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,
@@ -2081,7 +2110,12 @@
    "level": 2,
    "mana": 9,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "RedMushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,
@@ -2098,7 +2132,12 @@
    "level": 2,
    "mana": 6,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "RedMushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,
@@ -2271,7 +2310,12 @@
    "level": 3,
    "mana": 1,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "Mushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % check for enchantment already applied\r\n      if Send(who,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=manafocus_already_enchanted,\r\n              #parm1=Send(self,@GetIndef),#parm2=Send(self,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
@@ -2441,6 +2485,10 @@
    "mana": 8,
    "min_hit_points": 0,
    "reagents": [
+    {
+     "item": "RedMushroom",
+     "count": 2
+    },
     {
      "item": "Elderberry",
      "count": 1

@@ -81,9 +81,18 @@ export function reagentName(cls) {
   return String(cls ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().trim();
 }
 
+// THE CATALOGUE NAMES A SPELL BY ITS SID_ CONSTANT, THE GAME BY ITS RESOURCE. They agree except
+// for punctuation: SID_KARAHOLS_CURSE is "karahols curse" here and "Kara'hol's curse" on the
+// wire, so practice answered "no cost in the spell catalogue" and never cast it — Bunsen and
+// Beaker drilled only cloak for a day with it at the head of their list. Apostrophes either way.
+export function catalogueEntry(name, catalogue = loadCatalogue()) {
+  const n = String(name ?? '').toLowerCase();
+  return catalogue.get(n) ?? catalogue.get(n.replace(/['’]/g, '')) ?? null;
+}
+
 /** `{ name, mana, reagents: [[item, n], ...] }` for a spell, or null when the kod has no such spell. */
 export function spellCost(name, catalogue = loadCatalogue()) {
-  const s = catalogue.get(String(name ?? '').toLowerCase());
+  const s = catalogueEntry(name, catalogue);
   if (!s || !Number.isFinite(Number(s.mana))) return null;
   return { name: s.name, mana: Number(s.mana),
            reagents: (s.reagents ?? []).map(r => [reagentName(r.item), Number(r.count) || 1]) };
@@ -120,7 +129,26 @@ export const PRACTICE_DEFAULTS = Object.freeze({
   // Sit for a few seconds after a cast to win the mana back, but only on a held wall — resting in
   // the open is what the keeper's survival rung exists to prevent, and it is not this pass's call.
   rest_seconds: 5,
+  // REAGENTS PRACTICE LEAVES ALONE, by pack name: `{ "entroot berry": 10 }`. Operator, 2026-10-09:
+  // Bunsen and Beaker drill acid touch and Kara'hol's curse on entroot berries "saving 10 entroot
+  // berries for darkness". Honoured by the touch-spell trainer too (Autopilot.touchSpellKeep),
+  // because acid touch spends the same berry from the same pack.
+  keep: Object.freeze({}),
 });
+
+/** The `keep` map: pack name -> count, lower-case. Bad entries are reported and dropped. */
+export function normalizeKeep(v, problems = []) {
+  const out = {};
+  if (v == null) return out;
+  if (typeof v !== 'object' || Array.isArray(v)) { problems.push('keep must be an object of {reagent: count}'); return out; }
+  for (const [k, n] of Object.entries(v)) {
+    const item = String(k).trim().toLowerCase();
+    const num = Number(n);
+    if (!item || !(Number.isInteger(num) && num >= 0 && num <= 1000)) { problems.push(`keep.${k} must be a count 0..1000`); continue; }
+    out[item] = num;
+  }
+  return out;
+}
 
 const NUMBERS = { reserve_casts: [0, 20], mana_floor: [0, 1000], gap_ms: [2000, 3_600_000],
                   refused_ms: [10_000, 3_600_000], rest_seconds: [0, 60] };
@@ -205,6 +233,7 @@ export function normalizePractice(cfg) {
       out.reserve_services = list.filter(x => Object.hasOwn(SERVICE_SPELLS, x));
       continue;
     }
+    if (k === 'keep') { out.keep = normalizeKeep(v, out.problems); continue; }
     if (k === 'rooms') {
       const rooms = [].concat(v ?? []).map(Number).filter(n => Number.isInteger(n) && n > 0);
       if (rooms.length !== [].concat(v ?? []).length) out.problems.push('rooms must be room numbers');
@@ -315,10 +344,11 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
       tried.push(`${want.name}: ${cost.mana} mana would leave ${mana.value - cost.mana}, under the ${reserve.mana} reserve`);
       continue;
     }
-    const short = cost.reagents.filter(([item, n]) => have(item) - (reserve.reagents[item] || 0) < n);
+    const kept = (item) => (reserve.reagents[item] || 0) + (practice.keep?.[item] || 0);
+    const short = cost.reagents.filter(([item, n]) => have(item) - kept(item) < n);
     if (short.length) {
       tried.push(`${want.name}: short ${short.map(([item, n]) =>
-        `${item} (${have(item)} on hand, ${reserve.reagents[item] || 0} kept, needs ${n})`).join(', ')}`);
+        `${item} (${have(item)} on hand, ${kept(item)} kept, needs ${n})`).join(', ')}`);
       continue;
     }
     const target = want.target ?? ((Number(s.targets) || 0) > 0 ? 'self' : 'none');

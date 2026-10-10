@@ -3058,9 +3058,14 @@ export class Autopilot {
       return block('not enough mana', { mana, needs: spec.mana });
     const count = (re) => (c.inventory || []).filter(o => re.test(c.rsc?.get?.(o.nameRsc) || o.name || ''))
       .reduce((n, o) => n + (Number.isFinite(Number(o.amount)) && o.amount != null ? Math.max(0, Number(o.amount)) : 1), 0);
+    // practiceSpells.keep is a floor for EVERY drill on this pack, the touch included: acid touch and
+    // the darkness it must leave berries for spend the same entroot (m59-deskpractice.mjs `keep`).
+    const keep = normalizePractice(this.policy.practiceSpells)?.keep ?? {};
     for (const r of spec.reagents) {
       const have = count(r.match);
-      if (have < r.count) return block(`short of ${r.item}`, { have, needs: r.count });
+      const kept = keep[r.item] || 0;
+      if (have - kept < r.count) return block(kept ? `short of ${r.item} above the ${kept} kept back` : `short of ${r.item}`,
+        { have, kept, needs: r.count });
     }
     const reagentsBefore = spec.reagents.map(r => count(r.match));
 
@@ -21326,6 +21331,17 @@ export class Autopilot {
       publish();
       return HANDLED;
     }
+    // NO PULL WHILE KARA'HOL'S CURSE IS ON, OR WHILE HELD. The curse ends in a hold the caster cannot
+    // free-action out of (karahol.kod: 40+power/2 seconds, then a hold a sixth as long), so a pull
+    // started under it can leave the tagger frozen in the open at the far end. It is a practice
+    // drill on these characters, cast from the corner; the corner is where it has to wear off.
+    const spell = (c.enchantments?.() ?? []).map(e => String(e.name ?? '').toLowerCase())
+      .find(n => /kara'?hol|^hold$/.test(n));
+    if (spell) {
+      this.doing = `buddy: waiting out ${spell} in the corner`;
+      publish();
+      return HANDLED;
+    }
     const seen = this.buddyRoomObjects();
     const hunt = Array.isArray(this.policy.hunt) ? this.policy.hunt : this.policy.hunt ? [this.policy.hunt] : null;
     const want = buddySys.pickFreshTarget({ monsters: seen.monsters, players: seen.players, me: this.hold,
@@ -26230,7 +26246,13 @@ export class Autopilot {
           { spell: choice.cast.name, why: 'a creature-target practice cast is only made from a safe spot' });
       }
       this._practiceTargets ||= new Map();
-      const objects = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId).map(o => ({
+      // A BUDDY TAGGER WITH A TAG OUT CASTS AT THE TAG OR NOT AT ALL. The hit-point roll goes to
+      // whoever's LAST target the creature was (player.kod poKill_target), so enfeeble on any other
+      // skeleton while the tag is coming in would spend the tag. Operator, 2026-10-09: Robin builds
+      // enfeeble in Castle Victoria while running the Qor buddy system.
+      const tagId = this.buddyTag?.id ?? null;
+      const objects = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && (tagId == null || o.id === tagId)).map(o => ({
         id: o.id, name: c.rsc.get(o.nameRsc) || '', row: o.row, col: o.col,
         attackable: !!(o.flags & OF.ATTACKABLE), player: !!(o.flags & OF.PLAYER) }));
       creature = pickCreatureTarget({ objects, on: choice.cast.on ?? [], me: c.self,

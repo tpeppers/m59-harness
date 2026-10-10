@@ -103,24 +103,32 @@ function classVar(text, name, consts) {
 // Reagents are built imperatively, one Cons per ingredient:
 //   plReagents = Cons([&ShamanBlood,1], plReagents);
 // so read the ResetReagents body rather than looking for a table.
+//
+// KOD IS CASE-INSENSITIVE AND NOT EVERY FILE IS INDENTED THREE SPACES. This used to read only
+// `   ResetReagents(` and `Cons(`, so acidtch.kod (two spaces, `cons`) and vampdrn.kod (`cons`)
+// came out with NO reagents, and desk practice cast them without counting entroot berries or
+// shaman blood. Operator, 2026-10-09: "Both Acid and Kara'hol's Curse use entroot berries,
+// Vampiric Drain uses shaman's blood".
+function methodBody(text, name) {
+  const m = new RegExp(`^[ \\t]*${name}\\s*\\(`, 'mi').exec(text);
+  if (!m) return null;
+  const rest = text.slice(m.index);
+  const end = /\r?\n[ \t]*\}[ \t]*\r?\n/.exec(rest);
+  return end ? rest.slice(0, end.index) : rest.slice(0, 1500);
+}
+
 function reagentsOf(text) {
-  const i = text.indexOf('   ResetReagents(');
-  if (i < 0) return [];
-  const rest = text.slice(i);
-  const end = /\r?\n {3}\}\r?\n/.exec(rest);
-  const body = end ? rest.slice(0, end.index) : rest.slice(0, 1500);
-  return [...body.matchAll(/Cons\(\s*\[\s*&(\w+)\s*,\s*(\d+)\s*\]/g)]
+  const body = methodBody(text, 'ResetReagents');
+  if (body == null) return [];
+  return [...body.matchAll(/Cons\(\s*\[\s*&(\w+)\s*,\s*(\d+)\s*\]/gi)]
     .map(m => ({ item: m[1], count: Number(m[2]) }));
 }
 
 // Prerequisites are declared the same way: [spell number, ability needed].
 function prereqsOf(text, consts) {
-  const i = text.indexOf('   ResetPrereqs(');
-  if (i < 0) return [];
-  const rest = text.slice(i);
-  const end = /\r?\n {3}\}\r?\n/.exec(rest);
-  const body = end ? rest.slice(0, end.index) : rest.slice(0, 1500);
-  return [...body.matchAll(/Cons\(\s*\[\s*([A-Za-z_]\w*|\d+)\s*,\s*(\d+)\s*\]/g)]
+  const body = methodBody(text, 'ResetPrereqs');
+  if (body == null) return [];
+  return [...body.matchAll(/Cons\(\s*\[\s*([A-Za-z_]\w*|\d+)\s*,\s*(\d+)\s*\]/gi)]
     .map(m => ({ spell: /^\d+$/.test(m[1]) ? Number(m[1]) : (consts.get(m[1]) ?? m[1]), ability: Number(m[2]) }));
 }
 
