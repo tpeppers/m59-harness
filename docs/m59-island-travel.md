@@ -51,7 +51,8 @@ before anyone starts back. This avoids opposing traffic on Konima's narrow
 climb. Failed participants report through cleanup so successful arrivals can
 return, with departures spaced by `departSpacingMs`. Waiting travelers
 continue health and cancellation checks. Allow a
-larger per-hop budget for a convoy (`budgetMs=500000` in the shadow experiment).
+larger per-hop budget for a convoy (`budgetMs=800000` and
+`departSpacingMs=30000` in the completed shadow experiment).
 The expedition excludes the Underground Lake and the mainland south exit
 from each hop, and suppresses shopping errands. Its first westward approach
 uses the complete Dispel state observed by the character before applying
@@ -155,3 +156,31 @@ Receipts are gitignored under `substrate/island-trials/` and
 top-level `ok` means at least one agent completed, not the entire roster.
 
 Offline checks: `node tools/m59-island-test.mjs` and `npm run test:movement`.
+
+## Shadow validation, 2026-10-10
+
+The final quiet convoy completed all 24 roundtrips: 336 observed one-room
+hops, zero damage, zero deaths, and no maximum-health loss. Both 20 HP
+travelers stayed at 20 HP through all 14 of their hops. This used the
+shadow wrapper's initial health/vigor fixture and monster suppression;
+there was no admin heal or relocation between the outward and return trips.
+It establishes the asymmetric route and convoy traffic behavior.
+
+A separate 20 HP chalice trial completed both observed Rescue landings,
+the mandatory jungle refill, retrieval of duplicate weapons and raw ore,
+and confirmation of its original equipment, with no damage. It finished in Ko'catan
+with a full chalice and 20/20 HP. Monster generation was not suppressed
+for that ride or refill. Cargo recovery was also exercised across a
+server save that renumbered item handles.
+
+An unarmored 20 HP populated walking trial used its original hammer,
+matched karma, ordinary food to reach 140 vigor, and no health or vigor
+boost for the trial. It crossed map 27 without damage, but did not finish
+2500 to 2501. Several wall approaches failed as monster traffic grew;
+the fallback route took 7 HP of damage, reaching 13/20 HP. The keeper
+performed an emergency logout before a control call timed out. No death
+or maximum-health loss was observed.
+
+These results do not establish a safe populated-cave walking convoy.
+Keep walking experimental until the monster exposure and any required
+escort or control strategy have been tested with fragile travelers.
