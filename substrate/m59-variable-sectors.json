@@ -289,7 +289,79 @@
      "headroom_risk": false
     }
    ],
-   "groups": []
+   "groups": [],
+   "risk_groups": [
+    {
+     "line": 88,
+     "states": [
+      {
+       "sector": 1,
+       "height": 24,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 2,
+       "height": 24,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 3,
+       "height": 24,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 4,
+       "height": 24,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 24,
+       "name": null,
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 106,
+     "states": [
+      {
+       "sector": 1,
+       "height": 128,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 2,
+       "height": 56,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 3,
+       "height": 48,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 4,
+       "height": 40,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 32,
+       "name": null,
+       "kind": "floor"
+      }
+     ]
+    }
+   ]
   },
   {
    "room": 47,

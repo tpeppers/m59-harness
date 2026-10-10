@@ -892,3 +892,11 @@ substrate/magic-keep.json
 /substrate/red-alert.out
 /substrate/red-alert.err
 /substrate/tactics.json
+# Local island rehearsals: positions, receipts, and offline diagnostic output.
+substrate/island-*.json
+substrate/island-*.mjs
+substrate/island-*.png
+substrate/cave-west-*.json
+substrate/island-trials/
+substrate/island-chalice/
+substrate/island-admin/

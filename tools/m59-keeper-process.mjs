@@ -2587,6 +2587,7 @@ const server = createServer(async (req, res) => {
               maxSteps: Number(args.max_steps ?? args.maxSteps ?? 60),
               stride: args.stride != null ? Number(args.stride) : undefined,
               holdShelf: (args.hold_shelf ?? args.holdShelf) === true,
+              exactArrival: (args.exact_arrival ?? args.exactArrival) === true,
               // HOW CLOSE COUNTS AS THERE, in kod units. The default is 40 — SIX HUNDRED AND
               // FORTY client units, near enough two thirds of a square — which is right for
               // walking somewhere and hopelessly coarse for standing on a take-off. Measured:

@@ -47,7 +47,7 @@
 // next to a door it cannot open. Ukgoth's is worth 85 squares in a room this fleet crosses
 // daily.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { geometryWithSectorHeights, heightKodToClient, STEP_MASK_VERSION } from './m59-roo.mjs';
 
@@ -68,7 +68,7 @@ const b64 = (mask) => Buffer.from(mask).toString('base64');
  * excluded for the opposite reason — `headroom_risk` says we do not know, and this tool
  * would be inventing an answer rather than computing one.
  */
-export function doorStates(roomEntry) {
+export function doorStates(roomEntry, { includeRisk = false } = {}) {
   const out = [];
   const seen = new Set();
   const push = (parts) => {
@@ -79,7 +79,7 @@ export function doorStates(roomEntry) {
     out.push(state);
   };
   for (const sector of roomEntry.sectors ?? []) {
-    if (!sector.gates) continue;
+    if (!sector.gates && !(includeRisk && sector.gate_risk)) continue;
     for (const height of sector.heights)
       push([{ sector: sector.serverId ?? sector.sector, height, name: sector.name }]);
   }
@@ -91,6 +91,7 @@ export function doorStates(roomEntry) {
   // matters. Single-sector masks cannot be composed into it either: a door that RISES
   // removes steps, so OR-ing two masks is not a state, it is a wish.
   for (const group of roomEntry.groups ?? []) push(group.states);
+  if(includeRisk)for(const group of roomEntry.risk_groups??[])push(group.states);
   return out;
 }
 
@@ -168,6 +169,7 @@ export function bakeRoomDoors(roomNum, rooFile, states, { baselineMask = null } 
 }
 
 // ---------------------------------------------------------------------------- cli
+if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])){
 const argv = process.argv.slice(2);
 const only = argv.includes('--room') ? Number(argv[argv.indexOf('--room') + 1]) : null;
 
@@ -179,7 +181,7 @@ const results = [];
 for (const entry of varsectors.rooms) {
   if (entry.room == null) continue;
   if (only != null && entry.room !== only) continue;
-  const states = doorStates(entry);
+  const states = doorStates(entry, { includeRisk: argv.includes('--risk') });
   if (!states.length) continue;
   const roomTable = table.rooms?.[String(entry.room)];
   if (!roomTable) { skipped++; results.push({ room: entry.room, skipped: 'not in the routing table' }); continue; }
@@ -218,4 +220,5 @@ if (argv.includes('--write') && baked) {
   console.log(`wrote ${ROUTES}`);
 } else if (!argv.includes('--write')) {
   console.log('(nothing written — pass --write to merge these into the routing table)');
+}
 }
