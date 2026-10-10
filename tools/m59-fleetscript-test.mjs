@@ -258,9 +258,14 @@ const quiet = () => {};
 console.log('one driver per fleet');
 {
   const sent = fakeBroker({ rooms: { a1: 39 } });
+  let verifiedFleet,verifiedHealth,verifiedFragility;
   const first = await fleetScript({ name: 'first', fleet: 'testfleet', agents: ['a1'],
-    steps: [verify(async () => true)], onLog: quiet });
+    minHealth:0.9,fragileBelow:20,
+    steps: [verify(async ctx => {verifiedFleet=ctx.fleet;verifiedHealth=ctx.minHealth;verifiedFragility=ctx.fragileBelow;return true;})], onLog: quiet });
   ok('a run completes and releases its lock', first.ok);
+  ok('verification callbacks receive the selected fleet for keeper reads', verifiedFleet==='testfleet');
+  ok('verification callbacks receive the selected departure health floor', verifiedHealth===0.9);
+  ok('verification callbacks receive the selected maximum health floor', verifiedFragility===20);
 
   // THE RIVAL HAS TO BE A DIFFERENT PROCESS. takeRunLock deliberately lets the SAME pid
   // re-enter its own claim — otherwise a tool could not call fleetScript twice — so holding

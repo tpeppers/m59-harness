@@ -4535,7 +4535,8 @@ async function runStep(ctx, agent, rawStep, state) {
     }
 
     case 'verify': {
-      const v = await step.fn({ agent, observe, call, state });
+      const v = await step.fn({ agent, observe, call, state, fleet: ctx.fleet,
+                               minHealth: ctx.minHealth, fragileBelow: ctx.fragileBelow });
       // AN OBJECT IS TRUTHY, AND THIS USED TO BE `Boolean(v)`.
       //
       // So a verify returning `{ ok: false, why: '...' }` — the shape every script on disk

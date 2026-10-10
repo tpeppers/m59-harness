@@ -336,5 +336,21 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
   ok('the broker stamps replies at its one door', /stampReply\(out,/.test(broker) && /judgeArgs\(args,/.test(broker));
 }
 
+// Evaluate the actual keeper option object: a broker request must retain the
+// precise endpoint guard across the process boundary, in both wire spellings.
+{
+  const keeper = read('m59-keeper-process.mjs');
+  const options = keeper.match(/session\.walkFine\(Number\(args\.x\), Number\(args\.y\), \{([\s\S]*?)\n\s*\}\)\)/);
+  ok('fine-walk keeper options can be inspected', !!options);
+  if (options) {
+    const forwarded = new Function('args', `return ({${options[1]}});`);
+    for (const args of [{exactArrival:true,arriveWithin:3}, {exact_arrival:true,arrive_within:3}]) {
+      const actual = forwarded(args);
+      ok('exact fine arrival and its distance survive keeper forwarding', actual.exactArrival===true && actual.arriveWithin===3);
+    }
+    ok('legacy fine walks keep their default endpoint behavior', forwarded({}).exactArrival===false);
+  }
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

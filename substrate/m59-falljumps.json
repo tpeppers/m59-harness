@@ -5,6 +5,19 @@
  "_coordinates": "Square records in this file use named 1-based KOD `row` and `col` fields; JSON property order is not a positional convention. OPTIONAL `from_fine`/`to_fine` carry named {x,y} in CLIENT/BSP units (1024 to the square), and when present they are what the geometry validates against: a square is a summary and on jumping ground it is a false one — r40c33 spans 3520 to 10880, the valley floor and the high ledge in one square with one stand point. The squares remain the index every caller asks by; the fine points are the truth. See docs/m59-coordinates.md and docs/m59-routing.md.",
  "jumps": [
   {
+   "room": 2502,
+   "room_name": "The Archaic Hollows",
+   "from": {"row": 41, "col": 34},
+   "to": {"row": 44, "col": 27},
+   "from_fine": {"x": 34192, "y": 41376},
+   "to_fine": {"x": 26976, "y": 44160},
+   "kind": "fall",
+   "requires": {"running": true},
+   "observed_by": "operator, 2026-10-09, native client movement recording",
+   "part_of_cycle": false,
+   "note": "Approach to the small western cavern on the outward cave-to-island trip. Recorded native client points: takeoff KOD x2201 y2650, intermediate x1891 y2589 over the lower floor, landing x1750 y2824. Both endpoints are on floor 8000; the intervening floor is 4800. This is an operator-observed running crossing, not a candidate inferred from fall arithmetic. The return trip uses the lower eastern exit and does not reverse this crossing. The source recording has one-second position samples, so it does not establish the exact airborne arc."
+  },
+  {
    "room": 599,
    "room_name": "Ukgoth, Holy Land of Trolls",
    "from": {

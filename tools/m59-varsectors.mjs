@@ -462,6 +462,15 @@ export function scan(kodRoot = KOD_ROOT) {
         .map(g => ({ ...g, states: g.states.filter(st =>
               sectors.some(s => s.sector === st.sector && gatesMovement(s.heights, s.kind))) }))
         .filter(g => g.states.length >= 2),
+      // Keep complete simultaneous floor states for explicit --risk bakes. A floor
+      // that travels more than a step can obstruct movement even when its absolute
+      // heights do not straddle the legacy threshold. Do not split the cave's five
+      // Dispel sectors into independent masks.
+      risk_groups: groupsInSource(src).filter(g => g.states.some(st =>
+        sectors.some(s => s.sector === st.sector && gateRisk(s.heights, s.kind))))
+        .map(g => ({...g, states:g.states.filter(st =>
+          sectors.some(s => s.sector === st.sector && s.kind !== 'ceiling'))}))
+        .filter(g => g.states.length >= 2),
     });
   }
   rooms.sort((a, b) => (a.room ?? 1e9) - (b.room ?? 1e9));
@@ -513,6 +522,15 @@ if (isMain || process.argv[1]?.endsWith('m59-varsectors.mjs')) {
 
   if (argv.includes('--write')) {
     const out = fileURLToPath(new URL('../substrate/m59-variable-sectors.json', import.meta.url));
+    const selected = argv.includes('--room') ? Number(argv[argv.indexOf('--room')+1]) : null;
+    if(selected != null && !rooms.some(r=>r.room===selected))throw Error('room not found: '+selected);
+    if(selected != null){
+      const prior=JSON.parse(readFileSync(out,'utf8'));
+      prior.rooms=prior.rooms.map(r=>r.room===selected?rooms.find(n=>n.room===selected):r);
+      writeFileSync(out,JSON.stringify(prior,null,1)+'\n');
+      console.log(`wrote room ${selected} to ${out}`);
+      process.exit(0);
+    }
     writeFileSync(out, JSON.stringify({
       note: 'Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. ' +
             'A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square ' +
