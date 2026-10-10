@@ -9,6 +9,7 @@ import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,checkIslandCanc
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {chordWalkable,cutRail} from './m59-railcut.mjs';
+import {originLabel} from './m59-move-origin.mjs';
 import {doorStates} from './m59-doorbake.mjs';
 import {shadowDispelResetTimers} from './m59-island-lab-dispel.mjs';
 assert.deepEqual(shadowDispelResetTimers('Timer Remaining ms Object Message\n123 10000 1667 ReplaceIllusions\n124 20000 1667 ReplaceIllusions\n125 5000 1667 GenerateMonster\n126 5000 99 ReplaceIllusions',1667),[123,124]);
@@ -146,6 +147,26 @@ const resumed=await ordinaryHop({agent:'fixture',call:async name=>{
  return {};
 }},2013,{pollMs:1,idleGraceMs:0});
 assert(resumed.ok);assert.equal(resumeTravels,1);
+let handoffRoom=2000,handoffTravels=0,handoffCancels=0;
+const handoffOrigin={source:'fleetscript',name:'handoff-test',run_id:'own'},handoffLabel=originLabel(handoffOrigin);
+const handed=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async name=>{
+ if(name==='look')return look(handoffRoom);
+ if(name==='travel'){
+  if(++handoffTravels===1)return {ordered_by:handoffLabel,error:'fixture is busy: walk to 2000 (ordered by '+handoffLabel+')'};
+  handoffRoom=2013;return {ordered_by:handoffLabel};
+ }
+ if(name==='status')return {busy:false,movement:{order:null}};
+ if(name==='cancel_movement')handoffCancels++;return {};
+}},2013,{pollMs:1});
+assert(handed.ok);assert.equal(handoffTravels,2);assert.equal(handed.handoff_waits,1);assert.equal(handoffCancels,0);
+let foreignBusyTravels=0;
+const foreignBusy=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async name=>{
+ if(name==='look')return look(2000);
+ if(name==='travel'){foreignBusyTravels++;return {ordered_by:'operator:other',error:'fixture is busy: walk to 2000 (ordered by operator:other)'};}
+ if(name==='status')return {busy:false,movement:{order:null}};
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0});
+assert(!foreignBusy.ok);assert.equal(foreignBusyTravels,1);assert.equal(foreignBusy.handoff_waits,undefined);
 let recoveryReads=0,recoveryTravels=0,recoveryRests=0;
 const recovered=await ordinaryHop({agent:'fixture',call:async name=>{
  if(name==='look')return {...look(++recoveryReads>=6?2013:2000),vigor:{value:recoveryReads>=3?80:50}};
