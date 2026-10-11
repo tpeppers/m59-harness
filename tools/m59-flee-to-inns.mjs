@@ -201,10 +201,15 @@ const deadline = t0 + cfg.timeoutMin * 60_000;
 while (Date.now() < deadline) {
   rows = (await call('fleet', {}, 60_000).catch(() => null))?.fleet ?? rows;
   const byAgent = Object.fromEntries(rows.map(r => [r.agent, r]));
+  // EVERYONE NEWLY IN THE WORLD STARTS AT ONCE, eight at a time. One at a time was 3-11 s each: the
+  // rehearsal's 37th character would have stood still for three minutes, and on prod twelve of them are
+  // standing in Ukgoth. A character placed in 38 had walked itself out to 2 before its turn came.
+  const fresh = AGENTS.filter(a => byAgent[a] && byAgent[a].in_game !== false && !st[a].kind && !st[a].done);
+  for (let i = 0; i < fresh.length; i += 8)
+    await Promise.all(fresh.slice(i, i + 8).map(a => begin(a, byAgent[a]).catch(e => say(`  ${a} begin failed: ${e.message}`))));
   for (const a of AGENTS) {
     const r = byAgent[a], s = st[a];
-    if (!r || r.in_game === false || s.done) continue;
-    if (!s.kind) { await begin(a, r); continue; }
+    if (!r || r.in_game === false || s.done || !s.kind) continue;
     const room = Number(r.room_num);
     if (isInn(room)) { await arrive(a, room); continue; }
     if (s.kind === 'walker' && Date.now() - s.lastIssue > 45_000 && !/travelling|walking/i.test(String(r.activity ?? ''))) {
