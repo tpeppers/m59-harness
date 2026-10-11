@@ -946,18 +946,31 @@ export const script = {
     // back: on rehearsal 26 the dead raiders asked the router for 54 -> 40, the router has no route
     // into the throne room except the door, and the keepers "walked without a trap check" into
     // Ukgoth. This step goes to the door room by the ordinary route first, then hops through.
+    // A STRAGGLER GIVES UP ONCE THE GHOST IS DEAD (2026-10-11, strike 4: Rowlf could not get through the door and held
+    // the whole run -- and the cycle, and the armory -- open for fifteen minutes after a proven kill).
+    const lateCheck = async () => { while (!RUN.killAt) await sleep(1000); return 'killed'; };
     const enterStep = verify(async () => {
-      for (let i = 0; i < 3; i++) {
-        const room = Number((await observe(agent)).room);
-        if (room === RUN.room) return true;
-        if (room !== Number(RUN.door)) {
-          const w = await hop(agent, Number(RUN.door), { tries: 3 });
-          if (!w.ok) continue;
+      const entering = (async () => {
+        for (let i = 0; i < 3 && !RUN.killAt; i++) {
+          const room = Number((await observe(agent)).room);
+          if (room === RUN.room) return true;
+          if (room !== Number(RUN.door)) {
+            const w = await hop(agent, Number(RUN.door), { tries: 3 });
+            if (!w.ok) continue;
+          }
+          if (RUN.killAt) break;
+          const h = await hop(agent, RUN.room, { tries: 5 });
+          if (h.ok) return true;
         }
-        const h = await hop(agent, RUN.room, { tries: 5 });
-        if (h.ok) return true;
+        return RUN.killAt ? 'killed' : false;
+      })();
+      const r = await Promise.race([entering, lateCheck()]);
+      if (r === 'killed') {
+        await call('cancel_movement', { agent, why: 'ghost-raid: the ghost died before this raider got in' }, 30_000).catch(() => {});
+        event('late', { agent });
+        return { ok: false, why: 'the ghost was dead before this raider got in -- standing down' };
       }
-      return { ok: false, why: `could not get into room ${RUN.room} through the door (${RUN.door})` };
+      return r === true ? true : { ok: false, why: `could not get into room ${RUN.room} through the door (${RUN.door})` };
     }, 'into the boss room through its door', 'raid.enter');
     // SILENT IN THE ROOM UNTIL THE RELEASE. Nothing here sends the game anything: the count and the hits are read
     // off the broker's fleet roster. Wave 1 (the melee) goes at the release; wave 2 (spawn-square holders, healers,
