@@ -156,6 +156,18 @@ async function tendTheWounded({ call, agent, say, spell, forMs, below, mana }) {
  */
 export const CONTACT = { at: null, by: null };
 const contact = agent => { if (!CONTACT.at) { CONTACT.at = Date.now(); CONTACT.by = agent; } };
+/**
+ * THE KILLING BLOW, AS PROOF. "Out of sight" is not "dead": the ghost walks through walls, and on 2026-10-11 two
+ * strikes declared it killed when it had only left view (one was back three minutes later). Only the killer hears
+ * "You killed ...", in the reply to its own attack -- which this loop used to keep in `heard` and never read.
+ */
+export const KILL = { at: null, by: null, line: null };
+export const noteKill = (agent, lines, target) => {
+  if (KILL.at) return;
+  const rx = new RegExp(target, 'i');
+  const hit = (lines ?? []).map(String).find(l => /^You killed\b/i.test(l) && rx.test(l));
+  if (hit) { KILL.at = Date.now(); KILL.by = agent; KILL.line = hit; }
+};
 
 export const script = {
   name: 'raid-action',
@@ -489,6 +501,7 @@ export const script = {
         }
         if (probe?.error) console.log(`  ?  ${agent} first contact refused: ${probe.error}`);
         const lines = probe?.combat ?? probe?.messages ?? probe?.lines ?? [];
+        noteKill(agent, [...lines, ...(probe?.messages ?? [])], target);
         const magic = blowLandedAsMagic(lines, GHOST_OF_FARNOHL);
         st.first_contact = { magic, lines: lines.slice(0, 6) };
         if (magic === false) {
@@ -650,6 +663,7 @@ export const script = {
               }
               const msgs = r?.messages ?? [];
               heard.push(...msgs);
+              noteKill(agent, [...msgs, ...(r?.combat ?? [])], target);
               // SITTING DOWN IS WHY landed READ ZERO THROUGH THREE WHOLE SIMULATIONS.
               //
               // "You find yourself unable to lift your weapon." is PFLAG_NO_FIGHT, and

@@ -62,10 +62,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
-import { script as raidAction, CONTACT } from './raid-action.mjs';
+import { script as raidAction, CONTACT, KILL, noteKill } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, DAZZLE, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
          buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS,
-         nextGhostWindow, valveStep, chamberStayers }
+         nextGhostWindow, valveStep, chamberStayers, releaseWhy }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -144,9 +144,20 @@ function ghostGone(by) {
     return;
   }
   if (RUN.killAt || !RUN.ghostSeen) return;
+  // OUT OF VIEW IS NOT DEAD (kill_proof, 2026-10-11): the ghost walks through walls, and two strikes ended on
+  // "gone" with the ghost alive. Without the killer's own "You killed ..." the fight goes on.
+  if (RUN.killProof && !KILL.at) {
+    if (Date.now() - (RUN.unseenAt ?? 0) > 15_000) {
+      RUN.unseenAt = Date.now();
+      event('ghost_unseen', { by });
+      console.log(`  ghost out of ${by}'s view, and no kill heard -- still fighting`);
+    }
+    return;
+  }
   RUN.killAt = Date.now(); RUN.ghostAlive = false; RUN.kills.push(RUN.killAt);
-  event('ghost_gone', { by, after_s: RUN.startAt ? Math.round((RUN.killAt - RUN.startAt) / 1000) : null });
-  console.log(`  *** the ghost is gone (seen by ${by}) — farming for the window`);
+  event('ghost_gone', { by, after_s: RUN.startAt ? Math.round((RUN.killAt - RUN.startAt) / 1000) : null,
+                        ...(KILL.at ? { killed_by: KILL.by, line: KILL.line } : {}) });
+  console.log(`  *** the ghost is ${KILL.at ? `DEAD -- ${KILL.by}: "${KILL.line}"` : `gone (seen by ${by})`}`);
 }
 
 /** Every `sample_s`, every raider's room and health. One loop for the run, started at entry. */
@@ -344,6 +355,30 @@ async function windDown(agent, p) {
   const o = await observe(agent);
   if (!o.dead && Number(o.room) !== Number(p.stage)) await hop(agent, Number(p.stage));
   await restorePosture(agent);
+}
+
+/**
+ * THE RELEASE, decided once for every raider. Operator, 2026-10-11: wait for `release_at` (80%) of the raiders to be
+ * in the room, "and automatically release for attack if the fleet are being attacked inside the room (because
+ * something would have already triggered it then)". Also on the first contact (somebody already acted), and at
+ * `release_max_s` after the first raider came in. Read from the fleet roster only -- silent by construction.
+ * Resolves to the release time.
+ */
+async function awaitRelease(p, roles) {
+  const raiders = RUN.agents.filter(a => a !== roles.lightbearer);
+  const base = {};
+  let firstIn = null, why = null, inRoom = [];
+  while (!why) {
+    const rows = ((await call('fleet', {}, 30_000).catch(() => null))?.fleet ?? []).filter(r => raiders.includes(r.agent));
+    inRoom = rows.filter(r => Number(r.room_num) === RUN.room).map(r => ({ agent: r.agent, cur: Number(String(r.health ?? '').split('/')[0]) }));
+    if (inRoom.length && !firstIn) firstIn = Date.now();
+    why = releaseWhy({ raiders: raiders.length, inRoom, base, firstIn, contactBy: CONTACT.by,
+                       releaseAt: p.release_at, maxS: p.release_max_s });
+    if (!why) await sleep(500);
+  }
+  event('release', { why, in_room: inRoom.length, raiders: raiders.length, waited_s: firstIn ? Math.round((Date.now() - firstIn) / 1000) : 0 });
+  console.log(`  >>> RELEASE: ${why}`);
+  return Date.now();
 }
 
 /**
@@ -651,6 +686,16 @@ export const script = {
     holders: { type: 'string', default: '', describe: 'agents that cast hold on the ghost while it lives instead of meleeing it; "auto" = everyone who knows hold' },
     hold_every_s: { type: 'number', default: 3, describe: 'a holder re-casts hold this often' },
     stay_spots: { type: 'string', default: '', describe: 'stay: only these safe spots ("1,9" / "1,1;1,9"); the rest are still taken' },
+    // SILENT ENTRY (operator, 2026-10-11; user.kod NotifyMonstersOfPresence): a player who has just entered is not
+    // attacked until it ACTS -- moves, turns, attacks, casts, uses or wields, speaks on any channel, looks at a
+    // thing, gets/drops/puts, sits. Its first action pulls the five monsters that hate it most (room.kod
+    // FirstMove). The spawner starts at the first ENTRY regardless (monsroom.kod FirstUserEntered), capped at ten
+    // monsters, ghost included. So the raiders enter and do nothing until the release, then go together.
+    silent_entry: { type: 'boolean', default: true, describe: 'raiders do nothing in the boss room until the release' },
+    release_at: { type: 'number', default: 0.8, describe: 'silent_entry: release when this fraction of the raiders is in the room' },
+    release_max_s: { type: 'number', default: 60, describe: 'silent_entry: release anyway this long after the first raider entered' },
+    wave2_delay_s: { type: 'number', default: 2, describe: 'spawn-square holders, healers and hold casters move this long after the melee' },
+    kill_proof: { type: 'boolean', default: true, describe: 'the ghost is dead only on its killer\'s "You killed ..."; out of view keeps the fight going' },
   },
 
   async steps(p, agentArg, state) {
@@ -676,6 +721,7 @@ export const script = {
     const spells = await RUN.spells;
     const roles = assignRoles(agents, spells, { lightbearer: p.lightbearer, healers: p.healers });
     RUN.lightbearer = roles.lightbearer;
+    RUN.killProof = !(p.kill_proof === false || p.kill_proof === 'false');
     state && (state.fleet = process.env.M59_FLEET ?? state.fleet);
     expect('at-door', agents.length);
     const duty = {
@@ -867,7 +913,19 @@ export const script = {
       }
       return { ok: false, why: `could not get into room ${RUN.room} through the door (${RUN.door})` };
     }, 'into the boss room through its door', 'raid.enter');
-    const baseIn = i40 >= 0 ? [...base.slice(0, i40), enterStep, ...base.slice(i40 + 1)] : base;
+    // SILENT IN THE ROOM UNTIL THE RELEASE. Nothing here sends the game anything: the count and the hits are read
+    // off the broker's fleet roster. Wave 1 (the melee) goes at the release; wave 2 (spawn-square holders, healers,
+    // hold casters) `wave2_delay_s` later, so the first movers -- who draw the five worst haters -- are fighters.
+    const wave2 = !!duty.block || !!duty.hold || roles.healers.includes(agent);
+    const silentHold = verify(async () => {
+      if (p.silent_entry === false || p.silent_entry === 'false') return true;
+      const goAt = await (RUN.go ??= awaitRelease(p, roles));
+      if (wave2) { const left = goAt + Number(p.wave2_delay_s) * 1000 - Date.now(); if (left > 0) await sleep(left); }
+      return true;
+    }, 'still in the boss room until the strike is released', 'raid.silent');
+    // Spawn-square holders and hold casters do not close on the ghost: straight from the release to their own loop.
+    const direct = !!duty.block || !!duty.hold;
+    const baseIn = i40 >= 0 ? [...base.slice(0, i40), enterStep, silentHold, ...(direct ? [] : base.slice(i40 + 1))] : base;
     const steps = i40 >= 0 ? [restFirst, gearAndCheckpoint, ...baseIn.slice(0, i40), atDoor, theDoor, lightGate, ...baseIn.slice(i40)]
                            : [restFirst, gearAndCheckpoint, atDoor, theDoor, lightGate, ...base];
 
@@ -1207,7 +1265,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
       if (!r?.error) tally.swings += Number(p.swings);
       for (const m of r?.messages ?? []) {
         const k = /^You killed (?:the |a |an )?(.+?)\.?$/i.exec(m);
-        if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); }
+        if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); noteKill(agent, [m], p.target); }
       }
       continue;
     }
@@ -1231,7 +1289,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
     if (msgs.some(m => /spirit of Shal'ille departs/i.test(m))) RUN.light.expired = true;
     for (const m of msgs) {
       const k = /^You killed (?:the |a |an )?(.+?)\.?$/i.exec(m);
-      if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); }
+      if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); noteKill(agent, [m], p.target); }
     }
   }
   if (!(await stayInChamber(agent, p))) await windDown(agent, p);

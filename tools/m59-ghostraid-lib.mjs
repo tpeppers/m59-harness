@@ -125,6 +125,26 @@ export function chamberStayers(rows = [], { count = 2, over = 75, room = GHOST_R
   const n = Math.max(0, Math.min(Number(count) || 0, spots.length, pool.length));
   return Object.fromEntries(pool.slice(0, n).map((c, i) => [c.agent, { row: Number(spots[i].row), col: Number(spots[i].col), health: `${c.cur}/${c.max}` }]));
 }
+/**
+ * THE SILENT-ENTRY RELEASE (operator, 2026-10-11): go when `releaseAt` of the raiders are in the boss room, at once
+ * if anyone in it is being hit or somebody has already acted, and in any case `maxS` after the first came in.
+ * `inRoom` = [{agent, cur}] (current health); `base` = each raider's health when first seen there, filled in here.
+ * Returns the reason to release, or null to keep waiting.
+ */
+export function releaseWhy({ raiders = 0, inRoom = [], base = {}, firstIn = null, now = Date.now(), contactBy = null,
+                             releaseAt = 0.8, maxS = 60 } = {}) {
+  let hit = null;
+  for (const r of inRoom) {
+    if (base[r.agent] == null) base[r.agent] = r.cur;
+    else if (r.cur < base[r.agent] && !hit) hit = `${r.agent} is being hit (${base[r.agent]} -> ${r.cur})`;
+  }
+  if (hit) return hit;
+  if (contactBy) return `${contactBy} already acted`;
+  const need = Math.ceil(raiders * Number(releaseAt));
+  if (inRoom.length && inRoom.length >= need) return `${inRoom.length}/${raiders} in the room (release at ${need})`;
+  if (firstIn != null && now - firstIn > Number(maxS) * 1000) return `${maxS}s since the first raider entered (${inRoom.length}/${raiders} in)`;
+  return null;
+}
 export const STAGE_ROOM = 2;           // Outside Castle Victoria — where the raid forms up
 
 // Forces of light: 12 mana, 2 elderberry + 1 emerald (forceslt.kod ResetReagents), and

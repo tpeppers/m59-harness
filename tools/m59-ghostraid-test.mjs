@@ -6,7 +6,7 @@
 import { hammerNeed, matchHammers, reagentShortfall, planReagents, assignRoles, countFamily,
          expect, barrier, leave, resetBarriers, survivalReport, reportMarkdown, GHOST_ROOM,
          isHammer, isBlunt, blessAssignments, buddyAssignments, spawnBlockers, THRONE_GENERATORS,
-         nextGhostWindow, valveStep, GHOST_CYCLE_S, chamberStayers } from './m59-ghostraid-lib.mjs';
+         nextGhostWindow, valveStep, GHOST_CYCLE_S, chamberStayers, releaseWhy } from './m59-ghostraid-lib.mjs';
 
 let pass = 0, fail = 0;
 {
@@ -42,6 +42,34 @@ let pass = 0, fail = 0;
   ok0(Object.keys(chamberStayers(rows, { count: 3, over: 75, room: 40, spots })).length === 2, 'never more stayers than safe spots');
   ok0(Object.keys(chamberStayers(rows, { count: 2, over: 75, room: 40, spots, exclude: ['b'] })).join() === 'h,g', 'the light-bearer (excluded) never stays');
   ok0(Object.keys(chamberStayers(rows, { count: 0, spots })).length === 0, 'count 0: nobody stays');
+
+  // The silent-entry release (operator, 2026-10-11: 80%, or at once if anyone inside is being hit).
+  {
+    const base = {};
+    const w = (inRoom, extra = {}) => releaseWhy({ raiders: 10, inRoom, base, firstIn: 1000, now: 2000, ...extra });
+    ok0(w([]) === null, 'nobody in yet: wait');
+    ok0(w([{ agent: 'a', cur: 70 }, { agent: 'b', cur: 75 }]) === null, '2 of 10 in, unhurt: wait');
+    const eight = 'abcdefgh'.split('').map(a => ({ agent: a, cur: a === 'a' ? 70 : 75 }));
+    ok0((w(eight) ?? '').includes('8/10 in the room (release at 8)'), '8 of 10 (80%) in: release');
+    ok0(w(eight.slice(0, 7)) === null, '7 of 10 in, unhurt: wait');
+    ok0((w([{ agent: 'a', cur: 64 }]) ?? '').includes('a is being hit (70 -> 64)'),'a raider inside losing health: release at once, whatever the count');
+    ok0(/already acted/.test(releaseWhy({ raiders: 10, inRoom: [{ agent: 'z', cur: 75 }], base: {}, contactBy: 'z' }) ?? ''), 'somebody already swung: release');
+    ok0(/60s since/.test(releaseWhy({ raiders: 10, inRoom: [{ agent: 'z', cur: 75 }], base: {}, firstIn: 0, now: 61_000, maxS: 60 }) ?? ''), 'timeout after the first entered');
+    ok0(releaseWhy({ raiders: 10, inRoom: [{ agent: 'z', cur: 75 }], base: {}, firstIn: 0, now: 59_000, maxS: 60 }) === null, 'not before the timeout');
+    ok0((releaseWhy({ raiders: 2, inRoom: [{ agent: 'x', cur: 1 }, { agent: 'y', cur: 1 }], base: {} }) ?? '').includes('2/2'),'ceil: 80% of 2 is both');
+  }
+  // The killing blow, as proof (raid-action noteKill).
+  {
+    const { KILL, noteKill } = await import('./fleetscripts/raid-action.mjs');
+    noteKill('t1', ['You killed the tusked skeleton.'], "ghost of Far");
+    ok0(KILL.at === null, 'a skeleton kill is not the ghost');
+    noteKill('t2', ["The ghost of Far'Nohl hits you."], "ghost of Far");
+    ok0(KILL.at === null, 'being hit by the ghost is not killing it');
+    noteKill('t3', ["You killed the ghost of Far'Nohl."], "ghost of Far");
+    ok0(KILL.by === 't3' && /You killed the ghost/.test(KILL.line), 'the killer and its line are recorded');
+    noteKill('t4', ["You killed the ghost of Far'Nohl."], "ghost of Far");
+    ok0(KILL.by === 't3', 'the first killer stands');
+  }
 
   // The ghost's clock: 7200 s x 90-110 % from a SEEN spawn (throne1.kod:18, :102).
   const w = nextGhostWindow(0);
