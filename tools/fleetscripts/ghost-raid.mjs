@@ -145,8 +145,10 @@ function ghostGone(by) {
   }
   if (RUN.killAt || !RUN.ghostSeen) return;
   // OUT OF VIEW IS NOT DEAD (kill_proof, 2026-10-11): the ghost walks through walls, and two strikes ended on
-  // "gone" with the ghost alive. Without the killer's own "You killed ..." the fight goes on.
+  // "gone" with the ghost alive. A kill is the killer's own "You killed ..." or its treasure on the floor where it stood
+  // (dropProof -- the fine lute, 2026-10-11, was a real kill the attack replies never reported). Otherwise fight on.
   if (RUN.killProof && !KILL.at) {
+    dropProof(by).catch(() => {});     // the next call sees the result: a drop where it stood is the kill
     if (Date.now() - (RUN.unseenAt ?? 0) > 15_000) {
       RUN.unseenAt = Date.now();
       event('ghost_unseen', { by });
@@ -491,6 +493,29 @@ function pickFocus(others, p) {
 }
 
 /** Find the ghost (and everything else attackable) from where this agent stands. */
+const floorItems = look => (look?.objects ?? []).filter(o => !o.is_player && (o.can ?? []).includes('get') && !(o.can ?? []).includes('attack'));
+/**
+ * THE DROP, AS PROOF OF THE KILL. The ghost is MOB_ONE_TREASURE: it leaves one item where it dies. Operator,
+ * 2026-10-11: "you missed the kill that dropped the fine lute" -- the killer's "You killed ..." is not reliably in
+ * its own attack reply, so a new item within one square of where the ghost was last seen, after it vanished, is
+ * the kill too. `floorSeen` holds everything that was already on the floor while it lived (skeleton loot).
+ */
+async function dropProof(agent) {
+  if (KILL.at || !RUN.ghostLast || (RUN.dropCheckAt ?? 0) > Date.now() - 3000) return;
+  RUN.dropCheckAt = Date.now();
+  const look = await call('look', { agent }, 40_000).catch(() => null);
+  if (Number(look?.room?.num ?? look?.room) !== RUN.room) return;
+  if ((look?.objects ?? []).some(o => !o.is_player && new RegExp(RUN.target ?? 'ghost of Far', 'i').test(o.name ?? ''))) return;
+  const g = RUN.ghostLast;
+  const drop = floorItems(look).find(o => !RUN.floorSeen?.has(Number(o.id))
+    && Math.max(Math.abs(Number(o.row) - g.row), Math.abs(Number(o.col) - g.col)) <= 1);
+  if (drop && !KILL.at) {
+    KILL.at = Date.now(); KILL.by = 'drop';
+    KILL.line = `${drop.name} dropped at r${drop.row}c${drop.col}, where the ghost was last seen (r${g.row}c${g.col})`;
+    event('kill_proof', { by: 'drop', item: drop.name, at: `r${drop.row}c${drop.col}`, ghost_last: `r${g.row}c${g.col}`, seen_by: agent });
+  }
+}
+
 async function lookAround(agent, target) {
   const look = await call('look', { agent }, 40_000).catch(() => null);
   const attackable = (look?.objects ?? []).filter(o => (o.can ?? []).includes('attack') && !o.is_player);
@@ -498,6 +523,12 @@ async function lookAround(agent, target) {
   const ghost = attackable.find(o => re.test(o.name ?? '')) ?? null;
   const others = attackable.filter(o => !re.test(o.name ?? ''))
     .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99));
+  if (Number(look?.room?.num ?? look?.room) === RUN.room) {
+    // THE FLOOR, FOR THE DROP PROOF: what lies here while the ghost lives is not its treasure.
+    RUN.floorSeen ??= new Set();
+    if (ghost || !RUN.ghostLast) for (const o of floorItems(look)) RUN.floorSeen.add(Number(o.id));
+    if (ghost) RUN.ghostLast = { row: Number(ghost.row), col: Number(ghost.col), t: Date.now() };
+  }
   if (ghost && Number(look?.room?.num ?? look?.room) === RUN.room) {
     if (!RUN.ghostSeen) RUN.ghostAlive = true;
     else if (RUN.killAt && !RUN.ghostAlive) {
@@ -722,6 +753,7 @@ export const script = {
     const roles = assignRoles(agents, spells, { lightbearer: p.lightbearer, healers: p.healers });
     RUN.lightbearer = roles.lightbearer;
     RUN.killProof = !(p.kill_proof === false || p.kill_proof === 'false');
+    RUN.target = p.target;
     state && (state.fleet = process.env.M59_FLEET ?? state.fleet);
     expect('at-door', agents.length);
     const duty = {
