@@ -148,6 +148,15 @@ async function tendTheWounded({ call, agent, say, spell, forMs, below, mana }) {
   return casts;
 }
 
+/**
+ * FIRST CONTACT, AS A CLOCK OTHER SCRIPTS CAN WAIT ON. Operator, 2026-10-10: walking into the throne room
+ * does not wake the ghost -- the first character to ACT does, and it is that one the ghost goes for. So the
+ * 20-health light-bearer must not act first; ghost-raid holds his forces of light until a raider has swung
+ * (`at` is set as the first attack is SENT, whatever comes back).
+ */
+export const CONTACT = { at: null, by: null };
+const contact = agent => { if (!CONTACT.at) { CONTACT.at = Date.now(); CONTACT.by = agent; } };
+
 export const script = {
   name: 'raid-action',
   describe: 'Muster, finish the deferred buffs somewhere safe, walk in, and fight in roles.',
@@ -468,6 +477,7 @@ export const script = {
         // refused with a sentence that reads like combat, and first contact is the one swing
         // whose transcript the whole arming decision rests on.
         if (here) await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+        if (here) contact(agent);
         let probe = here
           ? await call('attack', { agent, target: here.id, swings: 2 }, 60_000)
               .catch(e => ({ error: e.message }))
@@ -630,6 +640,7 @@ export const script = {
                 continue;                                     // re-read before swinging
               }
               // `g.id` comes from the `look` three lines up — live, this round, never stored.
+              if (!onEscort) contact(agent);              // a swing at the BOSS; an escort's does not wake it
               const r = await call('attack', { agent, target: g.id, swings: 2 }, 60_000)
                 .catch(e => ({ error: e.message }));
               if (r?.error) {

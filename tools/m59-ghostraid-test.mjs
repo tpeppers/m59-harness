@@ -12,6 +12,13 @@ let pass = 0, fail = 0;
 {
   // Spawn blocking: the throne room's six generator squares (throne1.kod:61), held healers first.
   const ok0 = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL', m); } };
+  // --set: any fight param from the command line (the ghost cycle's fast strike).
+  const { setParams } = await import('./m59-ghostraid.mjs');
+  const sp = setParams('door_buffs=false; holders=t7,t9 ;spawn_block=0;target=ghost of Far');
+  ok0(sp.door_buffs === 'false' && sp.holders === 't7,t9' && sp.spawn_block === '0' && sp.target === 'ghost of Far', '--set splits on ; and keeps commas and spaces inside a value');
+  ok0(Object.keys(setParams(undefined)).length === 0 && Object.keys(setParams('')).length === 0, '--set absent is no overrides');
+  let threw = false; try { setParams('door_buffs'); } catch { threw = true; }
+  ok0(threw, '--set without = is refused, not silently dropped');
   ok0(THRONE_GENERATORS.length === 6 && THRONE_GENERATORS[0][0] === 5 && THRONE_GENERATORS[0][1] === 3, 'six spawn squares, [row, col], r5c3 first');
   const b = spawnBlockers(['a', 'b', 'c', 'd', 'light', 'h'], { lightbearer: 'light', healers: ['h'],
     maxHealth: { a: 75, b: 55, c: 60, d: 70, h: 66 }, count: 3 });

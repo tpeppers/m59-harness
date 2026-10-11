@@ -62,7 +62,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
-import { script as raidAction } from './raid-action.mjs';
+import { script as raidAction, CONTACT } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, DAZZLE, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
          buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS,
          nextGhostWindow, valveStep, chamberStayers }
@@ -357,7 +357,10 @@ function stayers(p) {
     const rows = (f?.fleet ?? []).filter(r => RUN.agents.includes(r.agent));
     const asker = rows.find(r => Number(r.room_num) === RUN.room && r.agent !== RUN.lightbearer)?.agent;
     const ss = asker ? await call('safe_spots', { agent: asker }, 40_000).catch(() => null) : null;
+    // `stay_spots` ("1,9" or "1,1;1,9"): only these squares -- the others are still held by the last round's farmers.
+    const only = String(p.stay_spots ?? '').split(';').map(s => s.split(',').map(Number)).filter(q => q.length === 2 && q.every(Number.isFinite));
     const spots = (ss?.spots ?? []).filter(x => (x.can_reach_you ?? 99) === 0)
+      .filter(x => !only.length || only.some(([r, c]) => Number(x.row) === r && Number(x.col) === c))
       .sort((a, b) => a.row - b.row || a.col - b.col);
     const pick = chamberStayers(rows, { count: Number(p.stay), over: Number(p.stay_over_max_health), room: RUN.room,
                                         exclude: [RUN.lightbearer].filter(Boolean), order: RUN.agents, spots });
@@ -635,6 +638,18 @@ export const script = {
     light_wait_room: { type: 'number', default: STAGE_ROOM, describe: 'where the light-bearer waits between casts' },
     light_heals: { type: 'boolean', default: false,
                    describe: 'let the light-bearer heal from inside the room after the kill. Off: at 20 health he died 1.6 min into the third hold' },
+    // THE GHOST WAKES ON THE FIRST ACTION, NOT ON ENTRY, AND GOES FOR WHOEVER TOOK IT. Operator, 2026-10-10, after
+    // dying to exactly that as Loial: "Forces of light *should not* start the fight -- someone charging towards the
+    // ghost and attacking should ... Loial can wait to cast forces of light until the engagement has started".
+    light_after_contact: { type: 'boolean', default: true, describe: 'the opening light waits until a raider has swung at the ghost (raid-action CONTACT)' },
+    light_contact_max_s: { type: 'number', default: 120, describe: 'light anyway if nobody has swung this long after the door opened' },
+    contact_call: { type: 'boolean', default: true, describe: 'with no scripted light-bearer (a person is playing him), announce first contact on the channel' },
+    door_buffs: { type: 'boolean', default: true, describe: 'the Kraanan casters bless / super-strength their share at the door; false = straight in' },
+    // HOLD THE GHOST (operator, 2026-10-10: "Janice and Camilla can also cast hold vs the ghost"). Qor level 4, 15
+    // mana + 2 purple mushrooms (hold.kod); a monster that is already held refuses it free. Only after contact.
+    holders: { type: 'string', default: '', describe: 'agents that cast hold on the ghost while it lives instead of meleeing it; "auto" = everyone who knows hold' },
+    hold_every_s: { type: 'number', default: 3, describe: 'a holder re-casts hold this often' },
+    stay_spots: { type: 'string', default: '', describe: 'stay: only these safe spots ("1,9" / "1,1;1,9"); the rest are still taken' },
   },
 
   async steps(p, agentArg, state) {
@@ -666,7 +681,10 @@ export const script = {
       bless: blessAssignments(agents, roles.blessers, { lightbearer: roles.lightbearer })[agent] ?? [],
       strength: buddyAssignments(agents, roles.strongmen, { lightbearer: roles.lightbearer })[agent] ?? [],
       medic: roles.medics.includes(agent) || roles.healers.includes(agent),
+      hold: String(p.holders ?? '') === 'auto' ? (spells[agent] ?? []).includes('hold')
+        : String(p.holders ?? '').split(',').map(s => s.trim()).includes(agent),
     };
+    if (p.door_buffs === false || p.door_buffs === 'false') { duty.bless = []; duty.strength = []; }
     // SPAWN BLOCKING (operator, 2026-09-25): some raiders stand ON the throne room's spawn squares,
     // which makes each spawn that picks their square fail. Healers first, then the weakest — the
     // ones a swarm on the ghost can spare. Computed once and shared; `spawn_block` is how many of
@@ -707,6 +725,15 @@ export const script = {
       const b = await barrier('enter', agent, { ms: Number(p.enter_wait_s) * 1000 });
       if (!RUN.startAt) { RUN.startAt = Date.now(); event('entered', { expected: b.expected, arrived: b.arrived }); }
       startSampler(p);
+      // A PERSON PLAYING THE LIGHT-BEARER is told when the fight has started, so the light is not the first action.
+      if (!roles.lightbearer && p.contact_call !== false && p.contact_call !== 'false') RUN.contactCall ??= (async () => {
+        const until = Date.now() + 10 * 60_000;
+        while (!CONTACT.at && Date.now() < until) await sleep(500);
+        if (!CONTACT.at) return;
+        event('contact', { by: CONTACT.by });
+        console.log(`  *** first contact by ${CONTACT.by} -- forces of light now`);
+        await call('say', { agent: CONTACT.by, type: p.channel, text: 'ENGAGED -- the ghost is on us. Forces of light NOW.' }, 30_000).catch(() => {});
+      })();
       st.door = b;
       return true;
     }, 'the door could not be read', 'raid.door');
@@ -721,7 +748,8 @@ export const script = {
       stage_room: p.mustered === true || p.mustered === 'true' ? 0 : Number(p.stage),
       room_caster: '', healers: roles.healers.join(','), escort: '', heal_spell: 'minor heal',
       heal_below: Number(p.heal_below), require_enchanted: false, despite_hazard: HAZARD, channel: p.channel,
-      rounds: Number(p.rounds), disengage_at: Number(p.retreat_at),
+      // A holder swings once (first contact is still everyone's) and goes to its hold loop.
+      rounds: duty.hold ? 1 : Number(p.rounds), disengage_at: Number(p.retreat_at),
     }, agent, state ?? {});
     const i40 = base.findIndex(s => s?.do === 'walk' && Number(s.to) === RUN.room);
     // NOBODY GOES IN WITHOUT THE LIGHT FOLLOWING. On the 2026-09-25 no-DM rehearsal the light-
@@ -951,6 +979,14 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         event('dazzle', { outcome });
         if (!staying()) await hop(agent, Number(RUN.door), { tries: 6 });
       };
+      // NOT THE FIRST ACTION IN THE ROOM: wait at the door for a raider's swing (see light_after_contact).
+      if (p.light_after_contact !== false && p.light_after_contact !== 'false') {
+        const until = Date.now() + Number(p.light_contact_max_s) * 1000;
+        if (Number((await observe(agent)).room) === RUN.room) await hop(agent, Number(RUN.door), { tries: 6 });
+        while (!CONTACT.at && Date.now() < until) await sleep(500);
+        event('contact', { by: CONTACT.by, waited_s: Math.round((Date.now() - (RUN.startAt ?? Date.now())) / 1000) });
+        console.log(`  ${agent}: ${CONTACT.at ? `first contact by ${CONTACT.by} -- lighting` : `nobody swung in ${p.light_contact_max_s}s -- lighting anyway`}`);
+      }
       await castIn('opening');
       while (Date.now() < endAt(p)) {
         const due = Date.now() - RUN.light.lastCast > Number(p.light_every_s) * 1000;
@@ -1139,6 +1175,19 @@ async function farmLoop({ agent, p, st, say, duty }) {
     if (holding && !(await holdSquare(agent, duty.block, tally))) continue;
     const { ghost, others } = await lookAround(agent, p.target);
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
+    // A HOLDER holds the ghost (after contact) instead of swinging at it; the escort it still fights.
+    if (ghost && duty?.hold) {
+      if (CONTACT.at && Date.now() - (tally.lastHold ?? 0) > Number(p.hold_every_s) * 1000) {
+        tally.lastHold = Date.now();
+        await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+        const r = await castVerified(agent, 'hold', { target: ghost.id, cost: 15 });
+        const outcome = r.landed ? 'landed' : /already/i.test(String(r.why ?? '')) ? 'already' : 'failed';
+        tally.holds = tally.holds ?? { landed: 0, already: 0, failed: 0 };
+        tally.holds[outcome]++;
+        event('hold', { agent, outcome, why: outcome === 'failed' ? String(r.why ?? r.outcome ?? '').slice(0, 60) : undefined });
+      } else await sleep(500);
+      continue;
+    }
     const g = ghost ?? pickFocus(others, p);
     if (!g) {
       // PREP WITH AN EMPTY ROOM: sit and recover for the ghost the countdown says is coming. A seated

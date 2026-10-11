@@ -12,6 +12,7 @@
 //   node tools/m59-ghostraid.mjs rehearse --fleet shadow --commit   rebuild a faithful clone, run it with NO DM
 //   node tools/m59-ghostraid.mjs muster --fleet prod                 job 0, previewed (read-only)
 //   ... room=<n> door=<n> target=<pattern> retarget the fight; armorers=a,b trips=n spare=zombie tune it
+//   ... --set "door_buffs=false;holders=auto"  any ghost-raid param
 //   ... --stay 2 [--stay-over 75]   after the kill only the two healthiest (max health over 75) stay, farming the
 //                                   empty chamber from its safe spots; everyone else goes out to the stage room
 //
@@ -359,7 +360,17 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(opt('--spawn-block') != null ? { spawn_block: Number(opt('--spawn-block')) } : {}),
   ...(opt('--stay') != null ? { stay: Number(opt('--stay')) } : {}),
   ...(opt('--stay-over') != null ? { stay_over_max_health: Number(opt('--stay-over')) } : {}),
+  // ANY ghost-raid param, for a caller that tunes the fight without a flag of its own:
+  // --set "door_buffs=false;door_rest_s=0;holders=auto". Values stay strings; the script reads them as such.
+  ...setParams(opt('--set')),
 });
+export function setParams(s) {
+  return Object.fromEntries(String(s ?? '').split(';').map(x => x.trim()).filter(Boolean).map(x => {
+    const i = x.indexOf('=');
+    if (i < 1) throw new Error(`--set wants key=value;key=value, got "${x}"`);
+    return [x.slice(0, i).trim(), x.slice(i + 1).trim()];
+  }));
+}
 
 async function arm(cfg) {
   const res = await runPhase(cfg, 'ghost-arm.mjs', armParams(cfg));
