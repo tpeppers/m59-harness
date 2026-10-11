@@ -109,6 +109,22 @@ export function spawnBlockers(agents = [], { lightbearer = '', healers = [], max
   const n = Math.max(0, Math.min(Number(count) || 0, squares.length, order.length));
   return Object.fromEntries(order.slice(0, n).map((a, i) => [a, { row: squares[i][0], col: squares[i][1], index: i }]));
 }
+/**
+ * THE EMPTY CHAMBER'S FARMERS. Operator, 2026-10-10: after the kill, "the 2 selected characters to stay being
+ * the highest *current* HP characters that also have over 75 *max* HP, and everyone go outside to room 38".
+ * Of the raiders standing in the boss room, alive and not piloted by a person, with max health OVER `over`:
+ * the highest current health first (then the higher maximum, then raid order), one per safe spot. A raider
+ * with no spot left does not stay — standing anywhere else in that room is what the spots exist to avoid.
+ * `rows` are fleet rows ({agent, health: 'cur/max', room_num, piloted}); `spots` are [{row, col}].
+ */
+export function chamberStayers(rows = [], { count = 2, over = 75, room = GHOST_ROOM, exclude = [], order = [], spots = [] } = {}) {
+  const at = a => { const i = order.indexOf(a); return i < 0 ? 1e9 : i; };
+  const pool = rows.map(r => { const [cur, max] = String(r.health ?? '').split('/').map(Number); return { agent: r.agent, cur, max, room: Number(r.room_num), piloted: !!r.piloted }; })
+    .filter(c => c.room === Number(room) && !c.piloted && !exclude.includes(c.agent) && c.cur > 0 && c.max > Number(over))
+    .sort((a, b) => b.cur - a.cur || b.max - a.max || at(a.agent) - at(b.agent));
+  const n = Math.max(0, Math.min(Number(count) || 0, spots.length, pool.length));
+  return Object.fromEntries(pool.slice(0, n).map((c, i) => [c.agent, { row: Number(spots[i].row), col: Number(spots[i].col), health: `${c.cur}/${c.max}` }]));
+}
 export const STAGE_ROOM = 2;           // Outside Castle Victoria — where the raid forms up
 
 // Forces of light: 12 mana, 2 elderberry + 1 emerald (forceslt.kod ResetReagents), and

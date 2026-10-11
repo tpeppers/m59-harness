@@ -6,7 +6,7 @@
 import { hammerNeed, matchHammers, reagentShortfall, planReagents, assignRoles, countFamily,
          expect, barrier, leave, resetBarriers, survivalReport, reportMarkdown, GHOST_ROOM,
          isHammer, isBlunt, blessAssignments, buddyAssignments, spawnBlockers, THRONE_GENERATORS,
-         nextGhostWindow, valveStep, GHOST_CYCLE_S } from './m59-ghostraid-lib.mjs';
+         nextGhostWindow, valveStep, GHOST_CYCLE_S, chamberStayers } from './m59-ghostraid-lib.mjs';
 
 let pass = 0, fail = 0;
 {
@@ -20,6 +20,21 @@ let pass = 0, fail = 0;
   ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 6 })).length === 2, 'never more holders than raiders');
   ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 0 })).length === 0, 'count 0 is off');
   ok0(b.h.index === 0 && b.c.index === 2, 'holders carry the order in which the valve opens their squares');
+
+  // The empty chamber: who stays after the kill (operator, 2026-10-10).
+  const rows = [
+    { agent: 'a', health: '70/80', room_num: 40 }, { agent: 'b', health: '90/96', room_num: 40 },
+    { agent: 'c', health: '75/75', room_num: 40 }, { agent: 'd', health: '88/90', room_num: 38 },
+    { agent: 'e', health: '85/100', room_num: 40, piloted: true }, { agent: 'f', health: '0/90', room_num: 40 },
+    { agent: 'g', health: '80/76', room_num: 40 }, { agent: 'h', health: '80/99', room_num: 40 }];
+  const spots = [{ row: 1, col: 1 }, { row: 1, col: 9 }];
+  const s = chamberStayers(rows, { count: 2, over: 75, room: 40, spots, order: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] });
+  ok0(Object.keys(s).join() === 'b,h', 'highest CURRENT health first, max over 75, in the room, alive, not piloted; ties on current go to the higher max');
+  ok0(s.b.row === 1 && s.b.col === 1 && s.h.col === 9, 'one safe spot each, in order');
+  ok0(!('c' in s), 'max exactly 75 is not OVER 75');
+  ok0(Object.keys(chamberStayers(rows, { count: 3, over: 75, room: 40, spots })).length === 2, 'never more stayers than safe spots');
+  ok0(Object.keys(chamberStayers(rows, { count: 2, over: 75, room: 40, spots, exclude: ['b'] })).join() === 'h,g', 'the light-bearer (excluded) never stays');
+  ok0(Object.keys(chamberStayers(rows, { count: 0, spots })).length === 0, 'count 0: nobody stays');
 
   // The ghost's clock: 7200 s x 90-110 % from a SEEN spawn (throne1.kod:18, :102).
   const w = nextGhostWindow(0);

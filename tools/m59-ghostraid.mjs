@@ -12,6 +12,8 @@
 //   node tools/m59-ghostraid.mjs rehearse --fleet shadow --commit   rebuild a faithful clone, run it with NO DM
 //   node tools/m59-ghostraid.mjs muster --fleet prod                 job 0, previewed (read-only)
 //   ... room=<n> door=<n> target=<pattern> retarget the fight; armorers=a,b trips=n spare=zombie tune it
+//   ... --stay 2 [--stay-over 75]   after the kill only the two healthiest (max health over 75) stay, farming the
+//                                   empty chamber from its safe spots; everyone else goes out to the stage room
 //
 // ============================================================================
 // ONE SCRIPT, TWO FLEETS, AND THE LINE BETWEEN THEM
@@ -355,6 +357,8 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(cfg.campNext || flag('--camp-next') ? { camp_next: true } : {}),
   ...(opt('--camp-max') != null ? { camp_max_min: Number(opt('--camp-max')) } : {}),
   ...(opt('--spawn-block') != null ? { spawn_block: Number(opt('--spawn-block')) } : {}),
+  ...(opt('--stay') != null ? { stay: Number(opt('--stay')) } : {}),
+  ...(opt('--stay-over') != null ? { stay_over_max_health: Number(opt('--stay-over')) } : {}),
 });
 
 async function arm(cfg) {

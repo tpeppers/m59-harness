@@ -44,6 +44,15 @@
 //    all of it (docs/m59-boundary.md): a raid is not an errand, and nothing here disarms the
 //    ladder.
 //
+// 4. OR IT HANDS THE ROOM TO TWO (`stay`, operator 2026-10-10): "change from the Ghost raid directly into the
+//    empty-chamber, with the 2 selected characters to stay being the highest *current* HP characters that also
+//    have over 75 *max* HP, and everyone go outside to room 38". With `stay` > 0 the hold ends AT the kill:
+//    `chamberStayers` picks the stayers once, each walks to its own safe spot (r1c1 / r1c9, can_reach_you 0, read
+//    from the keeper's safe_spots) and is left to its keeper farming `stay_hunt` from the wall, confined to the
+//    boss room alone -- the standard safe-spot behaviour (rest on the spot, play dead / log off, break out). Their
+//    posture is not restored, and `run_dir/chamber.json` records who stayed where and what they had. Everyone
+//    else winds down to the stage room as usual. Watching for the next ghost is not this script's: its run ends.
+//
 // WHAT IT WRITES, for `m59-ghostraid.mjs report`: `run_dir/samples.jsonl` (every raider's room and
 // health every `sample_s`), and `run_dir/events.jsonl` (entry, ghost seen, ghost gone, light cast,
 // retreat, return, death, kill). The report reads THOSE plus the fleet's own `died`/`killed`
@@ -56,7 +65,7 @@ import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m5
 import { script as raidAction } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, DAZZLE, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
          buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS,
-         nextGhostWindow, valveStep }
+         nextGhostWindow, valveStep, chamberStayers }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -76,6 +85,8 @@ const RUN = {
   valve: { open: 0, armed: false, changedAt: 0 }, valveLeader: null, valveAt: 0, blockerCount: 0,
 };
 const endAt = p => {
+  // THE EMPTY CHAMBER (stay > 0): nobody holds the room after the kill; the stayers are settled instead.
+  if (RUN.killAt && Number(p.stay) > 0) return RUN.killAt;
   // CAMPING FOR THE NEXT GHOST (camp_next): stay until the predicted window has passed, plus a margin
   // to fight it, capped at camp_max_min after the first kill. With no spawn seen the phase is
   // unknown, and the cap (>= 132 min) is long enough to see one.
@@ -336,6 +347,67 @@ async function windDown(agent, p) {
 }
 
 /**
+ * THE EMPTY CHAMBER: picked ONCE, by whichever raider's loop ends first after the kill -- every loop ends
+ * at the kill when `stay` > 0, and each waits on this same promise before winding down, so nobody has
+ * left the room when the pick reads it.
+ */
+function stayers(p) {
+  RUN.stay ??= (async () => {
+    const f = await call('fleet', {}, 40_000).catch(() => null);
+    const rows = (f?.fleet ?? []).filter(r => RUN.agents.includes(r.agent));
+    const asker = rows.find(r => Number(r.room_num) === RUN.room && r.agent !== RUN.lightbearer)?.agent;
+    const ss = asker ? await call('safe_spots', { agent: asker }, 40_000).catch(() => null) : null;
+    const spots = (ss?.spots ?? []).filter(x => (x.can_reach_you ?? 99) === 0)
+      .sort((a, b) => a.row - b.row || a.col - b.col);
+    const pick = chamberStayers(rows, { count: Number(p.stay), over: Number(p.stay_over_max_health), room: RUN.room,
+                                        exclude: [RUN.lightbearer].filter(Boolean), order: RUN.agents, spots });
+    event('stay_pick', { stayers: pick, spots: spots.map(x => `r${x.row}c${x.col}`) });
+    console.log(`  empty chamber: ${Object.entries(pick).map(([a, q]) => `${a} (${q.health}) -> r${q.row}c${q.col}`).join(', ') || 'NOBODY qualifies -- everyone leaves'}`);
+    return pick;
+  })();
+  return RUN.stay;
+}
+
+/** Stay and farm the empty chamber from a safe spot, or false (not picked, dead, gone): wind down instead. */
+async function stayInChamber(agent, p) {
+  if (!(Number(p.stay) > 0) || !RUN.killAt) return false;
+  const spot = (await stayers(p))[agent];
+  if (!spot) return false;
+  const o = await observe(agent);
+  if (o.dead || Number(o.room) !== RUN.room) return false;
+  let on = false, at = null;
+  for (let t = 0; t < 4 && !on; t++) {
+    await call('walk_to', { agent, col: spot.col, row: spot.row }, 90_000).catch(() => {});
+    at = (await call('look', { agent }, 40_000).catch(() => null))?.you ?? null;
+    on = !!at && Number(at.row) === spot.row && Number(at.col) === spot.col;
+    if (!on) await sleep(2000);
+  }
+  const st = await call('autopilot', { agent, action: 'status' }, 40_000).catch(() => null);
+  const pol = st?.policy ?? {};
+  const before = { ...(RUN.saved.get(agent) ?? {}), assigned_room: pol.assignedRoom ?? null, confine_rooms: pol.confineRooms ?? [],
+                   hunt: pol.hunt ?? null, roam: pol.roam ?? false };
+  // The raid's threat ceiling stays (a level-100 skeleton is out of every keeper's own band); its flee
+  // and rest points go back to the character's own, since resting on the spot is now the keeper's job.
+  const own = RUN.saved.get(agent) ?? {};
+  const r = await call('autopilot', { agent, action: 'start', mode: 'farm', hunt: [String(p.stay_hunt)],
+    assigned_room: RUN.room, confine_rooms: [RUN.room], roam: false, pull_to_safe_wall: true, use_safe_spots: true,
+    panic_logoff: true, break_out_via_logoff: true, rest_anywhere: false, town_trips: false,
+    ...(own.flee_below != null ? { flee_below: own.flee_below } : {}),
+    ...(own.rest_below != null ? { rest_below: own.rest_below } : {}) }, 40_000).catch(e => ({ error: e.message }));
+  RUN.restored.add(agent);                              // never "restored" out of the room by a later wind-down
+  RUN.chamber = { ...(RUN.chamber ?? {}), [agent]: { spot, on, at: at ? { row: at.row, col: at.col } : null, before,
+                                                     posture: r?.error ? `refused: ${r.error}` : 'farm' } };
+  if (RUN.dir) try {
+    fs.writeFileSync(path.join(RUN.dir, 'chamber.json'), JSON.stringify({ kill_at: RUN.killAt, room: RUN.room,
+      hunt: p.stay_hunt, stayers: RUN.chamber }, null, 1));
+  } catch {}
+  event('stay', { agent, spot: `r${spot.row}c${spot.col}`, on, posture: r?.error ? 'refused' : 'farm' });
+  console.log(`  ${String(agent).padEnd(9)} STAYS in the empty chamber at r${spot.row}c${spot.col}${on ? '' : ` (reached r${at?.row}c${at?.col})`}` +
+              (r?.error ? ` -- posture REFUSED: ${r.error}` : ': farming from the wall'));
+  return true;
+}
+
+/**
  * RETREAT TO A WALL IN THE ROOM, NOT OUT OF IT. Operator, 2026-09-24: "raiders [should] not
  * leave the throne room voluntarily (it's unsafe outside, too)". The keeper's own safe-spot
  * finder names two squares in room 40 that nothing can swing at — r1c1 and r1c9, the ledge
@@ -519,6 +591,9 @@ export const script = {
     healers: { type: 'string', default: '' },
     rounds: { type: 'number', default: 10, describe: 'raid-action melee rounds before the farm loop takes over' },
     minutes: { type: 'number', default: 30, describe: 'how long to hold the room after the kill' },
+    stay: { type: 'number', default: 0, describe: 'THE EMPTY CHAMBER: after the kill only this many stay, farming from the safe spots (one each); everyone else leaves for the stage room at once. 0 = everyone holds for `minutes`' },
+    stay_over_max_health: { type: 'number', default: 75, describe: 'stay: only raiders with max health OVER this; of those, the highest current health' },
+    stay_hunt: { type: 'string', default: 'tusked skeleton', describe: 'stay: what the stayers farm' },
     fight_limit_s: { type: 'number', default: 600, describe: 'if the ghost is not dead by now the window starts anyway' },
     retreat_at: { type: 'number', default: 0.25, describe: 'break off to room 38 below this health fraction' },
     // THE RAID POSTURE, applied to every fighter at the door and restored when its part ends.
@@ -584,6 +659,7 @@ export const script = {
     })();
     const spells = await RUN.spells;
     const roles = assignRoles(agents, spells, { lightbearer: p.lightbearer, healers: p.healers });
+    RUN.lightbearer = roles.lightbearer;
     state && (state.fleet = process.env.M59_FLEET ?? state.fleet);
     expect('at-door', agents.length);
     const duty = {
@@ -1104,7 +1180,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
       if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); }
     }
   }
-  await windDown(agent, p);
+  if (!(await stayInChamber(agent, p))) await windDown(agent, p);
   RUN.done.add(agent);
   st.farm = tally;
   event('farm_summary', { agent, ...tally, ...(duty?.block ? { block: duty.block } : {}) });
@@ -1145,7 +1221,7 @@ async function healLoop({ agent, p, st, say, duty }) {
     casts.push(h);
     await sleep(1000);
   }
-  await windDown(agent, p);
+  if (!(await stayInChamber(agent, p))) await windDown(agent, p);
   RUN.done.add(agent);
   st.heal_window = { casts: casts.length, landed: casts.filter(c => c.landed).length };
   event('heal_summary', { agent, ...st.heal_window, ...(duty?.block ? { block: duty.block, ...(st.blockTally ?? {}) } : {}) });
