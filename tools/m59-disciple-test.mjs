@@ -313,12 +313,27 @@ console.log('\na destination decided at run time still has to say where it could
      /allowTraps/.test(trapCheck([walk(someTrap)]) ?? ''));
 }
 
+// ---------------------------------------------------------------- the lift into the Temple of Qor
+console.log('\nthe lift into the Temple of Qor');
+{
+  const { toTemple, TEMPLE_LIFTS } = await import('./fleetscripts/disciple-quest.mjs');
+  const q = toTemple(802), L = TEMPLE_LIFTS[802];
+  ok('802 is entered from the lift room, never walked to directly', q[0].do === 'walk' && q[0].to === 598 && !q.some(s => s.do === 'walk' && s.to === 802));
+  ok('the crawl legs are the proven waypoints, then the mouth and the trigger', q.filter(s => s.do === 'crawl_to').slice(0, 7).map(s => `r${s.row}c${s.col}`).join(' ') === 'r25c32 r31c30 r33c30 r33c29 r33c26 r34c26 r38c26');
+  ok('the mouth and the trigger are retried tries times', q.filter(s => s.do === 'crawl_to' && s.row === 38 && s.col === 26).length === L.tries);
+  ok('every lift crawl stays in 598, so inside 802 it fails at once rather than walking back out', q.filter(s => s.do === 'crawl_to').every(s => s.room === 598 && s.optional === true));
+  ok('and it ends by checking the body is inside', q[q.length - 1].do === 'verify' && q[q.length - 1].lift === true);
+  ok('a temple with no lift is still one plain walk', toTemple(801).length === 1 && toTemple(801)[0].to === 801);
+}
+
 // ---------------------------------------------------------------- the plan itself
 console.log('\nthe errand, per school');
 {
   for (const school of ['kraanan', 'shalille', 'faren', 'qor']) {
-    const steps = await script.steps({ school, agent: 't1', agents: ['t1'],
-                                       rounds: 40, abortBelow: 0.5, home: 39 });
+    // The Qor temple's LIFT (toTemple, lift: true) is how the body gets IN, not part of the
+    // errand's shape; its own steps are pinned in 'the lift into the Temple of Qor' below.
+    const steps = (await script.steps({ school, agent: 't1', agents: ['t1'],
+                                        rounds: 40, abortBelow: 0.5, home: 39 })).filter(s => !s.lift);
     const verbs = steps.map(s => s.do);
     // Ends with the walk home and then the transcript, and BOTH are `always` — the walk
     // because a failed quest still has to bring the body back, the transcript because the run
@@ -576,7 +591,7 @@ console.log('\na format that uses fewer parameters than the server sent');
 console.log('\ngetting within five squares of somebody');
 {
   for (const school of ['kraanan', 'shalille', 'faren', 'qor']) {
-    const steps = await script.steps({ school, agent: 't1', agents: ['t1'] });
+    const steps = (await script.steps({ school, agent: 't1', agents: ['t1'] })).filter(s => !s.lift);
     const crawls = steps.filter(s => s.do === 'crawl_to');
     ok(`${school}: every say is preceded by a look and a crawl`,
        crawls.length >= 2 && steps.filter(s => s.do === 'say').length >= 2,
@@ -611,7 +626,7 @@ console.log('\ngetting within five squares of somebody');
   ok('no target means no room either, rather than a stale one',
      resolveStep(crawl, { near: null }).room === null);
   for (const school of ['kraanan', 'shalille', 'faren', 'qor']) {
-    const all = await script.steps({ school, agent: 't1', agents: ['t1'] });
+    const all = (await script.steps({ school, agent: 't1', agents: ['t1'] })).filter(s => !s.lift);
     ok(`${school}: every approach rung names the room it is walking in`,
        all.filter(s => s.do === 'crawl_to' || (s.do === 'walk_to' && typeof s.col === 'function'))
           .every(s => typeof s.room === 'function'),

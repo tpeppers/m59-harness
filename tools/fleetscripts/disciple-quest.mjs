@@ -183,6 +183,38 @@ export const SCHOOLS = Object.freeze({
   },
 });
 
+// TEMPLES THAT ARE NOT AN EXIT: the Temple of Qor (802) is up a lift from 598 that is open about ten
+// minutes in every twenty, and no static exit table has it — so `walk(802)` was "expected to fail at the
+// walk" (see Zuxana's destination note above). The way in is the one prod's local qor-l2-run proved
+// (qor-enter's waypoints, off the fine floor): from 598 crawl r25c32, r31c30, r33c30, r33c29, r33c26 to the
+// mouth r34c26, then onto the trigger r38c26; not in 802 a few seconds later means the lift is shut, so
+// back to the mouth and on again, `tries` times, `waitS` apart. There is a one-way ledge at r28c29, so only
+// the mouth and the trigger are retried. ALREADY INSIDE (the second visit, or a re-run) walks nowhere:
+// `walk(598)` from inside the temple would take the body back OUT.
+export const TEMPLE_LIFTS = Object.freeze({
+  802: { from: 598, legs: [[32, 25], [30, 31], [30, 33], [29, 33], [26, 33]], mouth: [26, 34], trigger: [26, 38], tries: 12, waitS: 90 },
+});
+const roomNow = async (call, agent) => Number((await call('status', { agent }, 30_000).catch(() => null))?.room?.num ?? NaN);
+/** The steps that put the body in `temple`. A plain walk, or the lift; lift steps carry `lift: true`. */
+export function toTemple(temple) {
+  const L = TEMPLE_LIFTS[temple];
+  if (!L) return [walk(temple)];
+  const leg = (c, r, extra = {}) => ({ ...crawlTo(c, r, { room: L.from, within: 0, deadlineMs: 120_000, ...extra }), optional: true, lift: true });
+  // Plain walk to the lift room: the body is outside the temple on both visits (it is sent away between them).
+  const steps = [walk(L.from), ...L.legs.map(([c, r]) => leg(c, r))];
+  for (let k = 0; k < L.tries; k++) {
+    steps.push(leg(...L.mouth), leg(...L.trigger, { bodyRetries: 20 }), {
+      ...verify(async ({ agent, call }) => {
+        for (let i = 0; i < 6; i++) { if ((await roomNow(call, agent)) === temple) return true; await new Promise(r => setTimeout(r, 3000)); }
+        await new Promise(r => setTimeout(r, L.waitS * 1000));
+        return { ok: false, why: `the ${temple} lift did not take (attempt ${k + 1} of ${L.tries}) — shut half the time` };
+      }, `lift attempt ${k + 1}`), optional: true, lift: true });
+  }
+  steps.push({ ...verify(async ({ agent, call }) => (await roomNow(call, agent)) === temple ? true
+    : { ok: false, why: `not in room ${temple} after ${L.tries} lift attempts` }, `inside room ${temple}`), lift: true });
+  return steps;
+}
+
 // Schools with no gate at all. Named rather than merely absent, so the refusal can say why.
 export const NO_QUEST = Object.freeze({
   riija: 'the Monk of Riija is a Temples subclass with viQuestID = 0 (kcrjmonk.kod:58), which ' +
@@ -919,7 +951,7 @@ export const script = {
     const templeWait = Number(templeWaitMs) > 0 ? Number(templeWaitMs) : 20 * 60_000;
 
     return [
-      walk(s.temple),
+      ...toTemple(s.temple),
 
       // WAIT MY TURN. Held from here to the moment she has been asked, and released even if the
       // run falls over in between — the runner's own `finally` does that, which is the whole
@@ -1007,7 +1039,7 @@ export const script = {
       // BACK TO HER. Walking in is enough on its own — `SomethingEntered` calls
       // `CheckCompletionCriteria` too (monster.kod:915-928) — but the body may never have left
       // the room, so the say below is the one that has to work.
-      walk(s.temple),
+      ...toTemple(s.temple),
 
       // AND QUEUE AGAIN FOR THE RETURN, WHICH IS THE VISIT THAT DECIDES THE QUEST. The closing
       // word has to be spoken within five squares of her (Q_NPC_CLOSE_ENOUGH), so this is the
