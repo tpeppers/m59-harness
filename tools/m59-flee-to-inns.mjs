@@ -195,6 +195,10 @@ async function begin(a, row) {
   say(`  ${a} walking ${b.room} -> ${s.target} ${INNS[s.target]} (p90 ${Math.round((best?.ms ?? 0) / 1000)}s)`);
 }
 
+// cupRide talks through m59-fleetscript's `call`, which reads M59_CONTROL_URL and defaults to 8901 -- prod. Point
+// it at THIS broker before the import, or a rehearsal on another port asks prod whether the holder has the cup
+// (2026-10-11: "s2 is not carrying the chalice" with the cup in s2's pack).
+process.env.M59_CONTROL_URL = CONTROL.replace(/\/$/, '');
 const { cupRide } = await import('./m59-inventory.mjs');
 let rows = [], riding = false, holderDrank = false;
 const deadline = t0 + cfg.timeoutMin * 60_000;
