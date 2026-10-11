@@ -1966,3 +1966,13 @@ A successful recenter inside the current square retains the refused waypoint
 and any intermediate squares swallowed by coalescing. Its pulled proof is
 rebuilt from the new fine pose. Recentring is an approach adjustment; it cannot
 fulfil a declared fall or skip straight to the next waypoint.
+
+Falls are also boundaries for fallback hop coalescing: send the fall waypoint
+with fall mode before continuing, even if the surrounding squares are collinear
+or an ordinary trace sees a clear line to a later point. A refused multi-square
+fall at the start of a walk has no incoming approach to blame. Exclude its full
+take-off-to-landing edge locally; excluding just an adjacent prefix does not
+match the jump edge in the graph and repeatedly selects the same refused fall.
+When the incoming approach is known, retain the existing approach exclusion so
+the ledge can be tried from a different pose. These exclusions stay local and
+never declare the fall permanently impossible.

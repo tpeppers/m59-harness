@@ -235,4 +235,42 @@ for (const hardAvoid of [false,true]) await test('coarse recovery retains refuse
  assert.ok(!calls.some(s=>s.row===trap.row&&s.col===trap.col),'relaxing occupancy cannot discard a mandatory avoidance');
  assert.equal(s.movementGeneration,7);
 });
+for(const incoming of [false,true])await test('refused multi-square fall reroutes '+(incoming?'its known approach':'from an initial take-off'),async()=>{
+ const takeoff={row:2,col:26},fall={row:5,col:23,fall:true},goal={row:7,col:28},start=incoming?{row:2,col:27}:takeoff;
+ const detour=[{row:2,col:25},{row:3,col:25},goal],calls=[],plans=[];
+ const refused=incoming?'2,27>2,26':'2,26>5,23';
+ const c={self:{...start,x:start.col*64+32,y:start.row*64+32},room:{id:599,objects:new Map()},vitals:()=>({health:{value:74,max:74}})};
+ const geo={collisionReady:false,num:599,standable:()=>true,
+  path:(row,col,_r,_c,opts={})=>{
+   plans.push(new Set(opts.blockedEdges));
+   if(row===goal.row&&col===goal.col)return {found:true,steps:[]};
+   if(opts.blockedEdges?.has(refused))return {found:true,steps:detour};
+   return {found:true,steps:row===start.row&&col===start.col&&incoming?[takeoff,fall,goal]:[fall,goal]};
+  }};
+ const s={client:c,need:()=>c,world:{geometry:geo,room:{num:599}},live:true,movementGeneration:7,
+  threatsHere:()=>[],movementWasCancelled:()=>false,confirmPosition:async()=>({...c.self}),
+  step:async(col,row,opts)=>{calls.push({row,col,fall:opts.fall});if(opts.fall)return {moved:false,reason:'geometry_blocked'};
+   Object.assign(c.self,{row,col,x:col*64+32,y:row*64+32});return {moved:true,position:{...c.self}};}};
+ const r=await Session.prototype.walkTo.call(s,goal.col,goal.row,{maxSteps:20});
+ assert.equal(r.arrived,true,'the refused fall must lead to an alternative route');
+ assert.equal(calls.filter(s=>s.fall).length,1,'an unchanged failed fall is not retried');
+ assert.ok(plans.some(p=>p.has(refused)),'replanning excludes the actual jump or known incoming approach');
+ if(incoming)assert.ok(plans.every(p=>!p.has('2,26>5,23')),'a known bad approach does not erase the ledge');
+ assert.equal(s.movementGeneration,7);
+});
+for(const traced of [false,true])for(const first of [false,true])await test('coalescing retains '+(first?'initial':'intermediate')+' fall in '+(traced?'traced':'grid')+' recovery',async()=>{
+ const start={row:10,col:10},fall={row:10,col:12,fall:true},goal={row:10,col:13},calls=[];
+ const route=first?[fall,goal]:[{row:10,col:11},fall,goal];
+ const c={self:{...start,x:672,y:672},room:{id:599,objects:new Map()},vitals:()=>({health:{value:74,max:74}})};
+ const geo={collisionReady:traced,num:599,standable:()=>true,path:()=>({found:true,steps:route}),
+  stringPull:()=>null,traceFineMoveClient:(_x,_y,x,y)=>({x,y})};
+ const s={client:c,need:()=>c,world:{geometry:geo,room:{num:599}},live:true,movementGeneration:7,
+  walkPivots:async()=>({done:false,legs:0,singles:0}),
+  threatsHere:()=>[],movementWasCancelled:()=>false,confirmPosition:async()=>({...c.self}),
+  step:async(col,row,opts)=>{calls.push({row,col,fall:opts.fall});Object.assign(c.self,{row,col,x:col*64+32,y:row*64+32});return {moved:true,position:{...c.self}};}};
+ const r=await Session.prototype.walkTo.call(s,goal.col,goal.row);
+ assert.equal(r.arrived,true);
+ assert.ok(calls.some(x=>x.row===fall.row&&x.col===fall.col&&x.fall),'a declared fall requires its own fall-mode step');
+ if(!first)assert.deepEqual(calls[0],{row:10,col:11,fall:false},'the approach cannot swallow the fall');
+});
 console.log(`${passed} passed; ${failed} failed`);if(failed)process.exitCode=1;

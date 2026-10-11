@@ -2980,7 +2980,9 @@ export function sessionWalkPrototype(deps) {
       // all live, 26 steps before and 26 after.
       if (pulled === undefined)
         pulled = provedSquares(geo, from0 ?? me0, next ? [next, ...queue] : queue);
-      if (from0 && geo.collisionReady) {
+      // Falls are explicit movement-mode boundaries. Neither an ordinary clear
+      // line nor collinearity permits swallowing their take-off/landing step.
+      if (from0 && geo.collisionReady && !next.fall) {
         // FROM WHERE THE CHARACTER ACTUALLY IS, NOT FROM THE MIDDLE OF ITS SQUARE.
         //
         // This trace decides which squares may be SKIPPED, so the line it proves clear has
@@ -3011,7 +3013,7 @@ export function sessionWalkPrototype(deps) {
         const reach = [];
         for (let i = 0; i < queue.length && reach.length < Math.max(1, cap) - 1; i++) {
           const s = queue[i];
-          if (occupied.has(`${s.row},${s.col}`)) break;
+          if (s.fall || occupied.has(`${s.row},${s.col}`)) break;
           reach.push(s);
         }
         // Membership in a proved route does not prove a direct line from the
@@ -3037,14 +3039,14 @@ export function sessionWalkPrototype(deps) {
             hop++;
           }
         }
-      } else {
+      } else if (!next.fall) {
         // Without a collision model, coalesce only collinear steps. Honor the
         // same shortened retry and failed-hop memory as the traced branch.
         const dc0 = Math.sign(next.col - (c.self?.col ?? next.col));
         const dr0 = Math.sign(next.row - (c.self?.row ?? next.row));
         while (hop < hopLimit && queue.length) {
           const peek = queue[0];
-          if (Math.sign(peek.col - next.col) !== dc0 || Math.sign(peek.row - next.row) !== dr0) break;
+          if (peek.fall || Math.sign(peek.col - next.col) !== dc0 || Math.sign(peek.row - next.row) !== dr0) break;
           if (occupied.has(`${peek.row},${peek.col}`)) break;
           if (blockedEdges.has(edgeKey(next.row, next.col, peek.row, peek.col))) break;
           if (from0 && missedHops.has(edgeKey(from0.row, from0.col, peek.row, peek.col))) break;
@@ -3299,8 +3301,14 @@ export function sessionWalkPrototype(deps) {
       // ledge from a different neighbour, which puts the body on a different fine point,
       // and most of them work. Offline, that alone turns the crossing from "bouncing" into
       // an arrival.
-      const blamed = next.fall && prevSquare
-        ? edgeKey(prevSquare.row, prevSquare.col, was?.row ?? next.row, was?.col ?? next.col)
+      // When the walk STARTS at the take-off there is no incoming approach to
+      // blame. A fall may span several squares: the graph names its full landing,
+      // so excluding a one-square prefix leaves the same refused jump available.
+      // Keep this exclusion local; another fine pose may still make the fall.
+      const blamed = next.fall
+        ? (prevSquare
+          ? edgeKey(prevSquare.row, prevSquare.col, was?.row ?? next.row, was?.col ?? next.col)
+          : (was ? edgeKey(was.row, was.col, next.row, next.col) : null))
         : (was ? edgeKey(was.row, was.col, was.row + bdr, was.col + bdc) : null);
       let learned = false;
       if (!hitSomething && was && blamed && (bdr || bdc || next.fall)) {
