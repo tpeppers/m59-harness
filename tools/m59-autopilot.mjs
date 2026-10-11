@@ -26182,6 +26182,21 @@ export class Autopilot {
   // was refused in silence (a room already lit, a heal on somebody whole, a resting caster), so
   // that spell is set aside for `refused_ms` and the next pass tries the next one.
   //
+  // STAND ON A SAFE SPOT FOR A CREATURE-TARGET PRACTICE CAST, by the regular safe-spot code: a known safe
+  // wall under us is adopted as the hold (adoptRecoveryWall); otherwise the nearest one is walked to
+  // (takeSafeSpot, recovery, nearest only) and adopted on arrival. No play-dead -- this is a drill, not a
+  // recovery. A failed walk waits 20 s before the next try, so a room with no reachable wall is not a treadmill.
+  async practiceSafeSpot() {
+    if (this.adoptRecoveryWall()) return true;
+    if (this._practiceSpotTriedAt && Date.now() - this._practiceSpotTriedAt < 20_000) return false;
+    this._practiceSpotTriedAt = Date.now();
+    const generation = this.s.movementGeneration;
+    const r = await this.takeSafeSpot('practice from a safe spot', null, { source: 'practice', recovery: true, nearestOnly: true })
+      .catch(e => ({ took: false, why: e.message }));
+    if (r?.cancelled || this.s.movementWasCancelled?.(generation)) return false;
+    return !!(r?.took && this.adoptRecoveryWall());
+  }
+
   // True only when it did something with the pass — a cast, or a short mana rest on a held
   // wall while blocked by the reserve. Every other answer hands the pass back unchanged.
   // IS A PRACTICE SESSION IN ANOTHER ROOM DUE, AND COULD IT CAST AT LEAST ONCE? The entry, or null.
@@ -26300,16 +26315,19 @@ export class Autopilot {
     }
 
     const spell = spells.find(x => x.name === choice.cast.name);
-    // A CREATURE TARGET IS PRACTISED FROM A PROVEN WALL AND NOWHERE ELSE. Operator, 2026-09-25:
+    // A CREATURE TARGET IS PRACTISED FROM A SAFE SPOT AND NOWHERE ELSE. Operator, 2026-09-25:
     // "Have Loial practice dazzle on skeletons from safe spots" — a 20-max-health caster in
     // Castle Victoria. Casting at a skeleton invites it, so the square has to be one that
-    // nothing in reach can hit; an unproven or absent wall declines the cast, never walks.
+    // nothing in reach can hit. The SAME safe-spot code as resting and recovery decides that
+    // (operator, 2026-10-11: "we know where safe spots are now ... use the same regular safe spot
+    // code as everywhere else"): stand on a known safe wall, or walk to the nearest one. It used to
+    // demand a wall a monster had PROVEN, which a character that is never attacked never gets.
     let creature = null;
     if (choice.cast.target === 'creature') {
-      if (!(this.hold && this.holdWorks())) {
+      if (!(await this.practiceSafeSpot())) {
         this._practiceAt = now;
-        return this.declinedCast('practice', 'not on a proven wall',
-          { spell: choice.cast.name, why: 'a creature-target practice cast is only made from a safe spot' });
+        return this.declinedCast('practice', 'not on a safe spot',
+          { spell: choice.cast.name, why: 'a creature-target practice cast is only made from a safe spot, and none was reached' });
       }
       this._practiceTargets ||= new Map();
       // A BUDDY TAGGER WITH A TAG OUT CASTS AT THE TAG OR NOT AT ALL. The hit-point roll goes to

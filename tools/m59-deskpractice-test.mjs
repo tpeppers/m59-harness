@@ -336,8 +336,12 @@ console.log('\na one-target spell practised on a creature');
   const { readFileSync } = await import('node:fs');
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = AP.indexOf("if (choice.cast.target === 'creature') {");
-  ok('the keeper casts a creature target only from a proven wall',
-     at > 0 && AP.slice(at, at + 300).includes('if (!(this.hold && this.holdWorks()))'));
+  ok('the keeper casts a creature target only from a safe spot, by the regular safe-spot code',
+     at > 0 && AP.slice(at, at + 300).includes('if (!(await this.practiceSafeSpot()))'));
+  const ps = AP.indexOf('async practiceSafeSpot() {');
+  ok('practiceSafeSpot adopts a known safe wall, or walks to the nearest, and never plays dead',
+     ps > 0 && AP.slice(ps, ps + 700).includes('this.adoptRecoveryWall()') && AP.slice(ps, ps + 700).includes('this.takeSafeSpot(')
+       && !AP.slice(ps, ps + 700).includes('playDead'));
   ok('a refused creature cast sets aside the creature, not the spell',
      AP.includes('if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000'));
 
