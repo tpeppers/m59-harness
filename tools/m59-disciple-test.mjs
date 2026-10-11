@@ -318,7 +318,10 @@ console.log('\nthe lift into the Temple of Qor');
 {
   const { toTemple, TEMPLE_LIFTS } = await import('./fleetscripts/disciple-quest.mjs');
   const q = toTemple(802), L = TEMPLE_LIFTS[802];
-  ok('802 is entered from the lift room, never walked to directly', q[0].do === 'walk' && q[0].to === 598 && !q.some(s => s.do === 'walk' && s.to === 802));
+  // The router first (it knows the entrance flips between 598 and 589), one flip waited out, the
+  // router again -- and never a walk to 598 afterwards, which from inside would walk the body OUT.
+  ok('802 is walked to first, the flip waited out, then walked to again', q[0].do === 'walk' && q[0].to === 802 && q[1].do === 'verify' && q[2].do === 'walk' && q[2].to === 802);
+  ok('the lift is a fallback that never walks to the lift room', !q.some(s => s.do === 'walk' && s.to === 598));
   ok('the crawl legs are the proven waypoints, then the mouth and the trigger', q.filter(s => s.do === 'crawl_to').slice(0, 7).map(s => `r${s.row}c${s.col}`).join(' ') === 'r25c32 r31c30 r33c30 r33c29 r33c26 r34c26 r38c26');
   ok('the mouth and the trigger are retried tries times', q.filter(s => s.do === 'crawl_to' && s.row === 38 && s.col === 26).length === L.tries);
   ok('every lift crawl stays in 598, so inside 802 it fails at once rather than walking back out', q.filter(s => s.do === 'crawl_to').every(s => s.room === 598 && s.optional === true));

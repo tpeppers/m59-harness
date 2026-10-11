@@ -200,8 +200,23 @@ export function toTemple(temple) {
   const L = TEMPLE_LIFTS[temple];
   if (!L) return [walk(temple)];
   const leg = (c, r, extra = {}) => ({ ...crawlTo(c, r, { room: L.from, within: 0, deadlineMs: 120_000, ...extra }), optional: true, lift: true });
-  // Plain walk to the lift room: the body is outside the temple on both visits (it is sent away between them).
-  const steps = [walk(L.from), ...L.legs.map(([c, r]) => leg(c, r))];
+  // THE ROUTER FIRST. The Temple of Qor's entrance alternates between 598 and 589 every ten minutes
+  // (tempqor.kod ExitsTimer), and walk(802) knows it: try it, wait out one flip where the body
+  // stands if the door was shut, try again. The crawl legs below are the fallback, not the plan --
+  // from where walk(598) lands (r5c17, Bunsen 2026-10-11) the first leg is twenty squares off and
+  // crawl_to never took a step. No walk(598) any more either -- once inside, that would walk the
+  // body back OUT. A crawl leg bound to 598 answers left_the_room at once from anywhere else, and a
+  // lift attempt checks the room first, so the fallback costs nothing when the walk worked.
+  const inside = async ({ agent, call }) => (await roomNow(call, agent)) === temple;
+  const steps = [
+    { ...walk(temple), optional: true },
+    { ...verify(async (ctx) => {
+      if (await inside(ctx)) return true;
+      await new Promise(r => setTimeout(r, 630_000));
+      return true;
+    }, 'wait one flip of the temple door'), optional: true, lift: true },
+    { ...walk(temple), optional: true, lift: true },
+    ...L.legs.map(([c, r]) => leg(c, r))];
   for (let k = 0; k < L.tries; k++) {
     steps.push(leg(...L.mouth), leg(...L.trigger, { bodyRetries: 20 }), {
       ...verify(async ({ agent, call }) => {
