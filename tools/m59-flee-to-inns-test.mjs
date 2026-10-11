@@ -9,8 +9,9 @@ const cfg = { cup: 'hk1', station: 38, hall: 714, hallInn: 103, fragile: 30, spl
 
 ok('an inn is already done', classify({ agent: 't1', room: 153, max: 77 }, cfg) === 'done');
 ok('the cup holder holds the station', classify({ agent: 'hk1', room: 38, max: 20 }, cfg) === 'holder');
-ok('a 26-health character rides, wherever it is', classify({ agent: 'hk3', room: 2, max: 26 }, cfg) === 'rider'
-  && classify({ agent: 'hk2', room: 535, max: 20 }, cfg) === 'rider');
+ok('a 26-health character outside Castle Victoria rides', classify({ agent: 'hk3', room: 2, max: 26 }, cfg) === 'rider');
+ok('the fragile ride out of Ukgoth from anywhere in it', classify({ agent: 'hk3', room: 599, row: 60, max: 26 }, cfg) === 'rider');
+ok('...but walk from a safe road (Zheng He, 535 -> Marion in 73 s)', classify({ agent: 'hk2', room: 535, max: 20 }, cfg) === 'walker');
 ok('Castle Victoria and Outside ride', classify({ agent: 't2', room: 38, max: 74 }, cfg) === 'rider'
   && classify({ agent: 't4', room: 2, max: 76 }, cfg) === 'rider');
 ok('north Ukgoth rides (72 s to the north exit)', classify({ agent: 't8', room: 599, row: 5, max: 70 }, cfg) === 'rider');

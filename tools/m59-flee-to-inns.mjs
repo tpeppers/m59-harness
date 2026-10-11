@@ -59,8 +59,11 @@ export const isInn = room => Object.hasOwn(INNS, Number(room)) || Number(room) =
 export function classify(b, cfg) {
   if (isInn(b.room)) return 'done';
   if (b.agent === cfg.cup) return 'holder';
-  if (Number(b.max) > 0 && Number(b.max) <= cfg.fragile) return 'rider';
   if (cfg.nearStation.includes(Number(b.room))) return 'rider';
+  // THE FRAGILE RIDE ONLY FROM WHERE THE CUP IS THE SHORT WAY OUT. Zheng He (20 health) dropped on the West
+  // Merchant Way, 73 s from the Limping Toad on a road rated 0; sending him to the cup would have walked him
+  // through Ukgoth. Anywhere but the station or Ukgoth itself, the fragile walk to their nearest inn.
+  if (Number(b.max) > 0 && Number(b.max) <= cfg.fragile) return Number(b.room) === 599 ? 'rider' : 'walker';
   if (Number(b.room) === 599 && Number.isFinite(Number(b.row)) && Number(b.row) < cfg.splitRow) return 'rider';
   return 'walker';
 }
@@ -100,7 +103,7 @@ const healthy = async () => { try { const r = await fetch(new URL('health', CONT
 
 // ---------------------------------------------------------------- where everyone was when they dropped
 const roster = (() => { try { return JSON.parse(readFileSync(stateFileFor(FLEET), 'utf8')); } catch { return {}; } })();
-const AGENTS = Object.keys(roster).filter(a => roster[a]?.credentials);   // never read further than that
+const AGENTS = Object.keys(roster).filter(a => roster[a]?.credentials?.character);   // never read further than that
 const lastSeen = a => {
   const f = path.join(REPO, 'substrate', `keeper-${a}.json`);
   if (!existsSync(f)) return { agent: a };
@@ -112,7 +115,7 @@ const lastSeen = a => {
 };
 const last = Object.fromEntries(AGENTS.map(a => [a, lastSeen(a)]));
 const kindOf = Object.fromEntries(AGENTS.map(a => [a, classify(last[a], cfg)]));
-const order = [cfg.cup,
+const order = [...String(arg('first', '')).split(',').map(s => s.trim()).filter(Boolean), cfg.cup,
   ...AGENTS.filter(a => a !== cfg.cup && Number(last[a].max) > 0 && Number(last[a].max) <= cfg.fragile),
   ...AGENTS.filter(a => Number(last[a].room) === 599 && !(Number(last[a].max) <= cfg.fragile)),
   ...AGENTS].filter((a, i, all) => AGENTS.includes(a) && all.indexOf(a) === i);
@@ -138,7 +141,7 @@ if (!(await healthy())) {
 }
 // THE RIGHT FLEET, OR NOTHING: the same gate every /m59 command runs.
 {
-  const w = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-which.mjs'), '--fleet', FLEET ?? '-'], { cwd: REPO, encoding: 'utf8', windowsHide: true });
+  const w = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-which.mjs'), '--fleet', FLEET ?? '-', '--port', String(cfg.http)], { cwd: REPO, encoding: 'utf8', windowsHide: true });
   if (w.status !== 0) { say(`m59-which refused (exit ${w.status}): ${String(w.stdout || w.stderr).trim().split('\n').slice(-3).join(' | ')}`); process.exit(3); }
 }
 
