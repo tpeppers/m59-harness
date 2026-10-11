@@ -370,6 +370,43 @@ walking back into the camper); an unusable value is refused at the setter rather
 overridable key and warns when a block switches it off; and `policy_control` reflects it from
 the schema like every other order. `node tools/m59-pvp-return-test.mjs` (49) pins all of it.
 
+## WHERE A CHARACTER MAY FIGHT A PLAYER — `pvp_rooms`
+
+The operator's order, 2026-10-11: *"stop people from fighting back outside of 599/2/38 (Ukgoth
+<-> Castle Victoria)"* — it *"overrides fight back in maps outside of 599/2/38"*.
+
+```bash
+autopilot action=start agent=<a> pvp_rooms=[599,2,38]   # players are fought only in these rooms
+autopilot action=start agent=<a> pvp_rooms=null         # every room again (also [])
+autopilot action=status agent=<a>                       # policy.pvpRooms, and pvp_rooms: {rooms, room, allowed_here}
+```
+
+**Map room numbers (`room.num`), never object ids.** A non-integer, zero or a word is refused at the
+setter with an error naming `pvp_rooms`, because a list that quietly dropped a typo would leave a
+character fighting where the operator said not to. Unset, `null` or `[]` is the behaviour from
+before the key existed.
+
+**The one decision** is `pvpAllowedHere(policy, roomNum)` in `tools/m59-pvp-rooms.mjs`, and every
+path that can swing at a PLAYER asks it: combat mode's return fire after a hit (`beginPvP`), the
+war's engage-on-sight and a fleetmate's alarm (`beginWar`), `syncPvP` (a fight carried out of the
+list ENDS, with the reason *"PvP: outside pvp_rooms (room N; allowed …)"* and never "operator
+suspended connection"), and the keeper's `defendAgainstPlayers`, `engagePlayerTarget`,
+`respondToConflict` (it will not converge on a fight in a room it may not fight in) and the PLAYER
+rows of `passFightBack`. An unknown room (no ROOM yet) is not a listed one.
+
+**What it deliberately does not touch.** Survival: the body is never taken or frozen; a character
+hit outside the list is left to the keeper's own ladder — flee below the line, playDead, panic
+logoff — exactly as for anything else hurting it that it will not fight. Monsters. And an
+operator's explicit `combat_order`, which is a person choosing a target on purpose.
+
+**It still reports.** Outside the list a war enemy produces the `sighted` alarm, and a hit produces
+the `attacked` alarm — fleet-mates standing in an allowed room fight on those. The hit is also
+written as a `pvp_outside_rooms` combat line (target, room, `survival: keeper ladder`) and as a
+`pvp_attacked_outside_rooms` row in `substrate/pvp/<fleet>/<day>.jsonl` (observer, room, attacker,
+at), which the battle reader counts as hostile contact, so a red-alert watcher sees the attack
+that was not answered. A farming strategy cannot set it (`PROTECTED_NAMES`: a war/PvP path).
+`node tools/m59-pvp-rooms-test.mjs` (53) pins it.
+
 ## Monster count does not veto shelter
 
 Travel shelters and recovery walls are available regardless of how many monsters

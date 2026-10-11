@@ -244,6 +244,7 @@ import { fallJumpsIn } from './m59-falljump.mjs';
 import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder } from './m59-move-origin.mjs';
 import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
+import { validatePvpRooms } from './m59-pvp-rooms.mjs';
 
 // WHO ORDERED THIS MOVE, as an MCP caller says it (m59-move-origin.mjs). A caller that names
 // nobody is `mcp:unattributed` — the honest default for a tool call, never empty and never a guess.
@@ -12050,6 +12051,17 @@ const TOOLS = [
           'walks 38 and 39 to room 2, which is monster-free and NOT player-safe. A refuge outside ' +
           'this list is refused and the character takes a local wall instead. Empty or null ' +
           'restores the ordinary search.' },
+      pvp_rooms: { type: ['array', 'null'], items: { type: 'integer', minimum: 1 },
+        description: 'the MAP room numbers (room.num, never object ids) where this character may ' +
+          'fight a PLAYER at all. Set and non-empty, it does NOT return fire after a player hit, ' +
+          'does NOT engage war-book enemies on sight or on a fleetmate alarm, and does NOT ' +
+          'defend, chase a marked target, converge on a conflict or fight back at a player ' +
+          'anywhere else; a fight that walks out of the list ends ("outside pvp_rooms"). It ' +
+          'still REPORTS: the war sighting alarm fires and an unanswered attack is logged ' +
+          '(pvp_attacked_outside_rooms). Survival is untouched: the keeper ladder still flees ' +
+          'below the line and logs off. Monsters are unaffected, and operator combat orders are ' +
+          'not gated. Operator, 2026-10-11: [599, 2, 38] (Ukgoth <-> Castle Victoria). null or ' +
+          '[] clears it: every room, the behaviour before this existed.' },
       defend_chase: { type: 'boolean',
         description: 'when defending against a flagged player, WALK TO THEM anywhere in the room ' +
           'instead of only swinging at what has already closed to melee. Default false, which is ' +
@@ -12712,6 +12724,10 @@ const TOOLS = [
       if (a.confine_rooms !== undefined)
         p.policy.confineRooms = Array.isArray(a.confine_rooms) && a.confine_rooms.length
           ? a.confine_rooms.map(Number).filter(Number.isFinite) : null;
+      // WHERE A PLAYER MAY BE FOUGHT (m59-pvp-rooms.mjs). VALIDATED, NOT COERCED: a room list
+      // that dropped a typo would leave the character fighting where the operator said not to,
+      // so a non-integer throws, naming the key. null or [] clears it (every room).
+      if (a.pvp_rooms !== undefined) p.policy.pvpRooms = validatePvpRooms(a.pvp_rooms);
       // AN UNRECOGNISED KEY IS REFUSED, NEVER DROPPED. `purpose` sat outside a schema for a
       // year with every keeper's audit switched off because a setting that silently does
       // nothing reads exactly like one that works — so a typo here is an error with the
