@@ -643,7 +643,8 @@ export const script = {
     // ghost and attacking should ... Loial can wait to cast forces of light until the engagement has started".
     light_after_contact: { type: 'boolean', default: true, describe: 'the opening light waits until a raider has swung at the ghost (raid-action CONTACT)' },
     light_contact_max_s: { type: 'number', default: 120, describe: 'light anyway if nobody has swung this long after the door opened' },
-    contact_call: { type: 'boolean', default: true, describe: 'with no scripted light-bearer (a person is playing him), announce first contact on the channel' },
+    contact_call: { type: 'boolean', default: true, describe: 'with no scripted light-bearer (a person is playing him), the first raider to swing calls it out loud: SAY in the room' },
+    call_to: { type: 'string', default: '', describe: 'contact_call: the light-bearer a person is playing (prod: hk1). Online but outside the boss room = YELL, which reaches the next room' },
     door_buffs: { type: 'boolean', default: true, describe: 'the Kraanan casters bless / super-strength their share at the door; false = straight in' },
     // HOLD THE GHOST (operator, 2026-10-10: "Janice and Camilla can also cast hold vs the ghost"). Qor level 4, 15
     // mana + 2 purple mushrooms (hold.kod); a monster that is already held refuses it free. Only after contact.
@@ -730,9 +731,13 @@ export const script = {
         const until = Date.now() + 10 * 60_000;
         while (!CONTACT.at && Date.now() < until) await sleep(500);
         if (!CONTACT.at) return;
-        event('contact', { by: CONTACT.by });
-        console.log(`  *** first contact by ${CONTACT.by} -- forces of light now`);
-        await call('say', { agent: CONTACT.by, type: p.channel, text: 'ENGAGED -- the ghost is on us. Forces of light NOW.' }, 30_000).catch(() => {});
+        // OUT LOUD, NOT ON THE GUILD CHANNEL (operator, 2026-10-10): the light-bearer may not be in the guild, but he
+        // is in this room -- or, keeping his distance, the room outside it, which only a YELL reaches.
+        const lb = String(p.call_to ?? '') && ((await call('fleet', {}, 30_000).catch(() => null))?.fleet ?? []).find(r => r.agent === p.call_to);
+        const type = lb && lb.in_game !== false && Number(lb.room_num) !== RUN.room ? 'yell' : 'say';
+        event('contact', { by: CONTACT.by, call: type });
+        console.log(`  *** first contact by ${CONTACT.by} -- forces of light now (${type})`);
+        await call('say', { agent: CONTACT.by, type, text: 'ENGAGED -- the ghost is on us. Forces of light NOW.' }, 30_000).catch(() => {});
       })();
       st.door = b;
       return true;
