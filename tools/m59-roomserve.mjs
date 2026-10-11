@@ -244,7 +244,7 @@ export async function start({ log = console.error, waitMs = 20_000 } = {}) {
   // `process.execPath` rather than 'node': this repository is run from a Windows shell where
   // 'node' on PATH is not always the node that is running us.
   const args = [join(HERE, 'm59-roomserve.mjs'), '--port', String(PORT)];
-  if (FLEET) args.push('--fleet', FLEET);
+  args.push('--fleet', FLEET || '-');   // '' is the unnamed fleet: name it
   const child = spawn(process.execPath, args,
                       { windowsHide: true, detached: true, stdio: ['ignore', fd, fd] });
   child.unref();

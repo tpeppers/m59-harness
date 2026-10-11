@@ -1519,7 +1519,7 @@ async function spawnKeeperInner(agent, index, credentials) {
        join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port), // `-` IS HOW YOU ASK FOR THE UNNAMED FLEET, and 'default' is how you ask for a file
        // called default.json that has never existed. resolveFleet reads this argv, and it
        // treats any other word as a roster NAME under substrate/fleets/.
-       '--fleet', FLEET ?? '-'],
+       '--fleet', FLEET || '-'],
       { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
         env: {
           ...process.env,
@@ -1807,7 +1807,7 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     try {
       child = spawn(process.execPath,
         [...keeperHeapArgs(), join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port),
-         '--fleet', FLEET ?? '-'],
+         '--fleet', FLEET || '-'],
         { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
           env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url'),
                  // Only a dormant swap starts dormant; an ordinary handoff's replacement must log in.
@@ -4527,7 +4527,7 @@ function startSavelog() {
       // the window's own start time — so a wider window would only re-parse days to decide
       // it had nothing to add.
       const args = [tool, '--write', '--since', '24h'];
-      if (FLEET) args.push('--fleet', FLEET);
+      args.push('--fleet', FLEET || '-');   // '' is the unnamed fleet: name it, or the child re-resolves to fleet-default
       const child = spawn(process.execPath, args,
                           { stdio: 'ignore', detached: false, windowsHide: true });
       child.on('error', e => console.error('[savelog] ' + e.message));
@@ -20101,7 +20101,7 @@ async function handleControl(action, res) {
   if (action === 'restart' || action === 'stop') {
     const svc = fileURLToPath(new URL('./m59-service.mjs', import.meta.url));
     const args = [svc, action];
-    if (FLEET) args.push('--fleet', FLEET);
+    args.push('--fleet', FLEET || '-');   // '' is the unnamed fleet: name it, or the child re-resolves to fleet-default
     try {
       const child = spawn(process.execPath, args,
         { windowsHide: true, detached: true, stdio: 'ignore', cwd: BROKER_ROOT });
