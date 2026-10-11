@@ -5004,6 +5004,18 @@ async function resumeFleet({ adopting = false } = {}) {
   // IN-PROCESS SESSIONS STAY SERIAL. They share this event loop and this process's one
   // socket table, and their join path was written on the assumption that nothing else is
   // joining at the same time. The fallback mode is not where the three minutes is.
+  // WHO COMES BACK FIRST, WHEN IT MATTERS. `M59_RESUME_FIRST=hk1,hk3,t1` moves those agents to the front of
+  // the work list, in that order (a stable sort: everyone else keeps roster order). Ports were assigned
+  // above by roster position, so this changes WHEN a keeper starts and nothing about WHERE it listens.
+  // Operator, 2026-10-11: a fleet that dropped where it stood is brought up fragile-first by
+  // m59-flee-to-inns.mjs -- the 20-health chalice holder must be standing at the cup station before the
+  // first rider arrives, not in the fourth wave of six.
+  const RESUME_FIRST = String(process.env.M59_RESUME_FIRST || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (RESUME_FIRST.length) {
+    const rank = a => { const i = RESUME_FIRST.indexOf(a); return i < 0 ? RESUME_FIRST.length : i; };
+    work.sort((x, y) => rank(x.agent) - rank(y.agent));
+    console.error(`[state] resume order: ${work.map(w => w.agent).join(', ')}`);
+  }
   if (!useKeepers) {
     for (const w of work) await resumeOne(w.agent, w.credentials, w.autopilot, w.index);
   } else {
