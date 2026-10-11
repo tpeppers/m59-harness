@@ -113,7 +113,15 @@ const lastSeen = a => {
     return { agent: a, character: j.character, room: j.room?.num, roomName: j.room?.name, row: j.you?.row, col: j.you?.col, hp: hp.value, max: hp.max };
   } catch { return { agent: a }; }
 };
-const last = Object.fromEntries(AGENTS.map(a => [a, lastSeen(a)]));
+// A SNAPSHOT TAKEN AT THE DROP BEATS THE KEEPER FILES, which the next broker to start overwrites -- including a
+// broker started by mistake (2026-10-11: every prod keeper-*.json read blank twenty minutes after the drop).
+// `--positions <file>`: a JSON array of {a, room, row, col, hp, max} rows.
+const snap = (() => { const f = arg('positions'); if (!f) return {};
+  try { return Object.fromEntries(JSON.parse(readFileSync(f, 'utf8')).map(r => [r.a ?? r.agent, r])); }
+  catch (e) { console.error(`--positions ${f}: ${e.message}`); return {}; } })();
+const last = Object.fromEntries(AGENTS.map(a => [a, snap[a]
+  ? { agent: a, character: snap[a].c ?? snap[a].character, room: snap[a].room, row: snap[a].row, col: snap[a].col, hp: snap[a].hp, max: snap[a].max }
+  : lastSeen(a)]));
 const kindOf = Object.fromEntries(AGENTS.map(a => [a, classify(last[a], cfg)]));
 const order = [...String(arg('first', '')).split(',').map(s => s.trim()).filter(Boolean), cfg.cup,
   ...AGENTS.filter(a => a !== cfg.cup && Number(last[a].max) > 0 && Number(last[a].max) <= cfg.fragile),
