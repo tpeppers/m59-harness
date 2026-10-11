@@ -363,6 +363,45 @@ const scriptOrigin = () => moveOrigin({ source: 'operator',
 export function setCallOrigin(origin) { const prev = callOrigin; callOrigin = origin ? moveOrigin(origin) : null; return prev; }
 export const currentCallOrigin = () => callOrigin ?? scriptOrigin();
 
+/**
+ * A BROKER REFUSAL IS AN ERROR, NOT A STRING. The incident, 2026-10-11 ~09:12Z: Robin (t8)
+ * was sent `act('autopilot', { action: 'start', mode: 'survive', assigned_room: 599, ...,
+ * practice_spells: { enabled: false } })`. The broker refused the WHOLE call — its tool handler
+ * threw `practice_spells must be null or an enabled settings object`, which `handleRpc` returns
+ * as `{ content: [{ text: 'error: ...' }], isError: true }`. This used to fall through
+ * `JSON.parse` to the bare text, a STRING, and every caller tests `r?.error` — which a string
+ * does not have. So the log read `t8 step 0 (act) ok`, nothing was applied, the character kept
+ * `farm` in 576, was walked to 599, and its keeper walked it straight back out once the lease
+ * went. Operator: "It can throw an error that's fine just not okay but do nothing."
+ *
+ * So every refusal shape comes back as the SAME shape a thrown call already produces through
+ * `.catch(e => ({ error: e.message }))`, which is what the 81 call sites already test:
+ *   - `isError: true` on the tool result (the broker's convention for a handler that threw);
+ *   - a non-JSON text that begins `error:` even without the flag (an older or third broker);
+ *   - a JSON-RPC `error` envelope (unknown method, a transport-level refusal).
+ * Returned rather than thrown on purpose: some calls sit in cleanup paths with no catch, and a
+ * throw there would trade a silent success for an unwind that never finishes.
+ */
+export function brokerReply(d) {
+  if (d && typeof d === 'object' && d.error && d.result === undefined) {
+    const m = d.error?.message ?? (typeof d.error === 'string' ? d.error : JSON.stringify(d.error));
+    return { error: String(m), broker_error: true, rpc_code: d.error?.code ?? null };
+  }
+  const text = d?.result?.content?.[0]?.text;
+  if (d?.result?.isError === true) {
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+      return { ...parsed, error: String(parsed.error ?? parsed.why ?? parsed.reason ?? 'the broker refused'), broker_error: true };
+    return { error: String(text ?? 'the broker refused without saying why').replace(/^error:\s*/i, ''),
+             broker_error: true };
+  }
+  try { return JSON.parse(text); } catch {}
+  if (typeof text === 'string' && /^\s*error:/i.test(text))
+    return { error: text.replace(/^\s*error:\s*/i, ''), broker_error: true };
+  return text ?? d;
+}
+
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
 export async function call(name, args = {}, ms = 180_000) {
   if (MOVE_TOOLS.has(name) && args && typeof args === 'object' && args.origin == null)
@@ -381,7 +420,7 @@ export async function call(name, args = {}, ms = 180_000) {
         signal: AbortSignal.timeout(ms),
       });
       const d = await r.json();
-      try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
+      return brokerReply(d);
     } catch (e) {
       last = e;
       // A TIMEOUT IS AN ANSWER — the broker had the request and took too long, and asking
@@ -4062,11 +4101,22 @@ async function runStep(ctx, agent, rawStep, state) {
       const r = await call(step.tool, { agent, ...step.args }, step.timeoutMs ?? 120_000)
         .catch(e => ({ error: e.message }));
       const said = (k) => r && typeof r === 'object' && r[k] === false;
+      // `started: false` is how `autopilot` and `travel` refuse WITHOUT throwing (a bad
+      // farm_strategy, a missing hunt, a journey gate) — the same "ok but did nothing" as the
+      // 2026-10-11 practice_spells refusal. EXCEPT `keeper_backed: true`, which is autopilot's
+      // SUCCESS on every keeper-backed character: the order went to the keeper process instead
+      // of a broker shell. There the proof is `keeper_push`, and `pushed: false` means the
+      // keeper never got the order and keeps the posture it had.
+      const keeperBacked = r && typeof r === 'object' && r.keeper_backed === true;
+      const pushFailed = r && typeof r === 'object' && r.keeper_push?.pushed === false;
       const denied = said('ok') || said('done') || said('fought') || said('engaged') ||
-                     said('accepted') || said('landed');
+                     said('accepted') || said('landed') ||
+                     (said('started') && !keeperBacked) || pushFailed;
       return { ok: !r?.error && !denied, result: r,
                why: r?.error ?? (denied
-                 ? (r.why ?? r.reason ?? `${step.tool} reported it did not happen`)
+                 ? (pushFailed && !(said('started') && !keeperBacked)
+                     ? `the order was recorded but never reached the keeper: ${r.keeper_push.error ?? 'push refused'}`
+                     : (r.why ?? r.reason ?? `${step.tool} reported it did not happen`))
                  : undefined) };
     }
 
