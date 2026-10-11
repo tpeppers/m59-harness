@@ -5,7 +5,7 @@
 // A Shal'ille trainee holding level 3 (identify, hospice, rescue) is a travelling service for a farming
 // party, and every service it gives is practice:
 //
-//   HALL      deposit what the last lap brought back (diamonds, rings, amulets) into the guild chests,
+//   HALL      deposit what the last lap brought back (diamonds, rings, amulets -- never an Amulet of Shadows) into the guild chests,
 //             draw shillings for the shopping. Rescue lands a guild member in the hall when the hall is in
 //             the region it was cast from (rescue.kod DoRescue), which is why the lap ENDS with a Rescue
 //             and BEGINS here. Not in the hall at the start: walk to the chalice station and ride in.
@@ -40,7 +40,12 @@ const RX = {
   // What the lap brings home. Rings first: a fire-resistance ring is what the next ghost strike wants.
   valuable: /\b(diamond|ring|amulet|necklace|circlet)s?\b/i,
   ring: /\bring\b/i,
+  // THE HOSPICE ENGINE, NOT LOOT. Wearing it hurts the wearer on every attempt to take it off, which is the only
+  // way a healer at full health has anything to heal (tools/m59-shalille-train.mjs). Picked up, taken off farmers,
+  // and NEVER deposited: a trainee without one cannot drill hospice between laps.
+  engine: /amulet of shadows/i,
 };
+export const goesToHall = name => RX.valuable.test(String(name ?? '')) && !RX.engine.test(String(name ?? ''));
 /** What an identify sentence says that matters to this errand. */
 export function readIdentify(lines = []) {
   const text = lines.join(' ');
@@ -95,7 +100,7 @@ export const script = {
     const hallPhase = () => ({ ...verify(async ({ call }) => {
       if (Number((await call('status', { agent }, 30_000).catch(() => null))?.room?.num) !== hall) return true;
       const now = await call('inventory', { agent }, 60_000).catch(() => null);
-      const goods = [...new Set((now?.items ?? []).filter(i => RX.valuable.test(String(i.name ?? ''))).map(i => lc(i.name)))];
+      const goods = [...new Set((now?.items ?? []).filter(i => goesToHall(i.name)).map(i => lc(i.name)))];
       if (goods.length) {
         const d = await depositWithRecovery(call, agent, goods);
         console.log(`  ${agent}: deposited ${goods.join(', ')}: ${d.ok ? `${d.left} item(s) into the chests` : d.why}`);
@@ -107,7 +112,7 @@ export const script = {
       }
       return true;
     }, 'the hall: deposit the haul, draw the shopping money'), optional: true });
-    const short = count(inv, RX.shilling) < Number(p.purse) / 2, haul = (inv?.items ?? []).some(i => RX.valuable.test(String(i.name ?? '')));
+    const short = count(inv, RX.shilling) < Number(p.purse) / 2, haul = (inv?.items ?? []).some(i => goesToHall(i.name));
     if ((short || haul) && !(o?.ok && Number(o.room) === hall))
       steps.push(walk(STATION, { why: 'the chalice station' }), rideChalice({ why: 'into the guild hall', expect: hall }));
     steps.push(hallPhase());
@@ -201,12 +206,12 @@ export const script = {
         // 2. IDENTIFY on the floor: rings and unidentified things, each once. Pick a ring up after.
         if (has.identify && teeth >= 1 && manaFor(10)) {
           const floor = (look?.objects ?? []).filter(x => !x.is_player && (x.can ?? []).includes('get') && !done.has(x.id) &&
-            (RX.ring.test(String(x.name ?? '')) || Number(x.appearance?.rarity) === 100));
+            (RX.ring.test(String(x.name ?? '')) || RX.engine.test(String(x.name ?? '')) || Number(x.appearance?.rarity) === 100));
           if (floor.length) {
             const it = floor.sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0];
             done.add(it.id);
             await identify(it.id, `${it.name} on the floor`);
-            if (RX.valuable.test(String(it.name ?? ''))) {
+            if (RX.valuable.test(String(it.name ?? '')) || RX.engine.test(String(it.name ?? ''))) {
               if ((it.distance ?? 0) > 2) await call('walk_to', { agent, col: it.col, row: it.row }, 120_000).catch(() => null);
               const g = await call('act', { agent, verb: 'get', target: it.id }, 60_000).catch(() => null);
               if (g && !g.error) tally.picked++;

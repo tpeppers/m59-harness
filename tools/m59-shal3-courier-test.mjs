@@ -1,7 +1,7 @@
 // Offline: the pure halves of the Shal'ille level-3 trainee courier (tools/fleetscripts/shal3-courier.mjs).
 //   node tools/m59-shal3-courier-test.mjs
 // Opens no socket: only the exported helpers are exercised, never `steps()` (which reads the broker).
-import { hurtAllies, readIdentify } from './fleetscripts/shal3-courier.mjs';
+import { hurtAllies, readIdentify, goesToHall } from './fleetscripts/shal3-courier.mjs';
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => { if (cond) pass++; else { fail++; console.log(`  FAIL ${what} ${extra}`); } };
 
@@ -24,6 +24,10 @@ ok('a fire line is read as fire', fire.fire && !fire.cursed);
 const cursed = readIdentify(['This item is cursed.']);
 ok('a curse is read as a curse', cursed.cursed && !cursed.fire);
 ok('silence reads as nothing', !readIdentify([]).fire && !readIdentify([]).cursed);
+
+ok('diamonds and rings go to the hall', goesToHall('diamond') && goesToHall('ring of fire resistance') && goesToHall('jade amulet'));
+ok('the Amulet of Shadows NEVER does: it is the hospice drill', !goesToHall('Amulet of Shadows'));
+ok('reagents and food do not', !goesToHall('herbs') && !goesToHall('emerald') && !goesToHall('bread'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
