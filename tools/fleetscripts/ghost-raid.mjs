@@ -709,6 +709,9 @@ export const script = {
     // ghost and attacking should ... Loial can wait to cast forces of light until the engagement has started".
     light_after_contact: { type: 'boolean', default: true, describe: 'the opening light waits until a raider has swung at the ghost (raid-action CONTACT)' },
     light_contact_max_s: { type: 'number', default: 120, describe: 'light anyway if nobody has swung this long after the door opened' },
+    light_enter_with_raid: { type: 'boolean', default: true, describe: 'the light-bearer comes in with the raid (silent until contact) instead of walking in from the door to cast' },
+    light_enter_delay_s: { type: 'number', default: 2, describe: 'light_enter_with_raid: seconds after the door opens before he goes through -- among the last' },
+    light_after_contact_s: { type: 'number', default: 1, describe: 'light_enter_with_raid: seconds after first contact before his first action (the light)' },
     contact_call: { type: 'boolean', default: true, describe: 'with no scripted light-bearer (a person is playing him), the first raider to swing calls it out loud: SAY in the room' },
     call_to: { type: 'string', default: '', describe: 'contact_call: the light-bearer a person is playing (prod: hk1). Online but outside the boss room = YELL, which reaches the next room' },
     door_buffs: { type: 'boolean', default: true, describe: 'the Kraanan casters bless / super-strength their share at the door; false = straight in' },
@@ -716,6 +719,7 @@ export const script = {
     // mana + 2 purple mushrooms (hold.kod); a monster that is already held refuses it free. Only after contact.
     holders: { type: 'string', default: '', describe: 'agents that cast hold on the ghost while it lives instead of meleeing it; "auto" = everyone who knows hold' },
     hold_every_s: { type: 'number', default: 3, describe: 'a holder re-casts hold this often' },
+    hold_karma_max: { type: 'number', default: -40, describe: 'hold is refused above this karma (hold.kod): such a holder melees instead' },
     stay_spots: { type: 'string', default: '', describe: 'stay: only these safe spots ("1,9" / "1,1;1,9"); the rest are still taken' },
     // SILENT ENTRY (operator, 2026-10-11; user.kod NotifyMonstersOfPresence): a player who has just entered is not
     // attacked until it ACTS -- moves, turns, attacks, casts, uses or wields, speaks on any channel, looks at a
@@ -764,6 +768,16 @@ export const script = {
         : String(p.holders ?? '').split(',').map(s => s.trim()).includes(agent),
     };
     if (p.door_buffs === false || p.door_buffs === 'false') { duty.bless = []; duty.strength = []; }
+    // HOLD NEEDS KARMA -40 OR BELOW (hold.kod; strike 4, 2026-10-11: twelve casts by Janice, every one refused "your
+    // karma is -37"). A holder who cannot cast it fights instead -- read once, here, before the door.
+    if (duty.hold) {
+      const k = Number((await call('status', { agent }, 30_000).catch(() => null))?.karma?.value);
+      if (Number.isFinite(k) && k > Number(p.hold_karma_max)) {
+        duty.hold = false;
+        console.log(`  ${agent}: karma ${k} is above ${p.hold_karma_max} -- no hold this raid, melee instead`);
+        event('hold_skipped', { agent, karma: k });
+      }
+    }
     // SPAWN BLOCKING (operator, 2026-09-25): some raiders stand ON the throne room's spawn squares,
     // which makes each spawn that picks their square fail. Healers first, then the weakest — the
     // ones a swarm on the ghost can spare. Computed once and shared; `spawn_block` is how many of
@@ -1000,7 +1014,8 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         if ((o.health ?? 1) < Math.max(0.95, Number(p.light_rest_below))) await restUntil(agent, 0.95, p);
       }
       RUN.light.ready = true;
-      await sleep(3000);
+      const withRaid = !(p.light_enter_with_raid === false || p.light_enter_with_raid === 'false');
+      if (!withRaid) await sleep(3000);
       let staying = () => false;
       const castIn = async why => {
         const o = await observe(agent);
@@ -1009,7 +1024,8 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
           await say('Resting before the next light.');
           await restUntil(agent, 0.95, p);
         }
-        const h = await hop(agent, RUN.room, { tries: 5 });
+        // Already inside (he came in with the raid): no hop -- `hop` always issues a travel, and a walk is an action.
+        const h = Number(o.room) === RUN.room ? { ok: true } : await hop(agent, RUN.room, { tries: 5 });
         if (!h.ok) {
           log.push({ t: Date.now(), outcome: 'could not enter', ...h });
           event('light', { outcome: 'could not enter', why, room: h.room ?? null, reply: h.reply ?? null });
@@ -1074,11 +1090,21 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         event('dazzle', { outcome });
         if (!staying()) await hop(agent, Number(RUN.door), { tries: 6 });
       };
-      // NOT THE FIRST ACTION IN THE ROOM: wait at the door for a raider's swing (see light_after_contact).
+      // IN WITH THE RAID (operator, 2026-10-11): strike 4's light came 37 s after first contact, spent walking from
+      // 38. So he enters WITH the raiders -- among the last through the door (light_enter_delay_s after it opens),
+      // and silent: an un-acted player is not targeted (user.kod NotifyMonstersOfPresence). His delay moves to
+      // the other end: first contact, then light_after_contact_s more, then forces of light as his FIRST action.
+      if (withRaid && Number((await observe(agent)).room) !== RUN.room) {
+        await sleep(Number(p.light_enter_delay_s) * 1000);
+        const inn = await hop(agent, RUN.room, { tries: 5 });
+        event('light_entered', { ok: inn.ok, room: inn.room ?? null });
+      }
+      // NOT THE FIRST ACTION IN THE ROOM: wait for a raider's swing (see light_after_contact).
       if (p.light_after_contact !== false && p.light_after_contact !== 'false') {
         const until = Date.now() + Number(p.light_contact_max_s) * 1000;
-        if (Number((await observe(agent)).room) === RUN.room) await hop(agent, Number(RUN.door), { tries: 6 });
+        if (!withRaid && Number((await observe(agent)).room) === RUN.room) await hop(agent, Number(RUN.door), { tries: 6 });
         while (!CONTACT.at && Date.now() < until) await sleep(500);
+        if (withRaid && CONTACT.at) await sleep(Number(p.light_after_contact_s) * 1000);
         event('contact', { by: CONTACT.by, waited_s: Math.round((Date.now() - (RUN.startAt ?? Date.now())) / 1000) });
         console.log(`  ${agent}: ${CONTACT.at ? `first contact by ${CONTACT.by} -- lighting` : `nobody swung in ${p.light_contact_max_s}s -- lighting anyway`}`);
       }
