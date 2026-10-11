@@ -732,10 +732,19 @@ export const script = {
         if (!doors.length) return { ok: true, skipped: 'no operable door in this room' };
         const best = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
           .sort((a, b) => a.cost - b.cost)[0];
-        if (!(you.row === best.sq.row && you.col === best.sq.col))
+        // ON THE TRIGGER, READ BACK -- AND READ AGAIN. A `look` straight after the walk can still report
+        // the square before (2026-10-11 run 3: arrived on r31c20, read r32c20, skipped the press, and
+        // the next walk stalled at the shut door). So: re-read a few times, and re-walk if it is truly off.
+        const at = sq => now => now && now.row === sq.row && now.col === sq.col;
+        let now = you, onIt = at(best.sq)(you);
+        for (let t = 0; t < 3 && !onIt; t++) {
           await call('walk_to', { agent: me, row: best.sq.row, col: best.sq.col }, 120_000).catch(() => null);
-        const now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
-        const onIt = now && now.row === best.sq.row && now.col === best.sq.col;
+          for (let r = 0; r < 3 && !onIt; r++) {
+            await new Promise(res => setTimeout(res, 700));
+            now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
+            onIt = at(best.sq)(now);
+          }
+        }
         if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, at: now ? `r${now.row}c${now.col}` : null };
         // PRESS AND GO THROUGH IN ONE BREATH. The door shuts itself (801: 10 s), and the next STEP is
         // too late: 2026-10-11 the re-run pressed on r31c20 and the following walk_to found every
