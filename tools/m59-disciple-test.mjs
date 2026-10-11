@@ -324,7 +324,7 @@ console.log('\nthe lift into the Temple of Qor');
   ok('the lift is a fallback that never walks to the lift room', !q.some(s => s.do === 'walk' && s.to === 598));
   const { APPROACH } = await import('./fleetscripts/disciple-quest.mjs');
   const z = { row: 16, col: 15 }, ap = APPROACH[802];
-  ok('802 has an approach square within Zuxana's 25 squared (her own square sits behind the north door)', !!ap && (ap.row - z.row) ** 2 + (ap.col - z.col) ** 2 <= 25 && ap.row >= 20);
+  ok('802 has an approach square within Zuxana 25 squared (her own square sits behind the north door)', !!ap && (ap.row - z.row) ** 2 + (ap.col - z.col) ** 2 <= 25 && ap.row >= 20);
   ok('the crawl legs are the proven waypoints, then the mouth and the trigger', q.filter(s => s.do === 'crawl_to').slice(0, 7).map(s => `r${s.row}c${s.col}`).join(' ') === 'r25c32 r31c30 r33c30 r33c29 r33c26 r34c26 r38c26');
   ok('the mouth and the trigger are retried tries times', q.filter(s => s.do === 'crawl_to' && s.row === 38 && s.col === 26).length === L.tries);
   ok('every lift crawl stays in 598, so inside 802 it fails at once rather than walking back out', q.filter(s => s.do === 'crawl_to').every(s => s.room === 598 && s.optional === true));
