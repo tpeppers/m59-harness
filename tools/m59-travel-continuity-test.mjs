@@ -191,4 +191,48 @@ for(const wall of [false,true])await test('fresh fallback chooses '+(wall?'safe 
  assert.equal(currentSurvivalDecision(f.s).strategy,wall?'logoff_safe':'nearest_refuge');
  assert.equal(f.k.suspendedJourney.to,39);
 });
+await test('recentering retains the refused fall waypoint before walking onward',async()=>{
+ const c={self:{row:45,col:17,x:1102,y:2918},room:{id:599,objects:new Map()},vitals:()=>({health:{value:77,max:77}})};
+ const fall={row:44,col:16,fall:true},goal={row:42,col:17},calls=[];let centered=false;
+ const geo={collisionReady:false,num:599,standable:()=>true,path:()=>({found:true,steps:[fall,goal]})};
+ const s={client:c,need:()=>c,world:{geometry:geo,room:{num:599}},live:true,movementGeneration:7,
+  threatsHere:()=>[],movementWasCancelled:()=>false,confirmPosition:async()=>({...c.self}),
+  recentreInSquare:async()=>{centered=true;c.self.x+=4;return true;},
+  step:async(col,row,opts)=>{calls.push({row,col,fall:opts.fall});
+   if(!centered)return {moved:false,reason:'geometry_blocked'};
+   Object.assign(c.self,{row,col,x:col*64+32,y:row*64+32});return {moved:true,position:{...c.self}};}};
+ const r=await Session.prototype.walkTo.call(s,goal.col,goal.row);
+ assert.equal(r.arrived,true);assert.deepEqual(calls.slice(0,2),[{row:44,col:16,fall:true},{row:44,col:16,fall:true}],
+  'a changed fine pose does not fulfil the refused waypoint or its fall');
+});
+for (const hardAvoid of [false,true]) await test('coarse recovery retains refused edges'+(hardAvoid?' and mandatory avoided squares':''),async()=>{
+ const at={row:45,col:17},bad={row:44,col:16},goal={row:42,col:17},trap={row:44,col:18};
+ const detour=[{row:45,col:18},{row:44,col:19},{row:43,col:18},goal],calls=[],plans=[];
+ const c={self:{...at,x:1102,y:2918},room:{id:599,objects:new Map()},vitals:()=>({health:{value:77,max:77}})};
+ const blocked=`${at.row},${at.col}>${bad.row},${bad.col}`;
+ const geo={collisionReady:false,num:599,standable:()=>true,moverStepLands:()=>false,
+  path:(row,col,_r,_c,opts={})=>{
+   plans.push({row,col,collision:opts.collision,blocked:new Set(opts.blockedEdges),avoid:new Set(opts.avoid)});
+   if(row===goal.row&&col===goal.col)return {found:true,steps:[]};
+   if(row===at.row&&col===at.col){
+    if(opts.blockedEdges?.has(blocked)){
+     if(opts.collision!==false)return {found:false,collision_view:true,reason:'no collision route'};
+     if(hardAvoid&&!opts.avoid?.has(`${trap.row},${trap.col}`))return {found:true,steps:[trap,goal]};
+     return {found:true,steps:detour};
+    }
+    return {found:true,steps:[bad,goal]};
+   }
+   return {found:true,steps:detour.slice(detour.findIndex(s=>s.row===row&&s.col===col)+1)};
+  }};
+ const s={client:c,need:()=>c,world:{geometry:geo,room:{num:599}},live:true,movementGeneration:7,
+  threatsHere:()=>[],movementWasCancelled:()=>false,confirmPosition:async()=>({...c.self}),
+  step:async(col,row)=>{calls.push({row,col});if(row===bad.row&&col===bad.col)return {moved:false,reason:'geometry_blocked'};
+   Object.assign(c.self,{row,col,x:col*64+32,y:row*64+32});return {moved:true,position:{...c.self}};}};
+ const r=await Session.prototype.walkTo.call(s,goal.col,goal.row,{maxSteps:20,avoidSquares:hardAvoid?[`${trap.row},${trap.col}`]:null});
+ assert.equal(r.arrived,true,'recovery must finish the original walk');
+ assert.equal(calls.filter(s=>s.row===bad.row&&s.col===bad.col).length,1,'a locally refused edge is not retried by the coarse fallback');
+ assert.ok(plans.some(p=>p.collision===false&&p.blocked.has(blocked)),'coarse planning uses live refusal evidence');
+ assert.ok(!calls.some(s=>s.row===trap.row&&s.col===trap.col),'relaxing occupancy cannot discard a mandatory avoidance');
+ assert.equal(s.movementGeneration,7);
+});
 console.log(`${passed} passed; ${failed} failed`);if(failed)process.exitCode=1;

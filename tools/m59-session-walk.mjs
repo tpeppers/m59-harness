@@ -2833,8 +2833,12 @@ export function sessionWalkPrototype(deps) {
     // TIMES in one leg — a hundred and eighty seconds in one room without leaving it.
     //
     // Passed in rather than derived here, because only the caller knows which door it wants.
-    for (const sq of (avoidSquares ?? [])) occupied.add(sq);
-    for (const sq of (this.hazardSquares?.() ?? [])) occupied.add(sq);
+    const mandatoryAvoid = new Set([...(avoidSquares ?? []), ...(this.hazardSquares?.() ?? [])]);
+    for (const sq of mandatoryAvoid) occupied.add(sq);
+    const forgetOccupancy = () => {
+      occupied.clear();
+      for (const sq of mandatoryAvoid) occupied.add(sq);
+    };
     // AND EDGES THE MOVER WILL NOT CROSS, WHICH IS A DIFFERENT FACT AND WAS NOT RECORDED
     // AT ALL. A monster moves; a wall does not. Blaming the SQUARE for a wall between two
     // squares removes a perfectly good place to stand that other neighbours still reach,
@@ -3257,7 +3261,14 @@ export function sessionWalkPrototype(deps) {
           && was && !recentredAt.has(`${was.row},${was.col}`)
           && typeof this.recentreInSquare === 'function') {
         recentredAt.add(`${was.row},${was.col}`);
-        if (await this.recentreInSquare().catch(() => false)) continue;
+        if (await this.recentreInSquare().catch(() => false)) {
+          // A new pose inside the same square has not completed this leg.
+          // Restore every swallowed waypoint, including a declared fall, and
+          // rebuild the proof from the new fine position before retrying.
+          queue.unshift(...skipped, next);
+          pulled = undefined;
+          continue;
+        }
       }
 
       // THE EDGE THAT REFUSED IS THE ONE WE ASKED FOR, AND IT IS NAMED FROM WHERE WE
@@ -4025,17 +4036,17 @@ export function sessionWalkPrototype(deps) {
         // is the coarse grid we planned on before any of this existed.
         let open = occupied.size
           ? geo.path(now.row, now.col, row, col,
-              { blockedEdges, threats: this.threatsHere(), clearance })
+              { avoid: mandatoryAvoid, blockedEdges, threats: this.threatsHere(), clearance })
           : re;
-        if (open.found) occupied.clear();
+        if (open.found) forgetOccupancy();
         else if (blockedEdges.size) {
-          // NOT CLEARED, ONLY SET ASIDE FOR THIS ONE PLAN. Forgetting the refusals would
-          // re-enter the same bounce with the same enthusiasm; keeping them means the hop
-          // coalescer still steps over them and the next replan still knows. If the coarse
-          // plan's own first step is one of them we fail again, learn nothing new, and the
-          // budget above ends the walk honestly instead of grinding.
-          open = geo.path(now.row, now.col, row, col, { collision: false });
-          if (open.found) occupied.clear();
+          // Relax the baked collision view, not observed refusals or mandatory
+          // avoidance. Dropping blockedEdges here re-selected the same wall on
+          // every fallback; dropping avoidance can fire the wrong door trigger.
+          open = geo.path(now.row, now.col, row, col,
+            { collision: false, avoid: mandatoryAvoid, blockedEdges,
+              threats: this.threatsHere(), clearance });
+          if (open.found) forgetOccupancy();
         }
         // AND THE POCKET CAN BE WALKED INTO MID-WALK, not only stood in at the start —
         // a slid step lands where it lands, and where it lands can be cut off. Same
@@ -4044,12 +4055,13 @@ export function sessionWalkPrototype(deps) {
           const out = await this.retreatAlongBreadcrumbs({
             movementGeneration, controlToken,
             until: () => geo.path(c.self?.row ?? -1, c.self?.col ?? -1, row, col,
-              { blockedEdges }).found,
+              { avoid: mandatoryAvoid, blockedEdges }).found,
           });
           if (out.cancelled) return out;
           escaped = Math.max(1, out.steps ?? 0);
           const at = c.self;
-          if (out.moved && at) open = geo.path(at.row, at.col, row, col, { blockedEdges });
+          if (out.moved && at) open = geo.path(at.row, at.col, row, col,
+            { avoid: mandatoryAvoid, blockedEdges });
         }
         if (!open.found)
           return { arrived: false, blocked_at: { col: now.col, row: now.row }, steps: taken,

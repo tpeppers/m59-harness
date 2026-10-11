@@ -1953,3 +1953,16 @@ when an exit is sealed or threats require shelter.
 The continuity regression covers both short-step branches, displacement and
 cancellation, plus an entire walk that reaches its original goal after one
 blocked pivot and a confirmed-position detour.
+
+Coarse recovery retains locally refused edges even when it relaxes the baked
+collision view. Clearing transient occupancy also retains caller avoidance and
+hazard squares, including during breadcrumb recovery. Otherwise the fallback
+can repeatedly propose the wall it just learned or walk onto a wrong-door
+trigger. The continuity suite drives the full walker through both failures:
+one geometry refusal, a coarse detour, and confirmed arrival at the original
+destination under the same movement owner.
+
+A successful recenter inside the current square retains the refused waypoint
+and any intermediate squares swallowed by coalescing. Its pulled proof is
+rebuilt from the new fine pose. Recentring is an approach adjustment; it cannot
+fulfil a declared fall or skip straight to the next waypoint.
