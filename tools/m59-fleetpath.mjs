@@ -65,6 +65,8 @@ function checked(name, source) {
   return { name, source };
 }
 
+export const REQUIRE_EXPLICIT = '!require-explicit';
+
 function recordedDefault(env) {
   const path = env.M59_FLEET_DEFAULT_FILE || DEFAULT_FLEET_FILE;
   if (!existsSync(path)) return '';
@@ -89,6 +91,14 @@ export function resolveFleetName(argv = process.argv.slice(2), env = process.env
   if (flag) return checked(flag, '--fleet');
   if (env.M59_FLEET) return checked(env.M59_FLEET, 'M59_FLEET');
   const local = recordedDefault(env);
+  // A CHECKOUT THAT REFUSES TO GUESS. `!require-explicit` in substrate/fleet-default means "this machine has
+  // no default fleet": every tool must be told `--fleet <name>`, `M59_FLEET`, or `--fleet -`. Operator,
+  // 2026-10-11, after a rehearsal on the unnamed test fleet came up as a prod broker: "I don't want default
+  // prod". Removing the file would not do it -- a bare command would fall through to the unnamed fleet just
+  // as quietly. The `!` keeps an older checkout safe too: it is not a legal name, so it refuses either way.
+  if (local === REQUIRE_EXPLICIT)
+    throw new Error('this checkout names no default fleet (substrate/fleet-default says ' + REQUIRE_EXPLICIT + ') -- ' +
+                    'pass --fleet <name>, set M59_FLEET, or --fleet - for the unnamed fleet');
   if (local) return checked(local, 'substrate/fleet-default');
   return { name: '', source: 'no fleet named' };
 }

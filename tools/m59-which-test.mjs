@@ -349,6 +349,20 @@ DEAD_PORT = await closedPort();
 
 // ------------------------------------------------------------------
 
+// A CHECKOUT THAT REFUSES TO GUESS (fleet-default `!require-explicit`, operator 2026-10-11).
+{
+  const { fleetName, REQUIRE_EXPLICIT } = await import('./m59-fleetpath.mjs');
+  const f = join(ROOT, 'fleet-default-explicit');
+  writeFileSync(f, `# no default fleet
+${REQUIRE_EXPLICIT}
+`);
+  const env = { M59_FLEET_DEFAULT_FILE: f };
+  let refused = false; try { fleetName([], env); } catch { refused = true; }
+  ok('require-explicit: a bare command is refused, not defaulted', refused);
+  ok('require-explicit: --fleet prod still names prod', fleetName(['--fleet', 'prod'], env) === 'prod');
+  ok('require-explicit: --fleet - still asks for the unnamed fleet', fleetName(['--fleet', '-'], env) === '');
+  ok('require-explicit: M59_FLEET still names a fleet', fleetName([], { ...env, M59_FLEET: 'shadow' }) === 'shadow');
+}
 for (const s of servers) s.close();
 try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* TEMP will get it */ }
 
