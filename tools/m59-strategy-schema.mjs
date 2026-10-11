@@ -201,7 +201,7 @@ export const PROTECTED_NAMES = Object.freeze({
   breakOutAbove: SURVIVAL, freezeMs: SURVIVAL, doomedInSpotBelow: SURVIVAL, healWandBelow: SURVIVAL,
   askForHelp: SURVIVAL, retreatToInn: SURVIVAL, escapeLadder: SURVIVAL,
   defendAgainstPlayers: WAR, defendChase: WAR, fightBack: WAR, fightBackAfterMs: WAR,
-  pvpReturnDelayMs: WAR, pvp: WAR, war: WAR, warResponse: WAR, warSentinel: WAR, warband: WAR,
+  pvpReturnDelayMs: WAR, pvpRooms: WAR, pvp_rooms: WAR, pvp: WAR, war: WAR, warResponse: WAR, warSentinel: WAR, warband: WAR,
   keepOff: WAR, leash: WAR, combatOrder: WAR, combat_order: WAR, guildOnly: WAR,
   // Not survival, but not the file's either: the mode is the switch the ASSIGNMENT throws.
   mode: 'is not a strategy key: pass mode:"farm" with the assignment (autopilot action=start mode=farm farm_strategy=...)',

@@ -25,6 +25,7 @@ import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import { classifyPvpDeath, pvpReturnDelayMs, readPvpDeath, writePvpDeath,
          pvpHoldState } from './m59-pvp-return.mjs';
 import { rememberedEnemy } from './m59-war.mjs';
+import { pvpAllowedHere, pvpRoomsOf, pvpRoomsRefusal } from './m59-pvp-rooms.mjs';
 import { allyVerdict } from './m59-ally.mjs';
 import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,sameJamPocket,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
 import {recordBlockerClearance} from './m59-blocker-events.mjs';
@@ -2052,6 +2053,13 @@ export class Autopilot {
       // applies a pushed order only for fields this object names, so without it the broker's
       // pvp_return_delay_ms was recorded nowhere and pushed nowhere (2026-10-01).
       pvpReturnDelayMs: null,
+      // WHERE THIS CHARACTER MAY FIGHT A PLAYER AT ALL: map room numbers (room.num). null or []
+      // is every room, the behaviour before the key existed. Set, every player-engaging path —
+      // return fire, war on sight, defendAgainstPlayers, player targets, the fight-back edict's
+      // player rows — refuses outside the list, and the survival ladder is untouched
+      // (m59-pvp-rooms.mjs; operator, 2026-10-11: "stop people from fighting back outside of
+      // 599/2/38"). A key HERE for the same reason as pvpReturnDelayMs above.
+      pvpRooms: null,
       // TRAIN A TOUCH SPELL BY SWINGING IT — 'acid touch', 'touch of flame', 'holy touch',
       // 'icy fingers', 'zap', or null (inert). On the assigned farm room in farm mode the keeper
       // keeps the hand EMPTY (a wielded weapon suppresses the touch, player.kod:4712-4729) and the
@@ -10408,6 +10416,19 @@ export class Autopilot {
       // threat the ladder answers, never somebody we swing at again here. m59-refused-targets.
       .filter(row => row.verdict.engage && !refusedHere(this.s, row.name));
     if (!candidates.length) return null;
+    // OUTSIDE pvp_rooms NOBODY IS ENGAGED (m59-pvp-rooms.mjs). The grudge stands and the ladder
+    // runs exactly as it would for anything else hurting us that we will not fight.
+    const outside = pvpRoomsRefusal(this.policy, this.s.world?.room?.num);
+    if (outside) {
+      const key = `${outside.room}|${candidates.map(r => r.name).join(',')}`;
+      if (this.pvpRoomsDefendNoted !== key) {
+        this.pvpRoomsDefendNoted = key;
+        this.note('not returning fire: outside pvp_rooms', {
+          who: candidates.map(r => r.name), room: outside.room, pvp_rooms: outside.rooms,
+          why: outside.why, survival: 'the ordinary ladder (flee below the line, logoff) owns this body' });
+      }
+      return { engaged: null, why: 'outside pvp_rooms' };
+    }
 
     // THE ONE THAT HAS HIT US MOST RECENTLY. Not the nearest and not the weakest: a fight
     // with a person is about making one of them stop, and spreading damage over two
@@ -12500,6 +12521,11 @@ export class Autopilot {
       // The effective delay beside it for the same reason `travel_guard` is always present.
       pvp_return_hold: this.pvpReturnHold(),
       pvp_return_delay_ms: pvpReturnDelayMs(this.policy),
+      // WHERE A PLAYER MAY BE ENGAGED, and whether that includes where the body stands now.
+      // Always present: `rooms: null` is "everywhere", the behaviour before pvp_rooms existed.
+      pvp_rooms: { rooms: pvpRoomsOf(this.policy),
+        room: this.s?.world?.room?.num ?? null,
+        allowed_here: pvpAllowedHere(this.policy, this.s?.world?.room?.num) },
       // THE TOUCH SPELL BEING TRAINED, and whether the server last said it was on. Null when
       // touch_spell is unset. `blocked_reason` is why it is not being cast (mana, reagents, an
       // unknown spell) while the character fights bare.
@@ -18485,6 +18511,15 @@ export class Autopilot {
       if (!found) continue;
       // The server has already refused us this person in this room (guild-only): move on.
       if (refusedHere(this.s, tName)) continue;
+      // Outside pvp_rooms a marked target is left alone too (m59-pvp-rooms.mjs).
+      if (!pvpAllowedHere(this.policy, this.s.world?.room?.num)) {
+        if (this.pvpRoomsTargetNoted !== `${this.s.world?.room?.num}|${tName}`) {
+          this.pvpRoomsTargetNoted = `${this.s.world?.room?.num}|${tName}`;
+          this.note('marked as a target, and left alone: outside pvp_rooms', {
+            target: tName, room: this.s.world?.room?.num ?? null, pvp_rooms: pvpRoomsOf(this.policy) });
+        }
+        continue;
+      }
 
       // THE GATE. Refused for anyone who has not attacked us inside the hour, for anyone
       // the server does not currently call a murderer or an outlaw, and for one of ours.
@@ -18603,7 +18638,9 @@ export class Autopilot {
     const knowsOurOwn = typeof party?.isFleetmate === 'function';
     const candidates = Object.values(conflicts)
       .filter(cf => cf.reporter !== myName && cf.room !== myRoom
-                    && knowsOurOwn && party.isFleetmate(cf.reporter))
+                    && knowsOurOwn && party.isFleetmate(cf.reporter)
+                    // A fight in a room this character may not fight in is not one to walk to.
+                    && pvpAllowedHere(this.policy, cf.room))
       .sort((a, b) => b.updated_at - a.updated_at);
 
     if (!candidates.length) return false;
@@ -18718,6 +18755,9 @@ export class Autopilot {
                refused: !name ? { why: 'it has no name' }
                  : (o.flags & OF.PLAYER) && refusedHere(this.s, name)
                    ? { why: 'the server refused us this player in this room (guild-only)' }
+                 // pvp_rooms: a PLAYER is never fought back outside the listed rooms; monsters are.
+                 : (o.flags & OF.PLAYER) && !pvpAllowedHere(this.policy, room?.num ?? this.s.world?.room?.num)
+                   ? { why: 'outside pvp_rooms: players are not fought back in this room' }
                    : this.refuseEngagement(name) };
     }).sort((x, y) => x.d - y.d);
     const pick = rows.find(r => r.name && !r.refused);

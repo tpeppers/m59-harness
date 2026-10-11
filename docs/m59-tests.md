@@ -1013,6 +1013,14 @@ the records it describes.
   Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
   that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
   that a test fake without a real Recorder writes nothing) and
+  `node tools/m59-pvp-rooms-test.mjs` (53 — **where a player may be fought at all, `pvp_rooms`**:
+  that silence allows every room and `[599,2,38]` allows 599 and refuses 576, that an unknown room
+  is not a listed one, that the broker refuses a non-integer room naming the key, that outside the
+  list a war enemy is not engaged but the sighting alarm still goes out, that a player hit is not
+  answered, the body is not taken and `pvp_attacked_outside_rooms` reaches the durable PvP log as
+  hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
+  the suspension text, that inside the list nothing changes, and that every keeper gate asks the
+  one function) and
   `node tools/m59-wand-shot-test.mjs` (15 — **why a wand zap was refused**: that the server's
   "behind you" test and staircase line of sight are transcribed, that a stale target square is
   charged to `stale` and a missing one to `other_room` ahead of every other gate, that any zap,

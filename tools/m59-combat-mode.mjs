@@ -24,6 +24,7 @@ import { squareCentre } from './m59-coords.mjs';
 import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
+import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
 
 export const PVP_DANGER_MS = 30_000;
@@ -379,9 +380,14 @@ export class CombatMode {
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
-    if (hostile && this.warEnabled() && !this.warLeashed())
+    // OUTSIDE pvp_rooms a fighter is a sentinel too (m59-pvp-rooms.mjs): no engagement, but the
+    // sighting alarm still goes out, because fleet-mates in an allowed room fight on it.
+    const scan = hostile ? warScanAction({ hostile, warEnabled: this.warEnabled(),
+      leashed: this.warEnabled() && this.warLeashed(), pvpAllowed: !this.pvpRoomsRefusal() }) : null;
+    if (scan === 'engage')
       this.beginWar(hostile.name, { basis: hostile.verdict.basis, why: hostile.verdict.why, room });
-    else if (hostile) {
+    else if (scan === 'sighted') {
+      if (this.warEnabled()) this.notePvpRoomsSkip('war_skipped_outside_pvp_rooms', hostile.name);
       this.warLast = { at: now, enemy: hostile.name, basis: 'sighted', room, reporter: null };
       this.raiseWarAlarm(hostile.name, 'sighted', room);
     }
@@ -416,8 +422,35 @@ export class CombatMode {
     return (this.roomFlagsHere() & (ROOM_NO_COMBAT | ROOM_NO_PK)) !== 0;
   }
 
+  /** pvp_rooms (m59-pvp-rooms.mjs): the refusal for where the body stands, or null when a player
+   *  may be engaged here. Read live off the keeper's policy, so a push takes effect at once. */
+  pvpRoomsRefusal() {
+    let policy = null;
+    try { policy = this.keeper?.()?.policy ?? null; } catch { policy = null; }
+    return pvpRoomsRefusal(policy, this.s.world?.room?.num);
+  }
+
+  /** One combat line per room and player for a refusal that would otherwise repeat every tick. */
+  notePvpRoomsSkip(event, name, extra = {}) {
+    const refusal = this.pvpRoomsRefusal();
+    if (!refusal) return null;
+    const key = `${event}|${refusal.room}|${String(name).toLowerCase()}`;
+    if (this.pvpRoomsNoted === key) return refusal;
+    this.pvpRoomsNoted = key;
+    this.s.recorder?.line?.('combat', { event, target: name, room: refusal.room,
+      pvp_rooms: refusal.rooms, ...extra });
+    return refusal;
+  }
+
   beginWar(name, { basis, why, room, reporter = null }) {
     if (this.pvpEligibility?.() === false) return false;
+    // OUTSIDE pvp_rooms (operator, 2026-10-11): no war engagement here, from the scan or from a
+    // fleetmate's alarm. Our own sighting is still reported, as a sighting.
+    if (this.pvpRoomsRefusal()) {
+      this.notePvpRoomsSkip('war_skipped_outside_pvp_rooms', name, { basis, reporter });
+      if (!reporter) this.raiseWarAlarm(name, 'sighted', room);
+      return false;
+    }
     // THE GATE FOR BOTH ENTRY PATHS — the on-sight scan and another keeper's alarm both come
     // through here, and the scan re-runs on every object change, so a gate on the refusal path
     // alone would re-engage within a tick. Sighting alarms are still raised elsewhere: an inn is
@@ -1507,6 +1540,32 @@ export class CombatMode {
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
+    // OUTSIDE pvp_rooms (operator, 2026-10-11: "stop people from fighting back outside of
+    // 599/2/38"). No return fire and the body is NOT taken: the keeper's own ladder (flee below the
+    // line, playDead, panic logoff) is the survival that applies, as for anything else hurting us
+    // that we will not fight. The attack is still evidence: a combat line, the durable PvP log
+    // (a red-alert watcher reads it), and the war alarm, which fleet-mates in allowed rooms act on.
+    const outside = this.pvpRoomsRefusal();
+    if (outside) {
+      const key = `${outside.room}|${String(evidence.character).toLowerCase()}`;
+      if (this.pvpOutsideNoted !== key) {
+        this.pvpOutsideNoted = key;
+        s.recorder?.line?.('combat', { event: 'pvp_outside_rooms', target: evidence.character,
+          room: outside.room, pvp_rooms: outside.rooms, text: evidence.text ?? null,
+          survival: 'keeper ladder (flee/logoff); outside pvp_rooms this character does not return fire' });
+      }
+      if (this.pvpLogging()) {
+        try {
+          pvplog.appendPvp(outsideRoomsRow({ at: Math.min(this.now(), Number.isFinite(observedAt) ? observedAt : this.now()),
+            observer: this.pvpObserver(), room: outside.room, attacker: evidence.character,
+            rooms: outside.rooms, text: evidence.text ?? null }));
+        } catch { /* evidence, never a reason to change what the body does */ }
+      }
+      this.raiseWarAlarm(evidence.character, 'attacked', outside.room);
+      // A fight that already owned the body ends here (syncPvP gives the reason).
+      if (this.active?.pvp) this.syncPvP(this.active);
+      return;
+    }
     // A PLAYER THE SERVER WILL NOT LET US HIT HERE is not somebody return fire can answer. The
     // body is NOT taken: the keeper's ordinary ladder (flee below the line, rest when safe) is
     // the survival that applies, exactly as for anything else hurting us that we will not fight.
@@ -1575,6 +1634,10 @@ export class CombatMode {
     if (!o?.pvp || this.active !== o) return true;
     const s = this.s, c = s.client, p = o.pvp;
     if (this.pvpEligibility?.() === false) { this.stop('operator suspended connection'); return false; }
+    // Walked (or was carried) out of pvp_rooms: the fight ends with ITS OWN reason, never the
+    // suspension text above, and survival returns to the keeper ladder (m59-pvp-rooms.mjs).
+    { const outside = this.pvpRoomsRefusal();
+      if (outside && s.live && c?.self) { this.stop(pvpRoomsStopReason(outside)); return false; } }
     if (!s.live || !c?.self || c.combatReady === false) {
       this.interruptPvPShelter(o, 'connection unavailable; retain PvP intent');
       if (o.phase !== 'offline') { o.phase = 'offline'; o.phaseRevision++; this.record('pvp_offline', o); }
