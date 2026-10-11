@@ -27,9 +27,9 @@
 //
 // Run it in a loop (one lap per run) for a standing courier. Survival stays with each trainee's
 // keeper throughout; the service loop also stops itself below `leaveBelow` health.
-import { walk, verify, rideChalice, fight, knownCharacters, observe, call as brokerCall } from '../m59-fleetscript.mjs';
+import { walk, verify, rideChalice, fight, knownCharacters, observe, foodIn, call as brokerCall } from '../m59-fleetscript.mjs';
 import { withdrawWithRecovery, depositWithRecovery } from '../m59-hall-access.mjs';
-import { buyByName } from '../m59-inventory.mjs';
+import { buyByName, eatTo } from '../m59-inventory.mjs';
 
 const HALL = 714, STATION = 2;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -76,6 +76,8 @@ export const script = {
     purse: { type: 'number', default: 3000, describe: 'shillings drawn from the hall for the shopping' },
     serveMin: { type: 'number', default: 45 }, hurtBelow: { type: 'number', default: 0.7 },
     leaveBelow: { type: 'number', default: 0.5 },
+    eatTo: { type: 'number', default: 180, describe: 'vigor to eat up to, from food taken off the farmers' },
+    farmerKeepsFood: { type: 'number', default: 6, describe: 'of each food kind, left with every farmer' },
     home: { type: 'number', default: 38, describe: 'where the lap ends: the keeper home' },
     assumeSpells: { type: 'string', default: '', describe: 'DRY RUNS ONLY: plan as though these spells were known' },
   },
@@ -163,7 +165,7 @@ export const script = {
       const serve = Number(p.serve), until = Date.now() + Number(p.serveMin) * 60_000;
       const named = String(p.farmers ?? '').split(',').map(s => s.trim()).filter(Boolean);
       const trainees = String(p.agents ?? agent).split(',').map(s => s.trim());
-      const done = new Set(), tally = { hospice: 0, identify: 0, picked: 0, taken: 0, uncurse: 0, fire: 0 };
+      const done = new Set(), tally = { hospice: 0, identify: 0, picked: 0, taken: 0, food: 0, uncurse: 0, fire: 0 };
       const cursorNow = () => call('wait_for_event', { agent, kinds: ['message'], timeout_ms: 1 }, 30_000).then(w => w?.cursor ?? 0).catch(() => 0);
       const prose = async (since, ms = 6000) => {
         const w = await call('wait_for_event', { agent, since, kinds: ['message'], timeout_ms: ms }, 60_000).catch(() => null);
@@ -222,18 +224,34 @@ export const script = {
           const mine = (inv?.items ?? []).filter(i => !done.has(i.id) && (RX.ring.test(String(i.name ?? '')) || Number(i.rarity) === 100));
           if (mine.length) { done.add(mine[0].id); await identify(mine[0].id, `${mine[0].name} in the pack`); continue; }
         }
-        // 3. COLLECT the farmers' diamonds and rings, every few minutes.
+        // 3. COLLECT the farmers' diamonds and rings -- and FOOD, every few minutes. Vigor is the mana clock
+        // (resting stops awarding it at 80 of 200, so everything above is eaten), and a trainee's 27 mana
+        // refills faster fed. Operator, 2026-10-11: "keep high vigor (picking up meat pies, food, etc., from
+        // the farmers)". A farmer keeps `farmerKeepsFood` of each kind; the trainee eats to `eatTo`.
         if (Date.now() - lastTake > 4 * 60_000) {
           lastTake = Date.now();
+          const vigor = Number(st?.vigor?.value ?? st?.vigor ?? 200);
           const here = (fleet?.fleet ?? []).filter(r => Number(r.room_num) === serve && !trainees.includes(r.agent) && (!named.length || named.includes(r.agent)));
           for (const f of here) {
             const fi = await call('inventory', { agent: f.agent }, 60_000).catch(() => null);
-            const goods = [...new Set((fi?.items ?? []).filter(i => RX.valuable.test(String(i.name ?? ''))).map(i => String(i.name)))];
-            for (const g of goods) {
-              const r = await call('supply', { from: f.agent, to: agent, what: g, who_travels: 'neither' }, 180_000).catch(() => null);
-              if (r?.supplied) tally.taken++;
+            const goods = (fi?.items ?? []).filter(i => RX.valuable.test(String(i.name ?? '')));
+            // BY ID AND AMOUNT: a name alone hands over `supply`'s default of two.
+            if (goods.length) {
+              const r = await call('supply', { from: f.agent, to: agent, who_travels: 'neither', ids_as_of: fi?.ids_as_of,
+                what: goods.map(i => ({ id: i.id, amount: Number(i.amount) || 1, name: String(i.name) })) }, 180_000).catch(() => null);
+              if (r?.supplied) tally.taken += goods.length;
+            }
+            if (vigor < Number(p.eatTo)) {
+              const spare = foodIn(fi?.items ?? []).map(fd => ({ ...fd, item: (fi.items ?? []).find(i => String(i.name ?? '').trim() === fd.name) }))
+                .filter(fd => fd.item && fd.amount > Number(p.farmerKeepsFood))
+                .map(fd => ({ id: fd.item.id, amount: fd.amount - Number(p.farmerKeepsFood), name: fd.name }));
+              if (spare.length) {
+                const r = await call('supply', { from: f.agent, to: agent, who_travels: 'neither', ids_as_of: fi?.ids_as_of, what: spare }, 180_000).catch(() => null);
+                if (r?.supplied) tally.food += spare.reduce((n, x) => n + x.amount, 0);
+              }
             }
           }
+          if (vigor < Number(p.eatTo)) await eatTo(agent, Number(p.eatTo)).catch(() => null);
           continue;
         }
         // 4. Nothing to do: stay near the farmers and wait a beat.

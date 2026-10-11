@@ -145,6 +145,24 @@ const MODE = (arg('mode') || 'curse').toLowerCase();
 // told by the process ending, rather than by having to poll it.
 const STOP_WHEN = arg('stop-when-learnable') || null;
 
+// STOP WHEN THIS ROOM HAS TAUGHT ALL IT WILL. Every improvement adds advancement points and a cast past
+// ADVANCEMENT_LIMIT can never improve (player.kod CheckAdvancementPoints); a ROOM CHANGE takes two away
+// (player.kod:1465, "give them a break on the botting imp cap"). The server says so only one refused
+// improve in eight, in one of three sentences (player.kod:711-721) -- so the loop listens for any of them
+// on the HEALER's tape and finishes cleanly, lease released, for the supervisor to send him on a journey.
+// Operator, 2026-10-11: "train in place until receiving the 'you may not learn more' message (the one that
+// gets fixed by travel!)". `--stop-file <path>` is the other clean exit: Windows cannot SIGINT a detached child.
+const UNTIL_CAPPED = has('until-capped');
+const CAP_RX = /practiced all you can in this location|training seems to have stagnated here|place holds no more lessons for you/i;
+const STOP_FILE = arg('stop-file') || null;
+let capCursor = null;
+async function cappedNow() {
+  const w = await call('wait_for_event', { agent: HEALER, kinds: ['message'], timeout_ms: 1,
+    ...(capCursor != null ? { since: capCursor } : {}) }, 30_000).catch(() => null);
+  if (w?.cursor !== undefined) capCursor = w.cursor;
+  return (w?.events ?? []).some(e => CAP_RX.test(String(e?.text ?? '')));
+}
+
 async function learnable(name) {
   const r = await call('remaining_required_to_learn_new_skills', { agent: HEALER, name }, 45_000)
     .catch(() => null);
@@ -558,6 +576,7 @@ const training = await trainingLedger({ agent: HEALER, run: process.env.M59_TRAI
   code: codeIdentity(fileURLToPath(import.meta.url)), health }).catch(() => null);
 const startKarma = healer0.karma;
 
+if (UNTIL_CAPPED) await cappedNow();   // the cursor starts NOW: a cap line from before this run is not this room's
 for (let round = 1; !stop && casts < MAX_CASTS; round++) {
   await beatIfDue();
 
@@ -606,6 +625,12 @@ for (let round = 1; !stop && casts < MAX_CASTS; round++) {
       console.log(`    gate ${STOP_WHEN}: have ${g.have}/${g.need}, gap ${g.gap}`);
       if (g.can) { await finish(`${STOP_WHEN} IS NOW LEARNABLE — buy it before grinding further`); break; }
     }
+  }
+  if (UNTIL_CAPPED && await cappedNow())
+    { await finish('CAPPED HERE — this room has taught all it will; a change of scenery resets it'); break; }
+  if (STOP_FILE) {
+    const fs = await import('node:fs');
+    if (fs.existsSync(STOP_FILE)) { try { fs.unlinkSync(STOP_FILE); } catch {} await finish('stop file'); break; }
   }
   if (UNTIL_KARMA && (h.karma ?? 0) >= UNTIL_KARMA)
     { await finish(`healer reached karma ${h.karma} (target ${UNTIL_KARMA})`); break; }
