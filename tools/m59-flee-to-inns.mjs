@@ -204,33 +204,43 @@ while (Date.now() < deadline) {
   // EVERYONE NEWLY IN THE WORLD STARTS AT ONCE, eight at a time. One at a time was 3-11 s each: the
   // rehearsal's 37th character would have stood still for three minutes, and on prod twelve of them are
   // standing in Ukgoth. A character placed in 38 had walked itself out to 2 before its turn came.
-  const fresh = AGENTS.filter(a => byAgent[a] && byAgent[a].in_game !== false && !st[a].kind && !st[a].done);
-  for (let i = 0; i < fresh.length; i += 8)
-    await Promise.all(fresh.slice(i, i + 8).map(a => begin(a, byAgent[a]).catch(e => say(`  ${a} begin failed: ${e.message}`))));
+  //
+  // AND NOTHING HERE IS AWAITED. A character whose calls hang (each has a 30-60 s timeout) used to freeze the
+  // whole loop -- arrivals, re-issues and the cup -- for minutes: the rehearsal's cup never poured with the
+  // holder and four riders standing at the station. Each start and each errand now runs on its own.
+  const fresh = AGENTS.filter(a => byAgent[a] && byAgent[a].in_game !== false && !st[a].kind && !st[a].done && !st[a].busy);
+  for (const a of fresh.slice(0, Math.max(0, 8 - AGENTS.filter(x => st[x].busy === 'begin').length))) {
+    st[a].busy = 'begin';
+    begin(a, byAgent[a]).catch(e => say(`  ${a} begin failed: ${e.message}`)).finally(() => { st[a].busy = null; });
+  }
   for (const a of AGENTS) {
     const r = byAgent[a], s = st[a];
-    if (!r || r.in_game === false || s.done || !s.kind) continue;
+    if (!r || r.in_game === false || s.done || !s.kind || s.busy) continue;
     const room = Number(r.room_num);
-    if (isInn(room)) { await arrive(a, room); continue; }
+    const bg = (why, fn) => { s.busy = why; fn().catch(e => say(`  ${a} ${why} failed: ${e.message}`)).finally(() => { s.busy = null; }); };
+    if (isInn(room)) { s.done = true; bg('arrive', () => arrive(a, room)); continue; }
     if (s.kind === 'walker' && Date.now() - s.lastIssue > 45_000 && !/travelling|walking/i.test(String(r.activity ?? ''))) {
       if (s.tries >= 5) continue;
       say(`  ${a} not travelling at ${room} (${String(r.activity ?? '').slice(0, 40)}) -- re-issuing to ${s.target}`);
       if (room === cfg.hall) s.target = cfg.hallInn;
-      await travel(a, s.target);
+      bg('travel', () => travel(a, s.target));
+      continue;
     }
     if ((s.kind === 'rider' || s.kind === 'holder') && room !== cfg.station && room !== cfg.hall && Date.now() - s.lastIssue > 45_000
-        && !/travelling|walking/i.test(String(r.activity ?? ''))) await travel(a, cfg.station);
+        && !/travelling|walking/i.test(String(r.activity ?? ''))) bg('travel', () => travel(a, cfg.station));
   }
   // THE CUP: one ride at a time, holder and rider both standing at the station.
   const holderRow = byAgent[cfg.cup];
   const holderHere = holderRow && holderRow.in_game !== false && Number(holderRow.room_num) === cfg.station;
   if (!riding && holderHere) {
-    const waiting = AGENTS.filter(a => st[a].kind === 'rider' && !st[a].done && Number(byAgent[a]?.room_num) === cfg.station)
+    const waiting = AGENTS.filter(a => st[a].kind === 'rider' && !st[a].done && !st[a].busy && Number(byAgent[a]?.room_num) === cfg.station)
       .map(a => ({ agent: a, ...frac(byAgent[a]) }));
     const pick = nextRider(waiting, cfg);
     if (pick) {
       riding = true;
       const a = pick.agent;
+      st[a].busy = 'cup';
+      (async () => {
       say(`CUP ${a} (${byAgent[a]?.health}) drinks at ${cfg.station}`);
       const res = await cupRide(a, cfg.cup, { hall: cfg.hall, waitMs: 60_000 }).catch(e => ({ ok: false, why: e.message }));
       await sleep(3000);
@@ -247,16 +257,15 @@ while (Date.now() < deadline) {
           say(`  ${a} walks instead -> ${st[a].target}`);
         }
       }
-      riding = false;
+      })().catch(e => say(`  ${a} cup failed: ${e.message}`)).finally(() => { riding = false; st[a].busy = null; });
     } else if (!holderDrank) {
       // NOBODY LEFT FOR THE CUP: every rider is done, walking, or not in the game at all.
       const pending = AGENTS.filter(a => a !== cfg.cup && st[a].kind === 'rider' && !st[a].done);
       const unseen = AGENTS.filter(a => a !== cfg.cup && !st[a].kind && kindOf[a] === 'rider');
       if (!pending.length && !unseen.length) {
-        holderDrank = true;
+        holderDrank = true; riding = true;
         say(`CUP ${cfg.cup} drinks its own cup (last)`);
-        await call('act', { agent: cfg.cup, verb: 'eat', target: 'Chalice of the Rain' }, 60_000).catch(() => null);
-        for (let i = 0; i < 12; i++) { await sleep(5000); const n = Number((await call('status', { agent: cfg.cup }, 30_000).catch(() => null))?.room?.num ?? NaN); if (n !== cfg.station) break; }
+        call('act', { agent: cfg.cup, verb: 'eat', target: 'Chalice of the Rain' }, 60_000).catch(() => null).finally(() => { riding = false; });
       }
     }
   }
