@@ -249,7 +249,7 @@ while (Date.now() < deadline) {
       // A RIDER ALREADY HOLDING A CUP DRINKS ITS OWN. A hand-over whose Rescue never fired leaves the cup in the
       // rider's pack, and every later hand-over is refused "already carries a chalice" -- the rehearsal's c2 held
       // the station for 79 attempts that way. Applying a cup to yourself is how Zheng He rides his.
-      const mine = ((await call('inventory', { agent: a }, 30_000).catch(() => null))?.items ?? []).some(i => /chalice of the rain/i.test(String(i.name ?? '')));
+      const mine = ((await call('inventory', { agent: a }, 30_000).catch(() => null))?.items ?? []).some(i => /chalice/i.test(String(i.name ?? '')));
       const res = mine
         ? await call('act', { agent: a, verb: 'eat', target: 'Chalice of the Rain' }, 60_000).then(() => sleep(28_000)).then(() => ({ ok: true, own: true })).catch(e => ({ ok: false, why: e.message }))
         : await cupRide(a, cfg.cup, { hall: cfg.hall, waitMs: 60_000 }).catch(e => ({ ok: false, why: e.message }));
