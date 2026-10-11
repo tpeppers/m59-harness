@@ -428,7 +428,10 @@ async function cmdStart() {
   const fd = openSync(LOG_FILE, 'a');
   const args = [join(HERE, 'm59-broker.mjs'), '--http', String(HTTP_PORT),
                 '--dashboard', String(DASH_PORT)];
-  if (FLEET) args.push('--fleet', FLEET);
+  // THE UNNAMED FLEET HAS TO BE NAMED AS SUCH. `fleetName` answers '' for `--fleet -`, and leaving the flag off
+  // let the broker re-resolve on its own -- to substrate/fleet-default, which on the operator's machine is `prod`.
+  // 2026-10-11: a rehearsal asked for the unnamed test fleet on 127.0.0.1:5959 and got a prod broker.
+  args.push('--fleet', FLEET || '-');
   // WHICH KEEPER ARRANGEMENT, PASSED THROUGH RATHER THAN ASSUMED.
   //
   // The broker runs one keeper PROCESS per character by default, which is what took the

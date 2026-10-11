@@ -88,7 +88,7 @@ const cfg = {
   timeoutMin: Number(arg('timeout-min', 30)), http: Number(arg('http', 8901)), dashboard: Number(arg('dashboard', 8902)),
 };
 const CONTROL = `http://127.0.0.1:${cfg.http}/`;
-const LOG = path.join(REPO, 'substrate', `flee-to-inns-${FLEET ?? 'default'}.log`);
+const LOG = path.join(REPO, 'substrate', `flee-to-inns-${FLEET || 'default'}.log`);
 const t0 = Date.now();
 const stamp = () => `${new Date().toISOString().slice(11, 19)} +${String(Math.round((Date.now() - t0) / 1000)).padStart(4)}s`;
 const say = m => { const line = `${stamp()} ${m}`; console.log(line); try { appendFileSync(LOG, line + '\n'); } catch {} };
@@ -120,7 +120,7 @@ const order = [...String(arg('first', '')).split(',').map(s => s.trim()).filter(
   ...AGENTS.filter(a => Number(last[a].room) === 599 && !(Number(last[a].max) <= cfg.fragile)),
   ...AGENTS].filter((a, i, all) => AGENTS.includes(a) && all.indexOf(a) === i);
 
-say(`flee-to-inns: fleet ${FLEET ?? '(default)'}, ${AGENTS.length} characters; cup ${cfg.cup} at ${cfg.station}, hall ${cfg.hall} -> inn ${cfg.hallInn}`);
+say(`flee-to-inns: fleet ${FLEET || '(unnamed)'}, ${AGENTS.length} characters; cup ${cfg.cup} at ${cfg.station}, hall ${cfg.hall} -> inn ${cfg.hallInn}`);
 for (const a of order) {
   const b = last[a];
   say(`  ${a.padEnd(4)} ${String(b.character ?? '?').slice(0, 14).padEnd(14)} last ${String(b.room ?? '?').padEnd(4)} r${b.row ?? '?'}c${b.col ?? '?'} ` +
@@ -132,7 +132,7 @@ if (!has('apply')) { say('PLAN ONLY (no --apply). Positions are re-read live whe
 if (!(await healthy())) {
   if (!has('start')) { say(`no broker answers on ${cfg.http} -- pass --start to bring one up`); process.exit(2); }
   say(`starting the broker, resume order ${order.join(',')}`);
-  const r = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-service.mjs'), 'start', '--fleet', FLEET ?? '-',
+  const r = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-service.mjs'), 'start', '--fleet', FLEET || '-',
     '--http', String(cfg.http), '--dashboard', String(cfg.dashboard)],
     { cwd: REPO, env: { ...process.env, M59_RESUME_FIRST: order.join(',') }, encoding: 'utf8', windowsHide: true });
   say(`  service: ${String(r.stdout || r.stderr || '').trim().split('\n').slice(-2).join(' | ')}`);
@@ -141,7 +141,7 @@ if (!(await healthy())) {
 }
 // THE RIGHT FLEET, OR NOTHING: the same gate every /m59 command runs.
 {
-  const w = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-which.mjs'), '--fleet', FLEET ?? '-', '--port', String(cfg.http)], { cwd: REPO, encoding: 'utf8', windowsHide: true });
+  const w = spawnSync(process.execPath, [path.join(REPO, 'tools', 'm59-which.mjs'), '--fleet', FLEET || '-', '--port', String(cfg.http)], { cwd: REPO, encoding: 'utf8', windowsHide: true });
   if (w.status !== 0) { say(`m59-which refused (exit ${w.status}): ${String(w.stdout || w.stderr).trim().split('\n').slice(-3).join(' | ')}`); process.exit(3); }
 }
 
