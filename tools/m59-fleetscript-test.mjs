@@ -37,7 +37,7 @@ const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
         shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza, say,
         foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure, readTwice, packConfirmed,
-        gate, ungate, gateStatus, gateReset } =
+        gate, ungate, gateStatus, gateReset, act, brokerReply } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -2907,6 +2907,82 @@ console.log('\ncrawl_to completes a withheld position from `look`, in the same r
     ok('but a `look` from another room is not believed: still position_unreadable',
        out.outcome === 'position_unreadable', String(out.outcome));
   }
+}
+
+// ---------------------------------------------------------------- a refusal is not an ok
+//
+// THE INCIDENT, 2026-10-11 ~09:12Z. Robin (t8) was sent `act('autopilot', { action: 'start',
+// mode: 'survive', assigned_room: 599, practice_spells: { enabled: false }, ... })`. The broker
+// refused the whole call — `error: practice_spells must be null or an enabled settings object`,
+// with `isError: true` — and the run logged `t8 step 0 (act) ok`. Nothing was applied; the
+// keeper walked it back out of 599 once the lease went. "It can throw an error that's fine
+// just not okay but do nothing."
+console.log('\na broker refusal fails an act step, it is never ok');
+{
+  const REFUSAL = 'error: practice_spells must be null or an enabled settings object';
+  const startArgs = { action: 'start', mode: 'survive', assigned_room: 599, confine_rooms: [599],
+                      practice_spells: { enabled: false } };
+  // Each case answers the `autopilot start` with one refusal shape and leaves every other tool
+  // to the ordinary fake, so the lease, the hold and the posture reads all behave normally.
+  const withStart = (reply) => {
+    const sent = fakeBroker({ rooms: { a1: 576 } });
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      if (opts?.method === 'POST') {
+        const b = JSON.parse(opts.body);
+        if (b.params?.name === 'autopilot' && b.params.arguments?.action === 'start') {
+          sent.push({ name: 'autopilot', ...b.params.arguments });
+          return { json: async () => reply };
+        }
+      }
+      return inner(url, opts);
+    };
+    return sent;
+  };
+  const run = (name) => fleetScript({ name, fleet: 'testfleet', agents: ['a1'],
+    steps: [act('autopilot', startArgs)], onLog: quiet });
+
+  withStart({ result: { content: [{ type: 'text', text: REFUSAL }], isError: true } });
+  let r = await run('act-iserror');
+  ok('an isError tool result fails the act step', r.results.a1.ok === false, JSON.stringify(r.results.a1).slice(0, 200));
+  ok('and the reason is the broker\'s own sentence, without the "error:" prefix',
+     /^practice_spells must be null/.test(r.results.a1.why ?? ''), r.results.a1.why);
+
+  // The same text with no flag — an older broker, or a third one — is still a refusal.
+  withStart({ result: { content: [{ type: 'text', text: REFUSAL }] } });
+  r = await run('act-errortext');
+  ok('an `error:` text with no isError flag also fails the step', r.results.a1.ok === false);
+
+  // A JSON-RPC error envelope used to come back as the envelope, with `error` an OBJECT.
+  withStart({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'method not found: tools/call' } });
+  r = await run('act-rpcerror');
+  ok('a JSON-RPC error fails the step with its message as the reason',
+     r.results.a1.ok === false && r.results.a1.why === 'method not found: tools/call', r.results.a1.why);
+
+  // autopilot's non-throwing refusal: `{started:false, reason}` from a bad farm_strategy.
+  withStart({ result: { content: [{ type: 'text', text: JSON.stringify({ started: false,
+    reason: 'farm_strategy refused: no such file', note: 'nothing was changed' }) }] } });
+  r = await run('act-started-false');
+  ok('`started: false` fails the step', r.results.a1.ok === false && /farm_strategy refused/.test(r.results.a1.why ?? ''),
+     r.results.a1.why);
+
+  // BUT the keeper-backed success is ALSO `started: false` — every prod character answers it.
+  withStart({ result: { content: [{ type: 'text', text: JSON.stringify({ started: false,
+    keeper_backed: true, why: 'driven by its own keeper process', keeper_push: { pushed: true, confirmed: true } }) }] } });
+  r = await run('act-keeper-backed');
+  ok('a keeper-backed start that reached the keeper is ok', r.results.a1.ok === true, JSON.stringify(r.results.a1).slice(0, 200));
+
+  // ...and one whose order never reached the keeper is the same "ok but nothing" again.
+  withStart({ result: { content: [{ type: 'text', text: JSON.stringify({ started: false,
+    keeper_backed: true, keeper_push: { pushed: false, error: 'keeper 503' } }) }] } });
+  r = await run('act-push-failed');
+  ok('a keeper-backed start whose push failed fails the step',
+     r.results.a1.ok === false && /never reached the keeper: keeper 503/.test(r.results.a1.why ?? ''), r.results.a1.why);
+
+  // Plain text that is NOT a refusal still passes through as text.
+  ok('a legitimate plain-text reply is still returned as text',
+     brokerReply({ result: { content: [{ type: 'text', text: 'hello there' }] } }) === 'hello there');
+  ok('and JSON is still parsed', brokerReply({ result: { content: [{ text: '{"ok":true}' }] } }).ok === true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

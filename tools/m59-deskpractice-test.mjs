@@ -295,6 +295,12 @@ console.log('\nthe desk is served before it is practised at');
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   ok('the broker accepts practice_spells and stores it AS SENT, so a doctrine diff can settle',
      /a\.practice_spells !== undefined/.test(broker) && /p\.policy\.practiceSpells = JSON\.parse\(JSON\.stringify\(value\)\)/.test(broker));
+  // 2026-10-11: `{ enabled: false }` was refused and took the whole autopilot start down with it.
+  const gate = broker.slice(broker.indexOf('if (a.practice_spells !== undefined) {'));
+  ok('practice_spells { enabled: false } is OFF (stored as null), not a refusal',
+     /a\.practice_spells\.enabled === false\)\) p\.policy\.practiceSpells = null;/.test(gate.slice(0, 400)));
+  ok('a practice_spells object that does not say enabled is still refused',
+     /value\.enabled !== true\)\s*throw new Error\('practice_spells must be null or an enabled settings object'\)/.test(gate));
 }
 
 // A CREATURE TARGET (2026-09-25): "Have Loial practice dazzle on skeletons from safe spots".
