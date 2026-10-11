@@ -11465,7 +11465,7 @@ const TOOLS = [
           description: 'Player names that are not ours but may be buffed (and healed by medic). Never overrides hostility: a name in the war book, the grudge book or a PvP-death record is refused regardless.' },
       }, description: 'cast the Kraanan personal enchantments on ALLIES standing in the same room: fleet characters (menagerie hosts included) and names in `friends`, NEVER a stranger and never anybody in the war book, the grudge book or a PvP-death record (m59-ally.mjs). super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
       practice_spells: { type: ['object', 'null'], properties: {
-        enabled: { type: 'boolean' },
+        enabled: { type: 'boolean', description: 'true to drill; false (or practice_spells: null) turns practice off.' },
         spells: { type: 'array', items: { type: ['string', 'object'] },
           description: 'What to drill, tried in order. A name, or {name, target: "self"|"none"|"creature", on: [creature names]}; without a target a one-target spell is cast on self. target "creature" (e.g. dazzle) needs on, is cast only from a proven wall, nearest match first, never on a player or a corpse.' },
         reserve_casts: { type: 'number',
@@ -12483,8 +12483,15 @@ const TOOLS = [
       // SAME SHAPE AGAIN, AND STRICTER: a practice config that would silently drop a key is
       // refused here, because the thing it protects — the desk's reserve — fails in silence
       // when it is wrong (a service cast the server refuses reads as `cast: true`).
+      // `{ enabled: false }` IS OFF, the same as null (operator, 2026-10-11). It used to be refused,
+      // and the refusal threw out the WHOLE autopilot start it rode in on: Robin's posture change to
+      // Ukgoth was dropped while the fleetscript step read "ok", and his keeper walked him back to
+      // the frogmen. Saying "off" in the shape every other caller writes is not a mistake to refuse.
+      // An object that does not say `enabled` at all is still refused below.
       if (a.practice_spells !== undefined) {
-        if (a.practice_spells == null) p.policy.practiceSpells = null;
+        if (a.practice_spells == null ||
+            (typeof a.practice_spells === 'object' && !Array.isArray(a.practice_spells) &&
+             a.practice_spells.enabled === false)) p.policy.practiceSpells = null;
         else {
           const value = a.practice_spells;
           if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
