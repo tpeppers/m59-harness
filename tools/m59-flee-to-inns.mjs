@@ -237,7 +237,7 @@ while (Date.now() < deadline) {
   const holderRow = byAgent[cfg.cup];
   const holderHere = holderRow && holderRow.in_game !== false && Number(holderRow.room_num) === cfg.station;
   if (!riding && holderHere) {
-    const waiting = AGENTS.filter(a => st[a].kind === 'rider' && !st[a].done && !st[a].busy && Number(byAgent[a]?.room_num) === cfg.station)
+    const waiting = AGENTS.filter(a => st[a].kind === 'rider' && !st[a].done && !st[a].busy && !(st[a].coolUntil > Date.now()) && Number(byAgent[a]?.room_num) === cfg.station)
       .map(a => ({ agent: a, ...frac(byAgent[a]) }));
     const pick = nextRider(waiting, cfg);
     if (pick) {
@@ -246,7 +246,14 @@ while (Date.now() < deadline) {
       st[a].busy = 'cup';
       (async () => {
       say(`CUP ${a} (${byAgent[a]?.health}) drinks at ${cfg.station}`);
-      const res = await cupRide(a, cfg.cup, { hall: cfg.hall, waitMs: 60_000 }).catch(e => ({ ok: false, why: e.message }));
+      // A RIDER ALREADY HOLDING A CUP DRINKS ITS OWN. A hand-over whose Rescue never fired leaves the cup in the
+      // rider's pack, and every later hand-over is refused "already carries a chalice" -- the rehearsal's c2 held
+      // the station for 79 attempts that way. Applying a cup to yourself is how Zheng He rides his.
+      const mine = ((await call('inventory', { agent: a }, 30_000).catch(() => null))?.items ?? []).some(i => /chalice of the rain/i.test(String(i.name ?? '')));
+      const res = mine
+        ? await call('act', { agent: a, verb: 'eat', target: 'Chalice of the Rain' }, 60_000).then(() => sleep(28_000)).then(() => ({ ok: true, own: true })).catch(e => ({ ok: false, why: e.message }))
+        : await cupRide(a, cfg.cup, { hall: cfg.hall, waitMs: 60_000 }).catch(e => ({ ok: false, why: e.message }));
+      if (mine) say(`  ${a} held a cup of its own and drank it`);
       await sleep(3000);
       const now = Number((await call('status', { agent: a }, 30_000).catch(() => null))?.room?.num ?? NaN);
       if (isInn(now)) await arrive(a, now);
@@ -254,8 +261,17 @@ while (Date.now() < deadline) {
         say(`  ${a} in the hall -> ${cfg.hallInn} ${INNS[cfg.hallInn]}`); }
       else {
         st[a].rideFails++;
-        say(`  ${a} ride failed (${res?.why ?? 'no landing'}) -- ${st[a].rideFails} of 3`);
-        if (st[a].rideFails >= 3 && !(pick.max <= cfg.fragile)) {
+        // TO THE BACK OF THE QUEUE FOR A MINUTE, so one rider can never hold the station.
+        st[a].coolUntil = Date.now() + 60_000;
+        const fragile = pick.max <= cfg.fragile;
+        say(`  ${a} ride failed (${res?.why ?? 'no landing'}) -- ${st[a].rideFails} of ${fragile ? 6 : 3}`);
+        if (fragile && st[a].rideFails >= 6) {
+          // The fragile never walk through Ukgoth: they stop asking, stay in the station room, and are named at the end.
+          st[a].kind = 'stranded';
+          await posture(a, cfg.station, 'the cup failed six times: staying at the station', [cfg.station]);
+          say(`  ${a} STAYS at ${cfg.station}: six failed rides, too fragile to walk`);
+        }
+        if (st[a].rideFails >= 3 && !fragile) {
           const best = await nearestInn(now); st[a].kind = 'walker'; st[a].target = best?.inn ?? 153;
           await posture(a, st[a].target, 'the cup failed: walking'); await travel(a, st[a].target);
           say(`  ${a} walks instead -> ${st[a].target}`);
