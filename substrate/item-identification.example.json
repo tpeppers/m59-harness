@@ -1,0 +1,8 @@
+{
+  "_doc": "Copy to substrate/item-identification.json (gitignored). Which kod classes this fleet names when the icon resource id proves them (tools/m59-item-signature.mjs; `node tools/m59-item-signature.mjs --list Wand` lists the classes). inventory rows then carry identified_as, and fleetscripts match on itemName(row).",
+  "name_unidentified_as": {
+    "LightningWand": "lightning wand",
+    "HoldWand": "hold wand",
+    "EarthquakeScroll": "earthquake scroll"
+  }
+}

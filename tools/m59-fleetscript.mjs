@@ -342,6 +342,11 @@ const RETRYABLE_READS = Object.freeze(new Set([
 ]));
 const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side closed|econnrefused/i;
 // Explicit lab simulation entry point; never runs as a side effect of compiling steps.
+// WHAT AN UNIDENTIFIED WAND OR SCROLL IS. `inventory` rows carry `identified_as` when the icon resource
+// id proves a class this machine names (substrate/item-identification.json); `itemName(row)` is that
+// name when present and the wire name otherwise, so a script can count "hold wand" in a pack where the
+// server only says "wand" (m59-item-signature.mjs).
+export { itemName, identifiedAs, classOfIcon } from './m59-item-signature.mjs';
 export {simulateScene} from './m59-scene-simulator.mjs';
 export {simulatePostMortem,planPostMortemSimulation} from './m59-postmortem-sim.mjs';
 export {capturePlayerLoadout,readLoadoutFile,readLoadoutBindings,writeLoadoutFile} from './m59-scene-loadout.mjs';

@@ -813,6 +813,7 @@ _verify2.mjs
 # one: a file that parses is a file the service acts on, and this one decides what gets sold.
 # The shape is committed beside it as substrate/magic-keep.example.json.
 substrate/magic-keep.json
+substrate/item-identification.json
 # The savelog ledger is written by the running fleet — one line per server save window, which
 # is what `m59-savelog.mjs` reads to decide which deploy a number belongs to. Runtime output,
 # same rule as history/ and recordings/. It was NOT ignored, so it sat untracked in

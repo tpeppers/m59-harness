@@ -32,6 +32,7 @@
 // has actually gone out, which turns an invisible failure into visible latency —
 // the trade this whole file exists to make.
 
+import { identifiedAs } from './m59-item-signature.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
@@ -13794,6 +13795,12 @@ const TOOLS = [
                                               // m59-items.mjs. Parsed since the beginning and
                                               // dropped here, so nothing could ask.
                                               rarity: o.rarity ?? null,
+                                              // WHAT THE ICON ID PROVES IT IS, under this machine's
+                                              // name for it (m59-item-signature.mjs: the icon
+                                              // resource id names the kod class exactly, and
+                                              // substrate/item-identification.json says which
+                                              // classes the fleet calls what). Absent unless both.
+                                              identified_as: identifiedAs({ name: c.rsc.get(o.nameRsc), icon_rsc: o.iconRsc }) ?? undefined,
                                               rarity_name: rarityName(o.rarity) ?? undefined,
                                               unidentified: isUnidentified(o) || undefined,
                                               broken: condemned.has(o.id) || undefined })),

@@ -134,6 +134,13 @@ These tests are offline. They do not execute a raid or shut down a server.
   reach, below the flee line, unwedged, or past six lures per room per ten minutes; `passFightBack`,
   `clearPathCheck` and the trade never pick a spared body; the strategy field is `movement` and refuses
   a bad value. **It should fail the day a Qor caster's jam in the sewers is answered by killing a rat.**
+- `m59-item-signature-test.mjs` (8): an unidentified wand or scroll named by its ICON RESOURCE ID
+  (`m59-item-signature.mjs`). blakcomp gives every class its own `_icon_rsc` id even when eleven wands
+  share `wand6.bgf`, and the server sends that id, so it names the class exactly where colour cannot
+  (grey is four wands). A file with two classes on one icon string is left out; nothing is renamed
+  without `substrate/item-identification.json`; an identified name is never touched; broker
+  `inventory` rows carry `identified_as` and fleetscripts get `itemName`. Against this machine's real
+  resources: prod's 2026-10-11 bare wands (30513, LightningWand) and scrolls (30461, MartyrScroll).
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

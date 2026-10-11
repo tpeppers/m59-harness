@@ -55,9 +55,18 @@ export default {
     roam: false,
   },
 
-  // Acid touch eats one entroot berry a cast (acidtch.kod); the rest is what a lupogg is worth.
-  protect: ['entroot berry', 'sapphire', 'diamond', 'ruby', 'blue dragon scale', 'dark angel feather',
-            'inky-cap mushroom', 'purple mushroom', 'blue mushroom'],
+  // KEEP (operator, 2026-10-11), from the lupogg's table, verytght.kod:33+: inky caps, the gems, dark angel
+  // feathers, hold wands, mystic swords, plate armor, keys and earthquake scrolls -- plus the entroot berries
+  // acid touch eats, one a cast (acidtch.kod). Blue and purple mushrooms, blue dragon scales and cloak
+  // potions are still picked up, just not held back from a sale.
+  //
+  // A hold wand drops UNIDENTIFIED as a bare "wand" and an earthquake scroll as a bare "scroll"; their
+  // icon resource ids say exactly which (m59-item-signature.mjs: HoldWand_icon_rsc, EarthquakeScroll_icon_rsc),
+  // and that is how fleet scripts tell them apart (`identified_as`). The keeper's keep list matches the
+  // wire NAME, so the bare words are listed too. Nothing else a lupogg drops is called "wand" or
+  // "scroll", so here that keeps exactly these two.
+  protect: ['entroot berry', 'inky-cap mushroom', 'sapphire', 'ruby', 'diamond', 'dark angel feather',
+            'wand', 'scroll', 'mystic sword', 'plate armor', 'key'],
 
   hooks: {
     onPass(ctx) {
