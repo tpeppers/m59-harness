@@ -196,6 +196,21 @@ export function normalizePractice(cfg) {
           on = [].concat(s?.on ?? []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
           if (!on.length) { out.problems.push(`spells.${name}: target "creature" needs on: [creature names]`); continue; }
         }
+        // A FRESH TARGET ONLY (operator, 2026-10-11: "make sure Janice's drills as a Qor caster won't have them
+        // accidentally land killing blows on monsters ... picking an unattacked / full health target"). A damaging
+        // drill (splash of acid) on a skeleton somebody is already fighting can land the killing blow, and a Qor
+        // caster's karma pays for it. The client is never told a monster's health, so "full health" is read as
+        // "untouched": no player within `clear_of` squares now or within `retarget_ms`, and not hit by this caster
+        // within `retarget_ms`. Creature targets only; refused anywhere else so it cannot look like it does something.
+        let freshExtra = {};
+        if (typeof s === 'object' && (s?.fresh != null || s?.retarget_ms != null || s?.clear_of != null)) {
+          if (target !== 'creature') { out.problems.push(`spells.${name}: fresh/retarget_ms/clear_of apply only to target "creature"`); continue; }
+          const retarget_ms = s.retarget_ms == null ? 900_000 : Number(s.retarget_ms);
+          const clear_of = s.clear_of == null ? 4 : Number(s.clear_of);
+          if (!(retarget_ms >= 60_000 && retarget_ms <= 3_600_000)) { out.problems.push(`spells.${name}.retarget_ms must be 60000..3600000`); continue; }
+          if (!(clear_of >= 1 && clear_of <= 15)) { out.problems.push(`spells.${name}.clear_of must be 1..15 squares`); continue; }
+          if (s.fresh !== false) freshExtra = { fresh: true, retarget_ms, clear_of };
+        }
         // A PRACTICE ROOM THAT IS NOT THE DESK. Operator, 2026-09-25: Loial practises dazzle on
         // the skeletons of Castle Victoria (38) while keeping the chalice at his post (2), which
         // has no monsters. An entry with `room` is practised ONLY in that room, and only by a
@@ -220,7 +235,7 @@ export function normalizePractice(cfg) {
           }
           extra = { room, session_ms, every_ms, when };
         }
-        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra, ...fleetExtra });
+        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra, ...fleetExtra, ...freshExtra });
       }
       out.spells = list;
       continue;
@@ -353,7 +368,8 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
     }
     const target = want.target ?? ((Number(s.targets) || 0) > 0 ? 'self' : 'none');
     return { cast: { name: want.name, target, mana: cost.mana, ...(want.on ? { on: want.on } : {}),
-                     ...(want.min_vigor ? { min_vigor: want.min_vigor } : {}) },
+                     ...(want.min_vigor ? { min_vigor: want.min_vigor } : {}),
+                     ...(want.fresh ? { fresh: true, retarget_ms: want.retarget_ms, clear_of: want.clear_of } : {}) },
              why: `practice ${want.name} (${cost.mana} mana, ${mana.value} on hand, ${reserve.mana} kept for the desk)` };
   }
   const manaOnly = tried.length && tried.every(t => /under the \d+ reserve|refused recently|not known/.test(t))
@@ -384,7 +400,7 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
  * @param engagedWithin  squares from a player that count as being fought (default 2.5)
  */
 export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyUntil = new Map(), now = 0,
-                                     engagedWithin = 2.5 } = {}) {
+                                     engagedWithin = 2.5, fresh = false, clearOf = 4, touchedUntil = new Map() } = {}) {
   const want = on.map(x => String(x).toLowerCase());
   const ok = objects.filter(o => {
     const n = String(o.name ?? '').toLowerCase();
@@ -394,7 +410,26 @@ export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyU
   if (!ok.length) return null;
   const players = objects.filter(o => o.player && o.row != null && o.col != null);
   const dist = (a, b) => Math.hypot((a.row ?? 0) - b.row, (a.col ?? 0) - b.col);
-  const engaged = o => players.some(p => dist(o, p) <= engagedWithin);
   const d = o => me ? dist(o, me) : 0;
+  if (fresh) {
+    // UNTOUCHED ONLY, AND THE LEAST LIKELY TO BE TOUCHED: never one a player (the caster included) stands
+    // within `clearOf` of, never one remembered as engaged or hit (`touchedUntil`), farthest from any player
+    // first. No fresh creature is null -- a skipped cast, never a fallback to an engaged one.
+    const near = [...players, ...(me?.row != null ? [me] : [])];
+    const gap = o => near.length ? Math.min(...near.map(p => dist(o, p))) : Infinity;
+    const clean = ok.filter(o => gap(o) > clearOf && !((touchedUntil.get(o.id) ?? 0) > now));
+    if (!clean.length) return null;
+    return clean.sort((a, b) => gap(b) - gap(a) || d(a) - d(b))[0];
+  }
+  const engaged = o => players.some(p => dist(o, p) <= engagedWithin);
   return ok.sort((a, b) => Number(engaged(b)) - Number(engaged(a)) || d(a) - d(b))[0];
+}
+
+/** The creatures that count as TOUCHED right now: attackable non-players within `clearOf` of a player or of
+ *  `me`. The keeper remembers them for `retarget_ms`, so a skeleton that walked away from a fight is not fresh. */
+export function touchedCreatures({ objects = [], me = null, clearOf = 4 } = {}) {
+  const near = [...objects.filter(o => o.player && o.row != null && o.col != null), ...(me?.row != null ? [me] : [])];
+  const dist = (a, b) => Math.hypot((a.row ?? 0) - b.row, (a.col ?? 0) - b.col);
+  return objects.filter(o => o.attackable && !o.player && o.row != null && near.some(p => dist(o, p) <= clearOf))
+    .map(o => o.id);
 }

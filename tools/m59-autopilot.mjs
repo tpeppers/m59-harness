@@ -87,7 +87,7 @@ import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameN
          sipVerdict, SIP_TOOK, SIP_REFUSED_PVP, dutyEligible, passTo, draftAlternate, carriesCup } from './m59-chalice.mjs';
 import { rideChaliceNow } from './m59-chalice-ride.mjs';
 import * as wandDuty from './m59-wand-duty.mjs';
-import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
+import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget, touchedCreatures } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -26321,8 +26321,17 @@ export class Autopilot {
         .filter(o => o.id !== c.selfId && (tagId == null || o.id === tagId)).map(o => ({
         id: o.id, name: c.rsc.get(o.nameRsc) || '', row: o.row, col: o.col,
         attackable: !!(o.flags & OF.ATTACKABLE), player: !!(o.flags & OF.PLAYER) }));
+      // A FRESH-ONLY DRILL REMEMBERS WHAT IT HAS SEEN TOUCHED (deskpractice `fresh`): anything near a player now
+      // stays ineligible for retarget_ms, so a skeleton that walks away from a fight is not mistaken for a full one.
+      const fresh = choice.cast.fresh === true;
+      if (fresh) {
+        this._practiceTouched ||= new Map();
+        for (const id of touchedCreatures({ objects, me: c.self, clearOf: choice.cast.clear_of }))
+          this._practiceTouched.set(id, now + choice.cast.retarget_ms);
+      }
       creature = pickCreatureTarget({ objects, on: choice.cast.on ?? [], me: c.self,
-                                      recentlyUntil: this._practiceTargets, now });
+                                      recentlyUntil: this._practiceTargets, now,
+                                      ...(fresh ? { fresh, clearOf: choice.cast.clear_of, touchedUntil: this._practiceTouched } : {}) });
       if (!creature) {
         this._practiceAt = now;
         return this.declinedCast('practice', `no ${(choice.cast.on ?? []).join('/')} to practise on`,
@@ -26361,7 +26370,9 @@ export class Autopilot {
     // A REFUSED CREATURE CAST SETS ASIDE THE CREATURE, NOT THE SPELL: "already dazzled" and
     // "out of reach" are facts about that target, and the next skeleton may take it. A landed one
     // is set aside for the longest the effect can run (Dazzle.kod bounds it to 15 s) plus a second.
-    if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));
+    if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000
+      // A fresh-only drill never hits the same creature twice inside retarget_ms: two hits are how it gets low.
+      : choice.cast.fresh ? choice.cast.retarget_ms : 16_000));
     // A full fleet-mate refuses relay; set IT aside five minutes, not the spell. A landed one waits a
     // minute, so the practice spreads across whoever is in the room.
     else if (mate) this._practiceTargets.set(mate.id, now + (landed === false ? 300_000 : 60_000));

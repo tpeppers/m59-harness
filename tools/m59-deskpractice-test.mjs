@@ -15,7 +15,7 @@
 //   * a reserve at or above max mana is said out loud rather than read as "no mana yet".
 import {
   PRACTICE_DEFAULTS, SERVICE_SPELLS, choosePractice, deskReserve, loadCatalogue,
-  normalizePractice, offeredServices, reagentName, spellCost, pickCreatureTarget, catalogueEntry,
+  normalizePractice, offeredServices, reagentName, spellCost, pickCreatureTarget, touchedCreatures, catalogueEntry,
 } from './m59-deskpractice.mjs';
 
 let pass = 0, fail = 0;
@@ -339,7 +339,45 @@ console.log('\na one-target spell practised on a creature');
   ok('the keeper casts a creature target only from a proven wall',
      at > 0 && AP.slice(at, at + 300).includes('if (!(this.hold && this.holdWorks()))'));
   ok('a refused creature cast sets aside the creature, not the spell',
-     AP.includes('if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));'));
+     AP.includes('if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000'));
+
+  // FRESH TARGETS ONLY (operator, 2026-10-11): a Qor damage drill must not land the killing blow on a creature
+  // somebody else is fighting. The client never sees a monster's health, so "untouched" stands in for "full".
+  const fcfg = normalizePractice({ spells: [{ name: 'splash of acid', target: 'creature', on: ['skeleton'], fresh: true }] });
+  ok('fresh is kept on a creature entry, with its defaults',
+     fcfg.spells[0]?.fresh === true && fcfg.spells[0]?.retarget_ms === 900_000 && fcfg.spells[0]?.clear_of === 4, JSON.stringify(fcfg));
+  ok('fresh on a non-creature entry is refused, not silently ignored',
+     normalizePractice({ spells: [{ name: 'bless', fresh: true }] }).problems.some(p => /apply only to target "creature"/.test(p)));
+  ok('an out-of-range retarget_ms is refused',
+     normalizePractice({ spells: [{ name: 'x', target: 'creature', on: ['skeleton'], retarget_ms: 5 }] }).problems.some(p => /retarget_ms/.test(p)));
+  const field = [
+    { id: 11, name: 'skeleton', row: 10, col: 10, attackable: true },          // beside a player: engaged
+    { id: 12, name: 'skeleton', row: 30, col: 30, attackable: true },          // alone, far: fresh
+    { id: 13, name: 'skeleton', row: 20, col: 25, attackable: true },          // alone, nearer the caster
+    { id: 14, name: 'Fighter', row: 10, col: 11, attackable: true, player: true },
+  ];
+  const fme = { row: 18, col: 18 };
+  ok('a fresh pick never takes a creature beside a player',
+     pickCreatureTarget({ objects: field, on: ['skeleton'], me: fme, fresh: true })?.id !== 11);
+  ok('and prefers the one farthest from any player',
+     pickCreatureTarget({ objects: field, on: ['skeleton'], me: fme, fresh: true })?.id === 12);
+  ok('one remembered as touched is skipped',
+     pickCreatureTarget({ objects: field, on: ['skeleton'], me: fme, fresh: true, now: 1000,
+                          touchedUntil: new Map([[12, 5000]]) })?.id === 13);
+  ok('a creature beside the CASTER is not fresh either',
+     pickCreatureTarget({ objects: [{ id: 21, name: 'skeleton', row: 18, col: 19, attackable: true }], on: ['skeleton'],
+                          me: fme, fresh: true }) === null);
+  ok('no fresh creature is null, never a fallback to an engaged one',
+     pickCreatureTarget({ objects: field.filter(o => o.id === 11 || o.player), on: ['skeleton'], me: fme, fresh: true }) === null);
+  ok('the default (not fresh) pick is unchanged: the engaged one first',
+     pickCreatureTarget({ objects: field, on: ['skeleton'], me: fme })?.id === 11);
+  ok('touchedCreatures names what is near a player or the caster',
+     JSON.stringify(touchedCreatures({ objects: field, me: fme })) === JSON.stringify([11]));
+  const fc = choosePractice({ practice: fcfg, spells: [{ id: 9, name: 'splash of acid', targets: 1 }], mana: { value: 65, max: 65 },
+                              reserve: { mana: 0, reagents: {}, why: '' }, have: () => 99 });
+  ok('choosePractice carries fresh to the keeper', fc.cast?.fresh === true && fc.cast?.retarget_ms === 900_000, JSON.stringify(fc));
+  ok('the keeper passes fresh to the pick and remembers touched creatures',
+     AP.includes('touchedUntil: this._practiceTouched') && AP.includes('touchedCreatures({ objects, me: c.self, clearOf: choice.cast.clear_of })'));
 }
 
 // A PRACTICE ROOM THAT IS NOT THE DESK (2026-09-25): Loial keeps the chalice at 2 and practises
