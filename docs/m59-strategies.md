@@ -308,7 +308,7 @@ answers, by `spareBlockers` (strategy) / `spare_blockers` (tool), movement facul
 
 At most six lures per room per ten minutes, then it is the movement ladder's again. A provoking swing that
 kills is noted loudly (`SPARED BLOCKER DIED`, `tally.spared_killed`). `qor-lupogg-sewers` (example) is the
-first user; `m59-spare-blocker-test.mjs` (13, offline) pins it.
+first user; `m59-spare-blocker-test.mjs` (14, offline) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 

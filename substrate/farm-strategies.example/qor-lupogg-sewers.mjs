@@ -18,7 +18,7 @@
 //     from 0 on the live server, which is what a Qor caster short of a spell's karma ceiling needs
 //     (L3 -30, L4 -40). Level 105, difficulty 9, ~126 hp, bites 7-10 every ~2.5s, melee only, and SLOW:
 //     a chase step is ~1.6s, so a character can always walk away from one. 70% resistant to every
-//     weapon, -20% to acid: acid touch is the attack. Drops 2-5 items from TID_VERY_TOUGH (sapphire,
+//     weapon (-10 to slash, -20 to acid). Drops 2-5 items from TID_VERY_TOUGH (sapphire,
 //     diamond, ruby, blue dragon scale, dark angel feather, inky cap, purple and blue mushrooms) and no
 //     money.
 //   * giant rat: karma -20, so each kill moves a Qor's karma the WRONG way. Aggressive and fast; it bites
@@ -38,15 +38,22 @@ const STATION = 112;
 
 export default {
   name: 'qor-lupogg-sewers',
-  describe: 'Barloque sewers 111/112: lupoggs with acid touch for evil karma and gems; rats spared and lured out of the way.',
+  describe: 'Barloque sewers 111/112: lupoggs with conjured axes and a shield, for evil karma and gems; rats spared and lured out of the way.',
 
   hunt: ['lupogg'],
   spare: ['giant rat'],
   spareBlockers: 'provoke',
 
+  // AXES, NOT ACID TOUCH (operator, 2026-10-11: "switch them over to use axes (from create weapon roulette)
+  // and shields and leather armor, because we need them high defense"). A touch spell needs an empty hand;
+  // an axe leaves the shield on. Axes slash, and a lupogg takes -10 from slash. The armed training style
+  // holds the training weapon, and while axe wielding is under 70 the keeper conjures one with create
+  // weapon (Kraanan; every Qor master here knows it, 89-99) rather than buying. The shield and the leather
+  // armour are each character's loadout (gear.slots), not this file's: a strategy cannot dress anybody.
   weapons: {
-    touchSpell: 'acid touch',
-    touchSpellTiming: 'on_target',
+    style: 'short_sword',
+    trainingWeapon: 'axe',
+    priority: ['axe'],
   },
 
   confine: {
@@ -56,23 +63,18 @@ export default {
   },
 
   // KEEP (operator, 2026-10-11), from the lupogg's table, verytght.kod:33+: inky caps, the gems, dark angel
-  // feathers, hold wands, mystic swords, plate armor, keys and earthquake scrolls -- plus the entroot berries
-  // acid touch eats, one a cast (acidtch.kod). Blue and purple mushrooms, blue dragon scales and cloak
-  // potions are still picked up, just not held back from a sale.
+  // feathers, purple mushrooms, blue dragon scales, hold wands, mystic swords, plate armor, keys and
+  // earthquake scrolls. Blue mushrooms and cloak potions are still picked up, just not held back from a sale.
   //
   // A hold wand drops UNIDENTIFIED as a bare "wand" and an earthquake scroll as a bare "scroll"; their
   // icon resource ids say exactly which (m59-item-signature.mjs: HoldWand_icon_rsc, EarthquakeScroll_icon_rsc),
   // and that is how fleet scripts tell them apart (`identified_as`). The keeper's keep list matches the
   // wire NAME, so the bare words are listed too. Nothing else a lupogg drops is called "wand" or
   // "scroll", so here that keeps exactly these two.
-  protect: ['entroot berry', 'inky-cap mushroom', 'sapphire', 'ruby', 'diamond', 'dark angel feather',
-            'wand', 'scroll', 'mystic sword', 'plate armor', 'key'],
+  protect: ['inky-cap mushroom', 'sapphire', 'ruby', 'diamond', 'dark angel feather', 'purple mushroom',
+            'blue dragon scale', 'wand', 'scroll', 'mystic sword', 'plate armor', 'key'],
 
   hooks: {
-    onPass(ctx) {
-      const berries = ctx.pack().filter(i => /entroot berr/i.test(i.name)).reduce((n, i) => n + i.amount, 0);
-      if (berries < 5) ctx.note('entroot berries running low: acid touch stops with them', { berries });
-    },
     onKill(ctx, kill) {
       const k = String(kill.creature ?? 'unknown').toLowerCase();
       const tally = (ctx.memory.kills ??= {});

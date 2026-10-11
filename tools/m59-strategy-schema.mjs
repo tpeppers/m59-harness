@@ -151,6 +151,11 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'weapons.style', keys: ['trainingStyle'], faculty: 'work', arg: 'training_style',
     normalize: v => { if (!TRAINING_STYLES.includes(v))
       throw new Error(`weapons.style must be one of ${TRAINING_STYLES.join(', ')}`); return v; } },
+  // WHICH WEAPON THE ARMED TRAINING STYLE HOLDS (and the create weapon roulette conjures while its
+  // proficiency is under 70): `weapons.style: 'short_sword'` with `weapons.trainingWeapon: 'axe'`.
+  { path: 'weapons.trainingWeapon', keys: ['trainingWeapon'], faculty: 'work', arg: 'training_weapon',
+    normalize: v => { const w = String(v ?? '').trim().toLowerCase();
+      if (!w) throw new Error('weapons.trainingWeapon must name a weapon'); return w; } },
   { path: 'weapons.preferMagic', keys: ['preferMagicWeapon'], faculty: 'work', arg: 'prefer_magic_weapon',
     normalize: bool('weapons.preferMagic') },
   { path: 'confine.rooms', keys: ['confineRooms'], faculty: 'movement', arg: 'confine_rooms',

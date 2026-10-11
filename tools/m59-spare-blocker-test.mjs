@@ -196,4 +196,22 @@ await ok('a strategy file may declare spareBlockers (movement faculty); a bad va
   assert.ok(bad.thrown || bad.ok === false || bad.problems?.length || bad.refused?.length, JSON.stringify(bad).slice(0, 300));
 });
 
+await ok('qor-lupogg-sewers (example) validates: lupoggs, rats spared and provoked, conjured axes, the keep list', async () => {
+  const mod = await import('../substrate/farm-strategies.example/qor-lupogg-sewers.mjs');
+  const v = validateStrategy(mod.default, { file: 'qor-lupogg-sewers.mjs' });
+  assert.ok(v.ok !== false && !(v.refused?.length) && !(v.problems?.length), JSON.stringify(v).slice(0, 400));
+  const d = mod.default;
+  assert.deepEqual(d.spare, ['giant rat']);
+  assert.equal(d.spareBlockers, 'provoke');
+  assert.equal(d.weapons.style, 'short_sword');
+  assert.equal(d.weapons.trainingWeapon, 'axe');
+  assert.equal(d.weapons.touchSpell, undefined, 'axes and a shield, not an empty hand');
+  for (const k of ['purple mushroom', 'blue dragon scale', 'wand', 'scroll', 'sapphire', 'dark angel feather', 'key'])
+    assert.ok(d.protect.includes(k), k);
+  const f = STRATEGY_FIELDS.find(x => x.path === 'weapons.trainingWeapon');
+  assert.equal(f?.arg, 'training_weapon');
+  assert.equal(f.normalize(' Axe '), 'axe');
+  assert.throws(() => f.normalize(''));
+});
+
 console.log(`\n${n} passed`);

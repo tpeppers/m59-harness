@@ -127,7 +127,7 @@ These tests are offline. They do not execute a raid or shut down a server.
   default object, round-tripped through the push into the session's attack veto, declared and set by
   the broker, reflected by `policy_control`. **It should fail the day a broker seeds an order from
   the effective policy again.**
-- `m59-spare-blocker-test.mjs` (13): a SPARED creature in the way (`spare_blockers`,
+- `m59-spare-blocker-test.mjs` (14): a SPARED creature in the way (`spare_blockers`,
   `lureSparedBlocker`, `grantProvoke`). Silence is the old behaviour; `lure` backs off to the planned
   refuge and never swings; `provoke` swings once at exactly that id with the spare veto lifted only
   during it, and not at all while something already hits us; nothing is done with a fightable body in
