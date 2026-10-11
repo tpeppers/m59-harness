@@ -194,6 +194,13 @@ export const SCHOOLS = Object.freeze({
 export const TEMPLE_LIFTS = Object.freeze({
   802: { from: 598, legs: [[32, 25], [30, 31], [30, 33], [29, 33], [26, 33]], mouth: [26, 34], trigger: [26, 38], tries: 12, waitS: 90 },
 });
+// WHERE TO STAND TO BE HEARD, where her own square is the wrong thing to walk at. Temple of Qor (802):
+// both entrances land at r33c14 (tempqor.kod:201-204), rows 18-19 are a wall between the body and
+// Zuxana (r16c15), and her only way round is the north ceiling door (r3-4 c17-18, tempqor.kod:172-189),
+// which shuts 5 s after a press -- so a walk aimed at her stopped on its trigger square, 14 squares off,
+// and the quest failed `out_of_earshot` (Bunsen, 2026-10-11). r20c17 is reached from r33c14 with no
+// jump and scores 4^2+2^2 = 20 of the 25 her quest node accepts (questnode.kod:650-653).
+export const APPROACH = Object.freeze({ 802: { row: 20, col: 17 } });
 const roomNow = async (call, agent) => Number((await call('status', { agent }, 30_000).catch(() => null))?.room?.num ?? NaN);
 /** The steps that put the body in `temple`. A plain walk, or the lift; lift steps carry `lift: true`. */
 export function toTemple(temple) {
@@ -741,6 +748,22 @@ export const script = {
         if (!you || room !== state.near.room) return { ok: true, skipped: 'not in the NPC\'s room' };
         const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
         if (cheb(you, state.near) <= NEAR_NPC) return { ok: true, skipped: 'already near' };
+        // A ROOM WHOSE NPC IS BEST HEARD FROM A NAMED SQUARE: walk to exactly that square, then clear
+        // `state.near` so the two rungs below do not set off for her own square by the long way round.
+        const appr = APPROACH[room];
+        if (appr) {
+          const d2 = p => (p.row - state.near.row) ** 2 + (p.col - state.near.col) ** 2;
+          let now = you;
+          for (let t = 0; t < 4 && !(now && d2(now) <= 25); t++) {
+            await call('walk_to', { agent: me, row: appr.row, col: appr.col }, 120_000).catch(() => null);
+            await new Promise(res => setTimeout(res, 700));
+            now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you ?? now;
+          }
+          const near = { ...state.near };
+          state.near = null;
+          return { ok: true, approach: `r${appr.row}c${appr.col}`, at: now ? `r${now.row}c${now.col}` : null,
+                   heard: !!(now && d2(now) <= 25), npc: `r${near.row}c${near.col}` };
+        }
         let plan = null;
         try { plan = doorsFor(room, { row: you.row, col: you.col }); } catch { return { ok: true, skipped: 'door table unreadable' }; }
         const doors = [...(plan?.on ?? []), ...(plan?.others ?? [])].filter(p => !p.gate && p.stand_on?.length);
