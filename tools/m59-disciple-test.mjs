@@ -362,9 +362,15 @@ console.log('\nthe errand, per school');
     // The take is immediately before the look that starts the approach, and the hand-back is
     // after the last thing that needs her. Anything else is a gate that does not cover the
     // contended stretch, which is the same as no gate at all.
+    // look -> door -> walk: the door step (2026-10-11, the Temple of Kraanan's ceiling door) sits
+    // between the look that finds the NPC and the walk toward her.
     ok(`${school}: each take is followed by the approach it exists to protect`,
        gates.filter(([, x]) => !x.release)
-            .every(([i]) => verbs[i + 1] === 'verify' && verbs[i + 2] === 'walk_to'),
+            .every(([i]) => verbs[i + 1] === 'verify' && verbs[i + 2] === 'verify' && verbs[i + 3] === 'walk_to'),
+       verbs.join(' '));
+    ok(`${school}: every approach works an operable door before it walks`,
+       steps.map((x, i) => [i, x]).filter(([, x]) => x.do === 'walk_to')
+            .every(([i]) => steps[i - 1]?.do === 'verify' && /work the door/.test(String(steps[i - 1]?.why ?? ''))),
        verbs.join(' '));
     ok(`${school}: every run-time walk declares its candidate rooms`,
        steps.filter(s => s.do === 'walk' && typeof s.to === 'function')

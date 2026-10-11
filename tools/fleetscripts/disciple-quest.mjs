@@ -48,6 +48,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { walk, say, shop, fight, verify, walkTo, crawlTo, gate, ungate } from '../m59-fleetscript.mjs';
 import { QUEST_NPC_RADIUS, sayToNpc } from '../m59-sayrange.mjs';
+import { doorsFor } from '../m59-doorplan.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { saveRun, runId } from '../m59-questbook.mjs';
 
@@ -676,6 +677,37 @@ export const script = {
         state.near = { ...at, room: Number(view?.room?.num ?? NaN) };
         return { ok: true, approaching: want, at: `r${at.row}c${at.col}`, room: state.near.room };
       }, `could not look for the ${label}`),
+
+      // THROUGH AN OPERABLE DOOR FIRST, WHEN THE ROOM HAS ONE. The Temple of Kraanan (801) keeps
+      // Qerti'nya behind a ceiling door that opens only for a `go` pressed ON r30c20 or r31c20 and
+      // shuts itself ten seconds later (tempkra.kod SomethingTryGo, RESET_TIME). On 2026-10-11 the
+      // walk and the crawl below both ran out of time 32 squares short of her and the quest
+      // failed `out_of_earshot`; by hand, walk to r31c20, `go`, walk on, reached her in 8 s.
+      // The door table (m59-doors.json, read by m59-doorplan doorsFor) already knew the door —
+      // only the walker's exit planning ever asked it. So: still out of earshot, and the room has
+      // an ungated door -> walk onto the trigger square that best lies between body and NPC,
+      // press, and let the walk below go straight through while it is up.
+      verify(async ({ agent: me, call, state }) => {
+        if (!state.near) return { ok: true, skipped: 'nothing to approach' };
+        const view = await call('look', { agent: me }, 30_000).catch(() => null);
+        const you = view?.you, room = Number(view?.room?.num ?? NaN);
+        if (!you || room !== state.near.room) return { ok: true, skipped: 'not in the NPC\'s room' };
+        const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
+        if (cheb(you, state.near) <= NEAR_NPC) return { ok: true, skipped: 'already near' };
+        let plan = null;
+        try { plan = doorsFor(room, { row: you.row, col: you.col }); } catch { return { ok: true, skipped: 'door table unreadable' }; }
+        const doors = [...(plan?.on ?? []), ...(plan?.others ?? [])].filter(p => !p.gate && p.stand_on?.length);
+        if (!doors.length) return { ok: true, skipped: 'no operable door in this room' };
+        const best = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
+          .sort((a, b) => a.cost - b.cost)[0];
+        if (!(you.row === best.sq.row && you.col === best.sq.col))
+          await call('walk_to', { agent: me, row: best.sq.row, col: best.sq.col }, 120_000).catch(() => null);
+        const now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
+        const onIt = now && now.row === best.sq.row && now.col === best.sq.col;
+        if (onIt) await call('act', { agent: me, verb: 'go' }, 30_000).catch(() => null);
+        return { ok: true, door: best.p.name ?? best.p.sector, pressed: !!onIt,
+                 at: now ? `r${now.row}c${now.col}` : null, shuts_after_ms: best.p.within_ms };
+      }, `could not work the door on the way to the ${label}`),
 
       // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
       // fourteen rows in one call in the Temple of Kraanan — and then WEDGES, returning the
