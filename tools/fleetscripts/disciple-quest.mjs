@@ -736,9 +736,15 @@ export const script = {
           await call('walk_to', { agent: me, row: best.sq.row, col: best.sq.col }, 120_000).catch(() => null);
         const now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
         const onIt = now && now.row === best.sq.row && now.col === best.sq.col;
-        if (onIt) await call('act', { agent: me, verb: 'go' }, 30_000).catch(() => null);
-        return { ok: true, door: best.p.name ?? best.p.sector, pressed: !!onIt,
-                 at: now ? `r${now.row}c${now.col}` : null, shuts_after_ms: best.p.within_ms };
+        if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, at: now ? `r${now.row}c${now.col}` : null };
+        // PRESS AND GO THROUGH IN ONE BREATH. The door shuts itself (801: 10 s), and the next STEP is
+        // too late: 2026-10-11 the re-run pressed on r31c20 and the following walk_to found every
+        // direction geometry_blocked. By hand the same press with an immediate walk crossed in 8 s.
+        await call('act', { agent: me, verb: 'go' }, 30_000).catch(() => null);
+        const through = await call('walk_to', { agent: me, row: state.near.row, col: state.near.col }, 120_000).catch(e => ({ error: e.message }));
+        const after = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
+        return { ok: true, door: best.p.name ?? best.p.sector, pressed: true, walked: !!through?.arrived,
+                 at: after ? `r${after.row}c${after.col}` : null, shuts_after_ms: best.p.within_ms };
       }, `could not work the door on the way to the ${label}`),
 
       // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
