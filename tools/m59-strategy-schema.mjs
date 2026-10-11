@@ -36,6 +36,7 @@ import { touchSpellName, touchCastTiming } from './m59-touchspell.mjs';
 import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
 import { normalizeBuddy } from './m59-buddy.mjs';
+import { spareBlockerMode } from './m59-spare.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -143,6 +144,10 @@ export const STRATEGY_FIELDS = Object.freeze([
   // target, and the client refuses the packet if anything else tries.
   { path: 'spare', keys: ['spareCreatures'], faculty: 'work', arg: 'spare_creatures',
     normalize: strList('spare', { lower: true }) },
+  // AND WHAT TO DO WHEN A SPARED CREATURE STANDS IN THE WAY (m59-spare.mjs, `lureSparedBlocker`):
+  // 'lure' backs off so it follows us out of a pipe, 'provoke' swings once first. Movement-shaped.
+  { path: 'spareBlockers', keys: ['spareBlockers'], faculty: 'movement', arg: 'spare_blockers',
+    normalize: v => spareBlockerMode(v) },
   { path: 'weapons.style', keys: ['trainingStyle'], faculty: 'work', arg: 'training_style',
     normalize: v => { if (!TRAINING_STYLES.includes(v))
       throw new Error(`weapons.style must be one of ${TRAINING_STYLES.join(', ')}`); return v; } },

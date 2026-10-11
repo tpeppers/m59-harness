@@ -52,5 +52,46 @@ export const sparePatternsOf = s => {
 export function vetoSpared(session, client, id) {
   const patterns = sparePatternsOf(session);
   if (!patterns?.length) return false;
+  if (provokeExempt(session, id)) return false;
   return isSpared(client, client?.room?.objects?.get?.(id), patterns);
+}
+
+// A SPARED CREATURE STANDING IN THE WAY. Operator, 2026-10-11, of Qor casters crossing the Barloque
+// sewers: they must "walk the barloque sewers without fighting/killing its rats, even if they get stuck
+// (... maybe sometimes you have to hit them once and then back up so they'll chase you to stop blocking
+// you, etc.)". Rats are karma -20 (giarat.kod), so a Qor caster that kills one walks its karma the
+// wrong way; a rat in a one-square pipe is a wall (tools/fixtures/sewers-108-row27.json).
+//
+//   policy.spareBlockers = null           silence: the old behaviour -- the movement ladder sidesteps,
+//                                         lanes and backs off; nothing lures a spared body on purpose
+//                          'lure'         back off to a refuge outside the needle and let the creature
+//                                         follow us out of it (aggressive monsters do: rats, lupoggs)
+//                          'provoke'      as 'lure', but first ONE swing at it when nothing is already
+//                                         hitting us -- the operator's "hit them once and then back up"
+//
+// Movement-shaped, so it is the `movement` faculty. The swing is the single exception to the spare
+// rule and it is NARROW: one object id, a few seconds, granted by the keeper around one fight round.
+export const SPARE_BLOCKER_MODES = Object.freeze(['off', 'lure', 'provoke']);
+
+/** Normalise a spare_blockers value: null/'off' -> null, else 'lure' | 'provoke'; anything else throws. */
+export function spareBlockerMode(v) {
+  if (v === null || v === undefined) return null;
+  const m = String(v).trim().toLowerCase();
+  if (!SPARE_BLOCKER_MODES.includes(m))
+    throw new Error(`spare_blockers must be one of ${SPARE_BLOCKER_MODES.join(', ')} or null`);
+  return m === 'off' ? null : m;
+}
+
+export const PROVOKE_WINDOW_MS = 8000;
+
+/** Grant one provoking swing at exactly this object id, for a few seconds. */
+export function grantProvoke(session, id, now = Date.now()) {
+  if (session) session.spareProvoke = { id: Number(id), until: now + PROVOKE_WINDOW_MS };
+}
+export function endProvoke(session) { if (session) session.spareProvoke = null; }
+
+/** Is this id the one the keeper is provoking right now? */
+export function provokeExempt(session, id, now = Date.now()) {
+  const p = session?.spareProvoke;
+  return !!p && p.id === Number(id) && now < p.until;
 }

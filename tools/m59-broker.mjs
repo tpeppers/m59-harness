@@ -11923,6 +11923,13 @@ const TOOLS = [
           'players are never matched. null or [] clears it. The `spare` of a farm strategy sets the same ' +
           'key (the Icky Cave hold); while one that declares it is assigned, the value in the file is in ' +
           'force. autopilot status reports it as policy.spareCreatures' },
+      spare_blockers: { type: ['string', 'null'],
+        description: 'WHEN A SPARED CREATURE (spare_creatures) IS ALL THAT STANDS IN THE WAY of a wedged ' +
+          'character (m59-spare.mjs): "lure" backs off to a refuge outside the needle so the creature ' +
+          'follows it out (aggressive monsters do: rats, lupoggs); "provoke" first swings ONCE at it when ' +
+          'nothing is already hitting us, then backs off; null or "off" leaves it to the movement ladder. ' +
+          'Above the flee line only, at most 6 lures per room per 10 minutes. A farm strategy may declare ' +
+          'it as `spareBlockers`. autopilot status reports it as policy.spareBlockers' },
       loot_only: { type: ['object', 'null'], additionalProperties: { type: 'array', items: { type: 'string' } },
         description: 'PER-CREATURE LOOT ALLOW LIST: { creature: [item, ...] }, e.g. {"spider": ' +
           '["purple mushroom"]}. After killing a listed creature the keeper picks up ONLY those ' +
@@ -13032,6 +13039,10 @@ const TOOLS = [
       }
       if (a.spare_creatures !== undefined) {
         try { p.policy.spareCreatures = farmStrategyField('spare').normalize(a.spare_creatures ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      if (a.spare_blockers !== undefined) {
+        try { p.policy.spareBlockers = farmStrategyField('spareBlockers').normalize(a.spare_blockers ?? null); }
         catch (e) { return { started: false, reason: e.message }; }
       }
       // THE FARMING STRATEGY ASSIGNMENT. Loaded and validated HERE so a missing or broken file is

@@ -127,6 +127,13 @@ These tests are offline. They do not execute a raid or shut down a server.
   default object, round-tripped through the push into the session's attack veto, declared and set by
   the broker, reflected by `policy_control`. **It should fail the day a broker seeds an order from
   the effective policy again.**
+- `m59-spare-blocker-test.mjs` (13): a SPARED creature in the way (`spare_blockers`,
+  `lureSparedBlocker`, `grantProvoke`). Silence is the old behaviour; `lure` backs off to the planned
+  refuge and never swings; `provoke` swings once at exactly that id with the spare veto lifted only
+  during it, and not at all while something already hits us; nothing is done with a fightable body in
+  reach, below the flee line, unwedged, or past six lures per room per ten minutes; `passFightBack`,
+  `clearPathCheck` and the trade never pick a spared body; the strategy field is `movement` and refuses
+  a bad value. **It should fail the day a Qor caster's jam in the sewers is answered by killing a rat.**
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

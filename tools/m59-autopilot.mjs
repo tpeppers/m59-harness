@@ -30,6 +30,7 @@ import { allyVerdict } from './m59-ally.mjs';
 import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,sameJamPocket,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
 import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
+import { isSpared, grantProvoke, endProvoke } from './m59-spare.mjs';
 import * as skills from './m59-skills.mjs';
 import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
@@ -362,6 +363,9 @@ const SETTLE_GRACE_MS = 250;
 // to a square with "0 adjacent" — a contradiction that was written into the book as
 // fact.
 const REACH = 3;
+// lureSparedBlocker: at most this many lures per room per window, then the movement ladder has it.
+const SPARE_LURES_PER_ROOM = 6;
+const SPARE_LURE_WINDOW_MS = 10 * 60_000;
 // HOW LONG A SQUARE STAYS "COULD NOT GET THERE". Long enough that a hurt character stops
 // re-choosing it for the rest of the fight that is stopping it, short enough that a wall
 // blocked by one wandering monster is not written off for the session.
@@ -2082,6 +2086,10 @@ export class Autopilot {
       // Cave's spiders alive so they fill its spawn cap and no orc can spawn (operator, 2026-10-02).
       // A filter on targets and on the attack packet; survival (rest, flee, recover) is unchanged.
       spareCreatures: null,
+      // WHAT TO DO WHEN A SPARED CREATURE IS THE THING IN THE WAY (m59-spare.mjs spareBlockerMode):
+      // null leaves it to the movement ladder; 'lure' backs off so it follows us out of the needle;
+      // 'provoke' swings once first. See `lureSparedBlocker`.
+      spareBlockers: null,
       // THE FARMING STRATEGY ASSIGNED TO THIS CHARACTER, by name: substrate/farm-strategies/<name>.mjs
       // (m59-strategy-engine.mjs). null is none. NOT `strategy` below, which picks a STRATEGIES
       // pattern like 'fieldrest'. Only this name is pushed and carried; the file's own keys are
@@ -5916,6 +5924,10 @@ export class Autopilot {
         && await this.escapeIfWedgedAndHurt({near:this.inReachOfUs(),v}))return true;
     if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && await this.blinkPastSurvivalJam())return true;
+    // A spared blocker needs no weapon to be lured, so it is not behind the armed gate.
+    if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
+        && await this.lureSparedBlocker({near:this.inReachOfUs(),v}).catch(()=>false))
+      return true;
     if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && this.armedForSure()
         && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v}))
@@ -11242,7 +11254,10 @@ export class Autopilot {
     //
     // Do NOT "simplify" this to room.objects: the player exclusion is the entire safety case,
     // and m59-travelling-test pins it behaviourally — three players in reach must not arm it.
-    const near = this.inReachOfUs?.() ?? [];
+    // A SPARED BODY IS NOT A REASON TO STOP THE WALK: passFightBack will never swing at it, so arming
+    // the rung for one cancelled a journey to pick a fight that could not happen (`lureSparedBlocker`
+    // is the answer to a spared blocker, and it is the wedge ladder's, not this rung's).
+    const near = (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o));
     if (!near.length) return null;
 
     w.clearPathPass = this.passes;
@@ -15603,6 +15618,8 @@ export class Autopilot {
 
   async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
     const s=this.s,c=s.client,me=c?.self;
+    // A body we will not swing at is asked about first, and only when it is ALL that is in reach.
+    if (await this.lureSparedBlocker({near,v}).catch(()=>false)) return true;
     if (this.policy?.tradeInPlaceWhenWedged===false || !me || this.hold || this.holdWorks()
         || !this.armedForSure() || !this.wedgedInPlace()) return false;
     if (this.crowded({forFighting:true}) && this.policy?.tradeInPlaceWhenCrowded===false) {
@@ -15613,7 +15630,7 @@ export class Autopilot {
     const known=Object.values(loadSpawns(SPAWN_FILE)?.creatures ?? {});
     const infoOf=o=>known.find(x=>String(x.name).toLowerCase()===nameOf(o).toLowerCase());
     const candidates=near.filter(o=>(o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)
-      && infoOf(o)?.level!=null && !this.karmaForbids(nameOf(o))
+      && infoOf(o)?.level!=null && !this.karmaForbids(nameOf(o)) && !this.sparedHere(o)
       && Math.hypot(o.col-me.col,o.row-me.row)<=REACH);
     const hp=(v ?? c.vitals())?.health,frac=pct(hp);
     if (frac==null || !(hp?.max>0)) return false;
@@ -15765,6 +15782,107 @@ export class Autopilot {
     if (!spot) return null;
     return {spot:{row:spot.row,col:spot.col},
       filter:(col,row)=>col===spot.col && row===spot.row && outside(col,row)};
+  }
+
+  /** Is this room object a monster this character leaves alive (policy.spareCreatures)? */
+  sparedHere(o) {
+    const patterns=this.policy?.spareCreatures;
+    return !!patterns?.length && isSpared(this.s?.client,o,patterns);
+  }
+
+  // A SPARED CREATURE IS THE THING IN THE WAY: DRAW IT OUT, NEVER KILL IT.
+  //
+  // Operator, 2026-10-11: Qor casters must "walk the barloque sewers without fighting/killing its rats,
+  // even if they get stuck (they might need some special tricks to get by the rats without killing
+  // them.. maybe sometimes you have to hit them once and then back up so they'll chase you to stop
+  // blocking you, etc.)". A rat is karma -20 (giarat.kod), so each kill walks a Qor's karma toward good,
+  // and a rat in a one-square pipe is a wall (tools/fixtures/sewers-108-row27.json: six of them, seventy
+  // seconds, nobody past).
+  //
+  // Before this, the wedge ladder's trade (`tradeInPlaceIfWedged`) and `passFightBack` both PICKED the
+  // spared body and then had the swing refused by the spare filter: a wasted pass, every pass, and a
+  // fightable creature behind it never chosen. Both now skip spared bodies; this is what happens when a
+  // spared body is ALL that is in reach.
+  //
+  // It is the trade's lure without the trade: the same refuge search (`planBlockerLure`: a safe wall
+  // outside the needle, behind us, with a 2x2 landing beside it for the chaser), the same retreat, the
+  // same chase observation (`pendingBlockerLure` -> `observeBlockerLure` -> `finishClearedBlocker`).
+  // What it drops is the ambiguity refusal, because nothing here infers WHO retaliated from prose -- the
+  // chase is judged by the target's object id, which is unambiguous among twenty namesake rats.
+  //
+  //   spare_blockers: 'lure'     back off to the refuge; aggressive creatures (rats, lupoggs) follow
+  //   spare_blockers: 'provoke'  first ONE swing at it, only when nothing is already hitting us -- one
+  //                              swing from a level-70 does not kill a 30-hp rat as a rule, and a kill
+  //                              that does happen is recorded loudly rather than hidden
+  //
+  // Above the flee line only: below it the body belongs to the survival ladder, which walks away from
+  // what it will not fight. Bounded per room so a creature that will not follow cannot own the keeper.
+  async lureSparedBlocker({ near = [], v = null } = {}) {
+    const mode=this.policy?.spareBlockers;
+    if (mode!=='lure' && mode!=='provoke') return false;
+    const s=this.s,c=s.client,me=c?.self;
+    if (!me || !this.policy?.spareCreatures?.length || this.hold || this.holdWorks() || !this.wedgedInPlace()) return false;
+    const inReach=near.filter(o=>!(o.flags & OF.PLAYER) && Math.hypot(o.col-me.col,o.row-me.row)<=REACH);
+    // Anything fightable in reach is the trade's to answer, not ours.
+    if (!inReach.length || inReach.some(o=>!this.sparedHere(o))) return false;
+    const hp=(v ?? c.vitals())?.health,frac=pct(hp),fleeAt=this.safety().fleeAt;
+    if (frac==null || frac<fleeAt) return false;
+    const now=Date.now(),room=s.world?.room?.num;
+    this._spareLures=(this._spareLures??[]).filter(x=>now-x.at<SPARE_LURE_WINDOW_MS);
+    if (this._spareLures.filter(x=>x.room===room).length>=SPARE_LURES_PER_ROOM) {
+      if (!this._spareLureCapNoted || now-this._spareLureCapNoted>SPARE_LURE_WINDOW_MS) {
+        this._spareLureCapNoted=now;
+        this.note('spared blocker: lure budget spent in this room; leaving it to the movement ladder',
+          {room,lures:SPARE_LURES_PER_ROOM,window_min:SPARE_LURE_WINDOW_MS/60000});
+      }
+      return false;
+    }
+    const nameOf=o=>o.name ?? c.rsc?.get?.(o.nameRsc) ?? '';
+    inReach.sort((a,b)=>Math.hypot(a.col-me.col,a.row-me.row)-Math.hypot(b.col-me.col,b.row-me.row));
+    const target=inReach[0],name=nameOf(target);
+    const origin={row:me.row,col:me.col},blocked={row:target.row,col:target.col};
+    const operation_id=process.pid+'-'+now+'-'+(this._blockerSequence=(this._blockerSequence??0)+1);
+    const event=(phase,detail={})=>this.blockerEvent(phase,{operation_id,target:name,target_id:target.id,
+      mode:'spared_'+mode,...detail});
+    const plan=this.planBlockerLure(target,origin);
+    this._spareLures.push({at:now,room});
+    if (!plan) {
+      event('refusal',{reason:'no reachable refuge outside the needle'});
+      return false;
+    }
+    event('start',{origin,blocked_square:blocked,refuge:plan.spot});
+    this.tally.spared_lures=(this.tally.spared_lures||0)+1;
+    let provoked=null;
+    if (mode==='provoke' && !this.watch?.attack) {
+      this.doing='provoking a spared blocker';
+      grantProvoke(s,target.id);
+      try {
+        provoked=await this.fightNow({target:name,exactTargetId:target.id,rounds:1,disengageAt:fleeAt,
+          loot:false,holdPosition:true,reach:REACH,weaponPriority:this.weaponPriorityNow(),
+          bannedWeapons:this.bannedWeaponsNow()}).catch(e=>({fought:false,note:e.message}));
+      } finally { endProvoke(s); }
+      event('provoke',{fought:!!provoked?.fought,landed:provoked?.landed_hits??null,killed:!!provoked?.killed});
+      if (provoked?.killed) {
+        this.tally.spared_killed=(this.tally.spared_killed||0)+1;
+        this.note('SPARED BLOCKER DIED TO THE PROVOKING SWING', {target:name,room,
+          why:'one swing was meant to draw it, not kill it; spare_blockers "lure" never swings'});
+        this.progress('spared blocker gone');
+        return true;
+      }
+      if (provoked?.died) return true;
+    }
+    this.doing='luring a spared blocker';
+    const r=await this.takeSafeSpot('lure a spared creature out of the way',null,
+      {source:'recovery',recovery:true,nearestOnly:true,candidateFilter:plan.filter}).catch(e=>({took:false,why:e.message}));
+    event('retreat',{took:!!r?.took,cancelled:!!r?.cancelled,refuge:r?.spot??plan.spot,provoked:!!provoked?.fought});
+    if (r?.took) {
+      this.pendingBlockerLure={operation_id,client:c,generation:s.movementGeneration,room,
+        target:name,target_id:target.id,blocked,refuge:plan.spot,until:Date.now()+30000};
+      this.observeBlockerLure();
+    }
+    this.note('spared blocker: backed off so it follows us out of the way',
+      {target:name,target_id:target.id,mode,refuge:plan.spot,took:!!r?.took,provoked:!!provoked?.fought});
+    return !!(r?.took || provoked?.fought);
   }
 
   // THE TWO HALVES OF `last_error`'s LIFECYCLE, NAMED, so that the rule can be driven
@@ -18758,6 +18876,9 @@ export class Autopilot {
                  // pvp_rooms: a PLAYER is never fought back outside the listed rooms; monsters are.
                  : (o.flags & OF.PLAYER) && !pvpAllowedHere(this.policy, room?.num ?? this.s.world?.room?.num)
                    ? { why: 'outside pvp_rooms: players are not fought back in this room' }
+                 // A SPARED MONSTER IS NEVER THE PICK: the swing would be refused at the packet, the
+                 // pass spent on nothing, and a fightable body behind it never chosen.
+                 : this.sparedHere(o) ? { why: 'spared (spare_creatures)' }
                    : this.refuseEngagement(name) };
     }).sort((x, y) => x.d - y.d);
     const pick = rows.find(r => r.name && !r.refused);

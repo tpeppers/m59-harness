@@ -17,7 +17,7 @@
 // caller did not ask for. A skill that gives up says why, at which stage, and what
 // the state was when it stopped.
 
-import { isSpared, sparePatternsOf } from './m59-spare.mjs';
+import { isSpared, sparePatternsOf, provokeExempt } from './m59-spare.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isEnemyHit } from './m59-combatlog.mjs';
 export { parseDeathBroadcast } from './m59-death-attribution.mjs';
@@ -2402,7 +2402,7 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
   // A MONSTER THIS CHARACTER LEAVES ALIVE is never a candidate (policy.spareCreatures,
   // m59-spare.mjs): every hunt, fight and fight-back that picks a target moves past it.
   const spared = sparePatternsOf(s);
-  if (spared?.length) list = list.filter(o => !isSpared(c, o, spared));
+  if (spared?.length) list = list.filter(o => !isSpared(c, o, spared) || provokeExempt(s, o.id));
   if (match) list = list.filter(o => match(c.rsc.get(o.nameRsc) || ''));
   else if (low) list = list.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(low));
   // `match` ANSWERS ABOUT THE NAME; `avoid` ANSWERS ABOUT THE OBJECT, and they are not the

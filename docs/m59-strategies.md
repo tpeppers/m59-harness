@@ -288,6 +288,28 @@ broker's) and a keeper restart (`policy_orders` and the echo filter are the keep
 `m59-service.mjs restart` then `restart-keepers`. The broker half alone already stops new damage, through
 `shadowing`; the keeper half is what holds against every other writer.
 
+### `spare_blockers`: a spared creature IN THE WAY
+
+Operator, 2026-10-11, of Qor casters crossing the Barloque sewers: walk them *"without fighting/killing
+its rats, even if they get stuck ... maybe sometimes you have to hit them once and then back up so they'll
+chase you"*. A spared rat in a one-square pipe is a wall, and before this the two rungs that answer a jam
+by swinging (`tradeInPlaceIfWedged`, `passFightBack`) picked the spared body and had the swing refused by
+the spare filter — a wasted pass every pass, with a fightable creature behind it never chosen; and
+`clearPathCheck` cancelled the walk to make room for that refused swing. All three now skip spared bodies.
+
+When a spared body is ALL that is in reach of a wedged character above its flee line, `lureSparedBlocker`
+answers, by `spareBlockers` (strategy) / `spare_blockers` (tool), movement faculty:
+
+| value | does |
+|---|---|
+| `null` / `"off"` | the old behaviour: the movement ladder sidesteps, lanes and backs off |
+| `"lure"` | back off to a refuge outside the needle (`planBlockerLure`) so the creature follows us out; the chase is watched by object id |
+| `"provoke"` | as `lure`, but first ONE swing at it — only when nothing is already hitting us. The spare veto is lifted for that one id for a few seconds (`grantProvoke`) |
+
+At most six lures per room per ten minutes, then it is the movement ladder's again. A provoking swing that
+kills is noted loudly (`SPARED BLOCKER DIED`, `tally.spared_killed`). `qor-lupogg-sewers` (example) is the
+first user; `m59-spare-blocker-test.mjs` (13, offline) pins it.
+
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 
 `icky-cave-orc-clear` (example) only REPORTS when room 27 is held. Taking the chalice is a sequence,
