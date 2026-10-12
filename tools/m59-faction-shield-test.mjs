@@ -170,4 +170,33 @@ ok('a finished soldier walks nowhere', async () => {});
     assert.equal(typeof s.text === 'function' ? s.text(st) : s.text, '');
 }
 
+// THE KEEPER'S HOME FOLLOWS THE ERRAND (Scooter, 2026-10-12: assigned to Ukgoth and confined
+// away from 585 while hunting a Duke's soldier there). Every leg that goes somewhere is preceded
+// by a home step naming the same room, and the run ends by putting the home back.
+ok('the keeper home is moved before every leg and restored at the end', () => {});
+{
+  const steps = await script.steps({ faction: 'princess', agent: 't5', agents: ['t5'], max_rooms: 3 });
+  const hunt = { needShield: true, stage: { n: 1, target: "soldier of the Duke's army", order: [585, 586, 587] } };
+  const report = { needShield: true, stage: { n: 1, killed: true } };
+  let paired = 0;
+  steps.forEach((s, i) => {
+    if (s.do !== 'walk' || typeof s.to !== 'function' || s.always) return;
+    const prev = steps[i - 1];
+    assert.equal(typeof prev?.home, 'function', `walk ${i} has no home step before it`);
+    for (const st of [hunt, report]) {
+      const rooms = prev.home(st);
+      if (!rooms) continue;
+      assert.deepEqual(rooms, [s.to(st)], `walk ${i}: home ${rooms} but walking to ${s.to(st)}`);
+      paired++;
+    }
+  });
+  // the liege (twice: join walk, shield walk), three flag rooms, the stage-1 report
+  assert.ok(paired >= 6, `only ${paired} home/walk pairs resolved`);
+  for (const s of steps.filter(x => typeof x.home === 'function'))
+    assert.equal(s.home({ hasShield: true, here: 39 }), null, 'a finished soldier moved its home');
+  const restore = steps.filter(x => x.restoresHome);
+  assert.equal(restore.length, 1);
+  assert.equal(restore[0].always, true, 'the restore must run however the errand ends');
+}
+
 console.log(`faction-shield: ${n} groups passed${kod ? ' (hints read from the kod)' : ' (no kod tree: built-in hints)'}`);

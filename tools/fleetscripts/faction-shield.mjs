@@ -377,6 +377,43 @@ export const script = {
                 room: st => st.near?.room ?? null }),
     ];
 
+    // THE KEEPER'S HOME FOLLOWS THE ERRAND. Operator, 2026-10-12, watching Scooter leave the
+    // Princess for a Duke's soldier in 585 with his keeper still assigned to Ukgoth (599) and
+    // confined to rooms that did not include 585: any survival rung that handed the body back
+    // would have steered it toward the trolls, not the fight it was in. So before every leg the
+    // keeper's assigned room and confinement are set to where that leg is going -- the flag room
+    // while a soldier is hunted, the liege's room while she is asked or reported to -- and put
+    // back as they were when the run ends, however it ends. Confinement is honoured by the
+    // survival refuge too (`confine_rooms` in the broker), so a hurt hunter takes a wall in the
+    // flag room rather than a refuge across the map. A refusal here is reported, never fatal:
+    // the hunt itself does not depend on it.
+    const homeTo = (roomsOf, label) => ({ ...verify(async ({ agent: me, call, state }) => {
+      const rooms = (roomsOf(state) ?? []).map(Number).filter(Number.isFinite);
+      if (!rooms.length) return { ok: true, skipped: true };
+      if (state.homeSet === rooms.join(',')) return { ok: true, home: rooms[0], unchanged: true };
+      if (!state.homeBefore) {
+        const st = await call('autopilot', { agent: me, action: 'status' }, 40_000).catch(() => null);
+        const pol = st?.policy;
+        if (!pol) return { ok: true, warning: `policy unreadable, so the home was left alone for ${label}` };
+        state.homeBefore = { assigned_room: pol.assignedRoom ?? null, confine_rooms: pol.confineRooms ?? [] };
+      }
+      const r = await call('autopilot', { agent: me, action: 'start', assigned_room: rooms[0],
+        confine_rooms: rooms }, 40_000).catch(e => ({ error: e.message }));
+      if (r?.error) return { ok: true, warning: `home not moved to ${rooms[0]} for ${label}: ${r.error}` };
+      state.homeSet = rooms.join(',');
+      return { ok: true, home: rooms[0], confined: rooms, for: label };
+    }, `could not move the keeper's home for ${label}`), home: roomsOf });
+
+    const restoreHome = { ...verify(async ({ agent: me, call, state }) => {
+      if (!state.homeBefore || !state.homeSet) return { ok: true, skipped: true };
+      const r = await call('autopilot', { agent: me, action: 'start', ...state.homeBefore }, 40_000)
+        .catch(e => ({ error: e.message }));
+      if (r?.error) return { ok: true, warning: `could not put the home back to ` +
+        `${JSON.stringify(state.homeBefore)}: ${r.error} -- set it by hand` };
+      state.homeSet = null;
+      return { ok: true, restored: state.homeBefore };
+    }, 'could not put the keeper\'s home back'), always: true, restoresHome: true };
+
     const mark = verify(async ({ agent: me, call, state }) => {
       state.cursor = await cursorNow(call, me);
       return true;
@@ -461,6 +498,7 @@ export const script = {
     const joinSteps = [
       // Everyone starts at the liege: the join asks there, and the shield asks there too. A
       // character that already carries the shield resolves every leg to where it stands.
+      homeTo(st => (active(st) ? [spec.room] : null), 'the liege'),
       walk(stay, { candidates }),
       gate(st => (active(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (needJoin(st) && !st.resumedJoin ? spec.leader : null), 'liege'),
@@ -501,12 +539,15 @@ export const script = {
         state.buy = { ...seller, item };
         return { ok: true, buy: item, at: `${seller.seller} (${seller.room})` };
       }, 'could not decide where to get the join item'),
+      homeTo(st => (active(st) ? [st.buy?.room ?? stay(st)] : null), 'the join item\'s shop'),
       walk(st => st.buy?.room ?? stay(st), { candidates }),
       shop(st => st.buy?.seller ?? null,
            st => (st.buy ? [{ match: new RegExp(`^${st.buy.item}$`, 'i'), amount: 1 }] : []),
            { optional: true }),
 
       // HAND IT OVER — to the liege (duke, jonas) or to the letter's recipient (princess).
+      homeTo(st => (active(st) ? [(needJoin(st) ? st.joinAsk?.room : null) ?? stay(st)] : null),
+             'the join hand-over'),
       walk(st => (needJoin(st) ? st.joinAsk?.room : null) ?? stay(st), { candidates }),
       gate(st => (needJoin(st) ? `npc:${st.joinAsk?.target ?? spec.leader}` : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (needJoin(st) ? st.joinAsk?.target : null), 'join recipient'),
@@ -562,6 +603,8 @@ export const script = {
       ];
       for (let i = 0; i < maxR; i++) {
         out.push(
+          homeTo(st => (hunting(st, n) && st.stage.order?.[i] ? [st.stage.order[i]] : null),
+                 `stage ${n}, flag room ${i + 1}`),
           walk(st => (hunting(st, n) && st.stage.order?.[i]) || st.here || spec.room,
                { candidates, optional: true }),
           // SCOUT. A room is worth fighting in only when the exact troop is standing in it.
@@ -611,6 +654,7 @@ export const script = {
       // Only the stage that has just been killed reports — a resume=2 run skips stage 1's report.
       const due = st => st.needShield && !st.promoted && st.stage?.n === n && st.stage.killed === true;
       return [
+      homeTo(st => (due(st) ? [spec.room] : null), `stage ${n} report`),
       walk(st => (due(st) ? spec.room : (st.here ?? spec.room)), { candidates }),
       gate(st => (due(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (due(st) ? spec.leader : null), 'liege'),
@@ -640,6 +684,7 @@ export const script = {
     };
 
     const shieldSteps = [
+      homeTo(st => (active(st) ? [spec.room] : null), 'the liege'),
       walk(stay, { candidates }),
       gate(st => (active(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (st.needShield && !st.promoted && !resumeStage ? spec.leader : null), 'liege'),
@@ -678,6 +723,7 @@ export const script = {
       ...joinSteps,
       ...shieldSteps,
       { ...ungate(liegeGate), always: true },
+      restoreHome,
       ...(home === undefined || home === null ? [] : [{ ...walk(Number(home)), always: true }]),
       { ...verify(async ({ state }) => {
           const failed = Object.values(state.results ?? {}).find(r => r && r.ok === false);
