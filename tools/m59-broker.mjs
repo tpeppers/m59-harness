@@ -135,6 +135,7 @@ import {
 } from './runtime/fleet-lock.mjs';
 import { HANDOVER_PROTOCOL, RequestHold, handOver, judgeAdoption, successorOf, successorSpawnSpec,
          takeOver } from './runtime/broker-handover.mjs';
+import {createBrokerListenerIdentity} from './runtime/broker-listener-identity.mjs';
 import {
   AccountLeaseRegistry,
   assertCanonicalAccountLeaseNamespace,
@@ -4582,6 +4583,7 @@ let pendingFleetTransfer = null;
 let carriedMenagerieToken = null;
 let rpcServer = null;
 let rpcServerPort = null;
+let listenerIdentity = null;
 let dashboardServer = null;
 let dashboardServerPort = null;
 let rpcInFlight = 0;
@@ -19251,6 +19253,7 @@ function brokerHealth() {
     // handover over the cold stop/start; a broker without it can only be restarted cold.
     broker_handoff: { protocol: HANDOVER_PROTOCOL, control: '/control/handoff',
                       retired: brokerRetired, holding: handoverHold.state },
+    listener_identity: { protocol: 1, available: listenerIdentity?.available()===true },
     // THE SERVER'S SAVE CADENCE, as this fleet has observed it (m59-idgen.mjs SaveClock): the
     // last save, the median gap between recent ones, and the next one that gap predicts. Every
     // save renumbers every object id, so this is also "when did every id go stale".
@@ -19598,8 +19601,15 @@ async function brokerRtsRead(url) {
 }
 
 function serveHttp(port, dashboardPort = null, { handle = null } = {}) {
+  if(!listenerIdentity)listenerIdentity=createBrokerListenerIdentity({
+    identity:()=>({pid:process.pid,fleet:FLEET||'default',root:BROKER_ROOT,state:STATE_FILE,port:rpcServerPort}),
+    active:()=>!!rpcServer?.listening&&!brokerStopping&&!brokerQuiet()&&fleetClaimStillOurs(),
+  });
   const audioPending=new Map();
   const server = http.createServer(withCompendiumRequest(async (req, res) => {
+    // Identity is never held/forwarded across handover. Prove the process that
+    // actually answered this connection, or refuse and let the caller rediscover.
+    if(listenerIdentity.http(req,res))return;
     // CHANGING HANDS. Held while the fleet moves; once it has moved, forwarded to the broker
     // that now owns it. Before anything else, so no request is served from a snapshot.
     if (handoverHold.state !== 'open') {
@@ -19771,6 +19781,9 @@ function serveHttp(port, dashboardPort = null, { handle = null } = {}) {
     server.once('error', rejectListen);
     const announce = () => {
       server.off('error', rejectListen);
+      // Optional observation aid: an occupied/unavailable pipe must not interrupt
+      // fleet service. Verifiers fail closed; there is no inherited-key fallback.
+      void listenerIdentity.start().catch(()=>console.error('[identity] local proof unavailable; no ownership checks may be bypassed'));
       console.error(`m59 broker on http://${bind}:${port} — ${TOOLS.length} tools, ` +
                     `${resources.size} resources; ${gameServerBanner()}` +
                     (handle ? '  [socket handed over from the previous broker]' : '') +
@@ -21024,6 +21037,7 @@ function runBrokerHandover() {
     ].filter(Boolean),
     commit() {
       brokerRetired = true;
+      listenerIdentity?.close();
       pendingFleetTransfer = null;
       // Nothing of the fleet's is ours any more. No release (the successor holds every claim),
       // no liveness-file removal (it is the successor's now), and no keeper may be signalled
