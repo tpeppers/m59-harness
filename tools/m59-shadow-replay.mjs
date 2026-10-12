@@ -18,6 +18,9 @@ import {loadoutForActor} from './m59-scene-loadout.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
+// A yielded/ended decision is history, not an in-flight refuge owner. Keeping
+// it in the restored recorder must not suppress the captured journey's walk.
+export const replayJourneyMayResume=decision=>!decision||['ended','yielded'].includes(decision.status);
 export function configureReplayEnvironment(selection,env=process.env) {
   const runtime=configureLabEnvironment(selection,env,{scope:`replay-${process.pid}`,fresh:true});
   env.M59_SURVIVAL_DECISION_DIR=path.join(runtime.runtimeDir,'decisions');
@@ -284,7 +287,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         }
         const destination=replayJourneyDestination(control);
         k.running=true;k.stopping=false;k.startedAt=Date.now();k.startWatchdog();
-        if(destination!=null&&!currentSurvivalDecision(s)) {
+        if(destination!=null&&replayJourneyMayResume(currentSurvivalDecision(s))) {
           assumptions.push('captured journey restarted through keeper travel; route replanned and per-journey stop counters restarted');
           replayed_journey=await resumeReplayJourney(k,destination,control.inert?.why);
         }

@@ -36,7 +36,7 @@ import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
-import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS,
+import { recoveryRefugeReach, recoveryOccupiedSquares, recoveryUnderPressure, observeRefugeProgress, REFUGE_PROGRESS_MS,
          planDoorEscape } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
@@ -5845,6 +5845,12 @@ export class Autopilot {
     if(!previous && !s.shelterPolicy?.need?.()) return false;
     const reason=previous ? `chosen shelter approach interrupted: ${why}`
       : `shelter needed during fallback travel: ${why}`;
+    // A replacement must not select the same currently blocked refuge again.
+    // This is temporary local reachability evidence, not a change to safe-wall geometry.
+    if (previous?.chosen_refuge && /object_blocked|off plan|no.*progress/i.test(why)) {
+      const wall = previous.chosen_refuge;
+      if (wall.kind !== 'exit') this.noteUnreachableSpot(s.world?.room?.num,wall.col,wall.row);
+    }
     const choice=this.replacementSurvivalChoice(reason,previous);
     // A fresh recovery chooses its closest clear wall independently of quarry
     // or the onward destination. Failed approaches use the replacement ladder.
@@ -6094,8 +6100,11 @@ export class Autopilot {
       }
       observeRefugeProgress(progress,s.world?.geometry,client.self,spot);
       const at=client.self;
+      // A fragile traveller taking hits cannot spend eight stationary seconds
+      // proving the jam. Genuine confirmed route progress still resets this clock.
+      const noProgressMs=recoveryUnderPressure(client,s.damagedAt)?2000:REFUGE_PROGRESS_MS;
       if((at && !at.predicted && at.row===spot.row && at.col===spot.col)
-          || Date.now()-progress.progressedAt<REFUGE_PROGRESS_MS)return;
+          || Date.now()-progress.progressedAt<noProgressMs)return;
       clearInterval(timer);
       // Temporary local reachability evidence, never a global verdict on the wall.
       this.noteUnreachableSpot(room,spot.col,spot.row);
@@ -6279,10 +6288,17 @@ export class Autopilot {
         // precisely where a hurt traveller needs a refuge; the geometry still decides
         // whether the square is defensible and reachable.
         const wallsAllowed = true;
+        let maxApproachSteps = Infinity;
+        if (recovery && onward && recoveryUnderPressure(c,s.damagedAt,
+            {failed:(currentSurvivalDecision(s)?.replan_count??0)>0})) {
+          const nearest = this.searchSafeSpot(geo,me,room,{within,quarryReach,strictQuarryReach,los,quarry,
+            stats:{},shareCap,nearQuarry,exclusiveClaim,recovery,onward:null,forwardBias:1,wallsAllowed,candidateFilter});
+          if (nearest && Number.isFinite(nearest.steps_away)) maxApproachSteps = nearest.steps_away + 3;
+        }
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
           stats: spotStats, shareCap, nearQuarry, exclusiveClaim, recovery,
-          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed, candidateFilter });
+          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed, candidateFilter, maxApproachSteps });
         if (!spot) break;
         const claimed = exclusiveClaim
           ? claimExclusiveSpot(this.s.name, room.num, spot.col, spot.row)
@@ -6468,7 +6484,10 @@ export class Autopilot {
       // length once it has planned — so hand it a cap that already fits the walk asked for.
       const walkBudget = Math.max(24, Math.ceil((spot.steps_away ?? 0) * 2) + 12);
       const approachOptions = { maxSteps: walkBudget, routeFirst: recovery || shelterOnly,
-        avoidSquares: recovery || shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null };
+        avoidSquares: recovery || shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null,
+        // Fine movement uses the actual body discs, so a legal sub-square gap
+        // is not removed along with the body's entire occupied coarse square.
+        fineAvoidSquares: null };
       const stopProgressWatch=recovery?this.watchRecoveryApproach(spot):()=>{};
       const arrival = fine
         ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, approachOptions)
@@ -8667,7 +8686,8 @@ export class Autopilot {
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
                                   exclusiveClaim = false, onward = null, forwardBias = 1,
-                                  wallsAllowed = true, recovery = false, candidateFilter = null }) {
+                                  wallsAllowed = true, recovery = false, candidateFilter = null,
+                                  maxApproachSteps = Infinity }) {
     const s = this.s;
     // One room search can inspect hundreds of candidate squares. Reading the shared
     // claim directory for every candidate would turn that into hundreds of lock/file
@@ -8720,8 +8740,10 @@ export class Autopilot {
           : spotTakenByAnother(this.s.name, room.num, col, r2, shareCap, spotClaims);
         if (claimed)
           return { reachable: false, reason: 'occupied at this share cap' };
-        if (recoveryReach) return recoveryReach(col, r2);
-        return s.world.reach(col, r2);
+        const route = recoveryReach ? recoveryReach(col,r2) : s.world.reach(col,r2);
+        if (route?.reachable && Number.isFinite(route.steps) && route.steps > maxApproachSteps)
+          return {reachable:false,reason:'longer exposed approach while under pressure'};
+        return route;
       },
     });
   }

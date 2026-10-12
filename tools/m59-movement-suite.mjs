@@ -34,6 +34,9 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-travel-crowd-test.mjs', 'passive pursuit estimates, bounded live-body detours and short pressure recovery retain uncertainty and movement ownership'],
+  ['m59-shadow-journey-test.mjs', 'shadow replay resumes yielded or ended journey ownership and preserves active recovery'],
+  ['m59-pivot-crowd-test.mjs', 'real optimized rail and pivot routes detour before confirmation waits; paced blockers and ownership remain guarded'],
   ['m59-travel-continuity-test.mjs', 'a recovering walk retains its objective, refused edges, mandatory avoidance and survival ownership'],
   ['m59-passage-admission-test.mjs', 'narrow passages admit one keeper across processes and release only a confirmed exit'],
   ['m59-island-composition-test.mjs', 'Island work compiles before departure and required safe chains refuse direct fallback'],

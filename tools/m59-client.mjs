@@ -26,6 +26,7 @@ import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
 import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
 import { AudioObservations } from './m59-audio-observations.mjs';
+import { MonsterAttention } from './m59-monster-attention.mjs';
 import { retireGeneration, closeGeneration } from './m59-idgen.mjs';
 import {
   Reader, objId, MAX_ANGLE, KOD_FINENESS, OF,
@@ -365,6 +366,7 @@ export class M59Client {
     this.enchantmentsById = new Map();
     this.enchantmentObservations = new EnchantmentObservations();
     this.audioObservations = new AudioObservations();
+    this.monsterAttention = new MonsterAttention();
     this.events = [];                               // recent world events, newest last
     this.maxEvents = 500;
     this.evSeq = 0;
@@ -832,6 +834,7 @@ export class M59Client {
 
   _connectionClosed() {
     this.audioObservations.reset();
+    this.monsterAttention.reset();
     this.log('connection closed');
     this.state = 'closed';
     this.stopKeepalive();
@@ -1551,6 +1554,7 @@ export class M59Client {
       // and BP_UNWAIT re-reads the pack and the room so the ids this client serves are
       // post-save ones again. `idsAsOf()` says which side of the last save they are on.
       case BP.WAIT:
+        this.monsterAttention.reset(); // a save retires object identities
         this.savePausedAt = Date.now();
         try {
           this.idGenerations = retireGeneration(this.idGenerations, {
@@ -1621,6 +1625,7 @@ export class M59Client {
       case BP.PLAYER: {
         const p = parsePlayer(body);
         this.audioObservations.enter(p.id,p.roomId,p.roomRsc,p.security);
+        this.monsterAttention.reset();
         this.enchantmentObservations.enter(p.id,p.roomId,Date.now());
         this.selfId = p.id;
         this.room.id = p.roomId;
@@ -1670,6 +1675,7 @@ export class M59Client {
           o.posAt = contentsAt;
           return [o.id, o];
         }));
+        this.monsterAttention.reconcile(this.room.objects);
         // SELF-HEAL A STALE selfId. selfId is set only by the BP.PLAYER packet (one per
         // room entry), and if it ever goes stale — the object map is rebuilt, an id is
         // reassigned — `self` resolves to undefined and the character is BLIND: no
@@ -1701,6 +1707,7 @@ export class M59Client {
         if (!this.check('CREATE', res)) break;
         res.object.appearanceRevision = ++this.appearanceRevision;
         res.object.posAt = Date.now();
+        this.monsterAttention.remove(res.object.id);
         this.room.objects.set(res.object.id, res.object);
         this.emit('appeared', { id: res.object.id, what: describeObject(res.object, this.lookup) });
         break;
@@ -1711,6 +1718,7 @@ export class M59Client {
         if (!this.check('REMOVE', res)) break;
         const gone = this.room.objects.get(res.id);
         this.room.objects.delete(res.id);
+        this.monsterAttention.remove(res.id);
         this.emit('vanished', { id: res.id, what: gone ? describeObject(gone, this.lookup) : `id ${res.id}` });
         break;
       }
@@ -1719,10 +1727,12 @@ export class M59Client {
         const res = parseMove(body);
         if (!this.check('MOVE', res)) break;
         const o = this.room.objects.get(res.id);
+        const before = o ? { ...o } : null;
         // Anything the SERVER says about this object supersedes a prediction, so the flag
         // is cleared here rather than left to rot — a stale `predicted: true` on a
         // confirmed position would make every later reader distrust a good reading.
         if (o) Object.assign(o, { x: res.x, y: res.y, col: res.col, row: res.row, predicted: false, posAt: Date.now() });
+        if (o) this.monsterAttention.move(o, before, this.room.objects, this.selfId);
         // WRITE DOWN WHERE EVERY BODY ACTUALLY WENT.
         //
         // This packet is the only ground truth about walkable space this repository has, and

@@ -144,6 +144,17 @@ test('real approach progress prevents cancellation; returning to old squares doe
   t.mock.timers.tick(5000);assert.equal(s.movementGeneration,0);
   c.self.col=20;t.mock.timers.tick(3000);assert.equal(s.movementGeneration,1);stop();
 });
+
+test('incoming damage shortens a motionless refuge approach to two seconds; progress still renews it',t=>{
+  t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+  const {k,s,c,target}=approachFixture();s.damagedAt=Date.now();
+  const stop=k.watchRecoveryApproach(target);
+  t.mock.timers.tick(1500);assert.equal(s.movementGeneration,0);
+  c.self.col=21;t.mock.timers.tick(500);assert.equal(s.movementGeneration,0);
+  t.mock.timers.tick(1500);assert.equal(s.movementGeneration,0);
+  t.mock.timers.tick(500);assert.equal(s.movementGeneration,1);
+  assert.ok(k.unreachableIn(38).has('23,7'));stop();
+});
 test('a new recovery episode and a completed arrival do not inherit an expired approach clock',t=>{
   t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
   const {k,s,c,target}=approachFixture();let stop=k.watchRecoveryApproach(target);

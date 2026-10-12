@@ -38,6 +38,8 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
     at:finePosition(o),angle:Number.isFinite(o.angle)?observed(o.angle):unknownField(),
     facing_degrees:Number.isFinite(o.degrees)?observed(o.degrees):unknownField(),
     flags:observed(o.flags??null),name_resource:observed(o.nameRsc??null),
+    client_attention: !self && (o.flags&OF.ATTACKABLE) && !(o.flags&OF.PLAYER)
+      ? copyReplayConfig(c?.monsterAttention?.view(o.id,c.selfId,at)??null) : null,
     vitals:{hp:self?vital(v.health):unknownField(),mana:self?vital(v.mana):unknownField(),
       vigor:self?vital(v.vigor):unknownField()},
     server_state:unknownField()});

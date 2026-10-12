@@ -2918,6 +2918,7 @@ class KeeperProxy {
         objects: new Map((s.objects ?? []).map(o => [o.id, {
           id: o.id, nameRsc: o.name, name: o.name,
           flags: o.flags ?? 0, col: o.col ?? null, row: o.row ?? null,
+          x: o.x ?? null, y: o.y ?? null, attention: o.attention ?? null,
         }])),
       },
     };

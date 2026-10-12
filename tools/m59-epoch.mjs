@@ -82,6 +82,8 @@ export const DOMAINS = Object.freeze({
     files: Object.freeze([
       'tools/m59-game.mjs',       // leaveVia, walkTo, walkFine, step, followRail, railAcross
       'tools/m59-session-walk.mjs',
+      'tools/m59-body-detour.mjs',
+      'tools/m59-monster-attention.mjs',
       'tools/m59-passage-admission.mjs',
       'tools/m59-spotclaims.mjs',
       'tools/m59-safelegs.mjs',

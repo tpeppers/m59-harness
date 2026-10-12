@@ -1,5 +1,48 @@
 # The keeper: what it can see, and what it cannot
 
+## Travel crowd recovery and inferred monster attention
+
+`BP_MOVE` feeds a bounded per-client monster pursuit tracker. Object snapshots and
+cached replay scenes carry `attention` / `client_attention`: `aggro_at_me`,
+`aggro_any`, and one `aggro_at_player` entry per visible player. A value of `true`
+is an inference from at least three closing movement samples over half a second,
+not an observation of the server's hidden target. `null` means unknown; there is
+no certified false. Collinear player candidates remain ambiguous. Predictions,
+stale player poses, discontinuities, expired samples, room/life changes and save
+identity changes cannot establish or retain pursuit. No additional requests or
+monster-move events are emitted into the combat event ring.
+
+On ordinary ground, fine travel and final shelter approaches preflight the live
+body collision and try a bounded local route using the client's wall and body
+trace. The route may briefly move away from the goal. Proved bends are retained
+while redundant lattice points are compressed; each packet still revalidates
+live geometry, bodies, passage admission and movement ownership. A sealed or
+budget-limited search returns to the caller rather than spending a heading fan
+in the crowd. It does not prove the whole room unreachable. Shelf traversal
+retains its separate guards.
+
+Optimized `walkPivots` and `followRail` use this handoff too. A hurt rail traveller
+checks its next three local bends before stepping away and turning back through
+an attacker. A body-blocked pivot enters the local route before the post-pivot
+confirmation read. Escape fine packets refuse clipping at both preflight and
+the paced send boundary. Their periodic read is asynchronous, with a bounded
+24-prediction limit; unknown positions, room changes and passage checks still
+require confirmation. Movement generation and client identity are checked at
+the actual send, including a takeover while a packet waits in the pacer.
+
+A hurt recovery under recent damage, inferred pursuit, or a failed approach
+limits the forward-biased search to the nearest clear refuge's route length plus
+three squares. Nearby backward cover remains eligible. Healthy travel keeps its
+existing forward preference. Under damage/pursuit, the no-confirmed-progress
+watch expires after two seconds instead of eight; actual shorter confirmed
+routes still renew it. Blocked replacement refuges are temporarily excluded.
+
+These changes are exercised by `m59-travel-crowd-test.mjs` and
+`m59-death-prevention-test.mjs`. `m59-pivot-crowd-test.mjs` runs the real rail,
+fine walker and validated packet queue on Tos geometry, including a blocker or
+movement takeover during pacing and mandatory passage confirmation. These
+checks do not claim an exact aggro count or guaranteed survival on every route.
+
 ## Poison, healing flasks, and stalled shelter approaches
 
 `restUntil` checks fresh server incoming-hit messages before the poison exception.

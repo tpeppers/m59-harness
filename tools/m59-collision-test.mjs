@@ -42,6 +42,7 @@ import {
   geometryRefreshBaseFile, movementMapFile,
 } from './m59-map-path.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
+import { planBodyDetour } from './m59-body-detour.mjs';
 import { World, boundedRegionEntry, boundedSilentGo, spreadEdges,
          distinctStagesFirst } from './m59-world.mjs';
 
@@ -1274,7 +1275,7 @@ const queueValidatedMove = compileSessionMethod(brokerSource,
 const confirmPosition = compileSessionMethod(brokerSource,
   'async confirmPosition() {', 'confirmPosition', { Pacer: { note() {} } });
 const stepFine = compileSessionMethod(brokerSource,
-  'async stepFine(x, y) {', 'stepFine',
+  'async stepFine(x, y, options = null) {', 'stepFine',
   // FINE_CONFIRM_EVERY and KOD_FINENESS arrived with the predict-instead-of-block change
   // and the dependency guard above named both before the ReferenceError could be blamed
   // on anything else. FINE_CONFIRM_EVERY is 1 here on purpose: these fixtures assert what a
@@ -1368,7 +1369,7 @@ const walkFine = compileSessionMethod(brokerSource,
     // stride may grow on clean ground, and the growth is a behaviour rather than a
     // tuning detail — a fixture that walked with a stubbed ceiling would assert the
     // reach of a walker nobody runs.
-    traceMove: () => {}, isTerminalMovementReason, KOD_FINENESS,
+    traceMove: () => {}, isTerminalMovementReason, KOD_FINENESS, planBodyDetour,
     // THE SHELF GUARD'S THREE. `holdShelf` reads floors, and floors live in CLIENT units
     // while this method works in kod PROTOCOL units, so both converters come with it. Real,
     // not stubbed: what they convert between is the whole point of the guard, and a fixture
@@ -1380,7 +1381,7 @@ const walkFine = compileSessionMethod(brokerSource,
 // before any straight-line fanning, and that no path means the old line-walk.
 let fakeFinePath = () => ({ found: false });
 const approachFine = compileSessionMethod(brokerSource,
-  'async approachFine(col, row, {', 'approachFine', { KOD_FINENESS, isTerminalMovementReason });
+  'async approachFine(col, row, {', 'approachFine', { KOD_FINENESS, isTerminalMovementReason, planBodyDetour });
 const walkTo = compileSessionMethod(brokerSource,
   'async walkTo(col, row, {', 'walkTo', {
     provedSquares,
@@ -1448,6 +1449,7 @@ const walkTo = compileSessionMethod(brokerSource,
 // one stubs it — so it needs its own.
 const followRail = compileSessionMethod(brokerSource,
   'async followRail(squares, {', 'followRail', {
+    KOD_FINENESS,
     isTerminalMovementReason,
     RAIL_STALL_WAYPOINTS: 3, RAIL_STALL_JUMP: 3,
     // THE JUMP VIGOR GATE. RUN_VIGOR_FLOOR is the real 12 rather than a stub, because the

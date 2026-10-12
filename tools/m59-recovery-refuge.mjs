@@ -3,6 +3,18 @@ import { OF, blocksMovement } from './m59-parse.mjs';
 
 export const REFUGE_PROGRESS_MS = 8000;
 
+// A forward preference is appropriate until actual damage or a failed approach
+// makes its exposure costly. Unknown pursuit is not evidence that the road is safe.
+export function recoveryUnderPressure(client, damagedAt, { now = Date.now(), failed = false } = {}) {
+  const hp = client?.vitals?.()?.health;
+  if (!hp?.max || hp.value >= hp.max) return false;
+  if (failed || Number.isFinite(damagedAt) && now - damagedAt >= 0 && now - damagedAt < 5000) return true;
+  for (const o of client.room?.objects?.values?.() ?? []) {
+    if (client.monsterAttention?.view(o.id,client.selfId,now).aggro_at_me === true) return true;
+  }
+  return false;
+}
+
 // A new command or a new survival decision is not movement. Retain the best
 // confirmed remaining route across retries so a short oscillation cannot keep
 // renewing an approach. Route distance allows detours around an internal wall.

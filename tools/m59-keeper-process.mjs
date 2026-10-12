@@ -1343,6 +1343,8 @@ function state() {
             // cannot show them cannot be used to tell a squeeze from a collision — which is
             // exactly the diagnosis this projection was needed for on 2026-08-27.
             x: o.x ?? null, y: o.y ?? null,
+            attention: (o.flags & 0x0008) && !(o.flags & 0x0004)
+              ? c.monsterAttention?.view(o.id,c.selfId) ?? null : null,
           }));
       } catch { return []; }
     })(),

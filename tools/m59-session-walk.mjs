@@ -35,6 +35,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { traversable as fallJumpTraversable, physics as fallPhysics } from './m59-falljump.mjs';
 import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from './m59-roo.mjs';
 import { fineRouteDetour, pullFine, pointOfSquare } from './m59-finepath.mjs';
+import { planBodyDetour } from './m59-body-detour.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
@@ -206,6 +207,17 @@ export function sessionWalkPrototype(deps) {
       ?? { x: protocolToClient(st.col * KOD_FINENESS + half),
            y: protocolToClient(st.row * KOD_FINENESS + half) };
     let remaining = planSteps.slice();
+    // Return a live-body obstruction to walkTo before its post-pivot read. The
+    // fine router belongs there, so both optimized and fallback paths share it.
+    const bodyBlock = (target, result = null) => {
+      if (target?.fall || !this._blockingBodies?.().some(b=>b.kind==='monster')) return null;
+      const aim = Number.isFinite(target?.x) ? target
+        : geo.standPointWire?.(target.row,target.col)
+          ?? {x:target.col*KOD_FINENESS+32,y:target.row*KOD_FINENESS+32};
+      const hit = result?.reason==='object_blocked' ||
+        this.validateFineTarget?.(aim.x,aim.y,{slide:true})?.reason==='object_blocked';
+      return hit ? {done:false,legs,singles,why:'object_blocked',body_detour_target:aim} : null;
+    };
 
     // PUBLISHED SO THE KEEPER CAN ASK THE SAME QUESTION THE WALKER ASKS.
     //
@@ -227,6 +239,16 @@ export function sessionWalkPrototype(deps) {
       if (this.activeShelter) this.activeShelter.atStep = planSteps.length - remaining.length;
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return { done: false, legs, singles, cancelled: true };
+
+      // When already hurt, inspect the next local bends before paying for a
+      // square step that will immediately turn back through an attacker.
+      const hp=c.vitals?.()?.health,pose=c.self;
+      if(pose && hp?.value<hp?.max) for(const next of remaining.slice(0,3)) {
+        const aim=geo.standPointWire?.(next.row,next.col)
+          ?? {x:next.col*KOD_FINENESS+32,y:next.row*KOD_FINENESS+32};
+        if(next.fall || Math.max(Math.abs(aim.x-pose.x),Math.abs(aim.y-pose.y))>8*KOD_FINENESS)break;
+        const blocked=bodyBlock({...aim,fall:next.fall});if(blocked)return blocked;
+      }
 
       // THE FUEL STOP. Checked before each leg, which is where a route can still be changed
       // cheaply — the walker is between aims rather than mid-slide.
@@ -288,11 +310,13 @@ export function sessionWalkPrototype(deps) {
         // The one square the pull could not prove: hand it to the ordinary step, which has
         // the aim correction, the slide and the edge learning. Then re-prove.
         const target = remaining[0];
+        const blocked = bodyBlock(target); if (blocked) return blocked;
         const advances = me.col !== target.col || me.row !== target.row;
         // A FALL IS ALWAYS "UNPROVED" TO THE PULL, because the pull traces in walk mode —
         // which is precisely the predicate that refuses a fall. So it lands here, and here
         // is where the flag has to be passed on.
         const r = await this.step(target.col, target.row, { fall: !!target.fall });
+        const blockedAfter = bodyBlock(target,r); if (blockedAfter) return blockedAfter;
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         if (r.left_room) return { done: false, legs, singles, left_room: true };
@@ -352,8 +376,10 @@ export function sessionWalkPrototype(deps) {
           && Date.now() - this.damagedAt < SHELTER_HIT_WINDOW_MS
           && remaining.length > 1) {
         const one = remaining[0];
+        const blocked = bodyBlock(one); if (blocked) return blocked;
         const advances = me.col !== one.col || me.row !== one.row;
         const r = await this.step(one.col, one.row, { fall: !!one.fall });
+        const blockedAfter = bodyBlock(one,r); if (blockedAfter) return blockedAfter;
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         if (r.left_room) return { done: false, legs, singles, left_room: true };
@@ -389,6 +415,7 @@ export function sessionWalkPrototype(deps) {
       // `let`, because a refused pivot may be retried at another point in the SAME square —
       // see the refusal below. The square is the plan; the point is a choice within it.
       let target = { x: clientToProtocol(aim.x), y: clientToProtocol(aim.y) };
+      const blocked = bodyBlock(target); if (blocked) return blocked;
       // BUT A PROOF ABOUT WALLS IS NOT A PROOF ABOUT BODIES.
       //
       // The pull proved this line against the .roo, offline, in an empty room — and a body is
@@ -416,6 +443,7 @@ export function sessionWalkPrototype(deps) {
         if (nextSq) {
           const advances = me.col !== nextSq.col || me.row !== nextSq.row;
           const r = await this.step(nextSq.col, nextSq.row, { fall: !!nextSq.fall });
+          const blockedAfter = bodyBlock(nextSq,r); if (blockedAfter) return blockedAfter;
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
           if (r?.left_room || c.room.id !== roomId)
             return { done: false, legs, singles, left_room: true };
@@ -459,6 +487,9 @@ export function sessionWalkPrototype(deps) {
       traceMove({ agent: this.name, room: this.world?.room?.num ?? null, kind: 'pivot',
                   to: { x: target.x, y: target.y }, sent: !!queued.sent,
                   reason: queued.validation?.reason ?? null });
+      if (queued.validation?.reason==='object_blocked') {
+        const blockedAfter = bodyBlock(target,queued.validation); if (blockedAfter) return blockedAfter;
+      }
       if (!queued.sent) {
         // A PIVOT IS A SQUARE, AND A STAND POINT IS ONE POINT IN IT.
         //
@@ -1232,8 +1263,9 @@ export function sessionWalkPrototype(deps) {
   //    what "hugging the wall" actually is, and it is how a human gets along a
   //    ledge without falling off it.
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units.
-  async stepFine(x, y) {
+  async stepFine(x, y, options = null) {
     const c = this.need();
+    const generation=options?.movementGeneration??this.movementGeneration,token=options?.controlToken;
     const startRoom = c.room.id;
     if (this.finePositionUnknown) {
       const recovered = await this.confirmPosition();
@@ -1245,8 +1277,12 @@ export function sessionWalkPrototype(deps) {
     const p0 = c.self;
     const before = p0 ? { x: p0.x, y: p0.y, col: p0.col, row: p0.row } : null;
     if (!before) return { moved: false, left_room: false, reason: 'own_position_unknown' };
+    const continuous = options?.bodyDetour===true;
+    // Local escape packets are all-or-nothing. A moving monster invalidates a
+    // leg instead of clipping it and forcing a blocking read in attack range.
     const queued = await this.queueValidatedMove(x, y,
-      { speed: this.moveSpeed(), slide: true, minGap: MOVE_INTERVAL_MS });
+      { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous,minGap: MOVE_INTERVAL_MS,
+        beforeMutation:continuous?()=>this.client===c&&!this.movementWasCancelled(generation,token):null });
     const validation = queued.validation ?? {};
     if (!queued.sent) {
       // Return the collision refusal to the walker so it can fan or replan.
@@ -1284,10 +1320,12 @@ export function sessionWalkPrototype(deps) {
     this._finePredicted = (this._finePredicted ?? 0) + 1;
     const mustConfirm = roomChanged || clipped
       || this.passageExitNeedsConfirmation?.(target)
-      || this._finePredicted >= FINE_CONFIRM_EVERY
+      || this._finePredicted >= (continuous ? Math.max(FINE_CONFIRM_EVERY,24) : FINE_CONFIRM_EVERY)
       || FINE_CONFIRM_EVERY <= 1;
 
     if (!mustConfirm) {
+      if (continuous && this._finePredicted===FINE_CONFIRM_EVERY)
+        this.pacer.submit('read',()=>c.roomContents()).catch(()=>{});
       // The same call the pivot walk and the breadcrumb retreat already make. `predicted`
       // is set on the object, and the client clears it the moment the server says anything
       // about us — so a caller that genuinely needs to know whether a step HAPPENED can
@@ -1367,7 +1405,7 @@ export function sessionWalkPrototype(deps) {
   // wall at all falls from 68% to 51%. `travel_hold_within` stays at ten.)
   // COORDINATE CONTRACT: the destination square is `(col,row)`; optional `toX/toY`
   // are a named fine point in kod wire units.
-  async approachFine(col, row, { toX = null, toY = null, maxSteps = 60, stride = 48,
+  async approachFine(col, row, { toX = null, toY = null, maxSteps = 60, stride = 48, avoidSquares = null,
                                  movementGeneration = this.movementGeneration,
                                  controlToken = null } = {}) {
     const c = this.need();
@@ -1416,14 +1454,42 @@ export function sessionWalkPrototype(deps) {
     // a waypoint is not this walk's problem — it drops through to the line-walk, whose
     // body rule reports it.
     if (typeof geo.finePathProtocol === 'function') {
-      const path = geo.finePathProtocol(me.x, me.y, goal.x, goal.y,
+      let path = geo.finePathProtocol(me.x, me.y, goal.x, goal.y,
         { step: 8, margin: 4 * KOD_FINENESS, maxNodes: 4000 });
+      if (!path?.found && this._blockingBodies?.().length) {
+        path = planBodyDetour(geo,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
+          roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,avoidSquares});
+        if (!path.found) return {arrived:false,steps:taken,reason:'object_blocked',detour_reason:path.reason};
+      }
       if (path?.found && Array.isArray(path.waypoints) && path.waypoints.length) {
         budget = Math.max(budget, path.waypoints.length);
-        for (const wp of path.waypoints) {
+        let waypoints = path.waypoints, index = 0, bodyReplans = 0;
+        const aroundBody = () => {
+          if (++bodyReplans > 3) return { found: false, reason: 'live body route changed repeatedly' };
+          const plan = planBodyDetour(geo, c.self, goal, { objects: c.room?.objects, selfId: c.selfId,
+            roomFlags: c.room?.flags ?? 0, overrideDepths: c.room?.overrideDepths, avoidSquares });
+          if (plan.found) {
+            waypoints = plan.waypoints; index = 0;
+            // Extend for the first valid detour only; moving bodies cannot renew the budget.
+            if (bodyReplans === 1) budget = Math.max(budget, taken + waypoints.length);
+          }
+          return plan;
+        };
+        while (index < waypoints.length) {
+          const wp = waypoints[index];
           if (interrupted())
             return this.cancelledMovement({ steps: taken, log: [] });
           if (taken >= budget) return exhausted();
+          // Test the live endpoint before paying for a refused packet or a heading fan.
+          // The bounded pour may backtrack around a body; every resulting step still
+          // passes ordinary send-time collision, pacing and ownership validation.
+          if (typeof this.validateFineTarget === 'function' && this._blockingBodies?.().length
+              && this.validateFineTarget(wp.x, wp.y, { slide: true })?.reason === 'object_blocked') {
+            const detour = aroundBody();
+            if (!detour.found) return { arrived: false, steps: taken, reason: 'object_blocked',
+              detour_reason: detour.reason, body_replans: bodyReplans };
+            continue;
+          }
           const step = await this.stepFine(wp.x, wp.y)
             .catch(e => ({ moved: false, reason: e.message }));
           taken++;
@@ -1432,7 +1498,13 @@ export function sessionWalkPrototype(deps) {
           if (step?.left_room) return { arrived: false, left_room: true, steps: taken };
           if (isTerminalMovementReason(step?.reason))
             return { ...step, arrived: false, steps: taken };
-          if (step?.reason === 'object_blocked') break;
+          if (step?.reason === 'object_blocked') {
+            const detour = aroundBody();
+            if (!detour.found) return { ...step, arrived: false, steps: taken,
+              detour_reason: detour.reason, body_replans: bodyReplans };
+            continue;
+          }
+          index++;
           const at = c.self;
           if (at && at.col === col && at.row === row)
             return { arrived: true, steps: taken, via: 'fine path',
@@ -1478,6 +1550,7 @@ export function sessionWalkPrototype(deps) {
     arriveWithin = 40,
     // Checked rails must reach each bend, even when the bend is inside one square.
     exactArrival = false,
+    bodyDetour = false,
     // DO NOT WALK OFF THE SHELF YOU ARE ON. OFF BY DEFAULT, AND THAT IS DELIBERATE.
     //
     // The fan exists to find a way round geometry, and it is judged purely on DISTANCE: the
@@ -1580,6 +1653,7 @@ export function sessionWalkPrototype(deps) {
     // so the caller can pick another square or wait, instead of spending the budget here.
     const BODY_BLOCK_STREAK = 3;
     let bodyStreak = 0, bodyStart = null, baseReason = null, baseBlockedId = null;
+    let bodyDetours = 0;
 
     walkSteps: for (let i = 0; i < maxSteps; i++) {
       if (this.movementWasCancelled(movementGeneration, controlToken))
@@ -1613,6 +1687,40 @@ export function sessionWalkPrototype(deps) {
                  steps: i, log, note: 'as close as fine movement gets — ' +
                    Math.round(closest) + ' units, inside one square' };
       let progressed = false;
+
+      // A live body calls for a local route, before trying nine headings into it.
+      // Stay on the caller's shelf mode for ledges; this ordinary-ground detour
+      // uses the actual client trace and never bypasses passage admission.
+      if (!holdShelf && typeof this.validateFineTarget === 'function' && this._blockingBodies?.().length
+          && this.validateFineTarget(me.x+dx/remaining*reach,me.y+dy/remaining*reach,{slide:true})?.reason==='object_blocked') {
+        if (++bodyDetours > 3) return {arrived:false,reason:'object_blocked',steps:i,log,
+          detour_reason:'live body route changed repeatedly'};
+        const distance=Math.min(remaining,4*KOD_FINENESS);
+        const goal={x:Math.round(me.x+dx/remaining*distance),y:Math.round(me.y+dy/remaining*distance)};
+        const detour=planBodyDetour(this.world?.geometry,me,goal,{objects:c.room?.objects,selfId:c.selfId,
+          roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,avoidSquares});
+        if (!detour.found) return {arrived:false,reason:'object_blocked',steps:i,log,detour_reason:detour.reason};
+        for (const wp of detour.waypoints) {
+          if (i>=maxSteps) return {arrived:false,reason:'ran out of steps',steps:i,log};
+          if (this.client!==c || this.movementWasCancelled(movementGeneration,controlToken))
+            return this.cancelledMovement({steps:i,log});
+          const from=c.self?{x:c.self.x,y:c.self.y}:null;
+          const r=await this.stepFine(wp.x,wp.y,{bodyDetour:true,movementGeneration,controlToken}); i++;
+          traceMove({agent:this.name,room:this.world?.room?.num,kind:'fine_body_detour',
+            movement_generation:this.movementGeneration,fine:from,aimed:wp,sent:!!r.moved,
+            reason:r.reason??null,objectId:r.objectId??null});
+          if (this.client!==c || r.cancelled || this.movementWasCancelled(movementGeneration,controlToken))
+            return this.cancelledMovement({steps:i,log});
+          if (r.left_room) return {arrived:false,left_room:true,steps:i,log};
+          if (isTerminalMovementReason(r.reason)) return {...r,arrived:false,steps:i,log};
+          if (r.reason==='object_blocked') { i--;continue walkSteps; }
+          const at=c.self;
+          if (!at || Math.hypot(at.x-wp.x,at.y-wp.y)>2)
+            return {arrived:false,reason:r.reason??'body detour landed off plan',steps:i,log};
+        }
+        log.push({step:i,body_detour:true,nodes:detour.nodes,bodies:detour.bodies});
+        bodyDetours=0; i--;continue walkSteps;
+      }
 
       // HAVE WE ALREADY FALLEN? ASKED OF A SETTLED POSITION, WHICH IS THE ONLY KIND WORTH
       // ASKING.
@@ -1742,7 +1850,7 @@ export function sessionWalkPrototype(deps) {
             }
           }
         }
-        const r = await this.stepFine(aimX, aimY);
+        const r = await this.stepFine(aimX, aimY,{bodyDetour:bodyDetour&&!holdShelf,movementGeneration,controlToken});
         if (r.traffic === 'passage_admission') {
           geometryRejections.add('object_blocked');
           log.push({step:i,traffic:r.traffic,zone:r.zone});
@@ -2709,7 +2817,29 @@ export function sessionWalkPrototype(deps) {
         if (ran.left_room)
           return { arrived: false, left_room: true, steps: pivotLegs,
                    note: 'a proved leg crossed the room edge' };
-        if (pivotLegs) {
+        if (ran.body_detour_target) {
+          // A clipped body move is already a known, packet-bound point. Pour
+          // around it now, before the read that used to consume the life window.
+          const aim=ran.body_detour_target;
+          const fine=await this.walkFine(aim.x,aim.y,{maxSteps:Math.min(24,Math.max(0,maxSteps-pivotLegs)),
+            exactArrival:true,arriveWithin:2,bodyDetour:true,movementGeneration,controlToken,
+            avoidSquares:new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])])});
+          pivotLegs+=fine.steps??0;
+          if(fine.cancelled || this.movementWasCancelled(movementGeneration,controlToken))
+            return this.cancelledMovement({steps:pivotLegs});
+          if(fine.left_room || isTerminalMovementReason(fine.reason))return {...fine,arrived:false,steps:pivotLegs};
+          if(!fine.arrived) {
+            const why=fine.reason??'optimized body detour did not reach its waypoint';
+            if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why}))
+              return this.cancelledMovement({steps:pivotLegs});
+            return {...fine,arrived:false,steps:pivotLegs,reason:why};
+          }
+          // Continue planning from the locally validated point, without calling
+          // it a confirmed final arrival. Final/boundary checks still own that.
+          const at=c.self;
+          if(!at)return {arrived:false,steps:pivotLegs,reason:'own_position_unknown'};
+          from=at;const again=replan(at.row,at.col);if(again.found)plan=again;
+        } else if (pivotLegs) {
           // ONE READ AFTER THE RUN, NOT ONE PER LEG. The prediction is what the proof
           // licenses; this is the single confirmation that the world agrees, and it is the
           // same trade `step` makes across a whole hop rather than per square.
@@ -3054,6 +3184,33 @@ export function sessionWalkPrototype(deps) {
           next = queue.shift(); hop++;
         }
       }
+      // A coalesced endpoint may be several squares beyond the actual blocker.
+      // Do not attribute that collision to the endpoint or repeat the same long
+      // step. Ordinary-ground fine travel now pours locally around live bodies.
+      const bodyAim = !next.fall ? (geo.standPointWire?.(next.row,next.col)
+        ?? {x:next.col*KOD_FINENESS+32,y:next.row*KOD_FINENESS+32}) : null;
+      const aroundBlockedWaypoint = async () => {
+        const fine=await this.walkFine(bodyAim.x,bodyAim.y,{maxSteps:Math.min(24,Math.max(0,maxSteps-taken)),
+          exactArrival:true,arriveWithin:2,bodyDetour:true,avoidSquares:mandatoryAvoid,movementGeneration,controlToken});
+        taken+=fine.steps??0;
+        if (fine.cancelled || this.movementWasCancelled(movementGeneration,controlToken))
+          return this.cancelledMovement({steps:taken,replans});
+        if (fine.left_room || isTerminalMovementReason(fine.reason)) return {...fine,arrived:false,steps:taken,replans};
+        if (fine.arrived && c.self?.row===next.row && c.self?.col===next.col) {
+          // The fine detour's incoming square is not the old coalesced origin.
+          prevSquare=null;pulled=undefined;stalledOn=null;stalledTimes=0;return null;
+        }
+        const why=fine.reason??'local body detour did not reach the waypoint';
+        if (await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why}))
+          return this.cancelledMovement({steps:taken,replans});
+        return {...fine,arrived:false,steps:taken,replans,reason:why};
+      };
+      const liveMonster = bodyAim && typeof this.walkFine==='function'
+        && this._blockingBodies?.().some(b=>b.kind==='monster');
+      if (liveMonster && typeof this.validateFineTarget==='function'
+          && this.validateFineTarget(bodyAim.x,bodyAim.y,{slide:true})?.reason==='object_blocked') {
+        const done=await aroundBlockedWaypoint();if(done)return done;continue;
+      }
       const was = c.self ? { col: c.self.col, row: c.self.row } : null;
       // A FALL IS A DIFFERENT KIND OF STEP AND THE MOVER HAS TO BE TOLD. `neighbors` marks
       // it; `fallTargets` proved it in fall mode; without the flag the same two squares are
@@ -3109,6 +3266,12 @@ export function sessionWalkPrototype(deps) {
       // the step landed, the room was rebuilt, our own object had not come back yet, and
       // the walk was abandoned rather than waiting for a read already on its way.
       const now = c.self ?? await this.selfOrResync();
+      // A monster may enter the line after preflight but before the paced send.
+      // Handle that actual receipt too, including a partial slide in this square.
+      if (liveMonster && r.reason==='object_blocked'
+          && (now?.row!==next.row || now?.col!==next.col)) {
+        const done=await aroundBlockedWaypoint();if(done)return done;continue;
+      }
       // EVERY SQUARE THIS BODY LANDS ON, whether the plan asked for it or not. Recorded here
       // rather than where a step is REQUESTED, because the off-plan slide is the thing worth
       // counting: a loop made of steps the mover kept redirecting looks like progress at the
@@ -4732,7 +4895,27 @@ export function sessionWalkPrototype(deps) {
             }
           }
         }
-        const r = jumpHere
+        // Rails are another optimized path: they call step directly and never
+        // enter walkTo's detour. Inspect the next local bends before a hurt
+        // traveller steps away and then turns back through the same attacker.
+        const liveBodies=!jumpHere && this._blockingBodies?.().some(b=>b.kind==='monster');
+        const wirePoint=t=>geo?.standPointWire?.(t.row,t.col)
+          ?? {x:t.col*KOD_FINENESS+32,y:t.row*KOD_FINENESS+32};
+        let bodyAim=null;
+        if(liveBodies) {
+          const hp=this.client?.vitals?.()?.health;
+          const candidates=hp?.value<hp?.max?squares.slice(i,i+3):[target];
+          for(const next of candidates){
+            const aim=wirePoint(next);
+            if(Math.max(Math.abs(aim.x-here.x),Math.abs(aim.y-here.y))>8*KOD_FINENESS)break;
+            if(this.validateFineTarget?.(aim.x,aim.y,{slide:true})?.reason==='object_blocked') {bodyAim=aim;break;}
+          }
+        }
+        const pour=aim=>this.walkFine(aim.x,aim.y,{maxSteps:24,exactArrival:true,arriveWithin:2,
+          bodyDetour:true,avoidSquares,movementGeneration,controlToken});
+        let attemptedBody=!!bodyAim;
+        let r = bodyAim ? await pour(bodyAim)
+          : jumpHere
           ? await this.step(jumpTo.col, jumpTo.row, { fall: true })
               .catch(e => ({ moved: false, reason: e.message }))
           : (pt && typeof this.walkFine === 'function')
@@ -4740,6 +4923,21 @@ export function sessionWalkPrototype(deps) {
               .then(w => ({ ...w, moved: w?.arrived ?? w?.moved }))
               .catch(e => ({ moved: false, reason: e.message }))
           : await this.step(target.col, target.row);
+        if(!jumpHere && !attemptedBody && r.reason==='object_blocked' && liveBodies){
+          attemptedBody=true;r=await pour(wirePoint(target));
+        }
+        if(attemptedBody){
+          if(r.cancelled || this.movementWasCancelled(movementGeneration,controlToken))
+            return {railed:false,cancelled:true,reason:'movement_cancelled',at:i,walked};
+          if(r.left_room)return {railed:true,left_room:true,at:i,walked};
+          if(isTerminalMovementReason(r.reason))return {railed:false,reason:r.reason,at:i,walked};
+          if(!r.arrived){
+            const why=r.reason??'rail body detour did not reach its waypoint';
+            if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why}))
+              return {railed:false,cancelled:true,reason:'movement_cancelled',at:i,walked};
+            return {railed:false,reason:why,detour_reason:r.detour_reason,at:i,walked};
+          }
+        }
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         if (r.left_room) return { railed: true, left_room: true, at: i, walked };
         if (isTerminalMovementReason(r.reason))

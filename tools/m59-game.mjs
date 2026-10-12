@@ -3531,7 +3531,7 @@ class Session {
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units, not a grid tuple.
   async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, timedFall = false, beforeMutation = null,
                                     minGap = MOVE_INTERVAL_MS, expectedRoomId = null,
-                                    offMap = false } = {}) {
+                                    offMap = false, unclipped = false } = {}) {
     const c = this.need();
     const roomId = expectedRoomId ?? c.room.id;
     if (c.room.id !== roomId) return { sent: false, validation: {
@@ -3626,6 +3626,8 @@ class Session {
     }
 
     const initial = this.validateFineTarget(x, y, { slide, fall, timedFall });
+    if(unclipped && (initial.blocked || initial.target?.x!==Math.round(x) || initial.target?.y!==Math.round(y)))
+      return {sent:false,validation:{...initial,moved:false,blocked:true,reason:initial.reason??'exact_move_refused'}};
     // WRITE DOWN THAT PROD MOVED. Otherwise a drifted room is only ever visible as a move
     // that did not happen — and the baked map is evidence about somebody else's server,
     // which can be patched without telling us.
@@ -3644,6 +3646,8 @@ class Session {
         available: false, moved: false, blocked: true, reason: 'room_changed_before_move',
       } };
       const validation = this.validateFineTarget(x, y, { slide, fall, timedFall });
+      if(unclipped && (validation.blocked || validation.target?.x!==Math.round(x) || validation.target?.y!==Math.round(y)))
+        return {sent:false,validation:{...validation,moved:false,blocked:true,reason:validation.reason??'exact_move_refused'}};
       if (timedFall && (validation.fall_motion?.elapsed_ms ?? Infinity) > fallDelayMs)
         return { sent:false, validation:{...validation,moved:false,reason:'fall_changed_before_send'} };
       if (validation?.drift) noteGeometryDrift(this, validation.drift);
@@ -3652,7 +3656,8 @@ class Session {
         return { sent: false, validation };
       if (validation.target.x === before.x && validation.target.y === before.y)
         return { sent: false, validation: { ...validation, moved: false } };
-      if (typeof beforeMutation === 'function') beforeMutation('move', { x, y });
+      if (typeof beforeMutation === 'function' && beforeMutation('move', { x, y })===false)
+        return {sent:false,validation:{available:false,moved:false,blocked:true,reason:'movement_cancelled'}};
       const hazard = this.groundEffectBlock?.(c.self, validation.target);
       if (hazard) return { sent: false, validation: hazard };
       // Atomic passage admission at the send boundary for steps, rails and jumps.
