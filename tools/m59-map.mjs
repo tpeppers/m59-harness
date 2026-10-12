@@ -589,6 +589,28 @@ export function selectedEdgeAt(room, direction, candidate) {
 // Exact BSP-validated crossings for a declared server edge. Keeping this beside the
 // graph makes an impossible direct edge disappear before route search chooses it;
 // execution revalidates the selected coordinates against live room state.
+// A STAGE A BODY CANNOT GET TO IS NOT A STAGE, AND ONLY TRAVEL IS TOLD SO. See
+// RoomGeometry.stageServes: Druid Hills 526 r40c50 staged three east openings from a centre on a
+// one-sided wall, and every journey to 536 was refused there before sending. Applied to the LIVE
+// question only (world.exits, travelgrade), never to the bake or the route graph, which call this
+// without `live`: filtering there moved route anchors and broke seven Cragged (578) rail
+// assertions in m59-routing-test. Covers the atlas too, which otherwise bypasses RoomGeometry
+// entirely. A preference: an edge whose every stage fails keeps the list it had. Memoised per
+// source list AND per geometry memo, because the atlas list never changes while
+// applySectorHeights can move the floor under it; that resets the geometry's memo, and so this.
+const SERVED_STAGES = new WeakMap();
+function servedStages(room, list) {
+  if (!Array.isArray(list) || !list.length) return list;
+  const geo = sharedRoomGeometry(room);
+  if (!geo?.collisionReady || typeof geo.withEnterableStages !== 'function') return list;
+  const memo = SERVED_STAGES.get(list);
+  if (memo && memo.token === geo._reachablePointsCache) return memo.out;
+  const kept = geo.withEnterableStages(list);
+  const out = kept.length ? Object.freeze(kept) : list;
+  SERVED_STAGES.set(list, { token: geo._reachablePointsCache, out });
+  return out;
+}
+
 export function edgeCandidatesOf(room, edgeOrDirection, condition = null, { live = false } = {}) {
   if (!room?.roo || room.rooDimensionMismatch) return [];
   const direction = typeof edgeOrDirection === 'string'
@@ -602,7 +624,8 @@ export function edgeCandidatesOf(room, edgeOrDirection, condition = null, { live
   const atlasApproaches = labExitApproaches(room, direction);
   const geo = atlasApproaches ? null : sharedRoomGeometry(room);
   if (!atlasApproaches && !geo?.collisionReady) return [];
-  const approaches = (atlasApproaches ?? geo.edgeApproachCandidates(direction))
+  const source = atlasApproaches ?? geo.edgeApproachCandidates(direction);
+  const approaches = (live ? servedStages(room, source) : source)
     .filter(candidate => live || candidate.graph_routable !== false);
   if (typeof edgeOrDirection !== 'object' || edgeOrDirection.synthetic)
     return approaches.filter(candidate => edgeConditionAllows(edgeCondition, candidate));

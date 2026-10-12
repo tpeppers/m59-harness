@@ -1935,6 +1935,92 @@ export class RoomGeometry {
     return all;
   }
 
+  // A STAGE PROOF STARTS AT THE STAGE SQUARE'S CENTRE, AND NOBODY MAY BE ABLE TO STAND THERE.
+  // Druid Hills (526) r40c50: its centre (3232,2592) lies exactly on wall 76, a one-sided wall
+  // facing west. From ON the line the outward trace passes (the client lets
+  // you leave a wall you are touching), so three east openings (y 2541, 2592, 2639) proved
+  // themselves from that centre — but from every neighbouring square centre the walk onto it
+  // is geometry_blocked. A body arriving from inside stops at x≈3216 and its edge packet is
+  // refused before sending. Prod, 2026-10-12: 55 journeys to 536 refused 5 times each at
+  // r40c50/r41c50/r41c49 and gave up `route_progressing_exits_exhausted` with the working
+  // r42 lane never tried; Sweetums and Pepe stranded 6+ hours. Reproduced 3/3 on the shadow
+  // fleet (substrate/scenes/druid-hills-526-exit-troll.json), and without the troll too.
+  //
+  // So a stage is judged FOR ITS OPENING, from where a body in that square can actually be.
+  // Sample fine points across the square; keep the ones a body walks onto (slide:false) from a
+  // walkable neighbour's centre (and onward inside the square); the stage serves the opening only
+  // if the reachable point NEAREST THE CENTRE, where a walk to the stage stops, walks to the
+  // opening's stand point. A square none of whose points can be walked onto from a neighbour
+  // (a ledge reached by a fall, no floor at its sample points) cannot be judged this way and is
+  // kept, and so is one with no reachable point LEVEL with the stand point: a drop onto the
+  // opening is not ours to refuse. Judging the CENTRE alone also refused 526 north r1c5, which
+  // was crossed 185 times that day, because on interesting ground a centre is not where anybody
+  // stands.
+  reachablePointsIn(row, col) {
+    this._reachablePointsCache ??= new Map();
+    const key = `${row},${col}`;
+    if (this._reachablePointsCache.has(key)) return this._reachablePointsCache.get(key);
+    const centre = (r, c) => [protocolToClient(c * KOD_FINENESS + (KOD_FINENESS >> 1)),
+                              protocolToClient(r * KOD_FINENESS + (KOD_FINENESS >> 1))];
+    const from = [];
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++)
+      if ((dr || dc) && this.inBounds(row + dr, col + dc) && this.walkable(row + dr, col + dc))
+        from.push(centre(row + dr, col + dc));
+    const walks = (a, b) => { const t = this.traceFineMoveClient(a[0], a[1], b[0], b[1], { slide: false });
+                              return t.available && t.arrived; };
+    const samples = [];
+    for (const fy of [8, 20, 32, 44, 56]) for (const fx of [8, 20, 32, 44, 56])
+      samples.push([protocolToClient(col * KOD_FINENESS + fx), protocolToClient(row * KOD_FINENESS + fy)]);
+    // A CLOSURE, NOT ONE STRAIGHT LINE: a body reaches the far side of a square around a
+    // corner. Seed with what a neighbour's centre walks onto, then spread inside the square.
+    const points = samples.filter(p => from.some(q => walks(q, p)));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const p of samples) {
+        if (points.includes(p)) continue;
+        if (points.some(q => walks(q, p))) { points.push(p); grew = true; }
+      }
+    }
+    this._reachablePointsCache.set(key, points);
+    return points;
+  }
+
+  stageServes(stage, standOn) {
+    const sx = protocolToClient(standOn.x), sy = protocolToClient(standOn.y);
+    const floorAt = (x, y) => { try { return this.floorBaseAtClient(x, y); } catch { return null; } };
+    const standFloor = floorAt(sx, sy);
+    if (!Number.isFinite(standFloor)) return true;                    // cannot judge: keep
+    // LEVEL GROUND ONLY. Where the last move onto the stand point is a drop (the Cragged
+    // Mountains' west door at r35c1) a no-fall trace refuses a crossing people make, so a
+    // square with no reachable point level with the stand point is not judged.
+    const points = this.reachablePointsIn(stage.row, stage.col).filter(([x, y]) => {
+      const z = floorAt(x, y);
+      return Number.isFinite(z) && Math.abs(z - standFloor) <= MAX_STEP_HEIGHT;
+    });
+    if (!points.length) return true;                                  // cannot judge: keep
+    // FROM WHERE THE WALKER WILL BE, NOT FROM ANYWHERE IT COULD BE. A walk to a stage aims at
+    // the square's centre and stops at the nearest point it can reach, so that is the point to
+    // judge from. Judging from ANY reachable point kept 526 r40c50 for the y 2656 opening (some
+    // point in it reaches that stand) while the body, parked at (3208,2570), could not: 0/3 on
+    // the shadow fleet, against 5/5 once r40c50 was dropped.
+    const cx = protocolToClient(stage.col * KOD_FINENESS + (KOD_FINENESS >> 1));
+    const cy = protocolToClient(stage.row * KOD_FINENESS + (KOD_FINENESS >> 1));
+    const d2 = p => (p[0] - cx) ** 2 + (p[1] - cy) ** 2;
+    const at = points.reduce((best, p) => (d2(p) < d2(best) ? p : best));
+    const t = this.traceFineMoveClient(at[0], at[1], sx, sy, { slide: false });
+    return !!(t.available && t.arrived);
+  }
+
+  withEnterableStages(approaches) {
+    const out = [];
+    for (const a of approaches) {
+      const stages = a.stages.filter(s => this.stageServes(s, a.fine_stand_on));
+      if (stages.length === a.stages.length) out.push(a);
+      else if (stages.length) out.push(Object.freeze({ ...a, stages: Object.freeze(stages) }));
+    }
+    return out;
+  }
+
   // A boundary opening is useful only when the character can approach it from a
   // square that the ordinary room router can reach. A perpendicular inside/outside
   // trace alone over-advertises decorative slits on the outside of a wall (Cor Noth
@@ -4872,14 +4958,15 @@ export function applySectorHeights(geometry, overrides = [], { mask = null } = {
   // The line whose absence produced a false negative and a wrong conclusion out loud.
   for (const wall of geometry.walls) setWallHeights(wall, geometry.sectors);
 
-  // EVERY MEMO THAT ASKED THE OLD HEIGHTS. Three are keyed on a step and two on a room
-  // edge; all five answer from wall z values that have just changed underneath them, and a
+  // EVERY MEMO THAT ASKED THE OLD HEIGHTS. Three are keyed on a step and three on a room
+  // edge; all six answer from wall z values that have just changed underneath them, and a
   // stale entry here is a door that reads open in one direction and shut in the other.
   geometry._stepCollisionCache = null;
   geometry._moverStepCache = null;
   geometry._fallCache = null;
   geometry._edgeOpeningCache = new Map();
   geometry._edgeApproachCache = new Map();
+  geometry._reachablePointsCache = null;
 
   if (!geometry.attachStepMask(mask))
     return { moved, restore, why: 'the mask is the wrong size for this room — geometry moved, ' +
