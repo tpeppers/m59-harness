@@ -293,6 +293,13 @@ __pycache__/
 # orders, like loadouts/ above.
 /substrate/lockdown-saved/
 /substrate/lockdown-doorwatch.*
+# The timed PvP lockdown (local pvp-lockdown pad): the flag with its deadline, and each character's whole
+# saved posture for pvp-unlock. Same argument as lockdown-saved/: one machine's orders, and losing them loses
+# where everyone goes back to.
+/substrate/pvp-lockdown.json
+/substrate/pvp-lockdown-saved/
+# The local troll-circuit driver's position in its loop, per hunter.
+/substrate/troll-circuit-state.json
 
 # THE SWARM'S RUNTIME STATE (tools/m59-swarm-follow.mjs): the driver's state and every keeper's
 # sighting, and the driver's log and output. One machine's live play, rewritten every second.
