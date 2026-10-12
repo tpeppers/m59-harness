@@ -11547,6 +11547,11 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      prefer_mundane_weapon: { type: 'boolean',
+        description: 'THE OPPOSITE OF prefer_magic_weapon: inside the weapon family, a mundane (undedicated) weapon wins ' +
+          'the tie over one read as magic, and a magic weapon in hand is swapped for a same-name mundane spare. For a ' +
+          'crew that keeps its enchanted weapon for trolls (prefer_magic_weapon true there) and the other for ' +
+          'everything else. Ignored while prefer_magic_weapon is true. autopilot status reports policy.preferMundaneWeapon' },
       prefer_magic_weapon: { type: 'boolean',
         description: 'Between two weapons of the SAME priority rank, wield the one READ as ' +
                      'bypassing NONMAGIC (enchanted, born magic, nerudite) — and swap to it at once ' +
@@ -12664,6 +12669,8 @@ const TOOLS = [
           ? a.weapon_priority.map(String) : null;
       if (a.prefer_magic_weapon !== undefined)
         p.policy.preferMagicWeapon = a.prefer_magic_weapon === true;
+      if (a.prefer_mundane_weapon !== undefined)
+        p.policy.preferMundaneWeapon = a.prefer_mundane_weapon === true;
       // A PROHIBITION, NOT A RANKING. Lower-cased at the door because isBannedWeapon
       // compares that way, and an empty list stores null so "no ban" and "a ban that
       // matches nothing" cannot be confused downstream.

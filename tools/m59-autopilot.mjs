@@ -2142,6 +2142,9 @@ export class Autopilot {
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
       // turns this on. It never outranks the priority itself — see weaponRanking.
       preferMagicWeapon: false,
+      // THE OPPOSITE TIE-BREAK: a mundane twin over a magic one inside the family (`syncMagicSet`, the ranking in
+      // m59-skills weaponRanking). For a crew that keeps its dedicated weapon for trolls only. Off by default.
+      preferMundaneWeapon: false,
       // KILL WHAT WE DO NOT WANT, TO KEEP THE ROOM PRODUCING WHAT WE DO. The spawn cap
       // is a room-wide total, so a creature we step over is a slot our prey cannot use.
       // Off makes the keeper ignore weak creatures and slowly suffocate its own hunting
@@ -31350,8 +31353,10 @@ export class Autopilot {
     c._madeItemIds = new Set(sum.weapons.filter(w => w.made === true).map(w => w.id));
     // Read as NOT conjured: a remembered summon id that now names one of these is looted, not ours.
     c._notMadeIds = new Set(sum.weapons.filter(w => w.made === false).map(w => w.id));
-    c._magicWeaponIds = on
+    const mundane = !on && this.policy?.preferMundaneWeapon === true;
+    c._magicWeaponIds = on || mundane
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
+    c._preferMundane = mundane;
     return sum;
   }
 
@@ -31362,6 +31367,22 @@ export class Autopilot {
     const on = this.policy?.preferMagicWeapon === true;
     const sum = this.syncMagicSet(c, items);
     const due = this._magicSwapDue; this._magicSwapDue = false;
+    // PREFER MUNDANE: a magic weapon in hand with a mundane same-name spare in the pack -> equipBest swaps (the
+    // ranking's inverted tie-break chooses the spare). The dedicated one is kept for the troll rooms.
+    if (!on && this.policy?.preferMundaneWeapon === true) {
+      const ws = sum?.weapons ?? [];
+      const held = ws.find(w => w.wielded);
+      const spare = held && held.bypasses_nonmagic === true
+        && ws.find(w => !w.wielded && w.bypasses_nonmagic !== true && !w.broken && String(w.name) === String(held.name));
+      if (!spare) return null;
+      if (!due && Date.now() - (this._magicSwapAt ?? 0) < 30_000) return null;
+      this._magicSwapAt = Date.now();
+      const r = await skills.equipBest(this.s, { priority: this.weaponPriorityNow?.() ?? null, banned: this.bannedWeaponsNow?.() ?? null })
+        .catch(e => ({ ok: false, why: e.message }));
+      this.note('MUNDANE SWAP', { to: spare.id, result: r?.ok ?? null,
+        why: 'prefer_mundane_weapon: the dedicated weapon is kept for the troll rooms' });
+      return r;
+    }
     if (!on) return null;
     const priority = this.weaponPriorityNow?.() ?? null;
     const rank = n => {

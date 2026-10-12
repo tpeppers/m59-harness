@@ -171,6 +171,9 @@ These tests are offline. They do not execute a raid or shut down a server.
   refused twice on 2026-10-12 by his own run's previous walk. The strategy-engine suite gained the matching
   residue cases (unassign plus an explicit value in one push; unassign while a script holds movement; a
   shadow that is the file's own value).
+- `m59-prefer-mundane-test.mjs` (5): PREFER MUNDANE (`prefer_mundane_weapon`, `c._preferMundane`). The troll crew keeps a
+  dedicated weapon for trolls and an undedicated twin for everything else; with the flag the mundane twin wins inside the
+  family (never across it), prefer-magic is unchanged, and the keeper swaps a magic weapon in hand for its mundane twin.
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

@@ -162,6 +162,8 @@ export const STRATEGY_FIELDS = Object.freeze([
     normalize: bool('weapons.trainingWeaponOnly') },
   { path: 'weapons.preferMagic', keys: ['preferMagicWeapon'], faculty: 'work', arg: 'prefer_magic_weapon',
     normalize: bool('weapons.preferMagic') },
+  { path: 'weapons.preferMundane', keys: ['preferMundaneWeapon'], faculty: 'work', arg: 'prefer_mundane_weapon',
+    normalize: bool('weapons.preferMundane') },
   { path: 'confine.rooms', keys: ['confineRooms'], faculty: 'movement', arg: 'confine_rooms',
     normalize: v => { if (v === null) return null;
       if (!Array.isArray(v) || !v.length) throw new Error('confine.rooms must be a non-empty list of room numbers or null');

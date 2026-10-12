@@ -629,7 +629,11 @@ export function weaponRanking(c, { priority = null, banned = null,
   // Stashed on the client for the same reason `_summoned` is: every equipBest call site then
   // agrees, and a later equip cannot swap straight back to the mundane twin.
   const magic = c._magicWeaponIds instanceof Set && c._magicWeaponIds.size ? c._magicWeaponIds : null;
-  const mundane = r => (magic?.has(r.o.id) ? 0 : 1);
+  // AND THE OTHER WAY ROUND, WHEN ASKED (`preferMundaneWeapon`, c._preferMundane): the troll crew keeps one
+  // dedicated weapon for trolls and one undedicated for everything else (operator, 2026-10-12), so off the troll
+  // rooms the mundane twin wins the tie inside the family. Never the cross-family "magic first" rule below.
+  const preferMundane = c._preferMundane === true && !!magic;
+  const mundane = r => (magic?.has(r.o.id) ? 0 : 1) ^ (preferMundane ? 1 : 0);
   if (priority?.length) {
     const rank = (n) => {
       const i = priority.findIndex(p => n.toLowerCase().includes(String(p).toLowerCase()));
@@ -641,7 +645,7 @@ export function weaponRanking(c, { priority = null, banned = null,
     // by its priority alone. Trolls resist a mundane blade by 80 (troll.kod:64-67): an enchanted long
     // sword in an axe trainee's hand beats its conjured axe outright. It was a tie-break inside the
     // family, and a hunter stood in the stage room holding an enchanted long sword he would not wield.
-    return rows.sort((a, b) => (magic ? mundane(a) - mundane(b) : 0) || rank(a.name) - rank(b.name) ||
+    return rows.sort((a, b) => (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || rank(a.name) - rank(b.name) ||
       mundane(a) - mundane(b) || b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
