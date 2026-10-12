@@ -11579,6 +11579,12 @@ const TOOLS = [
           'already reached the quarry level trains NOTHING on the armed half until this ' +
           'names a weapon it can still advance. Name it exactly — "sword" matches short, ' +
           'long and mystic sword alike.' },
+      engage_buff: { type: ['object', 'null'],
+        description: 'A SELF-BUFF cast right before the first swing of every engagement (the pull swing, or the ' +
+          'first swing at the wall): { spell, fullHealthOnly (default true), logoffOnHold (default false) }, e.g. ' +
+          '{"spell":"kara\'hol\'s curse","logoffOnHold":true}. Never while already on or held, at most once in 15s. ' +
+          'logoffOnHold: held (the curse ends in a hold) with something in reach within 3 minutes of the cast -> ' +
+          'reconnect, once a minute at most. A farm strategy may declare it as engageBuff. null: none.' },
       pull_through_crowd: { type: ['boolean', 'null'],
         description: 'true: a pull to the safe wall is no longer refused because the room is crowded (6+ threats, ' +
           'travelStopMaxThreats); instead the quarry is re-picked as the qualifying creature (hunted, not spared, ' +
@@ -12676,6 +12682,10 @@ const TOOLS = [
         const w = String(a.training_weapon).trim();
         if (!w) throw new Error('training_weapon must name a weapon, not an empty string');
         p.policy.trainingWeapon = w;
+      }
+      if (a.engage_buff !== undefined) {
+        try { p.policy.engageBuff = farmStrategyField('engageBuff').normalize(a.engage_buff ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
       }
       if (a.pull_through_crowd !== undefined) {
         if (a.pull_through_crowd !== null && typeof a.pull_through_crowd !== 'boolean')

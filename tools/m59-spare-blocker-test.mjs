@@ -203,10 +203,11 @@ await ok('qor-lupogg-sewers (example) validates: lupoggs, rats spared and provok
   const d = mod.default;
   assert.deepEqual(d.spare, ['giant rat']);
   assert.equal(d.spareBlockers, 'provoke');
-  assert.equal(d.weapons.style, 'short_sword');
-  assert.equal(d.weapons.trainingWeapon, 'axe');
-  assert.equal(d.weapons.touchSpell, null, 'axes and a shield, not an empty hand: a leftover touch spell is overridden');
-  assert.equal(d.weapons.trainingWeaponOnly, true);
+  // ACID TOUCH since 2026-10-12 (operator: "Let's switch them over to the acid"), the axe orders overridden.
+  assert.equal(d.weapons.touchSpell, 'acid touch');
+  assert.equal(d.weapons.style, 'normal');
+  assert.equal(d.weapons.trainingWeaponOnly, false);
+  assert.ok(d.protect.includes('entroot berry'), 'one berry a cast');
   for (const k of ['purple mushroom', 'blue dragon scale', 'wand', 'scroll', 'sapphire', 'dark angel feather', 'key'])
     assert.ok(d.protect.includes(k), k);
   const f = STRATEGY_FIELDS.find(x => x.path === 'weapons.trainingWeapon');

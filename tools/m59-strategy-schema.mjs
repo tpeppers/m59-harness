@@ -174,6 +174,13 @@ export const STRATEGY_FIELDS = Object.freeze([
       if (!Array.isArray(v) || !v.length) throw new Error('confine.approach must be a non-empty list of room numbers or null');
       return v.map(roomNum('confine.approach')); } },
   // PULL THROUGH A CROWD (Autopilot.pull / closestPullable): skip the crowd refusal, take the nearest target.
+  // A SELF-BUFF AT THE START OF EVERY ENGAGEMENT (Autopilot.castEngageBuff / escapeEngageBuffHold).
+  { path: 'engageBuff', keys: ['engageBuff'], faculty: 'work', arg: 'engage_buff',
+    normalize: v => { if (v === null) return null;
+      if (!v || typeof v !== 'object' || !String(v.spell ?? '').trim())
+        throw new Error('engageBuff must be { spell, fullHealthOnly?, logoffOnHold? } or null');
+      return { spell: String(v.spell).trim().toLowerCase(), fullHealthOnly: v.fullHealthOnly !== false,
+               logoffOnHold: v.logoffOnHold === true }; } },
   { path: 'pull.throughCrowd', keys: ['pullThroughCrowd'], faculty: 'work', arg: 'pull_through_crowd',
     normalize: bool('pull.throughCrowd') },
   { path: 'confine.roam', keys: ['roam'], faculty: 'movement', arg: 'roam', normalize: bool('confine.roam') },

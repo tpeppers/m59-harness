@@ -154,11 +154,15 @@ These tests are offline. They do not execute a raid or shut down a server.
   once inside; the legs (and only the legs) are exempt from the confinement gate; the lupogg road 544 ->
   552 -> 562 -> 108 is checked against the map's own edges. **It should fail the day a Qor caster enters
   the sewers by Barloque's door.**
-- `m59-pull-crowd-test.mjs` (5): PULLING THROUGH A CROWD (`pull_through_crowd` / a strategy's
+- `m59-pull-crowd-test.mjs` (8): PULLING THROUGH A CROWD (`pull_through_crowd` / a strategy's
   `pull.throughCrowd`, `Autopilot.closestPullable`). With the flag the crowd refusal on a pull is skipped and
   the quarry is the qualifying creature (hunted, not spared, inside the band, reachable) the fewest WALKING
   steps from the wall; without it the refusal stands; the flee-line refusal still runs. Written for 112 at
   its cap with ~20 lupoggs, where every pull was refused.
+- `m59-engage-buff-test.mjs` (6): the ENGAGE BUFF (`engage_buff` / a strategy's `engageBuff`,
+  `castEngageBuff`, `escapeEngageBuffHold`): a self-buff (Kara's curse on the lupogg hunters) cast right
+  before the pull's swing and the first swing at the wall, at full health only, never while on or held, once
+  in 15s; the hold its end brings, with something unspared in reach, answered by one reconnect a minute.
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

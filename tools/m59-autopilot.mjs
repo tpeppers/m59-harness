@@ -2134,6 +2134,9 @@ export class Autopilot {
       // PULL EVEN WHEN THE ROOM IS CROWDED, and then the closest qualifying target (`pull`, `closestPullable`).
       // Off by default: the crowd refusal is the old behaviour.
       pullThroughCrowd: false,
+      // A SELF-BUFF CAST AT THE START OF EVERY ENGAGEMENT: { spell, fullHealthOnly, logoffOnHold }
+      // (`castEngageBuff`, `escapeEngageBuffHold`). null: none.
+      engageBuff: null,
       // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
       // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
@@ -6623,13 +6626,19 @@ export class Autopilot {
       this.noteCrowdRefusal('pulling quarry to the wall');
       return { pulled: false, why: 'too many things in this room to walk out and back through' };
     }
+    // AND THE SAME ONE UNTIL IT DIES. Operator, 2026-10-12, after a lupogg room where each pull re-picked
+    // the closest and a lupogg that had taken a cut was dropped for a fresh one nearer the wall: "fix it to
+    // follow the same monster after starting one, and otherwise grab the closest". A fight from the wall is
+    // a round at a time, so damage only adds up to a kill if every pull fetches the same body.
     if (throughCrowd && !buddyCrowdOk) {
-      const closest = this.closestPullable();
-      if (closest && closest.id !== want?.id) {
-        this.note('pulling through a crowd: the closest qualifying target instead', {
-          was: want?.id ?? null, now: closest.id, steps: closest.steps,
-          why: 'pull.throughCrowd: the walk out and back is through everything in reach, so it is the shortest one' });
-        want = closest;
+      const pick = this.closestPullable({ preferId: this.pullFocusId() });
+      if (pick && pick.id !== want?.id) {
+        this.note(pick.focus ? 'pulling through a crowd: the one we already started on'
+                             : 'pulling through a crowd: the closest qualifying target instead', {
+          was: want?.id ?? null, now: pick.id, steps: pick.steps, focus: !!pick.focus,
+          why: pick.focus ? 'damage only adds up to a kill on one body'
+                          : 'pull.throughCrowd: the walk out and back is through everything in reach, so it is the shortest one' });
+        want = pick;
       }
     }
     const frac = pct(s?.client?.vitals?.()?.health);
@@ -6684,12 +6693,15 @@ export class Autopilot {
     const it = c.room.objects.get(foe.id);
     if (it) {
       await s.faceToward(it);
+      await this.castEngageBuff(`before pulling ${name}`).catch(() => null);
       await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
       this.swungAt = Date.now();
       // ONLY WHEN THE THING SWUNG AT IS A PERSON. This path is nearly always a monster, and
       // stamping every swing would ban the whole fleet from the chalice permanently.
       if (it.flags & OF.PLAYER) this.notePlayerSwing();
       this.foeId = foe.id;
+      // The body this character has started on, for the next pull (`pullFocusId`).
+      this._pullFocus = { id: foe.id, room: s.world?.room?.num ?? null, at: Date.now() };
     }
 
     const home = await skills.returnToSpot(s, spot, { maxSteps: approach.steps + 12 })
@@ -6728,7 +6740,80 @@ export class Autopilot {
    * with a reachable square beside it -- the one the fewest WALKING steps from here (the wall). Euclidean
    * distance narrows the field to the nearest eight before any path is asked for. null when none qualifies.
    */
-  closestPullable() {
+  // A SELF-BUFF AT THE START OF EVERY ENGAGEMENT (policy.engageBuff; a farm strategy's `engageBuff`).
+  //
+  // Operator, 2026-10-12, of the Qor casters on lupoggs: "have them use karahols curse on themselves when full
+  // hp and starting attacking". Measured that night, ninety seconds of their swings: 6 dodges, 2 avoids, 3
+  // "shrugs off", 3 hits -- and Kara'hol's curse adds 100 + 2 x power to the hit roll and a little damage
+  // (karahol.kod ModifyHitRoll / ModifyDamage) for 40 + power/2 seconds, self only, 9 mana and 2 entroot
+  // berries. Its price is a hold of a sixth of that when it ends, which `escapeEngageBuffHold` answers.
+  //
+  // Cast right before the pull's swing and before the first swing at the wall; only at full health (unless
+  // told otherwise), never while it is already on or while held, and not more than once in fifteen seconds
+  // so a refusal (no mana, no berries) cannot become a loop. A failed cast never stops the fight.
+  async castEngageBuff(why) {
+    const cfg = this.policy?.engageBuff;
+    if (!cfg?.spell) return null;
+    const s = this.s, c = s?.client;
+    if (!c?.selfId) return null;
+    const key = v => String(v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+    const want = key(cfg.spell);
+    const on = (c.enchantments?.() ?? []).map(e => key(e.name));
+    if (on.includes(want)) return { already: true };
+    if (on.includes('hold')) return { skipped: 'held' };
+    if (cfg.fullHealthOnly !== false) {
+      const h = c.vitals?.()?.health;
+      if (!h || !(h.max > 0) || h.value < h.max) return { skipped: 'not at full health' };
+    }
+    if (this._engageBuffTriedAt && Date.now() - this._engageBuffTriedAt < 15_000) return { skipped: 'tried recently' };
+    this._engageBuffTriedAt = Date.now();
+    const spell = (c.spells || []).find(sp => key(c.rsc?.get?.(sp.nameRsc) || sp.name) === want);
+    if (!spell) return { skipped: `does not know ${cfg.spell}` };
+    const mana = c.vitals?.()?.mana?.value ?? null;
+    const before = c.evSeq;
+    await s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050);
+    await c.waitFor?.({ since: before, kinds: ['message', 'stat'], timeoutMs: 2500 })?.catch?.(() => {});
+    const after = c.vitals?.()?.mana?.value ?? null;
+    const landed = mana != null && after != null && after < mana;
+    if (landed) { this._engageBuffOnAt = Date.now(); this.tally.engage_buffs = (this.tally.engage_buffs || 0) + 1; }
+    this.recordCast?.(cfg.spell, { ok: landed, why: `engage buff: ${why}`, target: 'self', mana_before: mana, mana_after: after });
+    this.note(landed ? 'engage buff: cast on ourselves before attacking' : 'engage buff: the cast left no trace',
+      { spell: cfg.spell, why, mana_before: mana, mana_after: after });
+    return { cast: true, landed };
+  }
+
+  // HELD WHILE STILL IN A FIGHT: LOG OFF AND ON. Operator, 2026-10-12: "They can log off and on if the hold
+  // starts on them while they are still fighting." Kara'hol's curse ends in a hold the caster cannot
+  // free-action out of; with `engageBuff.logoffOnHold` a held character with anything in reach reconnects
+  // (the same `reconnect` the crowd break-out uses) instead of standing frozen beside it. Once a minute at
+  // most, and only within three minutes of a curse this keeper cast.
+  async escapeEngageBuffHold() {
+    const cfg = this.policy?.engageBuff;
+    if (!cfg?.logoffOnHold || !this._engageBuffOnAt || Date.now() - this._engageBuffOnAt > 180_000) return false;
+    const c = this.s?.client;
+    const held = (c?.enchantments?.() ?? []).some(e => /^hold$/i.test(String(e.name ?? '').trim()));
+    if (!held) return false;
+    const near = (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o));
+    if (!near.length) return false;
+    if (this._engageHoldEscapeAt && Date.now() - this._engageHoldEscapeAt < 60_000) return false;
+    this._engageHoldEscapeAt = Date.now();
+    this.note('held by the end of the engage buff with something in reach -- logging off and on', {
+      spell: cfg.spell, in_reach: near.length,
+      why: 'operator: "They can log off and on if the hold starts on them while they are still fighting"' });
+    const r = await this.reconnect('engage buff hold while fighting').catch(e => ({ ok: false, why: e.message }));
+    this.tally.engage_hold_escapes = (this.tally.engage_hold_escapes || 0) + (r?.ok ? 1 : 0);
+    return !!r?.ok;
+  }
+
+  /** The creature this character last pulled, while it is still in this room; else null. */
+  pullFocusId() {
+    const f = this._pullFocus, c = this.s?.client;
+    if (!f || f.room !== (this.s?.world?.room?.num ?? null)) return null;
+    if (!c?.room?.objects?.get?.(f.id)) { this._pullFocus = null; return null; }
+    return f.id;
+  }
+
+  closestPullable({ preferId = null } = {}) {
     const s = this.s, c = s?.client, world = s?.world, me = c?.self;
     if (!c?.room?.objects || !world?.approachSquare || !me) return null;
     let match;
@@ -6741,6 +6826,12 @@ export class Autopilot {
       rows.push({ o, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) });
     }
     rows.sort((a, b) => a.d - b.d);
+    // THE ONE ALREADY STARTED ON comes first, wherever it stands, while it qualifies and can be reached.
+    const focus = preferId != null ? rows.find(r => r.o.id === preferId) : null;
+    if (focus) {
+      const a = world.approachSquare(focus.o.col, focus.o.row);
+      if (a) return { id: focus.o.id, steps: a.steps, focus: true, name: focus.o.name ?? c.rsc?.get?.(focus.o.nameRsc) ?? '' };
+    }
     let best = null;
     for (const { o } of rows.slice(0, 8)) {
       const a = world.approachSquare(o.col, o.row);
@@ -19067,6 +19158,7 @@ export class Autopilot {
   // ── passFleeAndRest: extracted from pass() ────────────────────────────────
   async passFleeAndRest(ctx) {
     const { s, c, room, v, hp } = ctx;
+    if (await this.escapeEngageBuffHold().catch(() => false)) return HANDLED;
     // 2. In danger. "Something attackable is adjacent and we are hurt" is the only
     //    threat signal available — the protocol does not say who is targeting us.
     //
@@ -23241,6 +23333,7 @@ export class Autopilot {
       // reason on the status, and the character swings bare.
       this.farmStrategyHook('beforeSwing', { target: engageName, target_id: claimedSwing ?? null,
                                              room: room?.num ?? null });
+      await this.castEngageBuff(`before swinging at ${engageName}`).catch(() => null);
       if (this.touchTrainingHere())
         await this.maintainTouchSpell(`before swinging at ${engageName}`)
           .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });

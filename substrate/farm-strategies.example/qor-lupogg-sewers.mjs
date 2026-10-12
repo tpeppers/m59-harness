@@ -38,31 +38,32 @@ const STATION = 112;
 
 export default {
   name: 'qor-lupogg-sewers',
-  describe: 'Barloque sewers 111/112: lupoggs with conjured axes and a shield, for evil karma and gems; rats spared and lured out of the way.',
+  describe: 'Barloque sewers 111/112: lupoggs with acid touch, one at a time through the crowd, for evil karma and gems; rats spared and lured out of the way.',
 
   hunt: ['lupogg'],
   spare: ['giant rat'],
   spareBlockers: 'provoke',
 
-  // AXES, NOT ACID TOUCH (operator, 2026-10-11: "switch them over to use axes (from create weapon roulette)
-  // and shields and leather armor, because we need them high defense"). A touch spell needs an empty hand;
-  // an axe leaves the shield on. Axes slash, and a lupogg takes -10 from slash. The armed training style
-  // holds the training weapon, and while axe wielding is under 70 the keeper conjures one with create
-  // weapon (Kraanan; every Qor master here knows it, 89-99) rather than buying. The shield and the leather
-  // armour are each character's loadout (gear.slots), not this file's: a strategy cannot dress anybody.
-  //
-  // AXE ONLY, AND NO TOUCH SPELL (operator, 2026-10-11: "we want lupoggs hunted with axes for the damage
-  // type slash"). Janice carried a hammer at 70 and was re-armed with it; `trainingWeaponOnly` makes the
-  // axe the only weapon any equip may choose. And a character's own `touchSpell` order outlives the
-  // strategy that set it -- Janice, Beaker and Camilla still carried `acid touch`, which empties the
-  // hand on the station -- so this file says null, and while it is assigned null is in force.
+  // ACID TOUCH (operator, 2026-10-12: "Let's switch them over to the acid"). Measured that night: a lupogg
+  // resists "largest resistance plus worst weakness" (battler.kod:189 ResistanceCheck) -- an axe is 70 (every
+  // weapon) - 10 (slash) = 60 resisted; acid touch is also a weapon attack (touchatk.kod:83, unarmed+punch)
+  // so pays the 70 too, but acid is -20: 50 resisted, 4-8 damage that strength does not touch
+  // (acidtch.kod:70-75). And Janice's acid touch is 99 against 39 in axes; in ninety seconds the axes
+  // landed 3 cuts in 14 swings. One entroot berry a cast, so they are protected below. `style: 'normal'`
+  // and `trainingWeaponOnly: false` override the axe orders these characters were given as their own.
   weapons: {
-    style: 'short_sword',
-    trainingWeapon: 'axe',
-    trainingWeaponOnly: true,
-    priority: ['axe'],
-    touchSpell: null,
+    touchSpell: 'acid touch',
+    touchSpellTiming: 'on_target',
+    style: 'normal',
+    trainingWeaponOnly: false,
   },
+
+  // KARA'HOL'S CURSE AT THE START OF EVERY FIGHT (operator, 2026-10-12: "have them use karahols curse on
+  // themselves when full hp and starting attacking", and "They can log off and on if the hold starts on them
+  // while they are still fighting"). +100 + 2 x power to hit for 40 + power/2 seconds against a lupogg that
+  // dodged most of the swings; 2 entroot berries a cast, on top of acid touch's one -- the berries are the
+  // binding supply. The curse ends in a hold; a held hunter with a lupogg in reach reconnects.
+  engageBuff: { spell: "kara'hol's curse", fullHealthOnly: true, logoffOnHold: true },
 
   // PULL THROUGH THE CROWD (operator, 2026-10-12: "Let strategies always pull through a crowd, but have them
   // just always prefer the closest target out of the crowd that fits the criteria"). 112 sits at its cap of 25
@@ -90,7 +91,7 @@ export default {
   // and that is how fleet scripts tell them apart (`identified_as`). The keeper's keep list matches the
   // wire NAME, so the bare words are listed too. Nothing else a lupogg drops is called "wand" or
   // "scroll", so here that keeps exactly these two.
-  protect: ['inky-cap mushroom', 'sapphire', 'ruby', 'diamond', 'dark angel feather', 'purple mushroom',
+  protect: ['entroot berry', 'inky-cap mushroom', 'sapphire', 'ruby', 'diamond', 'dark angel feather', 'purple mushroom',
             'blue dragon scale', 'wand', 'scroll', 'mystic sword', 'plate armor', 'key'],
 
   hooks: {

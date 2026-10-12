@@ -81,15 +81,13 @@ await ok('whole words: "axe" is not "battleaxe"-by-accident, and a hook that thr
   }
 });
 
-await ok('the strategy field and the broker argument exist; qor-lupogg-sewers sets it and nulls the touch spell', async () => {
+await ok('the strategy field and the broker argument exist, and a strategy may set it', async () => {
   const f = STRATEGY_FIELDS.find(x => x.path === 'weapons.trainingWeaponOnly');
   assert.equal(f?.arg, 'training_weapon_only');
   assert.deepEqual(f.keys, ['trainingWeaponOnly']);
-  const mod = await import('../substrate/farm-strategies.example/qor-lupogg-sewers.mjs');
-  const v = validateStrategy(mod.default, { file: 'qor-lupogg-sewers.mjs' });
+  const v = validateStrategy({ name: 'axe-only', weapons: { style: 'short_sword', trainingWeapon: 'axe', trainingWeaponOnly: true } },
+    { file: 'axe-only.mjs' });
   assert.ok(v.ok !== false && !(v.problems?.length), JSON.stringify(v).slice(0, 300));
-  assert.equal(mod.default.weapons.trainingWeaponOnly, true);
-  assert.equal(mod.default.weapons.touchSpell, null);
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(broker.includes('p.policy.trainingWeaponOnly = a.training_weapon_only === true;'));
 });

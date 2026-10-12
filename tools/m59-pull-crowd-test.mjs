@@ -56,13 +56,48 @@ await ok('nothing qualifies -> null, and the pull keeps the target it was given'
   assert.equal(keeper([{ id: 30, rsc: 2, row: 10, col: 11, steps: 1 }]).closestPullable(), null);
 });
 
+await ok('the one already started on wins over a closer one, while it is in the room and reachable', () => {
+  const ap = keeper([
+    { id: 40, rsc: 1, row: 10, col: 12, steps: 2 },
+    { id: 41, rsc: 1, row: 10, col: 20, steps: 11 },
+  ]);
+  const pick = ap.closestPullable({ preferId: 41 });
+  assert.equal(pick?.id, 41);
+  assert.equal(pick?.focus, true);
+});
+
+await ok('the focus gone, unreachable or no longer qualifying -> back to the closest', () => {
+  const bodies = [{ id: 50, rsc: 1, row: 10, col: 12, steps: 2 }, { id: 51, rsc: 1, row: 11, col: 10, steps: null },
+                  { id: 52, rsc: 2, row: 10, col: 11, steps: 1 }];
+  const ap = keeper(bodies);
+  assert.equal(ap.closestPullable({ preferId: 99 })?.id, 50, 'not in the room');
+  assert.equal(ap.closestPullable({ preferId: 51 })?.id, 50, 'cannot be reached');
+  assert.equal(ap.closestPullable({ preferId: 52 })?.id, 50, 'a spared rat is never the focus');
+  assert.equal(ap.closestPullable({ preferId: 50 })?.focus, true);
+});
+
+await ok('pullFocusId: the body last pulled, only in the room it was pulled in, forgotten once it is gone', () => {
+  const ap = keeper([{ id: 60, rsc: 1, row: 10, col: 12, steps: 2 }]);
+  ap.s.world.room = { num: 112 };
+  ap._pullFocus = { id: 60, room: 112, at: Date.now() };
+  assert.equal(ap.pullFocusId(), 60);
+  ap.s.world.room = { num: 111 };
+  assert.equal(ap.pullFocusId(), null, 'another room');
+  ap.s.world.room = { num: 112 };
+  ap._pullFocus = { id: 61, room: 112, at: Date.now() };
+  assert.equal(ap.pullFocusId(), null, 'dead or gone');
+  assert.equal(ap._pullFocus, null);
+  const p = AUTOPILOT.slice(AUTOPILOT.indexOf('  async pull(want) {'));
+  assert.ok(p.includes('this._pullFocus = { id: foe.id, room: s.world?.room?.num ?? null, at: Date.now() };'), 'set at the swing');
+  assert.ok(p.includes('const pick = this.closestPullable({ preferId: this.pullFocusId() });'));
+});
+
 await ok('the gate: refuses in a crowd unless pullThroughCrowd, and only then re-picks', () => {
   const p = AUTOPILOT.slice(AUTOPILOT.indexOf('  async pull(want) {'));
   const body = p.slice(0, p.indexOf('\n  closestPullable() {'));
   assert.ok(body.includes("const throughCrowd = crowd && this.policy?.pullThroughCrowd === true;"));
   assert.ok(body.includes("if (!buddyCrowdOk && crowd && !throughCrowd) {"));
-  assert.ok(body.includes('const closest = this.closestPullable();'));
-  assert.ok(body.indexOf('const closest = this.closestPullable();') < body.indexOf('below the flee line'),
+  assert.ok(body.indexOf('const pick = this.closestPullable(') < body.indexOf('below the flee line'),
     're-picked before the flee-line check, which still runs on every pull');
   assert.ok(body.includes('below the flee line'));
 });
