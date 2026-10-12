@@ -58,13 +58,6 @@ export default {
     trainingWeaponOnly: false,
   },
 
-  // KARA'HOL'S CURSE AT THE START OF EVERY FIGHT (operator, 2026-10-12: "have them use karahols curse on
-  // themselves when full hp and starting attacking", and "They can log off and on if the hold starts on them
-  // while they are still fighting"). +100 + 2 x power to hit for 40 + power/2 seconds against a lupogg that
-  // dodged most of the swings; 2 entroot berries a cast, on top of acid touch's one -- the berries are the
-  // binding supply. The curse ends in a hold; a held hunter with a lupogg in reach reconnects.
-  engageBuff: { spell: "kara'hol's curse", fullHealthOnly: true, logoffOnHold: true },
-
   // PULL THROUGH THE CROWD (operator, 2026-10-12: "Let strategies always pull through a crowd, but have them
   // just always prefer the closest target out of the crowd that fits the criteria"). 112 sits at its cap of 25
   // with ~20 lupoggs in it, which is over the keeper's crowd line of 6 on every pass, so without this every

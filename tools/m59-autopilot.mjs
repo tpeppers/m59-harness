@@ -363,6 +363,9 @@ const SETTLE_GRACE_MS = 250;
 // to a square with "0 adjacent" — a contradiction that was written into the book as
 // fact.
 const REACH = 3;
+// farmBuffContext's walk estimate back to the safe spot: a square of walking, plus settling on the wall.
+const FARM_BUFF_MS_PER_SQUARE = 450;
+const FARM_BUFF_SETTLE_MS = 1500;
 // lureSparedBlocker: at most this many lures per room per window, then the movement ladder has it.
 const SPARE_LURES_PER_ROOM = 6;
 const SPARE_LURE_WINDOW_MS = 10 * 60_000;
@@ -2134,9 +2137,6 @@ export class Autopilot {
       // PULL EVEN WHEN THE ROOM IS CROWDED, and then the closest qualifying target (`pull`, `closestPullable`).
       // Off by default: the crowd refusal is the old behaviour.
       pullThroughCrowd: false,
-      // A SELF-BUFF CAST AT THE START OF EVERY ENGAGEMENT: { spell, fullHealthOnly, logoffOnHold }
-      // (`castEngageBuff`, `escapeEngageBuffHold`). null: none.
-      engageBuff: null,
       // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
       // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
@@ -6647,6 +6647,11 @@ export class Autopilot {
                why: `below the flee line (${Math.round(frac * 100)}% against ` +
                     `${Math.round(this.safety().fleeAt * 100)}%) — the ladder owns the body, ` +
                     'and a pull would fetch another one to it' };
+    // A PRIVATE STRATEGY MAY BUFF FIRST, OR SAY "NOT NOW" (`farmBuff`), while the body is still on the wall.
+    {
+      const fb = await this.farmBuffAsk('before_pull', { target_id: want?.id ?? null }).catch(() => null);
+      if (fb?.no_engage) return { pulled: false, why: `${fb.strategy}: ${fb.why ?? 'not now'}` };
+    }
     const spot = { ...this.hold };
     // NEVER TRUST A CAPTURED OBJECT'S COORDINATES. BP_ROOM_CONTENTS replaces the
     // whole object map with fresh instances, so anything picked up earlier in the
@@ -6693,7 +6698,6 @@ export class Autopilot {
     const it = c.room.objects.get(foe.id);
     if (it) {
       await s.faceToward(it);
-      await this.castEngageBuff(`before pulling ${name}`).catch(() => null);
       await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
       this.swungAt = Date.now();
       // ONLY WHEN THE THING SWUNG AT IS A PERSON. This path is nearly always a monster, and
@@ -6740,69 +6744,98 @@ export class Autopilot {
    * with a reachable square beside it -- the one the fewest WALKING steps from here (the wall). Euclidean
    * distance narrows the field to the nearest eight before any path is asked for. null when none qualifies.
    */
-  // A SELF-BUFF AT THE START OF EVERY ENGAGEMENT (policy.engageBuff; a farm strategy's `engageBuff`).
+  // THE farmBuff SEAM: A PRIVATE STRATEGY'S SAY OVER BUFFS AND THE WALL WHILE FARMING.
   //
-  // Operator, 2026-10-12, of the Qor casters on lupoggs: "have them use karahols curse on themselves when full
-  // hp and starting attacking". Measured that night, ninety seconds of their swings: 6 dodges, 2 avoids, 3
-  // "shrugs off", 3 hits -- and Kara'hol's curse adds 100 + 2 x power to the hit roll and a little damage
-  // (karahol.kod ModifyHitRoll / ModifyDamage) for 40 + power/2 seconds, self only, 9 mana and 2 entroot
-  // berries. Its price is a hold of a sixth of that when it ends, which `escapeEngageBuffHold` answers.
+  // Operator, 2026-10-12: a self-buff tactic for the lupogg hunters -- when to cast it, being back on the
+  // safe spot before it ends, and logging off to wait out what its end brings -- is to be PRIVATE. So the
+  // tactic lives in substrate/strategies/ (gitignored) and answers `farmBuff`; this file only builds the
+  // question and carries out a small, closed set of answers. No strategy, or a declining one, is the old
+  // behaviour exactly.
   //
-  // Cast right before the pull's swing and before the first swing at the wall; only at full health (unless
-  // told otherwise), never while it is already on or while held, and not more than once in fifteen seconds
-  // so a refusal (no mana, no berries) cannot become a loop. A failed cast never stops the fight.
-  async castEngageBuff(why) {
-    const cfg = this.policy?.engageBuff;
-    if (!cfg?.spell) return null;
-    const s = this.s, c = s?.client;
-    if (!c?.selfId) return null;
-    const key = v => String(v ?? '').toLowerCase().replace(/[^a-z]/g, '');
-    const want = key(cfg.spell);
-    const on = (c.enchantments?.() ?? []).map(e => key(e.name));
-    if (on.includes(want)) return { already: true };
-    if (on.includes('hold')) return { skipped: 'held' };
-    if (cfg.fullHealthOnly !== false) {
-      const h = c.vitals?.()?.health;
-      if (!h || !(h.max > 0) || h.value < h.max) return { skipped: 'not at full health' };
+  // Asked with `phase`: 'pass' (every pass, ahead of the survival ladder's own rungs), 'before_pull' (on
+  // the wall, before walking out) and 'before_swing' (the first swing of a fight at the wall).
+  //   ctx = { phase, now, agent, character, room, farm_strategy, health, mana, enchantments: [names],
+  //           held, in_reach (unspared bodies in melee reach), safe_spot: {col,row} | null,
+  //           at_safe_spot, eta_to_safe_spot_ms, pack: { item: count }, spells: [known names],
+  //           heard: [{ at, text }] (the last two minutes of server messages), ...extra }
+  //   answer = { cast?: '<known spell>' (at ourselves), go_to_safe_spot?: true, no_engage?: true,
+  //              logoff?: { for_ms } (1-60 s offline, then back), why?: string } | null
+  // Never throws; a malformed answer does nothing.
+  farmBuffContext(phase, extra = {}) {
+    const s = this.s, c = s?.client, me = c?.self, now = Date.now();
+    const key = v => String(v ?? '').toLowerCase().trim();
+    const v = c?.vitals?.() ?? {};
+    const enchantments = (c?.enchantments?.() ?? []).map(e => key(e.name)).filter(Boolean);
+    const pack = {};
+    for (const o of c?.inventory ?? []) {
+      const n = key(c.rsc?.get?.(o.nameRsc) ?? o.name);
+      if (n) pack[n] = (pack[n] ?? 0) + (Number(o.amount) || 1);
     }
-    if (this._engageBuffTriedAt && Date.now() - this._engageBuffTriedAt < 15_000) return { skipped: 'tried recently' };
-    this._engageBuffTriedAt = Date.now();
+    const spells = (c?.spells ?? []).map(sp => key(c.rsc?.get?.(sp.nameRsc) || sp.name)).filter(Boolean);
+    const heard = (c?.events ?? []).filter(e => e?.kind === 'message' && e.text && now - (e.at ?? 0) < 120_000)
+      .slice(-40).map(e => ({ at: e.at, text: String(e.text) }));
+    const room = s?.world?.room?.num ?? null;
+    const spot = this.hold && this.hold.room === room ? { col: this.hold.col, row: this.hold.row } : null;
+    const squares = spot && me ? Math.max(Math.abs(me.col - spot.col), Math.abs(me.row - spot.row)) : null;
+    const atSpot = squares != null && squares < 1;
+    return { phase, now, agent: s?.name ?? null, character: this.who?.() ?? null, room,
+      farm_strategy: this.policy?.farmStrategy ?? null, health: v.health ?? null, mana: v.mana ?? null,
+      enchantments, held: enchantments.includes('hold'),
+      in_reach: (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o)).length,
+      safe_spot: spot, at_safe_spot: atSpot,
+      eta_to_safe_spot_ms: spot ? (atSpot ? 0 : squares * FARM_BUFF_MS_PER_SQUARE + FARM_BUFF_SETTLE_MS) : null,
+      pack, spells, heard, ...extra };
+  }
+
+  async farmBuffAsk(phase, extra = {}) {
+    if (typeof this.s?._askStrategies !== 'function') return null;
+    const ctx = this.farmBuffContext(phase, extra);
+    const got = await this.s._askStrategies('farmBuff', ctx).catch(() => null);
+    const a = got?.answer;
+    if (!a || typeof a !== 'object') return null;
+    const name = got.strategy ?? 'strategy', why = a.why == null ? phase : String(a.why);
+    const out = { strategy: name, why, no_engage: a.no_engage === true };
+    if (a.cast) out.cast = await this.castSelfSpell(String(a.cast), `${name}: ${why}`).catch(e => ({ landed: false, why: e.message }));
+    if (a.go_to_safe_spot === true && ctx.safe_spot && !ctx.at_safe_spot && this.hold) {
+      out.went = await skills.returnToSpot(this.s, this.hold, { maxSteps: 30 }).catch(e => ({ arrived: false, why: e.message }));
+      this.movedAt = Date.now();
+    }
+    if (a.logoff && Number.isFinite(Number(a.logoff.for_ms))) {
+      const ms = Math.max(1000, Math.min(60_000, Math.round(Number(a.logoff.for_ms))));
+      this.note('farm buff: logging off to wait it out', { strategy: name, for_ms: ms, why });
+      out.logoff = await this.reconnect(`${name}: ${why}`, { offlineMs: ms });
+    }
+    if (out.no_engage || out.cast || out.went || out.logoff)
+      this.note('farm buff', { phase, strategy: name, why, cast: a.cast ?? null, landed: out.cast?.landed ?? null,
+        went: out.went ? !!out.went.arrived : null, no_engage: out.no_engage, logoff_ms: out.logoff ? a.logoff.for_ms : null });
+    return out;
+  }
+
+  /** The pass-phase question; true when the answer moved or removed the body (the pass is over). */
+  async farmBuffPass() {
+    const r = await this.farmBuffAsk('pass');
+    return !!(r?.logoff?.ok || r?.went?.arrived);
+  }
+
+  /** Cast a known spell at ourselves; landed is judged by the mana it spent. Once in 10 s per spell. */
+  async castSelfSpell(name, why) {
+    const s = this.s, c = s?.client;
+    if (!c?.selfId) return { landed: false, why: 'no object id for ourselves yet' };
+    const key = v => String(v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+    const want = key(name);
     const spell = (c.spells || []).find(sp => key(c.rsc?.get?.(sp.nameRsc) || sp.name) === want);
-    if (!spell) return { skipped: `does not know ${cfg.spell}` };
+    if (!spell) return { landed: false, why: `does not know ${name}` };
+    this._selfCastAt ??= new Map();
+    if (Date.now() - (this._selfCastAt.get(want) ?? 0) < 10_000) return { landed: false, why: 'cast recently' };
+    this._selfCastAt.set(want, Date.now());
     const mana = c.vitals?.()?.mana?.value ?? null;
     const before = c.evSeq;
     await s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050);
     await c.waitFor?.({ since: before, kinds: ['message', 'stat'], timeoutMs: 2500 })?.catch?.(() => {});
     const after = c.vitals?.()?.mana?.value ?? null;
     const landed = mana != null && after != null && after < mana;
-    if (landed) { this._engageBuffOnAt = Date.now(); this.tally.engage_buffs = (this.tally.engage_buffs || 0) + 1; }
-    this.recordCast?.(cfg.spell, { ok: landed, why: `engage buff: ${why}`, target: 'self', mana_before: mana, mana_after: after });
-    this.note(landed ? 'engage buff: cast on ourselves before attacking' : 'engage buff: the cast left no trace',
-      { spell: cfg.spell, why, mana_before: mana, mana_after: after });
-    return { cast: true, landed };
-  }
-
-  // HELD WHILE STILL IN A FIGHT: LOG OFF AND ON. Operator, 2026-10-12: "They can log off and on if the hold
-  // starts on them while they are still fighting." Kara'hol's curse ends in a hold the caster cannot
-  // free-action out of; with `engageBuff.logoffOnHold` a held character with anything in reach reconnects
-  // (the same `reconnect` the crowd break-out uses) instead of standing frozen beside it. Once a minute at
-  // most, and only within three minutes of a curse this keeper cast.
-  async escapeEngageBuffHold() {
-    const cfg = this.policy?.engageBuff;
-    if (!cfg?.logoffOnHold || !this._engageBuffOnAt || Date.now() - this._engageBuffOnAt > 180_000) return false;
-    const c = this.s?.client;
-    const held = (c?.enchantments?.() ?? []).some(e => /^hold$/i.test(String(e.name ?? '').trim()));
-    if (!held) return false;
-    const near = (this.inReachOfUs?.() ?? []).filter(o => !this.sparedHere(o));
-    if (!near.length) return false;
-    if (this._engageHoldEscapeAt && Date.now() - this._engageHoldEscapeAt < 60_000) return false;
-    this._engageHoldEscapeAt = Date.now();
-    this.note('held by the end of the engage buff with something in reach -- logging off and on', {
-      spell: cfg.spell, in_reach: near.length,
-      why: 'operator: "They can log off and on if the hold starts on them while they are still fighting"' });
-    const r = await this.reconnect('engage buff hold while fighting').catch(e => ({ ok: false, why: e.message }));
-    this.tally.engage_hold_escapes = (this.tally.engage_hold_escapes || 0) + (r?.ok ? 1 : 0);
-    return !!r?.ok;
+    this.recordCast?.(name, { ok: landed, why, target: 'self', mana_before: mana, mana_after: after });
+    return { landed, mana_before: mana, mana_after: after };
   }
 
   /** The creature this character last pulled, while it is still in this room; else null. */
@@ -7987,8 +8020,8 @@ export class Autopilot {
   // is holding the monsters back, and concludes the corner is safe. It is not; it was
   // never tested; and the next time it stands there it will do so believing it can
   // rest through anything.
-  async reconnect(why) {
-    const r = await this.s.rejoin(why).then(() => ({ ok: true }), e => ({ ok: false, why: e.message }));
+  async reconnect(why, { offlineMs = 0 } = {}) {
+    const r = await this.s.rejoin(why, { offlineMs }).then(() => ({ ok: true }), e => ({ ok: false, why: e.message }));
     // Stamped even on failure: if we do not know whether we came back, we certainly
     // do not know whether the monsters are awake.
     this.rejoinedAt = Date.now();
@@ -19158,7 +19191,7 @@ export class Autopilot {
   // ── passFleeAndRest: extracted from pass() ────────────────────────────────
   async passFleeAndRest(ctx) {
     const { s, c, room, v, hp } = ctx;
-    if (await this.escapeEngageBuffHold().catch(() => false)) return HANDLED;
+    if (await this.farmBuffPass().catch(() => false)) return HANDLED;
     // 2. In danger. "Something attackable is adjacent and we are hurt" is the only
     //    threat signal available — the protocol does not say who is targeting us.
     //
@@ -23333,7 +23366,7 @@ export class Autopilot {
       // reason on the status, and the character swings bare.
       this.farmStrategyHook('beforeSwing', { target: engageName, target_id: claimedSwing ?? null,
                                              room: room?.num ?? null });
-      await this.castEngageBuff(`before swinging at ${engageName}`).catch(() => null);
+      await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);
       if (this.touchTrainingHere())
         await this.maintainTouchSpell(`before swinging at ${engageName}`)
           .catch(e => { const st = this.touchState(); if (st) st.blockedReason = e.message; });

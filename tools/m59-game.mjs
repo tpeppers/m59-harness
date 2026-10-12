@@ -2758,7 +2758,7 @@ class Session {
   // Drop the connection and log in again with the same credentials. The object id
   // is reissued at login, so this is what repairs a session whose selfId the server
   // renumbered underneath it.
-  async rejoin(why = 'unspecified') {
+  async rejoin(why = 'unspecified', { offlineMs = 0 } = {}) {
     if (!this.credentials) throw new Error('nothing to rejoin with — this session never joined');
     // SAY IT. An in-process relog leaves no "joined as" line (that is the keeper's own join), so the
     // 2026-10-03 investigation could not tell when, or why, a character had logged in again.
@@ -2768,7 +2768,8 @@ class Session {
     if (this.live) bodyAuthority(this).guard();
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
-    await new Promise(r => setTimeout(r, 800));
+    // `offlineMs`: stay out that long before logging back in (a private farmBuff strategy waiting out a hold).
+    await new Promise(r => setTimeout(r, Math.max(800, Math.min(60_000, Number(offlineMs) || 0))));
     return this.join(this.credentials);
   }
 

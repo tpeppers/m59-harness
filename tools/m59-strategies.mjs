@@ -98,11 +98,16 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     //   answer = { start?: { town, why }, favors?: [{ item, amount, deliver_to, deliver_room?,
 //     //              source?, shop_room?, key? }] }  -- or null to decline.
 //     async townTrip(ctx) { return null; },
+//     // Asked by a FARMING keeper every pass, on the wall before a pull, and before the first swing of a
+//     // fight at the wall: a self-buff to cast, whether to go back to the safe spot, whether to engage at
+//     // all, and whether to log off for a few seconds. ctx and the answer's closed shape are beside
+//     // Autopilot.farmBuffContext. Cheap: no I/O, no waiting.
+//     async farmBuff(ctx) { return null; },
 //     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'townTrip', 'wandDuty'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'townTrip', 'wandDuty', 'farmBuff'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
