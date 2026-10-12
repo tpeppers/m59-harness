@@ -194,13 +194,17 @@ export const SCHOOLS = Object.freeze({
 export const TEMPLE_LIFTS = Object.freeze({
   802: { from: 598, legs: [[32, 25], [30, 31], [30, 33], [29, 33], [26, 33]], mouth: [26, 34], trigger: [26, 38], tries: 12, waitS: 90 },
 });
-// WHERE TO STAND TO BE HEARD, where her own square is the wrong thing to walk at. Temple of Qor (802):
-// both entrances land at r33c14 (tempqor.kod:201-204), rows 18-19 are a wall between the body and
-// Zuxana (r16c15), and her only way round is the north ceiling door (r3-4 c17-18, tempqor.kod:172-189),
-// which shuts 5 s after a press -- so a walk aimed at her stopped on its trigger square, 14 squares off,
-// and the quest failed `out_of_earshot` (Bunsen, 2026-10-11). r20c17 is reached from r33c14 with no
-// jump and scores 4^2+2^2 = 20 of the 25 her quest node accepts (questnode.kod:650-653).
-export const APPROACH = Object.freeze({ 802: { row: 20, col: 17 } });
+// WHERE TO STAND TO BE HEARD, for a room whose NPC is best heard from a named square rather than
+// reached. EMPTY ON PURPOSE, and the Temple of Qor is why. Both entrances land at r33c14
+// (tempqor.kod:201-204), rows 18-19 wall the body off from Zuxana (r16c15), and the way in is round
+// the EAST walk to the north ceiling door (r3-4 c17-18, tempqor.kod:172-189): `go` on a trigger
+// square, and the ceiling lifts slowly and drops again 5 s after the press. That is the operable-door
+// rung below -- walk onto the trigger, press, walk straight through -- the one written for Kraanan.
+// An earlier entry here sent 802 to r20c17 instead ("heard through the wall"); that walk dithers out
+// at r20c21 and the door rung never ran (Bunsen 2026-10-11, out_of_earshot). Measured on the shadow
+// fleet 2026-10-12: r33c14 -> r4c18 by the east walk in 37 steps, press, walk at once, on Zuxana's
+// square 7.5 s later; leaving, `travel` presses the same door from inside on its own.
+export const APPROACH = Object.freeze({});
 const roomNow = async (call, agent) => Number((await call('status', { agent }, 30_000).catch(() => null))?.room?.num ?? NaN);
 /** The steps that put the body in `temple`. A plain walk, or the lift; lift steps carry `lift: true`. */
 export function toTemple(temple) {
@@ -768,22 +772,37 @@ export const script = {
         try { plan = doorsFor(room, { row: you.row, col: you.col }); } catch { return { ok: true, skipped: 'door table unreadable' }; }
         const doors = [...(plan?.on ?? []), ...(plan?.others ?? [])].filter(p => !p.gate && p.stand_on?.length);
         if (!doors.length) return { ok: true, skipped: 'no operable door in this room' };
-        const best = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
-          .sort((a, b) => a.cost - b.cost)[0];
+        // EVERY TRIGGER SQUARE, BEST FIRST, NOT ONLY THE BEST. A trigger the body can walk to beats a
+        // nearer one it cannot (the rule openOperableDoor already keeps). Temple of Qor (802): r4c17 and
+        // r4c18 tie on this score and r4c17 is listed first, but the mover has NO route to r4c17 from the
+        // entrance ("no route the mover can walk through this geometry", 5 steps) while r4c18 is 31 steps
+        // round the east walk. Taking only the first, the shadow run stood at r20c9, never pressed.
+        const cands = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
+          .sort((a, b) => a.cost - b.cost);
         // ON THE TRIGGER, READ BACK -- AND READ AGAIN. A `look` straight after the walk can still report
         // the square before (2026-10-11 run 3: arrived on r31c20, read r32c20, skipped the press, and
         // the next walk stalled at the shut door). So: re-read a few times, and re-walk if it is truly off.
         const at = sq => now => now && now.row === sq.row && now.col === sq.col;
-        let now = you, onIt = at(best.sq)(you);
-        for (let t = 0; t < 3 && !onIt; t++) {
-          await call('walk_to', { agent: me, row: best.sq.row, col: best.sq.col }, 120_000).catch(() => null);
-          for (let r = 0; r < 3 && !onIt; r++) {
-            await new Promise(res => setTimeout(res, 700));
-            now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
-            onIt = at(best.sq)(now);
+        let now = you, onIt = false, best = cands[0];
+        const tried = [];
+        for (const cand of cands) {
+          best = cand;
+          onIt = at(cand.sq)(now);
+          for (let t = 0; t < 2 && !onIt; t++) {
+            const w = await call('walk_to', { agent: me, row: cand.sq.row, col: cand.sq.col }, 120_000).catch(() => null);
+            for (let r = 0; r < 3 && !onIt; r++) {
+              await new Promise(res => setTimeout(res, 700));
+              now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you ?? now;
+              onIt = at(cand.sq)(now);
+            }
+            // A square with no route is not worth a second walk; the next trigger may have one.
+            if (!onIt && /no route/i.test(String(w?.reason ?? w?.error ?? ''))) break;
           }
+          if (onIt) break;
+          tried.push(`r${cand.sq.row}c${cand.sq.col}`);
         }
-        if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, at: now ? `r${now.row}c${now.col}` : null };
+        if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, tried,
+                            at: now ? `r${now.row}c${now.col}` : null };
         // PRESS AND GO THROUGH IN ONE BREATH. The door shuts itself (801: 10 s), and the next STEP is
         // too late: 2026-10-11 the re-run pressed on r31c20 and the following walk_to found every
         // direction geometry_blocked. By hand the same press with an immediate walk crossed in 8 s.
