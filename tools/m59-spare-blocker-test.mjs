@@ -205,7 +205,8 @@ await ok('qor-lupogg-sewers (example) validates: lupoggs, rats spared and provok
   assert.equal(d.spareBlockers, 'provoke');
   assert.equal(d.weapons.style, 'short_sword');
   assert.equal(d.weapons.trainingWeapon, 'axe');
-  assert.equal(d.weapons.touchSpell, undefined, 'axes and a shield, not an empty hand');
+  assert.equal(d.weapons.touchSpell, null, 'axes and a shield, not an empty hand: a leftover touch spell is overridden');
+  assert.equal(d.weapons.trainingWeaponOnly, true);
   for (const k of ['purple mushroom', 'blue dragon scale', 'wand', 'scroll', 'sapphire', 'dark angel feather', 'key'])
     assert.ok(d.protect.includes(k), k);
   const f = STRATEGY_FIELDS.find(x => x.path === 'weapons.trainingWeapon');

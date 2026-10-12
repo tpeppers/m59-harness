@@ -156,6 +156,10 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'weapons.trainingWeapon', keys: ['trainingWeapon'], faculty: 'work', arg: 'training_weapon',
     normalize: v => { const w = String(v ?? '').trim().toLowerCase();
       if (!w) throw new Error('weapons.trainingWeapon must name a weapon'); return w; } },
+  // AND ONLY THAT WEAPON: equipBest may choose nothing else while the armed style is in force
+  // (Autopilot trainingWeaponOnlyNow / s.equipOnly).
+  { path: 'weapons.trainingWeaponOnly', keys: ['trainingWeaponOnly'], faculty: 'work', arg: 'training_weapon_only',
+    normalize: bool('weapons.trainingWeaponOnly') },
   { path: 'weapons.preferMagic', keys: ['preferMagicWeapon'], faculty: 'work', arg: 'prefer_magic_weapon',
     normalize: bool('weapons.preferMagic') },
   { path: 'confine.rooms', keys: ['confineRooms'], faculty: 'movement', arg: 'confine_rooms',

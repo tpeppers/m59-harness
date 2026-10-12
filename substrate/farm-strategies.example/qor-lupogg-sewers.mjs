@@ -50,10 +50,18 @@ export default {
   // holds the training weapon, and while axe wielding is under 70 the keeper conjures one with create
   // weapon (Kraanan; every Qor master here knows it, 89-99) rather than buying. The shield and the leather
   // armour are each character's loadout (gear.slots), not this file's: a strategy cannot dress anybody.
+  //
+  // AXE ONLY, AND NO TOUCH SPELL (operator, 2026-10-11: "we want lupoggs hunted with axes for the damage
+  // type slash"). Janice carried a hammer at 70 and was re-armed with it; `trainingWeaponOnly` makes the
+  // axe the only weapon any equip may choose. And a character's own `touchSpell` order outlives the
+  // strategy that set it -- Janice, Beaker and Camilla still carried `acid touch`, which empties the
+  // hand on the station -- so this file says null, and while it is assigned null is in force.
   weapons: {
     style: 'short_sword',
     trainingWeapon: 'axe',
+    trainingWeaponOnly: true,
     priority: ['axe'],
+    touchSpell: null,
   },
 
   confine: {

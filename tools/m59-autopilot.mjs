@@ -1958,6 +1958,8 @@ export class Autopilot {
     // wielded weapon is swung INSTEAD of the touch (player.kod:4712-4729). One veto, at the one
     // function they all share, rather than ten guards that drift.
     if (session) session.equipVeto = () => this.touchEquipVeto();
+    // AND WHICH WEAPONS IT MAY CHOOSE AT ALL, from the same one place (`trainingWeaponOnlyNow`).
+    if (session) session.equipOnly = () => this.trainingWeaponOnlyNow();
     attachReplayRecorder(session,this);
     attachSurvivalTrace(session, this);
     this.survivalRecorder = createSurvivalDecisionRecorder(session.name);
@@ -2123,6 +2125,9 @@ export class Autopilot {
       // quarry, then flips for the next one; changing hands while a creature is still
       // alive would reset the target/advancement flags the regimen is meant to train.
       trainingStyle: 'normal',
+      // ONLY THE TRAINING WEAPON MAY BE WIELDED while the armed style is in force (`trainingWeaponOnly`,
+      // see `trainingWeaponOnlyNow`). Off by default: silence is the old ranking.
+      trainingWeaponOnly: false,
       // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
       // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
@@ -2972,6 +2977,28 @@ export class Autopilot {
     const st = this.touchState();
     if (!st || !c) return [];
     try { return st.consume(c); } catch { return []; }
+  }
+
+  // THE TRAINING WEAPON, AND NOTHING ELSE, WHEN THE OPERATOR SAYS SO.
+  //
+  // Operator, 2026-10-11: "we want lupoggs hunted with axes for the damage type slash" (a lupogg takes
+  // -10 from slash and resists every weapon 70, lupogg.kod). Janice carried a hammer at 70 and an axe
+  // at 39, and with `training_style: short_sword` + `training_weapon: axe` + `weapon_priority: [axe]`
+  // she was still found holding the hammer: one of the ten equip call sites re-armed her with it
+  // within forty seconds of the axe going on, and banning the hammer was what stopped it. A ban is the
+  // wrong tool -- a banned weapon is the first thing shed when the pack needs room, and three of them
+  // switch create weapon off (`bannedConjurablesHeld`), which is the spell that makes the axe.
+  //
+  // So this answers `s.equipOnly`, which `equipBest` asks once for every call site, exactly as it asks
+  // `s.equipVeto`: while `trainingWeaponOnly` is set and the armed style names a weapon, only that
+  // weapon may be chosen. With none in the pack the hand stays empty and the roulette / makeWeapon
+  // conjures one. PvP escalation ranks with `weaponRanking` directly and is not affected.
+  /** `s.equipOnly`: the only weapon names `equipBest` may choose, or null for no restriction. */
+  trainingWeaponOnlyNow() {
+    if (this.policy?.trainingWeaponOnly !== true) return null;
+    if ((this.policy?.trainingStyle ?? 'normal') !== 'short_sword') return null;
+    const w = String(this.policy?.trainingWeapon ?? '').trim().toLowerCase();
+    return w ? [w] : null;
   }
 
   /** `s.equipVeto`: a reason string while the hand is meant to stay empty, else null. */

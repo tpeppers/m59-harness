@@ -11579,6 +11579,13 @@ const TOOLS = [
           'already reached the quarry level trains NOTHING on the armed half until this ' +
           'names a weapon it can still advance. Name it exactly — "sword" matches short, ' +
           'long and mystic sword alike.' },
+      training_weapon_only: { type: ['boolean', 'null'],
+        description: 'true: while training_style is short_sword, the training_weapon is the ONLY weapon ' +
+          'any equip may choose (equipBest asks the keeper, s.equipOnly) -- a higher-skill hammer in the ' +
+          'pack no longer wins. With none in the pack the hand stays empty until the create weapon ' +
+          'roulette or makeWeapon conjures one. PvP escalation is unaffected. false/null: the old ranking. ' +
+          'A farm strategy may declare it as weapons.trainingWeaponOnly. autopilot status reports it as ' +
+          'policy.trainingWeaponOnly' },
       training_style: { type: 'string',
         enum: ['normal', 'short_sword', 'unarmed', 'alternate', 'alternate_on_improve'],
         description: 'combat practice style for farm prey. alternate keeps one style for a whole ' +
@@ -12657,6 +12664,11 @@ const TOOLS = [
         const w = String(a.training_weapon).trim();
         if (!w) throw new Error('training_weapon must name a weapon, not an empty string');
         p.policy.trainingWeapon = w;
+      }
+      if (a.training_weapon_only !== undefined) {
+        if (a.training_weapon_only !== null && typeof a.training_weapon_only !== 'boolean')
+          throw new Error('training_weapon_only must be true, false or null');
+        p.policy.trainingWeaponOnly = a.training_weapon_only === true;
       }
       if (a.training_style !== undefined) {
         const style = String(a.training_style);

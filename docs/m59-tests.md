@@ -141,6 +141,13 @@ These tests are offline. They do not execute a raid or shut down a server.
   without `substrate/item-identification.json`; an identified name is never touched; broker
   `inventory` rows carry `identified_as` and fleetscripts get `itemName`. Against this machine's real
   resources: prod's 2026-10-11 bare wands (30513, LightningWand) and scrolls (30461, MartyrScroll).
+- `m59-training-weapon-only-test.mjs` (7): `training_weapon_only` / a strategy's `weapons.trainingWeaponOnly`.
+  While the armed style names a weapon, `equipBest` (every call site, through `s.equipOnly`) chooses only
+  that weapon: Janice's axe at 39 beats her hammer at 70; with none in the pack it refuses and sends nothing
+  rather than reaching for the hammer; off by default; a throwing hook restricts nothing. A ban was the
+  wrong tool (banned weapons are shed first and three of them switch create weapon off). The lupogg
+  strategy sets it and nulls the leftover touch spell. **It should fail the day a lupogg hunter is
+  re-armed with a hammer.**
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

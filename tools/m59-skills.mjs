@@ -713,7 +713,21 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
   // the enchanted one and kept it (Animal in Ukgoth, 2026-09-27). A hook that throws must not
   // stop anyone arming: an unranked equip is still better than none.
   try { s.beforeEquip?.(c); } catch { /* rank with whatever the client already holds */ }
-  const ranked = weaponRanking(c, { priority, banned, allowUnrevealed });
+  // AND THE OWNER MAY SAY WHICH WEAPON, AND ONLY WHICH (`s.equipOnly`, Autopilot
+  // trainingWeaponOnlyNow): a narrowing of the ranking, never a widening. A hook that throws
+  // restricts nothing, for the same reason a throwing veto does not veto.
+  let only = null;
+  try { only = s?.equipOnly?.() ?? null; } catch { only = null; }
+  const rankedAll = weaponRanking(c, { priority, banned, allowUnrevealed });
+  const onlyRx = Array.isArray(only) && only.length
+    ? only.map(w => new RegExp(`\\b${String(w).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s?')}\\b`, 'i'))
+    : null;
+  const ranked = onlyRx ? rankedAll.filter(r => onlyRx.some(rx => rx.test(r.name))) : rankedAll;
+  if (onlyRx && !ranked.length)
+    return { wielding: null, verified: false, refused: true, only,
+             considered: rankedAll.map(x => x.name),
+             note: `only ${only.join(' / ')} may be wielded here (training_weapon_only), and none ` +
+                   'usable is in the pack -- the hand stays empty until one is made or found' };
   if (!ranked.length) {
     // "NOTHING WIELDABLE" AND "EVERY WEAPON HERE IS UNREAD" MUST NOT PRINT THE SAME. A character
     // holding three unrevealed maces and nothing else would otherwise report an empty pack and
