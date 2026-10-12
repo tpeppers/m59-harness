@@ -7,7 +7,7 @@
 //   - a lapse re-opens every reading of that NAME (the sentence names no id)
 //   - a reading does not survive its id being handed to a different item (ids are handles)
 //   - the swap stays inside the character's own weapon priority (no forced sword)
-import { classifyWeapon, lapsedWeapon, dedicatedWeapon, WeaponMagicBook, magicSwap }
+import { classifyWeapon, lapsedWeapon, dedicatedWeapon, alreadyDedicated, WeaponMagicBook, magicSwap }
   from './m59-weapon-magic.mjs';
 import { weaponRanking, inventorySalePlan, equipBest, armourOf, isOwnSummon } from './m59-skills.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
@@ -40,11 +40,13 @@ ok('the lapse sentence names the weapon',
 ok('an unrelated line is not a lapse', lapsedWeapon('You suddenly feel a little tougher.') === null);
 ok('the caster\'s dedication sentence names the weapon',
    dedicatedWeapon('Your hammer is now dedicated to Kraanan.') === 'hammer');
+ok('the already-dedicated refusal is recognised', alreadyDedicated('This weapon is already dedicated to Kraanan.')
+   && !alreadyDedicated('This weapon is already dedicated to Qor.'));
 
 console.log('WeaponMagicBook');
 {
   let t = 0;
-  const book = new WeaponMagicBook({ now: () => t, maxAgeMs: 1000 });
+  const book = new WeaponMagicBook({ now: () => t, maxAgeMs: 1000, mundaneMaxAgeMs: 5000 });
   const pack = [{ id: 1, name: 'long sword' }, { id: 2, name: 'long sword' },
                 { id: 3, name: 'mystic sword' }, { id: 4, name: 'bread' }];
   ok('everything unread and weapon-shaped needs a look, born magic does not',
@@ -56,7 +58,7 @@ console.log('WeaponMagicBook');
   ok('summary: wielded mundane', s.wielded?.bypasses_nonmagic === false);
   ok('summary: two magic spares (enchanted + born magic)', s.magic_spares === 2);
   t = 2000;
-  ok('an enchanted reading goes stale; a mundane one does not',
+  ok('an enchanted reading goes stale first; a mundane one waits for its own clock',
      book.needsLook(pack).map(i => i.id).join() === '1');
   t = 2100;
   const re = book.lapse('Long Sword');
@@ -68,6 +70,27 @@ console.log('WeaponMagicBook');
      book.summary([{ id: 1, name: 'hammer' }], null).weapons[0].class === 'unknown');
   book.reconcile([{ id: 2, name: 'long sword' }]);
   ok('a reading for an id no longer carried is dropped', !book.readings.has(1));
+}
+
+// 2026-10-12: Pepe's long sword read mundane for hours while the server answered "already dedicated".
+console.log('WeaponMagicBook: a mundane reading is not for ever');
+{
+  let t = 0;
+  const book = new WeaponMagicBook({ now: () => t, maxAgeMs: 1000, mundaneMaxAgeMs: 5000 });
+  const pack = [{ id: 1, name: 'long sword' }, { id: 2, name: 'long sword' }, { id: 3, name: 'axe' }];
+  book.record(1, 'long sword', PLAIN); book.record(2, 'long sword', ENCH); book.record(3, 'axe', PLAIN);
+  t = 900;
+  ok('fresh readings ask nothing', book.needsLook(pack).length === 0);
+  t = 6000;
+  ok('past its clock a mundane reading is asked again', book.needsLook(pack).map(i => i.id).join().includes('1')
+     && book.needsLook(pack).map(i => i.id).join().includes('3'));
+  t = 0; book.record(1, 'long sword', PLAIN); book.record(2, 'long sword', ENCH); book.record(3, 'axe', PLAIN);
+  ok('a named dedication re-opens the non-magic readings of that name only', book.reopen('Long Sword').join() === '1'
+     && book.summary(pack, 1).weapons.find(w => w.id === 2).bypasses_nonmagic === true
+     && book.summary(pack, 1).weapons.find(w => w.id === 3).bypasses_nonmagic === false);
+  book.record(1, 'long sword', PLAIN);
+  ok('an unnamed one (already dedicated) re-opens every non-magic reading', book.reopen(null).join() === '1,3');
+  ok('and the re-opened ones are looked at again', book.needsLook(pack).map(i => i.id).join() === '1,3');
 }
 
 console.log('magicSwap');
@@ -121,7 +144,7 @@ console.log('Autopilot: the lapse re-opens, reports, and the status carries it')
     note: (k) => notes.push(k), ledgerEvent: (k) => ledger.push(k),
     sweepWeaponMagic: async () => {},
   };
-  for (const m of ['weaponMagicBook', 'packWeapons', 'wieldedWeaponId', 'weaponMagicStatus', 'noteEnchantLapse'])
+  for (const m of ['weaponMagicBook', 'packWeapons', 'wieldedWeaponId', 'weaponMagicStatus', 'noteEnchantLapse', 'noteDedication'])
     rig[m] = Autopilot.prototype[m].bind(rig);
   rig.weaponMagicBook().record(7, 'hammer', 'dedicated to Kraanan\'s glory');
   rig.weaponMagicBook().record(8, 'hammer', 'dedicated to Kraanan\'s glory');
@@ -135,6 +158,13 @@ console.log('Autopilot: the lapse re-opens, reports, and the status carries it')
   ok('the lapse is noted, ledgered, counted, and the swap made due',
      notes.includes('ENCHANTMENT LAPSED') && ledger.includes('enchant_lapse') &&
      st.lapses === 1 && rig._magicSwapDue === true);
+  rig.weaponMagicBook().record(7, 'hammer', 'A plain hammer.');
+  rig.weaponMagicBook().record(8, 'hammer', 'A plain hammer.');
+  rig._magicSwapDue = false;
+  rig.noteDedication(null);
+  st = rig.weaponMagicStatus();
+  ok('"already dedicated" re-opens the mundane readings, notes it and makes the swap due',
+     st.wielded?.bypasses_nonmagic === null && notes.includes('DEDICATION SEEN') && rig._magicSwapDue === true);
 }
 
 // 2026-09-27: Animal reconnected in Ukgoth to shed aggro, the new client had no magic set, the

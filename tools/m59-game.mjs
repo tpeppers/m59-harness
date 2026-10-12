@@ -85,7 +85,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // there is no cycle here. Checked rather than assumed -- a cycle would leave this in the
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
-import { lapsedWeapon } from './m59-weapon-magic.mjs';
+import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
@@ -1575,9 +1575,12 @@ class Session {
 
   noteEnchantLapse(ev) {
     const name = lapsedWeapon(ev?.text);
-    if (!name) return;
-    const keeper = autopilotIfAny(this.name);
-    if (keeper?.s === this) keeper.noteEnchantLapse(name);
+    const keeper = () => { const k = autopilotIfAny(this.name); return k?.s === this ? k : null; };
+    if (name) { keeper()?.noteEnchantLapse(name); return; }
+    // And the two sentences that say a weapon IS magic: the caster's own success, and the refusal
+    // for one that already was. Neither names an id, so the keeper re-reads rather than records.
+    const dedicated = dedicatedWeapon(ev?.text);
+    if (dedicated || alreadyDedicated(ev?.text)) keeper()?.noteDedication?.(dedicated);
   }
 
   // ONE HEALTH READING. Called for every health stat the server sends.

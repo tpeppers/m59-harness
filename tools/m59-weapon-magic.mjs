@@ -43,6 +43,9 @@ export const ENCHANTED_DESC = /dedicated to Kraanan'?s glory/i;
 export const MADE_DESC = /shimmers insubstantially/i;
 export const LAPSE_MSG = /^\s*Your (.+?) suddenly seems a little more\.{2,3}\s*ordinary\.?\s*$/i;
 export const DEDICATED_MSG = /^\s*Your (.+?) is now dedicated to Kraanan\.?\s*$/i;
+// The refusal a caster gets for a weapon that already carries ATCK_WEAP_MAGIC (enchwp.kod:22, checked
+// in CanPayCosts BEFORE the reagents). It names no weapon, so it reopens every non-magic reading.
+export const ALREADY_DEDICATED_MSG = /^\s*This weapon is already dedicated to Kraanan\.?\s*$/i;
 
 /**
  * One weapon, classified. `look` is the description text if somebody has read it.
@@ -78,6 +81,7 @@ export function dedicatedWeapon(line) {
   const m = DEDICATED_MSG.exec(String(line ?? ''));
   return m ? norm(m[1]) : null;
 }
+export const alreadyDedicated = line => ALREADY_DEDICATED_MSG.test(String(line ?? ''));
 
 /**
  * THE READING BOOK: one keeper's memory of what it has seen, keyed by object id.
@@ -88,9 +92,15 @@ export function dedicatedWeapon(line) {
  * exists; the book only says what was learned about it.
  */
 export class WeaponMagicBook {
-  constructor({ now = () => Date.now(), maxAgeMs = 45 * 60_000 } = {}) {
+  constructor({ now = () => Date.now(), maxAgeMs = 45 * 60_000, mundaneMaxAgeMs = 45 * 60_000 } = {}) {
     this.now = now;
     this.maxAgeMs = maxAgeMs;          // a positive reading older than this is re-asked
+    // AND A NEGATIVE ONE TOO, on its own clock. The owner is not told when somebody else dedicates
+    // its weapon (header), and a keeper misses its OWN dedication whenever the cast went out while the
+    // sentence had nowhere to land. A mundane reading that never expired kept a dedicated long sword
+    // "false" for hours: 2026-10-12, Pepe in the Cragged Mountains, the server answering "already
+    // dedicated" to a sword the troll crew's swap had written off as ordinary.
+    this.mundaneMaxAgeMs = mundaneMaxAgeMs;
     this.readings = new Map();         // id -> { name, class, bypasses_nonmagic, made, at, source }
   }
 
@@ -115,6 +125,22 @@ export class WeaponMagicBook {
     return hit;
   }
 
+  /**
+   * A DEDICATION re-opens readings rather than writing one: the caster's sentence names the weapon
+   * by name, never by id, and the "already dedicated" refusal names nothing. `name` null re-opens
+   * every reading that is not already enchanted. The next look settles it.
+   */
+  reopen(name = null) {
+    const n = name == null ? null : norm(name);
+    const hit = [];
+    for (const [id, r] of this.readings) {
+      if (r.class === 'enchanted' || (n != null && r.name !== n)) continue;
+      this.readings.set(id, { ...r, class: 'unknown', bypasses_nonmagic: null, at: this.now(), source: 'dedication' });
+      hit.push(id);
+    }
+    return hit;
+  }
+
   /** Drop readings for ids no longer carried, and for ids now wearing a different name. */
   reconcile(items = []) {
     const live = new Map(items.filter(i => i?.id != null).map(i => [Number(i.id), norm(i.name)]));
@@ -134,6 +160,7 @@ export class WeaponMagicBook {
       if (BORN_MAGIC.includes(n) || UNFLAGGED.includes(n)) return false;
       const r = this.readings.get(Number(i.id));
       if (!r || r.name !== n || r.class === 'unknown') return true;
+      if (r.class === 'mundane') return t - r.at > this.mundaneMaxAgeMs;
       return r.class === 'enchanted' && t - r.at > this.maxAgeMs;
     });
   }

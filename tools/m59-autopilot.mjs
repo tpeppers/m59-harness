@@ -31206,6 +31206,18 @@ export class Autopilot {
     this.sweepWeaponMagic().catch(() => {});
   }
 
+  // THE OTHER DIRECTION: "Your <name> is now dedicated to Kraanan." (name given) or "This weapon is
+  // already dedicated to Kraanan." (null). Re-open the readings it could be about and look again now,
+  // so a fresh dedication — or one the book had filed as mundane — reaches the swap within a sweep.
+  noteDedication(name = null) {
+    const reopened = this.weaponMagicBook().reopen(name);
+    this._weaponMagicAt = 0;
+    this._magicSwapDue = true;
+    this.note('DEDICATION SEEN', { weapon: name, readings_reopened: reopened.length,
+      why: 'the server said a weapon is dedicated to Kraanan; re-read before trusting the book' });
+    this.sweepWeaponMagic().catch(() => {});
+  }
+
   // A LOOK PER UNREAD WEAPON, at most two a sweep, on a one-minute clock (immediately after a
   // lapse). Same id-checked shape as sweepGearCondition: a look reply carrying another id is
   // discarded, never recorded against this one.
