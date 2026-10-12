@@ -595,6 +595,60 @@ console.log('the leak: a strategy\'s keys must not become orders');
      && /for \(const k of strategyEcho\.restated\) delete fields\[k\];/.test(keeper));
 }
 
+// ------------------------------------------------------------------ the residue (2026-10-12)
+// Janice (t7): a fleetscript held her movement and pushed { farmStrategy: null, confineRooms: null, ... } in ONE
+// call. The null was trimmed as a "restatement", the release skipped the give-back because movement was held,
+// and the file's [108,111,112] stayed live, tagged as the strategy's, refusing her walk to the vault.
+console.log('the residue: unassigning in the same push as an explicit value, with the faculty held');
+{
+  writeStrategy('sew', strat('sew', `hunt: ['lupogg'], confine: { station: 112, rooms: [108, 111, 112], roam: false }`));
+  const mkSession = () => ({ name: 't7', live: true, client: null, world: { room: { num: 112 } }, need: () => null,
+                             pacer: { submit: async (_k, fn) => fn() } });
+  const mk = () => {
+    const orderCopy = { hunt: 'living tree', assignedRoom: 537, confineRooms: null, roam: false };
+    const ap = new Autopilot(mkSession(), { mode: 'farm', policy: { ...orderCopy } });
+    const push = async (fields) => {
+      const pushed = { ...fields };
+      const echo = ap.farmStrategyPushEcho(pushed);
+      const orderFields = { ...pushed }, live = { ...pushed };
+      for (const k of echo.echo) { delete orderFields[k]; delete live[k]; }
+      for (const k of echo.restated) delete live[k];
+      Object.assign(orderCopy, orderFields);
+      Object.assign(ap.policy, live);
+      await ap.applyFarmStrategy('policy push');
+      return echo;
+    };
+    return { ap, push };
+  };
+  {
+    const { ap, push } = mk();
+    await push({ farmStrategy: 'sew' });
+    ok('assigned: the confinement is the file\'s', JSON.stringify(ap.policy.confineRooms) === '[108,111,112]');
+    const echo = await push({ farmStrategy: null, confineRooms: null, assignedRoom: 114 });
+    ok('a push that changes the assignment echoes nothing', echo.echo.length === 0 && echo.restated.length === 0,
+       JSON.stringify(echo));
+    ok('...so the explicit null is live, not the file\'s rooms', ap.policy.confineRooms === null && ap.policy.assignedRoom === 114,
+       JSON.stringify({ c: ap.policy.confineRooms, a: ap.policy.assignedRoom }));
+  }
+  {
+    const { ap, push } = mk();
+    await push({ farmStrategy: 'sew' });
+    ap.claimFaculties({ faculties: ['movement', 'work', 'economy'], by: 'fleetscript:vault-draw', leaseMs: 60_000 });
+    await push({ farmStrategy: null });
+    ok('unassigned while a script holds movement: the file\'s rooms are still given back',
+       ap.policy.confineRooms === null && ap.policy.assignedRoom === 537,
+       JSON.stringify({ c: ap.policy.confineRooms, a: ap.policy.assignedRoom }));
+  }
+  {
+    const { ap, push } = mk();
+    await push({ farmStrategy: 'sew' });
+    ap._farmStrategy.base.set('confineRooms', { value: [108, 111, 112], source: 'carry' });   // contaminated
+    await push({ farmStrategy: null });
+    ok('a shadow equal to the file\'s own value is not given back: the key goes to its default',
+       ap.policy.confineRooms === null, JSON.stringify(ap.policy.confineRooms));
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);

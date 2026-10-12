@@ -165,6 +165,12 @@ These tests are offline. They do not execute a raid or shut down a server.
   unspared reach, the safe spot and the ETA back to it, pack, spells, the last two minutes heard), the
   closed answers (cast at our own id, go to the spot, refuse the pull before walking out, log off 1-60 s),
   that silence and nonsense do nothing, and the call sites.
+- `m59-walk-handoff-test.mjs` (3): SMOOTH HANDOFFS between a fleetscript's walks. A cancelled job is
+  superseded by a new job from the same issuer (`Session.startJob`) and still refuses anyone else; the
+  mid-journey sanctuary rest is skipped on the last hop and cancellable on every other. Written for Zheng He,
+  refused twice on 2026-10-12 by his own run's previous walk. The strategy-engine suite gained the matching
+  residue cases (unassign plus an explicit value in one push; unassign while a script holds movement; a
+  shadow that is the file's own value).
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

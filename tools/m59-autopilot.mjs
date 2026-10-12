@@ -3017,6 +3017,12 @@ export class Autopilot {
     return legs.length ? legs : null;
   }
 
+  /** A policy key's committed default (the farm strategy engine resets a leaked shadow to it), or undefined. */
+  policyDefaultFor(key) {
+    const d = policyDefaults();
+    return d && Object.hasOwn(d, key) ? d[key] : undefined;
+  }
+
   /** `s.equipOnly`: the only weapon names `equipBest` may choose, or null for no restriction. */
   trainingWeaponOnlyNow() {
     if (this.policy?.trainingWeaponOnly !== true) return null;
@@ -9569,6 +9575,11 @@ export class Autopilot {
   // the rest of the road. Cccc left the Limping Toad at 11 of 200 and never rose above it.
   async travelRestAtSanctuary(at, arm) {
     if (!this.travelAllows('rest')) return;
+    // NOT ON THE LAST HOP. A rest "part-way through a journey" in the destination room is not part-way:
+    // the journey is over, and holding its job open here for up to four minutes is what refused the next
+    // walk of the same fleetscript run as "busy" (Zheng He in South Barloque and Marion, 2026-10-12). The
+    // keeper's own ladder rests the body there once the job has ended.
+    if (at && at.remaining === 0) return;
     const room = this.s.world?.room;
     if (!this.sanctuary(room)) return;
     const v = this.s.client?.vitals?.();
@@ -9612,9 +9623,13 @@ export class Autopilot {
       // sits — the commonest reason a rest in an inn does nothing at all.
       await this.settle('resting part-way through a journey').catch(() => {});
       const budget = this.policy.travelSanctuaryBudgetMs ?? 240_000;
+      // AND CANCELLABLE: a cancel_movement (a fleetscript re-issuing, an operator) ends the rest, so it
+      // cannot hold a journey's job open against the walk that replaces it.
+      const restGeneration = this.s.movementGeneration;
       const rest = await skills.restUntil(this.s, {
         health: wantHealth, vigor: wantVigor,
         maxSeconds: Math.round(budget / 1000),
+        shouldCancel: () => !!(this.travelInterrupted?.() || this.s.movementWasCancelled?.(restGeneration)),
       }).catch(e => ({ error: e.message }));
       const after = this.s.client?.vitals?.();
       const heldMs = Date.now() - t0;

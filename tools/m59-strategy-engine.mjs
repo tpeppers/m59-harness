@@ -354,14 +354,35 @@ export class FarmStrategyEngine {
   }
 
   /** Give a key back to what it was shadowing — only if it is still ours and the keeper owns it. */
+  // GIVEN BACK EVEN WHILE ANOTHER OWNER HOLDS THE FACULTY, AND NEVER AS THE FILE'S OWN VALUE.
+  //
+  // Janice, prod 2026-10-12: a fleetscript held her `movement` and unassigned the lupogg strategy in
+  // the same push as `confine_rooms: null`. The null was trimmed as a "restatement" (see pushEcho), and
+  // this method then skipped the give-back because `movement` was held -- but still forgot the key, so
+  // the file's [108,111,112] stayed live, orphaned, tagged as the strategy's, and refused her walk to
+  // the vault. A held faculty is a reason not to WRITE under its holder; it is not a reason to leave
+  // the file's value behind once the file is gone. If the live value is still exactly what the file
+  // wrote, nobody else has written it, so giving back what it shadowed overrides no holder's order.
+  //
+  // And a shadow that IS the file's own value is a leak (THE LEAK, below): giving it back would hand the
+  // file's value to the orders as if somebody had ordered it. That key goes to its default instead.
   releaseKey(key) {
     const policy = this.host.policy, book = this.host.policySources;
     const was = this.base.get(key);
     const ours = this.wrote.has(key) && sameValue(policy[key], this.wrote.get(key));
-    const faculty = this.loaded?.strategy?.faculties?.[key] ?? fieldForKey(key)?.faculty ?? 'work';
-    if (ours && was && !this.heldBy(faculty)) {
-      policy[key] = clone(was.value);
-      book?.mark?.(key, was.source, { restored_from: `strategy:${this.name() ?? this.assigned}` });
+    const declared = this.loaded?.strategy?.desired?.[key];
+    const tag = `strategy:${this.name() ?? this.assigned}`;
+    if (ours && was) {
+      const leaked = declared !== undefined && sameValue(was.value, declared);
+      // A key with no declared default (confineRooms is one) resets to null: "not set" is the honest answer.
+      const fallback = this.host.policyDefaultFor?.(key) ?? null;
+      if (leaked) {
+        policy[key] = clone(fallback);
+        book?.mark?.(key, 'default', { restored_from: tag, why: "the shadow was the file's own value" });
+      } else {
+        policy[key] = clone(was.value);
+        book?.mark?.(key, was.source, { restored_from: tag });
+      }
     }
     this.wrote.delete(key); this.base.delete(key); delete this.overrides[key];
   }
@@ -398,6 +419,11 @@ export class FarmStrategyEngine {
   pushEcho(fields = {}) {
     const echo = [], restated = [];
     if (!this.loaded?.ok) return { echo, restated };
+    // A PUSH THAT CHANGES THE ASSIGNMENT ECHOES NOTHING. With the file leaving (or being replaced) in this
+    // same push, nothing will reassert over a restatement, so every key it carries is an order and goes
+    // live -- `confine_rooms: null` beside `farm_strategy: null` (Janice, 2026-10-12) must clear it.
+    if (Object.hasOwn(fields, 'farmStrategy') && (fields.farmStrategy ?? null) !== (this.assigned ?? null))
+      return { echo, restated };
     for (const k of Object.keys(fields)) {
       if (!this.wrote.has(k)) continue;
       if (!sameValue(this.host.policy?.[k], this.wrote.get(k))) continue;   // not ours any more

@@ -1860,8 +1860,19 @@ class Session {
     if (this.combat?.active) throw new Error(`${this.name}: combat override owns the body`);
     // THE REFUSAL NAMES WHO HOLDS THE BODY. "is busy: walk to X" told a caller something was
     // walking; the origin says whose walk it is, which decides whether to wait or to cancel.
-    if (this.job && !this.job.done) throw new Error(`${this.name} is busy: ${this.job.label}` +
-      (this.job.origin ? ` (ordered by ${originLabel(this.job.origin)})` : ''));
+    // EXCEPT BY ITS OWN ISSUER, ONCE CANCELLED. A fleetscript run walks a sequence of legs, cancelling
+    // the last one before ordering the next; when the old job had not wound down yet (a tail it could not
+    // be interrupted out of), the run was refused by its own previous walk -- twice on 2026-10-12, Zheng
+    // He "is busy: walk to South Barloque (ordered by fleetscript:entroot-supply ...)" from the very run
+    // ordering the next leg. A cancelled job ordered by the same issuer is superseded, not a refusal; its
+    // own code sees the changed movement generation and stops. Anybody else is still refused.
+    if (this.job && !this.job.done) {
+      const mine = this.job.cancelled && origin && this.job.origin
+        && originLabel(this.job.origin) === originLabel(moveOrigin(origin));
+      if (!mine) throw new Error(`${this.name} is busy: ${this.job.label}` +
+        (this.job.origin ? ` (ordered by ${originLabel(this.job.origin)})` : ''));
+      this.job.superseded = true; this.job.done = true; this.job.finishedAt = Date.now();
+    }
     const generation = this.movementGeneration;
     const job = { kind, label, startedAt: Date.now(), done: false, generation,
                   ...(origin ? { origin: moveOrigin(origin) } : {}),
