@@ -11579,6 +11579,12 @@ const TOOLS = [
           'already reached the quarry level trains NOTHING on the armed half until this ' +
           'names a weapon it can still advance. Name it exactly — "sword" matches short, ' +
           'long and mystic sword alike.' },
+      pull_through_crowd: { type: ['boolean', 'null'],
+        description: 'true: a pull to the safe wall is no longer refused because the room is crowded (6+ threats, ' +
+          'travelStopMaxThreats); instead the quarry is re-picked as the qualifying creature (hunted, not spared, ' +
+          'inside the engagement band, reachable) the fewest walking steps from the wall. The flee-line refusal and ' +
+          'the survival ladder are unchanged. false/null: the crowd refusal. A farm strategy may declare it as ' +
+          'pull.throughCrowd. autopilot status reports it as policy.pullThroughCrowd' },
       approach_rooms: { type: ['array', 'null'], items: { type: 'number' },
         description: 'THE ROAD INTO THE STATION: rooms walked IN ORDER by any journey to the assigned room (or a ' +
           'confined room) that starts outside confine_rooms, resuming after whichever of them the character ' +
@@ -12670,6 +12676,11 @@ const TOOLS = [
         const w = String(a.training_weapon).trim();
         if (!w) throw new Error('training_weapon must name a weapon, not an empty string');
         p.policy.trainingWeapon = w;
+      }
+      if (a.pull_through_crowd !== undefined) {
+        if (a.pull_through_crowd !== null && typeof a.pull_through_crowd !== 'boolean')
+          return { started: false, reason: 'pull_through_crowd must be true, false or null' };
+        p.policy.pullThroughCrowd = a.pull_through_crowd === true;
       }
       if (a.approach_rooms !== undefined) {
         try { p.policy.approachRooms = farmStrategyField('confine.approach').normalize(a.approach_rooms ?? null); }

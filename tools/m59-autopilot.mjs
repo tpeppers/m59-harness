@@ -2131,6 +2131,9 @@ export class Autopilot {
       // THE ROAD INTO THE STATION (`approachLegs`): rooms walked in order by a journey to the station that
       // starts outside the confinement. null: the router's own road.
       approachRooms: null,
+      // PULL EVEN WHEN THE ROOM IS CROWDED, and then the closest qualifying target (`pull`, `closestPullable`).
+      // Off by default: the crowd refusal is the old behaviour.
+      pullThroughCrowd: false,
       // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
       // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
@@ -6607,9 +6610,27 @@ export class Autopilot {
     const fullHealth = (() => { const h = s?.client?.vitals?.()?.health;
       return !!(h && Number(h.max) > 0 && Number(h.value) >= Number(h.max)); })();
     const buddyCrowdOk = fullHealth && this.mode === 'farm' && this.buddyRole?.()?.role === 'tag';
-    if (!buddyCrowdOk && this.crowded({ forFighting: true })) {
+    // AND A FARM STRATEGY THAT SAYS SO (`pull.throughCrowd`, policy.pullThroughCrowd). Operator, 2026-10-12, of
+    // Janice and Robin holding walls in the Barloque sewers' room 112 with 21 lupoggs and 4 rats in it and every
+    // pull refused here: "Let strategies always pull through a crowd, but have them just always prefer the
+    // closest target out of the crowd that fits the criteria". So the refusal is skipped, and the quarry is
+    // re-picked as the qualifying creature the fewest walking steps from the wall (`closestPullable`): the
+    // shortest walk out through the crowd and the shortest walk back. The flee-line refusal below, the
+    // survival ladder above this stage and the watchdog during the walk are all unchanged.
+    const crowd = this.crowded({ forFighting: true });
+    const throughCrowd = crowd && this.policy?.pullThroughCrowd === true;
+    if (!buddyCrowdOk && crowd && !throughCrowd) {
       this.noteCrowdRefusal('pulling quarry to the wall');
       return { pulled: false, why: 'too many things in this room to walk out and back through' };
+    }
+    if (throughCrowd && !buddyCrowdOk) {
+      const closest = this.closestPullable();
+      if (closest && closest.id !== want?.id) {
+        this.note('pulling through a crowd: the closest qualifying target instead', {
+          was: want?.id ?? null, now: closest.id, steps: closest.steps,
+          why: 'pull.throughCrowd: the walk out and back is through everything in reach, so it is the shortest one' });
+        want = closest;
+      }
     }
     const frac = pct(s?.client?.vitals?.()?.health);
     if (frac !== null && frac < this.safety().fleeAt)
@@ -6702,6 +6723,33 @@ export class Autopilot {
   //
   // No `returnToSpot`, no hold to release, and no claim about the square: nothing here
   // teaches the safe-spot book anything, which is right, because no spot was involved.
+  /**
+   * The creature to pull through a crowd: on the hunt list, not spared, not refused by the engagement band,
+   * with a reachable square beside it -- the one the fewest WALKING steps from here (the wall). Euclidean
+   * distance narrows the field to the nearest eight before any path is asked for. null when none qualifies.
+   */
+  closestPullable() {
+    const s = this.s, c = s?.client, world = s?.world, me = c?.self;
+    if (!c?.room?.objects || !world?.approachSquare || !me) return null;
+    let match;
+    try { match = huntMatcher(loadSpawns(SPAWN_FILE), this.policy?.hunt); } catch { return null; }
+    const rows = [];
+    for (const o of c.room.objects.values()) {
+      if (o.id === c.selfId || (o.flags & OF.PLAYER) || !(o.flags & OF.ATTACKABLE)) continue;
+      const name = o.name ?? c.rsc?.get?.(o.nameRsc) ?? '';
+      if (!match(name) || this.sparedHere(o) || this.refuseEngagement(name)) continue;
+      rows.push({ o, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) });
+    }
+    rows.sort((a, b) => a.d - b.d);
+    let best = null;
+    for (const { o } of rows.slice(0, 8)) {
+      const a = world.approachSquare(o.col, o.row);
+      if (!a) continue;
+      if (!best || a.steps < best.steps) best = { id: o.id, steps: a.steps, name: o.name ?? c.rsc?.get?.(o.nameRsc) ?? '' };
+    }
+    return best;
+  }
+
   async closeOnQuarry(want) {
     const s = this.s, c = s.client;
     // Same warning as pull(): BP_ROOM_CONTENTS replaces the whole object map, so a

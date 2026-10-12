@@ -173,6 +173,9 @@ export const STRATEGY_FIELDS = Object.freeze([
     normalize: v => { if (v === null) return null;
       if (!Array.isArray(v) || !v.length) throw new Error('confine.approach must be a non-empty list of room numbers or null');
       return v.map(roomNum('confine.approach')); } },
+  // PULL THROUGH A CROWD (Autopilot.pull / closestPullable): skip the crowd refusal, take the nearest target.
+  { path: 'pull.throughCrowd', keys: ['pullThroughCrowd'], faculty: 'work', arg: 'pull_through_crowd',
+    normalize: bool('pull.throughCrowd') },
   { path: 'confine.roam', keys: ['roam'], faculty: 'movement', arg: 'roam', normalize: bool('confine.roam') },
   { path: 'vigor.fightAbove', keys: ['fightAboveVigor', 'vigorFloor'], faculty: 'work', arg: 'fight_above_vigor',
     normalize: normFightAbove },

@@ -64,6 +64,12 @@ export default {
     touchSpell: null,
   },
 
+  // PULL THROUGH THE CROWD (operator, 2026-10-12: "Let strategies always pull through a crowd, but have them
+  // just always prefer the closest target out of the crowd that fits the criteria"). 112 sits at its cap of 25
+  // with ~20 lupoggs in it, which is over the keeper's crowd line of 6 on every pass, so without this every
+  // pull to the wall is refused and the hunters only ever fight what wanders to them.
+  pull: { throughCrowd: true },
+
   // THE ROAD IN, ALWAYS (operator, 2026-10-11): "always going through via valley of ileria -> sandy shores
   // -> ocean -> sewers". On the map it is 544 Valley of Ileria -> 552 the Great Ocean -> 562 the sandy shores
   // -> 108 the sewers (the ocean lies between the valley and the shore), never Barloque's own door at 101.
