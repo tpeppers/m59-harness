@@ -55,6 +55,16 @@ export const ALREADY_DEDICATED_MSG = /^\s*This weapon is already dedicated to Kr
  *   made               true | false | null   (a conjured weapon; null: nobody has looked)
  */
 const SHATTERED_DESC = /shattered by a powerful blow/i;
+// THE CONDITION SENTENCE, ALL SIX OF THEM (weapon.kod:87-92), as one word a stock rule can test: a
+// dedicator's stash keeps only mint and near-mint weapons (operator, 2026-10-12), so the sentence
+// the look already carries is read once here rather than re-parsed by every consumer.
+export const CONDITIONS = Object.freeze([
+  ['flawless', /is in flawless condition/i], ['excellent', /is in excellent condition/i],
+  ['good', /slightly tarnished but in generally good condition/i],
+  ['notched', /notched and stained with blood/i], ['worn', /well worn and may not last much longer/i],
+  ['shattered', SHATTERED_DESC]]);
+export const weaponCondition = text => text == null ? null
+  : (CONDITIONS.find(([, rx]) => rx.test(String(text)))?.[0] ?? null);
 
 export function classifyWeapon({ name, look = null } = {}) {
   const n = norm(name);
@@ -67,9 +77,10 @@ export function classifyWeapon({ name, look = null } = {}) {
   // THE CONDITION SENTENCE IS IN THE SAME LOOK (weapon.kod:87-92). A shattered weapon keeps its
   // enchantment text, so it has to be read here or it passes for a working magic spare.
   const broken = SHATTERED_DESC.test(text) ? { broken: true } : {};
+  const condition = weaponCondition(text);
   return ENCHANTED_DESC.test(text)
-    ? { name: n, class: 'enchanted', bypasses_nonmagic: true, made, ...broken }
-    : { name: n, class: 'mundane', bypasses_nonmagic: false, made, ...broken };
+    ? { name: n, class: 'enchanted', bypasses_nonmagic: true, made, condition, ...broken }
+    : { name: n, class: 'mundane', bypasses_nonmagic: false, made, condition, ...broken };
 }
 
 /** The weapon a lapse or a dedication sentence names, or null when the line is neither. */
@@ -183,6 +194,7 @@ export class WeaponMagicBook {
       return { id: Number(i.id), name: v.name, class: v.class, bypasses_nonmagic: v.bypasses_nonmagic,
                made: v.made ?? null, wielded: wieldedId != null && Number(i.id) === Number(wieldedId),
                at: v.at ?? null, source: v.source ?? (v.class === 'unknown' ? null : 'class'),
+               condition: v.condition ?? null,
                ...(broken?.has?.(Number(i.id)) || v.broken ? { broken: true } : {}) };
     });
     const wielded = rows.find(r => r.wielded) ?? null;
