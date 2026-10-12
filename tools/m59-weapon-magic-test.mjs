@@ -306,5 +306,25 @@ console.log('the look decides what is a summon');
   ok('and with neither it is not ours', isOwnSummon({}, o) === false);
 }
 
+// THE CONDITION, ONE WORD PER SENTENCE (weapon.kod:87-92): a dedicator's stash keeps only mint and
+// near-mint weapons (operator, 2026-10-12), so the grade has to reach the fleet row.
+{
+  const { weaponCondition } = await import('./m59-weapon-magic.mjs');
+  const look = tail => 'This blade of steel is the weapon of choice. This long sword' + tail;
+  ok('flawless', weaponCondition(look(' is in flawless condition.')) === 'flawless');
+  ok('excellent, repaired', weaponCondition(look(' is in excellent condition, but has been repaired before.')) === 'excellent');
+  ok('good', weaponCondition(look(' is slightly tarnished but in generally good condition.')) === 'good');
+  ok('notched', weaponCondition(look(' is notched and stained with blood but is still an effective weapon.')) === 'notched');
+  ok('worn', weaponCondition(look(' is well worn and may not last much longer.')) === 'worn');
+  ok('shattered', weaponCondition(look(' has been shattered by a powerful blow.')) === 'shattered');
+  ok('no sentence is null, not a guess', weaponCondition('A plain description.') === null && weaponCondition(null) === null);
+  const c = classifyWeapon({ name: 'long sword', look: look(' is well worn and may not last much longer.') });
+  ok('classifyWeapon carries it', c.condition === 'worn' && c.class === 'mundane');
+  const book = new WeaponMagicBook();
+  book.readings.set(91, c);
+  const row = book.summary([{ id: 91, name: 'long sword' }]).weapons[0];
+  ok('and the summary row carries it to the fleet board', row.condition === 'worn');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

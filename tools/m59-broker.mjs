@@ -79,6 +79,7 @@ import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { loadMerchants, findMerchants, stockMatching, merchantForObject } from './m59-merchants.mjs';
 import { loadShopsSeen, recordShopSeen, withShopsSeen } from './m59-shops-seen.mjs';
+import { resolveBuyNames } from './m59-shop-names.mjs';
 import { buyInChunks, countByKey, itemKey } from './m59-shop-arrival.mjs';
 import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
 
@@ -10444,7 +10445,16 @@ const TOOLS = [
                    'Repeated ids are summed, and every line is cut to what the purse, the weight ' +
                    'ceiling and the bulk ceiling actually allow — whatever is cut comes back under ' +
                    '`clamped` rather than being dropped quietly.',
-                 items: { type: ['number', 'object'] } } }, required: ['agent', 'seller'] },
+                 items: { type: ['number', 'object'] } },
+      // BY NAME, FOR A CALLER THAT PLANS BEFORE IT HAS SEEN THE COUNTER. An errand's steps are fixed when it
+      // is planned and the offer's ids exist only once the shop is open (DUM's Jasper elderberry run,
+      // 2026-10-12). Each name is matched against THIS seller's list, exactly or as its plural, and
+      // becomes a buy_ids line; a name the seller does not offer comes back under `unmatched`.
+      buy_names: { type: 'array',
+                   description: 'what to buy by name: [{name, amount}], matched exactly (or as the plural) against ' +
+                     'this seller\'s list and bought like buy_ids, with the same purse/weight/bulk clamping. ' +
+                     'Names it does not sell are returned under `unmatched`, never guessed.',
+                   items: { type: 'object' } } }, required: ['agent', 'seller'] },
     run: async (a) => {
       const s = session(a.agent), c = s.need();
       const t = resolveTarget(s, a.seller);
@@ -10482,6 +10492,14 @@ const TOOLS = [
         recordShopSeen({ name: sellerName, room: room?.num ?? null, room_name: room?.name ?? null,
                          items: shop.items });
       } catch { /* an observation, not part of the sale */ }
+      // buy_names -> buy_ids, against the offer just read (see the schema).
+      let unmatched = null;
+      if (Array.isArray(a.buy_names) && a.buy_names.length) {
+        const r = resolveBuyNames(shop.items, a.buy_names);
+        unmatched = r.unmatched;
+        a.buy_ids = [...(a.buy_ids ?? []), ...r.buy_ids];
+        if (!a.buy_ids.length) return { seller: shop.sellerId, items: shop.items, unmatched };
+      }
       if (!a.buy_ids?.length) return { seller: shop.sellerId, items: shop.items };
       // A BUY NEEDS A QUANTITY, AND A BARE ID DOES NOT CARRY ONE.
       //
@@ -10663,6 +10681,7 @@ const TOOLS = [
                got: run.got, bought: run.received.filter(x => x.arrived > 0),
                chunks: run.chunks_planned, chunks_sent: run.chunks_sent,
                ...(clamped.length ? { clamped } : {}),
+               ...(unmatched?.length ? { unmatched } : {}),
                ...(run.messages.length ? { messages: run.messages } : {}),
                ...(shortfall ? { shortfall } : {}),
                ...(run.refused_after && arrivedAny ? { stopped_early: run.refused_after } : {}),
