@@ -168,6 +168,11 @@ export const STRATEGY_FIELDS = Object.freeze([
       return [...new Set(v.map(roomNum('confine.rooms')))]; } },
   { path: 'confine.station', keys: ['assignedRoom'], faculty: 'movement', arg: 'assigned_room',
     normalize: roomNum('confine.station') },
+  // THE ROAD IN, walked in order from outside the confinement (Autopilot.approachLegs).
+  { path: 'confine.approach', keys: ['approachRooms'], faculty: 'movement', arg: 'approach_rooms',
+    normalize: v => { if (v === null) return null;
+      if (!Array.isArray(v) || !v.length) throw new Error('confine.approach must be a non-empty list of room numbers or null');
+      return v.map(roomNum('confine.approach')); } },
   { path: 'confine.roam', keys: ['roam'], faculty: 'movement', arg: 'roam', normalize: bool('confine.roam') },
   { path: 'vigor.fightAbove', keys: ['fightAboveVigor', 'vigorFloor'], faculty: 'work', arg: 'fight_above_vigor',
     normalize: normFightAbove },

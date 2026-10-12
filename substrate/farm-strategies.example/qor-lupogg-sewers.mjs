@@ -64,9 +64,14 @@ export default {
     touchSpell: null,
   },
 
+  // THE ROAD IN, ALWAYS (operator, 2026-10-11): "always going through via valley of ileria -> sandy shores
+  // -> ocean -> sewers". On the map it is 544 Valley of Ileria -> 552 the Great Ocean -> 562 the sandy shores
+  // -> 108 the sewers (the ocean lies between the valley and the shore), never Barloque's own door at 101.
+  // Walked from wherever on it the character already is (Autopilot.approachLegs).
   confine: {
     station: STATION,
     rooms: [108, 111, 112],
+    approach: [544, 552, 562, 108],
     roam: false,
   },
 

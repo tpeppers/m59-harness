@@ -2128,6 +2128,9 @@ export class Autopilot {
       // ONLY THE TRAINING WEAPON MAY BE WIELDED while the armed style is in force (`trainingWeaponOnly`,
       // see `trainingWeaponOnlyNow`). Off by default: silence is the old ranking.
       trainingWeaponOnly: false,
+      // THE ROAD INTO THE STATION (`approachLegs`): rooms walked in order by a journey to the station that
+      // starts outside the confinement. null: the router's own road.
+      approachRooms: null,
       // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
       // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
       // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
@@ -2993,6 +2996,21 @@ export class Autopilot {
   // `s.equipVeto`: while `trainingWeaponOnly` is set and the armed style names a weapon, only that
   // weapon may be chosen. With none in the pack the hand stays empty and the roulette / makeWeapon
   // conjures one. PvP escalation ranks with `weaponRanking` directly and is not affected.
+  /**
+   * The approach rooms still to walk before `room`, or null. Only for a journey to the station or a
+   * confined room that starts outside the confinement; resumes after the approach room the body is in.
+   */
+  approachLegs(room, here = this.s?.world?.room?.num) {
+    const path = Array.isArray(this.policy?.approachRooms) ? this.policy.approachRooms.map(Number) : null;
+    if (!path?.length || room == null || here == null) return null;
+    const dest = Number(room), at = Number(here);
+    const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms.map(Number) : [];
+    if (dest !== Number(this.policy?.assignedRoom) && !confine.includes(dest)) return null;
+    if (confine.includes(at) && !path.includes(at)) return null;     // already inside, off the approach
+    const legs = path.slice(path.indexOf(at) + 1).filter(r => r !== dest && r !== at);
+    return legs.length ? legs : null;
+  }
+
   /** `s.equipOnly`: the only weapon names `equipBest` may choose, or null for no restriction. */
   trainingWeaponOnlyNow() {
     if (this.policy?.trainingWeaponOnly !== true) return null;
@@ -9537,7 +9555,7 @@ export class Autopilot {
     // an existing suspended objective, even if they use ordinary travel().
     const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
             chalice: _chalice, chaliceRoom: _chaliceRoom, explicitOrder = false,
-            ...sessionOpts } = opts ?? {};
+            approachLeg = false, ...sessionOpts } = opts ?? {};
     // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
     // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
     // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
@@ -9565,6 +9583,30 @@ export class Autopilot {
       const refused = this.pvpReturnGate(room, { explicitOrder: explicitOrder === true,
                                                  recoveryDetour: opts?.recoveryDetour === true });
       if (refused) return refused;
+    }
+    // THE STATION'S APPROACH (policy.approachRooms; a farm strategy's `confine.approach`). Operator,
+    // 2026-10-11, of the Qor masters' lupogg station in the Barloque sewers: "Fix the lupogg strategy to
+    // work going from outside and have it include going to the sewers, *always going* through via valley
+    // of ileria -> sandy shores -> ocean -> sewers" -- 544 Valley of Ileria, 552 the Great Ocean, 562 the
+    // sandy shores, 108 the sewers (m59-map.json edgeExits: 544 north is 552, 552 east is 562, 562 east is
+    // 108). Without it the router may take Barloque's own door (101 -> 108), and a character outside its
+    // confinement had no declared way in at all: Robin sat in Marion reporting "stranded in 201".
+    //
+    // A journey to the station (or any confined room) that STARTS OUTSIDE the confinement walks the
+    // approach first, leg by leg, from wherever on it the body already is; each leg is an ordinary
+    // journey through this same function, so every gate below still applies to it, except that an
+    // approach room is not "outside the confinement" -- the operator declared that road. A failed leg
+    // returns its failure; the next pass asks again from the room the body reached.
+    if (!approachLeg) {
+      const legs = this.approachLegs?.(room);
+      if (legs?.length) {
+        this.note('taking the station approach', { to: Number(room), legs,
+          here: this.s.world?.room?.num ?? null, approach: this.policy.approachRooms });
+        for (const leg of legs) {
+          const r = await this.travel(leg, { ...(opts ?? {}), origin: opts?.origin ?? keeperOrigin('station_approach'), approachLeg: true });
+          if (!r?.arrived) return { ...(r ?? {}), arrived: false, approach: { failed_at: leg, legs } };
+        }
+      }
     }
     // A cancelled stockpile leg used to fall through into an apothecary leg in
     // the same awaited errand. Give the next survival pass the body first.
@@ -9605,7 +9647,9 @@ export class Autopilot {
     // 199 of 204 journeys from 38 to the gate in the next two hours were keeper:wand_duty, every farmer
     // confined to [38] walking out to a station at 2 where Morpheus camps. A confinement is the operator's
     // and outranks an errand's convenience: wandDutyStep now stands down when the station is outside it.
-    if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))) {
+    const approachRoom = approachLeg && (this.policy?.approachRooms ?? []).map(Number).includes(Number(room));
+    if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))
+        && !approachRoom) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
         here: this.s.world?.room?.num ?? null, doing: this.doing,

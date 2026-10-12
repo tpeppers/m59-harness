@@ -148,6 +148,12 @@ These tests are offline. They do not execute a raid or shut down a server.
   wrong tool (banned weapons are shed first and three of them switch create weapon off). The lupogg
   strategy sets it and nulls the leftover touch spell. **It should fail the day a lupogg hunter is
   re-armed with a hammer.**
+- `m59-approach-test.mjs` (8): the station's APPROACH (`approach_rooms` / a strategy's `confine.approach`,
+  `Autopilot.approachLegs`). A journey to the station or a confined room that starts outside the
+  confinement walks the declared road first, resuming from whichever room of it the body is in; nothing
+  once inside; the legs (and only the legs) are exempt from the confinement gate; the lupogg road 544 ->
+  552 -> 562 -> 108 is checked against the map's own edges. **It should fail the day a Qor caster enters
+  the sewers by Barloque's door.**
 - `m59-icky-chalice-test.mjs` (43): `substrate/fleetscripts.example/icky-chalice.mjs`, the Icky Cave
   chalice errand. The kod facts it acts on are read back out of the kod (dispel illusion's 1 dragonfly
   eye / 1 uncut seraphym / 2 solagh and 20 mana, no target; cave2's one chalice at r23c11, the 30 s

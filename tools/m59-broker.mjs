@@ -11579,6 +11579,12 @@ const TOOLS = [
           'already reached the quarry level trains NOTHING on the armed half until this ' +
           'names a weapon it can still advance. Name it exactly — "sword" matches short, ' +
           'long and mystic sword alike.' },
+      approach_rooms: { type: ['array', 'null'], items: { type: 'number' },
+        description: 'THE ROAD INTO THE STATION: rooms walked IN ORDER by any journey to the assigned room (or a ' +
+          'confined room) that starts outside confine_rooms, resuming after whichever of them the character ' +
+          'stands in; each leg is exempt from the confinement. e.g. [544,552,562,108] = Valley of Ileria, the ' +
+          'Great Ocean, the sandy shores, the Barloque sewers. null: the router chooses. A farm strategy may ' +
+          'declare it as confine.approach. autopilot status reports it as policy.approachRooms' },
       training_weapon_only: { type: ['boolean', 'null'],
         description: 'true: while training_style is short_sword, the training_weapon is the ONLY weapon ' +
           'any equip may choose (equipBest asks the keeper, s.equipOnly) -- a higher-skill hammer in the ' +
@@ -12664,6 +12670,10 @@ const TOOLS = [
         const w = String(a.training_weapon).trim();
         if (!w) throw new Error('training_weapon must name a weapon, not an empty string');
         p.policy.trainingWeapon = w;
+      }
+      if (a.approach_rooms !== undefined) {
+        try { p.policy.approachRooms = farmStrategyField('confine.approach').normalize(a.approach_rooms ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
       }
       if (a.training_weapon_only !== undefined) {
         if (a.training_weapon_only !== null && typeof a.training_weapon_only !== 'boolean')
