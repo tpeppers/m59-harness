@@ -2037,5 +2037,32 @@ console.log('\na deflected step lands only where the body can do what the stand 
   }
 }
 
+// DRUID HILLS 526 -> 536: STAGES NO BODY CAN GET TO. r40c50's centre lies on a one-sided wall
+// (76), so three east openings (y 2541/2592/2639) proved themselves from a point unreachable
+// from inside. Prod 2026-10-12: 55 journeys refused at r40c50/r41c50/r41c49, two characters
+// stranded for hours; reproduced 3/3 on the shadow fleet, crossed 5/5 with the rule. Pinned on
+// the LIVE question (atlas included), and pinned as absent from the bake's question.
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const room = realMap?.rooms?.['526'];
+  const east = room ? edgeExitsOf(room).find(e => Number(e.to) === 536) : null;
+  if (!room?.roo || !east) {
+    skip('526 east offers no opening staged only from r40c50', 'no room 526 geometry on disk');
+  } else {
+    const live = edgeCandidatesOf(room, east, null, { live: true });
+    const ys = live.map(c => c.fine_stand_on.y);
+    ok('526 east, live: the phantom openings at y 2541/2592/2639 are gone',
+       live.length > 0 && !ys.some(y => [2541, 2592, 2639].includes(y)), JSON.stringify(ys));
+    ok('526 east, live: the real r41/r42 lane is still offered',
+       ys.some(y => y >= 2640 && y <= 2736), JSON.stringify(ys));
+    const north = edgeExitsOf(room).find(e => Number(e.to) === 516);
+    ok('526 north, live: r1c5 (crossed 185 times that day) is still a stage',
+       !!north && edgeCandidatesOf(room, north, null, { live: true })
+         .some(c => c.stages.some(s => s.row === 1 && s.col === 5)));
+    ok('the bake question is untouched: it still sees every baked opening',
+       edgeCandidatesOf(room, east).some(c => c.fine_stand_on.y === 2592));
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
 process.exit(failed ? 1 : 0);
