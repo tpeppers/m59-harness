@@ -1962,10 +1962,22 @@ export class RoomGeometry {
     if (this._reachablePointsCache.has(key)) return this._reachablePointsCache.get(key);
     const centre = (r, c) => [protocolToClient(c * KOD_FINENESS + (KOD_FINENESS >> 1)),
                               protocolToClient(r * KOD_FINENESS + (KOD_FINENESS >> 1))];
-    const from = [];
+    // SEED FROM OFF THE BOUNDARY RING WHEN THERE IS ANY. Ukgoth (599) north r1c62-c66: a
+    // one-sided wall runs along row 1 just south of its centre line, so the strip from the
+    // edge to y≈97 can be dropped OUT of and never walked INTO. Every row-1 square centre
+    // (y 96) lies inside that strip, so seeding from the row-1 neighbours proved the strip
+    // from itself and all five stages served. A body arriving from inside stops at y≥100 and
+    // its edge packet is geometry_blocked before sending: prod 2026-10-12, 169 journeys
+    // 599->2 refused at r1c62-c65 while the jammed real door r1c27 was the only way out.
+    // A neighbour on the outermost ring may sit in the same phantom strip; one further in
+    // cannot. Only when no inner neighbour is walkable are the ring's centres used.
+    const onRing = (r, c) => r === 1 || c === 1 || r === this.rows || c === this.cols;
+    const near = [];
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++)
       if ((dr || dc) && this.inBounds(row + dr, col + dc) && this.walkable(row + dr, col + dc))
-        from.push(centre(row + dr, col + dc));
+        near.push([row + dr, col + dc]);
+    const inner = near.filter(([r, c]) => !onRing(r, c));
+    const from = (inner.length ? inner : near).map(([r, c]) => centre(r, c));
     const walks = (a, b) => { const t = this.traceFineMoveClient(a[0], a[1], b[0], b[1], { slide: false });
                               return t.available && t.arrived; };
     const samples = [];
