@@ -2064,6 +2064,39 @@ console.log('\na deflected step lands only where the body can do what the stand 
   }
 }
 
+// UKGOTH 599 -> 2: A RAIL WHOSE HEAD THE BODY CANNOT WALK. The baked line from the east door
+// to the north door runs r1c66 r6c65 r7c64 r8c65 ...; from where bodies in that corner stood on
+// 2026-10-13 nothing from r8c65 to r17c59 is reachable on the fine lattice, and eight units ground
+// against the wall following it. `fineRailBoard` must board them past the gap at r18c58, with a
+// fine path that lands there — and must say nothing for a body whose next waypoint is walkable.
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const room = realMap?.rooms?.['599'];
+  const status = room?.roo ? attachStepMasks(realMap) : null;
+  const { activeRoutes } = await import('./m59-routes.mjs');
+  const table = status?.ok ? activeRoutes() : null;
+  const squares = table ? bakedPath(table, 599, { row: 1, col: 66 }, { row: 1, col: 27 }) : null;
+  if (!room?.roo || !Array.isArray(squares) || squares.length < 14) {
+    skip('fineRailBoard boards Ukgoth past its broken rail head', 'no 599 geometry or rail on disk');
+  } else {
+    const geometry = sharedRoomGeometry(room);
+    const { sessionWalkPrototype } = await import('./m59-session-walk.mjs');
+    const plan = sessionWalkPrototype({}).fineRailBoard;
+    const at = (x, y) => plan.call({ world: { room: { num: 599 }, geometry },
+      client: { self: { x, y, row: Math.floor(y / 64), col: Math.floor(x / 64) } } }, squares);
+    // Rowlf r7c64, Floyd r6c65 — on the rail head, in the corner.
+    for (const [who, x, y] of [['Rowlf', 4155, 452], ['Floyd', 4187, 421]]) {
+      const got = at(x, y);
+      ok(`599: ${who}'s body on the rail head boards past the gap at r18c58`,
+         got?.square?.row === 18 && got?.square?.col === 58 && got.gap === 3 && got.legs.length > 0,
+         JSON.stringify(got && { gap: got.gap, index: got.index, square: got.square, legs: got.legs.length, ms: got.ms }));
+    }
+    // The real door's approach, standing on the line's last bend: nothing to fix there.
+    ok('599: a body at r3c26 on the line, next waypoint walkable, gets no fine boarding',
+       at(26 * 64 + 32, 3 * 64 + 32) === null);
+  }
+}
+
 // UKGOTH 599 -> 2: A STRIP YOU CAN DROP OUT OF AND NEVER WALK INTO. A one-sided wall runs along
 // row 1 just south of its centre line at c62-c66, and every row-1 centre is inside the strip, so
 // seeding from row-1 neighbours proved the NE openings from themselves. Prod 2026-10-12: 169

@@ -34,7 +34,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 // and the name the method bodies use is the alias m59-game.mjs gave it.
 import { traversable as fallJumpTraversable, physics as fallPhysics } from './m59-falljump.mjs';
 import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from './m59-roo.mjs';
-import { fineRouteDetour, pullFine, pointOfSquare } from './m59-finepath.mjs';
+import { boundsAround, fineRouteDetour, finePath, fineReachableSquares, pullFine, pointOfSquare } from './m59-finepath.mjs';
 import { planBodyDetour } from './m59-body-detour.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -43,6 +43,15 @@ import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planSafeLegs, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
+// Fine boarding past a broken rail head (see fineRailBoard). Synchronous on the keeper's loop,
+// and only after a bounded search proved the next waypoint unreachable: measured in Ukgoth,
+// reachability ~200ms, the fine path ~150ms, pulling it ~200ms — once per crossing attempt.
+const RAIL_FINE_QUICK_NODES = Number(process.env.M59_RAIL_FINE_QUICK_NODES || 1500);
+const RAIL_FINE_LOOKAHEAD = 2;
+// Bounded by NODES, not milliseconds, so the answer does not depend on how busy the machine
+// is: 8000 nodes (~600 squares, ~200ms) reaches Ukgoth's r18c58 from every stuck spot.
+const RAIL_FINE_REACH_NODES = Number(process.env.M59_RAIL_FINE_REACH_NODES || 8000);
+const RAIL_FINE_PATH_NODES = Number(process.env.M59_RAIL_FINE_PATH_NODES || 12000);
 const SAFE_LEG_CORRIDORS = new Map();
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
@@ -4566,6 +4575,94 @@ export function sessionWalkPrototype(deps) {
    * thrash this replaces. `maxSlips` bounds how long one square may be insisted on, so a
    * rail that genuinely cannot be walked gives up and lets the ordinary walk try.
    */
+  /**
+   * WHERE TO GET ON A RAIL WHOSE NEXT WAYPOINT THIS BODY CANNOT WALK TO. Pure planning, no
+   * movement. Null when the line is fine from here, when there is no collision model, or when
+   * nothing past the gap is reachable inside the budget — every one of those leaves the
+   * existing join/board logic exactly as it was.
+   */
+  fineRailBoard(squares) {
+    const geo = this.world?.geometry;
+    const me = this.client?.self;
+    if (!Array.isArray(squares) || squares.length < 2 || !geo?.collisionReady || !me
+        || !Number.isFinite(me.x) || !Number.isFinite(me.y)) return null;
+    const t0 = Date.now();
+    const from = { x: protocolToClient(me.x), y: protocolToClient(me.y) };
+    // CHEAP FIRST. Only a body standing on or beside the line is joining it, and for nearly
+    // every rail the next waypoint is a bounded fine search away; only when THAT fails is the
+    // room-sized reachability below worth its time on the keeper's clock.
+    let near = -1, nearD = Infinity;
+    for (let n = 0; n < squares.length; n++) {
+      const d = Math.hypot(squares[n].row - me.row, squares[n].col - me.col);
+      if (d < nearD) { nearD = d; near = n; }
+    }
+    if (near < 0 || nearD > 1.5 || near + 1 >= squares.length) return null;
+    // TWO WAYPOINTS AHEAD, not one: Ukgoth's corner body on r6c65 can reach r7c64, and the line
+    // breaks one waypoint later — checking only the next would cost a whole lap to find out.
+    let broken = false;
+    for (const next of squares.slice(near + 1, near + 1 + RAIL_FINE_LOOKAHEAD)) {
+      const nextPoint = pointOfSquare(geo, next.row, next.col);
+      if (!nextPoint) return null;
+      let quick;
+      try {
+        quick = finePath(geo, from, nextPoint, { goalSquare: next, maxNodes: RAIL_FINE_QUICK_NODES,
+          bounds: boundsAround([{ row: me.row, col: me.col }, next], 3) });
+      } catch { return null; }
+      if (quick?.found) continue;
+      if (quick?.reason !== 'no fine route') return null;                 // no opinion
+      broken = true; break;
+    }
+    if (!broken) return null;
+    let reach;
+    try { reach = fineReachableSquares(geo, from, { maxNodes: RAIL_FINE_REACH_NODES, maxMs: 2000 }); }
+    catch { return null; }
+    if (!reach?.squares || reach.squares.size <= 1) return null;
+    const ok = sq => reach.squares.has(`${sq.row},${sq.col}`);
+    // Where on the line the body is: the nearest waypoint it can actually walk to.
+    let at = -1, best = Infinity;
+    for (let n = 0; n < squares.length; n++) {
+      if (!ok(squares[n])) continue;
+      const d = Math.hypot(squares[n].row - me.row, squares[n].col - me.col);
+      if (d < best) { best = d; at = n; }
+    }
+    if (at < 0) return null;
+    let gap = -1;
+    for (let n = at + 1; n < Math.min(squares.length, at + 1 + RAIL_FINE_LOOKAHEAD); n++)
+      if (!ok(squares[n])) { gap = n; break; }
+    if (gap < 0) return null;
+    let index = -1;
+    for (let n = gap + 1; n < squares.length; n++) if (ok(squares[n])) { index = n; break; }
+    if (index < 0) return null;
+    const square = squares[index];
+    const goal = pointOfSquare(geo, square.row, square.col);
+    if (!goal) return null;
+    let found;
+    try { found = finePath(geo, from, goal, { goalSquare: square, maxNodes: RAIL_FINE_PATH_NODES }); }
+    catch { return null; }
+    if (!found?.found || !found.points?.length) return null;
+    const legs = pullFine(geo, from, found.points);
+    return { gap, index, square, legs, ms: Date.now() - t0 };
+  }
+
+  /** Walk pulled fine legs (client units) until the body stands on `square`. */
+  async walkFineLegs(legs, square, { movementGeneration = this.movementGeneration,
+                                     controlToken = null, avoidSquares = null } = {}) {
+    for (const leg of legs) {
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return { arrived: false, reason: 'movement_cancelled' };
+      const r = await this.walkFine(clientToProtocol(leg.x), clientToProtocol(leg.y),
+                                    { arriveWithin: 12, avoidSquares, movementGeneration, controlToken })
+        .catch(e => ({ arrived: false, reason: e.message }));
+      if (r?.left_room) return { arrived: false, left_room: true };
+      const at = this.client?.self;
+      if (at && at.row === square.row && at.col === square.col) return { arrived: true };
+      if (!(r?.arrived ?? r?.moved)) return { arrived: false, reason: r?.reason ?? 'fine leg refused' };
+    }
+    const at = this.client?.self;
+    return at && at.row === square.row && at.col === square.col
+      ? { arrived: true } : { arrived: false, reason: 'fine legs ended off the boarding square' };
+  }
+
   async followRail(squares, { movementGeneration = this.movementGeneration,
                               controlToken = null, maxSlips = 4, maxSkips = 8,
                               avoidSquares = null } = {}) {
@@ -5647,7 +5744,52 @@ export function sessionWalkPrototype(deps) {
                        note: target ? `no baked line to the anchor ${target.row},${target.col}`
                                     : `no anchor for room ${exit.to}` });
       }
+      // A RAIL WHOSE NEXT WAYPOINT THE BODY CANNOT WALK TO IS NOT JOINED, IT IS BOARDED PAST.
+      //
+      // Ukgoth (599), 2026-10-13: the troll loop brought eight characters in by the east door,
+      // and the baked line to the north door starts r1c66 r6c65 r7c64 r8c65 r9c66. The step
+      // mask calls r7c64 -> r8c65 a step, traced from square centres; from where a body in
+      // that corner actually stands, nothing after r7c64 can be reached for thirteen
+      // waypoints. Each of them stood ON the line, so the rejoin above followed it, asked for
+      // the same southward step into the wall, and every lap ground there: 0 of 65 crossings
+      // in six minutes, all eight within four squares of the rail's head.
+      //
+      // So ask the FINE lattice — the geometry the mover actually enforces — which of the
+      // line's waypoints this body can walk to. If the very next one is not among them, walk a
+      // fine path to the first waypoint past the gap that is, and follow the line from there.
+      // The rail is still the route; only the part this body cannot stand on is skipped.
+      let fineBoarded = false;
       if (rail && me0) {
+        const plan = typeof this.fineRailBoard === 'function' ? this.fineRailBoard(rail.squares) : null;
+        if (plan) {
+          fineBoarded = true;
+          const got = await this.walkFineLegs(plan.legs, plan.square,
+                                              { movementGeneration, controlToken,
+                                                avoidSquares: wrongDoor?.size ? wrongDoor : null });
+          const stoppedAfterFineBoard = await stopAfterAwait();
+          if (stoppedAfterFineBoard) return stoppedAfterFineBoard;
+          if (got?.left_room) return { left: true, via: 'rail', rail: { fine_boarded: plan.index } };
+          let ran = null;
+          if (got?.arrived) {
+            ran = await this.followRail(rail.squares.slice(plan.index), { movementGeneration, controlToken,
+                                        avoidSquares: wrongDoor?.size ? wrongDoor : null })
+              .catch(e => ({ railed: false, reason: e.message }));
+            const stoppedAfterFineRail = await stopAfterAwait();
+            if (stoppedAfterFineRail) return stoppedAfterFineRail;
+          }
+          recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: Number(this.world?.room?.num ?? 0),
+                         tactic: 'baked_rail', trigger: 'exit_crossing',
+                         worked: !!ran?.railed, ms: plan.ms, hp_lost: 0,
+                         note: `fine-boarded past ${plan.gap}..${plan.index - 1} at ${plan.index} of ${rail.squares.length} ` +
+                               `(${plan.legs.length} leg(s), planned in ${plan.ms}ms): ` +
+                               (!got?.arrived ? `could not reach ${plan.square.row},${plan.square.col}: ${got?.reason ?? 'unknown'}`
+                                : ran?.railed ? `followed ${ran.walked}`
+                                : `slipped at ${ran?.at}: ${ran?.reason ?? (ran?.cancelled ? 'cancelled' : 'unknown')}`) });
+          if (ran?.left_room)
+            return { left: true, via: 'rail', rail: { steps: ran.walked, fine_boarded: plan.index } };
+        }
+      }
+      if (rail && me0 && !fineBoarded) {
         // JOIN THE LINE WHERE WE ARE STANDING, NOT WHERE IT STARTS.
         //
         // A crossing gets interrupted — that is the ordinary condition of travel here, and
