@@ -2064,5 +2064,28 @@ console.log('\na deflected step lands only where the body can do what the stand 
   }
 }
 
+// UKGOTH 599 -> 2: A STRIP YOU CAN DROP OUT OF AND NEVER WALK INTO. A one-sided wall runs along
+// row 1 just south of its centre line at c62-c66, and every row-1 centre is inside the strip, so
+// seeding from row-1 neighbours proved the NE openings from themselves. Prod 2026-10-12: 169
+// journeys refused geometry_blocked at r1c62-c65 while the real door r1c27 was jammed.
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const room = realMap?.rooms?.['599'];
+  const north = room ? edgeExitsOf(room).find(e => Number(e.to) === 2) : null;
+  if (!room?.roo || !north) {
+    skip('599 north offers no NE phantom opening', 'no room 599 geometry on disk');
+  } else {
+    const live = edgeCandidatesOf(room, north, null, { live: true });
+    const cols = live.map(c => c.col);
+    ok('599 north, live: the NE strip r1c62-c66 is gone',
+       live.length > 0 && !cols.some(c => c >= 60), JSON.stringify(cols));
+    ok('599 north, live: the door r1c27/c28 is still offered',
+       cols.includes(27) && cols.includes(28), JSON.stringify(cols));
+    const east = edgeExitsOf(room).find(e => Number(e.to) === 598);
+    ok('599 east, live: the NE corner door to 598 is still offered',
+       !!east && edgeCandidatesOf(room, east, null, { live: true }).length > 0);
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
 process.exit(failed ? 1 : 0);
