@@ -10,16 +10,19 @@ export function blockingBodySnapshot(objects, selfId) {
 }
 
 export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
-  overrideDepths = null, avoidSquares = null, maxNodes = 768, maxMs = 35, now = performance.now.bind(performance) } = {}) {
+  overrideDepths = null, avoidSquares = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35, now = performance.now.bind(performance) } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'collision_geometry_unavailable' };
   if (![from?.x, from?.y, goal?.x, goal?.y].every(Number.isFinite))
     return { found: false, reason: 'own_position_unknown' };
-  if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > 8 * 64)
+  if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > Math.max(8, Math.min(24, maxRangeSquares)) * 64)
     return { found: false, reason: 'body detour exceeds local bounds' };
-  const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = 8;
-  const bounds = { minX: Math.min(from.x, goal.x) - 128, maxX: Math.max(from.x, goal.x) + 128,
-    minY: Math.min(from.y, goal.y) - 128, maxY: Math.max(from.y, goal.y) + 128 };
+  const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = spacingUnits === 16 ? 16 : 8;
+  const margin = Math.max(2,Math.min(12,marginSquares))*64;
+  const reached = p => goalSquare ? Math.floor(p.x/64)===goalSquare.col&&Math.floor(p.y/64)===goalSquare.row : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
+  const distance = p => goalSquare ? Math.hypot(Math.max(goalSquare.col*64+1-p.x,0,p.x-(goalSquare.col+1)*64+1),Math.max(goalSquare.row*64+1-p.y,0,p.y-(goalSquare.row+1)*64+1)) : Math.hypot(goal.x-p.x,goal.y-p.y);
+  const bounds = { minX: Math.min(from.x, goal.x) - margin, maxX: Math.max(from.x, goal.x) + margin,
+    minY: Math.min(from.y, goal.y) - margin, maxY: Math.max(from.y, goal.y) + margin };
   const key = p => `${Math.round((p.x - from.x) / spacing)},${Math.round((p.y - from.y) / spacing)}`;
   const allowed = p => p.x >= bounds.minX && p.x <= bounds.maxX && p.y >= bounds.minY && p.y <= bounds.maxY
     && !avoidSquares?.has?.(`${Math.floor(p.y / 64)},${Math.floor(p.x / 64)}`);
@@ -33,18 +36,24 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     const p = { x: protocolToward(t.x, a.x), y: protocolToward(t.y, a.y) };
     return Math.hypot(p.x - b.x, p.y - b.y) <= 1 && allowed(p) ? p : null;
   };
-  const open = [{ ...from, g: 0, f: Math.hypot(goal.x - from.x, goal.y - from.y) }];
+  // The wider departure search can visit thousands of nodes. Keep its frontier
+  // in a heap so sorting the entire frontier cannot spend the recovery budget.
+  const open = []; let sequence=0;
+  const precedes=(a,b)=>a.f<b.f||(a.f===b.f&&a.sequence>b.sequence);
+  const push=p=>{p.sequence=sequence++;open.push(p);let i=open.length-1;while(i){const parent=(i-1)>>1;if(!precedes(open[i],open[parent]))break;[open[i],open[parent]]=[open[parent],open[i]];i=parent;}};
+  const pop=()=>{const first=open[0],last=open.pop();if(open.length){open[0]=last;let i=0;for(;;){let next=i;for(const child of [2*i+1,2*i+2])if(child<open.length&&precedes(open[child],open[next]))next=child;if(next===i)break;[open[i],open[next]]=[open[next],open[i]];i=next;}}return first;};
+  push({ ...from, g: 0, f: distance(from) });
   const best = new Map([[key(from), 0]]), parents = new Map();
   let nodes = 0;
   while (open.length && nodes < maxNodes) {
     if (now() - startTime >= maxMs) return { found: false, reason: 'body detour budget exhausted', nodes };
-    open.sort((a, b) => b.f - a.f); const cur = open.pop(), ck = key(cur);
+    const cur = pop(), ck = key(cur);
     if (cur.g > best.get(ck)) continue;
     nodes++;
     // Only try the exact goal within one lattice edge; never tunnel through a crowd.
     const end = Math.hypot(goal.x - cur.x, goal.y - cur.y) <= spacing * Math.SQRT2
       ? edge(cur, goal) : null;
-    if (end || Math.hypot(cur.x - goal.x, cur.y - goal.y) <= 1) {
+    if (end || reached(cur)) {
       const waypoints = end ? [end] : [];
       for (let p = cur; parents.has(key(p)); p = parents.get(key(p))) waypoints.push({ x: p.x, y: p.y });
       waypoints.reverse();
@@ -68,7 +77,7 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
       const pk = key(p), g = cur.g + Math.hypot(p.x - cur.x, p.y - cur.y);
       if (g >= (best.get(pk) ?? Infinity)) continue;
       best.set(pk, g); parents.set(pk, cur);
-      open.push({ ...p, g, f: g + Math.hypot(goal.x - p.x, goal.y - p.y) });
+      push({ ...p, g, f: g + distance(p) });
     }
   }
   return { found: false, reason: open.length ? 'body detour budget exhausted' : 'no clear local body route', nodes };

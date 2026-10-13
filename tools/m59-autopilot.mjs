@@ -1924,6 +1924,7 @@ function journeyIncident(ap, { kind = null, outcome = {}, to = null, startedIn =
       agent: ap?.name ?? s?.name ?? null, character: c?.me?.name ?? null,
       kind: kind ?? classifyJourneyFailure(outcome, cancel), source: 'keeper',
       reason: outcome?.reason ?? outcome?.why ?? null,
+      deviation: outcome?.deviation ?? ((s?.lastMovementDeviation?.confirmation?.asked_at??0)>=startedAt?s.lastMovementDeviation:null),
       room: here ? { num: here.num, name: here.name ?? null } : null,
       from: startedIn, start: startAt,
       end: me ? { room: here?.num ?? null, row: me.row, col: me.col, x: me.x, y: me.y } : null,

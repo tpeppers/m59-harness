@@ -1246,7 +1246,7 @@ ok('the client object rule and the walk over it both compiled',
   // reads as a true answer and cost a whole run of blank telemetry the same day; this one is
   // guarded because the method is LIFTED into fixtures, and it is on the real prototype.
   ok('confirmPosition is a real method on the shipped Session, not a phantom',
-     /^  async confirmPosition\(\) \{$/m.test(src));
+     /^  async confirmPosition\(\{ timeoutMs = 8000 \} = \{\}\) \{$/m.test(src));
 }
 
 const atEdgeOpening = liftFunction(brokerSource,
@@ -1273,7 +1273,7 @@ const queueValidatedMove = compileSessionMethod(brokerSource,
   { MOVE_INTERVAL_MS: 0, CLIENT_FINENESS, atEdgeOpening,
     noteGeometryDrift: (session, drift) => driftRecorded.push(drift) });
 const confirmPosition = compileSessionMethod(brokerSource,
-  'async confirmPosition() {', 'confirmPosition', { Pacer: { note() {} } });
+  'async confirmPosition({ timeoutMs = 8000 } = {}) {', 'confirmPosition', { Pacer: { note() {} } });
 const stepFine = compileSessionMethod(brokerSource,
   'async stepFine(x, y, options = null) {', 'stepFine',
   // FINE_CONFIRM_EVERY and KOD_FINENESS arrived with the predict-instead-of-block change

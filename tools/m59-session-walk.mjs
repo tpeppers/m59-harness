@@ -132,6 +132,63 @@ export function sessionWalkPrototype(deps) {
   // The class exists only to hold the methods in the syntax they were written in. It is
   // never instantiated: its prototype is copied onto Session's.
   class SessionWalk {
+  async confirmMovementDeviation(deviation) {
+    const c=this.need(),roomId=c.room.id,generation=this.movementGeneration;
+    const point=p=>p?Object.fromEntries(['row','col','x','y'].filter(k=>Number.isFinite(p[k])).map(k=>[k,p[k]])):null;
+    const lastKnown=point(c.self),askedAt=Date.now();
+    const reply=await this.confirmPosition({timeoutMs:1500});
+    const changed=c!==this.client || c.room.id!==roomId || generation!==this.movementGeneration;
+    const confirmed=!!reply&&!changed&&!!c.self&&!c.self.predicted;
+    const here=c.self??lastKnown;
+    const blockers=[...(c.room.objects?.values?.()??[])].filter(o=>o.id!==c.selfId&&blocksMovement(o.flags??0))
+      .map(o=>({id:o.id,name:c.rsc?.get?.(o.nameRsc)??null,...point(o)}))
+      .filter(o=>Number.isFinite(o.x)&&Number.isFinite(o.y)&&here&&Math.hypot(o.x-here.x,o.y-here.y)<=8*64)
+      .sort((a,b)=>Math.hypot(a.x-here.x,a.y-here.y)-Math.hypot(b.x-here.x,b.y-here.y));
+    const failure={...deviation,room:this.world?.room?.num??null,units:'KOD/protocol (64 per square)',
+      confirmed,position:confirmed?point(c.self):null,last_known:lastKnown,
+      confirmation:{asked_at:askedAt,finished_at:Date.now(),requested:c.roomContentsRequested??null,received:c.roomContentsReceived??null},
+      blockers:{scope:'nearby cached blocking bodies; observation is not monster aggro',at:Date.now(),truncated:blockers.length>16,objects:blockers.slice(0,16)}};
+    if(deviation.phase==='observed'&&confirmed&&deviation.predicted
+        && Math.hypot(c.self.x-deviation.predicted.x,c.self.y-deviation.predicted.y)<=KOD_FINENESS)
+      return {resolved:true,moved:true,deviation:failure};
+    this.lastMovementDeviation=failure;
+    return {moved:false,arrived:false,refused:true,reason:'movement_deviation',deviation:failure,
+      ...(changed?{cancelled:true,reason:'movement_cancelled'}:{})};
+  }
+
+  async departureDetour(failure,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48,to=null,avoidSquares=null}={}) {
+    const c=this.need(),roomId=c.room.id,missed=failure?.deviation?.requested;
+    if(!missed || !c.self || !failure.deviation.confirmed)return failure;
+    // Rejoin the actual goal when it is local enough. Rejoining the rejected
+    // westward waypoint in Cragged needlessly walks back down the far side.
+    const square=to&&Math.max(Math.abs(to.row-c.self.row),Math.abs(to.col-c.self.col))<=24?to:missed;
+    const goal=this.world.geometry.standPointWire?.(square.row,square.col)??square;
+    const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
+    const plan=planBodyDetour(this.world.geometry,c.self,goal,{objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,goalSquare:square,avoidSquares:avoid,
+      marginSquares:12,maxRangeSquares:24,spacingUnits:16,maxNodes:16000,maxMs:500});
+    if(!plan.found)return {...failure,detour:{found:false,reason:plan.reason,nodes:plan.nodes}};
+    const waypoints=plan.waypoints;
+    if(waypoints.length>maxSteps)return {...failure,detour:{found:false,reason:'departure detour exceeds step budget'}};
+    let steps=0;
+    for(const p of waypoints){
+      if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps,deviation:failure.deviation});
+      if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
+      if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps,deviation:failure.deviation});
+      const r=await this.stepFine(p.x,p.y,{bodyDetour:true,
+        beforeMutation:(kind,details)=>!this.movementWasCancelled(movementGeneration,controlToken)&&(typeof beforeMutation!=='function'||beforeMutation(kind,details)!==false)});steps++;
+      if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps,deviation:failure.deviation});
+      if(r.left_room)return {arrived:false,left_room:true,steps};
+      if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2)return {...failure,steps,detour:{found:true,reason:r.reason??'departure waypoint did not arrive'}};
+      if(steps>=maxSteps&&p!==waypoints.at(-1))return {...failure,steps,detour:{found:true,reason:'departure detour spent step budget'}};
+    }
+    const reply=await this.confirmPosition({timeoutMs:1500});
+    if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps,deviation:failure.deviation});
+    const arrived=!!reply&&!c.self?.predicted&&c.self.row===square.row&&c.self.col===square.col;
+    return arrived?{arrived:true,steps,via:'geometry_departure_detour',deviation:failure.deviation}:
+      {...failure,steps,detour:{found:true,reason:'departure arrival unconfirmed'}};
+  }
+
   claimPassageMove(target) { return claimPassageMove(this, target); }
   releaseConfirmedPassage() { return releaseConfirmedPassage(this); }
   passageExitNeedsConfirmation(target) { return passageExitNeedsConfirmation(this, target); }
@@ -325,11 +382,12 @@ export function sessionWalkPrototype(deps) {
         // which is precisely the predicate that refuses a fall. So it lands here, and here
         // is where the flag has to be passed on.
         const r = await this.step(target.col, target.row, { fall: !!target.fall });
+        if(r.reason==='movement_deviation')return {done:false,legs,singles,...r,why:r.reason};
         const blockedAfter = bodyBlock(target,r); if (blockedAfter) return blockedAfter;
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         if (r.left_room) return { done: false, legs, singles, left_room: true };
-        if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
+        if (r.reason==='movement_deviation'||isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         const now = c.self;
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return { done: false, legs, singles, cancelled: true };
@@ -392,7 +450,7 @@ export function sessionWalkPrototype(deps) {
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         if (r.left_room) return { done: false, legs, singles, left_room: true };
-        if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
+        if (r.reason==='movement_deviation'||isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         if (c.room.id !== roomId) return { done: false, legs, singles, left_room: true };
         const now2 = c.self;
         if (this.movementWasCancelled(movementGeneration, controlToken))
@@ -457,7 +515,7 @@ export function sessionWalkPrototype(deps) {
           if (r?.left_room || c.room.id !== roomId)
             return { done: false, legs, singles, left_room: true };
           singles++;
-          if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
+          if (r.reason==='movement_deviation'||isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
           if (this.movementWasCancelled(movementGeneration, controlToken))
             return { done: false, legs, singles, cancelled: true };
           if (!c.self) return { done: false, legs, singles, why: 'own_position_unknown' };
@@ -705,6 +763,8 @@ export function sessionWalkPrototype(deps) {
     const c = this.need();
     const roomId = c.room.id;
     const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
+    const stepGeneration=this.movementGeneration;
+    const ownsStep=()=>(this.client===undefined||this.client===c)&&this.movementGeneration===stepGeneration;
     // NO RE-AIM HERE, AND THE MEASUREMENT IS WHY.
     //
     // A re-aim was wired in at this exact point and made things strictly worse: ten trials
@@ -1154,7 +1214,8 @@ export function sessionWalkPrototype(deps) {
       let last = null;
       for (const via of threaded.vias ?? []) {
         const stepped = await this.queueValidatedMove(via.x, via.y,
-          { speed, slide: true, minGap: MOVE_INTERVAL_MS, expectedRoomId: c.room.id })
+          { speed, slide: true, maxDeviation:KOD_FINENESS, minGap: MOVE_INTERVAL_MS, expectedRoomId: roomId,
+            beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false) })
           .catch(() => null);
         if (!stepped?.sent) break;
         last = via;
@@ -1172,8 +1233,8 @@ export function sessionWalkPrototype(deps) {
     // steps. Both `{ slide: true, fall: true }` and `{ slide: false, fall: true }` arrive on
     // the step that started this; only the missing `fall` ever refused one.
     const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,
-        beforeMutation: typeof beforeMutation === 'function'
-          ? () => beforeMutation('move', { col, row }) : null,
+        maxDeviation: timedFall||typeof this.confirmMovementDeviation!=='function' ? null : KOD_FINENESS,
+        beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false),
         minGap: Math.max(gap, owed), expectedRoomId: roomId });
     // `col`/`row` are `step`'s ARGUMENTS, which are where it is going — not where it is.
     // The first cut of this called them `from`, and a trace of an oscillating walk then read
@@ -1187,6 +1248,7 @@ export function sessionWalkPrototype(deps) {
                 reason: queued.validation?.reason ?? null });
     if (!queued.sent) {
       const validation = queued.validation ?? {};
+      if(validation.reason==='movement_deviation')return this.confirmMovementDeviation(validation.deviation);
       const leftRoom = c.room.id !== roomId;
       const at = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : before;
       return { moved: false, position: at, left_room: leftRoom,
@@ -1230,7 +1292,12 @@ export function sessionWalkPrototype(deps) {
       this.pacer.submit('read', () => c.roomContents()).catch(() => {});
     }
     this.releaseConfirmedPassage?.();
-    const after = c.self;
+    let after = c.self;
+    if(!timedFall&&c.room.id===roomId&&after&&!after.predicted&&Math.hypot(after.x-queued.target.x,after.y-queued.target.y)>KOD_FINENESS){
+      const checked=await this.confirmMovementDeviation({phase:'observed',requested:{x:aim.x,y:aim.y,row,col},predicted:queued.target,observed:{x:after.x,y:after.y,row:after.row,col:after.col}});
+      if(!checked.resolved)return checked;
+      after=c.self;
+    }
     return {
       moved: !!after && (!before || after.x !== before.x || after.y !== before.y),
       position: after ? { x: after.x, y: after.y, col: after.col, row: after.row } : null,
@@ -1291,7 +1358,8 @@ export function sessionWalkPrototype(deps) {
     // leg instead of clipping it and forcing a blocking read in attack range.
     const queued = await this.queueValidatedMove(x, y,
       { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous,minGap: MOVE_INTERVAL_MS,
-        beforeMutation:continuous?()=>this.client===c&&!this.movementWasCancelled(generation,token):null });
+        beforeMutation:continuous?(kind,details)=>this.client===c&&!this.movementWasCancelled(generation,token)
+          &&(typeof options?.beforeMutation!=='function'||options.beforeMutation(kind,details)!==false):null });
     const validation = queued.validation ?? {};
     if (!queued.sent) {
       // Return the collision refusal to the walker so it can fan or replan.
@@ -2411,6 +2479,7 @@ export function sessionWalkPrototype(deps) {
   async walkTo(col, row, {
     maxSteps = 120,
     hardCap = 400,
+    deviationDetours = 0,
     movementGeneration = this.movementGeneration,
     controlToken,
     beforeMutation = null,
@@ -2823,6 +2892,14 @@ export function sessionWalkPrototype(deps) {
         fallbackWhy = ran.why ?? 'pivot route did not reach its destination';
         pivotLegs = (ran.legs ?? 0) + (ran.singles ?? 0);
         if (ran.cancelled) return this.cancelledMovement({ steps: pivotLegs });
+        if(ran.reason==='movement_deviation'){
+          if(deviationDetours>=2)return {...ran,arrived:false,steps:pivotLegs};
+          const fine=await this.departureDetour(ran,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-pivotLegs),to:{row,col},avoidSquares});
+          if(!fine.arrived)return {...fine,arrived:false,steps:pivotLegs+(fine.steps??0)};
+          const onward=await this.walkTo(col,row,{maxSteps:Math.max(0,maxSteps-pivotLegs-fine.steps),hardCap,
+            movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
+          return {...onward,steps:pivotLegs+fine.steps+(onward.steps??0),departure_detour:true};
+        }
         if (ran.left_room)
           return { arrived: false, left_room: true, steps: pivotLegs,
                    note: 'a proved leg crossed the room edge' };
@@ -3280,6 +3357,14 @@ export function sessionWalkPrototype(deps) {
       if (liveMonster && r.reason==='object_blocked'
           && (now?.row!==next.row || now?.col!==next.col)) {
         const done=await aroundBlockedWaypoint();if(done)return done;continue;
+      }
+      if(r.reason==='movement_deviation'){
+        if(deviationDetours>=2)return {...r,arrived:false,steps:taken,replans};
+        const fine=await this.departureDetour(r,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-taken),to:{row,col},avoidSquares});
+        if(!fine.arrived)return {...fine,arrived:false,steps:taken+(fine.steps??0),replans};
+        const onward=await this.walkTo(col,row,{maxSteps:Math.max(0,maxSteps-taken-fine.steps),hardCap,
+          movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
+        return {...onward,steps:taken+fine.steps+(onward.steps??0),departure_detour:true};
       }
       // EVERY SQUARE THIS BODY LANDS ON, whether the plan asked for it or not. Recorded here
       // rather than where a step is REQUESTED, because the off-plan slide is the thing worth
@@ -5037,6 +5122,7 @@ export function sessionWalkPrototype(deps) {
         }
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         if (r.left_room) return { railed: true, left_room: true, at: i, walked };
+        if (r.reason==='movement_deviation')return {railed:false,...r,at:i,walked};
         if (isTerminalMovementReason(r.reason))
           return { railed: false, reason: r.reason, at: i, walked };
         const now = this.client?.self;
@@ -6019,7 +6105,7 @@ export function sessionWalkPrototype(deps) {
       if (stoppedAfterWalk) return stoppedAfterWalk;
       if (walk?.left_room)
         return { left: true, note: 'the room changed while approaching the doorway' };
-      if (isTerminalMovementReason(walk.reason))
+      if ((walk.reason==='movement_deviation'||isTerminalMovementReason(walk.reason)))
         return { left: false, stage: 'walk', ...walk };
 
       // COARSE "UNREACHABLE" IS NOT THE SAME AS IMPOSSIBLE.
@@ -6332,7 +6418,7 @@ export function sessionWalkPrototype(deps) {
       if (walk.left_room)
         return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
                  note: 'the room changed while approaching the boundary' };
-      if (isTerminalMovementReason(walk.reason))
+      if ((walk.reason==='movement_deviation'||isTerminalMovementReason(walk.reason)))
         return { left: false, stage: 'walk', ...walk };
       // ARRIVING ON *A* CROSSING SQUARE IS ARRIVING. THE EXACT ONE DOES NOT MATTER.
       //
@@ -6831,7 +6917,7 @@ export function sessionWalkPrototype(deps) {
         this.noteTravelMethod?.('portal');
         return { left: true, arrived_in: c.rsc.get(c.roomNameRsc), via: 'portal' };
       }
-      if (isTerminalMovementReason(walk.reason) && c.room.id === portalStartRoom)
+      if ((walk.reason==='movement_deviation'||isTerminalMovementReason(walk.reason)) && c.room.id === portalStartRoom)
         return { left: false, stage: 'walk', ...walk };
       const tGo = Date.now();
       const ev = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 4000 });
@@ -7921,6 +8007,7 @@ export function sessionWalkPrototype(deps) {
       if (r?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
 
+      if(r.reason==='movement_deviation')return finish({...r,left:false,tried,stage:'walk'});
       // WE ARE THROUGH. STOP. DO NOT RUN A RECOVERY.
       //
       // Every tactic below exists to get an unstuck walk moving again, and every one of

@@ -1976,3 +1976,36 @@ match the jump edge in the graph and repeatedly selects the same refused fall.
 When the incoming approach is known, retain the existing approach exclusion so
 the ledge can be tried from a different pose. These exclusions stay local and
 never declare the fall permanently impossible.
+
+## Large departure deviations
+
+A normal square step, including an ordinary planner fall, refuses a predicted
+endpoint more than one square (64 protocol units) from its requested endpoint.
+The proof is repeated at the paced send boundary. Timed fall motion keeps its
+existing contract, and body collisions retain the immediate local body-detour
+path. A fresh position read has a 1500 ms deadline: an unanswered read yields
+unknown position, never a certified cache. Movement-owner or room changes cancel
+the old attempt.
+
+The refusal carries requested and predicted fine endpoints, miss distance,
+collision reason/wall index when available, confirmed row/col/x/y, confirmation
+ordinals, and up to 16 nearby cached blocking bodies with observation time.
+These bodies are evidence of occupancy, not authoritative monster aggro. The
+receipt survives travel and movement-incident recording, including a later
+survival cancellation.
+
+From a confirmed pose, the walker can search around the pocket toward its local
+goal using the same wall/body collision predicate as the sender. This rare
+departure search is bounded to 24 squares of goal range, 12 squares of margin,
+16000 nodes and 500 ms, on a 16-unit wire lattice. Its heap frontier avoids
+repeated full-frontier sorting. Each waypoint is an integer protocol coordinate,
+validated again against live bodies at send time; hazard/mandatory avoidance,
+movement ownership and shelter preemption remain active. Only a fresh final
+read establishes arrival. An unproved route returns a definitive refusal instead
+of treating recovery at the old pose as permission to repeat the failed edge.
+
+Rizzo's room-578 regression distinguishes a coarse stand-point fall proof from
+its real take-off pose: r18c16 at x1072/y1200 cannot take the westward hop to
+r18c13 without a 185-unit slide. The departure route heads east around the wall
+first and rejoins the exit stage at r1c13. This is geometry-driven, not a room
+exception or a new production order.
