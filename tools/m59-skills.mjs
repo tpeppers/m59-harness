@@ -2198,6 +2198,18 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
     const confirmedArrival = await confirmPrediction();
     if (interrupted()) return stopped();
     if (!confirmedArrival) return unconfirmed();
+    // A predicted coarse arrival can be revoked by the confirmation. It is
+    // a failed approach, not a reason to abandon the fine fallback unused.
+    if (at() > tolerance && typeof s.approachFine === 'function') {
+      const fine = await attempt('approach_fine', w,
+        () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y, maxSteps, avoidSquares: fineAvoidSquares }));
+      if (interrupted(fine)) return stopped(fine);
+      if (isTerminalMovementReason(fine?.reason)) return fine;
+      if (!fine?.arrived) return { arrived: false, why: fine?.reason ?? 'confirmed coarse arrival was off the refuge' };
+      const confirmedFine = await confirmPrediction();
+      if (interrupted()) return stopped();
+      if (!confirmedFine) return unconfirmed();
+    }
   }
   if (spot.x != null && s.walkFine) {
     const fine = await attempt('walk_fine', null,

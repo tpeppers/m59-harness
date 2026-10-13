@@ -728,7 +728,7 @@ export class M59Client {
    * can say WHICH in a note; empty means nothing found, never "we cannot tell".
    */
   ailments() {
-    return this.enchantments().filter(e => /poison|disease|sick|plague|venom/i.test(e.name ?? ''));
+    return this.enchantments().filter(e => /^(?:poison|disease|sickness|plague|venom)$/i.test((e.name ?? '').trim()));
   }
 
   poisoned() { return this.ailments().length > 0; }
@@ -2359,6 +2359,7 @@ export class M59Client {
       // the book on every rest it took.
       case BP.INVALIDATE_DATA:
         this.enchantmentObservations.invalidate(Date.now());
+        this.enchantmentsById.clear(); // invalidated buffs cannot keep masking health loss
         break;
       case BP.ADD_ENCHANTMENT: {
         const res = parseAddEnchantment(body);

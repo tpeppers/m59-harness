@@ -124,14 +124,14 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
     const agent = a.agent;
     let payload = {};
     if (name === 'status') {
-      const hp = health[agent] ?? { value: 50, max: 50 };
+      const hp = typeof health[agent] === 'function' ? health[agent]() : health[agent] ?? { value: 50, max: 50 };
       payload = { where: { num: rooms[agent], name: dead.has(agent) ? 'The Underworld' : 'room' },
                   // Production returns null here — the money is a `shilling` stack in the
                   // pack, not a scalar on the character. Mirroring that is the point.
                   hp, gold: null, you: positions[agent] ?? null,
                   ...(movementFor ? { movement: movementFor({ agent, sent }) } : {}) };
     } else if (name === 'autopilot' && a.action === 'status' && autopilotStatus) {
-      payload = autopilotStatus;
+      payload = typeof autopilotStatus === 'function' ? autopilotStatus({agent,sent}) : autopilotStatus;
     } else if (name === 'travel') {
       // A refused destination leaves the character where it was, which is what the real
       // thing does: travel is a request, and arriving is a separate observation.
@@ -620,6 +620,32 @@ console.log('\na journey has a health floor, and a hurt character WAITS at it');
      r.results.a1.ok === false && !sent.some(c => c.name === 'travel') &&
      !sent.some(c => c.name === 'autopilot' && c.action === 'revive'));
 }
+for (const start of [15,1]) {
+  let reads=0,hp=start,departureHp=null,sent;
+  const recovery={hp:{value:15,max:20},room:{num:587},you:{row:33,col:56},safe_spot:{works:true},
+    survival_decisions:{current:{status:'recovering',chosen_refuge:{room:587,row:33,col:56}}}};
+  sent=fakeBroker({rooms:{a1:587},health:{a1:()=>({value:(hp=sent?.some(c=>c.name==='autopilot'&&c.action==='free')?(++reads>=3?20:15):start),max:20})},
+    autopilotStatus:({sent})=>start===15||sent.some(c=>c.name==='autopilot'&&c.action==='free')?recovery:null});
+  const fakeFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>{
+    if(options?.body) {const request=JSON.parse(options.body);if(request.params?.name==='travel')departureHp=hp;}
+    return fakeFetch(url,options);
+  };
+  const result=await fleetScript({name:'sheltered-recovery-'+start,fleet:'testfleet',agents:['a1'],fragileBelow:0,
+    minHealth:.75,pollMs:30,healMs:1000,steps:[walk(597)],onLog:quiet});
+  ok('a75-percent floor preserves active recovery from'+start+'HP',result.results.a1.ok&&departureHp===20,JSON.stringify({departureHp,why:result.results.a1.why}));
+  ok('recovery was queried before departure from'+start+'HP',sent.some(c=>c.name==='autopilot'&&c.action==='status'));
+}
+
+{
+  const recovery={hp:{value:45,max:50},room:{num:587},you:{row:33,col:56},safe_spot:{works:true},
+    survival_decisions:{current:{status:'recovering',chosen_refuge:{room:587,row:33,col:56}}}};
+  const sent=fakeBroker({rooms:{a1:587},health:{a1:{value:45,max:50}},autopilotStatus:recovery});
+  const result=await fleetScript({name:'explicit-recovery-plateau',fleet:'testfleet',agents:['a1'],fragileBelow:0,
+    minHealth:1,pollMs:30,healMs:400,steps:[walk(597,{plateauOk:.8})],onLog:quiet});
+  ok('an explicit validated plateau can still leave active recovery',result.results.a1.ok,result.results.a1.why);
+  ok('the plateau override really dispatched travel',sent.some(c=>c.name==='travel'));
+}
+
 console.log('\na dead character is not walked at');
 {
   const sent = fakeBroker({ rooms: { a1: 1 }, dead: new Set(['a1']) });

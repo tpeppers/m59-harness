@@ -18,9 +18,13 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
   if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > Math.max(8, Math.min(24, maxRangeSquares)) * 64)
     return { found: false, reason: 'body detour exceeds local bounds' };
   const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = spacingUnits === 16 ? 16 : 8;
+  // A square refuge accepts only a collision-proved point inside the square.
+  // Invalid square descriptors retain the explicit fine-point contract.
+  const squareGoal = Number.isInteger(goalSquare?.row) && Number.isInteger(goalSquare?.col)
+    ? goalSquare : null;
   const margin = Math.max(2,Math.min(12,marginSquares))*64;
-  const reached = p => goalSquare ? Math.floor(p.x/64)===goalSquare.col&&Math.floor(p.y/64)===goalSquare.row : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
-  const distance = p => goalSquare ? Math.hypot(Math.max(goalSquare.col*64+1-p.x,0,p.x-(goalSquare.col+1)*64+1),Math.max(goalSquare.row*64+1-p.y,0,p.y-(goalSquare.row+1)*64+1)) : Math.hypot(goal.x-p.x,goal.y-p.y);
+  const reached = p => squareGoal ? Math.floor(p.x/64)===squareGoal.col&&Math.floor(p.y/64)===squareGoal.row : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
+  const distance = p => squareGoal ? Math.hypot(Math.max(squareGoal.col*64+1-p.x,0,p.x-(squareGoal.col+1)*64+1),Math.max(squareGoal.row*64+1-p.y,0,p.y-(squareGoal.row+1)*64+1)) : Math.hypot(goal.x-p.x,goal.y-p.y);
   const bounds = { minX: Math.min(from.x, goal.x) - margin, maxX: Math.max(from.x, goal.x) + margin,
     minY: Math.min(from.y, goal.y) - margin, maxY: Math.max(from.y, goal.y) + margin };
   const key = p => `${Math.round((p.x - from.x) / spacing)},${Math.round((p.y - from.y) / spacing)}`;
