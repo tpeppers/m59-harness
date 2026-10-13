@@ -54,6 +54,7 @@ import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { refusedHere, refusedTargets } from './m59-refused-targets.mjs';
+import {quarryApproachSignature} from './m59-pocket-rails.mjs';
 import { isFood, foodValue, weighItem, weighPack, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
@@ -6957,6 +6958,13 @@ export class Autopilot {
                'that used to be silent' });
         return { closed: false, target: name, ...terminal };
       }
+      if(!out.cancelled&&c.self&&!c.self.predicted&&['movement_deviation','object_blocked','no_ground_gained','spinning_without_packets'].includes(out.reason)){
+        const deferred=this.deferPullTarget(s.world?.room?.num,foe.id,`approach refused: ${out.reason}`);
+        if(deferred)deferred.approachSignature=quarryApproachSignature(s,c.room.objects.get(foe.id));
+        this.note('quarry approach deferred until its inputs change',{
+          target:name,at:`r${foe.row}c${foe.col}`,reason:out.reason,
+          until:deferred?.until,why:'retrying the same approach from the same pose and room bodies is a loop'});
+      }
       return { closed: false, target: name, why: out.reason || 'could not get to it' };
     }
     this.note('closed on the quarry', {
@@ -11839,6 +11847,9 @@ export class Autopilot {
     const key = `${room}:${id}`;
     const record = store.get(key);
     if (!record) return null;
+    if(record.approachSignature&&record.approachSignature!==quarryApproachSignature(this.s,this.s?.client?.room?.objects?.get?.(id))){
+      store.delete(key);return null;
+    }
     if (record.until <= now) { store.delete(key); return null; }
     return record;
   }

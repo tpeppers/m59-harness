@@ -43,6 +43,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RoomGeometry } from './m59-roo.mjs';
+import {fineChokesFor} from './m59-pocket-rails.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 
 // The eight neighbours, in clockwise order, so that a run of blocked ones can be
@@ -1009,7 +1010,10 @@ export function nearestSafeSpot(geo, from, {
   let reachesOnwardCount = 0;
   let exitConsidered = false;
   let partitionRejected = 0;
+  const passages=fineChokesFor(geo);
   for (const s of (wallsAllowed ? all : [])) {
+    const stop=passages.length?geo.standPointWire?.(s.row,s.col):null;
+    if(stop&&passages.some(p=>Math.abs(p.x-stop.x)<=32&&Math.abs(p.y-stop.y)<=32))continue;
     // NO SQUARE IS DISQUALIFIED BY ITS HISTORY, and there is no longer a history to consult.
     // A `book.discredited()` filter stood here; it had already been reduced to a documented
     // no-op, and the record behind it is retired outright (see the tombstone at the foot of

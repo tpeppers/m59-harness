@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
 
   ['m59-tos-refuge-review-test.mjs', 'Tos refuge square goals and revoked predictions; recovery departure preserves shelter and health-loss uncertainty'],

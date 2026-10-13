@@ -1533,7 +1533,7 @@ export class RoomGeometry {
     // character's reported square (a slid or respawned character can start off-centre).
     const startSqCol = Math.floor(clientToProtocol(x0) / KOD_FINENESS);
     const startSqRow = Math.floor(clientToProtocol(y0) / KOD_FINENESS);
-    let blocked = false, slid = false, reason = null, wallIndex = null;
+    let blocked = false, slid = false, reason = null, wallIndex = null, objectId = null;
     for (let i = 0; i < count; i++) {
       const next = this._resolveClientMicrostep(at, { x: at.x + dx, y: at.y + dy },
         { slide, playerRadius, playerHeight, roomFlags, overrideDepths,
@@ -1547,6 +1547,7 @@ export class RoomGeometry {
       slid ||= !!resolved.slid;
       reason = resolved.reason ?? reason;
       wallIndex = resolved.wallIndex ?? wallIndex;
+      objectId = resolved.objectId ?? objectId;
       if (!resolved.moved) break;
       const stepFrom = at;
       at = { x: resolved.x, y: resolved.y, sectorNum: resolved.sectorNum };
@@ -1788,7 +1789,8 @@ export class RoomGeometry {
     return { available: true, x: at.x, y: at.y, moved, arrived,
              motionZ: carriedMotionZ, destinationFloor,
              blocked: blocked || !arrived, slid, reason: arrived ? null : (reason ?? 'geometry_blocked'),
-             ...(wallIndex == null ? {} : { wallIndex }) };
+             ...(wallIndex == null ? {} : { wallIndex }),
+             ...(objectId == null ? {} : { objectId }) };
   }
 
   // Fine BSP openings across each server room bound. StandardLeaveDir fires at the
