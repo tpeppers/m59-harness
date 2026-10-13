@@ -4164,7 +4164,17 @@ class Session {
     // `threadInto` passed it straight through — 105 of 200 random corridors had a leg four
     // units from a body while their endpoints all sat above 21, because the endpoint of a
     // square's stand point is fine and the line to it was never asked about.
-    return bodies.length ? { ...home, unproved: true } : home;
+    //
+    // AND A WALL IS AS MUCH A REASON TO SAY SO AS A BODY (2026-10-13). This used to label only the
+    // contested case, so an aim that no straight line reaches because a WALL is in the way came
+    // back looking proved, `threadInto` returned it untouched, and the mover slid along the wall
+    // to wherever it stopped. Since deploy-2026-10-13 a slide that misses its aim by more than a
+    // square is refused before it is sent (`movement_deviation`), so that slide no longer happens:
+    // Zheng He stood at r12c4 of Herbutte's shop (109) for four laps, the exit step into r13c4
+    // clipping the door frame and the walker's sidestep refused, the same pose every attempt.
+    // Labelled, `threadInto` searches for the lane along the wall instead -- step to the
+    // doorway's line first, then go through -- which is how a person walks it.
+    return { ...home, unproved: true };
   }
 
 
@@ -4315,7 +4325,15 @@ class Session {
     // `spread` 1, for the same reason the line test uses it: a step spans two squares, and the
     // body to get past may be sitting in the one being left.
     const bodies = this.bodiesInSquare(row, col, 1);
-    if (!bodies.length) return { aim };
+    // NOTHING IN THE WAY AND A PROVED LINE: the ordinary step, unchanged to the byte.
+    //
+    // A WALL IN THE WAY IS THREADED TOO (2026-10-13). This returned for every uncontested step,
+    // so the search below -- the reposition-inside-this-square that gets past a spider -- never ran
+    // for a door frame, and the step aimed into the wall and slid. With no bodies every leg below
+    // is asked of the walls alone (`_legIsLegal` with an empty list, `clearOf` is Infinity), so
+    // the same bounded, clocked search finds "walk along the wall to the opening, then through"
+    // and hands it back as `vias` + `aim`, each a straight line the mover will not slide on.
+    if (!bodies.length && !aim.unproved) return { aim };
 
     // THE TRIGGER IS THE LINE, NOT THE ENDPOINT — the same distinction that had to be made
     // inside `aimInto`, and it had to be made again here for the same reason. `aimInto` ends
