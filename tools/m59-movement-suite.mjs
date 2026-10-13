@@ -36,6 +36,7 @@ import { existsSync } from 'node:fs';
 const SUITES = [
   ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
+  ['m59-wall-thread-test.mjs', 'a wall in the way is threaded along, not slid into; a refused slide does not end leaving before the doorway fallbacks (109, 2026-10-13)'],
 
   ['m59-tos-refuge-review-test.mjs', 'Tos refuge square goals and revoked predictions; recovery departure preserves shelter and health-loss uncertainty'],
   ['m59-travel-crowd-test.mjs', 'passive pursuit estimates, bounded live-body detours and short pressure recovery retain uncertainty and movement ownership'],

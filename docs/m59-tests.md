@@ -1905,6 +1905,20 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
   and full destination arrival are separate endpoints. Modeled pursuit and
   unknown historical gear condition cannot prove a historical death avoided.
 
+## Wall threading and the doorway after a refused slide
+
+- `node --test tools/m59-wall-thread-test.mjs` (4): real `aimInto`/`threadInto`/`leaveVia`
+  on Herbutte's shop (109). A wall between the body and the next square is labelled
+  `unproved` rather than passed off as proved; `threadInto` then lines up along the wall
+  and goes through, every leg a straight no-slide line; an uncontested proved step is
+  unchanged to the byte; and a `movement_deviation` on the approach to a `go` doorway no
+  longer ends `leaveVia` before its doorway fallbacks. Three of the four fail on
+  `e7c4c6bd`. Registered in `npm run test:movement`.
+- Known limit, printed by the last test: 109's exit row has no baked floor, so the
+  offline doorway correction cannot stand on r13c4 and sends no `go`. Live, the server
+  accepted `go` from r12c4 (Zheng He, 2026-10-13 20:53Z). Proving the exit end to end
+  needs a shadow or live trial.
+
 
 ## Tos refuge and recovery regression coverage
 

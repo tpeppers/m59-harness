@@ -6153,7 +6153,18 @@ export function sessionWalkPrototype(deps) {
       if (stoppedAfterWalk) return stoppedAfterWalk;
       if (walk?.left_room)
         return { left: true, note: 'the room changed while approaching the doorway' };
-      if ((walk.reason==='movement_deviation'||isTerminalMovementReason(walk.reason)))
+      // A REFUSED SLIDE ON THE WAY TO A DOORWAY IS NOT THE END OF LEAVING (2026-10-13).
+      //
+      // `movement_deviation` was terminal here, so a body whose approach slid was handed back
+      // before any of the doorway fallbacks below could run -- and those fallbacks exist for
+      // exactly this ground: "a doorway is usually not walkable in the room's own grid ... the
+      // server does not require you to STAND on it". Herbutte's shop (109) is the case. Its exit
+      // to South Barloque matches on r13c4, row 13 has no floor anywhere in the bake, so the walk
+      // to it ends in a refused sidestep at r12c4 (262,830) every time; Zheng He sat there for
+      // four laps, and left at 20:53Z the moment his keeper's own resume pressed `go` from r12c4.
+      // The guard still refuses the slide itself -- nothing large is sent -- it just no longer
+      // decides that the room cannot be left. Terminal reasons stay terminal.
+      if (isTerminalMovementReason(walk.reason))
         return { left: false, stage: 'walk', ...walk };
 
       // COARSE "UNREACHABLE" IS NOT THE SAME AS IMPOSSIBLE.
