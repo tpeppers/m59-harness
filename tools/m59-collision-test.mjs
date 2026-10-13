@@ -43,6 +43,7 @@ import {
 } from './m59-map-path.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { planBodyDetour } from './m59-body-detour.mjs';
+import {rememberedDeparture,planRailDeparture} from './m59-pocket-rails.mjs';
 import { World, boundedRegionEntry, boundedSilentGo, spreadEdges,
          distinctStagesFirst } from './m59-world.mjs';
 
@@ -1419,7 +1420,7 @@ const walkTo = compileSessionMethod(brokerSource,
     // whose occupants the code under test cannot classify, then pass every assertion that
     // expects the monster path.
     OF,
-    isTerminalMovementReason, KOD_FINENESS, MOVE_HOP_MAX_SQUARES: 8,
+    isTerminalMovementReason, rememberedDeparture, KOD_FINENESS, MOVE_HOP_MAX_SQUARES: 8,
     // Thirteen, and the number is the server's speedhack check — see the constant.
     PROVED_HOP_MAX_SQUARES: 13,
     // The coalescer's two, which were free identifiers here for as long as the coalescer
@@ -1501,7 +1502,7 @@ const leaveVia = compileSessionMethod(brokerSource,
     // A MUTABLE ROUTE-TABLE SEAM AND THE REAL DESTINATION LOOKUP. With no table attached,
     // `anchorFor` answers null and the rail branch falls through to the ordinary walk. The
     // room-578 regression attaches one hermetic table to reach that otherwise untested path.
-    activeRoutes: () => leaveViaRoutesFixture, anchorFor,
+    activeRoutes: () => leaveViaRoutesFixture, anchorFor, planRailDeparture,
     // THE REAL VALUE, because the branch it guards is a behaviour rather than a stub point:
     // a rail whose line starts somewhere else is refused when the door is already close, and
     // eight squares is the number the broker ships. The measured case is the Western border
@@ -2387,7 +2388,7 @@ console.log('\nterminal movement propagation and edge packet authority');
     // rails have been on disk, and passing `--verify`, since 2026-08-29, and until this
     // change nothing could board one. `67,15 -> 71,2` is the basin's only way out.
     const railAcross = compileSessionMethod(brokerSource, 'railAcross(toSquare) {', 'railAcross',
-                                            { activeRoutes: () => leaveViaRoutesFixture, bakedPath });
+                                            { activeRoutes: () => leaveViaRoutesFixture, bakedPath, planRailDeparture });
     if (railAcross) {
       const ukgoth599 = {
         rooms: { 599: {

@@ -36,6 +36,7 @@ import { traversable as fallJumpTraversable, physics as fallPhysics } from './m5
 import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from './m59-roo.mjs';
 import { boundsAround, fineRouteDetour, finePath, fineReachableSquares, pullFine, pointOfSquare } from './m59-finepath.mjs';
 import { planBodyDetour } from './m59-body-detour.mjs';
+import {planRailDeparture,rememberedDeparture,rememberDeparture,forgetDeparture} from './m59-pocket-rails.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
@@ -159,34 +160,58 @@ export function sessionWalkPrototype(deps) {
   async departureDetour(failure,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48,to=null,avoidSquares=null}={}) {
     const c=this.need(),roomId=c.room.id,missed=failure?.deviation?.requested;
     if(!missed || !c.self || !failure.deviation.confirmed)return failure;
-    // Rejoin the actual goal when it is local enough. Rejoining the rejected
-    // westward waypoint in Cragged needlessly walks back down the far side.
-    const square=to&&Math.max(Math.abs(to.row-c.self.row),Math.abs(to.col-c.self.col))<=24?to:missed;
-    const goal=this.world.geometry.standPointWire?.(square.row,square.col)??square;
+    if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'blocked geometry departure'}))return this.cancelledMovement({steps:0});
     const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
-    const plan=planBodyDetour(this.world.geometry,c.self,goal,{objects:c.room.objects,selfId:c.selfId,
-      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,goalSquare:square,avoidSquares:avoid,
-      marginSquares:12,maxRangeSquares:24,spacingUnits:16,maxNodes:16000,maxMs:500});
-    if(!plan.found)return {...failure,detour:{found:false,reason:plan.reason,nodes:plan.nodes}};
-    const waypoints=plan.waypoints;
-    if(waypoints.length>maxSteps)return {...failure,detour:{found:false,reason:'departure detour exceeds step budget'}};
+    const goal=to??missed,memo=rememberedDeparture(this,goal,avoid);
+    if(memo){const detour={...memo.failure.detour,reused:true};return {...failure,arrived:false,
+      reason:memo.failure.reason,detour,deviation:{...failure.deviation,departure:detour}};}
+    const plan=planRailDeparture(this.world.geometry,c.self,goal,{room:this.world?.room?.num,table:activeRoutes(),
+      manifest:this.world?.map?.geometryManifestSha256,objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,sectorHeights:c.room.sectorHeights,avoidSquares:avoid});
+    if(!plan.found){
+      const o=plan.obstruction,body=o?.objectId!=null?c.room.objects.get(o.objectId):null;
+      const result={...failure,arrived:false,...(plan.reason==='departure_object_blocked'?{reason:'object_blocked'}:{}),detour:{found:false,reason:plan.reason,nodes:plan.nodes,
+        blocked_leg:o&&{from:o.from,to:o.to,reason:o.reason,object_id:o.objectId??null},
+        blocker:body&&{id:body.id,name:c.rsc?.get?.(body.nameRsc)??body.name??null,row:body.row,col:body.col,x:body.x,y:body.y}}};
+      result.deviation={...failure.deviation,departure:result.detour};this.lastMovementDeviation=result.deviation;
+      if(!plan.searchIncomplete)rememberDeparture(this,goal,avoid,result);return result;
+    }
+    forgetDeparture(this);
+    const result=await this.walkDepartureLegs(plan.waypoints,plan.square,{movementGeneration,controlToken,beforeMutation,maxSteps});
+    return {...result,via:plan.via,...(result.arrived&&plan.rail?{rail:plan.rail}:{}),deviation:failure.deviation};
+  }
+
+  async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48}={}) {
+    const c=this.need(),roomId=c.room.id;
+    if(waypoints.length>maxSteps)return {arrived:false,reason:'departure detour exceeds step budget'};
     let steps=0;
     for(const p of waypoints){
-      if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps,deviation:failure.deviation});
+      if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
       if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
-      if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps,deviation:failure.deviation});
+      if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps});
       const r=await this.stepFine(p.x,p.y,{bodyDetour:true,
         beforeMutation:(kind,details)=>!this.movementWasCancelled(movementGeneration,controlToken)&&(typeof beforeMutation!=='function'||beforeMutation(kind,details)!==false)});steps++;
-      if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps,deviation:failure.deviation});
+      if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps});
       if(r.left_room)return {arrived:false,left_room:true,steps};
-      if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2)return {...failure,steps,detour:{found:true,reason:r.reason??'departure waypoint did not arrive'}};
-      if(steps>=maxSteps&&p!==waypoints.at(-1))return {...failure,steps,detour:{found:true,reason:'departure detour spent step budget'}};
+      if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2)return {...r,arrived:false,steps,reason:r.reason??'departure waypoint did not arrive'};
+      if(steps>=maxSteps&&p!==waypoints.at(-1))return {arrived:false,steps,reason:'departure detour spent step budget'};
     }
     const reply=await this.confirmPosition({timeoutMs:1500});
-    if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps,deviation:failure.deviation});
+    if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
     const arrived=!!reply&&!c.self?.predicted&&c.self.row===square.row&&c.self.col===square.col;
-    return arrived?{arrived:true,steps,via:'geometry_departure_detour',deviation:failure.deviation}:
-      {...failure,steps,detour:{found:true,reason:'departure arrival unconfirmed'}};
+    return arrived?{arrived:true,steps}:{arrived:false,steps,reason:'departure arrival unconfirmed'};
+  }
+
+  async continueDeparture(fine,col,row,options) {
+    let steps=fine.steps??0;
+    if(fine.rail&&typeof this.followRail==='function'&&fine.rail.squares.length<=options.maxSteps-steps){
+      const ran=await this.followRail(fine.rail.squares,{...options,avoidSquares:options.avoidSquares});
+      steps+=ran.walked??0;
+      if(ran.left_room)return {arrived:false,left_room:true,steps,departure_detour:true};
+      if(!ran.railed)return {...ran,arrived:false,steps,departure_detour:true,reason:ran.reason??'departure rail did not arrive'};
+    }
+    const onward=await this.walkTo(col,row,{...options,maxSteps:Math.max(0,options.maxSteps-steps)});
+    return {...onward,steps:steps+(onward.steps??0),departure_detour:true};
   }
 
   claimPassageMove(target) { return claimPassageMove(this, target); }
@@ -2540,6 +2565,17 @@ export function sessionWalkPrototype(deps) {
                note: 'no movement packet was sent because the server does not validate player geometry' };
     }
 
+    // An unchanged resumed order must not re-derive the same rejected departure.
+    // Confirm again before reusing it: cached coordinates alone cannot certify a pose.
+    const prior=rememberedDeparture(this,{row,col},new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]));
+    if(prior&&deviationDetours<2){
+      const failure=await this.confirmMovementDeviation(prior.failure.deviation);
+      if(failure.cancelled||!failure.deviation?.confirmed)return {...failure,arrived:false};
+      const fine=await this.departureDetour(failure,{to:{row,col},movementGeneration,controlToken,beforeMutation,maxSteps,avoidSquares});
+      if(!fine.arrived)return {...fine,arrived:false};
+      return this.continueDeparture(fine,col,row,{maxSteps,hardCap,movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
+    }
+
     // If something has parked us on a square with no floor, no route exists from it at
     // all. The server does not check walls for players, so we can simply step onto
     // solid ground and carry on — but it has to be done deliberately, because from
@@ -2897,9 +2933,9 @@ export function sessionWalkPrototype(deps) {
           if(deviationDetours>=2)return {...ran,arrived:false,steps:pivotLegs};
           const fine=await this.departureDetour(ran,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-pivotLegs),to:{row,col},avoidSquares});
           if(!fine.arrived)return {...fine,arrived:false,steps:pivotLegs+(fine.steps??0)};
-          const onward=await this.walkTo(col,row,{maxSteps:Math.max(0,maxSteps-pivotLegs-fine.steps),hardCap,
+          const onward=await this.continueDeparture(fine,col,row,{maxSteps:Math.max(0,maxSteps-pivotLegs),hardCap,
             movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
-          return {...onward,steps:pivotLegs+fine.steps+(onward.steps??0),departure_detour:true};
+          return {...onward,steps:pivotLegs+(onward.steps??0),departure_detour:true};
         }
         if (ran.left_room)
           return { arrived: false, left_room: true, steps: pivotLegs,
@@ -3363,9 +3399,9 @@ export function sessionWalkPrototype(deps) {
         if(deviationDetours>=2)return {...r,arrived:false,steps:taken,replans};
         const fine=await this.departureDetour(r,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-taken),to:{row,col},avoidSquares});
         if(!fine.arrived)return {...fine,arrived:false,steps:taken+(fine.steps??0),replans};
-        const onward=await this.walkTo(col,row,{maxSteps:Math.max(0,maxSteps-taken-fine.steps),hardCap,
+        const onward=await this.continueDeparture(fine,col,row,{maxSteps:Math.max(0,maxSteps-taken),hardCap,
           movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
-        return {...onward,steps:taken+fine.steps+(onward.steps??0),departure_detour:true};
+        return {...onward,steps:taken+(onward.steps??0),departure_detour:true};
       }
       // EVERY SQUARE THIS BODY LANDS ON, whether the plan asked for it or not. Recorded here
       // rather than where a step is REQUESTED, because the off-plan slide is the thing worth
@@ -4438,6 +4474,10 @@ export function sessionWalkPrototype(deps) {
     if (!r?.anchors?.length || !toSquare) return null;
     const me = this.client?.self;
     if (!me) return null;
+    const board=planRailDeparture(this.world?.geometry,me,toSquare,{room,table,
+      manifest:this.world?.map?.geometryManifestSha256,objects:this.client?.room?.objects,selfId:this.client?.selfId,
+      roomFlags:this.client?.room?.flags??0,overrideDepths:this.client?.room?.overrideDepths,sectorHeights:this.client?.room?.sectorHeights,seedOnly:true});
+    if(board.found)return board.rail;
     // A GUTTER HEAD IS A BOARDABLE START, AND FOR A YEAR IT WAS NOT.
     //
     // The bake writes two kinds of line into `routes`: anchor-to-anchor, and one per GUTTER
@@ -5690,6 +5730,11 @@ export function sessionWalkPrototype(deps) {
       let rail = target ? this.railAcross({ row: target.row, col: target.col }) : null;
       let railSkipped = false;
       const me0 = this.client?.self;
+      const pocketPlan=target&&me0&&!me0.predicted?planRailDeparture(this.world.geometry,me0,target,
+        {room:railRoom,table:railTable,manifest:this.world?.map?.geometryManifestSha256,
+         objects:c.room.objects,selfId:c.selfId,roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,sectorHeights:c.room.sectorHeights,
+         avoidSquares:wrongDoor?.size?wrongDoor:null,seedOnly:true}):null;
+      if(pocketPlan?.found)rail=pocketPlan.rail;
       // DO NOT RAIL ACROSS A ROOM TO REACH A DOOR THAT IS FOUR SQUARES AWAY.
       //
       // `railAcross` excludes the target anchor from its candidate starts — a line has to
@@ -5847,12 +5892,14 @@ export function sessionWalkPrototype(deps) {
       // The rail is still the route; only the part this body cannot stand on is skipped.
       let fineBoarded = false;
       if (rail && me0) {
-        const plan = typeof this.fineRailBoard === 'function' ? this.fineRailBoard(rail.squares) : null;
+        const plan = pocketPlan?.found?{square:pocketPlan.square,index:0,gap:0,ms:0,
+          legs:pocketPlan.waypoints,wire:true}:
+          typeof this.fineRailBoard === 'function' ? this.fineRailBoard(rail.squares) : null;
         if (plan) {
           fineBoarded = true;
-          const got = await this.walkFineLegs(plan.legs, plan.square,
-                                              { movementGeneration, controlToken,
-                                                avoidSquares: wrongDoor?.size ? wrongDoor : null });
+          const got = plan.wire?await this.walkDepartureLegs(plan.legs,plan.square,
+            {movementGeneration,controlToken,maxSteps:160}):await this.walkFineLegs(plan.legs, plan.square,
+              { movementGeneration, controlToken,avoidSquares: wrongDoor?.size ? wrongDoor : null });
           const stoppedAfterFineBoard = await stopAfterAwait();
           if (stoppedAfterFineBoard) return stoppedAfterFineBoard;
           if (got?.left_room) return { left: true, via: 'rail', rail: { fine_boarded: plan.index } };
