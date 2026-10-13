@@ -2009,3 +2009,10 @@ its real take-off pose: r18c16 at x1072/y1200 cannot take the westward hop to
 r18c13 without a 185-unit slide. The departure route heads east around the wall
 first and rejoins the exit stage at r1c13. This is geometry-driven, not a room
 exception or a new production order.
+
+
+## Refuge square arrivals
+
+A new refuge asks for a square; a remembered explicit fine point remains an exact-point goal. The bounded local body router may finish at any collision-proved point inside a square goal, rather than insisting on its obstructed centre. This handles the Tos r2c1 fine-fallback failure without changing safe-wall geometry. Every packet still passes live collision, pacing and ownership checks. Confirmed arrival remains required: when a coarse prediction is revoked, returnToSpot invokes its fine fallback instead of abandoning the square with that fallback unused.
+
+The native probe from the October12 last living r3c1 pose returned object_blocked on historical source and reached r2c1 in one confirmed move with the candidate. This is route-component evidence with static modeled bodies, not proof that the historical death is prevented. Paired full-travel shadows did not reproduce the new death.

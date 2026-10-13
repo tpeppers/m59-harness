@@ -643,6 +643,20 @@ export function healthFractionOf(s) {
   return vit && Number.isFinite(vit.value) && vit.max > 0 ? vit.value / vit.max : null;
 }
 
+// A minimum departure floor does not end a keeper-owned shelter recovery.
+// Explicit rescue/plateau overrides remain with their caller. This only preserves
+// an active recovery behind cover until its health target is actually met.
+export function recoveryDepartureFloor(status, floor) {
+  const d = status?.survival_decisions?.current;
+  const hp = status?.hp;
+  const cover = status?.safe_spot;
+  if (d?.status !== 'recovering' || !d.chosen_refuge || !cover?.works
+      || status?.you?.predicted || status?.room?.num !== d.chosen_refuge.room
+      || status?.you?.row !== d.chosen_refuge.row || status?.you?.col !== d.chosen_refuge.col
+      || !Number.isFinite(hp?.value) || !(hp?.max > 0)) return floor;
+  return Math.max(floor, 1);
+}
+
 export async function observe(agent) {
   const s = await call('status', { agent }, 40_000).catch(() => null);
   // HEALTH LIVES UNDER TWO DIFFERENT KEYS AND ONLY ONE OF THEM WAS READ.
@@ -2136,8 +2150,12 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
       const now = await observe(agent);
       if (now.dead) return { ok: false, why: 'died while healing' };
       if (now.health != null && now.health >= floor) {
-        ctx.log(agent, `healed to ${now.hpText} — setting out`);
-        return { ok: true };
+        const recovery = await call('autopilot', {agent, action:'status'}, 30_000).catch(() => null);
+        const target = recoveryDepartureFloor(recovery, floor);
+        if (now.health >= target) {
+          ctx.log(agent, `healed to ${now.hpText} — setting out`);
+          return { ok: true };
+        }
       }
       // NOT IMPROVING IS ITS OWN ANSWER. Some rooms prevent rest, and a character at its
       // ceiling is not going to get better by being watched; either is worth reporting
@@ -2372,7 +2390,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
   // same evidence as three that walked and failed, and they used to unwind identically -- so a
   // contention failure was filed as a movement defect. `#movement` ledgers are keyed on that
   // distinction being right.
-  let launched = 0, waitedOnOwn = false;
+  let launched = 0, waitedOnOwn = false, recoveryPlateauAccepted = false;
   const sends = [];
   // WHO TOOK THE WALK, when somebody did. Each entry is a cancel of THIS step's order by another
   // issuer — the keeper's shelter rung, a bot, an operator — read off `status.movement`.
@@ -2436,8 +2454,11 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
     // rules this file earned are still the rules; they just live where everyone can reach
     // them: unknown health is not permission (it caught a character whose keeper had died),
     // and the Underworld is always leavable.
+    const recoveryStatus = at.room !== 1 && at.health != null && at.health < 1
+      ? await call('autopilot', {agent, action: 'status'}, 30_000).catch(() => null) : null;
+    const departureFloor = recoveryPlateauAccepted ? minHealth : recoveryDepartureFloor(recoveryStatus, minHealth);
     const gate = mayStartJourney({
-      health: at.health, floor: minHealth, from: at.room, to,
+      health: at.health, floor: departureFloor, from: at.room, to,
       // A script names its own destination, so `homeRoom` is not consulted here: the
       // recovery exemption is for a DRIVER that sent a hurt body somewhere, and a script
       // that wants to walk one home lowers `minHealth` and says so in the errand.
@@ -2447,7 +2468,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
     if (!gate.ok) {
       // THE REMEDY IS THIS FILE'S, NOT THE GATE'S. A script is patient: rest to the floor and
       // set out, rather than refusing an errand somebody asked for.
-      const healed = await healToFloor(ctx, agent, minHealth, ctx.healMs);
+      const healed = await healToFloor(ctx, agent, departureFloor, ctx.healMs);
       // A PLATEAU ABOVE `plateauOk` IS AS HEALED AS THIS BODY GETS. A ring of lethargy caps a rest
       // well short of full, and some rooms stop a rest altogether; resting there is not going to
       // reach the floor, and refusing the walk drops the character from the errand for good. On
@@ -2458,6 +2479,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
         if (now.health != null && now.health >= Number(plateauOk)) {
           ctx.log(agent, `health plateaued at ${now.hpText}, above ${plateauOk} — setting out from there`);
           minHealth = now.health - 0.001;
+          recoveryPlateauAccepted = true; // the explicit override was validated at a real plateau
           continue;
         }
       }

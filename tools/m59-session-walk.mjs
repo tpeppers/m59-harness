@@ -1504,6 +1504,7 @@ export function sessionWalkPrototype(deps) {
     // planned detour may raise it, as in walkTo; cutting a healthy route short
     // because of the caller's default loses arrivals. A failed waypoint still
     // spends an attempt, and the fallback never receives a fresh budget.
+    const goalSquare = Number.isFinite(toX) && Number.isFinite(toY) ? null : { row, col };
     let taken = 0;
     let budget = maxSteps;
     const interrupted = () => this.movementWasCancelled(movementGeneration, controlToken)
@@ -1533,10 +1534,10 @@ export function sessionWalkPrototype(deps) {
     if (typeof geo.finePathProtocol === 'function') {
       let path = geo.finePathProtocol(me.x, me.y, goal.x, goal.y,
         { step: 8, margin: 4 * KOD_FINENESS, maxNodes: 4000 });
-      if (!path?.found && this._blockingBodies?.().length) {
+      if (!path?.found && (goalSquare || this._blockingBodies?.().length)) {
         path = planBodyDetour(geo,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
-          roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,avoidSquares});
-        if (!path.found) return {arrived:false,steps:taken,reason:'object_blocked',detour_reason:path.reason};
+          roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,avoidSquares,goalSquare});
+        if (!path.found && this._blockingBodies?.().length) return {arrived:false,steps:taken,reason:'object_blocked',detour_reason:path.reason};
       }
       if (path?.found && Array.isArray(path.waypoints) && path.waypoints.length) {
         budget = Math.max(budget, path.waypoints.length);
@@ -1544,7 +1545,7 @@ export function sessionWalkPrototype(deps) {
         const aroundBody = () => {
           if (++bodyReplans > 3) return { found: false, reason: 'live body route changed repeatedly' };
           const plan = planBodyDetour(geo, c.self, goal, { objects: c.room?.objects, selfId: c.selfId,
-            roomFlags: c.room?.flags ?? 0, overrideDepths: c.room?.overrideDepths, avoidSquares });
+            roomFlags: c.room?.flags ?? 0, overrideDepths: c.room?.overrideDepths, avoidSquares, goalSquare });
           if (plan.found) {
             waypoints = plan.waypoints; index = 0;
             // Extend for the first valid detour only; moving bodies cannot renew the budget.

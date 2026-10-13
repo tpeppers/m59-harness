@@ -1640,6 +1640,7 @@ class Session {
         health: value, max: max ?? null,
         lost: before - value,
         by: line && now - line.at < 2500 ? line.who : null,
+        evidence: hitbook.healthLossEvidence(this.client, now),
       });
       // Written on a timer rather than per hit: a character under six attackers takes one
       // every second or two, and a synchronous write each time would put the disk in the

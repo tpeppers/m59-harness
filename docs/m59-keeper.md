@@ -803,3 +803,10 @@ cache-only body observations. Movement incidents retain it even when a later
 survival diversion cancels the journey. An unknown confirmation is explicitly
 unknown. A nearby monster is not thereby declared aggro'd, and recovery at the
 same safe pose does not validate the previously rejected departure.
+
+
+## Recovery ownership at an outside departure floor
+
+FleetScript's minimum journey health is a departure floor, not permission to cancel an active recovery behind confirmed cover. The compiler raises that floor to full health while the keeper reports a recovering decision at its chosen, confirmed safe square, and rechecks this before reclaiming a body that has healed to the ordinary floor. A caller's explicit plateau override remains available. Unknown, predicted or off-refuge observations do not establish this protected state.
+
+Health-loss segments retain bounded observed ailment and incoming-hit evidence. An ailment can coexist with an attack and does not identify the cause of a particular health delta. Empty observed effects also do not prove the absence of sickness. Resistance and cure effects are not recognized as active sickness, and invalidated enchantment IDs are cleared rather than continuing to mask damage. The room587 loss recorded on October12 lacks this causal evidence; poison can be modeled, but its historical presence is unproved.

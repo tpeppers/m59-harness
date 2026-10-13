@@ -32,6 +32,7 @@
 // deaths.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { isEnemyHit } from './m59-combatlog.mjs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -93,9 +94,23 @@ export const SEGMENT_GAP_MS = 30_000;
 // `lost` is the health delta, always positive. A gain is not a hit and must never reach
 // here — see the caller, which is the only thing that can tell a heal from a hit, because
 // this sees one number at a time.
+// Passive evidence, not causal attribution. Retain it with each health-loss
+// segment even while the keeper is blocked in travel or recovery. An observed
+// ailment does not erase independent incoming-hit evidence.
+export function healthLossEvidence(client, at = Date.now()) {
+  const ailments = (client?.ailments?.() ?? []).slice(0,16).map(e => ({id:e.id,name:e.name,observed_at:e.at??null}));
+  const attacks = (client?.events ?? []).filter(e => e.kind === 'message'
+    && at - e.at >= 0 && at - e.at <= 2500 && isEnemyHit(e.text)).slice(-4)
+    .map(e => ({at:e.at,text:e.text}));
+  const effects = client?.enchantmentStatus?.();
+  return {coverage:'observed-only', ailments, attacks,
+    interpretation:attacks.length?'incoming attack observed':ailments.length?'ailment present; damage cause unproved':'health loss unattributed',
+    effects_as_of:effects?.as_of??null, effects_truncated:effects?.truncated??null};
+}
+
 export function record(book, { at = Date.now(), room = null, roomName = null,
                                col = null, row = null, doing = null, health = null,
-                               max = null, lost = 0, by = null } = {}) {
+                               max = null, lost = 0, by = null, evidence = null } = {}) {
   if (!(lost > 0)) return null;
   const segs = book.segments;
   const open = segs[segs.length - 1];
@@ -106,6 +121,14 @@ export function record(book, { at = Date.now(), room = null, roomName = null,
     open.lost += lost;
     open.health = health;
     if (by && !open.by.includes(by)) open.by.push(by);
+    if(evidence) {
+      open.evidence ??= [];
+      const previous=open.evidence.at(-1);
+      if(JSON.stringify(previous?.value)!==JSON.stringify(evidence)) {
+        if(open.evidence.length>=16) {open.evidence.splice(1,1);open.evidence_truncated=true;}
+        open.evidence.push({at,value:structuredClone(evidence)});
+      }
+    }
     return open;
   }
   const seg = {
@@ -117,6 +140,7 @@ export function record(book, { at = Date.now(), room = null, roomName = null,
     // Whatever the server named as the attacker, when a combat line arrived close enough
     // to the damage to be about it. Best-effort by construction — see the caller.
     by: by ? [by] : [],
+    ...(evidence ? {evidence:[{at,value:structuredClone(evidence)}]} : {}),
   };
   segs.push(seg);
   while (segs.length > MAX_SEGMENTS) segs.shift();

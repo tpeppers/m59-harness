@@ -1904,3 +1904,8 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
   and clean up temporary accounts. Exit-stage reachability, living room escape
   and full destination arrival are separate endpoints. Modeled pursuit and
   unknown historical gear condition cannot prove a historical death avoided.
+
+
+## Tos refuge and recovery regression coverage
+
+node tools/m59-tos-refuge-review-test.mjs exercises the recorded Tos fine geometry with the nearby body, revoked coarse-arrival confirmation, protected recovery departure, protective versus harmful enchantments, and concurrent ailment/attack evidence. The movement gate includes it. FleetScript's compiled-walk tests cover both recovery already active above a0.75 floor and recovery begun after the script handed a hurt body back, requiring full health before departure in each. Native shadow results are kept separately from these offline assertions.
