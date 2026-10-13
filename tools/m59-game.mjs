@@ -3048,7 +3048,7 @@ class Session {
   // computed from where we are, so re-planning from a predicted position returns the
   // identical answer forever, which is what a character stuck in a doorway loop is
   // actually doing.
-  async confirmPosition() {
+  async confirmPosition({ timeoutMs = 8000 } = {}) {
     const c = this.need();
     this.lastRoomRead = Date.now();
     // There may already be a fire-and-forget room read in flight. Waiting for merely
@@ -3073,10 +3073,11 @@ class Session {
     // characters sat inside one keeper pass for 300-1090s and CLIMBING, completing zero
     // passes, at ~38% CPU. Low CPU is the tell: they were not computing, they were waiting
     // 2s at a time, for ever. The board said "travelling" throughout and nobody moved.
-    const CONFIRM_DEADLINE_MS = 8000;
+    const CONFIRM_DEADLINE_MS = Math.max(1, Math.min(8000, Number(timeoutMs) || 8000));
     while ((c.roomContentsReceived ?? request) < request) {
       if (Date.now() - t0 >= CONFIRM_DEADLINE_MS) { fresh = false; break; }
-      const reply = await c.waitFor({ since: cursor, kinds: ['room-contents'], timeoutMs: 2000 });
+      const reply = await c.waitFor({ since: cursor, kinds: ['room-contents'],
+        timeoutMs: Math.min(2000, Math.max(1, CONFIRM_DEADLINE_MS - (Date.now() - t0))) });
       if (reply.timedOut) { fresh = false; break; }
       cursor = reply.seq;
     }
@@ -3534,7 +3535,7 @@ class Session {
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units, not a grid tuple.
   async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, timedFall = false, beforeMutation = null,
                                     minGap = MOVE_INTERVAL_MS, expectedRoomId = null,
-                                    offMap = false, unclipped = false } = {}) {
+                                    offMap = false, unclipped = false, maxDeviation = null } = {}) {
     const c = this.need();
     const roomId = expectedRoomId ?? c.room.id;
     if (c.room.id !== roomId) return { sent: false, validation: {
@@ -3628,7 +3629,20 @@ class Session {
       }, minGap);
     }
 
+    // Ordinary route steps may slide a little; a large predicted miss is not
+    // progress. Recheck inside the paced callback as well as before waiting.
+    const deviationRefusal = validation => {
+      if (validation?.reason==='object_blocked' || timedFall || !Number.isFinite(maxDeviation) || !validation?.available || !validation.target) return null;
+      const error = Math.hypot(validation.target.x - x, validation.target.y - y);
+      if (!(error > maxDeviation)) return null;
+      return {sent:false,validation:{...validation,moved:false,blocked:true,reason:'movement_deviation',
+        deviation:{phase:'predicted',requested:{x,y,row:Math.floor(y/64),col:Math.floor(x/64)},
+          predicted:{...validation.target},error_units:error,tolerance_units:maxDeviation,
+          geometry:{reason:validation.reason??null,blocked:!!validation.blocked,slid:!!validation.slid,wall_index:validation.wallIndex??null},
+          from:c.self?{x:c.self.x,y:c.self.y,row:c.self.row,col:c.self.col}:null}}};
+    };
     const initial = this.validateFineTarget(x, y, { slide, fall, timedFall });
+    const initialDeviation = deviationRefusal(initial); if (initialDeviation) return initialDeviation;
     if(unclipped && (initial.blocked || initial.target?.x!==Math.round(x) || initial.target?.y!==Math.round(y)))
       return {sent:false,validation:{...initial,moved:false,blocked:true,reason:initial.reason??'exact_move_refused'}};
     // WRITE DOWN THAT PROD MOVED. Otherwise a drifted room is only ever visible as a move
@@ -3649,6 +3663,7 @@ class Session {
         available: false, moved: false, blocked: true, reason: 'room_changed_before_move',
       } };
       const validation = this.validateFineTarget(x, y, { slide, fall, timedFall });
+      const pacedDeviation = deviationRefusal(validation); if (pacedDeviation) return pacedDeviation;
       if(unclipped && (validation.blocked || validation.target?.x!==Math.round(x) || validation.target?.y!==Math.round(y)))
         return {sent:false,validation:{...validation,moved:false,blocked:true,reason:validation.reason??'exact_move_refused'}};
       if (timedFall && (validation.fall_motion?.elapsed_ms ?? Infinity) > fallDelayMs)
@@ -6035,6 +6050,8 @@ class Session {
         return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
       }
       let r = await this.leaveViaAny(candidates, { movementGeneration, controlToken });
+      if(r.reason==='movement_deviation')return {arrived:false,refused:true,reason:r.reason,
+        deviation:r.deviation,detour:r.detour,log,position:r.deviation?.position??null};
       if (!r.left && r.room_changed) {
         const settled = await settlePublishedRoom();
         if (settled.cancelled) return this.cancelledMovement({ log });

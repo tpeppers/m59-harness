@@ -166,6 +166,7 @@ export function buildIncident(input = {}, { now = Date.now(), fleet = null } = {
                                names: Array.isArray(input.threats.names) ? input.threats.names.slice(0, 8) : null } : null,
     ms: num(input.ms),
     movement_attempts: recentMoveAttempts(input.agent),
+    ...(input.deviation ? {movement_deviation:structuredClone(input.deviation)} : {}),
     // The code it ran on. The #movement epoch is passed by the caller (the keeper and FleetScript
     // already hold `epochId('movement')`), so this module never runs the epoch's git scan itself.
     code: input.code ?? { ...codeProvenance(), movement_epoch: input.epoch ?? null },

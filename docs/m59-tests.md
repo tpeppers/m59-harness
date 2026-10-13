@@ -1891,3 +1891,16 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
   rejoin sweep reads the store before any `/rejoin` and stops the lap if it cannot, `restart-keepers`
   replaces a piloted character dormant instead of skipping it, and a person logging off under a hold
   starts the penalty clock. Source text only, like `m59-handoff-shape-test.mjs`.
+
+## Departure deviation guard
+
+- `node --test tools/m59-deviation-test.mjs`: real Session methods and Cragged
+  geometry; early large-slide refusal, ordinary-fall coverage, confirmed/unknown
+  position evidence, send-time revalidation, movement-owner takeover, allowed
+  small slides/timed falls, stale-push reconciliation, mandatory avoidance and
+  departure routing to the exit stage. Registered in `npm run test:movement`.
+- Paired native shadows must freeze and attest both source manifests, reset the
+  same modeled scene/loadout per arm, verify scene release, preserve each outcome
+  and clean up temporary accounts. Exit-stage reachability, living room escape
+  and full destination arrival are separate endpoints. Modeled pursuit and
+  unknown historical gear condition cannot prove a historical death avoided.

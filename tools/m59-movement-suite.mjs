@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
   ['m59-travel-crowd-test.mjs', 'passive pursuit estimates, bounded live-body detours and short pressure recovery retain uncertainty and movement ownership'],
   ['m59-shadow-journey-test.mjs', 'shadow replay resumes yielded or ended journey ownership and preserves active recovery'],
   ['m59-pivot-crowd-test.mjs', 'real optimized rail and pivot routes detour before confirmation waits; paced blockers and ownership remain guarded'],

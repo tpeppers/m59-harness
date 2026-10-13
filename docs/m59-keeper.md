@@ -794,3 +794,12 @@ listener. Fleet-mates and menagerie hosts are excluded through the keeper's own 
   `enemy-alerts.log` (one line per enemy row: `ENEMY ONLINE|OFFLINE|PRESENT|GONE`), and the
   cursor `sightings-state.json`. `node tools/m59-sightings.mjs --online | --enemy | --player <name>`
   reads them. `M59_SIGHTINGS=0` turns the observer off; `/state` reports `sightings` counters.
+
+## Movement deviation evidence
+
+Travel can return `movement_deviation` before sending a badly clipped route
+step. The receipt contains a bounded fresh-position confirmation and nearby
+cache-only body observations. Movement incidents retain it even when a later
+survival diversion cancels the journey. An unknown confirmation is explicitly
+unknown. A nearby monster is not thereby declared aggro'd, and recovery at the
+same safe pose does not validate the previously rejected departure.
