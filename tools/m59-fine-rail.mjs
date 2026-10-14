@@ -107,6 +107,7 @@ export const cutFineRailAsync=(geo,from,goal,options={},settings={})=>
   runFineRailWorker(geo,from,goal,options,{...settings,task:'cut'});
 async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,timeoutMs=12000,task}={}){
   if(cancelled())return {found:false,cancelled:true,reason:'movement_cancelled'};
+  if(options.bodyRangeSquares!==undefined&&(!Number.isFinite(options.bodyRangeSquares)||options.bodyRangeSquares<=0))throw RangeError('bodyRangeSquares must be positive and finite');
   const geometry=geo.toJSON({includeSurfaces:false,graphEntrySquares:[],edgeDirections:[]});
   const copy={...options,threats:(options.threats??[]).map(o=>({row:o.row,col:o.col,x:o.x,y:o.y})),
     objects:[...(options.objects?.values?.()??[])].map(o=>({id:o.id,x:o.x,y:o.y,flags:o.flags}))};
@@ -132,11 +133,15 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
   if(workerData.task==='cut'){
     const point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
     const cost=threatEdgeCost((o.threats??[]).map(point),{radius:(o.threatRadius??8)*1024,weight:o.threatWeight??12,spacing:128,cacheSize:65536});
-    const obstacles=blockingBodySnapshot(o.objects,o.selfId);
+    const scopedObjects=Number.isFinite(o.bodyRangeSquares)?new Map([...o.objects].filter(([,p])=>
+      Math.hypot(p.x-workerData.from.x,p.y-workerData.from.y)<=o.bodyRangeSquares*64)):o.objects;
+    const obstacles=blockingBodySnapshot(scopedObjects,o.selfId);
     const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
-    parentPort.postMessage(cutRail(point(workerData.from),point(workerData.goal),{edge,
+    const cut=cutRail(point(workerData.from),point(workerData.goal),{edge,
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
-      floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}}));
+      floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}});
+    parentPort.postMessage({...cut,body_obstacles:obstacles.length,
+      ...(Number.isFinite(o.bodyRangeSquares)?{body_scope_squares:o.bodyRangeSquares}:{})});
   }else parentPort.postMessage(planFineRailRefuge(geo,workerData.from,workerData.goal,o));
 }

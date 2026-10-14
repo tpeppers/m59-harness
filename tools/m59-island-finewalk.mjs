@@ -151,6 +151,7 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
 }
 export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{}}={}){
   const {agent,call}=ctx,geo=roomGeometry(room),goal=protocolToClient(target),started=Date.now();
+  const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
   if(!geo?.collisionReady)throw Error('fine_route_geometry_unavailable');
   const edge=(a,b)=>geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true;
   const squares=new Set(safeSpots(geo,{limit:Infinity}).filter(s=>!s.rim&&hasAnyFooting(geo,s.row,s.col)).map(s=>s.row+','+s.col));
@@ -168,7 +169,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const body=protocolToClient(l.you);if(!Number.isFinite(body.x)||!Number.isFinite(body.y))throw Error('fine_route_position_unreadable');
     return {l,body};
   };
-  let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,shelteredStops=0,recoveries=0,confirmationRetries=0,stride=128,lastRiskCut=0;
+  let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,confirmationRetries=0,stride=128,lastRiskCut=0;
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     const distance=Math.hypot(body.x-goal.x,body.y-goal.y),actualFloor=floorAt(geo,body.x,body.y);
@@ -177,19 +178,24 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const threats=(l.objects??[]).filter(o=>(o.flags&8)&&!(o.flags&4)&&Number.isFinite(o.x)&&Number.isFinite(o.y));
     const signature=threats.map(o=>o.id+':'+o.row+','+o.col).sort().join('|');
     const cost=threatEdgeCost(threats.map(protocolToClient),{radius:8*1024,weight:12,spacing:128});
+    // Only the next four-square chord executes. Recut before it can leave the
+    // occupancy snapshot, with two squares of clearance; distant queued bodies remain risks,
+    // without sealing a route we will re-observe on approach.
+    if(cut&&Math.hypot(body.x-cut.bodyOrigin.x,body.y-cut.bodyOrigin.y)>chordBudget){cut=null;continue;}
     if(!cut){
       const seed=body;
       cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000,
-        objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id});
+        objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id,bodyRangeSquares:bodyScopeSquares});
       ({l,body}=await read());
       if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
       if(!cut.ok||!cut.bridgeOk){
+        if(cut.body_obstacles>0&&cutWaits++<12){cut=null;await new Promise(r=>setTimeout(r,500));continue;}
         ctx.state.islandFineFailure={room,target,body,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,seed:cut.seed,visited:cut.visited},
           floor:floorAt(geo,body.x,body.y),seedFloor:cut.seed?floorAt(geo,cut.seed.x,cut.seed.y):null};
         throw Error('fine_route_cut_failed');
-      }index=0;cut.threatSignature=signature;lastRiskCut=Date.now();
+      }index=0;cut.bodyOrigin={...body};cutWaits=0;cut.threatSignature=signature;lastRiskCut=Date.now();
     }
-    const direct=furthestTraceable(cut.waypoints,body,{edge,fromIndex:index,maxAhead:48,budget:4096,lattice:128,cost});
+    const direct=furthestTraceable(cut.waypoints,body,{edge,fromIndex:index,maxAhead:48,budget:chordBudget,lattice:128,cost});
     const aim=shelteredIslandAim(cut.waypoints,body,{fromIndex:index,aim:direct,squares,edge,cost});
     if(!aim||aim.tooClose||!chordWalkable(body,aim,{edge,lattice:128}).ok)throw Error('fine_route_chord_not_proved');
     if(signature!==cut.threatSignature&&Date.now()-lastRiskCut>=2500&&cost(body,aim)>Math.hypot(aim.x-body.x,aim.y-body.y)*1.25){cut=null;continue;}
