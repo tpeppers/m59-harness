@@ -2794,7 +2794,15 @@ class Session {
   // Drop the connection and log in again with the same credentials. The object id
   // is reissued at login, so this is what repairs a session whose selfId the server
   // renumbered underneath it.
-  async rejoin(why = 'unspecified', { offlineMs = 0 } = {}) {
+  async rejoin(why = 'unspecified', options = {}) {
+    // Survival and a travelling controller can notice the same dropout.
+    // Concurrent logins destroyed each other's socket and left group 2
+    // unreadable; every requester must await this one connection attempt.
+    if(this.rejoinTask)return this.rejoinTask;
+    const pending=this.rejoinConnection(why,options);this.rejoinTask=pending;
+    try{return await pending;}finally{if(this.rejoinTask===pending)this.rejoinTask=null;}
+  }
+  async rejoinConnection(why = 'unspecified', { offlineMs = 0 } = {}) {
     if (!this.credentials) throw new Error('nothing to rejoin with — this session never joined');
     // SAY IT. An in-process relog leaves no "joined as" line (that is the keeper's own join), so the
     // 2026-10-03 investigation could not tell when, or why, a character had logged in again.

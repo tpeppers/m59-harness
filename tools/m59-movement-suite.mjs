@@ -61,6 +61,7 @@ const SUITES = [
   ['m59-survival-jam-test.mjs', 'blocked travel recovery preserves the objective and exact body identity'],
   ['m59-passorder-test.mjs', 'an unfinished Underworld escape retains ownership while its stage age remains visible'],
   ['m59-travel-recovery-arm-test.mjs', 'suspended travel respects its original arming guard without requiring a weapon factory'],
+  ['m59-rejoin-test.mjs', 'concurrent survival reconnects share one login and release the next attempt on success or failure'],
   ['m59-pilgrimage-report-test.mjs', 'tail reports retain censored attempts and stop aging terminal refusals'],
   ['m59-underworld-node-test.mjs',
    'Underworld checked activation approaches avoid portal triggers; the unlit-only puzzle solver and special node verdict agree with source'],

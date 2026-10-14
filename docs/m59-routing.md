@@ -55,6 +55,10 @@ ordinary live-threat callers remain uncached. A priced flood skips a collision
 trace only when the edge's minimum permitted cost cannot improve the known
 arrival. In a captured crowded Merb scene, the old search stopped at four seconds;
 the optimized search retained the threat field and proved a refuge in 2.8 seconds.
+Concurrent session reconnect requests share one socket replacement and login.
+Every caller receives that attempt's result; success and failure both release
+the next attempt. Overlapping survival requests previously destroyed each
+other's connection and left a courier disconnected after its group-2 read.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed
