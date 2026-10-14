@@ -8,6 +8,8 @@ import {RoomGeometry} from './m59-roo.mjs';
 import {applyCeilingDoors} from './m59-ceiling-doors.mjs';
 import {planFineRailRefugeAsync,cutFineRailAsync} from './m59-fine-rail.mjs';
 import {sessionWalkPrototype} from './m59-session-walk.mjs';
+import {blockingBodySnapshot} from './m59-body-detour.mjs';
+import {protocolToClient} from './m59-finepos.mjs';
 const map=loadMap();attachStepMasks(map);const table=routesFor(map.geometryManifestSha256);
 // Actual Ugol wall departure: the square graph calls it seven steps, but the
 // body must leave south, cross west, then go north around the ledge.
@@ -169,4 +171,24 @@ const merbCrowd=[[3682,212],[3745,226],[3281,4456],[3417,209],[3040,3879],[3559,
 const throughCrowd=await planFineRailRefugeAsync(merb,{row:37,col:12,x:824,y:2408},{row:1,col:93},{maxLeg:36,goalFine:{x:6020,y:96},threats:merbCrowd});
 assert(throughCrowd.found&&throughCrowd.steps<=36,JSON.stringify(throughCrowd));
 assert(validateEscape(merb,{x:824,y:2408},throughCrowd.waypoints).ok);
+// Recorded populated Phobos stop. Nearby orcs disconnect the full body-priced
+// route, while its northern approach reaches a refuge before that obstruction.
+const phobos=roomGeometry(2501),phobosBody={row:26,col:70,x:4528,y:1664},phobosGoal={row:31,col:2};
+const phobosCrowd=[{x:2144,y:1632},{x:2090,y:2006},{x:3488,y:1696},{x:2912,y:992},
+ {x:2080,y:992},{x:3232,y:928},{x:2016,y:864},{x:1760,y:1888},{x:2144,y:1568},
+ {x:3808,y:2080},{x:1952,y:1184},{x:1504,y:1056},{x:2400,y:1248},{x:2028,y:2017},
+ {x:2848,y:1632},{x:2208,y:1312},{x:2016,y:1952},{x:3040,y:1689},{x:2080,y:672},
+ {x:2144,y:544},{x:3104,y:1696},{x:1939,y:2093},{x:2912,y:1632},{x:2588,y:1708},{x:3168,y:1760}]
+ .map((p,i)=>({...p,id:100+i,flags:9,row:Math.floor(p.y/64),col:Math.floor(p.x/64)}));
+const phobosOptions={maxLeg:28,objects:new Map(phobosCrowd.map(p=>[p.id,p])),selfId:1,
+ threats:phobosCrowd,threatWeight:12,threatRadius:8};
+const phobosPrefix=await planFineRailRefugeAsync(phobos,phobosBody,phobosGoal,phobosOptions);
+assert(phobosPrefix.found,JSON.stringify(phobosPrefix));assert.equal(phobosPrefix.kind,'wall');
+assert(phobosPrefix.steps<=28);assert(legWalls(phobos).some(w=>w.row===phobosPrefix.row&&w.col===phobosPrefix.col));
+let phobosPrevious=protocolToClient(phobosBody);const phobosObstacles=blockingBodySnapshot(phobosOptions.objects,1);
+for(const p of phobosPrefix.waypoints){const aim=protocolToClient(p),move=phobos.traceFineMoveClient(phobosPrevious.x,phobosPrevious.y,aim.x,aim.y,{slide:false,obstacles:phobosObstacles});
+ assert(move.arrived&&!move.blocked,'every refuge approach edge retains live body collision');phobosPrevious=aim;}
+const phobosSealed=await planFineRailRefugeAsync(phobos,phobosBody,phobosGoal,{...phobosOptions,
+ unreachable:new Set(legWalls(phobos).map(w=>w.row+','+w.col))});
+assert.equal(phobosSealed.found,false,'a checked prefix cannot stop on exposed ground when no refuge remains');
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');
