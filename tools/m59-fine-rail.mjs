@@ -8,7 +8,7 @@ import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 
 export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreachable=null,
   avoidSquares=null,objects=null,selfId=null,roomFlags=0,overrideDepths=null,
-  threats=[],threatWeight=6,threatRadius=4,maxMs=4000,goalFine=null,goalFineAlternates=[]}={}){
+  threats=[],threatWeight=6,threatRadius=4,maxMs=10000,goalFine=null,goalFineAlternates=[]}={}){
   const started=performance.now(),point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
   if(!geo?.collisionReady||![from?.x,from?.y].every(Number.isFinite))return {found:false,reason:'fine_rail_geometry_unavailable'};
   const exactGoal=Number.isFinite(goalFine?.x)&&Number.isFinite(goalFine?.y);
@@ -26,7 +26,7 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     return t?.arrived===true&&t.blocked!==true;
   };
   const danger=threats.map(p=>point({x:Number.isFinite(p.x)?p.x:p.col*64+32,y:Number.isFinite(p.y)?p.y:p.row*64+32}));
-  const cost=threatEdgeCost(danger,{radius:threatRadius*1024,weight:threatWeight,spacing:128});
+  const cost=threatEdgeCost(danger,{radius:threatRadius*1024,weight:threatWeight,spacing:128,cacheSize:65536});
   let rail;const candidates=[target,...(exactGoal?goalFineAlternates:[])].filter(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y));
   const usedTargets=new Set();
   for(const p of candidates.slice(0,8)){
@@ -105,7 +105,7 @@ export const planFineRailRefugeAsync=(geo,from,goal,options={},settings={})=>
 // Inputs are KOD; the returned rail retains the cutter's CLIENT coordinates.
 export const cutFineRailAsync=(geo,from,goal,options={},settings={})=>
   runFineRailWorker(geo,from,goal,options,{...settings,task:'cut'});
-async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,timeoutMs=6500,task}={}){
+async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,timeoutMs=12000,task}={}){
   if(cancelled())return {found:false,cancelled:true,reason:'movement_cancelled'};
   const geometry=geo.toJSON({includeSurfaces:false,graphEntrySquares:[],edgeDirections:[]});
   const copy={...options,threats:(options.threats??[]).map(o=>({row:o.row,col:o.col,x:o.x,y:o.y})),
@@ -131,7 +131,7 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
   o.objects=new Map(o.objects.map(p=>[p.id,p]));
   if(workerData.task==='cut'){
     const point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
-    const cost=threatEdgeCost((o.threats??[]).map(point),{radius:(o.threatRadius??8)*1024,weight:o.threatWeight??12,spacing:128});
+    const cost=threatEdgeCost((o.threats??[]).map(point),{radius:(o.threatRadius??8)*1024,weight:o.threatWeight??12,spacing:128,cacheSize:65536});
     const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y);return t?.arrived===true&&t.blocked!==true;};
     parentPort.postMessage(cutRail(point(workerData.from),point(workerData.goal),{edge,
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,

@@ -312,5 +312,17 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
   eq(clear(body,goal),896,'no observed threats keeps ordinary geometric distance');
 }
 
+{
+  const threats=[{x:64,y:128},{x:512,y:384},{x:2048,y:0}],options={radius:240,weight:20,spacing:64};
+  const reference=(a,b)=>{const d=Math.hypot(b.x-a.x,b.y-a.y),n=Math.max(1,Math.ceil(d/options.spacing));let extra=0;
+    for(let i=1;i<=n;i++){const x=a.x+(b.x-a.x)*i/n,y=a.y+(b.y-a.y)*i/n;let pressure=0;for(const p of threats)pressure=Math.max(pressure,Math.max(0,1-Math.hypot(x-p.x,y-p.y)/options.radius));extra+=options.weight*pressure;}return d*(1+extra/n);};
+  const cached=threatEdgeCost(threats,{...options,cacheSize:8}),live=threatEdgeCost(threats,options);
+  for(const [a,b] of [[{x:0,y:0},{x:960,y:512}],[{x:512,y:256},{x:576,y:320}],[{x:4096,y:4096},{x:4224,y:4096}]]){
+    eq(cached(a,b),reference(a,b),'bounded cached pressure retains the original sampled cost');
+    eq(live(a,b),reference(a,b),'bounding-box rejection retains the original sampled cost');
+  }
+  const a={x:0,y:0},b={x:64,y:128},before=live(a,b);threats[0].x=4096;threats[0].y=4096;
+  ok(live(a,b)<before,'uncached callers still observe a moving threat');
+}
 console.log(`\nm59-railcut: ${pass} assertion(s) passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

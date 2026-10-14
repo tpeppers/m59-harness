@@ -24,10 +24,11 @@ travelled squares. Searches share a 500 ms allowance and retain live body,
 mandatory avoidance, ownership and send-time collision checks. Compatible
 exit rails also work from a stage one or two cells inside their boundary.
 `maxLegByRoom` supplies measured distances for individual rooms. The protected
-Island controller supplies 28 for the Chamber (2501) and Konima (2505), and
+Island controller supplies 28 for Ugol (2500), the Chamber (2501) and Konima (2505), and
 36 for Merb (2503) and Obfal (2504). The Chamber has a proved 26-square
 refuge gap; Konima's eastern return passage has a proved 22-square gap.
 Merb's return from r60c77 needs a proved 35.3-square leg to r68c49.
+Ugol's monster-priced route from r37c32 needs a measured 20-square refuge leg.
 Obfal's southern return has a proved 29.4-square leg from r37c22 to r20c10.
 An operator's explicit distances remain authoritative.
 
@@ -48,6 +49,12 @@ expired lease, or recovery timeout refuses continuation.
 Planner workers finish their bounded searches naturally after cancellation.
 Their results are discarded; force-terminating an isolate during compilation
 caused a Windows Node 25 V8 fatal error in the containing keeper.
+Full-room refuge search has a ten-second worker allowance and a twelve-second
+parent timeout. Threat samples from its immutable snapshot have a bounded cache;
+ordinary live-threat callers remain uncached. A priced flood skips a collision
+trace only when the edge's minimum permitted cost cannot improve the known
+arrival. In a captured crowded Merb scene, the old search stopped at four seconds;
+the optimized search retained the threat field and proved a refuge in 2.8 seconds.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed
