@@ -14736,9 +14736,6 @@ export class Autopilot {
     // This clock still runs while a pass is waiting for stats or a mover to unwind.
     if (this.checkFreeze()) return;
 
-    // A carried, verified flask must not wait behind a stalled refuge walk.
-    this.emergencyFlaskTick(hp);
-
     // 1b'. THE FIGHT-BACK EDICT — under attack, not swinging, and told to. See fightBackCheck.
     this.fightBackCheck(w, hp, now, lostThisTick);
 
@@ -30562,25 +30559,6 @@ export class Autopilot {
     const here = c?.room?.objects ? [...c.room.objects.values()] : [];
     return here.some(o => o.id !== c.selfId && (o.flags & OF.PLAYER)
                           && !party.isFleetmate(c.rsc?.get(o.nameRsc)));
-  }
-
-  emergencyFlaskTick(hp) {
-    const s=this.s,c=s?.client;
-    if(this.emergencyFlaskTask||this.stopping||!s?.live||c?.state!=='game'||s.combat?.active||
-       this.facultyHeld('survival')||this.facultyHeld('recovery')||this.facultyHeld('combat')||
-       !Number.isFinite(hp?.value)||!Number.isFinite(hp?.max)||hp.value<=0||hp.max<=0||
-       hp.value/hp.max>=this.safety().fleeAt||this.holdWorks()||this.sanctuary(s.world?.room))return false;
-    const me=c.self;
-    const threatened=me&&[...c.room.objects.values()].some(o=>o.id!==c.selfId&&(o.flags&OF.ATTACKABLE)&&
-      !(o.flags&OF.PLAYER)&&Math.hypot(o.row-me.row,o.col-me.col)<=3);
-    if(!threatened||!c.inventory.some(o=>/flask/i.test(c.rsc.get(o.nameRsc)||'')))return false;
-    this.emergencyFlaskTask=skills.healUp(s,{target:0.95,maxItems:1})
-      .then(result=>{
-        this.recordHealUse(result,'below the flee line while approaching cover');
-        if(result.healed){this.tally.heals=(this.tally.heals??0)+1;this.progress('used a carried flask during recovery');}
-        return result;
-      }).catch(e=>({healed:false,reason:e.message})).finally(()=>{this.emergencyFlaskTask=null;});
-    return true;
   }
 
   async playDead(why) {
