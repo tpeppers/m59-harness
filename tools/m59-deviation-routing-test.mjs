@@ -115,3 +115,12 @@ test('a declared running jump still refuses low vigor and an intervening live bl
  const paced=fixture(599,1072,2304);paced.s.pacer.submit=async(k,run)=>{if(k==='move')paced.c.room.objects.set(2,{id:2,flags:9,x:672,y:2464,row:38,col:10});return run();};
  const changed=await paced.s.step(10,38,{fall:true});assert.equal(changed.moved,false);assert.equal(paced.packets.length,0,'a newly blocked jump must not be clipped into the gully');
 });
+test('the live Tos spider-blocked batch also reaches the journey replanner',async()=>{
+ const f=fixture(596,128,240);f.c.roomNameRsc=map.rooms[596].nameRsc;f.c.roomRsc=map.rooms[596].roomRsc;
+ f.c.room.objects.set(2,{id:2,flags:9,x:110,y:214,row:3,col:1,nameRsc:2});f.c.rsc.set(2,'spider');
+ f.s.world=new World(f.c,map);f.s._blockingBodies=Session.prototype._blockingBodies;
+ const north=f.s.world.exits().filter(e=>e.to===61),r=await f.s.leaveViaAny(north);
+ assert.equal(r.reason,'object_blocked');assert.equal(r.blocked_by_bodies,true);assert.equal(r.outcome,'exit_candidates_exhausted');
+ assert.equal(r.attempts,3);assert.equal(f.packets.length,0);
+ const route=f.s.world.route(61,{blockedHops:new Set(['596>61'])});assert.equal(route.found,true);assert.notEqual(route.hops[0].to,61);
+});

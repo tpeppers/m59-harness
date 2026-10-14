@@ -8363,6 +8363,7 @@ export function sessionWalkPrototype(deps) {
       tried.every(t => /object_blocked|body_blocked/i.test(String(t.why ?? '')));
     if (everyRefusalWasABody)
       return finish({ left: false, tried, blocked_by_bodies: true,
+                      outcome: 'exit_candidates_exhausted',
                       reason: 'object_blocked',
                       note: 'every attempted square on this boundary had somebody standing on it. Not using ' +
                             'the explicit diagnostic override: a person is not a hole in the map' });
