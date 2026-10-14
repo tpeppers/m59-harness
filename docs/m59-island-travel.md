@@ -67,8 +67,11 @@ takeoff at r40c33 and landing at r44c27; the ordinary jump uses stock gravity.
 It requires running vigor. Followers serialize that crossing and clear its
 landing. The western climb uses body-seeded 128-client-unit rails, with both
 lattice bridges and wire-rounded command chords checked against ordinary
-collision tracing. The shared fine cutter includes observed blocking bodies
-in its search, and the sender repeats collision checks against the current
+collision tracing. The shared fine cutter can scope observed blocking bodies
+to the current prefix. Island walking uses that scope and re-cuts before an
+upcoming command can leave it; distant bodies still affect threat pricing.
+Temporary body refusals receive bounded fresh observations and replanning.
+The sender repeats collision checks against the current
 room contents. Fine movement prefers a safe-wall stop on its checked
 rail when one is available. The mover's shelf guard rejects a collision slide
 onto an unintended lower ledge while allowing a planned descent onto the

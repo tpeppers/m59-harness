@@ -71,6 +71,11 @@ if(occupiedCut.ok&&occupiedCut.bridgeOk){
 }
 const ownCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640},{objects:new Map([[blocker.id,blocker]]),selfId:blocker.id});
 assert(ownCut.ok&&ownCut.bridgeOk,'the traveler is not its own obstacle');
+assert(Math.hypot(blocker.x-arrival.x,blocker.y-arrival.y)>8*64,'this body occupies a distant part of the route');
+const scopedCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640},{objects:new Map([[blocker.id,blocker]]),selfId:99992,bodyRangeSquares:8});
+assert(scopedCut.ok&&scopedCut.bridgeOk,'a distant body cannot disprove the current checked prefix');
+assert.equal(scopedCut.body_obstacles,0);assert.equal(scopedCut.body_scope_squares,8);
+await assert.rejects(()=>cutFineRailAsync(konima,arrival,{x:160,y:4640},{bodyRangeSquares:0}),/positive and finite/);
 assert(fineCut.waypoints.length>2);assert.equal(fineCut.waypoints[0].x,(arrival.x-64)*16);
 const merb=roomGeometry(2503),merbBody={row:69,col:76,x:4880,y:4416},merbGoal={row:57,col:2};
 assert.equal((await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:14})).found,false,'Merb needs its measured per-room gap allowance');
