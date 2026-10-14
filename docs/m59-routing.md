@@ -2121,6 +2121,14 @@ ownership. Neither the missing order nor the earlier body read establishes that
 the trip ended. Operator cancellation, foreign ownership and observed death
 still stop it.
 
+An unsuccessful fine-action reply can race a survival logout and say only that
+the character is offline. Recovery therefore uses the shared movement-origin
+receipt predicate rather than matching error prose: a keeper preemption must
+belong to the current issuer and fall within this walk's recovery interval.
+Later operator cancellation or a foreign live order invalidates it. After
+shelter recovery the walker recuts from the confirmed body toward the same fine
+goal; an old receipt cannot license another recovery.
+
 Fine movement now pays the duration of its actual stride at the selected walking
 or running speed. Its queued packet also retains the movement generation and
 control lease, so cancellation cannot leave a late packet behind. Longer checked

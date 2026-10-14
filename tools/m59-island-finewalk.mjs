@@ -6,7 +6,7 @@ import {applyDoorState} from './m59-routes.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {safeSpots,hasAnyFooting} from './m59-safespots.mjs';
 import {foodValue} from './m59-items.mjs';
-import {originLabel} from './m59-move-origin.mjs';
+import {originLabel,keeperMovementPreemption} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
@@ -83,10 +83,11 @@ export async function eatIslandAtWall(ctx,onSample=()=>{},{target=160,maxBites=1
   return {bites,vigor:l.vigor?.value};
 }
 
-export async function recoverIslandFineWalk(ctx,{deadline,read,pollMs=1000,onSample=()=>{}}={}){
+export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,pollMs=1000,onSample=()=>{}}={}){
   for(;;){
-    const s=await ctx.call('status',{agent:ctx.agent,brief:true}),pre=s.movement?.last_preempted;
-    if(pre?.by?.source!=='keeper'||pre.preempted?.ordered_by!==originLabel(ctx.origin??currentCallOrigin()))return false;
+    const s=await ctx.call('status',{agent:ctx.agent,brief:true});
+    checkIslandCancellation(ctx,s);
+    if(!keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since}))return false;
     const {l}=await read(),wall=s.autopilot_status?.safe_spot;
     if(wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col){
       await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
@@ -173,7 +174,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     return {l,body};
   };
   const partialRefuges=new Set();
-  let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,confirmationRetries=0,stride=128,lastRiskCut=0;
+  let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,recoverySince=started,confirmationRetries=0,stride=128,lastRiskCut=0;
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     const distance=Math.hypot(body.x-goal.x,body.y-goal.y),actualFloor=floorAt(geo,body.x,body.y);
@@ -209,7 +210,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     if(signature!==cut.threatSignature&&Date.now()-lastRiskCut>=2500&&cost(body,aim)>Math.hypot(aim.x-body.x,aim.y-body.y)*1.25){cut=null;continue;}
     const wire=clientToProtocol(aim),quantized=protocolToClient(wire);
     if(!chordWalkable(body,quantized,{edge,lattice:128}).ok)throw Error('fine_route_wire_chord_not_proved');
-    const before=body,reply=await call('walk_to',{agent,...wire,fine:true,stride,max_steps:Math.ceil(Math.hypot(body.x-aim.x,body.y-aim.y)/(16*stride))+2,arrive_within:3,exact_arrival:true,hold_shelf:true},30000);
+    const before=body,commandAt=Date.now(),reply=await call('walk_to',{agent,...wire,fine:true,stride,max_steps:Math.ceil(Math.hypot(body.x-aim.x,body.y-aim.y)/(16*stride))+2,arrive_within:3,exact_arrival:true,hold_shelf:true},30000);
     commands++;({l,body}=await read());
     let error=Math.hypot(body.x-aim.x,body.y-aim.y);
     if(reply.arrived===true&&error>128){
@@ -221,13 +222,13 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       }
     }
     if(error>128||reply.arrived!==true){
-      if(/cancelled/.test(reply.reason??'')&&recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample})){
-        recoveries++;({l,body}=await read());cut=null;continue;
+      if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample})){
+        recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
       }
       if(islandTrafficRefusal(reply)&&trafficWaits++<120){await new Promise(r=>setTimeout(r,1000));if(Math.hypot(body.x-before.x,body.y-before.y)>=64)cut=null;continue;}
       if(reply.shelf_refusals>0&&stride>8){stride=Math.max(8,Math.floor(stride/2));cut=null;continue;}
       if(Math.hypot(body.x-before.x,body.y-before.y)<64||++recuts>4){
-        ctx.state.islandFineFailure={room,target,wire,before,body,reply,status:await call('status',{agent,brief:true})};
+        ctx.state.islandFineFailure={room,target,wire,before,body,reply,commandAt,recoverySince,status:await call('status',{agent,brief:true})};
         throw Error('fine_route_ended_short_'+(reply.reason??'position'));
       }
       cut=null;

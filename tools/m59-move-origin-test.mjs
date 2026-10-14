@@ -262,6 +262,17 @@ await test('classification: preempted, cancelled, exits_exhausted, wedge, refuse
 });
 
 console.log('\nevery move path supplies an origin (source sweep)');
+await test('a failed move recovers only its fresh keeper preemption',()=>{
+ const pre={at:101,by:{source:'keeper'},preempted:{ordered_by:'our-move'}};
+ const status={movement:{last_preempted:pre}};
+ assert(M.keeperMovementPreemption(status,'our-move',{since:100}));
+ assert(!M.keeperMovementPreemption(status,'our-move',{since:102}));
+ assert(!M.keeperMovementPreemption(status,'foreign',{since:100}));
+ assert(!M.keeperMovementPreemption({movement:{last_preempted:{...pre,by:{source:'mcp'}}}},'our-move',{since:100}));
+ assert(!M.keeperMovementPreemption({movement:{last_preempted:pre,last_cancel:{at:102,by:{source:'mcp'}}}},'our-move',{since:100}));
+ assert(!M.keeperMovementPreemption({movement:{last_preempted:pre,order:{origin:{source:'mcp'},ordered_by:'foreign'}}},'our-move',{since:100}));
+ assert(M.keeperMovementPreemption({movement:{last_preempted:pre,order:{origin:{source:'keeper'},ordered_by:'keeper:shelter'}}},'our-move',{since:100}));
+});
 // THE GUARD AGAINST THE NEXT ANONYMOUS CALLER. Every `.travel(` and `cancelMovement(` call in the
 // keeper's movement code names its issuer. A new one that does not is the gap this whole change
 // closes, reopened — so it fails here, by file and line, rather than as `unattributed` on prod.
