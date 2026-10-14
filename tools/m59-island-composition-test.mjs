@@ -17,8 +17,10 @@ await assert.rejects(islandTaskSteps({...p,task:'work',taskParams:'[]'},{scripts
 const steps=await trip.steps({...p,task:'island-bows',taskParams:'{"bows":2,"arrows":200}'});
 assert.equal(steps[0].do,'verify');
 assert(steps.some(s=>s.do==='shop'&&s.seller==="Hanla zax'Ta"));
+assert(steps.some(s=>s.do==='shop'&&s.seller==="Kochtal ko'Tulca"&&s.lines[0].match.test('practice bow')));
 assert.equal(steps.at(-1).to,52);
 assert.equal(home.params.requireSafeLegs.default,true);
+assert(!steps.at(-1).avoid.includes(587));
 await assert.rejects(bows.steps({bows:-1,arrows:1}),/nonnegative/);
 // Required routing refuses missing geometry; ordinary travel retains its default.
 const prototype=sessionWalkPrototype({}), fake={need:()=>({}),world:{room:{num:99},geometry:null}};

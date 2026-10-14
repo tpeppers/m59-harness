@@ -42,6 +42,8 @@
 // planning budget spent all answer `found: false` with a reason, and the caller walks the
 // direct route it always walked. See docs/m59-routing.md, "Safe-spot legs".
 import { safeSpots, hasAnyFooting } from './m59-safespots.mjs';
+import {planBodyDetour} from './m59-body-detour.mjs';
+import {planRailDeparture} from './m59-pocket-rails.mjs';
 
 // WHICH ROOMS, BY DEFAULT. One room, on the evidence: Ukgoth is the room this fleet dies in
 // most on the road (218 recorded prod deaths; five of twenty in the 2026-09-24 convoy), it is on
@@ -51,6 +53,20 @@ import { safeSpots, hasAnyFooting } from './m59-safespots.mjs';
 // (tools/m59-crossingtrial.mjs) says legs beat the direct walk THERE, not because it has deaths —
 // a room with deaths and no walls between its doors gains nothing and loses the planning time.
 export const SAFE_LEG_ROOMS = Object.freeze([599]);
+
+export function normalizeSafeLegPolicy(want){
+  if(want==null)return null;
+  if(want===false||want==='off')return false;
+  if(typeof want!=='object'||Array.isArray(want))throw Error('safe_legs must be false, null, or an object such as {rooms: [599]}');
+  const known=['rooms','maxLeg','legCost','threatWeight','threatRadius','maxDetour','slack','deadlineMs','maxLegs','corridorRadius','off','required','fineLegs'];
+  const bad=Object.keys(want).filter(k=>!known.includes(k));
+  if(bad.length)throw Error('safe_legs: no such key '+bad.map(k=>'"'+k+'"').join(', '));
+  if(want.rooms!==undefined&&!(Array.isArray(want.rooms)&&want.rooms.every(r=>Number.isFinite(Number(r)))))throw Error('safe_legs.rooms must be an array of room numbers');
+  for(const k of ['required','fineLegs'])if(want[k]!==undefined&&typeof want[k]!=='boolean')throw Error('safe_legs.'+k+' must be a boolean');
+  for(const k of known.filter(k=>!['rooms','off','required','fineLegs'].includes(k)))
+    if(want[k]!==undefined&&!(Number(want[k])>0))throw Error('safe_legs.'+k+' must be a positive number — got '+want[k]);
+  return {...want,...(want.rooms?{rooms:want.rooms.map(Number)}:{})};
+}
 
 export const SAFE_LEG_DEFAULTS = Object.freeze({
   required: false, // refuse a failed chain instead of taking a direct crossing
@@ -222,6 +238,32 @@ export function legWalls(geo, { occupied = null, unreachable = null } = {}) {
     && hasAnyFooting(geo, s.row, s.col)
     && !occupied?.has?.(key(s.row, s.col))
     && !unreachable?.has?.(key(s.row, s.col)));
+}
+
+// #movement: a short grid leg can conceal a long walk around the same rock.
+// Prove the approach from the actual body and stop at a refuge on that route
+// before its travelled distance exceeds the leg allowance (64 KOD per square).
+export function planFineSafeLeg(geo,from,target,{maxLeg=SAFE_LEG_DEFAULTS.maxLeg,occupied=null,unreachable=null,avoidSquares=null,exitGoal=null,table=null,room=null,...options}={}){
+  const goal=geo?.standPointWire?.(target.row,target.col);
+  if(!goal)return {found:false,reason:'safe_leg_stand_point_unavailable'};
+  let route=planBodyDetour(geo,from,goal,{...options,goalSquare:target,avoidSquares,
+    marginSquares:24,maxRangeSquares:24,spacingUnits:16,maxNodes:16000,maxMs:500});
+  // A square-labelled wall can be on a different ledge. A compatible exit rail
+  // can supply a proved route around it, with the same short refuge stops.
+  if(!route.found&&exitGoal&&table&&room!=null)
+    route=planRailDeparture(geo,from,exitGoal,{...options,avoidSquares,table,room});
+  if(!route.found)return route;
+  const walls=new Set(legWalls(geo,{occupied,unreachable}).map(w=>key(w.row,w.col)));
+  let at=from,distance=0,stop=null;
+  for(const [i,p] of route.waypoints.entries()){
+    distance+=Math.hypot(p.x-at.x,p.y-at.y)/64;at=p;
+    if(distance>maxLeg)break;
+    const row=Math.floor(p.y/64),col=Math.floor(p.x/64);
+    if((row!==Math.floor(from.y/64)||col!==Math.floor(from.x/64))&&walls.has(key(row,col)))
+      stop={row,col,steps:distance,waypoints:route.waypoints.slice(0,i+1)};
+  }
+  return stop?{found:true,...stop,nodes:route.nodes,requested:target}:
+    {found:false,reason:'no_refuge_on_proved_leg',nodes:route.nodes};
 }
 
 // How many of a path's squares sit inside some threat's reach. `threats` are {row, col}.

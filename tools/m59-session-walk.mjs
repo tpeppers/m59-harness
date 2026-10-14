@@ -43,7 +43,7 @@ import { recordEvent } from './m59-ledger.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
-import { planSafeLegs, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
+import { planSafeLegs, planFineSafeLeg, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
 // Fine boarding past a broken rail head (see fineRailBoard). Synchronous on the keeper's loop,
 // and only after a bounded search proved the next waypoint unreachable: measured in Ukgoth,
 // reachability ~200ms, the fine path ~150ms, pulling it ~200ms — once per crossing attempt.
@@ -7282,15 +7282,30 @@ export function sessionWalkPrototype(deps) {
         `in ${plan?.ms}ms, ${threats.length} threat(s)`);
       if (!plan?.found) { out.fallback = plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
       if (n === 0) { out.planned_legs = plan.legs.length; out.planned_steps = plan.steps; out.direct_steps = plan.direct_steps; }
-      const next = plan.legs[0];
+      let next = plan.legs[0];
       // The last leg is the exit's, and the exit walker owns it.
       if (next.kind === 'exit') { out.handed_over = true; break; }
       // Kept inside the corridor too: the walker plans its own route to the wall, and without
       // this it plans the same unwalked shortcut the corridor exists to keep the legs off.
       // `walkTo` relaxes occupancy before it gives up, so this can cost a detour and never a walk.
-      const walked = await this.walkTo(next.col, next.row,
+      let fine=null;
+      if(opts.fineLegs===true){
+        fine=planFineSafeLeg(geo,c.self,next,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+          objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
+          avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
+        if(!fine.found){
+          console.log(`[safe-legs] ${c.me?.name??this.name??'?'} fine approach refused r${next.row}c${next.col}: ${fine.reason}`);
+          unreachable.add(`${next.row},${next.col}`);out.failed++;
+          if(out.failed>=3){out.fallback='three fine legs could not be proved';break;}
+          continue;
+        }
+        next={...next,row:fine.row,col:fine.col,steps:fine.steps};
+        console.log(`[safe-legs] ${c.me?.name??this.name??'?'} proved ${fine.steps.toFixed(1)} squares / ${fine.waypoints.length} moves to r${next.row}c${next.col}`);
+      }
+      const walked = await (fine?this.walkDepartureLegs(fine.waypoints,next,
+        {maxSteps:fine.waypoints.length,movementGeneration,controlToken}):this.walkTo(next.col, next.row,
         { maxSteps: Math.max(20, next.steps * 2), movementGeneration, controlToken,
-          ...(avoid ? { avoidSquares: avoid } : {}) })
+          ...(avoid ? { avoidSquares: avoid } : {}) }))
         .catch(e => ({ arrived: false, reason: e.message }));
       if (this.movementWasCancelled(movementGeneration, controlToken)) return { ...out, cancelled: true };
       if (walked?.left_room || (roomId != null && c.room?.id !== roomId)) { out.left_room = true; return note(); }
