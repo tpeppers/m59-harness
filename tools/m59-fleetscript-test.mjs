@@ -3050,5 +3050,13 @@ console.log('\na broker refusal fails an act step, it is never ok');
   ok('and JSON is still parsed', brokerReply({ result: { content: [{ text: '{"ok":true}' }] } }).ok === true);
 }
 
+{
+  fakeBroker({rooms:{a1:52}});let cleaned=0,continued=0;
+  const r=await fleetScript({name:'exception-unwinds-cleanup',fleet:'testfleet',agents:['a1'],onLog:quiet,
+    steps:[verify(()=>{throw Error('temporary observation unavailable');}),verify(()=>{continued++;return true;}),
+      {...verify(()=>{cleaned++;return true;}),always:true}]});
+  ok('a thrown step remains a failure with its original reason',!r.results.a1.ok&&r.results.a1.why==='temporary observation unavailable');
+  ok('an exception skips dependent work and runs always cleanup',continued===0&&cleaned===1);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

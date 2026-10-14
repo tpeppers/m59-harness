@@ -5,6 +5,7 @@ import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
 import {walkHollowsOut,approachIslandDoor,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
+import {observeIslandTraveller} from './m59-island-observation.mjs';
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
 export const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -119,23 +120,11 @@ export async function ordinaryHop(ctx,to,options={}){
 // A keeper may briefly have no body while its survival rung reconnects. Wait
 // only for recovery of this exact order; missing health alone proves nothing.
 export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15000,pollMs=1000}={}){
-  for(;;){
-    const l=await ctx.call('look',{agent:ctx.agent});
-    if(Number.isFinite(l.hp?.value)&&Number.isFinite(l.hp?.max)&&l.hp.max>0)return l;
-    const s=await ctx.call('status',{agent:ctx.agent,brief:true});
-    checkIslandCancellation(ctx,s);
-    const pre=s.movement?.last_preempted;
-    const hold=s.autopilot_status?.suspended_journey;
-    const ownsPreempted=pre?.by?.source==='keeper'&&pre.preempted?.ordered_by===orderedBy&&Number(pre.preempted?.to)===to;
-    const ownsRecovery=hold?.ordered_by===orderedBy&&Number(hold.to)===to;
-    if(!orderedBy||!(ownsPreempted||ownsRecovery))
-      throw Error('traveller_health_unreadable');
-    if(Date.now()>=deadline)throw Error('traveller_reconnect_budget');
-    await pause(pollMs);
-  }
+  try{return await observeIslandTraveller(ctx,()=>ctx.call('look',{agent:ctx.agent}),{to,orderedBy,deadline,pollMs});}
+  catch(e){if(e.message==='traveller_health_unreadable_recovery_budget')throw Error('traveller_reconnect_budget');throw e;}
 }
 async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{}}={}){
-  const {agent,call}=ctx,start=Date.now(),first=await call('look',{agent}),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
+  const {agent,call}=ctx,start=Date.now(),first=await observeIslandTraveller(ctx,()=>call('look',{agent})),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
   let previous=first.hp?.value;
   const sample=l=>{
     const p=location(l),hp=l.hp?.value;
@@ -231,7 +220,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     }
   }
   if(!leg.ok)await call('cancel_movement',{agent}).catch(()=>{});
-  leg.ms=Date.now()-start;leg.end=location(await call('look',{agent}));
+  leg.ms=Date.now()-start;leg.end=location(await observeIslandTraveller(ctx,()=>call('look',{agent})));
   // A room-entry packet can arrive between the position and idle-status polls.
   if(leg.end.room===to){leg.ok=true;delete leg.reason;}
   return leg;
@@ -241,7 +230,7 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
   const {agent,call,state}=ctx,chain=MAIN_CAVES;
   state.islandCancelFence??=Date.now();
   const route=direction==='back'?[...chain].reverse():[...chain];
-  let first=await call('look',{agent});
+  let first=await observeIslandTraveller(ctx,()=>call('look',{agent}));
   if(first.room?.num!==route[0])throw Error('route_start_requires_room_'+route[0]);
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   first=await prepareIslandDeparture(ctx,first,{minVigor});

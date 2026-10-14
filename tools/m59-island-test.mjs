@@ -11,6 +11,7 @@ import {protocolToClient} from './m59-finepos.mjs';
 import {chordWalkable,cutRail} from './m59-railcut.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {doorStates} from './m59-doorbake.mjs';
+import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
 import {shadowDispelResetTimers,shadowDispelIdentityMatches} from './m59-island-lab-dispel.mjs';
 assert.deepEqual(shadowDispelResetTimers('Timer Remaining ms Object Message\n123 10000 1667 ReplaceIllusions\n124 20000 1667 ReplaceIllusions\n125 5000 1667 GenerateMonster\n126 5000 99 ReplaceIllusions',1667),[123,124]);
 assert.throws(()=>shadowDispelResetTimers('',null),/room_unconfirmed/);
@@ -92,6 +93,26 @@ try{
  await withStashLease({agent:'a'},a,async()=>{a.stash.items[0].recovered=true;});assert(!existsSync(join(dir,'refill.lock')));
 }finally{rmSync(dir,{recursive:true,force:true});}
 const look=(room,hp=20,max=20)=>({room:{num:room},you:{row:4,col:40,x:2592,y:288},hp:{value:hp,max}});
+const heldOrigin={source:'fleetscript',name:'fixture',run_id:'current'},heldStatus={autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:5000}}}};
+assert(islandReadOwner({origin:heldOrigin},heldStatus));
+assert(!islandReadOwner({origin:heldOrigin},{autopilot_status:{faculties:{movement:{owner:'fleetscript:other',expires_in_ms:5000}}}}));
+assert(!islandReadOwner({origin:heldOrigin},{autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:0}}}}));
+let heldReads=0;
+const heldCtx={agent:'fixture',origin:heldOrigin,state:{islandCancelFence:100},call:async()=>heldStatus};
+assert.equal((await observeIslandTraveller(heldCtx,async()=>++heldReads<3?{hp:null}:look(2502),{pollMs:0})).room.num,2502);assert.equal(heldReads,3);
+await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>({})},async()=>({hp:null}),{pollMs:0}),/health_unreadable/);
+await assert.rejects(observeIslandTraveller(heldCtx,async()=>({hp:null}),{deadline:0}),/recovery_budget/);
+await assert.rejects(observeIslandTraveller(heldCtx,async()=>look(1)),/traveller_died/);
+await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>({...heldStatus,movement:{last_cancel:{at:101,by:{source:'operator'},by_label:'operator:new-order'}}})},async()=>({hp:null})),/cancelled_by_operator/);
+let fineRecoveryReads=0;
+const confirmedFine=await observeIslandTraveller(heldCtx,async()=>({body:look(2502),position:{fresh:++fineRecoveryReads>1},snapshot:heldStatus}),
+ {bodyOf:v=>v.body,statusOf:v=>v.snapshot,valid:v=>v.position.fresh===true,pollMs:0});
+assert.equal(confirmedFine.position.fresh,true);assert.equal(fineRecoveryReads,2);
+let leaseReads=0,bodyReads=0;
+await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>++leaseReads===1?heldStatus:{}},async()=>++bodyReads===1?{hp:null}:look(2502),{pollMs:0}),/health_unreadable/);
+let transportReads=0;
+assert.equal((await observeIslandTraveller(heldCtx,async()=>{if(++transportReads===1)throw Error('fetch failed');return look(2502);},{pollMs:0})).room.num,2502);
+await assert.rejects(observeIslandTraveller(heldCtx,async()=>{throw Error('island_keeper_identity_mismatch');}),/identity_mismatch/);
 let reconnectReads=0;
 const reconnectCtx={agent:'fixture',call:async name=>name==='look'?(++reconnectReads<3?{hp:null}:look(2500,13)):{movement:{last_preempted:{by:{source:'keeper'},preempted:{to:2501,ordered_by:'our-order'}}}}};
 assert.equal((await readIslandJourney(reconnectCtx,{to:2501,orderedBy:'our-order',pollMs:0})).hp.value,13);

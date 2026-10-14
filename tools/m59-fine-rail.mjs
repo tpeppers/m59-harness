@@ -115,7 +115,10 @@ async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,time
     const worker=new Worker(new URL('./m59-fine-rail.mjs',import.meta.url),{
       execArgv:[],resourceLimits:{maxOldGenerationSizeMb:256},
       workerData:{kind:'m59-fine-rail/1',task,geometry,stepMask:geo._stepMask??null,from:pose,goal,options:copy}});
-    let done=false;const finish=result=>{if(done)return;done=true;clearInterval(check);clearTimeout(timer);worker.terminate().catch(()=>{});resolve(result);};
+    // Every search is bounded and sends no packets. Let its isolate exit
+    // naturally even after cancellation: forcibly terminating a compiling
+    // worker crashed the containing keeper in Windows Node 25 (V8 !is_null).
+    let done=false;const finish=result=>{if(done)return;done=true;clearInterval(check);clearTimeout(timer);resolve(result);};
     const check=setInterval(()=>{if(cancelled())finish({found:false,cancelled:true,reason:'movement_cancelled'});},25);
     const timer=setTimeout(()=>finish({found:false,reason:'fine_rail_worker_budget'}),timeoutMs);
     worker.once('message',finish);worker.once('error',error=>finish({found:false,reason:'fine_rail_worker_error',error:error.message}));
