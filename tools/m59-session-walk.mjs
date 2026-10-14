@@ -44,6 +44,7 @@ import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planSafeLegs, planFineSafeLeg, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
+import {planFineRailRefugeAsync} from './m59-fine-rail.mjs';
 // Fine boarding past a broken rail head (see fineRailBoard). Synchronous on the keeper's loop,
 // and only after a bounded search proved the next waypoint unreachable: measured in Ukgoth,
 // reachability ~200ms, the fine path ~150ms, pulling it ~200ms — once per crossing attempt.
@@ -7403,7 +7404,17 @@ export function sessionWalkPrototype(deps) {
           threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
           objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
           avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
-        if(boot.found)plan={found:true,legs:[{kind:'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
+        if(!boot.found&&typeof geo.toJSON==='function'){
+          const pose={...c.self};
+          boot=await planFineRailRefugeAsync(geo,pose,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+            threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
+            objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
+            avoidSquares:avoid?new Set(avoid):null},
+            {cancelled:()=>this.client!==c||c.room?.id!==roomId||this.movementWasCancelled(movementGeneration,controlToken)});
+          if(boot.cancelled)return {...out,cancelled:true};
+          if(!c.self||Math.hypot(c.self.x-pose.x,c.self.y-pose.y)>1){out.fallback='fine rail starting pose changed';break;}
+        }
+        if(boot.found)plan={found:true,legs:[{kind:boot.kind==='exit'?'fine_exit':'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
       }
       if (!plan?.found) { out.fallback = boot?.reason ?? plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
       if (n === 0) { out.planned_legs = plan.legs.length; out.planned_steps = plan.steps; out.direct_steps = plan.direct_steps; }
@@ -7419,6 +7430,17 @@ export function sessionWalkPrototype(deps) {
           threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
           objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
           avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
+        if(!fine.found&&typeof geo.toJSON==='function'){
+          const pose={...c.self};
+          fine=await planFineRailRefugeAsync(geo,pose,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+            threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
+            objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
+            avoidSquares:avoid?new Set(avoid):null},
+            {cancelled:()=>this.client!==c||c.room?.id!==roomId||this.movementWasCancelled(movementGeneration,controlToken)});
+          if(fine.cancelled)return {...out,cancelled:true};
+          if(!c.self||Math.hypot(c.self.x-pose.x,c.self.y-pose.y)>1){out.fallback='fine rail starting pose changed';break;}
+          if(fine.kind==='exit')next={...next,kind:'fine_exit'};
+        }
         if(!fine.found){
           console.log(`[safe-legs] ${c.me?.name??this.name??'?'} fine approach refused r${next.row}c${next.col}: ${fine.reason}`);
           unreachable.add(`${next.row},${next.col}`);out.failed++;
@@ -7454,6 +7476,7 @@ export function sessionWalkPrototype(deps) {
         continue;          // re-plan from wherever that left us, without the wall it missed
       }
       out.legs++;
+      if(next.kind==='fine_exit'){out.handed_over=true;break;}
       out.walls.push(`r${next.row}c${next.col}`);
       visited.add(`${next.row},${next.col}`);
       // ON A WALL. Mend here only if the journey's own shelter policy says the body needs it.

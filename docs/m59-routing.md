@@ -27,6 +27,20 @@ exit rails also work from a stage one or two cells inside their boundary.
 Island controller supplies 28 for the Chamber (2501), whose opening corridor
 has a 26-square refuge gap, while retaining an operator's explicit distances.
 
+When the local fine window or square graph cannot supply a leg, protected fine
+travel can search the full room in a bounded worker. It keeps the observed
+collision geometry, live bodies, avoidance and threat prices, and ends on a
+proved refuge within the same distance limit. The keeper event loop stays free
+to cancel it. A changed body, room or owner invalidates the result; packets are
+checked again at send time. Worker startup has its own heap limit and does not
+inherit the keeper's incompatible Node command-line heap flag.
+
+Operable-door predicates accept KOD's case-insensitive Row/Col spellings.
+Konima's door has nine real buttons at r5–7c61–63; r6c59 is its arrival pocket,
+not a button. A normal `go` from a button and an observed ceiling lift open the
+fine route back into the cave. This supersedes the older closed-geometry claim
+below that the Island return is physically unwalkable.
+
 Explicit declared jumps, including their permitted one-square takeoff
 variations, use timed stock gravity and retain the running-vigor guard.
 `m59-jump-takeoff.mjs` can refine an approximate takeoff on the same ledge:

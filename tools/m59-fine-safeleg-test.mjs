@@ -4,6 +4,9 @@ import {planFineSafeLeg,normalizeSafeLegPolicy,legWalls} from './m59-safelegs.mj
 import {validateEscape,planRailDeparture} from './m59-pocket-rails.mjs';
 import {loadMap} from './m59-map.mjs';
 import {routesFor,attachStepMasks} from './m59-routes.mjs';
+import {RoomGeometry} from './m59-roo.mjs';
+import {applyCeilingDoors} from './m59-ceiling-doors.mjs';
+import {planFineRailRefugeAsync,cutFineRailAsync} from './m59-fine-rail.mjs';
 const map=loadMap();attachStepMasks(map);const table=routesFor(map.geometryManifestSha256);
 // Actual Ugol wall departure: the square graph calls it seven steps, but the
 // body must leave south, cross west, then go north around the ledge.
@@ -36,4 +39,22 @@ assert(departure.rail.squares.at(-1).col<=2);
 const corridor=planFineSafeLeg(chamber,entry,{row:56,col:31},{maxLeg:28,exitGoal:stage,table,room:2501});
 assert(corridor.found,JSON.stringify(corridor));assert(corridor.steps<=28);
 assert(validateEscape(chamber,entry,corridor.waypoints).ok);
+const konima=RoomGeometry.fromJSON(map.rooms[2505].roo),arrival={row:6,col:59,x:3808,y:416},west={row:72,col:2};
+konima.attachStepMask(roomGeometry(2505)._stepMask);
+assert.equal((await planFineRailRefugeAsync(konima,arrival,west,{maxLeg:28})).found,false,'the closed gate cannot be crossed');
+applyCeilingDoors(map,2505,new Map([[1,{type:5,height:1150}]]),null,{geometryOf:()=>konima});
+let ticks=0;const clock=setInterval(()=>ticks++,10);
+const open=await planFineRailRefugeAsync(konima,arrival,west,{maxLeg:28});clearInterval(clock);
+assert(open.found,JSON.stringify(open));assert(open.steps<=28);assert(ticks>=2,'planning leaves the keeper event loop free');
+assert(legWalls(konima).some(w=>w.row===open.row&&w.col===open.col));
+assert(validateEscape(konima,arrival,open.waypoints).ok,'every pulled packet retains the ordinary mover proof');
+const cancelled=await planFineRailRefugeAsync(konima,arrival,west,{maxLeg:28},{cancelled:()=>true});
+assert.equal(cancelled.cancelled,true);
+const fineCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640});
+assert(fineCut.ok&&fineCut.bridgeOk,JSON.stringify({...fineCut,waypoints:fineCut.waypoints?.length}));
+assert(fineCut.waypoints.length>2);assert.equal(fineCut.waypoints[0].x,(arrival.x-64)*16);
+const merb=roomGeometry(2503),merbBody={row:69,col:76,x:4880,y:4416},merbGoal={row:57,col:2};
+const wide=await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:28});
+assert(wide.found,JSON.stringify(wide));assert(wide.steps<=28);assert.equal(wide.row,68);assert.equal(wide.col,49);
+assert(validateEscape(merb,merbBody,wide.waypoints).ok,'a refuge beyond the local search window retains a full mover proof');
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');

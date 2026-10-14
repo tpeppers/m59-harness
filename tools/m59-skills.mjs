@@ -43,6 +43,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
 import { floorSnapshot } from './m59-loot-filter.mjs';
 import { withMoveOrder, keeperOrigin } from './m59-move-origin.mjs';
+import { planBodyDetour } from './m59-body-detour.mjs';
 
 // The merchant index resolves a live object id to the class whose buying rule applies.
 // Read once and kept: it is a built artefact that changes when somebody rebuilds it, and
@@ -2040,7 +2041,7 @@ export async function confirmRefugePosition(s) {
 }
 
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
-                                           routeFirst = false, avoidSquares = null, fineAvoidSquares = avoidSquares } = {}) {
+                                           routeFirst = false, checkedApproach = false, avoidSquares = null, fineAvoidSquares = avoidSquares } = {}) {
   // maxSteps supplies each strategy's budget; a finite planned detour may raise
   // it, as in walkTo. approachFine shares it between waypoints and sliding fan; the
   // final adjustment to a remembered fine point retains its separate six steps.
@@ -2051,13 +2052,13 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
   const result=await withMoveOrder(s, { kind: 'shelter', origin: keeperOrigin('shelter'),
       to: spot?.room != null ? `${spot.room} r${spot.row}c${spot.col}` : `r${spot?.row}c${spot?.col}` },
     () => traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance, routeFirst },
-      () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares, fineAvoidSquares })));
+      () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, checkedApproach, avoidSquares, fineAvoidSquares })));
   if(result?.cancelled && decision && currentSurvivalDecision(s)?.id===decision.id)
     cancelSurvivalDecision(s,result.why??result.reason??'shelter approach cancelled');
   return result;
 }
 
-async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares, fineAvoidSquares }) {
+async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, checkedApproach, avoidSquares, fineAvoidSquares }) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
   const generation = s.movementGeneration, room = s.world?.room?.num;
@@ -2115,6 +2116,31 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
   // actually requires movement. An already-held wall needs no posture change.
   await s.standBeforeGo({ shouldCancel: () => interrupted() });
   if (interrupted()) return stopped();
+
+  // A nearby recovery wall can be two coarse steps away across a fine cliff.
+  // Prove a bounded body route before spending the emergency on that approach.
+  // Longer hauls retain the ordinary router and its established fallback.
+  const away=c.self?Math.max(Math.abs(c.self.col-spot.col),Math.abs(c.self.row-spot.row)):Infinity;
+  if(checkedApproach&&away<=6&&Number.isFinite(c.self?.x)&&Number.isFinite(c.self?.y)
+      &&s.world?.geometry?.collisionReady&&typeof s.walkDepartureLegs==='function'){
+    const fine=Number.isFinite(spot.x)&&Number.isFinite(spot.y);
+    const goal=fine?{x:spot.x,y:spot.y}:{x:spot.col*KOD_FINENESS+32,y:spot.row*KOD_FINENESS+32};
+    const threats=[...(c.room?.objects?.values?.()??[])].filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
+    const plan=planBodyDetour(s.world.geometry,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
+      roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,goalSquare:fine?null:spot,
+      marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:80,
+      threats,threatWeight:6,threatRadius:4});
+    if(interrupted())return stopped();
+    if(!plan.found)return {arrived:false,reason:'refuge_fine_approach_unproved',why:plan.reason};
+    const w=await attempt('refuge_fine_path',null,()=>s.walkDepartureLegs(plan.waypoints,spot,
+      {movementGeneration:generation,maxSteps,shelterFallback:false}));
+    if(interrupted(w))return stopped(w);
+    if(!w?.arrived)return {arrived:false,reason:w?.reason,why:w?.reason??'checked refuge path ended short'};
+    const confirmed=await confirmPrediction();
+    if(interrupted())return stopped();
+    if(!confirmed)return unconfirmed();
+    return {arrived:at()<=tolerance,off_by:at(),via:'checked fine refuge path'};
+  }
 
   // Get onto the right square first through the geometry, then close the last few
   // fine units directly — the square router cannot express the last bit.

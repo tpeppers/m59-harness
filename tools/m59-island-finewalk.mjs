@@ -10,6 +10,7 @@ import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
+import {cutFineRailAsync} from './m59-fine-rail.mjs';
 
 export function checkIslandCancellation(ctx,status){
   const cancel=status?.movement?.last_cancel,start=ctx.state?.islandCancelFence;
@@ -174,10 +175,13 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const signature=threats.map(o=>o.id+':'+o.row+','+o.col).sort().join('|');
     const cost=threatEdgeCost(threats.map(protocolToClient),{radius:8*1024,weight:12,spacing:128});
     if(!cut){
-      cut=cutIslandRail(body,goal,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y),lattice:128,cost:threats.length?cost:null,maxMs:4000});
+      const seed=body;
+      cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000});
+      ({l,body}=await read());
+      if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
       if(!cut.ok||!cut.bridgeOk){
         ctx.state.islandFineFailure={room,target,body,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,seed:cut.seed,visited:cut.visited},
-          floor:floorAt(geo,body.x,body.y),seedFloor:floorAt(geo,cut.seed.x,cut.seed.y)};
+          floor:floorAt(geo,body.x,body.y),seedFloor:cut.seed?floorAt(geo,cut.seed.x,cut.seed.y):null};
         throw Error('fine_route_cut_failed');
       }index=0;cut.threatSignature=signature;lastRiskCut=Date.now();
     }

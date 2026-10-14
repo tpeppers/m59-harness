@@ -9,6 +9,7 @@ process.env.M59_UPTIME_FILE=path.join(evidence,'uptime.jsonl');
 const {Autopilot}=await import('./m59-autopilot.mjs');
 const {geometryFor}=await import('./m59-safespots.mjs');
 const {attachSurvivalDecisions,currentSurvivalDecision,chooseSurvivalDecision}=await import('./m59-survival-decision.mjs');
+const {withMoveOrder,keeperOrigin,liveMoveOrder}=await import('./m59-move-origin.mjs');
 const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
 let passed=0;
 async function test(name,run){await run();console.log('PASS '+name);passed++;}
@@ -83,5 +84,17 @@ await test('a deferred shelter note does not throw or invent a chosen refuge',as
  const f=fixture(),run=f.k.shelterRun;
  f.s.shelterPolicy.onDivert(null,{atStep:1,suppressed:'one leg of progress owed since the last refuge'});
  assert.equal(currentSurvivalDecision(f.s).id,f.d.id);assert.equal(f.k.shelterRun,run);
+});
+await test('a nested shelter retains its original journey issuer during suspension',async()=>{
+ const f=fixture(),origin={source:'fleetscript',name:'courier',run_id:'parent-proof'};
+ f.k.revive('configure parent proof');
+ await withMoveOrder(f.s,{kind:'travel',to:544,origin},async()=>{
+   const parent=liveMoveOrder(f.s).origin;
+   f.k.goTravelling('courier destination',{to:544});
+   await withMoveOrder(f.s,{kind:'shelter',to:'r7c16',origin:keeperOrigin('shelter')},async()=>{
+     assert.equal(f.k.suspendJourney('nested recovery'),true);
+     assert.equal(f.k.suspendedJourney.to,544);assert.deepEqual(f.k.suspendedJourney.origin,parent);
+   });
+ });
 });
 console.log(passed+' route refuge arrival scenarios passed');

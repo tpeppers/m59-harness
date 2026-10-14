@@ -5978,7 +5978,8 @@ class Session {
       if (typeof this.crossBySafeLegs === 'function') {
         legged = await this.crossBySafeLegs(exit, { movementGeneration, controlToken,
                                                      fromRoom: cameFromRoom, toRoom: nextHop.to })
-          .catch(e => ({ ran: false, error: e?.message ?? String(e) }));
+          .catch(e => {console.warn('[safe-legs] planner failed: '+(e?.stack??String(e)));
+            return { ran: false, error: e?.message ?? String(e) };});
         if (legged?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
           return this.cancelledMovement({ log });
         if (legged?.refused || (legged?.error && this.safeLegPolicy?.required === true))
