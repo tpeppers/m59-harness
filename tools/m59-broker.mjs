@@ -33,6 +33,7 @@
 // the trade this whole file exists to make.
 
 import { identifiedAs } from './m59-item-signature.mjs';
+import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
@@ -8624,10 +8625,9 @@ const TOOLS = [
       const before = { col: me.col, row: me.row };
       const declaration=declaredFine.find(j=>j.from.row===declared.from.row&&j.from.col===declared.from.col&&
         j.to.row===declared.to.row&&j.to.col===declared.to.col);
-      const fine=declaration?.to_fine;
-      const r = await s.step(a.to_col, a.to_row, { fall: true,
-        timedFall:declaration?.requires?.timed_fall===true,
-        ...(fine?{aimX:fine.x/16+64,aimY:fine.y/16+64}:{}) });
+      const move=declaredJumpMoveOptions(declaration,s.client?.vitals?.()?.vigor?.value);
+      if(!move.ok)return {made:false,moved:false,reason:move.reason};
+      const r = await s.step(a.to_col, a.to_row, move.options);
       const now = s.client?.self;
       const landed = now ? { col: now.col, row: now.row } : null;
       // WHERE IT LANDED IS THE ONLY HONEST VERDICT. A jump that comes up short lands on real
@@ -12146,7 +12146,7 @@ const TOOLS = [
           'a wait. `false` switches it off for this character; `{rooms: [599, ...]}` replaces the ' +
           'room list; `null` returns to the default, which is Ukgoth (599) only. Optional keys ' +
           'maxLeg, legCost, threatWeight, threatRadius, maxDetour, slack, deadlineMs and corridorRadius tune the ' +
-          'planner. required=true refuses a failed wall chain instead of walking directly. ' +
+          'planner; maxLegByRoom maps room numbers to a different maximum leg distance. required=true refuses a failed wall chain instead of walking directly. ' +
           'fineLegs=true proves the first approach from the actual fine position and inserts a reachable refuge before the distance limit. ' +
           'See tools/m59-safelegs.mjs. M59_SAFE_LEGS=0 turns it off process-wide.' },
       travel_hold_vigor: { type: 'number',

@@ -58,14 +58,18 @@ export function normalizeSafeLegPolicy(want){
   if(want==null)return null;
   if(want===false||want==='off')return false;
   if(typeof want!=='object'||Array.isArray(want))throw Error('safe_legs must be false, null, or an object such as {rooms: [599]}');
-  const known=['rooms','maxLeg','legCost','threatWeight','threatRadius','maxDetour','slack','deadlineMs','maxLegs','corridorRadius','off','required','fineLegs'];
+  const known=['rooms','maxLeg','maxLegByRoom','legCost','threatWeight','threatRadius','maxDetour','slack','deadlineMs','maxLegs','corridorRadius','off','required','fineLegs'];
   const bad=Object.keys(want).filter(k=>!known.includes(k));
   if(bad.length)throw Error('safe_legs: no such key '+bad.map(k=>'"'+k+'"').join(', '));
   if(want.rooms!==undefined&&!(Array.isArray(want.rooms)&&want.rooms.every(r=>Number.isFinite(Number(r)))))throw Error('safe_legs.rooms must be an array of room numbers');
   for(const k of ['required','fineLegs'])if(want[k]!==undefined&&typeof want[k]!=='boolean')throw Error('safe_legs.'+k+' must be a boolean');
-  for(const k of known.filter(k=>!['rooms','off','required','fineLegs'].includes(k)))
+  if(want.maxLegByRoom!==undefined&&(!want.maxLegByRoom||typeof want.maxLegByRoom!=='object'||Array.isArray(want.maxLegByRoom)
+      ||Object.entries(want.maxLegByRoom).some(([room,n])=>!/^\d+$/.test(room)||!Number.isFinite(Number(n))||Number(n)<=0)))
+    throw Error('safe_legs.maxLegByRoom must map room numbers to positive finite distances');
+  for(const k of known.filter(k=>!['rooms','maxLegByRoom','off','required','fineLegs'].includes(k)))
     if(want[k]!==undefined&&!(Number(want[k])>0))throw Error('safe_legs.'+k+' must be a positive number — got '+want[k]);
-  return {...want,...(want.rooms?{rooms:want.rooms.map(Number)}:{})};
+  return {...want,...(want.rooms?{rooms:want.rooms.map(Number)}:{}),
+    ...(want.maxLegByRoom?{maxLegByRoom:Object.fromEntries(Object.entries(want.maxLegByRoom).map(([r,n])=>[r,Number(n)]))}:{})};
 }
 
 export const SAFE_LEG_DEFAULTS = Object.freeze({
@@ -244,16 +248,50 @@ export function legWalls(geo, { occupied = null, unreachable = null } = {}) {
 // Prove the approach from the actual body and stop at a refuge on that route
 // before its travelled distance exceeds the leg allowance (64 KOD per square).
 export function planFineSafeLeg(geo,from,target,{maxLeg=SAFE_LEG_DEFAULTS.maxLeg,occupied=null,unreachable=null,avoidSquares=null,exitGoal=null,table=null,room=null,...options}={}){
+  const started=now(),remaining=()=>Math.max(0,500-(now()-started));
   const goal=geo?.standPointWire?.(target.row,target.col);
   if(!goal)return {found:false,reason:'safe_leg_stand_point_unavailable'};
   let route=planBodyDetour(geo,from,goal,{...options,goalSquare:target,avoidSquares,
-    marginSquares:24,maxRangeSquares:24,spacingUnits:16,maxNodes:16000,maxMs:500});
+    marginSquares:24,maxRangeSquares:24,spacingUnits:16,maxNodes:16000,maxMs:remaining()});
   // A square-labelled wall can be on a different ledge. A compatible exit rail
   // can supply a proved route around it, with the same short refuge stops.
-  if(!route.found&&exitGoal&&table&&room!=null)
-    route=planRailDeparture(geo,from,exitGoal,{...options,avoidSquares,table,room});
+  if(!route.found&&exitGoal&&table&&room!=null&&remaining()>0)
+    route=planRailDeparture(geo,from,exitGoal,{...options,avoidSquares,table,room,maxMs:remaining()});
   if(!route.found)return route;
   const walls=new Set(legWalls(geo,{occupied,unreachable}).map(w=>key(w.row,w.col)));
+  // A departure proof may only board a nearby suffix. Continue that compatible
+  // rail locally until it offers a refuge; each bend gets its own body proof.
+  if(route.rail?.squares?.length){
+    let at=route.waypoints.at(-1)??from,used=0,previous=from;
+    for(const p of route.waypoints){used+=Math.hypot(p.x-previous.x,p.y-previous.y)/64;previous=p;}
+    for(const q of route.rail.squares.slice(1)){
+      if(used>maxLeg||q.fall||remaining()<=0)break;
+      const end=geo.standPointWire(q.row,q.col);
+      if(!end)break;
+      const leg=planBodyDetour(geo,at,end,{...options,avoidSquares,goalSquare:q,
+        marginSquares:4,maxRangeSquares:8,spacingUnits:16,maxNodes:1200,maxMs:Math.min(35,remaining())});
+      if(!leg.found)break;
+      for(const p of leg.waypoints){used+=Math.hypot(p.x-at.x,p.y-at.y)/64;at=p;route.waypoints.push(p);}
+      if(walls.has(key(Math.floor(at.y/64),Math.floor(at.x/64))))break;
+      // The rail runs along the open lane; a refuge may be one square beside it.
+      const nearby=[...walls].map(k=>k.split(',').map(Number)).filter(([row,col])=>
+        Math.hypot(row-Math.floor(at.y/64),col-Math.floor(at.x/64))<=2
+        &&(row!==Math.floor(from.y/64)||col!==Math.floor(from.x/64)))
+        .sort(([ar,ac],[br,bc])=>Math.hypot(ar-target.row,ac-target.col)-Math.hypot(br-target.row,bc-target.col));
+      let sheltered=false;
+      for(const [row,col] of nearby.slice(0,4)){
+        if(remaining()<=0)break;
+        const side=planBodyDetour(geo,at,geo.standPointWire(row,col),{...options,avoidSquares,goalSquare:{row,col},
+          marginSquares:2,maxRangeSquares:8,spacingUnits:8,maxNodes:768,maxMs:Math.min(35,remaining())});
+        if(!side.found)continue;
+        let point=at,extra=0;
+        for(const p of side.waypoints){extra+=Math.hypot(p.x-point.x,p.y-point.y)/64;point=p;}
+        if(used+extra>maxLeg)continue;
+        route.waypoints.push(...side.waypoints);sheltered=true;break;
+      }
+      if(sheltered)break;
+    }
+  }
   let at=from,distance=0,stop=null;
   for(const [i,p] of route.waypoints.entries()){
     distance+=Math.hypot(p.x-at.x,p.y-at.y)/64;at=p;

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {normalizeSafeLegPolicy} from './m59-safelegs.mjs';
 assert.deepEqual(normalizeSafeLegPolicy({rooms:['599',2500],required:true,maxLeg:14}),{rooms:[599,2500],required:true,maxLeg:14});
 assert.deepEqual(normalizeSafeLegPolicy({rooms:[2500],required:false}),{rooms:[2500],required:false});
+assert.deepEqual(normalizeSafeLegPolicy({maxLegByRoom:{2501:'28'}}),{maxLegByRoom:{2501:28}});
+for(const maxLegByRoom of [[],null,{2501:Infinity},{abc:28},{2501:0}])assert.throws(()=>normalizeSafeLegPolicy({maxLegByRoom}),/distances/);
 assert.equal(normalizeSafeLegPolicy(null),null);assert.equal(normalizeSafeLegPolicy('off'),false);
 for(const required of ['true',1,0,null])assert.throws(()=>normalizeSafeLegPolicy({required}),/boolean/);
 assert.throws(()=>normalizeSafeLegPolicy({maxLeg:0}),/positive/);

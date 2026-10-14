@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {roomGeometry} from './m59-ground.mjs';
 import {planFineSafeLeg,normalizeSafeLegPolicy,legWalls} from './m59-safelegs.mjs';
-import {validateEscape} from './m59-pocket-rails.mjs';
+import {validateEscape,planRailDeparture} from './m59-pocket-rails.mjs';
+import {loadMap} from './m59-map.mjs';
+import {routesFor,attachStepMasks} from './m59-routes.mjs';
+const map=loadMap();attachStepMasks(map);const table=routesFor(map.geometryManifestSha256);
 // Actual Ugol wall departure: the square graph calls it seven steps, but the
 // body must leave south, cross west, then go north around the ledge.
 const geo=roomGeometry(2500),from={x:2608,y:2352},target={row:29,col:36};
@@ -23,4 +26,14 @@ const avoid=new Set(['37,38','39,33','39,34']),avoiding=planFineSafeLeg(geo,from
 if(avoiding.found)assert(validateEscape(geo,from,avoiding.waypoints,{avoidSquares:avoid}).ok);
 assert.equal(normalizeSafeLegPolicy({fineLegs:true}).fineLegs,true);
 assert.throws(()=>normalizeSafeLegPolicy({fineLegs:'yes'}),/fineLegs must be a boolean/);
+const pocket=planFineSafeLeg(geo,{x:816,y:688},{row:6,col:16},{maxLeg:14});
+assert(pocket.found,JSON.stringify(pocket));assert(pocket.steps<=14);
+assert(validateEscape(geo,{x:816,y:688},pocket.waypoints).ok);
+const chamber=roomGeometry(2501),entry={x:416,y:3808},stage={row:31,col:2};
+const departure=planRailDeparture(chamber,entry,stage,{room:2501,table});
+assert(departure.found,'an inside edge stage must retain its compatible boundary rail');
+assert(departure.rail.squares.at(-1).col<=2);
+const corridor=planFineSafeLeg(chamber,entry,{row:56,col:31},{maxLeg:28,exitGoal:stage,table,room:2501});
+assert(corridor.found,JSON.stringify(corridor));assert(corridor.steps<=28);
+assert(validateEscape(chamber,entry,corridor.waypoints).ok);
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');

@@ -34,6 +34,22 @@ import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
 
 export const LATTICE = 64;
 
+// Radius and sample spacing use the same coordinate units as the supplied points.
+export function threatEdgeCost(threats,{radius,weight=6,spacing=LATTICE}={}){
+  const points=threats.filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
+  return (a,b)=>{
+    const distance=Math.hypot(b.x-a.x,b.y-a.y);
+    if(!points.length||!(radius>0)||!(weight>0))return distance;
+    const samples=Math.max(1,Math.ceil(distance/spacing));let extra=0;
+    for(let i=1;i<=samples;i++){
+      const x=a.x+(b.x-a.x)*i/samples,y=a.y+(b.y-a.y)*i/samples;
+      let pressure=0;for(const p of points)pressure=Math.max(pressure,Math.max(0,1-Math.hypot(x-p.x,y-p.y)/radius));
+      extra+=weight*pressure;
+    }
+    return distance*(1+extra/samples);
+  };
+}
+
 /** Nearest lattice point. A body is never on the lattice; a flood only visits lattice points. */
 export const snap = (v, lattice = LATTICE) => Math.round(v / lattice) * lattice;
 
@@ -43,7 +59,8 @@ export const snap = (v, lattice = LATTICE) => Math.round(v / lattice) * lattice;
  * `edge(a, b)` is the mover's trace, passed in rather than imported, so this module has no opinion
  * about what walking means and cannot drift from whatever the mover actually enforces.
  */
-export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, cap = 400_000 }) {
+export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, cap = 400_000, cost = null, maxMs = 2000 }) {
+  if(typeof cost==='function')return pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs});
   const key = (x, y) => `${x},${y}`;
   const parent = new Map([[key(seed.x, seed.y), null]]);
   const q = [seed];
@@ -67,6 +84,30 @@ export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, ca
   return parent;
 }
 
+// Optional live-risk pricing leaves the original geometry flood unchanged.
+function pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs}){
+  const key=p=>p.x+','+p.y,parent=new Map([[key(seed),null]]),best=new Map([[key(seed),0]]),open=[],started=performance.now();
+  const h=p=>stopAt?Math.hypot(p.x-stopAt.x,p.y-stopAt.y):0;
+  const push=p=>{open.push(p);let i=open.length-1;while(i){const j=(i-1)>>1;if(open[j].f<=p.f)break;open[i]=open[j];i=j;}open[i]=p;};
+  const pop=()=>{const p=open[0],last=open.pop();if(open.length){let i=0;while(2*i+1<open.length){let j=2*i+1;if(j+1<open.length&&open[j+1].f<open[j].f)j++;if(last.f<=open[j].f)break;open[i]=open[j];i=j;}open[i]=last;}return p;};
+  push({...seed,g:0,f:h(seed)});
+  const dirs=[[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+  while(open.length&&parent.size<cap){
+    if(performance.now()-started>=maxMs){parent.reason='priced rail search budget';parent.complete=false;return parent;}
+    const p=pop();if(p.g!==best.get(key(p)))continue;
+    if(stopAt&&key(p)===key(stopAt)){parent.complete=true;return parent;}
+    for(const [dx,dy] of dirs){
+      const q={x:p.x+dx*lattice,y:p.y+dy*lattice};
+      if(q.x<0||q.y<0||q.x>=bounds.w||q.y>=bounds.h||!edge(p,q))continue;
+      const price=cost(p,q),distance=Math.hypot(q.x-p.x,q.y-p.y);
+      if(!Number.isFinite(price)||price<distance-0.01)continue;
+      const g=p.g+price,k=key(q);if(g>=(best.get(k)??Infinity))continue;
+      best.set(k,g);parent.set(k,{x:p.x,y:p.y});push({...q,g,f:g+h(q)});
+    }
+  }
+  parent.complete=!stopAt;parent.reason=open.length?'priced rail node budget':'priced rail did not reach the goal';return parent;
+}
+
 /** Walk a flood's parent chain back from `goal`, seed first. Null when the goal was not reached. */
 export function chainTo(parent, goal) {
   const key = (x, y) => `${x},${y}`;
@@ -86,7 +127,7 @@ export function chainTo(parent, goal) {
  * stepped, and the original hand-cut rails were all built and "verified" this way, with ONE trace
  * across spans up to 24,320 units. That is a claim about an endpoint, not about a path.
  */
-export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, alternateSeeds = true } = {}) {
+export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, alternateSeeds = true, cost = null, maxMs = 2000 } = {}) {
   const seed = { x: snap(body.x, lattice), y: snap(body.y, lattice) };
   const target = { x: snap(goal.x, lattice), y: snap(goal.y, lattice) };
   const bridge = Math.hypot(seed.x - body.x, seed.y - body.y);
@@ -103,13 +144,14 @@ export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, 
       if (chordWalkable(body, p, { edge, lattice }).ok) candidates.push({ p, distance });
     }
     for (const { p } of candidates.sort((a, b) => a.distance - b.distance).slice(0, 8)) {
-      const cut = cutRail(p, goal, { edge, bounds, floorAt, lattice, alternateSeeds: false });
+      const cut = cutRail(p, goal, { edge, bounds, floorAt, lattice, alternateSeeds: false, cost, maxMs });
       if (cut.ok && cut.bridgeOk) return { ...cut, bridgeOk: true, alternateSeed: true,
         waypoints: [{ ...body, f: floorAt?.(body.x, body.y) ?? null }, ...cut.waypoints],
         legs: cut.legs + 1 };
     }
   }
-  const parent = flood(seed, { edge, bounds, lattice, stopAt: target });
+  const parent = flood(seed, { edge, bounds, lattice, stopAt: target, cost, maxMs });
+  if(parent.complete===false)return {ok:false,why:parent.reason,visited:parent.size,seed,target,bridge,bridgeOk};
   const chain = chainTo(parent, target);
   if (!chain) return { ok: false, why: 'the flood did not reach the goal', visited: parent.size,
                        seed, target, bridge, bridgeOk };
@@ -169,17 +211,19 @@ export function chordWalkable(a, b, { edge, lattice = LATTICE } = {}) {
 
 export function furthestTraceable(waypoints, body, { edge, fromIndex = 0, maxAhead = 64,
                                                      budget = Infinity, lattice = LATTICE,
-                                                     minAim = MIN_MOVER_STEP } = {}) {
+                                                     minAim = MIN_MOVER_STEP, cost = null } = {}) {
   if (!Array.isArray(waypoints) || waypoints.length === 0 || typeof edge !== 'function') return null;
   const last = waypoints.length - 1;
   const start = Math.max(0, Math.min(fromIndex, last));
-  let best = null;
+  let best = null,originalCost=0,previous=body;
   for (let i = start + 1; i <= Math.min(last, start + maxAhead); i++) {
     const w = waypoints[i];
+    if(cost){originalCost+=cost(previous,w);previous=w;}
     const d = Math.hypot(w.x - body.x, w.y - body.y);
     if (d > budget) break;
     // STEPPED, not a single call over the whole chord — see chordWalkable.
     if (!chordWalkable(body, w, { edge, lattice }).ok) break;   // contiguity: stop at the first gap
+    if(cost&&cost(body,w)>originalCost+0.01)continue;
     best = { i, x: w.x, y: w.y, f: w.f, dist: Math.round(d), spanned: i - start };
   }
   // Nothing ahead is chord-reachable. The next waypoint is one validated lattice step — but ONE

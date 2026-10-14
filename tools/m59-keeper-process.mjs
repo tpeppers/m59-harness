@@ -27,6 +27,7 @@ import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
+import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
 // The addressing predicate, and WHY an order is not ours. Lifted out of this file so it can
 // be tested without starting a keeper — see m59-keeper-address.mjs.
 import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
@@ -2767,7 +2768,6 @@ const server = createServer(async (req, res) => {
                      my_floor: myFloor });
               return;
             }
-            void from;
             // A JUMP THAT DID NOT MOVE THE BODY IS NOT A JUMP.
             //
             // This reported `jumped: true` whenever `step` returned at all, and a caller
@@ -2781,20 +2781,18 @@ const server = createServer(async (req, res) => {
             // AIM AT THE DECLARED LANDING POINT, NOT THE MIDDLE OF ITS SQUARE. See `step`:
             // r40c32 spans 3200..10880 and its centre is the gully. The operator's `to_fine`
             // is the shelf.
-            const land = raw.find(x => x?.to && x.to_fine &&
+            const land = raw.find(x => x?.from&&x?.to&&Number(x.from.row)===from.row&&Number(x.from.col)===from.col&&
               Number(x.to.row) === Number(match.row) && Number(x.to.col) === Number(match.col));
-            const aim = land ? { aimX: land.to_fine.x / 16 + 64, aimY: land.to_fine.y / 16 + 64 } : {};
-            const r = await session.step(toCol, toRow, { fall: true,
-              timedFall:land?.requires?.timed_fall===true, ...aim });
+            const move=declaredJumpMoveOptions(land,session.client?.vitals?.()?.vigor?.value);
+            if(!move.ok){json({jumped:false,arrived:false,reason:move.reason});return;}
+            const r = await session.step(toCol, toRow, move.options);
             const now = session.client?.self;
             const moved = !!now && (now.row !== before.row || now.col !== before.col);
             json({ jumped: moved, asked: { row: toRow, col: toCol },
-                   from: before, aimed_at_fine: !!land,
+                   from: before, aimed_at_fine: !!land?.to_fine,
                    landed: now ? { row: now.row, col: now.col } : null,
                    arrived: !!now && now.row === toRow && now.col === toCol,
-                   ...(moved ? {} : { reason: `the jump was accepted but the body did not move — ` +
-                        `still at ${before.row},${before.col}. A fall is a trajectory: it has to ` +
-                        `start from the declared take-off, not a square beside it.` }),
+                   ...(moved ? {} : { reason: r?.reason?`declared jump refused: ${r.reason}`:'declared jump landing not observed' }),
                    mover: r ?? null });
             return;
           }

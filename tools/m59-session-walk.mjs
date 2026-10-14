@@ -206,19 +206,40 @@ export function sessionWalkPrototype(deps) {
     return {...result,via:'fine_waypoint_departure',deviation:d};
   }
 
-  async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48}={}) {
+  async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48,shelterFallback=true}={}) {
     const c=this.need(),roomId=c.room.id;
     if(waypoints.length>maxSteps)return {arrived:false,reason:'departure detour exceeds step budget'};
     let steps=0;
     for(const p of waypoints){
       if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
       if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
-      if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps});
-      const r=await this.stepFine(p.x,p.y,{bodyDetour:true,
-        beforeMutation:(kind,details)=>!this.movementWasCancelled(movementGeneration,controlToken)&&(typeof beforeMutation!=='function'||beforeMutation(kind,details)!==false)});steps++;
+      if(shelterFallback&&await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps});
+      const before=c.self&&{x:c.self.x,y:c.self.y};
+      const move=()=>this.stepFine(p.x,p.y,{bodyDetour:true,
+        beforeMutation:(kind,details)=>!this.movementWasCancelled(movementGeneration,controlToken)&&(typeof beforeMutation!=='function'||beforeMutation(kind,details)!==false)});
+      let r=await move();
+      const vertical=this.collisionVertical,now=Date.now();
+      if(!r.moved&&['geometry_blocked','exact_move_refused'].includes(r.reason)&&vertical?.roomId===roomId&&vertical.settleAt>now&&vertical.settleAt-now<=3000){
+        // A floor-height route may go under an overhang only after the stock
+        // falling body has landed. Keep the same pose/order, then re-prove it.
+        while(Date.now()<vertical.settleAt){
+          if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
+          if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
+          if(shelterFallback&&await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'settling a departure fall'}))return this.cancelledMovement({steps});
+          await new Promise(resolve=>setTimeout(resolve,Math.min(100,vertical.settleAt-Date.now())));
+        }
+        if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
+        if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
+        if(c.self?.x===before.x&&c.self?.y===before.y)r=await move();
+      }
+      steps++;
       if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps});
       if(r.left_room)return {arrived:false,left_room:true,steps};
-      if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2)return {...r,arrived:false,steps,reason:r.reason??'departure waypoint did not arrive'};
+      if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2){
+        const leg={from:before,to:p,reason:r.reason??'departure waypoint did not arrive',vertical:this.collisionVertical??null};
+        console.log('[fine-departure] '+JSON.stringify(leg));
+        return {...r,arrived:false,steps,reason:leg.reason,departure_leg:leg};
+      }
       if(steps>=maxSteps&&p!==waypoints.at(-1))return {arrived:false,steps,reason:'departure detour spent step budget'};
     }
     const reply=await this.confirmPosition({timeoutMs:1500});
@@ -1415,9 +1436,10 @@ export function sessionWalkPrototype(deps) {
     // Local escape packets are all-or-nothing. A moving monster invalidates a
     // leg instead of clipping it and forcing a blocking read in attack range.
     const queued = await this.queueValidatedMove(x, y,
-      { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous,minGap: MOVE_INTERVAL_MS,
-        beforeMutation:continuous?(kind,details)=>this.client===c&&!this.movementWasCancelled(generation,token)
-          &&(typeof options?.beforeMutation!=='function'||options.beforeMutation(kind,details)!==false):null });
+      { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous,
+        minGap:Math.max(MOVE_INTERVAL_MS,Math.ceil(1000*Math.hypot(x-before.x,y-before.y)/(KOD_FINENESS*squaresPerSecond(this.moveSpeed())))),
+        beforeMutation:(kind,details)=>this.client===c&&!this.movementWasCancelled(generation,token)
+          &&(typeof options?.beforeMutation!=='function'||options.beforeMutation(kind,details)!==false) });
     const validation = queued.validation ?? {};
     if (!queued.sent) {
       // Return the collision refusal to the walker so it can fan or replan.
@@ -7194,6 +7216,7 @@ export function sessionWalkPrototype(deps) {
     if (!geo?.collisionReady || !goal) return policy?.required === true
       ? {ran:false, refused:true, fallback:'safe_leg_geometry_unavailable'} : null;
     const opts = { ...(policy && typeof policy === 'object' ? policy : {}) };
+    if(opts.maxLegByRoom?.[room.num]!=null)opts.maxLeg=Number(opts.maxLegByRoom[room.num]);
     const roomId = c.room?.id;
     const started = Date.now();
     const out = { ran: true, room: room.num, legs: 0, walls: [], plans: 0, plan_ms_max: 0,
@@ -7280,7 +7303,15 @@ export function sessionWalkPrototype(deps) {
         `r${goal.row}c${goal.col}: ${plan?.found ? `${plan.legs.length} leg(s), next ${plan.legs[0].kind} ` +
         `r${plan.legs[0].row}c${plan.legs[0].col}/${plan.legs[0].steps}` : `no plan (${plan?.reason})`} ` +
         `in ${plan?.ms}ms, ${threats.length} threat(s)`);
-      if (!plan?.found) { out.fallback = plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
+      let boot=null;
+      if(!plan?.found&&opts.fineLegs===true){
+        boot=planFineSafeLeg(geo,c.self,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+          threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
+          objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
+          avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
+        if(boot.found)plan={found:true,legs:[{kind:'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
+      }
+      if (!plan?.found) { out.fallback = boot?.reason ?? plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
       if (n === 0) { out.planned_legs = plan.legs.length; out.planned_steps = plan.steps; out.direct_steps = plan.direct_steps; }
       let next = plan.legs[0];
       // The last leg is the exit's, and the exit walker owns it.
@@ -7288,9 +7319,10 @@ export function sessionWalkPrototype(deps) {
       // Kept inside the corridor too: the walker plans its own route to the wall, and without
       // this it plans the same unwalked shortcut the corridor exists to keep the legs off.
       // `walkTo` relaxes occupancy before it gives up, so this can cost a detour and never a walk.
-      let fine=null;
+      let fine=boot?.found?boot:null;
       if(opts.fineLegs===true){
-        fine=planFineSafeLeg(geo,c.self,next,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+        fine??=planFineSafeLeg(geo,c.self,next,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+          threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
           objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
           avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
         if(!fine.found){
@@ -7303,7 +7335,7 @@ export function sessionWalkPrototype(deps) {
         console.log(`[safe-legs] ${c.me?.name??this.name??'?'} proved ${fine.steps.toFixed(1)} squares / ${fine.waypoints.length} moves to r${next.row}c${next.col}`);
       }
       const walked = await (fine?this.walkDepartureLegs(fine.waypoints,next,
-        {maxSteps:fine.waypoints.length,movementGeneration,controlToken}):this.walkTo(next.col, next.row,
+        {maxSteps:fine.waypoints.length,movementGeneration,controlToken,shelterFallback:false}):this.walkTo(next.col, next.row,
         { maxSteps: Math.max(20, next.steps * 2), movementGeneration, controlToken,
           ...(avoid ? { avoidSquares: avoid } : {}) }))
         .catch(e => ({ arrived: false, reason: e.message }));
@@ -7312,7 +7344,7 @@ export function sessionWalkPrototype(deps) {
       let at = c.self;
       // A WALL IS A POCKET, AND THE LAST STEP INTO ONE IS THE FINE GRID'S. See the handover in
       // Shelter approach: the square walker is best for the haul and worst for the last squares.
-      if (!(walked?.arrived && at?.row === next.row && at?.col === next.col)
+      if (!fine&&!(walked?.arrived && at?.row === next.row && at?.col === next.col)
           && at && Math.max(Math.abs(at.row - next.row), Math.abs(at.col - next.col)) <= 3
           && typeof this.approachFine === 'function') {
         await this.approachFine(next.col, next.row, { movementGeneration, controlToken }).catch(() => null);

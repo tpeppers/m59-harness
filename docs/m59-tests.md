@@ -35,6 +35,14 @@
 
 These tests are offline. They do not execute a raid or shut down a server.
 
+Island movement regressions run in `m59-movement-suite.mjs`: fine refuge
+approaches and actual-distance bounds (`m59-fine-safeleg-test`), policy
+transport including per-room distances (`m59-safeleg-policy-test`), bounded
+keeper rest dispatch (`m59-rest-dispatch-test`), and declared takeoff refinement
+with stock gravity at four frame intervals (`m59-jump-takeoff-test`). The
+pocket suite also checks fall settlement and cancellation before a delayed
+departure packet. Populated fleet trials remain separate live evidence.
+
 ## Object ids across server saves
 
 - `node tools/m59-idgen-test.mjs` (64): every system save renumbers every object id

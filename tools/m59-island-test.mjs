@@ -99,6 +99,11 @@ assert.equal(reconnectReads,3);
 reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2501,orderedBy:'another-order',pollMs:0}),/health_unreadable/);
 reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2502,orderedBy:'our-order',pollMs:0}),/health_unreadable/);
 reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2501,orderedBy:'our-order',deadline:0,pollMs:0}),/reconnect_budget/);
+let nestedReads=0;
+const nested=await readIslandJourney({agent:'fixture',call:async name=>name==='look'?(++nestedReads<2?{hp:null}:look(2504,6)):
+ {movement:{last_preempted:{by:{source:'keeper'},preempted:{to:'refuge',ordered_by:'keeper:safe_spot'}}},
+  autopilot_status:{suspended_journey:{to:2505,ordered_by:'our-order'}}}},{to:2505,orderedBy:'our-order',pollMs:0});
+assert.equal(nested.hp.value,6);assert.equal(nestedReads,2);
 const fine={ok:true,fresh:true,room:2502,protocol:{x:2201,y:2650},square:{row:41,col:34}};
 assert.deepEqual(bindIslandFinePosition(look(2502),fine).you,{row:41,col:34,x:2201,y:2650});
 assert.throws(()=>bindIslandFinePosition(look(2502),{...fine,fresh:false}),/unconfirmed/);

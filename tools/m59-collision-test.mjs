@@ -1282,7 +1282,8 @@ const stepFine = compileSessionMethod(brokerSource,
   // on anything else. FINE_CONFIRM_EVERY is 1 here on purpose: these fixtures assert what a
   // CONFIRMED step reports, so the suite keeps testing the read-back path rather than
   // silently switching to the predicted one.
-  { MOVE_INTERVAL_MS: 0, Pacer: { note() {} }, FINE_CONFIRM_EVERY: 1, KOD_FINENESS: 64 });
+  { MOVE_INTERVAL_MS: 0, Pacer: { note() {} }, FINE_CONFIRM_EVERY: 1, KOD_FINENESS: 64,
+    squaresPerSecond: () => 5 });
 const ordinaryStep = compileSessionMethod(brokerSource,
   'async step(col, row, {', 'step', {
     MOVE_INTERVAL_MS: 0, ROOM_RESYNC_MS: Number.POSITIVE_INFINITY,
@@ -1624,6 +1625,7 @@ function fakeBrokerSession(geometry, {
     } },
     need() { return this.client; },
     moveSpeed() { return 18; },
+    movementWasCancelled() { return false; },
     validateFineTarget,
     queueValidatedMove,
     confirmPosition,
@@ -4487,6 +4489,16 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
   ok('timed fall sends only after paying the simulated duration',
     sent.sent&&f.packets.length===1&&Date.now()-began>=timed.fall_motion.elapsed_ms);
   ok('landed timed fall does not retain the old high-altitude uncertainty',f.session.collisionVertical===null);
+}
+
+{
+  const f=fakeBrokerSession(twoSides());let queued;
+  f.session.queueValidatedMove=async(x,y,options)=>{queued=options;return {sent:false,validation:{reason:'probe'}};};
+  await stepFine.call(f.session,f.client.self.x+128,f.client.self.y);
+  ok('two-square fine strides pay the stock running duration',queued.minGap===400,String(queued.minGap));
+  ok('fine movement retains its ownership fence while queued',queued.beforeMutation('move',{})===true);
+  f.session.movementWasCancelled=()=>true;
+  ok('a cancelled fine order cannot send its previously queued packet',queued.beforeMutation('move',{})===false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}`);

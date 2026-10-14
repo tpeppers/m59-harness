@@ -59,7 +59,12 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   if(!before.policy||typeof before.policy!=='object')throw Error('traveller_policy_unreadable');
   const prior=before.policy.safeLegs??null;
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
-  if(required){installed.required=true;installed.fineLegs=true;}
+  if(required){
+    installed.required=true;installed.fineLegs=true;
+    // The Chamber's opening corridor has a measured 26-square refuge gap.
+    // Keep operator-specified global or per-room distances authoritative.
+    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2504:28,...prior?.maxLegByRoom};
+  }
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});
   try{
@@ -107,7 +112,10 @@ export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15
     const s=await ctx.call('status',{agent:ctx.agent,brief:true});
     checkIslandCancellation(ctx,s);
     const pre=s.movement?.last_preempted;
-    if(!orderedBy||pre?.by?.source!=='keeper'||pre.preempted?.ordered_by!==orderedBy||Number(pre.preempted?.to)!==to)
+    const hold=s.autopilot_status?.suspended_journey;
+    const ownsPreempted=pre?.by?.source==='keeper'&&pre.preempted?.ordered_by===orderedBy&&Number(pre.preempted?.to)===to;
+    const ownsRecovery=hold?.ordered_by===orderedBy&&Number(hold.to)===to;
+    if(!orderedBy||!(ownsPreempted||ownsRecovery))
       throw Error('traveller_health_unreadable');
     if(Date.now()>=deadline)throw Error('traveller_reconnect_budget');
     await pause(pollMs);
@@ -152,7 +160,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     return reply;
   };
   leg.request=await request();leg.retries=0;
-  let attemptStarted=Date.now();
+  let attemptStarted=Date.now();const recoveryWalls=new Map();
   for(;;){
     await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:Math.min(start+budgetMs,Date.now()+15000),pollMs}),p=sample(l);
     if(p.room===to){leg.ok=true;leg.end=p;break;}
@@ -172,10 +180,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
       if(ownRecovery){
         const at=wall?.at;
         if(wall?.works&&at?.row===p.row&&at?.col===p.col){
-          if((leg.recoveries??0)>=3){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
+          const wallKey=p.room+':'+at.row+','+at.col,count=recoveryWalls.get(wallKey)??0;
+          if(count>=3||(leg.recoveries??0)>=24){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
           // Recovery is made on the observed wall. A shelter order is part of
           // this journey, not a replacement destination or a completed failure.
           await call('rest_up',{agent,to:1,max_seconds:30},45000);
+          recoveryWalls.set(wallKey,count+1);
           leg.recoveries=(leg.recoveries??0)+1;
           let recovered=await call('look',{agent});sample(recovered);
           if(recovered.room?.num===to){leg.ok=true;break;}
