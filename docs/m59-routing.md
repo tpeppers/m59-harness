@@ -21,6 +21,12 @@ squares, including a retreat. The full live-body and mandatory-edge checks
 still apply. A traveler already at that refuge may wait within its existing
 journey budget and re-observe; no refused path becomes a movement command.
 
+When live bodies leave no required refuge prefix from a covered starting
+cell, the fine planner reports that covered wait explicitly. The general
+walker can turn there to wake the room after a reconnect, then re-observe
+traffic within a bounded allowance. It never walks the refused path or
+substitutes a direct route for the required chain.
+
 Shared narrow-passage admission now runs at the validated packet send
 boundary (`m59-passage-admission.mjs`). Connected one-square grid passages
 have one incumbent, claimed atomically across keeper processes in the

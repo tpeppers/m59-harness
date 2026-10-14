@@ -14,6 +14,7 @@ import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot} from './m59-body-detour.mjs';
+import {knownRefugeCell} from './m59-refuge-activation.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -97,7 +98,7 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
     checkIslandCancellation(ctx,s);
     if(!keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})&&!(active&&activeOwnedFineRecovery(ctx,s)))return false;
     const {l}=await read(),wall=s.autopilot_status?.safe_spot;
-    if(wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col){
+    if((wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col)||knownRefugeCell(roomGeometry(l.room?.num),l.you)){
       await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
       await read();await eatIslandAtWall(ctx,onSample);const recovered=await read();
       if(recovered.l.hp.value<recovered.l.hp.max){if(Date.now()>=deadline)return false;continue;}

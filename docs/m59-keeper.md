@@ -6,6 +6,12 @@ approach before `INERT_RESCUE_MS` has elapsed. An overdue recovery, an ended
 order or a cancelled generation still permits rescue; external replans do
 not extend this window. Both watchdog implementations share the same check.
 
+After reconnect, native health regeneration requires the first room action.
+Shared rest sends a normal turn after sitting only when an ordered position
+read confirms a known refuge cell. This preserves the position while arming
+healing; missing positions, changed identities, cancelled movement and active
+PvP control refuse activation. Health gain is still measured normally.
+
 ## Travel crowd recovery and inferred monster attention
 
 `BP_MOVE` feeds a bounded per-client monster pursuit tracker. Object snapshots and

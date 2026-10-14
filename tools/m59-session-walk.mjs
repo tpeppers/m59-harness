@@ -41,6 +41,7 @@ import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
+import {turnAtProvedRefuge} from './m59-refuge-activation.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
@@ -7423,6 +7424,18 @@ export function sessionWalkPrototype(deps) {
           threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
           objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
           avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
+        if(boot?.waiting_refuge?.row===me.row&&boot?.waiting_refuge?.col===me.col){
+          out.refuge_traffic_waits=(out.refuge_traffic_waits??0)+1;
+          if(out.refuge_traffic_waits>120){out.fallback='covered traffic wait budget exhausted';break;}
+          if(!out.traffic_activation?.sent&&(out.traffic_activation_attempts??0)<3){
+            out.traffic_activation_attempts=(out.traffic_activation_attempts??0)+1;
+            out.traffic_activation=await turnAtProvedRefuge(this,{shouldCancel:()=>this.client!==c||c.room?.id!==roomId||this.movementWasCancelled(movementGeneration,controlToken)});
+          }
+          await this.confirmPosition?.({timeoutMs:1500});
+          if(this.movementWasCancelled(movementGeneration,controlToken))return {...out,cancelled:true};
+          if(roomId!=null&&c.room?.id!==roomId){out.left_room=true;return note();}
+          await new Promise(r=>setTimeout(r,500));n--;continue;
+        }
         if(boot?.found)plan={found:true,legs:[{kind:boot.kind==='exit'?'fine_exit':'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
       }
       if (!plan?.found) { out.fallback = boot?.reason ?? plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }

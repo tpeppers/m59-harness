@@ -111,6 +111,8 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     }
     stop.waypoints=pulled;
   }
+  if(!stop&&obstacles.length&&legWalls(geo).some(w=>w.row===from.row&&w.col===from.col))
+    return {found:false,reason:'body_traffic_at_refuge',waiting_refuge:{row:from.row,col:from.col},body_obstacles:obstacles.length,visited:rail.visited,ms:performance.now()-started};
   return stop?{found:true,kind:'wall',...stop,visited:rail.visited,ms:performance.now()-started}:
     {found:false,reason:'no_refuge_on_fine_rail',visited:rail.visited,ms:performance.now()-started};
 }
