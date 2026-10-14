@@ -2,6 +2,7 @@
 // THE BROKER'S LIFECYCLE, OWNED BY SOMETHING THAT IS NOT A CHAT SESSION.
 //
 //   node tools/m59-service.mjs start   [--fleet prod]
+//   node tools/m59-service.mjs start --staged [--fleet prod]    # keepers warm, NOBODY logged in
 //   node tools/m59-service.mjs stop    [--fleet prod]
 //   node tools/m59-service.mjs restart [--fleet prod]           # the BROKER: live handover, nobody leaves
 //   node tools/m59-service.mjs restart --cold [--fleet prod]    # the old way: logs everyone off
@@ -458,6 +459,10 @@ async function cmdStart() {
   // nothing but its own keepers being refused for holding the wrong character.
   if (process.argv.includes('--no-resume')) args.push('--no-resume');
   if (process.argv.includes('--no-rejoin')) args.push('--no-rejoin');
+  // A STAGED START: every keeper warm and dormant, nobody in the world until the TUI's A (or
+  // `dormancy` action start_all). For looking at the server as one character before the fleet
+  // logs on.
+  if (process.argv.includes('--staged')) args.push('--staged');
   // Setup's server-matched local map remains authoritative across ordinary service
   // restarts. An explicit M59_MAP still wins; otherwise selection is local-then-reference.
   const env = { ...process.env, M59_MAP: mapFile };
@@ -480,6 +485,9 @@ async function cmdStart() {
       console.log(`  rpc        http://127.0.0.1:${HTTP_PORT}`);
       console.log(`  dashboard  http://127.0.0.1:${DASH_PORT}/fleet`);
       console.log(`  log        ${LOG_FILE}`);
+      if (has('--staged'))
+        console.log(c.ok('  STAGED     ') + 'keepers come up warm and nobody logs in. In the TUI: L scouts one, ' +
+                    'A logs on the rest (or: dormancy action start_all)');
       // AND THE PAGE, IF IT IS HERE. Started AFTER the broker answers, because it exists
       // only to talk to one and a page that comes up first spends its first seconds
       // reporting a fleet that is not there yet.
