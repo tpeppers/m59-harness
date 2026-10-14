@@ -122,6 +122,7 @@ export const cutFineRailAsync=(geo,from,goal,options={},settings={})=>
   runFineRailWorker(geo,from,goal,options,{...settings,task:'cut'});
 async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,timeoutMs=12000,task}={}){
   if(cancelled())return {found:false,cancelled:true,reason:'movement_cancelled'};
+  if(options.avoidSquares!=null&&!(options.avoidSquares instanceof Set))throw TypeError('avoidSquares must be a Set of row,col keys');
   if(options.bodyRangeSquares!==undefined&&(!Number.isFinite(options.bodyRangeSquares)||options.bodyRangeSquares<=0))throw RangeError('bodyRangeSquares must be positive and finite');
   const geometry=geo.toJSON({includeSurfaces:false,graphEntrySquares:[],edgeDirections:[]});
   const copy={...options,threats:(options.threats??[]).map(o=>({row:o.row,col:o.col,x:o.x,y:o.y})),
@@ -151,14 +152,15 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
     const scopedObjects=Number.isFinite(o.bodyRangeSquares)?new Map([...o.objects].filter(([,p])=>
       Math.hypot(p.x-workerData.from.x,p.y-workerData.from.y)<=o.bodyRangeSquares*64)):o.objects;
     const obstacles=blockingBodySnapshot(scopedObjects,o.selfId);
-    const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
+    const allowed=b=>!o.avoidSquares?.has?.(Math.floor(clientToProtocol(b.y)/64)+','+Math.floor(clientToProtocol(b.x)/64));
+    const edge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
     const settings={
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
       floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}};
     let cut=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
     if((!cut.ok||!cut.bridgeOk)&&obstacles.length&&o.allowBodyPrefix===true){
-      const geometryEdge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
+      const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
         roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
       const guide=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
       if(guide.ok&&guide.bridgeOk){
@@ -181,6 +183,7 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
               .sort((a,b)=>Math.hypot(a.row-workerData.goal.y/64,a.col-workerData.goal.x/64)-Math.hypot(b.row-workerData.goal.y/64,b.col-workerData.goal.x/64));
             for(const w of near.slice(0,4)){
               const side=planBodyDetour(geo,p,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
+                avoidSquares:o.avoidSquares,
                 roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,marginSquares:2,maxRangeSquares:8,
                 maxNodes:768,maxMs:35,threats:o.threats??[],threatWeight:o.threatWeight??12,threatRadius:o.threatRadius??8});
               if(!side.found)continue;

@@ -586,6 +586,24 @@ export function selectedEdgeAt(room, direction, candidate) {
   return selected;
 }
 
+/** Declared edge exits an in-room walk must avoid, using legacy row,col keys. */
+export function roomExitSquares(room,{rows=room?.rows,cols=room?.cols,to=null,includeInland=false}={}) {
+  const out=new Set();
+  if(!Number.isInteger(rows)||!Number.isInteger(cols)||rows<1||cols<1)return out;
+  for(const direction of ['north','south','west','east']){
+    const vertical=direction==='west'||direction==='east',count=vertical?rows:cols;
+    for(let n=1;n<=count;n++){
+      const row=vertical?n:direction==='north'?1:rows,col=vertical?(direction==='west'?1:cols):n;
+      const edge=selectedEdgeAt(room,direction,{row,col});
+      if(!edge||Number(edge.to)===Number(room.num)||to!=null&&Number(edge.to)===Number(to))continue;
+      out.add(row+','+col);
+      if(includeInland){const r=row+(direction==='north'?1:direction==='south'?-1:0),c=col+(direction==='west'?1:direction==='east'?-1:0);
+        if(r>=1&&r<=rows&&c>=1&&c<=cols)out.add(r+','+c);}
+    }
+  }
+  return out;
+}
+
 // Exact BSP-validated crossings for a declared server edge. Keeping this beside the
 // graph makes an impossible direct edge disappear before route search chooses it;
 // execution revalidates the selected coordinates against live room state.
