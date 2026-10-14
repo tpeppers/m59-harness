@@ -76,6 +76,35 @@ const scopedCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640},{objects:ne
 assert(scopedCut.ok&&scopedCut.bridgeOk,'a distant body cannot disprove the current checked prefix');
 assert.equal(scopedCut.body_obstacles,0);assert.equal(scopedCut.body_scope_squares,8);
 await assert.rejects(()=>cutFineRailAsync(konima,arrival,{x:160,y:4640},{bodyRangeSquares:0}),/positive and finite/);
+// Recorded 20-HP Hollows stoppage: an orc seals the distant narrow lane,
+// while the first portion remains traversable and must not count as arrival.
+const hollows=roomGeometry(2502),hollowsFrom={row:42,col:49,x:3160,y:2736},hollowsGoal={x:2201,y:2650};
+const hollowsBodies=new Map([
+ {id:4290,flags:525,x:3672,y:3024},{id:4289,flags:13,x:3464,y:2880},
+ {id:7529,flags:9,x:3479,y:3040},{id:7519,flags:9,x:2656,y:2784}
+].map(o=>[o.id,o]));
+const blockedHollows=await cutFineRailAsync(hollows,hollowsFrom,hollowsGoal,{objects:hollowsBodies,selfId:4287,bodyRangeSquares:10});
+assert.equal(blockedHollows.ok,false,'the full body-aware route is genuinely disconnected');
+const prefixHollows=await cutFineRailAsync(hollows,hollowsFrom,hollowsGoal,{objects:hollowsBodies,selfId:4287,bodyRangeSquares:10,allowBodyPrefix:true,prefixSquares:4});
+assert(prefixHollows.ok&&prefixHollows.bridgeOk&&prefixHollows.partial,JSON.stringify(prefixHollows));
+const prefixObstacles=[...hollowsBodies.values()].map(o=>({id:o.id,x:(o.x-64)*16,y:(o.y-64)*16}));
+for(let i=1;i<prefixHollows.waypoints.length;i++){
+ const a=prefixHollows.waypoints[i-1],b=prefixHollows.waypoints[i],t=hollows.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles:prefixObstacles});
+ assert(t.arrived&&!t.blocked,'every partial-route edge retains body clearance');
+}
+const prefixEnd=prefixHollows.waypoints.at(-1);
+assert(Math.hypot(prefixEnd.x-(hollowsGoal.x-64)*16,prefixEnd.y-(hollowsGoal.y-64)*16)>128,'a prefix never claims the final waypoint');
+const shelterPrefix=await cutFineRailAsync(hollows,hollowsFrom,hollowsGoal,{objects:hollowsBodies,selfId:4287,bodyRangeSquares:10,
+  allowBodyPrefix:true,prefixSquares:4,requirePrefixRefuge:true});
+assert(shelterPrefix.ok&&shelterPrefix.partial&&shelterPrefix.refuge,JSON.stringify(shelterPrefix));
+assert(legWalls(hollows).some(w=>w.row===shelterPrefix.refuge.row&&w.col===shelterPrefix.refuge.col));
+const shelterEnd=shelterPrefix.waypoints.at(-1);
+assert.equal(Math.floor(shelterEnd.y/1024)+1,shelterPrefix.refuge.row);
+assert.equal(Math.floor(shelterEnd.x/1024)+1,shelterPrefix.refuge.col);
+for(let i=1;i<shelterPrefix.waypoints.length;i++){
+ const a=shelterPrefix.waypoints[i-1],b=shelterPrefix.waypoints[i],t=hollows.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles:prefixObstacles});
+ assert(t.arrived&&!t.blocked,'the side approach to the shelter must retain body clearance');
+}
 assert(fineCut.waypoints.length>2);assert.equal(fineCut.waypoints[0].x,(arrival.x-64)*16);
 const merb=roomGeometry(2503),merbBody={row:69,col:76,x:4880,y:4416},merbGoal={row:57,col:2};
 assert.equal((await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:14})).found,false,'Merb needs its measured per-room gap allowance');

@@ -12,6 +12,7 @@ import {fallJumpsIn} from './m59-falljump.mjs';
 import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
+import {blockingBodySnapshot} from './m59-body-detour.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -153,7 +154,8 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   const {agent,call}=ctx,geo=roomGeometry(room),goal=protocolToClient(target),started=Date.now();
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
   if(!geo?.collisionReady)throw Error('fine_route_geometry_unavailable');
-  const edge=(a,b)=>geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true;
+  let liveBodies=[];
+  const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles:liveBodies});return t?.arrived===true&&t.blocked!==true;};
   const squares=new Set(safeSpots(geo,{limit:Infinity}).filter(s=>!s.rim&&hasAnyFooting(geo,s.row,s.col)).map(s=>s.row+','+s.col));
   const read=async()=>{
     const l=await readIslandFinePosition(ctx);onSample(l);
@@ -167,8 +169,10 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     if(!Number.isFinite(l.hp?.value)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
     if(l.hp.value<=0)throw Error('traveller_died');
     const body=protocolToClient(l.you);if(!Number.isFinite(body.x)||!Number.isFinite(body.y))throw Error('fine_route_position_unreadable');
+    liveBodies=blockingBodySnapshot(new Map((l.objects??[]).map(o=>[o.id,o])),l.you.id);
     return {l,body};
   };
+  const partialRefuges=new Set();
   let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,confirmationRetries=0,stride=128,lastRiskCut=0;
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
@@ -185,7 +189,8 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     if(!cut){
       const seed=body;
       cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000,
-        objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id,bodyRangeSquares:bodyScopeSquares});
+        objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id,bodyRangeSquares:bodyScopeSquares,
+        allowBodyPrefix:true,prefixSquares:chordBudget/1024,requirePrefixRefuge:true,excludedPrefixStops:partialRefuges});
       ({l,body}=await read());
       if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
       if(!cut.ok||!cut.bridgeOk){
@@ -193,11 +198,14 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
         ctx.state.islandFineFailure={room,target,body,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,seed:cut.seed,visited:cut.visited},
           floor:floorAt(geo,body.x,body.y),seedFloor:cut.seed?floorAt(geo,cut.seed.x,cut.seed.y):null};
         throw Error('fine_route_cut_failed');
-      }index=0;cut.bodyOrigin={...body};cutWaits=0;cut.threatSignature=signature;lastRiskCut=Date.now();
+      }index=0;cut.bodyOrigin={...body};cut.threatSignature=signature;lastRiskCut=Date.now();
     }
     const direct=furthestTraceable(cut.waypoints,body,{edge,fromIndex:index,maxAhead:48,budget:chordBudget,lattice:128,cost});
     const aim=shelteredIslandAim(cut.waypoints,body,{fromIndex:index,aim:direct,squares,edge,cost});
-    if(!aim||aim.tooClose||!chordWalkable(body,aim,{edge,lattice:128}).ok)throw Error('fine_route_chord_not_proved');
+    if(!aim||aim.tooClose||!chordWalkable(body,aim,{edge,lattice:128}).ok){
+      if((cut.partial||liveBodies.length>0)&&cutWaits++<12){cut=null;await new Promise(r=>setTimeout(r,500));continue;}
+      throw Error('fine_route_chord_not_proved');
+    }
     if(signature!==cut.threatSignature&&Date.now()-lastRiskCut>=2500&&cost(body,aim)>Math.hypot(aim.x-body.x,aim.y-body.y)*1.25){cut=null;continue;}
     const wire=clientToProtocol(aim),quantized=protocolToClient(wire);
     if(!chordWalkable(body,quantized,{edge,lattice:128}).ok)throw Error('fine_route_wire_chord_not_proved');
@@ -223,7 +231,8 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
         throw Error('fine_route_ended_short_'+(reply.reason??'position'));
       }
       cut=null;
-    }else {confirmationRetries=0;index=aim.i;if(aim.sheltered)shelteredStops++;}
+    }else {confirmationRetries=0;cutWaits=0;index=aim.i;if(aim.sheltered)shelteredStops++;
+      if(cut.partial&&index===cut.waypoints.length-1){if(cut.refuge)partialRefuges.add(cut.refuge.row+','+cut.refuge.col);cut=null;}}
   }
   throw Error('fine_route_budget');
 }

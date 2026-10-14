@@ -138,9 +138,48 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
     const obstacles=blockingBodySnapshot(scopedObjects,o.selfId);
     const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
-    const cut=cutRail(point(workerData.from),point(workerData.goal),{edge,
+    const settings={
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
-      floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}});
+      floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}};
+    let cut=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
+    if((!cut.ok||!cut.bridgeOk)&&obstacles.length&&o.allowBodyPrefix===true){
+      const geometryEdge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
+        roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
+      const guide=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
+      if(guide.ok&&guide.bridgeOk){
+        const prefix=[guide.waypoints[0]];let previous=prefix[0],distance=0;
+        for(const p of guide.waypoints.slice(1)){
+          if(!edge(previous,p))break;
+          distance+=Math.hypot(p.x-previous.x,p.y-previous.y);prefix.push(p);previous=p;
+          if(distance>=(o.prefixSquares??4)*1024)break;
+        }
+        let waypoints=prefix,refuge=null;
+        if(o.requirePrefixRefuge===true){
+          const walls=legWalls(geo),from=workerData.from,limit=(o.prefixSquares??4),started=performance.now();
+          waypoints=null;
+          for(let i=prefix.length-1;i>=0&&!waypoints;i-=4){
+            if(performance.now()-started>1000)break;
+            const p={x:clientToProtocol(prefix[i].x),y:clientToProtocol(prefix[i].y)};
+            const used=prefix.slice(1,i+1).reduce((n,q,j)=>n+Math.hypot(q.x-prefix[j].x,q.y-prefix[j].y)/1024,0);
+            const near=walls.filter(w=>(w.row!==from.row||w.col!==from.col)&&!o.excludedPrefixStops?.has?.(w.row+','+w.col)
+              &&Math.hypot(w.row-Math.floor(p.y/64),w.col-Math.floor(p.x/64))<=2)
+              .sort((a,b)=>Math.hypot(a.row-workerData.goal.y/64,a.col-workerData.goal.x/64)-Math.hypot(b.row-workerData.goal.y/64,b.col-workerData.goal.x/64));
+            for(const w of near.slice(0,4)){
+              const side=planBodyDetour(geo,p,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
+                roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,marginSquares:2,maxRangeSquares:8,
+                maxNodes:768,maxMs:35,threats:o.threats??[],threatWeight:o.threatWeight??12,threatRadius:o.threatRadius??8});
+              if(!side.found)continue;
+              let previous=p,extra=0;for(const q of side.waypoints){extra+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
+              if(used+extra>limit)continue;
+              waypoints=[...prefix.slice(0,i+1),...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
+              refuge={row:w.row,col:w.col};break;
+            }
+          }
+        }
+        if(waypoints?.length>1)cut={...guide,waypoints,legs:waypoints.length-1,partial:true,refuge,
+          blocked_route_reason:cut.why??'body route bridge unavailable'};
+      }
+    }
     parentPort.postMessage({...cut,body_obstacles:obstacles.length,
       ...(Number.isFinite(o.bodyRangeSquares)?{body_scope_squares:o.bodyRangeSquares}:{})});
   }else parentPort.postMessage(planFineRailRefuge(geo,workerData.from,workerData.goal,o));
