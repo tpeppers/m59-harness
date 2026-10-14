@@ -100,6 +100,13 @@ export function liveMoveOrder(s) {
   return o;
 }
 
+/** A new keeper move is not the stalled external driver it just replaced. */
+export function keeperRecoveryRescueReady(s,bodyStillSince,now,minimumAgeMs){
+  const order=liveMoveOrder(s);
+  const began=order?.origin?.source==='keeper'&&Number.isFinite(order.at)?Math.max(bodyStillSince,order.at):bodyStillSince;
+  return now-began>=minimumAgeMs;
+}
+
 /** A fresh keeper interruption of this issuer can recover an unsuccessful move. */
 export function keeperMovementPreemption(status,orderedBy,{since=null}={}) {
   const m=status?.movement,pre=m?.last_preempted;

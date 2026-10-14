@@ -1,5 +1,11 @@
 # The keeper: what it can see, and what it cannot
 
+Stalled-driver rescue ages the current keeper move when recovery has just
+replaced the external driver. The old physical stall cannot cancel that new
+approach before `INERT_RESCUE_MS` has elapsed. An overdue recovery, an ended
+order or a cancelled generation still permits rescue; external replans do
+not extend this window. Both watchdog implementations share the same check.
+
 ## Travel crowd recovery and inferred monster attention
 
 `BP_MOVE` feeds a bounded per-client monster pursuit tracker. Object snapshots and
