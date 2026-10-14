@@ -61,9 +61,9 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
   if(required){
     installed.required=true;installed.fineLegs=true;
-    // The Chamber and Merb have measured 26-27 square refuge gaps.
+    // Directional cave routes have measured 22-30 square refuge gaps.
     // Keep operator-specified global or per-room distances authoritative.
-    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:28,2504:28,2505:20,...prior?.maxLegByRoom};
+    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:28,2504:36,2505:28,...prior?.maxLegByRoom};
   }
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});
@@ -80,6 +80,19 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
 }
 export function location(l){const p=l.you??l.self??{};return {room:l.room?.num,row:p.row,col:p.col,x:p.x,y:p.y,units:'kod',hp:l.hp};}
 export const foreignIslandDestination=(order,to)=>order?.to!=null&&Number.isFinite(Number(order.to))&&Number(order.to)!==to;
+// The western cave arrival is a sheltered pocket. Stand before turning: the
+// stock server refuses a turn while resting, which can otherwise block recovery.
+export async function recoverIslandMainland(ctx,{maxSeconds=90}={}){
+  const first=await ctx.call('look',{agent:ctx.agent});
+  if(first.room?.num!==CAVE||!Number.isFinite(first.hp?.value)||first.hp.value<=0)throw Error('mainland_recovery_requires_cave_arrival');
+  await ctx.call('rest',{agent:ctx.agent,stand:true});
+  await ctx.call('face',{agent:ctx.agent,degrees:180});
+  await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:maxSeconds},(maxSeconds+20)*1000);
+  const last=await ctx.call('look',{agent:ctx.agent});
+  if(last.room?.num!==CAVE||last.hp?.max!==first.hp.max||last.hp?.value!==last.hp?.max)throw Error('mainland_recovery_incomplete');
+  await ctx.call('rest',{agent:ctx.agent,stand:true});
+  return {ok:true};
+}
 export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
   if(!Number.isFinite(minVigor)||minVigor<12||minVigor>200)throw Error('invalid_island_departure_vigor');
   const health=l=>{

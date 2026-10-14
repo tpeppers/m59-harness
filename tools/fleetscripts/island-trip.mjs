@@ -1,8 +1,8 @@
 // Compose within one driver/lease; no nested runner or production DM actions.
-import {verify} from '../m59-fleetscript.mjs';
+import {verify,walk} from '../m59-fleetscript.mjs';
 import {loadFleetScripts,applyDefaults,checkParams} from '../m59-fleetlib.mjs';
 import {rideIslandCup} from '../m59-island-chalice.mjs';
-import {walkIsland} from '../m59-island-route.mjs';
+import {walkIsland,CAVE} from '../m59-island-route.mjs';
 import {script as home} from './island-home.mjs';
 
 export async function islandTaskSteps(p,{scripts}={}){
@@ -20,12 +20,13 @@ export async function islandTaskSteps(p,{scripts}={}){
 }
 export const script={name:'island-trip',describe:'Go to the Island, refill after a chalice ride, run a named FleetScript, and return to Tos',
   params:{agents:{type:'agents',required:true},outbound:{type:'string',default:'chalice'},task:{type:'string',default:''},taskParams:{type:'string',default:'{}'},
-    home:{type:'number',default:52},budgetMs:{type:'number',default:800000},requireSafeLegs:{type:'boolean',default:true},
+    home:{type:'number',default:52},destination:{type:'number',default:2001},budgetMs:{type:'number',default:800000},requireSafeLegs:{type:'boolean',default:true},
     keepItems:{type:'boolean',default:true},minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20},minVigor:{type:'number',default:120}},
   async steps(p){
     if(!['chalice','walk'].includes(p.outbound))throw Error('outbound must be chalice or walk');
     const task=await islandTaskSteps(p); // compile every stage before movement
-    return [verify(ctx=>p.outbound==='chalice'?rideIslandCup(ctx,p):walkIsland(ctx,{...p,direction:'out'}),
-      'Island departure incomplete; preserve its receipt'),...task,...await home.steps(p)];
+    return [...(p.outbound==='walk'?[walk(CAVE,{avoid:[5],runErrands:false})]:[]),
+      verify(ctx=>p.outbound==='chalice'?rideIslandCup(ctx,p):walkIsland(ctx,{...p,direction:'out'}),
+      'Island departure incomplete; preserve its receipt'),walk(p.destination,{runErrands:false}),...task,...await home.steps(p)];
   }
 };
