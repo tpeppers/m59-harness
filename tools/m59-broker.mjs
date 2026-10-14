@@ -272,6 +272,14 @@ const PORT = Number(process.env.M59_PORT || 5959);
 // arrangement; publishing the argv choice lets /health prove which driver was launched.
 const SESSION_DRIVER = process.argv.includes('--in-process')
   ? 'in-process' : 'keeper-process';
+// A STAGED START: every keeper comes up warm (process, map, routes, port) and DORMANT, and
+// nobody logs in until an operator says so (`dormancy` action `start_all`, the TUI's A).
+// Operator, 2026-10-14: bring prod up, scout the server as one character with L, THEN log the
+// fleet on. The hold is an ordinary operator dormancy whose `by` is STAGED_BY, so the rejoin
+// sweep, restart-keepers and a broker handover all already respect it, and start_all can tell
+// the staged holds from anybody else's.
+const STAGED_START = process.argv.includes('--staged') || process.env.M59_STAGED_START === '1';
+const STAGED_BY = 'staged-start';
 const factionStatuses = new FactionStatusCache();
 
 // The graveyard window, as arithmetic rather than observation. `readAnchor` returns null
@@ -1366,6 +1374,82 @@ async function sleepDormant(agent, request) {
   if (body?.dormancy) { try { dormancyStore().set(agent, body.dormancy); } catch {} }
   console.error(`[dormancy] ${agent} dormant (${rec.reason}, wakes ${rec.wake}) by ${rec.by}`);
   return { ok: true, dormancy: body?.dormancy ?? rec };
+}
+
+/**
+ * HOLD EVERY ROSTER CHARACTER FOR A STAGED START, before any keeper is spawned, so each one
+ * starts dormant. A character that already carries a dormancy keeps it: an evade hold with a
+ * penalty clock, or somebody's operator hold, is not ours to overwrite. Returns the agents held.
+ */
+function stageRoster(agents) {
+  const staged = [];
+  for (const agent of agents) {
+    try {
+      if (dormancyStore().get(agent)) continue;
+      dormancyStore().set(agent, normalizeDormancy({ reason: 'operator', wake: 'manual', by: STAGED_BY,
+        note: 'staged start: keeper warm, waiting for start_all' }));
+      staged.push(agent);
+    } catch (e) {
+      // dormancyEnvFor fails CLOSED on an unreadable store, so this keeper still starts dormant.
+      console.error(`[staged] ${agent}: could not write the hold (${e.message}); it starts dormant anyway`);
+    }
+  }
+  return staged;
+}
+
+/**
+ * LOG ON EVERYBODY A STAGED START HELD. Woken in lanes of M59_KEEPER_CONCURRENCY, the same cap
+ * the resume uses, so twenty logins are a few waves rather than one stampede on blakserv.
+ * A character a person is playing right now (the scout) is not woken -- that would bump them --
+ * its hold becomes a `pilot` one instead, so its keeper logs in when the client closes.
+ * Holds anybody else wrote are left alone.
+ */
+async function startStaged({ by = 'dormancy tool' } = {}) {
+  let all;
+  try { all = dormancyStore().all(); }
+  catch (e) { return { ok: false, error: e.message }; }
+  const staged = Object.entries(all)
+    .filter(([agent, rec]) => rec?.by === STAGED_BY && inAnyRoster(agent)).map(([agent]) => agent);
+  if (!staged.length) return { ok: true, started: 0, of: 0, note: 'nobody is held by a staged start' };
+  const piloted = staged.filter(agent => pilotOf(agent));
+  const work = staged.filter(agent => !pilotOf(agent));
+  for (const agent of piloted) {
+    try {
+      dormancyStore().set(agent, normalizeDormancy({ reason: 'pilot', by,
+        note: 'staged start released while a person was playing it' }));
+      console.error(`[staged] ${agent} is being played; its keeper logs in when the person is done`);
+    } catch (e) { console.error(`[staged] ${agent}: could not hand the hold to the pilot: ${e.message}`); }
+  }
+  const concurrency = Math.max(1, Number(process.env.M59_KEEPER_CONCURRENCY || 6));
+  const results = [];
+  let next = 0;
+  const lane = async () => {
+    for (let agent; (agent = work[next++]) && !brokerStopping;)
+      results.push({ agent, ...(await wakeDormant(agent, 'staged start: start all', by)) });
+  };
+  const started = Date.now();
+  await Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, lane));
+  // THREE OUTCOMES, NOT TWO. A keeper that woke but whose first login was refused is out of its
+  // hold and retrying on its own -- not the same thing as a hold that could not be cleared.
+  const why = r => r.why ?? r.error ?? 'unknown';
+  const loggedIn = results.filter(r => r.ok).map(r => r.agent);
+  const retrying = results.filter(r => !r.ok && r.woke && /retrying/.test(why(r)))
+    .map(r => ({ agent: r.agent, why: why(r) }));
+  const failed = results.filter(r => !r.ok && !retrying.some(x => x.agent === r.agent))
+    .map(r => ({ agent: r.agent, why: why(r) }));
+  console.error(`[staged] start_all by ${by}: ${loggedIn.length} of ${work.length} logged in in ` +
+                `${Math.round((Date.now() - started) / 1000)}s (${concurrency} at a time)` +
+                (retrying.length ? `; woken but login retrying: ${retrying.map(f => f.agent).join(', ')}` : '') +
+                (piloted.length ? `; waiting for the person playing ${piloted.join(', ')}` : '') +
+                (failed.length ? `; FAILED ${failed.map(f => f.agent).join(', ')}` : ''));
+  return { ok: !failed.length && !retrying.length, started: loggedIn.length, of: work.length,
+           retrying, waiting_for_pilot: piloted, failed };
+}
+
+/** How many characters a staged start is still holding, for /health; null when unreadable. */
+function stagedCount() {
+  try { return Object.values(dormancyStore().all()).filter(rec => rec?.by === STAGED_BY).length; }
+  catch { return null; }
 }
 
 function spawnKeeper(agent, index, credentials) {
@@ -4906,6 +4990,14 @@ async function resumeFleet({ adopting = false } = {}) {
   const held = await heldByLocalClients(saved);
   console.error(`[state] resuming ${names.length - held.size} of ${names.length} session(s) from ${STATE_FILE}` +
                 (held.size ? `; leaving ${[...held.keys()].join(', ')}` : ''));
+  // A STAGED START HOLDS EVERYBODY BEFORE THE FIRST SPAWN, so every keeper below starts dormant:
+  // warm and listening, out of the world. Not on an adoption: a successor taking a live fleet
+  // must not log anybody off, and the holds a staged predecessor wrote are already on disk.
+  if (STAGED_START && !adopting) {
+    const staged = stageRoster(names.filter(agent => saved[agent]?.credentials));
+    console.error(`[staged] STAGED START: ${staged.length} character(s) held out of the world; ` +
+                  'their keepers come up dormant. `dormancy` action start_all (the TUI\'s A) logs them on');
+  }
   let keeperIndex = 0;
   const useKeepers = SESSION_DRIVER === 'keeper-process';
 
@@ -18643,9 +18735,11 @@ const TOOLS = [
       'character you are PLAYING before you log off to escape something, and its keeper will not log ' +
       'straight back in onto the attacker. A logoff outside an inn or your guild hall leaves a ghost ' +
       'the server punishes 540-660 s later, so a hold brings the character back before that unless ' +
-      '`accept_penalty` is set. `wake` ends a hold now.',
+      '`accept_penalty` is set. `wake` ends a hold now. `start_all` logs on every character a ' +
+      'STAGED START (broker --staged) is still holding, a few at a time; one a person is playing ' +
+      'is left to log in when they are done.',
     schema: { type: 'object', properties: {
-      action: { type: 'string', enum: ['list', 'hold', 'wake'] },
+      action: { type: 'string', enum: ['list', 'hold', 'wake', 'start_all'] },
       agent: { type: 'string' },
       minutes: { type: 'number', description: 'hold: how long; omit to hold until `wake`' },
       note: { type: 'string', description: 'why, kept on the record and in the store\'s log' },
@@ -18659,8 +18753,9 @@ const TOOLS = [
         const s = store.read();
         return { dormant: Object.entries(s.agents).map(([agent, rec]) => ({ agent, ...rec,
                    verdict: dormancyVerdict(rec, { pilotHeld: !!pilotOf(agent) }) })),
-                 log: s.log.slice(-20), file: store.file };
+                 log: s.log.slice(-20), file: store.file, staged_by: STAGED_BY };
       }
+      if (a.action === 'start_all') return startStaged({ by: String(a.by ?? 'dormancy tool') });
       if (!a.agent || !inAnyRoster(a.agent)) return { error: `${a.agent ?? '(no agent)'} is not in a loaded roster` };
       const by = String(a.by ?? 'dormancy tool');
       if (a.action === 'wake') {
@@ -19282,6 +19377,9 @@ function brokerHealth() {
     root: BROKER_ROOT,
     fleet: FLEET || 'default',
     state: STATE_FILE,
+    // A STAGED START STILL WAITING: `held` characters are warm and out of the world until
+    // `dormancy` start_all. `requested` is this process's flag; the holds outlive it on disk.
+    staged: { requested: STAGED_START, held: stagedCount() },
     // WHAT THIS BROKER COSTS, IN ITS OWN WORDS. A caller choosing a timeout is guessing
     // without this, and every wrong guess is work computed for nobody. Slowest first,
     // and a tool with too few samples is left out rather than reported as fact.

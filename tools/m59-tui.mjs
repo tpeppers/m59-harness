@@ -161,6 +161,10 @@ const S = {
   // way nothing reports. While on, every row is reachable and X on a held one releases it.
   override: false,
   placed: false,         // has the cursor been put somewhere sensible yet?
+  // A STAGED START STILL WAITING (broker --staged): the agents its holds are keeping out of
+  // the world. Empty means A has nothing to do, and it is not offered.
+  staged: [],
+  startAllArmedAt: 0,    // A asks twice: the first press arms, a second within 5s logs them on
 };
 
 // WHICH PORT IS WHOSE KEEPER — ASKED, NEVER COMPUTED.
@@ -240,7 +244,14 @@ async function refresh() {
   // Refreshes the loopback keeper snapshots only; the broker explicitly guarantees this
   // option sends no Meridian packets.  That removes its independent two-second cache from
   // a manual/periodic TUI refresh without turning a five-second repaint into fleet traffic.
-  const f = await call('fleet', { refresh: true }, 15000);
+  const [f, dorm] = await Promise.all([
+    call('fleet', { refresh: true }, 15000),
+    // A file read on the broker, no game traffic. A broker too old to know about staging
+    // answers without `staged_by`, and then nothing is staged.
+    call('dormancy', { action: 'list' }, 5000),
+  ]);
+  if (!dorm?.__error && dorm?.staged_by)
+    S.staged = (dorm.dormant ?? []).filter(d => d.by === dorm.staged_by).map(d => d.agent);
   if (f?.__error) { S.lastError = 'broker: ' + f.__error; S.loading = false; return; }
   S.lastError = null;
   const rows = f?.fleet || [];
@@ -290,7 +301,8 @@ function listView() {
   const L = [];
   const up = S.rows.filter(r => r.ap?.running).length;
   const walls = S.rows.filter(r => r.ap?.safe_spot?.works).length;
-  const dead = S.rows.filter(r => r.in_game === false).length;
+  // A staged character is out of the world ON PURPOSE, so it is not counted as missing.
+  const dead = S.rows.filter(r => r.in_game === false && !S.staged.includes(r.agent)).length;
   const spotDeaths = S.rows.reduce((n, r) => n + (r.ap?.did?.deaths_in_safe_spot ?? 0), 0);
   const recentDeaths = S.rows.reduce((n, r) => n + (r.ap?.did?.deaths_24h ?? 0), 0);
   const heldCount = S.rows.filter(r => commitmentOf(r)).length;
@@ -299,7 +311,8 @@ function listView() {
   L.push(c.bold(c.cyan('  MERIDIAN 59 FLEET')) + '   ' + c.dim([
     `${up}/${S.rows.length} keepers up`,
     walls ? c.green(`${walls} proven walls`) : c.dim('0 proven walls'),
-    dead ? c.red(`${dead} NOT IN GAME`) : c.green('all in game'),
+    dead ? c.red(`${dead} NOT IN GAME`) : S.staged.length ? '' : c.green('all in game'),
+    S.staged.length ? c.yellow(`${S.staged.length} staged`) : '',
     recentDeaths ? c.red(`${recentDeaths} deaths/24h`) : c.green('0 deaths/24h'),
     spotDeaths ? c.red(`${spotDeaths} died in a spot`) : c.green('0 spot deaths'),
     freshness.stale.length
@@ -313,6 +326,15 @@ function listView() {
     heldCount ? (S.override ? c.yellow(`${heldCount} on fleet work — OVERRIDE ON`)
                             : c.dim(`${heldCount} on fleet work, skipped`)) : '',
   ].filter(Boolean).join(' · ')));
+  // THE STAGED START, said at the top while it is waiting: the whole point of this mode is that
+  // nothing happens until you press A, so the screen has to say that A is the thing to press.
+  if (S.staged.length) {
+    const armed = Date.now() - S.startAllArmedAt < START_ALL_CONFIRM_MS;
+    L.push('  ' + c.inv(c.yellow(` STAGED START — ${S.staged.length} keeper(s) warm, NOT logged in `)) + '  ' +
+           (armed ? c.bold(c.red(`press A again to LOG ON ${S.staged.length} character(s)`))
+                  : c.yellow('L') + c.dim(' scout one in the client · ') +
+                    c.bold(c.yellow('A')) + c.dim(' LOG-ON / START ALL CHARACTERS')));
+  }
   L.push('');
   L.push(c.dim('  ' + pad('character', 11) + pad('lvl', 4) + pad('health', 14) +
                pad('mana', 13) + pad('vigor', 14) + pad('w/f', 5) + pad('spot', 7) +
@@ -358,7 +380,8 @@ function listView() {
       // THE COMMITMENT REPLACES THE ACTIVITY, because it IS the activity and it is the
       // half worth reading. A keeper on a loot run reports "inert — a loot run is
       // driving"; the operation is what the board should say.
-      c.dim(cut((held ? held.label : r.ap?.activity) ?? '', mine ? 22 : 28));
+      (!mine && S.staged.includes(r.agent) ? c.yellow('staged — warm, out of the world')
+        : c.dim(cut((held ? held.label : r.ap?.activity) ?? '', mine ? 22 : 28)));
     // Three different marks in one gutter: ▸ is where the cursor is, ◆ is where the
     // person is, and · is a character the fleet is using. They are independent — you can
     // be scrolled somewhere else entirely — so none must hide another. The committed mark
@@ -382,6 +405,7 @@ function listView() {
   L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') + c.magenta('V pvp rec') + c.dim(' · ') +
          c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') + c.cyan('D DBFST') + c.dim(' · ') +
          c.cyan('G geometry') +
+         (S.staged.length ? c.dim(' · ') + c.bold(c.yellow('A start all')) : '') +
          c.dim(' · C compendium · P plan · ') + xSays +
          c.dim(' · r refresh · q quit'));
   if (S.status) L.push('  ' + S.status);
@@ -470,6 +494,7 @@ function heroView() {
          c.bold(c.cyan('F')) + c.dim(' FIELD COMMAND — the same fleet on a map, in a browser · ') +
          c.bold(c.cyan('D')) + c.dim(' DBFST — edit live fleet orders · ') +
          (held ? c.bold(c.yellow('X')) + c.dim(' take it off ' + cut(held.label ?? 'fleet work', 22)) + c.dim(' · ') : '') +
+         (S.staged.length ? c.bold(c.yellow('A')) + c.dim(` LOG-ON / START ALL ${S.staged.length} staged · `) : '') +
          c.dim('r refresh'));
   if (S.status) L.push('  ' + S.status);
   return L;
@@ -1286,6 +1311,38 @@ async function override(row) {
   await refresh();
 }
 
+// ------------------------------------------------------------------ staged start
+//
+// LOG-ON / START ALL CHARACTERS. Only offered while a staged start (m59-service.mjs start
+// --staged) is holding somebody. It is the one key here that puts twenty characters into the
+// world at once, so it asks twice: the first press arms it and says how many, a second within
+// START_ALL_CONFIRM_MS does it. The broker wakes them a few at a time, and leaves alone the one
+// you are scouting with -- that keeper logs in once your client closes.
+const START_ALL_CONFIRM_MS = 5000;
+async function startAll() {
+  if (!S.staged.length) {
+    S.status = c.dim('A starts a staged fleet, and nobody is staged — the broker was not started with --staged');
+    return;
+  }
+  if (Date.now() - S.startAllArmedAt >= START_ALL_CONFIRM_MS) {
+    S.startAllArmedAt = Date.now();
+    S.status = c.bold(c.red(`press A again within ${START_ALL_CONFIRM_MS / 1000}s to LOG ON ` +
+                            `${S.staged.length} staged character(s)`));
+    setTimeout(draw, START_ALL_CONFIRM_MS + 50);
+    return;
+  }
+  S.startAllArmedAt = 0;
+  S.status = c.yellow(`logging on ${S.staged.length} character(s), a few at a time…`);
+  draw();
+  const r = await call('dormancy', { action: 'start_all', by: `m59-tui (${hostname()})` }, 300_000);
+  if (r?.__error || r?.error) { S.status = c.red('start all failed: ' + (r.__error ?? r.error)); return; }
+  S.status = (r.ok ? c.green : c.yellow)(`logged on ${r.started} of ${r.of}`) +
+    (r.retrying?.length ? c.yellow(` · woken, login still retrying: ${r.retrying.map(x => x.agent).join(', ')}`) : '') +
+    (r.waiting_for_pilot?.length ? c.dim(` · ${r.waiting_for_pilot.join(', ')} logs in when you close the client`) : '') +
+    (r.failed?.length ? ' ' + c.red(`FAILED ${r.failed.map(x => `${x.agent} (${x.why})`).join(', ')}`) : '');
+  await refresh();
+}
+
 function onKey(str, key) {
   if (str === 'D' || str === 'd') { dbfst(); return; }
   if (key.ctrl && key.name === 'c') return quit();
@@ -1314,6 +1371,7 @@ function onKey(str, key) {
     else if (str === 'G' || str === 'g') geometryMaps();
     else if (str === 'C' || str === 'c') compendium(S.rows[S.sel]);
     else if (str === 'P' || str === 'p') compendium(S.rows[S.sel], '/planner/');
+    else if (str === 'A' || str === 'a') startAll().then(draw, e => { S.status = c.red('start all failed: ' + (e?.message ?? e)); draw(); });
     else if (str === 'r') { S.status = c.dim('refreshing…'); refresh().then(draw); }
   } else {
     if (key.name === 'q' || key.name === 'escape' || key.name === 'return') {
@@ -1327,6 +1385,7 @@ function onKey(str, key) {
     else if (str === 'G' || str === 'g') geometryMaps();
     else if (str === 'C' || str === 'c') compendium(S.hero);
     else if (str === 'P' || str === 'p') compendium(S.hero, '/planner/');
+    else if (str === 'A' || str === 'a') startAll().then(draw, e => { S.status = c.red('start all failed: ' + (e?.message ?? e)); draw(); });
     else if (str === 'r') { refresh().then(() => { S.hero = S.rows.find(r => r.agent === S.hero.agent) ?? S.hero; draw(); }); }
   }
   draw();
