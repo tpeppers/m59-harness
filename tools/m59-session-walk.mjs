@@ -165,6 +165,13 @@ export function sessionWalkPrototype(deps) {
     const goal=to??missed,memo=rememberedDeparture(this,goal,avoid);
     if(memo){const detour={...memo.failure.detour,reused:true};return {...failure,arrived:false,
       reason:memo.failure.reason,detour,deviation:{...failure.deviation,departure:detour}};}
+    // Repair the refused local bend before searching for a rail to a distant goal.
+    // This arrival is only an intermediate waypoint; continueDeparture still owns
+    // arrival at the caller's original destination.
+    if(to&&(to.row!==missed.row||to.col!==missed.col)&&typeof this.recoverDeviationWaypoint==='function'){
+      const local=await this.recoverDeviationWaypoint(failure,{movementGeneration,controlToken,beforeMutation,maxSteps,avoidSquares:avoid});
+      if(local.arrived||local.cancelled||local.left_room)return local;
+    }
     const plan=planRailDeparture(this.world.geometry,c.self,goal,{room:this.world?.room?.num,table:activeRoutes(),
       manifest:this.world?.map?.geometryManifestSha256,objects:c.room.objects,selfId:c.selfId,
       roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,sectorHeights:c.room.sectorHeights,avoidSquares:avoid});
@@ -179,6 +186,24 @@ export function sessionWalkPrototype(deps) {
     forgetDeparture(this);
     const result=await this.walkDepartureLegs(plan.waypoints,plan.square,{movementGeneration,controlToken,beforeMutation,maxSteps});
     return {...result,via:plan.via,...(result.arrived&&plan.rail?{rail:plan.rail}:{}),deviation:failure.deviation};
+  }
+
+  async recoverDeviationWaypoint(failure,{movementGeneration=this.movementGeneration,controlToken,
+    beforeMutation=null,maxSteps=32,avoidSquares=null}={}) {
+    const c=this.need(),d=failure?.deviation,p=d?.position,q=d?.requested;
+    if(!d?.confirmed||!Number.isInteger(q?.row)||!Number.isInteger(q?.col)||!p||c.self?.predicted||d.room!==this.world?.room?.num
+      ||c.self?.x!==p.x||c.self?.y!==p.y)return failure;
+    if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+    if(await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'local deviation recovery'}))return this.cancelledMovement({steps:0});
+    const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
+    const goal=this.world.geometry?.standPointWire?.(q.row,q.col);
+    if(!goal)return failure;
+    const plan=planBodyDetour(this.world.geometry,c.self,goal,{objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,goalSquare:q,avoidSquares:avoid,
+      marginSquares:4,maxRangeSquares:24,spacingUnits:16,maxNodes:3000,maxMs:100});
+    if(!plan.found||!plan.waypoints.length||plan.waypoints.length>Math.min(32,maxSteps))return failure;
+    const result=await this.walkDepartureLegs(plan.waypoints,q,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(32,maxSteps)});
+    return {...result,via:'fine_waypoint_departure',deviation:d};
   }
 
   async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48}={}) {
@@ -198,6 +223,7 @@ export function sessionWalkPrototype(deps) {
     }
     const reply=await this.confirmPosition({timeoutMs:1500});
     if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
+    if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
     const arrived=!!reply&&!c.self?.predicted&&c.self.row===square.row&&c.self.col===square.col;
     return arrived?{arrived:true,steps}:{arrived:false,steps,reason:'departure arrival unconfirmed'};
   }
@@ -831,6 +857,7 @@ export function sessionWalkPrototype(deps) {
     // guard in m59-collision-test only knows about MODULE-scope names, so a local declared in
     // the wrong block passes both. The test below pins the position rather than the spelling.
     let laneAim = null;   // set by laneClearing; the fall aims here when it exists
+    let declaredTimedFall = false;
     if (fall && before) {
       const vig = (() => { try { return c.vitals?.()?.vigor?.value ?? null; } catch { return null; } })();
       const isDeclared = declaredJumpNeedsRun(this.world?.room?.num, before, { row, col });
@@ -844,6 +871,12 @@ export function sessionWalkPrototype(deps) {
                  note: `this declared jump needs a run and vigor is ${vig} against a floor of ` +
                        `${RUN_VIGOR_FLOOR}; refusing rather than falling short of the landing` };
       }
+      // A declared running jump needs the stock gravity/time simulation. The
+      // static fall trace clips Ukgoth's r36c16 -> r38c10 at the gully, so the
+      // deviation guard correctly refuses that prediction. Timed physics proves
+      // the actual shelf landing and pays its duration at the packet boundary.
+      // Ordinary planner falls keep their deviation guard and static contract.
+      if(isDeclared){timedFall=true;declaredTimedFall=true;}
       // EVERY FALL STEP LEAVES A RECORD, AND THAT INCLUDES THE ONES THAT WORK.
       //
       // Three rounds were spent arguing about this jump from the outside, off transit rows
@@ -1257,7 +1290,7 @@ export function sessionWalkPrototype(deps) {
     // router priced — measured: Ukgoth 2,27 -> 71,2 went from 1.04x to bouncing on 12 of 13
     // steps. Both `{ slide: true, fall: true }` and `{ slide: false, fall: true }` arrive on
     // the step that started this; only the missing `fall` ever refused one.
-    const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,
+    const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,unclipped:declaredTimedFall,
         maxDeviation: timedFall||typeof this.confirmMovementDeviation!=='function' ? null : KOD_FINENESS,
         beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false),
         minGap: Math.max(gap, owed), expectedRoomId: roomId });
@@ -5163,6 +5196,12 @@ export function sessionWalkPrototype(deps) {
         }
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         if (r.left_room) return { railed: true, left_room: true, at: i, walked };
+        if (r.reason==='movement_deviation'&&typeof this.recoverDeviationWaypoint==='function') {
+          r=await this.recoverDeviationWaypoint(r,{movementGeneration,controlToken,avoidSquares});
+          if(r.cancelled||this.movementWasCancelled(movementGeneration,controlToken))return {railed:false,...this.cancelledMovement(),at:i,walked};
+          if(r.left_room)return {railed:true,left_room:true,at:i,walked};
+          if(!r.arrived)return {railed:false,...r,at:i,walked};
+        }
         if (r.reason==='movement_deviation')return {railed:false,...r,at:i,walked};
         if (isTerminalMovementReason(r.reason))
           return { railed: false, reason: r.reason, at: i, walked };
@@ -8066,7 +8105,6 @@ export function sessionWalkPrototype(deps) {
       if (r?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
 
-      if(r.reason==='movement_deviation')return finish({...r,left:false,tried,stage:'walk'});
       // WE ARE THROUGH. STOP. DO NOT RUN A RECOVERY.
       //
       // Every tactic below exists to get an unstuck walk moving again, and every one of
@@ -8163,6 +8201,17 @@ export function sessionWalkPrototype(deps) {
       if (isTerminalMovementReason(r.reason)) {
         tried.push(refusal(exit, r));
         return finish({ ...r, left: false, used_exit: exit, tried });
+      }
+      if(r.reason==='movement_deviation') {
+        const d=r.deviation,p=d?.position,me=this.client?.self;
+        tried.push(refusal(exit,r,{movement_deviation:d??null}));
+        // Unknown position still stops the batch. A confirmed local refusal is
+        // evidence about this approach, so buy the next candidate with the same
+        // bounded budget. Exhaustion then teaches travel's existing blocked-hop
+        // replanner instead of retrying the identical failed hop on every stumble.
+        if(!d?.confirmed||d.room!==roomBefore||me?.predicted||!p||me?.x!==p.x||me?.y!==p.y)
+          return finish({...r,left:false,tried,stage:'walk'});
+        continue;
       }
       // A GEOMETRY REFUSAL AT A DOORWAY IS USUALLY THE BODY IN THE WRONG PART OF ITS OWN
       // SQUARE, AND THAT IS NOT A REASON TO GIVE THE SQUARE UP.
