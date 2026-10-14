@@ -98,6 +98,24 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     }
     if(stop)break;
   }
+  if(!stop&&obstacles.length&&legWalls(geo).some(w=>w.row===from.row&&w.col===from.col)){
+    // A preferred rail can end at a body choke while another covered lane is
+    // still open. Search actual reachable refuges before waiting at this one.
+    // The caller excludes visited stops, so this cannot oscillate between them.
+    const candidates=walls.filter(w=>(w.row!==from.row||w.col!==from.col)&&
+      Math.hypot(w.row-from.row,w.col-from.col)<=Math.min(12,maxLeg))
+      .sort((a,b)=>(Math.hypot(a.row-goal.row,a.col-goal.col)+.25*Math.hypot(a.row-from.row,a.col-from.col))-
+                  (Math.hypot(b.row-goal.row,b.col-goal.col)+.25*Math.hypot(b.row-from.row,b.col-from.col)));
+    for(const w of candidates.slice(0,24)){
+      if(performance.now()-started>maxMs+500)break;
+      const side=planBodyDetour(geo,from,geo.standPointWire(w.row,w.col),{objects,selfId,roomFlags,overrideDepths,
+        goalSquare:w,avoidSquares,marginSquares:3,maxRangeSquares:14,maxNodes:6000,maxMs:80,threats,threatWeight,threatRadius});
+      if(!side.found||!side.waypoints.length)continue;
+      let previous=from,distance=0;for(const p of side.waypoints){distance+=Math.hypot(p.x-previous.x,p.y-previous.y)/64;previous=p;}
+      if(distance>maxLeg||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
+      stop={row:w.row,col:w.col,steps:distance,waypoints:side.waypoints,alternative_refuge:true};break;
+    }
+  }
   if(stop){
     const pulled=[];let source=point(from);
     for(let i=0;i<stop.waypoints.length;){
