@@ -76,6 +76,19 @@ function flatGeometry({closed=false}={}) {
  }};
 }
 const body={id:2,flags:9,x:140,y:100,row:1,col:2};
+test('fine routes price live threat exposure and retain that avoidance while pulling bends',()=>{
+ const from={x:100,y:100},goal={x:180,y:100},danger={x:140,y:100};
+ const plain=planBodyDetour(flatGeometry(),from,goal,{maxMs:500,maxNodes:16000});
+ const safer=planBodyDetour(flatGeometry(),from,goal,{threats:[danger],threatWeight:10,threatRadius:0.5,maxMs:500,maxNodes:16000});
+ assert(plain.found&&safer.found);assert(plain.waypoints.every(p=>p.y===100));
+ let at=from,closest=Infinity;
+ for(const p of safer.waypoints){
+  const dx=p.x-at.x,dy=p.y-at.y,t=Math.max(0,Math.min(1,((danger.x-at.x)*dx+(danger.y-at.y)*dy)/(dx*dx+dy*dy)));
+  closest=Math.min(closest,Math.hypot(at.x+t*dx-danger.x,at.y+t*dy-danger.y));at=p;
+ }
+ assert(closest>=24,`pulled route cut through the threat: ${closest}`);
+ assert.deepEqual(at,goal);
+});
 test('local pour rounds a body, while an impassable crowd and search exhaustion refuse',()=>{
  const plan=planBodyDetour(flatGeometry(),{x:100,y:100},{x:180,y:100},{objects:new Map([[2,body]]),selfId:1});
  assert.equal(plan.found,true);assert.ok(plan.waypoints.some(p=>Math.abs(p.y-100)>=16));

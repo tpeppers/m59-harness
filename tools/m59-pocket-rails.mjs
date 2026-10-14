@@ -77,15 +77,20 @@ export function isFinePassageStop(geo,p) {
 // Failed waypoints are never substituted for a distant destination.
 const searchProgress=new WeakMap();
 export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,selfId,
-  roomFlags=0,overrideDepths=null,sectorHeights=null,avoidSquares=null,seedOnly=false,maxNodes=16000,maxMs=500}={}) {
+  roomFlags=0,overrideDepths=null,sectorHeights=null,avoidSquares=null,seedOnly=false,maxNodes=16000,maxMs=500,
+  threats=[],threatWeight=0,threatRadius=4}={}) {
   if(!geo?.collisionReady||typeof geo.traceFineMoveClient!=='function'||![from?.x,from?.y,to?.row,to?.col].every(Number.isFinite))
     return {found:false,reason:'departure geometry or position unavailable'};
   if(manifest&&table?.geometryManifestSha256!==manifest)return {found:false,reason:'departure table geometry mismatch'};
   from={...from,...square(from)};
-  const options={objects,selfId,roomFlags,overrideDepths,avoidSquares},r=table?.rooms?.[room];
+  const options={objects,selfId,roomFlags,overrideDepths,avoidSquares,threats,threatWeight,threatRadius},r=table?.rooms?.[room];
   const anchor=r?.anchors?.find(a=>a.row===to.row&&a.col===to.col)
     ??r?.anchors?.filter(a=>(a.row===to.row&&(a.row===1||a.row===geo.rows))
       ||(a.col===to.col&&(a.col===1||a.col===geo.cols)))
+      .sort((a,b)=>Math.hypot(a.row-to.row,a.col-to.col)-Math.hypot(b.row-to.row,b.col-to.col))[0]
+    ??r?.anchors?.filter(a=>a.kind==='edge'&&Math.max(Math.abs(a.row-to.row),Math.abs(a.col-to.col))<=2
+      &&(a.dir==='west'&&to.col<=3||a.dir==='east'&&to.col>=geo.cols-2
+        ||a.dir==='north'&&to.row<=3||a.dir==='south'&&to.row>=geo.rows-2))
       .sort((a,b)=>Math.hypot(a.row-to.row,a.col-to.col)-Math.hypot(b.row-to.row,b.col-to.col))[0];
   let obstruction=null;
   const rb=railBookRoom(geo,room,manifest);

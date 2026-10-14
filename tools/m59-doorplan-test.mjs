@@ -124,5 +124,12 @@ console.log('\nagainst the real derived table');
   }
 }
 
+{
+  const real=loadDoors(),off=doorsFor(2505,{row:6,col:59},{table:real}),on=doorsFor(2505,{row:6,col:61},{table:real});
+  ok('Konima capitalized KOD axes retain exactly the nine real trigger squares',
+    off.others.length===1&&off.others[0].stand_on.length===9&&off.others[0].stand_on.every(p=>p.row>=5&&p.row<=7&&p.col>=61&&p.col<=63));
+  ok('Konima arrival r6c59 is not a gate button',off.on.length===0);
+  ok('Konima r6c61 is a gate button',on.on.length===1&&on.on[0].sector===1);
+}
 console.log(`\n${pass} passed, ${fail} failed, ${skip} skipped`);
 process.exit(fail ? 1 : 0);

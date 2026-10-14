@@ -33,6 +33,7 @@
 // the trade this whole file exists to make.
 
 import { identifiedAs } from './m59-item-signature.mjs';
+import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
@@ -122,6 +123,7 @@ import * as hitbook from './m59-hits.mjs';
 import * as transits from './m59-transits.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-session.mjs';
+import {normalizeSafeLegPolicy} from './m59-safelegs.mjs';
 import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
 import {
   BROKER_FLEET_LOCK_KIND,
@@ -8624,10 +8626,9 @@ const TOOLS = [
       const before = { col: me.col, row: me.row };
       const declaration=declaredFine.find(j=>j.from.row===declared.from.row&&j.from.col===declared.from.col&&
         j.to.row===declared.to.row&&j.to.col===declared.to.col);
-      const fine=declaration?.to_fine;
-      const r = await s.step(a.to_col, a.to_row, { fall: true,
-        timedFall:declaration?.requires?.timed_fall===true,
-        ...(fine?{aimX:fine.x/16+64,aimY:fine.y/16+64}:{}) });
+      const move=declaredJumpMoveOptions(declaration,s.client?.vitals?.()?.vigor?.value);
+      if(!move.ok)return {made:false,moved:false,reason:move.reason};
+      const r = await s.step(a.to_col, a.to_row, move.options);
       const now = s.client?.self;
       const landed = now ? { col: now.col, row: now.row } : null;
       // WHERE IT LANDED IS THE ONLY HONEST VERDICT. A jump that comes up short lands on real
@@ -11066,9 +11067,13 @@ const TOOLS = [
       to: { type: 'number', description: 'fraction of max to reach, default 0.9' },
       max_seconds: { type: 'number', description: 'default 120' },
     }, required: ['agent'] },
-    run: (a) => skills.restUntil(session(a.agent), {
-      health: num(a.to, 0.9), vigor: num(a.to, 0.9), maxSeconds: num(a.max_seconds, 120),
-    }),
+    run: (a) => {
+      const s=session(a.agent),health=num(a.to,0.9),maxSeconds=num(a.max_seconds,120);
+      // The keeper owns the wire and the rest clock. A proxy's emulated client
+      // cannot run a local rest loop through independently refreshed snapshots.
+      return s instanceof KeeperProxy?s.rest({health,vigor:health,max_seconds:maxSeconds}):
+        skills.restUntil(s,{health,vigor:health,maxSeconds});
+    },
   },
   {
     name: 'equip_best',
@@ -12142,7 +12147,9 @@ const TOOLS = [
           'a wait. `false` switches it off for this character; `{rooms: [599, ...]}` replaces the ' +
           'room list; `null` returns to the default, which is Ukgoth (599) only. Optional keys ' +
           'maxLeg, legCost, threatWeight, threatRadius, maxDetour, slack, deadlineMs and corridorRadius tune the ' +
-          'planner — see tools/m59-safelegs.mjs. M59_SAFE_LEGS=0 turns it off process-wide.' },
+          'planner; maxLegByRoom maps room numbers to a different maximum leg distance. required=true refuses a failed wall chain instead of walking directly. ' +
+          'fineLegs=true proves the first approach from the actual fine position and inserts a reachable refuge before the distance limit. ' +
+          'See tools/m59-safelegs.mjs. M59_SAFE_LEGS=0 turns it off process-wide.' },
       travel_hold_vigor: { type: 'number',
         description: 'OPTIONAL floor on vigor before a mid-journey rest at a wall. Default 0 — ' +
           'no floor, because vigor is not a reason to refuse refuge. It was 100 (above anything ' +
@@ -12872,22 +12879,7 @@ const TOOLS = [
         } else throw new Error('travel_guard must be an object of booleans, or "on"/"off"');
       }
       if (a.safe_legs !== undefined) {
-        const want = a.safe_legs;
-        if (want == null) p.policy.safeLegs = null;
-        else if (want === false || want === 'off') p.policy.safeLegs = false;
-        else if (typeof want === 'object' && !Array.isArray(want)) {
-          const KNOWN = ['rooms', 'maxLeg', 'legCost', 'threatWeight', 'threatRadius', 'maxDetour',
-                         'slack', 'deadlineMs', 'maxLegs', 'corridorRadius', 'off'];
-          const bad = Object.keys(want).filter(k => !KNOWN.includes(k));
-          if (bad.length)
-            throw new Error(`safe_legs: no such key ${bad.map(b => `"${b}"`).join(', ')} — it is one of ${KNOWN.join(', ')}`);
-          if (want.rooms !== undefined && !(Array.isArray(want.rooms) && want.rooms.every(r => Number.isFinite(Number(r)))))
-            throw new Error('safe_legs.rooms must be an array of room numbers');
-          for (const k of KNOWN.filter(k => k !== 'rooms' && k !== 'off'))
-            if (want[k] !== undefined && !(Number(want[k]) > 0))
-              throw new Error(`safe_legs.${k} must be a positive number — got ${want[k]}`);
-          p.policy.safeLegs = { ...want, ...(want.rooms ? { rooms: want.rooms.map(Number) } : {}) };
-        } else throw new Error('safe_legs must be false, null, or an object such as {rooms: [599]}');
+        p.policy.safeLegs=normalizeSafeLegPolicy(a.safe_legs);
       }
       if (a.travel_hold_vigor !== undefined) {
         if (a.travel_hold_vigor == null) p.policy.travelHoldVigor = null;

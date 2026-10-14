@@ -24,6 +24,34 @@ function fixture(room,x,y){
  return {s,c,geo,packets};
 }
 const fail=f=>({reason:'movement_deviation',deviation:{confirmed:true,from:{...f.c.self},position:{...f.c.self},requested:{row:34,col:36,x:2336,y:2208}}});
+test('a planned refuge leg is not mislabeled as fallback while ordinary departure recovery retains its shelter gate',async()=>{
+ const planned=fixture(2501,416,3808),p={x:416,y:3744};
+ planned.s.shelterPolicy={onFallback:async()=>{throw Error('planned refuge leg is not fallback');}};
+ const r=await planned.s.walkDepartureLegs([p],{row:58,col:6},{maxSteps:1,shelterFallback:false});
+ assert.equal(r.arrived,true);assert.equal(planned.packets.length,1);
+ const recovering=fixture(2501,416,3808);recovering.s.shelterPolicy={onFallback:async()=>true};
+ assert.equal((await recovering.s.walkDepartureLegs([p],{row:58,col:6},{maxSteps:1})).cancelled,true);
+ assert.equal(recovering.packets.length,0);
+});
+
+test('a refused overhang waits for the owned fall to settle and re-proves the same departure',async()=>{
+ const f=fixture(2501,1170,2480),target={x:1138,y:2512};let attempts=0;
+ f.s.collisionVertical={roomId:2501,min:15355,max:24000,settleAt:Date.now()+30};
+ f.s.stepFine=async(x,y)=>{
+  if(++attempts===1)return {moved:false,reason:'geometry_blocked'};
+  assert(Date.now()>=f.s.collisionVertical.settleAt);
+  f.c.predictSelf({x,y,row:Math.floor(y/64),col:Math.floor(x/64)});return {moved:true};
+ };
+ const r=await f.s.walkDepartureLegs([target],{row:39,col:17},{maxSteps:1});
+ assert.equal(r.arrived,true);assert.equal(attempts,2);assert.equal(r.steps,1);
+});
+test('cancellation during fall settlement forbids the delayed departure packet',async()=>{
+ const f=fixture(2501,1170,2480);let attempts=0;
+ f.s.collisionVertical={roomId:2501,min:15355,max:24000,settleAt:Date.now()+50};
+ f.s.stepFine=async()=>{attempts++;return {moved:false,reason:'geometry_blocked'};};
+ const timer=setTimeout(()=>f.s.movementGeneration++,5);
+ try{const r=await f.s.walkDepartureLegs([{x:1138,y:2512}],{row:39,col:17},{maxSteps:1});assert.equal(r.cancelled,true);assert.equal(attempts,1);}finally{clearTimeout(timer);}
+});
 
 test('every baked pocket escape replays through quantized collision and finishes on its intended exit',async()=>{
  for(const [room,r] of Object.entries(pocketRailBook().rooms))for(const rail of r.rails){

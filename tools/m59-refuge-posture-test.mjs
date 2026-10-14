@@ -99,4 +99,32 @@ await test('failed stand does not fall through to movement',async()=>{
  const {s,calls}=fixture();s.pacer.submit=async()=>{throw Error('socket closed');};
  await assert.rejects(()=>returnToSpot(s,{row:8,col:18}),/socket closed/);assert.deepEqual(calls,[]);
 });
+await test('an unproved nearby recovery approach emits no speculative movement',async()=>{
+ const {s,calls}=fixture();
+ s.world.geometry={collisionReady:true,traceFineMoveClient:()=>({moved:false,blocked:true})};
+ s.walkDepartureLegs=async()=>assert.fail('unproved path must not be walked');
+ const r=await returnToSpot(s,{row:8,col:18},{checkedApproach:true,routeFirst:true});
+ assert.equal(r.arrived,false);assert.equal(r.reason,'refuge_fine_approach_unproved');
+ assert.deepEqual(calls,['stand']);
+});
+await test('a checked recovery path uses its proved square entry and confirms it',async()=>{
+ const {s,c,calls}=fixture();
+ s.world.geometry={collisionReady:true,traceFineMoveClient:(x0,y0,x,y)=>({x,y,moved:x!==x0||y!==y0,blocked:false})};
+ s.walkDepartureLegs=async(points,spot,options)=>{
+   assert.equal(c.seated,false);assert.equal(options.shelterFallback,false);calls.push('checked path');
+   const p=points.at(-1);assert.equal(Math.floor(p.x/64),spot.col);assert.equal(Math.floor(p.y/64),spot.row);
+   Object.assign(c.self,p,{col:spot.col,row:spot.row,predicted:true});return {arrived:true};
+ };
+ s.confirmPosition=async()=>{calls.push('confirm');c.self.predicted=false;return c.self;};
+ const r=await returnToSpot(s,{row:8,col:18},{checkedApproach:true,routeFirst:true});
+ assert.equal(r.arrived,true);assert.equal(r.via,'checked fine refuge path');
+ assert.deepEqual(calls,['stand','checked path','confirm']);
+});
+await test('a checked recovery packet cannot revive a cancelled shelter',async()=>{
+ const {s,calls}=fixture();
+ s.world.geometry={collisionReady:true,traceFineMoveClient:(x0,y0,x,y)=>({x,y,moved:true,blocked:false})};
+ s.walkDepartureLegs=async()=>{calls.push('cancelled path');s.movementGeneration++;return {arrived:true};};
+ const r=await returnToSpot(s,{row:8,col:18},{checkedApproach:true});
+ assert.equal(r.cancelled,true);assert.deepEqual(calls,['stand','cancelled path']);
+});
 console.log(`${count} refuge posture scenarios passed`);

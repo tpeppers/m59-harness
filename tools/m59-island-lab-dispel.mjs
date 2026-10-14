@@ -32,6 +32,15 @@ class DispelAdmin extends M59Client{
 }
 let adminPromise,queue=Promise.resolve();
 let users=0,recast;
+let selectedFleet='shadow',selectedState=null;
+export function shadowDispelIdentityMatches(health,{fleet='shadow',stateFile=null}={},env=process.env){
+  const norm=p=>String(p??'').replaceAll('\\','/').toLowerCase();
+  return typeof fleet==='string'&&fleet.length>0&&fleet!=='prod'&&
+    (fleet==='shadow'||typeof stateFile==='string'&&stateFile.length>0)&&
+    health.fleet===fleet&&env.M59_FLEET===fleet&&
+    health.game_server?.host==='127.0.0.1'&&health.game_server?.port===15959&&
+    Number(env.M59_ADMIN_PORT)===19998&&(!stateFile||norm(health.state)===norm(resolve(stateFile)));
+}
 export function shadowDispelResetTimers(reply,room){
   if(!Number.isInteger(room)||room<=0)throw Error('dispel_room_unconfirmed');
   return [...String(reply).matchAll(/^\s*(\d+)\s+\d+\s+(\d+)\s+ReplaceIllusions\s*$/gim)]
@@ -40,8 +49,7 @@ export function shadowDispelResetTimers(reply,room){
 async function administrator(){
   if(!adminPromise)adminPromise=(async()=>{
     const health=await(await fetch(process.env.M59_CONTROL_URL+'health')).json();
-    if(health.fleet!=='shadow'||health.game_server?.host!=='127.0.0.1'||health.game_server?.port!==15959||
-      process.env.M59_FLEET!=='shadow'||Number(process.env.M59_ADMIN_PORT)!==19998)
+    if(!shadowDispelIdentityMatches(health,{fleet:selectedFleet,stateFile:selectedState}))
       throw Error('dispel_requires_isolated_shadow_server');
     const account='disp'+randomBytes(6).toString('hex'),password=randomBytes(20).toString('hex');
     const reply=await dm('create account admin '+account+' '+password);
@@ -77,7 +85,9 @@ export async function closeShadowIslandDispel(){
   await queue.catch(()=>{});
   const c=await adminPromise?.catch(()=>null);c?.sock?.destroy();adminPromise=null;
 }
-export async function retainShadowIslandDispel(){
+export async function retainShadowIslandDispel({fleet='shadow',stateFile=null}={}){
+  if(users&&(fleet!==selectedFleet||stateFile!==selectedState))throw Error('dispel_lab_selection_busy');
+  if(!users){selectedFleet=fleet;selectedState=stateFile;}
   users++;
   try{
     await openShadowIslandCave();

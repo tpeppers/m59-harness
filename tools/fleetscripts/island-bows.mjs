@@ -1,12 +1,17 @@
 import {walk,shop} from '../m59-fleetscript.mjs';
-export const script={name:'island-bows',describe:'Buy longbows and arrows at Hanla\'s counter, then return to Ko\'catan town',
-  params:{agents:{type:'agents',required:true},bows:{type:'number',default:1},arrows:{type:'number',default:200},
+export const script={name:'island-bows',describe:'Buy practice bows at Kochtal and arrows at Hanla, then return to Ko\'catan town',
+  params:{agents:{type:'agents',required:true},bows:{type:'number',default:1},arrows:{type:'number',default:200},bowType:{type:'string',default:'practice'},
     minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20}},
   async steps(p){
     for(const n of [p.bows,p.arrows])if(!Number.isSafeInteger(n)||n<0)throw Error('bow and arrow quantities must be nonnegative integers');
     if(!p.bows&&!p.arrows)throw Error('no island supplies requested');
-    return [walk(2100),shop("Hanla zax'Ta",[
-      ...(p.bows?[{match:/^longbow$/i,amount:p.bows}]:[]),
-      ...(p.arrows?[{match:/^arrows?$/i,amount:p.arrows}]:[])]),walk(2000)];
+    const type=p.bowType??'practice';
+    if(!['practice','long'].includes(type))throw Error('bowType must be practice or long');
+    const steps=[];
+    if(p.bows&&type==='practice')steps.push(walk(2014),shop("Kochtal ko'Tulca",[{match:/^practice bow$/i,amount:p.bows}]),walk(2000));
+    if(p.arrows||p.bows&&type==='long')steps.push(walk(2100),shop("Hanla zax'Ta",[
+      ...(p.bows&&type==='long'?[{match:/^longbow$/i,amount:p.bows}]:[]),
+      ...(p.arrows?[{match:/^arrows?$/i,amount:p.arrows}]:[])]),walk(2000));
+    return steps;
   }
 };

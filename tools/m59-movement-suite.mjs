@@ -34,6 +34,10 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-jump-takeoff-test.mjs','declared ledge variations retain stock timed gravity, ordinary takeoff approaches and running/occupied-landing guards'],
+  ['m59-rest-dispatch-test.mjs','journey recovery delegates one bounded rest to the keeper rather than nesting its default rest in a proxy loop'],
+  ['m59-fine-safeleg-test.mjs','safe legs from the actual fine body stop at proved refuges within the travelled distance allowance'],
+  ['m59-safeleg-policy-test.mjs','live safe-leg policy accepts required and advisory modes without dropping the transport constraint'],
   ['m59-deviation-routing-test.mjs', 'confirmed rail bends take bounded local detours; exit-candidate exhaustion reaches the journey replanner without relaxing unknown-position or ownership guards'],
   ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],

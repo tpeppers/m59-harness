@@ -72,7 +72,7 @@ export function parseCondition(text) {
   const out = [];
   const re = /(?<![A-Za-z0-9])(?:new_)?(row|col)\s*(<=|>=|<|>|=)\s*(\d+)/gi;
   let m;
-  while ((m = re.exec(text))) out.push({ axis: m[1], op: m[2] === '=' ? '==' : m[2], value: Number(m[3]) });
+  while ((m = re.exec(text))) out.push({ axis: m[1].toLowerCase(), op: m[2] === '=' ? '==' : m[2], value: Number(m[3]) });
   return out;
 }
 
@@ -150,8 +150,11 @@ const satisfies = (c, row, col) => {
 // exists but can never be stood in, which is worse than not knowing about it.
 // Inequalities on one axis still AND together: `row > 14` and `row < 18` is a band.
 export const inRegion = (when, row, col) => {
+  // KOD is case insensitive. Older derived doors retain Row/Col spellings;
+  // ignoring those comparisons makes every square in the room a trigger.
   for (const axis of ['row', 'col']) {
-    const cs = when.filter(c => c.axis === axis);
+    const cs = when.filter(c => String(c.axis).toLowerCase() === axis)
+      .map(c=>c.axis===axis?c:{...c,axis});
     if (!cs.length) continue;
     const eqs = cs.filter(c => c.op === '==');
     const ineqs = cs.filter(c => c.op !== '==');

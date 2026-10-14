@@ -10,7 +10,8 @@ export function blockingBodySnapshot(objects, selfId) {
 }
 
 export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
-  overrideDepths = null, avoidSquares = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35, now = performance.now.bind(performance) } = {}) {
+  overrideDepths = null, avoidSquares = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
+  threats = [], threatWeight = 0, threatRadius = 4, now = performance.now.bind(performance) } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'collision_geometry_unavailable' };
   if (![from?.x, from?.y, goal?.x, goal?.y].every(Number.isFinite))
@@ -18,11 +19,22 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
   if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > Math.max(8, Math.min(24, maxRangeSquares)) * 64)
     return { found: false, reason: 'body detour exceeds local bounds' };
   const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = spacingUnits === 16 ? 16 : 8;
+  const dangers=threats.map(t=>({x:Number.isFinite(t.x)?t.x:t.col*64+32,y:Number.isFinite(t.y)?t.y:t.row*64+32}))
+    .filter(t=>Number.isFinite(t.x)&&Number.isFinite(t.y));
+  const pressure=p=>threatWeight>0?dangers.reduce((cost,t)=>Math.max(cost,
+    Math.max(0,1-Math.hypot(t.x-p.x,t.y-p.y)/(threatRadius*64))*threatWeight),0):0;
+  const travelCost=(a,b)=>{
+    const distance=Math.hypot(b.x-a.x,b.y-a.y);
+    if(!(threatWeight>0)||!dangers.length)return distance;
+    const samples=Math.max(1,Math.ceil(distance/spacing));let cost=0;
+    for(let i=1;i<=samples;i++)cost+=pressure({x:a.x+(b.x-a.x)*i/samples,y:a.y+(b.y-a.y)*i/samples});
+    return distance*(1+cost/samples);
+  };
   // A square refuge accepts only a collision-proved point inside the square.
   // Invalid square descriptors retain the explicit fine-point contract.
   const squareGoal = Number.isInteger(goalSquare?.row) && Number.isInteger(goalSquare?.col)
     ? goalSquare : null;
-  const margin = Math.max(2,Math.min(12,marginSquares))*64;
+  const margin = Math.max(2,Math.min(24,marginSquares))*64;
   const reached = p => squareGoal ? Math.floor(p.x/64)===squareGoal.col&&Math.floor(p.y/64)===squareGoal.row : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
   const distance = p => squareGoal ? Math.hypot(Math.max(squareGoal.col*64+1-p.x,0,p.x-(squareGoal.col+1)*64+1),Math.max(squareGoal.row*64+1-p.y,0,p.y-(squareGoal.row+1)*64+1)) : Math.hypot(goal.x-p.x,goal.y-p.y);
   const bounds = { minX: Math.min(from.x, goal.x) - margin, maxX: Math.max(from.x, goal.x) + margin,
@@ -36,9 +48,16 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     for (let i=1;i<samples;i++) if (!allowed({x:a.x+(b.x-a.x)*i/samples,y:a.y+(b.y-a.y)*i/samples})) return null;
     const t = geo.traceFineMoveClient(protocolToClient(a.x), protocolToClient(a.y),
       protocolToClient(b.x), protocolToClient(b.y), { slide: false, obstacles, roomFlags, overrideDepths });
-    if (!t?.moved || t.reason === 'object_blocked' || t.available === false) return null;
-    const p = { x: protocolToward(t.x, a.x), y: protocolToward(t.y, a.y) };
-    return Math.hypot(p.x - b.x, p.y - b.y) <= 1 && allowed(p) ? p : null;
+    if (!t?.moved || t.blocked === true || t.reason === 'object_blocked' || t.available === false) return null;
+    const p = { x: protocolToward(t.x, protocolToClient(a.x)), y: protocolToward(t.y, protocolToClient(a.y)) };
+    if(Math.hypot(t.x-protocolToClient(b.x),t.y-protocolToClient(b.y))>0.01
+        ||Math.hypot(p.x-b.x,p.y-b.y)>1||!allowed(p))return null;
+    if(p.x!==b.x||p.y!==b.y){
+      const exact=geo.traceFineMoveClient(protocolToClient(a.x),protocolToClient(a.y),protocolToClient(p.x),protocolToClient(p.y),
+        {slide:false,obstacles,roomFlags,overrideDepths});
+      if(!exact?.moved||exact.blocked===true||Math.hypot(exact.x-protocolToClient(p.x),exact.y-protocolToClient(p.y))>0.01)return null;
+    }
+    return p;
   };
   // The wider departure search can visit thousands of nodes. Keep its frontier
   // in a heap so sorting the entire frontier cannot spend the recovery budget.
@@ -65,10 +84,13 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
       // sidestep pays a separate paced/confirmed packet for every search edge.
       const pulled = []; let at = from;
       for (let i = 0; i < waypoints.length;) {
-        let last = i;
+        let last = i,originalCost=travelCost(at,waypoints[i]),previous=waypoints[i];
         for (let j = i + 1; j < waypoints.length && now() - startTime < maxMs; j++) {
           if (Math.hypot(waypoints[j].x - at.x,waypoints[j].y - at.y) > 64) break;
-          if (!edge(at,waypoints[j])) break;
+          originalCost+=travelCost(previous,waypoints[j]);previous=waypoints[j];
+          const landed=edge(at,waypoints[j]);
+          if (!landed||landed.x!==waypoints[j].x||landed.y!==waypoints[j].y) break;
+          if(travelCost(at,waypoints[j])>originalCost+0.01)continue;
           last = j;
         }
         at = waypoints[last]; pulled.push(at); i = last + 1;
@@ -78,7 +100,7 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     for (const dx of [-spacing, 0, spacing]) for (const dy of [-spacing, 0, spacing]) {
       if (!dx && !dy) continue;
       const p = edge(cur, { x: cur.x + dx, y: cur.y + dy }); if (!p) continue;
-      const pk = key(p), g = cur.g + Math.hypot(p.x - cur.x, p.y - cur.y);
+      const pk = key(p), g = cur.g + travelCost(cur,p);
       if (g >= (best.get(pk) ?? Infinity)) continue;
       best.set(pk, g); parents.set(pk, cur);
       push({ ...p, g, f: g + distance(p) });

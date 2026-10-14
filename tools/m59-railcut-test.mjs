@@ -4,7 +4,7 @@
 //
 // The edge test is injected, so this exercises the cutter against synthetic worlds whose shape is
 // known exactly. Every case is a thing that went wrong on the real map on 2026-09-11/12.
-import { snap, flood, chainTo, cutRail, verifyRail, furthestTraceable, chordWalkable, LATTICE,
+import { snap, flood, chainTo, cutRail, verifyRail, furthestTraceable, chordWalkable, threatEdgeCost, LATTICE,
          MIN_MOVER_STEP }
   from './m59-railcut.mjs';
 import { MIN_AIM } from './m59-railfollow.mjs';
@@ -295,6 +295,21 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
   eq(MIN_MOVER_STEP, 128, 'the number itself');
   eq(MIN_AIM, MIN_MOVER_STEP, 'm59-railfollow.MIN_AIM is the same value, by import');
   eq(MIN_MOVER_REACH_CLIENT, MIN_MOVER_STEP, 'and so is m59-stepbench.MIN_MOVER_REACH_CLIENT');
+}
+
+{
+  const body={x:64,y:256},goal={x:960,y:256};
+  const cost=threatEdgeCost([{x:512,y:256}],{radius:240,weight:20});
+  const rail=cutRail(body,goal,{edge:open,bounds:{w:1024,h:768},cost});
+  ok(rail.ok,'priced rail reaches the same physical goal');
+  ok(rail.waypoints.some(p=>Math.abs(p.y-256)>=240),'priced rail passes outside the exposed central corridor');
+  const aim=furthestTraceable(rail.waypoints,body,{edge:open,maxAhead:100,cost});
+  const original=rail.waypoints.slice(1,aim.i+1).reduce((s,p,i)=>s+cost(i?rail.waypoints[i]:body,p),0);
+  ok(cost(body,aim)<=original+0.01,'pulling a priced rail preserves its avoidance detour');
+  const bounded=cutRail(body,goal,{edge:open,bounds:{w:1024,h:768},cost,maxMs:0});
+  ok(!bounded.ok&&/budget/.test(bounded.why),'an unfinished priced search cannot certify a route');
+  const clear=threatEdgeCost([],{radius:240});
+  eq(clear(body,goal),896,'no observed threats keeps ordinary geometric distance');
 }
 
 console.log(`\nm59-railcut: ${pass} assertion(s) passed, ${fail} failed`);

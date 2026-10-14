@@ -6485,7 +6485,7 @@ export class Autopilot {
       // now a legitimate choice, and `walkTo` only raises a caller's cap to the plan's own
       // length once it has planned — so hand it a cap that already fits the walk asked for.
       const walkBudget = Math.max(24, Math.ceil((spot.steps_away ?? 0) * 2) + 12);
-      const approachOptions = { maxSteps: walkBudget, routeFirst: recovery || shelterOnly,
+      const approachOptions = { maxSteps: walkBudget, routeFirst: recovery || shelterOnly, checkedApproach: recovery || shelterOnly,
         avoidSquares: recovery || shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null,
         // Fine movement uses the actual body discs, so a legal sub-square gap
         // is not removed along with the body's entire occupied coarse square.
@@ -13638,7 +13638,8 @@ export class Autopilot {
                    // Room numbers are positive; anything else is absence.
                    to: (to != null && Number.isFinite(Number(to)) && Number(to) > 0)
                        ? Number(to) : null,
-                   attempts: Number(attempts) || 0 };
+                   attempts: Number(attempts) || 0,
+                   origin: Number(liveMoveOrder(this.s)?.to)===Number(to) ? liveMoveOrder(this.s)?.origin : null };
     // A NEW JOURNEY RETIRES ANY SUSPENDED ONE. Whoever issued this said where the character
     // should be going now, and an older objective coming back to life underneath a live
     // instruction is two directions on one body — the thing this whole boundary exists to
@@ -14296,7 +14297,8 @@ export class Autopilot {
       to: journey.to, why: journey.why ?? 'travelling', at: Date.now(), trigger,
       guard: { ...this.travelGuard(this.inert?.travelling ? this.inert.guard : null) },
       attempts: (journey.attempts ?? 0) + 1, deaths_at: this.tally?.deaths ?? 0,
-      ...(order?.origin && Number(order.to) === Number(journey.to) ? { origin: order.origin } : {}),
+      ...(order?.origin && Number(order.to) === Number(journey.to) ? { origin: order.origin }
+        : journey.origin ? {origin:journey.origin} : {}),
     };
     return true;
   }
@@ -30561,6 +30563,7 @@ export class Autopilot {
 
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
+    this.suspendJourney(why);
     const s=this.s,atWall=this.adoptRecoveryWall();
     // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze
     // should be removed as a tactic or only ever done in PvP, it will not save you from

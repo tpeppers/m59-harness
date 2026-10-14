@@ -59,7 +59,12 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   if(!before.policy||typeof before.policy!=='object')throw Error('traveller_policy_unreadable');
   const prior=before.policy.safeLegs??null;
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
-  if(required)installed.required=true;
+  if(required){
+    installed.required=true;installed.fineLegs=true;
+    // The Chamber and Merb have measured 26-27 square refuge gaps.
+    // Keep operator-specified global or per-room distances authoritative.
+    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:28,2504:28,...prior?.maxLegByRoom};
+  }
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});
   try{
@@ -98,8 +103,26 @@ export async function ordinaryHop(ctx,to,options={}){
     catch(e){await ctx.call('cancel_movement',{agent:ctx.agent}).catch(()=>{});throw e;}
   });
 }
+// A keeper may briefly have no body while its survival rung reconnects. Wait
+// only for recovery of this exact order; missing health alone proves nothing.
+export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15000,pollMs=1000}={}){
+  for(;;){
+    const l=await ctx.call('look',{agent:ctx.agent});
+    if(Number.isFinite(l.hp?.value)&&Number.isFinite(l.hp?.max)&&l.hp.max>0)return l;
+    const s=await ctx.call('status',{agent:ctx.agent,brief:true});
+    checkIslandCancellation(ctx,s);
+    const pre=s.movement?.last_preempted;
+    const hold=s.autopilot_status?.suspended_journey;
+    const ownsPreempted=pre?.by?.source==='keeper'&&pre.preempted?.ordered_by===orderedBy&&Number(pre.preempted?.to)===to;
+    const ownsRecovery=hold?.ordered_by===orderedBy&&Number(hold.to)===to;
+    if(!orderedBy||!(ownsPreempted||ownsRecovery))
+      throw Error('traveller_health_unreadable');
+    if(Date.now()>=deadline)throw Error('traveller_reconnect_budget');
+    await pause(pollMs);
+  }
+}
 async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{}}={}){
-  const {agent,call}=ctx,start=Date.now(),first=await call('look',{agent}),leg={to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
+  const {agent,call}=ctx,start=Date.now(),first=await call('look',{agent}),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
   let previous=first.hp?.value;
   const sample=l=>{
     const p=location(l),hp=l.hp?.value;
@@ -137,9 +160,9 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     return reply;
   };
   leg.request=await request();leg.retries=0;
-  let attemptStarted=Date.now();
+  let attemptStarted=Date.now();const recoveryWalls=new Map();
   for(;;){
-    await pause(pollMs);const l=await call('look',{agent}),p=sample(l);
+    await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:Math.min(start+budgetMs,Date.now()+15000),pollMs}),p=sample(l);
     if(p.room===to){leg.ok=true;leg.end=p;break;}
     if(p.room!==first.room.num){leg.reason='unexpected_room_'+p.room;leg.status=await call('status',{agent,brief:true});break;}
     const s=await call('status',{agent,brief:true});
@@ -157,10 +180,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
       if(ownRecovery){
         const at=wall?.at;
         if(wall?.works&&at?.row===p.row&&at?.col===p.col){
-          if((leg.recoveries??0)>=3){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
+          const wallKey=p.room+':'+at.row+','+at.col,count=recoveryWalls.get(wallKey)??0;
+          if(count>=3||(leg.recoveries??0)>=24){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
           // Recovery is made on the observed wall. A shelter order is part of
           // this journey, not a replacement destination or a completed failure.
           await call('rest_up',{agent,to:1,max_seconds:30},45000);
+          recoveryWalls.set(wallKey,count+1);
           leg.recoveries=(leg.recoveries??0)+1;
           let recovered=await call('look',{agent});sample(recovered);
           if(recovered.room?.num===to){leg.ok=true;break;}

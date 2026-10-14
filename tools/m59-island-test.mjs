@@ -4,16 +4,22 @@ import {mkdtempSync,writeFileSync,existsSync,rmSync,readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip} from './m59-island-chalice.mjs';
-import {ordinaryHop,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
+import {ordinaryHop,readIslandJourney,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
 import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {chordWalkable,cutRail} from './m59-railcut.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {doorStates} from './m59-doorbake.mjs';
-import {shadowDispelResetTimers} from './m59-island-lab-dispel.mjs';
+import {shadowDispelResetTimers,shadowDispelIdentityMatches} from './m59-island-lab-dispel.mjs';
 assert.deepEqual(shadowDispelResetTimers('Timer Remaining ms Object Message\n123 10000 1667 ReplaceIllusions\n124 20000 1667 ReplaceIllusions\n125 5000 1667 GenerateMonster\n126 5000 99 ReplaceIllusions',1667),[123,124]);
 assert.throws(()=>shadowDispelResetTimers('',null),/room_unconfirmed/);
+const isolatedDispelState=join(tmpdir(),'island20.json'),dispelHealth={fleet:'island20',state:isolatedDispelState,game_server:{host:'127.0.0.1',port:15959}},dispelEnv={M59_FLEET:'island20',M59_ADMIN_PORT:'19998'};
+assert(shadowDispelIdentityMatches(dispelHealth,{fleet:'island20',stateFile:isolatedDispelState},dispelEnv));
+assert(!shadowDispelIdentityMatches(dispelHealth,{fleet:'island20'},dispelEnv));
+assert(!shadowDispelIdentityMatches({...dispelHealth,fleet:'prod'},{fleet:'prod',stateFile:isolatedDispelState},{...dispelEnv,M59_FLEET:'prod'}));
+assert(!shadowDispelIdentityMatches({...dispelHealth,state:join(tmpdir(),'other.json')},{fleet:'island20',stateFile:isolatedDispelState},dispelEnv));
+assert(!shadowDispelIdentityMatches({...dispelHealth,game_server:{host:'remote',port:15959}},{fleet:'island20',stateFile:isolatedDispelState},dispelEnv));
 const sectors=JSON.parse(readFileSync(new URL('../substrate/m59-variable-sectors.json',import.meta.url))).rooms.find(r=>r.room===27);
 // Live ledge stop: nearest rounded seed is across collision, but a nearby seed
 // on the same floor has a fully proved connection and reaches the takeoff.
@@ -86,6 +92,18 @@ try{
  await withStashLease({agent:'a'},a,async()=>{a.stash.items[0].recovered=true;});assert(!existsSync(join(dir,'refill.lock')));
 }finally{rmSync(dir,{recursive:true,force:true});}
 const look=(room,hp=20,max=20)=>({room:{num:room},you:{row:4,col:40,x:2592,y:288},hp:{value:hp,max}});
+let reconnectReads=0;
+const reconnectCtx={agent:'fixture',call:async name=>name==='look'?(++reconnectReads<3?{hp:null}:look(2500,13)):{movement:{last_preempted:{by:{source:'keeper'},preempted:{to:2501,ordered_by:'our-order'}}}}};
+assert.equal((await readIslandJourney(reconnectCtx,{to:2501,orderedBy:'our-order',pollMs:0})).hp.value,13);
+assert.equal(reconnectReads,3);
+reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2501,orderedBy:'another-order',pollMs:0}),/health_unreadable/);
+reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2502,orderedBy:'our-order',pollMs:0}),/health_unreadable/);
+reconnectReads=0;await assert.rejects(readIslandJourney(reconnectCtx,{to:2501,orderedBy:'our-order',deadline:0,pollMs:0}),/reconnect_budget/);
+let nestedReads=0;
+const nested=await readIslandJourney({agent:'fixture',call:async name=>name==='look'?(++nestedReads<2?{hp:null}:look(2504,6)):
+ {movement:{last_preempted:{by:{source:'keeper'},preempted:{to:'refuge',ordered_by:'keeper:safe_spot'}}},
+  autopilot_status:{suspended_journey:{to:2505,ordered_by:'our-order'}}}},{to:2505,orderedBy:'our-order',pollMs:0});
+assert.equal(nested.hp.value,6);assert.equal(nestedReads,2);
 const fine={ok:true,fresh:true,room:2502,protocol:{x:2201,y:2650},square:{row:41,col:34}};
 assert.deepEqual(bindIslandFinePosition(look(2502),fine).you,{row:41,col:34,x:2201,y:2650});
 assert.throws(()=>bindIslandFinePosition(look(2502),{...fine,fresh:false}),/unconfirmed/);

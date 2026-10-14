@@ -17,6 +17,46 @@ that every valid leg is immune to attacks. `cutRail` also checks alternate
 nearby lattice seeds when the closest rounded seed cannot bridge from the
 observed body. Both fixes apply to general movement consumers.
 
+`safe_legs.fineLegs=true` proves refuge approaches from the body's actual fine
+position. A short square-graph edge can require a long walk around a ledge;
+the executor stops at a reachable refuge on that proved route within `maxLeg`
+travelled squares. Searches share a 500 ms allowance and retain live body,
+mandatory avoidance, ownership and send-time collision checks. Compatible
+exit rails also work from a stage one or two cells inside their boundary.
+`maxLegByRoom` supplies measured distances for individual rooms. The protected
+Island controller supplies 28 for the Chamber (2501), Merb (2503), and Obfal
+(2504). The Chamber and Merb have proved 26-27 square refuge gaps. An operator's
+explicit distances remain authoritative.
+
+When the local fine window or square graph cannot supply a leg, protected fine
+travel can search the full room in a bounded worker. It keeps the observed
+collision geometry, live bodies, avoidance and threat prices, and ends on a
+proved refuge within the same distance limit. The keeper event loop stays free
+to cancel it. A changed body, room or owner invalidates the result; packets are
+checked again at send time. Worker startup has its own heap limit and does not
+inherit the keeper's incompatible Node command-line heap flag.
+
+Operable-door predicates accept KOD's case-insensitive Row/Col spellings.
+Konima's door has nine real buttons at r5–7c61–63; r6c59 is its arrival pocket,
+not a button. A normal `go` from a button and an observed ceiling lift open the
+fine route back into the cave. This supersedes the older closed-geometry claim
+below that the Island return is physically unwalkable.
+
+Explicit declared jumps, including their permitted one-square takeoff
+variations, use timed stock gravity and retain the running-vigor guard.
+`m59-jump-takeoff.mjs` can refine an approximate takeoff on the same ledge:
+both the ordinary approach and the timed flight to the unchanged declared
+landing must pass collision. The Hollows controller observes that precise
+takeoff before dispatch. A refused flight is reported as refused, and a
+predicted landing still needs a fresh position observation. Local departure
+routes wait briefly for an active fall to settle before retrying a refused
+overhang, preserving cancellation and shelter decisions during the wait.
+
+Island controllers wait through a keeper survival reconnect only when its
+preempted destination and movement owner match the original journey. Missing
+health alone is insufficient. `rest_up` delegates one bounded rest to a keeper
+instead of nesting its default rest inside a broker-side proxy recovery loop.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Read this before touching `m59-movement.mjs`, `m59-routes.mjs`, `m59-roo.mjs`, `m59-routebake.mjs` or the mover inside `m59-broker.mjs`.
 
 **Coordinate legend:** MCP tools use named `col`/`row` fields; positional
@@ -2012,6 +2052,16 @@ exception or a new production order.
 
 
 ## Refuge square arrivals
+
+Fine movement now pays the duration of its actual stride at the selected walking
+or running speed. Its queued packet also retains the movement generation and
+control lease, so cancellation cannot leave a late packet behind. Longer checked
+strides can cross exposed ground at normal running speed without exceeding it.
+
+The fine rail cutter accepts optional live-threat edge pricing. Geometry still
+decides which edges exist; pricing chooses among them. Chord simplification and
+Island refuge aims preserve the original route's threat cost instead of cutting
+straight through an avoided monster. Search exhaustion remains a refusal.
 
 A new refuge asks for a square; a remembered explicit fine point remains an exact-point goal. The bounded local body router may finish at any collision-proved point inside a square goal, rather than insisting on its obstructed centre. This handles the Tos r2c1 fine-fallback failure without changing safe-wall geometry. Every packet still passes live collision, pacing and ownership checks. Confirmed arrival remains required: when a coarse prediction is revoked, returnToSpot invokes its fine fallback instead of abandoning the square with that fallback unused.
 
