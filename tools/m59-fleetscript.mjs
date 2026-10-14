@@ -5139,8 +5139,11 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // node-run) continue to take.
   const control = declaredControl({ controls }, agents);
   const known = knownCharacters(fleet);
+  // A WAIVED LOCK STILL HAS TO BE RELEASABLE. The `finally` below calls `claim.release()` on
+  // every path, and the waiver's stand-in had no such method: door-sweep (waives runLock)
+  // finished its sweep and then died with "claim.release is not a function", 2026-10-14 08:05Z.
   const claim = waived.has('runLock')
-    ? { ok: true, holder: null, tookOverFrom: [] }
+    ? { ok: true, holder: null, tookOverFrom: [], release() {} }
     : takeAgentLocks(fleet, control.names, { label: `${name} [${control.names.join(',')}]`, force });
   if (!claim.ok) {
     const h = claim.holder ?? {};

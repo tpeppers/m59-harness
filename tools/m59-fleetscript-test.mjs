@@ -1694,6 +1694,20 @@ console.log('the broker you talk to must be holding the fleet you named');
   // would have proved nothing about whether the guarantee was waived.
   ok('and the journey actually ran', sent.some(x => x.name === 'travel' && x.to === 101));
 }
+{
+  // A WAIVED RUN LOCK STILL ENDS CLEANLY. The `finally` releases the claim on every path, and
+  // the waiver's stand-in had no `release` -- door-sweep (waives runLock) swept, then threw
+  // "claim.release is not a function", 2026-10-14 08:05Z.
+  fakeBroker({ rooms: { a1: 39 } });
+  let threw = null, r = null;
+  try {
+    r = await fleetScript({ name: 'lockless', fleet: 'testfleet', agents: ['a1'],
+      unsafe: { reason: 'runs alongside another driver on purpose', waives: ['runLock'] },
+      steps: [walk(101)], onLog: quiet });
+  } catch (e) { threw = e; }
+  ok('a run with the run lock waived returns instead of throwing at the end', threw === null, threw?.message);
+  ok('and its step still ran', r?.results?.a1?.ok === true);
+}
 
 console.log('leaving the newbie zone is a step, not a travel');
 {
