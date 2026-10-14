@@ -68,7 +68,8 @@ console.log('\nthe inert rescue — taking a character back from a driver that s
   // destination went with the driver and the character stood in a bad room until it died.
   const h = host({ hp: 5, blockedMs: 0, inert: { why: 'an errand' }, doing: 'travelling' });
   const calls = [];
-  h.suspendJourney = (t) => { calls.push(['suspend', t]); return true; };
+  h.suspendJourney = (t) => { calls.push(['suspend', t]);
+    ok('the original movement still exists when the watchdog suspends it',h.cancels===0);return true; };
   h.wantForwardShelter = (w) => calls.push(['shelter', w]);
   h.revive = (w) => calls.push(['revive', w]);
   let t = 1000;

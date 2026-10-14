@@ -2112,6 +2112,15 @@ exception or a new production order.
 
 ## Refuge square arrivals
 
+Journey rescue uses the shared suspension method before cancelling the live
+order. This retains its original issuer and effective travel guards, including
+through nested shelter detours. A disconnected status snapshot can arrive after
+a positive body read; Island travel waits within its existing recovery budget
+only while the matching journey or renewable movement lease still proves
+ownership. Neither the missing order nor the earlier body read establishes that
+the trip ended. Operator cancellation, foreign ownership and observed death
+still stop it.
+
 Fine movement now pays the duration of its actual stride at the selected walking
 or running speed. Its queued packet also retains the movement generation and
 control lease, so cancellation cannot leave a late packet behind. Longer checked
