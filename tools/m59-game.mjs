@@ -707,6 +707,12 @@ const orderExits = (candidates) => candidates.slice().sort((a, b) =>
   // Nearest-first is right among squares that are equally good guesses. An anchor is a better
   // guess: the bake planned a walkable line to it, while a scanned square only has floor on it.
   (b.from_anchor === true) - (a.from_anchor === true) ||
+  // A STAGE THE MOVER'S FLOOD REACHED BEATS ONE ONLY THE COARSE GRID DID, as it already
+  // does inside `exits()`. Flattened by `spreadEdges` and re-sorted on distance alone, the
+  // coarse-only squares came back to the front: in Outskirts of Tos (596) the north ledge
+  // r1c20/r1c23 is near by the coarse grid and unreachable by the mover, while r2c42 is the
+  // stage a body can actually walk to. Only reorders; nothing is dropped.
+  ((a.grid_only === true || a.verified === false) - (b.grid_only === true || b.verified === false)) ||
   // AN EXIT WITH NO SQUARE TO STAND ON GOES LAST. Without a stand_on, leaveVia falls
   // back to scanning the whole boundary line for somewhere walkable — and when that
   // line has no floor it fails outright, which is the "no floor anywhere on the west
