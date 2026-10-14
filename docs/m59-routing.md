@@ -25,8 +25,9 @@ mandatory avoidance, ownership and send-time collision checks. Compatible
 exit rails also work from a stage one or two cells inside their boundary.
 `maxLegByRoom` supplies measured distances for individual rooms. The protected
 Island controller supplies 28 for the Chamber (2501), Merb (2503), and Obfal
-(2504). The Chamber and Merb have proved 26-27 square refuge gaps. An operator's
-explicit distances remain authoritative.
+(2504), and 20 for Konima (2505). The Chamber and Merb have proved 26-27 square
+refuge gaps; Konima's outer return passage exceeds the ordinary 14-square
+allowance. An operator's explicit distances remain authoritative.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed
@@ -35,6 +36,18 @@ proved refuge within the same distance limit. The keeper event loop stays free
 to cancel it. A changed body, room or owner invalidates the result; packets are
 checked again at send time. Worker startup has its own heap limit and does not
 inherit the keeper's incompatible Node command-line heap flag.
+
+Fine-leg travel prefers a route to the actual exit through the full geometry.
+Local routes to coarse target walls can belong to another ledge and make the
+body cycle, as measured in Ugol. Only the next short prefix is executed: bodies
+outside that prefix do not disprove it, and are observed again at the next wall.
+Visited walls remain ineligible as the next stop during the crossing.
+
+An edge's fine opening is the routing target when available. A coarse staging
+square can have its centre on the other side of a wall, as at Konima r73c2.
+The worker can try the same exit's other published fine openings within one
+search budget. Every final bridge is collision proved; an unproved opening is
+never permission to cross a different boundary or to skip the sender's checks.
 
 Operable-door predicates accept KOD's case-insensitive Row/Col spellings.
 Konima's door has nine real buttons at r5–7c61–63; r6c59 is its arrival pocket,

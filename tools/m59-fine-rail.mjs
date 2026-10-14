@@ -8,12 +8,17 @@ import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 
 export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreachable=null,
   avoidSquares=null,objects=null,selfId=null,roomFlags=0,overrideDepths=null,
-  threats=[],threatWeight=6,threatRadius=4,maxMs=4000}={}){
+  threats=[],threatWeight=6,threatRadius=4,maxMs=4000,goalFine=null,goalFineAlternates=[]}={}){
   const started=performance.now(),point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
   if(!geo?.collisionReady||![from?.x,from?.y].every(Number.isFinite))return {found:false,reason:'fine_rail_geometry_unavailable'};
-  const target=geo.standPointWire(goal.row,goal.col);
+  const exactGoal=Number.isFinite(goalFine?.x)&&Number.isFinite(goalFine?.y);
+  let target=exactGoal?{x:Math.round(goalFine.x),y:Math.round(goalFine.y)}:geo.standPointWire(goal.row,goal.col);
   if(!target)return {found:false,reason:'fine_rail_goal_unavailable'};
-  const obstacles=blockingBodySnapshot(objects,selfId);
+  // Only this prefix is executed. A distant body blocking a later doorway
+  // cannot disprove the first refuge; its position will be re-read there.
+  const localObjects=new Map([...(objects?.values?.()??[])].filter(o=>
+    Number.isFinite(o.x)&&Number.isFinite(o.y)&&Math.hypot(o.x-from.x,o.y-from.y)<=(maxLeg+2)*64).map(o=>[o.id,o]));
+  const obstacles=blockingBodySnapshot(localObjects,selfId);
   const edge=(a,b)=>{
     const row=Math.floor(clientToProtocol(b.y)/64),col=Math.floor(clientToProtocol(b.x)/64);
     if(avoidSquares?.has(`${row},${col}`))return false;
@@ -22,9 +27,33 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
   };
   const danger=threats.map(p=>point({x:Number.isFinite(p.x)?p.x:p.col*64+32,y:Number.isFinite(p.y)?p.y:p.row*64+32}));
   const cost=threatEdgeCost(danger,{radius:threatRadius*1024,weight:threatWeight,spacing:128});
-  const rail=cutRail(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
-    lattice:128,cost:danger.length?cost:null,maxMs});
+  let rail;const candidates=[target,...(exactGoal?goalFineAlternates:[])].filter(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y));
+  const usedTargets=new Set();
+  for(const p of candidates.slice(0,8)){
+    const candidate={x:Math.round(p.x),y:Math.round(p.y)},key=candidate.x+','+candidate.y;
+    if(usedTargets.has(key))continue;usedTargets.add(key);
+    const remaining=maxMs-(performance.now()-started);if(remaining<=0)break;
+    target=candidate;
+    // Discard a sealed fine opening on geometry alone before spending the
+    // threat-priced search budget on its entire unreachable component.
+    if(exactGoal&&candidates.length>1){
+      rail=cutRail(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128});
+      if(!rail.ok||!rail.bridgeOk)continue;
+      if(!danger.length)break;
+    }
+    rail=cutRail(point(from),point(target),{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
+      lattice:128,cost:danger.length?cost:null,maxMs:Math.max(0,maxMs-(performance.now()-started))});
+    if(rail.ok&&rail.bridgeOk)break;
+  }
+  if(!rail)return {found:false,reason:'fine_rail_search_budget'};
   if(!rail.ok||!rail.bridgeOk)return {found:false,reason:rail.why??'fine_rail_bridge_unproved',visited:rail.visited};
+  if(exactGoal){
+    const end=rail.waypoints.at(-1),raw=point(target);
+    if(Math.hypot(end.x-raw.x,end.y-raw.y)>0.01){
+      if(!edge(end,raw)||!chordWalkable(end,raw,{edge,lattice:128}).ok)return {found:false,reason:'fine_rail_goal_bridge_unproved'};
+      rail.waypoints.push(raw);
+    }
+  }
   const walls=legWalls(geo,{occupied,unreachable}),keys=new Set(walls.map(w=>w.row+','+w.col));
   const points=rail.waypoints.slice(1).map(p=>({x:clientToProtocol(p.x),y:clientToProtocol(p.y)}));
   let at=from,used=0,stop=null;const prefix=[];
@@ -34,7 +63,9 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     prefix.push({...p,distance:used});
     const row=Math.floor(p.y/64),col=Math.floor(p.x/64);
     if((row!==from.row||col!==from.col)&&keys.has(row+','+col))stop={row,col,steps:used,waypoints:prefix.map(({x,y})=>({x,y}))};
-    if(row===goal.row&&col===goal.col){stop={kind:'exit',row,col,steps:used,waypoints:prefix.map(({x,y})=>({x,y}))};break;}
+    if(exactGoal?Math.hypot(p.x-target.x,p.y-target.y)<=1:row===goal.row&&col===goal.col){
+      stop={kind:'exit',row,col,steps:used,waypoints:prefix.map(({x,y})=>({x,y}))};break;
+    }
   }
   // A shortest lane may pass beside a wall without entering its safe square.
   // Ask the body mover for a short side approach, charged to the same leg budget.
