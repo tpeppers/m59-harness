@@ -25,6 +25,10 @@ const walking=await trip.steps({...p,outbound:'walk'});
 assert.equal(walking[0].to,27);assert(!walking[0].avoid.includes(587));
 assert(walking.some(s=>s.do==='walk'&&s.to===2001));
 assert.equal((await home.steps({...p}))[0].to,2000);
+const convoy=await trip.steps({...p,outbound:'walk',agents:['a','b']});
+assert.equal(convoy[0].do,'verify');assert.equal(convoy.at(-1).always,true);
+assert.equal(trip.params.departSpacingMs.default,60000);
+await assert.rejects(trip.steps({...p,departSpacingMs:-1}),/convoy timing/);
 assert(!steps.at(-1).avoid.includes(587));
 await assert.rejects(bows.steps({bows:-1,arrows:1}),/nonnegative/);
 // Required routing refuses missing geometry; ordinary travel retains its default.

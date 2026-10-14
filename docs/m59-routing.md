@@ -36,6 +36,18 @@ directional crossing. Both outbound modes continue to the Island Inn (2001)
 by default, then run the named task. `island-home` first leaves an Island
 interior for the settlement, crosses the return route, and recovers normally
 in the mainland arrival pocket before departing for Tos.
+Multi-agent `island-trip` departures are spaced by `departSpacingMs` (60 seconds
+by default). The group waits at the destination before starting its spaced
+return. Wave cleanup runs on failed steps as well as successful trips.
+
+Fresh Island observations can wait up to 15 seconds through a keeper survival
+reconnect while this controller's movement lease or suspended journey remains
+verified. Missing health is never interpreted as being alive; a fresh body is
+required before movement resumes. A death, operator cancellation, foreign or
+expired lease, or recovery timeout refuses continuation.
+Planner workers finish their bounded searches naturally after cancellation.
+Their results are discarded; force-terminating an isolate during compilation
+caused a Windows Node 25 V8 fatal error in the containing keeper.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed

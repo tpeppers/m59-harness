@@ -5434,7 +5434,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
         const stepT0 = Date.now();
         CURRENT_STEP.set(agent, { script: ctx.name ?? null, at, do: step.do, label: step.label ?? null,
                                   why: step.why ?? null, to: step.to ?? null, t0: stepT0 });
-        const r = await runStep(ctx, agent, step, state);
+        let r;
+        try { r = await runStep(ctx, agent, step, state); }
+        catch (e) { r = { ok:false, why:e.message, outcome:'step_exception' }; }
         CURRENT_STEP.delete(agent);
         recordStepTime(ctx, { agent, at, do: step.do, label: step.label ?? null, why: step.why ?? null,
                               to: step.to ?? null, t0: stepT0, ms: Date.now() - stepT0, ok: !!r.ok,

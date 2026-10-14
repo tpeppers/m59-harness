@@ -11,15 +11,18 @@ import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
-
-export function checkIslandCancellation(ctx,status){
-  const cancel=status?.movement?.last_cancel,start=ctx.state?.islandCancelFence;
-  if(start!=null&&cancel?.at>=start&&cancel.by?.source!=='keeper'&&
-     cancel.by_label!==originLabel(ctx.origin??currentCallOrigin()))throw Error('island_walk_cancelled_by_operator');
-}
+import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
+export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
 export async function readIslandFinePosition(ctx,look){
+  return observeIslandTraveller(ctx,()=>readFineOnce(ctx,look),{
+    valid:v=>v.position?.ok&&v.position.fresh===true&&v.position.room===v.body.room?.num&&
+      Number.isFinite(v.body.hp?.value)&&Number.isFinite(v.body.hp?.max)&&v.body.hp.max>0,
+    bodyOf:v=>v.body,statusOf:v=>v.snapshot,error:'island_fine_position_unconfirmed'
+  }).then(({body,position,snapshot,observed})=>({...bindIslandFinePosition(body,position),objects:snapshot.objects,sector_heights:observed,movement:snapshot.movement}));
+}
+async function readFineOnce(ctx,look){
   const key=ctx.fleet+':'+ctx.agent;
   let observed,snapshot;
   const fetchState=async(port,path)=>{
@@ -41,7 +44,7 @@ export async function readIslandFinePosition(ctx,look){
     position=await finePosition(ctx.agent,{port,fetchState});finePorts.set(key,port);
   }
   const body=look??{room:snapshot.room,you:snapshot.you,hp:snapshot.hp,vigor:snapshot.vigor};
-  return {...bindIslandFinePosition(body,position),objects:snapshot.objects,sector_heights:observed,movement:snapshot.movement};
+  return {body,position,snapshot,observed};
 }
 export function bindIslandFinePosition(look,position){
   if(!position?.ok||position.fresh!==true||position.room!==look.room?.num)throw Error('island_fine_position_unconfirmed');
