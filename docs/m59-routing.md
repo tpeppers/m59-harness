@@ -24,10 +24,17 @@ travelled squares. Searches share a 500 ms allowance and retain live body,
 mandatory avoidance, ownership and send-time collision checks. Compatible
 exit rails also work from a stage one or two cells inside their boundary.
 `maxLegByRoom` supplies measured distances for individual rooms. The protected
-Island controller supplies 28 for the Chamber (2501), Merb (2503), and Obfal
-(2504), and 20 for Konima (2505). The Chamber and Merb have proved 26-27 square
-refuge gaps; Konima's outer return passage exceeds the ordinary 14-square
-allowance. An operator's explicit distances remain authoritative.
+Island controller supplies 28 for the Chamber (2501), Merb (2503), and Konima
+(2505), and 36 for Obfal (2504). The Chamber and Merb have proved 26-27 square
+refuge gaps; Konima's eastern return passage has a proved 22-square gap.
+Obfal's southern return has a proved 29.4-square leg from r37c22 to r20c10.
+An operator's explicit distances remain authoritative.
+
+`island-trip outbound=walk` walks from Tos to the mainland cave before the
+directional crossing. Both outbound modes continue to the Island Inn (2001)
+by default, then run the named task. `island-home` first leaves an Island
+interior for the settlement, crosses the return route, and recovers normally
+in the mainland arrival pocket before departing for Tos.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed

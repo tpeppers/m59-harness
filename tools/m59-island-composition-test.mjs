@@ -20,6 +20,11 @@ assert(steps.some(s=>s.do==='shop'&&s.seller==="Hanla zax'Ta"));
 assert(steps.some(s=>s.do==='shop'&&s.seller==="Kochtal ko'Tulca"&&s.lines[0].match.test('practice bow')));
 assert.equal(steps.at(-1).to,52);
 assert.equal(home.params.requireSafeLegs.default,true);
+assert.equal(trip.params.destination.default,2001);
+const walking=await trip.steps({...p,outbound:'walk'});
+assert.equal(walking[0].to,27);assert(!walking[0].avoid.includes(587));
+assert(walking.some(s=>s.do==='walk'&&s.to===2001));
+assert.equal((await home.steps({...p}))[0].to,2000);
 assert(!steps.at(-1).avoid.includes(587));
 await assert.rejects(bows.steps({bows:-1,arrows:1}),/nonnegative/);
 // Required routing refuses missing geometry; ordinary travel retains its default.
