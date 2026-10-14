@@ -2137,6 +2137,20 @@ leg. A clipped guide cannot append an unproved exit bridge or return an exposed
 stopping point. This covers the populated Phobos r26c70 stop without a map-specific
 exception.
 
+Fine FleetScript movement yields to an active keeper recovery under its live
+movement lease, including recovery that started while the rail worker was
+planning. The keeper refuses a new fine request while that injury recovery is
+active, before registering another order. The controller rests at the confirmed
+refuge and resumes its fine goal only after full health returns.
+
+`roomExitSquares` derives forbidden edge cells from the ordinary declared exit
+selector, including an optional inland strip. Same-room fine routes avoid these
+cells in their worker, chord checks and packet mover; the intended mainland and
+final Island edge approaches declare the destination they permit. `walk_to`
+accepts named `avoid_squares` objects, and both fine and square requests preserve
+the set across the broker/keeper JSON boundary. This prevents a threat-priced
+Hollows detour from using the north exit into Grog's Antechamber.
+
 Fine movement now pays the duration of its actual stride at the selected walking
 or running speed. Its queued packet also retains the movement generation and
 control lease, so cancellation cannot leave a late packet behind. Longer checked

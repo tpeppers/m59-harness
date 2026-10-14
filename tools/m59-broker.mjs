@@ -3425,7 +3425,8 @@ class KeeperProxy {
   async walkTo(col, row, opts = {}) {
     const fine = opts.fine === true
       || Number.isFinite(opts.x) || Number.isFinite(opts.y);
-    return keeperAction(this.name, this._index, 'walk', { col, row, ...opts },
+    const options={...opts,...(opts.avoidSquares instanceof Set?{avoidSquares:[...opts.avoidSquares]}:{})};
+    return keeperAction(this.name, this._index, 'walk', { col, row, ...options },
                         fine ? { timeoutMs: 5 * 60_000 } : undefined);
   }
   async step(col, row, opts = {}) {
@@ -3923,7 +3924,8 @@ class KeeperProxy {
   // afterwards; that is why this presented as "walks that report nothing and move nobody"
   // rather than as an error. One ceiling, in one place, matching its sibling.
   async walkFine(x, y, opts = {}) {
-    return keeperAction(this.name, this._index, 'walk_fine', { x, y, ...opts },
+    const options={...opts,...(opts.avoidSquares instanceof Set?{avoidSquares:[...opts.avoidSquares]}:{})};
+    return keeperAction(this.name, this._index, 'walk_fine', { x, y, ...options },
                         { timeoutMs: 5 * 60_000 });
   }
 }
@@ -8787,6 +8789,8 @@ const TOOLS = [
         'you are standing on, instead of counting it as progress because it got closer. For ' +
         'walking a route that only makes sense on one shelf — a staircase of slivers, a climb ' +
         'along a cliff face. Off by default: ordinary ground wants to be able to walk downhill.' },
+      avoid_squares: {type:'array',items:{type:'object',properties:{row:{type:'integer',minimum:1},col:{type:'integer',minimum:1}},required:['row','col']},
+        description:'Squares this movement may not enter, including unwanted room exits.'},
       stride: { type: 'number', description: 'kod fine units to reach per step, default 48 of 64 units per square' },
       x: { type: 'number', description: 'fine x/column-axis destination in kod units, instead of a square; x/y take precedence' },
       y: { type: 'number', description: 'fine y/row-axis destination in kod units, instead of a square; x/y take precedence' },
@@ -8820,6 +8824,7 @@ const TOOLS = [
       if (a.x != null && a.y != null) {
         const r = await s.walkFine(num(a.x), num(a.y), {
           maxSteps: num(a.max_steps, 60),
+          ...(a.avoid_squares?{avoidSquares:new Set(a.avoid_squares.map(p=>p.row+','+p.col))}:{}),
           ...(a.stride != null ? { stride: num(a.stride) } : {}),
           holdShelf: a.hold_shelf === true, exactArrival: a.exact_arrival === true,
           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
@@ -8830,10 +8835,12 @@ const TOOLS = [
       const fine = a.fine ?? s.fine;
       if (!fine) return s.walkTo(num(a.col), num(a.row), {
         maxSteps: num(a.max_steps, 30), controlToken: a.control_token, origin,
+        ...(a.avoid_squares?{avoidSquares:new Set(a.avoid_squares.map(p=>p.row+','+p.col))}:{}),
       });
       const half = KOD_FINENESS >> 1;
       return s.walkFine(num(a.col) * KOD_FINENESS + half, num(a.row) * KOD_FINENESS + half,
                         { maxSteps: num(a.max_steps, 120), stride: num(a.stride, 48),
+                          ...(a.avoid_squares?{avoidSquares:new Set(a.avoid_squares.map(p=>p.row+','+p.col))}:{}),
                           holdShelf: a.hold_shelf === true, exactArrival: a.exact_arrival === true,
                           ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
                           controlToken: a.control_token, origin });

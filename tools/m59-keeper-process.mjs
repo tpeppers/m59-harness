@@ -23,6 +23,7 @@ import { sourceForPush, sameValue } from './m59-policy-sources.mjs';
 import { KEY_FACULTY } from './m59-strategy-schema.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
+import {currentSurvivalDecision} from './m59-survival-decision.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
@@ -2301,8 +2302,9 @@ const server = createServer(async (req, res) => {
             return;
           }
           case 'walk': {
+            const options={...args,...(Array.isArray(args.avoidSquares)?{avoidSquares:new Set(args.avoidSquares)}:{})};
             const r = await asWalkOrder(args, `r${args.row}c${args.col}`,
-              () => session.walkTo(Number(args.col), Number(args.row), args));
+              () => session.walkTo(Number(args.col), Number(args.row), options));
             json(r ?? { ok: true });
             return;
           }
@@ -2598,6 +2600,12 @@ const server = createServer(async (req, res) => {
           // the ledges in 579 and the catwalk in 108 are. Without this a bot cannot walk a
           // sliver, and slivers are where the interesting places in this game are.
           case 'walk_fine': {
+            const recovery=currentSurvivalDecision(session),health=session.client?.vitals?.()?.health;
+            if(args.origin?.source==='fleetscript'&&health?.value<health?.max&&recovery?.source==='keeper'&&
+              recovery.strategy!=='yield_to_controller'&&recovery.ended_at==null&&
+              ['pending','approaching','arrived','holding','recovering'].includes(recovery.status)){
+              json({arrived:false,reason:'keeper_recovery_active',decision_id:recovery.id});return;
+            }
             // EVERY OPTION THIS FORWARDS HAS TO BE NAMED HERE, and one that is not is dropped
             // in silence — the proxy spreads `...opts` over the request and this end picks
             // fields out by hand. `holdShelf` was added to `walkFine` and passed by the
@@ -2605,6 +2613,7 @@ const server = createServer(async (req, res) => {
             // guard was on that was not.
             const r = await asWalkOrder(args, `x${args.x},y${args.y} (kod)`, () => session.walkFine(Number(args.x), Number(args.y), {
               maxSteps: Number(args.max_steps ?? args.maxSteps ?? 60),
+              avoidSquares:Array.isArray(args.avoidSquares)?new Set(args.avoidSquares):args.avoidSquares,
               stride: args.stride != null ? Number(args.stride) : undefined,
               holdShelf: (args.hold_shelf ?? args.holdShelf) === true,
               exactArrival: (args.exact_arrival ?? args.exactArrival) === true,
