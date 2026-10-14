@@ -15,6 +15,7 @@ import { sessionWalkPrototype } from './m59-session-walk.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
+import {rememberRefugePosition} from './m59-refuge-leg.mjs';
 import { CombatMode } from './m59-combat-mode.mjs';
 import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
@@ -3137,7 +3138,8 @@ class Session {
     const pose=client.self;
     if(!read||this.client!==client||client.state!=='game'||client.room?.id!==roomObjectId||!pose||pose.predicted||
        ![pose.x,pose.y,pose.row,pose.col].every(Number.isFinite))return null;
-    return {x:pose.x,y:pose.y,row:pose.row,col:pose.col,room_object_id:roomObjectId,at:Date.now()};
+    const observed={x:pose.x,y:pose.y,row:pose.row,col:pose.col,room_object_id:roomObjectId,at:Date.now()};
+    rememberRefugePosition(this,observed);return observed;
   }
 
   // "I DO NOT KNOW WHERE I AM" IS A QUESTION, NOT A VERDICT.

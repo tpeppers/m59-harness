@@ -20,6 +20,7 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import { SWARM_MIN_MAX_HEALTH } from './m59-swarm-follow.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import { classifyPvpDeath, pvpReturnDelayMs, readPvpDeath, writePvpDeath,
@@ -16786,7 +16787,7 @@ export class Autopilot {
     // already owns, so an operator who moves the flee line moves this with it.
     const danger = this.mortalDanger?.();
     let survivalRanEarly = false;
-    if (danger && !this.stageInFlight?.has('passFleeAndRest')) {
+    if (danger && !this.stageInFlight?.has('passFleeAndRest') && !continuingProvenRefugeLeg(this.s)) {
       survivalRanEarly = true;
       ran.push('passFleeAndRest');
       this.passStage = 'passFleeAndRest';
@@ -19258,6 +19259,10 @@ export class Autopilot {
   // ── passFleeAndRest: extracted from pass() ────────────────────────────────
   async passFleeAndRest(ctx) {
     const { s, c, room, v, hp } = ctx;
+    if(continuingProvenRefugeLeg(s)){
+      this.note('continuing the proved route to cover', {refuge:s.provenRefugeLeg.goal,why:'recent confirmed forward progress; recovery at its end'});
+      return HANDLED;
+    }
     if (await this.farmBuffPass().catch(() => false)) return HANDLED;
     // 2. In danger. "Something attackable is adjacent and we are hurt" is the only
     //    threat signal available — the protocol does not say who is targeting us.
