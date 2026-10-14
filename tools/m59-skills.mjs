@@ -2310,6 +2310,10 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
   // is not winning still ends on its own leash, and the caller deserves to know which.
   let poisonDrain = 0;
   try {
+    if((vitalFrac(v,'health')??1)<health){
+      const {turnAtProvedRefuge}=await import('./m59-refuge-activation.mjs');
+      await turnAtProvedRefuge(s,{shouldCancel,beforeMutation});
+    }
     while (Date.now() - t0 < maxSeconds * 1000 &&
            !(typeof shouldCancel === 'function' && shouldCancel())) {
       await sleep(3000);

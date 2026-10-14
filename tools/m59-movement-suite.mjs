@@ -64,6 +64,8 @@ const SUITES = [
   ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],
   ['m59-selfheal-test.mjs', 'fresh named player identity replaces a reused self id and refuses another character position after saves'],
   ['m59-recovery-driver-age-test.mjs', 'both real watchdogs give a new keeper approach its bounded recovery window while retaining stalled-driver rescue'],
+  ['m59-refuge-activation-test.mjs', 'rest at confirmed cover uses a normal activation turn after rejoin, with identity, cancellation and cleanup guards'],
+  ['m59-covered-traffic-test.mjs', 'a body-constrained refuge gap wakes the room and waits at confirmed cover before re-proving the required route'],
   ['m59-survival-escalation-test.mjs', 'local retreats use an observed landing in this room; cancellation forbids further rungs'],
   ['m59-survival-jam-test.mjs', 'blocked travel recovery preserves the objective and exact body identity'],
   ['m59-passorder-test.mjs', 'an unfinished Underworld escape retains ownership while its stage age remains visible'],
