@@ -214,8 +214,17 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       if(l.hp.value<l.hp.max&&activeOwnedFineRecovery(ctx,l)){cut=null;continue;}
       if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
       if(!cut.ok||!cut.bridgeOk){
+        if(cut.traffic_blocked&&cut.waiting_refuge?.row===l.you.row&&cut.waiting_refuge?.col===l.you.col){
+          // A temporary live-body cut at cover spends the existing journey
+          // budget, not twelve retries. Every loop re-reads position, damage,
+          // ownership and bodies; no packet leaves without a new full proof.
+          cut=null;await new Promise(r=>setTimeout(r,1000));continue;
+        }
         if(cut.body_obstacles>0&&cutWaits++<12){cut=null;await new Promise(r=>setTimeout(r,500));continue;}
-        ctx.state.islandFineFailure={room,target,body,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,seed:cut.seed,visited:cut.visited},
+        ctx.state.islandFineFailure={room,target,body,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,seed:cut.seed,visited:cut.visited,
+          body_obstacles:cut.body_obstacles,traffic_blocked:cut.traffic_blocked,waiting_refuge:cut.waiting_refuge},
+          objects:(l.objects??[]).map(o=>({id:o.id,x:o.x,y:o.y,row:o.row,col:o.col,flags:o.flags,name:o.name})),
+          avoided_squares:[...avoidance],excluded_prefix_refuges:[...partialRefuges],
           floor:floorAt(geo,body.x,body.y),seedFloor:cut.seed?floorAt(geo,cut.seed.x,cut.seed.y):null};
         throw Error('fine_route_cut_failed');
       }index=0;cut.bodyOrigin={...body};cut.threatSignature=signature;lastRiskCut=Date.now();

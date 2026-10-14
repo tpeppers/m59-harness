@@ -159,11 +159,17 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
       floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}};
     let cut=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
+    let waitingRefuge=null;
     if((!cut.ok||!cut.bridgeOk)&&obstacles.length&&o.allowBodyPrefix===true){
       const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
         roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
       const guide=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
       if(guide.ok&&guide.bridgeOk){
+        // A full geometry route blocked by this scene is traffic evidence.
+        // The body may wait only at an existing proved refuge; this result
+        // authorizes no movement and does not pretend to reach the goal.
+        const held=legWalls(geo).find(w=>w.row===workerData.from.row&&w.col===workerData.from.col);
+        if(held)waitingRefuge={row:held.row,col:held.col};
         const prefix=[guide.waypoints[0]];let previous=prefix[0],distance=0;
         for(const p of guide.waypoints.slice(1)){
           if(!edge(previous,p))break;
@@ -194,11 +200,32 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
             }
           }
         }
+        if(!waypoints&&o.requirePrefixRefuge===true&&!waitingRefuge){
+          // A new obstruction can appear after the last proved chord. Reach
+          // nearby cover, including behind the body, before waiting. Every
+          // retreat still uses the same live-body and mandatory-edge proof.
+          const from=workerData.from,limit=(o.prefixSquares??4)+2;
+          const candidates=legWalls(geo).filter(w=>Math.hypot(w.row-from.row,w.col-from.col)<=limit)
+            .sort((a,b)=>Math.hypot(a.row-from.row,a.col-from.col)-Math.hypot(b.row-from.row,b.col-from.col));
+          for(const w of candidates.slice(0,16)){
+            const side=planBodyDetour(geo,from,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
+              avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,
+              marginSquares:2,maxRangeSquares:limit+2,maxNodes:2000,maxMs:60,
+              threats:o.threats??[],threatWeight:o.threatWeight??12,threatRadius:o.threatRadius??8});
+            if(!side.found||!side.waypoints.length)continue;
+            let previous=from,distance=0;for(const q of side.waypoints){distance+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
+            if(distance>limit||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
+            const first=point(from);
+            waypoints=[{...first,f:settings.floorAt(first.x,first.y)},...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
+            refuge={row:w.row,col:w.col};break;
+          }
+        }
         if(waypoints?.length>1)cut={...guide,waypoints,legs:waypoints.length-1,partial:true,refuge,
           blocked_route_reason:cut.why??'body route bridge unavailable'};
       }
     }
     parentPort.postMessage({...cut,body_obstacles:obstacles.length,
+      ...(!cut.ok&&waitingRefuge?{traffic_blocked:true,waiting_refuge:waitingRefuge}:{}),
       ...(Number.isFinite(o.bodyRangeSquares)?{body_scope_squares:o.bodyRangeSquares}:{})});
   }else parentPort.postMessage(planFineRailRefuge(geo,workerData.from,workerData.goal,o));
 }

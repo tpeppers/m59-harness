@@ -61,6 +61,7 @@ const SUITES = [
   ['m59-island-test.mjs', 'island health and safe-leg policy guards; full chalice, observed landings and exclusive recoverable jungle cargo'],
   ['m59-fine-recovery-test.mjs', 'a fresh keeper interruption recovers an offline fine-action reply and confirms the original fine goal'],
   ['m59-refuge-leg-test.mjs', 'recent confirmed progress retains a short proved route to cover; stale, blocked or cancelled legs restore emergency recovery'],
+  ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],
   ['m59-survival-escalation-test.mjs', 'local retreats use an observed landing in this room; cancellation forbids further rungs'],
   ['m59-survival-jam-test.mjs', 'blocked travel recovery preserves the objective and exact body identity'],
   ['m59-passorder-test.mjs', 'an unfinished Underworld escape retains ownership while its stage age remains visible'],
