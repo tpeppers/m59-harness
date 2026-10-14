@@ -271,7 +271,7 @@ export function sessionWalkPrototype(deps) {
       if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps});
       if(r.left_room)return {arrived:false,left_room:true,steps};
       if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2){
-        const leg={from:before,to:p,reason:r.reason??'departure waypoint did not arrive',vertical:this.collisionVertical??null};
+        const leg={from:before,to:p,reason:r.reason??'departure waypoint did not arrive',object_id:r.objectId??null,vertical:this.collisionVertical??null};
         console.log('[fine-departure] '+JSON.stringify(leg));
         return {...r,arrived:false,steps,reason:leg.reason,departure_leg:leg};
       }
@@ -7474,6 +7474,18 @@ export function sessionWalkPrototype(deps) {
       if (!(at?.row === next.row && at?.col === next.col)) {
         console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} did not reach r${next.row}c${next.col} ` +
           `(at r${at?.row}c${at?.col}): ${walked?.reason ?? walked?.note ?? 'no reason'}`);
+        if(walked?.reason==='object_blocked'||walked?.traffic||walked?.blocked_by_bodies){
+          // Traffic invalidates a scene snapshot, not the refuge's geometry.
+          // Refresh the body and objects before pricing another path. Keep the
+          // original owner and required-wall policy while survival can preempt.
+          out.traffic_waits=(out.traffic_waits??0)+1;
+          if(out.traffic_waits>24){out.fallback='body traffic wait budget exhausted';break;}
+          await this.confirmPosition?.({timeoutMs:1500});
+          if(this.movementWasCancelled(movementGeneration,controlToken))return {...out,cancelled:true};
+          if(roomId!=null&&c.room?.id!==roomId){out.left_room=true;return note();}
+          await new Promise(resolve=>setTimeout(resolve,250));
+          n--;continue;
+        }
         unreachable.add(`${next.row},${next.col}`);
         out.failed++;
         if (out.failed >= 3) { out.fallback = 'three legs could not be walked'; break; }

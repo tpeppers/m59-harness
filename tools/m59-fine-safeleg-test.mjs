@@ -89,6 +89,23 @@ const forward=await sessionWalkPrototype({}).crossBySafeLegs.call(executor,{stan
   {policy:{rooms:[2500],required:true,fineLegs:true,maxLeg:14}});
 assert(forward.handed_over,JSON.stringify(forward));assert(forward.legs<=6);
 assert.equal(client.self.row,1);assert.equal(client.self.col,27);assert.equal(new Set(forward.walls).size,forward.walls.length);
+// A body can arrive after a worker's snapshot. The actual executor refreshes
+// that scene and retries instead of condemning three walls on the same prefix.
+Object.assign(client.self,{row:27,col:20,x:1320,y:1744});
+const clearWalk=executor.walkDepartureLegs;let bodyRefusals=0,sceneReads=0;
+executor.walkDepartureLegs=async points=>++bodyRefusals===1?{arrived:false,reason:'object_blocked'}:clearWalk(points);
+executor.confirmPosition=async()=>{sceneReads++;return client.self;};
+const traffic=await sessionWalkPrototype({}).crossBySafeLegs.call(executor,{stand_on:{row:1,col:27},to:2501},
+  {policy:{rooms:[2500],required:true,fineLegs:true,maxLeg:14}});
+assert(traffic.handed_over,JSON.stringify(traffic));assert.equal(traffic.failed,0);
+assert.equal(traffic.traffic_waits,1);assert.equal(sceneReads,1);
+Object.assign(client.self,{row:27,col:20,x:1320,y:1744});
+executor.walkDepartureLegs=async()=>({arrived:false,reason:'object_blocked'});
+executor.confirmPosition=async()=>{executor.movementWasCancelled=()=>true;return client.self;};
+const cancelledTraffic=await sessionWalkPrototype({}).crossBySafeLegs.call(executor,{stand_on:{row:1,col:27},to:2501},
+  {policy:{rooms:[2500],required:true,fineLegs:true,maxLeg:14}});
+assert.equal(cancelledTraffic.cancelled,true,'a traffic refresh cannot revive a preempted traveler');
+executor.movementWasCancelled=()=>false;
 const konimaWest=roomGeometry(2505),westBody={row:9,col:79,x:5112,y:576},wrongStage={row:73,col:2};
 const alternate=await planFineRailRefugeAsync(konimaWest,westBody,wrongStage,{maxLeg:20,
   goalFine:{x:96,y:4704},goalFineAlternates:[{x:96,y:4688}]});
