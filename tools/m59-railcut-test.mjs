@@ -300,6 +300,8 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
 {
   const body={x:64,y:256},goal={x:960,y:256};
   const cost=threatEdgeCost([{x:512,y:256}],{radius:240,weight:20});
+  const crowded=threatEdgeCost([{x:512,y:256},{x:512,y:256}],{radius:240,weight:20});
+  eq(crowded(body,goal)-896,2*(cost(body,goal)-896),'two nearby monsters contribute twice the exposure of one');
   const rail=cutRail(body,goal,{edge:open,bounds:{w:1024,h:768},cost});
   ok(rail.ok,'priced rail reaches the same physical goal');
   ok(rail.waypoints.some(p=>Math.abs(p.y-256)>=240),'priced rail passes outside the exposed central corridor');

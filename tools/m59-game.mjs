@@ -3130,6 +3130,16 @@ class Session {
     return c.self ? { col: c.self.col, row: c.self.row } : null;
   }
 
+  async confirmFinePosition({timeoutMs=3000}={}) {
+    const client=this.client,roomObjectId=client?.room?.id;
+    if(!client||client.state!=='game'||roomObjectId==null)return null;
+    const read=await this.confirmPosition({timeoutMs});
+    const pose=client.self;
+    if(!read||this.client!==client||client.state!=='game'||client.room?.id!==roomObjectId||!pose||pose.predicted||
+       ![pose.x,pose.y,pose.row,pose.col].every(Number.isFinite))return null;
+    return {x:pose.x,y:pose.y,row:pose.row,col:pose.col,room_object_id:roomObjectId,at:Date.now()};
+  }
+
   // "I DO NOT KNOW WHERE I AM" IS A QUESTION, NOT A VERDICT.
   //
   // `client.self` is `room.objects.get(selfId)`, so it is undefined whenever our own object
