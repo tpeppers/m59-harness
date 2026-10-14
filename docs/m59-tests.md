@@ -1917,12 +1917,14 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
   penalty guard outranking all of them; a deadline wake without a deadline refused rather than read
   as "for ever"; an unreadable hand-over failing CLOSED; and a corrupt store throwing instead of
   reading as "nobody is held". Temp directory only.
-- `node tools/m59-dormancy-shape-test.mjs` (18): that the keeper and the broker CONSULT it where
+- `node tools/m59-dormancy-shape-test.mjs` (22): that the keeper and the broker CONSULT it where
   forgetting to is the bug -- join, the autopilot's reconnect, `/join` and `/rejoin` refuse a dormant
   keeper (423, never the 409 a broker reads as a stranger's port), a dormant spawn never logs in, the
   rejoin sweep reads the store before any `/rejoin` and stops the lap if it cannot, `restart-keepers`
   replaces a piloted character dormant instead of skipping it, and a person logging off under a hold
-  starts the penalty clock. Source text only, like `m59-handoff-shape-test.mjs`.
+  starts the penalty clock; and that a STAGED START holds everybody before the first spawn (never
+  on an adoption, never over an existing hold) and `start_all` wakes only its own holds, in lanes,
+  without bumping a pilot. Source text only, like `m59-handoff-shape-test.mjs`.
 
 ## Departure deviation guard
 

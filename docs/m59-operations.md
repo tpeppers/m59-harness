@@ -149,6 +149,30 @@ The playbook verbs `logoff` and `call_for_help` already promise "stay off for `s
 the broker honours the window; it never did, and `breakOut` reconnects rather than staying off. The
 keeper's `goDormant()` and the record's `must_wake_by` are what those verbs should call and read.
 
+### A staged start: every keeper warm, nobody logged in
+
+```bash
+node tools/m59-service.mjs start --staged --fleet prod   # or M59_STAGED_START=1 on the broker
+node tools/m59-tui.mjs --fleet prod                       # L scouts one; A (twice) logs on the rest
+```
+
+For looking at the server before the fleet walks into it. Before the first spawn the broker
+writes an ordinary `operator` / `manual` dormancy, `by: "staged-start"`, for every roster
+character that does not already carry one, so every keeper comes up warm (process, map, routes,
+port) and dormant. Everything that already respects a dormancy respects this: the rejoin sweep,
+`restart-keepers`, and a broker handover (an adopting successor writes no holds of its own and
+the ones on disk carry over). `/health` reports `staged.held`.
+
+`L` in the TUI launches the client as one of them, exactly as it always does; its keeper is out,
+so nobody is bumped. `A` -- offered only while somebody is staged, and asked twice -- calls the
+`dormancy` tool's `start_all`, which wakes every staged hold in lanes of
+`M59_KEEPER_CONCURRENCY` (6). Holds anybody else wrote are left alone. The character you are
+scouting with is not woken under you: its hold becomes a `pilot` one and its keeper logs in when
+your client closes. **If you log the scout off BEFORE pressing A**, the release stamps a logoff
+under an operator hold (room unknown, treated as unsafe), so the penalty guard logs that one
+character back on about eight minutes later -- that is the ghost rule in the section above, not
+a fault.
+
 ### Restarting keepers: hand them off, do not log them off
 
 ```bash
