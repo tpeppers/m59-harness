@@ -8,6 +8,13 @@ control token; a blocked step, stale progress, arrival or cancellation releases
 the survival ladder immediately. It does not authorize packets or bypass live
 collision checks. At the refuge, ordinary shelter and recovery still apply.
 
+Protected fine-rail searches distinguish a temporarily body-blocked geometry
+route from a terrain refusal. If a forward prefix cannot reach cover, they
+may offer a nearby refuge approach within the prefix allowance plus two
+squares, including a retreat. The full live-body and mandatory-edge checks
+still apply. A traveler already at that refuge may wait within its existing
+journey budget and re-observe; no refused path becomes a movement command.
+
 Shared narrow-passage admission now runs at the validated packet send
 boundary (`m59-passage-admission.mjs`). Connected one-square grid passages
 have one incumbent, claimed atomically across keeper processes in the
