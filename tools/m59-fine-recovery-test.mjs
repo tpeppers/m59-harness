@@ -5,7 +5,7 @@ import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {originLabel} from './m59-move-origin.mjs';
-import {checkedIslandWalk,activeOwnedFineRecovery} from './m59-island-finewalk.mjs';
+import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk} from './m59-island-finewalk.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {roomGeometry} from './m59-ground.mjs';
@@ -60,7 +60,32 @@ try{
   {avoidSquares:hollows,maxMs:2000});
  assert(!forbidden.ok||!forbidden.bridgeOk,'a blocked edge exit cannot become a proved fine goal');
  await assert.rejects(cutFineRailAsync(roomGeometry(2502),pose,{x:2410,y:1062},{avoidSquares:['1,41']}),/must be a Set/);
- console.log('Fine walk survives an offline action reply, rests under its fresh keeper receipt, and confirms the original goal.');
+ // A fresh keeper episode can end while an ailment leaves health below full.
+ // The initial owned observation licenses recovery only at that same actual
+ // refuge under the controller's still-live lease, never at a foreign body.
+ const ownLease={owner:'fleetscript:fine-recovery',expires_in_ms:10000};
+ const initial={room:{num:2502,object_id:777},you:{id:1,x:2083,y:1466,row:22,col:32},hp:{value:13,max:20},
+  autopilot_status:{faculties:{movement:ownLease},survival_decisions:{current:{source:'keeper',strategy:'rest_safe',status:'recovering',ended_at:null}}}};
+ async function completedEpisode({lease=ownLease,you=initial.you,cancel=null,attacked=false}={}){
+  let health=13,restCount=0,stands=0;
+  const x={...ctx,state:{islandCancelFence:1},call:async name=>{
+   if(name==='status')return {movement:{last_cancel:cancel},autopilot_status:{faculties:{movement:lease},survival_decisions:{current:null}}};
+   if(name==='look')return {room:initial.room,you,hp:{value:health,max:20},vigor};
+   if(name==='rest_up'){restCount++;health=restCount===1?18:20;return attacked?{interrupted:'attacked while resting'}:{};}
+   if(name==='rest'){stands++;return {};}
+   throw Error('unexpected recovery request '+name);
+  }};
+  const ok=await recoverIslandFineWalk(x,{initial,active:true,deadline:Date.now()+10000,
+   read:async()=>({l:{room:initial.room,you,hp:{value:health,max:20},vigor}})});
+  return {ok,restCount,stands};
+ }
+ assert.deepEqual(await completedEpisode(),{ok:true,restCount:2,stands:1});
+ assert.deepEqual(await completedEpisode({attacked:true}),{ok:false,restCount:1,stands:0});
+ for(const options of [{lease:{...ownLease,owner:'fleetscript:foreign'}},{lease:{...ownLease,expires_in_ms:0}},
+  {you:{...initial.you,id:2}},{you:{...initial.you,x:initial.you.x+8}}])
+  assert.deepEqual(await completedEpisode(options),{ok:false,restCount:0,stands:0});
+ await assert.rejects(completedEpisode({cancel:{at:2,by:{source:'operator'}}}),/cancelled_by_operator/);
+ console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
 }finally{
  await new Promise(resolve=>server.close(resolve));
  if(oldRegistry==null)delete process.env.M59_KEEPER_BAND_REGISTRY;else process.env.M59_KEEPER_BAND_REGISTRY=oldRegistry;
