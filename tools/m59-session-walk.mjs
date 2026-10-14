@@ -54,6 +54,8 @@ const RAIL_FINE_LOOKAHEAD = 2;
 const RAIL_FINE_REACH_NODES = Number(process.env.M59_RAIL_FINE_REACH_NODES || 8000);
 const RAIL_FINE_PATH_NODES = Number(process.env.M59_RAIL_FINE_PATH_NODES || 12000);
 const SAFE_LEG_CORRIDORS = new Map();
+// How long a slide-refused edge stays out of this session's plans (learnDeviationEdge).
+const DEVIATION_EDGE_TTL_MS = Number(process.env.M59_DEVIATION_EDGE_TTL_MS || 30 * 60 * 1000);
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation} from './m59-passage-admission.mjs';
@@ -188,6 +190,38 @@ export function sessionWalkPrototype(deps) {
     return {...result,via:plan.via,...(result.arrived&&plan.rail?{rail:plan.rail}:{}),deviation:failure.deviation};
   }
 
+  /**
+   * A CONFIRMED GEOMETRY DEVIATION NAMES AN EDGE THIS WALK MUST STOP PROPOSING. True when it
+   * added `here > here + one step toward the requested square` to `blockedEdges`.
+   *
+   * The step mask prices an edge between two STAND POINTS, and a body is not always on one.
+   * Ukgoth (599): the step r9c56>r10c57 lands at (3696,656) because the stand point (3680,672)
+   * is not reachable from r9c56 (aimInto); from there r10c57>r11c57 predicts a 70-unit slide,
+   * which the pre-send check refuses, and no bounded departure search gets out. The walk used
+   * to return there, and every later walk -- the next exit candidate, the next journey --
+   * re-planned the same edge from the same pose. Walk-local on purpose: `moverStepLands` still
+   * says yes from the stand point, so this is a fact about the pose, not the map, and it is
+   * not written to `impossibleEdges`. A body or an unconfirmed position teaches nothing.
+   */
+  learnDeviationEdge(failure,blockedEdges) {
+    const c=this.client,d=failure?.deviation,p=d?.position,q=d?.requested;
+    if(failure?.reason!=='movement_deviation'||failure.cancelled||failure.left_room||!blockedEdges)return false;
+    if(!d?.confirmed||d.phase!=='predicted'||!p||!Number.isInteger(q?.row)||!Number.isInteger(q?.col))return false;
+    if(d.geometry?.reason==='object_blocked'||d.room!==this.world?.room?.num)return false;
+    if(!c?.self||c.self.predicted||c.self.x!==p.x||c.self.y!==p.y)return false;
+    const dr=Math.sign(q.row-c.self.row),dc=Math.sign(q.col-c.self.col);
+    if(!dr&&!dc)return false;
+    const key=`${c.self.row},${c.self.col}>${c.self.row+dr},${c.self.col+dc}`;
+    if(blockedEdges.has(key))return false;
+    blockedEdges.add(key);
+    const room=Number(d.room);
+    if(Number.isFinite(room)){
+      const held=((this.deviationEdges??=new Map()).get(room)??this.deviationEdges.set(room,new Map()).get(room));
+      if(held.size<256)held.set(key,Date.now()+DEVIATION_EDGE_TTL_MS);
+    }
+    return true;
+  }
+
   async recoverDeviationWaypoint(failure,{movementGeneration=this.movementGeneration,controlToken,
     beforeMutation=null,maxSteps=32,avoidSquares=null}={}) {
     const c=this.need(),d=failure?.deviation,p=d?.position,q=d?.requested;
@@ -252,7 +286,20 @@ export function sessionWalkPrototype(deps) {
   async continueDeparture(fine,col,row,options) {
     let steps=fine.steps??0;
     if(fine.rail&&typeof this.followRail==='function'&&fine.rail.squares.length<=options.maxSteps-steps){
-      const ran=await this.followRail(fine.rail.squares,{...options,avoidSquares:options.avoidSquares});
+      // A DEPARTURE THAT LANDS ON A BROKEN RAIL HEAD IS BOARDED PAST IT, as leaveVia does
+      // (fineRailBoard). Ukgoth, 2026-10-14: the departure search put bodies on r7c64, the head
+      // of the north-door rail whose next waypoints no fine path reaches, and followRail then
+      // ground r6c65<->r7c64 for 500-1000 packets before giving up.
+      let squares=fine.rail.squares;
+      const board=typeof this.fineRailBoard==='function'?this.fineRailBoard(squares):null;
+      if(board){
+        const got=await this.walkFineLegs(board.legs,board.square,{movementGeneration:options.movementGeneration,
+          controlToken:options.controlToken,avoidSquares:options.avoidSquares});
+        if(got?.left_room)return {arrived:false,left_room:true,steps,departure_detour:true};
+        if(got?.reason==='movement_cancelled')return this.cancelledMovement({steps});
+        if(got?.arrived)squares=squares.slice(board.index);
+      }
+      const ran=await this.followRail(squares,{...options,avoidSquares:options.avoidSquares});
       steps+=ran.walked??0;
       if(ran.left_room)return {arrived:false,left_room:true,steps,departure_detour:true};
       if(!ran.railed)return {...ran,arrived:false,steps,departure_detour:true,reason:ran.reason??'departure rail did not arrive'};
@@ -2755,6 +2802,10 @@ export function sessionWalkPrototype(deps) {
     // Only when the COLLISION view is what refused. A coarse-grid "no route" is the room
     // telling us something, and re-asking it the same question would just be slower.
     const blockedEdges = new Set();
+    // Re-plans bought by confirmed geometry deviations (learnDeviationEdge); each also cost a
+    // failed departure search, so bounded.
+    let deviationReplans = 0;
+    const deviationReplanMax = Number(process.env.M59_DEVIATION_REPLANS || 6);
     // One re-centre per square per walk. Standing in the middle either helps or it does not;
     // trying it twice from the same square is the dither this is meant to remove.
     const recentredAt = new Set();
@@ -2791,6 +2842,14 @@ export function sessionWalkPrototype(deps) {
          ?? this.impossibleEdges.set(roomNow, new Set()).get(roomNow))
       : null;
     if (impossibleHere) for (const e of impossibleHere) blockedEdges.add(e);
+    // And the edges a confirmed slide refused recently (learnDeviationEdge). Not proof about the
+    // map, so they expire; but without them every new walk -- the next exit candidate, the next
+    // journey -- plans the same edge again, and in Ukgoth that walked the whole troll crew into
+    // one square at r9c57/r10c57 where they then blocked each other (recordjam 2026-10-14).
+    if (Number.isFinite(roomNow) && this.deviationEdges?.get(roomNow)) {
+      const now = Date.now(), held = this.deviationEdges.get(roomNow);
+      for (const [e, until] of held) { if (until > now) blockedEdges.add(e); else held.delete(e); }
+    }
 
     // BLOCKED EDGES GO INTO THE FIRST QUESTION, NOT ONLY THE LATER ONES.
     //
@@ -2987,12 +3046,22 @@ export function sessionWalkPrototype(deps) {
         if(ran.reason==='movement_deviation'){
           if(deviationDetours>=2)return {...ran,arrived:false,steps:pivotLegs};
           const fine=await this.departureDetour(ran,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-pivotLegs),to:{row,col},avoidSquares});
-          if(!fine.arrived)return {...fine,arrived:false,steps:pivotLegs+(fine.steps??0)};
-          const onward=await this.continueDeparture(fine,col,row,{maxSteps:Math.max(0,maxSteps-pivotLegs),hardCap,
-            movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
-          return {...onward,steps:pivotLegs+(onward.steps??0),departure_detour:true};
-        }
-        if (ran.left_room)
+          // Same rule as the step loop below (learnDeviationEdge): a refused pivot edge is
+          // learned and the rest is walked square by square on a plan that avoids it.
+          let replanned=false;
+          if(!fine.arrived&&deviationReplans<deviationReplanMax&&this.learnDeviationEdge(fine,blockedEdges)){
+            deviationReplans++;
+            const at=c.self,again=at&&replan(at.row,at.col);
+            if(again?.found){from=at;plan=again;replanned=true;}
+          }
+          if(!fine.arrived&&!replanned)return {...fine,arrived:false,steps:pivotLegs+(fine.steps??0)};
+          if(!replanned){
+            const onward=await this.continueDeparture(fine,col,row,{maxSteps:Math.max(0,maxSteps-pivotLegs),hardCap,
+              movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
+            return {...onward,steps:pivotLegs+(onward.steps??0),departure_detour:true};
+          }
+          // replanned: fall through to the step walker below with the new plan
+        } else if (ran.left_room)
           return { arrived: false, left_room: true, steps: pivotLegs,
                    note: 'a proved leg crossed the room edge' };
         if (ran.body_detour_target) {
@@ -3453,6 +3522,17 @@ export function sessionWalkPrototype(deps) {
       if(r.reason==='movement_deviation'){
         if(deviationDetours>=2)return {...r,arrived:false,steps:taken,replans};
         const fine=await this.departureDetour(r,{movementGeneration,controlToken,beforeMutation,maxSteps:Math.min(160,maxSteps-taken),to:{row,col},avoidSquares});
+        // A REFUSED EDGE IS STILL AN EDGE: LEARN IT AND RE-PLAN, DO NOT HAND THE SAME PLAN BACK.
+        // See learnDeviationEdge. Ukgoth, 2026-10-14: every walk to the north door reached
+        // r10c57 at (3696,656), had r10c57>r11c57 refused as a 70-unit slide, failed the
+        // departure search, and returned -- so the next exit candidate re-planned the same
+        // edge from the same pose and all three were spent without a packet.
+        if(!fine.arrived&&deviationReplans<deviationReplanMax&&this.learnDeviationEdge(fine,blockedEdges)){
+          deviationReplans++;
+          const at=c.self,again=at&&geo.path(at.row,at.col,row,col,
+            {avoid:occupied,blockedEdges,threats:this.threatsHere(),clearance});
+          if(again?.found){queue=again.steps.slice();pulled=undefined;continue;}
+        }
         if(!fine.arrived)return {...fine,arrived:false,steps:taken+(fine.steps??0),replans};
         const onward=await this.continueDeparture(fine,col,row,{maxSteps:Math.max(0,maxSteps-taken),hardCap,
           movementGeneration,controlToken,beforeMutation,avoidSquares,clearance,deviationDetours:deviationDetours+1});
@@ -5965,6 +6045,20 @@ export function sessionWalkPrototype(deps) {
           if (stoppedAfterFineBoard) return stoppedAfterFineBoard;
           if (got?.left_room) return { left: true, via: 'rail', rail: { fine_boarded: plan.index } };
           let ran = null;
+          // A POCKET BOARDING CAN LAND ON A BROKEN RAIL HEAD TOO. Ukgoth, 2026-10-14: the seed
+          // departure put r6c65 bodies on r7c64, and the fine check below this branch never ran,
+          // so followRail ground r6c65<->r7c64 for ~530 packets. Ask it from where we landed.
+          if (got?.arrived && plan.wire && typeof this.fineRailBoard === 'function') {
+            const past = this.fineRailBoard(rail.squares.slice(plan.index));
+            if (past) {
+              const over = await this.walkFineLegs(past.legs, past.square,
+                { movementGeneration, controlToken, avoidSquares: wrongDoor?.size ? wrongDoor : null });
+              const stoppedPastHead = await stopAfterAwait();
+              if (stoppedPastHead) return stoppedPastHead;
+              if (over?.left_room) return { left: true, via: 'rail', rail: { fine_boarded: plan.index + past.index } };
+              if (over?.arrived) plan.index += past.index;
+            }
+          }
           if (got?.arrived) {
             ran = await this.followRail(rail.squares.slice(plan.index), { movementGeneration, controlToken,
                                         avoidSquares: wrongDoor?.size ? wrongDoor : null })
