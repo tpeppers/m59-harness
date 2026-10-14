@@ -8,6 +8,7 @@ const c=client(),s={client:c,confirmPosition:({timeoutMs})=>{assert.equal(timeou
 let done=false;const waiting=confirm.call(s).then(r=>{done=true;return r;});
 await Promise.resolve();assert.equal(done,false);release({row:69,col:10});
 const observed=await waiting;assert.equal(observed.x,640);assert.equal(observed.y,4440);assert.equal(observed.room_object_id,2815);
+assert.equal(s.refugePosition.x,640,'only the confirmed read records refuge progress');
 for(const change of ['room','client','predicted','disconnected','timeout']){
  const c=client(),s={client:c,confirmPosition:async()=>{
   if(change==='room')c.room.id=6;
@@ -17,5 +18,6 @@ for(const change of ['room','client','predicted','disconnected','timeout']){
   return change==='timeout'?null:{row:69,col:10};
  }};
  assert.equal(await confirm.call(s),null,change+' cannot certify this fine position');
+ assert.equal(s.refugePosition,undefined,change+' cannot certify refuge progress');
 }
 console.log('Fine position waits for the server read and refuses room/client changes, predictions, disconnects and timeouts.');

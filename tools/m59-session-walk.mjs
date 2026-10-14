@@ -40,6 +40,7 @@ import {planRailDeparture,rememberedDeparture,rememberDeparture,forgetDeparture}
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
@@ -246,6 +247,8 @@ export function sessionWalkPrototype(deps) {
     if(waypoints.length>maxSteps)return {arrived:false,reason:'departure detour exceeds step budget'};
     let steps=0;
     for(const p of waypoints){
+      const refuge=this.provenRefugeLeg?.waypoints===waypoints?this.provenRefugeLeg:null;
+      if(refuge){refuge.next_index=steps;refuge.blocked=false;}
       if(this.movementWasCancelled(movementGeneration,controlToken)||c!==this.client)return this.cancelledMovement({steps});
       if(c.room.id!==roomId)return {arrived:false,left_room:true,steps};
       if(shelterFallback&&await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:'geometry departure detour'}))return this.cancelledMovement({steps});
@@ -268,13 +271,16 @@ export function sessionWalkPrototype(deps) {
         if(c.self?.x===before.x&&c.self?.y===before.y)r=await move();
       }
       steps++;
+      if(refuge)refuge.blocked=!r.moved;
       if(r.cancelled||r.reason==='movement_cancelled'||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps});
       if(r.left_room)return {arrived:false,left_room:true,steps};
       if(!r.moved || Math.hypot((c.self?.x??Infinity)-p.x,(c.self?.y??Infinity)-p.y)>2){
+        if(refuge)refuge.blocked=true;
         const leg={from:before,to:p,reason:r.reason??'departure waypoint did not arrive',object_id:r.objectId??null,vertical:this.collisionVertical??null};
         console.log('[fine-departure] '+JSON.stringify(leg));
         return {...r,arrived:false,steps,reason:leg.reason,departure_leg:leg};
       }
+      if(refuge)refuge.next_index=steps;
       if(steps>=maxSteps&&p!==waypoints.at(-1))return {arrived:false,steps,reason:'departure detour spent step budget'};
     }
     const reply=await this.confirmPosition({timeoutMs:1500});
@@ -7454,8 +7460,11 @@ export function sessionWalkPrototype(deps) {
         next={...next,row:fine.row,col:fine.col,steps:fine.steps};
         console.log(`[safe-legs] ${c.me?.name??this.name??'?'} proved ${fine.steps.toFixed(1)} squares / ${fine.waypoints.length} moves to r${next.row}c${next.col}`);
       }
-      const walked = await (fine?this.walkDepartureLegs(fine.waypoints,next,
-        {maxSteps:fine.waypoints.length,movementGeneration,controlToken,shelterFallback:false}):this.walkTo(next.col, next.row,
+      const runFine=()=>this.walkDepartureLegs(fine.waypoints,next,
+        {maxSteps:fine.waypoints.length,movementGeneration,controlToken,shelterFallback:false});
+      const walked = await (fine?(next.kind==='fine_exit'?runFine():withProvenRefugeLeg(this,fine.waypoints,next,
+        {movementGeneration,controlToken},runFine)):
+        this.walkTo(next.col, next.row,
         { maxSteps: Math.max(20, next.steps * 2), movementGeneration, controlToken,
           ...(avoid ? { avoidSquares: avoid } : {}) }))
         .catch(e => ({ arrived: false, reason: e.message }));

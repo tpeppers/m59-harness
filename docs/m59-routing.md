@@ -1,5 +1,13 @@
 # Movement, collision and routing
 
+A hit during a short proved refuge leg can retain that route to cover while
+ordered server position reads confirm movement within the last 2.5 seconds
+and at most 20 travelled squares remain. This applies to general fine safe-leg
+travel. The scope keeps the same client, room, owner, movement generation and
+control token; a blocked step, stale progress, arrival or cancellation releases
+the survival ladder immediately. It does not authorize packets or bypass live
+collision checks. At the refuge, ordinary shelter and recovery still apply.
+
 Shared narrow-passage admission now runs at the validated packet send
 boundary (`m59-passage-admission.mjs`). Connected one-square grid passages
 have one incumbent, claimed atomically across keeper processes in the
