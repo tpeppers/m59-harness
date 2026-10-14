@@ -7382,8 +7382,8 @@ export function sessionWalkPrototype(deps) {
       // BOUNDED WORK PER TICK. The floods a plan builds are cached per geometry, so a plan cut
       // off by its deadline leaves the next attempt less to do; between attempts the event loop
       // runs. Four attempts is the whole allowance, then the direct walk.
-      let plan = null;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      let plan = {found:false,reason:'fine_geometry_requested'};
+      for (let attempt = 0; attempt < (opts.fineLegs===true&&typeof geo.toJSON==='function'?0:4); attempt++) {
         plan = planSafeLegs(geo, { row: me.row, col: me.col }, { row: goal.row, col: goal.col },
                             { ...opts, threats, occupied, unreachable, corridor });
         out.plans++;
@@ -7399,22 +7399,25 @@ export function sessionWalkPrototype(deps) {
         `r${plan.legs[0].row}c${plan.legs[0].col}/${plan.legs[0].steps}` : `no plan (${plan?.reason})`} ` +
         `in ${plan?.ms}ms, ${threats.length} threat(s)`);
       let boot=null;
-      if(!plan?.found&&opts.fineLegs===true){
-        boot=planFineSafeLeg(geo,c.self,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
-          threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
-          objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
-          avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
-        if(!boot.found&&typeof geo.toJSON==='function'){
+      if(opts.fineLegs===true){
+        // Price the route to the actual exit, not a coarse target on another
+        // ledge. Repeated local approaches to such targets made Ugol loop.
+        if(typeof geo.toJSON==='function'){
           const pose={...c.self};
           boot=await planFineRailRefugeAsync(geo,pose,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
             threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
             objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
-            avoidSquares:avoid?new Set(avoid):null},
+            avoidSquares:avoid?new Set(avoid):null,goalFine:exit.kind==='edge'?exit.fine_stand_on:null,
+            goalFineAlternates:exit.kind==='edge'?(exit.alternates??[]).map(a=>a.fine_stand_on).filter(Boolean):[]},
             {cancelled:()=>this.client!==c||c.room?.id!==roomId||this.movementWasCancelled(movementGeneration,controlToken)});
           if(boot.cancelled)return {...out,cancelled:true};
           if(!c.self||Math.hypot(c.self.x-pose.x,c.self.y-pose.y)>1){out.fallback='fine rail starting pose changed';break;}
         }
-        if(boot.found)plan={found:true,legs:[{kind:boot.kind==='exit'?'fine_exit':'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
+        if(!boot?.found&&!plan?.found&&typeof geo.toJSON!=='function')boot=planFineSafeLeg(geo,c.self,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
+          threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
+          objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
+          avoidSquares:avoid?new Set(avoid):null,exitGoal:goal,table:activeRoutes(),room:room.num});
+        if(boot?.found)plan={found:true,legs:[{kind:boot.kind==='exit'?'fine_exit':'wall',row:boot.row,col:boot.col,steps:boot.steps}]};
       }
       if (!plan?.found) { out.fallback = boot?.reason ?? plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
       if (n === 0) { out.planned_legs = plan.legs.length; out.planned_steps = plan.steps; out.direct_steps = plan.direct_steps; }
@@ -7435,7 +7438,8 @@ export function sessionWalkPrototype(deps) {
           fine=await planFineRailRefugeAsync(geo,pose,goal,{maxLeg:opts.maxLeg??SAFE_LEG_DEFAULTS.maxLeg,occupied,unreachable,
             threats,threatWeight:opts.threatWeight??SAFE_LEG_DEFAULTS.threatWeight,threatRadius:opts.threatRadius??SAFE_LEG_DEFAULTS.threatRadius,
             objects:c.room?.objects,selfId:c.selfId,roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,
-            avoidSquares:avoid?new Set(avoid):null},
+            avoidSquares:avoid?new Set(avoid):null,goalFine:exit.kind==='edge'?exit.fine_stand_on:null,
+            goalFineAlternates:exit.kind==='edge'?(exit.alternates??[]).map(a=>a.fine_stand_on).filter(Boolean):[]},
             {cancelled:()=>this.client!==c||c.room?.id!==roomId||this.movementWasCancelled(movementGeneration,controlToken)});
           if(fine.cancelled)return {...out,cancelled:true};
           if(!c.self||Math.hypot(c.self.x-pose.x,c.self.y-pose.y)>1){out.fallback='fine rail starting pose changed';break;}

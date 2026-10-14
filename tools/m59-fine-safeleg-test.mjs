@@ -7,6 +7,7 @@ import {routesFor,attachStepMasks} from './m59-routes.mjs';
 import {RoomGeometry} from './m59-roo.mjs';
 import {applyCeilingDoors} from './m59-ceiling-doors.mjs';
 import {planFineRailRefugeAsync,cutFineRailAsync} from './m59-fine-rail.mjs';
+import {sessionWalkPrototype} from './m59-session-walk.mjs';
 const map=loadMap();attachStepMasks(map);const table=routesFor(map.geometryManifestSha256);
 // Actual Ugol wall departure: the square graph calls it seven steps, but the
 // body must leave south, cross west, then go north around the ledge.
@@ -58,4 +59,24 @@ assert.equal((await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:14}))
 const wide=await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:28});
 assert(wide.found,JSON.stringify(wide));assert(wide.steps<=28);assert.equal(wide.row,68);assert.equal(wide.col,49);
 assert(validateEscape(merb,merbBody,wide.waypoints).ok,'a refuge beyond the local search window retains a full mover proof');
+// Ugol's coarse targets sent the body around a cycle of different ledges.
+// Exercise the actual executor against real geometry with a proved packet seam.
+const client={self:{row:27,col:20,x:1320,y:1744},room:{id:2500,objects:new Map(),flags:0},me:{name:'offline Ugol'}};
+const executor={client,need:()=>client,world:{room:map.rooms[2500],geometry:geo,map},movementGeneration:0,
+  movementWasCancelled:()=>false,threatsHere:()=>[],walkDepartureLegs:async(points)=>{
+    assert(validateEscape(geo,client.self,points).ok,'each forward packet must retain the ordinary mover proof');
+    const p=points.at(-1);Object.assign(client.self,p,{row:Math.floor(p.y/64),col:Math.floor(p.x/64)});return {arrived:true};
+  }};
+const forward=await sessionWalkPrototype({}).crossBySafeLegs.call(executor,{stand_on:{row:1,col:27},to:2501},
+  {policy:{rooms:[2500],required:true,fineLegs:true,maxLeg:14}});
+assert(forward.handed_over,JSON.stringify(forward));assert(forward.legs<=6);
+assert.equal(client.self.row,1);assert.equal(client.self.col,27);assert.equal(new Set(forward.walls).size,forward.walls.length);
+const konimaWest=roomGeometry(2505),westBody={row:9,col:79,x:5112,y:576},wrongStage={row:73,col:2};
+const alternate=await planFineRailRefugeAsync(konimaWest,westBody,wrongStage,{maxLeg:20,
+  goalFine:{x:96,y:4704},goalFineAlternates:[{x:96,y:4688}]});
+assert(alternate.found,JSON.stringify(alternate));assert(alternate.steps<=20);
+assert(validateEscape(konimaWest,westBody,alternate.waypoints).ok);
+const opening=await planFineRailRefugeAsync(konimaWest,{row:72,col:2,x:160,y:4640},wrongStage,
+  {maxLeg:14,goalFine:{x:96,y:4688}});
+assert.equal(opening.kind,'exit',JSON.stringify(opening));assert.deepEqual(opening.waypoints.at(-1),{x:96,y:4688});
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');
