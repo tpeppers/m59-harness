@@ -121,6 +121,10 @@ test('the live Tos spider-blocked batch also reaches the journey replanner',asyn
  f.s.world=new World(f.c,map);f.s._blockingBodies=Session.prototype._blockingBodies;
  const north=f.s.world.exits().filter(e=>e.to===61),r=await f.s.leaveViaAny(north);
  assert.equal(r.reason,'object_blocked');assert.equal(r.blocked_by_bodies,true);assert.equal(r.outcome,'exit_candidates_exhausted');
- assert.equal(r.attempts,3);assert.equal(f.packets.length,0);
+ assert.equal(r.attempts,3);
+ // Was `packets === 0`: all three tries were r1c1/r2c2/r1c2, inside the corner the spider holds.
+ // A body refusal now sends the next try away from it (deferNearRefusedStage, m59-edge-stage-test);
+ // this fixture has no step masks, so those far tries are refused too and the batch still ends here.
+ assert.ok(r.tried.slice(1).every(t=>Math.max(t.stand_on.row-1,t.stand_on.col-1)>2),JSON.stringify(r.tried.map(t=>t.stand_on)));
  const route=f.s.world.route(61,{blockedHops:new Set(['596>61'])});assert.equal(route.found,true);assert.notEqual(route.hops[0].to,61);
 });

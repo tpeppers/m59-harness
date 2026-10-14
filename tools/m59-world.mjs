@@ -1863,6 +1863,11 @@ export function spreadEdges(candidates) {
                  fine_stand_on: alt.fine_stand_on ?? e.fine_stand_on,
                  edge_target: alt.edge_target ?? e.edge_target,
                  fine_path: alt.fine_path ?? e.fine_path,
+                 // THE ALTERNATE'S OWN VERDICT, NOT THE PRIMARY'S. `exits()` marks a stage the
+                 // mover's flood could not reach `grid_only`, and spreading `...e` used to hand
+                 // every alternate the primary's `verified: true`. In 596 that dressed the
+                 // north ledge (r1c20, r1c23, r1c38 -- coarse-only) as walkable stages.
+                 ...(alt.grid_only ? { grid_only: true, verified: false } : {}),
                  alternates: undefined, from_alternate: true });
   }
   return out;
@@ -1933,6 +1938,40 @@ export function distinctStagesFirst(candidates) {
     else { kept.push(e); first.push(e); }
   }
   return [...first, ...rest];
+}
+
+// A STAGE WE COULD NOT GET TO, OR THAT A BODY HELD, TAKES ITS NEIGHBOURS WITH IT.
+//
+// `distinctStagesFirst` makes the three-walk budget buy three different SQUARES. Squares
+// are not places: once `orderExits` has put the baked anchor first and sorted the rest by
+// distance, the squares after a corner anchor are its neighbours, and whatever refused the
+// anchor -- a monster parked there, or an approach the walker cannot make -- refuses them
+// for the same reason.
+//
+// THE INCIDENT, 2026-10-13/14. Outskirts of Tos (596) north to East Ende (61) is an EDGE
+// exit. The bake anchors it at r1c1, the NW corner: a pocket of six squares reached by a
+// one-square passage down column 1, while the mover's own flood reaches the north wall
+// properly at r2c42. Zheng He (hk2) walked the baked line into the pocket and the budget
+// bought r1c1, r2c2, r1c2 -- `object_blocked` at every one, four journeys running, the body
+// oscillating r3c2<->r4c2 among a spider, a soldier and a groundworm; other runs spent it on
+// r1c1 twice and r2c2, all `movement_deviation` at the walk. The crossing on 2026-10-14
+// died there.
+//
+// So after a refusal at the WALK stage (we never stood on the square) or by a BODY, every
+// not-yet-tried candidate staging within `radius` squares (Chebyshev) of it goes to the
+// tail, order otherwise kept. Not after a refusal AT the crossing: that is about one square,
+// and the adjacent square is often exactly the one that crosses (Kardde's Canyon: r1c21
+// refused, r1c22 fine -- m59-stagespread-test). Deferred, never dropped, the bargain
+// `distinctStagesFirst` makes: a caller that has tried everywhere else can still come back.
+// Returns a new array; entries before `from` stay exactly where they are.
+export const REFUSED_STAGE_RADIUS = 2;
+export function deferNearRefusedStage(ordered, from, refused, radius = REFUSED_STAGE_RADIUS) {
+  const list = Array.isArray(ordered) ? ordered : [];
+  if (!refused || !Number.isFinite(refused.row) || !Number.isFinite(refused.col)) return list.slice();
+  const near = e => e?.stand_on && Number.isFinite(e.stand_on.row) && Number.isFinite(e.stand_on.col)
+    && Math.max(Math.abs(e.stand_on.row - refused.row), Math.abs(e.stand_on.col - refused.col)) <= radius;
+  const head = list.slice(0, from), tail = list.slice(from);
+  return [...head, ...tail.filter(e => !near(e)), ...tail.filter(near)];
 }
 
 // A `go` sent immediately after the last movement update can disappear without either

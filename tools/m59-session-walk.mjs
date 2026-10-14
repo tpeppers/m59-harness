@@ -65,7 +65,7 @@ import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation}
  * Every dependency is named rather than imported, so this file cannot reach back into
  * m59-game.mjs and there is no import cycle to reason about.
  */
-import { boundedRegionEntry, boundedSilentGo, distinctStagesFirst, spreadEdges } from './m59-world.mjs';
+import { boundedRegionEntry, boundedSilentGo, deferNearRefusedStage, distinctStagesFirst, spreadEdges } from './m59-world.mjs';
 
 import { forgetInferredExit } from './m59-map.mjs';
 
@@ -8086,7 +8086,7 @@ export function sessionWalkPrototype(deps) {
     // different squares rather than one square asked three times. See distinctStagesFirst
     // for the measurement; the duplicates are moved to the tail, not removed, so nothing
     // that was reachable before is unreachable now.
-    const ordered = distinctStagesFirst(orderExits(spread));
+    let ordered = distinctStagesFirst(orderExits(spread));
     for (let index = 0; index < ordered.length; index++) {
       const exit = ordered[index];
       if (spent >= budget) {
@@ -8211,6 +8211,8 @@ export function sessionWalkPrototype(deps) {
         // replanner instead of retrying the identical failed hop on every stumble.
         if(!d?.confirmed||d.room!==roomBefore||me?.predicted||!p||me?.x!==p.x||me?.y!==p.y)
           return finish({...r,left:false,tried,stage:'walk'});
+        // The approach to this stage deviated; its neighbours share the approach (596 -> 61).
+        if(r.stage==='walk')ordered=deferNearRefusedStage(ordered,index+1,exit.stand_on);
         continue;
       }
       // A GEOMETRY REFUSAL AT A DOORWAY IS USUALLY THE BODY IN THE WRONG PART OF ITS OWN
@@ -8337,6 +8339,9 @@ export function sessionWalkPrototype(deps) {
         continue;
       }
       tried.push(refusal(exit, r));
+      // A BODY HOLDING THIS STAGE, OR AN APPROACH THAT NEVER REACHED IT, HOLDS THE SQUARES
+      // BESIDE IT TOO. Spend the next try further along the wall -- deferNearRefusedStage.
+      if (bodyBlocked || r?.stage === 'walk') ordered = deferNearRefusedStage(ordered, index + 1, exit.stand_on);
     }
     // EVERY SQUARE REFUSED. Normal travel reports the refusal and replans. An operator may
     // explicitly enable the unvalidated diagnostic below to test a known model gap, but
