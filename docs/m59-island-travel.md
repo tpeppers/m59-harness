@@ -71,6 +71,11 @@ collision tracing. The shared fine cutter can scope observed blocking bodies
 to the current prefix. Island walking uses that scope and re-cuts before an
 upcoming command can leave it; distant bodies still affect threat pricing.
 Temporary body refusals receive bounded fresh observations and replanning.
+If bodies temporarily disconnect the full destination, an explicitly partial
+plan may advance to a reachable refuge beside the geometry route. Every edge
+to that refuge retains body collision checks; the prefix cannot certify final
+arrival. The controller refreshes live bodies before choosing each chord and
+does not return to previously used partial refuges during the same approach.
 The sender repeats collision checks against the current
 room contents. Fine movement prefers a safe-wall stop on its checked
 rail when one is available. The mover's shelf guard rejects a collision slide
