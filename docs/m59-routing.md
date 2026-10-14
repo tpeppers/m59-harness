@@ -57,6 +57,10 @@ certifies the fine body. `/state?fresh=1` refreshes inventory and can retain an
 old body position; its projection freshness cannot certify arrival or shelter.
 The shared rail threat price adds independent monster exposures, so a crowd
 costs more than one monster at the same location.
+Required refuge walks treat body refusals as transient traffic. They refresh
+the server scene and replan with bounded waits, preserving movement ownership
+and keeper preemption. A blocked body cannot mark a valid wall unreachable or
+permit the required route to fall back to an exposed direct crossing.
 Planner workers finish their bounded searches naturally after cancellation.
 Their results are discarded; force-terminating an isolate during compilation
 caused a Windows Node 25 V8 fatal error in the containing keeper.
