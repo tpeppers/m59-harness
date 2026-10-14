@@ -37,7 +37,8 @@ movement ownership, records each one-room hop and HP samples, and cancels
 unfinished movement on failure. It temporarily adds the cave maps to the
 existing safe-leg policy, then restores that policy unless the operator has
 changed it during the trip. Safe-leg planning can fall back to direct travel
-where no chain exists; enabling it is not a claim that every crossing is safe.
+where no chain exists in an advisory geometry experiment. `island-trip` and
+`island-home` require a complete refuge chain and refuse that fallback.
 Pending shopping trips are cleared before departure. A keeper shelter move
 and recovery of this script's suspended journey are allowed to finish before
 the hop resumes. On the observed recovery wall, the traveler rests and eats
@@ -54,18 +55,21 @@ climb. Failed participants report through cleanup so successful arrivals can
 return, with departures spaced by `departSpacingMs`. Waiting travelers
 continue health and cancellation checks. Allow a
 larger per-hop budget for a convoy (`budgetMs=800000` and
-`departSpacingMs=30000` in the completed shadow experiment).
+`departSpacingMs=60000` are the current `island-trip` defaults).
 The expedition excludes the Underground Lake and the mainland south exit
 from each hop, and suppresses shopping errands. Its first westward approach
 uses the complete Dispel state observed by the character before applying
 the matching baked mask.
 
 The outward Hollows crossing is declared from the operator's successful native
-client recording: r41c34 to r44c27, with the recorded fine takeoff and landing.
+client recording. The approach near r41c34 leads to a physics-checked fine
+takeoff at r40c33 and landing at r44c27; the ordinary jump uses stock gravity.
 It requires running vigor. Followers serialize that crossing and clear its
 landing. The western climb uses body-seeded 128-client-unit rails, with both
 lattice bridges and wire-rounded command chords checked against ordinary
-collision tracing. Fine movement prefers a safe-wall stop on its checked
+collision tracing. The shared fine cutter includes observed blocking bodies
+in its search, and the sender repeats collision checks against the current
+room contents. Fine movement prefers a safe-wall stop on its checked
 rail when one is available. The mover's shelf guard rejects a collision slide
 onto an unintended lower ledge while allowing a planned descent onto the
 command's destination floor. A position that cannot bridge back to a valid
@@ -191,10 +195,11 @@ escort or control strategy have been tested with fragile travelers.
 ## Composition and shared movement guards
 
 `island-trip` starts with a full cup in the cave region (or `outbound=walk`
-from map 27), performs the compulsory jungle refill after a ride, executes a
+from Tos, walking to map 27), performs the compulsory jungle refill after a ride, executes a
 named Island FleetScript, walks the asymmetric return, and goes home to Tos
-(52). `island-bows` uses the ordinary verified shop step at Hanla zax'Ta in
-2100 and returns to Ko'catan town. `taskParams` is a JSON object; a task's
+(52). `island-bows` buys practice bows from Kochtal ko'Tulca in 2014 and
+arrows from Hanla zax'Ta in 2100 through ordinary verified shop steps, then
+returns to Ko'catan town. `taskParams` is a JSON object; a task's
 parameters compile before departure. The parent keeps its driver and health
 floors, and a task that waives expedition guarantees is refused.
 

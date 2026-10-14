@@ -56,6 +56,21 @@ const cancelledWorker=await planFineRailRefugeAsync(konima,arrival,west,{maxLeg:
 assert.equal(cancelledWorker.cancelled,true,'an in-flight worker cancellation returns without terminating its isolate');
 const fineCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640});
 assert(fineCut.ok&&fineCut.bridgeOk,JSON.stringify({...fineCut,waypoints:fineCut.waypoints?.length}));
+// A live body on an otherwise valid narrow rail must change or refuse the
+// plan before a traveler commits to that ledge.
+const bodyPoint=fineCut.waypoints[Math.floor(fineCut.waypoints.length/2)];
+const blocker={id:99991,flags:9,x:Math.round(bodyPoint.x/16+64),y:Math.round(bodyPoint.y/16+64)};
+const occupiedCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640},{objects:new Map([[blocker.id,blocker]]),selfId:99992});
+if(occupiedCut.ok&&occupiedCut.bridgeOk){
+ const obstacles=[{id:blocker.id,x:(blocker.x-64)*16,y:(blocker.y-64)*16}];
+ for(let i=1;i<occupiedCut.waypoints.length;i++){
+  const a=occupiedCut.waypoints[i-1],b=occupiedCut.waypoints[i],trace=konima.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles});
+  assert(trace.arrived&&!trace.blocked,'the planned rail must retain body clearance');
+ }
+ assert.notDeepEqual(occupiedCut.waypoints,fineCut.waypoints,'an occupied rail cannot remain the chosen route');
+}
+const ownCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640},{objects:new Map([[blocker.id,blocker]]),selfId:blocker.id});
+assert(ownCut.ok&&ownCut.bridgeOk,'the traveler is not its own obstacle');
 assert(fineCut.waypoints.length>2);assert.equal(fineCut.waypoints[0].x,(arrival.x-64)*16);
 const merb=roomGeometry(2503),merbBody={row:69,col:76,x:4880,y:4416},merbGoal={row:57,col:2};
 assert.equal((await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:14})).found,false,'Merb needs its measured per-room gap allowance');

@@ -46,6 +46,17 @@ reconnect while this controller's movement lease or suspended journey remains
 verified. Missing health is never interpreted as being alive; a fresh body is
 required before movement resumes. A death, operator cancellation, foreign or
 expired lease, or recovery timeout refuses continuation.
+A failed fresh status snapshot cannot prove that a journey stopped: the
+controller continues bounded body observations while waiting for status.
+A continuous cave journey may arrive in its next map injured. It rests at an
+observed safe wall when available, otherwise retains ordinary keeper shelter
+and survival on the next leg. A standalone hop retains its departure floor.
+Fine-position readers request `/state?position=1`, which waits for the ordered
+server room-contents response. Only its current-room `position_read` proof
+certifies the fine body. `/state?fresh=1` refreshes inventory and can retain an
+old body position; its projection freshness cannot certify arrival or shelter.
+The shared rail threat price adds independent monster exposures, so a crowd
+costs more than one monster at the same location.
 Planner workers finish their bounded searches naturally after cancellation.
 Their results are discarded; force-terminating an isolate during compilation
 caused a Windows Node 25 V8 fatal error in the containing keeper.
