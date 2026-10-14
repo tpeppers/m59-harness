@@ -1684,14 +1684,20 @@ export class M59Client {
         // room contents cannot fix it, because BP.PLAYER is not resent. Character names
         // are unique in this game, and we know ours from character select, so the player
         // object carrying our name in the fresh contents IS us: re-bind selfId to it.
-        if (this.inGame && (this.selfId == null || !this.room.objects.has(this.selfId))
-            && this.me?.name) {
+        if (this.inGame && this.me?.name) {
           const want = String(this.me.name).toLowerCase();
           const mine = res.objects.find(o => (o.flags & OF.PLAYER)
             && String(this.rsc.get(o.nameRsc) ?? o.name ?? '').toLowerCase() === want);
-          if (mine) {
-            this.log(`self-heal: selfId ${this.selfId} did not resolve; re-bound to ${mine.id} (${this.me.name})`);
+          if (mine && mine.id !== this.selfId) {
+            this.log(`self-heal: selfId ${this.selfId} did not identify ${this.me.name}; re-bound to ${mine.id}`);
             this.selfId = mine.id;
+          } else if (!mine && this.room.objects.has(this.selfId)) {
+            // Saves can reuse our old id for another visible player. A
+            // resolving id is not identity evidence. Request the authoritative
+            // player packet, and expose no foreign pose while awaiting it.
+            this.log(`self-heal: fresh contents do not identify ${this.me.name}; requesting our player identity`);
+            this.selfId = null;
+            this.requestPlayer();
           }
         }
         this.log(`room ${res.roomId}: ${res.count} object(s)`);
