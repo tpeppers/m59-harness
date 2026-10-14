@@ -916,3 +916,6 @@ substrate/island-admin/
 /substrate/pvp-strategy.json
 /substrate/pvp-strategy-*.json
 /substrate/pvp-strategy-dirs.json
+
+# Faction intel (tools/m59-faction-intel.mjs): what the fleet overheard on this server.
+/substrate/faction-intel.jsonl

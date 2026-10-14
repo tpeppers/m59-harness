@@ -6,8 +6,8 @@
 // one port over. Keep the list here so the HTTP server and its offline test share it.
 
 const EXACT = new Set([
-  '/budget', '/deaths', '/deaths/report', '/dum', '/economy', '/economy/trips', '/harness',
-  '/communications', '/players', '/pvp', '/skills', '/stats', '/tougher', '/travel',
+  '/budget', '/deaths', '/deaths/report', '/dum', '/economy', '/economy/trips', '/harness', '/inventory',
+  '/communications', '/faction', '/players', '/pvp', '/skills', '/stats', '/tougher', '/travel',
 ]);
 
 export function isDashboardOnlyPath(pathname) {

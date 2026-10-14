@@ -1627,6 +1627,30 @@ flag rooms, never a town pole); and that the plan compiles for all three lieges 
 dynamic walk declared and a clean trap check, every `say` is one of four fixed lines, and a
 character already carrying its shield walks nowhere.
 
+**`m59-max-faction-shield-test.mjs` (18 groups) — the rank line, the hunt, and the no-ops.**
+`tools/fleetscripts/max-faction-shield.mjs` ranks an earned shield up by farming the other two
+armies' troops. Rank is `piFactionRank` (1-10, +1 per enemy troop, capped at
+MAX_RANK_FROM_MONSTERS 10) and the only visible part is the band `AppendDesc` prints, so the
+goal is the title "a supreme hero" (rank 9 or 10 — indistinguishable) and the kills needed are a
+range. It pins the five titles and three army names against `soldshld.kod` and its subclasses;
+that the shield in the pack decides the faction; that each army hunts the OTHER two (killing your
+own costs a rank) and a corpse is not a troop; that a room is taken for enemy troops or an enemy
+flagpole and never for our own; the search order (both enemies' starting holdings nearest first,
+then the rest); that the shield read refuses another object's description and never asks about a
+negative id; and that a maxed shield walks nowhere and farms nothing. The farm itself is
+`harvest` with its `until` predicate, which the fleetscript suite covers.
+
+**`m59-faction-intel-test.mjs` (8 groups) — what the fleet overhears about the struggle, and the
+`/faction` board.** The server never reports faction power; `tools/m59-faction-intel.mjs` catches
+the sentences that leak it (flag claims, token returns, councilor thanks and news, townsfolk
+rumours of a power band, the "balance of power" shift, and the 1-in-101 personal bonus hint) into
+an append-only `substrate/faction-intel.jsonl` that every keeper writes. It pins those sentences
+against `parlia.kod`, `flag.kod`, `token.kod` and `council.kod`; that a broadcast keeps no player
+name; that the fold dedupes one broadcast heard by many keepers, lets the later claim win and keeps
+two servers apart; `FigurePowerFromCount` and the power half of `CalcFactionBonus`; the Effects
+Part's per-faction benefits (no to-hit for Duke or Princess, unfactioned a quarter and never
+negative, the non-intriguing flat bonus); and that the board renders with its tab and route.
+
 ## The disciple gate — the level-3 spell quest
 
 **`m59-disciple-test.mjs` (174) — three groups, none of which is about whether the errand runs.**

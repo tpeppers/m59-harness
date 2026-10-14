@@ -52,6 +52,7 @@ import * as hitbook from './m59-hits.mjs';
 import { observeAnnouncement } from './m59-tougher.mjs';
 import * as transits from './m59-transits.mjs';
 import * as bankbook from './m59-bank.mjs';
+import { noteFactionLine } from './m59-faction-intel.mjs';
 // Write-only, and safe to import anywhere: the ledger pulls in no keeper and no hook loader
 // at module scope — `attachHooks` is wired by whoever actually loads hooks. See m59-ledger.mjs.
 import { recordEvent } from './m59-ledger.mjs';
@@ -1793,6 +1794,19 @@ class Session {
     } catch { /* the record is a convenience; never let it interrupt play */ }
   }
 
+  // THE STRUGGLE BETWEEN THE FACTIONS, OVERHEARD (m59-faction-intel.mjs). Flag claims, token
+  // returns, councilor news, rumours of who holds power, and the 1-in-101 hint about this
+  // character's own faction bonus — all prose said once. Appended to a shared JSONL log rather
+  // than a broker cache, because this runs in every keeper process and the faction-status
+  // cache is inert here.
+  noteFactionIntel(ev) {
+    try {
+      const c = this.client;
+      noteFactionLine(ev, { server: c?.host ? `${c.host}:${c.port}` : null,
+                            character: c?.me?.name ?? null });
+    } catch { /* bookkeeping never costs an event */ }
+  }
+
   noteBanker(ev) {
     const who = this.client?.me?.name ?? null;
     if (!who) return;
@@ -2398,6 +2412,7 @@ class Session {
       }
       if (ev.kind === 'ability') this.noteAdvancement(ev);
       if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); }
+      if ((ev.kind === 'message' || ev.kind === 'said') && ev.text) this.noteFactionIntel(ev);
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
       // exactly the reason a bank balance is: whatever walked a character to a vaultman
       // has already paid for the trip, and if the reply goes past unread the contents are

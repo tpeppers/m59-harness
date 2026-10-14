@@ -420,10 +420,17 @@ console.log('\nthe inventory board marks magic, and only where it knows');
      !/class="magic/.test(old) && old.includes('ring of lethargy'));
 }
 
-console.log('\none tab bar, ten boards');
+console.log('\none tab bar, every board on it');
 {
   const { NAV, TABS } = await import('./m59-page-chrome.mjs');
-  ok('every board has a tab', TABS.length === 10);
+  // A COUNT ONLY PROVES SOMEBODY BUMPED A NUMBER — this one sat at 10 while the bar grew to
+  // 14. What matters is that every tab is distinct and that every href is reachable from the
+  // broker port, which redirects dashboard-only paths (m59-dashboard-route.mjs).
+  const { isDashboardOnlyPath } = await import('./m59-dashboard-route.mjs');
+  ok('every tab is its own board', new Set(TABS.map(t => t.key)).size === TABS.length &&
+     new Set(TABS.map(t => t.href)).size === TABS.length);
+  ok('every tab is reachable from the broker port',
+     TABS.every(t => t.href === '/' || isDashboardOnlyPath(t.href)));
   // SIX BOARDS SHARE THIS BAR BECAUSE A SEVENTH WRITTEN BY HAND WAS INVISIBLE from
   // whichever copy nobody edited. Inventory was split out of Economy on 2026-09-17, so it
   // is NAMED here rather than only counted: a bumped number proves somebody changed the

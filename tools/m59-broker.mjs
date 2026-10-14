@@ -222,6 +222,7 @@ import { communicationsReport, renderCommunications, fleetCommunications } from 
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayersOffThread } from './m59-players-worker.mjs';
 import { renderPvp } from './m59-pvp-page.mjs';
+import { renderFaction, factionReport } from './m59-faction-page.mjs';
 import { pvpReport } from './m59-pvp.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
 import { renderDumBoard, renderHarnessBoard } from './m59-observability-page.mjs';
@@ -20779,6 +20780,28 @@ function serveDashboard(port, { handle = null } = {}) {
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('/pvp failed: ' + e.message);
+      }
+    }
+    // /faction — cached membership, soldier rank, loyalty service and an estimate of each
+    // faction's power from what the fleet has overheard. Reads files only; no session is asked.
+    if (url.pathname === '/faction') {
+      try {
+        const characters = [], servers = new Set();
+        for (const [agent, e] of fleetState) {
+          characters.push({ agent, character: e?.credentials?.character ?? null });
+          if (e?.credentials?.host) servers.add(`${e.credentials.host}:${e.credentials.port ?? PORT}`);
+        }
+        characters.sort((a, b) => String(a.character ?? a.agent).localeCompare(String(b.character ?? b.agent)));
+        const opts = { characters, server: servers.size === 1 ? [...servers][0] : null };
+        if (url.searchParams.get('format') === 'json') {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(JSON.stringify(factionReport(opts)));
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(renderFaction(opts));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        return res.end('/faction failed: ' + e.message);
       }
     }
     if (url.pathname !== '/' && !url.pathname.startsWith('/fleet')) {
