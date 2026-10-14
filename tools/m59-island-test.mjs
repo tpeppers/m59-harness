@@ -175,6 +175,24 @@ reads=0;await assert.rejects(ordinaryHop({agent:'fixture',call:async name=>name=
 let cancelled=false;
 await assert.rejects(ordinaryHop({agent:'fixture',call:async name=>{if(name==='cancel_movement')cancelled=true;return name==='look'?look(2000,19,20):{};}},2013),/departure_health_floor/);
 assert(cancelled);
+let entryRoom=2000,entryHealth=17,entryRests=0;
+const entryRecovered=await ordinaryHop({agent:'fixture',call:async name=>{
+ if(name==='look')return look(entryRoom,entryHealth);
+ if(name==='status')return {autopilot_status:{safe_spot:{works:true,at:{row:4,col:40}}}};
+ if(name==='rest_up'){entryRests++;entryHealth=20;return {};}
+ if(name==='travel'){assert.equal(entryHealth,20);entryRoom=2013;return {};}
+ return {};
+}},2013,{pollMs:1,recoverAtEntry:true});
+assert(entryRecovered.ok&&entryRecovered.entry_recovered);assert.equal(entryRests,1);
+let missingStatusReads=0,missingBodyReads=0,missingTravels=0;
+const statusRecovered=await ordinaryHop({agent:'fixture',call:async name=>{
+ if(name==='look')return look(++missingBodyReads>=4?2013:2000);
+ if(name==='travel'){missingTravels++;return {ordered_by:'owned-status-recovery'};}
+ if(name==='status')return ++missingStatusReads===1?{broker_error:true,error:'keeper did not provide a fresh state snapshot'}:
+ {busy:true,movement:{order:{kind:'travel',to:2013,ordered_by:'owned-status-recovery'}}};
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0});
+assert(statusRecovered.ok);assert.equal(missingTravels,1);assert.equal(missingStatusReads,2);
 assert(!foreignIslandDestination({kind:'shelter',to:'r18c14'},2500));
 assert(foreignIslandDestination({kind:'travel',to:2000},2500));
 assert(!foreignIslandDestination({kind:'travel',to:2500},2500));

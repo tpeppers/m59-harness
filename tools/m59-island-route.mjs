@@ -123,7 +123,7 @@ export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15
   try{return await observeIslandTraveller(ctx,()=>ctx.call('look',{agent:ctx.agent}),{to,orderedBy,deadline,pollMs});}
   catch(e){if(e.message==='traveller_health_unreadable_recovery_budget')throw Error('traveller_reconnect_budget');throw e;}
 }
-async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{}}={}){
+async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{},recoverAtEntry=false}={}){
   const {agent,call}=ctx,start=Date.now(),first=await observeIslandTraveller(ctx,()=>call('look',{agent})),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
   let previous=first.hp?.value;
   const sample=l=>{
@@ -139,7 +139,21 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   sample(first);
   if(first.room?.num===to){leg.ok=true;leg.end=location(first);return leg;}
   if(first.hp.max<(ctx.fragileBelow??20))throw Error('traveller_below_max_health_floor');
-  if(first.hp.value/first.hp.max<(ctx.minHealth??1))throw Error('traveller_below_departure_health_floor');
+  // A continuous cave journey can arrive injured after its boundary step.
+  // Keep the keeper's shelter/recovery controller armed for that next leg;
+  // the standalone hop still requires its caller's departure health floor.
+  if(!recoverAtEntry&&first.hp.value/first.hp.max<(ctx.minHealth??1))throw Error('traveller_below_departure_health_floor');
+  if(recoverAtEntry&&first.hp.value<first.hp.max){
+    const entry=await call('status',{agent,brief:true}),wall=entry.autopilot_status?.safe_spot;
+    checkIslandCancellation(ctx,entry);
+    if(wall?.works&&wall.at?.row===first.you?.row&&wall.at?.col===first.you?.col){
+      await call('rest_up',{agent,to:1,max_seconds:90},110000);
+      const recovered=await observeIslandTraveller(ctx,()=>call('look',{agent}));sample(recovered);
+      if(recovered.room?.num!==first.room.num)throw Error('entry_recovery_unexpected_room');
+      leg.entry_recovered=recovered.hp.value===recovered.hp.max;
+      await call('rest',{agent,stand:true});
+    }
+  }
   if(first.room?.num===27&&to===2500)await approachMainlandCaveExit(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2502&&to===2503)await walkHollowsOut(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2505&&to===2000)await approachIslandDoor(ctx,{budgetMs,onSample:sample});
@@ -162,12 +176,20 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     return reply;
   };
   leg.request=await request();leg.retries=0;
-  let attemptStarted=Date.now();const recoveryWalls=new Map();
+  let attemptStarted=Date.now(),statusMissingSince=null;const recoveryWalls=new Map();
   for(;;){
     await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:Math.min(start+budgetMs,Date.now()+15000),pollMs}),p=sample(l);
     if(p.room===to){leg.ok=true;leg.end=p;break;}
     if(p.room!==first.room.num){leg.reason='unexpected_room_'+p.room;leg.status=await call('status',{agent,brief:true});break;}
     const s=await call('status',{agent,brief:true});
+    // A failed fresh snapshot contains neither busy nor movement. It cannot
+    // prove that the owned journey stopped; keep sampling its live body.
+    if(s.broker_error){
+      statusMissingSince??=Date.now();
+      if(Date.now()-statusMissingSince>=15000||Date.now()-start>budgetMs)throw Error('traveller_status_recovery_budget');
+      continue;
+    }
+    statusMissingSince=null;
     checkIslandCancellation(ctx,s);
     if(Date.now()-start>budgetMs){leg.reason='budget';break;}
     if(foreignIslandDestination(s.movement?.order,to)){leg.reason='preempted_by_other_destination';leg.status=s;break;}
@@ -245,7 +267,7 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
   try{
     return await withIslandSafeLegs(ctx,async()=>{
     for(const to of route.slice(1)){
-      const leg=await ordinaryHop(ctx,to,{budgetMs,onSample:live=>{record.current=live;save();}});
+      const leg=await ordinaryHop(ctx,to,{budgetMs,recoverAtEntry:true,onSample:live=>{record.current=live;save();}});
       record.legs.push(leg);delete record.current;save();
       console.log('ISLAND HOP '+JSON.stringify({agent,to,ok:leg.ok,ms:leg.ms,damage:leg.damage,end:leg.end,reason:leg.reason}));
       if(!leg.ok)return {ok:false,why:'hop_failed_'+to,evidence:file};
