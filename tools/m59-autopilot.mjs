@@ -9891,13 +9891,15 @@ export class Autopilot {
     // where its allies are; the keeper's own next journey -- back to the farm, to an errand -- would
     // walk it straight out to whoever it ran from. So keeper journeys out of the hold room are refused
     // until it expires, exactly as the confinement refuses them. An EXPLICIT order (travelJob, the
-    // operator's travel) is not the keeper's own idea and is let through. Silence is unset.
+    // operator's travel) is not the keeper's own idea and is let through -- unless the strategy asked
+    // for `hold_orders`, because a director (the DUM) moves its units with explicit travel and would
+    // walk a fled unit back to its attacker on the next pass. Silence is unset.
     const hold = this.pvpStrategyHold;
     if (hold && Date.now() >= hold.until) this.pvpStrategyHold = null;
-    else if (hold && !explicitOrder && Number(room) !== Number(hold.room)) {
+    else if (hold && (!explicitOrder || hold.orders === true) && Number(room) !== Number(hold.room)) {
       this.note('refused to leave the PvP strategy hold', {
         wanted: Number(room), hold_room: hold.room, until: new Date(hold.until).toISOString(),
-        strategy: hold.strategy ?? null, threat: hold.threat ?? null,
+        strategy: hold.strategy ?? null, threat: hold.threat ?? null, orders_held: hold.orders === true, explicit: !!explicitOrder,
       });
       return { arrived: false, refused: true, held: true,
                why: `holding in ${hold.room} for PvP strategy ${hold.strategy ?? '?'} until ${new Date(hold.until).toISOString()}` };

@@ -1068,7 +1068,7 @@ the records it describes.
   hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
   the suspension text, that inside the list nothing changes, and that every keeper gate asks the
   one function) and
-  `node tools/m59-pvp-strategy-test.mjs` (57 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
+  `node tools/m59-pvp-strategy-test.mjs` (63 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
   that no assignment, `default`, an unknown verb, a throw, a promise or a slow decide is silence and the
   old behaviour, that agent beats character beats default and `null` stops the fall-through, that a local
   module overrides a private one of the same name and an edited one reloads, that `flee_to` takes the body,

@@ -80,7 +80,9 @@ console.log('the decision set');
   ok('flee_to needs a real room', v({ do: 'flee_to' }).error && v({ do: 'flee_to', room: 1 }).error && v({ do: 'flee_to', room: 'x' }).error);
   const f = v({ do: 'flee_to', room: 38, hold_ms: 99 * 3600_000 }).decision;
   ok('flee_to carries the room; the hold is clamped to the ceiling', f?.room === 38 && f.hold_ms === ps.MAX_HOLD_MS
-    && f.max_ms === ps.DEFAULT_FLIGHT_MS, JSON.stringify(f));
+    && f.max_ms === ps.DEFAULT_FLIGHT_MS && f.hold_orders === false, JSON.stringify(f));
+  ok('hold_orders is carried only when it is literally true', v({ do: 'flee_to', room: 38, hold_orders: true }).decision.hold_orders === true
+    && v({ do: 'flee_to', room: 38, hold_orders: 'yes' }).decision.hold_orders === false);
   ok('a negative hold is refused', !!v({ do: 'flee_to', room: 38, hold_ms: -1 }).error);
 }
 
@@ -186,7 +188,7 @@ const put = (f, id, flags) => f.c.room.objects.set(id, { id, nameRsc: id, row: 5
 const hitBy = f => f.mode.event({ kind: 'message', text: "Morpheus's scimitar cleaves you." });
 // A bastion, in the module's own terms: flee to 38 from anywhere else on a hit or on Morpheus.
 const bastion = (moment, f) => f.room === 38 ? null
-  : (moment === 'attacked_by_player' || f.player === 'Morpheus') ? { do: 'flee_to', room: 38, hold_ms: 600_000, max_ms: 600_000, strategy: 'bastion' } : null;
+  : (moment === 'attacked_by_player' || f.player === 'Morpheus') ? { do: 'flee_to', room: 38, hold_ms: 600_000, hold_orders: true, max_ms: 600_000, strategy: 'bastion' } : null;
 
 console.log('combat mode: silence is the old behaviour');
 {
@@ -220,6 +222,7 @@ console.log('combat mode: flee_to on a hit');
   ok('the flight ends on arrival', !f.mode.active && f.mode.lastFlight?.outcome === 'arrived', JSON.stringify(f.mode.lastFlight));
   ok('and the keeper holds there', f.keeper.pvpStrategyHold?.room === 38 && f.keeper.pvpStrategyHold.until > Date.now(),
     JSON.stringify(f.keeper.pvpStrategyHold));
+  ok('the hold carries the strategy\'s hold_orders', f.keeper.pvpStrategyHold?.orders === true);
   ok('a decision line names the strategy and the room', f.lines.some(l => l.event === 'pvp_strategy_decision'
     && l.strategy === 'bastion' && l.to === 38 && l.moment === 'attacked_by_player'));
   ok('status reports the strategy and the last flight', f.mode.status().pvp_strategy?.last_flight?.room === 38);
@@ -288,8 +291,30 @@ console.log('the keeper');
   const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   const i = src.indexOf('  async travel(room, opts) {');
   const body = src.slice(i, src.indexOf('\n  }\n', i));
-  ok('Autopilot.travel refuses a keeper journey out of a strategy hold, and lets an explicit order through',
-    /pvpStrategyHold/.test(body) && /!explicitOrder && Number\(room\) !== Number\(hold\.room\)/.test(body));
+  ok('Autopilot.travel refuses a keeper journey out of a strategy hold, and an explicit order only under hold_orders',
+    /pvpStrategyHold/.test(body) && /\(!explicitOrder \|\| hold\.orders === true\) && Number\(room\) !== Number\(hold\.room\)/.test(body));
+  // And the gate itself, run: the hold check sits right after the confinement, so a fake that passes the
+  // gates before it reaches it. Driven through the real method with everything ahead of it stubbed.
+  {
+    const { Autopilot } = await import('./m59-autopilot.mjs');
+    const notes = [];
+    const fake = { policy: {}, s: { world: { room: { num: 38 } } }, suspendedJourney: null,
+      note: (what, data) => notes.push({ what, ...data }),
+      pvpReturnGate: () => null, approachLegs: async () => null, travelInterrupted: () => null,
+      eatBeforeTravel: async () => null };
+    const tryTravel = async (hold, opts) => { fake.pvpStrategyHold = hold; notes.length = 0;
+      try { return await Autopilot.prototype.travel.call(fake, 599, opts); } catch (e) { return { threw: e.message }; } };
+    const until = Date.now() + 60_000;
+    const kept = await tryTravel({ room: 38, until, orders: false }, {});
+    ok('a keeper journey out of the hold is refused, held: true', kept?.held === true && kept.refused === true, JSON.stringify(kept));
+    const order = await tryTravel({ room: 38, until, orders: false }, { explicitOrder: true });
+    ok('an explicit order passes a plain hold', order?.held !== true, JSON.stringify(order));
+    const strong = await tryTravel({ room: 38, until, orders: true }, { explicitOrder: true });
+    ok('hold_orders refuses the explicit order too (a director would walk the unit back out)',
+      strong?.held === true && notes.some(n => n.orders_held === true && n.explicit === true), JSON.stringify(strong));
+    const expired = await tryTravel({ room: 38, until: Date.now() - 1, orders: true }, { explicitOrder: true });
+    ok('an expired hold is cleared and refuses nothing', expired?.held !== true && fake.pvpStrategyHold === null, JSON.stringify(expired));
+  }
   const kp = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');
   ok('the keeper process gives every character a host, refreshed off the event path, hosts marked',
     /new PvpStrategyHost\(\{[^}]*isHost: isHostCharacter/.test(kp) && /pvpStrategy\.refresh\(\)/.test(kp));

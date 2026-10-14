@@ -1628,7 +1628,8 @@ export class CombatMode {
     const until = this.now() + d.hold_ms;
     const prev = keeper.pvpStrategyHold;
     if (prev && prev.room === d.room && prev.until >= until) return;
-    keeper.pvpStrategyHold = { room: d.room, until, strategy: d.strategy ?? null, threat: threat ?? null, set_at: this.now() };
+    keeper.pvpStrategyHold = { room: d.room, until, orders: d.hold_orders === true || (prev?.room === d.room && prev.until > this.now() && prev.orders === true),
+      strategy: d.strategy ?? null, threat: threat ?? null, set_at: this.now() };
   }
 
   /** Take the body and travel to `d.room`, as survival. False when there is nothing to do. */
@@ -1663,7 +1664,7 @@ export class CombatMode {
       phase: 'fleeing', phaseRevision: 0, targetId: null, targetName: null,
       attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false,
       flight: { room: d.room, from: here, threat, trigger, strategy: d.strategy ?? null, why: d.why ?? null,
-        hold_ms: d.hold_ms ?? 0, decision_id: decision.id, started_at: now, arrived_at: null } };
+        hold_ms: d.hold_ms ?? 0, hold_orders: d.hold_orders === true, decision_id: decision.id, started_at: now, arrived_at: null } };
     updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'pvp_strategy_flight' });
     this.record('pvp_strategy_flight', this.active);
     s.pacer?.wake?.();
@@ -1684,7 +1685,7 @@ export class CombatMode {
       demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
     }
     f.arrived_at = this.now();
-    this.setStrategyHold({ room: f.room, hold_ms: f.hold_ms, strategy: f.strategy }, f.threat);
+    this.setStrategyHold({ room: f.room, hold_ms: f.hold_ms, hold_orders: f.hold_orders, strategy: f.strategy }, f.threat);
     this.stop(`PvP strategy flight reached ${f.room}`);
   }
 

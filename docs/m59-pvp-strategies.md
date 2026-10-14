@@ -3,7 +3,7 @@
 Split out of [`CLAUDE.md`](../CLAUDE.md). The code is [`tools/m59-pvp-strategy.mjs`](../tools/m59-pvp-strategy.mjs)
 (the loader and the closed decision set) and the PvP-strategy section of `CombatMode` in
 [`tools/m59-combat-mode.mjs`](../tools/m59-combat-mode.mjs) (the keeper's half). The guard is
-`node tools/m59-pvp-strategy-test.mjs` (57, offline).
+`node tools/m59-pvp-strategy-test.mjs` (63, offline).
 
 ## What the operator asked for
 
@@ -53,7 +53,7 @@ in_flight, flight_room, hold_room, now` — frozen.
 | decision | what the keeper does |
 |---|---|
 | `null` / `'default'` | what it always did |
-| `{ do: 'flee_to', room, hold_ms?, max_ms?, why? }` | takes the body as survival (`pvp_strategy_flight`), cancels any journey or job, walks the validated router to `room` without asking the confinement, ends the flight on arrival and HOLDS there: `Autopilot.travel` refuses the keeper's own journeys out until `hold_ms` passes (explicit orders are let through). A blow on the road does not restart it and a war engagement does not preempt it. A flight that does not arrive backs off 15 s |
+| `{ do: 'flee_to', room, hold_ms?, hold_orders?, max_ms?, why? }` | takes the body as survival (`pvp_strategy_flight`), cancels any journey or job, walks the validated router to `room` without asking the confinement, ends the flight on arrival and HOLDS there: `Autopilot.travel` refuses the keeper's own journeys out until `hold_ms` passes (explicit orders are let through, unless `hold_orders: true`, which refuses those too -- a director such as the DUM moves units with explicit `travel` and would walk a fled unit straight back out). A blow on the road does not restart it and a war engagement does not preempt it. A flight that does not arrive backs off 15 s |
 | `{ do: 'engage', why? }` | lifts this character's own `pvp_rooms` refusal **for this room**, for 60 s (renewed by deciding again): return fire on a hit, the war response on a hostile sighting. The server's room flags, the safety flag and every refused-target memory still apply |
 
 `decide` must be synchronous and fast. A throw, a promise or more than 25 ms (`M59_PVP_STRATEGY_MS`) is

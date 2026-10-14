@@ -28,9 +28,11 @@
 //
 // THE DECISIONS — a CLOSED set, like the playbook verbs. Anything else is reported and ignored.
 //   null | 'default' | { do: 'default' }    what the harness already does; silence
-//   { do: 'flee_to', room, hold_ms?, max_ms?, why? }
+//   { do: 'flee_to', room, hold_ms?, hold_orders?, max_ms?, why? }
 //        take the body and travel to `room` now, as survival, through anything; on arrival hold the
-//        character there for `hold_ms` (keeper journeys out of it are refused, explicit orders are not)
+//        character there for `hold_ms` (keeper journeys out of it are refused, explicit orders are not --
+//        unless `hold_orders: true`, which refuses EVERY journey out, a director's `travel` included:
+//        a DUM that walks its units with explicit travel would otherwise send a fled unit straight back)
 //   { do: 'engage', why? }
 //        fight here even where the character's pvp_rooms would refuse: return fire on a hit, the war
 //        response on a hostile sighting. The server's own rules, the safety flag and every refused-target
@@ -146,7 +148,7 @@ export function validateDecision(d) {
   const ms = (v, dflt, max) => v == null ? dflt : (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.min(Number(v), max) : NaN);
   const hold_ms = ms(d.hold_ms, 0, MAX_HOLD_MS), max_ms = ms(d.max_ms, DEFAULT_FLIGHT_MS, MAX_HOLD_MS);
   if (Number.isNaN(hold_ms) || Number.isNaN(max_ms)) return { decision: null, error: 'hold_ms and max_ms are non-negative milliseconds' };
-  return { decision: { do: 'flee_to', room, hold_ms, max_ms, why } };
+  return { decision: { do: 'flee_to', room, hold_ms, hold_orders: d.hold_orders === true, max_ms, why } };
 }
 
 /**
