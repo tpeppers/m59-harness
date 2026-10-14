@@ -1781,7 +1781,14 @@ export class World {
         const offered = this.exits();
         availableFirstHops = new Set(offered
           .filter(e => e.to != null && Number.isFinite(Number(e.to)))
-          .map(e => Number(e.to)));
+          .map(e => Number(e.to))
+          .filter(to => !learned?.has(`${room.num}>${to}`)));
+        // A confirmed, exhausted approach is caller evidence about this origin,
+        // not a soft warning from an offline transit bake. Keep it out of the
+        // first expansion even on findPath's permissive pass. Otherwise that
+        // pass drops blockedHops and reselects the refused doorway before trying
+        // a longer executable route. A later entry through another door remains
+        // eligible; the origin restriction is not a room-wide or persistent ban.
 
         // ABSENCE IS HARD; AN OFFERED BUT UNVERIFIED EXIT IS STILL SOFT. Preserve the
         // existing preference against a destination whose every offered action is known

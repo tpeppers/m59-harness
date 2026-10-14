@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-deviation-routing-test.mjs', 'confirmed rail bends take bounded local detours; exit-candidate exhaustion reaches the journey replanner without relaxing unknown-position or ownership guards'],
   ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
   ['m59-wall-thread-test.mjs', 'a wall in the way is threaded along, not slid into; a refused slide does not end leaving before the doorway fallbacks (109, 2026-10-13)'],
