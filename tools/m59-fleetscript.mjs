@@ -3095,6 +3095,9 @@ const DYNAMIC_FIELDS = Object.freeze({
   // to whichever NPC the server rolled needs one gate per NPC, not one gate for the errand —
   // otherwise two characters with different destinations queue behind each other for nothing.
   gate: ['key'],
+  // A FARM WHOSE ROOM IS FOUND BY SCOUTING. A soldier hunt does not know which flag room holds
+  // troops until it has walked there and looked (fleetscripts/max-faction-shield.mjs).
+  harvest: ['quarry', 'room'],
 });
 
 // A POSITION THE BROKER WITHHELD, ASKED OF `look` INSTEAD. `status` drops `you` whenever the keeper's
@@ -3983,6 +3986,19 @@ async function runStep(ctx, agent, rawStep, state) {
       };
       const before = await held();
 
+      // A GOAL THAT IS NOT A PACK COUNT. `until({agent, call, observe, state})` is asked before
+      // the posture is pushed and after every poll; truthy (or `{done: true}`) ends the farm as
+      // met. A shield's rank lives in its description, not in how many of anything is carried.
+      const until = typeof step.until === 'function' ? step.until : null;
+      let reached = null;
+      const isDone = async () => {
+        const v = await until({ agent, call, observe, state }).catch(e => ({ done: false, why: e.message }));
+        reached = v;
+        return v && typeof v === 'object' ? v.done === true : !!v;
+      };
+      if (until && await isDone())
+        return { ok: true, result: { already: true, until: reached, quarry, room } };
+
       // MODE IS THE WHOLE THING, AND IT IS WHY THIS STEP EXISTS.
       //
       // `hunt` is read ONLY in farm mode — the schema says so in as many words, "creature
@@ -4009,14 +4025,15 @@ async function runStep(ctx, agent, rawStep, state) {
       // Hand the body back: the keeper cannot hunt while the lease holds its work and legs.
       await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
 
-      const until = Date.now() + budgetMs;
-      let now = before;
-      while (Date.now() < until) {
+      const deadline = Date.now() + budgetMs;
+      let now = before, done = false;
+      while (Date.now() < deadline) {
         await sleep(Math.max(15_000, ctx.pollMs ?? 15_000));
         const at = await observe(agent);
         if (at.dead) break;                       // recovery is the keeper's; the runner handles it
         now = await held();
-        if (target > 0 && now - before >= target) break;
+        if (until && await isDone()) { done = true; break; }
+        if (!until && target > 0 && now - before >= target) break;
       }
 
       // Take it back so the delivery half can be driven. The runner's own handle is stale
@@ -4024,9 +4041,12 @@ async function runStep(ctx, agent, rawStep, state) {
       const re = await holdKeeper(ctx, agent, ctx.fleet ?? fleet).catch(() => null);
 
       const gained = now - before;
-      const met = target <= 0 ? gained > 0 : gained >= target;
-      return { ok: met, result: { gained, held: now, target, quarry, room, reclaimed: !!re },
+      const met = until ? done : target <= 0 ? gained > 0 : gained >= target;
+      return { ok: met, result: { gained, held: now, target, quarry, room, reclaimed: !!re,
+                                  ...(until ? { until: reached } : {}) },
                why: met ? undefined
+                  : until ? `the goal was not reached in ${Math.round(budgetMs / 60_000)} min` +
+                            (reached?.why || reached?.note ? ` (last reading: ${reached.why ?? reached.note})` : '')
                   : `farmed ${gained} of ${target} ${want || 'item(s)'} in ` +
                     `${Math.round(budgetMs / 60_000)} min` };
     }
