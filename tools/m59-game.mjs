@@ -3138,7 +3138,7 @@ class Session {
     const pose=client.self;
     if(!read||this.client!==client||client.state!=='game'||client.room?.id!==roomObjectId||!pose||pose.predicted||
        ![pose.x,pose.y,pose.row,pose.col].every(Number.isFinite))return null;
-    const observed={x:pose.x,y:pose.y,row:pose.row,col:pose.col,room_object_id:roomObjectId,at:Date.now()};
+    const observed={id:pose.id,x:pose.x,y:pose.y,row:pose.row,col:pose.col,room_object_id:roomObjectId,at:Date.now()};
     rememberRefugePosition(this,observed);return observed;
   }
 

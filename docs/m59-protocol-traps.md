@@ -372,6 +372,13 @@ and the server brackets it with BP_WAIT and BP_UNWAIT. CLAUDE.md's "an object id
 temporary handle" is the rule; this is how the harness now enforces it rather than relying on
 everyone remembering it.
 
+The old `selfId` can now resolve to a different visible player after a save.
+Room contents identify the controlled body by its unique selected character
+name even when the old ID still exists. Without a matching player, the client
+exposes no foreign pose and requests its authoritative player packet. Refuge
+progress also carries the current body ID and discards samples from the old
+identity. Existence in the object map alone cannot confirm where we are.
+
 **What it cost, 2026-10-04 22:37Z.** A fleetscript `supply` step read Kermit's pack, took the
 shilling stack's id and sent it: *"Kermit is carrying nothing matching those ids"*. A retry
 seconds later worked. The same day `equipment` said an amulet was not worn while it was. Two

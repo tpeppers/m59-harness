@@ -71,7 +71,7 @@ const resources = new Map([
   assert.equal(client.selfId, null, 'selfId stays unset when we are not in the room');
 }
 
-// 3. NO HEAL WHILE HEALTHY: a resolving selfId is never touched.
+// 3. An id resolving to our correctly named player is retained.
 {
   const client = new M59Client({ resources, verbose: false });
   client.inGame = true;
@@ -84,6 +84,24 @@ const resources = new Map([
   ]));
   assert.equal(client.selfId, 777, 'a resolving selfId is left alone');
   assert.equal(client.self?.id, 777);
+}
+
+// A save reuses the old id for another player. Resolving it must not follow
+// that player's position; our own fresh named object identifies this body.
+{
+  const c=new M59Client({resources,verbose:false});c.inGame=true;c.me={name:'JayB'};c.selfId=501;
+  c.onGameMessage(BP.ROOM_CONTENTS,roomContents(800,[
+    {id:501,name:902,flags:PLAYER,x:672,y:736,angle:0},
+    {id:777,name:900,flags:PLAYER,x:864,y:800,angle:0},
+  ]));
+  assert.equal(c.selfId,777);assert.equal(c.self.col,13);assert.equal(c.self.row,12);
+}
+// If the body cannot be positively identified, no foreign pose is exposed.
+{
+  const c=new M59Client({resources,verbose:false});c.inGame=true;c.me={name:'JayB'};c.selfId=501;let requests=0;
+  c.requestPlayer=()=>requests++;
+  c.onGameMessage(BP.ROOM_CONTENTS,roomContents(800,[{id:501,name:902,flags:PLAYER,x:672,y:736,angle:0}]));
+  assert.equal(c.selfId,null);assert.equal(c.self,undefined);assert.equal(requests,1);
 }
 
 // 4. NO HEAL FROM A NON-PLAYER OBJECT with our name (a sign, a mailbox).
@@ -99,4 +117,4 @@ const resources = new Map([
   assert.equal(client.selfId, null, 'a non-player object with our name is not us');
 }
 
-console.log('m59 selfheal: 4 scenarios passed on packed offline packets');
+console.log('m59 selfheal: 6 scenarios passed on packed offline packets');

@@ -1,5 +1,11 @@
 # Movement, collision and routing
 
+Fresh room contents rebind the controlled body by its unique character name,
+even when a save reused its old object ID for another visible player. If the
+body cannot be identified, the client exposes no other player's pose and
+requests its authoritative player packet. A successful position read must
+refer to this body before it can certify routing or refuge progress.
+
 A hit during a short proved refuge leg can retain that route to cover while
 ordered server position reads confirm movement within the last 2.5 seconds
 and at most 20 travelled squares remain. This applies to general fine safe-leg

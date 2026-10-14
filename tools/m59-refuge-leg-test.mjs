@@ -4,13 +4,13 @@ import {Autopilot,CONTINUE,HANDLED,PASS_STAGES} from './m59-autopilot.mjs';
 import {sessionWalkPrototype} from './m59-session-walk.mjs';
 const origin={source:'fleetscript',name:'refuge-leg',run_id:'fixture'};
 function session(){
- const c={state:'game',room:{id:77},self:{x:640,y:640,row:10,col:10},vitals:()=>({health:{value:13,max:20}})};
+ const c={state:'game',room:{id:77},self:{id:1,x:640,y:640,row:10,col:10},vitals:()=>({health:{value:13,max:20}})};
  return {client:c,live:true,movementGeneration:4,moveOrder:{origin,generation:4},movementWasCancelled:()=>false};
 }
 const points=[{x:960,y:640},{x:1280,y:640}],goal={row:10,col:20};
 function progress(s,leg){
- rememberRefugePosition(s,{x:640,y:640,room_object_id:77,at:leg.started_at});
- rememberRefugePosition(s,{x:704,y:640,room_object_id:77,at:leg.started_at});
+ rememberRefugePosition(s,{id:1,x:640,y:640,room_object_id:77,at:leg.started_at});
+ rememberRefugePosition(s,{id:1,x:704,y:640,room_object_id:77,at:leg.started_at});
 }
 const options={movementGeneration:4,controlToken:{id:1}};
 const s=session();
@@ -18,7 +18,7 @@ await withProvenRefugeLeg(s,points,goal,options,async leg=>{
  assert(!continuingProvenRefugeLeg(s),'a planned route alone cannot defer survival');
  progress(s,leg);assert(continuingProvenRefugeLeg(s,{now:leg.started_at+2}));
  const pose=s.refugePosition;
- rememberRefugePosition(s,{x:704,y:640,room_object_id:77,at:leg.started_at+3000});
+ rememberRefugePosition(s,{id:1,x:704,y:640,room_object_id:77,at:leg.started_at+3000});
  assert(!continuingProvenRefugeLeg(s,{now:leg.started_at+3000}),'fresh reads of a stalled body are not progress');
  s.refugePosition=pose;
  for(const [why,change,restore] of [
@@ -28,6 +28,8 @@ await withProvenRefugeLeg(s,points,goal,options,async leg=>{
   ['new generation',()=>s.movementGeneration=5,()=>s.movementGeneration=4],
   ['new room',()=>s.client.room.id=78,()=>s.client.room.id=77],
   ['new client',()=>s.client={...s.client},()=>s.client=leg.client],
+  ['new body identity',()=>s.client.self.id=2,()=>s.client.self.id=1],
+  ['missing body identity',()=>leg.self_id=undefined,()=>leg.self_id=1],
   ['disconnected',()=>s.client.state='closed',()=>s.client.state='game'],
   ['dead',()=>s.client.vitals=()=>({health:{value:0,max:20}}),()=>s.client.vitals=()=>({health:{value:13,max:20}})],
  ]){change();assert(!continuingProvenRefugeLeg(s,{now:leg.started_at+2}),why);restore();}
@@ -47,6 +49,8 @@ await withProvenRefugeLeg(s,points,goal,options,async leg=>{
  assert.equal(cancel.length,1,'a refused step immediately restores emergency preemption');assert.equal(buffs,1);
 });
 assert.equal(s.provenRefugeLeg,null);
+rememberRefugePosition(s,{id:2,x:704,y:640,room_object_id:77,at:Date.now()});
+assert.equal(s.refugePosition.previous,null,'a new body identity does not inherit earlier movement samples');
 await assert.rejects(withProvenRefugeLeg(s,points,goal,options,async()=>{throw Error('fixture failure');}),/fixture failure/);
 assert.equal(s.provenRefugeLeg,null,'a thrown move releases its scoped proof');
 // Actual waypoint executor advances the proof cursor only on an arrived step.
