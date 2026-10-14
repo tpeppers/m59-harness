@@ -89,4 +89,9 @@ assert.equal((await planFineRailRefugeAsync(obfal,obfalBody,obfalExit,{...obfalO
 const obfalGap=await planFineRailRefugeAsync(obfal,obfalBody,obfalExit,{...obfalOptions,maxLeg:36});
 assert(obfalGap.found&&obfalGap.steps>28&&obfalGap.steps<=36,JSON.stringify(obfalGap));
 assert(validateEscape(obfal,obfalBody,obfalGap.waypoints).ok);
+const merbNorthWall={row:60,col:77,x:4928,y:3880},merbFineExit={goalFine:{x:96,y:3680},goalFineAlternates:[{x:96,y:3724},{x:96,y:3744},{x:96,y:3799}]};
+assert.equal((await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:28})).found,false);
+const merbLongGap=await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:36});
+assert(merbLongGap.found&&merbLongGap.steps>28&&merbLongGap.steps<=36,JSON.stringify(merbLongGap));
+assert(validateEscape(merb,merbNorthWall,merbLongGap.waypoints).ok);
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');

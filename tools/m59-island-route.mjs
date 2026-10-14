@@ -61,9 +61,9 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
   if(required){
     installed.required=true;installed.fineLegs=true;
-    // Directional cave routes have measured 22-30 square refuge gaps.
+    // Directional cave routes have measured 22-36 square refuge gaps.
     // Keep operator-specified global or per-room distances authoritative.
-    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:28,2504:36,2505:28,...prior?.maxLegByRoom};
+    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:36,2504:36,2505:28,...prior?.maxLegByRoom};
   }
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});
@@ -84,7 +84,7 @@ export const foreignIslandDestination=(order,to)=>order?.to!=null&&Number.isFini
 // stock server refuses a turn while resting, which can otherwise block recovery.
 export async function recoverIslandMainland(ctx,{maxSeconds=90}={}){
   const first=await ctx.call('look',{agent:ctx.agent});
-  if(first.room?.num!==CAVE||!Number.isFinite(first.hp?.value)||first.hp.value<=0)throw Error('mainland_recovery_requires_cave_arrival');
+  if(first.room?.num!==CAVE||!Number.isFinite(first.hp?.value)||first.hp.value<=0||!Number.isFinite(first.hp?.max)||first.hp.max<(ctx.fragileBelow??20))throw Error('mainland_recovery_requires_cave_arrival');
   await ctx.call('rest',{agent:ctx.agent,stand:true});
   await ctx.call('face',{agent:ctx.agent,degrees:180});
   await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:maxSeconds},(maxSeconds+20)*1000);

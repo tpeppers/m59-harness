@@ -24,9 +24,10 @@ travelled squares. Searches share a 500 ms allowance and retain live body,
 mandatory avoidance, ownership and send-time collision checks. Compatible
 exit rails also work from a stage one or two cells inside their boundary.
 `maxLegByRoom` supplies measured distances for individual rooms. The protected
-Island controller supplies 28 for the Chamber (2501), Merb (2503), and Konima
-(2505), and 36 for Obfal (2504). The Chamber and Merb have proved 26-27 square
-refuge gaps; Konima's eastern return passage has a proved 22-square gap.
+Island controller supplies 28 for the Chamber (2501) and Konima (2505), and
+36 for Merb (2503) and Obfal (2504). The Chamber has a proved 26-square
+refuge gap; Konima's eastern return passage has a proved 22-square gap.
+Merb's return from r60c77 needs a proved 35.3-square leg to r68c49.
 Obfal's southern return has a proved 29.4-square leg from r37c22 to r20c10.
 An operator's explicit distances remain authoritative.
 
