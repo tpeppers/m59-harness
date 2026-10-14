@@ -62,6 +62,11 @@ Poison alone may continue resting; poison plus an attack interrupts recovery eve
 when healing hides the net health loss. The next recovery decision reads current
 health, so an earlier above-threshold logoff refusal cannot persist below the flee line.
 
+Fine controllers retain an owned recovery observation at the positively confirmed
+refuge when the keeper episode ends before health remains full. Continuation requires
+the same character, room, fine position and live movement lease; an actual attack,
+operator cancellation, expired lease or position change ends that authorization.
+
 Arsenic has the same name and icon as a healing flask. `healUp` requires a fresh
 LOOK for that object matching the healing flask's blue-fluid description. Harmful,
 unknown, stale and mismatched descriptions are skipped and reported. Verification

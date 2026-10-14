@@ -92,14 +92,27 @@ export function activeOwnedFineRecovery(ctx,status){
   return origin?.source==='fleetscript'&&lease?.owner===origin.source+':'+origin.name&&lease.expires_in_ms>0&&
     d?.source==='keeper'&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&['pending','approaching','arrived','holding','recovering'].includes(d.status);
 }
-export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,pollMs=1000,onSample=()=>{}}={}){
+export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
+  const actor=l=>({id:l.you?.id,room:l.room?.num,roomId:l.room?.object_id,x:l.you?.x,y:l.you?.y});
+  const covered=l=>knownRefugeCell(roomGeometry(l.room?.num),l.you);
+  let refugeFence=initial&&activeOwnedFineRecovery(ctx,initial)&&covered(initial)?actor(initial):null;
   for(;;){
     const s=await ctx.call('status',{agent:ctx.agent,brief:true});
     checkIslandCancellation(ctx,s);
-    if(!keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})&&!(active&&activeOwnedFineRecovery(ctx,s)))return false;
+    const owned=keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})||(active&&activeOwnedFineRecovery(ctx,s));
+    if(!owned&&!refugeFence)return false;
     const {l}=await read(),wall=s.autopilot_status?.safe_spot;
+    if(!owned){
+      const origin=ctx.origin??currentCallOrigin(),lease=s.autopilot_status?.faculties?.movement,order=s.movement?.order,p=actor(l);
+      if(origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0)||
+        (order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))||
+        !Number.isInteger(p.id)||p.id!==refugeFence.id||p.room!==refugeFence.room||p.roomId!==refugeFence.roomId||
+        Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return false;
+    }
     if((wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col)||knownRefugeCell(roomGeometry(l.room?.num),l.you)){
-      await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
+      if(covered(l))refugeFence=actor(l);
+      const rested=await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
+      if(rested?.interrupted)return false;
       await read();await eatIslandAtWall(ctx,onSample);const recovered=await read();
       if(recovered.l.hp.value<recovered.l.hp.max){if(Date.now()>=deadline)return false;continue;}
       await ctx.call('rest',{agent:ctx.agent,stand:true});return true;
@@ -192,7 +205,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     if(l.hp.value<l.hp.max&&activeOwnedFineRecovery(ctx,l)){
-      if(recoveries>=3||!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true}))throw Error('fine_route_recovery_incomplete');
+      if(recoveries>=3||!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l}))throw Error('fine_route_recovery_incomplete');
       recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
     }
     const distance=Math.hypot(body.x-goal.x,body.y-goal.y),actualFloor=floorAt(geo,body.x,body.y);
@@ -252,7 +265,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       }
     }
     if(error>128||reply.arrived!==true){
-      if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true})){
+      if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
         recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
       }
       if(islandTrafficRefusal(reply)&&trafficWaits++<120){await new Promise(r=>setTimeout(r,1000));if(Math.hypot(body.x-before.x,body.y-before.y)>=64)cut=null;continue;}
