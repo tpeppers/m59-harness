@@ -61,9 +61,9 @@ export async function withIslandSafeLegs(ctx,fn,{required=false}={}){
   const installed={...(prior&&typeof prior==='object'?prior:{}),rooms:[...new Set([...(prior?.rooms??[599]),...ISLAND_SAFE_LEGS.rooms])]};
   if(required){
     installed.required=true;installed.fineLegs=true;
-    // The Chamber's opening corridor has a measured 26-square refuge gap.
+    // The Chamber and Merb have measured 26-27 square refuge gaps.
     // Keep operator-specified global or per-room distances authoritative.
-    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2504:28,...prior?.maxLegByRoom};
+    if(prior?.maxLeg==null)installed.maxLegByRoom={2501:28,2503:28,2504:28,...prior?.maxLegByRoom};
   }
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   await call('autopilot',{agent,action:'start',safe_legs:installed});

@@ -238,8 +238,11 @@ export async function walkHollowsOut(ctx,options={}){
     if(!approach.arrived||Math.hypot(before.you.x-refined.takeoff.x,before.you.y-refined.takeoff.y)>0.1)throw Error('hollows_refined_takeoff_not_observed');
   }
   const jump=await call('jump',{agent,to_row:44,to_col:27});
-  await new Promise(r=>setTimeout(r,5500));
-  const landed=await readIslandFinePosition(ctx);options.onSample?.(landed);
+  const observed=await confirmIslandFineArrival(async()=>{
+    const l=await readIslandFinePosition(ctx);options.onSample?.(l);checkIslandCancellation(ctx,l);
+    return {l,body:protocolToClient(l.you)};
+  },protocolToClient({x:1750,y:2824}),{attempts:8,settleMs:100});
+  const landed=observed.l;
   if(landed.room?.num!==2502||Math.hypot(landed.you.x-1750,landed.you.y-2824)>10)throw Error('hollows_crossing_not_observed_'+(jump.reason??'landing'));
   await checkedIslandWalk(ctx,HOLLOWS_OUT_POINTS[0],remaining());
   },async()=>{

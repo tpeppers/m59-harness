@@ -54,6 +54,7 @@ const fineCut=await cutFineRailAsync(konima,arrival,{x:160,y:4640});
 assert(fineCut.ok&&fineCut.bridgeOk,JSON.stringify({...fineCut,waypoints:fineCut.waypoints?.length}));
 assert(fineCut.waypoints.length>2);assert.equal(fineCut.waypoints[0].x,(arrival.x-64)*16);
 const merb=roomGeometry(2503),merbBody={row:69,col:76,x:4880,y:4416},merbGoal={row:57,col:2};
+assert.equal((await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:14})).found,false,'Merb needs its measured per-room gap allowance');
 const wide=await planFineRailRefugeAsync(merb,merbBody,merbGoal,{maxLeg:28});
 assert(wide.found,JSON.stringify(wide));assert(wide.steps<=28);assert.equal(wide.row,68);assert.equal(wide.col,49);
 assert(validateEscape(merb,merbBody,wide.waypoints).ok,'a refuge beyond the local search window retains a full mover proof');

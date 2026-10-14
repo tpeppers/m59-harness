@@ -24,8 +24,9 @@ travelled squares. Searches share a 500 ms allowance and retain live body,
 mandatory avoidance, ownership and send-time collision checks. Compatible
 exit rails also work from a stage one or two cells inside their boundary.
 `maxLegByRoom` supplies measured distances for individual rooms. The protected
-Island controller supplies 28 for the Chamber (2501), whose opening corridor
-has a 26-square refuge gap, while retaining an operator's explicit distances.
+Island controller supplies 28 for the Chamber (2501), Merb (2503), and Obfal
+(2504). The Chamber and Merb have proved 26-27 square refuge gaps. An operator's
+explicit distances remain authoritative.
 
 When the local fine window or square graph cannot supply a leg, protected fine
 travel can search the full room in a bounded worker. It keeps the observed
