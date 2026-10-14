@@ -74,17 +74,16 @@ export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060]
  * problems and conflating them is how a working run gets thrown away.
  */
 /**
- * `/state` IS A CACHE. `/state?fresh=1` IS A READ. A position must be the second one.
+ * `/state?position=1` requests an ordered server position read.
  *
- * The keeper serves a coalesced projection and only re-asks the socket when a reader says so
- * (`m59-keeper-process.mjs:1407` — "`?fresh=1` asks this process — the one that owns the socket — to
- * do the read"). `as_of_ms` is that projection's age and `fresh` reports whether THIS reply was
- * refreshed — it is not a staleness alarm, which is how it was first read here.
+ * `/state` serves a coalesced projection. `/state?fresh=1` refreshes inventory,
+ * so its `fresh:true` marker cannot confirm the body's position. The position
+ * endpoint carries a separate `position_read` proof tied to the room object.
  *
  * MEASURED 2026-09-12, the same instant, immediately after teleporting Alfa:
  *
  *     /state           as_of_ms=435   fresh=false     <- a cache, no packet sent
- *     /state?fresh=1   as_of_ms=0     fresh=true      <- the keeper went and looked
+ *     /state?fresh=1   as_of_ms=0     fresh=true      <- refreshed projection, not position proof
  *
  * Polled without it, the cache served the PRE-teleport square for 1.4-1.9 seconds, rock steady, so
  * two reads agreed and a body was declared settled on a square it had already left. Every step

@@ -179,7 +179,8 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const cost=threatEdgeCost(threats.map(protocolToClient),{radius:8*1024,weight:12,spacing:128});
     if(!cut){
       const seed=body;
-      cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000});
+      cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000,
+        objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id});
       ({l,body}=await read());
       if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
       if(!cut.ok||!cut.bridgeOk){

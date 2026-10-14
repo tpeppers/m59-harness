@@ -132,7 +132,9 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
   if(workerData.task==='cut'){
     const point=p=>({x:protocolToClient(p.x),y:protocolToClient(p.y)});
     const cost=threatEdgeCost((o.threats??[]).map(point),{radius:(o.threatRadius??8)*1024,weight:o.threatWeight??12,spacing:128,cacheSize:65536});
-    const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y);return t?.arrived===true&&t.blocked!==true;};
+    const obstacles=blockingBodySnapshot(o.objects,o.selfId);
+    const edge=(a,b)=>{const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
+      roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
     parentPort.postMessage(cutRail(point(workerData.from),point(workerData.goal),{edge,
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
       floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}}));
