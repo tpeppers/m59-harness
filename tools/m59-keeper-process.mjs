@@ -74,6 +74,7 @@ import { DeferredLatest } from './runtime/deferred-latest.mjs';
 import { fallJumpsIn } from './m59-falljump.mjs';
 import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
+import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
 
 // EVERYTHING THAT REACHES THIS PROCESS OVER HTTP IS SOMEBODY ELSE'S ORDER. The broker forwards
 // the MCP caller's origin; a caller that names none is recorded as such (m59-move-origin.mjs).
@@ -397,6 +398,13 @@ session.combat.warEligibility = () => joinWanted && !isHostCharacter && !war.isN
 // fleet (a `sighted` alarm) and never fights because of it. A host is the point -- Loial stands
 // Outside Castle Victoria, on Morpheus's road to the stairs. `warSentinel: false` or
 // M59_WAR_SENTINEL=0 turn the reporting off.
+// A PVP STRATEGY (m59-pvp-strategy.mjs): this machine's choice of answer to a player, per character,
+// from gitignored files. No assignment file -- every fresh clone -- is no strategy, and CombatMode keeps
+// the behaviour it always had. Re-read off the event path every 2s, so an assignment edit needs no restart.
+session.combat.pvpStrategy = new PvpStrategyHost({ fleet: fleetName, agent, character, isHost: isHostCharacter,
+  log: line => log(line) });
+void session.combat.pvpStrategy.refresh();
+setInterval(() => { void session.combat.pvpStrategy.refresh(); }, 2000).unref?.();
 session.combat.sentinelEligibility = () => joinWanted &&
   process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
 // WARBAND COMBAT (CombatMode.warbandTick): on while a swarm holds this character -- the terminal's S

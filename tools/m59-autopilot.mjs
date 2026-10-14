@@ -9887,6 +9887,22 @@ export class Autopilot {
                why: `room ${room} is outside the confinement ${confine.join('/')}` };
     }
 
+    // A PVP STRATEGY'S HOLD (m59-pvp-strategy.mjs `flee_to` with `hold_ms`). The flight landed the body
+    // where its allies are; the keeper's own next journey -- back to the farm, to an errand -- would
+    // walk it straight out to whoever it ran from. So keeper journeys out of the hold room are refused
+    // until it expires, exactly as the confinement refuses them. An EXPLICIT order (travelJob, the
+    // operator's travel) is not the keeper's own idea and is let through. Silence is unset.
+    const hold = this.pvpStrategyHold;
+    if (hold && Date.now() >= hold.until) this.pvpStrategyHold = null;
+    else if (hold && !explicitOrder && Number(room) !== Number(hold.room)) {
+      this.note('refused to leave the PvP strategy hold', {
+        wanted: Number(room), hold_room: hold.room, until: new Date(hold.until).toISOString(),
+        strategy: hold.strategy ?? null, threat: hold.threat ?? null,
+      });
+      return { arrived: false, refused: true, held: true,
+               why: `holding in ${hold.room} for PvP strategy ${hold.strategy ?? '?'} until ${new Date(hold.until).toISOString()}` };
+    }
+
     // AND NOT FROM A SQUARE THE WATCHDOG HAS ALREADY BROKEN A WALK ON. Here, at the same
     // single gate, for the same reason the confinement is: every keeper journey passes
     // through it, and the loop this closes — cancel, re-issue the identical walk, cancel —

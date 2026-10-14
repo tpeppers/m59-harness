@@ -25,6 +25,9 @@ import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
+import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS } from './m59-pvp-strategy.mjs';
+// A strategy flight that did not land waits this long before another may start.
+const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
 
 export const PVP_DANGER_MS = 30_000;
@@ -259,13 +262,19 @@ export class CombatMode {
     this.fleetmate = () => false;
     this.warLookAt = 0; this.warPendingLook = null; this.warSeen = new Map();
     this.warAlarmed = new Map(); this.warLast = null; this.warError = null;
+    // A PVP STRATEGY (m59-pvp-strategy.mjs) is null until the owning process assigns a host; with
+    // none, every moment below is answered by the behaviour that was already here.
+    this.pvpStrategy = null; this.pvpSeenAt = new Map(); this.strategyEngage = null;
+    this.flightBackoffUntil = 0; this.lastFlight = null;
   }
 
   status() {
     const o = this.active ?? this.last;
     const watch = this.watchStatus();
     const refused_targets = this.refusedStatus();
+    const pvp_strategy = this.pvpStrategyStatus();
     if (!o) return { active: false, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
+      ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
       ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
     return { active: !!this.active, order_id: o.id, action: o.order.action,
@@ -282,6 +291,7 @@ export class CombatMode {
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
       attack_readiness: o.lastReadiness ?? null, last_approach: o.lastApproach ?? null,
       pvp_survival: this.pvpStatus(), keep_safety: !!o.keepSafety, war: this.warStatus(),
+      ...(o.flight ? { flight: o.flight } : {}), ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
       ...(watch ? { watch } : {}) };
   }
@@ -362,7 +372,7 @@ export class CombatMode {
     if (!s.live || !c?.self || !(room > 1) || c.vitals?.()?.health?.value === 0) return;
     const now = this.now();
     let hostile = null;
-    const unknown = [], ours = [];
+    const unknown = [], ours = [], seen = [];
     for (const o of c.room?.objects?.values?.() ?? []) {
       if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
       const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
@@ -370,6 +380,7 @@ export class CombatMode {
       const mine = this.isOurs(name);
       if (mine) { ours.push(name); continue; }
       const verdict = war.warHostility({ name, flags: o.flags }, { fleetmate: mine, now });
+      seen.push({ name, verdict });
       if (verdict.hostile) {
         // Refused to us in this room: not engaged here, and not re-engaged on every object change.
         if ((o.flags & OF.ATTACKABLE) && !hostile && !this.targetRefused(name)) hostile = { o, name, verdict };
@@ -379,6 +390,12 @@ export class CombatMode {
       if (!(o.flags & OF.GUILDMATE) && war.needsLook(name, { now })) unknown.push({ o, name });
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
+    // THE STRATEGY SEES EVERY STRANGER, hostile or not (m59-pvp-strategy.mjs `player_seen`): a flight
+    // ends the scan here; an `engage` lifts this room's pvp_rooms refusal for the scan just below.
+    for (const p of seen) {
+      const d = this.consultSeen(p.name, p.verdict, room, now);
+      if (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted')) { this.raiseWarAlarm(p.name, 'sighted', room); return; }
+    }
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
     // OUTSIDE pvp_rooms a fighter is a sentinel too (m59-pvp-rooms.mjs): no engagement, but the
     // sighting alarm still goes out, because fleet-mates in an allowed room fight on it.
@@ -425,6 +442,10 @@ export class CombatMode {
   /** pvp_rooms (m59-pvp-rooms.mjs): the refusal for where the body stands, or null when a player
    *  may be engaged here. Read live off the keeper's policy, so a push takes effect at once. */
   pvpRoomsRefusal() {
+    // A PvP strategy's `engage` lifts OUR room list for this room, for a window it renews by deciding
+    // again. The server's own room flags are pvpForbiddenHere's, and nothing here touches them.
+    const e = this.strategyEngage, here = this.s.world?.room?.num;
+    if (e && e.room === here && this.now() < e.until) return null;
     let policy = null;
     try { policy = this.keeper?.()?.policy ?? null; } catch { policy = null; }
     return pvpRoomsRefusal(policy, this.s.world?.room?.num);
@@ -444,6 +465,8 @@ export class CombatMode {
 
   beginWar(name, { basis, why, room, reporter = null }) {
     if (this.pvpEligibility?.() === false) return false;
+    // A strategy's flight owns the body until it lands; a war engagement on the road is what it is fleeing.
+    if (this.active?.flight) return false;
     // OUTSIDE pvp_rooms (operator, 2026-10-11): no war engagement here, from the scan or from a
     // fleetmate's alarm. Our own sighting is still reported, as a sighting.
     if (this.pvpRoomsRefusal()) {
@@ -1537,9 +1560,146 @@ export class CombatMode {
     this.record(result?.took ? 'pvp_sheltered' : 'pvp_shelter_blocked', o);
   }
 
+  // ------------------------------------------------------------------ PvP strategies
+  //
+  // m59-pvp-strategy.mjs has the argument. This half is the keeper's: build the facts, ask the host
+  // (a synchronous call on a module already loaded), and carry out the two decisions that act —
+  // `engage` (lift our room list here) and `flee_to` (a survival flight to a named room, then a hold).
+
+  pvpStrategyStatus() {
+    const host = this.pvpStrategy;
+    if (!host && !this.lastFlight) return null;
+    const keeper = this.keeper?.();
+    return { ...(host?.status?.() ?? {}), flight: this.active?.flight ?? null, last_flight: this.lastFlight,
+      engage: this.strategyEngage, hold: keeper?.pvpStrategyHold ?? null,
+      backoff_until: this.flightBackoffUntil > this.now() ? this.flightBackoffUntil : null };
+  }
+
+  strategyFacts(player, extra = {}) {
+    const s = this.s, v = s.client?.vitals?.()?.health;
+    const max = v?.max ?? v?.scale_max;
+    let hold = null;
+    try { hold = this.keeper?.()?.pvpStrategyHold ?? null; } catch { hold = null; }
+    let ownRefusal = null;
+    try { ownRefusal = pvpRoomsRefusal(this.keeper?.()?.policy ?? null, s.world?.room?.num); } catch { ownRefusal = null; }
+    return { character: this.character?.() ?? characterName(s, s.client), agent: this.agentId ?? null,
+      room: s.world?.room?.num ?? null, player, hostile: false, basis: null,
+      pvp_allowed_here: !ownRefusal && !this.pvpForbiddenHere(),
+      health_pct: Number.isFinite(v?.value) && max > 0 ? Math.round(100 * v.value / max) : null,
+      max_health: Number.isFinite(max) ? max : null,
+      in_flight: !!this.active?.flight, flight_room: this.active?.flight?.room ?? null,
+      hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(), ...extra };
+  }
+
+  /** Ask the character's strategy; null is "the behaviour that was already here". */
+  consultPvpStrategy(moment, player, extra = {}) {
+    const host = this.pvpStrategy;
+    if (!host?.decide || !player) return null;
+    let d = null;
+    try { d = host.decide(moment, this.strategyFacts(player, extra)); } catch { d = null; }
+    if (!d) return null;
+    const here = this.s.world?.room?.num;
+    const key = `${moment}|${here}|${String(player).toLowerCase()}|${d.do}`;
+    if (this.pvpStrategyNoted !== key) {
+      this.pvpStrategyNoted = key;
+      this.s.recorder?.line?.('combat', { event: 'pvp_strategy_decision', moment, target: player, room: here,
+        strategy: d.strategy ?? null, decision: d.do, to: d.room ?? null, why: d.why ?? null });
+    }
+    if (d.do === 'engage' && here > 1) this.strategyEngage = { room: here, until: this.now() + ENGAGE_WINDOW_MS, player, strategy: d.strategy ?? null };
+    return d;
+  }
+
+  /** `player_seen`, at most once per player per room per PLAYER_SEEN_EVERY_MS. */
+  consultSeen(name, verdict, room, now = this.now()) {
+    if (!this.pvpStrategy) return null;
+    const key = `${room}|${String(name).toLowerCase()}`;
+    if (now - (this.pvpSeenAt.get(key) ?? -Infinity) < PLAYER_SEEN_EVERY_MS) return null;
+    this.pvpSeenAt.set(key, now);
+    if (this.pvpSeenAt.size > 512) this.pvpSeenAt.clear();
+    return this.consultPvpStrategy('player_seen', name,
+      { hostile: !!verdict?.hostile, basis: verdict?.basis ?? null });
+  }
+
+  /** The keeper's hold on the room a flight lands in (Autopilot.travel refuses keeper journeys out). */
+  setStrategyHold(d, threat) {
+    if (!(d.hold_ms > 0)) return;
+    const keeper = this.keeper?.();
+    if (!keeper) return;
+    const until = this.now() + d.hold_ms;
+    const prev = keeper.pvpStrategyHold;
+    if (prev && prev.room === d.room && prev.until >= until) return;
+    keeper.pvpStrategyHold = { room: d.room, until, strategy: d.strategy ?? null, threat: threat ?? null, set_at: this.now() };
+  }
+
+  /** Take the body and travel to `d.room`, as survival. False when there is nothing to do. */
+  beginFlight(d, threat, trigger) {
+    const s = this.s, c = s.client, here = s.world?.room?.num, now = this.now();
+    if (!s.live || !c?.self || !(here > 1) || c.vitals?.()?.health?.value === 0) return false;
+    if (here === d.room) { this.setStrategyHold(d, threat); return false; }
+    if (this.active?.flight || now < this.flightBackoffUntil) return false;
+    // An operator's combat order is the operator's: a strategy does not preempt one.
+    if (this.active && !this.active.pvp && !this.active.watchId) return false;
+    const decision = chooseSurvivalDecision(s, { strategy: 'pvp_strategy_flight', status: 'active',
+      reason: `${trigger === 'attacked' ? 'attacked by' : 'saw'} ${threat}; PvP strategy ${d.strategy ?? '?'} flees to ${d.room}`,
+      reason_code: 'pvp_strategy_flight', source: 'combat',
+      mitigation: 'the strategy chose distance to allies over fighting or resting here' },
+    { because: 'the character\'s PvP strategy chose flight' });
+    this.stop('superseded by PvP strategy flight', { preserveId: decision.id });
+    s.combatEpoch = (s.combatEpoch ?? 0) + 1;
+    s.fightGeneration = (s.fightGeneration ?? 0) + 1;
+    const id = randomUUID();
+    withBodyCommand(s, () => s.cancelMovement(null, 'PvP strategy flight', { preserveId: decision.id, origin: keeperOrigin('pvp_strategy') }), id);
+    s._router?.clear?.();
+    if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = now; }
+    const keeper = this.keeper();
+    if (keeper) {
+      keeper.suspendedJourney = null;
+      keeper.revive?.('PvP strategy flight');
+      keeper.frozenUntil = null; keeper.freezeSample = null;
+    }
+    this.active = { id, order: { action: 'flee_to', target: threat, map: d.room, sequence: [{ swings: 1 }], stop_below: 0 },
+      acceptedAt: now, expiresAt: now + (d.max_ms ?? 600_000),
+      client: c, playerId: c.selfId, room: here, roomObject: c.room?.id ?? null,
+      phase: 'fleeing', phaseRevision: 0, targetId: null, targetName: null,
+      attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false,
+      flight: { room: d.room, from: here, threat, trigger, strategy: d.strategy ?? null, why: d.why ?? null,
+        hold_ms: d.hold_ms ?? 0, decision_id: decision.id, started_at: now, arrived_at: null } };
+    updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'pvp_strategy_flight' });
+    this.record('pvp_strategy_flight', this.active);
+    s.pacer?.wake?.();
+    this.wake();
+    return true;
+  }
+
+  async advanceFlight(o) {
+    const s = this.s, f = o.flight;
+    if (s.world.room.num !== f.room) {
+      await this.stand(o);
+      this.armTimer();
+      // The ordinary validated router, under this flight's packet and identity guards -- the same walk
+      // an ambush order takes to its map. It does not ask the keeper's confinement: a flight is survival.
+      const result = await s.travel(f.room, { origin: keeperOrigin('pvp_strategy', { run_id: o.id }),
+        movementGeneration: s.movementGeneration, controlToken: o.id });
+      this.guard(o);
+      demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
+    }
+    f.arrived_at = this.now();
+    this.setStrategyHold({ room: f.room, hold_ms: f.hold_ms, strategy: f.strategy }, f.threat);
+    this.stop(`PvP strategy flight reached ${f.room}`);
+  }
+
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
+    // A STRATEGY FLIGHT IN PROGRESS keeps going: a blow on the road is the reason for the road. The
+    // alarm still goes out, so fleet-mates in the room we are running to know what is coming.
+    if (this.active?.flight) { this.raiseWarAlarm(evidence.character, 'attacked', s.world.room.num); return; }
+    // THE CHARACTER'S PVP STRATEGY ANSWERS FIRST (m59-pvp-strategy.mjs). Silence -- no strategy, or
+    // `default` -- leaves everything below exactly as it was. `engage` lifts our room list here (so
+    // `outside` below reads null); `flee_to` takes the body and travels, as survival.
+    const strategyDecision = this.consultPvpStrategy('attacked_by_player', evidence.character,
+      { hostile: true, basis: 'attacked' });
+    const fled = strategyDecision?.do === 'flee_to' && this.beginFlight(strategyDecision, evidence.character, 'attacked');
     // OUTSIDE pvp_rooms (operator, 2026-10-11: "stop people from fighting back outside of
     // 599/2/38"). No return fire and the body is NOT taken: the keeper's own ladder (flee below the
     // line, playDead, panic logoff) is the survival that applies, as for anything else hurting us
@@ -1552,7 +1712,8 @@ export class CombatMode {
         this.pvpOutsideNoted = key;
         s.recorder?.line?.('combat', { event: 'pvp_outside_rooms', target: evidence.character,
           room: outside.room, pvp_rooms: outside.rooms, text: evidence.text ?? null,
-          survival: 'keeper ladder (flee/logoff); outside pvp_rooms this character does not return fire' });
+          survival: fled ? `PvP strategy ${strategyDecision.strategy}: flight to ${strategyDecision.room}`
+            : 'keeper ladder (flee/logoff); outside pvp_rooms this character does not return fire' });
       }
       if (this.pvpLogging()) {
         try {
@@ -1566,6 +1727,7 @@ export class CombatMode {
       if (this.active?.pvp) this.syncPvP(this.active);
       return;
     }
+    if (fled) { this.raiseWarAlarm(evidence.character, 'attacked', s.world.room.num); return; }
     // A PLAYER THE SERVER WILL NOT LET US HIT HERE is not somebody return fire can answer. The
     // body is NOT taken: the keeper's ordinary ladder (flee below the line, rest when safe) is
     // the survival that applies, exactly as for anything else hurting us that we will not fight.
@@ -1939,9 +2101,10 @@ export class CombatMode {
     demand(o.expiresAt == null || this.now() < o.expiresAt, 'order expired');
     demand(!(o.client.lastRxAt > 0 && this.now() - o.client.lastRxAt > 45000),
       'connection stale: no server data for 45 seconds');
-    demand((o.pvp ? this.healthFraction() > 0 : this.healthOK(o.order)) &&
-      this.s.world?.room?.num > 1, o.pvp ? 'waiting for live health' : 'survival floor reached');
-    if (o.phase !== 'positioning') demand(o.client.room.id === o.roomObject &&
+    // A FLIGHT HAS NO HEALTH FLOOR: it is what the character does below one.
+    demand((o.pvp || o.flight ? this.healthFraction() > 0 : this.healthOK(o.order)) &&
+      this.s.world?.room?.num > 1, o.pvp || o.flight ? 'waiting for live health' : 'survival floor reached');
+    if (o.phase !== 'positioning' && o.phase !== 'fleeing') demand(o.client.room.id === o.roomObject &&
       this.s.world.room.num === o.room, 'left the combat room');
     if (o.phase === 'armed') demand(o.client.self?.row === o.order.position.row &&
       o.client.self?.col === o.order.position.col, 'ambush position changed');
@@ -2065,6 +2228,15 @@ export class CombatMode {
         /attackers absent/.test(reason) ? 'attackers_left' : 'stopped';
       p.end_reason = reason; this.lastPvP = p;
       finishSurvivalDecision(this.s, p.decision_id, p.outcome, reason);
+    }
+    if (o.flight) {
+      const f = o.flight;
+      f.ended_at = this.now(); f.end_reason = reason; f.outcome = f.arrived_at ? 'arrived' : 'stopped';
+      // A flight that did not land backs off before the next one, or a road the router cannot plan is
+      // re-planned on every packet that shows the same player.
+      if (!f.arrived_at) this.flightBackoffUntil = this.now() + FLIGHT_BACKOFF_MS;
+      this.lastFlight = f;
+      finishSurvivalDecision(this.s, f.decision_id, f.outcome, reason);
     }
     withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId, origin: keeperOrigin('combat_mode') }), o.id);
     this.active = null; this.s.combatEpoch = (this.s.combatEpoch ?? 0) + 1;
@@ -2239,6 +2411,7 @@ export class CombatMode {
 
   async advance(o) {
     const s = this.s, c = o.client;
+    if (o.flight) return this.advanceFlight(o);
     if (!o.pvp && effectsAt(c, c.self).length) {
       demand(await escapeGroundEffect(s), 'ground effect underfoot; no safe escape step');
       return;

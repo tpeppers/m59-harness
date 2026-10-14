@@ -908,3 +908,11 @@ substrate/cave-west-*.json
 substrate/island-trials/
 substrate/island-chalice/
 substrate/island-admin/
+
+# PvP strategies (tools/m59-pvp-strategy.mjs): a character's answer to a player is an ORDER, so the modules,
+# the per-character assignment and the extra search directories are this machine's. The shape is in
+# substrate/pvp-strategies.example/ -- BESIDE the directory, never inside it.
+/substrate/pvp-strategies/
+/substrate/pvp-strategy.json
+/substrate/pvp-strategy-*.json
+/substrate/pvp-strategy-dirs.json
