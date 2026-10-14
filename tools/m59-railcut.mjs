@@ -35,16 +35,26 @@ import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
 export const LATTICE = 64;
 
 // Radius and sample spacing use the same coordinate units as the supplied points.
-export function threatEdgeCost(threats,{radius,weight=6,spacing=LATTICE}={}){
+export function threatEdgeCost(threats,{radius,weight=6,spacing=LATTICE,cacheSize=0}={}){
   const points=threats.filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
+  // Cache only an explicitly immutable snapshot. Ordinary callers can retain
+  // live objects whose positions change between cost queries.
+  const cache=cacheSize>0?new Map():null;
+  const pressureAt=(x,y)=>{
+    const key=cache?x+','+y:null,known=cache?.get(key);if(known!==undefined)return known;
+    let pressure=0;for(const p of points){
+      if(Math.abs(x-p.x)>=radius||Math.abs(y-p.y)>=radius)continue;
+      pressure=Math.max(pressure,Math.max(0,1-Math.hypot(x-p.x,y-p.y)/radius));
+    }
+    if(cache){if(cache.size>=cacheSize)cache.clear();cache.set(key,pressure);}return pressure;
+  };
   return (a,b)=>{
     const distance=Math.hypot(b.x-a.x,b.y-a.y);
     if(!points.length||!(radius>0)||!(weight>0))return distance;
     const samples=Math.max(1,Math.ceil(distance/spacing));let extra=0;
     for(let i=1;i<=samples;i++){
       const x=a.x+(b.x-a.x)*i/samples,y=a.y+(b.y-a.y)*i/samples;
-      let pressure=0;for(const p of points)pressure=Math.max(pressure,Math.max(0,1-Math.hypot(x-p.x,y-p.y)/radius));
-      extra+=weight*pressure;
+      extra+=weight*pressureAt(x,y);
     }
     return distance*(1+extra/samples);
   };
@@ -98,10 +108,16 @@ function pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs}){
     if(stopAt&&key(p)===key(stopAt)){parent.complete=true;return parent;}
     for(const [dx,dy] of dirs){
       const q={x:p.x+dx*lattice,y:p.y+dy*lattice};
-      if(q.x<0||q.y<0||q.x>=bounds.w||q.y>=bounds.h||!edge(p,q))continue;
-      const price=cost(p,q),distance=Math.hypot(q.x-p.x,q.y-p.y);
+      if(q.x<0||q.y<0||q.x>=bounds.w||q.y>=bounds.h)continue;
+      const distance=Math.hypot(q.x-p.x,q.y-p.y),k=key(q),known=best.get(k);
+      // Every accepted price is at least distance minus the rounding tolerance.
+      // A known cheaper arrival cannot be improved by this edge, so avoid its
+      // expensive geometry trace and threat samples altogether.
+      if(known!==undefined&&p.g+distance-0.01>=known)continue;
+      if(!edge(p,q))continue;
+      const price=cost(p,q);
       if(!Number.isFinite(price)||price<distance-0.01)continue;
-      const g=p.g+price,k=key(q);if(g>=(best.get(k)??Infinity))continue;
+      const g=p.g+price;if(g>=(best.get(k)??Infinity))continue;
       best.set(k,g);parent.set(k,{x:p.x,y:p.y});push({...q,g,f:g+h(q)});
     }
   }

@@ -97,4 +97,10 @@ assert.equal((await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merb
 const merbLongGap=await planFineRailRefugeAsync(merb,merbNorthWall,merbGoal,{...merbFineExit,maxLeg:36});
 assert(merbLongGap.found&&merbLongGap.steps>28&&merbLongGap.steps<=36,JSON.stringify(merbLongGap));
 assert(validateEscape(merb,merbNorthWall,merbLongGap.waypoints).ok);
+// A populated Merb scene exhausted the old four-second search at r37c12.
+// Keep the observed risk field and collision proof in this regression.
+const merbCrowd=[[3682,212],[3745,226],[3281,4456],[3417,209],[3040,3879],[3559,2201],[5165,1772],[2779,4182],[3115,3857],[4311,3104],[1823,2969],[3499,228]].map(([x,y])=>({x,y}));
+const throughCrowd=await planFineRailRefugeAsync(merb,{row:37,col:12,x:824,y:2408},{row:1,col:93},{maxLeg:36,goalFine:{x:6020,y:96},threats:merbCrowd});
+assert(throughCrowd.found&&throughCrowd.steps<=36,JSON.stringify(throughCrowd));
+assert(validateEscape(merb,{x:824,y:2408},throughCrowd.waypoints).ok);
 console.log('Fine safe legs stop on collision-proved refuges within the actual distance allowance.');
