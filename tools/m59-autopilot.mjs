@@ -14867,12 +14867,7 @@ export class Autopilot {
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.wedged_journey_rescues = (this.tally.wedged_journey_rescues || 0) + 1;
         const journey = this.travelling;
-        if (journey?.to != null) this.suspendedJourney ??= {
-          to: journey.to, why: journey.why ?? 'travelling', at: Date.now(),
-          trigger: 'wedged below the flee line while travelling',
-          attempts: (journey.attempts ?? 0) + 1,
-          deaths_at: this.tally?.deaths ?? 0,
-        };
+        this.suspendJourney('wedged below the flee line while travelling');
         try { this.cancelForSurvival(null, 'wedged below the flee line while travelling', { origin: keeperOrigin('watchdog') }); } catch {}
         // Mend at a wall FORWARD on the route rather than idling where it was dying — the
         // same landing the watchdog's other rescue takes, and for the same reason.

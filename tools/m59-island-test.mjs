@@ -193,6 +193,25 @@ const statusRecovered=await ordinaryHop({agent:'fixture',call:async name=>{
  return {};
 }},2013,{pollMs:1,idleGraceMs:0});
 assert(statusRecovered.ok);assert.equal(missingTravels,1);assert.equal(missingStatusReads,2);
+let racedStatuses=0,racedTravels=0,racedRoom=2000;
+const racedOwner={source:'fleetscript',name:'status-race',run_id:'one'},racedLabel=originLabel(racedOwner);
+const raced=await ordinaryHop({agent:'fixture',origin:racedOwner,call:async name=>{
+ if(name==='look')return look(racedRoom);
+ if(name==='travel'){racedTravels++;return {ordered_by:racedLabel};}
+ if(name==='status'){
+  if(++racedStatuses===1)return {connected:false,in_game:true,hp:null,movement:{order:null,
+   last_preempted:{by:{source:'keeper'},preempted:{to:2013,ordered_by:racedLabel}}}};
+  racedRoom=2013;return {busy:true,movement:{order:{kind:'travel',to:2013,ordered_by:racedLabel}}};
+ }
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0});
+assert(raced.ok);assert.equal(racedTravels,1);assert.equal(racedStatuses,2);
+await assert.rejects(ordinaryHop({agent:'fixture',origin:racedOwner,call:async name=>{
+ if(name==='look')return look(2000);if(name==='travel')return {ordered_by:racedLabel};
+ if(name==='status')return {connected:false,movement:{last_preempted:{by:{source:'keeper'},preempted:{to:2013,ordered_by:'foreign'}}}};
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0}),/traveller_health_unreadable/);
+await assert.rejects(ordinaryHop({agent:'fixture',call:async name=>name==='look'?look(2000):name==='status'?{room:{num:1},hp:{value:0,max:20}}:{}},2013,{pollMs:1}),/traveller_died/);
 assert(!foreignIslandDestination({kind:'shelter',to:'r18c14'},2500));
 assert(foreignIslandDestination({kind:'travel',to:2000},2500));
 assert(!foreignIslandDestination({kind:'travel',to:2500},2500));

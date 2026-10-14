@@ -1,6 +1,7 @@
 // Offline: interrupted travel keeps its arming guard while later survival gates still run.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {freshState} from './m59-watchdog.mjs';
 const {Autopilot,CONTINUE}=await import(process.env.M59_TEST_AUTOPILOT ?? './m59-autopilot.mjs');
 function fixture(policy={},suspended=true){
   const calls=[],k=Object.assign(Object.create(Autopilot.prototype),{policy,
@@ -33,4 +34,24 @@ test('suspension preserves a copy of the effective journey guard',()=>{
   const {k}=fixture({},false);k.tally={deaths:0};k.inert={travelling:true,to:39,guard:{arm:true}};
   assert.equal(k.suspendJourney('test'),true);assert.equal(k.suspendedJourney.guard.arm,true);
   k.inert.guard.arm=false;assert.equal(k.suspendedJourney.guard.arm,true);
+});
+
+test('the watchdog keeps the issuer and guards before cancelling a wounded journey',()=>{
+  const {k}=fixture({},false),origin={source:'fleetscript',name:'courier',run_id:'one'};
+  const now=Date.now();let cancellations=0;
+  Object.assign(k,{tally:{deaths:0},passes:1,watch:freshState(),claims:new Map(),doing:'travelling',
+    inert:{travelling:true,to:2501,guard:{arm:false,safe_spot:true}},
+    recordFrame:()=>{},checkFreeze:()=>false,fightBackCheck:()=>{},clearPathCheck:()=>{},
+    facultyHeld:()=>false,note:()=>{},progress:()=>{},safety:()=>({fleeAt:0.7}),
+    revive(){this.inert=null;},
+    cancelForSurvival(){cancellations++;this.s.moveOrder=null;return {cancelled:true};}});
+  Object.assign(k.s,{live:true,movementGeneration:1,moveOrder:{to:2501,origin,generation:1},
+    client:{state:'game',vitals:()=>({health:{value:13,max:20}})}});
+  k.watch.lastPulseAt=now;k.watch.wedged={since:now-60000,taking_hits:true,inert:true,at:{row:30,col:22}};
+  k.watchdogTick();
+  assert.equal(cancellations,1);assert.equal(k.suspendedJourney.to,2501);
+  assert.deepEqual(k.suspendedJourney.origin,origin);
+  assert.equal(k.suspendedJourney.guard.arm,false);assert.equal(k.suspendedJourney.guard.safe_spot,true);
+  const parent=k.suspendedJourney;k.inert={travelling:true,to:2000};k.suspendJourney('nested shelter');
+  assert.equal(k.suspendedJourney,parent,'recovery retains its root issuer and destination');
 });

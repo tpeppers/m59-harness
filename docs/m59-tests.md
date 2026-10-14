@@ -1970,4 +1970,11 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
 
 ## Tos refuge and recovery regression coverage
 
+The travel recovery arm suite exercises the actual watchdog rescue of an injured
+journey, retaining its issuer and copied guards before cancellation. The Island
+suite covers a survival logout between the body and status reads, rejects a
+foreign recovery owner, and detects death in the later status snapshot. The
+shared watchdog suite also checks suspension before cancellation removes the
+live order.
+
 node tools/m59-tos-refuge-review-test.mjs exercises the recorded Tos fine geometry with the nearby body, revoked coarse-arrival confirmation, protected recovery departure, protective versus harmful enchantments, and concurrent ailment/attack evidence. The movement gate includes it. FleetScript's compiled-walk tests cover both recovery already active above a0.75 floor and recovery begun after the script handed a hurt body back, requiring full health before departure in each. Native shadow results are kept separately from these offline assertions.

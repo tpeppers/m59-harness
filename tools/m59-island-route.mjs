@@ -5,7 +5,7 @@ import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
 import {walkHollowsOut,approachIslandDoor,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
-import {observeIslandTraveller} from './m59-island-observation.mjs';
+import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
 export const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -185,7 +185,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     const s=await call('status',{agent,brief:true});
     // A failed fresh snapshot contains neither busy nor movement. It cannot
     // prove that the owned journey stopped; keep sampling its live body.
-    if(s.broker_error){
+    if(s.room?.num===1||s.hp?.value===0)throw Error('traveller_died');
+    if(s.broker_error||s.connected===false||s.in_game===false){
+      // Survival may disconnect after the positive body read above. An absent
+      // movement order on that disconnected snapshot cannot end its journey.
+      checkIslandCancellation(ctx,s);
+      if(!s.broker_error&&!islandReadOwner(ctx,s,{to,orderedBy:leg.request?.ordered_by}))throw Error('traveller_health_unreadable');
       statusMissingSince??=Date.now();
       if(Date.now()-statusMissingSince>=15000||Date.now()-start>budgetMs)throw Error('traveller_status_recovery_budget');
       continue;

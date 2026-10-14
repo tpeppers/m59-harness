@@ -541,12 +541,12 @@ export function tick(host) {
       w.rescuedPass = host.passes;
       w.rescues = (w.rescues ?? 0) + 1;
       host.tally.inert_rescues = (host.tally.inert_rescues || 0) + 1;
+      host.suspendJourney?.('the watchdog rescued a stalled driver');
       const stopped = (() => {
         try { return host.s.cancelMovement(null, 'the watchdog rescuing a stalled driver', { origin: keeperOrigin('watchdog') }); }
         catch (e) { return { cancelled: false, why: e.message }; }
       })();
       const was = host.inert?.why ?? 'inert';
-      host.suspendJourney?.('the watchdog rescued a stalled driver');
       host.wantForwardShelter?.('the watchdog took us back from a stalled driver');
       host.revive?.('the character stopped moving and started dying while ' + was);
       host.note('WATCHDOG — took the character back from a driver that had stopped', {
