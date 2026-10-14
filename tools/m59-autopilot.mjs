@@ -20,6 +20,7 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import {keeperRecoveryRescueReady} from './m59-move-origin.mjs';
 import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import { SWARM_MIN_MAX_HEALTH } from './m59-swarm-follow.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
@@ -14800,7 +14801,7 @@ export class Autopilot {
     // A decision not to act still has to be recorded, or the absence of a rescue is
     // indistinguishable from the absence of a problem.
     if (travelling && wedge && wedge.taking_hits
-        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes
+        && keeperRecoveryRescueReady(this.s,wedge.since,now,INERT_RESCUE_MS) && w.rescuedPass !== this.passes
         && !w.saidTravelWedge) {
       w.saidTravelWedge = true;
       // NOT the moment to cancel the walk, even in a crowd. Tried on tour 16 (2026-09-03):
@@ -14859,7 +14860,7 @@ export class Autopilot {
     // driver was holding a dying character is worth having in the postmortem -- it is just not
     // a precondition for saving it.
     if (travelling && wedge && wedge.taking_hits
-        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedJourney !== this.inert) {
+        && keeperRecoveryRescueReady(this.s,wedge.since,now,INERT_RESCUE_MS) && w.rescuedJourney !== this.inert) {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
         w.rescuedPass = this.passes;
@@ -14890,7 +14891,7 @@ export class Autopilot {
     // stopped, and the body is being hit. See the wedge marker above for the measurement.
     const heldByOther = !!this.inert || this.facultyHeld('movement');
     if (!travelling && heldByOther && wedge?.inert && wedge.taking_hits
-        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
+        && keeperRecoveryRescueReady(this.s,wedge.since,now,INERT_RESCUE_MS) && w.rescuedPass !== this.passes) {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
         w.rescuedPass = this.passes;

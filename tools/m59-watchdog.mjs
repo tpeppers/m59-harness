@@ -66,7 +66,7 @@
 // Environment still wins where it is set, so a one-off run can override without editing a file.
 //   { "WATCHDOG_PINNED_MS": 2147483647 }
 import { readFileSync } from 'node:fs';
-import { keeperOrigin } from './m59-move-origin.mjs';
+import { keeperOrigin,keeperRecoveryRescueReady } from './m59-move-origin.mjs';
 
 const LOCAL = (() => {
   try {
@@ -535,7 +535,7 @@ export function tick(host) {
   // does not, and the cancel still happens. That is what lets the tick driver share this.
   const wedge = w.wedged;
   if (host.inert && wedge?.inert && wedge.taking_hits
-      && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== host.passes) {
+      && keeperRecoveryRescueReady(host.s,wedge.since,now,INERT_RESCUE_MS) && w.rescuedPass !== host.passes) {
     const frac = pct(hp);
     if (frac !== null && frac < host.safety().fleeAt) {
       w.rescuedPass = host.passes;
