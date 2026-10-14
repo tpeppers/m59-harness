@@ -34,6 +34,8 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-emergency-flask-test.mjs','carried medicine remains available while a refuge approach is blocked; ownership and arsenic guards stay active'],
+  ['m59-position-read-test.mjs','fine observations require an ordered server read tied to this client and room'],
   ['m59-jump-takeoff-test.mjs','declared ledge variations retain stock timed gravity, ordinary takeoff approaches and running/occupied-landing guards'],
   ['m59-rest-dispatch-test.mjs','journey recovery delegates one bounded rest to the keeper rather than nesting its default rest in a proxy loop'],
   ['m59-fine-safeleg-test.mjs','safe legs from the actual fine body stop at proved refuges within the travelled distance allowance'],

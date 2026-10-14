@@ -44,7 +44,9 @@ export function threatEdgeCost(threats,{radius,weight=6,spacing=LATTICE,cacheSiz
     const key=cache?x+','+y:null,known=cache?.get(key);if(known!==undefined)return known;
     let pressure=0;for(const p of points){
       if(Math.abs(x-p.x)>=radius||Math.abs(y-p.y)>=radius)continue;
-      pressure=Math.max(pressure,Math.max(0,1-Math.hypot(x-p.x,y-p.y)/radius));
+      // Each monster contributes pressure. A clustered group cannot have
+      // the same route price as a single member of that group.
+      pressure+=Math.max(0,1-Math.hypot(x-p.x,y-p.y)/radius);
     }
     if(cache){if(cache.size>=cacheSize)cache.clear();cache.set(key,pressure);}return pressure;
   };

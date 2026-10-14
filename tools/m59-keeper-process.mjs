@@ -1816,6 +1816,15 @@ const server = createServer(async (req, res) => {
       // the only thing entitled to do. Everything else still gets the cache, and every
       // answer now carries `as_of_ms` so a caller can tell how old its evidence is rather
       // than assuming it is current.
+      // An inventory refresh proves nothing about a body's fine position.
+      // Position callers wait for this socket's own ordered room-contents read.
+      if(url.searchParams.get('position')==='1'){
+        let position=null;
+        if(inGame)try{position=await session.confirmFinePosition({timeoutMs:3000});}catch{}
+        const snapshot=stateSnapshot({fresh:true});
+        json({...snapshot.value,as_of_ms:snapshot.ageMs,fresh:snapshot.refreshed,position_read:position});
+        return;
+      }
       const wantFresh = url.searchParams.get('fresh') === '1';
       if (wantFresh && inGame) {
         try {

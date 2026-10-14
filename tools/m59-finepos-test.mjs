@@ -11,6 +11,8 @@ const ok = (c, what) => { if (c) pass++; else { fail++; console.log(`  FAIL: ${w
 const eq = (got, want, what) =>
   ok(JSON.stringify(got) === JSON.stringify(want),
      `${what}\n         got  ${JSON.stringify(got)}\n         want ${JSON.stringify(want)}`);
+const observedPose=(pose,extra={})=>({...extra,room:{num:49,object_id:123},
+  position_read:{...pose,room_object_id:123,at:Date.now()}});
 
 // ---- the units boundary, in both directions ---------------------------------------------
 eq(protocolToClient({ x: 1167, y: 1519 }), { x: 17648, y: 23280 },
@@ -99,16 +101,16 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
 
 // ---- A POSITION READ MUST BE A READ, NOT A CACHE LOOKUP --------------------------------
 {
-  // `/state` serves a coalesced projection and only re-asks the socket when a reader says so. Polled
+  // Inventory freshness alone does not certify a fine position.
   // without `?fresh=1` it served the PRE-teleport square for 1.4-1.9s, rock steady — measured at the
   // same instant: /state as_of_ms=435 fresh=false, /state?fresh=1 as_of_ms=0 fresh=true.
   const paths = [];
   const fetchState = async (port, path) => {
     paths.push(path);
-    return { self: { x: 1167, y: 1519, row: 23, col: 18 }, as_of_ms: 0, fresh: true };
+    return observedPose({x:1167,y:1519,row:23,col:18},{as_of_ms:0,fresh:true});
   };
   await finePosition('hk2', { port: 9533, fetchState });
-  eq(paths, ['/state?fresh=1'], 'by DEFAULT it asks the keeper to go and look');
+  eq(paths, ['/state?position=1'], 'by DEFAULT it requests an ordered server position read');
 
   paths.length = 0;
   await finePosition('hk2', { port: 9533, fetchState, fresh: false });
@@ -123,8 +125,7 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
                  { x: 1116, y: 1100 }, { x: 1116, y: 1100 }];
   let i = 0;
   const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
-    fetchState: async () => ({ self: { ...track[Math.min(i++, track.length - 1)], row: 23, col: 18 },
-                               pid: 1452 }) });
+    fetchState: async () => observedPose({...track[Math.min(i++,track.length-1)],row:23,col:18},{pid:1452}) });
   ok(r.ok && r.settled, 'it waits for the body to stop and then answers');
   eq(r.protocol, { x: 1116, y: 1100 }, 'and the answer is where it STOPPED, not where it was passing');
   eq(r.reads, 4, 'having read until two consecutive reads agreed');
@@ -133,7 +134,7 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   // A body that never stops must not be reported as though it had.
   let n = 0;
   const r = await settledPosition('hk2', { port: 9533, gapMs: 0, maxMs: 0, sleep: async () => {},
-    fetchState: async () => ({ self: { x: 1100 + 8 * n++, y: 1100, row: 23, col: 18 } }) });
+    fetchState: async () => observedPose({x:1100+8*n++,y:1100,row:23,col:18}) });
   eq(r.settled, false, 'a body still in flight is NOT reported as settled');
   ok(/in flight, not a place/.test(r.why), '...and says so, rather than handing back the last read');
 }
@@ -153,8 +154,8 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
     { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 128, fresh: false },
     { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 409, fresh: false },
     { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 803, fresh: false },
-    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
-    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
+    observedPose({x:1020,y:1010,row:80,col:51},{as_of_ms:0,fresh:true}),
+    observedPose({x:1020,y:1010,row:80,col:51},{as_of_ms:0,fresh:true}),
   ];
   let i = 0;
   const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
@@ -179,8 +180,20 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   let n = 0;
   const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
     fetchState: async () => ({ self: { x: 1100, y: 1100, row: 87, col: 59 }, pid: 7 }) });
-  ok(r.settled, 'a keeper that omits `fresh` still settles on agreement');
-  eq(r.fresh, null, '...with the field reported as unknown rather than invented');
+  ok(!r.settled, 'an older keeper without position confirmation cannot certify a settled body');
+  eq(r.fresh, false, '...even when cached coordinates agree');
+}
+{
+ const cached={self:{x:100,y:200,row:3,col:1},room:{num:49,object_id:123},fresh:true,as_of_ms:0};
+ const stale=await finePosition('hk2',{port:9533,fetchState:async()=>cached});
+ eq(stale.fresh,false,'a freshly projected inventory snapshot does not refresh the body');
+ const actual=await finePosition('hk2',{port:9533,fetchState:async()=>({...cached,
+   position_read:{x:1200,y:1500,row:23,col:18,room_object_id:123,at:Date.now()}})});
+ eq(actual.protocol,{x:1200,y:1500},'server position wins over the stale projected self');
+ ok(actual.fresh,'matching ordered position proof is fresh');
+ const changed=await finePosition('hk2',{port:9533,fetchState:async()=>({...cached,
+   position_read:{x:1200,y:1500,row:23,col:18,room_object_id:999,at:Date.now()}})});
+ eq(changed.fresh,false,'a position from a different room cannot certify this body');
 }
 
 // ---- movedBetween: the receipt, because `arrived` is not one ----------------------------

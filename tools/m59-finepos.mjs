@@ -102,9 +102,11 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
   // real keeper on 9533 and failed. A tool that cannot be isolated gets tested in production.
   const p = port ?? await keeperPortFor(agent, probe ? { probe } : {});
   if (!p) return { ok: false, why: 'no keeper answering for this agent in any known band' };
-  const j = await fetchState(p, fresh ? '/state?fresh=1' : '/state');
+  const j = await fetchState(p, fresh ? '/state?position=1' : '/state');
   if (!j) return { ok: false, why: `keeper on ${p} did not answer /state`, port: p };
-  const you = j.self ?? j.you ?? null;
+  const confirmed=j.position_read&&j.position_read.room_object_id===j.room?.object_id&&
+    Number.isFinite(j.position_read.at)&&Date.now()-j.position_read.at>=0&&Date.now()-j.position_read.at<=3000;
+  const you = confirmed ? j.position_read : j.self ?? j.you ?? null;
   if (!you || !Number.isFinite(you.x) || !Number.isFinite(you.y))
     return { ok: false, why: `keeper on ${p} answered without a fine position`, port: p,
              room: j.room?.num ?? null };
@@ -132,7 +134,7 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
     // `fresh` all along and every caller here ignored them, which is how a position read gets
     // treated as a fact about now rather than a fact about some moment.
     asOfMs: Number.isFinite(j.as_of_ms) ? j.as_of_ms : null,
-    fresh: j.fresh ?? null,
+    fresh: fresh ? !!confirmed : j.fresh ?? null,
   };
 }
 
