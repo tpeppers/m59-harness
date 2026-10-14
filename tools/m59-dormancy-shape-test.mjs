@@ -149,4 +149,36 @@ await test('broker: the dormancy tool reads no keeper snapshot (its subject has 
   assert.match(list, /'dormancy'/);
 });
 
+// ---------------------------------------------------------------- the staged start
+// Operator, 2026-10-14: bring prod up with every keeper warm and NOBODY logged in, scout with one
+// character, then log the fleet on. The whole mode is an operator dormancy written before the spawns.
+
+await test('staged: the holds are written BEFORE the first keeper spawn, and never on an adoption', () => {
+  const r = block(broker, broker.indexOf(') {', broker.indexOf('async function resumeFleet(')));
+  assert.match(r, /if \(STAGED_START && !adopting\) \{/);
+  before(r, 'stageRoster(', 'await Promise.all(Array.from({ length: Math.min(CONCURRENCY', 'held before any keeper starts');
+});
+
+await test('staged: an existing dormancy is never overwritten by a staged hold', () => {
+  const s = block(broker, broker.indexOf('function stageRoster('));
+  before(s, 'if (dormancyStore().get(agent)) continue;', 'dormancyStore().set(agent', 'look before writing');
+  assert.match(s, /reason: 'operator', wake: 'manual', by: STAGED_BY/);
+});
+
+await test('staged: start_all wakes only staged holds, through wakeDormant, and never bumps a pilot', () => {
+  const s = block(broker, broker.indexOf(') {', broker.indexOf('async function startStaged(')));
+  assert.match(s, /rec\?\.by === STAGED_BY/);
+  assert.match(s, /wakeDormant\(agent, /);
+  assert.doesNotMatch(s, /\/rejoin/);
+  assert.match(s, /const work = staged\.filter\(agent => !pilotOf\(agent\)\);/);
+  assert.match(s, /reason: 'pilot'/, 'a piloted staged hold becomes a pilot wait');
+  assert.match(s, /M59_KEEPER_CONCURRENCY/, 'woken in lanes, not all at once');
+});
+
+await test('staged: the dormancy tool offers start_all, and /health says how many are still staged', () => {
+  assert.match(broker, /enum: \['list', 'hold', 'wake', 'start_all'\]/);
+  assert.match(broker, /if \(a\.action === 'start_all'\) return startStaged\(/);
+  assert.match(block(broker, broker.indexOf('function brokerHealth(')), /staged: \{ requested: STAGED_START, held: stagedCount\(\) \}/);
+});
+
 console.log(`\n${tests} passed, 0 failed`);
