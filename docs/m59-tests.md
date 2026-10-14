@@ -1977,4 +1977,10 @@ foreign recovery owner, and detects death in the later status snapshot. The
 shared watchdog suite also checks suspension before cancellation removes the
 live order.
 
+The fine recovery integration supplies a mock keeper endpoint and the actual
+Hollows geometry. An offline action reply after a keeper preemption must recover
+at the observed refuge, then confirm the original fine goal. It uses no game
+server or fleet roster. The movement-origin suite rejects stale or foreign
+preemptions and later operator cancellation.
+
 node tools/m59-tos-refuge-review-test.mjs exercises the recorded Tos fine geometry with the nearby body, revoked coarse-arrival confirmation, protected recovery departure, protective versus harmful enchantments, and concurrent ailment/attack evidence. The movement gate includes it. FleetScript's compiled-walk tests cover both recovery already active above a0.75 floor and recovery begun after the script handed a hurt body back, requiring full health before departure in each. Native shadow results are kept separately from these offline assertions.

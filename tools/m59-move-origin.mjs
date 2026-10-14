@@ -100,6 +100,18 @@ export function liveMoveOrder(s) {
   return o;
 }
 
+/** A fresh keeper interruption of this issuer can recover an unsuccessful move. */
+export function keeperMovementPreemption(status,orderedBy,{since=null}={}) {
+  const m=status?.movement,pre=m?.last_preempted;
+  if(!orderedBy||pre?.by?.source!=='keeper'||pre.preempted?.ordered_by!==orderedBy)return false;
+  if(since!=null&&(!Number.isFinite(since)||!Number.isFinite(pre.at)||pre.at<since))return false;
+  const cancel=m.last_cancel;
+  if(Number.isFinite(cancel?.at)&&Number.isFinite(pre.at)&&cancel.at>=pre.at&&cancel.by?.source!=='keeper')return false;
+  const order=m.order;
+  if(order&&order.origin?.source!=='keeper'&&order.ordered_by!==orderedBy)return false;
+  return true;
+}
+
 const orderView = (o, now = Date.now()) => o ? {
   kind: o.kind ?? 'travel', to: o.to ?? null, origin: o.origin, ordered_by: originLabel(o.origin),
   since_s: Math.max(0, Math.round((now - (o.at ?? now)) / 1000)),

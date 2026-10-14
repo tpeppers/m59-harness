@@ -58,6 +58,7 @@ const SUITES = [
   ['m59-escape-test.mjs', 'a missed shifting portal window still tries other fixed portals'],
   ['m59-travel-test.mjs', 'entry memory separates source doors from destination landings; failed hops retain evidence'],
   ['m59-island-test.mjs', 'island health and safe-leg policy guards; full chalice, observed landings and exclusive recoverable jungle cargo'],
+  ['m59-fine-recovery-test.mjs', 'a fresh keeper interruption recovers an offline fine-action reply and confirms the original fine goal'],
   ['m59-survival-escalation-test.mjs', 'local retreats use an observed landing in this room; cancellation forbids further rungs'],
   ['m59-survival-jam-test.mjs', 'blocked travel recovery preserves the objective and exact body identity'],
   ['m59-passorder-test.mjs', 'an unfinished Underworld escape retains ownership while its stage age remains visible'],
