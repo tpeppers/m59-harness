@@ -1455,8 +1455,38 @@ export const leaveRaza = (opts = {}) => ({ do: 'leave_raza', ...opts });
 // `what` is a NAME here, matched across the whole family — `mushroom` covers red, blue, purple,
 // edible and Inky-cap, which are five separate stacks and all valid reagents. A regex that
 // anchored it (`/^mushroom$/`) read ONE against a pack holding sixty-four.
+//
+// AND A FAMILY IS THE WRONG ANSWER WHEN THE CALLER MEANT ONE THING. `what: 'wand'` covers
+// "wand of healing" too, and 2026-10-13 01:19Z two of three "lightning wand" hand-overs in
+// Castle Victoria delivered a healing wand instead: the giver's healing wand came first in the
+// pack, and the receiver's count, read through the same family, rose and called it a success.
+// So a caller can say exactly what it means, two ways that combine:
+//
+//   supply('t9', 't4', 'lightning wand')                     the identity name (see below)
+//   supply('t9', 't4', 'wand', { exact: true })              the whole name: not "wand of healing"
+//   supply('t9', 't4', 'wand', { icon_rsc: 30513 })          one kod class, whatever it is called
+//
+// An unidentified item reads only "wand" on the wire, but the broker's inventory rows carry
+// `identified_as` (m59-item-signature.mjs: the icon resource id names the class), and that name
+// is matched as well as the wire name — so 'lightning wand' takes only lightning wands, family
+// or exact. `icon_rsc` is the sharpest key and needs no naming file at all.
 export const supply = (from, to, what, opts = {}) =>
   ({ do: 'supply', from, to, what, ...opts });
+
+/** The `supply` step's item test, pure: (row) => boolean over a broker inventory row. */
+export function supplyMatcher(what, { exact = false, icon_rsc = null } = {}) {
+  const norm = (x) => String(x ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const needle = norm(what);
+  const icon = icon_rsc == null || icon_rsc === '' ? null : Number(icon_rsc);
+  const nameHit = exact
+    ? (n) => n === needle || n === `${needle}s` || `${n}s` === needle
+    : (n) => n.includes(needle);
+  return (row) => {
+    if (icon != null && Number(row?.icon_rsc) !== icon) return false;
+    if (!needle) return icon != null;
+    return [row?.name, row?.identified_as].some(n => n != null && nameHit(norm(n)));
+  };
+}
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 
@@ -4174,16 +4204,19 @@ async function runStep(ctx, agent, rawStep, state) {
     // See the `supply` step above for the four silent failures this exists to prevent.
     case 'supply': {
       const want = String(step.what ?? '').trim();
-      if (!want) return { ok: false, why: 'supply needs something to move' };
+      if (!want && step.icon_rsc == null) return { ok: false, why: 'supply needs something to move' };
       // A SUBSTRING TEST ON LOWERCASED NAMES, AND DELIBERATELY NOT A REGEX. `what` is an
       // item name typed by a caller, so building a pattern out of it means escaping it —
       // and the family match is the whole point: `mushroom` has to cover red, blue, purple,
       // edible and Inky-cap, which are five stacks and all valid reagents. Anchoring it
       // (`/^mushroom$/`) read ONE against a pack holding sixty-four.
-      const needle = want.toLowerCase();
-      const family = { test: (n) => String(n ?? '').toLowerCase().includes(needle) };
+      //
+      // `exact` and `icon_rsc` narrow it to one thing (see `supplyMatcher`), and the receiver's
+      // count is read through the SAME test — a count read through the family is how a healing
+      // wand handed over in place of a lightning wand was scored as delivered.
+      const matches = supplyMatcher(want, { exact: step.exact === true || step.exact === 'true', icon_rsc: step.icon_rsc });
       const countIn = (inv) => (inv?.items ?? [])
-        .filter(i => family.test(String(i.name ?? '')))
+        .filter(matches)
         .reduce((n, i) => n + (i.amount || 1), 0);
       const read = (who) => call('inventory', { agent: who }, 60_000).catch(() => null);
 
@@ -4209,7 +4242,7 @@ async function runStep(ctx, agent, rawStep, state) {
         const donor = await readFresh(step.from);
         if (!donor?.items) return { ok: false, why: `could not read ${step.from}'s pack`, moved };
         const stacks = (donor.items)
-          .filter(i => family.test(String(i.name ?? '')) && i.id != null)
+          .filter(i => matches(i) && i.id != null)
           .sort((a, b) => (b.amount || 1) - (a.amount || 1));
         const held = stacks.reduce((n, i) => n + (i.amount || 1), 0);
         const spare = held - (Number(step.keep) || 0);

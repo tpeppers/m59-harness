@@ -159,12 +159,13 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
           const take = Math.min(want, src.amount ?? 1);
           src.amount = (src.amount ?? 1) - take;
           if (src.amount <= 0) from.splice(from.indexOf(src), 1);
-          const dst = to.find(i => i.name === src.name);
+          // A single (a wand) is its own entry; a stack merges with one of the same name AND class.
+          const dst = (src.amount ?? 1) > 0 && to.find(i => i.name === src.name && i.icon_rsc === src.icon_rsc && (i.amount ?? 1) > 0);
           if (dst) dst.amount = (dst.amount ?? 1) + take;
           // A NEW ID ON THE RECEIVER'S SIDE, because that is what the server does — the
           // stack is a different object over there, and a caller caching the giver's id
           // across a hand-over is the mistake the step's comment is about.
-          else to.push({ id: 90000 + to.length, name: src.name, amount: take });
+          else to.push({ ...src, id: 90000 + to.length, amount: take });
           moved.push({ name: src.name, asked: want, received: take, giver_lost: take });
         }
         payload = moved.length
@@ -468,6 +469,44 @@ console.log('\nsupply: the step that did not exist, and the four ways it was han
     ok('and the reply names the receiver as the problem',
        /receiver_full/.test(JSON.stringify(r.results.a1)));
     ok('nothing left the giver', inventory.a1[0].amount === 30);
+  }
+
+  // A FAMILY IS THE WRONG ANSWER WHEN THE CALLER MEANT ONE THING. 2026-10-13 01:19Z, Castle
+  // Victoria: `hand-over item=wand` was meant to move a lightning wand, and two of three moved
+  // the giver's "wand of healing" instead — and the receiver's count, read through the same
+  // family, rose, so both reported delivered. An unidentified lightning wand reads only "wand"
+  // on the wire; the broker's row says `identified_as: "lightning wand"` and `icon_rsc: 30513`.
+  {
+    const { supplyMatcher } = await import('./m59-fleetscript.mjs');
+    const heal = { id: 21, name: 'wand of healing', amount: 0, icon_rsc: 30519 };
+    const bolt = { id: 22, name: 'wand', amount: 0, icon_rsc: 30513, identified_as: 'lightning wand' };
+    const ident = { id: 23, name: 'wand', amount: 0, icon_rsc: 30499 };
+    const pick = (what, o) => [heal, bolt, ident].filter(supplyMatcher(what, o)).map(i => i.id).join(',');
+    ok('the default is still the family: "wand" covers all three', pick('wand') === '21,22,23', pick('wand'));
+    ok('exact takes the whole name only, not "wand of healing"', pick('wand', { exact: true }) === '22,23',
+       pick('wand', { exact: true }));
+    ok('the identity name takes only the lightning wand, family or exact',
+       pick('lightning wand') === '22' && pick('lightning wand', { exact: true }) === '22');
+    ok('icon_rsc names one class whatever it is called', pick('wand', { icon_rsc: 30513 }) === '22' &&
+       pick('', { icon_rsc: '30499' }) === '23', pick('wand', { icon_rsc: 30513 }));
+
+    for (const [label, what, opts] of [['identity name', 'lightning wand', {}], ['icon_rsc', 'wand', { icon_rsc: 30513 }]]) {
+      const inventory = { a1: [{ ...heal }, { ...bolt }, { ...ident }], a2: [] };
+      fakeBroker({ rooms: { a1: 38, a2: 38 }, inventory });
+      const r = await fleetScript({ name: 'bolt', fleet: 'testfleet', agents: ['a1'],
+        controls: ['a1', 'a2'], steps: [supply('a1', 'a2', what, { amount: 1, ...opts })], onLog: quiet });
+      ok(`by ${label}: the lightning wand moves and nothing else`, r.ok === true &&
+         inventory.a2.length === 1 && inventory.a2[0].icon_rsc === 30513, JSON.stringify(inventory.a2));
+    }
+    // And the receiver's count reads through the same test, so the wrong wand is not a success.
+    {
+      const inventory = { a1: [{ ...heal }], a2: [] };
+      fakeBroker({ rooms: { a1: 38, a2: 38 }, inventory });
+      const r = await fleetScript({ name: 'nobolt', fleet: 'testfleet', agents: ['a1'],
+        controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'lightning wand', { amount: 1 })], onLog: quiet });
+      ok('a giver with only a healing wand fails a lightning-wand hand-over, and keeps the wand',
+         r.ok === false && inventory.a1.length === 1 && inventory.a2.length === 0, JSON.stringify(r.results?.a1));
+    }
   }
 
   // A STALE ID IS A REFUSAL ABOUT THE HANDLE, NOT THE GOODS. 2026-10-04 22:37Z: a supply step
