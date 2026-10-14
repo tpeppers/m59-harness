@@ -113,7 +113,7 @@ function pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs}){
       // Every accepted price is at least distance minus the rounding tolerance.
       // A known cheaper arrival cannot be improved by this edge, so avoid its
       // expensive geometry trace and threat samples altogether.
-      if(known!==undefined&&p.g+distance-0.01>=known)continue;
+      if(known!==undefined&&p.g+(distance-0.01)>=known)continue;
       if(!edge(p,q))continue;
       const price=cost(p,q);
       if(!Number.isFinite(price)||price<distance-0.01)continue;
