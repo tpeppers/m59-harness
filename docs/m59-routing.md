@@ -2129,6 +2129,14 @@ Later operator cancellation or a foreign live order invalidates it. After
 shelter recovery the walker recuts from the confirmed body toward the same fine
 goal; an old receipt cannot license another recovery.
 
+The shared refuge rail planner also handles a body-disconnected full route. A
+geometry guide supplies candidates, but only its prefix that passes the ordinary
+live-body tracer can reach the next refuge. The existing wall selection and
+distance allowance still apply, and occupancy is re-read there before another
+leg. A clipped guide cannot append an unproved exit bridge or return an exposed
+stopping point. This covers the populated Phobos r26c70 stop without a map-specific
+exception.
+
 Fine movement now pays the duration of its actual stride at the selected walking
 or running speed. Its queued packet also retains the movement generation and
 control lease, so cancellation cannot leave a late packet behind. Longer checked

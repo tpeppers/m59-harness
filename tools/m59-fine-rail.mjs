@@ -46,8 +46,23 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
     if(rail.ok&&rail.bridgeOk)break;
   }
   if(!rail)return {found:false,reason:'fine_rail_search_budget'};
+  if((!rail.ok||!rail.bridgeOk)&&obstacles.length){
+    const geometryEdge=(a,b)=>{
+      const row=Math.floor(clientToProtocol(b.y)/64),col=Math.floor(clientToProtocol(b.x)/64);
+      if(avoidSquares?.has(`${row},${col}`))return false;
+      const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,roomFlags,overrideDepths});
+      return t?.arrived===true&&t.blocked!==true;
+    };
+    const guide=cutRail(point(from),point(target),{edge:geometryEdge,bounds:{w:geo.cols*1024,h:geo.rows*1024},
+      lattice:128,cost:danger.length?cost:null,maxMs:Math.max(0,maxMs-(performance.now()-started))});
+    if(guide.ok&&guide.bridgeOk&&edge(point(from),guide.waypoints[0])){
+      const checked=[guide.waypoints[0]];let previous=checked[0];
+      for(const p of guide.waypoints.slice(1)){if(!edge(previous,p))break;checked.push(p);previous=p;}
+      if(checked.length>1)rail={...guide,waypoints:checked,partial:checked.length<guide.waypoints.length};
+    }
+  }
   if(!rail.ok||!rail.bridgeOk)return {found:false,reason:rail.why??'fine_rail_bridge_unproved',visited:rail.visited};
-  if(exactGoal){
+  if(exactGoal&&!rail.partial){
     const end=rail.waypoints.at(-1),raw=point(target);
     if(Math.hypot(end.x-raw.x,end.y-raw.y)>0.01){
       if(!edge(end,raw)||!chordWalkable(end,raw,{edge,lattice:128}).ok)return {found:false,reason:'fine_rail_goal_bridge_unproved'};

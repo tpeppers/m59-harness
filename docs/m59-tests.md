@@ -1983,4 +1983,8 @@ at the observed refuge, then confirm the original fine goal. It uses no game
 server or fleet roster. The movement-origin suite rejects stale or foreign
 preemptions and later operator cancellation.
 
+The fine safe-leg suite includes the recorded Phobos r26c70 body and monster
+positions. It checks the shared refuge prefix's distance, actual wall membership,
+body-clear edges and refusal when every refuge is excluded.
+
 node tools/m59-tos-refuge-review-test.mjs exercises the recorded Tos fine geometry with the nearby body, revoked coarse-arrival confirmation, protected recovery departure, protective versus harmful enchantments, and concurrent ailment/attack evidence. The movement gate includes it. FleetScript's compiled-walk tests cover both recovery already active above a0.75 floor and recovery begun after the script handed a hurt body back, requiring full health before departure in each. Native shadow results are kept separately from these offline assertions.
