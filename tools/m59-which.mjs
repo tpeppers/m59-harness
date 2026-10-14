@@ -239,6 +239,10 @@ function readProcessStartMs(pid) {
 // A generous window. What this catches is pid RECYCLING, where the disagreement is hours or
 // days; it must never fire on a broker that simply took a while to write its lock.
 const START_TOLERANCE_MS = 15 * 60 * 1000;
+// ONE-SIDED, the same test as m59-runlock.mjs `recycledPid` (defined here because importing that module
+// changes how this tool resolves its lock directory): recycling is only a process that started AFTER the
+// lock was written. A lock taken after its own process started is a warm broker handover committing.
+const recycledPid = (started, at, tol) => Number.isFinite(started) && !!at && started - at > tol;
 
 function readRecord(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
@@ -280,7 +284,8 @@ if (lockFound.state === 'live') {
     // checksum is what separates them, and without it we keep the claim rather than
     // inventing a reason to drop it.
     const started = processStartMs(pid);
-    if (started !== null && lock.at && Math.abs(started - lock.at) > START_TOLERANCE_MS) {
+    // ONE-SIDED (m59-runlock.mjs recycledPid): a lock written after its process started is a warm handover's.
+    if (started !== null && lock.at && recycledPid(started, lock.at, START_TOLERANCE_MS)) {
       lock.stale = `lock names pid ${pid}, but that process started ` +
                    `${new Date(started).toISOString()} and the lock was taken ` +
                    `${new Date(lock.at).toISOString()} — a recycled pid, not our broker`;

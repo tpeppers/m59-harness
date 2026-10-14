@@ -103,6 +103,21 @@ export function agentLockFiles(fleet) {
 // START_TOLERANCE_MS). And a pid that `kill(pid, 0)` says does not exist cannot have a start
 // time. Only a pid that is ALIVE and is not us needs the expensive question, because only then
 // is "is it the same process" still open. EPERM means it exists and is somebody else's.
+/**
+ * IS THE PROCESS ANSWERING TO A LOCK'S PID A RECYCLED ONE? One-sided, and that is the whole point.
+ * Recycling looks one way only: the lock was written by a process that has since died, and an unrelated
+ * process started LATER under the same number. A lock taken AFTER its own process started is the ordinary
+ * shape of a warm broker handover (runtime/broker-handover.mjs: the next broker starts beside the old one
+ * and takes the lock when the handover commits, which can be most of an hour later) -- and two processes
+ * cannot hold one pid at once, so that process wrote it. m59-which used |start - lock| and printed
+ * "INCONSISTENT ... a recycled pid" for the healthy prod broker on 2026-10-14 (started 23:35, lock 00:29).
+ */
+export function recycledPid(startedMs, lockAtMs, toleranceMs) {
+  const s = Number(startedMs), a = Number(lockAtMs);
+  if (!Number.isFinite(s) || !Number.isFinite(a) || !a) return false;
+  return s - a > (Number(toleranceMs) || 0);
+}
+
 export function readProcessStartMs(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (pid === process.pid) return Math.round(Date.now() - process.uptime() * 1000);

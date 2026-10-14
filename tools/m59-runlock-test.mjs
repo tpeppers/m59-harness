@@ -184,6 +184,19 @@ console.log('AN UNRECOGNISED FLAG IS NOT A REQUEST TO DO THE DEFAULT THING TO A 
        .every(k => solo.includes(`'${k}'`)));
 }
 
+console.log('\nrecycledPid: one-sided');
+{
+  const { recycledPid } = await import('./m59-runlock.mjs');
+  const MIN = 60_000, TOL = 15 * MIN, start = Date.parse('2026-10-12T23:35:46Z');
+  ok('a lock taken 54 min after its process started (a warm handover) is NOT a recycled pid',
+     recycledPid(start, start + 54 * MIN, TOL) === false);
+  ok('a process that started hours after the lock was written IS a recycled pid',
+     recycledPid(start + 3 * 60 * MIN, start, TOL) === true);
+  ok('within the tolerance either way: not recycled', recycledPid(start + 5 * MIN, start, TOL) === false);
+  ok('an unreadable start or lock time never manufactures a verdict',
+     recycledPid(null, start, TOL) === false && recycledPid(start, null, TOL) === false);
+}
+
 console.log('');
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
