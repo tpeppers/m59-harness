@@ -13,7 +13,7 @@ import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
-import {knownRefugeCell} from './m59-refuge-activation.mjs';
+import {knownRefugeCell,confirmRefugeCellArrival} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 import {planDeclaredLanding} from './m59-jump-takeoff.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
@@ -388,8 +388,7 @@ export async function walkHollowsOut(ctx,options={}){
     if(!refuge.found)throw Error('declared_crossing_refuge_unavailable');
     const held=await followDeclaredApproach(declaration,{geo:roomGeometry(2502),read,walk,
      target:refuge.point,gutter,requireShelf:true});
-    if(!held.gutter&&!knownRefugeCell(roomGeometry(2502),(await read()).you))
-     throw Error('declared_crossing_refuge_not_observed');
+    if(!held.gutter)await confirmIslandQueueRefuge(ctx,roomGeometry(2502),refuge,read,'declared_crossing_refuge_not_observed');
    },
    observeLanding:async landing=>(await confirmIslandFineArrival(async()=>{
     const l=await read();return {l,body:protocolToClient(l.you)};
@@ -400,24 +399,31 @@ export async function walkHollowsOut(ctx,options={}){
     console.log('HOLLOWS POINT '+JSON.stringify({agent,target:point}));
   }
 }
-async function waitForDeclaredTurn(ctx,geo,read,walk){
-  const l=await read();if(knownRefugeCell(geo,l.you))return;
-  const refuge=planNearbyFineRefuge(geo,l.you,new Map(l.objects.map(o=>[o.id,o])),l.you.id);
-  if(!refuge.found)throw Error('declared_crossing_queue_refuge_unavailable');
-  await walk(refuge.point);let held=await read();
-  if(Math.hypot(held.you.x-refuge.point.x,held.you.y-refuge.point.y)<=8&&
-      (held.you.row!==refuge.cell.row||held.you.col!==refuge.cell.col)){
-    const result=await ctx.call('walk_to',{agent:ctx.agent,...refuge.point,fine:true,stride:8,max_steps:10,
-      arrive_within:0,exact_arrival:true,hold_shelf:true});
-    if(result?.cancelled)throw Error('declared_crossing_queue_cancelled');held=await read();
-  }
-  if(held.you.row!==refuge.cell.row||held.you.col!==refuge.cell.col||!knownRefugeCell(geo,held.you))
-    throw Error('declared_crossing_queue_refuge_unconfirmed');
+async function waitForDeclaredTurn(ctx,geo,read,walk,{allowUnparked=false}={}){
+  const l=await read();
+  // Queue parking has the same exit exclusions as its executing walker. A
+  // neighbouring arrival cell is not cover if reaching it would leave the map.
+  const excludedRefuges=roomExitSquares(loadMap().rooms[l.room.num],{rows:geo.rows,cols:geo.cols,includeInland:true});
+  if(knownRefugeCell(geo,l.you)&&!excludedRefuges.has(l.you.row+','+l.you.col))return true;
+  const avoidSquares=new Set(excludedRefuges);
+  avoidSquares.delete(l.you.row+','+l.you.col);
+  const refuge=planNearbyFineRefuge(geo,l.you,new Map(l.objects.map(o=>[o.id,o])),l.you.id,{avoidSquares,excludedRefuges});
+  if(!refuge.found){if(allowUnparked)return false;throw Error('declared_crossing_queue_refuge_unavailable');}
+  await walk(refuge.point);
+  await confirmIslandQueueRefuge(ctx,geo,refuge,read,'declared_crossing_queue_refuge_unconfirmed');
+  return true;
+}
+async function confirmIslandQueueRefuge(ctx,geo,refuge,read,error){
+ const result=await confirmRefugeCellArrival(geo,refuge,{read:async()=>(await read()).you,
+  finish:point=>ctx.call('walk_to',{agent:ctx.agent,...point,fine:true,stride:8,max_steps:10,
+   arrive_within:0,exact_arrival:true,hold_shelf:true})});
+ if(result.cancelled)throw Error('declared_crossing_queue_cancelled');
+ if(!result.arrived)throw Error(error);
 }
 export async function waitAtIslandTrafficRefuge(ctx,options={}){
  const initial=await readIslandFinePosition(ctx),room=initial.room.num,geo=roomGeometry(room);
  const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);return l;};
- return waitForDeclaredTurn(ctx,geo,read,(point,guard={})=>checkedIslandWalk(ctx,point,{...options,...guard,room}));
+ return waitForDeclaredTurn(ctx,geo,read,(point,guard={})=>checkedIslandWalk(ctx,point,{...options,...guard,room}),{allowUnparked:true});
 }
 export async function approachIslandDoor(ctx,options={}){
   const initial=await readIslandFinePosition(ctx);

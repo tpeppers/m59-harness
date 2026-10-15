@@ -103,6 +103,15 @@ export function liveMoveOrder(s) {
 /** A new keeper move is not the stalled external driver it just replaced. */
 export function keeperRecoveryRescueReady(s,bodyStillSince,now,minimumAgeMs){
   const order=liveMoveOrder(s);
+  const approach=s?.keeperRecoveryApproach,progress=approach?.progress;
+  if(order?.origin?.source==='keeper'&&approach?.generation===s.movementGeneration&&
+      Number.isFinite(progress?.best)&&Number.isFinite(progress?.progressedAt)&&
+      now>=progress.progressedAt&&now-progress.progressedAt<minimumAgeMs){
+    // Fine movement inside a square is still progress. The actual approach
+    // watcher owns this lease and validates client, room, life and decision;
+    // predictions and repeated old positions cannot refresh its best distance.
+    try{if(approach.isCurrent?.()===true)return false;}catch{ /* invalid proof permits rescue */ }
+  }
   const began=order?.origin?.source==='keeper'&&Number.isFinite(order.at)?Math.max(bodyStillSince,order.at):bodyStillSince;
   return now-began>=minimumAgeMs;
 }

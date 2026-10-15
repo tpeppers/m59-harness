@@ -9,6 +9,26 @@ export function knownRefugeCell(geo,pose){
  if(!leaf?.sector||!Number.isFinite(geo.floorBaseAtClient(x,y,leaf)))return null;
  return {row:pose.row,col:pose.col};
 }
+// A normal walk's distance tolerance can stop across the boundary of a partial
+// refuge square. Finish only that short, already planned approach, then prove
+// the actual covered cell; a successful movement reply alone is not arrival.
+export async function confirmRefugeCellArrival(geo,refuge,{read,finish,attempts=4,settleMs=100}={}){
+ let finished=false,pose;
+ for(let n=0;n<attempts;n++){
+  pose=await read();
+  if(pose?.row===refuge.cell.row&&pose?.col===refuge.cell.col&&knownRefugeCell(geo,pose))
+   return {arrived:true,pose,finished};
+  if(pose?.predicted||![pose?.x,pose?.y].every(Number.isFinite)||
+    Math.hypot(pose.x-refuge.point.x,pose.y-refuge.point.y)>8)
+   return {arrived:false,pose,reason:'refuge approach not confirmed'};
+  if(!finished){
+   const result=await finish(refuge.point);finished=true;
+   if(result?.cancelled)return {arrived:false,pose,cancelled:true,reason:'refuge approach cancelled'};
+  }
+  if(n+1<attempts&&settleMs>0)await new Promise(resolve=>setTimeout(resolve,settleMs));
+ }
+ return {arrived:false,pose,finished,reason:'refuge cell not observed'};
+}
 export async function turnAtProvedRefuge(s,{shouldCancel=null,beforeMutation=null}={}){
  const c=s?.client,generation=s?.movementGeneration,room=c?.room?.id;
  if(s?.combat?.active||c?.pvpGearActive)return {sent:false,reason:'PvP recovery retains activation control'};

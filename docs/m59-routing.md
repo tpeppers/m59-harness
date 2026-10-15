@@ -2378,3 +2378,51 @@ that longer, undeclared target loses the timed-gravity/unclipped-send guard and
 can clip into the lower gully. The jump primitive retains responsibility for
 its measured lanes and guarded landing alternatives. Its paced authority check
 also retains the caller's movement generation and cancellation token.
+
+Nearby fine-refuge proof accepts the executing walker's excluded squares,
+excluded refuge cells, floor limit and room collision options. The exclusions
+apply to both the approach and its return proof. An arrival cell may be allowed
+as a departure without being eligible for queue parking. Obfal's r81c65 is a
+recorded example: it has physical footing but lies inside an exit trigger.
+
+`confirmRefugeCellArrival` handles a distance-tolerant walk that stops just
+outside a partial refuge square. The caller retains room and movement ownership
+checks. From a confirmed KOD pose within eight units of the planned point, it
+allows one ordinary exact approach and bounded position confirmation. Only an
+observed, covered target cell proves arrival; an optimistic movement reply,
+prediction or cancellation cannot do so.
+
+Island walking uses the shared traversal admission for both the Hollows (2502)
+and Konima (2505). Admission is acquired in the preceding map and retained until
+an actual exit is observed, including when the driver stops with its body still
+inside. Followers wait at checked cover outside the map; Konima returners wait
+in the Island Inn. This prevents the native arrival and one-way jump approach
+from becoming a queue of overlapping travelers.
+
+The traversal parking callback may return `false` when current bodies leave no
+proved parking route. This grants no movement or admission. The queue continues
+its original deadline and fresh ownership/position checks, retries admission
+before parking, and retains keeper survival control. A traveler can therefore
+leave a crowded upstream arrival when the held room actually clears instead
+of failing merely because all nearby refuges are occupied. Cancellation and an
+unconfirmed predecessor exit still prevent entry.
+
+Island convoy wave and room-admission waits default to four hours, separately
+from each active walking budget. Native Konima admissions, including the
+preceding Obfal approach, took about five to eight minutes per traveler in the
+queue component. Twenty serialized couriers can exceed the former two-hour
+arrival barrier while continuing to make progress. `waveBudgetMs` and
+`queueBudgetMs` remain positive, bounded settings; departure spacing, packet
+pacing, collision checks and active-leg deadlines are unchanged.
+
+The guide baker also generates six ordinary western Hollows links from the
+declared landing through the existing human-walk points. The shared fine
+cutter can reuse those links instead of repeatedly searching the same ground.
+The declared jump remains its own operation. Current body obstruction,
+mandatory avoidance, shelf limits and exact endpoint bridges still determine
+whether a link is usable, with keeper recovery observing the executing walk.
+
+Runtime provenance hashes the fine-guide book along with the map, route, track
+and fall-jump data. Changes to those navigation inputs mark the executing
+source dirty, so a recorded route identifies its actual guide content as well
+as its code commit.

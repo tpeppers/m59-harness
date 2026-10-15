@@ -61,3 +61,22 @@ for(const from of [{x:4960,y:3104},{x:3360,y:3168}]){
   'the shared walker can use a baked approach from either native starting point');
 }
 console.log('Hollows entry and login approaches reach actual reversible refuge footing instead of an unreachable cell centre.');
+
+const western=book.rooms[2502].guides.filter(g=>g.name.startsWith('western_out_'));
+assert.equal(western.length,6,'the ordinary western chain remains separate from the declared jump');
+for(const guide of western){
+ const from=protocolToClient(guide.from),to=protocolToClient(guide.to);
+ const r=findFineGuide(hollows,from,to,{edge:edgeFor(hollows)});
+ assert(r?.ok&&r.guide===guide.name,guide.name+' retains its checked ordinary endpoint');
+ const shared=await cutFineRailAsync(hollows,guide.from,guide.to,{maxMs:4000});
+ assert(shared.ok&&shared.guide===guide.name&&shared.visited===0,'the general cutter reuses '+guide.name);
+}
+const passage=western[3],middle=clientToProtocol(passage.waypoints[Math.floor(passage.waypoints.length/2)]);
+assert.equal(findFineGuide(hollows,protocolToClient(passage.from),protocolToClient(passage.to),{
+ edge:edgeFor(hollows,new Map([[999,{id:999,flags:9,...middle}]]))}),null,
+ 'a body in the western passage invalidates the baked walk');
+const drop=western[4],source=protocolToClient(drop.from),minimum=hollows.floorBaseAtClient(source.x,source.y)-384;
+assert.equal(findFineGuide(hollows,source,protocolToClient(drop.to),{edge:(a,b)=>
+ floorConstraintAllows(hollows,clientToProtocol(b),minimum)&&edgeFor(hollows)(a,b)}),null,
+ 'a shelf-bound caller cannot use a western drop to bypass its floor fence');
+console.log('The shared fine cutter reuses all six ordinary western Hollows links; live bodies and shelf constraints still reject them.');

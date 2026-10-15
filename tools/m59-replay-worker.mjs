@@ -8,12 +8,13 @@ import path from 'node:path';
 export function runtimeProvenance(root) {
   const git=args=>{try{return execFileSync('git',args,{ windowsHide: true,cwd:root,encoding:'utf8',timeout:10000,
     stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}};
-  const files={},listed=git(['ls-files','-co','--exclude-standard','-z','tools','server-patches',
-    'substrate/m59-map.json','substrate/m59-routes.json','substrate/m59-tracks.json','substrate/m59-falljumps.json']);
+  const inputs=['tools','server-patches','substrate/m59-map.json','substrate/m59-routes.json',
+    'substrate/m59-tracks.json','substrate/m59-falljumps.json','substrate/m59-fine-guides.json'];
+  const files={},listed=git(['ls-files','-co','--exclude-standard','-z',...inputs]);
   for(const file of [...new Set((listed??'').split('\0').filter(Boolean))].sort()) {
     try{files[file]=createHash('sha256').update(readFileSync(path.join(root,file))).digest('hex');}catch{files[file]=null;}
   }
-  const changes=git(['status','--porcelain','--untracked-files=all','--','tools','server-patches']);
+  const changes=git(['status','--porcelain','--untracked-files=all','--',...inputs]);
   return {captured_at:new Date().toISOString(),harness:{commit:git(['rev-parse','HEAD']),
     source_sha256:createHash('sha256').update(JSON.stringify(files)).digest('hex'),
     dirty:changes==null?null:changes.length>0,files,node:process.version,

@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-replay-provenance-test.mjs','executing movement provenance includes routing/guide content and dirty navigation data, without relabelling historical decisions'],
   ['m59-traversal-admission-test.mjs','shared map admission keeps queued travelers outside until a confirmed exit; stopped bodies and dead drivers cannot release it'],
   ['m59-recovery-preemption-test.mjs','keeper shelter invalidates an in-flight FleetScript walk before issuing its own packets and preserves the recovery decision'],
   ['m59-survival-switch-test.mjs','explicit operator stand-down preserves PvP/fallback and clears old autonomous recovery'],
@@ -81,7 +82,7 @@ const SUITES = [
   ['m59-konima-crossing-test.mjs', 'distinct stock-gravity crossings and one-at-a-time admission send missed landings through the southbound gutter'],
   ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],
   ['m59-selfheal-test.mjs', 'fresh named player identity replaces a reused self id and refuses another character position after saves'],
-  ['m59-recovery-driver-age-test.mjs', 'both real watchdogs give a new keeper approach its bounded recovery window while retaining stalled-driver rescue'],
+  ['m59-recovery-driver-age-test.mjs', 'both real watchdogs retain new or confirmed progressing keeper approaches while bounding stalled-driver rescue and ownership'],
   ['m59-refuge-activation-test.mjs', 'rest at confirmed cover uses a normal activation turn after rejoin, with identity, cancellation and cleanup guards'],
   ['m59-covered-traffic-test.mjs', 'a body-constrained refuge gap wakes the room and waits at confirmed cover before re-proving the required route'],
   ['m59-survival-escalation-test.mjs', 'local retreats use an observed landing in this room; cancellation forbids further rungs'],

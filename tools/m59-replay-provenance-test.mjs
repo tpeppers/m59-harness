@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {runtimeProvenance} from './m59-replay-worker.mjs';
 import {attachReplayDecisionRecording,createShadowReplayAdapter} from './m59-shadow-replay.mjs';
 import {chooseSurvivalDecision,restoreSurvivalDecisionForReplay,updateSurvivalDecision} from './m59-survival-decision.mjs';
 const source={harness:{commit:'a'.repeat(40),source_sha256:'1'.repeat(64),dirty:false}};
@@ -44,3 +46,27 @@ try {
  await assert.rejects(()=>createShadowReplayAdapter({configFile:'unused',engineRoot:dir,isolate:false}),/Cannot find module/,'missing historical engine must not fall back to current modules');
 }finally{assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert(path.basename(dir).startsWith('m59-replay-engine-test-'));await fs.rm(dir,{recursive:true,force:true});}
 console.log('Replay engine: historical decision recording shares one WeakMap; current state cannot replace it; missing sources refuse');
+
+const navRoot=await fs.mkdtemp(path.join(os.tmpdir(),'m59-navigation-provenance-test-'));
+try{
+ const git=args=>execFileSync('git',args,{cwd:navRoot,windowsHide:true,stdio:'ignore'});
+ await fs.mkdir(path.join(navRoot,'tools'));await fs.mkdir(path.join(navRoot,'substrate'));
+ await fs.writeFile(path.join(navRoot,'tools','probe.mjs'),'export const probe=true;\n');
+ const guide=path.join(navRoot,'substrate','m59-fine-guides.json'),map=path.join(navRoot,'substrate','m59-map.json');
+ await fs.writeFile(guide,'{"route":"first"}\n');await fs.writeFile(map,'{"room":1}\n');
+ git(['init','-q']);git(['add','.']);
+ git(['-c','user.name=Navigation Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture']);
+ const before=runtimeProvenance(navRoot).harness;
+ assert.equal(before.dirty,false);assert.match(before.files['substrate/m59-fine-guides.json'],/^[a-f0-9]{64}$/);
+ await fs.writeFile(guide,'{"route":"second"}\n');
+ const changed=runtimeProvenance(navRoot).harness;
+ assert.equal(changed.commit,before.commit);assert.equal(changed.dirty,true);
+ assert.notEqual(changed.source_sha256,before.source_sha256,'changing only a guide book changes the recorded executing source');
+ await fs.writeFile(guide,'{"route":"first"}\n');await fs.writeFile(map,'{"room":2}\n');
+ assert.equal(runtimeProvenance(navRoot).harness.dirty,true,'other recorded routing inputs also contribute to the dirty flag');
+}finally{
+ assert.equal(path.dirname(path.resolve(navRoot)),path.resolve(os.tmpdir()));
+ assert(path.basename(navRoot).startsWith('m59-navigation-provenance-test-'));
+ await fs.rm(navRoot,{recursive:true,force:true});
+}
+console.log('Navigation provenance includes fine guide content and marks changed routing data dirty without borrowing another commit.');

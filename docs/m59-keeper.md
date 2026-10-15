@@ -6,6 +6,18 @@ approach before `INERT_RESCUE_MS` has elapsed. An overdue recovery, an ended
 order or a cancelled generation still permits rescue; external replans do
 not extend this window. Both watchdog implementations share the same check.
 
+An owned refuge approach also supplies its existing confirmed progress clock
+to both watchdogs. A shorter fine route inside the same coarse square renews
+the bounded recovery window. Predictions and revisiting an old best position
+do not renew it. The proof expires with the approach, decision, movement
+generation, body, room, life, client or control ownership; the approach's own
+two-second no-progress limit under pressure remains active.
+
+This addresses a local Hollows death at r52c15: the generic watchdog cancelled
+a final approach to r51c16 while its confirmed fine route was shortening. The recorded
+coordinates exercise both real watchdogs in `m59-recovery-driver-age-test.mjs`.
+That offline regression does not establish native survival or trip success.
+
 After reconnect, native health regeneration requires the first room action.
 Shared rest sends a normal turn after sitting only when an ordered position
 read confirms a known refuge cell. This preserves the position while arming

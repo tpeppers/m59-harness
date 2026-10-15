@@ -6115,14 +6115,16 @@ export class Autopilot {
     progress=observeRefugeProgress(progress,s.world?.geometry,client.self,spot,now);
     if(memory.targets.size>=32 && !memory.targets.has(key))memory.targets.delete(memory.targets.keys().next().value);
     memory.targets.set(key,progress);
-    let closed=false,confirming=false;
-    const stillOwned=()=>!closed && s.client===client && s.world?.room?.num===room
+    let closed=false,confirming=false,guard;
+    const stillOwned=()=>!closed && s.keeperRecoveryApproach===guard && s.client===client && s.world?.room?.num===room
       && client.self?.id===bodyId && client.room?.id===roomId
       && s.movementGeneration===generation && (s.lifeBoundary??0)===life
       && currentSurvivalDecision(s)?.id===decision.id && !this.stopping
       && !s.combat?.active?.pvp && !(this.inert&&!this.inert.travelling)
       && !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat');
-    const close=()=>{closed=true;clearInterval(timer);};
+    const close=()=>{closed=true;clearInterval(timer);if(s.keeperRecoveryApproach===guard)delete s.keeperRecoveryApproach;};
+    guard={generation,progress,isCurrent:stillOwned};
+    s.keeperRecoveryApproach=guard;
     const assess=position=>{
       if(!stillOwned()){close();return;}
       observeRefugeProgress(progress,s.world?.geometry,position,spot);

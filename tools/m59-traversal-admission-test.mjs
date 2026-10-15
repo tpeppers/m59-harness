@@ -20,6 +20,12 @@ const reset=()=>configureSpotClaimStore({directory:dir,namespace:String(++cases)
 const proof=(agent,room)=>({agent,room,confirmed:true,at:Date.now()});
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 try{
+ for(const queueBudgetMs of [0,NaN]){
+  let called=false;
+  await assert.rejects(admittedIslandTransit({agent:'invalid-budget',state:{}},{queueBudgetMs,
+   read:async()=>{called=true;},hop:async()=>{called=true;}}),/invalid_island_queue_budget/);
+  assert.equal(called,false,'an invalid deadline cannot start observations or travel');
+ }
  reset();
  {
   const a=reserveFileTraversal('a',room,'one').lease;
@@ -115,8 +121,37 @@ try{
   const places=new Map([['a',room],['b',2504]]),hops=[];let parked=0;
   await admittedIslandTransit({agent:'b',state:{},call:async()=>({connected:true,in_game:true,room:{num:places.get('a')}})},{from:2504,to:2000,
    read:async c=>({room:{num:places.get(c.agent)},you:{id:c.agent==='a'?1:2,predicted:false}}),
-   park:async()=>{parked++;places.set('a',2504);},hop:async(c,to)=>{hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
-  assert.equal(parked,1);assert.deepEqual(hops,[2505,2000]);
+   park:async()=>{if(++parked===2)places.set('a',2504);return false;},
+   hop:async(c,to)=>{assert.equal(places.get('a'),2504,'unavailable parking cannot waive the occupied-room claim');hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
+  assert.equal(parked,2,'the Island integration retries an unavailable parking scene before admission');assert.deepEqual(hops,[2505,2000]);
+ }
+ reset();
+ {
+  const held=reserveFileTraversal('a',room,'unparked-cancel').lease;markFileTraversal(held,'entered');
+  let ownReads=0,entered=false,parking=0;
+  await assert.rejects(withTraversalAdmission({agent:'b',state:{}},{room,pollMs:1,
+   read:async agent=>{if(agent==='b'&&++ownReads>1)throw Error('owner cancelled');return proof(agent,agent==='a'?room:2504);},
+   waitQueued:async()=>{parking++;return false;},run:async()=>{entered=true;}}),/owner cancelled/);
+  assert.equal(parking,1);assert.equal(entered,false);
+  assert.equal(reserveFileTraversal('c',room,'still-held').ok,false,'an unparked cancellation cannot release its predecessor');
+ }
+ reset();
+ {
+  const places=new Map([['a',2501],['b',2501]]),events=[];let enteredA,finishA,parkedB;
+  const started=new Promise(r=>enteredA=r),finish=new Promise(r=>finishA=r),parked=new Promise(r=>parkedB=r);
+  const read=async ctx=>({room:{num:places.get(ctx.agent)},you:{id:ctx.agent==='a'?1:2,predicted:false},hp:{value:20,max:20}});
+  const caller=agent=>({agent,state:{},call:async(name,args)=>({connected:true,in_game:true,room:{num:places.get(args.agent)}})});
+  const hop=async(ctx,to)=>{
+   if(ctx.agent==='a'&&to===2503){enteredA();await finish;}
+   events.push(ctx.agent+'->'+to);places.set(ctx.agent,to);return {ok:true,to};
+  };
+  const options={room:2502,from:2501,to:2503,read,hop,park:async ctx=>{events.push(ctx.agent+' parks');parkedB();}};
+  const a=admittedIslandTransit(caller('a'),options);await started;
+  const b=admittedIslandTransit(caller('b'),options);await parked;
+  assert.equal(places.get('b'),2501,'the Hollows follower waits before its native arrival can occupy the jump approach');
+  assert(!events.includes('b->2502'));
+  finishA();await Promise.all([a,b]);
+  assert.deepEqual(events,['a->2502','b parks','a->2503','b->2502','b->2503']);
  }
  configureSpotClaimStore({directory:dir,namespace:'crash'});
  {
