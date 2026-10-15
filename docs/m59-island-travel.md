@@ -15,6 +15,10 @@ during the approach. Each confirmed position is checked; that approach ends
 before it can spend its remaining budget aiming for the higher takeoff. The
 crossing controller then reads the body again and walks the declared gutter.
 Cancellation remains a cancellation and cannot start an escape walk.
+The staging walk carries the same fence. It can begin below the shelf and
+climb normally; only after reaching the required shelf does a later lower
+pose trigger the escape. This prevents an interrupted staging walk from
+spending its full budget aiming back up at an inaccessible ledge.
 
 The declarations live in `m59-falljumps.json` and `m59-gutters.json`, so the
 shared router can use them. `node tools/m59-fine-guidebake.mjs` generates the

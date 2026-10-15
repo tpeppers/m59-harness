@@ -3,7 +3,7 @@ import {roomGeometry} from './m59-ground.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {traceFallMotion} from './m59-falltrace.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
-import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
+import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 const geo=roomGeometry(2505),jumps=fallJumpsIn(2505),out=jumps.find(j=>j.from.col===60);
 assert.equal(jumps.length,4);
 for(const j of jumps)for(const dt of [8,16,33,50]){
@@ -44,6 +44,22 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+for(const mode of ['climb','drop']){
+ let body={x:4064,y:1696};const walks=[];
+ const read=async()=>({room:{num:2505},you:{...body},hp:{value:20,max:20}});
+ const walk=async(target,{validatePosition}={})=>{
+  walks.push({...target});
+  if(target.x===stage.x){
+   validatePosition?.(await read()); // an initial lower approach is legitimate
+   body=clientToProtocol(out.from_fine);validatePosition?.(await read());
+   body=mode==='drop'?{x:3288,y:1248}:{...stage};validatePosition?.(await read());
+  }else body={...target};
+ };
+ const r=await followDeclaredApproach(out,{geo,read,walk,target:stage,gutter});
+ assert.equal(r.gutter,mode==='drop');
+ assert.deepEqual(walks,mode==='drop'?[stage,gutter]:[stage],
+  'a staging walk may climb normally, but an observed later fall goes straight to its gutter');
+}
 {
  const f=fixture(),old=f.walk;let dropped=false;
  f.walk=async(p,{validatePosition}={})=>{

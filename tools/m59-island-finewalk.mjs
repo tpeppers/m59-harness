@@ -15,7 +15,7 @@ import {checkIslandCancellation,observeIslandTraveller} from './m59-island-obser
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
-import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
+import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
@@ -358,12 +358,12 @@ export async function approachIslandDoor(ctx,options={}){
     const initialPoint=protocolToClient(initial.you),height=geo.floorBaseAtClient(initialPoint.x,initialPoint.y);
     let crossed={crossed:initial.you.col>=65&&initial.you.col<84&&initial.you.row<47};
     if(initial.you.col<48||initial.you.col<=60&&height>=14800){
-      await walk({x:3072,y:1768});
-      crossed=await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs});
+      const staged=await followDeclaredApproach(first,{geo,read,walk,target:{x:3072,y:1768},gutter:{x:3808,y:2144}});
+      crossed=staged.gutter?staged:await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs});
     }else if(initial.you.col<65&&height<14500&&initial.you.row<35)await walk({x:3808,y:2144});
     if(crossed.crossed){
-      await walk({x:5144,y:2688});
-      await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs});
+      const staged=await followDeclaredApproach(second,{geo,read,walk,target:{x:5144,y:2688},gutter:{x:5440,y:3096}});
+      if(!staged.gutter)await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs});
     }
   }
   // Fine point inside the real go-trigger, in KOD/protocol units.
@@ -387,9 +387,9 @@ export async function approachKonimaMainland(ctx,options={}){
     // Already on the mainland side of the return drop: retain its westbound goal.
   }else if(before.you.col<65&&before.you.row>=25&&before.you.row<=35&&height<14500)await walk({x:3808,y:2144});
   else{
-    await walk({x:4840,y:1472});
     const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===64&&j.to.row===23);
-    await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs});
+    const staged=await followDeclaredApproach(declaration,{geo,read,walk,target:{x:4840,y:1472},gutter:{x:3808,y:2144}});
+    if(!staged.gutter)await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs});
   }
   await checkedIslandWalk(ctx,{x:160,y:4640},{room:2505,allowEdgeTo:2504,...options});
 }
