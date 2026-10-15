@@ -63,7 +63,7 @@ export const provider = {
     if (!found) {
       return [{ id: 'control.keeper', group: 'Control', icon: 'keeper', title: 'Relinquish control to Keeper', disabled: true,
         describe: 'No gate-capable proxy is carrying this client, so nothing can lock it. Start one with ' +
-                  '`node tools/m59-proxy.mjs --observe --gate-control 8911 --listen <port> --server <host:port>` and ' +
+                  '`node tools/m59-proxy.mjs --observe --gate-control 8931 --listen <port> --server <host:port>` and ' +
                   'reconnect through it (dev.bat finds it by itself).' }];
     }
     if (!gate) {

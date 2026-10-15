@@ -16,6 +16,25 @@ fs zheng-he-lap agents=hk2            a FleetScript REPL line, exactly as if typ
 
 ## Running it
 
+**The normal way: the fleet terminal's L.** A normal launch now starts the gate-capable proxy
+(5962, gate control 8931) and the plan desk if they aren't already up, and `dev.bat` goes
+through that proxy. Nothing else needs starting. `M59_TUI_NO_PLAN=1` launches the old way.
+
+While prod-deploy predates this work (no deploy cut), run the terminal from the **trunk**
+against the prod fleet, with the roster and the desk pointed at prod-deploy:
+
+```powershell
+cd C:\code\mindmap\maps\m59-harness
+$env:M59_STATE_FILE     = 'C:\code\m59-lab\prod-deploy\substrate\fleets\prod.json'
+$env:M59_PLAN_SUBSTRATE = 'C:\code\m59-lab\prod-deploy\substrate'
+node tools/m59-tui.mjs --fleet prod
+```
+
+The live courier lap (prod-deploy's local `zheng-he-lap.mjs`) imports
+`m59-human-handoff.mjs` from the trunk by absolute path until a deploy carries it.
+
+**By hand**, the pieces are:
+
 The client half needs only `M59_CLIENT_CONTEXT_DIR`, which `dev.bat` already sets. The
 other half is the **plan desk**:
 
@@ -28,10 +47,10 @@ because that is where the courier's request files and the loops' pid files live.
 desk running, the tab says so and nothing can be queued.
 
 For the lock you also need a proxy that serves the gate. Either start one yourself, or
-set `M59_PROXY_GATE_CONTROL=8911` before the fleet terminal starts its swarm proxy:
+set `M59_PROXY_GATE_CONTROL=8931` before the fleet terminal starts its swarm proxy:
 
 ```
-node tools/m59-proxy.mjs --observe --gate-control 8911 --listen 5961 --server 76.214.42.186:5959
+node tools/m59-proxy.mjs --observe --gate-control 8931 --listen 5961 --server 76.214.42.186:5959
 ```
 
 `dev.bat` finds the proxy by itself (`m59-devclient.mjs --endpoint`).
@@ -73,7 +92,38 @@ characters in eight places. It now owns one half of the trade
 - **delivery:** it offers → you counter with nothing → it accepts.
 
 Both halves time out and cancel, so you can't leave a trade open that wedges its next
-`supply`. Only the harness-local copy of `zheng-he-lap.mjs` has this so far. **The
+`supply`.
+
+### Automated Courier: Full Auto or Manual
+
+Double-click **Automated Courier** to open its settings window. Rows flagged as settings
+open in their own window, like the Guild page; every row with arguments does too. It has:
+
+- **Handling:** a dropdown.
+  - *Full Auto:* the proxy carrying your client does your half of the trade
+    (`tools/m59-proxy-trade.mjs`). No trade window opens. Items simply leave and arrive in
+    your inventory.
+  - *Manual:* you work the trade window yourself, as above.
+- **With instruction text:** a checkbox. The courier sends you a private **tell**, never
+  room speech, starting `[COURIER SERVICE]`. In Manual it says what to do ("type 'offer'
+  and offer back 40 diamond…"). In Full Auto it says what is happening.
+
+How Full Auto works:
+
+- The client reports the players in your room by name (`W` rows), because only the
+  client can resolve those names. The desk publishes them to
+  `<substrate>/human-presence.json`.
+- When the courier stands in your room, the desk tells the proxy
+  `POST /trade/accept-from` (the courier's object id, 15 s lease). An offer from the
+  courier is then answered with an empty counteroffer.
+- When the lap reaches its pickup step it writes `courier-ready.json`. The desk then
+  tells the proxy `POST /trade/give` with the held items' ids from your own pack. The
+  proxy offers them and accepts once the courier counters.
+- The proxy swallows every server→client packet of an automated trade.
+- It never acts while you have a trade window of your own open (two minutes after your
+  last trade packet).
+- It needs a gate-capable proxy, the same precondition as the lock: the proxy must
+  own the stream to inject. Only the harness-local copy of `zheng-he-lap.mjs` has this so far. **The
 prod-deploy copy has not been changed.**
 
 ## The lock

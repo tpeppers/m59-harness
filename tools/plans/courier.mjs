@@ -6,6 +6,10 @@
 //   zheng-he-next-lap.json  one-shot "only this" order { only, why, to }
 //   courier-holds.json      room kept for a person's goods, and the human half of the
 //                           trade at home (m59-human-handoff.mjs)
+//   courier-settings.json   per person: { mode: 'auto'|'manual', instructions: bool } — the
+//                           "Automated Courier" settings row. Full Auto means the proxy does the
+//                           person's half of the trade (m59-proxy-trade.mjs); this provider's
+//                           tick() tells it when, from the presence the client reports
 //   courier-wishlist.json   things asked for that the lap has NO shopping line for — kept
 //                           apart so the lap's own arithmetic never sees an item it
 //                           cannot buy, and so the gap is visible instead of silent
@@ -19,6 +23,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { findSession } from './control.mjs';
 
 const LAP = 'zheng-he-lap';
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -77,8 +82,45 @@ export function itemOptions(lap, merchantsFile) {
   return opts;
 }
 
+export const MODES = [{ value: 'auto', label: 'Full Auto — the proxy trades for you; no window opens' },
+                      { value: 'manual', label: 'Manual — you offer and accept in your own trade window' }];
+export function settingsFor(substrate, agent) {
+  const s = readJson(join(substrate, 'courier-settings.json'), {})[agent] ?? {};
+  return { mode: s.mode === 'auto' ? 'auto' : 'manual', instructions: s.instructions !== false };
+}
+const sameName = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+const lastGive = new Map();   // agent -> the ready.at it already answered
+
 export const provider = {
   id: 'courier',
+  // FULL AUTO, every desk tick. When the person chose Full Auto and the courier is standing in
+  // their room (by the client's own room list), the proxy is told to accept the courier's offers;
+  // and when the lap has said it is ready to collect a hold, the proxy offers the held goods.
+  async tick(ctx) {
+    const me = ctx.client.agent;
+    if (!me || settingsFor(ctx.substrate, me).mode !== 'auto') return;
+    const lap = lapState(ctx.substrate, ctx.fleet);
+    const courier = ctx.agents.find(a => a.agent === lap?.agent);
+    const there = courier?.character && ctx.client.room.find(o => sameName(o.name, courier.character));
+    if (!there) return;
+    const found = await findSession(ctx.client);
+    if (!found) return;
+    const post = (path, body) => fetch(`http://127.0.0.1:${found.advert.gate_control}${path}?player=${found.session.player_id}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) })
+      .then(r => r.json()).catch(e => ({ ok: false, why: e.message }));
+    await post('/trade/accept-from', { from_id: there.id, ttl_ms: 15_000 });
+    const ready = readJson(join(ctx.substrate, 'courier-ready.json'), {})[me];
+    const hold = readJson(join(ctx.substrate, 'courier-holds.json'), {})[me];
+    if (!ready || !hold || ctx.now - ready.at > 90_000 || lastGive.get(me) === ready.at) return;
+    const items = Object.entries(hold.items ?? {}).map(([name, n]) => {
+      const inv = ctx.client.inventory.find(i => fold(i.name) === fold(name));
+      return inv ? { id: inv.id, amount: Math.min(Number(n) || 0, inv.amount) } : null;
+    }).filter(x => x && x.amount > 0);
+    lastGive.set(me, ready.at);
+    if (!items.length) { ctx.log(`[plan ${me}] courier ready but none of the held goods are in the pack`); return; }
+    const r = await post('/trade/give', { to_id: there.id, items, ttl_ms: 60_000 });
+    ctx.log(`[plan ${me}] full auto: offered ${items.map(i => i.amount).join('+')} to ${courier.character}: ${r.ok ? 'sent' : r.why}`);
+  },
   entries(ctx) {
     const lap = lapState(ctx.substrate, ctx.fleet);
     if (!lap) return [];
@@ -91,7 +133,16 @@ export const provider = {
     const items = itemOptions(lap, join(ctx.harness, 'substrate', 'm59-merchants.json'));
     const sellable = ctx.client.inventory.filter(i => lap.pool.some(p => p.rx.test(i.name.trim())));
     const status = `${lap.agent ?? 'the courier'} — ${lap.lapNow ? 'on a lap now' : lap.running ? 'looping between laps' : 'NOT running'}`;
+    const set = settingsFor(ctx.substrate, me);
     const rows = [
+      { id: 'courier.settings', group: 'Courier', icon: 'scroll', configure: true, disabled: !me,
+        title: `Automated Courier: ${set.mode === 'auto' ? 'Full Auto' : 'Manual'}${set.instructions ? ', with instructions' : ''}`,
+        describe: 'How the courier trades with YOU while you are at the keyboard. Full Auto: the proxy carrying your client ' +
+          'offers your held goods and accepts your deliveries itself — no trade window opens, items simply arrive and leave. ' +
+          'Needs a gate-capable proxy (see Control). Manual: you work the trade window yourself. ' +
+          'Instructions: the courier sends you a private tell saying what it is doing or what to offer.',
+        args: [{ id: 'mode', title: 'Handling', type: 'choice', options: MODES, default: set.mode },
+               { id: 'instructions', title: 'With instruction text (a private tell)', type: 'boolean', default: String(set.instructions) }] },
       { id: 'courier.request', group: 'Courier', icon: 'elderberry', running: lap.running, disabled: !me,
         title: 'Request a delivery from the courier',
         describe: `${status}. Sets a standing top-up target: every lap buys the total of all requests and tops the requester ` +
@@ -124,6 +175,12 @@ export const provider = {
   run(entry, args, ctx, e) {
     const me = ctx.client.agent, S = ctx.substrate;
     if (!me) return { ok: false, message: 'this account is not in the fleet roster' };
+    if (entry === 'courier.settings') {
+      const f = join(S, 'courier-settings.json'), all = readJson(f, {});
+      all[me] = { mode: args.mode === 'auto' ? 'auto' : 'manual', instructions: args.instructions === 'true', at: Date.now(), by: 'plan-desk' };
+      writeJson(f, all);
+      return { ok: true, message: `Automated Courier: ${all[me].mode === 'auto' ? 'Full Auto' : 'Manual'}, instructions ${all[me].instructions ? 'on' : 'off'}.` };
+    }
     if (entry === 'courier.request') {
       const to = args.for || me, n = Number(args.count);
       if (args.item.startsWith('wish:')) {

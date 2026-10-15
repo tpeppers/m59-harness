@@ -129,6 +129,51 @@ writeReq([[6, 'courier.cancel.elderberry', '']]);
 await desk.tick();
 ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-requests.json')) || !JSON.parse(readFileSync(join(substrate, 'courier-requests.json'), 'utf8')).t1);
 
+// ------------------------------------------------------------------ 3b. Automated Courier: Full Auto
+{
+  // A fake gate-capable proxy, advertised the way m59-proxy.mjs advertises itself.
+  const http = await import('node:http');
+  const posts = [];
+  const fake = http.createServer((req, res) => {
+    let b = ''; req.on('data', d => { b += d; }); req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.method === 'GET') return res.end(JSON.stringify({ sessions: [{ player_id: 99, in_game: true, gate: null, gate_refusal: null }] }));
+      posts.push({ path: req.url, body: JSON.parse(b || '{}') }); res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  mkdirSync(join(tmp, 'evidence', 'proxies'), { recursive: true });
+  writeFileSync(join(tmp, 'evidence', 'proxies', '5962.json'), JSON.stringify({ listen: 5962, server: { host: '127.0.0.1', port: 5959 }, pid: process.pid, gate_control: fake.address().port }));
+  const writeRoom = (reqs, room) => writeFileSync(join(dir, 'plan', 'in', '4242.tsv'),
+    [`M59PLANREQ\t1\t${Date.now()}\t4242\t${enc('127.0.0.1:5959')}\t${enc('t1')}\t${enc('Kermit')}\t99\t1`,
+     `I\t11\t${enc('diamond')}\t40`, ...room.map(([id, n]) => `W\t${id}\t${enc(n)}`),
+     ...reqs.map(([s, e, a]) => `R\t${s}\t${e}\t${enc(a)}`), 'END', ''].join('\n'));
+
+  writeRoom([], []); await desk.tick();
+  ok('the Automated Courier settings row is a settings form (flag c) with a dropdown and a checkbox',
+     /E\tcourier\.settings\t[^\t]*\t[^\t]*\t[^\t]*\tc\t/.test(view()) && /A\tcourier\.settings\tinstructions\tboolean/.test(view()) && /A\tcourier\.settings\tmode\tchoice/.test(view()));
+  ok('it defaults to Manual with instructions', /Automated%20Courier%3A%20Manual%2C%20with%20instructions/.test(view()));
+  writeRoom([[20, 'courier.settings', 'mode=auto&instructions=false']], []); await desk.tick();
+  ok('saving it writes courier-settings.json', JSON.parse(readFileSync(join(substrate, 'courier-settings.json'), 'utf8')).t1?.mode === 'auto');
+  ok('a checkbox value that is not true/false is refused', (writeRoom([[21, 'courier.settings', 'mode=auto&instructions=maybe']], []), await desk.tick(), /^21 0 .*true or false/m.test(said())));
+  posts.length = 0;
+  writeRoom([], [[555, 'Someone Else']]); await desk.tick();
+  ok('Full Auto does nothing while the courier is not in the room', posts.length === 0);
+  writeRoom([], [[4242, 'Zheng He']]); await desk.tick();
+  ok('with the courier in the room, the proxy is told to accept its offers', posts.some(p => p.path === '/trade/accept-from?player=99' && p.body.from_id === 4242), JSON.stringify(posts));
+  ok('but offers nothing before the lap says it is ready', !posts.some(p => p.path.startsWith('/trade/give')));
+  writeFileSync(join(substrate, 'courier-ready.json'), JSON.stringify({ t1: { at: Date.now(), courier: 'hk2' } }));
+  await desk.tick(); await desk.tick();
+  const gives = posts.filter(p => p.path.startsWith('/trade/give'));
+  ok('once ready, the held diamonds are offered to the courier, once', gives.length === 1 && gives[0].body.to_id === 4242 && gives[0].body.items[0].id === 11 && gives[0].body.items[0].amount === 40, JSON.stringify(gives));
+  const pres = JSON.parse(readFileSync(join(substrate, 'human-presence.json'), 'utf8'));
+  ok('the desk publishes who is at a keyboard and with whom', pres.t1?.with?.[0]?.name === 'Zheng He' && pres.t1.player_id === 99);
+  const { atKeyboardWith, courierSettings } = await import('./m59-human-handoff.mjs');
+  ok('the lap can read that presence and the settings', atKeyboardWith(join(substrate, 'human-presence.json'), 't1', 'zheng he') &&
+     !atKeyboardWith(join(substrate, 'human-presence.json'), 't1', 'Gonzo') && courierSettings(join(substrate, 'courier-settings.json'), 't1').instructions === false);
+  fake.close();
+}
+
 // ------------------------------------------------------------------ 4. the human half of a trade
 {
   const calls = []; let t = null, step = 0;

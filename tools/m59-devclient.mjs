@@ -97,7 +97,7 @@ export function proxyFor(host, port, {
   isLive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } },
   startedAt = processStartedAt,
 } = {}) {
-  let names = [];
+  let names = [], found = null;
   try { names = readdirSync(dir); } catch { return null; }
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
@@ -114,9 +114,14 @@ export function proxyFor(host, port, {
       const started = Number.isFinite(a.at) ? startedAt(a.pid) : null;
       if (started && started > a.at + START_TIME_TOLERANCE_MS) continue;   // a recycled pid
     }
-    return { listen: Number(a.listen), server: a.server, pid: a.pid ?? null };
+    // A GATE-CAPABLE PROXY WINS (m59-proxy-gate.mjs). Two proxies can front one server: the
+    // swarm's observe-only shim and the PLAN tab's. Only the second can hand the controls to a
+    // keeper or do the courier's trade for you, so a client that has the choice takes it.
+    const hit = { listen: Number(a.listen), server: a.server, pid: a.pid ?? null, gate_control: a.gate_control ?? null };
+    if (hit.gate_control) return hit;
+    found ??= hit;
   }
-  return null;
+  return found;
 }
 
 const matches = (e, want) => [e.agent, e.character, e.account]
