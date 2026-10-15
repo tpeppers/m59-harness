@@ -589,6 +589,47 @@ async function ensureProxy(host, port) {
   return { started: true, ok: false };
 }
 
+// THE PLAN TAB'S PLUMBING, started by L so nothing has to be started by hand (operator,
+// 2026-10-14: "deploy it ... as the new client that m59-tui.mjs runs and I can just run it").
+//
+//   a gate-capable proxy (PLAN_PROXY_PORT, gate control on PLAN_GATE_PORT), loopback only, separate
+//     from the swarm's observe-only shim on PROXY_PORT so a swarm launch is exactly what it was.
+//     dev.bat finds it by itself and prefers it (m59-devclient.mjs proxyFor). It carries the lock
+//     ("Relinquish control to Keeper") and the Automated Courier's Full Auto trade.
+//   the plan desk (tools/m59-plan-desk.mjs) on this checkout's substrate, which fills the PLAN tab.
+//
+// Both are one per machine and outlive the terminal. M59_TUI_NO_PLAN=1 launches exactly as before.
+const PLAN_PROXY_PORT = Number(env.M59_PLAN_PROXY_PORT || 5962);
+const PLAN_GATE_PORT = Number(env.M59_PLAN_GATE_PORT || 8931);
+const listeningOn = (port, ms = 400) => new Promise(res => {
+  const s = net.connect(port, '127.0.0.1');
+  s.once('connect', () => { s.destroy(); res(true); });
+  s.once('error', () => res(false));
+  setTimeout(() => { s.destroy(); res(false); }, ms);
+});
+async function ensurePlanProxy(host, port) {
+  if (await listeningOn(PLAN_PROXY_PORT)) return { started: false, ok: true };
+  const child = spawn(process.execPath,
+    [join(REPO, 'tools', 'm59-proxy.mjs'), '--listen', String(PLAN_PROXY_PORT), '--bind', '127.0.0.1',
+     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--fleet-state', STATE_FILE],
+    { stdio: 'ignore', detached: true, windowsHide: true });
+  child.unref();
+  for (let i = 0; i < 20; i++) { if (await listeningOn(PLAN_PROXY_PORT, 300)) return { started: true, ok: true }; await new Promise(r => setTimeout(r, 250)); }
+  return { started: true, ok: false };
+}
+function ensurePlanDesk() {
+  // The desk refreshes this heartbeat every few seconds; a stale or missing one means start another.
+  try {
+    const h = JSON.parse(readFileSync(join(REPO, 'substrate', 'plan-desk.json'), 'utf8'));
+    if (Date.now() - h.at < 30_000) { try { process.kill(h.pid, 0); return { started: false }; } catch {} }
+  } catch { /* none yet */ }
+  const child = spawn(process.execPath,
+    [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', join(REPO, 'substrate')],
+    { stdio: 'ignore', detached: true, windowsHide: true, cwd: REPO });
+  child.unref();
+  return { started: true };
+}
+
 // THROUGH A GATE (tools/m59-gate.mjs connect --tui). This machine holds no roster, so the
 // client logs in as the character's roster key with a placeholder password, at the gate's
 // local login port; the gate on the home machine swaps in the real account and password,
@@ -632,6 +673,14 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   // A swarm launch points the client at the proxy instead of the game server. Same
   // credentials, same everything else — the only difference is who is in the middle.
   let host = realHost, port = realPort;
+  // THE PLAN TAB: a normal L goes through the gate-capable proxy, with the desk running.
+  if (devExe && WIN && !viaProxy && !GATE && !REMOTE && env.M59_TUI_NO_PLAN !== '1') {
+    const pp = await ensurePlanProxy(realHost, realPort);
+    const pd = ensurePlanDesk();
+    S.status = pp.ok ? c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${PLAN_PROXY_PORT}, desk ${pd.started ? 'started' : 'up'}… `)
+                     : c.red(`PLAN proxy would not come up on ${PLAN_PROXY_PORT} — launching direct, no lock or Full Auto `);
+    draw();
+  }
   if (viaProxy) {
     const p = await ensureProxy(realHost, realPort);
     if (!p.ok) {
