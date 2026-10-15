@@ -59,7 +59,7 @@ import {railIdentityProblem} from './m59-node-tour-policy.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
 import { auditNodeWalk } from './m59-node-route-audit.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
-import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint } from './m59-railfollow.mjs';
+import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint, waitForRailAnimation } from './m59-railfollow.mjs';
 import { exactFloor } from './m59-noderails.mjs';
 import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
 
@@ -409,9 +409,9 @@ for (const [li, leg] of plan.legs.entries()) {
   for (const [wi, wp] of leg.waypoints.entries()) {
     const wire = quantizeRailPoint(wp,{floorAt:bodyFloor,edge:(a,b)=>R.geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
     if(!wire.ok){came_off={leg:li+1,waypoint:wi+1,why:wire.reason,asked:wp};receipt(came_off);console.log(JSON.stringify(came_off));break outer;}
-    const w = await call('walk_to', { agent: AGENT, ...wire.protocol,
+    const w = await waitForRailAnimation(() => call('walk_to', { agent: AGENT, ...wire.protocol,
                                       max_steps: STEPS, stride: STRIDE,
-                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000);
+                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000), { room: ROOM, readRoom: async () => (await look()).room });
     receipt({kind:'walk',leg:li+1,waypoint:wi+1,aim:wp,wire,reply:w});
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.

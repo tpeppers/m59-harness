@@ -35,12 +35,26 @@
   {
    "room": 2502,
    "room_name": "The Archaic Hollows",
-   "from": {"row": 41, "col": 34},
-   "to": {"row": 44, "col": 27},
-   "from_fine": {"x": 34192, "y": 41376},
-   "to_fine": {"x": 26976, "y": 44160},
+   "from": {
+    "row": 41,
+    "col": 34
+   },
+   "to": {
+    "row": 44,
+    "col": 27
+   },
+   "from_fine": {
+    "x": 34192,
+    "y": 41376
+   },
+   "to_fine": {
+    "x": 26976,
+    "y": 44160
+   },
    "kind": "fall",
-   "requires": {"running": true},
+   "requires": {
+    "running": true
+   },
    "observed_by": "operator, 2026-10-09, native client movement recording",
    "part_of_cycle": false,
    "note": "Approach to the small western cavern on the outward cave-to-island trip. Recorded native client points: takeoff KOD x2201 y2650, intermediate x1891 y2589 over the lower floor, landing x1750 y2824. Both endpoints are on floor 8000; the intervening floor is 4800. This is an operator-observed running crossing, not a candidate inferred from fall arithmetic. The return trip uses the lower eastern exit and does not reverse this crossing. The source recording has one-second position samples, so it does not establish the exact airborne arc."
@@ -280,6 +294,118 @@
     "y": 35456
    },
    "note": "THE ONLY WAY FROM THE ENTRANCE TO THE TWO GUESTLEVERS, AND IT IS OVER A GULLY. From the entrance (r11c17, the door to Marion 200) the levers at r27c4 and r27c9 are ~110 steps away: east along row 18, north up col 23, round the east side, down to the ledge at r32c30 (floor 3392), then a RUNNING fall south over the gully (r33-34 c28-31, sector floor 1856 with depth, 1652 standing) into the corridor at r35c30 (floor 2368), west along row 37 and up the ramp at col 12 into the hall. The gully sits 512-716 below the corridor against a 384 step limit, so nothing walks across it and nothing walks back out of it the short way. The detector sees a fall here too, but it finds the column-31 pair first, and moverStepLands refuses every gully pair because a fall is not a step -- so until this was declared the bake threw away every route from the entrance to the levers while reach still called them joined. jumpConfidence(1024, ~2816) clears at every frame rate; m59-jumpfinder proposed 32,29 -> 37,31. Kermit missed it the same afternoon and landed in the gully at r33c31: a miss is ordinary, which is why substrate/m59-gutters.json carries a rail from the gully back to this take-off. Fine points follow the F9 line (x 30415 -> 30509, straight down column 30): the take-off is at the south lip of r32 (y 32640, 128 short of the edge) and the landing on the corridor floor in r35 (y 35456)."
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true,
+    "timed_fall": true
+   },
+   "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
+   "part_of_cycle": false,
+   "from": {
+    "row": 32,
+    "col": 55
+   },
+   "to": {
+    "row": 25,
+    "col": 55
+   },
+   "from_fine": {
+    "x": 55808,
+    "y": 32000
+   },
+   "to_fine": {
+    "x": 55808,
+    "y": 25088
+   },
+   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250)."
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true,
+    "timed_fall": true
+   },
+   "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
+   "part_of_cycle": false,
+   "from": {
+    "row": 15,
+    "col": 55
+   },
+   "to": {
+    "row": 8,
+    "col": 55
+   },
+   "from_fine": {
+    "x": 55808,
+    "y": 14848
+   },
+   "to_fine": {
+    "x": 55808,
+    "y": 7680
+   },
+   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform."
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true,
+    "timed_fall": true
+   },
+   "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
+   "part_of_cycle": false,
+   "from": {
+    "row": 32,
+    "col": 56
+   },
+   "to": {
+    "row": 25,
+    "col": 56
+   },
+   "from_fine": {
+    "x": 56832,
+    "y": 32000
+   },
+   "to_fine": {
+    "x": 56832,
+    "y": 25088
+   },
+   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250). Parallel adjacent lane for grouped arrivals."
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true,
+    "timed_fall": true
+   },
+   "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
+   "part_of_cycle": false,
+   "from": {
+    "row": 15,
+    "col": 56
+   },
+   "to": {
+    "row": 8,
+    "col": 56
+   },
+   "from_fine": {
+    "x": 56832,
+    "y": 14848
+   },
+   "to_fine": {
+    "x": 56832,
+    "y": 7680
+   },
+   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform. Parallel adjacent lane for grouped arrivals."
   }
  ]
 }
