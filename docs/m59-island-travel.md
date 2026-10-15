@@ -300,6 +300,15 @@ wall, including while poison wears off. Its retry allowance counts actual
 travel resumptions rather than those polls; the overall leg deadline,
 cancellation and observed health checks still apply.
 
+Ordinary cave hops remember their actual entry. A healthy courier still within
+two squares of that confirmed arrival can retreat and retry when required
+safe-leg travel ends there with a nearby blocking body. The border must be
+explicitly reversible. The shared controller walks back, waits 30 seconds,
+re-enters and retries, at most twice under the original hop deadline. It does
+not relocate the character, fight the blocker or waive the required safe-leg
+policy. A different destination owner, cancellation or unreadable/dead body
+still ends the attempt.
+
 Offline checks: `node tools/m59-island-test.mjs` and `npm run test:movement`.
 
 ## Shadow validation, 2026-10-10
@@ -330,6 +339,28 @@ or maximum-health loss was observed.
 These results do not establish a safe populated-cave walking convoy.
 Keep walking experimental until the monster exposure and any required
 escort or control strategy have been tested with fragile travelers.
+
+## Populated validation, 2026-10-15
+
+The completed 20-courier cohort on main `39dd7955` started each traveler at
+20/20 HP, 200 vigor, zero skills/spells and 40,000 synthetic shillings, with
+plate, helm, ordinary food and no healing flasks. Native monster generation
+remained enabled; only Dispel Illusion was artificial during measurement.
+Sixteen reached the inn, five completed the roundtrip and nineteen survived.
+One Konima return death near r24c62 lost 40,000. Five homeward purses retained
+200,000, and fourteen living stopped couriers retained 560,000. Eight
+returners stopped at Ugol's r1c27 arrival. This is 25% completion despite
+95% survival, below the operator's accepted 90–95% roundtrip milestone.
+
+Subsequent native components on `e9528015` completed the Hollows upper
+approach and both travelers of an occupied Konima staging pair. Minimum
+health was 19/20/20 and all three 40,000-shilling purses were retained.
+The corrected Konima return completed separately at full health with its
+purse intact. A blocked Ugol traveler also completed an ordinary retreat,
+30-second wait, re-entry and onward crossing with minimum 20 HP and no cash
+loss. These measured components used no health, vigor, cash or monster
+resets; initial positions were reconstructed explicitly. They validate
+components, not a replacement full cohort or shopping/cargo acceptance.
 
 ## Composition and shared movement guards
 

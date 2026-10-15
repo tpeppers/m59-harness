@@ -176,6 +176,30 @@ assert.equal(activeOwnedFineRecovery(recoveryCtx,{...completedRecovery,autopilot
  survival_decisions:{current:{...completedRecovery.autopilot_status.survival_decisions.current,status:'approaching'}}}}),true,
  'an actual keeper approach retains its control until it ends');
 let reads=0;
+{
+let entryRoom=2501,entryBlocked=false,backedOut=false;
+const entryOrders=[];
+const entryCtx={agent:'entry-fixture',state:{},call:async(name,args)=>{
+ if(name==='look')return {...look(entryRoom),you:{...look(entryRoom).you,id:1,predicted:false},
+  objects:[{id:2,x:2592,y:300,flags:9}]};
+ if(name==='travel'){
+  entryOrders.push(args.to);
+  if(args.to===27&&!backedOut)entryBlocked=true;
+  else {entryRoom=args.to;if(args.to===2501)backedOut=true;entryBlocked=false;}
+  return {ordered_by:'entry-test'};
+ }
+ if(name==='status')return {busy:false,failed:entryBlocked?'safe_legs_required':undefined,
+  job:{ordered_by:'entry-test'},movement:{order:null}};
+ return {};
+}};
+assert((await ordinaryHop(entryCtx,2500,{pollMs:1,idleGraceMs:0,budgetMs:1000})).ok);
+assert.equal(entryCtx.state.islandEntry.from,2501);
+const recoveredEntry=await ordinaryHop(entryCtx,27,{pollMs:1,idleGraceMs:0,budgetMs:1000,entryWaitMs:1});
+assert(recoveredEntry.ok);assert.equal(recoveredEntry.end.room,27);
+assert.deepEqual(entryOrders,[2500,27,2501,2500,27]);
+assert.equal(recoveredEntry.entry_recovery.attempts.length,1);
+assert.equal(recoveredEntry.damage,0);
+}
 const ok=await ordinaryHop({agent:'fixture',call:async(name,args)=>{
  if(name==='travel'){assert.deepEqual(args.avoid,[5,587]);assert.equal(args.run_errands,false);}
  return name==='look'?look(++reads===1?2000:2013):{};
