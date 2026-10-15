@@ -97,11 +97,18 @@ const heldOrigin={source:'fleetscript',name:'fixture',run_id:'current'},heldStat
 assert(islandReadOwner({origin:heldOrigin},heldStatus));
 assert(!islandReadOwner({origin:heldOrigin},{autopilot_status:{faculties:{movement:{owner:'fleetscript:other',expires_in_ms:5000}}}}));
 assert(!islandReadOwner({origin:heldOrigin},{autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:0}}}}));
+assert(!islandReadOwner({origin:heldOrigin},{autopilot_status:{faculties:{movement:{owner:'fleetscript:other',expires_in_ms:5000}}},
+ movement:{last_preempted:{by:{source:'keeper'},preempted:{ordered_by:'fleetscript:fixture#current'}}}}),
+ 'a stale preemption cannot overrule a live foreign movement lease');
 let heldReads=0;
 const heldCtx={agent:'fixture',origin:heldOrigin,state:{islandCancelFence:100},call:async()=>heldStatus};
 assert.equal((await observeIslandTraveller(heldCtx,async()=>++heldReads<3?{hp:null}:look(2502),{pollMs:0})).room.num,2502);assert.equal(heldReads,3);
 await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>({})},async()=>({hp:null}),{pollMs:0}),/health_unreadable/);
+assert.equal(heldCtx.state.islandObservationFailure.owner_proved,false);
+assert.equal(heldCtx.state.islandObservationFailure.reason,'traveller_health_unreadable');
 await assert.rejects(observeIslandTraveller(heldCtx,async()=>({hp:null}),{deadline:0}),/recovery_budget/);
+assert.equal(heldCtx.state.islandObservationFailure.owner_proved,true);
+assert.equal(heldCtx.state.islandObservationFailure.reason,'traveller_health_unreadable_recovery_budget');
 await assert.rejects(observeIslandTraveller(heldCtx,async()=>look(1)),/traveller_died/);
 await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>({...heldStatus,movement:{last_cancel:{at:101,by:{source:'operator'},by_label:'operator:new-order'}}})},async()=>({hp:null})),/cancelled_by_operator/);
 let fineRecoveryReads=0;
@@ -153,6 +160,15 @@ await eatIslandAtWall({agent:'fixture',call:async(name,args)=>{
  throw Error(name);
 }},()=>{},{settleMs:0});
 assert.deepEqual(meals,[101,102]);assert.equal(mealVigor,160);
+let mealReconnectReads=0,mealSamples=0;
+const mealReconnect=await eatIslandAtWall({agent:'fixture',origin:heldOrigin,state:{},call:async name=>{
+ if(name==='look')return ++mealReconnectReads===1?{hp:null}:{...look(2503),vigor:{value:186}};
+ if(name==='status')return heldStatus;
+ throw Error('unexpected meal action '+name);
+}},()=>{mealSamples++;},{settleMs:0});
+assert.equal(mealReconnectReads,2);assert.equal(mealSamples,1);assert.equal(mealReconnect.bites,0);
+await assert.rejects(eatIslandAtWall({agent:'fixture',origin:heldOrigin,call:async name=>name==='look'?{hp:null}:
+ {autopilot_status:{faculties:{movement:{owner:'fleetscript:other',expires_in_ms:5000}}}}}),/health_unreadable/);
 let mealReads=0;
 await assert.rejects(eatIslandAtWall({agent:'fixture',call:async name=>{
  if(name==='look')return {...look(2013,20,++mealReads===1?20:19),vigor:{value:80}};

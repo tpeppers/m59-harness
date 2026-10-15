@@ -36,6 +36,27 @@ const SCRIPT = { source: 'fleetscript', name: 'buy-spell', run_id: 'r1' };
 const SHELTER_WHY = 'chosen shelter approach interrupted: route uses the fallback walker';
 
 console.log('the origin itself');
+await test('an overlapping shelter cannot restore a script walk that already ended',async()=>{
+  for(const firstToEnd of ['script','shelter']){
+    const s={movementGeneration:1};let endScript,endShelter;
+    const script=M.withMoveOrder(s,{kind:'walk',origin:SCRIPT,to:'fine chord'},
+      ()=>new Promise(r=>{endScript=r;}));
+    const scriptOrder=s.moveOrder;
+    const shelter=M.withMoveOrder(s,{kind:'shelter',origin:M.keeperOrigin('shelter'),to:'wall'},
+      ()=>new Promise(r=>{endShelter=r;}));
+    if(firstToEnd==='script'){
+      endScript();await script;
+      assert.ok(scriptOrder.ended_at);
+      assert.equal(M.movementReport(s).order.kind,'shelter');
+      endShelter();await shelter;
+    }else{
+      endShelter();await shelter;
+      assert.equal(M.movementReport(s).order.kind,'walk');
+      endScript();await script;
+    }
+    assert.equal(M.movementReport(s).order,null);
+  }
+});
 await test('silence is unattributed, never empty', () => {
   const o = M.moveOrigin(null);
   assert.equal(o.source, 'unattributed'); assert.equal(o.name, 'unattributed');

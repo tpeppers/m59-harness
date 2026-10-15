@@ -66,7 +66,7 @@ export function bindIslandFinePosition(look,position){
 export async function eatIslandAtWall(ctx,onSample=()=>{},{target=160,maxBites=12,settleMs=2500}={}){
   let initial;
   const read=async()=>{
-    const l=await ctx.call('look',{agent:ctx.agent});onSample(l);
+    const l=await observeIslandTraveller(ctx,()=>ctx.call('look',{agent:ctx.agent}));onSample(l);
     if(ctx.state?.islandCancelFence!=null)checkIslandCancellation(ctx,await ctx.call('status',{agent:ctx.agent,brief:true}));
     if(!Number.isFinite(l.hp?.value)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
     if(l.hp.value<=0||l.room?.num===1)throw Error('traveller_died');
