@@ -22,13 +22,20 @@ export function observeRefugeProgress(state, geo, position, target, now = Date.n
   if (!state) state = { startedAt: now, progressedAt: now, best: Infinity };
   if (position && !position.predicted) {
     const square=`${position.row},${position.col}`;
-    if(state.square===square)return state;
+    if(state.square===square){
+      const p=state.fineTarget;
+      if(p&&[position.x,position.y].every(Number.isFinite)){
+        const distance=Math.hypot(position.x-p.x,position.y-p.y);
+        if(distance<=state.fineBest-2){state.fineBest=distance;state.progressedAt=now;}
+      }
+      return state;
+    }
     state.square=square;
-    let remaining = Infinity;
+    let remaining = Infinity,path=null;
     if (position.row === target.row && position.col === target.col) remaining = 0;
     else if (geo?.path) {
       try {
-        const path = geo.path(position.row, position.col, target.row, target.col, { clearance: 0 });
+        path = geo.path(position.row, position.col, target.row, target.col, { clearance: 0 });
         if (path?.found) remaining = path.steps.length;
       } catch { /* an unreadable path is not progress */ }
     }
@@ -36,6 +43,11 @@ export function observeRefugeProgress(state, geo, position, target, now = Date.n
       state.best = remaining;
       state.progressedAt = now;
     }
+    const next=path?.steps?.[0];
+    state.fineTarget=remaining===state.best&&Number.isFinite(next?.row)&&Number.isFinite(next?.col)
+      ?geo?.standPointWire?.(next.row,next.col)??{x:next.col*64+32,y:next.row*64+32}:null;
+    state.fineBest=state.fineTarget&&[position.x,position.y].every(Number.isFinite)
+      ?Math.hypot(position.x-state.fineTarget.x,position.y-state.fineTarget.y):Infinity;
   }
   return state;
 }
