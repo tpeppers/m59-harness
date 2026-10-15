@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot,keeperSurvivalInterruption,readyAfterSurvival} from './m59-brax.mjs';
+import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot,keeperSurvivalInterruption,readyAfterSurvival,awaitLeverConfirmation} from './m59-brax.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {applyAncientFloors} from './m59-moving-platform.mjs';
 import {script} from './fleetscripts/walk-to-brax.mjs';
@@ -68,3 +68,13 @@ assert(readyAfterSurvival({hp:{value:145,max:151},autopilot_status:{survival_dec
 assert(!readyAfterSurvival({hp:{value:70,max:151}}));
 assert(!readyAfterSurvival({hp:{value:151,max:151},autopilot_status:{survival_decisions:{current:'play_dead'}}}));
 assert(!readyAfterSurvival({hp:{value:0,max:151}}));
+
+let tick=0,seen=[];
+assert(await awaitLeverConfirmation({messages:['System is saving; please wait.']},{since:10,now:()=>tick,
+  observedRaised:async()=>false,waitEvent:async args=>{seen.push(args.since);tick+=1000;return tick===1000?{cursor:11,events:[{text:'An unrelated message'}]}:{cursor:12,events:[{text:'You switch the lever.'}]};}}));
+assert.deepEqual(seen,[10,11]);
+tick=0;
+assert(!await awaitLeverConfirmation({}, {since:1,timeoutMs:2000,now:()=>tick,observedRaised:async()=>false,
+  waitEvent:async()=>{tick+=1000;return {cursor:2,events:[{text:'System saved.'}]};}}));
+const leaderPath=platformAims(squareCentreClient(22,55),squareCentreClient(17,51));
+assert(!leaderPath.some(p=>p.x===squareCentreClient(24,51).x&&p.y===squareCentreClient(24,51).y),'north lever worker must not use the occupied south lever station as a mandatory aim');

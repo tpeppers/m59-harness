@@ -42,11 +42,27 @@ export function platformAims(from,to){
     if(lo>hi)return [to];
   }
   const inColumn=from.x>=box.x.min&&from.x<=box.x.max;
-  const aisle=inColumn&&from.y>box.y.max?24064:to.y<box.y.min?16896:24064;
+  const aisle=to.y<box.y.min?16896:24064;
   const aims=[];
-  if(inColumn&&from.y<box.y.min&&aisle===24064)aims.push({x:52736,y:from.y},{x:52736,y:aisle});
+  if(inColumn&&((from.y<box.y.min&&aisle===24064)||(from.y>box.y.max&&aisle===16896))){
+    const side=to.x<(box.x.min+box.x.max)/2?52736:58880;aims.push({x:side,y:from.y},{x:side,y:aisle});
+  }
   else aims.push({x:from.x,y:aisle});
   aims.push({x:to.x,y:aisle},to);return aims;
+}
+// An unrelated message (including a periodic server save) is not a lever verdict.
+export async function awaitLeverConfirmation(reply,{since,waitEvent,observedRaised,now=Date.now,timeoutMs=10000}){
+  const switched=value=>/You switch the lever\./.test(JSON.stringify(value));
+  if(switched(reply))return true;
+  const deadline=now()+timeoutMs;let cursor=since;
+  while(now()<deadline){
+    if(await observedRaised())return true;
+    const event=await waitEvent({since:cursor,kinds:['message'],timeout_ms:Math.min(1000,deadline-now())});
+    if(switched(event))return true;
+    if(event.no_event_stream)return false;
+    cursor=Math.max(cursor,event.cursor??cursor);
+  }
+  return await observedRaised();
 }
 export const keeperSurvivalInterruption=reply=>reply?.cancelled===true&&reply.cancelled_by_origin?.source==='keeper';
 export const readyAfterSurvival=(s,minHealth=0.9)=>Number(s.hp?.value)>0&&Number(s.hp?.max)>0&&s.hp.value/s.hp.max>=minHealth&&!s.autopilot_status?.survival_decisions?.current;
@@ -204,9 +220,9 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     if(found.length!==1)throw Error('Brax lever not uniquely visible');
     const since=(await read()).ev_seq;
     const reply=await command('act',{verb:'activate',target:found[0].id});
-    const observation=/You switch the lever\./.test(JSON.stringify(reply))?null:
-      await command('wait_for_event',{since,kinds:['message'],timeout_ms:5000});
-    if(!/You switch the lever\./.test(JSON.stringify({reply,observation}))&&(await read()).doors.observed?.[3]!==800)throw Error('Brax lever switch was not confirmed');
+    const confirmed=await awaitLeverConfirmation(reply,{since,
+      waitEvent:args=>command('wait_for_event',args),observedRaised:async()=>(await read()).doors.observed?.[3]===800});
+    if(!confirmed)throw Error('Brax lever switch was not confirmed');
     log('lever',{row:lever.row,col:lever.col,id:found[0].id});
     if((await read()).doors.observed?.[3]===800)await update(g=>{g.raisedAt??=Date.now();});
   };
