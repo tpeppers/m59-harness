@@ -1,5 +1,10 @@
 # The keeper: what it can see, and what it cannot
 
+Island hop handoffs wait for a positively identified previous job from the
+same controller within the original leg deadline. Shelter or reconnect cleanup
+can exceed a fixed poll allowance after the room changes. Health, room and
+cancellation checks stay active, and a foreign busy job is never replaced.
+
 An active keeper recovery's refuge approach carries packet priority above
 background reads, including its ordered position read, stand and checked
 movement. Explicit combat ownership retains its higher priority. The enclosing

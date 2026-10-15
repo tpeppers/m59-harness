@@ -299,6 +299,25 @@ const handed=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async 
  if(name==='cancel_movement')handoffCancels++;return {};
 }},2013,{pollMs:1});
 assert(handed.ok);assert.equal(handoffTravels,2);assert.equal(handed.handoff_waits,1);assert.equal(handoffCancels,0);
+let longRoom=2000,longTravels=0,longCancels=0;
+const longHandoff=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async name=>{
+ if(name==='look')return look(longRoom);
+ if(name==='travel'){
+  if(++longTravels<=12)return {ordered_by:handoffLabel,error:'fixture is busy: walk to 2000 (ordered by '+handoffLabel+')'};
+  longRoom=2013;return {ordered_by:handoffLabel};
+ }
+ if(name==='status')return {busy:false,movement:{order:null}};
+ if(name==='cancel_movement')longCancels++;return {};
+}},2013,{pollMs:1,idleGraceMs:0,budgetMs:2000});
+assert(longHandoff.ok);assert.equal(longTravels,13);assert.equal(longHandoff.handoff_waits,12);assert.equal(longCancels,0);
+let boundedTravels=0,boundedCancels=0;
+const boundedHandoff=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async name=>{
+ if(name==='look')return look(2000);
+ if(name==='travel'){boundedTravels++;return {ordered_by:handoffLabel,error:'fixture is busy: walk to 2000 (ordered by '+handoffLabel+')'};}
+ if(name==='status')return {busy:false,movement:{order:null}};
+ if(name==='cancel_movement')boundedCancels++;return {};
+}},2013,{pollMs:1,idleGraceMs:0,budgetMs:20});
+assert(!boundedHandoff.ok);assert.equal(boundedHandoff.reason,'budget');assert(boundedTravels>0);assert.equal(boundedCancels,1);
 let foreignBusyTravels=0;
 const foreignBusy=await ordinaryHop({agent:'fixture',origin:handoffOrigin,call:async name=>{
  if(name==='look')return look(2000);

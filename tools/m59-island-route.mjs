@@ -204,10 +204,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   // Both mainland exits are detours from this measured cave expedition.
   const request=async()=>{
     const by=originLabel(ctx.origin??currentCallOrigin());let reply;
-    for(let attempt=0;attempt<6;attempt++){
+    for(;;){
       reply=await call('travel',{agent,to,background:true,max_hops:1,avoid:[5,587],run_errands:false},30000);
       // Room entry can precede the previous hop's job cleanup. Wait only for
       // this controller's own busy job; never replace another owner's order.
+      // Shelter/reconnect cleanup can exceed six polls. The original leg
+      // deadline, health, room and cancellation checks bound this handoff.
       if(!reply.error?.includes(' is busy:')||reply.ordered_by!==by||!reply.error.includes('(ordered by '+by+')'))return reply;
       leg.handoff_waits=(leg.handoff_waits??0)+1;
       const l=await observeIslandTraveller(ctx,readBody),p=sample(l);
