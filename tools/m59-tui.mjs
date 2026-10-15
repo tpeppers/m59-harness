@@ -568,8 +568,12 @@ async function ensureProxy(host, port) {
   const proxy = join(REPO, 'tools', 'm59-proxy.mjs');
   // --observe: forward and rewrite, inject nothing. A swarm only needs to WATCH the
   // leader; taking over its stream buys nothing and risks the operator's own session.
+  // M59_PROXY_GATE_CONTROL=<port> also serves the control gate (m59-proxy-gate.mjs), which the
+  // PLAN tab's "Relinquish control to Keeper" takes. Opt-in for the reason above: holding a gate
+  // takes over the stream arithmetic, and nobody should get that by launching a swarm.
+  const gate = env.M59_PROXY_GATE_CONTROL ? ['--gate-control', String(Number(env.M59_PROXY_GATE_CONTROL))] : [];
   const child = spawn(process.execPath,
-    [proxy, '--listen', String(PROXY_PORT), '--server', `${host}:${port}`, '--observe', '--fleet-state', STATE_FILE],
+    [proxy, '--listen', String(PROXY_PORT), '--server', `${host}:${port}`, '--observe', '--fleet-state', STATE_FILE, ...gate],
     { stdio: 'ignore', detached: false, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) {
