@@ -2199,6 +2199,28 @@ exception or a new production order.
 
 ## Refuge square arrivals
 
+Nearby recovery from a confirmed fine position uses the body tracer before the
+coarse router, even when the coarse edge exists. It retains the actual entry
+point and requires a proved return. A coarse square can straddle a ledge: in
+the Hollows, r42c42 is eight wire units from the observed upper footing, while
+aiming at its centre led a recovery walk into the lower cavern. Neither coarse
+reverse reachability nor an onward coarse component overrides a failed fine
+return proof. Distant and legacy position-only recovery retain their ordinary
+router.
+
+When an exact fine destination is occupied, the shared rail cutter keeps a
+covered follower at its current refuge until the incumbent clears it. Moving
+through a succession of other waiting walls cannot free that destination.
+Traffic-refuge arrivals require both the observed refuge square and its fine
+endpoint; a nearby position across the cell boundary is not cover.
+
+Declared shelf approaches carry a minimum floor into the shared fine cutter
+and local body planner. Checked intermediate aims must satisfy it too; the
+existing shelf guard still validates the actual packet movement. This prevents
+a threat-priced approach from deliberately walking down into a pocket before
+trying to reach the higher takeoff. Long staging walks arm near the physical
+takeoff rather than treating matching height elsewhere as the same shelf.
+
 Journey rescue uses the shared suspension method before cancelling the live
 order. This retains its original issuer and effective travel guards, including
 through nested shelter detours. A disconnected status snapshot can arrive after

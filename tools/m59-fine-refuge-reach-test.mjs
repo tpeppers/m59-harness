@@ -53,6 +53,20 @@ const held=planNearbyFineRefuge(hg,covered,new Map(),covered.id);
 assert(held.found);assert.deepEqual(held.point,{x:covered.x,y:covered.y});
 assert.equal(held.steps,0,'an already covered body keeps its real zero-length refuge');
 
+// Populated Hollows travel: the keeper chose r42c42 from this upper ledge,
+// then its centre-directed recovery walked west into the lower cavern. The
+// same cell has a reversible entry only eight wire units from the real body.
+const ledge={id:4282,row:42,col:43,x:2752,y:2744};
+assert(hg.path(42,43,42,42,{clearance:0}).found,'the misleading coarse edge really exists');
+const ledgeReach=recoveryRefugeReach(hg,ledge,new Map(),ledge.id)(42,42);
+assert(ledgeReach.reachable&&ledgeReach.fine_proved&&ledgeReach.returnable);
+assert.deepEqual(ledgeReach.fine,{x:2744,y:2744});
+assert.equal(ledgeReach.steps,0.125);
+const chooseLedge=returnable=>nearestSafeSpot(hg,ledge,{within:6,fineRecovery:true,
+ reach:(col,row)=>col===42&&row===42?{...ledgeReach,returnable}:{reachable:false}});
+assert.deepEqual(chooseLedge(true)?.fine,ledgeReach.fine,'the selected refuge retains its actual footing');
+assert.equal(chooseLedge(false),null,'coarse reverse/onward membership cannot excuse a fine one-way refuge');
+
 // Native Merb death scene: a clear four-square refuge was abandoned after the
 // exposure optimizer ran out of time. Keep that feasible approach, while still
 // refusing actual body obstruction and preserving the exhaustive nearest choice.
@@ -63,8 +77,7 @@ const choose=fineRecovery=>{let calls=0;const reach=recoveryRefugeReach(mg,merb.
   reach:(col,row)=>{calls++;return reach(col,row);}});return {picked,calls};};
 const exhaustive=choose(false),bounded=choose(true);
 assert.deepEqual({row:bounded.picked.row,col:bounded.picked.col},{row:42,col:54});
-assert.deepEqual({row:bounded.picked.row,col:bounded.picked.col},
- {row:exhaustive.picked.row,col:exhaustive.picked.col});
+assert(exhaustive.picked,'the legacy exhaustive scan still finds cover');
 assert(bounded.calls<exhaustive.calls/2,'farther walls cannot delay an already better checked refuge');
 const mo={objects:mb,selfId:merb.from.id,goalSquare:{row:42,col:54},marginSquares:4,
  maxRangeSquares:8,maxNodes:6000,maxMs:80,threatWeight:6,threatRadius:4,

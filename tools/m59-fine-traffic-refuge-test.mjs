@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {roomGeometry} from './m59-ground.mjs';
@@ -34,6 +34,20 @@ let previous=protocolToClient(failed),travelled=0;const obstacles=blockingBodySn
 for(const p of retreat.waypoints.slice(1)){const t=geo.traceFineMoveClient(previous.x,previous.y,p.x,p.y,{slide:false,obstacles});
  assert(t.arrived&&!t.blocked,'every retreat chord retains live-body proof');travelled+=Math.hypot(p.x-previous.x,p.y-previous.y)/1024;previous=p;}
 assert(travelled<=6);assert(Math.hypot(previous.x-protocolToClient(target).x,previous.y-protocolToClient(target).y)>128,'cover is not a false final goal');
+const queue=JSON.parse(readFileSync(new URL('./fixtures/konima-occupied-stage-2505.json',import.meta.url)));
+const qgeo=roomGeometry(queue.room),qobjects=new Map(queue.bodies.map(o=>[o.id,o]));
+const qopts={objects:qobjects,selfId:queue.from.id,bodyRangeSquares:10,allowBodyPrefix:true,
+ prefixSquares:4,requirePrefixRefuge:true,avoidSquares:new Set(queue.avoid_squares),maxMs:4000};
+const waiting=await cutFineRailAsync(qgeo,queue.from,queue.target,qopts);
+assert(!waiting.ok&&waiting.traffic_blocked,'a covered follower waits for the occupied exact goal');
+assert.deepEqual(waiting.waiting_refuge,{row:queue.from.row,col:queue.from.col});
+const incumbent=queue.bodies.find(o=>o.x===queue.target.x&&o.y===queue.target.y);
+assert(incumbent,'the captured staging point is occupied by another player');
+const onlyIncumbent=new Map([[incumbent.id,incumbent]]);
+const sameWait=await cutFineRailAsync(qgeo,queue.from,queue.target,{...qopts,objects:onlyIncumbent});
+assert(!sameWait.ok&&sameWait.traffic_blocked,'an otherwise clear room does not make another refuge free this goal');
+const freed=await cutFineRailAsync(qgeo,queue.from,queue.target,{...qopts,objects:new Map()});
+assert(freed.ok&&freed.bridgeOk,'the same route becomes available after the incumbent leaves');
 const scratch=mkdtempSync(join(tmpdir(),'m59-fine-traffic-')),old=process.env.M59_KEEPER_BAND_REGISTRY;
 const agent='fine-traffic-fixture',room={num:2502,object_id:77};let pose={...from},reads=0,moves=0;
 const server=createServer((request,response)=>{

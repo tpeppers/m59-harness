@@ -1,17 +1,17 @@
 // General fine-scale refuge routing. Expensive room searches run off the keeper
 // event loop so survival and ownership changes remain observable during planning.
 import {Worker,parentPort,workerData} from 'node:worker_threads';
-import {RoomGeometry,protocolToClient,clientToProtocol} from './m59-roo.mjs';
+import {RoomGeometry,protocolToClient,clientToProtocol,MIN_NOMOVEON} from './m59-roo.mjs';
 import {cutRail,threatEdgeCost,chordWalkable} from './m59-railcut.mjs';
 import {legWalls} from './m59-safelegs.mjs';
-import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
+import {planBodyDetour,blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {findFineGuide} from './m59-fine-guides.mjs';
 
 // A traffic side refuge must lead back to the proved route. Ordinary downhill
 // walking can enter a covered pocket that cannot rejoin a higher ledge.
 export function fineRefugeReturnable(geo,from,anchor,{objects,selfId,roomFlags=0,overrideDepths,
- avoidSquares,marginSquares=2,maxRangeSquares=8,maxNodes=768,maxMs=35}={}){
- return planBodyDetour(geo,from,anchor,{objects,selfId,roomFlags,overrideDepths,avoidSquares,
+ avoidSquares,minimumFloor=null,marginSquares=2,maxRangeSquares=8,maxNodes=768,maxMs=35}={}){
+ return planBodyDetour(geo,from,anchor,{objects,selfId,roomFlags,overrideDepths,avoidSquares,minimumFloor,
   marginSquares,maxRangeSquares,maxNodes,maxMs,threats:[],threatWeight:0}).found===true;
 }
 
@@ -184,7 +184,8 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
     const scopedObjects=Number.isFinite(o.bodyRangeSquares)?new Map([...o.objects].filter(([,p])=>
       Math.hypot(p.x-workerData.from.x,p.y-workerData.from.y)<=o.bodyRangeSquares*64)):o.objects;
     const obstacles=blockingBodySnapshot(scopedObjects,o.selfId);
-    const allowed=b=>!o.avoidSquares?.has?.(Math.floor(clientToProtocol(b.y)/64)+','+Math.floor(clientToProtocol(b.x)/64));
+    const allowed=b=>!o.avoidSquares?.has?.(Math.floor(clientToProtocol(b.y)/64)+','+Math.floor(clientToProtocol(b.x)/64))&&
+      floorConstraintAllows(geo,{x:clientToProtocol(b.x),y:clientToProtocol(b.y)},o.minimumFloor);
     const edge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles,
       roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
     const settings={
@@ -206,6 +207,11 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
         // authorizes no movement and does not pretend to reach the goal.
         const held=legWalls(geo).find(w=>w.row===workerData.from.row&&w.col===workerData.from.col);
         if(held)waitingRefuge={row:held.row,col:held.col};
+        const goal=point(workerData.goal);
+        const occupiedGoal=obstacles.some(o=>Math.abs(o.x-goal.x)<MIN_NOMOVEON&&Math.abs(o.y-goal.y)<MIN_NOMOVEON);
+        // A different waiting wall cannot free an occupied exact destination.
+        // Keep this proved cover until its incumbent leaves, then recut.
+        if(!waitingRefuge||!occupiedGoal){
         const prefix=[guide.waypoints[0]];let previous=prefix[0],distance=0;
         for(const p of guide.waypoints.slice(1)){
           if(!edge(previous,p))break;
@@ -225,14 +231,14 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
               .sort((a,b)=>Math.hypot(a.row-workerData.goal.y/64,a.col-workerData.goal.x/64)-Math.hypot(b.row-workerData.goal.y/64,b.col-workerData.goal.x/64));
             for(const w of near.slice(0,4)){
               const side=planBodyDetour(geo,p,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
-                avoidSquares:o.avoidSquares,
+                avoidSquares:o.avoidSquares,minimumFloor:o.minimumFloor,
                 roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,marginSquares:2,maxRangeSquares:8,
                 maxNodes:768,maxMs:35,threats:o.threats??[],threatWeight:o.threatWeight??12,threatRadius:o.threatRadius??8});
               if(!side.found)continue;
               let previous=p,extra=0;for(const q of side.waypoints){extra+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
               if(used+extra>limit)continue;
               if(!fineRefugeReturnable(geo,previous,p,{objects:scopedObjects,selfId:o.selfId,
-               avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths}))continue;
+               avoidSquares:o.avoidSquares,minimumFloor:o.minimumFloor,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths}))continue;
               waypoints=[...prefix.slice(0,i+1),...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
               refuge={row:w.row,col:w.col};break;
             }
@@ -248,14 +254,14 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
             .sort((a,b)=>Math.hypot(a.row-from.row,a.col-from.col)-Math.hypot(b.row-from.row,b.col-from.col));
           for(const w of candidates.slice(0,16)){
             const side=planBodyDetour(geo,from,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
-              avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,
+              avoidSquares:o.avoidSquares,minimumFloor:o.minimumFloor,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,goalSquare:w,
               marginSquares:2,maxRangeSquares:limit+2,maxNodes:2000,maxMs:60,
               threats:o.threats??[],threatWeight:o.threatWeight??12,threatRadius:o.threatRadius??8});
             if(!side.found||!side.waypoints.length)continue;
             let previous=from,distance=0;for(const q of side.waypoints){distance+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
             if(distance>limit||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
             if(!fineRefugeReturnable(geo,previous,from,{objects:scopedObjects,selfId:o.selfId,
-             avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,
+             avoidSquares:o.avoidSquares,minimumFloor:o.minimumFloor,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,
              maxRangeSquares:limit+2,maxNodes:2000,maxMs:60}))continue;
             const first=point(from);
             waypoints=[{...first,f:settings.floorAt(first.x,first.y)},...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
@@ -264,6 +270,7 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
         }
         if(waypoints?.length>1)cut={...guide,waypoints,legs:waypoints.length-1,partial:true,refuge,refuge_return_proved:!!refuge,
           blocked_route_reason:cut.why??'body route bridge unavailable'};
+        }
       }
     }
     parentPort.postMessage({...cut,body_obstacles:obstacles.length,

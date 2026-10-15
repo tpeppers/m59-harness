@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Autopilot, releaseSpot } from './m59-autopilot.mjs';
 import { RoomGeometry } from './m59-roo.mjs';
+import {roomGeometry} from './m59-ground.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { OF, MOVEON } from './m59-parse.mjs';
 import { recoveryRefugeReach, planDoorEscape } from './m59-recovery-refuge.mjs';
@@ -75,6 +76,26 @@ await test('occupied closest wall loses; adjacent body alone does not veto a cle
   s=choose(); assert.ok(s); assert.notDeepEqual({row:s.row,col:s.col},{row:7,col:16});
   k.s.client.room.objects.set(5,{id:5,row:7,col:17,flags:OF.PLAYER|MOVEON.NO});
   s=choose(); assert.deepEqual({row:s.row,col:s.col},{row:7,col:16});
+});
+
+await test('Hollows ledge recovery preserves the nearby reversible fine footing through execution',async()=>{
+  const k=keeper(2502,{id:1,row:42,col:43,x:2752,y:2744,predicted:false}),c=k.s.client;
+  k.s.world.geometry=roomGeometry(2502);
+  let moves=0;
+  k.s.walkTo=k.s.approachFine=async()=>assert.fail('the proved fine refuge must not fall back to a square centre');
+  k.s.walkDepartureLegs=async points=>{
+    for(const p of points){
+      assert(Math.hypot(p.x-c.self.x,p.y-c.self.y)<=8,'recovery stays on the short upper ledge');
+      c.self={...c.self,...p,row:Math.floor(p.y/64),col:Math.floor(p.x/64),predicted:false};moves++;
+    }
+    return {arrived:true};
+  };
+  k.playDead=async()=>true;
+  const r=await k.takeRecoverySpot('recover on the observed upper ledge');
+  assert(r.took,JSON.stringify({result:r,notes:k.journal.slice(-3)}));assert.equal(moves,1);
+  assert.deepEqual({row:c.self.row,col:c.self.col,x:c.self.x,y:c.self.y},
+    {row:42,col:42,x:2744,y:2744});
+  releaseSpot(k.s.name);
 });
 
 await test('distant monster count cannot change the nearest recovery wall', async () => {

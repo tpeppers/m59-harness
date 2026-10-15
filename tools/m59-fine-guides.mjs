@@ -15,11 +15,16 @@ export function findFineGuide(geo,from,goal,{edge,book=fineGuideBook(),maxJoinSq
  if(!room)return null;
  const gap=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y),candidates=[];
  for(const guide of room.guides??[]){
-  const points=guide.waypoints,end=points?.at(-1);if(!end||gap(goal,end)>128)continue;
-  for(let i=0;i<points.length;i++)if(gap(from,points[i])<=maxJoinSquares*1024)candidates.push({guide,i,distance:gap(from,points[i])});
+  const points=guide.waypoints;if(!points?.length)continue;
+  // A checked interior endpoint is useful to staging and refuge consumers too.
+  // Keep the authored direction: this never manufactures the reverse rail.
+  const ends=points.map((p,j)=>({j,distance:gap(goal,p)})).filter(p=>p.distance<=128);
+  for(let i=0;i<points.length;i++)if(gap(from,points[i])<=maxJoinSquares*1024)
+    for(const end of ends)if(end.j>=i)candidates.push({guide,i,j:end.j,
+      distance:gap(from,points[i]),goalDistance:end.distance,full:end.j===points.length-1});
  }
- for(const {guide,i} of candidates.sort((a,b)=>a.distance-b.distance||b.i-a.i)){
-  const points=guide.waypoints.slice(i),first=points[0];
+ for(const {guide,i,j} of candidates.sort((a,b)=>a.distance-b.distance||Number(b.full)-Number(a.full)||a.goalDistance-b.goalDistance||b.i-a.i)){
+  const points=guide.waypoints.slice(i,j+1),first=points[0];
   if(!chordWalkable(from,first,{edge,lattice:128}).ok)continue;
   let previous=first,valid=true;
   for(const p of points.slice(1)){if(!chordWalkable(previous,p,{edge,lattice:128}).ok){valid=false;break;}previous=p;}
