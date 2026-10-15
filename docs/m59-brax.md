@@ -11,6 +11,18 @@ Start the fleet REPL in the checkout holding the fleet, with an explicit
 does not move a character. The real run takes the normal FleetScript keeper
 leases, retaining survival with the keeper.
 
+For the local test fleet in this worktree (PowerShell):
+
+```powershell
+$env:M59_CONTROL_URL='http://127.0.0.1:8981/'
+node tools/m59-fleet-repl.mjs --fleet brax-test
+```
+
+Then enter `walk-to-brax agents=braxtest01,braxtest02,braxtest03`.
+The shared local game server is 127.0.0.1:15959; its dedicated test dashboard is
+http://127.0.0.1:8982/fleet. The broker uses the repository's normal control-URL
+resolution, including an explicitly required URL when the checkout demands one.
+
 ## Route
 
 1. Ordinary travel to the Sentinel (589), then the eastern Ancient Place
@@ -69,6 +81,13 @@ collision guard. The rail follower and platform walker wait at the same aim,
 bounded by 45 seconds, and retain cancellation, room-change, wall and body
 refusals. They never advance through refused aims.
 
+On the three onward rail legs, an interruption explicitly attributed to a
+keeper survival action may retry at most twice. The route waits for at least
+90% health (or its higher requested floor), no active survival decision, and
+eight seconds without further health loss, then re-cuts from the actual
+position. Death, changed rooms, geometry failures, and unrelated cancellations
+remain failures. This is ordinary movement recovery, without healing or placement.
+
 ## Evidence and limits
 
 Local trials use only new `braxtest01`/Alfa, `braxtest02`/Bravo and
@@ -80,10 +99,32 @@ administrative tools.
 
 Detailed movement and objective receipts are under `substrate/brax-attempts/`.
 The early failures remain there, including the delayed final-lever message
-and the room-entry animation refusals. Success totals and exact final trial
-IDs are recorded after live verification.
+and the room-entry animation refusals. The final complete trial on 2026-10-14 PDT (2026-10-15 UTC) succeeded **3/3**:
+
+| Agent / character | Full route receipt ID | Alive arrival in 827 (UTC) |
+|---|---|---|
+| braxtest01 / Alfa | braxtest01-1792027915424 | 01:41:21 |
+| braxtest02 / Bravo | braxtest02-1792027923653 | 01:42:05 |
+| braxtest03 / Charlie | braxtest03-1792027931834 | 01:41:39 |
+
+All arrived at r5c2 with 151/151 health, with no mid-route administrative
+placement, healing, death recovery or survival retry. The measured route began
+at the actual eastern Ancient Place entrance, r38c74, after setup; the normal
+road travel to that entrance is composed from the existing travel tool. They
+shared one batch and exactly five confirmed lever pulls. Route build f7c9f159,
+source hashes in `substrate/brax-attempts/full-final-build.json`, and a compact
+summary in `full-final-result.json` identify the successful trial. Later code
+changes use the standard broker-URL resolver and handle a transient Windows
+mutex delete-pending refusal; the route geometry and sequence are unchanged. The trial retains normal monsters;
+it does not disable generation or remove hostile creatures. The operator permits
+restoring dead test characters to a previously reached checkpoint with full
+health and vigor, but any such recovery is recorded separately.
 
 The layout, queues, assignments, and paths around 24 parked bodies are checked for 25 members; a three-character live
 trial is the group-scale check. A 25-character live convoy and arbitrary
 hostile crowd tolerance require their own evidence. A blocked or interrupted
 character must produce a failure receipt rather than an arrival claim.
+
+Validation: the movement runner completed 49 suites with zero regressions
+(existing named baseline failures remain). Focused checks also cover unrelated
+lever messages, keeper survival recovery gates, and the Windows mutex retry.

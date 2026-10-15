@@ -4,6 +4,7 @@ import {asAgents} from '../m59-fleetlib.mjs';
 
 export const script={
   name:'walk-to-brax',
+  provenance:{pinned:'b1af6975',verified:'2026-10-14',touches:['tools/m59-brax.mjs','tools/m59-moving-platform.mjs','tools/m59-railfollow.mjs','tools/m59-fineclimb.mjs','tools/m59-falljump.mjs','tools/m59-keeper-process.mjs'],refuseOnDrift:false},
   describe:'Walk groups of up to 25 through the Ancient Place lift and Winding Caverns to the Ancient Graveyard of Brax (827).',
   recipe:{
     effect:'Uses the mana-node cliff climb, two declared falls, the five platform levers, and the legal eastern Cragged Mountains route.',
