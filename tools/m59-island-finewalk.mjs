@@ -18,6 +18,7 @@ import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-cros
 import {planDeclaredLanding} from './m59-jump-takeoff.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
 import {planRefugeStage,planNearbyFineRefuge} from './m59-fine-refuge-reach.mjs';
+import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -95,7 +96,7 @@ export function activeOwnedFineRecovery(ctx,status){
   const order=status?.movement?.order;
   if(order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))return false;
   const owned=origin?.source==='fleetscript'&&lease?.owner===origin.source+':'+origin.name&&lease.expires_in_ms>0&&
-    d?.source==='keeper'&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&['pending','approaching','arrived','holding','recovering'].includes(d.status);
+    isActiveRecoveryDecision(d);
   if(!owned)return false;
   // A completed rest can precede the keeper's next decision pulse. Its normal
   // fine tool already accepts a healthy body; do not consume all three recovery
@@ -130,7 +131,7 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
     }
     const decision=s.autopilot_status?.survival_decisions?.current;
     const chosen=decision?.chosen_refuge,order=s.movement?.order;
-    const approaching=owned&&decision?.source==='keeper'&&decision.ended_at==null&&
+    const approaching=owned&&isActiveRecoveryDecision(decision)&&
       ['pending','approaching'].includes(decision.status)&&
       (chosen&&(chosen.row!==l.you.row||chosen.col!==l.you.col||chosen.room!=null&&chosen.room!==l.room.num)||
        order?.origin?.source==='keeper'&&order.kind==='shelter');

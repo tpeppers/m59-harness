@@ -2262,6 +2262,13 @@ at already confirmed cover still permits resting; cancellation or a foreign
 lease ends continuation. Fine-walk budget failures retain their target,
 progress counters and last cut for the next investigation.
 
+The recovery decision's `source` is a context tag, not an issuer: ordinary
+keeper shelter choices also use `recovery`, `travel` and `practice`. Shared
+`isActiveRecoveryDecision` recognizes the lifecycle independently of that tag.
+The script still needs its live movement lease/order, and keeper fine dispatch
+refuses script moves while an injured body has active recovery. Explicit
+operator movement and a fully recovered body retain their existing behavior.
+
 `m59-entry-recovery.mjs` supplies bounded retreat/re-entry recovery for a
 confirmed healthy arrival blocked by live bodies. Callers provide their normal
 one-room travel, fresh health/position reads, cancellation checks and original

@@ -13,9 +13,9 @@ const scratch=mkdtempSync(join(tmpdir(),'m59-fine-recovery-'));
 const oldRegistry=process.env.M59_KEEPER_BAND_REGISTRY;
 const origin={source:'fleetscript',name:'fine-recovery',run_id:'fixture'},label=originLabel(origin);
 const agent='fine-recovery-fixture',room={num:2502,object_id:777},vigor={value:200};
-let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false;
+let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false,recoverySource='keeper';
 const recovery=()=>proactive?{faculties:{movement:{owner:'fleetscript:fine-recovery',expires_in_ms:10000}},
- survival_decisions:{current:{source:'keeper',strategy:'nearest_refuge',status:hp.value<20?'approaching':'ended',ended_at:hp.value<20?null:Date.now()}},
+ survival_decisions:{current:{source:recoverySource,strategy:'nearest_refuge',status:hp.value<20?'approaching':'ended',ended_at:hp.value<20?null:Date.now()}},
  safe_spot:{works:true,at:{row:pose.row,col:pose.col}}}:undefined;
 const server=createServer((request,response)=>{
  if(!request.url.startsWith('/state')&&!['/live','/health'].includes(request.url)){response.writeHead(404);response.end();return;}
@@ -51,6 +51,13 @@ try{
  assert(!activeOwnedFineRecovery({...ctx,origin:{...origin,name:'foreign'}},{autopilot_status:recovery()}));
  const cooperative=await checkedIslandWalk(ctx,{x:2410,y:1062},{room:2502,budgetMs:60000});
  assert.equal(cooperative.ok,true);assert.equal(rests,1);assert(moves>0);
+ for(const source of ['recovery','travel','practice']){
+  recoverySource=source;pre=null;moves=0;rests=0;pose={id:1,x:2152,y:1392,row:21,col:33};hp={value:14,max:20};
+  assert(activeOwnedFineRecovery(ctx,{autopilot_status:recovery()}),'the keeper context '+source+' is not a different movement owner');
+  const resumed=await checkedIslandWalk(ctx,{x:2410,y:1062},{room:2502,budgetMs:60000});
+  assert(resumed.ok);assert.equal(rests,1);assert(moves>0,'the original fine goal resumes only after owned recovery');
+ }
+ recoverySource='keeper';
  const map=loadMap(),hollows=roomExitSquares(map.rooms[2502],{includeInland:true});
  assert(hollows.has('1,41')&&hollows.has('2,41')&&hollows.has('47,78'));
  const merb=roomExitSquares(map.rooms[2502],{to:2503,includeInland:true});

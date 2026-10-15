@@ -23,7 +23,7 @@ import { sourceForPush, sameValue } from './m59-policy-sources.mjs';
 import { KEY_FACULTY } from './m59-strategy-schema.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
-import {currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {currentSurvivalDecision,isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
@@ -2604,9 +2604,7 @@ const server = createServer(async (req, res) => {
           // sliver, and slivers are where the interesting places in this game are.
           case 'walk_fine': {
             const recovery=currentSurvivalDecision(session),health=session.client?.vitals?.()?.health;
-            if(args.origin?.source==='fleetscript'&&health?.value<health?.max&&recovery?.source==='keeper'&&
-              recovery.strategy!=='yield_to_controller'&&recovery.ended_at==null&&
-              ['pending','approaching','arrived','holding','recovering'].includes(recovery.status)){
+            if(args.origin?.source==='fleetscript'&&health?.value<health?.max&&isActiveRecoveryDecision(recovery)){
               json({arrived:false,reason:'keeper_recovery_active',decision_id:recovery.id});return;
             }
             // EVERY OPTION THIS FORWARDS HAS TO BE NAMED HERE, and one that is not is dropped
