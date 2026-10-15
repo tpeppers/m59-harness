@@ -1,5 +1,13 @@
 # Movement, collision and routing
 
+Wrong-exit masks may include an extra interior row or column. A confirmed
+arrival on that guard can leave its connected interior buffer; the actual
+boundary exclusions and existing current-cell departure allowance remain
+unchanged. The full buffer returns once the body leaves it. Predicted or
+unconfirmed positions cannot grant this departure. Each fine packet still
+checks geometry, bodies and the resulting exclusions. The recorded Icky Cave
+arrival at r58c44 exercises this through a complete ordinary fine-route proof.
+
 ## Local combat approaches
 
 An adjacent coarse square is not proof that the body can stand beside a quarry.

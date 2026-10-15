@@ -587,8 +587,8 @@ export function selectedEdgeAt(room, direction, candidate) {
 }
 
 /** Declared edge exits an in-room walk must avoid, using legacy row,col keys. */
-export function roomExitSquares(room,{rows=room?.rows,cols=room?.cols,to=null,includeInland=false}={}) {
-  const out=new Set();
+export function roomExitSquares(room,{rows=room?.rows,cols=room?.cols,to=null,includeInland=false,from=null}={}) {
+  const out=new Set(),boundary=new Set();
   if(!Number.isInteger(rows)||!Number.isInteger(cols)||rows<1||cols<1)return out;
   for(const direction of ['north','south','west','east']){
     const vertical=direction==='west'||direction==='east',count=vertical?rows:cols;
@@ -596,9 +596,26 @@ export function roomExitSquares(room,{rows=room?.rows,cols=room?.cols,to=null,in
       const row=vertical?n:direction==='north'?1:rows,col=vertical?(direction==='west'?1:cols):n;
       const edge=selectedEdgeAt(room,direction,{row,col});
       if(!edge||Number(edge.to)===Number(room.num)||to!=null&&Number(edge.to)===Number(to))continue;
-      out.add(row+','+col);
+      out.add(row+','+col);boundary.add(row+','+col);
       if(includeInland){const r=row+(direction==='north'?1:direction==='south'?-1:0),c=col+(direction==='west'?1:direction==='east'?-1:0);
         if(r>=1&&r<=rows&&c>=1&&c<=cols)out.add(r+','+c);}
+    }
+  }
+  // The extra inland buffer must not imprison an observed arrival. Its
+  // connected interior apron may be left while every actual exit stays banned.
+  // Recompute from each confirmed body; leaving the apron restores the buffer.
+  if(includeInland&&from?.confirmed===true&&!from.predicted&&Number.isInteger(from.row)&&Number.isInteger(from.col)){
+    const start=from.row+','+from.col;
+    if(out.has(start)){
+      const steps=[{row:-1,col:0},{row:1,col:0},{row:0,col:-1},{row:0,col:1}];
+      const queue=boundary.has(start)?steps.map(d=>({row:from.row+d.row,col:from.col+d.col}))
+        .filter(p=>out.has(p.row+','+p.col)&&!boundary.has(p.row+','+p.col)):[{row:from.row,col:from.col}];
+      const seen=new Set(queue.map(p=>p.row+','+p.col));
+      for(let i=0;i<queue.length;i++)for(const delta of steps){
+        const p={row:queue[i].row+delta.row,col:queue[i].col+delta.col},key=p.row+','+p.col;
+        if(out.has(key)&&!boundary.has(key)&&!seen.has(key)){seen.add(key);queue.push(p);}
+      }
+      for(const key of seen)out.delete(key);
     }
   }
   return out;

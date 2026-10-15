@@ -224,7 +224,9 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const body=protocolToClient(l.you);if(!Number.isFinite(body.x)||!Number.isFinite(body.y))throw Error('fine_route_position_unreadable');
     validatePosition?.(l);
     liveBodies=blockingBodySnapshot(new Map((l.objects??[]).map(o=>[o.id,o])),l.you.id);
-    avoidance=new Set(exits);avoidance.delete(l.you.row+','+l.you.col); // permit leaving an arrival cell
+    avoidance=roomExitSquares(loadMap().rooms[room],{rows:geo.rows,cols:geo.cols,to:allowEdgeTo,includeInland:true,
+      from:{row:l.you.row,col:l.you.col,confirmed:true}});
+    avoidance.delete(l.you.row+','+l.you.col); // permit leaving an actual arrival cell
     return {l,body};
   };
   const partialRefuges=new Set();
