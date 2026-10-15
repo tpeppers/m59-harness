@@ -2,12 +2,13 @@
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
-import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition} from './m59-island-finewalk.mjs';
+import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition,waitAtIslandTrafficRefuge} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
 import {entryTrafficCandidate,reversibleEntry,retreatAndRetryEntry} from './m59-entry-recovery.mjs';
 import {loadMap} from './m59-map.mjs';
+import {withTraversalAdmission} from './m59-traversal-admission.mjs';
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
 export const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -289,6 +290,41 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(leg.end.room===to){leg.ok=true;delete leg.reason;}
   return leg;
 }
+export async function admittedIslandTransit(ctx,{from,to,budgetMs=180000,hop=ordinaryHop,read=readIslandFinePosition,
+ admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
+ const takeHop=async destination=>{
+  const leg=await hop(ctx,destination,{budgetMs,recoverAtEntry:true});onLeg(leg);
+  if(!leg.ok)throw Error('hop_failed_'+destination);return leg;
+ };
+ const proof=async(agent,{cached=false}={})=>{
+  if(cached){
+   const s=await ctx.call('status',{agent,brief:true});
+   return {agent,room:s.connected===true&&s.in_game!==false?s.room?.num:null,confirmed:false,at:Date.now()};
+  }
+  const observer=agent===ctx.agent?ctx:{...ctx,agent,state:{}};
+  let l;
+  try{l=await read(observer);}catch(e){
+   if(agent===ctx.agent||e.message!=='traveller_died')throw e;
+   const s=await ctx.call('status',{agent,brief:true});
+   if(s.connected===true&&s.in_game!==false&&s.room?.num===1&&s.hp?.value===0)
+    return {agent,room:1,confirmed:true,at:Date.now()};
+   throw e;
+  }
+  if(agent===ctx.agent)checkIslandCancellation(ctx,l);
+  return {agent,room:l.room?.num,confirmed:!!l.you&&!l.you.predicted&&Number.isInteger(l.you.id),at:Date.now()};
+ };
+ return admit(ctx,{room:2505,read:proof,waitQueued:async()=>{
+  if(from===ISLAND){
+   await takeHop(2001); // Returners wait in the inn, outside the cramped cave entry.
+   ctx.state.traversalAdmission.waiting_room=2001;
+  }else await park(ctx,{budgetMs});
+ },run:async ticket=>{
+  if((await read(ctx)).room?.num===2001)await takeHop(ISLAND);
+  const enter=await takeHop(2505);await ticket.entered();
+  const leave=await takeHop(to);await ticket.cleared();
+  return {enter,leave};
+ }});
+}
 export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=120,requireSafeLegs=false,evidenceDir='substrate/island-trials'}={}){
   if(!['out','back'].includes(direction))throw Error('direction must be out or back');
   const {agent,call,state}=ctx,chain=MAIN_CAVES;
@@ -308,7 +344,15 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
   save();
   try{
     return await withIslandSafeLegs(ctx,async()=>{
-    for(const to of route.slice(1)){
+    for(let i=1;i<route.length;i++){
+      const to=route[i];
+      if(to===2505){
+        await admittedIslandTransit(ctx,{from:route[i-1],to:route[i+1],budgetMs,onLeg:leg=>{
+          record.legs.push(leg);save();
+        }});
+        record.admission={...state.traversalAdmission};save();
+        i++;continue;
+      }
       const leg=await ordinaryHop(ctx,to,{budgetMs,recoverAtEntry:true,onSample:live=>{record.current=live;save();}});
       record.legs.push(leg);delete record.current;save();
       console.log('ISLAND HOP '+JSON.stringify({agent,to,ok:leg.ok,ms:leg.ms,damage:leg.damage,end:leg.end,reason:leg.reason}));
@@ -317,5 +361,6 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
     record.end=location(await call('look',{agent}));record.complete=record.end.room===route.at(-1);save();
     return {ok:record.complete,evidence:file};
     },{required:requireSafeLegs});
-  }catch(e){record.failure=e.message;record.failure_detail=state.islandFineFailure;save();throw e;}
+  }catch(e){record.failure=e.message;record.failure_detail=state.islandFineFailure;
+    record.admission=state.traversalAdmission;save();throw e;}
 }

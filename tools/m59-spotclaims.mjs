@@ -139,7 +139,7 @@ function writeExclusive(dir, kind, agent, record) {
   return { path, name };
 }
 
-function records(dir, prefix) {
+function records(dir, prefix, { retainDead = false } = {}) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.startsWith(prefix + '-') || !entry.name.endsWith('.json'))
@@ -149,12 +149,16 @@ function records(dir, prefix) {
     try { value = JSON.parse(readFileSync(path, 'utf8')); }
     catch {
       const pid = Number(entry.name.split('-')[1]);
-      if (!pidAlive(pid)) { remove(path); continue; }
+      if (!retainDead && !pidAlive(pid)) { remove(path); continue; }
       // An unreadable record owned by a live process means the store is not safe to use.
       // Failing closed is preferable to sending two characters to the same wall.
       throw new Error(`live wall claim record is unreadable: ${entry.name}`);
     }
-    if (!value?.agent || !pidAlive(value.pid)) { remove(path); continue; }
+    if (!value?.agent) {
+      if(retainDead)throw Error('traversal claim identity is unreadable');
+      remove(path);continue;
+    }
+    if (!retainDead && !pidAlive(value.pid)) { remove(path); continue; }
     out.push({ ...value, _path: path, _name: entry.name });
   }
 
@@ -330,6 +334,58 @@ export function releaseFilePassage(agent) {
   return withLock(dir => {
     for (const r of records(dir, 'passage'))
       if (r.agent === String(agent) && r.pid === process.pid) remove(r._path);
+    return true;
+  });
+}
+
+// Map entry can precede a narrow crossing by several walking legs. Reserve
+// that complete transit before entry, independently of packet-level passages.
+// A dead driver does not prove that its character left the constrained room.
+const traversalRecords=dir=>{
+  const all=records(dir,'traversal',{retainDead:true});
+  if(all.some(r=>!Number.isSafeInteger(r.room)||typeof r.token!=='string'||!r.token||
+    !['admitted','entered','stopped'].includes(r.phase)||!Number.isSafeInteger(r.pid)||r.pid<=0))
+    throw Error('traversal claim is unusable');
+  return all.sort((a,b)=>(b.updated_at??0)-(a.updated_at??0));
+};
+const traversalView=r=>r&&({agent:r.agent,room:r.room,token:r.token,phase:r.phase,
+  pid:r.pid,driver_alive:pidAlive(r.pid),updated_at:r.updated_at});
+export function reserveFileTraversal(agent,room,token){
+  if(!fileSpotClaimsEnabled())return null;
+  if(!agent||!Number.isSafeInteger(room)||!token)throw Error('invalid traversal admission');
+  return withLock(dir=>{
+    const all=traversalRecords(dir),own=all.find(r=>r.agent===String(agent));
+    if(own?.room===room&&own.token===token)return {ok:true,lease:traversalView(own)};
+    const other=own??all.find(r=>r.room===room);
+    if(other)return {ok:false,lease:traversalView(other)};
+    const made={agent:String(agent),room,token,phase:'admitted',pid:process.pid,updated_at:Date.now()};
+    writeExclusive(dir,'traversal',String(agent),made);
+    return {ok:true,lease:traversalView(made)};
+  });
+}
+export function markFileTraversal(lease,phase){
+  if(!fileSpotClaimsEnabled())return null;
+  if(!['entered','stopped'].includes(phase))throw Error('invalid traversal phase');
+  return withLock(dir=>{
+    const all=traversalRecords(dir),own=all.find(r=>r.token===lease.token&&r.agent===lease.agent&&r.room===lease.room);
+    if(!own||own.pid!==process.pid)return false;
+    const {_path,_name,...made}=own;
+    writeExclusive(dir,'traversal',own.agent,{...made,phase,updated_at:Date.now()});
+    for(const r of all)if(r.token===own.token&&r.agent===own.agent)remove(r._path);
+    return true;
+  });
+}
+export function releaseFileTraversal(lease,proof){
+  if(!fileSpotClaimsEnabled())return null;
+  if(proof?.confirmed!==true||proof.agent!==lease.agent||!Number.isInteger(proof.room)||
+      proof.room===lease.room||!Number.isFinite(proof.at)||Math.abs(Date.now()-proof.at)>5000)return false;
+  return withLock(dir=>{
+    const all=traversalRecords(dir),own=all.find(r=>r.token===lease.token&&r.agent===lease.agent&&r.room===lease.room);
+    if(!own)return true;
+    // An admitted driver outside the room has not entered yet. A waiter must
+    // not steal its ticket during the await before the first crossing packet.
+    if(own.phase==='admitted'&&pidAlive(own.pid))return false;
+    for(const r of all)if(r.token===own.token&&r.agent===own.agent)remove(r._path);
     return true;
   });
 }

@@ -45,6 +45,30 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+for(const mode of ['gutter','default','cancel','unknown']){
+ const f=fixture();let calls=0,cancelled=false;
+ f.ctx.call=async()=>{calls++;if(mode==='cancel'&&calls===3)cancelled=true;
+  return {jumped:false,arrived:false,reason:'declared jump refused: '+(mode==='unknown'?'unexpected_failure':'geometry_blocked')};};
+ const originalRead=f.read;
+ const read=async()=>{if(cancelled)throw Error('cancelled_by_operator');return originalRead();};
+ const run=()=>followDeclaredCrossing(f.ctx,out,{geo,read,walk:f.walk,gutter,stage,clear,gutterOnRefusal:mode!=='default'});
+ if(mode==='gutter'){
+  const r=await run();assert(r.gutter&&!r.crossed);assert.equal(r.why,'flight_refused');
+  assert.deepEqual(f.walks.at(-1),gutter);assert.equal(f.walks.filter(p=>p.x===stage.x&&p.y===stage.y).length,2,
+   'the final refused flight leaves through its walking gutter instead of occupying retry staging');
+  assert.equal(f.ctx.state.declaredCrossingFallback.via,'ordinary_gutter');
+  assert.equal(f.ctx.state.declaredCrossingFailure,undefined);
+ }else{
+  await assert.rejects(run(),mode==='cancel'?/cancelled_by_operator/:/attempts_exhausted/);
+  assert(!f.walks.some(p=>p.x===gutter.x&&p.y===gutter.y),'cancellation, unknown failure and an unapproved escape cannot start a gutter walk');
+ }
+ assert.equal(calls,3);
+}
+{
+ const f=fixture();f.ctx.call=async()=>({jumped:false,reason:'declared jump refused: geometry_blocked'});
+ await assert.rejects(followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,stage,clear,gutterOnRefusal:true,
+  gutter:()=>{throw Error('ordinary_escape_unproved');}}),/ordinary_escape_unproved/);
+}
 {
  let occupant=null,waits=0;const events=[],fs=[fixture(),fixture()];
  await Promise.all(fs.map((f,i)=>followDeclaredCrossing(f.ctx,out,{geo,read:f.read,

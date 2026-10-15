@@ -34,7 +34,7 @@ export async function followDeclaredApproach(declaration,{geo,read,walk,target,g
 }
 export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter,clear,stage,budgetMs=180000,
  refineTakeoff=false,approachPoint=null,walkTakeoff=walk,recover=null,observeLanding=null,waitAtCover=null,
- prepare=null,waitQueued=null,queueBudgetMs=null}={}){
+ prepare=null,waitQueued=null,queueBudgetMs=null,gutterOnRefusal=false}={}){
  if(!declaration?.from_fine||!declaration?.to_fine||!geo||!read||!walk||!gutter)throw Error('declared_crossing_incomplete');
  const queuedAt=Date.now(),takeoff=clientToProtocol(declaration.from_fine),landing=clientToProtocol(declaration.to_fine);
  let began=queuedAt;
@@ -165,6 +165,16 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
     observed:after.you,reply};
    if(recover&&await recover({since,initial:after}))continue;
    if(Math.abs(height-fromFloor)>64||Math.hypot(after.you.x-target.x,after.you.y-target.y)>64)throw Error('declared_crossing_unclassified_landing');
+   // Some declared crossings also have an ordinary lower walking route. Its
+   // caller must opt in, and its checked walker still proves every packet.
+   // Refused flights must not leave the exhausted traveler on retry staging.
+   if(gutterOnRefusal&&attempts>=3&&reply.jumped===false&&
+       /^declared jump refused: (geometry_blocked|object_blocked|exact_move_refused|fall_changed_before_send)$/.test(reply.reason??'')){
+    await reachGutter(gutter,walk,after);
+    ctx.state.declaredCrossingFallback={room:declaration.room,reason:lastRefusal,attempts,via:'ordinary_gutter'};
+    delete ctx.state.declaredCrossingFailure;
+    return {crossed:false,gutter:true,why:'flight_refused',attempts,reply};
+   }
    await restage();await new Promise(r=>setTimeout(r,500));
   }
   throw Error('declared_crossing_attempts_exhausted: '+lastRefusal);
