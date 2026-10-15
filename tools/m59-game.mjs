@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
 import {rememberRefugePosition} from './m59-refuge-leg.mjs';
+import {verticalMotionRange,nextVerticalMotion} from './m59-vertical-motion.mjs';
 import { CombatMode } from './m59-combat-mode.mjs';
 import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
@@ -3380,10 +3381,7 @@ class Session {
       .filter(o => !overlapExempt({ obstacle: o, fromX, fromY, isOurs: o.ours }));
     const vertical = this.collisionVertical;
     const now = Date.now();
-    const motionZ = vertical?.roomId === c.room.id && vertical.settleAt > now
-      && Number.isFinite(vertical.min) && Number.isFinite(vertical.max)
-      ? { min: vertical.min, max: vertical.max }
-      : null;
+    const motionZ = verticalMotionRange(vertical,c.room.id,now);
     if (vertical && (!motionZ || vertical.roomId !== c.room.id)) this.collisionVertical = null;
     // THE ROUTER PROVES A FALL WITH ONE PREDICATE AND THE MOVER ATTEMPTED IT WITH ANOTHER.
     // THAT IS THE WHOLE OF THE MOUNTAIN ROOMS.
@@ -3765,30 +3763,11 @@ class Session {
       });
       const destinationFloor = validation.destinationFloor;
       if (Number.isFinite(destinationFloor)) {
-        const commandZ = validation.motionZ;
-        const startMin = Number.isFinite(commandZ?.min) ? commandZ.min
-          : Number.isFinite(commandZ) ? commandZ : destinationFloor;
-        const startMax = Number.isFinite(commandZ?.max) ? commandZ.max
-          : Number.isFinite(commandZ) ? commandZ : destinationFloor;
-        const min = Math.min(startMin, startMax, destinationFloor);
-        const max = Math.max(startMin, startMax, destinationFloor);
-        if (max - min > 1e-6) {
-          const existing = this.collisionVertical;
-          const now = Date.now();
-          const active = existing?.roomId === roomId && existing.settleAt > now;
-          const combinedMin = active ? Math.min(existing.min, min) : min;
-          const combinedMax = active ? Math.max(existing.max, max) : max;
-          const floorChanged = !active || existing.lastFloor !== destinationFloor;
-          if (floorChanged || min < existing.min || max > existing.max) {
-            // A normal client animates this transition between input commands. The
-            // headless protocol has no z updates, so retain the entire possible range
-            // for a conservative settling window instead of guessing a single height.
-            const settleMs = Math.min(5000,
-              500 + Math.ceil((combinedMax - combinedMin) / CLIENT_FINENESS * 1500));
-            this.collisionVertical = { roomId, min: combinedMin, max: combinedMax,
-              lastFloor: destinationFloor, settleAt: now + settleMs };
-          }
-        } else this.collisionVertical = null;
+        // Ordinary falls settle between input packets. Age the conservative upper
+        // height instead of restarting the entire drop at every new floor sample.
+        // Timed/declared falls retain their separate, unmodelled flight envelope.
+        this.collisionVertical=nextVerticalMotion(this.collisionVertical,roomId,
+          validation.motionZ,destinationFloor,Date.now(),{normalWalk:!fall&&!timedFall});
       }
       return { sent: true, roomId, eventSeq, before, target: validation.target, validation };
     }, minGap);

@@ -1,5 +1,7 @@
 // Recovery asks where this body can get safe now, independently of a future quarry.
 import { OF, blocksMovement } from './m59-parse.mjs';
+import {fineRefugeReach} from './m59-fine-refuge-reach.mjs';
+import {planBodyDetour} from './m59-body-detour.mjs';
 
 export const REFUGE_PROGRESS_MS = 8000;
 
@@ -31,7 +33,7 @@ export function observeRefugeProgress(state, geo, position, target, now = Date.n
       return state;
     }
     state.square=square;
-    let remaining = Infinity,path=null;
+    let remaining = Infinity,path=null,fineNext=null;
     if (position.row === target.row && position.col === target.col) remaining = 0;
     else if (geo?.path) {
       try {
@@ -39,13 +41,26 @@ export function observeRefugeProgress(state, geo, position, target, now = Date.n
         if (path?.found) remaining = path.steps.length;
       } catch { /* an unreadable path is not progress */ }
     }
+    if(!Number.isFinite(remaining)&&geo?.collisionReady&&[position.x,position.y].every(Number.isFinite)
+      &&Math.max(Math.abs(position.row-target.row),Math.abs(position.col-target.col))<=6){
+      const goal=target.fine??geo.standPointWire?.(target.row,target.col);
+      if(goal){
+        const p=planBodyDetour(geo,position,goal,{goalSquare:target.fine?null:target,
+          marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:40});
+        if(p.found){
+          remaining=0;let previous=position;
+          for(const point of p.waypoints){remaining+=Math.hypot(point.x-previous.x,point.y-previous.y)/64;previous=point;}
+          fineNext=p.waypoints.find(p=>Math.hypot(p.x-position.x,p.y-position.y)>=2)??null;
+        }
+      }
+    }
     if (remaining < state.best) {
       state.best = remaining;
       state.progressedAt = now;
     }
     const next=path?.steps?.[0];
-    state.fineTarget=remaining===state.best&&Number.isFinite(next?.row)&&Number.isFinite(next?.col)
-      ?geo?.standPointWire?.(next.row,next.col)??{x:next.col*64+32,y:next.row*64+32}:null;
+    state.fineTarget=remaining===state.best?(fineNext??(Number.isFinite(next?.row)&&Number.isFinite(next?.col)
+      ?geo?.standPointWire?.(next.row,next.col)??{x:next.col*64+32,y:next.row*64+32}:null)):null;
     state.fineBest=state.fineTarget&&[position.x,position.y].every(Number.isFinite)
       ?Math.hypot(position.x-state.fineTarget.x,position.y-state.fineTarget.y):Infinity;
   }
@@ -66,12 +81,14 @@ export function recoveryOccupiedSquares(objects, selfId, playersOnline = null) {
 
 export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = null) {
   const occupied = recoveryOccupiedSquares(objects, selfId, playersOnline);
+  const fine=fineRefugeReach(geo,from,objects,selfId);
   return (col, row) => {
     if (!geo?.path || !from) return { reachable: false, why: 'recovery route unavailable' };
     if (occupied.has(`${row},${col}`)) return { reachable: false, why: 'recovery spot occupied' };
     try {
       const path = geo.path(from.row, from.col, row, col,
         { avoid: occupied, clearance: 0, goalExempt: false });
+      if(!path?.found){const proved=fine(col,row);if(proved.reachable)return proved;}
       return { reachable: !!path?.found, steps: path?.found ? path.steps.length : null,
         path: path?.found ? path.steps : null,
         why: path?.found ? undefined : path?.reason ?? 'no clear recovery route' };

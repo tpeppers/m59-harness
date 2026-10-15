@@ -901,6 +901,9 @@ export function nearestSafeSpot(geo, from, {
   rule = 'wall', minBackCover = 1, fromFightWeight = 0.3,
   closestToToward = false,
   allowExit = true,
+  // Recovery alone may supplement the coarse component with a bounded fine
+  // body proof, including a way back. The reach callback still owns occupancy.
+  fineRecovery = false,
   // false withholds every wall and leaves the exit (when a journey names one): the crowd
   // rule — see Autopilot.crowded — because a wall in a room of thirteen trolls is not one.
   wallsAllowed = true,
@@ -1011,7 +1014,8 @@ export function nearestSafeSpot(geo, from, {
   let exitConsidered = false;
   let partitionRejected = 0;
   const passages=fineChokesFor(geo);
-  for (const s of (wallsAllowed ? all : [])) {
+  const candidates=fineRecovery?[...all].sort((a,b)=>cheb(from,a)-cheb(from,b)):all;
+  for (const s of (wallsAllowed ? candidates : [])) {
     const stop=passages.length?geo.standPointWire?.(s.row,s.col):null;
     if(stop&&passages.some(p=>Math.abs(p.x-stop.x)<=32&&Math.abs(p.y-stop.y)<=32))continue;
     // NO SQUARE IS DISQUALIFIED BY ITS HISTORY, and there is no longer a history to consult.
@@ -1060,13 +1064,14 @@ export function nearestSafeSpot(geo, from, {
     // world: caching it per room would cost more than it saves.
     // AND NOT ONE THE MOVER CANNOT GET TO AT ALL. The measured case is a shelter offered in
     // a disconnected component while a real wall sat one square from the character.
-    if (canWalkThere && !canWalkThere.has(`${s.row},${s.col}`)) { unreachableToUs++; continue; }
+    let p=fineRecovery&&cheb(from,s)<=6&&reach?reach(s.col,s.row):null;
+    if (canWalkThere && !canWalkThere.has(`${s.row},${s.col}`)&&!p?.fine_proved) { unreachableToUs++; continue; }
     if (!hasAnyFooting(geo, s.row, s.col)) { unreachableToUs++; continue; }
     // NOR ONE WE COULD NOT COME BACK FROM. Now that distance is the whole ranking, the
     // nearest wall is sometimes over a one-way drop — the mover walks a character off a
     // ledge it cannot climb, the character rests, and the journey that diverted has no
     // route onward. Getting there was never the hard half of a rest stop.
-    const returnsToUs = !canComeBack || canComeBack.has(`${s.row},${s.col}`);
+    const returnsToUs = !canComeBack || canComeBack.has(`${s.row},${s.col}`)||p?.fine_proved&&p.returnable===true;
     const towardExit = !!reachesOnward?.has(`${s.row},${s.col}`);
     if (!returnsToUs && !towardExit) { oneWay++; continue; }
     if (towardExit) reachesOnwardCount++;
@@ -1124,7 +1129,7 @@ export function nearestSafeSpot(geo, from, {
       partitionRejected++;
       continue;
     }
-    const p = reach ? reach(s.col, s.row) : { reachable: true, steps: d };
+    p ??= reach ? reach(s.col, s.row) : { reachable: true, steps: d };
     if (!p?.reachable) {
       unreachableToUs++;
       continue;
@@ -1187,7 +1192,7 @@ export function nearestSafeSpot(geo, from, {
       // reporting — and the remembered fine coordinate was one operator's exact footing on
       // one past visit, which is not a property of the square. Kept in the shape so callers
       // need not change; a caller wanting fine footing computes it from the square.
-      proven: true, held_before: null, fine: null,
+      proven: true, held_before: null, fine: p.fine_proved?p.fine:null,
     };
     if (predictedUnreachable) {
       if (preferSafeSpotCandidate(candidate, bestPredictedUnreachable, { closestToToward }))

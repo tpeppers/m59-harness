@@ -61,6 +61,8 @@ const SUITES = [
   ['m59-island-test.mjs', 'island health and safe-leg policy guards; full chalice, observed landings and exclusive recoverable jungle cargo'],
   ['m59-fine-recovery-test.mjs', 'a fresh keeper interruption recovers an offline fine-action reply and confirms the original fine goal'],
   ['m59-refuge-leg-test.mjs', 'recent confirmed progress retains a short proved route to cover; stale, blocked or cancelled legs restore emergency recovery'],
+  ['m59-vertical-motion-test.mjs', 'ordinary walking falls age a conservative height envelope across packets and floor changes; unmodelled flights retain their uncertainty'],
+  ['m59-fine-refuge-reach-test.mjs', 'recorded Konima recovery supplements coarse reach with bounded reversible live-body fine approaches and retains occupied goals'],
   ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],
   ['m59-selfheal-test.mjs', 'fresh named player identity replaces a reused self id and refuses another character position after saves'],
   ['m59-recovery-driver-age-test.mjs', 'both real watchdogs give a new keeper approach its bounded recovery window while retaining stalled-driver rescue'],

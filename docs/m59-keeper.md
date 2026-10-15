@@ -66,6 +66,10 @@ Fine controllers retain an owned recovery observation at the positively confirme
 refuge when the keeper episode ends before health remains full. Continuation requires
 the same character, room, fine position and live movement lease; an actual attack,
 operator cancellation, expired lease or position change ends that authorization.
+A completed keeper escape may resume from a corrected positive pose once health
+is full, provided the same character, room and controller lease remain live.
+That completion path issues no rest or movement packet. Fine controllers yield
+to an owned active recovery even when a transient health snapshot reads full.
 
 Arsenic has the same name and icon as a healing flask. `healUp` requires a fresh
 LOOK for that object matching the healing flask's blue-fluid description. Harmful,

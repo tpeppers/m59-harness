@@ -85,6 +85,8 @@ export const DOMAINS = Object.freeze({
       'tools/m59-body-detour.mjs',
       'tools/m59-fine-rail.mjs',
       'tools/m59-refuge-leg.mjs',
+      'tools/m59-vertical-motion.mjs',
+      'tools/m59-fine-refuge-reach.mjs',
       'tools/m59-refuge-activation.mjs',
       'tools/m59-pocket-rails.mjs',
       'tools/m59-jump-takeoff.mjs',
