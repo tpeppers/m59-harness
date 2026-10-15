@@ -54,6 +54,20 @@ reported order lets both paced walkers steer the same body. The selected
 recovery decision survives this handoff; a refused cancellation prevents the
 replacement approach.
 
+Routes with a constrained entrance may reserve a complete room transit before
+entry. This uses a separate atomic claim from packet-level narrow passages.
+An admitted driver waiting to enter cannot be displaced; a stopped or dead
+driver retains the claim until its exact character is freshly observed outside.
+Konima transits use this in both directions. Returners queue in the island inn,
+then take ordinary hops through town after admission. Outward waiters use an
+unoccupied checked refuge in Obfal. Passage collision checks still apply inside.
+
+A declared crossing may explicitly offer its ordinary gutter after three
+refused flights. Only recognized unchanged-takeoff refusals qualify. The walker
+must still prove that escape; cancellation and unknown failures do not start it.
+Konima's known walking gutters opt in, avoiding another return to retry staging
+after the final refusal. Hollows has no proved lower escape and does not opt in.
+
 Static refuge staging uses a checked fine footing rather than assuming that
 the marked cell's centre is enterable. The layout resolver requires a known
 non-rim refuge, an approach and a return proof from its geometry anchor. That

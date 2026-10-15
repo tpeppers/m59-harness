@@ -414,6 +414,11 @@ async function waitForDeclaredTurn(ctx,geo,read,walk){
   if(held.you.row!==refuge.cell.row||held.you.col!==refuge.cell.col||!knownRefugeCell(geo,held.you))
     throw Error('declared_crossing_queue_refuge_unconfirmed');
 }
+export async function waitAtIslandTrafficRefuge(ctx,options={}){
+ const initial=await readIslandFinePosition(ctx),room=initial.room.num,geo=roomGeometry(room);
+ const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);return l;};
+ return waitForDeclaredTurn(ctx,geo,read,(point,guard={})=>checkedIslandWalk(ctx,point,{...options,...guard,room}));
+}
 export async function approachIslandDoor(ctx,options={}){
   const initial=await readIslandFinePosition(ctx);
   if(initial.you.row>10){
@@ -427,11 +432,11 @@ export async function approachIslandDoor(ctx,options={}){
     const initialPoint=protocolToClient(initial.you),height=geo.floorBaseAtClient(initialPoint.x,initialPoint.y);
     let crossed={crossed:initial.you.col>=65&&initial.you.col<84&&initial.you.row<47};
     if(initial.you.col<48||initial.you.col<=60&&height>=14800){
-      crossed=await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs,queueBudgetMs,waitQueued,
+      crossed=await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs,queueBudgetMs,waitQueued, gutterOnRefusal:true,
         prepare:()=>followDeclaredApproach(first,{geo,read,walk,target:{x:3072,y:1768},gutter:{x:3808,y:2144}})});
     }else if(initial.you.col<65&&height<14500&&initial.you.row<35)await walk({x:3808,y:2144});
     if(crossed.crossed){
-      await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs,queueBudgetMs,waitQueued,
+      await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs,queueBudgetMs,waitQueued, gutterOnRefusal:true,
         prepare:()=>followDeclaredApproach(second,{geo,read,walk,target:{x:5144,y:2688},gutter:{x:5440,y:3096}})});
     }
   }
@@ -458,7 +463,7 @@ export async function approachKonimaMainland(ctx,options={}){
   else{
     const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===64&&j.to.row===23);
     await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs,
-      queueBudgetMs:options.queueBudgetMs??7200000,waitQueued:()=>waitForDeclaredTurn(ctx,geo,read,walk),
+      queueBudgetMs:options.queueBudgetMs??7200000,waitQueued:()=>waitForDeclaredTurn(ctx,geo,read,walk),gutterOnRefusal:true,
       prepare:()=>followDeclaredApproach(declaration,{geo,read,walk,target:{x:4840,y:1472},gutter:{x:3808,y:2144}})});
   }
   await checkedIslandWalk(ctx,{x:160,y:4640},{room:2505,allowEdgeTo:2504,...options});

@@ -43,6 +43,12 @@ with stock gravity at four frame intervals (`m59-jump-takeoff-test`). The
 pocket suite also checks fall settlement and cancellation before a delayed
 departure packet. Populated fleet trials remain separate live evidence.
 
+`m59-traversal-admission-test` exercises shared room entry reservations, a
+parallel returner's wait in the inn, confirmed exits, cancellation, and a real
+crashed driver whose character must still be observed outside before release.
+`m59-konima-crossing-test` also covers the explicitly enabled ordinary gutter
+after bounded refused flights, including cancellation and unproved-escape guards.
+
 `m59-fine-safeleg-test` also covers Konima's closed/open gate, the full-room
 refuge worker, event-loop responsiveness, cancellation, and Merb's refuge
 beyond the local window. Run it with `node --max-old-space-size=640` to exercise
