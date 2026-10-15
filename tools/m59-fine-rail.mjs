@@ -220,12 +220,13 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
             }
           }
         }
-        if(!waypoints&&o.requirePrefixRefuge===true&&!waitingRefuge){
+        if(!waypoints&&o.requirePrefixRefuge===true){
           // A new obstruction can appear after the last proved chord. Reach
           // nearby cover, including behind the body, before waiting. Every
           // retreat still uses the same live-body and mandatory-edge proof.
           const from=workerData.from,limit=(o.prefixSquares??4)+2;
-          const candidates=legWalls(geo).filter(w=>Math.hypot(w.row-from.row,w.col-from.col)<=limit)
+          const candidates=legWalls(geo).filter(w=>(w.row!==from.row||w.col!==from.col)
+            &&!o.excludedPrefixStops?.has?.(w.row+','+w.col)&&Math.hypot(w.row-from.row,w.col-from.col)<=limit)
             .sort((a,b)=>Math.hypot(a.row-from.row,a.col-from.col)-Math.hypot(b.row-from.row,b.col-from.col));
           for(const w of candidates.slice(0,16)){
             const side=planBodyDetour(geo,from,geo.standPointWire(w.row,w.col),{objects:scopedObjects,selfId:o.selfId,
