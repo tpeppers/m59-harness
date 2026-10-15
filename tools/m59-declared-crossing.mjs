@@ -20,7 +20,19 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    // A lower floor is the escape case, even before the first attempt. The same
    // square number on another shelf must never authorize a jump retry.
    if(floor(before.you)<fromFloor-384){await walk(gutter);return {crossed:false,gutter:true,why:'below_takeoff'};}
-   await walk(takeoff);before=await read();
+   const validatePosition=observed=>{
+    if(observed.room?.num===declaration.room&&floor(observed.you)<fromFloor-384)
+     throw Object.assign(Error('declared_crossing_approach_dropped'),{code:'declared_crossing_approach_dropped'});
+   };
+   try{await walk(takeoff,{validatePosition});}
+   catch(error){
+    if(error.code!=='declared_crossing_approach_dropped')throw error;
+    const observed=await read();
+    if(observed.room?.num!==declaration.room||!(floor(observed.you)<fromFloor-384))throw error;
+    await walk(gutter);return {crossed:false,gutter:true,why:'approach_dropped'};
+   }
+   before=await read();
+   if(floor(before.you)<fromFloor-384){await walk(gutter);return {crossed:false,gutter:true,why:'approach_dropped'};}
    if(Math.hypot(before.you.x-takeoff.x,before.you.y-takeoff.y)>8||Math.abs(floor(before.you)-fromFloor)>64)throw Error('declared_crossing_takeoff_unconfirmed');
    if(before.hp?.value<before.hp?.max){if(!stage)throw Error('declared_crossing_needs_recovery');await walk(stage);continue;}
    const reply=await ctx.call('jump',{agent:ctx.agent,to_row:declaration.to.row,to_col:declaration.to.col});

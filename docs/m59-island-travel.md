@@ -10,6 +10,11 @@ crossing also uses that lower floor: go south through r31c64 and r33c64,
 then west to the refuge at r33c59. The northern lower-floor approach is about
 12 walking squares from that refuge; the southern approach is about nine.
 Never retry the outward jump while below its takeoff shelf.
+The same handoff applies when a keeper recovery move reaches the lower floor
+during the approach. Each confirmed position is checked; that approach ends
+before it can spend its remaining budget aiming for the higher takeoff. The
+crossing controller then reads the body again and walks the declared gutter.
+Cancellation remains a cancellation and cannot start an escape walk.
 
 The declarations live in `m59-falljumps.json` and `m59-gutters.json`, so the
 shared router can use them. `node tools/m59-fine-guidebake.mjs` generates the
@@ -133,7 +138,9 @@ The shelf guard preserves a blocked-body reason even when it refuses before
 sending a step. Exact small strides halve after a refusal instead of being
 raised to the ordinary 24-unit minimum.
 Positions come from the selected fleet's fresh
-keeper read, rather than the square summary in `look`. A waiting follower
+keeper read, rather than the square summary in `look`. The outward Hollows
+queue stages at the r42c36 wall, behind the active takeoff corridor; takeoff
+refinement checks observed bodies as well as the static geometry. A waiting follower
 continues health and cancellation checks, and the crossing queue shares the
 Hollows leg's time budget. Konima's final door is opened by the ordinary
 `go` action from inside the actual trigger; no door or room geometry is edited.

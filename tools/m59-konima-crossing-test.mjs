@@ -45,6 +45,26 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
 {
+ const f=fixture(),old=f.walk;let dropped=false;
+ f.walk=async(p,{validatePosition}={})=>{
+  if(!dropped){dropped=true;
+   validatePosition?.({room:{num:2505},you:{x:4064,y:1696}});
+   assert.fail('an observed lower approach must end before another takeoff command');
+  }
+  await old(p);
+ };
+ // The read observes the same lower native pose after the guarded walk stops.
+ const read=f.read;f.read=async()=>dropped?{...(await read()),you:{x:4064,y:1696}}:read();
+ const r=await followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,gutter,stage,clear});
+ assert(r.gutter&&r.why==='approach_dropped');assert.equal(f.calls,0);
+ assert.deepEqual(f.walks,[gutter],'recovery onto the lower floor goes south without retrying the higher takeoff');
+}
+{
+ const f=fixture();f.walk=async()=>{throw Error('operator cancelled');};
+ await assert.rejects(followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,gutter,stage,clear}),/operator cancelled/);
+ assert.equal(f.calls,0,'a cancellation cannot turn into a gutter walk');
+}
+{
  const declaration=jumps.find(j=>j.from.col===64),f=fixture(clientToProtocol(declaration.from_fine));
  let body=clientToProtocol(declaration.from_fine),calls=0;
  f.read=async()=>({room:{num:2505},you:body,hp:{value:20,max:20},vigor:{value:200}});
