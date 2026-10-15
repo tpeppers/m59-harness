@@ -1016,6 +1016,13 @@ export function nearestSafeSpot(geo, from, {
   const passages=fineChokesFor(geo);
   const candidates=fineRecovery?[...all].sort((a,b)=>cheb(from,a)-cheb(from,b)):all;
   for (const s of (wallsAllowed ? candidates : [])) {
+    // Recovery ranks only by walking distance. Once a checked choice beats the
+    // distance to every remaining square, farther path searches cannot improve
+    // it. Subtract one square for fine footing near a cell boundary; keep ties
+    // and all quarry/forward-biased searches. Exit candidates are still checked
+    // below this loop. A whole-room scan here cost a hurt courier over a second.
+    if(fineRecovery&&!onwardSquare&&!closestToToward&&Number.isFinite(best?.steps_away)
+        &&Math.max(0,cheb(from,s)-1)>best.steps_away)break;
     const stop=passages.length?geo.standPointWire?.(s.row,s.col):null;
     if(stop&&passages.some(p=>Math.abs(p.x-stop.x)<=32&&Math.abs(p.y-stop.y)<=32))continue;
     // NO SQUARE IS DISQUALIFIED BY ITS HISTORY, and there is no longer a history to consult.

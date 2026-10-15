@@ -43,7 +43,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
 import { floorSnapshot } from './m59-loot-filter.mjs';
 import { withMoveOrder, keeperOrigin } from './m59-move-origin.mjs';
-import { planBodyDetour } from './m59-body-detour.mjs';
+import { planRecoveryApproach } from './m59-fine-refuge-reach.mjs';
 
 // The merchant index resolves a live object id to the class whose buying rule applies.
 // Read once and kept: it is a built artefact that changes when somebody rebuilds it, and
@@ -2126,20 +2126,21 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
     const fine=Number.isFinite(spot.x)&&Number.isFinite(spot.y);
     const goal=fine?{x:spot.x,y:spot.y}:{x:spot.col*KOD_FINENESS+32,y:spot.row*KOD_FINENESS+32};
     const threats=[...(c.room?.objects?.values?.()??[])].filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER));
-    const plan=planBodyDetour(s.world.geometry,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
+    const plan=planRecoveryApproach(s.world.geometry,c.self,goal,{objects:c.room?.objects,selfId:c.selfId,
       roomFlags:c.room?.flags??0,overrideDepths:c.room?.overrideDepths,goalSquare:fine?null:spot,
       marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:80,
       threats,threatWeight:6,threatRadius:4});
     if(interrupted())return stopped();
     if(!plan.found)return {arrived:false,reason:'refuge_fine_approach_unproved',why:plan.reason};
+    const pricing=plan.checked_short_fallback?{checked_short_fallback:true,price_refusal:plan.price_refusal}:{};
     const w=await attempt('refuge_fine_path',null,()=>s.walkDepartureLegs(plan.waypoints,spot,
       {movementGeneration:generation,maxSteps,shelterFallback:false}));
     if(interrupted(w))return stopped(w);
-    if(!w?.arrived)return {arrived:false,reason:w?.reason,why:w?.reason??'checked refuge path ended short'};
+    if(!w?.arrived)return {...pricing,arrived:false,reason:w?.reason,why:w?.reason??'checked refuge path ended short'};
     const confirmed=await confirmPrediction();
     if(interrupted())return stopped();
     if(!confirmed)return unconfirmed();
-    return {arrived:at()<=tolerance,off_by:at(),via:'checked fine refuge path'};
+    return {...pricing,arrived:at()<=tolerance,off_by:at(),via:'checked fine refuge path'};
   }
 
   // Get onto the right square first through the geometry, then close the last few

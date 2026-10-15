@@ -1,0 +1,395 @@
+{
+  "room": 2503,
+  "frame_at": 1792035251457,
+  "from": {
+    "id": 4282,
+    "row": 46,
+    "col": 54,
+    "x": 3464,
+    "y": 2992,
+    "predicted": false,
+    "units": "KOD/protocol fine units; 64 per square"
+  },
+  "bodies": [
+    {
+      "id": 4282,
+      "flags": 525,
+      "row": 46,
+      "col": 54,
+      "x": 3464,
+      "y": 2992,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 4283,
+      "flags": 525,
+      "row": 58,
+      "col": 2,
+      "x": 160,
+      "y": 3744,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7822,
+      "flags": 9,
+      "row": 64,
+      "col": 58,
+      "x": 3744,
+      "y": 4128,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7818,
+      "flags": 9,
+      "row": 68,
+      "col": 48,
+      "x": 3104,
+      "y": 4384,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7810,
+      "flags": 2097161,
+      "row": 17,
+      "col": 61,
+      "x": 3927,
+      "y": 1109,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7808,
+      "flags": 2097161,
+      "row": 20,
+      "col": 20,
+      "x": 1312,
+      "y": 1312,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7789,
+      "flags": 9,
+      "row": 27,
+      "col": 80,
+      "x": 5154,
+      "y": 1768,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7779,
+      "flags": 2097161,
+      "row": 13,
+      "col": 19,
+      "x": 1248,
+      "y": 864,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7771,
+      "flags": 9,
+      "row": 16,
+      "col": 40,
+      "x": 2601,
+      "y": 1052,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7728,
+      "flags": 9,
+      "row": 17,
+      "col": 40,
+      "x": 2597,
+      "y": 1112,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7724,
+      "flags": 2097161,
+      "row": 47,
+      "col": 54,
+      "x": 3495,
+      "y": 3029,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7666,
+      "flags": 2097161,
+      "row": 41,
+      "col": 60,
+      "x": 3872,
+      "y": 2656,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7664,
+      "flags": 9,
+      "row": 21,
+      "col": 13,
+      "x": 861,
+      "y": 1364,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7657,
+      "flags": 9,
+      "row": 49,
+      "col": 57,
+      "x": 3684,
+      "y": 3158,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7655,
+      "flags": 9,
+      "row": 21,
+      "col": 14,
+      "x": 925,
+      "y": 1373,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7645,
+      "flags": 9,
+      "row": 14,
+      "col": 41,
+      "x": 2652,
+      "y": 936,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7644,
+      "flags": 9,
+      "row": 42,
+      "col": 28,
+      "x": 1834,
+      "y": 2715,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7643,
+      "flags": 9,
+      "row": 21,
+      "col": 67,
+      "x": 4305,
+      "y": 1382,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 7640,
+      "flags": 2097161,
+      "row": 35,
+      "col": 48,
+      "x": 3104,
+      "y": 2272,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2813,
+      "flags": 0,
+      "row": 3,
+      "col": 90,
+      "x": 5792,
+      "y": 208,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2812,
+      "flags": 0,
+      "row": 42,
+      "col": 89,
+      "x": 5744,
+      "y": 2688,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2811,
+      "flags": 0,
+      "row": 59,
+      "col": 76,
+      "x": 4912,
+      "y": 3824,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2810,
+      "flags": 0,
+      "row": 64,
+      "col": 59,
+      "x": 3792,
+      "y": 4112,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2809,
+      "flags": 64,
+      "row": 32,
+      "col": 75,
+      "x": 4848,
+      "y": 2080,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2808,
+      "flags": 64,
+      "row": 60,
+      "col": 47,
+      "x": 3024,
+      "y": 3888,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2807,
+      "flags": 64,
+      "row": 54,
+      "col": 56,
+      "x": 3616,
+      "y": 3456,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2806,
+      "flags": 64,
+      "row": 36,
+      "col": 52,
+      "x": 3360,
+      "y": 2352,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2805,
+      "flags": 64,
+      "row": 25,
+      "col": 55,
+      "x": 3552,
+      "y": 1632,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2804,
+      "flags": 64,
+      "row": 10,
+      "col": 21,
+      "x": 1360,
+      "y": 640,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2803,
+      "flags": 64,
+      "row": 17,
+      "col": 20,
+      "x": 1296,
+      "y": 1136,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2802,
+      "flags": 64,
+      "row": 12,
+      "col": 27,
+      "x": 1728,
+      "y": 768,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2801,
+      "flags": 64,
+      "row": 14,
+      "col": 32,
+      "x": 2096,
+      "y": 896,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2800,
+      "flags": 64,
+      "row": 16,
+      "col": 40,
+      "x": 2592,
+      "y": 1072,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2799,
+      "flags": 64,
+      "row": 10,
+      "col": 42,
+      "x": 2704,
+      "y": 688,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2798,
+      "flags": 0,
+      "row": 35,
+      "col": 18,
+      "x": 1152,
+      "y": 2272,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2797,
+      "flags": 0,
+      "row": 37,
+      "col": 17,
+      "x": 1136,
+      "y": 2416,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2796,
+      "flags": 64,
+      "row": 42,
+      "col": 8,
+      "x": 512,
+      "y": 2704,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    },
+    {
+      "id": 2795,
+      "flags": 64,
+      "row": 47,
+      "col": 6,
+      "x": 400,
+      "y": 3040,
+      "predicted": false,
+      "units": "KOD/protocol fine units; 64 per square"
+    }
+  ]
+}

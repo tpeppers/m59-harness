@@ -32,6 +32,17 @@ re-proves against current bodies and validates every packet. Confirmed fine
 progress can also keep its approach watchdog alive when the coarse path is
 absent; predictions and oscillation do not renew it.
 
+Nearest recovery searches stop considering farther walls once a conservative
+distance bound cannot beat the checked choice. Fine footing retains a full
+square of slack, equal-distance candidates still compete, and quarry/forward
+preferences keep their full search. The exit remains a separate candidate.
+A nearby emergency approach first retains a checked body route of at most
+eight walking squares, then spends the remaining shared allowance optimizing
+monster exposure. If only that optimization times out, the short checked
+route remains usable. Actual body or terrain refusals do not qualify, and
+an occupied refuge is still refused. The executor checks movement ownership
+and collision again before sending it.
+
 A hit during a short proved refuge leg can retain that route to cover while
 ordered server position reads confirm movement within the last 2.5 seconds
 and at most 20 travelled squares remain. This applies to general fine safe-leg
