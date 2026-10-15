@@ -46,6 +46,30 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
 {
+ let occupant=null,waits=0;const events=[],fs=[fixture(),fixture()];
+ await Promise.all(fs.map((f,i)=>followDeclaredCrossing(f.ctx,out,{geo,read:f.read,
+  walk:async(p,...rest)=>{await f.walk(p,...rest);if(p===clear){events.push('clear'+i);occupant=null;}},gutter,stage,clear,
+  prepare:async()=>{assert.equal(occupant,null,'a follower cannot occupy reserved retry staging');occupant=i;events.push('stage'+i);await new Promise(r=>setTimeout(r,10));},
+  waitQueued:async()=>{waits++;assert.equal(f.walks.length,0,'queued travelers wait before their staging walk');}})));
+ assert.deepEqual(events,['stage0','clear0','stage1','clear1']);assert.equal(waits,1);
+}
+{
+ const f=fixture();
+ const result=await followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,gutter,stage,clear,
+  prepare:async()=>({gutter:true,crossed:false})});
+ assert(result.gutter);assert.equal(f.calls,0,'a fall during admitted staging goes to its gutter without a flight');
+}
+for(const separateQueueBudget of [false,true]){
+ const first=fixture(),second=fixture();
+ const active=followDeclaredCrossing(first.ctx,out,{geo,read:first.read,walk:first.walk,gutter,clear,budgetMs:1000,
+  prepare:async()=>new Promise(r=>setTimeout(r,20))});
+ const waiting=followDeclaredCrossing(second.ctx,out,{geo,read:second.read,walk:second.walk,gutter,clear,budgetMs:100,
+  ...(separateQueueBudget?{queueBudgetMs:2000}:{})});
+ if(separateQueueBudget){assert((await waiting).crossed);assert.equal(second.calls,1);}
+ else{await assert.rejects(waiting,/crossing_.*budget/);assert.equal(second.calls,0,'ordinary callers retain the original whole-crossing deadline');}
+ await active;
+}
+{
  const hg=roomGeometry(2502),j=fallJumpsIn(2502).find(j=>j.to.row===44&&j.to.col===27);
  const short={id:1,x:1744,y:2814},landing=clientToProtocol(j.to_fine),clear={x:1344,y:3076};
  assert(planDeclaredLanding(hg,short,j).found,'the native short landing has a short ground connection');

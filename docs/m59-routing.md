@@ -2247,6 +2247,21 @@ proximity or matching height alone never authorizes another flight. The
 Hollows wrapper also checks this proof before staging, so a resumed landing
 does not try to walk back across the gap.
 
+Crossing admission can include the caller's guarded staging approach through
+`prepare`. Konima uses this for both outbound jumps and its return drop:
+followers wait at an observed nearby refuge before approaching staging. The
+active traveler retains the staging refuge for a damage or refusal retry;
+a follower cannot take that refuge while the incumbent is at the ledge.
+These convoys use a separate bounded queue allowance; other callers retain
+their original whole-crossing deadline.
+
+Fine recovery leaves an active keeper approach to another chosen refuge
+running before asking it to rest. An interrupted rest may wait for a live
+owned replacement recovery under the same deadline. A stale approach label
+at already confirmed cover still permits resting; cancellation or a foreign
+lease ends continuation. Fine-walk budget failures retain their target,
+progress counters and last cut for the next investigation.
+
 `m59-entry-recovery.mjs` supplies bounded retreat/re-entry recovery for a
 confirmed healthy arrival blocked by live bodies. Callers provide their normal
 one-room travel, fresh health/position reads, cancellation checks and original

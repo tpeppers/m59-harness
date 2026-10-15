@@ -87,6 +87,35 @@ try{
   {you:{...initial.you,id:2}},{you:{...initial.you,x:initial.you.x+8}}])
   assert.deepEqual(await completedEpisode(options),{ok:false,restCount:0,stands:0});
  await assert.rejects(completedEpisode({cancel:{at:2,by:{source:'operator'}}}),/cancelled_by_operator/);
+ async function replacedApproach({foreignAfterHit=false,cancelAfterHit=false,expired=false}={}){
+  let health=13,statusReads=0,rests=0,stands=0;
+  const x={...ctx,state:{islandCancelFence:1},call:async name=>{
+   if(name==='status'){
+    statusReads++;const afterHit=rests>0;
+    return {hp:{value:health,max:20},vigor,movement:afterHit&&cancelAfterHit?{last_cancel:{at:2,by:{source:'operator'}}}:{},
+     autopilot_status:{faculties:{movement:afterHit&&foreignAfterHit?{...ownLease,owner:'fleetscript:foreign'}:ownLease},
+      safe_spot:{works:true,at:{row:initial.you.row,col:initial.you.col}},
+      survival_decisions:{current:{source:'keeper',strategy:'nearest_refuge',status:
+       statusReads%3===0?'recovering':statusReads%3===1?'pending':'approaching',ended_at:null,
+       chosen_refuge:{room:initial.room.num,row:initial.you.row,col:initial.you.col+(statusReads%3===0?0:1)}}}}};
+   }
+   if(name==='rest_up'){
+    assert.equal(statusReads%3,0,'rest waits for the active refuge approach to finish');rests++;
+    if(rests===1){health=12;return {interrupted:'attacked while resting'};}
+    health=20;return {};
+   }
+   if(name==='look')return {room:initial.room,you:initial.you,hp:{value:health,max:20},vigor};
+   if(name==='rest'){stands++;return {};}
+   throw Error('unexpected replacement request '+name);
+  }};
+  const ok=await recoverIslandFineWalk(x,{initial,active:true,pollMs:1,deadline:Date.now()+(expired?-1:1000),
+   read:async()=>({l:{room:initial.room,you:initial.you,hp:{value:health,max:20},vigor}})});
+  return {ok,rests,stands,statusReads};
+ }
+ assert.deepEqual(await replacedApproach(),{ok:true,rests:2,stands:1,statusReads:7});
+ assert.deepEqual(await replacedApproach({foreignAfterHit:true}),{ok:false,rests:1,stands:0,statusReads:4});
+ assert.deepEqual(await replacedApproach({expired:true}),{ok:false,rests:0,stands:0,statusReads:0});
+ await assert.rejects(replacedApproach({cancelAfterHit:true}),/cancelled_by_operator/);
  console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
  proactive=false;pre=null;pose={id:1,x:2112,y:3080,row:48,col:33};hp={value:20,max:20};
  const beforeLower=moves;
