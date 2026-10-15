@@ -14,7 +14,7 @@ generation, body, room, life, client or control ownership; the approach's own
 two-second no-progress limit under pressure remains active.
 
 This addresses a local Hollows death at r52c15: the generic watchdog cancelled
-a progressing final approach to r51c16 after three seconds. The recorded
+a final approach to r51c16 while its confirmed fine route was shortening. The recorded
 coordinates exercise both real watchdogs in `m59-recovery-driver-age-test.mjs`.
 That offline regression does not establish native survival or trip success.
 
