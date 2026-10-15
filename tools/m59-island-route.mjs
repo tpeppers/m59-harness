@@ -2,7 +2,7 @@
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
-import {walkHollowsOut,approachIslandDoor,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition} from './m59-island-finewalk.mjs';
+import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
@@ -158,6 +158,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(first.room?.num===27&&to===2500)await approachMainlandCaveExit(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2502&&to===2503)await walkHollowsOut(ctx,{budgetMs,onSample:sample});
   if(first.room?.num===2505&&to===2000)await approachIslandDoor(ctx,{budgetMs,onSample:sample});
+  if(first.room?.num===2505&&to===2504)await approachKonimaMainland(ctx,{budgetMs,onSample:sample});
   // Both mainland exits are detours from this measured cave expedition.
   const request=async()=>{
     const by=originLabel(ctx.origin??currentCallOrigin());let reply;

@@ -40,6 +40,19 @@ test('clean checkout selects the shipped blink rung across an actual blocked cor
   assert.equal(s.blinkRungStats.casts,1);assert.equal(s.blinkRungStats.arrivals,1);
 });
 
+test('traffic Blink protects its trance at the packet gate and releases only its own hold',async()=>{
+ for(const replacement of [false,true]){
+  const {s,c,ctx}=blinkFixture(),a=await s._askStrategies('whenStuck',ctx);let stood=false,releases=0;
+  s.pacer={holdUntil:0,holdReason:null,holdForCast(ms,reason){this.holdUntil=1234;this.holdReason=reason;return 1234;},releaseCastHold(){releases++;this.holdUntil=0;this.holdReason=null;}};
+  c.stand=()=>{assert.match(s.pacer.holdReason,/traffic blink/);stood=true;};
+  c.cast=()=>assert(stood,'standing is ordered inside the protected trance');
+  const wait=c.waitFor;c.waitFor=async()=>{if(replacement){s.pacer.holdUntil=9999;s.pacer.holdReason='replacement controller';}return wait();};
+  assert((await s.blinkOut({expect:a.answer.expect,proposalId:a.answer.proposalId})).arrived);
+  assert.equal(releases,replacement?0:1);
+  if(replacement)assert.equal(s.pacer.holdReason,'replacement controller');
+ }
+});
+
 test('Flatlands: traffic behind the body and a bad goal are not a sealed pocket',()=>{
   const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
   const room=map.rooms[584],geo=sharedRoomGeometry(room);
@@ -148,6 +161,14 @@ function keeperFixture() {
     checkFreeze:()=>false,safety:()=>({fleeAt:0.7}),facultyHeld:()=>false});
   return {s,c,k,ctx};
 }
+
+test('a useful Blink is offered before another pending jam retreat',async()=>{
+ const {k,s}=keeperFixture(),order=[];
+ chooseSurvivalDecision(s,{strategy:'nearest_refuge',status:'pending',reason:'measured traffic'});
+ k.rememberSurvivalJam=()=>{};k.blinkPastSurvivalJam=async()=>{order.push('blink');return true;};
+ k.escapeIfWedgedAndHurt=async()=>{assert.fail('a selected Blink must precede another retreat');};
+ assert.equal(await k.continueSurvivalDecisionStep(),true);assert.deepEqual(order,['blink']);
+});
 test('recovery detour preserves a journey through the real travelling posture and resumes its original goal',async()=>{
   const {k,s}=keeperFixture();
   k.goTravelling('tour',{to:110});const destinations=[];

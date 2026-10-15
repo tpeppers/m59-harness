@@ -1,3 +1,4 @@
+import {applyAncientFloors} from './m59-moving-platform.mjs';
 // Exact precomputed ceiling geometry, separate from legacy floor door variants.
 import { readFileSync } from 'node:fs';
 import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION, RoomGeometry, exitSquaresOf } from './m59-roo.mjs';
@@ -14,12 +15,14 @@ export function installDoorObserver(client, map, roomNumber, report = () => {}) 
     const num = Number(roomNumber());
     if (!Number.isFinite(num)) return;
     if (event.kind === 'room-entered') {
+      applyAncientFloors(map, num, new Map());
       applyCeilingDoors(map, num, new Map());
       applyDoorState(map, num, new Map());
       return;
     }
     if (event.kind !== 'sector-height') return;
-    const ceiling = applyCeilingDoors(map, num, client.room.sectorHeights ?? new Map(), event);
+    const ceiling = applyAncientFloors(map, num, client.room.sectorHeights ?? new Map(), event) ??
+      applyCeilingDoors(map, num, client.room.sectorHeights ?? new Map(), event);
     const invalidated = client.room.collisionInvalidated;
     if (ceiling?.settledAt != null && invalidated?.sector === event.sector) {
       invalidated.until = ceiling.settledAt;

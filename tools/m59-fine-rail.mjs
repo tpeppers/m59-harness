@@ -5,6 +5,7 @@ import {RoomGeometry,protocolToClient,clientToProtocol} from './m59-roo.mjs';
 import {cutRail,threatEdgeCost,chordWalkable} from './m59-railcut.mjs';
 import {legWalls} from './m59-safelegs.mjs';
 import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
+import {findFineGuide} from './m59-fine-guides.mjs';
 
 export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreachable=null,
   avoidSquares=null,objects=null,selfId=null,roomFlags=0,overrideDepths=null,
@@ -178,12 +179,16 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
     const settings={
       bounds:{w:geo.cols*1024,h:geo.rows*1024},lattice:128,cost:o.threats?.length?cost:null,maxMs:o.maxMs??4000,
       floorAt:(x,y)=>{const l=geo.leafAtClient(x,y);return l?.sector?geo.floorBaseAtClient(x,y,l):null;}};
-    let cut=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
+    const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
+      roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
+    const baked=findFineGuide(geo,point(workerData.from),point(workerData.goal),{edge:geometryEdge});
+    const clearBaked=baked&&baked.waypoints.slice(1).every((p,i)=>edge(baked.waypoints[i],p));
+    let cut=clearBaked?baked:cutRail(point(workerData.from),point(workerData.goal),{...settings,edge});
     let waitingRefuge=null;
     if((!cut.ok||!cut.bridgeOk)&&obstacles.length&&o.allowBodyPrefix===true){
       const geometryEdge=(a,b)=>{if(!allowed(b))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,
         roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths});return t?.arrived===true&&t.blocked!==true;};
-      const guide=cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
+      const guide=baked??cutRail(point(workerData.from),point(workerData.goal),{...settings,edge:geometryEdge});
       if(guide.ok&&guide.bridgeOk){
         // A full geometry route blocked by this scene is traffic evidence.
         // The body may wait only at an existing proved refuge; this result

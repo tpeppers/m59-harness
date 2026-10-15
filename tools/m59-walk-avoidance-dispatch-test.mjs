@@ -54,3 +54,12 @@ for(const kind of ['walk','walk_fine']){
  assert.equal(dispatched,false);assert.equal(response.reason,'keeper_recovery_active');
 }
 console.log('Forbidden squares survive fine/square dispatch, proxy JSON and keeper execution.');
+{
+ const block=broker.slice(broker.indexOf("name: 'operate_door'"),broker.indexOf("name: 'jump'"));
+ const start=block.indexOf('run: ')+5,end=block.lastIndexOf('\n    },');let forwarded;
+ const run=runInNewContext('('+block.slice(start,end)+'\n    })',{session:()=>({_index:2,name:'fixture',world:{geometry:null}}),keeperAction:(name,index,kind,args)=>{forwarded={name,index,kind,args};return {opened:true};}});
+ const targets=[{row:27,col:65}];assert((await run({agent:'fixture',targets})).opened);assert.equal(forwarded.kind,'operate_door');assert.deepEqual(forwarded.args.targets,targets);
+ const a=keeper.indexOf("          case 'operate_door': {"),b=keeper.indexOf('\n          }',a)+12;let seen;
+ const execute=runInNewContext('(async function(args){switch("operate_door"){'+keeper.slice(a,b)+'}})',{asWalkOrder:(_args,_label,fn)=>fn(),session:{openOperableDoor:async options=>{seen=options;return {opened:true};}},json:()=>{}});
+ await execute({targets});assert.deepEqual(seen.targets,targets,'shared door targeting survives the broker and keeper boundaries');
+}

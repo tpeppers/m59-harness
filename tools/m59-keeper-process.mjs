@@ -73,7 +73,7 @@ import { verifyFleetLockGuard } from './runtime/fleet-lock.mjs';
 import { planAccountLeases } from './runtime/account-leases.mjs';
 import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
-import { fallJumpsIn } from './m59-falljump.mjs';
+import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
@@ -2773,12 +2773,16 @@ const server = createServer(async (req, res) => {
               const h = floorClient(d.from_fine.x, d.from_fine.y);
               return h == null || Math.abs(h - myFloor) <= 64;
             };
-            for (let r0 = me.row - 1; r0 <= me.row + 1 && !match; r0++)
-              for (let c0 = me.col - 1; c0 <= me.col + 1 && !match; c0++) {
-                const here = geo.declaredFallJumps(r0, c0) ?? [];
-                const hit = here.find(j => Math.abs(j.row - toRow) <= 2 && Math.abs(j.col - toCol) <= 2);
-                if (hit && shelfOk(r0, c0)) { match = hit; from = { row: r0, col: c0 }; }
+            const candidates=[];
+            for (let r0 = me.row - 1; r0 <= me.row + 1; r0++)
+              for (let c0 = me.col - 1; c0 <= me.col + 1; c0++) {
+                if(!shelfOk(r0,c0))continue;
+                for(const hit of geo.declaredFallJumps(r0,c0)??[])
+                  if(Math.abs(hit.row-toRow)<=2&&Math.abs(hit.col-toCol)<=2)
+                    candidates.push({from:{row:r0,col:c0},to:hit});
               }
+            const selected=selectDeclaredFall(candidates,{from:{row:me.row,col:me.col},to:{row:toRow,col:toCol}});
+            if(selected){match=selected.to;from=selected.from;}
             if (!match) {
               json({ jumped: false,
                      reason: `no declared fall-jump from ${me.row},${me.col} to ${toRow},${toCol}`,
@@ -2943,6 +2947,10 @@ const server = createServer(async (req, res) => {
             const r = await session.standBeforeGo?.(args);
             json(r ?? { ok: true });
             return;
+          }
+          case 'operate_door': {
+            const r=await asWalkOrder(args,'operate room door',()=>session.openOperableDoor({targets:args.targets??null}));
+            json(r);return;
           }
           case 'raw_go': {
             // The bare GO, at the square the character is standing on. Distinct from the
