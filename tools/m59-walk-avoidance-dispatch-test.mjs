@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 const broker=readFileSync(new URL('./m59-broker.mjs',import.meta.url),'utf8');
 const keeper=readFileSync(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
 const calls=[];
@@ -34,19 +35,34 @@ for(const name of ['walkFine','walkTo']){
 for(const kind of ['walk','walk_fine']){
  const from=keeper.indexOf("          case '"+kind+"': {"),to=keeper.indexOf('\n          }',from)+12;
  assert(from>=0&&to>from);
- let seen;
+ let seen,reply,decision=null;const health={value:13,max:20};
  const execute=runInNewContext('(async function(args){switch('+JSON.stringify(kind)+'){'+keeper.slice(from,to)+'}})',{
-  Set,currentSurvivalDecision:()=>null,session:{walkTo:async(_c,_r,options)=>{seen=options;return {};},walkFine:async(_x,_y,options)=>{seen=options;return {};}},
-  asWalkOrder:(_args,_label,fn)=>fn(),json:()=>{}
+  Set,currentSurvivalDecision:()=>decision,isActiveRecoveryDecision,
+  session:{client:{vitals:()=>({health})},walkTo:async(_c,_r,options)=>{seen=options;return {};},walkFine:async(_x,_y,options)=>{seen=options;return {};}},
+  asWalkOrder:(_args,_label,fn)=>fn(),json:value=>{reply=value;}
  });
  await execute({col:33,row:21,x:2152,y:1392,avoidSquares:['1,41']});
  assert(seen.avoidSquares.has('1,41'),'the keeper reconstructs the forbidden-square set');
+ if(kind==='walk_fine'){
+  for(const source of ['keeper','recovery','travel','practice',undefined]){
+   decision={source,strategy:'nearest_refuge',status:'approaching',ended_at:null};seen=null;
+   await execute({x:2152,y:1392,origin:{source:'fleetscript'}});
+   assert.equal(seen,null,'an active '+source+' recovery cannot be crossed by a script movement');
+   assert.equal(reply.reason,'keeper_recovery_active');
+  }
+  for(const d of [{strategy:'yield_to_controller',status:'pending'}, {strategy:'nearest_refuge',status:'ended',ended_at:1}]){
+   decision=d;seen=null;await execute({x:2152,y:1392,origin:{source:'fleetscript'}});assert(seen);
+  }
+  decision={source:'recovery',strategy:'nearest_refuge',status:'approaching',ended_at:null};seen=null;
+  await execute({x:2152,y:1392,origin:{source:'operator'}});assert(seen,'explicit operator movement retains its override');
+  health.value=20;seen=null;await execute({x:2152,y:1392,origin:{source:'fleetscript'}});assert(seen,'a healthy body can resume under a stale recovery label');
+ }
 }
 {
  const from=keeper.indexOf("          case 'walk_fine': {"),to=keeper.indexOf('\n          }',from)+12;
  let dispatched=false,response;
  const execute=runInNewContext('(async function(args){switch("walk_fine"){'+keeper.slice(from,to)+'}})',{
-  Set,currentSurvivalDecision:()=>({id:'owned-recovery',source:'keeper',strategy:'nearest_refuge',status:'approaching',ended_at:null}),
+  Set,isActiveRecoveryDecision,currentSurvivalDecision:()=>({id:'owned-recovery',source:'keeper',strategy:'nearest_refuge',status:'approaching',ended_at:null}),
   session:{client:{vitals:()=>({health:{value:14,max:20}})},walkFine:async()=>{dispatched=true;return {};}},
   asWalkOrder:(_args,_label,fn)=>fn(),json:r=>{response=r;}
  });

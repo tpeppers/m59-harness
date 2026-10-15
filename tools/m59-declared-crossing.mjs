@@ -33,14 +33,16 @@ export async function followDeclaredApproach(declaration,{geo,read,walk,target,g
  }
 }
 export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter,clear,stage,budgetMs=180000,
- refineTakeoff=false,approachPoint=null,walkTakeoff=walk,recover=null,observeLanding=null,waitAtCover=null}={}){
+ refineTakeoff=false,approachPoint=null,walkTakeoff=walk,recover=null,observeLanding=null,waitAtCover=null,
+ prepare=null,waitQueued=null,queueBudgetMs=null}={}){
  if(!declaration?.from_fine||!declaration?.to_fine||!geo||!read||!walk||!gutter)throw Error('declared_crossing_incomplete');
- const began=Date.now(),takeoff=clientToProtocol(declaration.from_fine),landing=clientToProtocol(declaration.to_fine);
+ const queuedAt=Date.now(),takeoff=clientToProtocol(declaration.from_fine),landing=clientToProtocol(declaration.to_fine);
+ let began=queuedAt;
  const floor=p=>{const q=protocolToClient(p);return geo.floorBaseAtClient(q.x,q.y);};
  const fromFloor=floor(takeoff),toFloor=floor(landing);
  if(!Number.isFinite(fromFloor)||!Number.isFinite(toFloor))throw Error('declared_crossing_floor_unavailable');
  const key=ctx.fleet+':'+declaration.room+':'+declaration.from.row+','+declaration.from.col;
- const prior=queues.get(key)??Promise.resolve();let release;
+ const incumbent=queues.get(key),prior=incumbent??Promise.resolve();let release;
  const tail=new Promise(r=>{release=r;});queues.set(key,tail);
  const restage=async()=>{if(waitAtCover)await waitAtCover();else if(stage)await walk(stage);};
  const finishLanding=async observed=>{
@@ -72,8 +74,20 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
   return {planned,terrain};
  };
  try{
-  let ready=false;prior.then(()=>{ready=true;});
-  while(!ready){await read();if(Date.now()-began>budgetMs)throw Error('declared_crossing_queue_budget');await new Promise(r=>setTimeout(r,500));}
+  let ready=!incumbent,covered=false;prior.then(()=>{ready=true;});
+  while(!ready){
+   await read();if(Date.now()-queuedAt>(queueBudgetMs??budgetMs))throw Error('declared_crossing_queue_budget');
+   if(waitQueued&&!covered){await waitQueued();covered=true;}
+   await new Promise(r=>setTimeout(r,500));
+  }
+  if(queueBudgetMs!=null)began=Date.now();
+  if(prepare){
+   if(Date.now()-began>=budgetMs)throw Error('declared_crossing_budget');
+   const observed=await read();
+   if(observed.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
+   if((await finishLanding(observed)).landed)return {crossed:true,resumed:true};
+   const prepared=await prepare();if(prepared?.gutter)return prepared;
+  }
   let lastRefusal='landing not observed',attempts=0;
   while(attempts<3){
    if(Date.now()-began>=budgetMs)throw Error('declared_crossing_budget');

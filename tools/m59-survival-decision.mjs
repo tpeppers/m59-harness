@@ -2,6 +2,12 @@
 import { OF } from './m59-parse.mjs';
 
 export const SURVIVAL_DECISION_VERSION = 1;
+// `source` records the recovery context; it is not the movement issuer.
+// Callers bind the live lease/order separately before yielding to this intent.
+export function isActiveRecoveryDecision(d){
+  return !!d&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&
+    ['pending','approaching','arrived','holding','recovering'].includes(d.status);
+}
 const states = new WeakMap();
 const MAX_HISTORY = 64, MAX_PATH = 256;
 const text = x => x == null ? null : String(x).slice(0, 400);

@@ -18,6 +18,7 @@ import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-cros
 import {planDeclaredLanding} from './m59-jump-takeoff.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
 import {planRefugeStage,planNearbyFineRefuge} from './m59-fine-refuge-reach.mjs';
+import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -95,7 +96,7 @@ export function activeOwnedFineRecovery(ctx,status){
   const order=status?.movement?.order;
   if(order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))return false;
   const owned=origin?.source==='fleetscript'&&lease?.owner===origin.source+':'+origin.name&&lease.expires_in_ms>0&&
-    d?.source==='keeper'&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&['pending','approaching','arrived','holding','recovering'].includes(d.status);
+    isActiveRecoveryDecision(d);
   if(!owned)return false;
   // A completed rest can precede the keeper's next decision pulse. Its normal
   // fine tool already accepts a healthy body; do not consume all three recovery
@@ -111,6 +112,7 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
   let actorFence=initial&&activeOwnedFineRecovery(ctx,initial)?actor(initial):null;
   let refugeFence=initial&&activeOwnedFineRecovery(ctx,initial)&&covered(initial)?actor(initial):null;
   for(;;){
+    if(Date.now()>=deadline)return false;
     const s=await ctx.call('status',{agent:ctx.agent,brief:true});
     checkIslandCancellation(ctx,s);
     const owned=keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})||(active&&activeOwnedFineRecovery(ctx,s));
@@ -127,10 +129,22 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
       if(Number.isFinite(l.hp?.max)&&l.hp.max>0&&l.hp.value>=l.hp.max)return true;
       if(!refugeFence||Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return false;
     }
-    if((wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col)||knownRefugeCell(roomGeometry(l.room?.num),l.you)){
+    const decision=s.autopilot_status?.survival_decisions?.current;
+    const chosen=decision?.chosen_refuge,order=s.movement?.order;
+    const approaching=owned&&isActiveRecoveryDecision(decision)&&
+      ['pending','approaching'].includes(decision.status)&&
+      (chosen&&(chosen.row!==l.you.row||chosen.col!==l.you.col||chosen.room!=null&&chosen.room!==l.room.num)||
+       order?.origin?.source==='keeper'&&order.kind==='shelter');
+    // A covered cell can lie on the way to the keeper's chosen refuge. Let
+    // that active approach finish before a rest command can interrupt it.
+    if(!approaching&&((wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col)||knownRefugeCell(roomGeometry(l.room?.num),l.you))){
       if(covered(l))refugeFence=actor(l);
       const rested=await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
-      if(rested?.interrupted)return false;
+      if(rested?.interrupted){
+        const next=await ctx.call('status',{agent:ctx.agent,brief:true});checkIslandCancellation(ctx,next);
+        if(Date.now()>=deadline||!activeOwnedFineRecovery(ctx,next))return false;
+        await new Promise(r=>setTimeout(r,Math.min(pollMs,Math.max(1,deadline-Date.now()))));continue;
+      }
       await read();await eatIslandAtWall(ctx,onSample);const recovered=await read();
       if(recovered.l.hp.value<recovered.l.hp.max){if(Date.now()>=deadline)return false;continue;}
       await ctx.call('rest',{agent:ctx.agent,stand:true});return true;
@@ -311,6 +325,11 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     }else {confirmationRetries=0;cutWaits=0;index=aim.i;if(aim.sheltered)shelteredStops++;
       if(cut.partial&&index===cut.waypoints.length-1){if(cut.refuge)partialRefuges.add(cut.refuge.row+','+cut.refuge.col);cut=null;}}
   }
+  ctx.state??={};ctx.state.islandFineFailure={room,target,body,reason:'fine_route_budget',
+    commands,recuts,trafficWaits,cutWaits,recoveries,index,excluded_prefix_refuges:[...partialRefuges],
+    cut:cut&&{ok:cut.ok,bridgeOk:cut.bridgeOk,why:cut.why,partial:cut.partial,refuge:cut.refuge,
+      waiting_refuge:cut.waiting_refuge,traffic_blocked:cut.traffic_blocked,
+      first:cut.waypoints?.[0],next:cut.waypoints?.slice(index,index+4),last:cut.waypoints?.at(-1)}};
   throw Error('fine_route_budget');
 }
 export async function walkHollowsOut(ctx,options={}){
@@ -381,23 +400,39 @@ export async function walkHollowsOut(ctx,options={}){
     console.log('HOLLOWS POINT '+JSON.stringify({agent,target:point}));
   }
 }
+async function waitForDeclaredTurn(ctx,geo,read,walk){
+  const l=await read();if(knownRefugeCell(geo,l.you))return;
+  const refuge=planNearbyFineRefuge(geo,l.you,new Map(l.objects.map(o=>[o.id,o])),l.you.id);
+  if(!refuge.found)throw Error('declared_crossing_queue_refuge_unavailable');
+  await walk(refuge.point);let held=await read();
+  if(Math.hypot(held.you.x-refuge.point.x,held.you.y-refuge.point.y)<=8&&
+      (held.you.row!==refuge.cell.row||held.you.col!==refuge.cell.col)){
+    const result=await ctx.call('walk_to',{agent:ctx.agent,...refuge.point,fine:true,stride:8,max_steps:10,
+      arrive_within:0,exact_arrival:true,hold_shelf:true});
+    if(result?.cancelled)throw Error('declared_crossing_queue_cancelled');held=await read();
+  }
+  if(held.you.row!==refuge.cell.row||held.you.col!==refuge.cell.col||!knownRefugeCell(geo,held.you))
+    throw Error('declared_crossing_queue_refuge_unconfirmed');
+}
 export async function approachIslandDoor(ctx,options={}){
   const initial=await readIslandFinePosition(ctx);
   if(initial.you.row>10){
     const geo=roomGeometry(2505),walk=(target,guard={})=>checkedIslandWalk(ctx,target,{room:2505,...options,...guard});
     const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);options.onSample?.(l);return l;};
     const jumps=fallJumpsIn(2505),first=jumps.find(j=>j.from.row===27&&j.from.col===60),second=jumps.find(j=>j.from.row===46&&j.from.col===80);
-    // Stage at cover before admission; the shared crossing controller includes
-    // the takeoff approach and landing clearance in the exclusive turn.
+    // Staging is part of admission: a waiting follower must not occupy the
+    // refuge the active traveler may need after damage or a refused jump.
+    const waitQueued=()=>waitForDeclaredTurn(ctx,geo,read,walk);
+    const queueBudgetMs=options.queueBudgetMs??7200000;
     const initialPoint=protocolToClient(initial.you),height=geo.floorBaseAtClient(initialPoint.x,initialPoint.y);
     let crossed={crossed:initial.you.col>=65&&initial.you.col<84&&initial.you.row<47};
     if(initial.you.col<48||initial.you.col<=60&&height>=14800){
-      const staged=await followDeclaredApproach(first,{geo,read,walk,target:{x:3072,y:1768},gutter:{x:3808,y:2144}});
-      crossed=staged.gutter?staged:await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs});
+      crossed=await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs,queueBudgetMs,waitQueued,
+        prepare:()=>followDeclaredApproach(first,{geo,read,walk,target:{x:3072,y:1768},gutter:{x:3808,y:2144}})});
     }else if(initial.you.col<65&&height<14500&&initial.you.row<35)await walk({x:3808,y:2144});
     if(crossed.crossed){
-      const staged=await followDeclaredApproach(second,{geo,read,walk,target:{x:5144,y:2688},gutter:{x:5440,y:3096}});
-      if(!staged.gutter)await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs});
+      await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs,queueBudgetMs,waitQueued,
+        prepare:()=>followDeclaredApproach(second,{geo,read,walk,target:{x:5144,y:2688},gutter:{x:5440,y:3096}})});
     }
   }
   // Fine point inside the real go-trigger, in KOD/protocol units.
@@ -422,8 +457,9 @@ export async function approachKonimaMainland(ctx,options={}){
   }else if(before.you.col<65&&before.you.row>=25&&before.you.row<=35&&height<14500)await walk({x:3808,y:2144});
   else{
     const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===64&&j.to.row===23);
-    const staged=await followDeclaredApproach(declaration,{geo,read,walk,target:{x:4840,y:1472},gutter:{x:3808,y:2144}});
-    if(!staged.gutter)await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs});
+    await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs,
+      queueBudgetMs:options.queueBudgetMs??7200000,waitQueued:()=>waitForDeclaredTurn(ctx,geo,read,walk),
+      prepare:()=>followDeclaredApproach(declaration,{geo,read,walk,target:{x:4840,y:1472},gutter:{x:3808,y:2144}})});
   }
   await checkedIslandWalk(ctx,{x:160,y:4640},{room:2505,allowEdgeTo:2504,...options});
 }

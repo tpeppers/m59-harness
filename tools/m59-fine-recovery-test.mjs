@@ -13,9 +13,9 @@ const scratch=mkdtempSync(join(tmpdir(),'m59-fine-recovery-'));
 const oldRegistry=process.env.M59_KEEPER_BAND_REGISTRY;
 const origin={source:'fleetscript',name:'fine-recovery',run_id:'fixture'},label=originLabel(origin);
 const agent='fine-recovery-fixture',room={num:2502,object_id:777},vigor={value:200};
-let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false;
+let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false,recoverySource='keeper';
 const recovery=()=>proactive?{faculties:{movement:{owner:'fleetscript:fine-recovery',expires_in_ms:10000}},
- survival_decisions:{current:{source:'keeper',strategy:'nearest_refuge',status:hp.value<20?'approaching':'ended',ended_at:hp.value<20?null:Date.now()}},
+ survival_decisions:{current:{source:recoverySource,strategy:'nearest_refuge',status:hp.value<20?'approaching':'ended',ended_at:hp.value<20?null:Date.now()}},
  safe_spot:{works:true,at:{row:pose.row,col:pose.col}}}:undefined;
 const server=createServer((request,response)=>{
  if(!request.url.startsWith('/state')&&!['/live','/health'].includes(request.url)){response.writeHead(404);response.end();return;}
@@ -51,6 +51,13 @@ try{
  assert(!activeOwnedFineRecovery({...ctx,origin:{...origin,name:'foreign'}},{autopilot_status:recovery()}));
  const cooperative=await checkedIslandWalk(ctx,{x:2410,y:1062},{room:2502,budgetMs:60000});
  assert.equal(cooperative.ok,true);assert.equal(rests,1);assert(moves>0);
+ for(const source of ['recovery','travel','practice']){
+  recoverySource=source;pre=null;moves=0;rests=0;pose={id:1,x:2152,y:1392,row:21,col:33};hp={value:14,max:20};
+  assert(activeOwnedFineRecovery(ctx,{autopilot_status:recovery()}),'the keeper context '+source+' is not a different movement owner');
+  const resumed=await checkedIslandWalk(ctx,{x:2410,y:1062},{room:2502,budgetMs:60000});
+  assert(resumed.ok);assert.equal(rests,1);assert(moves>0,'the original fine goal resumes only after owned recovery');
+ }
+ recoverySource='keeper';
  const map=loadMap(),hollows=roomExitSquares(map.rooms[2502],{includeInland:true});
  assert(hollows.has('1,41')&&hollows.has('2,41')&&hollows.has('47,78'));
  const merb=roomExitSquares(map.rooms[2502],{to:2503,includeInland:true});
@@ -87,6 +94,35 @@ try{
   {you:{...initial.you,id:2}},{you:{...initial.you,x:initial.you.x+8}}])
   assert.deepEqual(await completedEpisode(options),{ok:false,restCount:0,stands:0});
  await assert.rejects(completedEpisode({cancel:{at:2,by:{source:'operator'}}}),/cancelled_by_operator/);
+ async function replacedApproach({foreignAfterHit=false,cancelAfterHit=false,expired=false}={}){
+  let health=13,statusReads=0,rests=0,stands=0;
+  const x={...ctx,state:{islandCancelFence:1},call:async name=>{
+   if(name==='status'){
+    statusReads++;const afterHit=rests>0;
+    return {hp:{value:health,max:20},vigor,movement:afterHit&&cancelAfterHit?{last_cancel:{at:2,by:{source:'operator'}}}:{},
+     autopilot_status:{faculties:{movement:afterHit&&foreignAfterHit?{...ownLease,owner:'fleetscript:foreign'}:ownLease},
+      safe_spot:{works:true,at:{row:initial.you.row,col:initial.you.col}},
+      survival_decisions:{current:{source:'keeper',strategy:'nearest_refuge',status:
+       statusReads%3===0?'recovering':statusReads%3===1?'pending':'approaching',ended_at:null,
+       chosen_refuge:{room:initial.room.num,row:initial.you.row,col:initial.you.col+(statusReads%3===0?0:1)}}}}};
+   }
+   if(name==='rest_up'){
+    assert.equal(statusReads%3,0,'rest waits for the active refuge approach to finish');rests++;
+    if(rests===1){health=12;return {interrupted:'attacked while resting'};}
+    health=20;return {};
+   }
+   if(name==='look')return {room:initial.room,you:initial.you,hp:{value:health,max:20},vigor};
+   if(name==='rest'){stands++;return {};}
+   throw Error('unexpected replacement request '+name);
+  }};
+  const ok=await recoverIslandFineWalk(x,{initial,active:true,pollMs:1,deadline:Date.now()+(expired?-1:1000),
+   read:async()=>({l:{room:initial.room,you:initial.you,hp:{value:health,max:20},vigor}})});
+  return {ok,rests,stands,statusReads};
+ }
+ assert.deepEqual(await replacedApproach(),{ok:true,rests:2,stands:1,statusReads:7});
+ assert.deepEqual(await replacedApproach({foreignAfterHit:true}),{ok:false,rests:1,stands:0,statusReads:4});
+ assert.deepEqual(await replacedApproach({expired:true}),{ok:false,rests:0,stands:0,statusReads:0});
+ await assert.rejects(replacedApproach({cancelAfterHit:true}),/cancelled_by_operator/);
  console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
  proactive=false;pre=null;pose={id:1,x:2112,y:3080,row:48,col:33};hp={value:20,max:20};
  const beforeLower=moves;
