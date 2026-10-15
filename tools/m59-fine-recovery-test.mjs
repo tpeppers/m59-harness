@@ -66,8 +66,8 @@ try{
  const ownLease={owner:'fleetscript:fine-recovery',expires_in_ms:10000};
  const initial={room:{num:2502,object_id:777},you:{id:1,x:2083,y:1466,row:22,col:32},hp:{value:13,max:20},
   autopilot_status:{faculties:{movement:ownLease},survival_decisions:{current:{source:'keeper',strategy:'rest_safe',status:'recovering',ended_at:null}}}};
- async function completedEpisode({lease=ownLease,you=initial.you,cancel=null,attacked=false}={}){
-  let health=13,restCount=0,stands=0;
+ async function completedEpisode({lease=ownLease,you=initial.you,cancel=null,attacked=false,initialHealth=13}={}){
+  let health=initialHealth,restCount=0,stands=0;
   const x={...ctx,state:{islandCancelFence:1},call:async name=>{
    if(name==='status')return {movement:{last_cancel:cancel},autopilot_status:{faculties:{movement:lease},survival_decisions:{current:null}}};
    if(name==='look')return {room:initial.room,you,hp:{value:health,max:20},vigor};
@@ -80,6 +80,8 @@ try{
   return {ok,restCount,stands};
  }
  assert.deepEqual(await completedEpisode(),{ok:true,restCount:2,stands:1});
+ assert.deepEqual(await completedEpisode({initialHealth:20,you:{...initial.you,x:initial.you.x+8}}),{ok:true,restCount:0,stands:0});
+ assert.deepEqual(await completedEpisode({initialHealth:20,you:{...initial.you,id:2}}),{ok:false,restCount:0,stands:0});
  assert.deepEqual(await completedEpisode({attacked:true}),{ok:false,restCount:1,stands:0});
  for(const options of [{lease:{...ownLease,owner:'fleetscript:foreign'}},{lease:{...ownLease,expires_in_ms:0}},
   {you:{...initial.you,id:2}},{you:{...initial.you,x:initial.you.x+8}}])

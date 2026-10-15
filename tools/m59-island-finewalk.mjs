@@ -95,19 +95,24 @@ export function activeOwnedFineRecovery(ctx,status){
 export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
   const actor=l=>({id:l.you?.id,room:l.room?.num,roomId:l.room?.object_id,x:l.you?.x,y:l.you?.y});
   const covered=l=>knownRefugeCell(roomGeometry(l.room?.num),l.you);
+  let actorFence=initial&&activeOwnedFineRecovery(ctx,initial)?actor(initial):null;
   let refugeFence=initial&&activeOwnedFineRecovery(ctx,initial)&&covered(initial)?actor(initial):null;
   for(;;){
     const s=await ctx.call('status',{agent:ctx.agent,brief:true});
     checkIslandCancellation(ctx,s);
     const owned=keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})||(active&&activeOwnedFineRecovery(ctx,s));
-    if(!owned&&!refugeFence)return false;
+    if(!owned&&!actorFence&&!refugeFence)return false;
     const {l}=await read(),wall=s.autopilot_status?.safe_spot;
+    if(owned)actorFence=actor(l);
     if(!owned){
       const origin=ctx.origin??currentCallOrigin(),lease=s.autopilot_status?.faculties?.movement,order=s.movement?.order,p=actor(l);
       if(origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0)||
         (order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))||
-        !Number.isInteger(p.id)||p.id!==refugeFence.id||p.room!==refugeFence.room||p.roomId!==refugeFence.roomId||
-        Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return false;
+        !Number.isInteger(p.id)||p.id<=0||p.id!==actorFence?.id||p.room!==actorFence.room||p.roomId!==actorFence.roomId)return false;
+      // A completed keeper escape may have arrived at another fine pose. A
+      // positively read healthy body can resume its goal without more resting.
+      if(Number.isFinite(l.hp?.max)&&l.hp.max>0&&l.hp.value>=l.hp.max)return true;
+      if(!refugeFence||Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return false;
     }
     if((wall?.works&&wall.at?.row===l.you.row&&wall.at?.col===l.you.col)||knownRefugeCell(roomGeometry(l.room?.num),l.you)){
       if(covered(l))refugeFence=actor(l);
@@ -204,7 +209,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,recoverySince=started,confirmationRetries=0,stride=128,lastRiskCut=0;
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
-    if(l.hp.value<l.hp.max&&activeOwnedFineRecovery(ctx,l)){
+    if(activeOwnedFineRecovery(ctx,l)){
       if(recoveries>=3||!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l}))throw Error('fine_route_recovery_incomplete');
       recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
     }
