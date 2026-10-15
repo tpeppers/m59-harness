@@ -41,6 +41,7 @@ import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
 import { parseRoomContents, objId } from './m59-parse.mjs';
+import { gateRefusal, newGate, gateLive, gateDrops, gateView } from './m59-proxy-gate.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
 
@@ -163,10 +164,18 @@ class Framer {
 }
 
 export class ProxySession extends EventEmitter {
-  constructor(clientSock, { host, port, observe = false, log = () => {} }) {
+  constructor(clientSock, { host, port, observe = false, gateable = false, log = () => {} }) {
     super();
     this.client = clientSock;
     this.observe = observe;
+    // THE CONTROL GATE (m59-proxy-gate.mjs). `gateable` lets an observe-only proxy hold
+    // one: a gate injects nothing, but it does take over the stream arithmetic on the
+    // first drop, which is the same risk --observe exists to rule out — so it is opt-in.
+    this.gateable = gateable || !observe;
+    this.gate = null;
+    // Set on the first dropped packet. From then on every client packet is re-framed by
+    // us, exactly as after an injection, because the client's own value is one step off.
+    this.owned = false;
     this.log = log;
     this.stream = new SecurityStream();
     this.inGame = false;
@@ -328,6 +337,16 @@ export class ProxySession extends EventEmitter {
     if (this.inGame && (payload[0] === 103 || payload[0] === 104) && payload.length >= 6) {
       this.noteLeaderTarget(payload.readUInt32LE(2), payload[0] === 104 ? 'shoot' : 'attack');
     }
+    // THE GATE. Only once calibrated (setGate refuses otherwise), so dropping here and
+    // re-framing everything after is the server's peer arithmetic, not a guess.
+    if (this.gate && !gateLive(this.gate)) { this.log(`gate held by ${this.gate.holder} lapsed`); this.gate = null; }
+    if (this.inGame && this.gate && this.locked && gateDrops(this.gate, payload)) {
+      this.gate.dropped++; this.gate.last_dropped = { op: payload[0], at: Date.now() };
+      this.stats.gated = (this.stats.gated ?? 0) + 1;
+      if (!this.owned) this.log(`gate: first drop (op ${payload[0]}) — taking over the stream arithmetic`);
+      this.owned = true;
+      return;
+    }
     // PASSTHROUGH UNTIL WE HAVE ACTUALLY INJECTED SOMETHING.
     //
     // While we have injected nothing, the client's own security values are correct
@@ -339,7 +358,7 @@ export class ProxySession extends EventEmitter {
     // So we only take over the arithmetic once we have perturbed the stream, and
     // from then on we owe the server every value. `offset` is how far ahead of the
     // client we are, which is exactly the number of packets we have injected.
-    if (!this.inGame || !this.stream.seeds || this.stats.injected === 0) {
+    if (!this.inGame || !this.stream.seeds || (this.stats.injected === 0 && !this.owned)) {
       this.server.write(whole);
       if (this.inGame) {
         // SOLVE FOR THE STREAM RATHER THAN SEARCHING FOR IT.
@@ -653,8 +672,33 @@ export class ProxySession extends EventEmitter {
     return { ok: true, angle: a, player: this.playerId };
   }
 
+  // Take or hand back the controls. Returns {ok} or {ok:false, why}.
+  setGate(opts) {
+    if (!this.gateable) return { ok: false, why: 'observe-only proxy started without --gate' };
+    const why = gateRefusal(this);
+    if (why) return { ok: false, why };
+    if (gateLive(this.gate) && this.gate.holder !== opts?.holder && !opts?.supersede)
+      return { ok: false, why: `gate already held by ${this.gate.holder}` };
+    const renewing = gateLive(this.gate) && this.gate.holder === opts?.holder;
+    let next; try { next = newGate(opts); } catch (e) { return { ok: false, why: e.message }; }
+    // A renewal extends the lease; it does not restart the record of the hold.
+    if (renewing) { next.since = this.gate.since; next.dropped = this.gate.dropped; next.last_dropped = this.gate.last_dropped; }
+    this.gate = next;
+    if (!renewing) this.log(`gate taken by ${this.gate.holder}${this.gate.reason ? ' — ' + this.gate.reason : ''}`);
+    return { ok: true, gate: gateView(this.gate) };
+  }
+
+  clearGate(holder = null) {
+    if (!gateLive(this.gate)) { this.gate = null; return { ok: true, gate: null, was: null }; }
+    if (holder && holder !== this.gate.holder) return { ok: false, why: `gate is held by ${this.gate.holder}, not ${holder}` };
+    const was = gateView(this.gate); this.gate = null;
+    this.log(`gate released by ${was.holder} after ${was.dropped} dropped packet(s)`);
+    return { ok: true, gate: null, was };
+  }
+
   status() {
     return { in_game: this.inGame, have_seeds: !!this.stream.seeds,
+             gate: gateView(this.gate), gateable: this.gateable, gate_refusal: gateRefusal(this),
              player_id: this.playerId,
              observe: this.observe, ...this.stats, shadowed: this.shadowed,
              aligned: this.aligned, misaligned: this.misaligned, locked: this.locked,
@@ -664,7 +708,7 @@ export class ProxySession extends EventEmitter {
              server_room_ms_ago: this.serverRoomAt ? Date.now() - this.serverRoomAt : null,
              human_move_ms_ago: this.lastHumanMoveAt ? Date.now() - this.lastHumanMoveAt : null,
              human_driving: !!(this.lastHumanMoveAt && Date.now() - this.lastHumanMoveAt < 5000),
-             owning_stream: this.stats.injected > 0 };
+             owning_stream: this.stats.injected > 0 || this.owned };
   }
 
   destroy() {
@@ -779,9 +823,42 @@ function serveControl(port, getSession) {
   }).listen(port, '127.0.0.1', () => console.error(`  control on http://127.0.0.1:${port}`));
 }
 
+// THE GATE'S OWN CONTROL CHANNEL, separate from serveControl because that one can send
+// arbitrary packets as the player and is therefore refused alongside native context.
+// This one can only take, renew and release the gate — it never writes to the server.
+//
+//   GET  /gate                       every session's gate, by player object id
+//   POST /gate    {holder, reason, chat, ttl_ms, supersede}   ?player=<objId>
+//   POST /ungate  {holder}                                     ?player=<objId>
+export function serveGateControl(port, getSession) {
+  return http.createServer((req, res) => {
+    const send = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const sessions = () => getSession('all').map(s => ({ player_id: s.playerId, in_game: s.inGame,
+      gate: gateView(s.gate), gateable: s.gateable, gate_refusal: gateRefusal(s),
+      human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null }));
+    if (req.method === 'GET' && (url.pathname === '/gate' || url.pathname === '/status'))
+      return send(200, { sessions: sessions() });
+    if (req.method !== 'POST' || !['/gate', '/ungate'].includes(url.pathname))
+      return send(405, { error: 'GET /gate | POST /gate | POST /ungate' });
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 4096) req.destroy(); });
+    req.on('end', () => {
+      let msg = {};
+      if (body.trim()) { try { msg = JSON.parse(body); } catch { return send(400, { error: 'bad json' }); } }
+      const want = url.searchParams.get('player');
+      const s = getSession(want ? Number(want) : null);
+      if (!s) return send(409, { error: want ? `no session for player ${want}` : 'no client is connected' });
+      const r = url.pathname === '/gate' ? s.setGate(msg) : s.clearGate(msg.holder ?? null);
+      send(r.ok ? 200 : 409, { ...r, player_id: s.playerId });
+    });
+  }).listen(port, '127.0.0.1', () => console.error(`  gate control on http://127.0.0.1:${port}`));
+}
+
 export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
                              observe = false, control = null, onSession = () => {},
-                             listenHost = '0.0.0.0', contextPort = null, communicationStateFile = null } = {}) {
+                             listenHost = '0.0.0.0', contextPort = null, communicationStateFile = null,
+                             gateable = false, gateControl = null } = {}) {
   if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
   const communications=communicationStateFile?proxyCommunicationsConfig({stateFile:communicationStateFile,host,port}):null;
   const context=contextPort!==null?proxyContext({host,port,listen}):null;
@@ -793,10 +870,12 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     if (sel === 'list')
       return [...sessions].map(s => ({ player_id: s.playerId, known_room: s.knownRoom,
                                        in_game: s.inGame, current: s === current }));
+    if (sel === 'all') return [...sessions];
     if (sel == null) return current;
     return [...sessions].find(s => s.playerId === sel) ?? null;
   };
   if (control) serveControl(control, pick);
+  if (gateControl) serveGateControl(gateControl, pick);
   // RECORD WHERE A HUMAN ACTUALLY WALKS. One file per proxy run — see the note on
   // `walkLog` in the session. `--no-walklog` turns it off; it is on by default because
   // the trace is the only ground truth this repository has about walkable space, and the
@@ -813,7 +892,7 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     const tag = `${sock.remoteAddress}:${sock.remotePort}`;
     const log = (m) => console.error(`[proxy ${tag}] ${m}`);
     log('client connected');
-    const s = new ProxySession(sock, { host, port, observe, log });
+    const s = new ProxySession(sock, { host, port, observe, gateable, log });
     if(communications)s.communications=attachProxyCommunications(s,communications);
     if(context)try{context.attach(s);}catch{s.destroy();return;}
     current = s;
@@ -859,6 +938,8 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     mkdirSync(dirnamePath(advert), { recursive: true });
     writeFileSync(advert, JSON.stringify({
       listen, server: { host, port }, pid: process.pid, at: Date.now(), communication_state_file:communicationStateFile,
+      // Where the plan desk takes and releases the controls (m59-proxy-gate.mjs).
+      gate_control: arg('--gate-control') ? Number(arg('--gate-control')) : null,
     }, null, 1));
     const drop = () => { try { unlinkSync(advert); } catch { /* already gone */ } };
     process.on('exit', drop);
@@ -871,5 +952,8 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     control: arg('--control') ? Number(arg('--control')) : null,
     listenHost: arg('--bind','0.0.0.0'),
     contextPort: arg('--context-port') ? Number(arg('--context-port')) : null,
+    // --gate lets an --observe proxy hold the control gate; --gate-control <port> serves it.
+    gateable: process.argv.includes('--gate') || !!arg('--gate-control'),
+    gateControl: arg('--gate-control') ? Number(arg('--gate-control')) : null,
   });
 }
