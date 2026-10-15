@@ -76,8 +76,32 @@ This checks the live staging and western-cavern climb, not full-trip safety.
 The previous staging-cell centre was physically unreachable. The shared
 refuge-footing resolver now supplies a proved enterable, reversible fine point;
 generated Hollows guides cover both the map entrance and native login point.
-The candidate subsequently passed all 69 movement suites with zero new
+That staging candidate subsequently passed all 69 movement suites with zero new
 regressions and the existing baseline failures unchanged.
+
+The next completed populated cohort on `4652abce` (source hash
+`8ba2342a1c02ca297e891b0c61bffa1e840887f13a89d220afaaebb1cfc1b67b`)
+had zero deaths but completed only 1/20 round trips. All twenty native
+wallets retained 40,000 shillings: 40,000 home and 760,000 held by nineteen
+living stopped travelers. Eighteen stopped in the Hollows and one in the
+Chamber; the successful courier completed both Konima directions. All twenty
+keepers retained the pinned source and zero known skills/spells, and no new
+postmortems appeared. The run continued every traveler after failures and
+finished its final native audit before further setup. Minimum observed HP
+was 4. This is 100% survival and 5% completion, not an accepted courier result.
+The follow-up candidate addresses interrupted refined crossings and traffic
+detours into irreversible lower refuges. It needs its own native validation.
+The later candidate source
+`c87a0fe8ecdacbb2cf1a2f674e499a8e62f4f49d4b550780e6c71d6fcefb7a14`
+completed a two-courier native Hollows retry from the recorded upper stopped
+positions. All twenty initial poses were reconstructed before measurement;
+current HP, vigor, purses and monsters were retained. The two departures had
+20 HP and 172/194 vigor, and measured administrator mutations were zero.
+Both reached Merb alive with their original 40,000 shillings and no known
+skills/spells. Minimum HP was 17 and 14. This validates the direct takeoff
+and recovery revision as a component, not the next full-cohort success rate.
+The same movement candidate then passed all 69 offline movement suites with
+zero new regressions and the existing baseline failures unchanged.
 
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
@@ -85,6 +109,13 @@ Ko'catan (2000). The return uses those maps in reverse order, with different
 paths inside them. The Hollows' northern east exit is reached through the
 small western cavern and its climb. The return takes the lower east exit;
 it does not attempt to reverse the outward fall.
+Takeoff refinement and recovery now use the shared declared-crossing controller.
+A live-body refusal waits at a nearby unoccupied reversible refuge, and an
+owned keeper interruption can resume from its observed healthy body. Traffic
+side refuges must lead back to the proved rail. An ordinary walking escape
+from the lower pocket beneath this takeoff has not been proved; it is not
+Konima's gutter, and the controller refuses there instead of aiming uphill.
+The normal route must prevent that unplanned descent.
 
 Run from a checkout with the intended roster and keeper band, and verify the
 broker before selecting characters. For the isolated shadow broker:

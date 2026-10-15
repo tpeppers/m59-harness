@@ -181,6 +181,19 @@ const ok=await ordinaryHop({agent:'fixture',call:async(name,args)=>{
  return name==='look'?look(++reads===1?2000:2013):{};
 }},2013,{pollMs:1});
 assert(ok.ok);assert.equal(ok.damage,0);assert.equal(ok.lowest_hp,20);
+let directCancelCleanups=0;
+const directCancel={agent:'fixture',origin:{source:'fleetscript',name:'direct-hop',run_id:'fixture'},call:async name=>{
+ if(name==='look')return look(2000);
+ if(name==='status')return {movement:{last_cancel:{at:directCancel.state.islandCancelFence+1,
+  by:{source:'operator'},by_label:'operator:cancel'}}};
+ if(name==='cancel_movement')directCancelCleanups++;
+ return {};
+}};
+await assert.rejects(ordinaryHop(directCancel,2013,{pollMs:1,budgetMs:100,idleGraceMs:2}),/cancelled_by_operator/);
+const directFence=directCancel.state.islandCancelFence;
+await assert.rejects(ordinaryHop(directCancel,2013,{pollMs:1,budgetMs:100,idleGraceMs:2}),/cancelled_by_operator/);
+assert.equal(directCancel.state.islandCancelFence,directFence,'another hop in the same cancelled controller cannot refresh its fence');
+assert.equal(directCancelCleanups,2);
 reads=0;await assert.rejects(ordinaryHop({agent:'fixture',call:async name=>name==='look'?look(++reads===1?2000:1,reads===1?20:0):{}},2013,{pollMs:1}),/traveller_died/);
 reads=0;await assert.rejects(ordinaryHop({agent:'fixture',call:async name=>name==='look'?look(2000,20,++reads===1?20:19):{}},2013,{pollMs:1}),/lost_max_health/);
 let cancelled=false;

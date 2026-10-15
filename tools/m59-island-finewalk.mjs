@@ -9,7 +9,6 @@ import {foodValue} from './m59-items.mjs';
 import {originLabel,keeperMovementPreemption} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
-import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
@@ -17,7 +16,7 @@ import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
-import {planRefugeStage} from './m59-fine-refuge-reach.mjs';
+import {planRefugeStage,planNearbyFineRefuge} from './m59-fine-refuge-reach.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -149,19 +148,6 @@ export const HOLLOWS_OUT_POINTS=[
   {x:3991,y:1160}, // after the eastward drop, r18c62
   {x:4968,y:649},  // northern east exit approach, r10c77
 ];
-let hollowsCrossing=Promise.resolve();
-async function crossingTurn(fn,whileWaiting){
-  const previous=hollowsCrossing;let release;
-  hollowsCrossing=new Promise(r=>{release=r;});
-  try{
-    let ready=false;previous.then(()=>{ready=true;});
-    while(!ready){await whileWaiting();await new Promise(r=>setTimeout(r,1000));}
-    return await fn();
-  }finally{
-    // A cancelled waiter must not let its successor overlap the current jumper.
-    previous.then(release);
-  }
-}
 export function shelteredIslandAim(waypoints,body,{fromIndex=0,aim,squares,edge,cost=null}={}){
   if(!aim||!squares?.size)return aim;
   const prices=new Map();let accumulated=0,previous=body;
@@ -183,12 +169,12 @@ export function cutIslandRail(body,goal,options){
   return cutRail(body,goal,options);
 }
 export const islandTrafficRefusal=reply=>reply?.reason==='object_blocked'||reply?.geometry_rejections?.includes('object_blocked')===true;
-export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250}={}){
+export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250,tolerance=128}={}){
   let observation,error;
   for(let i=0;i<attempts;i++){
     await new Promise(r=>setTimeout(r,settleMs));
     observation=await read();error=Math.hypot(observation.body.x-aim.x,observation.body.y-aim.y);
-    if(error<=128)break;
+    if(error<=tolerance)break;
   }
   return {...observation,error};
 }
@@ -323,42 +309,58 @@ export async function walkHollowsOut(ctx,options={}){
   // takeoff corridor while the admitted traveler refines and clears its jump.
   const staging=planRefugeStage(roomGeometry(2502),{x:2201,y:2650},{row:42,col:36});
   if(!staging.found)throw Error('hollows_staging_'+staging.reason);
-  await checkedIslandWalk(ctx,staging.point,remaining());
-  await crossingTurn(async()=>{
-  // A declared landing occupied by another follower is not permission to jump
-  // elsewhere. Let the preceding traveler clear the landing along the same rail.
-  await checkedIslandWalk(ctx,{x:2201,y:2650},remaining());
-  let before=await readIslandFinePosition(ctx);
-  if(!Number.isFinite(before.vigor?.value)||before.vigor.value<12)throw Error('hollows_crossing_requires_running_vigor');
+  const read=async()=>{const l=await readIslandFinePosition(ctx);options.onSample?.(l);checkIslandCancellation(ctx,l);return l;};
+  const walk=(point,guard={})=>checkedIslandWalk(ctx,point,{...remaining(),...guard});
   const declaration=fallJumpsIn(2502).find(j=>j.to?.row===44&&j.to?.col===27);
-  const refined=planDeclaredTakeoff(roomGeometry(2502),before.you,declaration,
-    {objects:new Map((before.objects??[]).map(o=>[o.id,o])),selfId:before.you.id});
-  if(!refined.found)throw Error('hollows_takeoff_'+refined.reason);
-  if(before.you.x!==refined.takeoff.x||before.you.y!==refined.takeoff.y){
-    const distance=Math.hypot(before.you.x-refined.takeoff.x,before.you.y-refined.takeoff.y);
-    const approach=await call('walk_to',{agent,...refined.takeoff,fine:true,stride:16,max_steps:Math.ceil(distance/16)+2,arrive_within:0,exact_arrival:true,hold_shelf:true},30000);
-    before=await readIslandFinePosition(ctx);options.onSample?.(before);
-    if(!approach.arrived||Math.hypot(before.you.x-refined.takeoff.x,before.you.y-refined.takeoff.y)>0.1){
-      ctx.state.islandTakeoffFailure={room:2502,takeoff:refined.takeoff,observed:before.you,
+  // This lower pocket has no proved ordinary path to any room exit or the
+  // western climb. Unlike Konima it has no established walking gutter. Never
+  // aim uphill or invent a teleport; the route must prevent that descent.
+  const gutter=async observed=>{
+   ctx.state??={};ctx.state.islandTakeoffFailure={room:2502,reason:'lower_escape_unproved',observed:observed.you};
+   throw Error('hollows_lower_escape_unproved');
+  };
+  const staged=await followDeclaredApproach(declaration,{geo:roomGeometry(2502),read,walk,
+   target:staging.point,gutter,requireShelf:true});
+  // The shared controller owns refinement through landing clearance, including
+  // body waits and a verified keeper recovery during a takeoff or jump call.
+  if(!staged.gutter)await followDeclaredCrossing(ctx,declaration,{geo:roomGeometry(2502),read,walk,
+   stage:staging.point,gutter,clear:HOLLOWS_OUT_POINTS[0],
+   refineTakeoff:true,approachPoint:{x:2201,y:2650},budgetMs:Math.max(1,deadline-Date.now()),
+   walkTakeoff:async(target,{validatePosition}={})=>{
+    let before=await read();validatePosition?.(before);
+    if(!Number.isFinite(before.vigor?.value)||before.vigor.value<12)throw Error('hollows_crossing_requires_running_vigor');
+    const distance=Math.hypot(before.you.x-target.x,before.you.y-target.y);
+    const approach=await call('walk_to',{agent,...target,fine:true,stride:16,max_steps:Math.ceil(distance/16)+2,arrive_within:0,exact_arrival:true,hold_shelf:true},30000);
+    before=await read();validatePosition?.(before);
+    if(approach.arrived&&Math.hypot(before.you.x-target.x,before.you.y-target.y)>0.1){
+     const confirmed=await confirmIslandFineArrival(async()=>{
+      const l=await read();validatePosition?.(l);return {l,body:protocolToClient(l.you)};
+     },protocolToClient(target),{attempts:4,settleMs:150,tolerance:1.6});
+     before=confirmed.l;
+    }
+    if(!approach.arrived||Math.hypot(before.you.x-target.x,before.you.y-target.y)>0.1){
+      ctx.state.islandTakeoffFailure={room:2502,takeoff:target,observed:before.you,
         approach:{arrived:approach.arrived,reason:approach.reason,steps:approach.steps,
           last_step:approach.last_step,geometry_rejections:approach.geometry_rejections}};
       console.log('ISLAND TAKEOFF REFUSED '+JSON.stringify({agent,...ctx.state.islandTakeoffFailure}));
-      throw Error('hollows_refined_takeoff_not_observed_'+(approach.reason??'position'));
+      throw Object.assign(Error('hollows_refined_takeoff_not_observed_'+(approach.reason??'position')),
+       islandTrafficRefusal(approach)?{code:'declared_crossing_traffic_blocked'}:{});
     }
-  }
-  const jump=await call('jump',{agent,to_row:44,to_col:27});
-  const observed=await confirmIslandFineArrival(async()=>{
-    const l=await readIslandFinePosition(ctx);options.onSample?.(l);checkIslandCancellation(ctx,l);
-    return {l,body:protocolToClient(l.you)};
-  },protocolToClient({x:1750,y:2824}),{attempts:8,settleMs:100});
-  const landed=observed.l;
-  if(landed.room?.num!==2502||Math.hypot(landed.you.x-1750,landed.you.y-2824)>10)throw Error('hollows_crossing_not_observed_'+(jump.reason??'landing'));
-  await checkedIslandWalk(ctx,HOLLOWS_OUT_POINTS[0],remaining());
-  },async()=>{
-    const waiting=await readIslandFinePosition(ctx);options.onSample?.(waiting);
-    checkIslandCancellation(ctx,waiting);
-    if(Date.now()>=deadline)throw Error('hollows_crossing_queue_budget');
-    if(waiting.room?.num!==2502||waiting.hp?.value<=0)throw Error('hollows_crossing_queue_body_changed');
+   },
+   recover:({since,initial})=>recoverIslandFineWalk(ctx,{deadline,since,initial,active:true,onSample:options.onSample,
+    read:async()=>({l:await read()})}),
+   waitAtCover:async()=>{
+    const l=await read(),refuge=planNearbyFineRefuge(roomGeometry(2502),l.you,
+     new Map((l.objects??[]).map(o=>[o.id,o])),l.you.id);
+    if(!refuge.found)throw Error('declared_crossing_refuge_unavailable');
+    const held=await followDeclaredApproach(declaration,{geo:roomGeometry(2502),read,walk,
+     target:refuge.point,gutter,requireShelf:true});
+    if(!held.gutter&&!knownRefugeCell(roomGeometry(2502),(await read()).you))
+     throw Error('declared_crossing_refuge_not_observed');
+   },
+   observeLanding:async landing=>(await confirmIslandFineArrival(async()=>{
+    const l=await read();return {l,body:protocolToClient(l.you)};
+   },protocolToClient(landing),{attempts:8,settleMs:100})).l,
   });
   for(const point of HOLLOWS_OUT_POINTS.slice(1)){
     await checkedIslandWalk(ctx,point,{...remaining(),...(point===HOLLOWS_OUT_POINTS.at(-1)?{allowEdgeTo:2503}:{})});

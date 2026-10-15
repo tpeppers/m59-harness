@@ -5,7 +5,7 @@ import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {originLabel} from './m59-move-origin.mjs';
-import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk} from './m59-island-finewalk.mjs';
+import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk,walkHollowsOut,confirmIslandFineArrival} from './m59-island-finewalk.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {roomGeometry} from './m59-ground.mjs';
@@ -88,6 +88,15 @@ try{
   assert.deepEqual(await completedEpisode(options),{ok:false,restCount:0,stands:0});
  await assert.rejects(completedEpisode({cancel:{at:2,by:{source:'operator'}}}),/cancelled_by_operator/);
  console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
+ proactive=false;pre=null;pose={id:1,x:2112,y:3080,row:48,col:33};hp={value:20,max:20};
+ const beforeLower=moves;
+ await assert.rejects(walkHollowsOut(ctx,{budgetMs:10000}),/hollows_lower_escape_unproved/);
+ assert.equal(moves,beforeLower,'an unproved lower Hollows escape cannot become an uphill movement command');
+ let exactReads=0;
+ const exact=await confirmIslandFineArrival(async()=>({body:{x:++exactReads===1?108:100,y:100}}),
+  {x:100,y:100},{attempts:2,settleMs:1,tolerance:1.6});
+ assert.equal(exactReads,2,'exact takeoff confirmation cannot accept the ordinary eight-KOD tolerance');
+ assert.equal(exact.error,0);
 }finally{
  await new Promise(resolve=>server.close(resolve));
  if(oldRegistry==null)delete process.env.M59_KEEPER_BAND_REGISTRY;else process.env.M59_KEEPER_BAND_REGISTRY=oldRegistry;

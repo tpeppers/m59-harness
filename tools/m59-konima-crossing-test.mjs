@@ -89,3 +89,55 @@ for(const mode of ['climb','drop']){
  const r=await followDeclaredCrossing(f.ctx,declaration,{geo,read:f.read,walk:f.walk,gutter,stage,clear});
  assert(r.gutter&&!r.crossed);assert.equal(calls,1);assert.deepEqual(body,gutter,'a missed landing can be higher than the intended low refuge and still requires the gutter');
 }
+
+// Refined takeoffs retain live bodies, ordinary recovery and lower escape.
+const hg=roomGeometry(2502),hd=fallJumpsIn(2502)[0],ha={x:2201,y:2650},hs={x:2305,y:2714},hc={x:1344,y:3076},hl={x:2241,y:2322};
+for(const mode of ['traffic','recovery','health_wait','lower','cancel']){
+ let body=mode==='health_wait'?{x:2176,y:2552}:{...ha},hp=mode==='health_wait'?15:20,jumps=0,waits=0,restored=0,cancelled=false;
+ let objects=mode==='traffic'?[{id:2,flags:525,row:39,col:34,x:2176,y:2552}]:[];
+ const read=async()=>{
+  if(cancelled)throw Error('cancelled_by_operator');
+  return {room:{num:2502},you:{id:1,...body,row:Math.floor(body.y/64),col:Math.floor(body.x/64)},hp:{value:hp,max:20},vigor:{value:200},objects};
+ };
+ const walks=[];
+ const walk=async(point,{validatePosition}={})=>{body={...point};walks.push({...point});validatePosition?.(await read());};
+ const ctx={fleet:'refined-fixture',agent:'a',state:{},call:async()=>{
+  jumps++;
+  if(mode==='cancel'){cancelled=true;return {error:'interrupted'};}
+  if(mode==='recovery'&&jumps===1){body={x:2176,y:2552};hp=12;return {error:'keeper recovery owns the body'};}
+  body=clientToProtocol(hd.to_fine);return {jumped:true};
+ }};
+ const run=()=>followDeclaredCrossing(ctx,hd,{geo:hg,read,walk,gutter:mode==='lower'?hl:hc,clear:hc,stage:hs,
+  refineTakeoff:true,approachPoint:ha,budgetMs:10000,
+  walkTakeoff:async(point,{validatePosition}={})=>{
+   assert.equal(hp,20,'an injured body recovers at cover before another takeoff approach');
+   if(mode==='health_wait')assert(Math.hypot(point.x-2176,point.y-2552)<=16,'use the proved takeoff next to the actual recovery body');
+   if(mode==='lower'){body={x:2096,y:2920};validatePosition?.(await read());assert.fail('a lower approach must stop');}
+   await walk(point,{validatePosition});
+  },
+  waitAtCover:async()=>{waits++;objects=[];if(mode==='health_wait')hp=20;else body={...hs};},
+  recover:async({since,initial})=>{
+   assert(Number.isFinite(since));
+   if(mode==='recovery'&&initial.hp.value===12){restored++;hp=20;return true;}
+   return false;
+  },
+ });
+ if(mode==='cancel'){await assert.rejects(run(),/cancelled_by_operator/);assert.equal(restored,0);assert.equal(jumps,1);continue;}
+ const result=await run();
+ assert.equal(result.gutter,mode==='lower'?true:undefined);
+ assert.deepEqual(walks.at(-1),mode==='lower'?hl:hc);
+ if(mode==='traffic'){assert.equal(waits,1);assert.equal(jumps,1);assert(ctx.state.declaredCrossingFailure.terrain_proved);}
+ if(mode==='recovery'){
+  assert.equal(restored,1);assert.equal(jumps,2);
+  assert(!walks.some(p=>p.x===hs.x&&p.y===hs.y),'healthy keeper recovery does not retreat into a follower staging cell');
+  assert(!walks.some(p=>p.x===ha.x&&p.y===ha.y),'a proved takeoff at the recovery body does not backtrack through the old approach');
+ }
+ if(mode==='health_wait'){assert.equal(waits,1);assert.equal(jumps,1);}
+ if(mode==='lower')assert.equal(jumps,0,'lower Hollows approach uses the checked gutter, never another takeoff');
+}
+console.log('Refined crossings wait for fresh body clearance, resume verified keeper recovery, retain cancellation, and route lower approaches through their ordinary gutter.');
+{
+ const f=fixture(),unknown=Object.create(geo);unknown.floorBaseAtClient=()=>null;
+ await assert.rejects(followDeclaredCrossing(f.ctx,out,{geo:unknown,read:f.read,walk:f.walk,gutter,stage,clear}),/floor_unavailable/);
+ assert.equal(f.calls,0);assert.equal(f.walks.length,0,'unknown floors do not claim or dispatch a crossing');
+}
