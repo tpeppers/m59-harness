@@ -156,6 +156,7 @@ async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,time
   if(cancelled())return {found:false,cancelled:true,reason:'movement_cancelled'};
   if(options.avoidSquares!=null&&!(options.avoidSquares instanceof Set))throw TypeError('avoidSquares must be a Set of row,col keys');
   if(options.bodyRangeSquares!==undefined&&(!Number.isFinite(options.bodyRangeSquares)||options.bodyRangeSquares<=0))throw RangeError('bodyRangeSquares must be positive and finite');
+  if(options.guideNext!=null&&![options.guideNext.x,options.guideNext.y].every(Number.isFinite))throw TypeError('guideNext must be a finite protocol point');
   const geometry=geo.toJSON({includeSurfaces:false,graphEntrySquares:[],edgeDirections:[]});
   const copy={...options,threats:(options.threats??[]).map(o=>({row:o.row,col:o.col,x:o.x,y:o.y})),
     objects:[...(options.objects?.values?.()??[])].map(o=>({id:o.id,x:o.x,y:o.y,flags:o.flags}))};
@@ -209,9 +210,16 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
         if(held)waitingRefuge={row:held.row,col:held.col};
         const goal=point(workerData.goal);
         const occupiedGoal=obstacles.some(o=>Math.abs(o.x-goal.x)<MIN_NOMOVEON&&Math.abs(o.y-goal.y)<MIN_NOMOVEON);
+        // Only an explicitly optional guide point may advance. An occupied
+        // exact destination still waits. The next authored point must have a
+        // complete route under the SAME bodies, floor and mandatory edges.
+        if(occupiedGoal&&o.guideNext){
+          const next=cutRail(point(workerData.from),point(o.guideNext),{...settings,edge});
+          if(next.ok&&next.bridgeOk)cut={...next,guide_advance:{from:workerData.goal,to:o.guideNext,reason:'occupied_guide_waypoint'}};
+        }
         // A different waiting wall cannot free an occupied exact destination.
         // Keep this proved cover until its incumbent leaves, then recut.
-        if(!waitingRefuge||!occupiedGoal){
+        if(!cut.guide_advance&&(!waitingRefuge||!occupiedGoal)){
         const prefix=[guide.waypoints[0]];let previous=prefix[0],distance=0;
         for(const p of guide.waypoints.slice(1)){
           if(!edge(previous,p))break;

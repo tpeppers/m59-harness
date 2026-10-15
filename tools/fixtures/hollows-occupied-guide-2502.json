@@ -1,0 +1,11 @@
+{
+  "room": 2502,
+  "from": {"id": 99, "row": 50, "col": 21, "x": 1400, "y": 3232},
+  "goal": {"x": 935, "y": 3351},
+  "next": {"x": 880, "y": 2591},
+  "bodies": [
+    {"id": 1, "name": "cave orc", "flags": 9, "row": 51, "col": 24, "x": 1568, "y": 3296},
+    {"id": 2, "name": "shadowbeast", "flags": 2097161, "row": 52, "col": 14, "x": 923, "y": 3347},
+    {"id": 3, "name": "cave orc", "flags": 9, "row": 54, "col": 25, "x": 1632, "y": 3488}
+  ]
+}

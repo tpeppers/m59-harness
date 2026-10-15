@@ -138,6 +138,19 @@ That applies to both the short fine-cut fallback and protected full-room
 legs. A covered pocket reached by a one-way descent is not a traffic detour.
 Forward drops already on a complete route retain their ordinary checks.
 
+An intermediate authored guide point may be occupied while its corridor is
+clear. `cutFineRailAsync` accepts an explicit protocol `guideNext` for that
+case, together with `allowBodyPrefix`. It advances only when a live body
+occupies the original point, its geometry route exists, and the next authored
+point has a complete current collision-checked route under the same floor
+and avoidance constraints. The returned `guide_advance` names both points;
+the follower changes its actual goal and re-proves every executing chord.
+Exact destinations, required refuge positions, jump landings and door targets
+have no look-ahead by default. A blocked or unproved next point keeps the
+original covered wait. The native Hollows regression places a shadowbeast
+on r52c14: its exact destination stays blocked, while the optional guide can
+advance along the proved western continuation without moving that creature.
+
 The shared declared-crossing controller can refine a takeoff from current
 bodies, wait at an observed unoccupied reversible refuge, and resume after a
 caller-verified keeper recovery. Recovery resumes from the actual healthy

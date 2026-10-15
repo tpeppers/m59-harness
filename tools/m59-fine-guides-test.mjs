@@ -80,3 +80,35 @@ assert.equal(findFineGuide(hollows,source,protocolToClient(drop.to),{edge:(a,b)=
  floorConstraintAllows(hollows,clientToProtocol(b),minimum)&&edgeFor(hollows)(a,b)}),null,
  'a shelf-bound caller cannot use a western drop to bypass its floor fence');
 console.log('The shared fine cutter reuses all six ordinary western Hollows links; live bodies and shelf constraints still reject them.');
+
+// Native r50c21 wait: a shadowbeast occupies an interior human guide point.
+// The corridor and the following point remain reachable with that body present.
+const jam=JSON.parse(readFileSync(new URL('./fixtures/hollows-occupied-guide-2502.json',import.meta.url)));
+const bodyOptions={objects:new Map(jam.bodies.map(o=>[o.id,o])),selfId:jam.from.id,
+ bodyRangeSquares:10,allowBodyPrefix:true,requirePrefixRefuge:true,prefixSquares:4,maxMs:4000};
+const exact=await cutFineRailAsync(hollows,jam.from,jam.goal,bodyOptions);
+assert.equal(exact.ok,false);assert.equal(exact.traffic_blocked,true);
+assert.deepEqual(exact.waiting_refuge,{row:50,col:21});
+assert.equal(exact.guide_advance,undefined,'an exact occupied destination remains exact');
+const advanced=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:jam.next});
+assert(advanced.ok&&advanced.bridgeOk&&!advanced.partial,'only a complete proved next leg advances the guide');
+assert.deepEqual(advanced.guide_advance,{from:jam.goal,to:jam.next,reason:'occupied_guide_waypoint'});
+const bodyEdge=edgeFor(hollows,bodyOptions.objects),end=advanced.waypoints.at(-1);
+assert(Math.hypot(end.x-protocolToClient(jam.next).x,end.y-protocolToClient(jam.next).y)<=128);
+for(let i=1;i<advanced.waypoints.length;i++)assert(bodyEdge(advanced.waypoints[i-1],advanced.waypoints[i]),
+ 'every advanced chord still respects actual geometry and the captured creatures');
+const clear=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,objects:new Map(),guideNext:jam.next});
+assert(clear.ok&&clear.bridgeOk);assert.equal(clear.guide_advance,undefined,'a clear optional point is still visited');
+const near={x:967,y:3351},blockedNext=new Map([...bodyOptions.objects,[4,{id:4,flags:9,...near}]]);
+const occupiedNext=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,objects:blockedNext,guideNext:near});
+assert.equal(occupiedNext.ok,false);assert.equal(occupiedNext.guide_advance,undefined,'an occupied next target grants no bypass');
+const forbidden=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:near,avoidSquares:new Set(['52,15'])});
+assert.equal(forbidden.ok,false);assert.equal(forbidden.guide_advance,undefined,'mandatory avoidance also fences look-ahead');
+const below=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:jam.next,minimumFloor:1000000});
+assert.equal(below.ok,false);assert.equal(below.guide_advance,undefined,'a guide hint cannot waive a caller floor fence');
+const outside=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:{x:-64,y:-64}});
+assert.equal(outside.ok,false);assert.equal(outside.guide_advance,undefined,'unreachable geometry cannot be skipped through');
+await assert.rejects(()=>cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:{x:NaN,y:0}}),/finite protocol point/);
+const cancelled=await cutFineRailAsync(hollows,jam.from,jam.goal,{...bodyOptions,guideNext:jam.next},{cancelled:()=>true});
+assert.equal(cancelled.cancelled,true);assert.equal(cancelled.guide_advance,undefined);
+console.log('Occupied optional guide points may advance only along a complete current body-safe route; exact, occupied-next, forbidden, floor, geometry and cancellation cases stay fenced.');

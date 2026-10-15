@@ -223,8 +223,9 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
   }
   return {...observation,error};
 }
-export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null}={}){
-  const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),goal=protocolToClient(target),started=Date.now();
+export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
+  const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),started=Date.now();
+  let goal=protocolToClient(target);
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
   const exits=roomExitSquares(loadMap().rooms[room],{rows:geo?.rows,cols:geo?.cols,to:allowEdgeTo,includeInland:true});
   let avoidance=new Set(exits);
@@ -261,7 +262,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   };
   const partialRefuges=new Set();
   let {l,body}=await read(),cut=null,index=0,recuts=0,commands=0,trafficWaits=0,cutWaits=0,shelteredStops=0,recoveries=0,recoverySince=started,confirmationRetries=0,stride=128,lastRiskCut=0;
-  const expectedFloor=floorAt(geo,goal.x,goal.y);
+  let expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     if(activeOwnedFineRecovery(ctx,l)){
       if(recoveries>=3){
@@ -293,10 +294,14 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000,
         objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id,bodyRangeSquares:bodyScopeSquares,
         avoidSquares:avoidance,minimumFloor:floorMinimum(),
-        allowBodyPrefix:true,prefixSquares:chordBudget/1024,requirePrefixRefuge:true,excludedPrefixStops:partialRefuges});
+        allowBodyPrefix:true,prefixSquares:chordBudget/1024,requirePrefixRefuge:true,excludedPrefixStops:partialRefuges,guideNext});
       ({l,body}=await read());
       if(l.hp.value<l.hp.max&&activeOwnedFineRecovery(ctx,l)){cut=null;continue;}
       if(Math.hypot(seed.x-body.x,seed.y-body.y)>16){cut=null;continue;}
+      if(cut.guide_advance){
+        target=cut.guide_advance.to;goal=protocolToClient(target);expectedFloor=floorAt(geo,goal.x,goal.y);guideNext=null;
+        ((ctx.state??={}).islandGuideAdvances??=[]).push({at:Date.now(),room,...cut.guide_advance});
+      }
       if(!cut.ok||!cut.bridgeOk){
         if(cut.traffic_blocked&&cut.waiting_refuge?.row===l.you.row&&cut.waiting_refuge?.col===l.you.col){
           // A temporary live-body cut at cover spends the existing journey
@@ -426,8 +431,9 @@ export async function walkHollowsOut(ctx,options={}){
     const l=await read();return {l,body:protocolToClient(l.you)};
    },protocolToClient(landing),{attempts:8,settleMs:100})).l,
   });
-  for(const point of HOLLOWS_OUT_POINTS.slice(1)){
-    await checkedIslandWalk(ctx,point,{...remaining(),...(point===HOLLOWS_OUT_POINTS.at(-1)?{allowEdgeTo:2503}:{})});
+  const points=HOLLOWS_OUT_POINTS.slice(1);
+  for(const [i,point] of points.entries()){
+    await checkedIslandWalk(ctx,point,{...remaining(),guideNext:points[i+1]??null,...(point===HOLLOWS_OUT_POINTS.at(-1)?{allowEdgeTo:2503}:{})});
     console.log('HOLLOWS POINT '+JSON.stringify({agent,target:point}));
   }
 }
