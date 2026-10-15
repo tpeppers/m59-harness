@@ -6,6 +6,14 @@
  "jumps": [
   {
    "room": 2505, "room_name": "Konima's Ascension",
+   "from": {"row": 27, "col": 64}, "to": {"row": 23, "col": 60},
+   "from_fine": {"x": 65024, "y": 27136}, "to_fine": {"x": 61312, "y": 22528},
+   "kind": "fall", "requires": {"running": true},
+   "observed_by": "Local native ordinary courier on 2026-10-15: independent server reads confirmed the exact r23c60 refuge point x3896/y1472, floor 12186. Initial and final HP20/V200, no skills or spells, monsters enabled, no measured admin mutations. Stock gravity also passes at 8, 16, 33 and 50 ms frames.",
+   "note": "Preferred return. Walk one square west along the same right-hand shelf from r27c65, then drop northwest directly onto the r23c60 refuge. This bypasses the r25c60-64 cluster. Continue west through the next refuge at r19c51. Misses still take the southbound gutter; no retry from a lower floor."
+  },
+  {
+   "room": 2505, "room_name": "Konima's Ascension",
    "from": {"row": 27, "col": 65}, "to": {"row": 29, "col": 63},
    "from_fine": {"x": 66048, "y": 27136}, "to_fine": {"x": 64000, "y": 29184},
    "kind": "fall", "requires": {"running": true},

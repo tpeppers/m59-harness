@@ -10,13 +10,13 @@ export function copyFineGeometry(source){
  return geo;
 }
 export function applyFineSectorObservations(map,room,geo,movements){
- const observed=new Map(),heights={};
+ const observed=new Map();
  for(const [key,value]of movements instanceof Map?movements:Object.entries(movements??{})){
   const sector=Number(key);
   if(!Number.isInteger(sector)||!Number.isFinite(value?.height)||!Number.isFinite(value?.type))continue;
-  observed.set(sector,{...value});heights[sector]=value.height;
+  observed.set(sector,{...value});
  }
  // Match the keeper observer's precedence; ceiling masks are complete states.
  return applyCeilingDoors(map,room,observed,null,{geometryOf:()=>geo})
-   ??applyDoorState(map,room,heights,{geometryOf:()=>geo});
+   ??applyDoorState(map,room,observed,{geometryOf:()=>geo});
 }

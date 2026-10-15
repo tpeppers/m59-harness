@@ -5,7 +5,7 @@ import {traceFallMotion} from './m59-falltrace.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
 const geo=roomGeometry(2505),jumps=fallJumpsIn(2505),out=jumps.find(j=>j.from.col===60);
-assert.equal(jumps.length,3);
+assert.equal(jumps.length,4);
 for(const j of jumps)for(const dt of [8,16,33,50]){
  const t=traceFallMotion(geo,j.from_fine.x,j.from_fine.y,j.to_fine.x,j.to_fine.y,{dt,recordFrames:true});
  assert(t.arrived,JSON.stringify({from:j.from,to:j.to,dt,reason:t.reason}));
@@ -44,3 +44,12 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+{
+ const declaration=jumps.find(j=>j.from.col===64),f=fixture(clientToProtocol(declaration.from_fine));
+ let body=clientToProtocol(declaration.from_fine),calls=0;
+ f.read=async()=>({room:{num:2505},you:body,hp:{value:20,max:20},vigor:{value:200}});
+ f.walk=async p=>{body={...p};};
+ f.ctx.call=async()=>{calls++;body={x:4064,y:1696};return {jumped:true};};
+ const r=await followDeclaredCrossing(f.ctx,declaration,{geo,read:f.read,walk:f.walk,gutter,stage,clear});
+ assert(r.gutter&&!r.crossed);assert.equal(calls,1);assert.deepEqual(body,gutter,'a missed landing can be higher than the intended low refuge and still requires the gutter');
+}

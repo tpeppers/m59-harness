@@ -1,8 +1,11 @@
 # Cave and Ko'catan travel
 
-Konima has three independently observed local native crossings: outbound
-r27c60 to r27c65 and r46c80 to r46c84, and return r27c65 to r29c63.
-The return deliberately drops onto the lower floor. A missed first outbound
+Konima's normal outbound crossings are r27c60 to r27c65 and r46c80 to r46c84.
+The preferred return walks one square west on the right-hand shelf, then drops
+from r27c64 directly onto the r23c60 refuge. Independent native fine reads
+confirmed that landing, and its westbound rail bypasses r25c60–64. The older
+observed r27c65-to-r29c63 drop remains an alternate into the lower gutter.
+A missed first outbound
 crossing also uses that lower floor: go south through r31c64 and r33c64,
 then west to the refuge at r33c59. The northern lower-floor approach is about
 12 walking squares from that refuge; the southern approach is about nine.
@@ -29,6 +32,12 @@ were in Konima: nine around r25c60–64, two around r21c61–62, one at r23c61
 and one at r31c64. The later return scenes had more creatures, while each
 death scene had zero or one other courier nearby. This does not establish a
 twenty-character player pileup. The new route requires its own populated trial.
+An interrupted trial of private planner copies retained all twenty travelers
+and all 800,000 shillings. It exposed a floor-door cache keyed only by room:
+later copies could report the open Dispel state without receiving its mask.
+Door application is now tracked per geometry and mask, with separate typed
+floor and ceiling events; the two-copy regression is covered offline. That
+interrupted attempt is not a completed survival sample.
 
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and

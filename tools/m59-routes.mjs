@@ -302,6 +302,12 @@ export function doorVariants(roomNum) {
 // per collision index — captured from the geometry BEFORE anything moved it.
 const DOOR_BASELINE = new Map();
 const DOOR_STATE = new Map();
+let DOOR_GEOMETRY_STATE = new WeakMap();
+export function doorStateForGeometry(geometry){
+  const applied=DOOR_GEOMETRY_STATE.get(geometry);
+  if(!applied||applied.mask!==geometry?._stepMask)return {applied:false,state:null};
+  return {applied:true,state:applied.key};
+}
 
 /** `sector3@356+sector4@419` — the name of one state, sorted so it has only one name. */
 export const doorStateKey = (parts) =>
@@ -369,7 +375,13 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
   }
 
   const key = deviations.length ? doorStateKey(deviations) : null;
-  if (DOOR_STATE.get(roomNum) === key) return { changed: false, state: key, why: 'already there' };
+  // Published room state is not proof that this geometry copy has its mask.
+  // External planners and separate characters can observe the same open state.
+  const applied=DOOR_GEOMETRY_STATE.get(geometry);
+  if (applied?.key===key&&applied.mask===geometry._stepMask) {
+    DOOR_STATE.set(roomNum,key);
+    return { changed: false, state: key, why: 'already there' };
+  }
 
   if (key == null) {
     // Back to what the .roo shipped, which is the mask the routing table already holds.
@@ -380,11 +392,13 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
     const bytes = Buffer.from(baked, 'base64');
     const result = applySectorHeights(geometry, [...shipped].map(([index, floor]) => ({ index, floor })),
       { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
+    geometry.attachStepMask?.(bytes);
+    DOOR_GEOMETRY_STATE.set(geometry,{key:null,mask:geometry._stepMask});
     DOOR_STATE.set(roomNum, null);
     // A DOOR THAT MOVED IS A ROOM WITH DIFFERENT REGIONS. Blackstone Keep goes from a
     // 38-square island plus a 644-square body to ONE body of 682, so a cached labelling
     // taken before the door opened says the feast hall is unreachable from the keep.
-    if (result.moved) forgetReach(roomNum);
+    forgetReach(roomNum);
     return { changed: result.moved > 0, state: null, shut: true, ...(result.why ? { why: result.why } : {}) };
   }
 
@@ -401,8 +415,12 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
   for (const s of variant.sectors ?? []) put.set(s.index, s.floor);
   const result = applySectorHeights(geometry, [...put].map(([index, floor]) => ({ index, floor })),
     { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
+  // applySectorHeights can return early when heights already match, while a
+  // newly attached or copied mask still describes the shipped closed state.
+  geometry.attachStepMask?.(bytes);
+  DOOR_GEOMETRY_STATE.set(geometry,{key,mask:geometry._stepMask});
   DOOR_STATE.set(roomNum, key);
-  if (result.moved) forgetReach(roomNum);
+  forgetReach(roomNum);
   return { changed: result.moved > 0, state: key, ...(result.why ? { why: result.why } : {}) };
 }
 
@@ -511,6 +529,7 @@ export function resetDoorStates() {
       { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
   }
   DOOR_STATE.clear(); DOOR_BASELINE.clear(); REACH_CACHE.clear();
+  DOOR_GEOMETRY_STATE=new WeakMap();
 }
 
 // ------------------------------------------------------------- exits you can actually reach
