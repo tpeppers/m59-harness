@@ -230,7 +230,18 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
   const desk = await createDesk({ fleet, dir, substrate, providerDirs });
   console.error(`plan desk: fleet ${fleet || '(unnamed)'}, substrate ${substrate}, files under ${join(dir, 'plan')}`);
   if (argv.includes('--once')) { console.error(`served ${await desk.tick()} client(s)`); process.exit(0); }
-  for (;;) {
+  // ONE DESK PER SUBSTRATE. The fleet terminal's L starts one when this heartbeat is missing or stale
+  // (m59-tui.mjs ensurePlanDesk), so a second start here would mean two desks answering one client.
+  const beat = join(substrate, 'plan-desk.json');
+  try {
+    const h = JSON.parse(readFileSync(beat, 'utf8'));
+    if (h.pid !== process.pid && Date.now() - h.at < 30_000) { try { process.kill(h.pid, 0); console.error(`a plan desk (pid ${h.pid}) is already serving ${substrate}`); process.exit(0); } catch {} }
+  } catch { /* none */ }
+  const heartbeat = () => { try { writeAtomic(beat, JSON.stringify({ pid: process.pid, at: Date.now(), fleet, dir })); } catch {} };
+  process.on('exit', () => { try { const h = JSON.parse(readFileSync(beat, 'utf8')); if (h.pid === process.pid) writeFileSync(beat, JSON.stringify({ ...h, at: 0 })); } catch {} });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
+  for (let n = 0; ; n++) {
+    if (n % 5 === 0) heartbeat();
     try { await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); }
     await new Promise(r => setTimeout(r, 1000));
   }

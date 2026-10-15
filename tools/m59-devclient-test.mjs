@@ -128,6 +128,20 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------- the PLAN tab's proxy wins
+console.log('proxyFor prefers a gate-capable proxy');
+{
+  const pdir = mkdtempSync(join(tmpdir(), 'm59-proxies-'));
+  try {
+    const srv = { host: '76.214.42.186', port: 5959 };
+    writeFileSync(join(pdir, '5961.json'), JSON.stringify({ listen: 5961, server: srv, pid: 1, at: 1 }));
+    const find = () => proxyFor(srv.host, srv.port, { dir: pdir, isLive: () => true, startedAt: () => null });
+    ok(find()?.listen === 5961, 'with only the swarm shim up, the client uses it');
+    writeFileSync(join(pdir, '5962.json'), JSON.stringify({ listen: 5962, server: srv, pid: 2, at: 1, gate_control: 8931 }));
+    ok(find()?.listen === 5962 && find().gate_control === 8931, 'a gate-capable proxy for the same server wins over the shim');
+  } finally { rmSync(pdir, { recursive: true, force: true }); }
+}
+
 // ---------------------------------------------------------------- whose proxy is it
 console.log('proxyFor');
 {
