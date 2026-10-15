@@ -16,6 +16,25 @@ fs zheng-he-lap agents=hk2            a FleetScript REPL line, exactly as if typ
 
 ## Running it
 
+**The normal way: the fleet terminal's L.** A normal launch now starts the gate-capable proxy
+(5962, gate control 8931) and the plan desk if they aren't already up, and `dev.bat` goes
+through that proxy. Nothing else needs starting. `M59_TUI_NO_PLAN=1` launches the old way.
+
+While prod-deploy predates this work (no deploy cut), run the terminal from the **trunk**
+against the prod fleet, with the roster and the desk pointed at prod-deploy:
+
+```powershell
+cd C:\code\mindmap\maps\m59-harness
+$env:M59_STATE_FILE     = 'C:\code\m59-lab\prod-deploy\substrateleets\prod.json'
+$env:M59_PLAN_SUBSTRATE = 'C:\code\m59-lab\prod-deploy\substrate'
+node tools/m59-tui.mjs --fleet prod
+```
+
+The live courier lap (prod-deploy's local `zheng-he-lap.mjs`) imports
+`m59-human-handoff.mjs` from the trunk by absolute path until a deploy carries it.
+
+**By hand**, the pieces are:
+
 The client half needs only `M59_CLIENT_CONTEXT_DIR`, which `dev.bat` already sets. The
 other half is the **plan desk**:
 
