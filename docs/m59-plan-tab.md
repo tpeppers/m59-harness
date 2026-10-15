@@ -25,7 +25,7 @@ against the prod fleet, with the roster and the desk pointed at prod-deploy:
 
 ```powershell
 cd C:\code\mindmap\maps\m59-harness
-$env:M59_STATE_FILE     = 'C:\code\m59-lab\prod-deploy\substrateleets\prod.json'
+$env:M59_STATE_FILE     = 'C:\code\m59-lab\prod-deploy\substrate\fleets\prod.json'
 $env:M59_PLAN_SUBSTRATE = 'C:\code\m59-lab\prod-deploy\substrate'
 node tools/m59-tui.mjs --fleet prod
 ```
