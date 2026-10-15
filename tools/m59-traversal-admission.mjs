@@ -43,7 +43,13 @@ export async function withTraversalAdmission(ctx,{room,read,run,waitQueued=null,
    evidence.holder=holder?.agent;
    // A failed or dead driver can leave a living body inside. The claim stays
    // until this exact agent has a fresh, confirmed position outside the room.
-   const seen=holder?.agent===ctx.agent?p:await read(holder?.agent,{cached:true}).catch(()=>null);
+   // A live admitted driver still owns its approach in the preceding room.
+   // The store cannot release this ticket before entry, so probing its body
+   // here only fills its packet queue while it needs to walk or take cover.
+   // Re-read the atomic lease on the next poll; entered, stopped or dead
+   // drivers retain the existing cached hint + fresh outside-position proof.
+   const approaching=holder?.phase==='admitted'&&holder.driver_alive===true;
+   const seen=approaching?null:holder?.agent===ctx.agent?p:await read(holder?.agent,{cached:true}).catch(()=>null);
    const proof=holder&&Number.isInteger(seen?.room)&&seen.room!==holder.room?
     (fresh(seen,holder.agent,now())?seen:await read(holder.agent).catch(()=>null)):null;
    if(holder&&fresh(proof,holder.agent,now())&&store.release(holder,proof))continue;

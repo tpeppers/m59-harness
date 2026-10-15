@@ -16,6 +16,13 @@ The hint cannot release a claim: an outside-room hint still requires the
 existing fresh ordered position proof. Ordinary status keeps its fresh
 ability-list behavior.
 
+Waiters also leave a live admitted driver's preceding-room approach alone.
+Its reservation cannot be released before entry, so neither cached nor ordered
+holder reads are useful in that phase. Each poll still checks the atomic lease.
+Entered, stopped and dead drivers retain cached hints followed by a fresh,
+confirmed outside position before release. The twenty-caller admission test
+checks that nineteen waiters send no holder reads during the live approach.
+
 ## Local combat approaches
 
 An adjacent coarse square is not proof that the body can stand beside a quarry.
