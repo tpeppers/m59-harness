@@ -1,5 +1,14 @@
 # Movement, collision and routing
 
+Operable doors share a press, observed-opening and animation-settling contract.
+The opening must finish within the door's remaining cycle measured from the
+actual press, including response delay. Retry timing comes from that door's
+declared cycle rather than an assumed five seconds. The normal opener also
+checks cancellation, client, room, body and trigger again at paced dispatch.
+Guild passage and counter doors use the same wait and retry routines; the
+Bookmakers' password door retains its native five-second cycle. Konima's
+sector 1 lifts from 1060 to 1150 at speed 50, with a ten-second close timer.
+
 Fresh room contents rebind the controlled body by its unique character name,
 even when a save reused its old object ID for another visible player. If the
 body cannot be identified, the client exposes no other player's pose and
@@ -37,6 +46,10 @@ may offer a nearby refuge approach within the prefix allowance plus two
 squares, including a retreat. The full live-body and mandatory-edge checks
 still apply. A traveler already at that refuge may wait within its existing
 journey budget and re-observe; no refused path becomes a movement command.
+The fine-cut worker also searches those alternatives from an already covered
+body before choosing the wait. Previously that branch skipped the search
+while covered and could sit beside a clear three-square approach indefinitely.
+It excludes its current cell and previously used partial-refuge stops.
 
 When live bodies leave no required refuge prefix from a covered starting
 cell, the fine planner reports that covered wait explicitly. The general

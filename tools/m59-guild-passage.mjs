@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { RoomGeometry, applySectorHeights } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 import { doorsFor } from './m59-doorplan.mjs';
-import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 
 let closed;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
@@ -56,7 +56,7 @@ export const doors = [
   { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]] },
   { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]] },
   { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
-  { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true },
+  { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true, within_ms:5000 },
 ];
 export function guildSection(row, col) {
   if (!closed) {
@@ -196,10 +196,13 @@ export async function guildPassage(k, destination, isInterrupted) {
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
       if (isInterrupted()) throw new Error('guild passage paused for survival');
       await standUp(s, isInterrupted);
+      guard();
       const since = c.evSeq;
+      let pressedAt=null;
       if (door.secret) {
+        pressedAt=Date.now();
         if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
-      } else await s.pacer.submit('move', () => { guard(); return c.go(); });
+      } else await s.pacer.submit('move', () => { guard();pressedAt=Date.now();return c.go(); });
       const plans = doorsFor(714, { row: c.self.row, col: c.self.col });
       // The password-operated door is not in SomethingTryGo's table.
       const definition = [...plans.on, ...plans.others].find(p => p.sector === door.sector)
@@ -207,9 +210,9 @@ export async function guildPassage(k, destination, isInterrupted) {
           .rooms[714].doors.find(d => d.id === door.sector);
       const plan = definition?.to_height != null ? definition : {
         sector: door.sector, from_height: definition?.closed, to_height: definition?.open,
-        within_ms: 8000,
+        within_ms: door.within_ms ?? 8000,
       };
-      const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted });
+      const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted,pressedAt });
       if (isInterrupted()) throw new Error('guild passage paused for survival');
       if (!opening.opened) {
         const cantGo = refusedToGo(c, since);
@@ -218,7 +221,7 @@ export async function guildPassage(k, destination, isInterrupted) {
           reason: cantGo ? 'the server refused the press: "You are unable to go anywhere." ' +
                            '(seated, held or webbed), not a slow door' : opening.reason });
         if (attempt < 2) {
-          const retryAt = Date.now() + 5200;
+          const retryAt = doorRetryAt(plan,pressedAt);
           while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
         }
         continue;
@@ -256,7 +259,7 @@ export async function guildPassage(k, destination, isInterrupted) {
       if (!crossed && attempt < 2) {
         // GO while a door is already open does not restart its five-second
         // timer. Let that cycle finish, then request a fresh opening.
-        const retryAt = Date.now() + 5200;
+        const retryAt = doorRetryAt(plan,pressedAt);
         while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
       }
     }
@@ -301,9 +304,11 @@ async function crossCounter(k, westward, isInterrupted) {
   for (let attempt = 0; attempt < 3; attempt++) {
     guard();
     await standUp(s, isInterrupted);
+    guard();
     const since = c.evSeq;
-    await s.pacer.submit('move', () => { guard(); return c.go(); });
-    const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted });
+    let pressedAt=null;
+    await s.pacer.submit('move', () => { guard();pressedAt=Date.now();return c.go(); });
+    const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted,pressedAt });
     if (opening.opened) {
       for (let step = 0; step < 6; step++) {
         guard();
@@ -320,7 +325,7 @@ async function crossCounter(k, westward, isInterrupted) {
       k.note?.('counter door opening not verified', { reason: refusedToGo(c, since)
         ? 'the server refused the press: "You are unable to go anywhere."' : opening.reason });
     }
-    const retryAt = Date.now() + 5200;
+    const retryAt = doorRetryAt(plan,pressedAt);
     while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
   }
   throw new Error('counter door 58 could not be crossed');

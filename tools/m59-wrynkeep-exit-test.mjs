@@ -33,7 +33,7 @@ import { applyCeilingDoors } from './m59-ceiling-doors.mjs';
 // Absent before the door-chain planner; a checkout without it must FAIL, not refuse to load.
 const { planDoorChain } = await import('./m59-ceiling-doors.mjs');
 import { doorsFor, loadDoors } from './m59-doorplan.mjs';
-import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo,doorRetryAt } from './m59-door-wait.mjs';
 import { doorsFor as kodDoorsFor } from './m59-doors.mjs';
 import { groundEffectSquares } from './m59-ground-effects.mjs';
 // Imported by namespace so a checkout without the counter scan FAILS its assertions rather than
@@ -241,10 +241,10 @@ function hall(start, { plates = false } = {}) {
   const source = readFileSync(new URL('./m59-session-walk.mjs', import.meta.url), 'utf8');
   const a = source.indexOf('  async openOperableDoor('), b = source.indexOf('\n  // WHICH INTERNAL DOOR', a);
   assert.ok(a >= 0 && b > a, 'openOperableDoor moved — this test is stale');
-  const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo',
+  const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo','doorRetryAt',
     'planDoorChain', `return class { ${source.slice(a, b)} }`)(
       doorsFor, (fn, ms) => { clock += ms; deliver(); fn(); }, { now: () => clock },
-      (cl, p, opts) => waitForDoorOpen(cl, p, { ...opts, now: () => clock, sleep }), refusedToGo,
+      (cl, p, opts) => waitForDoorOpen(cl, p, { ...opts, now: () => clock, sleep }), refusedToGo,doorRetryAt,
       planDoorChain);
   const s = new Session();
   s.movementGeneration = 1;

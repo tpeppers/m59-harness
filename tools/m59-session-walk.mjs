@@ -78,7 +78,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // The door table and the decision about which door is in the way. Pure and file-backed; it
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
-import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 import { planDoorChain } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
@@ -5577,7 +5577,10 @@ export function sessionWalkPrototype(deps) {
   async openOperableDoor({ movementGeneration = this.movementGeneration, controlToken,
                            isInterrupted = () => false, exclude = null, targets = null } = {}) {
     const c = this.need?.();
-    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken) || isInterrupted();
+    const roomObjectId=c?.room?.id,bodyId=c?.selfId??c?.self?.id,roomScope=this.world?.room?.num;
+    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken) || isInterrupted()
+      ||this.client!=null&&this.client!==c||c?.room?.id!==roomObjectId||this.world?.room?.num!==roomScope
+      ||bodyId!=null&&(c.selfId??c.self?.id)!==bodyId;
     if (!c) return { opened: false, reason: 'no client' };
     const roomNum = Number(this.world?.room?.num ?? NaN);
     if (!Number.isFinite(roomNum)) return { opened: false, reason: 'room unknown' };
@@ -5649,10 +5652,17 @@ export function sessionWalkPrototype(deps) {
       // standBeforeGo, and m59-guild-passage's standUp for the 2026-09-24 incident).
       if (this.standBeforeGo)
         await this.standBeforeGo({ shouldCancel: () => cancelled() || isInterrupted() }).catch(() => null);
+      if(cancelled())return {opened:false,sector:pick.sector,reason:'movement cancelled'};
       const since = c.evSeq;
-      await (this.pacer?.submit ? this.pacer.submit('move', () => c.go()) : c.go())
+      let pressedAt=null;
+      const press=async()=>{
+        if(cancelled()||c.self?.row!==target.row||c.self?.col!==target.col)return;
+        pressedAt=Date.now();return c.go();
+      };
+      await (this.pacer?.submit ? this.pacer.submit('move', press) : press())
         .catch(() => {});
-      const opening = await waitForDoorOpen(c, pick, { since, cancelled });
+      if(pressedAt===null)return {opened:false,sector:pick.sector,reason:cancelled()?'movement cancelled':'door trigger changed before press'};
+      const opening = await waitForDoorOpen(c, pick, { since, cancelled,pressedAt });
       if (cancelled()) return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
       if (!opening.opened && refusedToGo(c, since))
         opening.reason = 'the server refused the press: "You are unable to go anywhere." ' +
@@ -5670,7 +5680,7 @@ export function sessionWalkPrototype(deps) {
                          'The opening was not verified; access or an existing door cycle may be responsible' };
       if (attempt < 2) {
         // A `go` while it is already open does not restart the five-second timer.
-        const retryAt = Date.now() + 5200;
+        const retryAt = doorRetryAt(pick,pressedAt);
         while (Date.now() < retryAt && !isInterrupted() && !cancelled())
           await new Promise(r => setTimeout(r, 100));
       }

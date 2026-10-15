@@ -10,11 +10,14 @@
 // doors"), and it is waited out from that event, never guessed.
 export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
   now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
-  eventTimeoutMs = 1500 } = {}) {
+  eventTimeoutMs = 1500, pressedAt = null } = {}) {
   const began = now(), room = c.room?.id;
+  const press=Number.isFinite(pressedAt)?pressedAt:began;
+  const window=Number.isFinite(plan.within_ms)&&plan.within_ms>0?plan.within_ms:8000;
+  const deadline=press+window;
   const sectors = plan.sectors?.length ? plan.sectors : [plan.sector];
   const lastSector = sectors[sectors.length - 1];
-  const eventWindowMs = eventTimeoutMs + Math.max(0, Number(plan.sequence_ms) || 0);
+  const eventWindowMs = Math.min(eventTimeoutMs + Math.max(0, Number(plan.sequence_ms) || 0),deadline-began);
   const stopped = () => cancelled() || c.room?.id !== room;
   const matches = e => e.sector === lastSector && e.height === plan.to_height &&
     (e.room == null || e.room === room);
@@ -39,16 +42,27 @@ export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
     Math.ceil(Math.abs(plan.to_height - plan.from_height) * 1000 / event.speed) + 100;
   const started = event.at ?? now();
   // Never claim completion beyond the known open window, or wait without a bound.
-  if (!Number.isFinite(duration) || duration > Math.min(plan.within_ms ?? 8000, 8000))
+  if (!Number.isFinite(duration))
     return { opened: false, reason: 'door animation exceeds its opening window' };
   const until = started + duration;
+  // Its close timer starts at the press, not at the response. A delayed sector
+  // packet can leave insufficient time even when the animation alone fits.
+  if(until>=deadline)return {opened:false,reason:'door animation exceeds the remaining opening window'};
   while (!stopped() && now() < until) {
+    if(now()>=deadline)return {opened:false,reason:'door opening window expired'};
     if (shut()) return { opened: false, reason: 'door closed before its animation settled' };
     await sleep(Math.min(100, until - now()));
   }
   if (stopped()) return { opened: false, reason: 'movement cancelled' };
   if (shut()) return { opened: false, reason: 'door closed before crossing' };
-  return { opened: true, animation_ms: duration, waited_ms: now() - began };
+  if(now()>=deadline)return {opened:false,reason:'door opening window expired'};
+  return { opened: true, animation_ms: duration, waited_ms: now() - began,remaining_ms:deadline-now() };
+}
+
+// Door cycles differ: Konima holds for ten seconds, ordinary guild doors for
+// five. An unanswered press spends the actual cycle before requesting another.
+export function doorRetryAt(plan,pressedAt){
+  return pressedAt+Math.max(1000,Number.isFinite(plan?.within_ms)&&plan.within_ms>0?plan.within_ms:5000)+200;
 }
 
 // A PRESS THE SERVER REFUSED IS NOT A DOOR THAT STAYED SHUT.
