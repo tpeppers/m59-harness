@@ -69,6 +69,7 @@ const SUITES = [
   ['m59-fine-refuge-reach-test.mjs', 'recorded Konima recovery supplements coarse reach with bounded reversible live-body fine approaches and retains occupied goals'],
   ['m59-covered-cut-test.mjs', 'a body-blocked fine cut tries a proved nearby alternative refuge before waiting at existing cover and retains visited-stop exclusions'],
   ['m59-fine-guides-test.mjs', 'baked directional fine walks retain live geometry, body, boarding, endpoint and closed-door checks'],
+  ['m59-observed-geometry-test.mjs', 'typed room door observations update an external fine planner without mutating another character or the baked source'],
   ['m59-konima-crossing-test.mjs', 'distinct stock-gravity crossings and one-at-a-time admission send missed landings through the southbound gutter'],
   ['m59-fine-traffic-refuge-test.mjs', 'a live-body cut waits at a proved fine refuge and moves only after a fresh scene admits the route'],
   ['m59-selfheal-test.mjs', 'fresh named player identity replaces a reused self id and refuses another character position after saves'],

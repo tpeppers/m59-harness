@@ -1487,6 +1487,9 @@ function state() {
     // `applied` is the door state the routing model is actually in — null meaning "as the
     // .roo shipped it".
     doors: {
+      movements: Object.fromEntries([...(session.client?.room?.sectorHeights ?? new Map())]
+        .map(([sector,value])=>[sector,{height:value?.height,type:value?.type,speed:value?.speed,at:value?.at}])),
+      settling_until: session.client?.room?.collisionInvalidated?.until ?? null,
       observed: Object.fromEntries(
         [...(session.client?.room?.sectorHeights ?? new Map())]
           .map(([sector, v]) => [sector, v?.height ?? null])),
