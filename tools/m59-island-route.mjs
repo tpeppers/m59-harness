@@ -320,7 +320,8 @@ export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=1800
   if(room===2505&&from===ISLAND){
    await takeHop(2001); // Returners wait in the inn, outside the cramped cave entry.
    ctx.state.traversalAdmission.waiting_room=2001;
-  }else await park(ctx,{budgetMs});
+   return true;
+  }else return park(ctx,{budgetMs});
  },run:async ticket=>{
   if((await read(ctx)).room?.num===2001)await takeHop(ISLAND);
   const enter=await takeHop(room);await ticket.entered();

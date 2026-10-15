@@ -47,7 +47,13 @@ export async function withTraversalAdmission(ctx,{room,read,run,waitQueued=null,
    const proof=holder&&Number.isInteger(seen?.room)&&seen.room!==holder.room?
     (fresh(seen,holder.agent,now())?seen:await read(holder.agent).catch(()=>null)):null;
    if(holder&&fresh(proof,holder.agent,now())&&store.release(holder,proof))continue;
-   if(waitQueued&&!parked){await waitQueued();parked=true;}
+   if(waitQueued&&!parked){
+    evidence.parking_attempts=(evidence.parking_attempts??0)+1;
+    // No available cover is a scene limitation, not a failed journey or an
+    // admission grant. Retry the claim before another parking attempt so a
+    // waiter can leave a crowded arrival as soon as its predecessor clears.
+    parked=(await waitQueued())!==false;evidence.parked=parked;
+   }
    await sleep(Math.min(pollMs,Math.max(1,deadline-now())));
   }
   evidence.phase='admitted';evidence.admitted_at=now();delete evidence.holder;

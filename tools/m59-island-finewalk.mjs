@@ -399,18 +399,19 @@ export async function walkHollowsOut(ctx,options={}){
     console.log('HOLLOWS POINT '+JSON.stringify({agent,target:point}));
   }
 }
-async function waitForDeclaredTurn(ctx,geo,read,walk){
+async function waitForDeclaredTurn(ctx,geo,read,walk,{allowUnparked=false}={}){
   const l=await read();
   // Queue parking has the same exit exclusions as its executing walker. A
   // neighbouring arrival cell is not cover if reaching it would leave the map.
   const excludedRefuges=roomExitSquares(loadMap().rooms[l.room.num],{rows:geo.rows,cols:geo.cols,includeInland:true});
-  if(knownRefugeCell(geo,l.you)&&!excludedRefuges.has(l.you.row+','+l.you.col))return;
+  if(knownRefugeCell(geo,l.you)&&!excludedRefuges.has(l.you.row+','+l.you.col))return true;
   const avoidSquares=new Set(excludedRefuges);
   avoidSquares.delete(l.you.row+','+l.you.col);
   const refuge=planNearbyFineRefuge(geo,l.you,new Map(l.objects.map(o=>[o.id,o])),l.you.id,{avoidSquares,excludedRefuges});
-  if(!refuge.found)throw Error('declared_crossing_queue_refuge_unavailable');
+  if(!refuge.found){if(allowUnparked)return false;throw Error('declared_crossing_queue_refuge_unavailable');}
   await walk(refuge.point);
   await confirmIslandQueueRefuge(ctx,geo,refuge,read,'declared_crossing_queue_refuge_unconfirmed');
+  return true;
 }
 async function confirmIslandQueueRefuge(ctx,geo,refuge,read,error){
  const result=await confirmRefugeCellArrival(geo,refuge,{read:async()=>(await read()).you,
@@ -422,7 +423,7 @@ async function confirmIslandQueueRefuge(ctx,geo,refuge,read,error){
 export async function waitAtIslandTrafficRefuge(ctx,options={}){
  const initial=await readIslandFinePosition(ctx),room=initial.room.num,geo=roomGeometry(room);
  const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);return l;};
- return waitForDeclaredTurn(ctx,geo,read,(point,guard={})=>checkedIslandWalk(ctx,point,{...options,...guard,room}));
+ return waitForDeclaredTurn(ctx,geo,read,(point,guard={})=>checkedIslandWalk(ctx,point,{...options,...guard,room}),{allowUnparked:true});
 }
 export async function approachIslandDoor(ctx,options={}){
   const initial=await readIslandFinePosition(ctx);

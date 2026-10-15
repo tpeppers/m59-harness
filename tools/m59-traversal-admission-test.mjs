@@ -115,8 +115,19 @@ try{
   const places=new Map([['a',room],['b',2504]]),hops=[];let parked=0;
   await admittedIslandTransit({agent:'b',state:{},call:async()=>({connected:true,in_game:true,room:{num:places.get('a')}})},{from:2504,to:2000,
    read:async c=>({room:{num:places.get(c.agent)},you:{id:c.agent==='a'?1:2,predicted:false}}),
-   park:async()=>{parked++;places.set('a',2504);},hop:async(c,to)=>{hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
-  assert.equal(parked,1);assert.deepEqual(hops,[2505,2000]);
+   park:async()=>{if(++parked===2)places.set('a',2504);return false;},
+   hop:async(c,to)=>{assert.equal(places.get('a'),2504,'unavailable parking cannot waive the occupied-room claim');hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
+  assert.equal(parked,2,'the Island integration retries an unavailable parking scene before admission');assert.deepEqual(hops,[2505,2000]);
+ }
+ reset();
+ {
+  const held=reserveFileTraversal('a',room,'unparked-cancel').lease;markFileTraversal(held,'entered');
+  let ownReads=0,entered=false,parking=0;
+  await assert.rejects(withTraversalAdmission({agent:'b',state:{}},{room,pollMs:1,
+   read:async agent=>{if(agent==='b'&&++ownReads>1)throw Error('owner cancelled');return proof(agent,agent==='a'?room:2504);},
+   waitQueued:async()=>{parking++;return false;},run:async()=>{entered=true;}}),/owner cancelled/);
+  assert.equal(parking,1);assert.equal(entered,false);
+  assert.equal(reserveFileTraversal('c',room,'still-held').ok,false,'an unparked cancellation cannot release its predecessor');
  }
  reset();
  {

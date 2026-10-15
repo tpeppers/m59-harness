@@ -2398,3 +2398,11 @@ an actual exit is observed, including when the driver stops with its body still
 inside. Followers wait at checked cover outside the map; Konima returners wait
 in the Island Inn. This prevents the native arrival and one-way jump approach
 from becoming a queue of overlapping travelers.
+
+The traversal parking callback may return `false` when current bodies leave no
+proved parking route. This grants no movement or admission. The queue continues
+its original deadline and fresh ownership/position checks, retries admission
+before parking, and retains keeper survival control. A traveler can therefore
+leave a crowded upstream arrival when the held room actually clears instead
+of failing merely because all nearby refuges are occupied. Cancellation and an
+unconfirmed predecessor exit still prevent entry.
