@@ -1,0 +1,151 @@
+{
+  "format": "m59-combat-approach-fixture/1",
+  "basis": "confirmed incident fine origin with later observed frozen bodies; no simultaneous native checkpoint",
+  "from": {
+    "room": 598,
+    "row": 33,
+    "col": 34,
+    "x": 2224,
+    "y": 2170
+  },
+  "to": 38,
+  "reach": 2,
+  "target_id": 10,
+  "bodies": [
+    {
+      "id": 2,
+      "flags": 4160758285,
+      "row": 16,
+      "col": 15,
+      "x": 960,
+      "y": 1048,
+      "name": "fleet body"
+    },
+    {
+      "id": 3,
+      "flags": 9,
+      "row": 31,
+      "col": 15,
+      "x": 992,
+      "y": 2016,
+      "name": "black spider"
+    },
+    {
+      "id": 4,
+      "flags": 9,
+      "row": 29,
+      "col": 21,
+      "x": 1376,
+      "y": 1888,
+      "name": "black spider"
+    },
+    {
+      "id": 5,
+      "flags": 9,
+      "row": 36,
+      "col": 30,
+      "x": 1952,
+      "y": 2336,
+      "name": "troll"
+    },
+    {
+      "id": 6,
+      "flags": 9,
+      "row": 51,
+      "col": 32,
+      "x": 2080,
+      "y": 3296,
+      "name": "troll"
+    },
+    {
+      "id": 7,
+      "flags": 9,
+      "row": 2,
+      "col": 18,
+      "x": 1184,
+      "y": 160,
+      "name": "troll"
+    },
+    {
+      "id": 8,
+      "flags": 9,
+      "row": 38,
+      "col": 30,
+      "x": 1952,
+      "y": 2464,
+      "name": "black spider"
+    },
+    {
+      "id": 9,
+      "flags": 9,
+      "row": 40,
+      "col": 26,
+      "x": 1696,
+      "y": 2592,
+      "name": "black spider"
+    },
+    {
+      "id": 10,
+      "flags": 9,
+      "row": 35,
+      "col": 33,
+      "x": 2139,
+      "y": 2284,
+      "name": "troll"
+    },
+    {
+      "id": 11,
+      "flags": 9,
+      "row": 27,
+      "col": 11,
+      "x": 736,
+      "y": 1760,
+      "name": "black spider"
+    },
+    {
+      "id": 12,
+      "flags": 9,
+      "row": 21,
+      "col": 12,
+      "x": 800,
+      "y": 1376,
+      "name": "black spider"
+    },
+    {
+      "id": 13,
+      "flags": 9,
+      "row": 17,
+      "col": 14,
+      "x": 935,
+      "y": 1120,
+      "name": "black spider"
+    },
+    {
+      "id": 14,
+      "flags": 9,
+      "row": 4,
+      "col": 4,
+      "x": 288,
+      "y": 288,
+      "name": "black spider"
+    },
+    {
+      "id": 15,
+      "flags": 9,
+      "row": 32,
+      "col": 21,
+      "x": 1376,
+      "y": 2080,
+      "name": "troll"
+    },
+    {
+      "id": 16,
+      "flags": 9,
+      "row": 13,
+      "col": 17,
+      "x": 1120,
+      "y": 864,
+      "name": "black spider"
+    }
+  ]
+}

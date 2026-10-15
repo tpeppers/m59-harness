@@ -18,7 +18,7 @@ export function floorConstraintAllows(geo,p,minimumFloor){
 }
 
 export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
-  overrideDepths = null, avoidSquares = null, minimumFloor = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
+  overrideDepths = null, avoidSquares = null, minimumFloor = null, goalSquare = null, goalSquares = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
   threats = [], threatWeight = 0, threatRadius = 4, now = performance.now.bind(performance) } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'collision_geometry_unavailable' };
@@ -40,11 +40,14 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
   };
   // A square refuge accepts only a collision-proved point inside the square.
   // Invalid square descriptors retain the explicit fine-point contract.
-  const squareGoal = Number.isInteger(goalSquare?.row) && Number.isInteger(goalSquare?.col)
-    ? goalSquare : null;
+  const squareGoals = Array.isArray(goalSquares) && goalSquares.length>0 && goalSquares.length<=128
+    && goalSquares.every(p=>Number.isInteger(p?.row)&&Number.isInteger(p?.col)) ? goalSquares
+    : Number.isInteger(goalSquare?.row) && Number.isInteger(goalSquare?.col) ? [goalSquare] : null;
+  const goalKeys=squareGoals?new Set(squareGoals.map(p=>`${p.row},${p.col}`)):null;
   const margin = Math.max(2,Math.min(24,marginSquares))*64;
-  const reached = p => squareGoal ? Math.floor(p.x/64)===squareGoal.col&&Math.floor(p.y/64)===squareGoal.row : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
-  const distance = p => squareGoal ? Math.hypot(Math.max(squareGoal.col*64+1-p.x,0,p.x-(squareGoal.col+1)*64+1),Math.max(squareGoal.row*64+1-p.y,0,p.y-(squareGoal.row+1)*64+1)) : Math.hypot(goal.x-p.x,goal.y-p.y);
+  const reached = p => goalKeys ? goalKeys.has(`${Math.floor(p.y/64)},${Math.floor(p.x/64)}`) : Math.hypot(p.x-goal.x,p.y-goal.y)<=1;
+  const distance = p => squareGoals ? Math.min(...squareGoals.map(q=>Math.hypot(
+    Math.max(q.col*64+1-p.x,0,p.x-(q.col+1)*64+1),Math.max(q.row*64+1-p.y,0,p.y-(q.row+1)*64+1)))) : Math.hypot(goal.x-p.x,goal.y-p.y);
   const bounds = { minX: Math.min(from.x, goal.x) - margin, maxX: Math.max(from.x, goal.x) + margin,
     minY: Math.min(from.y, goal.y) - margin, maxY: Math.max(from.y, goal.y) + margin };
   const key = p => `${Math.round((p.x - from.x) / spacing)},${Math.round((p.y - from.y) / spacing)}`;
@@ -85,8 +88,8 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     // Only try the exact goal within one lattice edge; never tunnel through a crowd.
     const end = Math.hypot(goal.x - cur.x, goal.y - cur.y) <= spacing * Math.SQRT2
       ? edge(cur, goal) : null;
-    if (end || reached(cur)) {
-      const waypoints = end ? [end] : [];
+    if ((end && reached(end)) || reached(cur)) {
+      const waypoints = end && reached(end) ? [end] : [];
       for (let p = cur; parents.has(key(p)); p = parents.get(key(p))) waypoints.push({ x: p.x, y: p.y });
       waypoints.reverse();
       // Keep proved bends, not every eight-unit lattice point. Otherwise a tiny
