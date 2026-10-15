@@ -30,7 +30,7 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    if(Math.hypot(after.you.x-landing.x,after.you.y-landing.y)<=8&&Math.abs(height-toFloor)<=64){
     if(clear)await walk(clear);return {crossed:true,reply};
    }
-   if(Number.isFinite(height)&&height<Math.min(fromFloor,toFloor)-384){await walk(gutter);return {crossed:false,gutter:true,reply};}
+   if(Number.isFinite(height)&&height<fromFloor-384){await walk(gutter);return {crossed:false,gutter:true,reply};}
    if(Math.abs(height-fromFloor)>64||Math.hypot(after.you.x-takeoff.x,after.you.y-takeoff.y)>64)throw Error('declared_crossing_unclassified_landing');
    if(stage)await walk(stage);await new Promise(r=>setTimeout(r,500));
   }

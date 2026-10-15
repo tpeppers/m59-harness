@@ -373,11 +373,13 @@ export async function approachKonimaMainland(ctx,options={}){
     await walk({x:4456,y:560});
   }
   before=await read();const point=protocolToClient(before.you),height=geo.floorBaseAtClient(point.x,point.y);
-  if(before.you.col<65&&before.you.row>=25&&before.you.row<=35&&height<14500)await walk({x:3808,y:2144});
+  if(before.you.col<48||before.you.col<=61&&before.you.row<25){
+    // Already on the mainland side of the return drop: retain its westbound goal.
+  }else if(before.you.col<65&&before.you.row>=25&&before.you.row<=35&&height<14500)await walk({x:3808,y:2144});
   else{
     await walk({x:4840,y:1472});
-    const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===65);
-    await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3808,y:2144},budgetMs:options.budgetMs});
+    const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===64&&j.to.row===23);
+    await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3312,y:1272},budgetMs:options.budgetMs});
   }
   await checkedIslandWalk(ctx,{x:160,y:4640},{room:2505,allowEdgeTo:2504,...options});
 }
