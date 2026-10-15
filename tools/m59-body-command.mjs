@@ -13,12 +13,21 @@ export function withBodyCommand(session, fn, owner = null) {
   return scope.run({ session, epoch: session.combatEpoch ?? 0, owner }, fn);
 }
 
+// A keeper's active recovery must not spend its escape window behind a
+// diagnostic read backlog. Preserve the enclosing authority and epoch: this
+// changes queue order only, never who may command the body.
+export function withRecoveryCommand(session, fn) {
+  const parent=scope.getStore(),same=parent?.session===session;
+  return scope.run({session,epoch:same?parent.epoch:session.combatEpoch??0,
+    owner:same?parent.owner:null,priority:1},fn);
+}
+
 export function bodyAuthority(session) {
   const context = scope.getStore();
   const epoch = context?.session === session ? context.epoch : session.combatEpoch ?? 0;
   const owner = context?.session === session ? context.owner : null;
   return {
-    priority: owner ? 2 : 0,
+    priority: Math.max(owner ? 2 : 0, context?.session===session ? context.priority??0 : 0),
     bind: fn => () => scope.run(context, fn),
     guard() {
       if (epoch !== (session.combatEpoch ?? 0) ||

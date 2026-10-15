@@ -1,5 +1,13 @@
 # The keeper: what it can see, and what it cannot
 
+An active keeper recovery's refuge approach carries packet priority above
+background reads, including its ordered position read, stand and checked
+movement. Explicit combat ownership retains its higher priority. The enclosing
+combat epoch and owner are preserved, so raising recovery priority cannot renew
+stale authority. Normal pacing, concentration, movement cancellation, room/body
+checks and geometry validation remain active. Ordinary returns without an active
+recovery decision retain their existing scheduling.
+
 Stalled-driver rescue ages the current keeper move when recovery has just
 replaced the external driver. The old physical stall cannot cancel that new
 approach before `INERT_RESCUE_MS` has elapsed. An overdue recovery, an ended
