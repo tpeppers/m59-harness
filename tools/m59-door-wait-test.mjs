@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { waitForDoorOpen } from './m59-door-wait.mjs';
+import { waitForDoorOpen,doorRetryAt } from './m59-door-wait.mjs';
 
 async function run({ speed = 20, delay = 700, events = true, cancelledAt = Infinity,
-  closeAt = Infinity, roomAt = Infinity, unrelated = false } = {}) {
+  closeAt = Infinity, roomAt = Infinity, unrelated = false,window=6000 } = {}) {
   let time = 0;
   const room = { id: 2572, sectorHeights: new Map() };
   const c = { room, async waitFor({ timeoutMs, match }) {
@@ -15,7 +15,7 @@ async function run({ speed = 20, delay = 700, events = true, cancelledAt = Infin
     return { events: [], timedOut: true };
   } };
   const result = await waitForDoorOpen(c,
-    { sector: 59, from_height: 100, to_height: 190, within_ms: 5000 }, {
+    { sector: 59, from_height: 100, to_height: 190, within_ms: window }, {
       since: 0, now: () => time, cancelled: () => time >= cancelledAt,
       sleep: async ms => { time += ms;
         if (time >= closeAt) room.sectorHeights.set(59, { height: 100 });
@@ -35,4 +35,9 @@ assert.equal((await run({ roomAt: 1200 })).result.reason, 'movement cancelled');
 assert.equal((await run({ closeAt: 1700 })).result.opened, false);
 assert.equal((await run({ speed: 0 })).time, 700);
 assert.equal((await run({ speed: 10 })).result.opened, false);
+assert.equal((await run({window:5000})).result.opened,false,'response plus animation must fit before closure');
+assert.equal((await run({speed:10,window:12000})).result.opened,true,'an explicit longer door cycle supports a genuinely slower lift');
+assert.equal(doorRetryAt({within_ms:10000},1000),11200);
+assert.equal(doorRetryAt({within_ms:5000},1000),6200);
+assert.equal(doorRetryAt({},1000),6200);
 console.log('door wait: slow opening, resolved timeout, wrong sector, cancellation, room change and closure passed');

@@ -11,7 +11,7 @@
 // worked and strand the next character.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo,doorRetryAt } from './m59-door-wait.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail = '') => {
@@ -47,10 +47,10 @@ const scopedDoorsFor = (room, at) => doorsFor(room, at, { table: DOORS });
 
 let clock = 0;
 const sleep = async ms => { clock += ms; };
-const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo',
+const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo','doorRetryAt',
   `return class { ${body} }`)(scopedDoorsFor, (fn, ms) => { clock += ms; fn(); },
     { now: () => clock }, (c, p, opts) => waitForDoorOpen(c, p, { ...opts, now: () => clock, sleep }),
-    refusedToGo);
+    refusedToGo,doorRetryAt);
 
 /** A body in room 714, with every live thing the opener touches and nothing else. */
 function body714({ at = { row: 4, col: 28 }, sectorMoves = true, cancel = false,
@@ -159,5 +159,29 @@ console.log('\nthe refusals that must stay refusals');
      (await roomless.openOperableDoor()).reason === 'room unknown');
 }
 
+console.log('\ncancelled or changed while the press is queued');
+for(const change of ['stand','cancel','room','pose','client','body']){
+ const b=body714(),c=b.s.need();b.s.need=()=>c;let cancelled=false;c.selfId=1;b.s.client=c;
+ b.s.movementWasCancelled=()=>cancelled;
+ if(change==='stand')b.s.standBeforeGo=async()=>{cancelled=true;};
+ else b.s.pacer={submit:async(_kind,fn)=>{
+  if(change==='cancel')cancelled=true;
+  if(change==='room')b.s.world.room.num=39;
+  if(change==='pose')b.where().col++;
+  if(change==='client')b.s.client={...c};
+  if(change==='body')c.selfId=2;
+  return fn();
+ }};
+ const r=await b.s.openOperableDoor();
+ ok(change+' cannot dispatch an obsolete press',!r.opened&&b.seen.go===0,JSON.stringify(r));
+}
+console.log('\nmetadata supplies a longer cycle');
+{
+ const door=DOORS.rooms[714].doors[1],old=door.delay_ms;door.delay_ms=10000;
+ const b=body714({at:{row:18,col:10},sectorMoves:false});const before=clock;
+ await b.s.openOperableDoor();
+ ok('the ten-second cycle is waited before each retry',clock-before>=21900);
+ door.delay_ms=old;
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
