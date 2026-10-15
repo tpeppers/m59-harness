@@ -9,6 +9,8 @@ import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk,walkHoll
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {roomGeometry} from './m59-ground.mjs';
+import {applyDoorState} from './m59-routes.mjs';
+import {copyFineGeometry} from './m59-observed-geometry.mjs';
 const scratch=mkdtempSync(join(tmpdir(),'m59-fine-recovery-'));
 const oldRegistry=process.env.M59_KEEPER_BAND_REGISTRY;
 const origin={source:'fleetscript',name:'fine-recovery',run_id:'fixture'},label=originLabel(origin);
@@ -63,6 +65,25 @@ try{
  const merb=roomExitSquares(map.rooms[2502],{to:2503,includeInland:true});
  assert(merb.has('1,41')&&!merb.has('10,78')&&merb.has('47,78'));
  assert(!roomExitSquares(map.rooms[27],{to:2500}).has('11,1'));
+ {
+  const geo=copyFineGeometry(roomGeometry(27)),from={row:58,col:44,x:2872,y:3712};
+  applyDoorState({rooms:{27:{num:27}}},27,{1:24,2:24,3:24,4:24,5:24},{geometryOf:()=>geo});
+  const options={rows:geo.rows,cols:geo.cols,to:2500,includeInland:true};
+  const legacy=roomExitSquares(map.rooms[27],options),actual=roomExitSquares(map.rooms[27],{...options,includeInland:false});
+  assert(legacy.has('58,44'),'the recorded native arrival lies on the guarded edge');
+  const departed=roomExitSquares(map.rooms[27],{...options,from:{...from,confirmed:true}});
+  assert(!departed.has('57,44'),'the inward buffer no longer traps the observed edge arrival');
+  for(const cell of actual)assert(departed.has(cell),'every actual wrong exit remains forbidden');
+  for(const pose of [from,{...from,confirmed:true,predicted:true},{row:56,col:46,confirmed:true}])
+   assert.deepEqual(roomExitSquares(map.rooms[27],{...options,from:pose}),legacy,'unknown, predicted or cleared arrivals retain the full buffer');
+  legacy.delete('58,44');departed.delete('58,44'); // the existing current-cell departure allowance
+  const trapped=await cutFineRailAsync(geo,from,{x:96,y:736},{avoidSquares:legacy,maxMs:4000});
+  assert(!trapped.ok||!trapped.bridgeOk,'the old guard actually reproduces the recorded refusal');
+  const escaped=await cutFineRailAsync(geo,from,{x:96,y:736},{avoidSquares:departed,maxMs:4000});
+  assert(escaped.ok&&escaped.bridgeOk,'the same geometry has a complete departure without crossing a wrong exit');
+  for(const point of escaped.waypoints){const cell=(Math.floor(point.y/1024)+1)+','+(Math.floor(point.x/1024)+1);
+   assert(cell==='58,44'||!actual.has(cell),'departure never reaches another wrong-exit cell');}
+ }
  const forbidden=await cutFineRailAsync(roomGeometry(2502),{x:2152,y:1392,row:21,col:33},{x:2656,y:96},
   {avoidSquares:hollows,maxMs:2000});
  assert(!forbidden.ok||!forbidden.bridgeOk,'a blocked edge exit cannot become a proved fine goal');

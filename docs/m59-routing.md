@@ -1,5 +1,21 @@
 # Movement, collision and routing
 
+Wrong-exit masks may include an extra interior row or column. A confirmed
+arrival on that guard can leave its connected interior buffer; the actual
+boundary exclusions and existing current-cell departure allowance remain
+unchanged. The full buffer returns once the body leaves it. Predicted or
+unconfirmed positions cannot grant this departure. Each fine packet still
+checks geometry, bodies and the resulting exclusions. The recorded Icky Cave
+arrival at r58c44 exercises this through a complete ordinary fine-route proof.
+
+Room-admission waiters inspect their holder through an identity-verified,
+cached keeper projection. `status brief` still sends stats, spell and skill
+requests, so it must not serve this polling role. Concurrent cached readers
+share discovery and projection requests, rechecking identity after a restart.
+The hint cannot release a claim: an outside-room hint still requires the
+existing fresh ordered position proof. Ordinary status keeps its fresh
+ability-list behavior.
+
 ## Local combat approaches
 
 An adjacent coarse square is not proof that the body can stand beside a quarry.
