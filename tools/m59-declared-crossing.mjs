@@ -13,6 +13,7 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
  try{
   let ready=false;prior.then(()=>{ready=true;});
   while(!ready){await read();if(Date.now()-began>budgetMs)throw Error('declared_crossing_queue_budget');await new Promise(r=>setTimeout(r,500));}
+  let lastRefusal='landing not observed';
   for(let attempt=0;attempt<3;attempt++){
    let before=await read();
    if(before.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
@@ -23,6 +24,7 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    if(Math.hypot(before.you.x-takeoff.x,before.you.y-takeoff.y)>8||Math.abs(floor(before.you)-fromFloor)>64)throw Error('declared_crossing_takeoff_unconfirmed');
    if(before.hp?.value<before.hp?.max){if(!stage)throw Error('declared_crossing_needs_recovery');await walk(stage);continue;}
    const reply=await ctx.call('jump',{agent:ctx.agent,to_row:declaration.to.row,to_col:declaration.to.col});
+   lastRefusal=reply.reason??'landing not observed';
    const after=await read(),height=floor(after.you);
    if(after.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
    if(Math.hypot(after.you.x-landing.x,after.you.y-landing.y)<=8&&Math.abs(height-toFloor)<=64){
@@ -32,6 +34,6 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    if(Math.abs(height-fromFloor)>64||Math.hypot(after.you.x-takeoff.x,after.you.y-takeoff.y)>64)throw Error('declared_crossing_unclassified_landing');
    if(stage)await walk(stage);await new Promise(r=>setTimeout(r,500));
   }
-  throw Error('declared_crossing_traffic_budget');
+  throw Error('declared_crossing_attempts_exhausted: '+lastRefusal);
  }finally{prior.then(release);if(queues.get(key)===tail)tail.then(()=>{if(queues.get(key)===tail)queues.delete(key);});}
 }

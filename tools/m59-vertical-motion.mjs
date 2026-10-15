@@ -2,6 +2,19 @@
 // -FINENESS * 2 / 3; gravity only speeds it up. Retain a 500ms grace and use that
 // slow initial rate as an upper-height envelope, rather than an exact z guess.
 const FINENESS=1024,RATE=FINENESS/1500,GRACE=500;
+// Wait for the existing bounded model to expire; never substitute a guessed z.
+// The caller pins its body, room and movement owner throughout this packet-free wait.
+export async function waitForVerticalSettlement(read,{roomId,cancelled=()=>false,maxMs=5000,
+ now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
+ const began=now(),deadline=began+maxMs;
+ for(;;){
+  if(cancelled())return {ok:false,reason:'movement_cancelled',waited_ms:now()-began};
+  const vertical=read();
+  if(!verticalMotionRange(vertical,roomId,now()))return {ok:true,waited_ms:now()-began};
+  if(vertical.settleAt>deadline||now()>=deadline)return {ok:false,reason:'fall_start_unsettled',waited_ms:now()-began};
+  await sleep(Math.max(1,Math.min(100,vertical.settleAt-now(),deadline-now())));
+ }
+}
 export function verticalMotionRange(vertical,roomId,now=Date.now()){
  if(!vertical||vertical.roomId!==roomId||!(vertical.settleAt>now)||
    ![vertical.min,vertical.max].every(Number.isFinite))return null;
