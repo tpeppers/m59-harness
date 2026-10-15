@@ -8728,7 +8728,7 @@ export class Autopilot {
     const recoveryReach = recovery ? recoveryRefugeReach(geo, me,
       s.client?.room?.objects, s.client?.selfId, s.client?.playersOnline) : null;
     return nearestSafeSpot(geo, me, {
-      wallsAllowed,
+      wallsAllowed, fineRecovery: recovery,
       // WHAT MAKES A SQUARE A CANDIDATE. `wall` asks for a wall to stand against and
       // ranks by how much of it there is; `disc` is the old attackers_avoided >= 20
       // gate, kept so the two can be compared rather than swapped on faith. See
