@@ -34,6 +34,8 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-spotclaims-lock-test.mjs','Windows sharing races retry atomic acquisition without removing live owners or bypassing persistent permission errors'],
+  ['m59-courier-purchases-test.mjs','courier maximum loads use live quotes, preserve one-attempt purchase evidence and reconcile delivered, lost and held acquisition value'],
   ['m59-recovery-pacer-test.mjs','active recovery stands and moves ahead of background reads without changing pacing, cancellation, combat authority or concentration'],
   ['m59-keeper-discovery-test.mjs','cached admission hints use verified keeper identities without gameplay reads; stale, duplicate and changed identities refuse'],
   ['m59-replay-provenance-test.mjs','executing movement provenance includes routing/guide content and dirty navigation data, without relabelling historical decisions'],
