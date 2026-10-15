@@ -9,8 +9,16 @@ export function blockingBodySnapshot(objects, selfId) {
     .map(o => ({ id: o.id, x: protocolToClient(o.x), y: protocolToClient(o.y) }));
 }
 
+// Points are KOD wire units; the minimum height is in CLIENT geometry units.
+export function floorConstraintAllows(geo,p,minimumFloor){
+  if(!Number.isFinite(minimumFloor))return true;
+  const x=protocolToClient(p.x),y=protocolToClient(p.y),leaf=geo.leafAtClient(x,y);
+  const height=leaf?.sector?geo.floorBaseAtClient(x,y,leaf):null;
+  return Number.isFinite(height)&&height>=minimumFloor;
+}
+
 export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
-  overrideDepths = null, avoidSquares = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
+  overrideDepths = null, avoidSquares = null, minimumFloor = null, goalSquare = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
   threats = [], threatWeight = 0, threatRadius = 4, now = performance.now.bind(performance) } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'collision_geometry_unavailable' };
@@ -41,7 +49,8 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     minY: Math.min(from.y, goal.y) - margin, maxY: Math.max(from.y, goal.y) + margin };
   const key = p => `${Math.round((p.x - from.x) / spacing)},${Math.round((p.y - from.y) / spacing)}`;
   const allowed = p => p.x >= bounds.minX && p.x <= bounds.maxX && p.y >= bounds.minY && p.y <= bounds.maxY
-    && !avoidSquares?.has?.(`${Math.floor(p.y / 64)},${Math.floor(p.x / 64)}`);
+    && !avoidSquares?.has?.(`${Math.floor(p.y / 64)},${Math.floor(p.x / 64)}`)
+    && floorConstraintAllows(geo,p,minimumFloor);
   const edge = (a, b) => {
     if (!allowed(b)) return null;
     const samples = Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/spacing));

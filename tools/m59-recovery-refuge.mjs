@@ -82,9 +82,19 @@ export function recoveryOccupiedSquares(objects, selfId, playersOnline = null) {
 export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = null) {
   const occupied = recoveryOccupiedSquares(objects, selfId, playersOnline);
   const fine=fineRefugeReach(geo,from,objects,selfId);
+  const confirmedFine=geo?.collisionReady&&from&&!from.predicted&&
+    [from.x,from.y,from.row,from.col].every(Number.isFinite);
   return (col, row) => {
     if (!geo?.path || !from) return { reachable: false, why: 'recovery route unavailable' };
     if (occupied.has(`${row},${col}`)) return { reachable: false, why: 'recovery spot occupied' };
+    // A coarse cell can straddle a cliff or contain an unreachable centre.
+    // Preserve the actual reversible footing even when its coarse path exists.
+    // A failed nearby fine proof cannot be overruled by that same coarse path.
+    if(confirmedFine&&Math.max(Math.abs(row-from.row),Math.abs(col-from.col))<=6){
+      const proved=fine(col,row);
+      return proved.reachable&&proved.returnable!==true?
+        {...proved,reachable:false,why:'fine refuge has no proved return'}:proved;
+    }
     try {
       const path = geo.path(from.row, from.col, row, col,
         { avoid: occupied, clearance: 0, goalExempt: false });

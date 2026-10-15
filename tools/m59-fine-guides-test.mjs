@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {roomGeometry} from './m59-ground.mjs';
 import {loadMap} from './m59-map.mjs';
 import {previewOpenedDoor} from './m59-ceiling-doors.mjs';
 import {fineGuideBook,findFineGuide} from './m59-fine-guides.mjs';
-import {protocolToClient} from './m59-finepos.mjs';
+import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {planRefugeStage} from './m59-fine-refuge-reach.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
+import {floorConstraintAllows,planBodyDetour} from './m59-body-detour.mjs';
 const geo=roomGeometry(2505),book=fineGuideBook(),room=book.rooms[2505];
 const edgeFor=(g,objects)=>{const obstacles=blockingBodySnapshot(objects);return (a,b)=>{const t=g.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles});return t.arrived&&!t.blocked;};};
 for(const guide of room.guides){
@@ -24,6 +26,25 @@ assert.equal(findFineGuide(geo,from,to,{edge:blocked}),null,'live bodies cannot 
 const gate=room.guides.find(g=>g.name==='gate_to_return_takeoff');
 assert.equal(findFineGuide(geo,protocolToClient(gate.from),protocolToClient(gate.to),{edge:edgeFor(geo)}),null,'a conditional open-door guide is refused by the current closed geometry');
 assert.equal(findFineGuide(geo,from,to,{edge:()=>false}),null,'mandatory avoidance can reject every guide segment');
+const opened=previewOpenedDoor(loadMap(),2505,gate.requires_open_door).geometry;
+const doorClear=protocolToClient({x:4456,y:416}),returnStage=protocolToClient({x:4840,y:1472});
+const doorPrefix=findFineGuide(opened,protocolToClient(gate.from),doorClear,{edge:edgeFor(opened)});
+assert(doorPrefix?.ok&&doorPrefix.guide===gate.name,'the return clears the door on its own corridor');
+assert.equal(findFineGuide(geo,protocolToClient(gate.from),doorClear,{edge:edgeFor(geo)}),null,
+ 'an interior guide endpoint cannot bypass a closed door');
+const interior=findFineGuide(opened,doorClear,returnStage,{edge:edgeFor(opened)});
+assert(interior?.ok&&interior.guide===gate.name,'the shared cutter can stop at an interior staging point');
+assert(interior.waypoints.length<gate.waypoints.length,'the interior segment stops before the jump');
+const death=JSON.parse(readFileSync(new URL('./fixtures/konima-return-approach-2505.json',import.meta.url)));
+const bad={x:4062,y:1600}; // native sent move immediately before the r25c64 fall
+assert.equal(floorConstraintAllows(geo,bad,death.minimumFloor),false);
+assert.equal(planBodyDetour(geo,{x:4176,y:1648},bad,{minimumFloor:death.minimumFloor,maxMs:100}).found,false);
+const bounded=await cutFineRailAsync(geo,death.from,death.target,{minimumFloor:death.minimumFloor,
+ objects:new Map(death.bodies.map(o=>[o.id,o])),selfId:death.from.id,maxMs:4000,
+ threats:death.bodies.filter(o=>(o.flags&8)&&!(o.flags&4)),threatWeight:12});
+assert(bounded.ok&&bounded.bridgeOk,'the captured return approach retains a route on the takeoff shelf');
+for(const p of bounded.waypoints)assert(floorConstraintAllows(geo,clientToProtocol(p),death.minimumFloor),
+ 'no planned chord endpoint may enter the fatal lower floor');
 console.log('Fine guides require current compatible geometry, a checked boarding chord and endpoint, and clear live bodies; closed doors remain closed.');
 const hollows=roomGeometry(2502),anchor={x:2201,y:2650},staging=planRefugeStage(hollows,anchor,{row:42,col:36});
 assert(staging.found);assert.notDeepEqual(staging.point,{x:2336,y:2720},'the safe-cell centre is not enterable footing');

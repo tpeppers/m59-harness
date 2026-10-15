@@ -16,9 +16,12 @@ before it can spend its remaining budget aiming for the higher takeoff. The
 crossing controller then reads the body again and walks the declared gutter.
 Cancellation remains a cancellation and cannot start an escape walk.
 The staging walk carries the same fence. It can begin below the shelf and
-climb normally; only after reaching the required shelf does a later lower
+climb normally; only near the takeoff shelf does a later lower
 pose trigger the escape. This prevents an interrupted staging walk from
 spending its full budget aiming back up at an inaccessible ledge.
+Equal height in a distant corridor does not arm that fence. Once armed, the
+minimum floor constrains the rail and body-detour planner before movement.
+The short takeoff approach requires that constraint from its first point.
 
 The declarations live in `m59-falljumps.json` and `m59-gutters.json`, so the
 shared router can use them. `node tools/m59-fine-guidebake.mjs` generates the
@@ -26,6 +29,9 @@ directional fine guides and separate r72c1-to-r5c57 and reverse traversal
 chains. The shared fine rail worker uses these guides only after checking
 the current geometry, avoidance, boarding chord and exact endpoint; movement
 still checks live bodies. An open-door guide cannot open a closed door.
+The shared guide lookup can also use a forward segment ending at an interior
+staging point. The return clears the animated door at x4456/y416 on its
+authored corridor before following that guide.
 `operate_door` uses the shared trigger, ordinary GO and observed animation
 wait. The crossing helper serializes approach through landing clearance,
 confirms the actual fine floor, and sends lower landings through their gutter.
@@ -288,6 +294,11 @@ check; its earlier receipt is archived.
 Receipts are gitignored under `substrate/island-trials/` and
 `substrate/island-chalice/`. Inspect individual agent results: FleetScript's
 top-level `ok` means at least one agent completed, not the entire roster.
+
+An owned journey can wait through several bounded rest polls at one confirmed
+wall, including while poison wears off. Its retry allowance counts actual
+travel resumptions rather than those polls; the overall leg deadline,
+cancellation and observed health checks still apply.
 
 Offline checks: `node tools/m59-island-test.mjs` and `npm run test:movement`.
 

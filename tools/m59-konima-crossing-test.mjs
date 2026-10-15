@@ -44,6 +44,19 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+{
+ let you={x:3936,y:416};
+ const read=async()=>({room:{num:2505},you:{...you}});
+ const walk=async(target,{validatePosition,minimumFloor})=>{
+  assert.equal(minimumFloor(),null,'a distant upper corridor is not the takeoff shelf');
+  you={x:5960,y:560};validatePosition(await read());
+  assert.equal(minimumFloor(),null,'the long approach may descend elsewhere before reaching staging');
+  you={...target};validatePosition(await read());
+ };
+ const back=jumps.find(j=>j.from.col===64&&j.to.row===23);
+ const staged=await followDeclaredApproach(back,{geo,read,walk,target:{x:4840,y:1472},gutter});
+ assert.equal(staged.gutter,false);
+}
 for(const mode of ['climb','drop']){
  let body={x:4064,y:1696};const walks=[];
  const read=async()=>({room:{num:2505},you:{...body},hp:{value:20,max:20}});

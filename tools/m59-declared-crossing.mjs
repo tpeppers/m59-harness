@@ -15,11 +15,15 @@ export async function followDeclaredApproach(declaration,{geo,read,walk,target,g
  const validatePosition=observed=>{
   if(observed.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
   const floor=height(observed);if(!Number.isFinite(floor))throw Error('declared_approach_floor_unreadable');
-  if(floor>=minimum)armed=true;
+  // Equal height elsewhere in the room is not the takeoff shelf. A long
+  // staging walk may descend before climbing onto it. Near the takeoff, or
+  // on an explicitly shelf-bound approach, a lower pose belongs to the gutter.
+  const p=protocolToClient(observed.you);
+  if(floor>=minimum){if(Math.hypot(p.x-q.x,p.y-q.y)<=6*1024)armed=true;}
   else if(armed)throw Object.assign(Error('declared_crossing_approach_dropped'),{code:'declared_crossing_approach_dropped'});
  };
  try{
-  validatePosition(await read());await walk(target,{validatePosition});validatePosition(await read());
+  validatePosition(await read());await walk(target,{validatePosition,minimumFloor:()=>armed?minimum:null});validatePosition(await read());
   return {gutter:false};
  }catch(error){
   if(error?.code!=='declared_crossing_approach_dropped')throw error;

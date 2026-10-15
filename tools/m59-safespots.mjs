@@ -1072,6 +1072,9 @@ export function nearestSafeSpot(geo, from, {
     // AND NOT ONE THE MOVER CANNOT GET TO AT ALL. The measured case is a shelter offered in
     // a disconnected component while a real wall sat one square from the character.
     let p=fineRecovery&&cheb(from,s)<=6&&reach?reach(s.col,s.row):null;
+    // Reverse coarse membership does not prove that this particular fine
+    // footing can climb back out of a one-way pocket.
+    if(p?.fine_proved&&p.returnable!==true){oneWay++;continue;}
     if (canWalkThere && !canWalkThere.has(`${s.row},${s.col}`)&&!p?.fine_proved) { unreachableToUs++; continue; }
     if (!hasAnyFooting(geo, s.row, s.col)) { unreachableToUs++; continue; }
     // NOR ONE WE COULD NOT COME BACK FROM. Now that distance is the whole ranking, the

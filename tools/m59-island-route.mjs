@@ -213,11 +213,10 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
         const at=wall?.at;
         if(wall?.works&&at?.row===p.row&&at?.col===p.col){
           const wallKey=p.room+':'+at.row+','+at.col,count=recoveryWalls.get(wallKey)??0;
-          if(count>=3||(leg.recoveries??0)>=24){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
+          if(count>=3||(leg.recovery_restarts??0)>=24){leg.reason='shelter_recovery_exhausted';leg.status=s;break;}
           // Recovery is made on the observed wall. A shelter order is part of
           // this journey, not a replacement destination or a completed failure.
           await call('rest_up',{agent,to:1,max_seconds:30},45000);
-          recoveryWalls.set(wallKey,count+1);
           leg.recoveries=(leg.recoveries??0)+1;
           let recovered=await observeIslandTraveller(ctx,readBody);sample(recovered);
           if(recovered.room?.num===to){leg.ok=true;break;}
@@ -235,6 +234,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
           if(!Number.isFinite(rested.vigor?.value))throw Error('traveller_vigor_unreadable');
           if(rested.hp.value/rested.hp.max<(ctx.minHealth??1)||rested.vigor.value<40)continue;
           await call('rest',{agent,stand:true});
+          // A bounded rest poll is not another failed departure. Poison can
+          // outlast several polls while the same owned journey stays at cover.
+          // Charge the retry allowance only when actually resuming travel;
+          // the overall leg deadline still bounds an unfinished recovery.
+          recoveryWalls.set(wallKey,count+1);
+          leg.recovery_restarts=(leg.recovery_restarts??0)+1;
           leg.request=await request();attemptStarted=Date.now();continue;
         }
         // The keeper may still be approaching its refuge or reconnecting.

@@ -276,6 +276,28 @@ const recovered=await ordinaryHop({agent:'fixture',call:async name=>{
  return {};
 }},2013,{pollMs:1,idleGraceMs:0});
 assert(recovered.ok);assert.equal(recoveryTravels,2);assert.equal(recoveryRests,1);assert.equal(recovered.damage,0);
+let poisonWaits=0,poisonTravels=0,poisonRoom=2000;
+const poisonRecovery=await ordinaryHop({agent:'fixture',call:async name=>{
+ if(name==='look')return {...look(poisonRoom,poisonTravels===0||poisonWaits>=4?20:12),vigor:{value:180}};
+ if(name==='travel'){if(++poisonTravels===2)poisonRoom=2013;return {ordered_by:'poison-journey'};}
+ if(name==='status')return {busy:false,autopilot_status:{safe_spot:{works:true,at:{row:4,col:40}},
+  suspended_journey:{to:2013,ordered_by:'poison-journey'}}};
+ if(name==='rest_up'){poisonWaits++;return {};}
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0,recoverAtEntry:true});
+assert(poisonRecovery.ok);assert.equal(poisonWaits,4);
+assert.equal(poisonTravels,2);assert.equal(poisonRecovery.recoveries,4);
+assert.equal(poisonRecovery.recovery_restarts,1,'waiting at the same wall does not consume departure retries');
+let endlessTravels=0;
+const boundedRecovery=await ordinaryHop({agent:'fixture',call:async name=>{
+ if(name==='look')return {...look(2000,endlessTravels?12:20),vigor:{value:180}};
+ if(name==='travel'){endlessTravels++;return {ordered_by:'bounded-recovery'};}
+ if(name==='status')return {busy:false,autopilot_status:{safe_spot:{works:true,at:{row:4,col:40}},
+  suspended_journey:{to:2013,ordered_by:'bounded-recovery'}}};
+ return {};
+}},2013,{pollMs:1,idleGraceMs:0,budgetMs:30});
+assert(!boundedRecovery.ok);assert.equal(boundedRecovery.reason,'budget');
+assert.equal(endlessTravels,1,'an unfinished bounded recovery sends no new departure');
 let automaticRoom=2000,automaticTravels=0;
 const automatic=await ordinaryHop({agent:'fixture',call:async name=>{
  if(name==='look')return {...look(automaticRoom),vigor:{value:80}};

@@ -12,7 +12,7 @@ import {fallJumpsIn} from './m59-falljump.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
-import {blockingBodySnapshot} from './m59-body-detour.mjs';
+import {blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
@@ -178,14 +178,16 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
   }
   return {...observation,error};
 }
-export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null}={}){
+export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null}={}){
   const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),goal=protocolToClient(target),started=Date.now();
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
   const exits=roomExitSquares(loadMap().rooms[room],{rows:geo?.rows,cols:geo?.cols,to:allowEdgeTo,includeInland:true});
   let avoidance=new Set(exits);
   if(!geo?.collisionReady)throw Error('fine_route_geometry_unavailable');
   let liveBodies=[];
+  const floorMinimum=()=>typeof minimumFloor==='function'?minimumFloor():minimumFloor;
   const edge=(a,b)=>{if(avoidance.has(Math.floor(b.y/1024)+1+','+(Math.floor(b.x/1024)+1)))return false;
+    if(!floorConstraintAllows(geo,clientToProtocol(b),floorMinimum()))return false;
     const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles:liveBodies});return t?.arrived===true&&t.blocked!==true;};
   let squares=new Set(),refugeMask=null,refugeRevision=null;
   const read=async()=>{
@@ -243,7 +245,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       const seed=body;
       cut=await cutFineRailAsync(geo,l.you,target,{threats,threatRadius:8,threatWeight:12,maxMs:4000,
         objects:new Map((l.objects??[]).map(o=>[o.id,o])),selfId:l.you.id,bodyRangeSquares:bodyScopeSquares,
-        avoidSquares:avoidance,
+        avoidSquares:avoidance,minimumFloor:floorMinimum(),
         allowBodyPrefix:true,prefixSquares:chordBudget/1024,requirePrefixRefuge:true,excludedPrefixStops:partialRefuges});
       ({l,body}=await read());
       if(l.hp.value<l.hp.max&&activeOwnedFineRecovery(ctx,l)){cut=null;continue;}
@@ -268,24 +270,33 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     const aim=shelteredIslandAim(cut.waypoints,body,{fromIndex:index,aim:direct,squares,edge,cost});
     if(!aim||aim.tooClose||!chordWalkable(body,aim,{edge,lattice:128}).ok){
       if((cut.partial||liveBodies.length>0)&&cutWaits++<12){cut=null;await new Promise(r=>setTimeout(r,500));continue;}
+      ctx.state.islandFineFailure={room,target,body,reason:'fine_route_chord_not_proved',
+        aim,direct,fromIndex:index,cut:{ok:cut.ok,bridgeOk:cut.bridgeOk,partial:cut.partial,
+          refuge:cut.refuge,first:cut.waypoints?.[0],last:cut.waypoints?.at(-1),
+          next:cut.waypoints?.slice(index,index+4)},
+        objects:(l.objects??[]).map(o=>({id:o.id,x:o.x,y:o.y,row:o.row,col:o.col,flags:o.flags})),
+        avoided_squares:[...avoidance],excluded_prefix_refuges:[...partialRefuges]};
       throw Error('fine_route_chord_not_proved');
     }
     if(signature!==cut.threatSignature&&Date.now()-lastRiskCut>=2500&&cost(body,aim)>Math.hypot(aim.x-body.x,aim.y-body.y)*1.25){cut=null;continue;}
     const wire=clientToProtocol(aim),quantized=protocolToClient(wire);
     if(!chordWalkable(body,quantized,{edge,lattice:128}).ok)throw Error('fine_route_wire_chord_not_proved');
-    const before=body,commandAt=Date.now(),reply=await call('walk_to',{agent,...wire,fine:true,stride,max_steps:Math.ceil(Math.hypot(body.x-aim.x,body.y-aim.y)/(16*stride))+2,arrive_within:3,exact_arrival:true,hold_shelf:true,
+    const refugeArrival=cut.partial&&cut.refuge&&aim.i===cut.waypoints.length-1;
+    const tolerance=refugeArrival?16:128;
+    const atRefuge=()=>!refugeArrival||l.you.row===cut.refuge.row&&l.you.col===cut.refuge.col;
+    const before=body,commandAt=Date.now(),reply=await call('walk_to',{agent,...wire,fine:true,stride,max_steps:Math.ceil(Math.hypot(body.x-aim.x,body.y-aim.y)/(16*stride))+2,arrive_within:refugeArrival?0:3,exact_arrival:true,hold_shelf:true,
       avoid_squares:[...avoidance].map(k=>{const [row,col]=k.split(',').map(Number);return {row,col};})},30000);
     commands++;({l,body}=await read());
     let error=Math.hypot(body.x-aim.x,body.y-aim.y);
-    if(reply.arrived===true&&error>128){
+    if(reply.arrived===true&&(error>tolerance||!atRefuge())){
       // A save or correction can overtake the predicted walk reply. Never accept
       // that prediction as arrival; reread, then retry an unchanged body twice.
-      ({l,body,error}=await confirmIslandFineArrival(read,aim));
-      if(error>128&&Math.hypot(body.x-before.x,body.y-before.y)<64&&confirmationRetries++<2){
+      ({l,body,error}=await confirmIslandFineArrival(read,aim,{tolerance}));
+      if((error>tolerance||!atRefuge())&&Math.hypot(body.x-before.x,body.y-before.y)<64&&confirmationRetries++<2){
         await new Promise(r=>setTimeout(r,750));continue;
       }
     }
-    if(error>128||reply.arrived!==true){
+    if(error>tolerance||!atRefuge()||reply.arrived!==true){
       if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
         recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
       }
@@ -400,7 +411,7 @@ export async function approachKonimaMainland(ctx,options={}){
     const opened=await ctx.call('operate_door',{agent:ctx.agent,targets:[{row:27,col:65}]},30000);
     if(!opened.opened)throw Error('konima_return_door_'+opened.reason);
     // Clear the animated sector inside its opening window before the long walk.
-    await walk({x:4456,y:560});
+    await walk({x:4456,y:416});
   }
   before=await read();const point=protocolToClient(before.you),height=geo.floorBaseAtClient(point.x,point.y);
   if(before.you.col<48||before.you.col<=61&&before.you.row<25){
