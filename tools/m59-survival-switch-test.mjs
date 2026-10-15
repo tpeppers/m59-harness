@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {Autopilot} from './m59-autopilot.mjs';
+import {chooseSurvivalDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
+import {PROTECTED_NAMES} from './m59-strategy-schema.mjs';
+const s={live:true,world:{room:{num:38}},client:{state:'game',self:{row:1,col:1},vitals:()=>({health:{value:2,max:75},vigor:{value:80}})}};
+const ap=Object.assign(Object.create(Autopilot.prototype),{s,policy:{survivalEnabled:false},hold:{row:1,col:1},frozenUntil:Date.now()+60000,suspendedJourney:{to:9},applyFarmStrategy:async()=>{},progress:()=>{},releaseHold(){this.hold=null;}});
+chooseSurvivalDecision(s,{strategy:'logoff_safe',reason:'old recovery intent',status:'recovering'});
+await ap.passOnce();assert.equal(currentSurvivalDecision(s),null);assert.equal(ap.hold,null);assert.equal(ap.frozenUntil,null);assert.equal(ap.suspendedJourney,null);
+assert.equal(await ap.continueSurvivalDecision(),false);assert.equal(await ap.playDead('old asynchronous attempt'),false);
+assert.equal(ap.travelHoldMode(),'off');assert(Object.values(ap.travelGuard({rest:true,flee:true})).every(v=>v===false));
+assert.doesNotThrow(()=>ap.watchdogTick(),'disabled watchdog does not execute an old rescue');
+ap.healingWands={tick(){throw Error('unexpected autonomous healing');}};assert.equal(await ap.useHealingWand(),null);
+let pvp=0;s.combat={active:{pvp:true},tick:async()=>{pvp++;}};await ap.passOnce();await ap.continueSurvivalDecision();assert.equal(pvp,2,'active player combat retains the first turn');
+s.combat.active={flight:{room:38}};ap.watchdogTick();await ap.passOnce();assert.equal(pvp,4,'a configured fallback flight also retains its controller');
+assert(PROTECTED_NAMES.survivalEnabled&&PROTECTED_NAMES.survival_enabled,'ordinary farming strategies cannot disable survival');
+ap.policy={};assert.equal(ap.operatorSurvivalStandDown(),false,'default behavior is unchanged');
+console.log('Operator survival off clears old recovery/freeze without logoff, stops autonomous passes/watchdogs/travel recovery, preserves PvP and rejects farming-strategy control.');

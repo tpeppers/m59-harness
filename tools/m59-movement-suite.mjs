@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-survival-switch-test.mjs','explicit operator stand-down preserves PvP/fallback and clears old autonomous recovery'],
   ['m59-entry-recovery-test.mjs','healthy body-blocked arrivals may retreat through a reversible entry and retry under the original deadline and cancellation'],
   ['m59-walk-avoidance-dispatch-test.mjs','forbidden squares survive MCP movement dispatch, proxy JSON and keeper execution'],
   ['m59-position-read-test.mjs','fine observations require an ordered server read tied to this client and room'],

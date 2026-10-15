@@ -2267,6 +2267,7 @@ export class Autopilot {
       // to forbid it — but it is the most effective survival move available when we
       // have nowhere safe to stand, and the penalties the game attaches to logging
       // off exist for PvP, not for this.
+      survivalEnabled: true,
       panicLogoff: true,
       // How long to stay frozen and unattackable after reconnecting.
       freezeMs: 90_000,
@@ -5137,6 +5138,15 @@ export class Autopilot {
     } catch { /* a ledger may never take a character down */ }
   }
 
+  operatorSurvivalStandDown() {
+    if(this.policy?.survivalEnabled!==false)return false;
+    const d=currentSurvivalDecision(this.s);
+    if(d)finishSurvivalDecision(this.s,d.id,'operator_disabled','autonomous survival disabled by operator');
+    this.frozenUntil=null;this.freezeSample=null;this.suspendedJourney=null;
+    if(this.hold)this.releaseHold('autonomous survival disabled by operator');
+    return true;
+  }
+
   releaseHold(why) {
     if (!this.hold) return;
     const h = this.hold;
@@ -5838,6 +5848,7 @@ export class Autopilot {
 
   async recoverFromTravelFallback({movementGeneration=this.s.movementGeneration,controlToken=null,
     why='pivot route did not reach its destination'}={}) {
+    if(this.policy?.survivalEnabled===false)return false;
     const s=this.s;
     if(s.movementWasCancelled(movementGeneration,controlToken) || !this.inert?.travelling
         || !this.inert.guard?.safe_spot) return false;
@@ -5922,6 +5933,7 @@ export class Autopilot {
       await this.s.combat.tick();
       return true;
     }
+    if(this.operatorSurvivalStandDown())return false;
     // A replacement is executable intent, not work to defer to the heartbeat.
     // Drain distinct alternatives serially, with fresh ownership/health checks in
     // each step. Stop when an action is stable or the same failed state recurs;
@@ -9252,6 +9264,7 @@ export class Autopilot {
   // same shape as the bug the block above `travel()` describes, where one of them honoured
   // the enum and the other left the coin in charge.
   travelHoldMode() {
+    if(this.policy?.survivalEnabled===false)return 'off';
     const m = this.policy.travelHold ?? TRAVEL_HOLD_MODE;
     if (m !== 'ab' && m !== 'half') return m;
     if (!this._saidAbRetired) {
@@ -13699,6 +13712,7 @@ export class Autopilot {
   // by the tool that sets it and ignored here rather than being merged into a shape the
   // rest of the file would then read as a real faculty.
   travelGuard(override = null) {
+    if(this.policy?.survivalEnabled===false)return Object.fromEntries(TRAVEL_GUARD_KEYS.map(k=>[k,false]));
     const from = source => {
       if (!source || typeof source !== 'object') return {};
       const out = {};
@@ -14731,6 +14745,7 @@ export class Autopilot {
     const s = this.s, c = s?.client;
     if (!c || s.live !== true || c.state !== 'game') return;
     if (s.combat?.active) { void s.combat.tick(); return; }
+    if(this.policy?.survivalEnabled===false)return;
     const w = this.watch;
     w.ticks++;
     const now = Date.now();
@@ -16361,6 +16376,7 @@ export class Autopilot {
   }
 
   async useHealingWand(cancelled = () => false) {
+    if(this.policy?.survivalEnabled===false)return null;
     const allowed = () => this.running && !this.stopping && !this.inert
       && !this.parking && !this.busyStatus?.() && !this.checkFreeze()
       && this.mode === 'farm' && !this.s.combat?.active;
@@ -16393,6 +16409,10 @@ export class Autopilot {
     if (s.combat?.active) {
       await s.combat.tick();
       if (s.combat.active) { this.doing = `combat: ${s.combat.active.phase}`; return; }
+    }
+    // Operator control stands down autonomous work; PvP above and mortality below remain.
+    if(s.world?.room?.num!==1&&this.operatorSurvivalStandDown()){
+      this.progress('autonomous survival disabled by operator');return;
     }
     if (effectsAt(s.client, s.client?.self).length) {
       this.doing = await escapeGroundEffect(s) ? 'leaving a ground effect' : 'ground effect: escape blocked';
@@ -19281,6 +19301,7 @@ export class Autopilot {
 
   // ── passFleeAndRest: extracted from pass() ────────────────────────────────
   async passFleeAndRest(ctx) {
+    if(this.operatorSurvivalStandDown())return CONTINUE;
     const { s, c, room, v, hp } = ctx;
     if(continuingProvenRefugeLeg(s)){
       this.note('continuing the proved route to cover', {refuge:s.provenRefugeLeg.goal,why:'recent confirmed forward progress; recovery at its end'});
@@ -30540,6 +30561,7 @@ export class Autopilot {
   // middle of a monster room, and it is the difference between a fight we lost and a
   // fight we get to have again.
   checkFreeze() {
+    if(this.policy?.survivalEnabled===false){this.frozenUntil=null;this.freezeSample=null;return false;}
     if (!this.frozenUntil) return false;
     const c = this.s.client, me = c?.self;
     const sample = { health: c?.vitals?.()?.health?.value ?? null,
@@ -30586,6 +30608,7 @@ export class Autopilot {
 
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
+    if(this.operatorSurvivalStandDown())return false;
     this.suspendJourney(why);
     const s=this.s,atWall=this.adoptRecoveryWall();
     // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze

@@ -1,5 +1,13 @@
 # Policy, profiles and tuning
 
+An explicit operator can set `autopilot survival_enabled:false` to stand down
+autonomous noncombat behavior. The default is `true`. The switch clears old
+recovery decisions and freezes, disables watchdog interventions and journey
+recovery, and leaves the body available for explicit movement orders. Player
+combat (including a configured fallback strategy), identity handling and death/
+Underworld escape remain active. Ordinary farming strategies cannot set it.
+Set it back to `true` to restore the normal keeper behavior.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Where this checkout's opinions live, and where the fleet is allowed to stand.
 
 ## A NUMBER THAT IS THIS CHECKOUT'S OPINION DOES NOT BELONG IN GIT

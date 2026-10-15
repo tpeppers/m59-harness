@@ -11523,6 +11523,7 @@ const TOOLS = [
           'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
       heal_wand_below: { type: 'number', minimum: 0, maximum: 1,
         description: 'Farmers apply healing wands to self below this health fraction; 0 disables (default). Confirmed empty healing wands are dropped. Vampiric wands are preserved.' },
+      survival_enabled: { type: 'boolean', description: 'Explicit operator switch for autonomous noncombat behavior. Default true. False stands down recovery, freezing, shelter, watchdog interventions and ordinary keeper work; explicit commands, player combat and death/Underworld handling remain active.' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
       flee_below: { type: 'number', description: 'under this fraction, reach for the logoff ' +
           'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
@@ -12516,6 +12517,10 @@ const TOOLS = [
         const v = Number(a.heal_wand_below);
         if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('heal_wand_below must be between 0 and 1');
         p.policy.healWandBelow = v;
+      }
+      if (a.survival_enabled !== undefined) {
+        if(typeof a.survival_enabled!=='boolean')throw new Error('survival_enabled must be true or false');
+        p.policy.survivalEnabled=a.survival_enabled;
       }
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);

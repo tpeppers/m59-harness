@@ -220,7 +220,7 @@ const WAR = 'is a war/PvP path and stays with the keeper: a strategy cannot chan
             'answers a player';
 export const PROTECTED_NAMES = Object.freeze({
   flee: SURVIVAL, fleeBelow: SURVIVAL, rest: SURVIVAL, restBelow: SURVIVAL, restAnywhere: SURVIVAL,
-  holdResumeAbove: SURVIVAL, survival: SURVIVAL, mortality: SURVIVAL, recovery: SURVIVAL,
+  holdResumeAbove: SURVIVAL, survivalEnabled: SURVIVAL, survival_enabled: SURVIVAL, survival: SURVIVAL, mortality: SURVIVAL, recovery: SURVIVAL,
   identity: SURVIVAL, travelGuard: SURVIVAL, panicLogoff: SURVIVAL, breakOutViaLogoff: SURVIVAL,
   breakOutAbove: SURVIVAL, freezeMs: SURVIVAL, doomedInSpotBelow: SURVIVAL, healWandBelow: SURVIVAL,
   askForHelp: SURVIVAL, retreatToInn: SURVIVAL, escapeLadder: SURVIVAL,
