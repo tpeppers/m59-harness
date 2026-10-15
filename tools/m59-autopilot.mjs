@@ -6080,7 +6080,7 @@ export class Autopilot {
 
   watchRecoveryApproach(spot) {
     const s=this.s,client=s.client,room=s.world?.room?.num,decision=currentSurvivalDecision(s);
-    const generation=s.movementGeneration,life=s.lifeBoundary??0;
+    const generation=s.movementGeneration,life=s.lifeBoundary??0,bodyId=client.self?.id,roomId=client.room?.id;
     if (!decision || typeof s.cancelMovement!=='function') return ()=>{};
     let memory=this.refugeApproachProgress;
     if (!memory || memory.client!==client || memory.room!==room || memory.life!==life
@@ -6093,34 +6093,54 @@ export class Autopilot {
     progress=observeRefugeProgress(progress,s.world?.geometry,client.self,spot,now);
     if(memory.targets.size>=32 && !memory.targets.has(key))memory.targets.delete(memory.targets.keys().next().value);
     memory.targets.set(key,progress);
-    const timer=setInterval(()=>{
-      // An older await must never cancel a replacement, a human, or PvP.
-      if(s.client!==client || s.world?.room?.num!==room || s.movementGeneration!==generation
-          || (s.lifeBoundary??0)!==life || currentSurvivalDecision(s)?.id!==decision.id
-          || this.stopping || s.combat?.active?.pvp
-          || (this.inert&&!this.inert.travelling) || this.facultyHeld('survival')
-          || this.facultyHeld('recovery') || this.facultyHeld('combat')) {
-        clearInterval(timer);return;
-      }
-      observeRefugeProgress(progress,s.world?.geometry,client.self,spot);
-      const at=client.self;
-      // A fragile traveller taking hits cannot spend eight stationary seconds
-      // proving the jam. Genuine confirmed route progress still resets this clock.
+    let closed=false,confirming=false;
+    const stillOwned=()=>!closed && s.client===client && s.world?.room?.num===room
+      && client.self?.id===bodyId && client.room?.id===roomId
+      && s.movementGeneration===generation && (s.lifeBoundary??0)===life
+      && currentSurvivalDecision(s)?.id===decision.id && !this.stopping
+      && !s.combat?.active?.pvp && !(this.inert&&!this.inert.travelling)
+      && !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat');
+    const close=()=>{closed=true;clearInterval(timer);};
+    const assess=position=>{
+      if(!stillOwned()){close();return;}
+      observeRefugeProgress(progress,s.world?.geometry,position,spot);
+      if(position && !position.predicted && position.row===spot.row && position.col===spot.col){close();return;}
       const noProgressMs=recoveryUnderPressure(client,s.damagedAt)?2000:REFUGE_PROGRESS_MS;
-      if((at && !at.predicted && at.row===spot.row && at.col===spot.col)
-          || Date.now()-progress.progressedAt<noProgressMs)return;
-      clearInterval(timer);
-      // Temporary local reachability evidence, never a global verdict on the wall.
+      if(Date.now()-progress.progressedAt<noProgressMs)return;
+      close();
       this.noteUnreachableSpot(room,spot.col,spot.row);
       this.rememberSurvivalJam({failed:true});
       const why='shelter approach made no confirmed route progress';
       this.note(why,{to:{row:spot.row,col:spot.col},room,
         stalled_ms:Date.now()-progress.progressedAt,remaining_steps:progress.best});
       this.cancelForSurvival(null,why,{origin:keeperOrigin('shelter')});
+    };
+    const timer=setInterval(()=>{
+      if(!stillOwned()){close();return;}
+      observeRefugeProgress(progress,s.world?.geometry,client.self,spot);
+      const at=client.self,noProgressMs=recoveryUnderPressure(client,s.damagedAt)?2000:REFUGE_PROGRESS_MS;
+      if((at && !at.predicted && at.row===spot.row && at.col===spot.col)
+          || Date.now()-progress.progressedAt<noProgressMs){assess(at);return;}
+      if(at?.predicted && typeof s.confirmFinePosition==='function'){
+        if(confirming)return;
+        confirming=true;
+        // Prediction is neither progress nor a proved jam. Read the actual body
+        // once before cancelling a short escape; no packet is licensed by it.
+        void s.confirmFinePosition({timeoutMs:1000}).then(p=>{
+          confirming=false;
+          if(!stillOwned()){close();return;}
+          const valid=p && !p.predicted && Number.isInteger(p.id) && p.id>0
+            && p.id===client.self?.id && p.room_object_id===client.room?.id
+            && [p.row,p.col,p.x,p.y].every(Number.isFinite);
+          assess(valid?p:client.self);
+        }).catch(()=>{confirming=false;assess(client.self);});
+        return;
+      }
+      assess(at);
     },500);
     timer.unref?.();
     return ()=>{
-      clearInterval(timer);
+      close();
       const at=client.self;
       if(at && !at.predicted && at.row===spot.row && at.col===spot.col)memory.targets.delete(key);
     };

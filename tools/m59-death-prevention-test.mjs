@@ -137,6 +137,34 @@ test('watchdog cancellations cannot renew a stalled refuge; the next selection e
   assert.equal(s.movementGeneration,2);assert.ok(k.unreachableIn(38).has('23,7'));
   assert.notEqual(currentSurvivalDecision(s).status,'approaching');stop();
 });
+
+test('confirmed fine progress within a square renews only the best route',()=>{
+ const target={row:7,col:23},geo={path:(row,col)=>({found:true,steps:Array.from({length:23-col},(_,i)=>({row,col:col+i+1}))})};
+ const p=observeRefugeProgress(null,geo,{row:7,col:20,x:1296,y:480},target,0);
+ observeRefugeProgress(p,geo,{row:7,col:20,x:1312,y:480},target,1000);assert.equal(p.progressedAt,1000);
+ observeRefugeProgress(p,geo,{row:7,col:20,x:1328,y:480,predicted:true},target,2000);assert.equal(p.progressedAt,1000);
+ observeRefugeProgress(p,geo,{row:7,col:20,x:1296,y:480},target,3000);
+ observeRefugeProgress(p,geo,{row:7,col:20,x:1312,y:480},target,4000);assert.equal(p.progressedAt,1000);
+});
+
+test('predicted recovery arrival is confirmed before the watchdog can cancel',async t=>{
+ t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+ const {s,c,k,target}=approachFixture();c.self={...c.self,id:1,x:1312,y:480,predicted:true};c.room.id=777;s.damagedAt=Date.now();
+ let reads=0;s.confirmFinePosition=async()=>{reads++;return {id:1,row:target.row,col:target.col,x:1504,y:480,room_object_id:777};};
+ const stop=k.watchRecoveryApproach(target);t.mock.timers.tick(2000);await Promise.resolve();await Promise.resolve();
+ assert.equal(reads,1);assert.equal(s.movementGeneration,0);t.mock.timers.tick(8000);assert.equal(s.movementGeneration,0);stop();
+});
+
+for(const change of ['generation','client','human','stopped','identity'])test('a late refuge confirmation cannot act after '+change,async t=>{
+ t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
+ const {s,c,k,target}=approachFixture();c.self={...c.self,id:1,x:1312,y:480,predicted:true};c.room.id=777;s.damagedAt=Date.now();
+ let resolve;s.confirmFinePosition=()=>new Promise(r=>{resolve=r;});
+ const stop=k.watchRecoveryApproach(target);t.mock.timers.tick(2000);assert(resolve);
+ if(change==='generation')s.movementGeneration++;if(change==='client')s.client={...c};if(change==='human')k.inert={by:'human'};
+ if(change==='stopped')stop();if(change==='identity')c.self.id=2;
+ const generation=s.movementGeneration;resolve({id:1,row:7,col:20,x:1312,y:480,room_object_id:777});
+ await Promise.resolve();await Promise.resolve();assert.equal(s.movementGeneration,generation);stop();
+});
 test('real approach progress prevents cancellation; returning to old squares does not',t=>{
   t.mock.timers.enable({apis:['Date','setInterval'],now:100000});
   const {k,s,c,target}=approachFixture();const stop=k.watchRecoveryApproach(target);
