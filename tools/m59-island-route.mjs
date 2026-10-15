@@ -2,7 +2,7 @@
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
-import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition,waitAtIslandTrafficRefuge} from './m59-island-finewalk.mjs';
+import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition,readIslandOccupancy,waitAtIslandTrafficRefuge} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
@@ -307,7 +307,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   return leg;
 }
 export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,hop=ordinaryHop,read=readIslandFinePosition,
- readCached=null,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
+ readCached=null,readOccupancy=readIslandOccupancy,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
  if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_island_queue_budget');
  const takeHop=async destination=>{
   const leg=await hop(ctx,destination,{budgetMs,recoverAtEntry:true});onLeg(leg);
@@ -321,15 +321,8 @@ export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=1800
    return {agent,room:s?.connected!==false&&s?.in_game===true?s.room?.num:null,confirmed:false,at:Date.now()};
   }
   const observer=agent===ctx.agent?ctx:{...ctx,agent,state:{}};
-  let l;
-  try{l=await read(observer);}catch(e){
-   if(agent===ctx.agent||e.message!=='traveller_died')throw e;
-   const s=await ctx.call('status',{agent,brief:true});
-   if(s.connected===true&&s.in_game!==false&&s.room?.num===1&&s.hp?.value===0)
-    return {agent,room:1,confirmed:true,at:Date.now()};
-   throw e;
-  }
-  if(agent===ctx.agent)checkIslandCancellation(ctx,l);
+  if(agent!==ctx.agent)return readOccupancy(observer);
+  const l=await read(observer);checkIslandCancellation(ctx,l);
   return {agent,room:l.room?.num,confirmed:!!l.you&&!l.you.predicted&&Number.isInteger(l.you.id),at:Date.now()};
  };
  return admit(ctx,{room,deadline:Date.now()+queueBudgetMs,read:proof,waitQueued:async()=>{

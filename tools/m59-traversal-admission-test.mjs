@@ -18,6 +18,7 @@ const dir=mkdtempSync(join(tmpdir(),'m59-traversal-')),room=2505;
 let cases=0;
 const reset=()=>configureSpotClaimStore({directory:dir,namespace:String(++cases)});
 const proof=(agent,room)=>({agent,room,confirmed:true,at:Date.now()});
+const occupancy=read=>async ctx=>proof(ctx.agent,(await read(ctx)).room.num);
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 try{
  for(const queueBudgetMs of [0,NaN]){
@@ -126,23 +127,24 @@ try{
    events.push(ctx.agent+'->'+to);places.set(ctx.agent,to);
    if(ctx.agent==='b'&&to===2001)parkedB();return {ok:true,to};
   };
-  const a=admittedIslandTransit(caller('a'),{from:2000,to:2504,read,readCached,hop});await started;
-  const b=admittedIslandTransit(caller('b'),{from:2000,to:2504,read,readCached,hop});await parked;
+  const a=admittedIslandTransit(caller('a'),{from:2000,to:2504,read,readCached,readOccupancy:occupancy(read),hop});await started;
+  const b=admittedIslandTransit(caller('b'),{from:2000,to:2504,read,readCached,readOccupancy:occupancy(read),hop});await parked;
   assert.equal(places.get('b'),2001);assert(!events.includes('b->2505'));
   finishA();await Promise.all([a,b]);
   assert.deepEqual(events,['a->2505','b->2001','a->2504','b->2000','b->2505','b->2504'],
    'the next returner waits in the inn until an actual cave exit, then uses ordinary hops');
  }
  reset();
- {
-  const held=reserveFileTraversal('dead',room,'underworld').lease;markFileTraversal(held,'entered');
-  let place=2000;
-  await admittedIslandTransit({agent:'b',state:{},call:async(name,args)=>{
-   assert.equal(name,'status');assert.equal(args.agent,'dead');return {connected:true,in_game:true,room:{num:1},hp:{value:0}};
-  }},{from:2000,to:2504,readCached:async()=>({connected:true,in_game:true,room:{num:1},hp:{value:0}}),read:async c=>{
-   if(c.agent==='dead')throw Error('traveller_died');return {room:{num:place},you:{id:2,predicted:false}};
-  },hop:async(_ctx,to)=>{place=to;return {ok:true,to};}});
-  assert.equal(place,2504,'an observed Underworld transition releases a dead predecessor without stopping the other travelers');
+ for(const hp of [0,1,20]){
+  const held=reserveFileTraversal('dead',room,'underworld-'+hp).lease;markFileTraversal(held,'stopped');
+  let place=2504,observations=0,parking=0;
+  await admittedIslandTransit({agent:'b',state:{},call:async()=>assert.fail('occupancy cannot poll status or issue gameplay')},
+   {from:2504,to:2000,readCached:async()=>({connected:true,in_game:true,room:{num:1},hp:{value:hp}}),
+    readOccupancy:async c=>{assert.equal(c.agent,'dead');return {...proof(c.agent,1),confirmed:++observations>1};},
+    read:async c=>{assert.notEqual(c.agent,'dead','the predecessor is an occupancy observation, not a living traveler');return {room:{num:place},you:{id:2,predicted:false}};},
+    park:async()=>{parking++;return true;},hop:async(_ctx,to)=>{place=to;return {ok:true,to};}});
+  assert.equal(place,2000,'fresh outside occupancy releases a predecessor at any Underworld health');
+  assert.equal(observations,2);assert.equal(parking,1,'a cached or unconfirmed Underworld hint cannot release the ticket');
  }
  reset();
  {
@@ -150,6 +152,7 @@ try{
   const places=new Map([['a',room],['b',2504]]),hops=[];let parked=0;
   await admittedIslandTransit({agent:'b',state:{},call:async()=>({connected:true,in_game:true,room:{num:places.get('a')}})},{from:2504,to:2000,
    readCached:async()=>({connected:true,in_game:true,room:{num:places.get('a')}}),
+   readOccupancy:async c=>proof(c.agent,places.get(c.agent)),
    read:async c=>({room:{num:places.get(c.agent)},you:{id:c.agent==='a'?1:2,predicted:false}}),
    park:async()=>{if(++parked===2)places.set('a',2504);return false;},
    hop:async(c,to)=>{assert.equal(places.get('a'),2504,'unavailable parking cannot waive the occupied-room claim');hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
@@ -175,7 +178,7 @@ try{
    if(ctx.agent==='a'&&to===2503){enteredA();await finish;}
    events.push(ctx.agent+'->'+to);places.set(ctx.agent,to);return {ok:true,to};
   };
-  const options={room:2502,from:2501,to:2503,read,hop,park:async ctx=>{events.push(ctx.agent+' parks');parkedB();}};
+  const options={room:2502,from:2501,to:2503,read,readOccupancy:occupancy(read),hop,park:async ctx=>{events.push(ctx.agent+' parks');parkedB();}};
   const a=admittedIslandTransit(caller('a'),options);await started;
   const b=admittedIslandTransit(caller('b'),options);await parked;
   assert.equal(places.get('b'),2501,'the Hollows follower waits before its native arrival can occupy the jump approach');

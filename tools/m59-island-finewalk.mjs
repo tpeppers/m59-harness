@@ -22,6 +22,27 @@ import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
+// Occupancy is independent of survival. An observer must be able to prove a
+// predecessor's actual exit even while that body is dead or recovering in the
+// Underworld. This read grants no travel/recovery authority to that character.
+export async function readIslandOccupancy(ctx){
+  const {position,snapshot}=await readFineOnce(ctx),p=snapshot?.position_read;
+  if(!position?.ok||position.fresh!==true||position.room!==snapshot.room?.num||
+     snapshot.in_game!==true||snapshot.connected===false||
+     !Number.isSafeInteger(snapshot.pid)||snapshot.pid<=0||position.pid!==snapshot.pid||
+     typeof snapshot.character!=='string'||!snapshot.character||
+     !Number.isSafeInteger(p?.id)||p.id<=0||p.id!==snapshot.you?.id||p.predicted||
+     p.room_object_id!==snapshot.room?.object_id||
+     ![p.x,p.y,p.row,p.col].every(Number.isFinite)||
+     Math.floor(p.x/64)!==p.col||Math.floor(p.y/64)!==p.row)
+    throw Error('island_occupancy_unconfirmed');
+  const live=await(await fetch('http://127.0.0.1:'+position.port+'/live',
+    {signal:AbortSignal.timeout(3000)})).json();
+  if(live.agent!==ctx.agent||live.pid!==snapshot.pid||live.character!==snapshot.character)
+    throw Error('island_occupancy_keeper_changed');
+  return {agent:ctx.agent,room:position.room,confirmed:true,at:p.at,
+    body_id:p.id,keeper_pid:snapshot.pid};
+}
 export async function readIslandFinePosition(ctx,look){
   return observeIslandTraveller(ctx,()=>readFineOnce(ctx,look),{
     valid:v=>v.position?.ok&&v.position.fresh===true&&v.position.room===v.body.room?.num&&
