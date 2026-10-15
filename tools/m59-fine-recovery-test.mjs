@@ -166,6 +166,33 @@ try{
   {x:100,y:100},{attempts:2,settleMs:1,tolerance:1.6});
  assert.equal(exactReads,2,'exact takeoff confirmation cannot accept the ordinary eight-KOD tolerance');
  assert.equal(exact.error,0);
+ // Two native Konima stops: an actual script preemption was followed by a
+ // keeper-to-keeper refuge replacement. The original issuer disappeared from
+ // last_preempted while the same leased body's recovery was still active.
+ for(const retained of [
+  {stage:{x:3272,y:1712,row:26,col:51},cover:{x:3256,y:1792,row:28,col:50}},
+  {stage:{x:3536,y:1616,row:25,col:55},cover:{x:3512,y:1592,row:24,col:54}},
+ ])for(const leaseKind of ['own','foreign','expired','unproved','substituted']){
+  room.num=2505;pose={id:1,...retained.stage,predicted:false};hp={value:10,max:20};proactive=false;
+  let statuses=0,meals=0;const beforeRests=rests;
+  const handoff={...ctx,call:async(name,args)=>{
+   if(name==='status'){
+    const first=++statuses===1;if(!first)pose={id:leaseKind==='substituted'?2:1,...retained.cover,predicted:false};
+    return {hp,vigor,movement:{last_preempted:{at:Date.now(),by:{source:'keeper'},
+     preempted:{ordered_by:first&&leaseKind!=='unproved'?label:'keeper:shelter'}}},autopilot_status:{
+     faculties:{movement:{owner:first||leaseKind!=='foreign'?'fleetscript:fine-recovery':'fleetscript:foreign',expires_in_ms:!first&&leaseKind==='expired'?0:10000}},
+     survival_decisions:{current:{id:first?'first':'replacement',source:'travel',strategy:first?'nearest_refuge':'rest_safe',status:first?'approaching':'recovering',chosen_refuge:{...retained.cover,room:2505}}}}};
+   }
+   if(name==='use')meals++;
+   return ctx.call(name,args);
+  }};
+  const completed=await recoverIslandFineWalk(handoff,{deadline:Date.now()+5000,pollMs:1,active:false,
+   read:async()=>({l:{room,you:pose,hp,vigor}})});
+  assert.equal(completed,leaseKind==='own','a proved recovery follows its keeper replacement only under the same live movement lease');
+  if(leaseKind==='own'){assert.equal(hp.value,20);assert.equal(rests,beforeRests+1);assert(statuses>=2);}
+  else assert.equal(rests,beforeRests,'foreign and expired control cannot authorize rest');
+  assert.equal(meals,0,'full vigor does not need an invented healing item');
+ }
  room.num=1;pose={id:1,x:796,y:1134,row:17,col:12,predicted:false};hp={value:1,max:20};
  await assert.rejects(readIslandFinePosition(ctx),/traveller_died/,'own travel still refuses the Underworld');
  const outside=await readIslandOccupancy(ctx);

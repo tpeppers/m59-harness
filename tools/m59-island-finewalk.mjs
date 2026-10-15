@@ -127,6 +127,10 @@ export function activeOwnedFineRecovery(ctx,status){
       Number.isFinite(health.value)&&health.value>=health.max&&Number.isFinite(vigor)&&vigor>=80)return false;
   return true;
 }
+export function ownsFineRecovery(ctx,status,{since=null,active=false,established=false}={}){
+  return keeperMovementPreemption(status,originLabel(ctx.origin??currentCallOrigin()),{since})||
+    ((active||established)&&activeOwnedFineRecovery(ctx,status));
+}
 export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
   const actor=l=>({id:l.you?.id,room:l.room?.num,roomId:l.room?.object_id,x:l.you?.x,y:l.you?.y});
   const covered=l=>knownRefugeCell(roomGeometry(l.room?.num),l.you);
@@ -136,9 +140,14 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
     if(Date.now()>=deadline)return false;
     const s=await ctx.call('status',{agent:ctx.agent,brief:true});
     checkIslandCancellation(ctx,s);
-    const owned=keeperMovementPreemption(s,originLabel(ctx.origin??currentCallOrigin()),{since})||(active&&activeOwnedFineRecovery(ctx,s));
+    // Once positively observed, follow this controller's live recovery lease
+    // across keeper refuge/logoff replacements. Their own preemptions can
+    // replace last_preempted without ending the traveler's recovery.
+    const owned=ownsFineRecovery(ctx,s,{since,active,established:Number.isInteger(actorFence?.id)&&actorFence.id>0});
     if(!owned&&!actorFence&&!refugeFence)return false;
     const {l}=await read(),wall=s.autopilot_status?.safe_spot;
+    const observedActor=actor(l);
+    if(actorFence&&(observedActor.id!==actorFence.id||observedActor.room!==actorFence.room||observedActor.roomId!==actorFence.roomId))return false;
     if(owned)actorFence=actor(l);
     if(!owned){
       const origin=ctx.origin??currentCallOrigin(),lease=s.autopilot_status?.faculties?.movement,order=s.movement?.order,p=actor(l);
