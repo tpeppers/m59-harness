@@ -37,6 +37,17 @@
 // the ordering, the timeouts and every abort path are driven offline by
 // broker-handover-test.mjs. This module decides; the broker supplies the hands.
 
+import {validateKeeperSample} from './keeper-liveness.mjs';
+
+// A pilot's keeper is deliberately not resumed into a game session. Preserve its
+// existing process without login only after the transferred guards and identity agree.
+export function canPreservePilotedKeeper({pilot,agent,character,previous,current,sample,guarded}) {
+  return !!pilot && guarded === true && !!agent && typeof character==='string' && !!character.trim() &&
+    Number.isSafeInteger(previous?.pid) && previous.pid>0 && Number.isInteger(previous?.port) && previous.port>0 && previous.port<=65535 &&
+    current?.pid===previous.pid && current?.port===previous.port &&
+    validateKeeperSample(sample,{agent,character,pid:previous.pid}).ok;
+}
+
 export const HANDOVER_PROTOCOL = 1;
 export const SUCCESSOR_ENV = 'M59_BROKER_SUCCESSOR_OF';
 

@@ -136,7 +136,7 @@ import {
   transferFleetLock,
   verifyFleetLockGuard,
 } from './runtime/fleet-lock.mjs';
-import { HANDOVER_PROTOCOL, RequestHold, handOver, judgeAdoption, successorOf, successorSpawnSpec,
+import { HANDOVER_PROTOCOL, RequestHold, handOver, judgeAdoption, canPreservePilotedKeeper, successorOf, successorSpawnSpec,
          takeOver } from './runtime/broker-handover.mjs';
 import {createBrokerListenerIdentity} from './runtime/broker-listener-identity.mjs';
 import {
@@ -21267,7 +21267,7 @@ async function runAsSuccessor() {
     async adopt() {
       await resumeFleet({ adopting: true });
       let adopted = 0;
-      const unadopted_live = [], replaced = [], gone = [], identity_mismatch = [];
+      const unadopted_live = [], replaced = [], gone = [], identity_mismatch = [], piloted_preserved = [];
       for (const [agent, was] of expected) {
         const now = keeperProcesses.get(agent);
         if (now?.pid === was.pid && sessions.has(agent)) { adopted++; continue; }
@@ -21280,6 +21280,14 @@ async function runAsSuccessor() {
         // is corrected. Any OTHER unadopted running keeper still aborts the handover.
         let live = null;
         try { const reply = await keeperLiveAt(was.port, { timeoutMs: 3000 }); live = reply?.ok ? reply.value : null; } catch {}
+        if (canPreservePilotedKeeper({pilot:pilotOf(agent),agent,
+            character:rosterEntry(agent)?.credentials?.character,previous:was,current:now,
+            sample:live,guarded:keeperOwnershipIsGuarded(agent,was.pid)})) {
+          keeperPorts.set(agent,was.port);
+          piloted_preserved.push(agent);adopted++;
+          console.error(`[handover] preserved ${agent}'s exact guarded keeper under its human pilot; no session resumed`);
+          continue;
+        }
         const rostered = keeperCharacterIdentity(rosterEntry(agent)?.credentials?.character);
         const running = keeperCharacterIdentity(live?.character);
         if (live && String(live.agent ?? '') === String(agent) && rostered && running && running !== rostered) {
@@ -21290,7 +21298,7 @@ async function runAsSuccessor() {
         } else unadopted_live.push(agent);
       }
       if (fault === 'adopt') unadopted_live.push('(M59_HANDOFF_FAULT=adopt rehearsal)');
-      return { expected: expected.size, adopted, unadopted_live, replaced, gone, identity_mismatch,
+      return { expected: expected.size, adopted, unadopted_live, replaced, gone, identity_mismatch, piloted_preserved,
                sessions: sessions.size };
     },
     adoptionAcceptable: judgeAdoption,

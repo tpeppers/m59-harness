@@ -243,6 +243,13 @@ the outage this exists to avoid. `--cold` is the operator saying otherwise.
 **A broker older than this cannot hand over**, so the first restart onto this code is cold, once.
 Every restart after it is live. `/health` advertises `broker_handoff` when a broker can do it.
 
+A human-piloted character is not resumed into a session during handover. Its existing
+keeper is preserved only when the exact PID, port, agent, character and transferred
+fleet/account guards agree. This includes an inactive game connection: preserving the
+process does not log in, release the pilot or issue character orders. A missing identity
+or guard still aborts the handover. This avoids an inactive piloted keeper blocking an
+otherwise complete warm adoption.
+
 **Keepers are spawned DETACHED, and before 2026-10-06 they were not, which made every keeper die
 with its broker however the broker ended.** On Windows libuv puts each non-detached child into
 one job object created with `KILL_ON_JOB_CLOSE`, so an orderly exit, a crash and `taskkill /F`

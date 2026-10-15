@@ -34,7 +34,7 @@ import {
 } from './fleet-lock.mjs';
 import { AccountLeaseRegistry } from './account-leases.mjs';
 import {
-  HANDOVER_PROTOCOL, RequestHold, SUCCESSOR_ENV, handOver, judgeAdoption, successorOf,
+  HANDOVER_PROTOCOL, RequestHold, SUCCESSOR_ENV, handOver, judgeAdoption, canPreservePilotedKeeper, successorOf,
   successorSpawnSpec, takeOver,
 } from './broker-handover.mjs';
 
@@ -413,6 +413,15 @@ try {
     assert.equal(judgeAdoption({ expected: 0, adopted: 0, unadopted_live: [] }).ok, true);
     assert.equal(judgeAdoption(null).ok, false);
     ok('adoption is refused when any running keeper was left unmanaged');
+  }
+
+  {
+    const valid={pilot:{pid:99},agent:'human',character:'Human Player',previous:{pid:123,port:9001},current:{pid:123,port:9001},sample:{agent:'human',character:'Human Player',pid:123,in_game:true,connected:false,ok:false},guarded:true};
+    assert.equal(canPreservePilotedKeeper(valid),true,'inactive pilot connection preserves process without resuming a session');
+    assert.equal(canPreservePilotedKeeper({...valid,sample:{...valid.sample,in_game:false}}),true);
+    for(const patch of [{pilot:null},{guarded:false},{agent:''},{character:' '},{previous:{pid:123}},{current:{pid:124,port:9001}},{current:{pid:123,port:9002}},{sample:null},{sample:{...valid.sample,pid:124}},{sample:{...valid.sample,agent:'other'}},{sample:{...valid.sample,character:'Other Player'}},{sample:{...valid.sample,in_game:undefined}}])
+      assert.equal(canPreservePilotedKeeper({...valid,...patch}),false,JSON.stringify(patch));
+    ok('piloted keepers survive warm adoption only with exact identity, PID, port and transferred guards');
   }
 
   console.log(`broker-handover-test: ${passed} passed, 0 failed`);
