@@ -11,6 +11,9 @@ import {loadMap} from './m59-map.mjs';
 import {withTraversalAdmission} from './m59-traversal-admission.mjs';
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
+// Admission begins in the preceding map, before an arrival can stack bodies in
+// a one-way approach or occupy the active traveler's recovery refuge.
+export const ISLAND_SINGLE_TRANSIT_ROOMS=[2502,2505];
 export const pause=ms=>new Promise(r=>setTimeout(r,ms));
 export const ISLAND_SAFE_LEGS={rooms:[599,...MAIN_CAVES.filter(r=>r!==ISLAND)]};
 const islandWaves=new Map();
@@ -290,7 +293,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(leg.end.room===to){leg.ok=true;delete leg.reason;}
   return leg;
 }
-export async function admittedIslandTransit(ctx,{from,to,budgetMs=180000,hop=ordinaryHop,read=readIslandFinePosition,
+export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=180000,hop=ordinaryHop,read=readIslandFinePosition,
  admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
  const takeHop=async destination=>{
   const leg=await hop(ctx,destination,{budgetMs,recoverAtEntry:true});onLeg(leg);
@@ -313,14 +316,14 @@ export async function admittedIslandTransit(ctx,{from,to,budgetMs=180000,hop=ord
   if(agent===ctx.agent)checkIslandCancellation(ctx,l);
   return {agent,room:l.room?.num,confirmed:!!l.you&&!l.you.predicted&&Number.isInteger(l.you.id),at:Date.now()};
  };
- return admit(ctx,{room:2505,read:proof,waitQueued:async()=>{
-  if(from===ISLAND){
+ return admit(ctx,{room,read:proof,waitQueued:async()=>{
+  if(room===2505&&from===ISLAND){
    await takeHop(2001); // Returners wait in the inn, outside the cramped cave entry.
    ctx.state.traversalAdmission.waiting_room=2001;
   }else await park(ctx,{budgetMs});
  },run:async ticket=>{
   if((await read(ctx)).room?.num===2001)await takeHop(ISLAND);
-  const enter=await takeHop(2505);await ticket.entered();
+  const enter=await takeHop(room);await ticket.entered();
   const leave=await takeHop(to);await ticket.cleared();
   return {enter,leave};
  }});
@@ -346,8 +349,8 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,minVigor=1
     return await withIslandSafeLegs(ctx,async()=>{
     for(let i=1;i<route.length;i++){
       const to=route[i];
-      if(to===2505){
-        await admittedIslandTransit(ctx,{from:route[i-1],to:route[i+1],budgetMs,onLeg:leg=>{
+      if(ISLAND_SINGLE_TRANSIT_ROOMS.includes(to)){
+        await admittedIslandTransit(ctx,{from:route[i-1],to:route[i+1],room:to,budgetMs,onLeg:leg=>{
           record.legs.push(leg);save();
         }});
         record.admission={...state.traversalAdmission};save();

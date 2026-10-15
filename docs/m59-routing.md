@@ -2378,3 +2378,23 @@ that longer, undeclared target loses the timed-gravity/unclipped-send guard and
 can clip into the lower gully. The jump primitive retains responsibility for
 its measured lanes and guarded landing alternatives. Its paced authority check
 also retains the caller's movement generation and cancellation token.
+
+Nearby fine-refuge proof accepts the executing walker's excluded squares,
+excluded refuge cells, floor limit and room collision options. The exclusions
+apply to both the approach and its return proof. An arrival cell may be allowed
+as a departure without being eligible for queue parking. Obfal's r81c65 is a
+recorded example: it has physical footing but lies inside an exit trigger.
+
+`confirmRefugeCellArrival` handles a distance-tolerant walk that stops just
+outside a partial refuge square. The caller retains room and movement ownership
+checks. From a confirmed KOD pose within eight units of the planned point, it
+allows one ordinary exact approach and bounded position confirmation. Only an
+observed, covered target cell proves arrival; an optimistic movement reply,
+prediction or cancellation cannot do so.
+
+Island walking uses the shared traversal admission for both the Hollows (2502)
+and Konima (2505). Admission is acquired in the preceding map and retained until
+an actual exit is observed, including when the driver stops with its body still
+inside. Followers wait at checked cover outside the map; Konima returners wait
+in the Island Inn. This prevents the native arrival and one-way jump approach
+from becoming a queue of overlapping travelers.

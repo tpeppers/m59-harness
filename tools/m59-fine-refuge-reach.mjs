@@ -5,10 +5,10 @@ import {safeSpots} from './m59-safespots.mjs';
 
 // Reversible short waits use the observed body and current occupants. A
 // reserved queue cell may be occupied by a follower, so it is not a retreat.
-export function planNearbyFineRefuge(geo,from,objects,selfId,{budgetMs=300}={}){
+export function planNearbyFineRefuge(geo,from,objects,selfId,{budgetMs=300,...constraints}={}){
  if(!geo?.collisionReady||from?.predicted||![from?.x,from?.y,from?.row,from?.col].every(Number.isFinite))
   return {found:false,reason:'confirmed fine refuge origin unavailable'};
- const reach=fineRefugeReach(geo,from,objects,selfId,{budgetMs});
+ const reach=fineRefugeReach(geo,from,objects,selfId,{budgetMs,...constraints});
  const candidates=safeSpots(geo,{limit:Infinity}).filter(w=>!w.rim&&
   Math.max(Math.abs(w.row-from.row),Math.abs(w.col-from.col))<=6)
   .sort((a,b)=>Math.hypot(a.row-from.row,a.col-from.col)-Math.hypot(b.row-from.row,b.col-from.col));
@@ -61,7 +61,8 @@ export function planRecoveryApproach(geo,from,goal,options={},
 
 // One synchronous refuge scan has a shared allowance. Fine proof can supplement
 // a coarse component only near this confirmed body, never across a distant room.
-export function fineRefugeReach(geo,from,objects,selfId,{budgetMs=300}={}){
+export function fineRefugeReach(geo,from,objects,selfId,{budgetMs=300,avoidSquares=null,minimumFloor=null,
+ excludedRefuges=avoidSquares,roomFlags=0,overrideDepths=null}={}){
  const started=performance.now(),cache=new Map(),remaining=()=>Math.max(0,budgetMs-(performance.now()-started));
  const usable=geo?.collisionReady&&from&&!from.predicted&&[from.x,from.y,from.row,from.col].every(Number.isFinite);
  const snapshot=new Map([...(objects?.entries?.()??[])].map(([id,o])=>[id,{...o}]));
@@ -70,12 +71,14 @@ export function fineRefugeReach(geo,from,objects,selfId,{budgetMs=300}={}){
  return (col,row)=>{
   const key=row+','+col;if(cache.has(key))return cache.get(key);
   const refuse=why=>{const r={reachable:false,why};cache.set(key,r);return r;};
+  if(excludedRefuges?.has?.(key)||avoidSquares?.has?.(key))return refuse('recovery spot excluded by the movement contract');
   if([...snapshot.values()].some(o=>o.id!==selfId&&o.row===row&&o.col===col&&
     (blocksMovement(o.flags??0)||(o.flags&(OF.ATTACKABLE|OF.PLAYER)))))return refuse('recovery spot occupied');
   if(!usable||!complete||Math.max(Math.abs(row-from.row),Math.abs(col-from.col))>6||remaining()<=0)
    return refuse('nearby confirmed fine refuge proof unavailable');
   const goal=geo.standPointWire?.(row,col);if(!goal)return refuse('refuge footing unavailable');
-  const options={objects:snapshot,selfId,marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:Math.min(80,remaining())};
+  const options={objects:snapshot,selfId,avoidSquares,minimumFloor,roomFlags,overrideDepths,
+   marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:Math.min(80,remaining())};
   const p=planBodyDetour(geo,from,goal,{...options,goalSquare:{row,col}});
   if(!p.found)return refuse(p.reason??'fine refuge approach unproved');
   const end=p.waypoints.at(-1)??from;let previous=from,length=0;

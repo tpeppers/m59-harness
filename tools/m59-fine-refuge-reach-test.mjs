@@ -7,6 +7,8 @@ import {protocolToClient} from './m59-roo.mjs';
 import {OF,MOVEON} from './m59-parse.mjs';
 import {recoveryRefugeReach,observeRefugeProgress,recoveryOccupiedSquares} from './m59-recovery-refuge.mjs';
 import {nearestSafeSpot} from './m59-safespots.mjs';
+import {loadMap,roomExitSquares} from './m59-map.mjs';
+import {cutFineRailAsync} from './m59-fine-rail.mjs';
 const fixture=JSON.parse(readFileSync(new URL('./fixtures/konima-recovery-2505.json',import.meta.url)));
 const geo=roomGeometry(fixture.room),from=fixture.from,objects=new Map(fixture.bodies.map(o=>[o.id,o]));
 assert.equal(geo.path(from.row,from.col,22,63,{avoid:recoveryOccupiedSquares(objects,from.id),clearance:0,goalExempt:false}).found,false);
@@ -102,3 +104,23 @@ const noRoute={...deadline,plan:(g,f,t,o)=>o.threatWeight>0?
 assert.equal(planRecoveryApproach(mg,merb.from,mg.standPointWire(42,54),mo,noRoute).found,false,
  'a fresh terrain/body refusal is not a price deadline');
 console.log('Recorded Merb recovery retains a collision-checked short escape after an exposure-price deadline and prunes only farther nearest-refuge candidates.');
+
+// Populated convoy 28: Obfal's arrival is beside a broad exit trigger. The
+// geometrically nearest refuge was r81c65, which the executing walker forbids.
+const og=roomGeometry(2504),arrival={id:1,row:81,col:64,x:4128,y:5216};
+const excludedRefuges=roomExitSquares(loadMap().rooms[2504],{rows:og.rows,cols:og.cols,includeInland:true});
+const naive=planNearbyFineRefuge(og,arrival,new Map(),arrival.id);
+assert(naive.found&&excludedRefuges.has(naive.cell.row+','+naive.cell.col),'the recorded nearest candidate is an exit');
+const avoidSquares=new Set(excludedRefuges);avoidSquares.delete(arrival.row+','+arrival.col);
+const constraints={avoidSquares,excludedRefuges};
+assert.equal(fineRefugeReach(og,arrival,new Map(),arrival.id,constraints)(65,81).reachable,false);
+assert.equal(fineRefugeReach(og,arrival,new Map(),arrival.id,{...constraints,
+ excludedRefuges:new Set([arrival.row+','+arrival.col])})(arrival.col,arrival.row).reachable,false,
+ 'permission to leave an arrival cell does not make it a queue destination');
+const queued=planNearbyFineRefuge(og,arrival,new Map(),arrival.id,constraints);
+assert(queued.found&&queued.steps<=8&&!excludedRefuges.has(queued.cell.row+','+queued.cell.col));
+const executable=await cutFineRailAsync(og,arrival,queued.point,{avoidSquares,objects:new Map(),selfId:arrival.id,maxMs:4000});
+assert(executable.ok&&executable.bridgeOk,'the queue refuge satisfies the actual walker exit contract');
+assert.equal(fineRefugeReach(og,arrival,new Map(),arrival.id,{...constraints,minimumFloor:100000})(queued.cell.col,queued.cell.row).reachable,false,
+ 'nearby refuge proof retains the executing floor constraint');
+console.log('Recorded Obfal queue refuses exit-trigger parking and proves a short executable refuge under the same exit and floor constraints.');

@@ -118,6 +118,24 @@ try{
    park:async()=>{parked++;places.set('a',2504);},hop:async(c,to)=>{hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
   assert.equal(parked,1);assert.deepEqual(hops,[2505,2000]);
  }
+ reset();
+ {
+  const places=new Map([['a',2501],['b',2501]]),events=[];let enteredA,finishA,parkedB;
+  const started=new Promise(r=>enteredA=r),finish=new Promise(r=>finishA=r),parked=new Promise(r=>parkedB=r);
+  const read=async ctx=>({room:{num:places.get(ctx.agent)},you:{id:ctx.agent==='a'?1:2,predicted:false},hp:{value:20,max:20}});
+  const caller=agent=>({agent,state:{},call:async(name,args)=>({connected:true,in_game:true,room:{num:places.get(args.agent)}})});
+  const hop=async(ctx,to)=>{
+   if(ctx.agent==='a'&&to===2503){enteredA();await finish;}
+   events.push(ctx.agent+'->'+to);places.set(ctx.agent,to);return {ok:true,to};
+  };
+  const options={room:2502,from:2501,to:2503,read,hop,park:async ctx=>{events.push(ctx.agent+' parks');parkedB();}};
+  const a=admittedIslandTransit(caller('a'),options);await started;
+  const b=admittedIslandTransit(caller('b'),options);await parked;
+  assert.equal(places.get('b'),2501,'the Hollows follower waits before its native arrival can occupy the jump approach');
+  assert(!events.includes('b->2502'));
+  finishA();await Promise.all([a,b]);
+  assert.deepEqual(events,['a->2502','b parks','a->2503','b->2502','b->2503']);
+ }
  configureSpotClaimStore({directory:dir,namespace:'crash'});
  {
   const worker=fork(fileURLToPath(import.meta.url),['crash-worker',dir],{windowsHide:true,stdio:'ignore'});
