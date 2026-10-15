@@ -150,6 +150,8 @@ have no look-ahead by default. A blocked or unproved next point keeps the
 original covered wait. The native Hollows regression places a shadowbeast
 on r52c14: its exact destination stays blocked, while the optional guide can
 advance along the proved western continuation without moving that creature.
+`FINE_GUIDE_ADVANCE_VERSION` is 1 for callers that must refuse older deployed
+harnesses before starting or funding an expedition.
 
 The shared declared-crossing controller can refine a takeoff from current
 bodies, wait at an observed unoccupied reversible refuge, and resume after a
