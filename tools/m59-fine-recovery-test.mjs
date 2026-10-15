@@ -5,7 +5,7 @@ import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {originLabel} from './m59-move-origin.mjs';
-import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk,walkHollowsOut,confirmIslandFineArrival} from './m59-island-finewalk.mjs';
+import {checkedIslandWalk,activeOwnedFineRecovery,recoverIslandFineWalk,walkHollowsOut,confirmIslandFineArrival,readIslandOccupancy,readIslandFinePosition} from './m59-island-finewalk.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
 import {roomGeometry} from './m59-ground.mjs';
@@ -15,15 +15,15 @@ const scratch=mkdtempSync(join(tmpdir(),'m59-fine-recovery-'));
 const oldRegistry=process.env.M59_KEEPER_BAND_REGISTRY;
 const origin={source:'fleetscript',name:'fine-recovery',run_id:'fixture'},label=originLabel(origin);
 const agent='fine-recovery-fixture',room={num:2502,object_id:777},vigor={value:200};
-let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false,recoverySource='keeper';
+let pose={id:1,x:2152,y:1392,row:21,col:33},hp={value:20,max:20},pre=null,moves=0,rests=0,proactive=false,recoverySource='keeper',positionId=null,livePid=null;
 const recovery=()=>proactive?{faculties:{movement:{owner:'fleetscript:fine-recovery',expires_in_ms:10000}},
  survival_decisions:{current:{source:recoverySource,strategy:'nearest_refuge',status:hp.value<20?'approaching':'ended',ended_at:hp.value<20?null:Date.now()}},
  safe_spot:{works:true,at:{row:pose.row,col:pose.col}}}:undefined;
 const server=createServer((request,response)=>{
  if(!request.url.startsWith('/state')&&!['/live','/health'].includes(request.url)){response.writeHead(404);response.end();return;}
  response.setHeader('content-type','application/json');
- response.end(JSON.stringify({agent,in_game:true,room,you:pose,hp,vigor,objects:[],autopilot_status:recovery(),
-   position_read:{...pose,at:Date.now(),room_object_id:room.object_id},movement:{last_preempted:pre}}));
+ response.end(JSON.stringify({agent,character:'fine-recovery-fixture',pid:request.url==='/live'?(livePid??process.pid):process.pid,in_game:true,room,you:pose,hp,vigor,objects:[],autopilot_status:recovery(),
+   position_read:{...pose,id:positionId??pose.id,at:Date.now(),room_object_id:room.object_id},movement:{last_preempted:pre}}));
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const port=server.address().port;
@@ -166,6 +166,14 @@ try{
   {x:100,y:100},{attempts:2,settleMs:1,tolerance:1.6});
  assert.equal(exactReads,2,'exact takeoff confirmation cannot accept the ordinary eight-KOD tolerance');
  assert.equal(exact.error,0);
+ room.num=1;pose={id:1,x:796,y:1134,row:17,col:12,predicted:false};hp={value:1,max:20};
+ await assert.rejects(readIslandFinePosition(ctx),/traveller_died/,'own travel still refuses the Underworld');
+ const outside=await readIslandOccupancy(ctx);
+ assert.equal(outside.agent,agent);assert.equal(outside.room,1);assert.equal(outside.confirmed,true);assert.equal(outside.body_id,1);
+ assert.equal(outside.keeper_pid,process.pid);assert(Date.now()-outside.at<3000);
+ positionId=2;await assert.rejects(readIslandOccupancy(ctx),/occupancy_unconfirmed/,'a mismatched body cannot release a reservation');
+ positionId=null;livePid=process.pid+1;await assert.rejects(readIslandOccupancy(ctx),/occupancy_keeper_changed/);
+ livePid=null;pose.predicted=true;await assert.rejects(readIslandOccupancy(ctx),/occupancy_unconfirmed/);
 }finally{
  await new Promise(resolve=>server.close(resolve));
  if(oldRegistry==null)delete process.env.M59_KEEPER_BAND_REGISTRY;else process.env.M59_KEEPER_BAND_REGISTRY=oldRegistry;

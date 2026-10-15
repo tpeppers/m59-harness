@@ -23,6 +23,13 @@ Entered, stopped and dead drivers retain cached hints followed by a fresh,
 confirmed outside position before release. The twenty-caller admission test
 checks that nineteen waiters send no holder reads during the live approach.
 
+An ordered occupancy observation is separate from a living traveler's health
+check. A stopped predecessor may already be recovering in the Underworld at
+positive health; that must not hide its confirmed exit from admission waiters.
+The occupancy reader requires the same keeper and body, an ordered fresh pose,
+matching room identity, and consistent fine coordinates. Cached or unconfirmed
+hints still cannot release a claim. The traveler's own death refusal remains.
+
 ## Local combat approaches
 
 An adjacent coarse square is not proof that the body can stand beside a quarry.
