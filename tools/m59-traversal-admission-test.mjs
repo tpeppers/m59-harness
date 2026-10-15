@@ -42,6 +42,36 @@ try{
  }
  reset();
  {
+  const places=new Map([['lead',2501]]),followers=Array.from({length:19},(_,i)=>'waiter'+i);
+  let begin,enter,inside,leave,holderReads=0,orderedHolderReads=0,entered=false;
+  const started=new Promise(r=>begin=r),go=new Promise(r=>enter=r),inRoom=new Promise(r=>inside=r),finish=new Promise(r=>leave=r);
+  const lead=withTraversalAdmission({agent:'lead',state:{}},{room,read:async a=>proof(a,places.get(a)),run:async ticket=>{
+   begin();await go;places.set('lead',room);await ticket.entered();inside();await finish;
+   places.set('lead',2504);await ticket.cleared();return 'lead';
+  }});
+  await started;
+  const pending=followers.map(agent=>{
+   places.set(agent,2501);
+   return withTraversalAdmission({agent,state:{}},{room,pollMs:1,waitQueued:async()=>true,
+    read:async(a,{cached=false}={})=>{
+     if(a==='lead'){holderReads++;if(!cached)orderedHolderReads++;}
+     return {...proof(a,places.get(a)),confirmed:!cached};
+    },run:async ticket=>{
+     assert(entered,'a follower cannot steal a live approach ticket');
+     places.set(agent,room);await ticket.entered();places.set(agent,2504);await ticket.cleared();return agent;
+    }});
+  });
+  await pause(40);
+  assert.equal(holderReads,0,'nineteen waiters must not poll the live admitted body, even though it is outside');
+  assert.equal(reserveFileTraversal('probe',room,'probe').ok,false);
+  entered=true;enter();await inRoom;await pause(40);
+  assert(holderReads>0,'the entered holder is still monitored through cached hints');
+  assert.equal(orderedHolderReads,0,'an inside hint cannot request an unnecessary ordered read');
+  leave();assert.equal((await Promise.all([lead,...pending])).length,20);
+  assert.equal(reserveFileTraversal('probe',room,'cleared').ok,true);
+ }
+ reset();
+ {
   const places=new Map([['a',2001],['b',2001]]),read=async a=>proof(a,places.get(a)),events=[];
   let beginA,finishA,parked=0;
   const started=new Promise(r=>beginA=r),finish=new Promise(r=>finishA=r);
