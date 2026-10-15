@@ -3507,6 +3507,9 @@ class Session {
       blocked: requestedTrace.blocked || trace.blocked,
       slid: requestedTrace.slid || trace.slid,
       reason: trace.reason ?? requestedTrace.reason,
+      // Quantizing a clipped endpoint can produce a clear shorter trace. The
+      // original collision still explains the refusal and owns its blocker ID.
+      ...((trace.objectId??requestedTrace.objectId)==null?{}:{objectId:trace.objectId??requestedTrace.objectId}),
     };
   }
 

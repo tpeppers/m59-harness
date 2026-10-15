@@ -84,6 +84,8 @@ export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,
   if(manifest&&table?.geometryManifestSha256!==manifest)return {found:false,reason:'departure table geometry mismatch'};
   from={...from,...square(from)};
   const options={objects,selfId,roomFlags,overrideDepths,avoidSquares,threats,threatWeight,threatRadius},r=table?.rooms?.[room];
+  const started=performance.now(),budget=seedOnly?Math.min(35,maxMs):maxMs;
+  let searchIncomplete=false;
   const anchor=r?.anchors?.find(a=>a.row===to.row&&a.col===to.col)
     ??r?.anchors?.filter(a=>(a.row===to.row&&(a.row===1||a.row===geo.rows))
       ||(a.col===to.col&&(a.col===1||a.col===geo.cols)))
@@ -95,16 +97,26 @@ export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,
   let obstruction=null;
   const rb=railBookRoom(geo,room,manifest);
   for(const rail of [...(rb?.rails??[])].sort((a,b)=>gap(from,a.from)-gap(from,b.from))) {
-    if(!anchor||rail.exit.row!==anchor.row||rail.exit.col!==anchor.col||gap(from,rail.from)>64)continue;
+    if(!anchor||rail.exit.row!==anchor.row||rail.exit.col!==anchor.col)continue;
     const line=bakedPath(table,room,rail.line_from,rail.exit);
     const index=line?.findIndex(q=>q.row===rail.board.row&&q.col===rail.board.col);
     if(index==null||index<0)continue;
-    const legs=gap(from,rail.from)<=1?rail.legs:[rail.from,...rail.legs];
-    const staticProof=validateEscape(geo,from,legs,{roomFlags,overrideDepths,avoidSquares});
-    if(!staticProof.ok)continue;
-    const proof=validateEscape(geo,from,legs,options);
-    if(proof.ok)return {found:true,waypoints:legs,square:rail.board,rail:{from:rail.board,squares:line.slice(index)},via:'baked_pocket_rail'};
-    obstruction??=proof;
+    // A displaced body may be beside a later fine leg, rather than beside the
+    // original capture point. Join only within one square, prove the bridge and
+    // the complete remaining suffix, and retain the exact baked fine points.
+    // Merely sharing a coarse square does not establish an escape.
+    const joins=[{point:rail.from,index:0},...rail.legs.map((point,n)=>({point,index:n+1}))]
+      .filter(j=>gap(from,j.point)<=64)
+      .sort((a,b)=>gap(from,a.point)-gap(from,b.point)||b.index-a.index).slice(0,8);
+    for(const join of joins){
+      if(performance.now()-started>=budget){searchIncomplete=true;break;}
+      const legs=[...(gap(from,join.point)<=1?[]:[join.point]),...rail.legs.slice(join.index)];
+      const staticProof=validateEscape(geo,from,legs,{roomFlags,overrideDepths,avoidSquares});
+      if(!staticProof.ok)continue;
+      const proof=validateEscape(geo,from,legs,options);
+      if(proof.ok)return {found:true,waypoints:legs,square:rail.board,rail:{from:rail.board,squares:line.slice(index)},via:'baked_pocket_rail'};
+      obstruction??=proof;
+    }
   }
   const candidates=[];
   if(!seedOnly&&Math.max(Math.abs(to.row-from.row),Math.abs(to.col-from.col))<=24)candidates.push({square:to});
@@ -118,8 +130,7 @@ export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,
   const progress=searchProgress.get(geo)??new Map();searchProgress.set(geo,progress);
   const done=seedOnly?new Set():(progress.get(progressKey)??new Set());
   if(!seedOnly){if(progress.size>=64&&!progress.has(progressKey))progress.delete(progress.keys().next().value);progress.set(progressKey,done);}
-  const seen=new Set(),started=performance.now();let searchIncomplete=false;
-  const budget=seedOnly?Math.min(35,maxMs):maxMs;
+  const seen=new Set();
   for(const candidate of candidates.sort((a,b)=>(a.distance??-1)-(b.distance??-1))) {
     const q=candidate.square,next=candidate.rail?.squares?.[1];
     const k=`${q.row},${q.col}>${next?.row??''},${next?.col??''}`;

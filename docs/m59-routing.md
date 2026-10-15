@@ -2251,3 +2251,32 @@ straight through an avoided monster. Search exhaustion remains a refusal.
 A new refuge asks for a square; a remembered explicit fine point remains an exact-point goal. The bounded local body router may finish at any collision-proved point inside a square goal, rather than insisting on its obstructed centre. This handles the Tos r2c1 fine-fallback failure without changing safe-wall geometry. Every packet still passes live collision, pacing and ownership checks. Confirmed arrival remains required: when a coarse prediction is revoked, returnToSpot invokes its fine fallback instead of abandoning the square with that fallback unused.
 
 The native probe from the October12 last living r3c1 pose returned object_blocked on historical source and reached r2c1 in one confirmed move with the candidate. This is route-component evidence with static modeled bodies, not proof that the historical death is prevented. Paired full-travel shadows did not reproduce the new death.
+
+## Bastion escape rail boarding
+
+A body approaching within eight squares of a rail checks its next two fine
+waypoints before boarding a broken head. Healthy continuations pay only the
+bounded lookahead; a proven gap invokes the existing bounded fine reachability
+search to board beyond it. This also covers Ukgoth's northeast arrival poses
+that were outside the old 1.5-square probe radius.
+
+Fine-only rail waypoints promise a square. The walker cuts a bounded live-body
+fine route to any proved point inside that square, rather than repeatedly
+fanning toward an inaccessible nominal stand point. Each packet still passes
+the exact no-slide trace, current body/passage checks, pacing and ownership
+guards. A fresh position read establishes arrival. Declared jumps retain their
+timed-gravity path.
+
+A displaced body may join a compatible baked pocket escape within one square
+of any of its fine waypoints. Both the short bridge from the actual body and
+the complete remaining baked suffix must validate against current geometry,
+avoidance and bodies. A nearby coarse square alone grants no authority. This
+uses the existing manifest/security-bound rail book and bounded search budget;
+no character-specific route, collision exception or production order is added.
+
+Declared rail jumps reach `step` with their declared landing unchanged. The
+rail's planar clearance heuristic must not replace Ukgoth r38c10 with r38c8:
+that longer, undeclared target loses the timed-gravity/unclipped-send guard and
+can clip into the lower gully. The jump primitive retains responsibility for
+its measured lanes and guarded landing alternatives. Its paced authority check
+also retains the caller's movement generation and cancellation token.
