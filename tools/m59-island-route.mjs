@@ -9,6 +9,16 @@ import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.m
 import {entryTrafficCandidate,reversibleEntry,retreatAndRetryEntry} from './m59-entry-recovery.mjs';
 import {loadMap} from './m59-map.mjs';
 import {withTraversalAdmission} from './m59-traversal-admission.mjs';
+import {createCachedKeeperReader} from './runtime/keeper-discovery.mjs';
+const cachedRoomReaders=new Map();
+const cachedRoomReader=ctx=>{
+ const registryPath=process.env.M59_KEEPER_BAND_REGISTRY,key=JSON.stringify([ctx.fleet,registryPath]);
+ if(!cachedRoomReaders.has(key)){
+  if(cachedRoomReaders.size>=32)cachedRoomReaders.delete(cachedRoomReaders.keys().next().value);
+  cachedRoomReaders.set(key,createCachedKeeperReader({fleet:ctx.fleet,registryPath}));
+ }
+ return cachedRoomReaders.get(key);
+};
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
 // Admission begins in the preceding map, before an arrival can stack bodies in
@@ -297,7 +307,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   return leg;
 }
 export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,hop=ordinaryHop,read=readIslandFinePosition,
- admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
+ readCached=null,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
  if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_island_queue_budget');
  const takeHop=async destination=>{
   const leg=await hop(ctx,destination,{budgetMs,recoverAtEntry:true});onLeg(leg);
@@ -305,8 +315,10 @@ export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=1800
  };
  const proof=async(agent,{cached=false}={})=>{
   if(cached){
-   const s=await ctx.call('status',{agent,brief:true});
-   return {agent,room:s.connected===true&&s.in_game!==false?s.room?.num:null,confirmed:false,at:Date.now()};
+   // `status brief` still sends stats/spell/skill requests. Polling an active
+   // traveler through that verb floods its pacer while it tries to walk.
+   const s=await(readCached??cachedRoomReader(ctx))(agent);
+   return {agent,room:s?.connected!==false&&s?.in_game===true?s.room?.num:null,confirmed:false,at:Date.now()};
   }
   const observer=agent===ctx.agent?ctx:{...ctx,agent,state:{}};
   let l;

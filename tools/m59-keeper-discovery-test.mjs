@@ -8,6 +8,7 @@ import {
   discoverKeeperStates,
   keeperBandPorts,
   resolveKeeperBand,
+  createCachedKeeperReader,
 } from './runtime/keeper-discovery.mjs';
 
 const temporary = mkdtempSync(join(tmpdir(), 'm59-keeper-discovery-'));
@@ -44,7 +45,7 @@ try {
   const fetchImpl = async url => {
     const parsed = new URL(url);
     const port = Number(parsed.port);
-    calls.push({ port, path: parsed.pathname });
+    calls.push({ port, path: parsed.pathname, query: parsed.search });
     if (parsed.pathname === '/live') {
       if (port === 12008) return response(null, 404);
       if (live.has(port)) return response(live.get(port));
@@ -104,6 +105,24 @@ try {
   assert.equal(calls.filter(call => call.path === '/state').length, 0,
                'ambiguous duplicate keepers fail before any rich read');
 
+  live.delete(12004);states.delete(12004);calls.length=0;
+  const cached=createCachedKeeperReader({band,fetchImpl});
+  const [cachedA,cachedB]=await Promise.all([cached('a'),cached('a')]);
+  assert.equal(cachedA.pid,303);assert.equal(cachedB.pid,303);
+  assert.equal(calls.filter(c=>c.path==='/live').length,100,'concurrent holder observers share one discovery');
+  assert.equal(calls.filter(c=>c.path==='/state').length,1);
+  calls.length=0;await Promise.all(Array.from({length:20},()=>cached('a')));
+  assert.equal(calls.length,1,'verified cached identity and concurrent observers need one projection read');
+  assert.equal(calls[0].path,'/state');
+  live.set(12003,{...live.get(12003),pid:304});states.set(12003,{...states.get(12003),pid:304});
+  assert.equal((await cached('a')).pid,304,'a restarted keeper must pass live/state identity checks again');
+  states.set(12003,{...states.get(12003),as_of_ms:2501});
+  assert.equal(await cached('a'),null,'a stale hint does not become a fresh gameplay request');
+  states.set(12003,{...states.get(12003),as_of_ms:10,agent:'stranger'});
+  assert.equal(await cached('a'),null,'a recycled identity cannot supply another agent state');
+  assert(calls.every(c=>['/live','/health','/state'].includes(c.path)&&!/[?&](?:fresh|position)=/.test(c.query)),
+    'cached observations never request inventory refresh, ordered positions or actions');
+  await assert.rejects(cached(''),/agent is required/);
   console.log('m59 keeper discovery: PASS');
 } finally {
   rmSync(temporary, { recursive: true, force: true });

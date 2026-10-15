@@ -256,3 +256,35 @@ export function keeperIdentityHeaders(identity) {
     'x-m59-keeper-pid': String(identity.pid),
   };
 }
+
+/** Cached room/liveness hints, never an ordered position or gameplay read.
+ * Reuse verified identities and coalesce concurrent observers of one keeper.
+ * A restart, stale projection or changed band must pass discovery again.
+ */
+export function createCachedKeeperReader({fleet,registryPath,band=null,fetchImpl=globalThis.fetch}={}) {
+  const identities=new Map(),pending=new Map();
+  return agent=>{
+    if(typeof agent!=='string'||!agent)return Promise.reject(new TypeError('keeper agent is required'));
+    if(pending.has(agent))return pending.get(agent);
+    const job=(async()=>{
+      const selected=band?validateKeeperBand(band):resolveKeeperBand(fleet,
+        registryPath===undefined?{}:{registryPath});
+      const identity=identities.get(agent);
+      if(identity&&identity.port>=selected.base&&identity.port<=selected.end){
+        const state=await readVerifiedKeeperState(identity,{fresh:false,fetchImpl});
+        if(state)return state;
+      }
+      identities.delete(agent);
+      const found=await discoverKeeperStates({band:selected,expectedAgents:[agent],fetchImpl});
+      const state=found.states.get(agent),next=found.identities.get(agent);
+      if(state&&next){
+        if(identities.size>=64)identities.delete(identities.keys().next().value);
+        identities.set(agent,next);
+      }
+      return state??null;
+    })();
+    pending.set(agent,job);
+    void job.finally(()=>{if(pending.get(agent)===job)pending.delete(agent);}).catch(()=>{});
+    return job;
+  };
+}

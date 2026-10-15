@@ -89,16 +89,15 @@ try{
   const places=new Map([['a',2000],['b',2000]]),events=[];let enteredA,finishA,parkedB;
   const started=new Promise(r=>enteredA=r),finish=new Promise(r=>finishA=r),parked=new Promise(r=>parkedB=r);
   const read=async ctx=>({room:{num:places.get(ctx.agent)},you:{id:ctx.agent==='a'?1:2,predicted:false},hp:{value:20,max:20}});
-  const caller=agent=>({agent,state:{},call:async(name,args)=>{
-   assert.equal(name,'status');return {connected:true,in_game:true,room:{num:places.get(args.agent)}};
-  }});
+  const caller=agent=>({agent,state:{},call:async()=>{throw Error('queued holder hint must not send status reads');}});
+  const readCached=async agent=>({connected:true,in_game:true,room:{num:places.get(agent)}});
   const hop=async(ctx,to)=>{
    if(ctx.agent==='a'&&to===2504){enteredA();await finish;}
    events.push(ctx.agent+'->'+to);places.set(ctx.agent,to);
    if(ctx.agent==='b'&&to===2001)parkedB();return {ok:true,to};
   };
-  const a=admittedIslandTransit(caller('a'),{from:2000,to:2504,read,hop});await started;
-  const b=admittedIslandTransit(caller('b'),{from:2000,to:2504,read,hop});await parked;
+  const a=admittedIslandTransit(caller('a'),{from:2000,to:2504,read,readCached,hop});await started;
+  const b=admittedIslandTransit(caller('b'),{from:2000,to:2504,read,readCached,hop});await parked;
   assert.equal(places.get('b'),2001);assert(!events.includes('b->2505'));
   finishA();await Promise.all([a,b]);
   assert.deepEqual(events,['a->2505','b->2001','a->2504','b->2000','b->2505','b->2504'],
@@ -110,7 +109,7 @@ try{
   let place=2000;
   await admittedIslandTransit({agent:'b',state:{},call:async(name,args)=>{
    assert.equal(name,'status');assert.equal(args.agent,'dead');return {connected:true,in_game:true,room:{num:1},hp:{value:0}};
-  }},{from:2000,to:2504,read:async c=>{
+  }},{from:2000,to:2504,readCached:async()=>({connected:true,in_game:true,room:{num:1},hp:{value:0}}),read:async c=>{
    if(c.agent==='dead')throw Error('traveller_died');return {room:{num:place},you:{id:2,predicted:false}};
   },hop:async(_ctx,to)=>{place=to;return {ok:true,to};}});
   assert.equal(place,2504,'an observed Underworld transition releases a dead predecessor without stopping the other travelers');
@@ -120,6 +119,7 @@ try{
   const held=reserveFileTraversal('a',room,'outward').lease;markFileTraversal(held,'entered');
   const places=new Map([['a',room],['b',2504]]),hops=[];let parked=0;
   await admittedIslandTransit({agent:'b',state:{},call:async()=>({connected:true,in_game:true,room:{num:places.get('a')}})},{from:2504,to:2000,
+   readCached:async()=>({connected:true,in_game:true,room:{num:places.get('a')}}),
    read:async c=>({room:{num:places.get(c.agent)},you:{id:c.agent==='a'?1:2,predicted:false}}),
    park:async()=>{if(++parked===2)places.set('a',2504);return false;},
    hop:async(c,to)=>{assert.equal(places.get('a'),2504,'unavailable parking cannot waive the occupied-room claim');hops.push(to);places.set(c.agent,to);return {ok:true,to};}});
