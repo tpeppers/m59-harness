@@ -23,12 +23,13 @@
 //   plan/in/<pid>.tsv    client -> desk, rewritten every second
 //     M59PLANREQ 1 <at> <pid> <server%> <account%> <character%> <player_id> <visible 0|1>
 //     I <id> <name%> <amount>              inventory, as the client holds it
+//     W <id> <name%>                       other players in the client's room (names only the client can resolve)
 //     R <seq> <entry id> <args%>           requests not yet acknowledged (args: k=v&k=v)
 //     END
 //   plan/out/<pid>.tsv   desk -> client
 //     M59PLAN 1 <at> <pid> <ack> <control: none|keeper|other> <status%>
-//     E <id> <group%> <icon%> <title%> <flags: r running, d disabled> <describe%>
-//     A <entry> <arg> <type> <title%> <default%>
+//     E <id> <group%> <icon%> <title%> <flags: r running, d disabled, c settings> <describe%>
+//     A <entry> <arg> <type: choice|count|text|boolean> <title%> <default%>
 //     O <entry> <arg> <value%> <label%>
 //     M <seq> <ok 0|1> <message%>          the result of each request, newest last
 //     END
@@ -62,12 +63,15 @@ export function parsePlanRequest(text, now = Date.now()) {
   const at = num(h[2]);
   if (!(at <= now + 1000 && now - at <= FRESH_MS)) return null;
   const r = { at, pid: num(h[3]), server: dec(h[4])?.toLowerCase(), account: dec(h[5])?.toLowerCase(),
-              character: dec(h[6]), player_id: num(h[7]), visible: h[8] === '1', inventory: [], requests: [] };
+              character: dec(h[6]), player_id: num(h[7]), visible: h[8] === '1', inventory: [], room: [], requests: [] };
   if (!(r.pid > 0) || !r.account || r.character == null) return null;
   for (const f of rows) {
     if (f[0] === 'I' && f.length === 4) {
       const name = dec(f[2]); if (name == null || r.inventory.length >= 512) return null;
       r.inventory.push({ id: num(f[1]), name, amount: num(f[3]) || 1 });
+    } else if (f[0] === 'W' && f.length === 3) {
+      const name = dec(f[2]); if (name == null || r.room.length >= 128) return null;
+      r.room.push({ id: num(f[1]), name });
     } else if (f[0] === 'R' && f.length === 4) {
       const seq = num(f[1]), args = dec(f[3]);
       if (!(seq > 0) || !idOk(f[2]) || args == null || r.requests.length >= 16) return null;
@@ -93,10 +97,10 @@ export function renderPlanView({ pid, ack, control = 'none', status = '', entrie
   const L = [['M59PLAN', 1, now, pid, ack, control, enc(status)].join('\t')];
   for (const e of entries.slice(0, 256)) {
     if (!idOk(e.id)) continue;
-    const flags = (e.running ? 'r' : '') + (e.disabled ? 'd' : '');
+    const flags = (e.running ? 'r' : '') + (e.disabled ? 'd' : '') + (e.configure ? 'c' : '');
     L.push(['E', e.id, enc(e.group ?? ''), enc(e.icon ?? ''), enc(e.title), flags || '-', enc(e.describe ?? '')].join('\t'));
     for (const a of (e.args ?? []).slice(0, 8)) {
-      if (!/^[a-z0-9_]{1,40}$/.test(a.id) || !['choice', 'count', 'text'].includes(a.type)) continue;
+      if (!/^[a-z0-9_]{1,40}$/.test(a.id) || !['choice', 'count', 'text', 'boolean'].includes(a.type)) continue;
       L.push(['A', e.id, a.id, a.type, enc(a.title ?? a.id), enc(a.default ?? '')].join('\t'));
       for (const o of (a.options ?? []).slice(0, 600)) L.push(['O', e.id, a.id, enc(o.value), enc(o.label ?? o.value)].join('\t'));
     }
@@ -150,6 +154,7 @@ export async function runRequest(req, { entries, owner }, ctx) {
     const v = req.args[a.id] ?? a.default;
     if (v == null || v === '') return { ok: false, message: `${e.title}: ${a.title ?? a.id} is required` };
     if (a.type === 'count' && !/^\d{1,6}$/.test(String(v))) return { ok: false, message: `${a.title ?? a.id} must be a whole number` };
+    if (a.type === 'boolean' && !['true', 'false'].includes(String(v))) return { ok: false, message: `${a.title ?? a.id} must be true or false` };
     if (a.type === 'choice' && a.options?.length && !a.options.some(o => String(o.value) === String(v)))
       return { ok: false, message: `${a.title ?? a.id}: "${v}" is not one of the offered options` };
     req.args[a.id] = String(v);
@@ -177,6 +182,7 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
     if (!existsSync(inDir)) return 0;
     const providers = await loadProviders(providerDirs);
     const agents = roster();
+    const presence = {};
     let served = 0;
     for (const f of readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f))) {
       let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
@@ -192,6 +198,12 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
         st.messages.push({ seq: r.seq, ...out }); st.messages = st.messages.slice(-12);
         log(`[plan ${me?.agent ?? req.account}] ${r.entry} ${JSON.stringify(r.args)} -> ${out.ok ? 'ok' : 'refused'}: ${out.message}`);
       }
+      // Standing work a provider does every tick for this client (e.g. the Full Auto courier).
+      for (const p of providers) if (typeof p.tick === 'function') {
+        try { await p.tick(ctx); } catch (e) { log(`[plan ${me?.agent ?? req.account}] ${p.id} tick: ${e.message}`); }
+      }
+      if (me) presence[me.agent] = { character: req.character, player_id: req.player_id, with: req.room,
+                                     inventory: req.inventory, pid: req.pid, at: req.at };
       const after = st.messages.length && req.requests.length ? await gatherEntries(providers, ctx) : g;
       const control = ctx.control ?? 'none';
       const status = me ? `${me.agent} (${req.character}) on fleet ${fleet || '(unnamed)'}` :
@@ -200,6 +212,9 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
         entries: after.entries, messages: st.messages }, Date.now()));
       state.set(req.pid, st); served++;
     }
+    // WHO IS AT A KEYBOARD, AND WITH WHOM. The broker has no room for a piloted character (its
+    // keeper is offline); the client does. Scripts that meet people read this, never the client files.
+    if (substrate) { try { writeAtomic(join(substrate, 'human-presence.json'), JSON.stringify(presence, null, 1)); } catch {} }
     return served;
   }
   return { tick, state };

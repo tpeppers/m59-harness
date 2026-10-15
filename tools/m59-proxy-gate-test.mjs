@@ -16,6 +16,7 @@
 import net from 'node:net';
 import zlib from 'node:zlib';
 import { ProxySession } from './m59-proxy.mjs';
+import { ProxyTrade } from './m59-proxy-trade.mjs';
 import { gateDrops, newGate, gateLive, GATE_PASS } from './m59-proxy-gate.mjs';
 
 let passed = 0, failed = 0;
@@ -61,7 +62,9 @@ const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 // ------------------------------------------------------------------ 2. on the wire
 const SEEDS = [3571238106, 184153256, 462, 697447458, 184166115];
 const received = []; let hungUp = null;
+let srvSock = null;
 const server = net.createServer(sock => {
+  srvSock = sock;
   const st = new Stream(SEEDS); let game = false;
   frames(sock, (p, sec) => {
     if (!game) { if (p[0] === 1) { const b = Buffer.alloc(21); b[0] = 22; SEEDS.forEach((v, i) => b.writeUInt32LE(v, 1 + i * 4)); sock.write(plain(b)); sock.write(plain(Buffer.from([25]))); game = true; } return; }
@@ -78,7 +81,8 @@ front.on('connection', sock => { session = new ProxySession(sock, { host: '127.0
 const client = net.connect(front.address().port, '127.0.0.1');
 await new Promise(r => client.on('connect', r));
 let cst = null;
-frames(client, p => { if (p[0] === 22 && !cst) cst = new Stream([...Array(5)].map((_, i) => p.readUInt32LE(1 + i * 4))); });
+const toClient = [];
+frames(client, p => { toClient.push(p[0]); if (p[0] === 22 && !cst) cst = new Stream([...Array(5)].map((_, i) => p.readUInt32LE(1 + i * 4))); });
 const send = p => client.write(frame(p, cst.sec(p)));
 client.write(plain(Buffer.from([1])));           // "login"
 await tick(80);
@@ -105,6 +109,33 @@ send(MOVE); send(MOVE); send(ATTACK); await tick(60);
 ok('after release the human steers again', received.filter(o => o === 100).length === 4 && received.includes(103), JSON.stringify(received));
 ok('still re-framed correctly after release (the client is one step off for ever now)', hungUp === null, hungUp ?? '');
 ok('status reports owning the stream', session.status().owning_stream === true);
+
+// ------------------------------------------------------------------ 3. the automated courier trade
+// The person chose Full Auto: the proxy answers the courier's offer and offers the person's goods.
+session.trade = new ProxyTrade(session, { offerFrom: body => body.readUInt32LE(0) });
+const COURIER = 4242, u32 = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
+const fromServer = p => srvSock.write(plain(p));
+const before = received.length, seen = toClient.length;
+// An offer from a stranger is the person's business: it reaches the client.
+fromServer(Buffer.concat([Buffer.from([211]), u32(999), Buffer.from([0, 0])])); await tick(40);
+ok('an offer from anyone else reaches the client untouched', toClient.slice(seen).includes(211) && received.length === before);
+fromServer(Buffer.from([212])); await tick(20);
+session.trade.acceptFrom(COURIER, 10_000);
+const seen2 = toClient.length;
+fromServer(Buffer.concat([Buffer.from([211]), u32(COURIER), Buffer.from([0, 0])])); await tick(40);
+ok('the courier offer is answered with an empty counteroffer', received.at(-1) === 123, JSON.stringify(received.slice(before)));
+fromServer(Buffer.from([215, 0, 0])); fromServer(Buffer.from([212])); await tick(40);
+ok('and the client never saw any of that trade (no window)', !toClient.slice(seen2).some(o => o >= 211 && o <= 215), JSON.stringify(toClient.slice(seen2)));
+ok('the receive is recorded as closed', /closed after our counter/.test(session.trade.results.at(-1)?.outcome ?? ''));
+const g = session.trade.give(COURIER, [{ id: 77, amount: 40 }], 10_000); await tick(40);
+ok('giving offers the goods to the courier', g.ok && received.at(-1) === 120, JSON.stringify(g));
+const seen3 = toClient.length;
+fromServer(Buffer.from([213, 0, 0])); fromServer(Buffer.from([214, 0, 0])); await tick(40);
+ok('and accepts once the courier counters', received.at(-1) === 121 && session.trade.active === null);
+ok('again without the client seeing the trade', !toClient.slice(seen3).some(o => o >= 211 && o <= 215));
+ok('every injected trade packet carried a valid security value', hungUp === null, hungUp ?? '');
+send(Buffer.from([120, 1, 0, 0, 0, 0, 0])); await tick(20);
+ok('while the person has their own trade open, nothing is automated', !session.trade.give(COURIER, [77]).ok);
 
 client.destroy(); front.close(); server.close();
 console.log(`\n${passed} passed, ${failed} failed`);
