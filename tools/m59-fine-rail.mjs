@@ -150,6 +150,7 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
 export const planFineRailRefugeAsync=(geo,from,goal,options={},settings={})=>
   runFineRailWorker(geo,from,goal,options,{...settings,task:'refuge'});
 // Inputs are KOD; the returned rail retains the cutter's CLIENT coordinates.
+export const FINE_GUIDE_ADVANCE_VERSION=1;
 export const cutFineRailAsync=(geo,from,goal,options={},settings={})=>
   runFineRailWorker(geo,from,goal,options,{...settings,task:'cut'});
 async function runFineRailWorker(geo,from,goal,options,{cancelled=()=>false,timeoutMs=12000,task}={}){
