@@ -66,6 +66,19 @@ addresses refuge-search latency, interrupted staging/approach gutter handoff,
 Hollows queue staging, and completed recovery-label lag. It needs its own
 native components and populated cohort before enabling the private recipe.
 
+A later two-courier Hollows component on `016659f6` (source hash
+`9665bb1fbb87c13c763789f70da14f4801f2f87cf7f932f0bd7c228aa2fc643a`)
+completed both crossings to Merb with no deaths and both 40,000-shilling
+purses intact. They began at the map's normal login point after a broker
+restart, at 20 HP and 184/182 vigor; there were no administrator mutations
+during this component. Minimum HP was 4 and 14, and final HP was 20 for both.
+This checks the live staging and western-cavern climb, not full-trip safety.
+The previous staging-cell centre was physically unreachable. The shared
+refuge-footing resolver now supplies a proved enterable, reversible fine point;
+generated Hollows guides cover both the map entrance and native login point.
+The candidate subsequently passed all 69 movement suites with zero new
+regressions and the existing baseline failures unchanged.
+
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
 Ko'catan (2000). The return uses those maps in reverse order, with different

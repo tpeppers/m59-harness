@@ -32,6 +32,12 @@ re-proves against current bodies and validates every packet. Confirmed fine
 progress can also keep its approach watchdog alive when the coarse path is
 absent; predictions and oscillation do not renew it.
 
+Static refuge staging uses a checked fine footing rather than assuming that
+the marked cell's centre is enterable. The layout resolver requires a known
+non-rim refuge, an approach and a return proof from its geometry anchor. That
+anchor is planning input, never a claimed player position. The executing
+walker still proves its actual-body route against current geometry and bodies.
+
 Nearest recovery searches stop considering farther walls once a conservative
 distance bound cannot beat the checked choice. Fine footing retains a full
 square of slack, equal-distance candidates still compete, and quarry/forward
