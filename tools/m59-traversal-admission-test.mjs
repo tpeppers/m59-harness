@@ -20,6 +20,12 @@ const reset=()=>configureSpotClaimStore({directory:dir,namespace:String(++cases)
 const proof=(agent,room)=>({agent,room,confirmed:true,at:Date.now()});
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 try{
+ for(const queueBudgetMs of [0,NaN]){
+  let called=false;
+  await assert.rejects(admittedIslandTransit({agent:'invalid-budget',state:{}},{queueBudgetMs,
+   read:async()=>{called=true;},hop:async()=>{called=true;}}),/invalid_island_queue_budget/);
+  assert.equal(called,false,'an invalid deadline cannot start observations or travel');
+ }
  reset();
  {
   const a=reserveFileTraversal('a',room,'one').lease;

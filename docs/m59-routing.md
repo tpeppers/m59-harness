@@ -2406,3 +2406,11 @@ before parking, and retains keeper survival control. A traveler can therefore
 leave a crowded upstream arrival when the held room actually clears instead
 of failing merely because all nearby refuges are occupied. Cancellation and an
 unconfirmed predecessor exit still prevent entry.
+
+Island convoy wave and room-admission waits default to four hours, separately
+from each active walking budget. Native Konima admissions, including the
+preceding Obfal approach, took about five to eight minutes per traveler in the
+queue component. Twenty serialized couriers can exceed the former two-hour
+arrival barrier while continuing to make progress. `waveBudgetMs` and
+`queueBudgetMs` remain positive, bounded settings; departure spacing, packet
+pacing, collision checks and active-leg deadlines are unchanged.
