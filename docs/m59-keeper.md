@@ -8,6 +8,15 @@ stale authority. Normal pacing, concentration, movement cancellation, room/body
 checks and geometry validation remain active. Ordinary returns without an active
 recovery decision retain their existing scheduling.
 
+After a fine controller positively observes its own keeper interruption, the
+same live movement lease can retain that recovery across keeper-to-keeper
+refuge or logoff replacements. Their preemption records may name the keeper
+instead of the original script. The established body and room remain fenced;
+foreign, expired, unproved and substituted-body observations cannot authorize
+continuation. The original deadline and full-health completion checks remain.
+Two recorded Konima stage-to-refuge handoffs exercise this in the real fine
+recovery fixture; that test is separate from populated native qualification.
+
 Stalled-driver rescue ages the current keeper move when recovery has just
 replaced the external driver. The old physical stall cannot cancel that new
 approach before `INERT_RESCUE_MS` has elapsed. An overdue recovery, an ended
