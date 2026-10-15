@@ -189,7 +189,7 @@ These findings came out of building the PLAN tab and the control gate
   through. What does not exist yet: something that **drives** during the hold. The
   keeper would need a transport that speaks through the proxy session (the proxy already
   owns the stream and parses room contents), or the human client would need to attach
-  to a keeper's session. This is the largest open item.
+  to a keeper's session. **Closed 2026-10-15:** the keeper now attaches to the person's own session through the proxy (m59-proxy-attach.mjs, m59-spectate-keeper.mjs) and drives while it holds the gate; the person's screen follows its moves inside the room. See m59-plan-tab.md, Spectate.
 - **7.4 Movement prediction. DISCREPANCY the lock has to respect.** The client moves its
   own view before the server agrees (2.1). A locked client that still predicted motion
   would show a character walking that the world never saw move. So the client refuses
