@@ -1995,3 +1995,35 @@ the broker, proxy and keeper branches to verify that forbidden squares survive
 transport and a new fine request cannot overwrite active injury recovery.
 
 node tools/m59-tos-refuge-review-test.mjs exercises the recorded Tos fine geometry with the nearby body, revoked coarse-arrival confirmation, protected recovery departure, protective versus harmful enchantments, and concurrent ailment/attack evidence. The movement gate includes it. FleetScript's compiled-walk tests cover both recovery already active above a0.75 floor and recovery begun after the script handed a hurt body back, requiring full health before departure in each. Native shadow results are kept separately from these offline assertions.
+
+## Bastion fallback tests
+
+`node --test tools/m59-bastion-fallback-test.mjs` runs the actual travel, exit,
+rail and collision code from 96 redacted positions associated with 41 PvP deaths
+in the 48-hour capture ending October 15, 2026 at 07:05 UTC. Each death has a
+named test; the most recent recorded stuck within that life is included when
+available. Fifteen deaths had no recorded stuck. Cached predictions and death
+square centers without a fine observation are explicitly labelled in
+`tools/fixtures/bastion-fallbacks.json`; a synthetic center is not an observed
+body position. Duplicate body-free positions reuse one completed run.
+
+The socketless client models only declared KOD edge/code/go crossings and room
+confirmation replies. It uses the committed geometry, real packet collision
+checks and finite time/packet budgets. Every route must finish with confirmed
+room 38 identity and avoid repeated fine-pose grinding. Starts already inside
+38 are arrival checks. A separate test exercises the actual bastion flight's
+call into travel and its hold after arrival. Guards cover newly arriving bodies,
+changed rooms, cancelled movement generations/tokens, mandatory avoidance,
+missing geometry, predicted starts and unconfirmed endpoints.
+
+These are routing regressions, not native combat or survival replays. Frozen
+historical body snapshots are retained for separate diagnostics; the full-route
+tests deliberately isolate static geometry. No live attacker, damage, fatigue,
+gear or server reply timing is reconstructed. Passing does not establish that a
+historical death would have been survived. Registered in `npm run test:movement`.
+
+Eight additional full-route checks restore captured frozen bodies. The Ukgoth
+case asserts that the rail keeps the declared r36c16 -> r38c10 jump instead of
+choosing the longer r38c8 landing by planar clearance. Predicted rail starts
+must be refreshed before planning, and a takeover during that read forbids a
+packet. Ordinary steps also recheck a cancelled control token during pacing.

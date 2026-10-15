@@ -46,6 +46,9 @@ const SUITES = [
   ['m59-rail-animation-test.mjs', 'rail aims wait for room animation without advancing, changing rooms, ignoring cancellation or waiving collisions'],
   ['m59-deviation-routing-test.mjs', 'confirmed rail bends take bounded local detours; exit-candidate exhaustion reaches the journey replanner without relaxing unknown-position or ownership guards'],
   ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
+  // The full corpus retains stock-gravity settlement waits. Its individual
+  // scenes remain bounded; allow the expanded file ten minutes on busy hosts.
+  ['m59-bastion-fallback-test.mjs', 'recent PvP death and last-stuck origins reach Castle Victoria through real walkers and modeled declared crossings; suffix boarding, square goals and paced ownership/body guards',600_000],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
   ['m59-wall-thread-test.mjs', 'a wall in the way is threaded along, not slid into; a refused slide does not end leaving before the doorway fallbacks (109, 2026-10-13)'],
   ['m59-edge-stage-test.mjs', 'a body refusing an exit stage defers its neighbours: the budget tries elsewhere on the wall (596 -> 61, 2026-10-14)'],
@@ -189,14 +192,14 @@ console.log('\n=== #movement suites ===\n');
 let regressions = 0, fixed = 0, missing = 0, ran = 0;
 const summary = [];
 
-for (const [file, why] of SUITES) {
+for (const [file, why, timeoutMs=300_000] of SUITES) {
   const path = 'tools/' + file;
   if (!existsSync(path)) {
     console.log('  ????  ' + file.padEnd(30) + 'NOT FOUND — a suite named here must exist');
     missing++; summary.push([file, 'MISSING', '']); continue;
   }
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, [path], { windowsHide: true, encoding: 'utf8', timeout: 300_000 });
+  const r = spawnSync(process.execPath, [path], { windowsHide: true, encoding: 'utf8', timeout: timeoutMs });
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   ran++;
   const out = (r.stdout ?? '') + (r.stderr ?? '');

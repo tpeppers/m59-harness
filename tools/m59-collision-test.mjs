@@ -4274,16 +4274,14 @@ console.log('A FAILED STITCH JOINS THE WALKED ROUTE AHEAD OF ITS PROGRESS');
 }
 
 console.log('');
-console.log('FINE RAIL TARGETS STAY IN WIRE COORDINATES');
+console.log('FINE RAIL SQUARE GOALS AND WIRE RECENTERING');
 {
-  // Room 537 exposed this distinction live. Its north-to-east rail reached square 5,38,
-  // then handed `walkFine` a CLIENT-space stand point for the next fine-only square.
-  // `walkFine` compares its target to `client.self`, which is WIRE-space, so the 16x larger
-  // x coordinate produced 908 clipped moves almost straight east and no southward progress.
-  // Deliberately unrelated values make either unit leak unmistakable here.
+  // Fine rail waypoints now retain their square contract through walkRailSquare;
+  // recentering still passes an explicit wire point. Room 537 exposed the old
+  // client/wire point leak. Deliberately unrelated point values pin that boundary.
   const clientPoint = { x: 39_424, y: 5_632 };
   const wirePoint = { x: 2_528, y: 416 };
-  const fineCalls = [];
+  const squareCalls = [];
   const geometry = {
     walkable: () => false,
     standable: () => true,
@@ -4294,19 +4292,20 @@ console.log('FINE RAIL TARGETS STAY IN WIRE COORDINATES');
     client: { self: { row: 1, col: 1 } },
     world: { geometry },
     movementWasCancelled: () => false,
-    async walkFine(x, y) {
-      fineCalls.push({ x, y });
+    async walkRailSquare(square) {
+      squareCalls.push(square);
       this.client.self = { row: 2, col: 2 };
       return { arrived: true };
     },
+    async walkFine() { throw new Error('fine-only square became an exact-point goal'); },
     async step() { throw new Error('fine-only rail fell through to the square walker'); },
   };
   const railed = await followRail.call(railSession,
     [{ row: 1, col: 1 }, { row: 2, col: 2 }], {});
-  ok('a fine-only rail gives walkFine the wire stand point',
-     fineCalls.length === 1 && fineCalls[0].x === wirePoint.x && fineCalls[0].y === wirePoint.y,
-     JSON.stringify({ fineCalls, clientPoint, wirePoint, railed }));
-  ok('and that wire-space rail reaches the next square', railed?.railed === true,
+  ok('a fine-only rail preserves its named square goal',
+     squareCalls.length === 1 && squareCalls[0].row === 2 && squareCalls[0].col === 2,
+     JSON.stringify({ squareCalls, railed }));
+  ok('and that square-goal rail reaches the next square', railed?.railed === true,
      JSON.stringify(railed));
 
   const recentreCalls = [];

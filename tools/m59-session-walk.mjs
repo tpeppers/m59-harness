@@ -887,12 +887,14 @@ export function sessionWalkPrototype(deps) {
   // `substrate/m59-falljumps.json` already carries `to_fine` for exactly this reason. Nothing
   // was reading it.
   async step(col, row, { confirm = false, beforeMutation = null, fall = false,
-                         aimX = null, aimY = null, timedFall = false } = {}) {
+                         aimX = null, aimY = null, timedFall = false,
+                         movementGeneration = this.movementGeneration,controlToken = null } = {}) {
     const c = this.need();
     const roomId = c.room.id;
     const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
-    const stepGeneration=this.movementGeneration;
-    const ownsStep=()=>(this.client===undefined||this.client===c)&&this.movementGeneration===stepGeneration;
+    const stepGeneration=movementGeneration;
+    const ownsStep=()=>(this.client===undefined||this.client===c)&&this.movementGeneration===stepGeneration
+      &&(!controlToken||!this.movementWasCancelled(stepGeneration,controlToken));
     // NO RE-AIM HERE, AND THE MEASUREMENT IS WHY.
     //
     // A re-aim was wired in at this exact point and made things strictly worse: ten trials
@@ -4866,15 +4868,19 @@ export function sessionWalkPrototype(deps) {
         || !Number.isFinite(me.x) || !Number.isFinite(me.y)) return null;
     const t0 = Date.now();
     const from = { x: protocolToClient(me.x), y: protocolToClient(me.y) };
-    // CHEAP FIRST. Only a body standing on or beside the line is joining it, and for nearly
-    // every rail the next waypoint is a bounded fine search away; only when THAT fails is the
+    // CHEAP FIRST. A body approaching the line is joining it too. Restricting
+    // this to 1.5 squares let Ukgoth's r4c63/r5c57 arrivals walk onto the broken
+    // NE head before its fine continuation was checked. Keep the probe local;
+    // healthy continuations still return after the cheap lookahead.
+    // For nearly every rail the next waypoint is a bounded fine search away;
+    // only when THAT fails is the
     // room-sized reachability below worth its time on the keeper's clock.
     let near = -1, nearD = Infinity;
     for (let n = 0; n < squares.length; n++) {
       const d = Math.hypot(squares[n].row - me.row, squares[n].col - me.col);
       if (d < nearD) { nearD = d; near = n; }
     }
-    if (near < 0 || nearD > 1.5 || near + 1 >= squares.length) return null;
+    if (near < 0 || nearD > 8 || near + 1 >= squares.length) return null;
     // TWO WAYPOINTS AHEAD, not one: Ukgoth's corner body on r6c65 can reach r7c64, and the line
     // breaks one waypoint later — checking only the next would cost a whole lap to find out.
     let broken = false;
@@ -4939,6 +4945,32 @@ export function sessionWalkPrototype(deps) {
     const at = this.client?.self;
     return at && at.row === square.row && at.col === square.col
       ? { arrived: true } : { arrived: false, reason: 'fine legs ended off the boarding square' };
+  }
+
+  async walkRailSquare(square,{movementGeneration=this.movementGeneration,controlToken=null,avoidSquares=null}={}) {
+    const c=this.need(),roomId=c.room.id;
+    if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+    if(c.self?.predicted){
+      const reply=await this.confirmPosition({timeoutMs:1500});
+      if(c!==this.client||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+      if(c.room.id!==roomId)return {moved:false,left_room:true,reason:'room_changed_before_move'};
+      if(!reply)return {moved:false,reason:'own_position_unknown'};
+    }
+    const me=c.self,geo=this.world?.geometry;
+    if(!me||me.predicted||![me.x,me.y].every(Number.isFinite))return {moved:false,reason:'own_position_unknown'};
+    if(!geo?.collisionReady)return {moved:false,reason:'collision_geometry_unavailable'};
+    const point=geo?.standPointWire?.(square.row,square.col);
+    if(!point)return {moved:false,reason:'geometry_blocked'};
+    const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
+    const plan=planBodyDetour(geo,me,point,{goalSquare:square,objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,avoidSquares:avoid,
+      spacingUnits:8,marginSquares:4,maxRangeSquares:24,maxNodes:3000,maxMs:100});
+    if(!plan.found)return {moved:false,reason:'geometry_blocked',detour_reason:plan.reason};
+    // The rail promises a square, not its sometimes unoccupiable centre. Every
+    // fine packet remains all-or-nothing and arrival requires a fresh body read.
+    const result=await this.walkDepartureLegs(plan.waypoints,square,
+      {movementGeneration,controlToken,maxSteps:32,shelterFallback:false});
+    return {...result,moved:result.arrived===true};
   }
 
   async followRail(squares, { movementGeneration = this.movementGeneration,
@@ -5220,7 +5252,11 @@ export function sessionWalkPrototype(deps) {
         }
 
         let jumpTo = target;
-        if (jumpHere) {
+        // A declared landing must reach step unchanged: that lookup arms timed
+        // gravity and the unclipped-send guard. Planar clearance alone preferred
+        // Ukgoth r38c8, lost the declaration, and clipped into the r38c13 gully.
+        // step already owns the measured lanes and guarded landing alternatives.
+        if (jumpHere && !declaredJumpHere) {
           const shelf = [];
           for (let dr = -1; dr <= 1; dr++) for (let dc = -2; dc <= 2; dc++) {
             const cand = { row: target.row + dr, col: target.col + dc };
@@ -5291,13 +5327,12 @@ export function sessionWalkPrototype(deps) {
         let attemptedBody=!!bodyAim;
         let r = bodyAim ? await pour(bodyAim)
           : jumpHere
-          ? await this.step(jumpTo.col, jumpTo.row, { fall: true })
+          ? await this.step(jumpTo.col, jumpTo.row, { fall: true,movementGeneration,controlToken })
               .catch(e => ({ moved: false, reason: e.message }))
           : (pt && typeof this.walkFine === 'function')
-          ? await this.walkFine(pt.x, pt.y, { maxSteps: 6, stride: 40, avoidSquares })
-              .then(w => ({ ...w, moved: w?.arrived ?? w?.moved }))
+          ? await this.walkRailSquare(target,{movementGeneration,controlToken,avoidSquares})
               .catch(e => ({ moved: false, reason: e.message }))
-          : await this.step(target.col, target.row);
+          : await this.step(target.col, target.row,{movementGeneration,controlToken});
         if(!jumpHere && !attemptedBody && r.reason==='object_blocked' && liveBodies){
           attemptedBody=true;r=await pour(wirePoint(target));
         }
