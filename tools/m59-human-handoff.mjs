@@ -41,10 +41,33 @@ export function reservedPercent(holds, perUnit = 0.25, cap = 40) {
 
 const tradeOf = r => r?.trade ?? null;
 
+// Instruction text goes to the PERSON, privately (a tell costs the courier one mana), never to
+// the room: on a shared server the room is full of people this is not addressed to.
+export const COURIER_TAG = '[COURIER SERVICE]';
+async function instruct(call, agent, to, text) {
+  if (!text) return;
+  await call('say', { agent, type: 'tell', to, text: `${COURIER_TAG} ${text}` }, 60_000).catch(() => null);
+}
+
+// Settings written by the PLAN tab's "Automated Courier" row (tools/plans/courier.mjs).
+export function courierSettings(file, agent) {
+  try { const s = JSON.parse(fs.readFileSync(file, 'utf8'))?.[agent] ?? {};
+        return { mode: s.mode === 'auto' ? 'auto' : 'manual', instructions: s.instructions !== false }; }
+  catch { return { mode: 'manual', instructions: true }; }
+}
+
+// Is this person at their keyboard in the same room as `withName`? From the client's own room list,
+// which the plan desk publishes (human-presence.json); the broker has no room for a piloted body.
+export function atKeyboardWith(file, agent, withName, now = Date.now(), freshMs = 10_000) {
+  try { const p = JSON.parse(fs.readFileSync(file, 'utf8'))?.[agent];
+        return !!p && now - p.at <= freshMs && (p.with ?? []).some(o => String(o.name).trim().toLowerCase() === String(withName).trim().toLowerCase()); }
+  catch { return false; }
+}
+
 // Wait for `character` to offer us something, then accept it as a gift by countering with
 // nothing. Resolves {received:[...], why}.
 export async function acceptGiftFrom(call, agent, character, { timeoutMs = 90_000, pollMs = 1500, say = null } = {}) {
-  if (say) await call('say', { agent, text: say }, 60_000).catch(() => null);
+  await instruct(call, agent, character, say);
   const until = Date.now() + timeoutMs;
   try {
     while (Date.now() < until) {
@@ -75,7 +98,7 @@ export async function deliverTo(call, agent, character, items, { timeoutMs = 90_
   if (!items?.length) return { delivered: false, why: 'nothing to hand over' };
   const o = await call('trade', { agent, action: 'offer', to: character, items }, 30_000).catch(e => ({ error: e.message }));
   if (!o?.offered) return { delivered: false, why: o?.error ?? (o?.messages ?? []).join(' ') ?? 'offer not confirmed' };
-  if (say) await call('say', { agent, text: say }, 60_000).catch(() => null);
+  await instruct(call, agent, character, say);
   const until = Date.now() + timeoutMs;
   try {
     while (Date.now() < until) {

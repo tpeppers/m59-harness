@@ -42,6 +42,7 @@ import { EventEmitter } from 'node:events';
 import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
 import { parseRoomContents, objId } from './m59-parse.mjs';
 import { gateRefusal, newGate, gateLive, gateDrops, gateView } from './m59-proxy-gate.mjs';
+import { ProxyTrade } from './m59-proxy-trade.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
 
@@ -176,6 +177,8 @@ export class ProxySession extends EventEmitter {
     // Set on the first dropped packet. From then on every client packet is re-framed by
     // us, exactly as after an injection, because the client's own value is one step off.
     this.owned = false;
+    // The person's half of a courier trade, done here when they chose Full Auto (m59-proxy-trade.mjs).
+    this.trade = new ProxyTrade(this);
     this.log = log;
     this.stream = new SecurityStream();
     this.inGame = false;
@@ -347,6 +350,7 @@ export class ProxySession extends EventEmitter {
       this.owned = true;
       return;
     }
+    if (this.inGame) this.trade.onClient(payload);
     // PASSTHROUGH UNTIL WE HAVE ACTUALLY INJECTED SOMETHING.
     //
     // While we have injected nothing, the client's own security values are correct
@@ -550,6 +554,12 @@ export class ProxySession extends EventEmitter {
       this.presteps = catchUp;
       this.log(`server confirmed game mode — stream pre-stepped ${catchUp}`);
     }
+    // An automated trade's packets stop here: the client would open a window for a trade it never started.
+    if (this.inGame && this.trade.onServer(payload)) {
+      this.stats.swallowed = (this.stats.swallowed ?? 0) + 1;
+      this.emit('server-packet', payload);
+      return;
+    }
     // Server -> client: forward the ORIGINAL bytes. Rebuilding them can only
     // introduce differences, and the client is entitled to exactly what the server
     // said.
@@ -672,6 +682,17 @@ export class ProxySession extends EventEmitter {
     return { ok: true, angle: a, player: this.playerId };
   }
 
+  // Inject as the player under the gate's precondition (calibrated, gateable) rather than
+  // inject()'s (not --observe). Used only by the automated trade, which the person asked for.
+  injectOwned(payload) {
+    if (!this.gateable) return { sent: false, why: 'observe-only proxy started without --gate' };
+    const why = gateRefusal(this);
+    if (why) return { sent: false, why };
+    this.server.write(this.stream.frame(Buffer.from(payload), this.lastEpoch));
+    this.stats.injected++;
+    return { sent: true };
+  }
+
   // Take or hand back the controls. Returns {ok} or {ok:false, why}.
   setGate(opts) {
     if (!this.gateable) return { ok: false, why: 'observe-only proxy started without --gate' };
@@ -698,7 +719,7 @@ export class ProxySession extends EventEmitter {
 
   status() {
     return { in_game: this.inGame, have_seeds: !!this.stream.seeds,
-             gate: gateView(this.gate), gateable: this.gateable, gate_refusal: gateRefusal(this),
+             gate: gateView(this.gate), gateable: this.gateable, gate_refusal: gateRefusal(this), trade: this.trade.view(),
              player_id: this.playerId,
              observe: this.observe, ...this.stats, shadowed: this.shadowed,
              aligned: this.aligned, misaligned: this.misaligned, locked: this.locked,
@@ -712,6 +733,7 @@ export class ProxySession extends EventEmitter {
   }
 
   destroy() {
+    this.trade?.destroy();
     try { this.client.destroy(); } catch {}
     try { this.server.destroy(); } catch {}
     this.emit('closed', this.stats);
@@ -835,12 +857,12 @@ export function serveGateControl(port, getSession) {
     const send = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
     const url = new URL(req.url, 'http://127.0.0.1');
     const sessions = () => getSession('all').map(s => ({ player_id: s.playerId, in_game: s.inGame,
-      gate: gateView(s.gate), gateable: s.gateable, gate_refusal: gateRefusal(s),
+      gate: gateView(s.gate), gateable: s.gateable, gate_refusal: gateRefusal(s), trade: s.trade.view(),
       human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null }));
     if (req.method === 'GET' && (url.pathname === '/gate' || url.pathname === '/status'))
       return send(200, { sessions: sessions() });
-    if (req.method !== 'POST' || !['/gate', '/ungate'].includes(url.pathname))
-      return send(405, { error: 'GET /gate | POST /gate | POST /ungate' });
+    if (req.method !== 'POST' || !['/gate', '/ungate', '/trade/accept-from', '/trade/give'].includes(url.pathname))
+      return send(405, { error: 'GET /gate | POST /gate | /ungate | /trade/accept-from | /trade/give' });
     let body = '';
     req.on('data', d => { body += d; if (body.length > 4096) req.destroy(); });
     req.on('end', () => {
@@ -849,7 +871,11 @@ export function serveGateControl(port, getSession) {
       const want = url.searchParams.get('player');
       const s = getSession(want ? Number(want) : null);
       if (!s) return send(409, { error: want ? `no session for player ${want}` : 'no client is connected' });
-      const r = url.pathname === '/gate' ? s.setGate(msg) : s.clearGate(msg.holder ?? null);
+      // The automated courier trade (m59-proxy-trade.mjs): answer offers from one object id, or offer to one.
+      const r = url.pathname === '/gate' ? s.setGate(msg)
+        : url.pathname === '/ungate' ? s.clearGate(msg.holder ?? null)
+        : url.pathname === '/trade/accept-from' ? s.trade.acceptFrom(msg.from_id, msg.ttl_ms)
+        : s.trade.give(msg.to_id, msg.items, msg.ttl_ms);
       send(r.ok ? 200 : 409, { ...r, player_id: s.playerId });
     });
   }).listen(port, '127.0.0.1', () => console.error(`  gate control on http://127.0.0.1:${port}`));
