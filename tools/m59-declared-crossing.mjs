@@ -1,7 +1,7 @@
 // Ordinary declared jumps with a positive landing and a proved missed-jump
 // escape. Callers supply their guarded reader/walker, so this works for any map.
 import {clientToProtocol,protocolToClient} from './m59-finepos.mjs';
-import {planDeclaredTakeoff} from './m59-jump-takeoff.mjs';
+import {planDeclaredTakeoff,planDeclaredLanding} from './m59-jump-takeoff.mjs';
 const queues=new Map();
 const reachGutter=(gutter,walk,observed)=>typeof gutter==='function'?gutter(observed):walk(gutter);
 // A long staging walk may begin below the takeoff shelf. Arm its floor fence
@@ -43,6 +43,27 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
  const prior=queues.get(key)??Promise.resolve();let release;
  const tail=new Promise(r=>{release=r;});queues.set(key,tail);
  const restage=async()=>{if(waitAtCover)await waitAtCover();else if(stage)await walk(stage);};
+ const finishLanding=async observed=>{
+  const matches=body=>!body.predicted&&Math.hypot(body.x-landing.x,body.y-landing.y)<=8&&Math.abs(floor(body)-toFloor)<=64;
+  if(!matches(observed.you)){
+   const completion=planDeclaredLanding(geo,observed.you,declaration,
+    {objects:new Map((observed.objects??[]).map(o=>[o.id,o])),selfId:observed.you.id});
+   if(!completion.found)return {landed:false,observed};
+   const validatePosition=body=>{
+    if(body.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
+    const h=floor(body.you);if(body.you.predicted||!Number.isFinite(h)||h<completion.minimumFloor)
+     throw Error('declared_landing_completion_left_shelf');
+   };
+   validatePosition(observed);
+   const moved=await walk(completion.point,{minimumFloor:completion.minimumFloor,validatePosition});
+   if(moved?.cancelled)throw Error('declared_landing_completion_cancelled');
+   observed=await read();validatePosition(observed);
+   if(!matches(observed.you))throw Error('declared_landing_completion_unconfirmed');
+  }
+  if(!matches(observed.you))return {landed:false,observed};
+  if(clear){const moved=await walk(clear);if(moved?.cancelled)throw Error('declared_landing_clearance_cancelled');}
+  return {landed:true,observed};
+ };
  const planFrom=observed=>{
   const started=performance.now(),planned=planDeclaredTakeoff(geo,observed.you,declaration,
    {objects:new Map((observed.objects??[]).map(o=>[o.id,o])),selfId:observed.you.id,maxMs:350});
@@ -58,6 +79,9 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    if(Date.now()-began>=budgetMs)throw Error('declared_crossing_budget');
    let before=await read();
    if(before.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
+   // A retry or reconnect can start on the landing shelf. Prove and clear it
+   // before classifying any lower-than-takeoff body as a missed flight.
+   if((await finishLanding(before)).landed)return {crossed:true,resumed:true};
    // A lower floor is the escape case, even before the first attempt. The same
    // square number on another shelf must never authorize a jump retry.
    if(floor(before.you)<fromFloor-384){await reachGutter(gutter,walk,before);return {crossed:false,gutter:true,why:'below_takeoff'};}
@@ -116,12 +140,12 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
     throw error;
    }
    lastRefusal=reply.reason??reply.error??'landing not observed';
-   const after=await (observeLanding?observeLanding(landing):read()),height=floor(after.you);
+   let after=await (observeLanding?observeLanding(landing):read()),height=floor(after.you);
    if(after.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
    if(!Number.isFinite(height))throw Error('declared_crossing_landing_floor_unreadable');
-   if(Math.hypot(after.you.x-landing.x,after.you.y-landing.y)<=8&&Math.abs(height-toFloor)<=64){
-    if(clear)await walk(clear);return {crossed:true,reply};
-   }
+   const completion=await finishLanding(after);
+   if(completion.landed)return {crossed:true,reply};
+   after=completion.observed;height=floor(after.you);
    if(Number.isFinite(height)&&height<fromFloor-384){await reachGutter(gutter,walk,after);return {crossed:false,gutter:true,reply};}
    ctx.state??={};ctx.state.declaredCrossingFailure={phase:'landing',room:declaration.room,
     observed:after.you,reply};

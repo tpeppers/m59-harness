@@ -15,6 +15,7 @@ import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
+import {planDeclaredLanding} from './m59-jump-takeoff.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
 import {planRefugeStage,planNearbyFineRefuge} from './m59-fine-refuge-reach.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
@@ -330,7 +331,9 @@ export async function walkHollowsOut(ctx,options={}){
    ctx.state??={};ctx.state.islandTakeoffFailure={room:2502,reason:'lower_escape_unproved',observed:observed.you};
    throw Error('hollows_lower_escape_unproved');
   };
-  const staged=await followDeclaredApproach(declaration,{geo:roomGeometry(2502),read,walk,
+  const initial=await read(),landed=planDeclaredLanding(roomGeometry(2502),initial.you,declaration,
+   {objects:new Map((initial.objects??[]).map(o=>[o.id,o])),selfId:initial.you.id});
+  const staged=landed.found?{gutter:false}:await followDeclaredApproach(declaration,{geo:roomGeometry(2502),read,walk,
    target:staging.point,gutter,requireShelf:true});
   // The shared controller owns refinement through landing clearance, including
   // body waits and a verified keeper recovery during a takeoff or jump call.

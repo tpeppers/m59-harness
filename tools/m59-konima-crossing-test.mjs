@@ -4,6 +4,7 @@ import {fallJumpsIn} from './m59-falljump.mjs';
 import {traceFallMotion} from './m59-falltrace.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
+import {planDeclaredLanding} from './m59-jump-takeoff.mjs';
 const geo=roomGeometry(2505),jumps=fallJumpsIn(2505),out=jumps.find(j=>j.from.col===60);
 assert.equal(jumps.length,4);
 for(const j of jumps)for(const dt of [8,16,33,50]){
@@ -44,6 +45,42 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+{
+ const hg=roomGeometry(2502),j=fallJumpsIn(2502).find(j=>j.to.row===44&&j.to.col===27);
+ const short={id:1,x:1744,y:2814},landing=clientToProtocol(j.to_fine),clear={x:1344,y:3076};
+ assert(planDeclaredLanding(hg,short,j).found,'the native short landing has a short ground connection');
+ assert(!planDeclaredLanding(hg,{...short,predicted:true},j).found);
+ assert(!planDeclaredLanding(hg,{...short,x:1644},j).found);
+ const disconnected=Object.create(hg);disconnected.traceFineMoveClient=()=>({moved:false,blocked:true});
+ assert(!planDeclaredLanding(disconnected,short,j).found,'matching height and proximity cannot cross a wall');
+ const lower=Object.create(hg),originalFloor=hg.floorBaseAtClient.bind(hg),shortClient=protocolToClient(short);
+ lower.floorBaseAtClient=(x,y,...args)=>x===shortClient.x&&y===shortClient.y?7600:originalFloor(x,y,...args);
+ assert(!planDeclaredLanding(lower,short,j).found,'a lower nearby pocket is not the landing shelf');
+ assert(!planDeclaredLanding(hg,short,j,{objects:new Map([[2,{id:2,flags:9,...landing}]]),selfId:1}).found,
+  'a body on the intended landing is not waived');
+ let you=clientToProtocol(j.from_fine),flights=0;const walks=[];
+ const read=async()=>({room:{num:2502},you:{id:1,...you},hp:{value:20,max:20},objects:[]});
+ const walk=async(p,{minimumFloor,validatePosition}={})=>{
+  if(p.x===landing.x&&p.y===landing.y)assert.equal(minimumFloor,7616);
+  you={...p};walks.push(p);validatePosition?.(await read());
+ };
+ const result=await followDeclaredCrossing({fleet:'short-landing',agent:'a',call:async()=>{
+  flights++;you={...short};return {jumped:true,arrived:false,landed:{row:43,col:27}};
+ }},j,{geo:hg,read,walk,gutter:()=>assert.fail('a proved landing shelf must not enter a gutter'),clear});
+ assert(result.crossed);assert.equal(flights,1,'a short grounded landing never retries the flight');
+ assert(walks.some(p=>p.x===landing.x&&p.y===landing.y));assert.deepEqual(you,clear);
+ for(const start of [short,landing]){
+  you={...start};walks.length=0;
+  const resumed=await followDeclaredCrossing({fleet:'resume-landing',agent:'a',call:async()=>assert.fail('no new flight from the landing')},
+   j,{geo:hg,read,walk,gutter:()=>assert.fail('no gutter from the proved landing'),clear});
+  assert(resumed.crossed&&resumed.resumed);assert.deepEqual(you,clear);
+  assert(!walks.some(p=>p.x===clientToProtocol(j.from_fine).x),'resuming never walks back to takeoff');
+ }
+ you={...short};walks.length=0;
+ await assert.rejects(followDeclaredCrossing({fleet:'cancel-landing',agent:'a',call:async()=>assert.fail('no flight')},j,
+  {geo:hg,read,walk:async()=>({cancelled:true}),gutter:()=>assert.fail('no gutter'),clear}),/completion_cancelled/);
+ assert.deepEqual(you,short,'a cancelled completion never clears the landing');
+}
 {
  let you={x:3936,y:416};
  const read=async()=>({room:{num:2505},you:{...you}});

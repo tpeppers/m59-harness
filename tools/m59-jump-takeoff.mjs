@@ -1,7 +1,26 @@
 // #movement: refine a declared ledge takeoff using stock gravity and collision.
 // All coordinates at this API are named KOD/protocol points; declarations use CLIENT units.
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
-import {blockingBodySnapshot} from './m59-body-detour.mjs';
+import {blockingBodySnapshot,planBodyDetour} from './m59-body-detour.mjs';
+
+// A settled landing just short of its exact aim may finish on foot. Proximity
+// alone cannot connect two shelves: retain body collision and a floor fence.
+export function planDeclaredLanding(geo,body,declaration,{objects,selfId,roomFlags=0,overrideDepths=null,maxMs=100}={}){
+ if(!geo?.collisionReady||body?.predicted||!declaration?.to_fine||![body?.x,body?.y].every(Number.isFinite))
+  return {found:false,reason:'confirmed_declared_landing_unavailable'};
+ const point=clientToProtocol(declaration.to_fine),p=protocolToClient(body);
+ if(Math.hypot(body.x-point.x,body.y-point.y)>32)return {found:false,reason:'not_near_declared_landing'};
+ const targetFloor=geo.floorBaseAtClient(declaration.to_fine.x,declaration.to_fine.y),height=geo.floorBaseAtClient(p.x,p.y);
+ if(!Number.isFinite(targetFloor)||!Number.isFinite(height)||Math.abs(height-targetFloor)>384)
+  return {found:false,reason:'not_on_declared_landing_shelf'};
+ const minimumFloor=targetFloor-384,plan=planBodyDetour(geo,body,point,{objects,selfId,roomFlags,overrideDepths,
+  minimumFloor,marginSquares:2,maxRangeSquares:8,maxNodes:6000,maxMs});
+ if(!plan.found)return {found:false,reason:plan.reason??'landing_ground_approach_unproved'};
+ let previous=body,distance=0;
+ for(const q of plan.waypoints){distance+=Math.hypot(q.x-previous.x,q.y-previous.y);previous=q;}
+ return distance<=64?{found:true,point,minimumFloor,waypoints:plan.waypoints}:
+  {found:false,reason:'landing_ground_approach_too_long'};
+}
 
 export function declaredJumpMoveOptions(declaration,vigor){
   if(!declaration?.from||!declaration?.to)return {ok:false,reason:'jump_undeclared'};

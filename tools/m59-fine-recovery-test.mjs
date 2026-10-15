@@ -92,6 +92,18 @@ try{
  const beforeLower=moves;
  await assert.rejects(walkHollowsOut(ctx,{budgetMs:10000}),/hollows_lower_escape_unproved/);
  assert.equal(moves,beforeLower,'an unproved lower Hollows escape cannot become an uphill movement command');
+ pose={id:1,x:1744,y:2814,row:43,col:27};
+ let landingCommands=0;
+ await assert.rejects(walkHollowsOut({...ctx,call:async(name,args)=>{
+  if(name==='walk_to'){
+   landingCommands++;assert(Math.hypot(args.x-1750,args.y-2824)<=8,
+    'a resumed short landing completes the shelf before any staging walk');
+   throw Error('fixture_landing_completion_observed');
+  }
+  assert.notEqual(name,'jump','resuming on the landing shelf needs no new jump');
+  return ctx.call(name,args);
+ }},{budgetMs:10000}),/fixture_landing_completion_observed/);
+ assert.equal(landingCommands,1);
  let exactReads=0;
  const exact=await confirmIslandFineArrival(async()=>({body:{x:++exactReads===1?108:100,y:100}}),
   {x:100,y:100},{attempts:2,settleMs:1,tolerance:1.6});

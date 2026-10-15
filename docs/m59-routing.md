@@ -2221,6 +2221,16 @@ a threat-priced approach from deliberately walking down into a pocket before
 trying to reach the higher takeoff. Long staging walks arm near the physical
 takeoff rather than treating matching height elsewhere as the same shelf.
 
+Declared crossings can finish a settled short landing on foot. The shared
+planner requires a confirmed body within 32 protocol units of the declared
+landing, a matching shelf, and a collision-proved ground route of at most 64
+protocol units with a minimum-floor fence. Fresh position must then satisfy
+the original landing tolerance before clearance. Retries already on that
+shelf use the same proof before any staging walk or lower-floor gutter;
+proximity or matching height alone never authorizes another flight. The
+Hollows wrapper also checks this proof before staging, so a resumed landing
+does not try to walk back across the gap.
+
 `m59-entry-recovery.mjs` supplies bounded retreat/re-entry recovery for a
 confirmed healthy arrival blocked by live bodies. Callers provide their normal
 one-room travel, fresh health/position reads, cancellation checks and original
