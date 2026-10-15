@@ -1,0 +1,14 @@
+{
+ "t15": {
+  "credentials": {
+   "account": "t15",
+   "character": "Clifford",
+   "host": "127.0.0.1",
+   "port": 57615
+  },
+  "autopilot": {
+   "mode": "idle",
+   "policy": {}
+  }
+ }
+}
