@@ -1,5 +1,18 @@
 import {planBodyDetour} from './m59-body-detour.mjs';
 import {blocksMovement,OF} from './m59-parse.mjs';
+import {knownRefugeCell} from './m59-refuge-activation.mjs';
+
+// Static staging layout: a refuge cell's centre can be inside its wall. Find
+// actual enterable fine footing from a known approach and prove a way back.
+// This plans only; the executing walker still observes its real body and checks
+// the live route. The anchor is geometry input, not a claimed player position.
+export function planRefugeStage(geo,anchor,cell,{budgetMs=300}={}){
+ const from={...anchor,row:Math.floor(anchor?.y/64),col:Math.floor(anchor?.x/64),predicted:false};
+ const result=fineRefugeReach(geo,from,new Map(),null,{budgetMs})(cell?.col,cell?.row);
+ return result.reachable&&result.returnable&&knownRefugeCell(geo,{...result.fine,...cell,predicted:false})?
+  {found:true,point:result.fine,cell:{...cell},steps:result.steps}:
+  {found:false,reason:result.why??'staging refuge has no proved return'};
+}
 
 // Keep a short, collision-checked escape while optimizing monster exposure.
 // A time-limited price search is not evidence that this clear approach vanished.

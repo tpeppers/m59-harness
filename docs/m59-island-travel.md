@@ -166,7 +166,11 @@ raised to the ordinary 24-unit minimum.
 Positions come from the selected fleet's fresh
 keeper read, rather than the square summary in `look`. The outward Hollows
 queue stages at the r42c36 wall, behind the active takeoff corridor; takeoff
-refinement checks observed bodies as well as the static geometry. A waiting follower
+refinement checks observed bodies as well as the static geometry. Staging
+uses fine footing proved enterable and returnable from the approach. The cell's
+centre is unreachable; the shared staging planner resolves its valid edge
+footing, and generated guides cover both the cave entrance and authored login
+point. A waiting follower
 continues health and cancellation checks, and the crossing queue shares the
 Hollows leg's time budget. Konima's final door is opened by the ordinary
 `go` action from inside the actual trigger; no door or room geometry is edited.

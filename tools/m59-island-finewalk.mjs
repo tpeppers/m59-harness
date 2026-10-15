@@ -17,6 +17,7 @@ import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
+import {planRefugeStage} from './m59-fine-refuge-reach.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -320,7 +321,9 @@ export async function walkHollowsOut(ctx,options={}){
   const remaining=()=>({...options,room:2502,budgetMs:Math.max(1,deadline-Date.now())});
   // Wait at a real wall behind the approach. Followers must not occupy the
   // takeoff corridor while the admitted traveler refines and clears its jump.
-  await checkedIslandWalk(ctx,{x:2336,y:2720},remaining());
+  const staging=planRefugeStage(roomGeometry(2502),{x:2201,y:2650},{row:42,col:36});
+  if(!staging.found)throw Error('hollows_staging_'+staging.reason);
+  await checkedIslandWalk(ctx,staging.point,remaining());
   await crossingTurn(async()=>{
   // A declared landing occupied by another follower is not permission to jump
   // elsewhere. Let the preceding traveler clear the landing along the same rail.
