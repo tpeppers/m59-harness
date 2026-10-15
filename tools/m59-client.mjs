@@ -298,6 +298,11 @@ export class M59Client {
     // into the same table, which is safe because dynamic ids are globally
     // allocated by the server (blakserv/blakres.c) rather than per-session.
     this.rsc = resources || loadResources();
+    // SPECTATE (m59-proxy-attach.mjs): with M59_KEEPER_ATTACH set, this client does not log in. It
+    // attaches to a session a person's client already holds, through the proxy carrying it, and its
+    // frames are injected there only while the keeper holds the control gate.
+    //   M59_KEEPER_ATTACH={"port":8932,"agent":"t15","player":4464}
+    try { this.attach = process.env.M59_KEEPER_ATTACH ? JSON.parse(process.env.M59_KEEPER_ATTACH) : null; } catch { this.attach = null; }
     this.lookup = id => (this.rsc.has(id) ? this.rsc.get(id) : undefined);
     this.name = id => this.rsc.get(id);
 
@@ -809,7 +814,42 @@ export class M59Client {
     return out;
   }
 
+  // ATTACHED: no login exchange exists to watch. The session is already in game, so the state jumps
+  // straight there; the security value we compute is discarded by the proxy, which re-frames every
+  // payload at the true stream position, so the seeds only have to exist for send() to frame at all.
+  // Then ask the server to resend what a login would have pushed -- player, room, inventory, stats --
+  // which the gate's allowlist passes even while the person holds the controls.
+  connectAttached() {
+    return new Promise((resolve, reject) => {
+      const a = this.attach;
+      this.sock = net.connect(Number(a.port), '127.0.0.1');
+      let head = Buffer.alloc(0), ready = false;
+      this.sock.on('connect', () => this.sock.write(JSON.stringify({ agent: a.agent, player: a.player }) + '\n'));
+      this.sock.on('data', d => {
+        if (ready) return this.onData(d);
+        head = Buffer.concat([head, d]);
+        const nl = head.indexOf(10);
+        if (nl < 0) return;
+        let hello = null;
+        try { hello = JSON.parse(head.subarray(0, nl).toString('utf8')); } catch { /* refused below */ }
+        if (!hello?.ok) { this.fail(`attach refused: ${hello?.why ?? 'bad reply'}`); this.sock.destroy(); return reject(new Error(this.error)); }
+        ready = true;
+        this.seeds = [1, 2, 3, 4, 5];
+        this.state = 'game';
+        this.log(`ATTACHED to player ${hello.player} through the proxy on ${a.port}`);
+        this._armKeepalive?.();
+        try { this.requestPlayer(); this.roomContents(); this.requestInventory(); this.stats(1); this.stats(2); } catch { /* the keeper asks again */ }
+        resolve();
+        const rest = head.subarray(nl + 1);
+        if (rest.length) this.onData(rest);
+      });
+      this.sock.on('error', reject);
+      this.sock.on('close', () => this._connectionClosed());
+    });
+  }
+
   connect() {
+    if (this.attach) return this.connectAttached();
     return new Promise((resolve, reject) => {
       this.sock = net.connect(this.port, this.host);
       this.sock.on('connect', () => {

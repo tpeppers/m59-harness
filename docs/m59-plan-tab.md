@@ -145,25 +145,43 @@ for your character:
   **KEEPER** on it. That is only so the screen does not pretend to move: a stock client
   through the same proxy is locked out just the same.
 
-### What does NOT happen yet
+### Spectate: the keeper plays, you watch
 
-**Nothing drives your character while the gate is held**, unless something injects
-through the proxy (`m59-drive.mjs`, the proxy's `/walk`). The keeper *process* cannot
-share your socket: the server allows one connection per character, and your client is
-that connection. Today, "Keeper has the controls" means "you are locked out and
-spectating". It does not yet mean "the keeper is playing".
+"Relinquish control to Keeper" does two things:
 
-Closing that gap means the keeper drives **through the proxy session** rather than
-over its own login. Either:
+1. It takes the gate (above).
+2. It starts a **spectate keeper** (`tools/m59-spectate-keeper.mjs`) for your character.
 
-- (a) a keeper transport that speaks to the proxy's injection channel instead of a
-  socket, fed by the proxy's server→client stream, or
-- (b) the keeper logs in through the proxy first and the human client *attaches* to that
-  session. That needs the proxy to replay enough of the server→client stream for a
-  freshly started client to reconstruct room, inventory and stats.
+The spectate keeper is the same keeper the broker runs: the same `Session` and `Autopilot`,
+with the roster's standing orders. Its client does not log in, because your client holds
+the one connection the server allows. Instead it **attaches** to your connection through
+the proxy's attach port (`tools/m59-proxy-attach.mjs`, `--attach 8932`):
 
-(a) is smaller, because the proxy already parses room contents and owns the stream.
-Both are written up in `docs/m59-client-vs-harness.md`.
+- It receives a copy of everything the server sends you. It rebuilds its picture by
+  asking the server to resend player, room, inventory and stats. The gate lets those
+  requests through, and your client just redraws.
+- Its packets are injected **only while it holds the gate**. Taking control back silences
+  it on its very next packet; nothing depends on the keeper noticing.
+- **Your screen follows it.** The server never tells you about your own moves, so the
+  proxy mirrors each keeper step and turn to your client. Steps are mirrored only inside
+  the current room's grid, with the room size taken from `substrate/m59-map.json`. A
+  forged out-of-room square crashes the client, so it is never sent: crossing into the
+  next room arrives with the server's own room burst instead.
+- **Take control back** releases the gate first, then stops the spectate keeper.
+- **If the keeper dies while holding the gate**, the desk gives the controls back within
+  about 20 seconds and tells you.
+- The broker sees the character as piloted throughout and leaves it alone. The spectate
+  keeper never registers with the broker and holds no claim.
+- It runs against a password-free copy of the roster (`substrate/spectate/<agent>-roster.json`),
+  because `Session` can write to its roster and the real one is the only copy of the passwords.
+
+To check it is driving, look at the Control row's description: it shows how many keeper
+packets were sent and how many moves were mirrored. `GET http://127.0.0.1:8931/gate` shows
+the same under `attached`. The spectate keeper's heartbeat is
+`substrate/spectate/<agent>.json`.
+
+A plan proxy started before this change has no attach port. Restart it (close it, then
+press L again) or the desk will say the keeper cannot drive.
 
 ## Files
 
@@ -176,6 +194,8 @@ Both are written up in `docs/m59-client-vs-harness.md`.
 | `tools/m59-proxy-gate.mjs` | harness | the gate rules (allowlist, lease) |
 | `tools/m59-proxy.mjs` | harness | `setGate`/`clearGate`, `--gate`, `--gate-control` |
 | `tools/m59-human-handoff.mjs` | harness | the courier's half of a trade with a person |
+| `tools/m59-proxy-attach.mjs`, `tools/m59-spectate-keeper.mjs` | harness | spectate: the keeper attached to your connection |
+| `tools/m59-spectate-test.mjs` | harness | offline: attach, gate handover, mirrored moves, edge safety |
 | `tools/m59-plan-desk-test.mjs`, `tools/m59-proxy-gate-test.mjs` | harness | offline tests |
 
 The file protocol is documented at the top of `m59-plan-desk.mjs` and mirrored in

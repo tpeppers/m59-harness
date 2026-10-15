@@ -604,6 +604,7 @@ async function ensureProxy(host, port) {
 const PLAN_SUBSTRATE = env.M59_PLAN_SUBSTRATE || join(REPO, 'substrate');
 const PLAN_PROXY_PORT = Number(env.M59_PLAN_PROXY_PORT || 5962);
 const PLAN_GATE_PORT = Number(env.M59_PLAN_GATE_PORT || 8931);
+const PLAN_ATTACH_PORT = Number(env.M59_PLAN_ATTACH_PORT || 8932);   // spectate: the keeper attaches here
 const listeningOn = (port, ms = 400) => new Promise(res => {
   const s = net.connect(port, '127.0.0.1');
   s.once('connect', () => { s.destroy(); res(true); });
@@ -614,7 +615,7 @@ async function ensurePlanProxy(host, port) {
   if (await listeningOn(PLAN_PROXY_PORT)) return { started: false, ok: true };
   const child = spawn(process.execPath,
     [join(REPO, 'tools', 'm59-proxy.mjs'), '--listen', String(PLAN_PROXY_PORT), '--bind', '127.0.0.1',
-     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--fleet-state', STATE_FILE],
+     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--attach', String(PLAN_ATTACH_PORT), '--fleet-state', STATE_FILE],
     { stdio: 'ignore', detached: true, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) { if (await listeningOn(PLAN_PROXY_PORT, 300)) return { started: true, ok: true }; await new Promise(r => setTimeout(r, 250)); }
