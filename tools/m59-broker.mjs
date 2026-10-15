@@ -244,7 +244,7 @@ import { COMMANDER_SCHEMA, COMMERCE_SCHEMA, COMMANDER_FACULTIES,
          resolveCommerceInventoryOrigins, tradeFingerprint } from './m59-rts-command.mjs';
 import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
-import { fallJumpsIn } from './m59-falljump.mjs';
+import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder } from './m59-move-origin.mjs';
 import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
@@ -8704,11 +8704,12 @@ const TOOLS = [
       for (let r = me.row - 1; r <= me.row + 1; r++)
         for (let c = me.col - 1; c <= me.col + 1; c++)
           for (const j of geo.declaredFallJumps(r, c)) table.push({ from: { row: r, col: c }, to: j });
-      const declared = table.find(j =>
+      const declared = selectDeclaredFall(table.filter(j =>
         nearFrom(j.from.row, j.from.col, me.row, me.col) &&
         near(j.to.row, j.to.col, a.to_row, a.to_col) &&
         sameFloor(hereFloor, floorOfDeclared(j.from.row, j.from.col, 'from')) &&
-        sameFloor(wantFloor, floorOfDeclared(j.to.row, j.to.col, 'to')));
+        sameFloor(wantFloor, floorOfDeclared(j.to.row, j.to.col, 'to'))),
+        {from:{row:me.row,col:me.col},to:{row:a.to_row,col:a.to_col}});
       if (!declared)
         throw new Error(`${a.agent}: ${me.row},${me.col} -> ${a.to_row},${a.to_col} is not a declared ` +
                         `fall-jump or a one-square variation of one. Declared near here: ` +

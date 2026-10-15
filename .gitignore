@@ -919,3 +919,6 @@ substrate/island-admin/
 
 # Faction intel (tools/m59-faction-intel.mjs): what the fleet overheard on this server.
 /substrate/faction-intel.jsonl
+
+# Local Brax route trials, generated rails, coordination and movement receipts.
+/substrate/brax-*
