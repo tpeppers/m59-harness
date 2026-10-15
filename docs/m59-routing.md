@@ -1,5 +1,21 @@
 # Movement, collision and routing
 
+## Local combat approaches
+
+An adjacent coarse square is not proof that the body can stand beside a quarry.
+Local fights use one bounded fine search for any collision-proved point in the
+player's melee square range, with the live bodies and room depths applied. The
+same exact-move dispatcher checks position, ownership, room, target and blockers
+again before every packet. A held safe spot is retained.
+
+If that local search fails, the keeper briefly rotates the exact quarry rather
+than grinding the same coarse approach. A moved quarry or immediate melee
+contact reopens it, and the creature remains in threat calculations. Deviation,
+unknown position, room change and cancellation return their movement evidence
+without a second fallback or false swing accounting. The sanitized Cragged
+fixture in `m59-combat-approach-test.mjs` also retains a complete route to map 38;
+its socketless replies do not model combat survival.
+
 Operable doors share a press, observed-opening and animation-settling contract.
 The opening must finish within the door's remaining cycle measured from the
 actual press, including response delay. Retry timing comes from that door's
