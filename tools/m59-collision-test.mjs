@@ -31,7 +31,7 @@ import { BP, M59Client } from './m59-client.mjs';
 import { isFleetmate } from './m59-party.mjs';
 import { overlapExempt } from './m59-roo.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
-import {verticalMotionRange,nextVerticalMotion} from './m59-vertical-motion.mjs';
+import {verticalMotionRange,nextVerticalMotion,waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 
 import {
   COND, LEAVE, edgeCandidatesOf, edgeExitsOf, findPath,
@@ -1287,6 +1287,7 @@ const stepFine = compileSessionMethod(brokerSource,
     squaresPerSecond: () => 5 });
 const ordinaryStep = compileSessionMethod(brokerSource,
   'async step(col, row, {', 'step', {
+    waitForVerticalSettlement,
     MOVE_INTERVAL_MS: 0, ROOM_RESYNC_MS: Number.POSITIVE_INFINITY,
     KOD_FINENESS, squaresPerSecond: () => 2.5,
     // THE JUMP VIGOR GATE, on the primitive every fall passes through. The real floor,

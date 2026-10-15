@@ -40,6 +40,7 @@ import {planRailDeparture,rememberedDeparture,rememberDeparture,forgetDeparture}
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import {waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import {turnAtProvedRefuge} from './m59-refuge-activation.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
@@ -1366,6 +1367,14 @@ export function sessionWalkPrototype(deps) {
     // router priced — measured: Ukgoth 2,27 -> 71,2 went from 1.04x to bouncing on 12 of 13
     // steps. Both `{ slide: true, fall: true }` and `{ slide: false, fall: true }` arrive on
     // the step that started this; only the missing `fall` ever refused one.
+    // A normal walk can reach the takeoff before its conservative height range
+    // expires. Retrying from another square renews that range. Wait once on the
+    // same body instead, then let the unchanged timed tracer prove the jump.
+    const settleBodyId=c.selfId??c.self?.id,settleLife=this.lifeBoundary;
+    const settled=timedFall?await waitForVerticalSettlement(()=>this.collisionVertical,{roomId,
+      cancelled:()=>!ownsStep()||c.room.id!==roomId||(c.selfId??c.self?.id)!==settleBodyId||this.lifeBoundary!==settleLife
+        ||c.self?.x!==before?.x||c.self?.y!==before?.y}):{ok:true,waited_ms:0};
+    if(!settled.ok)return {moved:false,position:before,left_room:c.room.id!==roomId,reason:settled.reason};
     const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,unclipped:declaredTimedFall,
         maxDeviation: timedFall||typeof this.confirmMovementDeviation!=='function' ? null : KOD_FINENESS,
         beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false),
@@ -1379,7 +1388,7 @@ export function sessionWalkPrototype(deps) {
                 square: c.self ? { col: c.self.col, row: c.self.row } : null,
                 target: { col, row }, to: { x: aim.x, y: aim.y }, sent: !!queued.sent,
                 objectId: queued.validation?.objectId ?? null,
-                reason: queued.validation?.reason ?? null });
+                reason: queued.validation?.reason ?? null,vertical_wait_ms:settled.waited_ms });
     if (!queued.sent) {
       const validation = queued.validation ?? {};
       if(validation.reason==='movement_deviation')return this.confirmMovementDeviation(validation.deviation);
