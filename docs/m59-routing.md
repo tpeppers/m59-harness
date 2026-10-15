@@ -6,6 +6,13 @@ body cannot be identified, the client exposes no other player's pose and
 requests its authoritative player packet. A successful position read must
 refer to this body before it can certify routing or refuge progress.
 
+Ordinary walking descents keep a conservative falling-height range that ages
+between packets. The stock client's initial fall speed supplies the slow upper
+bound after a 500 ms grace; crossing another lower floor preserves that clock.
+Climbing onto a higher floor starts a new bound. Declared/timed falls and ranges
+without an ordinary-fall clock retain their previous uncertainty. This changes
+the validator's time model, never the body's height or movement speed.
+
 A hit during a short proved refuge leg can retain that route to cover while
 ordered server position reads confirm movement within the last 2.5 seconds
 and at most 20 travelled squares remain. This applies to general fine safe-leg

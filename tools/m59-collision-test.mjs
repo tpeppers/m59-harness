@@ -31,6 +31,7 @@ import { BP, M59Client } from './m59-client.mjs';
 import { isFleetmate } from './m59-party.mjs';
 import { overlapExempt } from './m59-roo.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
+import {verticalMotionRange,nextVerticalMotion} from './m59-vertical-motion.mjs';
 
 import {
   COND, LEAVE, edgeCandidatesOf, edgeExitsOf, findPath,
@@ -1256,7 +1257,7 @@ ok('the extracted edge-opening predicate compiled', typeof atEdgeOpening === 'fu
 for (const n of moduleScopeNames(brokerSource)) BROKER_SCOPE.add(n);
 const validateFineTarget = compileSessionMethod(brokerSource,
   'validateFineTarget(x, y, {', 'validateFineTarget',
-  { CLIENT_FINENESS, KOD_FINENESS, blocksMovement, OF,
+  { CLIENT_FINENESS, KOD_FINENESS, blocksMovement, OF, verticalMotionRange,
     // The real fleet-mate exemption: a pure distance test and the roster lookup, which with
     // no roster loaded answers false -- so every body here keeps the client's rule, as before.
     overlapExempt, isFleetmate,
@@ -1271,7 +1272,7 @@ const validateFineTarget = compileSessionMethod(brokerSource,
 const driftRecorded = [];
 const queueValidatedMove = compileSessionMethod(brokerSource,
   'async queueValidatedMove(x, y, {', 'queueValidatedMove',
-  { MOVE_INTERVAL_MS: 0, CLIENT_FINENESS, atEdgeOpening,
+  { MOVE_INTERVAL_MS: 0, CLIENT_FINENESS, atEdgeOpening, nextVerticalMotion,
     noteGeometryDrift: (session, drift) => driftRecorded.push(drift) });
 const confirmPosition = compileSessionMethod(brokerSource,
   'async confirmPosition({ timeoutMs = 8000 } = {}) {', 'confirmPosition', { Pacer: { note() {} } });
