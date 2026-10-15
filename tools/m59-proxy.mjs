@@ -43,6 +43,7 @@ import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
 import { parseRoomContents, objId } from './m59-parse.mjs';
 import { gateRefusal, newGate, gateLive, gateDrops, gateView } from './m59-proxy-gate.mjs';
 import { ProxyTrade } from './m59-proxy-trade.mjs';
+import { serveAttach } from './m59-proxy-attach.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
 
@@ -437,6 +438,8 @@ export class ProxySession extends EventEmitter {
 
   fromServer(payload, epoch, whole) {
     this.stats.fromServer++;
+    // An attached keeper (m59-proxy-attach.mjs, spectate) sees every frame, swallowed or not.
+    this.emit('server-frame', whole);
     this.emit('received-server-packet', payload);
     // The client keeps the epoch byte of the LAST server message and stamps it on
     // everything it sends (clientd3d/com.c:409-410). So anything we forge towards the
@@ -858,7 +861,8 @@ export function serveGateControl(port, getSession) {
     const url = new URL(req.url, 'http://127.0.0.1');
     const sessions = () => getSession('all').map(s => ({ player_id: s.playerId, in_game: s.inGame,
       gate: gateView(s.gate), gateable: s.gateable, gate_refusal: gateRefusal(s), trade: s.trade.view(),
-      human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null }));
+      human_move_ms_ago: s.lastHumanMoveAt ? Date.now() - s.lastHumanMoveAt : null,
+      attached: s.attached ? { agent: s.attached.agent, since: s.attached.since, ...s.attached.stats } : null }));
     if (req.method === 'GET' && (url.pathname === '/gate' || url.pathname === '/status'))
       return send(200, { sessions: sessions() });
     if (req.method !== 'POST' || !['/gate', '/ungate', '/trade/accept-from', '/trade/give'].includes(url.pathname))
@@ -884,7 +888,7 @@ export function serveGateControl(port, getSession) {
 export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
                              observe = false, control = null, onSession = () => {},
                              listenHost = '0.0.0.0', contextPort = null, communicationStateFile = null,
-                             gateable = false, gateControl = null } = {}) {
+                             gateable = false, gateControl = null, attachPort = null } = {}) {
   if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
   const communications=communicationStateFile?proxyCommunicationsConfig({stateFile:communicationStateFile,host,port}):null;
   const context=contextPort!==null?proxyContext({host,port,listen}):null;
@@ -902,6 +906,8 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
   };
   if (control) serveControl(control, pick);
   if (gateControl) serveGateControl(gateControl, pick);
+  // SPECTATE: a keeper attaches here and drives while it holds the gate (m59-proxy-attach.mjs).
+  if (attachPort) serveAttach(attachPort, pick, m => console.error(m));
   // RECORD WHERE A HUMAN ACTUALLY WALKS. One file per proxy run — see the note on
   // `walkLog` in the session. `--no-walklog` turns it off; it is on by default because
   // the trace is the only ground truth this repository has about walkable space, and the
@@ -966,6 +972,7 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
       listen, server: { host, port }, pid: process.pid, at: Date.now(), communication_state_file:communicationStateFile,
       // Where the plan desk takes and releases the controls (m59-proxy-gate.mjs).
       gate_control: arg('--gate-control') ? Number(arg('--gate-control')) : null,
+      attach: arg('--attach') ? Number(arg('--attach')) : null,
     }, null, 1));
     const drop = () => { try { unlinkSync(advert); } catch { /* already gone */ } };
     process.on('exit', drop);
@@ -981,5 +988,6 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     // --gate lets an --observe proxy hold the control gate; --gate-control <port> serves it.
     gateable: process.argv.includes('--gate') || !!arg('--gate-control'),
     gateControl: arg('--gate-control') ? Number(arg('--gate-control')) : null,
+    attachPort: arg('--attach') ? Number(arg('--attach')) : null,
   });
 }

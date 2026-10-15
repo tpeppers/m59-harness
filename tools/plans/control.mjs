@@ -15,7 +15,9 @@
 // finding in docs/m59-client-vs-harness.md, and this row says so rather than pretending.
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { evidenceDirFor } from '../m59-fleetpath.mjs';
 
 const TTL_MS = 120_000, RENEW_MS = 30_000;
@@ -53,8 +55,48 @@ export async function findSession(client, proxies = gateProxies()) {
 
 const renewals = new Map();   // pid -> timer
 
+// SPECTATE (tools/m59-spectate-keeper.mjs): the keeper that drives while the gate is held, attached
+// to the person's own connection through the proxy's attach port. Started here, one per agent;
+// its heartbeat is <harness>/substrate/spectate/<agent>.json.
+const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const spectateBeat = agent => { try { return JSON.parse(readFileSync(join(HARNESS, 'substrate', 'spectate', `${agent}.json`), 'utf8')); } catch { return null; } };
+const spectateAlive = agent => { const h = spectateBeat(agent); if (!h || Date.now() - h.at > 10_000 || /^stopped/.test(h.state)) return null;
+  try { process.kill(h.pid, 0); return h; } catch { return null; } };
+function startSpectate(ctx, advert, playerId) {
+  if (spectateAlive(ctx.client.agent)) return { ok: true, already: true };
+  if (!advert.attach) return { ok: false, why: 'this proxy has no attach port (start it with --attach), so no keeper can drive' };
+  const child = spawn(process.execPath, [join(HARNESS, 'tools', 'm59-spectate-keeper.mjs'), '--fleet', ctx.fleet === '' ? '-' : ctx.fleet,
+    '--agent', ctx.client.agent, '--attach-port', String(advert.attach), '--player', String(playerId)],
+    { cwd: HARNESS, detached: true, stdio: 'ignore', windowsHide: true });
+  child.unref();
+  return { ok: true, pid: child.pid };
+}
+function stopSpectate(agent) {
+  const h = spectateBeat(agent);
+  if (h?.pid) { try { process.kill(h.pid, 'SIGTERM'); } catch { /* already gone */ } }
+}
+const gaveUp = new Map();   // agent -> when the keeper was found dead while holding the gate
+
 export const provider = {
   id: 'control',
+  // A KEEPER THAT DIED WHILE HOLDING THE CONTROLS GIVES THEM BACK. Locked out with nobody driving is
+  // the one state this must never leave a person in for long: after 20s without a live spectate
+  // keeper, the gate is released and the person is told.
+  async tick(ctx) {
+    const c = ctx.client;
+    if (!c.agent) return;
+    const found = await findSession(c);
+    const gate = found?.session?.gate;
+    if (!gate || gate.holder !== holderFor(c.agent)) { gaveUp.delete(c.agent); return; }
+    if (spectateAlive(c.agent) || found.session.attached) { gaveUp.delete(c.agent); return; }
+    if (!gaveUp.has(c.agent)) { gaveUp.set(c.agent, ctx.now); return; }
+    if (ctx.now - gaveUp.get(c.agent) < 20_000) return;
+    clearInterval(renewals.get(c.pid)); renewals.delete(c.pid);
+    await http(found.advert.gate_control, `/ungate?player=${found.session.player_id}`, { holder: holderFor(c.agent) }).catch(() => {});
+    gaveUp.delete(c.agent);
+    const st = ctx.desk; st.messages.push({ seq: Date.now(), ok: false, message: 'The keeper stopped, so the controls are yours again.' });
+    ctx.log(`[plan ${c.agent}] spectate keeper gone while holding the gate -- released`);
+  },
   async entries(ctx) {
     const c = ctx.client;
     const found = await findSession(c);
@@ -77,8 +119,11 @@ export const provider = {
     if (gate.holder === holderFor(c.agent)) {
       return [{ id: 'control.take', group: 'Control', icon: 'keeper', title: 'Take control back from Keeper', running: true,
         describe: `Keeper has held the controls since ${new Date(gate.since).toLocaleTimeString()} ` +
-          `(${gate.dropped} of your inputs dropped). Driver on this connection: none yet — the keeper process cannot ` +
-          'share your socket (see the report); scripts that inject through the proxy can.' }];
+          `(${gate.dropped} of your inputs dropped). ` + (found.session.attached
+            ? `Keeper ${found.session.attached.agent} is driving on your connection: ${found.session.attached.injected} of its packets sent, ` +
+              `${found.session.attached.forged} moves mirrored to your screen.`
+            : spectateAlive(c.agent) ? 'Keeper is starting and attaching to your connection…'
+            : 'No keeper is attached yet.') }];
     }
     return [{ id: 'control.take', group: 'Control', icon: 'keeper', title: `Controls held by ${gate.holder}`, disabled: true,
       describe: `${gate.reason || 'no reason given'} — only its holder can release it, or it lapses by itself.` }];
@@ -94,11 +139,16 @@ export const provider = {
       clearInterval(renewals.get(c.pid));
       renewals.set(c.pid, setInterval(() => http(port, '/gate' + q, { holder: holderFor(c.agent), reason: 'relinquished from the PLAN tab', ttl_ms: TTL_MS })
         .then(x => { if (!x.ok) { clearInterval(renewals.get(c.pid)); renewals.delete(c.pid); } }).catch(() => {}), RENEW_MS));
-      return { ok: true, message: 'Keeper has the controls. You are spectating; take control back from this tab, or log off.' };
+      const sp = startSpectate(ctx, found.advert, found.session.player_id);
+      gaveUp.delete(c.agent);
+      return { ok: true, message: sp.ok ? 'Keeper has the controls and is attaching to your connection. You are spectating; take control back from this tab, or log off.'
+                                        : `Keeper has the controls, but cannot drive: ${sp.why}. Take control back to play.` };
     }
     if (entry === 'control.take') {
       clearInterval(renewals.get(c.pid)); renewals.delete(c.pid);
+      // Ungate FIRST: from this packet on the keeper's frames are dropped at the proxy, so stopping it can be slow.
       const r = await http(port, '/ungate' + q, { holder: holderFor(c.agent) });
+      stopSpectate(c.agent);
       return r.ok ? { ok: true, message: `Controls are yours again (${r.was?.dropped ?? 0} inputs were dropped while Keeper held them).` }
                   : { ok: false, message: r.why ?? r.error };
     }
