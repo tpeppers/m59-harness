@@ -17,6 +17,7 @@ node_modules/
 # snapshot of somebody's characters: the roster carries account passwords in
 # plain text, and the flight recordings are one server's history, not reference.
 /substrate/fleet-state.json
+/substrate/courier-purchases/
 /substrate/fleet-state.json.*
 # Named fleets (--fleet <name>) keep a roster each under here. Same plaintext
 # passwords as the file above, one file per server, so the whole directory goes —

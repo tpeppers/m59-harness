@@ -98,6 +98,8 @@ export const DOMAINS = Object.freeze({
       'tools/m59-island-route.mjs',
       'tools/m59-island-finewalk.mjs',
       'tools/m59-island-observation.mjs',
+      'tools/m59-courier-purchases.mjs', // measured courier load and acquisition-value receipts
+      'tools/fleetscripts/island-bows.mjs',
       'tools/m59-door-wait.mjs',
       'tools/m59-ceiling-doors.mjs',
       'tools/m59-guild-passage.mjs',

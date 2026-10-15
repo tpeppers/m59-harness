@@ -105,17 +105,22 @@ function withLock(fn) {
   while (fd == null) {
     try {
       fd = openSync(path, 'wx');
-      writeFileSync(fd, JSON.stringify({ pid: process.pid, process_started_at: PROCESS_STARTED_AT }));
-      fsyncSync(fd);
     } catch (e) {
-      if (fd != null) { try { closeSync(fd); } catch {} fd = null; remove(path); }
-      if (e?.code !== 'EEXIST') throw e;
-      clearAbandonedLock(path);
+      // Windows can report a sharing/delete-pending race as EPERM rather than
+      // EEXIST. Retry acquisition only, bounded by the same deadline. This does
+      // not remove a lock on permission/sharing errors or enter without one.
+      const sharing=process.platform==='win32'&&['EPERM','EACCES','EBUSY'].includes(e?.code);
+      if (e?.code !== 'EEXIST'&&!sharing) throw e;
+      if(e?.code==='EEXIST')clearAbandonedLock(path);
       if (Date.now() >= deadline)
-        throw new Error(`wall claim store stayed locked for ${LOCK_TIMEOUT_MS}ms`);
+        throw new Error(`wall claim store stayed locked for ${LOCK_TIMEOUT_MS}ms`,{cause:e});
       Atomics.wait(LOCK_WAIT, 0, 0, 5);
     }
   }
+  try{
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, process_started_at: PROCESS_STARTED_AT }));
+    fsyncSync(fd);
+  }catch(e){try{closeSync(fd);}catch{}remove(path);throw e;}
   try { return fn(cfg.path); }
   finally {
     try { closeSync(fd); } catch {}

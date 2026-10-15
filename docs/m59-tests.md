@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+`m59-courier-purchases-test.mjs` checks capacity-clamped maximum orders,
+separate cash and pack arrival, one-attempt durable receipts, uncertain
+purchases and acquisition-cost loss overhead. `m59-spotclaims-lock-test.mjs`
+injects Windows acquisition sharing errors into the actual file store and
+checks bounded retries, live-owner protection and persistent denial. These
+are offline contracts; populated delivery measurements remain separate.
+
 `m59-recovery-pacer-test.mjs` runs the actual five-packet scheduler, Session
 stand and refuge-return code behind thirty queued reads. It checks that active
 recovery reaches stand and movement without bypassing normal pacing, while

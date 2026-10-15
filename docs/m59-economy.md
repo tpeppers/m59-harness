@@ -1,5 +1,20 @@
 # Money, merchants, gear and supply
 
+`island-bows maxBows=true` buys the requested arrows first, then requests as
+many practice bows as the remaining purse can pay for. The existing shop tool
+clamps that order to weight and bulk. Live quotes and confirmed inventory/cash
+changes are recorded in ignored `substrate/courier-purchases/` receipts.
+Ambiguous purchases are never resent; short or refused orders are recorded
+and the trip still attempts the return.
+
+Courier loss overhead is lost cash plus cargo at acquisition cost divided by
+cash plus cargo delivered home. Equal loads with half lost and half delivered
+have 100% overhead. Held capital is reported separately. Cargo-only loss
+overhead divides the same loss by delivered cargo cost, so returning unspent
+cash cannot conceal a costly supply delivery. No deliveries or unreconciled
+capital produce an unknown ratio, not zero. Worn kit and consumed provisions
+are outside this cash-and-cargo measure unless separately priced.
+
 Gauntlets have their own default equipment slot. The keeper equips usable,
 unreserved pairs after looting and during its periodic empty-slot check;
 `wear_best` includes them too. Existing armour, shield and helm slots are

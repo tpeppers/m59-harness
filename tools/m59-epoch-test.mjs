@@ -33,7 +33,8 @@ ok('a dirty working tree gets its own id, suffixed by the content of the owned f
    !now.dirty || /^[0-9a-f]{12}\+[0-9a-f]{8}$/.test(now.id), JSON.stringify(now));
 ok('a clean tree is just the ref', now.dirty || /^[0-9a-f]{12}$/.test(now.id), JSON.stringify(now));
 ok('the movement domain owns the mover, the collision model and the route table',
-   ['tools/m59-game.mjs', 'tools/m59-body-command.mjs', 'tools/m59-roo.mjs', 'tools/m59-routes.mjs', 'tools/m59-world.mjs']
+   ['tools/m59-game.mjs', 'tools/m59-body-command.mjs', 'tools/m59-roo.mjs', 'tools/m59-routes.mjs', 'tools/m59-world.mjs',
+    'tools/m59-courier-purchases.mjs','tools/fleetscripts/island-bows.mjs']
      .every(f => DOMAINS.movement.files.includes(f)));
 ok('the tag is the thing a commit message carries', DOMAINS.movement.tag === '#movement');
 

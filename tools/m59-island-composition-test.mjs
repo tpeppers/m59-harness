@@ -31,6 +31,11 @@ assert.equal(trip.params.departSpacingMs.default,60000);
 await assert.rejects(trip.steps({...p,departSpacingMs:-1}),/convoy timing/);
 assert(!steps.at(-1).avoid.includes(587));
 await assert.rejects(bows.steps({bows:-1,arrows:1}),/nonnegative/);
+const maximum=await bows.steps({bows:1,arrows:200,bowType:'practice',maxBows:true});
+assert.equal(maximum[0].to,2100,'reserve the requested arrows before filling the remaining bow budget');
+assert(maximum.some(s=>s.do==='walk'&&s.to===2014));
+assert.equal(maximum.at(-1).to,2000);
+await assert.rejects(bows.steps({bows:1,arrows:200,bowType:'long',maxBows:true}),/practice/);
 // Required routing refuses missing geometry; ordinary travel retains its default.
 const prototype=sessionWalkPrototype({}), fake={need:()=>({}),world:{room:{num:99},geometry:null}};
 assert.equal((await prototype.crossBySafeLegs.call(fake,{stand_on:{row:1,col:1}},{policy:{rooms:[99],required:true}})).refused,true);
