@@ -34,6 +34,10 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-falljump-choice-test.mjs', 'adjacent declared falls prefer the requested landing while retaining eligible variation fallback'],
+  ['m59-moving-platform-test.mjs', 'Ancient Place lift heights and timing retain legal running falls and reject wrong lift states'],
+  ['m59-brax-test.mjs', '25-player platform stations, divided levers, endpoint-keyed atomic group journal and live-room objective'],
+  ['m59-rail-animation-test.mjs', 'rail aims wait for room animation without advancing, changing rooms, ignoring cancellation or waiving collisions'],
   ['m59-deviation-routing-test.mjs', 'confirmed rail bends take bounded local detours; exit-candidate exhaustion reaches the journey replanner without relaxing unknown-position or ownership guards'],
   ['m59-cragged-pocket-test.mjs', 'fine pocket escape rails, distant goals, persistent refusal evidence, choke admission, survival ownership and quarry approach invalidation'],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],

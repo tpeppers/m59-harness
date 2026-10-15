@@ -175,3 +175,15 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const unseen = jumps.filter(j => !j.observed_by);
   if (unseen.length) console.log(`\n${unseen.length} entr(y/ies) nobody has walked — worth less than no entry at all`);
 }
+
+// Prefer the requested declared landing before accepting a nearby variation.
+export function selectDeclaredFall(candidates,{from,to}) {
+  let best=null,score=Infinity;
+  for(const candidate of candidates){
+    const target=Math.hypot(candidate.to.row-to.row,candidate.to.col-to.col);
+    const start=Math.hypot(candidate.from.row-from.row,candidate.from.col-from.col);
+    const rank=target*100+start;
+    if(rank<score){best=candidate;score=rank;}
+  }
+  return best;
+}

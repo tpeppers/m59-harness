@@ -412,6 +412,7 @@ async function main() {
       const r = await rpc(a.broker, 'reroll', {
         action: 'reroll', agent, name: p.name,
         stats: p.stats, loadout: a.loadout, confirm: true,
+        unsafe: a.waive ? { reason: a.reason ?? '', waives: a.waive } : undefined,
         account: p.account, password,
         host: process.env.M59_HOST || undefined,
         port: process.env.M59_PORT ? Number(process.env.M59_PORT) : undefined,
