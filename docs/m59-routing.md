@@ -2414,3 +2414,15 @@ queue component. Twenty serialized couriers can exceed the former two-hour
 arrival barrier while continuing to make progress. `waveBudgetMs` and
 `queueBudgetMs` remain positive, bounded settings; departure spacing, packet
 pacing, collision checks and active-leg deadlines are unchanged.
+
+The guide baker also generates six ordinary western Hollows links from the
+declared landing through the existing human-walk points. The shared fine
+cutter can reuse those links instead of repeatedly searching the same ground.
+The declared jump remains its own operation. Current body obstruction,
+mandatory avoidance, shelf limits and exact endpoint bridges still determine
+whether a link is usable, with keeper recovery observing the executing walk.
+
+Runtime provenance hashes the fine-guide book along with the map, route, track
+and fall-jump data. Changes to those navigation inputs mark the executing
+source dirty, so a recorded route identifies its actual guide content as well
+as its code commit.

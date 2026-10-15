@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-replay-provenance-test.mjs','executing movement provenance includes routing/guide content and dirty navigation data, without relabelling historical decisions'],
   ['m59-traversal-admission-test.mjs','shared map admission keeps queued travelers outside until a confirmed exit; stopped bodies and dead drivers cannot release it'],
   ['m59-recovery-preemption-test.mjs','keeper shelter invalidates an in-flight FleetScript walk before issuing its own packets and preserves the recovery decision'],
   ['m59-survival-switch-test.mjs','explicit operator stand-down preserves PvP/fallback and clears old autonomous recovery'],
