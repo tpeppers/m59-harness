@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {roomGeometry} from './m59-ground.mjs';
-import {fineRefugeReach,planRecoveryApproach} from './m59-fine-refuge-reach.mjs';
+import {fineRefugeReach,planRecoveryApproach,planNearbyFineRefuge} from './m59-fine-refuge-reach.mjs';
 import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 import {protocolToClient} from './m59-roo.mjs';
 import {OF,MOVEON} from './m59-parse.mjs';
@@ -41,6 +41,17 @@ assert.equal(fineProgress.progressedAt,1500);
 observeRefugeProgress(fineProgress,coarseMiss,{...from,predicted:true,x:n.x,y:n.y},selected,2000);
 assert.equal(fineProgress.progressedAt,1500,'predictions cannot renew fine progress');
 console.log('Recorded Konima recovery has a short reversible fine refuge approach; blocked, predicted, unknown-body and exhausted scans fail closed.');
+const wait=planNearbyFineRefuge(geo,from,objects,from.id);
+assert(wait.found&&wait.steps<=8);
+assert(![...objects.values()].some(o=>o.id!==from.id&&o.row===wait.cell.row&&o.col===wait.cell.col&&
+ (o.flags&(OF.ATTACKABLE|OF.PLAYER))));
+assert.equal(planNearbyFineRefuge(geo,{...from,predicted:true},objects,from.id).found,false);
+assert.equal(planNearbyFineRefuge(geo,from,objects,from.id,{budgetMs:0}).found,false);
+assert.equal(planNearbyFineRefuge(geo,null,objects,from.id).found,false);
+const hg=roomGeometry(2502),covered={id:1,x:2176,y:2552,row:39,col:34};
+const held=planNearbyFineRefuge(hg,covered,new Map(),covered.id);
+assert(held.found);assert.deepEqual(held.point,{x:covered.x,y:covered.y});
+assert.equal(held.steps,0,'an already covered body keeps its real zero-length refuge');
 
 // Native Merb death scene: a clear four-square refuge was abandoned after the
 // exposure optimizer ran out of time. Keep that feasible approach, while still

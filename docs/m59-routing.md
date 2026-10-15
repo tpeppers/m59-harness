@@ -67,6 +67,19 @@ The fine-cut worker also searches those alternatives from an already covered
 body before choosing the wait. Previously that branch skipped the search
 while covered and could sit beside a clear three-square approach indefinitely.
 It excludes its current cell and previously used partial-refuge stops.
+Side refuges now also need a bounded, checked way back to their route anchor.
+That applies to both the short fine-cut fallback and protected full-room
+legs. A covered pocket reached by a one-way descent is not a traffic detour.
+Forward drops already on a complete route retain their ordinary checks.
+
+The shared declared-crossing controller can refine a takeoff from current
+bodies, wait at an observed unoccupied reversible refuge, and resume after a
+caller-verified keeper recovery. Recovery resumes from the actual healthy
+body instead of retreating into a follower's staging cell. The existing
+crossing queue remains held through landing clearance. Actual flight attempts
+and the overall journey stay bounded; every new attempt re-proves its takeoff.
+Configured lower-floor escapes retain the same floor fence during staging,
+approach and refuge waits. An unknown escape is an explicit refusal.
 
 When live bodies leave no required refuge prefix from a covered starting
 cell, the fine planner reports that covered wait explicitly. The general

@@ -112,6 +112,7 @@ export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
   return ready;
 }
 export async function ordinaryHop(ctx,to,options={}){
+  ctx.state??={};ctx.state.islandCancelFence??=Date.now();
   return withTourWalkOwnership(ctx.agent,async()=>{
     try{return await hopOwned(ctx,to,options);}
     catch(e){await ctx.call('cancel_movement',{agent:ctx.agent}).catch(()=>{});throw e;}

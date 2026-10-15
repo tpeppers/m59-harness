@@ -7,6 +7,14 @@ import {legWalls} from './m59-safelegs.mjs';
 import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 import {findFineGuide} from './m59-fine-guides.mjs';
 
+// A traffic side refuge must lead back to the proved route. Ordinary downhill
+// walking can enter a covered pocket that cannot rejoin a higher ledge.
+export function fineRefugeReturnable(geo,from,anchor,{objects,selfId,roomFlags=0,overrideDepths,
+ avoidSquares,marginSquares=2,maxRangeSquares=8,maxNodes=768,maxMs=35}={}){
+ return planBodyDetour(geo,from,anchor,{objects,selfId,roomFlags,overrideDepths,avoidSquares,
+  marginSquares,maxRangeSquares,maxNodes,maxMs,threats:[],threatWeight:0}).found===true;
+}
+
 export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreachable=null,
   avoidSquares=null,objects=null,selfId=null,roomFlags=0,overrideDepths=null,
   threats=[],threatWeight=6,threatRadius=4,maxMs=10000,goalFine=null,goalFineAlternates=[]}={}){
@@ -95,7 +103,8 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
       if(!side.found)continue;
       let q=p,extra=0;for(const n of side.waypoints){extra+=Math.hypot(n.x-q.x,n.y-q.y)/64;q=n;}
       if(p.distance+extra>maxLeg)continue;
-      stop={row:w.row,col:w.col,steps:p.distance+extra,waypoints:[...prefix.slice(0,i+1).map(({x,y})=>({x,y})),...side.waypoints]};break;
+      if(!fineRefugeReturnable(geo,q,p,{objects,selfId,roomFlags,overrideDepths,avoidSquares}))continue;
+      stop={row:w.row,col:w.col,steps:p.distance+extra,refuge_return_proved:true,waypoints:[...prefix.slice(0,i+1).map(({x,y})=>({x,y})),...side.waypoints]};break;
     }
     if(stop)break;
   }
@@ -114,7 +123,9 @@ export function planFineRailRefuge(geo,from,goal,{maxLeg=20,occupied=null,unreac
       if(!side.found||!side.waypoints.length)continue;
       let previous=from,distance=0;for(const p of side.waypoints){distance+=Math.hypot(p.x-previous.x,p.y-previous.y)/64;previous=p;}
       if(distance>maxLeg||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
-      stop={row:w.row,col:w.col,steps:distance,waypoints:side.waypoints,alternative_refuge:true};break;
+      if(!fineRefugeReturnable(geo,previous,from,{objects,selfId,roomFlags,overrideDepths,avoidSquares,
+       marginSquares:3,maxRangeSquares:14,maxNodes:6000,maxMs:80}))continue;
+      stop={row:w.row,col:w.col,steps:distance,waypoints:side.waypoints,alternative_refuge:true,refuge_return_proved:true};break;
     }
   }
   if(stop){
@@ -220,6 +231,8 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
               if(!side.found)continue;
               let previous=p,extra=0;for(const q of side.waypoints){extra+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
               if(used+extra>limit)continue;
+              if(!fineRefugeReturnable(geo,previous,p,{objects:scopedObjects,selfId:o.selfId,
+               avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths}))continue;
               waypoints=[...prefix.slice(0,i+1),...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
               refuge={row:w.row,col:w.col};break;
             }
@@ -241,12 +254,15 @@ if(parentPort&&workerData?.kind==='m59-fine-rail/1'){
             if(!side.found||!side.waypoints.length)continue;
             let previous=from,distance=0;for(const q of side.waypoints){distance+=Math.hypot(q.x-previous.x,q.y-previous.y)/64;previous=q;}
             if(distance>limit||Math.floor(previous.y/64)!==w.row||Math.floor(previous.x/64)!==w.col)continue;
+            if(!fineRefugeReturnable(geo,previous,from,{objects:scopedObjects,selfId:o.selfId,
+             avoidSquares:o.avoidSquares,roomFlags:o.roomFlags??0,overrideDepths:o.overrideDepths,
+             maxRangeSquares:limit+2,maxNodes:2000,maxMs:60}))continue;
             const first=point(from);
             waypoints=[{...first,f:settings.floorAt(first.x,first.y)},...side.waypoints.map(q=>{const p=point(q);return {...p,f:settings.floorAt(p.x,p.y)};})];
             refuge={row:w.row,col:w.col};break;
           }
         }
-        if(waypoints?.length>1)cut={...guide,waypoints,legs:waypoints.length-1,partial:true,refuge,
+        if(waypoints?.length>1)cut={...guide,waypoints,legs:waypoints.length-1,partial:true,refuge,refuge_return_proved:!!refuge,
           blocked_route_reason:cut.why??'body route bridge unavailable'};
       }
     }

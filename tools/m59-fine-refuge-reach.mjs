@@ -1,6 +1,23 @@
 import {planBodyDetour} from './m59-body-detour.mjs';
 import {blocksMovement,OF} from './m59-parse.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
+import {safeSpots} from './m59-safespots.mjs';
+
+// Reversible short waits use the observed body and current occupants. A
+// reserved queue cell may be occupied by a follower, so it is not a retreat.
+export function planNearbyFineRefuge(geo,from,objects,selfId,{budgetMs=300}={}){
+ if(!geo?.collisionReady||from?.predicted||![from?.x,from?.y,from?.row,from?.col].every(Number.isFinite))
+  return {found:false,reason:'confirmed fine refuge origin unavailable'};
+ const reach=fineRefugeReach(geo,from,objects,selfId,{budgetMs});
+ const candidates=safeSpots(geo,{limit:Infinity}).filter(w=>!w.rim&&
+  Math.max(Math.abs(w.row-from.row),Math.abs(w.col-from.col))<=6)
+  .sort((a,b)=>Math.hypot(a.row-from.row,a.col-from.col)-Math.hypot(b.row-from.row,b.col-from.col));
+ for(const cell of candidates){const r=reach(cell.col,cell.row);
+  if(r.reachable&&r.returnable&&knownRefugeCell(geo,{...r.fine,row:cell.row,col:cell.col,predicted:false}))
+   return {found:true,point:r.fine,cell:{row:cell.row,col:cell.col},steps:r.steps};
+ }
+ return {found:false,reason:'no short reversible unoccupied refuge'};
+}
 
 // Static staging layout: a refuge cell's centre can be inside its wall. Find
 // actual enterable fine footing from a known approach and prove a way back.
@@ -61,7 +78,7 @@ export function fineRefugeReach(geo,from,objects,selfId,{budgetMs=300}={}){
   const options={objects:snapshot,selfId,marginSquares:4,maxRangeSquares:8,maxNodes:6000,maxMs:Math.min(80,remaining())};
   const p=planBodyDetour(geo,from,goal,{...options,goalSquare:{row,col}});
   if(!p.found)return refuse(p.reason??'fine refuge approach unproved');
-  const end=p.waypoints.at(-1);let previous=from,length=0;
+  const end=p.waypoints.at(-1)??from;let previous=from,length=0;
   for(const point of p.waypoints){length+=Math.hypot(point.x-previous.x,point.y-previous.y)/64;previous=point;}
   if(length>8)return refuse('fine refuge approach exceeds short recovery allowance');
   const back=remaining()>0?planBodyDetour(geo,end,from,{...options,maxMs:Math.min(80,remaining())}):null;
