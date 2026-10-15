@@ -3058,5 +3058,25 @@ console.log('\na broker refusal fails an act step, it is never ok');
   ok('a thrown step remains a failure with its original reason',!r.results.a1.ok&&r.results.a1.why==='temporary observation unavailable');
   ok('an exception skips dependent work and runs always cleanup',continued===0&&cleaned===1);
 }
+{
+  // A local continuation may waive only the outer run marker after its own
+  // actor ended. Cleanup still returns normally and cannot erase that marker.
+  const {takeAgentLocks,inspectRunLock}=await import('./m59-runlock.mjs');
+  const {resolve,sep}=await import('node:path');
+  const previous=process.env.M59_RUNLOCK_DIR,scratch=mkdtempSync(join(tmpdir(),'m59-waived-run-'));
+  process.env.M59_RUNLOCK_DIR=scratch;const outer=takeAgentLocks('testfleet',['a1'],{label:'outer batch'});
+  try{
+    fakeBroker({rooms:{a1:39}});let ran=0;
+    const r=await fleetScript({name:'waived-marker-cleanup',fleet:'testfleet',agents:['a1'],controls:['a1'],
+      unsafe:{waives:['runLock'],reason:'offline shadow continuation contract fixture'},
+      steps:[verify(()=>{ran++;return true;})],onLog:quiet});
+    ok('a run-marker waiver completes and cleans up without a missing release handle',ran===1&&r.results?.a1?.ok===true);
+    ok('waived cleanup preserves the existing outer batch marker',inspectRunLock('testfleet','a1').lock?.label==='outer batch');
+  }finally{
+    outer.release();if(previous==null)delete process.env.M59_RUNLOCK_DIR;else process.env.M59_RUNLOCK_DIR=previous;
+    if(!resolve(scratch).startsWith(resolve(tmpdir())+sep))throw Error('waiver fixture cleanup escaped temporary directory');
+    rmSync(scratch,{recursive:true,force:true});
+  }
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

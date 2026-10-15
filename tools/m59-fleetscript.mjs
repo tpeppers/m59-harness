@@ -5140,7 +5140,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
   const control = declaredControl({ controls }, agents);
   const known = knownCharacters(fleet);
   const claim = waived.has('runLock')
-    ? { ok: true, holder: null, tookOverFrom: [] }
+    ? { ok: true, holder: null, tookOverFrom: [], release() {} }
     : takeAgentLocks(fleet, control.names, { label: `${name} [${control.names.join(',')}]`, force });
   if (!claim.ok) {
     const h = claim.holder ?? {};
