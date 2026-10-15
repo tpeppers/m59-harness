@@ -16,6 +16,7 @@ import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
 import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
+import {copyFineGeometry,applyFineSectorObservations} from './m59-observed-geometry.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -24,7 +25,9 @@ export async function readIslandFinePosition(ctx,look){
     valid:v=>v.position?.ok&&v.position.fresh===true&&v.position.room===v.body.room?.num&&
       Number.isFinite(v.body.hp?.value)&&Number.isFinite(v.body.hp?.max)&&v.body.hp.max>0,
     bodyOf:v=>v.body,statusOf:v=>v.snapshot,error:'island_fine_position_unconfirmed'
-  }).then(({body,position,snapshot,observed})=>({...bindIslandFinePosition(body,position),objects:snapshot.objects,sector_heights:observed,movement:snapshot.movement,autopilot_status:snapshot.autopilot_status}));
+  }).then(({body,position,snapshot,observed})=>({...bindIslandFinePosition(body,position),objects:snapshot.objects,sector_heights:observed,
+    sector_movements:snapshot.doors?.movements,door_settling_until:snapshot.doors?.settling_until,
+    movement:snapshot.movement,autopilot_status:snapshot.autopilot_status}));
 }
 async function readFineOnce(ctx,look){
   const key=ctx.fleet+':'+ctx.agent;
@@ -181,7 +184,7 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
   return {...observation,error};
 }
 export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null}={}){
-  const {agent,call}=ctx,geo=roomGeometry(room),goal=protocolToClient(target),started=Date.now();
+  const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),goal=protocolToClient(target),started=Date.now();
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
   const exits=roomExitSquares(loadMap().rooms[room],{rows:geo?.rows,cols:geo?.cols,to:allowEdgeTo,includeInland:true});
   let avoidance=new Set(exits);
@@ -189,15 +192,20 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   let liveBodies=[];
   const edge=(a,b)=>{if(avoidance.has(Math.floor(b.y/1024)+1+','+(Math.floor(b.x/1024)+1)))return false;
     const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles:liveBodies});return t?.arrived===true&&t.blocked!==true;};
-  const squares=new Set(safeSpots(geo,{limit:Infinity}).filter(s=>!s.rim&&hasAnyFooting(geo,s.row,s.col)).map(s=>s.row+','+s.col));
+  let squares=new Set(),refugeMask=null,refugeRevision=null;
   const read=async()=>{
     const l=await readIslandFinePosition(ctx);onSample(l);
     checkIslandCancellation(ctx,l);
     if(l.room?.num!==room)throw Error('fine_route_unexpected_room');
+    applyFineSectorObservations(loadMap(),room,geo,l.sector_movements);
     if(room===27){
       if(![1,2,3,4,5].every(id=>l.sector_heights?.[id]===24))throw Error('island_cave_requires_observed_dispel');
       const applied=applyDoorState({rooms:{27:{num:27}}},27,l.sector_heights,{geometryOf:()=>geo});
       if(applied.unbaked||applied.state!=='sector1@24+sector2@24+sector3@24+sector4@24+sector5@24')throw Error('island_cave_open_mask_unavailable');
+    }
+    if(refugeMask!==geo._stepMask||refugeRevision!==geo.revision||!squares.size){
+      squares=new Set(safeSpots(geo,{limit:Infinity}).filter(s=>!s.rim&&hasAnyFooting(geo,s.row,s.col)).map(s=>s.row+','+s.col));
+      refugeMask=geo._stepMask;refugeRevision=geo.revision;
     }
     if(!Number.isFinite(l.hp?.value)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
     if(l.hp.value<=0)throw Error('traveller_died');
@@ -213,6 +221,10 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
     if(activeOwnedFineRecovery(ctx,l)){
       if(recoveries>=3||!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l}))throw Error('fine_route_recovery_incomplete');
       recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
+    }
+    if(Number.isFinite(l.door_settling_until)&&l.door_settling_until>Date.now()){
+      cut=null;await new Promise(r=>setTimeout(r,Math.min(100,l.door_settling_until-Date.now())));
+      ({l,body}=await read());continue;
     }
     const distance=Math.hypot(body.x-goal.x,body.y-goal.y),actualFloor=floorAt(geo,body.x,body.y);
     if(distance<=128&&Number.isFinite(actualFloor)&&Number.isFinite(expectedFloor)&&Math.abs(actualFloor-expectedFloor)<=384)
