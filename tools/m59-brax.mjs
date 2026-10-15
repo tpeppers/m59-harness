@@ -11,7 +11,7 @@ import {cutRail} from './m59-railcut.mjs';
 import {scanKeepers,identityOf,identityMismatch} from './m59-keeper.mjs';
 import {protocolToClient,clientToProtocol,squareCentreClient} from './m59-finepos.mjs';
 import {applyAncientFloors,liftWaitMs} from './m59-moving-platform.mjs';
-import {evidenceDirFor} from './m59-fleetpath.mjs';
+import {evidenceDirFor,resolveControlUrl} from './m59-fleetpath.mjs';
 import {planBodyDetour} from './m59-body-detour.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -70,14 +70,21 @@ export const braxArrival=s=>Number(s.room?.num)===827&&Number(s.hp?.value)>0;
 
 // All checkouts use the same endpoint-keyed journal beside the shared evidence store.
 // The short mutex is atomic (wx); no socket work occurs while it is held.
-export function groupJournal(server,{directory=join(evidenceDirFor(),'brax-groups')}={}){
+export function groupJournal(server,{directory=join(evidenceDirFor(),'brax-groups'),openMutex=openSync}={}){
   mkdirSync(directory,{recursive:true});
   const file=join(directory,createHash('sha256').update(server).digest('hex').slice(0,24)+'.json');
   return {file,async change(fn){
     const lock=file+'.mutex',until=Date.now()+10000;
     for(;;){let fd;
-      try{fd=openSync(lock,'wx');writeFileSync(fd,JSON.stringify({pid:process.pid}));}
-      catch(e){if(e.code!=='EEXIST')throw e;
+      try{fd=openMutex(lock,'wx');writeFileSync(fd,JSON.stringify({pid:process.pid}));}
+      catch(e){
+        // Windows can report a just-unlinked mutex as temporarily delete-pending.
+        // Retry without deleting or interpreting an inaccessible owner's lock.
+        if(e.code==='EPERM'||e.code==='EACCES'){
+          if(Date.now()>until)throw Error('Brax journal mutex stayed inaccessible');
+          await sleep(50);continue;
+        }
+        if(e.code!=='EEXIST')throw e;
         let held;
         try{held=JSON.parse(readFileSync(lock,'utf8'));}
         catch(readError){if(Date.now()>until)throw Error('Unreadable Brax journal mutex');await sleep(50);continue;}
@@ -124,6 +131,8 @@ export function ensureBraxApproach({sourceFile=join(root,'substrate/node-tour-ra
 
 export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile=join(root,'substrate/brax-rails.json'),resumeRaisedAt=null,resumeNorthLedge=false}={}){
   const {agent,fleet,call,state}=ctx,start=Date.now(),end=start+timeoutMs;
+  const control=resolveControlUrl();if(!control.url)throw Error(control.why);
+  const controlURL=new URL(control.url);
   const out=join(root,'substrate/brax-attempts');mkdirSync(out,{recursive:true});
   const id=agent+'-'+Date.now(),receipt=join(out,id+'.jsonl');state.brax={id,receipt,success:false};
   const log=(event,data={})=>{appendFileSync(receipt,JSON.stringify({at:new Date().toISOString(),agent,event,...data})+'\n');console.log('BRAX '+agent+' '+event);};
@@ -182,7 +191,7 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     }
   };
   const follow=async(file,label)=>{
-    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',new URL(process.env.M59_CONTROL_URL).port,'--agent',agent,'--rail','brax','--rail-file',file,'--no-hop','--receipt',join(out,id+'-'+label+'-commands.jsonl')];
+    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',controlURL.port,'--agent',agent,'--rail','brax','--rail-file',file,'--no-hop','--receipt',join(out,id+'-'+label+'-commands.jsonl')];
     const commandsFile=join(out,id+'-'+label+'-commands.jsonl');
     const result=await new Promise(done=>execFile(process.execPath,args,{cwd:root,timeout:900000,maxBuffer:8e6,windowsHide:true},(error,stdout,stderr)=>done({error,stdout,stderr})));
     writeFileSync(join(out,id+'-'+label+'.txt'),result.stdout+'\n'+result.stderr);
@@ -289,7 +298,7 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     await command('cancel_movement');await command('rest',{stand:true});
     await follow(approachFile,'cliffs');
     s=await read();if(s.room.num!==579||Math.hypot(position(s).x-55808,position(s).y-32000)>160)throw Error('Brax south takeoff not reached');
-    const server=(await(await fetch(new URL('health',process.env.M59_CONTROL_URL))).json()).game_server;
+    const server=(await(await fetch(new URL('health',controlURL))).json()).game_server;
     journal=groupJournal(`${server.host}:${server.port}`);
     ticket=agent+'-'+randomUUID();
     await until(async()=>{

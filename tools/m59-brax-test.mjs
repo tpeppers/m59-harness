@@ -3,7 +3,7 @@ import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {squareCentreClient} from './m59-finepos.mjs';
 import {chordWalkable} from './m59-railcut.mjs';
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync} from 'node:fs';
+import {mkdtempSync,readFileSync,openSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
@@ -78,3 +78,11 @@ assert(!await awaitLeverConfirmation({}, {since:1,timeoutMs:2000,now:()=>tick,ob
   waitEvent:async()=>{tick+=1000;return {cursor:2,events:[{text:'System saved.'}]};}}));
 const leaderPath=platformAims(squareCentreClient(22,55),squareCentreClient(17,51));
 assert(!leaderPath.some(p=>p.x===squareCentreClient(24,51).x&&p.y===squareCentreClient(24,51).y),'north lever worker must not use the occupied south lever station as a mandatory aim');
+
+let mutexOpenCalls=0;
+const deletePending=groupJournal('windows-delete-pending',{directory,openMutex:(...args)=>{
+  if(!mutexOpenCalls++)throw Object.assign(Error('delete pending'),{code:'EPERM'});
+  return openSync(...args);
+}});
+assert.equal((await deletePending.change(()=>({count:1}))).count,1);
+assert.equal(mutexOpenCalls,2,'a Windows delete-pending refusal retries without deleting an unowned lock');
