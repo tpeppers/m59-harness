@@ -1,5 +1,35 @@
 # Cave and Ko'catan travel
 
+Konima has three independently observed local native crossings: outbound
+r27c60 to r27c65 and r46c80 to r46c84, and return r27c65 to r29c63.
+The return deliberately drops onto the lower floor. A missed first outbound
+crossing also uses that lower floor: go south through r31c64 and r33c64,
+then west to the refuge at r33c59. The northern lower-floor approach is about
+12 walking squares from that refuge; the southern approach is about nine.
+Never retry the outward jump while below its takeoff shelf.
+
+The declarations live in `m59-falljumps.json` and `m59-gutters.json`, so the
+shared router can use them. `node tools/m59-fine-guidebake.mjs` generates the
+directional fine guides and separate r72c1-to-r5c57 and reverse traversal
+chains. The shared fine rail worker uses these guides only after checking
+the current geometry, avoidance, boarding chord and exact endpoint; movement
+still checks live bodies. An open-door guide cannot open a closed door.
+`operate_door` uses the shared trigger, ordinary GO and observed animation
+wait. The crossing helper serializes approach through landing clearance,
+confirms the actual fine floor, and sends lower landings through their gutter.
+
+Component checks on October 14–15 used stock local monsters, initial 20 HP,
+200 vigor, no skills or spells, and no measured administrator mutations.
+Each crossing and the gutter reached its expected server-confirmed landing
+without a death. These are component observations, not a fleet survival rate.
+The earlier completed 20-courier build `48f8973a` reached the inn with 15/20
+and completed the round trip with 4/20; 13 deaths lost 520,000 synthetic
+shillings, and three living route failures retained their purses. All deaths
+were in Konima: nine around r25c60–64, two around r21c61–62, one at r23c61
+and one at r31c64. The later return scenes had more creatures, while each
+death scene had zero or one other courier nearby. This does not establish a
+twenty-character player pileup. The new route requires its own populated trial.
+
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
 Ko'catan (2000). The return uses those maps in reverse order, with different

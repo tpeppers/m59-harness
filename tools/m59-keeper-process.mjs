@@ -2944,6 +2944,10 @@ const server = createServer(async (req, res) => {
             json(r ?? { ok: true });
             return;
           }
+          case 'operate_door': {
+            const r=await asWalkOrder(args,'operate room door',()=>session.openOperableDoor({targets:args.targets??null}));
+            json(r);return;
+          }
           case 'raw_go': {
             // The bare GO, at the square the character is standing on. Distinct from the
             // 'go' action above, which resolves an exit and calls leaveViaAny.

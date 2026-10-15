@@ -15,6 +15,7 @@ import {checkIslandCancellation,observeIslandTraveller} from './m59-island-obser
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {knownRefugeCell} from './m59-refuge-activation.mjs';
+import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
 export {checkIslandCancellation} from './m59-island-observation.mjs';
 
 const finePorts=new Map();
@@ -325,10 +326,48 @@ export async function walkHollowsOut(ctx,options={}){
   }
 }
 export async function approachIslandDoor(ctx,options={}){
+  const initial=await readIslandFinePosition(ctx);
+  if(initial.you.row>10){
+    const geo=roomGeometry(2505),walk=target=>checkedIslandWalk(ctx,target,{room:2505,...options});
+    const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);options.onSample?.(l);return l;};
+    const jumps=fallJumpsIn(2505),first=jumps.find(j=>j.from.row===27&&j.from.col===60),second=jumps.find(j=>j.from.row===46&&j.from.col===80);
+    // Stage at cover before admission; the shared crossing controller includes
+    // the takeoff approach and landing clearance in the exclusive turn.
+    const initialPoint=protocolToClient(initial.you),height=geo.floorBaseAtClient(initialPoint.x,initialPoint.y);
+    let crossed={crossed:initial.you.col>=65&&initial.you.col<84&&initial.you.row<47};
+    if(initial.you.col<48||initial.you.col<=60&&height>=14800){
+      await walk({x:3072,y:1768});
+      crossed=await followDeclaredCrossing(ctx,first,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:3072,y:1768},clear:{x:4800,y:1512},budgetMs:options.budgetMs});
+    }else if(initial.you.col<65&&height<14500&&initial.you.row<35)await walk({x:3808,y:2144});
+    if(crossed.crossed){
+      await walk({x:5144,y:2688});
+      await followDeclaredCrossing(ctx,second,{geo,read,walk,gutter:{x:5440,y:3096},stage:{x:5144,y:2688},clear:{x:5440,y:3096},budgetMs:options.budgetMs});
+    }
+  }
   // Fine point inside the real go-trigger, in KOD/protocol units.
   await checkedIslandWalk(ctx,{x:4029,y:385},{room:2505,...options});
   await ctx.call('rest',{agent:ctx.agent,stand:true});
   await ctx.call('act',{agent:ctx.agent,verb:'go'});
+}
+export async function approachKonimaMainland(ctx,options={}){
+  const geo=roomGeometry(2505),walk=target=>checkedIslandWalk(ctx,target,{room:2505,...options});
+  const read=async()=>{const l=await readIslandFinePosition(ctx);checkIslandCancellation(ctx,l);options.onSample?.(l);return l;};
+  let before=await read();
+  if(before.you.row<10){
+    await walk({x:3936,y:416});
+    const opened=await ctx.call('operate_door',{agent:ctx.agent,targets:[{row:27,col:65}]},30000);
+    if(!opened.opened)throw Error('konima_return_door_'+opened.reason);
+    // Clear the animated sector inside its opening window before the long walk.
+    await walk({x:4456,y:560});
+  }
+  before=await read();const point=protocolToClient(before.you),height=geo.floorBaseAtClient(point.x,point.y);
+  if(before.you.col<65&&before.you.row>=25&&before.you.row<=35&&height<14500)await walk({x:3808,y:2144});
+  else{
+    await walk({x:4840,y:1472});
+    const declaration=fallJumpsIn(2505).find(j=>j.from.row===27&&j.from.col===65);
+    await followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter:{x:3808,y:2144},stage:{x:4840,y:1472},clear:{x:3808,y:2144},budgetMs:options.budgetMs});
+  }
+  await checkedIslandWalk(ctx,{x:160,y:4640},{room:2505,allowEdgeTo:2504,...options});
 }
 export async function approachMainlandCaveExit(ctx,options={}){
   // Its west boundary is r11c1. Observe the complete Dispel state before using

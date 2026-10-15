@@ -8622,6 +8622,16 @@ const TOOLS = [
     },
   },
   {
+    name: 'operate_door',
+    description: 'Operate a reachable room door through the shared trigger, normal GO, and observed animation wait. Returns opened only while its actual opening window remains valid.',
+    schema: {type:'object',properties:{agent:{type:'string'},targets:{type:'array',items:{type:'object',properties:{row:{type:'integer'},col:{type:'integer'}},required:['row','col'],additionalProperties:false}}},required:['agent']},
+    run: async a => {
+      const s=session(a.agent);
+      if(s._index!==undefined&&!s.world?.geometry)return keeperAction(s.name,s._index,'operate_door',{targets:a.targets??null});
+      return s.openOperableDoor({targets:a.targets??null});
+    },
+  },
+  {
     name: 'jump',
     description: 'Run off a DECLARED ledge and land on the far side. This is the one move that ' +
       'cannot be expressed as a step — the mover gates climbing on MAX_STEP_HEIGHT, so a fall is ' +

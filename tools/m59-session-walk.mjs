@@ -7991,11 +7991,17 @@ export function sessionWalkPrototype(deps) {
     const spell=(c.spells??[]).find(sp=>String(c.rsc?.get?.(sp.nameRsc)??sp.name??'').toLowerCase()==='blink');
     const loop=this._tickLoop, frozen=loop?._frozen, since=c.evSeq, from={...c.self},
       started=Date.now(), room=this.world?.room?.num;
-    let cast=false, waited=null;
+    let cast=false, waited=null,castHoldUntil=null;
+    const castHoldReason='traffic blink proposal '+(proposal.id??'unlabelled');
     const freezeLease={loop,generation:movementGeneration,frozen};
     try {
       if(loop) {this._blinkFreeze=freezeLease;loop._frozen=true;}
       if(cancelled())return finish({cast:false,arrived:false,reason:'cancelled',why:'cancelled before cast'});
+      // Recovery also sends sit/turn packets outside the tick loop. Protect
+      // the full native trance at the common packet gate.
+      castHoldUntil=this.pacer?.holdForCast?.(holdMs,castHoldReason)??null;
+      c.stand?.();
+      if(cancelled())return finish({cast:false,arrived:false,reason:'cancelled',why:'cancelled while standing to cast'});
       c.cast(spell.id,[]);cast=true;this._lastTrafficBlinkAt=Date.now();
       do {
         waited=await c.waitFor({since,kinds:['moved'],timeoutMs:Math.min(500,holdMs-(Date.now()-started))});
@@ -8009,6 +8015,8 @@ export function sessionWalkPrototype(deps) {
         why:arrived?'blinked to the room teleport point':'blink did not verify the expected relocation'});
     } catch(e) { return finish({cast,arrived:false,reason:'cast_error',why:e.message}); }
     finally {
+      if(castHoldUntil!=null&&this.pacer?.holdUntil===castHoldUntil&&this.pacer?.holdReason===castHoldReason)
+        this.pacer.releaseCastHold?.();
       // Restore the pre-cast pause only while still owning this exact driver.
       if(this._blinkFreeze===freezeLease) {
         if(loop && this._tickLoop===loop)loop._frozen=frozen;

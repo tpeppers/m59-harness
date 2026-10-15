@@ -5990,10 +5990,12 @@ export class Autopilot {
     // enter the same health-aware blocker operation as an ordinary jam.
     // This also gives a blocked retry delay useful work without another walk.
     this.rememberSurvivalJam();
-    if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
-        && await this.escapeIfWedgedAndHurt({near:this.inReachOfUs(),v}))return true;
+    // Ask the measured jam's useful Blink before walking another retreat.
+    // Spell, health, damage and landing guards still apply; skill-less couriers skip it.
     if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && await this.blinkPastSurvivalJam())return true;
+    if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
+        && await this.escapeIfWedgedAndHurt({near:this.inReachOfUs(),v}))return true;
     // A spared blocker needs no weapon to be lured, so it is not behind the armed gate.
     if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && await this.lureSparedBlocker({near:this.inReachOfUs(),v}).catch(()=>false))
