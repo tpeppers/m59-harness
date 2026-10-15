@@ -599,6 +599,9 @@ async function ensureProxy(host, port) {
 //   the plan desk (tools/m59-plan-desk.mjs) on this checkout's substrate, which fills the PLAN tab.
 //
 // Both are one per machine and outlive the terminal. M59_TUI_NO_PLAN=1 launches exactly as before.
+// M59_PLAN_SUBSTRATE points the desk at another checkout's substrate -- the one whose loops actually
+// run (a terminal run from the trunk against the prod-deploy fleet: the courier reads its requests there).
+const PLAN_SUBSTRATE = env.M59_PLAN_SUBSTRATE || join(REPO, 'substrate');
 const PLAN_PROXY_PORT = Number(env.M59_PLAN_PROXY_PORT || 5962);
 const PLAN_GATE_PORT = Number(env.M59_PLAN_GATE_PORT || 8931);
 const listeningOn = (port, ms = 400) => new Promise(res => {
@@ -620,11 +623,11 @@ async function ensurePlanProxy(host, port) {
 function ensurePlanDesk() {
   // The desk refreshes this heartbeat every few seconds; a stale or missing one means start another.
   try {
-    const h = JSON.parse(readFileSync(join(REPO, 'substrate', 'plan-desk.json'), 'utf8'));
+    const h = JSON.parse(readFileSync(join(PLAN_SUBSTRATE, 'plan-desk.json'), 'utf8'));
     if (Date.now() - h.at < 30_000) { try { process.kill(h.pid, 0); return { started: false }; } catch {} }
   } catch { /* none yet */ }
   const child = spawn(process.execPath,
-    [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', join(REPO, 'substrate')],
+    [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', PLAN_SUBSTRATE],
     { stdio: 'ignore', detached: true, windowsHide: true, cwd: REPO });
   child.unref();
   return { started: true };
