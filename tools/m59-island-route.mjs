@@ -6,6 +6,8 @@ import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlan
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
+import {entryTrafficCandidate,reversibleEntry,retreatAndRetryEntry} from './m59-entry-recovery.mjs';
+import {loadMap} from './m59-map.mjs';
 export const CAVE=27,ISLAND=2000;
 export const MAIN_CAVES=[27,2500,2501,2502,2503,2504,2505,2000];
 export const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -114,7 +116,29 @@ export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
 export async function ordinaryHop(ctx,to,options={}){
   ctx.state??={};ctx.state.islandCancelFence??=Date.now();
   return withTourWalkOwnership(ctx.agent,async()=>{
-    try{return await hopOwned(ctx,to,options);}
+    try{
+      const began=Date.now(),entry=ctx.state.islandEntry;
+      let leg=await hopOwned(ctx,to,options);
+      if(!leg.ok&&leg.reason==='entry_traffic_blocked'){
+        const initial=leg,deadline=began+(options.budgetMs??180000);
+        const recovery=await retreatAndRetryEntry({entry,to,deadline,
+          waitMs:options.entryWaitMs??30000,
+          hop:(destination,budgetMs)=>hopOwned(ctx,destination,{...options,budgetMs,recoverAtEntry:true,entryRecovery:destination===to}),
+          read:()=>readIslandJourney(ctx,{to,orderedBy:initial.request?.ordered_by}),
+          check:async()=>checkIslandCancellation(ctx,await ctx.call('status',{agent:ctx.agent,brief:true})),
+          sleep:pause});
+        const legs=[initial,...recovery.attempts.flatMap(a=>[a.back,a.reenter,a.retry].filter(Boolean))];
+        leg={...recovery,to,start:initial.start,ms:Date.now()-began,
+          damage:legs.reduce((n,l)=>n+(l.damage??0),0),
+          lowest_hp:Math.min(...legs.map(l=>l.lowest_hp??Infinity)),
+          entry_recovery:{initial_failure:initial.reason,attempts:recovery.attempts}};
+        delete leg.attempts;
+        leg.end=location(await readIslandJourney(ctx,{to,orderedBy:initial.request?.ordered_by}));
+      }
+      if(leg.ok&&leg.end)ctx.state.islandEntry={from:leg.start.room,room:leg.end.room,
+        position:leg.end,maxHp:leg.end.hp?.max,at:Date.now()};
+      return leg;
+    }
     catch(e){await ctx.call('cancel_movement',{agent:ctx.agent}).catch(()=>{});throw e;}
   });
 }
@@ -124,7 +148,7 @@ export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15
   try{return await observeIslandTraveller(ctx,()=>ctx.fleet?readIslandFinePosition(ctx):ctx.call('look',{agent:ctx.agent}),{to,orderedBy,deadline,pollMs});}
   catch(e){if(e.message==='traveller_health_unreadable_recovery_budget')throw Error('traveller_reconnect_budget');throw e;}
 }
-async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{},recoverAtEntry=false}={}){
+async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{},recoverAtEntry=false,entryRecovery=true}={}){
   const {agent,call}=ctx,start=Date.now(),readBody=()=>ctx.fleet?readIslandFinePosition(ctx):call('look',{agent});
   const first=await observeIslandTraveller(ctx,readBody),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
   let previous=first.hp?.value;
@@ -201,6 +225,11 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
     checkIslandCancellation(ctx,s);
     if(Date.now()-start>budgetMs){leg.reason='budget';break;}
     if(foreignIslandDestination(s.movement?.order,to)){leg.reason='preempted_by_other_destination';leg.status=s;break;}
+    if(entryRecovery&&Date.now()-attemptStarted>idleGraceMs&&
+      entryTrafficCandidate(ctx.state.islandEntry,l,s,to,{orderedBy:leg.request?.ordered_by,
+        canReturn:reversibleEntry(loadMap(),ctx.state.islandEntry)})){
+      leg.reason='entry_traffic_blocked';leg.status=s;break;
+    }
     if(s.movement?.order?.kind==='shelter')continue;
     // A keeper-resumed journey can be running before the broker's busy snapshot
     // catches up. Its live movement order is the authority during that interval.

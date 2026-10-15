@@ -2221,6 +2221,14 @@ a threat-priced approach from deliberately walking down into a pocket before
 trying to reach the higher takeoff. Long staging walks arm near the physical
 takeoff rather than treating matching height elsewhere as the same shelf.
 
+`m59-entry-recovery.mjs` supplies bounded retreat/re-entry recovery for a
+confirmed healthy arrival blocked by live bodies. Callers provide their normal
+one-room travel, fresh health/position reads, cancellation checks and original
+deadline. The Island ordinary-hop controller uses it only at an explicitly
+reversible entry after a required safe-leg refusal; a failed route elsewhere
+does not qualify. This avoids waiting through repeated shelter resumes at a
+sealed arrival while preserving ordinary movement and ownership.
+
 Journey rescue uses the shared suspension method before cancelling the live
 order. This retains its original issuer and effective travel guards, including
 through nested shelter detours. A disconnected status snapshot can arrive after
