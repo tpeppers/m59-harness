@@ -93,8 +93,16 @@ export function activeOwnedFineRecovery(ctx,status){
   const origin=ctx.origin??currentCallOrigin(),a=status?.autopilot_status,lease=a?.faculties?.movement,d=a?.survival_decisions?.current;
   const order=status?.movement?.order;
   if(order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))return false;
-  return origin?.source==='fleetscript'&&lease?.owner===origin.source+':'+origin.name&&lease.expires_in_ms>0&&
+  const owned=origin?.source==='fleetscript'&&lease?.owner===origin.source+':'+origin.name&&lease.expires_in_ms>0&&
     d?.source==='keeper'&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&['pending','approaching','arrived','holding','recovering'].includes(d.status);
+  if(!owned)return false;
+  // A completed rest can precede the keeper's next decision pulse. Its normal
+  // fine tool already accepts a healthy body; do not consume all three recovery
+  // attempts waiting for that completed `recovering` label to disappear.
+  const health=status?.hp,vigor=status?.vigor?.value;
+  if(d.status==='recovering'&&Number.isFinite(health?.max)&&health.max>0&&
+      Number.isFinite(health.value)&&health.value>=health.max&&Number.isFinite(vigor)&&vigor>=80)return false;
+  return true;
 }
 export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
   const actor=l=>({id:l.you?.id,room:l.room?.num,roomId:l.room?.object_id,x:l.you?.x,y:l.you?.y});
@@ -220,7 +228,14 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   const expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     if(activeOwnedFineRecovery(ctx,l)){
-      if(recoveries>=3||!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l}))throw Error('fine_route_recovery_incomplete');
+      if(recoveries>=3){
+        ctx.state.islandRecoveryFailure={room,reason:'attempt_budget',position:l.you,hp:l.hp,vigor:l.vigor};
+        throw Error('fine_route_recovery_budget');
+      }
+      if(!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l})){
+        ctx.state.islandRecoveryFailure={room,reason:'controller_incomplete',position:l.you,hp:l.hp,vigor:l.vigor};
+        throw Error('fine_route_recovery_incomplete');
+      }
       recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
     }
     if(Number.isFinite(l.door_settling_until)&&l.door_settling_until>Date.now()){

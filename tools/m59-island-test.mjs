@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip} from './m59-island-chalice.mjs';
 import {ordinaryHop,readIslandJourney,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
-import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
+import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,activeOwnedFineRecovery,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {chordWalkable,cutRail} from './m59-railcut.mjs';
@@ -164,6 +164,17 @@ const recoveryCtx={agent:'fixture',origin:{source:'fleetscript',name:'island',ru
 }};
 assert(await recoverIslandFineWalk(recoveryCtx,{deadline:Date.now()+1000,read:async()=>({l:look(2013)})}));
 assert(!await recoverIslandFineWalk({...recoveryCtx,origin:{source:'mcp',name:'operator'}},{deadline:Date.now()+1000,read:async()=>({l:look(2013)})}));
+const completedRecovery={hp:{value:20,max:20},vigor:{value:200},movement:{order:null},
+ autopilot_status:{faculties:{movement:{owner:'fleetscript:island',expires_in_ms:1000}},
+  survival_decisions:{current:{source:'keeper',strategy:'nearest_refuge',status:'recovering',ended_at:null}}}};
+for(let i=0;i<4;i++)assert.equal(activeOwnedFineRecovery(recoveryCtx,completedRecovery),false,
+ 'an observed healthy/rested body cannot burn its recovery attempts on a completed decision label');
+assert.equal(activeOwnedFineRecovery(recoveryCtx,{...completedRecovery,hp:{value:19,max:20}}),true);
+assert.equal(activeOwnedFineRecovery(recoveryCtx,{...completedRecovery,vigor:{value:70}}),true);
+assert.equal(activeOwnedFineRecovery(recoveryCtx,{...completedRecovery,hp:null}),true,'unknown health is not recovered');
+assert.equal(activeOwnedFineRecovery(recoveryCtx,{...completedRecovery,autopilot_status:{...completedRecovery.autopilot_status,
+ survival_decisions:{current:{...completedRecovery.autopilot_status.survival_decisions.current,status:'approaching'}}}}),true,
+ 'an actual keeper approach retains its control until it ends');
 let reads=0;
 const ok=await ordinaryHop({agent:'fixture',call:async(name,args)=>{
  if(name==='travel'){assert.deepEqual(args.avoid,[5,587]);assert.equal(args.run_errands,false);}

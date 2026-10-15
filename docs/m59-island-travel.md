@@ -91,7 +91,11 @@ Pending shopping trips are cleared before departure. A keeper shelter move
 and recovery of this script's suspended journey are allowed to finish before
 the hop resumes. On the observed recovery wall, the traveler rests and eats
 carried food using fresh inventory handles. Rest alone caps vigor at 80; bring
-food for both directions. The shadow convoy's provision trial purchased and
+food for both directions. A fully healed, rested body can resume when the
+completed `recovering` label is waiting for the keeper's next decision pulse;
+that label cannot consume repeated recovery attempts. Injured or exhausted
+bodies and active approaches keep the ordinary recovery gate.
+The shadow convoy's provision trial purchased and
 traded food to carry 90–180 nutrition each, according to starting vigor,
 through ordinary tools,
 including redistribution of existing surplus. Departure meals use ordinary
