@@ -10,6 +10,15 @@ crossing also uses that lower floor: go south through r31c64 and r33c64,
 then west to the refuge at r33c59. The northern lower-floor approach is about
 12 walking squares from that refuge; the southern approach is about nine.
 Never retry the outward jump while below its takeoff shelf.
+The same handoff applies when a keeper recovery move reaches the lower floor
+during the approach. Each confirmed position is checked; that approach ends
+before it can spend its remaining budget aiming for the higher takeoff. The
+crossing controller then reads the body again and walks the declared gutter.
+Cancellation remains a cancellation and cannot start an escape walk.
+The staging walk carries the same fence. It can begin below the shelf and
+climb normally; only after reaching the required shelf does a later lower
+pose trigger the escape. This prevents an interrupted staging walk from
+spending its full budget aiming back up at an inaccessible ledge.
 
 The declarations live in `m59-falljumps.json` and `m59-gutters.json`, so the
 shared router can use them. `node tools/m59-fine-guidebake.mjs` generates the
@@ -21,7 +30,7 @@ still checks live bodies. An open-door guide cannot open a closed door.
 wait. The crossing helper serializes approach through landing clearance,
 confirms the actual fine floor, and sends lower landings through their gutter.
 
-Component checks on October 14–15 used stock local monsters, initial 20 HP,
+Component checks on October 14 (local time) used stock local monsters, initial 20 HP,
 200 vigor, no skills or spells, and no measured administrator mutations.
 Each crossing and the gutter reached its expected server-confirmed landing
 without a death. These are component observations, not a fleet survival rate.
@@ -38,6 +47,37 @@ later copies could report the open Dispel state without receiving its mask.
 Door application is now tracked per geometry and mask, with separate typed
 floor and ceiling events; the two-copy regression is covered offline. That
 interrupted attempt is not a completed survival sample.
+
+The completed populated cohort on `ebc7154b` (source hash
+`d61ca3a36b9796febb803a8f28a5255524f32d7bd3820b627e22d0ffe50b3f6b`)
+reached the inn with 11/20 and completed 10/20 roundtrips. Eighteen survived;
+there were no return-leg deaths and no Konima deaths. The two outward deaths
+were a shadow beast at Merb r46c52 and an orc wizard at Obfal r32c23. Both
+recorded body-detour search exhaustion during recovery, with no other courier
+within six squares in the death scenes. Native wallet audits found 400,000
+shillings home, 320,000 retained by eight living stopped couriers, and 80,000
+lost by the two deaths. All twenty retained the pinned source and zero known
+skills/spells. The initial profile was 20 HP, 200 vigor, 40,000 shillings,
+plate armor, helm and eight cheese wheels, with no healing flasks; monsters
+remained enabled and measured administrator actions were Dispel only.
+Seven outward living failures and one return living failure keep this cohort
+below courier acceptance despite the improved survival. The pending candidate
+addresses refuge-search latency, interrupted staging/approach gutter handoff,
+Hollows queue staging, and completed recovery-label lag. It needs its own
+native components and populated cohort before enabling the private recipe.
+
+A later two-courier Hollows component on `016659f6` (source hash
+`9665bb1fbb87c13c763789f70da14f4801f2f87cf7f932f0bd7c228aa2fc643a`)
+completed both crossings to Merb with no deaths and both 40,000-shilling
+purses intact. They began at the map's normal login point after a broker
+restart, at 20 HP and 184/182 vigor; there were no administrator mutations
+during this component. Minimum HP was 4 and 14, and final HP was 20 for both.
+This checks the live staging and western-cavern climb, not full-trip safety.
+The previous staging-cell centre was physically unreachable. The shared
+refuge-footing resolver now supplies a proved enterable, reversible fine point;
+generated Hollows guides cover both the map entrance and native login point.
+The candidate subsequently passed all 69 movement suites with zero new
+regressions and the existing baseline failures unchanged.
 
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
@@ -82,7 +122,11 @@ Pending shopping trips are cleared before departure. A keeper shelter move
 and recovery of this script's suspended journey are allowed to finish before
 the hop resumes. On the observed recovery wall, the traveler rests and eats
 carried food using fresh inventory handles. Rest alone caps vigor at 80; bring
-food for both directions. The shadow convoy's provision trial purchased and
+food for both directions. A fully healed, rested body can resume when the
+completed `recovering` label is waiting for the keeper's next decision pulse;
+that label cannot consume repeated recovery attempts. Injured or exhausted
+bodies and active approaches keep the ordinary recovery gate.
+The shadow convoy's provision trial purchased and
 traded food to carry 90–180 nutrition each, according to starting vigor,
 through ordinary tools,
 including redistribution of existing surplus. Departure meals use ordinary
@@ -133,7 +177,13 @@ The shelf guard preserves a blocked-body reason even when it refuses before
 sending a step. Exact small strides halve after a refusal instead of being
 raised to the ordinary 24-unit minimum.
 Positions come from the selected fleet's fresh
-keeper read, rather than the square summary in `look`. A waiting follower
+keeper read, rather than the square summary in `look`. The outward Hollows
+queue stages at the r42c36 wall, behind the active takeoff corridor; takeoff
+refinement checks observed bodies as well as the static geometry. Staging
+uses fine footing proved enterable and returnable from the approach. The cell's
+centre is unreachable; the shared staging planner resolves its valid edge
+footing, and generated guides cover both the cave entrance and authored login
+point. A waiting follower
 continues health and cancellation checks, and the crossing queue shares the
 Hollows leg's time budget. Konima's final door is opened by the ordinary
 `go` action from inside the actual trigger; no door or room geometry is edited.

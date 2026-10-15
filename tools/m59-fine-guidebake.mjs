@@ -7,6 +7,7 @@ import {previewOpenedDoor} from './m59-ceiling-doors.mjs';
 import {cutRail,chordWalkable} from './m59-railcut.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {STEP_MASK_VERSION} from './m59-roo.mjs';
+import {planRefugeStage} from './m59-fine-refuge-reach.mjs';
 const p=(row,col)=>({x:col*64+32,y:row*64+32});
 const specs=[{room:2505,walks:[
  ['mainland_to_takeoff',p(72,2),p(27,60)],
@@ -21,6 +22,13 @@ const specs=[{room:2505,walks:[
  ['gutter_refuge_to_mainland',p(33,59),p(72,2)],
  ['gutter_refuge_to_gate',p(33,59),{x:4029,y:385}],
  ]}];
+const hollowsStage=planRefugeStage(roomGeometry(2502),{x:2201,y:2650},{row:42,col:36});
+if(!hollowsStage.found)throw Error('unproved Hollows waiting refuge');
+specs.push({room:2502,walks:[
+ ['entrance_to_wait',p(48,77),hollowsStage.point],
+ ['login_to_wait',p(49,52),hollowsStage.point],
+ ['wait_to_takeoff_approach',hollowsStage.point,{x:2201,y:2650}],
+]});
 const map=loadMap(),rooms={};
 for(const spec of specs){const base=roomGeometry(spec.room),guides=[];
  for(const [name,from,to,door]of spec.walks){const geo=door?previewOpenedDoor(map,spec.room,door).geometry:base;
@@ -33,7 +41,7 @@ for(const spec of specs){const base=roomGeometry(spec.room),guides=[];
   console.log(JSON.stringify({room:spec.room,name,points:waypoints.length}));
  }
  rooms[spec.room]={security:base.security,rows:base.rows,cols:base.cols,guides,
-  traversals:[
+  traversals:spec.room===2505?[
    {from:{row:72,col:1},to:{row:5,col:57},to_room:2000,legs:[
     {walk:'mainland_to_takeoff'},{jump:{from:{row:27,col:60},to:{row:27,col:65}},missed:'north_gutter_to_refuge'},
     {walk:'landing_to_second_takeoff'},{jump:{from:{row:46,col:80},to:{row:46,col:84}}},
@@ -41,6 +49,6 @@ for(const spec of specs){const base=roomGeometry(spec.room),guides=[];
    {from:{row:5,col:57},to:{row:72,col:1},to_room:2504,legs:[
     {walk:'island_exit_to_button'},{operate_door:1},{walk:'gate_to_return_takeoff'},
     {jump:{from:{row:27,col:64},to:{row:23,col:60}},missed:'north_gutter_to_refuge'},{walk:'return_refuge_to_mainland'}]}
-  ]};
+  ]:[]};
 }
 writeFileSync(new URL('../substrate/m59-fine-guides.json',import.meta.url),JSON.stringify({format:'m59-fine-guides/1',coordinates:'CLIENT/BSP x,y (1024 units per square)',stepMaskVersion:STEP_MASK_VERSION,geometryManifestSha256:map.geometryManifestSha256,rooms})+'\n');

@@ -2,6 +2,30 @@
 // escape. Callers supply their guarded reader/walker, so this works for any map.
 import {clientToProtocol,protocolToClient} from './m59-finepos.mjs';
 const queues=new Map();
+// A long staging walk may begin below the takeoff shelf. Arm its floor fence
+// only after reaching that shelf, then hand any later lower pose to the gutter.
+export async function followDeclaredApproach(declaration,{geo,read,walk,target,gutter,requireShelf=false}={}){
+ if(!declaration?.from_fine||!geo||!read||!walk||!target||!gutter)throw Error('declared_approach_incomplete');
+ const q=declaration.from_fine,minimum=geo.floorBaseAtClient(q.x,q.y)-384;
+ if(!Number.isFinite(minimum))throw Error('declared_approach_floor_unreadable');
+ let armed=requireShelf;
+ const height=observed=>{const p=protocolToClient(observed.you);return geo.floorBaseAtClient(p.x,p.y);};
+ const validatePosition=observed=>{
+  if(observed.room?.num!==declaration.room)throw Error('declared_crossing_room_changed');
+  const floor=height(observed);if(!Number.isFinite(floor))throw Error('declared_approach_floor_unreadable');
+  if(floor>=minimum)armed=true;
+  else if(armed)throw Object.assign(Error('declared_crossing_approach_dropped'),{code:'declared_crossing_approach_dropped'});
+ };
+ try{
+  validatePosition(await read());await walk(target,{validatePosition});validatePosition(await read());
+  return {gutter:false};
+ }catch(error){
+  if(error?.code!=='declared_crossing_approach_dropped')throw error;
+  const observed=await read();
+  if(observed.room?.num!==declaration.room||!(height(observed)<minimum))throw error;
+  await walk(gutter);return {crossed:false,gutter:true,why:'approach_dropped'};
+ }
+}
 export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutter,clear,stage,budgetMs=180000}={}){
  if(!declaration?.from_fine||!declaration?.to_fine||!geo||!read||!walk||!gutter)throw Error('declared_crossing_incomplete');
  const key=ctx.fleet+':'+declaration.room+':'+declaration.from.row+','+declaration.from.col;
@@ -20,7 +44,10 @@ export async function followDeclaredCrossing(ctx,declaration,{geo,read,walk,gutt
    // A lower floor is the escape case, even before the first attempt. The same
    // square number on another shelf must never authorize a jump retry.
    if(floor(before.you)<fromFloor-384){await walk(gutter);return {crossed:false,gutter:true,why:'below_takeoff'};}
-   await walk(takeoff);before=await read();
+   const approach=await followDeclaredApproach(declaration,{geo,read,walk,target:takeoff,gutter,requireShelf:true});
+   if(approach.gutter)return approach;
+   before=await read();
+   if(floor(before.you)<fromFloor-384){await walk(gutter);return {crossed:false,gutter:true,why:'approach_dropped'};}
    if(Math.hypot(before.you.x-takeoff.x,before.you.y-takeoff.y)>8||Math.abs(floor(before.you)-fromFloor)>64)throw Error('declared_crossing_takeoff_unconfirmed');
    if(before.hp?.value<before.hp?.max){if(!stage)throw Error('declared_crossing_needs_recovery');await walk(stage);continue;}
    const reply=await ctx.call('jump',{agent:ctx.agent,to_row:declaration.to.row,to_col:declaration.to.col});

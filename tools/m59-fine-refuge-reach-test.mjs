@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {roomGeometry} from './m59-ground.mjs';
-import {fineRefugeReach} from './m59-fine-refuge-reach.mjs';
+import {fineRefugeReach,planRecoveryApproach} from './m59-fine-refuge-reach.mjs';
+import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
+import {protocolToClient} from './m59-roo.mjs';
+import {OF,MOVEON} from './m59-parse.mjs';
 import {recoveryRefugeReach,observeRefugeProgress,recoveryOccupiedSquares} from './m59-recovery-refuge.mjs';
 import {nearestSafeSpot} from './m59-safespots.mjs';
 const fixture=JSON.parse(readFileSync(new URL('./fixtures/konima-recovery-2505.json',import.meta.url)));
@@ -38,3 +41,40 @@ assert.equal(fineProgress.progressedAt,1500);
 observeRefugeProgress(fineProgress,coarseMiss,{...from,predicted:true,x:n.x,y:n.y},selected,2000);
 assert.equal(fineProgress.progressedAt,1500,'predictions cannot renew fine progress');
 console.log('Recorded Konima recovery has a short reversible fine refuge approach; blocked, predicted, unknown-body and exhausted scans fail closed.');
+
+// Native Merb death scene: a clear four-square refuge was abandoned after the
+// exposure optimizer ran out of time. Keep that feasible approach, while still
+// refusing actual body obstruction and preserving the exhaustive nearest choice.
+const merb=JSON.parse(readFileSync(new URL('./fixtures/merb-recovery-2503.json',import.meta.url)));
+const mg=roomGeometry(merb.room),mb=new Map(merb.bodies.map(o=>[o.id,o]));
+const choose=fineRecovery=>{let calls=0;const reach=recoveryRefugeReach(mg,merb.from,mb,merb.from.id);
+ const picked=nearestSafeSpot(mg,merb.from,{within:Math.max(mg.rows,mg.cols),fineRecovery,
+  reach:(col,row)=>{calls++;return reach(col,row);}});return {picked,calls};};
+const exhaustive=choose(false),bounded=choose(true);
+assert.deepEqual({row:bounded.picked.row,col:bounded.picked.col},{row:42,col:54});
+assert.deepEqual({row:bounded.picked.row,col:bounded.picked.col},
+ {row:exhaustive.picked.row,col:exhaustive.picked.col});
+assert(bounded.calls<exhaustive.calls/2,'farther walls cannot delay an already better checked refuge');
+const mo={objects:mb,selfId:merb.from.id,goalSquare:{row:42,col:54},marginSquares:4,
+ maxRangeSquares:8,maxNodes:6000,maxMs:80,threatWeight:6,threatRadius:4,
+ threats:merb.bodies.filter(o=>(o.flags&OF.ATTACKABLE)&&!(o.flags&OF.PLAYER))};
+const deadline={now:()=>0,plan:(g,f,t,o)=>o.threatWeight>0?
+ {found:false,reason:'body detour budget exhausted'}:planBodyDetour(g,f,t,{...o,maxMs:500})};
+const escape=planRecoveryApproach(mg,merb.from,mg.standPointWire(42,54),mo,deadline);
+assert(escape.found&&escape.checked_short_fallback);
+let at=merb.from;
+for(const point of escape.waypoints){
+ const check=mg.traceFineMoveClient(protocolToClient(at.x),protocolToClient(at.y),
+  protocolToClient(point.x),protocolToClient(point.y),{slide:false,obstacles:blockingBodySnapshot(mb,merb.from.id)});
+ assert(check.moved&&check.blocked!==true);at=point;
+}
+assert.equal(Math.floor(at.y/64),42);assert.equal(Math.floor(at.x/64),54);
+const occupied=new Map(mb);occupied.set(99999,{id:99999,flags:MOVEON.NO|OF.ATTACKABLE,
+ row:42,col:54,x:at.x,y:at.y});
+assert.equal(planRecoveryApproach(mg,merb.from,mg.standPointWire(42,54),{...mo,objects:occupied},deadline).found,false,
+ 'a priced-search deadline never permits walking through a blocking body');
+const noRoute={...deadline,plan:(g,f,t,o)=>o.threatWeight>0?
+ {found:false,reason:'no clear local body route'}:planBodyDetour(g,f,t,{...o,maxMs:500})};
+assert.equal(planRecoveryApproach(mg,merb.from,mg.standPointWire(42,54),mo,noRoute).found,false,
+ 'a fresh terrain/body refusal is not a price deadline');
+console.log('Recorded Merb recovery retains a collision-checked short escape after an exposure-price deadline and prunes only farther nearest-refuge candidates.');

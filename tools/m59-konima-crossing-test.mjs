@@ -3,7 +3,7 @@ import {roomGeometry} from './m59-ground.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {traceFallMotion} from './m59-falltrace.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
-import {followDeclaredCrossing} from './m59-declared-crossing.mjs';
+import {followDeclaredCrossing,followDeclaredApproach} from './m59-declared-crossing.mjs';
 const geo=roomGeometry(2505),jumps=fallJumpsIn(2505),out=jumps.find(j=>j.from.col===60);
 assert.equal(jumps.length,4);
 for(const j of jumps)for(const dt of [8,16,33,50]){
@@ -44,6 +44,42 @@ function fixture(start=clientToProtocol(out.from_fine),mode='land'){
  assert.equal(peak,1,'takeoff through cleared landing admits one crossing at a time');
 }
 console.log('Konima directional jumps retain stock gravity, confirm the landing shelf, admit one crossing, and send misses south without retrying from below.');
+for(const mode of ['climb','drop']){
+ let body={x:4064,y:1696};const walks=[];
+ const read=async()=>({room:{num:2505},you:{...body},hp:{value:20,max:20}});
+ const walk=async(target,{validatePosition}={})=>{
+  walks.push({...target});
+  if(target.x===stage.x){
+   validatePosition?.(await read()); // an initial lower approach is legitimate
+   body=clientToProtocol(out.from_fine);validatePosition?.(await read());
+   body=mode==='drop'?{x:3288,y:1248}:{...stage};validatePosition?.(await read());
+  }else body={...target};
+ };
+ const r=await followDeclaredApproach(out,{geo,read,walk,target:stage,gutter});
+ assert.equal(r.gutter,mode==='drop');
+ assert.deepEqual(walks,mode==='drop'?[stage,gutter]:[stage],
+  'a staging walk may climb normally, but an observed later fall goes straight to its gutter');
+}
+{
+ const f=fixture(),old=f.walk;let dropped=false;
+ f.walk=async(p,{validatePosition}={})=>{
+  if(!dropped){dropped=true;
+   validatePosition?.({room:{num:2505},you:{x:4064,y:1696}});
+   assert.fail('an observed lower approach must end before another takeoff command');
+  }
+  await old(p);
+ };
+ // The read observes the same lower native pose after the guarded walk stops.
+ const read=f.read;f.read=async()=>dropped?{...(await read()),you:{x:4064,y:1696}}:read();
+ const r=await followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,gutter,stage,clear});
+ assert(r.gutter&&r.why==='approach_dropped');assert.equal(f.calls,0);
+ assert.deepEqual(f.walks,[gutter],'recovery onto the lower floor goes south without retrying the higher takeoff');
+}
+{
+ const f=fixture();f.walk=async()=>{throw Error('operator cancelled');};
+ await assert.rejects(followDeclaredCrossing(f.ctx,out,{geo,read:f.read,walk:f.walk,gutter,stage,clear}),/operator cancelled/);
+ assert.equal(f.calls,0,'a cancellation cannot turn into a gutter walk');
+}
 {
  const declaration=jumps.find(j=>j.from.col===64),f=fixture(clientToProtocol(declaration.from_fine));
  let body=clientToProtocol(declaration.from_fine),calls=0;
