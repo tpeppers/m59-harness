@@ -48,6 +48,8 @@ export function platformAims(from,to){
   else aims.push({x:from.x,y:aisle});
   aims.push({x:to.x,y:aisle},to);return aims;
 }
+export const keeperSurvivalInterruption=reply=>reply?.cancelled===true&&reply.cancelled_by_origin?.source==='keeper';
+export const readyAfterSurvival=(s,minHealth=0.9)=>Number(s.hp?.value)>0&&Number(s.hp?.max)>0&&s.hp.value/s.hp.max>=minHealth&&!s.autopilot_status?.survival_decisions?.current;
 export const braxArrival=s=>Number(s.room?.num)===827&&Number(s.hp?.value)>0;
 
 // All checkouts use the same endpoint-keyed journal beside the shared evidence store.
@@ -165,9 +167,14 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
   };
   const follow=async(file,label)=>{
     const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',new URL(process.env.M59_CONTROL_URL).port,'--agent',agent,'--rail','brax','--rail-file',file,'--no-hop','--receipt',join(out,id+'-'+label+'-commands.jsonl')];
+    const commandsFile=join(out,id+'-'+label+'-commands.jsonl');
     const result=await new Promise(done=>execFile(process.execPath,args,{cwd:root,timeout:900000,maxBuffer:8e6,windowsHide:true},(error,stdout,stderr)=>done({error,stdout,stderr})));
     writeFileSync(join(out,id+'-'+label+'.txt'),result.stdout+'\n'+result.stderr);
-    if(result.error)throw Error('Brax '+label+' rail follower stopped');
+    if(result.error){
+      const rows=existsSync(commandsFile)?readFileSync(commandsFile,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
+      const last=rows.filter(row=>row.kind==='walk').at(-1)?.reply;
+      throw Object.assign(Error('Brax '+label+' rail follower stopped'),{survival:keeperSurvivalInterruption(last),interruption:last});
+    }
   };
   const cut=async(to,label)=>{
     const s=await read(),geo=roomGeometry(s.room.num),from=position(s),edge=edgeOf(geo);
@@ -214,10 +221,31 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     const x=(col-1)*1024+512;await walkPoint({x,y:14848});
     await jump({row:8,col,x,y:7680},8160);await walkPoint({row:7,col});
   };
+  const onward=async(room,to,label,row,col,next)=>{
+    for(let attempt=0;attempt<3;attempt++){
+      const s=await read();if(s.room.num===next)return;
+      if(s.room.num!==room)throw Error('Brax '+label+' unexpected recovery room');
+      try{await cut(to,label+'-'+attempt);await cross(row,col,next);return;}
+      catch(error){
+        if(!error.survival||attempt===2)throw error;
+        log('survival-interruption',{label,attempt,reply:error.interruption});
+        let stableSince=0,lastHP=0;
+        await until(async()=>{
+          const s=await read();
+          if(s.room.num!==room)throw Error('Brax survival changed rooms');
+          if(!readyAfterSurvival(s,Math.max(0.9,ctx.minHealth??0.9))||s.hp.value<lastHP)stableSince=0;
+          else stableSince ||= Date.now();
+          lastHP=s.hp.value;
+          return stableSince&&Date.now()-stableSince>=8000?s:null;
+        },'Brax keeper recovery timed out',180000);
+        log('survival-recovered',{label,attempt,position:position(await read())});
+      }
+    }
+  };
   const finish=async()=>{
-    await cut({x:62976,y:512},'north-exit');await cross(0,62,578);
-    await cut({x:50176,y:27136},'cragged-east');await cross(27,51,826);
-    await cut({x:44544,y:18944},'caverns-east');await cross(19,45,827);
+    await onward(579,{x:62976,y:512},'north-exit',0,62,578);
+    await onward(578,{x:50176,y:27136},'cragged-east',27,51,826);
+    await onward(826,{x:44544,y:18944},'caverns-east',19,45,827);
     const s=await read();state.brax.success=braxArrival(s);log('objective',{success:state.brax.success,room:s.room,you:s.you,hp:s.hp});
     if(!state.brax.success)throw Error('Ancient Graveyard of Brax not reached');
     await command('autopilot',{action:'set',mode:'idle',assigned_room:827,roam:false});return true;

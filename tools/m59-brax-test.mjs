@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot} from './m59-brax.mjs';
+import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot,keeperSurvivalInterruption,readyAfterSurvival} from './m59-brax.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {applyAncientFloors} from './m59-moving-platform.mjs';
 import {script} from './fleetscripts/walk-to-brax.mjs';
@@ -60,3 +60,11 @@ for(let i=0;i<25;i++){
   assert(route.found,'every station remains reachable around the other 24 players');
 }
 console.log('Brax: platform slots, group cap, divided lever work, objective, and atomic shared journal passed');
+
+assert(keeperSurvivalInterruption({cancelled:true,cancelled_by_origin:{source:'keeper',name:'play_dead'}}));
+assert(!keeperSurvivalInterruption({cancelled:true,cancelled_by_origin:{source:'fleetscript'}}));
+assert(!keeperSurvivalInterruption({reason:'object_blocked'}));
+assert(readyAfterSurvival({hp:{value:145,max:151},autopilot_status:{survival_decisions:{current:null}}}));
+assert(!readyAfterSurvival({hp:{value:70,max:151}}));
+assert(!readyAfterSurvival({hp:{value:151,max:151},autopilot_status:{survival_decisions:{current:'play_dead'}}}));
+assert(!readyAfterSurvival({hp:{value:0,max:151}}));
