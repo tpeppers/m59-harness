@@ -2527,6 +2527,7 @@ async function fightWithIntent(s, {
   // lease stops the walk and the fight together.
   controlToken = null,
   fightGeneration = s?.fightGeneration,
+  movementGeneration = s?.movementGeneration,
   // How far a swing carries. One square plus the diagonal; the caller can widen it
   // for a bow.
   reach = 1.5,
@@ -2660,8 +2661,17 @@ async function fightWithIntent(s, {
     ? Math.hypot((foe.col ?? 0) - meBefore.col, (foe.row ?? 0) - meBefore.row) <= 2
     : false;
 
-  const spot = (holdPosition || foeNearby) ? null : s.world?.approachSquare?.(foe.col, foe.row);
-  if (spot && spot.steps > 0) {
+  const approachStopped=walk=>walk?.cancelled||walk?.left_room||walk?.reason==='movement_deviation'||isTerminalMovementReason(walk?.reason);
+  const approachFailure=walk=>({ ...walk, fought:false, arrived:false, target:foeName,foe_id:foe.id,target_id:foe.id,log,
+    note:'the combat approach returned control with its confirmed movement result; no fallback or attack was sent' });
+  const localDistance=meBefore?Math.hypot(foe.col-meBefore.col,foe.row-meBefore.row):0;
+  const fineApproach=!holdPosition&&localDistance<=8&&typeof s.walkToMeleeRange==='function';
+  const spot = (holdPosition || foeNearby || fineApproach) ? null : s.world?.approachSquare?.(foe.col, foe.row);
+  if(fineApproach){
+    const walk=await s.walkToMeleeRange(foe.id,{reach,movementGeneration,controlToken});
+    say('melee_approach',{arrived:walk.arrived,steps:walk.steps,reason:walk.reason,position:walk.position});
+    if(!walk.arrived)return approachFailure(walk);
+  } else if (spot && spot.steps > 0) {
     // CAP THE APPROACH: walking more than 8 grid steps (or 12 raw cells)
     // to close on a mob blocks the broker for 2-40s (coarse vs fine grid).
     // The GOAP re-plans every second; a long approach is better done across
@@ -2674,8 +2684,9 @@ async function fightWithIntent(s, {
                foe_id: foe.id, reason: `target ${rawDist.toFixed(0)} cells away — too far to approach this pass`,
                nearest: { distance: +rawDist.toFixed(1) }, log, note: 'the GOAP will travel closer on the next pass' };
     }
-    let walk = await s.walkTo(spot.col, spot.row, { maxSteps: Math.min(10, Math.max(6, spot.steps * 2)), arriveWithin: KOD_FINENESS });
+    let walk = await s.walkTo(spot.col, spot.row, { maxSteps: Math.min(10, Math.max(6, spot.steps * 2)), arriveWithin: KOD_FINENESS,movementGeneration,controlToken });
     say('approached', { arrived: walk.arrived, steps: walk.steps, reason: walk.reason });
+    if(approachStopped(walk))return approachFailure(walk);
     if (!walk.arrived) {
       // COARSE GRID FAILED — TRY FINE
       const half = KOD_FINENESS >> 1;
@@ -2689,9 +2700,10 @@ async function fightWithIntent(s, {
       const distCells = spot.steps || 10;
       const fineMaxSteps = Math.min(10, Math.max(8, Math.ceil(distCells * KOD_FINENESS / 48)));
       say('fine_fallback', { to: [fx, fy], reason: walk.reason, maxSteps: fineMaxSteps });
-      walk = await s.walkFine(fx, fy, { maxSteps: fineMaxSteps, stride: 48, arriveWithin: KOD_FINENESS })
+      walk = await s.walkFine(fx, fy, { maxSteps: fineMaxSteps, stride: 48, arriveWithin: KOD_FINENESS,movementGeneration,controlToken })
                      .catch(e => ({ arrived: false, reason: e.message }));
       say('fine_result', { arrived: walk.arrived, steps: walk.steps, reason: walk.reason });
+      if(approachStopped(walk))return approachFailure(walk);
     }
     if (!walk.arrived) {
       if (foeNearby) {
@@ -2712,8 +2724,9 @@ async function fightWithIntent(s, {
       const fy = (foe.row + dr) * KOD_FINENESS + half;
       const distCells = Math.hypot((foe.col ?? 0) - (meBefore?.col ?? 0), (foe.row ?? 0) - (meBefore?.row ?? 0));
       const fineMaxSteps2 = Math.max(60, Math.ceil(distCells * KOD_FINENESS / 48) * 2);
-      const r = await s.walkFine(fx, fy, { maxSteps: fineMaxSteps2, stride: 48, arriveWithin: KOD_FINENESS })
+      const r = await s.walkFine(fx, fy, { maxSteps: fineMaxSteps2, stride: 48, arriveWithin: KOD_FINENESS,movementGeneration,controlToken })
                      .catch(e => ({ arrived: false, reason: e.message }));
+      if(approachStopped(r))return approachFailure(r);
       if (r.arrived) { fineArrived = true; break; }
     }
     if (!fineArrived)

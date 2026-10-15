@@ -4947,6 +4947,43 @@ export function sessionWalkPrototype(deps) {
       ? { arrived: true } : { arrived: false, reason: 'fine legs ended off the boarding square' };
   }
 
+  async walkToMeleeRange(targetId,{reach=2,movementGeneration=this.movementGeneration,controlToken=null}={}) {
+    const c=this.need(),roomId=c.room.id;
+    const position=()=>c.self?Object.fromEntries(['row','col','x','y'].map(k=>[k,c.self[k]])):null;
+    if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+    if(c.self?.predicted){
+      const reply=await this.confirmPosition({timeoutMs:1500});
+      if(c!==this.client||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+      if(c.room.id!==roomId)return {arrived:false,left_room:true,reason:'room_changed_before_move'};
+      if(!reply)return {arrived:false,reason:'own_position_unknown'};
+    }
+    const me=c.self,foe=c.room.objects.get(targetId),geo=this.world?.geometry;
+    if(!me||me.predicted||![me.x,me.y].every(Number.isFinite))return {arrived:false,reason:'own_position_unknown'};
+    if(!foe)return {arrived:false,reason:'quarry_left_room'};
+    if(![foe.row,foe.col,reach].every(Number.isFinite)||reach<=0)return {arrived:false,reason:'invalid_move_target'};
+    const inRange=()=>{const p=c.self,q=c.room.objects.get(targetId);return p&&!p.predicted&&q&&Math.hypot(p.row-q.row,p.col-q.col)<=reach;};
+    if(inRange())return {arrived:true,steps:0,position:position()};
+    if(!geo?.collisionReady)return {arrived:false,reason:'collision_geometry_unavailable'};
+    // Melee accepts a disc of squares, not one adjacent square's often unreachable
+    // stand point. One bounded fine pour finds any reachable point in that disc.
+    const goals=[],radius=Math.min(3,Math.ceil(reach));
+    for(let row=foe.row-radius;row<=foe.row+radius;row++)for(let col=foe.col-radius;col<=foe.col+radius;col++)
+      if((row!==foe.row||col!==foe.col)&&Math.hypot(row-foe.row,col-foe.col)<=reach)goals.push({row,col});
+    const goal={x:foe.col*64+32,y:foe.row*64+32};
+    const plan=goals.length?planBodyDetour(geo,me,goal,{goalSquares:goals,objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,avoidSquares:this.hazardSquares?.(),
+      spacingUnits:8,marginSquares:4,maxRangeSquares:8,maxNodes:3000,maxMs:100}):{found:false,reason:'no walkable melee square'};
+    if(!plan.found)return {arrived:false,approach_blocked:true,reason:'combat_approach_blocked',detour_reason:plan.reason,position:position(),
+      blockers:[...c.room.objects.values()].filter(o=>o.id!==c.selfId&&blocksMovement(o.flags??0)&&Number.isFinite(o.x)&&Number.isFinite(o.y)
+        &&Math.hypot(o.x-me.x,o.y-me.y)<=8*64).slice(0,16).map(o=>({id:o.id,row:o.row,col:o.col,x:o.x,y:o.y}))};
+    const end=plan.waypoints.at(-1)??me,square={row:Math.floor(end.y/64),col:Math.floor(end.x/64)};
+    const targetSquare={row:foe.row,col:foe.col};
+    const result=await this.walkDepartureLegs(plan.waypoints,square,{movementGeneration,controlToken,maxSteps:32,shelterFallback:false,
+      beforeMutation:()=>{const q=c.room.objects.get(targetId);return !!q&&q.row===targetSquare.row&&q.col===targetSquare.col;}});
+    if(!result.arrived)return {...result,position:position()};
+    return inRange()?{...result,position:position()}:{arrived:false,reason:'quarry_moved_out_of_reach',position:position()};
+  }
+
   async walkRailSquare(square,{movementGeneration=this.movementGeneration,controlToken=null,avoidSquares=null}={}) {
     const c=this.need(),roomId=c.room.id;
     if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});

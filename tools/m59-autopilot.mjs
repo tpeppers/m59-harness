@@ -11902,6 +11902,10 @@ export class Autopilot {
     const key = `${room}:${id}`;
     const record = store.get(key);
     if (!record) return null;
+    if(record.quarry_position){
+      const foe=this.s?.client?.room?.objects?.get?.(id),at=record.quarry_position;
+      if(!foe||['row','col','x','y'].some(k=>foe[k]!==at[k])){store.delete(key);return null;}
+    }
     if(record.approachSignature&&record.approachSignature!==quarryApproachSignature(this.s,this.s?.client?.room?.objects?.get?.(id))){
       store.delete(key);return null;
     }
@@ -11915,6 +11919,43 @@ export class Autopilot {
     const record = { room, id, at: now, until: now + ms, why };
     (this.pullTargetCooldowns ??= new Map()).set(`${room}:${id}`, record);
     return record;
+  }
+
+  combatApproachCooling(room,foe) {
+    const cooling=this.pullTargetCooling(room,foe?.id),me=this.s?.client?.self;
+    return !!cooling?.combat_approach&&!!me&&Math.hypot(foe.row-me.row,foe.col-me.col)>PLAYER_REACH;
+  }
+
+  deferBlockedCombatApproach(result) {
+    if(!result?.approach_blocked||result.cancelled||result.left_room)return false;
+    const room=this.s.world?.room?.num,id=result.target_id??result.foe_id,foe=this.s.client?.room?.objects?.get?.(id);
+    if(!foe||this.s.client.self?.predicted)return false;
+    const record=this.deferPullTarget(room,id,result.detour_reason??result.reason);
+    if(!record)return false;
+    record.combat_approach=true;
+    record.quarry_position=Object.fromEntries(['row','col','x','y'].map(k=>[k,foe[k]]));
+    if(this.foeId===id)this.foeId=null;
+    if(!this.pendingPull)releaseQuarry(this.s.name);
+    this.note('combat approach blocked - choosing another quarry',{
+      target_id:id,quarry:record.quarry_position,position:result.position,blockers:result.blockers,
+      reason:result.reason,detail:result.detour_reason,until:record.until,
+      why:'the coarse adjacent square has no proved local fine route; a moved quarry or melee contact permits an immediate retry'});
+    return true;
+  }
+
+  finishFailedCombatApproach(result) {
+    if(this.deferBlockedCombatApproach(result)){
+      this.noProgress('local combat approach blocked; exact quarry deferred briefly');
+      return true;
+    }
+    if(result?.fought===false&&(result.cancelled||result.left_room||result.reason==='movement_deviation'||isTerminalMovementReason(result.reason))){
+      this.note('combat approach returned control',{
+        reason:result.reason,cancelled:!!result.cancelled,position:result.position??result.deviation?.position,
+        deviation:result.deviation,why:'no attack occurred; the next pass must decide from the confirmed movement failure'});
+      this.noProgress('combat approach stopped: '+(result.reason??'ownership changed'));
+      return true;
+    }
+    return false;
   }
 
   // A deadline alone cannot distinguish a slow follower from a monster fighting somebody
@@ -23193,7 +23234,8 @@ export class Autopilot {
       // A karma-strict character does not hit back at what it may not kill — and does not leave
       // the room over it either (the refusal branch below would): it keeps on its quarry, and
       // the flee line is what protects it. See karmaForbids.
-      const bystander = adjacent.find(o => { const n = c.rsc.get(o.nameRsc) || '';
+      const bystander = adjacent.find(o => { if(this.combatApproachCooling(room?.num,o))return false;
+                                             const n = c.rsc.get(o.nameRsc) || '';
                                              return !isOurs(n) && !this.karmaForbids(n); });
       if (!bystander && this.policy?.karmaStrict) {
         const spared = adjacent.map(o => c.rsc.get(o.nameRsc) || '').filter(n => n && !isOurs(n) && this.karmaForbids(n));
@@ -23510,6 +23552,8 @@ export class Autopilot {
                                         rounds: training.rounds,
                                         weaponPriority: this.weaponPriorityNow(engageName),
                                         bannedWeapons: this.bannedWeaponsNow() });
+
+      if(this.finishFailedCombatApproach(f))return HANDLED;
 
       // With equip:false fight() cannot know which prepared weapon shattered. Remember
       // the exact short-sword id here so the next pass makes a replacement instead of
