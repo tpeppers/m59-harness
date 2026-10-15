@@ -23,7 +23,8 @@ import { isEnemyHit } from './m59-combatlog.mjs';
 export { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
 import { traceSurvivalOperation, tracePoint } from './m59-survival-trace.mjs';
-import { currentSurvivalDecision, cancelSurvivalDecision } from './m59-survival-decision.mjs';
+import { currentSurvivalDecision, cancelSurvivalDecision, isActiveRecoveryDecision } from './m59-survival-decision.mjs';
+import { withRecoveryCommand } from './m59-body-command.mjs';
 // A ROOM REFERENCE CARRIES ITS SPACE — the client's room `.id` is an OBJECT ID and the bake's
 // key is a ROOM NUMBER, and both are small integers. See tools/m59-roomref.mjs.
 import { roomFields } from './m59-roomref.mjs';
@@ -2049,10 +2050,11 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
   // A SHELTER APPROACH IS A MOVE ORDER OF THE KEEPER'S OWN (m59-move-origin.mjs), so whatever
   // cancels it is recorded as having pre-empted `keeper:shelter`, and while it runs `status`
   // says the keeper, not the journey it interrupted, is steering the body.
-  const result=await withMoveOrder(s, { kind: 'shelter', origin: keeperOrigin('shelter'),
+  const run=()=>withMoveOrder(s, { kind: 'shelter', origin: keeperOrigin('shelter'),
       to: spot?.room != null ? `${spot.room} r${spot.row}c${spot.col}` : `r${spot?.row}c${spot?.col}` },
     () => traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance, routeFirst },
       () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, checkedApproach, avoidSquares, fineAvoidSquares })));
+  const result=await(isActiveRecoveryDecision(decision)?withRecoveryCommand(s,run):run());
   if(result?.cancelled && decision && currentSurvivalDecision(s)?.id===decision.id)
     cancelSurvivalDecision(s,result.why??result.reason??'shelter approach cancelled');
   return result;

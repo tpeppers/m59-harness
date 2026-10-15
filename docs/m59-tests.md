@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+`m59-recovery-pacer-test.mjs` runs the actual five-packet scheduler, Session
+stand and refuge-return code behind thirty queued reads. It checks that active
+recovery reaches stand and movement without bypassing normal pacing, while
+ordinary returns retain their scheduling. Cancellation, stale combat epochs,
+explicit combat ownership, session isolation and concentration remain guarded.
+This is an offline scheduling regression, not a native survival measurement.
+
 ## Recovered raid and process identity checks
 
 - `node tools/runtime/process-identity-test.mjs`: process start-time and image
