@@ -26,7 +26,7 @@ leases, retaining survival with the keeper.
    allowing a delayed message or the final observed platform movement.
 5. Wait the full ascent and validate the observed heights: sector 3=800,
    sector 4=510. Follow the north aisle around the center spire, then fall
-   from r15c55/r15c56 to r8c55/r8c56. Clear the landing at r7 before releasing
+   from r15c55/r15c56 to r8c55/r8c56. Form two half-square-spaced departure queues, then clear the landing at r7 before releasing
    the next character in the same lane.
 6. Fine route to r1c62 and cross north into the eastern section of 578.
    Route to the eastern mouth near r27c50, then cross into 826.
@@ -83,7 +83,7 @@ The early failures remain there, including the delayed final-lever message
 and the room-entry animation refusals. Success totals and exact final trial
 IDs are recorded after live verification.
 
-The layout and assignment tests cover 25 members; a three-character live
+The layout, queues, assignments, and paths around 24 parked bodies are checked for 25 members; a three-character live
 trial is the group-scale check. A 25-character live convoy and arbitrary
 hostile crowd tolerance require their own evidence. A blocked or interrupted
 character must produce a failure receipt rather than an arrival claim.

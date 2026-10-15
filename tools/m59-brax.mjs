@@ -12,11 +12,13 @@ import {scanKeepers,identityOf,identityMismatch} from './m59-keeper.mjs';
 import {protocolToClient,clientToProtocol,squareCentreClient} from './m59-finepos.mjs';
 import {applyAncientFloors,liftWaitMs} from './m59-moving-platform.mjs';
 import {evidenceDirFor} from './m59-fleetpath.mjs';
+import {planBodyDetour} from './m59-body-detour.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const BRAX_DESTINATION=827;
 export const MAX_BRAX_GROUP=25;
+export const departureSlot=index=>({x:55808+(index%2)*1024,y:14848+Math.floor(index/2)*512});
 export const platformSlot=index=>{
   if(!Number.isInteger(index)||index<0||index>=25)throw Error('platform slot must be 0..24');
   return {row:[18,19,21,22,23][Math.floor(index/5)],col:[52,53,57,58,59][index%5]};
@@ -102,7 +104,7 @@ export function ensureBraxApproach({sourceFile=join(root,'substrate/node-tour-ra
   const temporary=out+'.'+randomUUID();writeFileSync(temporary,JSON.stringify({stones:[{node:'brax',room:579,routes:[route]}]}));renameSync(temporary,out);return out;
 }
 
-export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile=join(root,'substrate/brax-rails.json'),resumeRaisedAt=null}={}){
+export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile=join(root,'substrate/brax-rails.json'),resumeRaisedAt=null,resumeNorthLedge=false}={}){
   const {agent,fleet,call,state}=ctx,start=Date.now(),end=start+timeoutMs;
   const out=join(root,'substrate/brax-attempts');mkdirSync(out,{recursive:true});
   const id=agent+'-'+Date.now(),receipt=join(out,id+'.jsonl');state.brax={id,receipt,success:false};
@@ -136,12 +138,30 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
       await sleep(1000);
     }while(true);
     const s=await read(),p=position(s);
-    if(s.room.num!==room||Math.hypot(p.x-aim.x,p.y-aim.y)>128)throw Error('Brax fine walk stopped before its target');
+    if(s.room.num!==room||Math.hypot(p.x-aim.x,p.y-aim.y)>128)throw Object.assign(Error('Brax fine walk stopped before its target'),{reply});
   };
   const walkPoint=async(point,room=579)=>{
     const aim=point.x==null?squareCentreClient(point.row,point.col):point;
-    const from=position(await read());
-    for(const target of room===579?platformAims(from,aim):[aim])await rawWalkPoint(target,room);
+    const current=await read(),from=position(current);
+    const flatTop=current.doors.observed?.[2]===800&&current.doors.observed?.[3]===800;
+    for(const target of room===579&&!flatTop?platformAims(from,aim):[aim]){
+      try{await rawWalkPoint(target,room);}
+      catch(error){
+        if(room!==579||error.reply?.reason!=='object_blocked')throw error;
+        let complete=false;
+        for(let attempt=0;attempt<3&&!complete;attempt++){
+          const s=await read(),geo=roomGeometry(room);
+          applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(s.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
+          const plan=planBodyDetour(geo,s.you,clientToProtocol(target),{
+            objects:new Map(s.objects.map(o=>[o.id,o])),selfId:s.you.id,maxRangeSquares:24,marginSquares:4,maxNodes:12000,maxMs:1000});
+          log('body-detour',{found:plan.found,reason:plan.reason,nodes:plan.nodes});
+          if(!plan.found)throw error;
+          try{for(const point of plan.waypoints)await rawWalkPoint(protocolToClient(point),room);complete=true;}
+          catch(next){if(next.reply?.reason!=='object_blocked')throw next;error=next;}
+        }
+        if(!complete)throw error;
+      }
+    }
   };
   const follow=async(file,label)=>{
     const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',new URL(process.env.M59_CONTROL_URL).port,'--agent',agent,'--rail','brax','--rail-file',file,'--no-hop','--receipt',join(out,id+'-'+label+'-commands.jsonl')];
@@ -154,16 +174,19 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     const proof=cutRail(from,to,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
     if(!proof.ok||!proof.bridgeOk)throw Error('Brax '+label+' exact route not proved');
     const leg=railLeg({waypoints:proof.waypoints},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
-    const route={ok:true,rail_complete:!leg.unvalidated,direction:'to_node',exit:label,exit_label:label,from:`r${s.you.row}c${s.you.col}`,to:'Brax',legs:[leg],jumps:0,all_declared:true,waypoints:leg.waypoints.length};
+    const route={ok:true,rail_complete:!leg.unvalidated,direction:'to_node',exit:label,exit_label:label,from:`r${s.you.row}c${s.you.col}`,to:`r${Math.floor(to.y/1024)+1}c${Math.floor(to.x/1024)+1}`,legs:[leg],jumps:0,all_declared:true,waypoints:leg.waypoints.length};
     if(!route.rail_complete||!checkRoute(route,{edge}).ok)throw Error('Brax '+label+' cut check refused');
     const file=join(out,id+'-'+label+'.json');writeFileSync(file,JSON.stringify({stones:[{node:'brax',room:s.room.num,routes:[route]}]}));await follow(file,label);
   };
   const jump=async(to,expectedFloor)=>{
     await command('rest',{stand:true});await command('jump',{to_row:to.row,to_col:to.col});
-    const landed=await until(async()=>{const s=await read(),p=position(s);return s.room.num===579&&Math.hypot(p.x-to.x,p.y-to.y)<=160?s:null;},'Brax fall landing not observed',12000);
+    // The existing mover may choose a body-clearing lane within this square.
+    // Accept that legal adjustment, then independently require the expected shelf below.
+    const landed=await until(async()=>{const s=await read(),p=position(s);return s.room.num===579&&s.you.row===to.row&&s.you.col===to.col&&Math.hypot(p.x-to.x,p.y-to.y)<=512?s:null;},'Brax fall landing not observed',12000);
     const s=await read(),p=position(s),geo=roomGeometry(579);
     applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(s.doors.observed).map(([k,height])=>[Number(k),{height,type:4}])),null,{geometryOf:()=>geo});
-    if(Math.abs(floorAt(geo,p.x,p.y)-expectedFloor)>1)throw Error('Brax landed on wrong shelf');
+    const actualFloor=floorAt(geo,p.x,p.y);
+    if(!Number.isFinite(actualFloor)||Math.abs(actualFloor-expectedFloor)>1)throw Error('Brax landed on wrong shelf');
     log('landing',{position:p,floor_client:expectedFloor});return landed;
   };
   const update=fn=>journal.change(g=>{if(g?.id!==batchId)throw Error('Brax batch was replaced');fn(g);return g;});
@@ -178,6 +201,7 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
       await command('wait_for_event',{since,kinds:['message'],timeout_ms:5000});
     if(!/You switch the lever\./.test(JSON.stringify({reply,observation}))&&(await read()).doors.observed?.[3]!==800)throw Error('Brax lever switch was not confirmed');
     log('lever',{row:lever.row,col:lever.col,id:found[0].id});
+    if((await read()).doors.observed?.[3]===800)await update(g=>{g.raisedAt??=Date.now();});
   };
   const cross=async(row,col,to)=>{
     await command('walk_to',{row,col,max_steps:12,arrive_within:2});
@@ -186,8 +210,7 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
   };
   const northFall=async(col)=>{
     const p=position(await read());
-    // Walk around the raised center spire on the north aisle.
-    await walkPoint({x:p.x,y:16896});await walkPoint({x:(col-1)*1024+512,y:16896});
+    // At full height the center spire and platform share one floor.
     const x=(col-1)*1024+512;await walkPoint({x,y:14848});
     await jump({row:8,col,x,y:7680},8160);await walkPoint({row:7,col});
   };
@@ -202,6 +225,11 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
   try{
     let s=await read();log('start',{room:s.room,you:s.you,hp:s.hp});
     if(braxArrival(s)){state.brax.success=true;return true;}
+    if(resumeNorthLedge){
+      const p=position(s);
+      if(s.room.num!==579||s.you.row!==7||![55,56].includes(s.you.col)||floorAt(roomGeometry(579),p.x,p.y)!==8160)throw Error('Brax continuation requires the actual north shelf');
+      log('north-shelf-continuation',{position:p});return await finish();
+    }
     // Explicit measured continuation: no placement and no inferred lift timing.
     if(resumeRaisedAt!=null){
       if(!Number.isFinite(resumeRaisedAt)||Date.now()>resumeRaisedAt+100000||s.room.num!==579||s.doors.observed?.[3]!==800)throw Error('Brax lift continuation is not current');
@@ -251,13 +279,16 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     g=await until(async()=>{let g=await update(g=>{});if(g.failure)throw Error(g.failure);return g.members.every(m=>m.corners)?g:null;},'Brax corner work incomplete',120000);
     if(me.slot===0){
       await until(async()=>(await read()).doors.observed?.[3]===800,'Brax puzzle did not raise lift',10000);
-      const raised=Date.now();await update(g=>{g.phase='rising';g.raisedAt=raised;g.readyAfter=raised+240000+1000;});
+      await update(g=>{g.phase='rising';g.raisedAt??=Date.now();g.readyAfter=g.raisedAt+240000+1000;});
     }
     g=await phase(['rising','leaving','departed']);
     // Full 550/15 seconds plus margin, then validate the packet and floor.
     await sleep(Math.max(0,g.raisedAt+liftWaitMs()-Date.now()));
     s=await read();if(s.room.num!==579||s.doors.observed?.[3]!==800||s.doors.observed?.[4]!==510)throw Error('Brax lift height did not validate');
     await update(g=>{if(g.phase==='rising')g.phase='leaving';});
+    // Assemble two half-square-spaced queues before waiting for the preceding fall.
+    // Successive riders then advance half a square, rather than walking from a distant station.
+    await walkPoint(departureSlot(me.slot));log('departure-queue',{slot:me.slot});
     await until(async()=>{let g=await update(g=>{});if(g.failure)throw Error(g.failure);return g.members.slice(0,me.slot).filter(m=>m.slot%2===lane).every(m=>m.gone);},'Brax preceding jumper did not clear north ledge',80000);
     await northFall(col);
     // Walk off the landing before the next member uses the same trajectory.
