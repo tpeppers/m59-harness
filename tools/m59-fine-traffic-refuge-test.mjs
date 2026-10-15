@@ -49,10 +49,11 @@ assert(!sameWait.ok&&sameWait.traffic_blocked,'an otherwise clear room does not 
 const freed=await cutFineRailAsync(qgeo,queue.from,queue.target,{...qopts,objects:new Map()});
 assert(freed.ok&&freed.bridgeOk,'the same route becomes available after the incumbent leaves');
 const scratch=mkdtempSync(join(tmpdir(),'m59-fine-traffic-')),old=process.env.M59_KEEPER_BAND_REGISTRY;
-const agent='fine-traffic-fixture',room={num:2502,object_id:77};let pose={...from},reads=0,moves=0;
+const jam=JSON.parse(readFileSync(new URL('./fixtures/hollows-occupied-guide-2502.json',import.meta.url)));
+const agent='fine-traffic-fixture',room={num:2502,object_id:77};let pose={...from},reads=0,moves=0,guideMode=false;
 const server=createServer((request,response)=>{
  const blocked=++reads<=20;response.setHeader('content-type','application/json');
- response.end(JSON.stringify({agent,in_game:true,room,you:pose,hp:{value:20,max:20},vigor:{value:200},objects:blocked?crowd:[],
+ response.end(JSON.stringify({agent,in_game:true,room,you:pose,hp:{value:20,max:20},vigor:{value:200},objects:guideMode?jam.bodies:blocked?crowd:[],
   position_read:{...pose,at:Date.now(),room_object_id:77}}));
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -60,10 +61,19 @@ const registry=join(scratch,'bands.json');writeFileSync(registry,JSON.stringify(
 try{
  const ctx={agent,fleet:'fine-traffic-test',origin:{source:'fleetscript',name:'traffic',run_id:'fixture'},state:{},call:async(name,args)=>{
   if(name==='walk_to'){assert(reads>20,'no packet may leave while the scene remains blocked');moves++;
+   if(guideMode){const a=protocolToClient(pose),b=protocolToClient(args),obstacles=blockingBodySnapshot(new Map(jam.bodies.map(o=>[o.id,o])),pose.id);
+    const traced=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles});
+    assert(traced.arrived&&!traced.blocked,'the controller must re-prove each emitted chord against the unchanged native creatures');}
    pose={...pose,x:args.x,y:args.y,row:Math.floor(args.y/64),col:Math.floor(args.x/64)};return {arrived:true};}
   throw Error('unexpected action '+name);
  }};
  const result=await checkedIslandWalk(ctx,target,{room:2502,budgetMs:90000});
  assert(result.ok);assert(moves>0);assert(Math.hypot(pose.x-target.x,pose.y-target.y)<=8);
  console.log('A body-blocked geometry route waits at the actual Hollows refuge, then moves only after the scene clears.');
+ guideMode=true;pose={...jam.from};moves=0;ctx.state={};
+ const advanced=await checkedIslandWalk(ctx,jam.goal,{room:2502,budgetMs:90000,guideNext:jam.next});
+ assert(advanced.ok);assert(moves>0);assert(Math.hypot(pose.x-jam.next.x,pose.y-jam.next.y)<=8);
+ assert(Math.hypot(pose.x-jam.goal.x,pose.y-jam.goal.y)>64,'advancing a soft point must not be reported as reaching its occupied exact location');
+ assert.equal(ctx.state.islandGuideAdvances.length,1);assert.deepEqual(ctx.state.islandGuideAdvances[0].to,jam.next);
+ console.log('The controller follows the proved next authored guide point while the native shadowbeast remains in place; every emitted chord retains collision proof.');
 }finally{await new Promise(r=>server.close(r));if(old==null)delete process.env.M59_KEEPER_BAND_REGISTRY;else process.env.M59_KEEPER_BAND_REGISTRY=old;rmSync(scratch,{recursive:true,force:true});}
