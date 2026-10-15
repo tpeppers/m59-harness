@@ -30,7 +30,7 @@ still checks live bodies. An open-door guide cannot open a closed door.
 wait. The crossing helper serializes approach through landing clearance,
 confirms the actual fine floor, and sends lower landings through their gutter.
 
-Component checks on October 14–15 used stock local monsters, initial 20 HP,
+Component checks on October 14 (local time) used stock local monsters, initial 20 HP,
 200 vigor, no skills or spells, and no measured administrator mutations.
 Each crossing and the gutter reached its expected server-confirmed landing
 without a death. These are component observations, not a fleet survival rate.
@@ -47,6 +47,24 @@ later copies could report the open Dispel state without receiving its mask.
 Door application is now tracked per geometry and mask, with separate typed
 floor and ceiling events; the two-copy regression is covered offline. That
 interrupted attempt is not a completed survival sample.
+
+The completed populated cohort on `ebc7154b` (source hash
+`d61ca3a36b9796febb803a8f28a5255524f32d7bd3820b627e22d0ffe50b3f6b`)
+reached the inn with 11/20 and completed 10/20 roundtrips. Eighteen survived;
+there were no return-leg deaths and no Konima deaths. The two outward deaths
+were a shadow beast at Merb r46c52 and an orc wizard at Obfal r32c23. Both
+recorded body-detour search exhaustion during recovery, with no other courier
+within six squares in the death scenes. Native wallet audits found 400,000
+shillings home, 320,000 retained by eight living stopped couriers, and 80,000
+lost by the two deaths. All twenty retained the pinned source and zero known
+skills/spells. The initial profile was 20 HP, 200 vigor, 40,000 shillings,
+plate armor, helm and eight cheese wheels, with no healing flasks; monsters
+remained enabled and measured administrator actions were Dispel only.
+Seven outward living failures and one return living failure keep this cohort
+below courier acceptance despite the improved survival. The pending candidate
+addresses refuge-search latency, interrupted staging/approach gutter handoff,
+Hollows queue staging, and completed recovery-label lag. It needs its own
+native components and populated cohort before enabling the private recipe.
 
 `island-walk` follows the mainland cave (27), Ugol's Warren Entrance (2500),
 2501, the Archaic Hollows (2502), 2503, 2504, Konima's Ascension (2505), and
