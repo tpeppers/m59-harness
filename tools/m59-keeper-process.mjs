@@ -35,6 +35,7 @@ import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
 import { autopilotFor, dropAutopilot, autopilotIfAny, releaseSpot } from './m59-autopilot.mjs';
 import { reagentCoopCommand } from './m59-reagent-coop-runtime.mjs';
 import {captureCachedScene} from './m59-scene-capture.mjs';
+import {survivalTraceSnapshot} from './m59-survival-trace.mjs';
 import { TickLoop } from './m59-tick.mjs';
 import { makeDecider, DEFAULT_GOALS, intend, INTENTS } from './m59-decide.mjs';
 import { Router, routeIntent } from './m59-route.mjs';
@@ -1804,6 +1805,11 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && path === '/survival-trace') {
+      // Bounded cached evidence for living movement failures, using the same
+      // collector as postmortems. This sends no game request or movement.
+      json({agent,trace:survivalTraceSnapshot(session)});return;
+    }
     if (req.method === 'GET' && path === '/scene-capture') {
       json({scene:captureCachedScene(session,autopilot,{provenance:session.replayRecorder?.status()?.provenance??{pending:true}})});return;
     }

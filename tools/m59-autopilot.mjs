@@ -6080,6 +6080,14 @@ export class Autopilot {
   // Healing chooses the shortest clear approach to an exclusive local wall. Combat
   // later binds a quarry to its own wall through the ordinary target-first selector.
   async takeRecoverySpot(why, { source = 'recovery', route=false, decisionId=null } = {}) {
+    // Cancel the old script's paced packets before this keeper starts its approach.
+    // Replacing the visible move order alone leaves both walkers on one generation.
+    const order=liveMoveOrder(this.s);
+    if(order?.kind==='walk'&&order.origin?.source==='fleetscript'){
+      const handoff=this.s.cancelMovement?.(null,'keeper recovery preempts the script walk',
+        {origin:keeperOrigin('shelter'),preserveId:decisionId??currentSurvivalDecision(this.s)?.id});
+      if(!handoff?.cancelled)return {took:false,cancelled:true,why:'script walk recovery handoff refused'};
+    }
     if (this.adoptRecoveryWall()) {
       const did=await this.playDead(why);
       return {took:!!did || !!this.hold,spot:this.hold,via:'logoff_at_safe_wall'};

@@ -48,6 +48,12 @@ re-proves against current bodies and validates every packet. Confirmed fine
 progress can also keep its approach watchdog alive when the coarse path is
 absent; predictions and oscillation do not renew it.
 
+When recovery takes over an active FleetScript walk, it cancels that walk's
+movement generation before starting the refuge approach. Merely replacing the
+reported order lets both paced walkers steer the same body. The selected
+recovery decision survives this handoff; a refused cancellation prevents the
+replacement approach.
+
 Static refuge staging uses a checked fine footing rather than assuming that
 the marked cell's centre is enterable. The layout resolver requires a known
 non-rim refuge, an approach and a return proof from its geometry anchor. That

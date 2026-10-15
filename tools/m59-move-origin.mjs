@@ -144,8 +144,8 @@ export async function withMoveOrder(s, { kind = 'travel', to = null, origin = nu
   s.moveOrder = mine;
   try { return await fn(); }
   finally {
+    mine.ended_at = Date.now();
     if (s.moveOrder === mine) {
-      mine.ended_at = Date.now();
       s.lastMoveOrder = mine;
       s.moveOrder = outer && !outer.ended_at ? outer : null;
     }
