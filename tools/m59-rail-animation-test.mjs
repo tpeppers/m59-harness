@@ -15,3 +15,7 @@ for(const reason of ['cancelled','object_blocked','geometry_blocked','unknown_po
   calls=0;const reply={reason};assert.equal(await waitForRailAnimation(async()=>{calls++;return reply;},options),reply);assert.equal(calls,1);
 }
 console.log('rail animation: same aim, bounded wait, room change, cancellation and collision refusals passed');
+
+let clock=0,bodyCalls=0;
+const bodyWait=await waitForRailAnimation(async()=>++bodyCalls===1?{arrived:false,reason:'object_blocked'}:{arrived:true},{room:579,readRoom:async()=>579,retryBodies:true,now:()=>clock,wait:async ms=>{clock+=ms}});
+assert.equal(bodyCalls,2);assert(bodyWait.arrived);

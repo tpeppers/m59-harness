@@ -73,7 +73,7 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
+                       'wait-bodies', 'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -411,7 +411,7 @@ for (const [li, leg] of plan.legs.entries()) {
     if(!wire.ok){came_off={leg:li+1,waypoint:wi+1,why:wire.reason,asked:wp};receipt(came_off);console.log(JSON.stringify(came_off));break outer;}
     const w = await waitForRailAnimation(() => call('walk_to', { agent: AGENT, ...wire.protocol,
                                       max_steps: STEPS, stride: STRIDE,
-                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000), { room: ROOM, readRoom: async () => (await look()).room });
+                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000), { room: ROOM, readRoom: async () => (await look()).room, retryBodies:has('wait-bodies'),timeoutMs:has('wait-bodies')?90000:45000 });
     receipt({kind:'walk',leg:li+1,waypoint:wi+1,aim:wp,wire,reply:w});
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
