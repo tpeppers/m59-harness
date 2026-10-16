@@ -189,6 +189,25 @@ token walk by one. The first live relinquish ran without this: the keeper read g
 session fell back to character select, and the client crashed in `char.dll`. The spectate
 keeper's output is in `substrate/spectate/<agent>.log`.
 
+**Logging off to survive really logs off.** The keeper's last resort in a losing fight is
+to leave the world and come straight back. A keeper with its own connection drops its socket.
+The spectate keeper's socket is only its attachment, so at first that "logoff" just
+re-attached, and the character stayed in the fight. Now an attached rejoin sends `BP_REQ_QUIT`
+first, and the proxy does the round trip on your connection (`ProxySession.logoffAway`):
+
+1. The server takes the character out of the world and drops to its menu, still logged in.
+2. The proxy holds it there until the keeper re-attaches (about a second).
+3. It sends `AP_REQ_GAME` and `BP_USE_CHARACTER`. No password is needed.
+
+Your client sees none of the menu: the proxy swallows everything in between, both ways. The
+character just reappears as if it had changed room. Taking control back mid-logoff brings it
+back at once. If nothing asks within 20 seconds it comes back by itself. If the server refuses
+any step, the proxy hangs up, which logs the character off.
+
+**The keeper's looks stay off your screen.** The keeper inspects items with `REQ_LOOK`. Each
+answer used to open an "Object Description" window on your client. The proxy now notes who
+asked for each look and swallows the answers to the keeper's. The keeper still receives them.
+
 A plan proxy started before this change has no attach port. Restart it (close it, then
 press L again) or the desk will say the keeper cannot drive.
 
