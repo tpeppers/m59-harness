@@ -165,6 +165,23 @@ console.log('Autopilot: the lapse re-opens, reports, and the status carries it')
   st = rig.weaponMagicStatus();
   ok('"already dedicated" re-opens the mundane readings, notes it and makes the swap due',
      st.wielded?.bypasses_nonmagic === null && notes.includes('DEDICATION SEEN') && rig._magicSwapDue === true);
+
+  // East Jasper, 2026-10-16: a fleet-mate dedicated the spare and handed it back under the same id;
+  // only the caster heard "is now dedicated", so the owner's "mundane" reading stood for 45 minutes.
+  rig.noteWeaponArrived = Autopilot.prototype.noteWeaponArrived.bind(rig);
+  rig.weaponMagicBook().record(8, 'hammer', 'A plain hammer.');
+  rig._magicSwapDue = false;
+  let swept = 0;
+  rig.sweepWeaponMagic = async () => { swept += 1; };
+  rig.noteWeaponArrived([8]);
+  st = rig.weaponMagicStatus();
+  ok('a weapon handed back has its reading forgotten, and is re-read at once',
+     st.weapons.find(w => w.id === 8)?.class === 'unknown' && rig._magicSwapDue === true && swept === 1 &&
+     notes.includes('WEAPON BACK IN THE PACK'));
+  ok('the next look is asked for it', rig.weaponMagicBook().needsLook([{ id: 8, name: 'hammer' }]).length === 1);
+  swept = 0; rig._magicSwapDue = false;
+  rig.noteWeaponArrived([99]);
+  ok('an arrival the book never read (loot, a purchase) changes nothing', swept === 0 && rig._magicSwapDue === false);
 }
 
 // 2026-09-27: Animal reconnected in Ukgoth to shed aggro, the new client had no magic set, the
