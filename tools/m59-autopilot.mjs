@@ -3006,10 +3006,11 @@ export class Autopilot {
     return this._huntAreaSet;
   }
 
-  /** The area square nearest to us, or null. */
-  nearestHuntAreaSquare(area, me) {
+  /** The area square nearest to us that no other body stands on (stacked fleet-mates trap each other), or null. */
+  nearestHuntAreaSquare(area, me, taken = new Set()) {
     let best = null, bd = Infinity;
     for (const k of area) {
+      if (taken.has(k)) continue;
       const [row, col] = k.split(',').map(Number), d = Math.hypot(row - me.row, col - me.col);
       if (d < bd) { bd = d; best = { row, col }; }
     }
@@ -22706,7 +22707,11 @@ export class Autopilot {
 
       if (!found.length && huntArea && c.self && !huntArea.has(`${c.self.row},${c.self.col}`)) {
         // OUTSIDE THE HUNT AREA WITH NOTHING TO DO: walk back onto it rather than holding a wall elsewhere.
-        const back = this.nearestHuntAreaSquare(huntArea, c.self);
+        // Not onto a square a body already holds: measured 2026-10-16, seven farmers walked back to the
+        // same nearest square of the Castle Victoria door cone.
+        const taken = new Set([...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId)
+          .map(o => `${o.row},${o.col}`));
+        const back = this.nearestHuntAreaSquare(huntArea, c.self, taken);
         if (back) {
           if (this.hold && !huntArea.has(`${this.hold.row},${this.hold.col}`)) this.hold = null;
           this.doing = 'returning to the hunt area';

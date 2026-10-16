@@ -54,6 +54,11 @@ await ok('the nearest area square is the nearest', () => {
   const ap = keeper({ room: 38, squares: [[7, 14], [12, 20], [14, 16]] });
   assert.deepEqual(ap.nearestHuntAreaSquare(ap.huntAreaHere(38), { row: 14, col: 10 }), { row: 14, col: 16 });
 });
+await ok('the walk-back skips squares another body holds', () => {
+  const ap = keeper({ room: 38, squares: [[14, 16], [14, 18], [7, 14]] });
+  assert.deepEqual(ap.nearestHuntAreaSquare(ap.huntAreaHere(38), { row: 14, col: 10 }, new Set(['14,16'])), { row: 14, col: 18 });
+  assert.equal(ap.nearestHuntAreaSquare(ap.huntAreaHere(38), { row: 14, col: 10 }, new Set(['14,16', '14,18', '7,14'])), null);
+});
 await ok('passFarm: the area filter runs after the avoid filter and before ranking; the walk-back before the vigil', () => {
   const i = AUTOPILOT.indexOf('  async passFarm(ctx) {');
   const body = AUTOPILOT.slice(i, AUTOPILOT.indexOf('\n  async ', i + 30));
