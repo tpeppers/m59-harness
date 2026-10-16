@@ -33,7 +33,9 @@
 //   in_flight, flight_room, hold_room, now,
 //   allies_here (fleet-mates in the room, NOT counting this character), hostiles_here (players in the
 //   room the war book or the server marks hostile), sortie_room / sortie_phase (the sortie in force, or
-//   null), alarm_room / reporter (alarm_elsewhere only)
+//   null), alarm_room / reporter (alarm_elsewhere only),
+//   player_health -- the fleet's groan-based estimate of the player's health (m59-player-health.mjs):
+//   { band 1-4, min_pct, max_pct, age_ms, room } from the last time anyone of ours heard them hurt, or null
 //
 // THE DECISIONS — a CLOSED set, like the playbook verbs. Anything else is reported and ignored.
 //   null | 'default' | { do: 'default' }    what the harness already does; silence
@@ -55,6 +57,10 @@
 //        flight, held there for `home_hold_ms` -- after `idle_ms` with no hostile in the map, after
 //        `max_ms` in all, or the moment the body is anywhere but `room` or `home` (a sortie never
 //        follows anybody a second map out). A `flee_to` decided during it replaces it.
+//   { do: 'hold_fire', ms?, why? }
+//        do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's
+//        alarm both pass over them for `ms` (default HOLD_FIRE_MS, renewed by deciding again). It never
+//        stops return fire -- a player who hits us is answered exactly as before.
 //
 // WHERE THE FILES ARE (all optional, all this machine's — gitignored, never committed):
 //   strategies   substrate/pvp-strategies/<name>.mjs (or M59_PVP_STRATEGY_DIR), then every directory in
@@ -86,7 +92,7 @@ const SUBSTRATE = join(HERE, '..', 'substrate');
 export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
 /** What a module hears when it does not say: the moments that existed before `moments` did. */
 export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
-export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie']);
+export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire']);
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
 export const STRIKES = 3;
 export const MAX_HOLD_MS = 4 * 3600_000;
@@ -96,6 +102,8 @@ export const PLAYER_SEEN_EVERY_MS = 5_000;
 export const SORTIE_MAX_MS = 15 * 60_000;
 export const DEFAULT_SORTIE_MS = 3 * 60_000;
 export const DEFAULT_SORTIE_IDLE_MS = 30_000;
+export const HOLD_FIRE_MS = 6_000;
+export const HOLD_FIRE_MAX_MS = 60_000;
 
 export const pvpStrategyDir = (env = process.env) => env.M59_PVP_STRATEGY_DIR || join(SUBSTRATE, 'pvp-strategies');
 export const pvpStrategyDirsFile = (env = process.env) => env.M59_PVP_STRATEGY_DIRS_FILE || join(SUBSTRATE, 'pvp-strategy-dirs.json');
@@ -167,6 +175,11 @@ export function validateDecision(d) {
   if (verb === 'default') return { decision: null };
   const why = d.why == null ? null : String(d.why).slice(0, 200);
   if (verb === 'engage') return { decision: { do: 'engage', why } };
+  if (verb === 'hold_fire') {
+    const v = d.ms == null ? HOLD_FIRE_MS : Number(d.ms);
+    if (!Number.isFinite(v) || v < 0) return { decision: null, error: 'hold_fire ms is non-negative milliseconds' };
+    return { decision: { do: 'hold_fire', ms: Math.min(v, HOLD_FIRE_MAX_MS), why } };
+  }
   const room = Number(d.room);
   if (!Number.isInteger(room) || room <= 1) return { decision: null, error: `${verb} needs a room number above 1, not ${JSON.stringify(d.room)}` };
   const ms = (v, dflt, max) => v == null ? dflt : (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.min(Number(v), max) : NaN);

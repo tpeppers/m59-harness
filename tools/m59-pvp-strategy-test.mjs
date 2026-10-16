@@ -33,6 +33,7 @@ process.env.M59_WAR_ALARM_FILE = join(BOOKS, 'war-alarms.jsonl');
 process.env.M59_GRUDGE_FILE = join(BOOKS, 'grudges.json');
 process.env.M59_PVP_HOLD_DIR = join(BOOKS, 'holds');
 process.env.M59_PVP_DIR = join(BOOKS, 'pvp');
+process.env.M59_PLAYER_HEALTH_FILE = join(BOOKS, 'player-health.jsonl');
 const LOCAL = join(BOOKS, 'local'), PRIVATE = join(BOOKS, 'private'), EXTRA = join(BOOKS, 'extra');
 for (const d of [LOCAL, PRIVATE, EXTRA]) mkdirSync(d, { recursive: true });
 const ENV = { M59_PVP_STRATEGY_DIR: LOCAL, M59_PVP_STRATEGY_PATH: PRIVATE,
@@ -392,6 +393,67 @@ console.log('combat mode: alarm_elsewhere');
   ok('asked at most once per map and enemy per window', f.asked.length === n);
   await f.mode.tick();
   ok('and it lands in the fight next door', f.s.world.room.num === 2 && f.mode.sortie?.phase === 'posted', JSON.stringify(f.mode.status()));
+}
+
+console.log('groans: health bands off the pain sound');
+{
+  const ph = await import('./m59-player-health.mjs');
+  const { parseAudio } = await import('./m59-audio-observations.mjs');
+  ok('the eight pain sounds are the four bands; anything else is not a groan',
+    ph.groanBand('ouchm1')?.band === 1 && ph.groanBand('ouchf4')?.band === 4 && ph.groanBand('ouchf4').gender === 'f'
+    && ph.groanBand('ouchm5') === null && ph.groanBand('hit') === null && ph.groanBand(null) === null);
+  ok('the bands are the kod thresholds (GetOuchSound: >75, >50, >25, else)',
+    ph.GROAN_BANDS[1].min_pct === 76 && ph.GROAN_BANDS[2].max_pct === 75 && ph.GROAN_BANDS[3].max_pct === 50 && ph.GROAN_BANDS[4].max_pct === 25);
+  const b = Buffer.alloc(25); b.writeUInt32LE(901, 0); b.writeUInt32LE(2, 4); b[8] = 0;
+  const a = parseAudio(170, b, new Map([[901, 'ouchm3.wav']]));
+  ok('a BP_PLAY_WAVE of ouchm3 names its source object and reads band 3', a?.source === 2 && ph.groanBand(a.stem)?.band === 3, JSON.stringify(a));
+  const src = readFileSync(new URL('./m59-client.mjs', import.meta.url), 'utf8');
+  ok('the client emits it as a groan event with the source', /this\.emit\('groan', \{ source: a\.source, band: g\.band/.test(src));
+  ph.resetHealthCache();
+  const t0 = Date.now();
+  ok('recorded once a second per player and band', ph.recordGroan({ name: 'Morpheus', band: 2, at: t0 }) === true
+    && ph.recordGroan({ name: 'Morpheus', band: 2, at: t0 + 10 }) === false);
+  ph.recordGroan({ name: 'Morpheus', band: 4, room: 38, reporter: 'Us', at: t0 + 20 });
+  const h = ph.latestHealth('morpheus', { now: t0 + 1000 });
+  ok('the latest reading wins, by name in any case', h?.band === 4 && h.max_pct === 25 && h.room === 38 && h.age_ms === 980, JSON.stringify(h));
+  ok('an old reading is no reading', ph.latestHealth('Morpheus', { now: t0 + 200_000, maxAgeMs: 120_000 }) === null);
+  ok('nobody heard: null', ph.latestHealth('Bob', { now: t0 + 1000 }) === null);
+  ph.resetHealthCache();
+}
+{
+  reset(); const ph = await import('./m59-player-health.mjs'); ph.resetHealthCache();
+  const f = fixture({ room: 38, strategy: () => null });
+  put(f, 2, P | OF.ENEMY); put(f, 1, P);
+  f.mode.event({ kind: 'groan', source: 2, band: 3 });
+  f.mode.event({ kind: 'groan', source: 1, band: 1 });
+  ok('CombatMode records a groan from a player who is not ours, never our own', ph.latestHealth('Morpheus')?.band === 3
+    && ph.latestHealth('Us') === null && f.mode.lastGroan?.name === 'Morpheus');
+  f.mode.event({ kind: 'appeared', id: 2 });
+  ok('and the strategy sees it as player_health', f.asked.some(a => a.player === 'Morpheus' && a.player_health?.band === 3 && a.player_health.max_pct === 50),
+    JSON.stringify(f.asked.map(a => a.player_health)));
+  ph.resetHealthCache();
+}
+
+console.log('combat mode: hold_fire');
+{
+  const v = d => ps.validateDecision(d);
+  ok('hold_fire is a decision with a bounded window', v('hold_fire').decision?.ms === ps.HOLD_FIRE_MS
+    && v({ do: 'hold_fire', ms: 10 * 60_000 }).decision.ms === ps.HOLD_FIRE_MAX_MS && !!v({ do: 'hold_fire', ms: -1 }).error);
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: (m, x) => x.player === 'Morpheus' ? { do: 'hold_fire', ms: 6000, strategy: 'd' } : null });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('a held hostile is not engaged on sight', !f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  ok('nor by a fleet-mate\'s alarm in this room', f.mode.onWarAlarm({ at: Date.now(), room: 38, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === false);
+  hitBy(f); await f.mode.tick();
+  ok('but a hit is still answered: hold_fire never stops return fire', !!f.mode.active?.pvp && f.sent.includes('attack:2'), f.sent.join());
+  f.mode.stop('test');
+  f.advance(7000);
+  ok('the hold lapses unless decided again', f.mode.fireHeld('Morpheus') === false);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => null });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('without hold_fire the same hostile IS engaged on sight (the control)', !!f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  f.mode.stop('test');
 }
 
 console.log('the keeper');

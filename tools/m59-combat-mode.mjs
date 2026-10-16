@@ -25,7 +25,8 @@ import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
-import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS } from './m59-pvp-strategy.mjs';
+import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS } from './m59-pvp-strategy.mjs';
+import { recordGroan, latestHealth } from './m59-player-health.mjs';
 // A strategy flight that did not land waits this long before another may start.
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
@@ -268,6 +269,8 @@ export class CombatMode {
     this.flightBackoffUntil = 0; this.lastFlight = null;
     // A SORTIE in force (m59-pvp-strategy.mjs `sortie`), the last one, and the alarm_elsewhere throttle.
     this.sortie = null; this.lastSortie = null; this.alarmAskedAt = new Map();
+    // hold_fire: player (lower case) -> until. The groan book is read through latestHealth.
+    this.holdFire = new Map(); this.lastGroan = null;
   }
 
   status() {
@@ -374,7 +377,7 @@ export class CombatMode {
     if (!s.live || !c?.self || !(room > 1) || c.vitals?.()?.health?.value === 0) return;
     const now = this.now();
     let hostile = null;
-    const unknown = [], ours = [], seen = [];
+    const unknown = [], ours = [], seen = [], hostiles = [];
     for (const o of c.room?.objects?.values?.() ?? []) {
       if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
       const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
@@ -385,7 +388,8 @@ export class CombatMode {
       seen.push({ name, verdict });
       if (verdict.hostile) {
         // Refused to us in this room: not engaged here, and not re-engaged on every object change.
-        if ((o.flags & OF.ATTACKABLE) && !hostile && !this.targetRefused(name)) hostile = { o, name, verdict };
+        // Chosen after the strategy below has spoken, so a hold_fire this scan is honoured.
+        if ((o.flags & OF.ATTACKABLE) && !this.targetRefused(name)) hostiles.push({ o, name, verdict });
         continue;
       }
       if (!this.warSeen.has(o.id)) this.warSeen.set(o.id, now);
@@ -401,6 +405,7 @@ export class CombatMode {
       if (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted')) { this.raiseWarAlarm(p.name, 'sighted', room); return; }
       if (d?.do === 'sortie' && this.beginSortie(d, p.name, 'sighted') === 'going') { this.raiseWarAlarm(p.name, 'sighted', room); return; }
     }
+    hostile = hostiles.find(h => !this.fireHeld(h.name)) ?? null;
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
     // OUTSIDE pvp_rooms a fighter is a sentinel too (m59-pvp-rooms.mjs): no engagement, but the
     // sighting alarm still goes out, because fleet-mates in an allowed room fight on it.
@@ -470,6 +475,8 @@ export class CombatMode {
 
   beginWar(name, { basis, why, room, reporter = null }) {
     if (this.pvpEligibility?.() === false) return false;
+    // A strategy's hold_fire: we do not START this fight (scan or alarm). A hit is beginPvP, not this.
+    if (this.fireHeld(name)) return false;
     // A strategy's flight owns the body until it lands; a war engagement on the road is what it is fleeing.
     if (this.active?.flight) return false;
     // OUTSIDE pvp_rooms (operator, 2026-10-11): no war engagement here, from the scan or from a
@@ -1587,7 +1594,8 @@ export class CombatMode {
     if (!host && !this.lastFlight && !this.sortie && !this.lastSortie) return null;
     const keeper = this.keeper?.();
     return { ...(host?.status?.() ?? {}), flight: this.active?.flight ?? null, last_flight: this.lastFlight,
-      sortie: this.sortie, last_sortie: this.lastSortie,
+      sortie: this.sortie, last_sortie: this.lastSortie, last_groan: this.lastGroan,
+      hold_fire: Object.fromEntries([...this.holdFire].filter(([, u]) => u > this.now())),
       engage: this.strategyEngage, hold: keeper?.pvpStrategyHold ?? null,
       backoff_until: this.flightBackoffUntil > this.now() ? this.flightBackoffUntil : null };
   }
@@ -1607,7 +1615,32 @@ export class CombatMode {
       in_flight: !!this.active?.flight, flight_room: this.active?.flight?.room ?? null,
       hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(),
       ...this.roomCount(), sortie_room: this.sortie?.room ?? null, sortie_phase: this.sortie?.phase ?? null,
-      alarm_room: null, reporter: null, ...extra };
+      alarm_room: null, reporter: null, player_health: this.playerHealth(player), ...extra };
+  }
+
+  /** The fleet's groan-based estimate for a player, or null. Never throws on the strategy path. */
+  playerHealth(player) {
+    try { return latestHealth(player, { now: this.now() }); } catch { return null; }
+  }
+
+  /** true while a strategy's hold_fire says not to start a fight with this player. */
+  fireHeld(name) {
+    const k = String(name ?? '').toLowerCase(), until = this.holdFire.get(k);
+    if (until == null) return false;
+    if (this.now() < until) return true;
+    this.holdFire.delete(k); return false;
+  }
+
+  /** A pain sound (m59-player-health.mjs): the hurt player's health band, recorded for players not ours. */
+  observeGroan(ev, c) {
+    if (ev.kind !== 'groan' || !ev.source || ev.source === c.selfId) return;
+    const o = c.room?.objects?.get?.(ev.source);
+    if (!o || !(o.flags & OF.PLAYER)) return;
+    const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
+    if (!name || this.isOurs(name)) return;
+    this.lastGroan = { at: this.now(), name, band: ev.band, room: this.s.world?.room?.num ?? null };
+    recordGroan({ name, band: ev.band, room: this.s.world?.room?.num ?? null,
+      reporter: this.character?.() ?? characterName(this.s, c), at: this.now() });
   }
 
   /** Who is in the room with us: fleet-mates (not counting us) and players marked hostile. */
@@ -1641,6 +1674,10 @@ export class CombatMode {
         strategy: d.strategy ?? null, decision: d.do, to: d.room ?? null, why: d.why ?? null });
     }
     if (d.do === 'engage' && here > 1) this.strategyEngage = { room: here, until: this.now() + ENGAGE_WINDOW_MS, player, strategy: d.strategy ?? null };
+    if (d.do === 'hold_fire') {
+      this.holdFire.set(String(player).toLowerCase(), this.now() + (d.ms ?? HOLD_FIRE_MS));
+      if (this.holdFire.size > 256) this.holdFire.clear();
+    }
     return d;
   }
 
@@ -2254,6 +2291,7 @@ export class CombatMode {
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observeWar(ev, client);
+    if (ev.kind === 'groan') { try { this.observeGroan(ev, client); } catch { /* evidence only */ } }
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
     if (ev.kind === 'message' && ev.text) this.noteFightMessage(ev.text);
