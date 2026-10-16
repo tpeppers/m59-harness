@@ -2352,6 +2352,8 @@ export class Autopilot {
       // pull in it was being refused, and each of those numbers was a room-shaped guess
       // standing in for the reasoning. Set `pull_within` to put a ceiling back.
       pullWithin: null,
+      // { room, squares } -- where in a room prey may be chosen (m59-strategy-schema.mjs huntArea). null = anywhere.
+      huntArea: null,
       // WHETHER A FIGHT OPENS BY WALKING TO A WALL. Renamed 2026-09-10 from
       // `requireSafeWall`, which had grown four jobs and only one of them was this.
       //
@@ -2996,6 +2998,24 @@ export class Autopilot {
 
   // HUNT PRIORITY (m59-hunt-priority.mjs). The ordering lives there; this binds it to the
   // keeper's own name reader and hunt matcher, and remembers the last choice for status.
+  /** The hunt area's squares for this room (a Set of "row,col"), or null when the whole room is fair game. */
+  huntAreaHere(roomNum) {
+    const a = this.policy?.huntArea;
+    if (!a || Number(a.room) !== Number(roomNum) || !Array.isArray(a.squares) || !a.squares.length) return null;
+    if (this._huntAreaFor !== a) { this._huntAreaFor = a; this._huntAreaSet = new Set(a.squares.map(([r, c]) => `${r},${c}`)); }
+    return this._huntAreaSet;
+  }
+
+  /** The area square nearest to us, or null. */
+  nearestHuntAreaSquare(area, me) {
+    let best = null, bd = Infinity;
+    for (const k of area) {
+      const [row, col] = k.split(',').map(Number), d = Math.hypot(row - me.row, col - me.col);
+      if (d < bd) { bd = d; best = { row, col }; }
+    }
+    return best;
+  }
+
   huntPriorityOrder(found, preferId = null) {
     const c = this.s?.client;
     const nameOf = o => c?.rsc?.get?.(o.nameRsc) || o.name || '';
@@ -22611,6 +22631,16 @@ export class Autopilot {
         found = reachable;
       }
 
+      // THE HUNT AREA (policy.huntArea): in its room only quarry standing inside it is chosen. Everything
+      // outside is left for whoever is not bound to the area; with nothing inside, the pass is empty and the
+      // empty branch below walks us back onto the area.
+      const huntArea = this.huntAreaHere(room?.num);
+      if (huntArea && found.length) {
+        const inside = found.filter(o => huntArea.has(`${o.row},${o.col}`));
+        if (inside.length < found.length) this.huntAreaSkipped = { at: Date.now(), skipped: found.length - inside.length };
+        found = inside;
+      }
+
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
       // prefer the least-claimed creature while retaining findCreature's distance order
@@ -22672,6 +22702,18 @@ export class Autopilot {
           });
         }
         return HANDLED;
+      }
+
+      if (!found.length && huntArea && c.self && !huntArea.has(`${c.self.row},${c.self.col}`)) {
+        // OUTSIDE THE HUNT AREA WITH NOTHING TO DO: walk back onto it rather than holding a wall elsewhere.
+        const back = this.nearestHuntAreaSquare(huntArea, c.self);
+        if (back) {
+          if (this.hold && !huntArea.has(`${this.hold.row},${this.hold.col}`)) this.hold = null;
+          this.doing = 'returning to the hunt area';
+          const w = await s.walkTo(back.col, back.row, { maxSteps: 40 }).catch(e => ({ arrived: false, reason: e.message }));
+          this.huntAreaReturn = { at: Date.now(), to: back, arrived: w?.arrived === true, reason: w?.arrived ? null : (w?.reason ?? null) };
+          return HANDLED;
+        }
       }
 
       if (!found.length) {

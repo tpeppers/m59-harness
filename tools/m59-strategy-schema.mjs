@@ -185,7 +185,29 @@ export const STRATEGY_FIELDS = Object.freeze([
   // THE BUDDY SYSTEM (m59-buddy.mjs): { pairs: { tagger: killer }, wait_s, tries, reach, quarry }. One
   // value for every member, each keeper finds its own role in it, so one file can be assigned to all.
   { path: 'buddy', keys: ['buddy'], faculty: 'work', arg: 'buddy', normalize: v => normalizeBuddy(v) },
+  // WHERE IN A ROOM PREY MAY BE CHOSEN (Autopilot.huntAreaHere): { room, squares: [[row, col], ...] }. In that room
+  // only quarry standing on a listed square is selected, and an idle farmer walks back onto the area. Elsewhere
+  // nothing changes. Operator 2026-10-16: farm Castle Victoria's undead but stay in sight of the bastion door.
+  { path: 'huntArea', keys: ['huntArea'], faculty: 'work', arg: 'hunt_area', normalize: normHuntArea },
 ]);
+
+/** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */
+export function normHuntArea(v) {
+  if (v === null) return null;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('huntArea must be { room, squares } or null');
+  const room = Number(v.room);
+  if (!Number.isInteger(room) || room <= 1) throw new Error('huntArea.room must be a room number above 1');
+  if (!Array.isArray(v.squares) || !v.squares.length || v.squares.length > 4000)
+    throw new Error('huntArea.squares must be a non-empty list (at most 4000) of [row, col] or { row, col }');
+  const seen = new Set(), squares = [];
+  for (const q of v.squares) {
+    const row = Number(Array.isArray(q) ? q[0] : q?.row), col = Number(Array.isArray(q) ? q[1] : q?.col);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0) throw new Error(`huntArea square ${JSON.stringify(q)} is not a whole [row, col]`);
+    const k = `${row},${col}`;
+    if (!seen.has(k)) { seen.add(k); squares.push([row, col]); }
+  }
+  return { room, squares };
+}
 
 /** The file's value laid over another writer's: replaced, or (merge 'union') added to it. */
 export function mergeOver(field, base, value) {

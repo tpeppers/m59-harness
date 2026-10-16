@@ -109,6 +109,7 @@ export default {
 | `confine.roam` | `roam` | movement | boolean |
 | `vigor.fightAbove` | `fightAboveVigor`, `vigorFloor` | work | 0..200, as `applyFightAboveVigor` |
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
+| `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
 
 `protect` is additive on purpose: a strategy that replaced the list would quietly unprotect the
 reagents the roster put there, and the next sell would take them.
