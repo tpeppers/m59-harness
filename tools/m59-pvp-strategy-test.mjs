@@ -132,6 +132,16 @@ console.log('the host');
   ok('a promise is silence and a strike', b.decide('player_seen', { player: 'P' }) === null && b.strikes === 2);
   b.decide('player_seen', { player: 'T' });
   ok('three strikes stand the module down', b.decide('player_seen', { player: 'G' }) === null);
+  writeFileSync(join(LOCAL, 'old.mjs'), "export default { decide: () => 'engage' };");
+  writeFileSync(join(LOCAL, 'next.mjs'), "export default { moments: ['player_seen', 'alarm_elsewhere'], decide: () => 'engage' };");
+  assign({ agents: { t5: 'old', t6: 'next' } });
+  const old = new ps.PvpStrategyHost({ fleet: 'test', agent: 't5', character: 'A', env: ENV }); await old.refresh();
+  const nxt = new ps.PvpStrategyHost({ fleet: 'test', agent: 't6', character: 'B', env: ENV }); await nxt.refresh();
+  ok('alarm_elsewhere is opt-in: a module that does not list it is never asked',
+    old.decide('alarm_elsewhere', { player: 'G' }) === null && old.decide('player_seen', { player: 'G' })?.do === 'engage');
+  ok('a module that lists its moments hears exactly those', nxt.decide('alarm_elsewhere', { player: 'G' })?.do === 'engage'
+    && nxt.decide('attacked_by_player', { player: 'G' }) === null);
+  assign({ default: 'bad' });
   const host = new ps.PvpStrategyHost({ fleet: 'test', agent: 'hk1', character: 'Them', isHost: true, env: ENV });
   await host.refresh();
   ok('a menagerie host is never given a strategy, even by a default', host.decide('player_seen', { player: 'G' }) === null

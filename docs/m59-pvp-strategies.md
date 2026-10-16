@@ -3,7 +3,7 @@
 Split out of [`CLAUDE.md`](../CLAUDE.md). The code is [`tools/m59-pvp-strategy.mjs`](../tools/m59-pvp-strategy.mjs)
 (the loader and the closed decision set) and the PvP-strategy section of `CombatMode` in
 [`tools/m59-combat-mode.mjs`](../tools/m59-combat-mode.mjs) (the keeper's half). The guard is
-`node tools/m59-pvp-strategy-test.mjs` (89, offline).
+`node tools/m59-pvp-strategy-test.mjs` (91, offline).
 
 ## What the operator asked for
 
@@ -45,7 +45,9 @@ export default {
 **Moments:** `attacked_by_player` (a player's blow landed — `CombatMode.beginPvP`) and `player_seen` (a
 non-fleetmate player is in the room — `CombatMode.scanForEnemies`, at most once per player per room per 5 s), and
 `alarm_elsewhere` (a fleet-mate's war alarm — attacked or engaged, never a bare sighting — names ANOTHER map;
-`CombatMode.onWarAlarm`, at most once per map and enemy per 5 s).
+`CombatMode.onWarAlarm`, at most once per map and enemy per 5 s). **`alarm_elsewhere` is opt-in**: a module hears
+it only if its `moments` array lists it (default `['attacked_by_player', 'player_seen']`), because a strategy written
+before it existed would read "a hostile, elsewhere" as one of its own and act on it.
 
 **Facts:** `moment, character, agent, room, player, hostile, basis, pvp_allowed_here, health_pct, max_health,
 in_flight, flight_room, hold_room, now, allies_here, hostiles_here, sortie_room, sortie_phase, alarm_room, reporter` —

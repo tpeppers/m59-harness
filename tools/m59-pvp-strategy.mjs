@@ -24,6 +24,8 @@
 //                        map OTHER than ours (CombatMode.onWarAlarm), once per map and enemy every
 //                        PLAYER_SEEN_EVERY_MS. `player` is the enemy; `alarm_room`, `reporter` and
 //                        `basis` say where and who. This is how a character hears a fight next door.
+//                        OPT-IN: asked only of a module whose `moments` lists it, because a strategy written
+//                        before this moment existed would read "a hostile, elsewhere" as one of its own.
 //
 // THE FACTS, every moment (a frozen object):
 //   moment, character, agent, room, player, hostile (war book / server enemy mark), basis,
@@ -68,6 +70,7 @@
 // A STRATEGY MODULE:
 //   export default {
 //     name: 'bastion', describe: '...',
+//     moments: ['attacked_by_player', 'player_seen', 'alarm_elsewhere'],   // optional; default the first two
 //     decide(moment, facts, options) { return { do: 'flee_to', room: options.room } },
 //   };
 // It must be fast and must not throw; a throw, or more than DECIDE_BUDGET_MS, is reported and
@@ -81,6 +84,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
 
 export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
+/** What a module hears when it does not say: the moments that existed before `moments` did. */
+export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
 export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie']);
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
 export const STRIKES = 3;
@@ -235,6 +240,7 @@ export class PvpStrategyHost {
   decide(moment, facts) {
     const m = this.module, a = this.assignment;
     if (!m || !a || this.isHost || this.strikes >= STRIKES || !PVP_MOMENTS.includes(moment)) return null;
+    if (!(Array.isArray(m.moments) ? m.moments : DEFAULT_MOMENTS).includes(moment)) return null;
     let raw;
     const t0 = this.now();
     try { raw = m.decide(moment, Object.freeze({ ...facts, moment }), Object.freeze({ ...a.options })); }
