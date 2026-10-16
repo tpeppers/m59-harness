@@ -2812,6 +2812,9 @@ class Session {
     console.error(`[session] ${this.name} ${new Date().toISOString()} rejoin: ${why}`);
     // A recovery await begun before incoming PvP cannot disconnect the fighter.
     if (this.live) bodyAuthority(this).guard();
+    // SPECTATE: an attached client's socket is not the character's connection, so closing it would
+    // log nobody off. Ask the proxy to do it on the person's connection first (m59-proxy.mjs logoffAway).
+    if (this.client?.attach) await this.client.attachedLogoff?.().catch(() => false);
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
     // `offlineMs`: stay out that long before logging back in (a private farmBuff strategy waiting out a hold).

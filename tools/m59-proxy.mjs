@@ -73,6 +73,24 @@ const BP_ROOM_CONTENTS = 134;     // server -> client: u32 roomId, u16 count, ob
 const BP_MOVE     = 200;          // server -> client: u32 objId, u16 y, u16 x, u8 speed
 const BP_TURN     = 201;          // server -> client: u32 objId, u16 angle
 
+// A LOGOFF THE PERSON'S CLIENT NEVER SEES (logoffAway). blakserv takes a character out of the
+// world on BP_REQ_QUIT and drops the session to the main menu with the account still attached
+// (game.c:421-424, synched.c SynchedInit), so it can come straight back with AP_REQ_GAME and
+// BP_USE_CHARACTER and no password.
+const AP_REQ_GAME = 4;            // client -> server, menu: int download_time, int encodednum, string host
+const BP_REQ_QUIT = 54;           // client -> server: leave the world, back to the menu
+const BP_USE_CHARACTER = 46;      // client -> server, game: u32 objId of the character
+const BP_QUIT = 149;              // server -> client: the server's answer to BP_REQ_QUIT
+const BP_REQ_LOOK = 116;          // client -> server: u32 objId
+const BP_LOOK = 207;              // server -> client: an object's description, opened as a window
+// What a menu step may take before the proxy gives up and hangs up both ends. Hanging up is the
+// safe failure: the server logs the character off when its connection drops.
+const AWAY_STEP_MS = 10_000;
+// How long a character stays logged off if nothing asks for it back (a keeper that died mid-logoff).
+const AWAY_MAX_MS = 20_000;
+// A look the server never answered (the object left) must not swallow a later reply.
+const LOOK_TTL_MS = 4_000;
+
 // THE "CRC16" IN THIS PROTOCOL IS NOT A CRC-16.
 //
 // It is zlib's CRC-32 truncated to sixteen bits — `zlib.crc32(buf) & 0xffff`. I
@@ -207,7 +225,13 @@ export class ProxySession extends EventEmitter {
     this.playerId = null;
     this.serverEpoch = 0;
     this.stats.forged = 0;
+    // A logoff in progress on the keeper's behalf (logoffAway), or null.
+    this.away = null;
+    // Who asked for each outstanding look, oldest first: 'person' or 'keeper'. The server answers
+    // looks in order, and the answer to a keeper's look is not something the person opened.
+    this.looks = [];
 
+    this.serverHost = host;
     this.server = net.connect(port, host);
     const cf = new Framer(), sf = new Framer();
 
@@ -328,6 +352,9 @@ export class ProxySession extends EventEmitter {
   fromClient(payload, epoch, whole) {
     this.stats.fromClient++;
     this.emit('received-client-packet', payload);
+    // LOGGED OFF UNDER THE CLIENT'S FEET: the server is at its menu and the client still thinks it
+    // is in the world. Nothing it sends means anything to a menu, and a game packet there is misread.
+    if (this.away) { this.stats.dropped_away = (this.stats.dropped_away ?? 0) + 1; return; }
     this.lastEpoch = epoch;
     if (this.inGame) this.learn(payload);
     // WHAT THE OPERATOR IS SWINGING AT, READ OFF THE WIRE.
@@ -356,6 +383,7 @@ export class ProxySession extends EventEmitter {
       this.owned = true;
       return;
     }
+    if (this.inGame && payload[0] === BP_REQ_LOOK) this.noteLook('person');
     if (this.inGame) this.trade.onClient(payload);
     // PASSTHROUGH UNTIL WE HAVE ACTUALLY INJECTED SOMETHING.
     //
@@ -446,6 +474,8 @@ export class ProxySession extends EventEmitter {
     // Everything below reads the PLAIN opcode. A real client pings, so its stream is token-scrambled
     // (m59-proxy-token.mjs) and reading the wire byte misidentified BP_PLAYER, room contents, trades.
     const payload = (this.fromServerToken ??= new OpcodeToken()).decode(wire);
+    // The menu round trip of a logoff the client must not see: swallowed whole, from everyone.
+    if (this.away) { this.stats.swallowed_away = (this.stats.swallowed_away ?? 0) + 1; this.onAwayFrame(payload); return; }
     // An attached keeper (m59-proxy-attach.mjs, spectate) sees every frame, swallowed or not, PLAIN:
     // its client never pings and reads token 0.
     this.emit('server-frame', payload[0] === wire[0] ? whole : plainFrame(payload, epoch));
@@ -569,6 +599,13 @@ export class ProxySession extends EventEmitter {
     // An automated trade's packets stop here: the client would open a window for a trade it never started.
     if (this.inGame && this.trade.onServer(payload)) {
       this.stats.swallowed = (this.stats.swallowed ?? 0) + 1;
+      this.emit('server-packet', payload);
+      return;
+    }
+    // A description the KEEPER asked for would open an "Object Description" window on the person's
+    // screen in the middle of watching. The keeper already has it (server-frame, above).
+    if (this.inGame && payload[0] === BP_LOOK && this.takeLook() === 'keeper') {
+      this.stats.swallowed_looks = (this.stats.swallowed_looks ?? 0) + 1;
       this.emit('server-packet', payload);
       return;
     }
@@ -707,6 +744,118 @@ export class ProxySession extends EventEmitter {
     return { sent: true };
   }
 
+  noteLook(who) {
+    const now = Date.now();
+    this.looks = this.looks.filter(l => now - l.at < LOOK_TTL_MS);
+    this.looks.push({ who, at: now });
+    if (this.looks.length > 16) this.looks.shift();
+  }
+
+  takeLook() {
+    const now = Date.now();
+    while (this.looks.length && now - this.looks[0].at >= LOOK_TTL_MS) this.looks.shift();
+    return this.looks.shift()?.who ?? null;
+  }
+
+  // LOG THE CHARACTER OFF, AND BACK ON, WITHOUT THE PERSON'S CLIENT EVER KNOWING.
+  //
+  // The keeper's survival move is "log off rather than die": leaving the world is the one thing
+  // that stops every attack outright, and coming back is a fresh entry the monsters have to notice
+  // again. A keeper with its own connection does that by dropping the socket. A keeper attached to
+  // a person's connection (spectate) has no socket of its own, so dropping it only re-attached
+  // and the character stayed in the fight (2026-10-15: "rejoin: logging off rather than dying",
+  // twice in a minute, character never left).
+  //
+  // So the proxy does it on the shared connection:
+  //
+  //   -> BP_REQ_QUIT                server: character leaves the world (ClientHangupToBlakod), BP_QUIT,
+  //                                 then the menu with NEW security seeds (AP_GETCHOICE)
+  //   ... held until awayReturn()   the keeper re-attaching, the person taking control, or AWAY_MAX_MS
+  //   -> AP_REQ_GAME                server: AP_GAME
+  //   -> BP_USE_CHARACTER           server: the character enters the world again (user.kod UserLogon)
+  //
+  // The person's client must see none of the middle: BP_QUIT would send it to the login screen and
+  // the AP_* menu opcodes collide with game ones. Everything between is swallowed, both directions,
+  // and the client simply receives the re-entry burst (BP_PLAYER, the room) as if it had changed
+  // room. Its module load is ignored as a duplicate (modules.c), and nothing it re-requested at its
+  // own login is re-sent unasked.
+  //
+  // Afterwards the server's stream runs on the new seeds and the client still counts on the old
+  // ones, so every client packet is re-framed from then on (`owned`), exactly as after a gate drop.
+  // The opcode token is untouched by the menu (commcli.c secures every state), and the client's
+  // walk, shifted by everything swallowed, is re-encoded until the next ping re-keys both.
+  logoffAway({ by = 'keeper', maxMs = AWAY_MAX_MS, stepMs = AWAY_STEP_MS } = {}) {
+    if (this.away) return { ok: true, already: true };
+    if (this.playerId == null) return { ok: false, why: 'player object id not learned yet' };
+    const r = this.injectOwned(Buffer.from([BP_REQ_QUIT]));
+    if (!r.sent) return { ok: false, why: r.why };
+    this.owned = true;
+    this.looks = [];
+    this.away = { by, phase: 'quitting', since: Date.now(), epoch: this.lastEpoch, maxMs, stepMs, timer: null, returnWhy: null };
+    this.away.timer = setTimeout(() => this.awayFailed('the server never took the character out of the world'), stepMs);
+    this.stats.logoffs = (this.stats.logoffs ?? 0) + 1;
+    this.log(`logoff for ${by}: BP_REQ_QUIT sent; the client will not see the menu`);
+    return { ok: true };
+  }
+
+  onAwayFrame(payload) {
+    const a = this.away;
+    if (a.phase === 'quitting') {
+      // Game messages already in flight still arrive first; the server's BP_QUIT is the boundary.
+      if (payload[0] === BP_QUIT) { this.inGame = false; a.phase = 'leaving'; }
+      return;
+    }
+    if (a.phase === 'leaving') {
+      if (payload[0] === AP_GETCHOICE && this.stream.adopt(payload.subarray(1))) {
+        this.seedSets++;
+        clearTimeout(a.timer);
+        a.phase = 'menu';
+        this.log(`logoff: character is out of the world (new seeds #${this.seedSets})`);
+        if (a.returnWhy) this.awayReturn(a.returnWhy);
+        else a.timer = setTimeout(() => this.awayReturn('nobody asked for it back in time'), Math.max(0, a.maxMs - (Date.now() - a.since)));
+      }
+      return;
+    }
+    if (a.phase === 'entering' && payload[0] === AP_GAME) {
+      clearTimeout(a.timer);
+      this.inGame = true;
+      // Peers by construction: the seeds just arrived and nothing has been sent on them.
+      this.locked = true; this.owned = true;
+      const use = Buffer.alloc(5); use[0] = BP_USE_CHARACTER; use.writeUInt32LE(objId(this.playerId) >>> 0, 1);
+      this.server.write(this.stream.frame(use, a.epoch));
+      this.stats.injected++;
+      const held = Date.now() - a.since;
+      this.away = null;
+      this.log(`logoff for ${a.by}: back in the world after ${held}ms (${a.returnWhy})`);
+      this.emit('back', { held_ms: held, why: a.returnWhy });
+    }
+  }
+
+  // Come back. Before the menu is reached this only records the wish; the menu acts on it.
+  awayReturn(why) {
+    const a = this.away;
+    if (!a || a.phase === 'entering') return;
+    a.returnWhy ??= why;
+    if (a.phase !== 'menu') return;
+    clearTimeout(a.timer);
+    a.phase = 'entering';
+    // The values the harness's own login sends (m59-client.mjs reqGame); the server reads the
+    // download time (0: nothing to fetch) and ignores the rest.
+    const host = Buffer.from(String(this.serverHost ?? ''), 'latin1');
+    const req = Buffer.alloc(1 + 4 + 4 + 2 + host.length);
+    req[0] = AP_REQ_GAME; req.writeInt32LE(0, 1); req.writeInt32LE((7 * 100 + 37) * 3 + 3, 5);
+    req.writeUInt16LE(host.length, 9); host.copy(req, 11);
+    this.server.write(plainFrame(req, 0));
+    a.timer = setTimeout(() => this.awayFailed('the server never let the character back in'), a.stepMs);
+  }
+
+  awayFailed(why) {
+    if (!this.away) return;
+    this.log(`logoff FAILED (${why}) in phase ${this.away.phase} — hanging up; the server logs the character off`);
+    this.emit('away-failed', { why, phase: this.away.phase });
+    this.destroy();
+  }
+
   // Take or hand back the controls. Returns {ok} or {ok:false, why}.
   setGate(opts) {
     if (!this.gateable) return { ok: false, why: 'observe-only proxy started without --gate' };
@@ -724,8 +873,10 @@ export class ProxySession extends EventEmitter {
   }
 
   clearGate(holder = null) {
-    if (!gateLive(this.gate)) { this.gate = null; return { ok: true, gate: null, was: null }; }
+    if (!gateLive(this.gate)) { this.gate = null; this.awayReturn('the gate lapsed'); return { ok: true, gate: null, was: null }; }
     if (holder && holder !== this.gate.holder) return { ok: false, why: `gate is held by ${this.gate.holder}, not ${holder}` };
+    // Taking control back mid-logoff brings the character straight back to the person.
+    this.awayReturn('the person took control back');
     const was = gateView(this.gate); this.gate = null;
     this.log(`gate released by ${was.holder} after ${was.dropped} dropped packet(s)`);
     return { ok: true, gate: null, was };
@@ -743,10 +894,12 @@ export class ProxySession extends EventEmitter {
              server_room_ms_ago: this.serverRoomAt ? Date.now() - this.serverRoomAt : null,
              human_move_ms_ago: this.lastHumanMoveAt ? Date.now() - this.lastHumanMoveAt : null,
              human_driving: !!(this.lastHumanMoveAt && Date.now() - this.lastHumanMoveAt < 5000),
-             owning_stream: this.stats.injected > 0 || this.owned };
+             owning_stream: this.stats.injected > 0 || this.owned,
+             away: this.away ? { by: this.away.by, phase: this.away.phase, since: this.away.since } : null };
   }
 
   destroy() {
+    if (this.away) { clearTimeout(this.away.timer); this.away = null; }
     this.trade?.destroy();
     try { this.client.destroy(); } catch {}
     try { this.server.destroy(); } catch {}
