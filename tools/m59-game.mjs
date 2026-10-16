@@ -11,6 +11,7 @@
 // The broker imports Session from here:
 //   import { Session, Recorder } from './m59-game.mjs';
 
+import { reagentRefusalSpell } from './m59-sharing.mjs';
 import { sessionWalkPrototype } from './m59-session-walk.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
@@ -1582,6 +1583,15 @@ class Session {
     if (keeper?.s === this) keeper.noteUncursed?.(item, text);
   }
 
+  // RAN OUT IN THE MIDDLE OF A CAST (spell.kod:52). The sentence goes only to the caster, so this is
+  // the one place it can be caught; the keeper turns it into a need on the fleet board (m59-sharing.mjs).
+  noteReagentRefusal(ev) {
+    const spell = reagentRefusalSpell(ev?.text);
+    if (!spell) return;
+    const keeper = autopilotIfAny(this.name);
+    if (keeper?.s === this) keeper.noteReagentRefusal?.(spell);
+  }
+
   noteEnchantLapse(ev) {
     const name = lapsedWeapon(ev?.text);
     const keeper = () => { const k = autopilotIfAny(this.name); return k?.s === this ? k : null; };
@@ -2413,7 +2423,7 @@ class Session {
         try { this.sightings.event(ev, c); } catch { /* bookkeeping never costs an event */ }
       }
       if (ev.kind === 'ability') this.noteAdvancement(ev);
-      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); }
+      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); this.noteReagentRefusal(ev); }
       if ((ev.kind === 'message' || ev.kind === 'said') && ev.text) this.noteFactionIntel(ev);
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
       // exactly the reason a bank balance is: whatever walked a character to a vaultman

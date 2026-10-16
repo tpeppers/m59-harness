@@ -15,6 +15,7 @@ process.env.M59_KEEPER = '1';
 //   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
+import { configureInterestStore } from './m59-interest-store.mjs';
 import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 // WHO SET EACH POLICY KEY, and which faculty a strategy-governed key belongs to (a push that lands
@@ -246,6 +247,14 @@ try {
     }),
   });
   rememberFileSpotPartner(agent, policy.partner ?? null);
+  // THE FLEET'S WANTS / NEEDS / SPARE BOARD, scoped exactly like the wall claims: every keeper of
+  // this roster on this server reads and writes the same directory (m59-interest-store.mjs).
+  configureInterestStore({
+    directory: process.env.M59_INTEREST_DIR || resolve('substrate', '.interest'),
+    namespace: process.env.M59_SPOT_CLAIMS_NAMESPACE || spotClaimNamespace({
+      fleetPath, host: credHost, port: credPort,
+    }),
+  });
 } catch (e) {
   // Leave the store configured so selection fails closed instead of silently falling back
   // to the per-process Map and recreating the wall pile-up this guard exists to prevent.
