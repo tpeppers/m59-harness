@@ -78,7 +78,7 @@ runs under that mutex. Ambiguous ownership or unreadable state fails closed.
 
 Room texture replay and pillar lights can impose the existing temporary
 collision guard. The rail follower and platform walker wait at the same aim,
-bounded by 45 seconds, and retain cancellation, room-change, wall and body
+bounded by 90 seconds for this route, and retain cancellation, room-change, wall and body
 refusals. They never advance through refused aims.
 
 On the three onward rail legs, an interruption explicitly attributed to a
@@ -128,3 +128,12 @@ character must produce a failure receipt rather than an arrival claim.
 Validation: the movement runner completed 49 suites with zero regressions
 (existing named baseline failures remain). Focused checks also cover unrelated
 lever messages, keeper survival recovery gates, and the Windows mutex retry.
+
+## Full-shadow follow-up
+
+The 2026-10-16 full-shadow trial ended **1/24**, with no recorded deaths.
+The original dispatch and three corrected retries retained actual positions
+and all failures. Three lift ascents occurred; the final batch carried seven,
+but only Rizzo reached 827. Farming did not start because a majority did not
+arrive. This supersedes any fleet-scale inference from the earlier 3/3 trial.
+See [full trial results](m59-brax-shadow-trial.md) for failure stages and limits.

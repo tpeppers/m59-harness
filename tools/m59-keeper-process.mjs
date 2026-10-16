@@ -1361,8 +1361,9 @@ function state() {
       } catch { return []; }
     })(),
     exits: (() => {
-      try { return (session.world?.exits?.() ?? []).map(e => ({ to: e.to, direction: e.direction })); }
-      catch { return []; }
+      try { const cached=session.world?.exits?.({cachedOnly:true});
+        return Array.isArray(cached)?cached.map(e=>({to:e.to,direction:e.direction})):null; }
+      catch { return null; }
     })(),
     // AMOUNT AS THE WIRE REPORTED IT, WHICH FOR A NON-STACK IS ZERO AND NOT ONE.
     //

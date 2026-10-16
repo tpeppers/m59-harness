@@ -1,3 +1,4 @@
+import {cutRail} from './m59-railcut.mjs';
 import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {squareCentreClient} from './m59-finepos.mjs';
@@ -8,7 +9,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot,keeperSurvivalInterruption,readyAfterSurvival,awaitLeverConfirmation} from './m59-brax.mjs';
+import {platformSlot,cornerWork,braxArrival,groupJournal,platformAims,CORNERS,departureSlot,keeperSurvivalInterruption,readyAfterSurvival,awaitLeverConfirmation,freePlatformStation,replaceBraxJournal} from './m59-brax.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
 import {applyAncientFloors} from './m59-moving-platform.mjs';
 import {script} from './fleetscripts/walk-to-brax.mjs';
@@ -86,3 +87,20 @@ const deletePending=groupJournal('windows-delete-pending',{directory,openMutex:(
 }});
 assert.equal((await deletePending.change(()=>({count:1}))).count,1);
 assert.equal(mutexOpenCalls,2,'a Windows delete-pending refusal retries without deleting an unowned lock');
+
+// Recorded public travel arrival and a keeper refuge must both board by legal walking.
+const entryGeo=roomGeometry(579),railHead={x:74880,y:38400};
+for(const from of [{x:72192,y:39424},{x:47360,y:48640}]){
+ const entry=cutRail(from,railHead,{edge:(a,b)=>entryGeo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true,bounds:{w:entryGeo.cols*1024,h:entryGeo.rows*1024},floorAt:(x,y)=>floorAt(entryGeo,x,y)});
+ assert(entry.ok&&entry.bridgeOk,'normal entry and observed refuge must have a checked walking connector');
+ assert(Math.hypot(entry.waypoints.at(-1).x-railHead.x,entry.waypoints.at(-1).y-railHead.y)<1);
+}
+
+assert.equal(freePlatformStation([],[{id:2,flags:5,...clientToProtocol(squareCentreClient(18,52))}],1),1,'a previous rider cannot be assigned to the next rider');
+assert.equal(freePlatformStation([{slot:0,station:1}],[{id:2,flags:5,...clientToProtocol(squareCentreClient(18,52))}],1),2);
+assert.equal(freePlatformStation(Array.from({length:25},(_,slot)=>({slot})),[],1),null);
+
+let replaceAttempts=0,replaceClock=0;
+await replaceBraxJournal('unused','unused',{rename:()=>{if(!replaceAttempts++)throw Object.assign(Error('reader sharing violation'),{code:'EPERM'});},now:()=>replaceClock,wait:async ms=>{replaceClock+=ms}});
+assert.equal(replaceAttempts,2);
+await assert.rejects(replaceBraxJournal('unused','unused',{rename:()=>{throw Object.assign(Error('permission denied'),{code:'EPERM'})},budgetMs:100,now:()=>replaceClock,wait:async ms=>{replaceClock+=ms}}),/permission denied/);

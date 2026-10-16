@@ -453,13 +453,14 @@ export function rejoinedBehind(furthest, current, { behind = REJOIN_BEHIND, rejo
 
 // Sector and texture replay can temporarily block an otherwise checked rail.
 // Keep the same aim. Geometry refusals, cancellation and room changes still stop.
-export async function waitForRailAnimation(walk,{room,readRoom,timeoutMs=45000,
+export async function waitForRailAnimation(walk,{room,readRoom,timeoutMs=45000,retryBodies=false,
   now=Date.now,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}){
   const deadline=now()+timeoutMs;
   let reply=await walk();
-  while(reply?.reason==='collision_geometry_changed'){
+  const bodyBlocked=r=>retryBodies&&!r?.cancelled&&(r?.reason==='object_blocked'||r?.geometry_rejections?.includes('object_blocked'));
+  while(reply?.reason==='collision_geometry_changed'||bodyBlocked(reply)){
     if(await readRoom()!==room)return {...reply,reason:'left_room'};
-    if(now()>=deadline)return {...reply,animation_timeout:true};
+    if(now()>=deadline)return {...reply,...(bodyBlocked(reply)?{body_timeout:true}:{animation_timeout:true})};
     await wait(Math.min(1000,deadline-now()));
     reply=await walk();
   }
