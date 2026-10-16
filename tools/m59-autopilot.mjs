@@ -2897,10 +2897,11 @@ export class Autopilot {
     skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare,
       room: this.s.world?.room?.num ?? null, character: c.me?.name ?? null,
       farming: this.mode === 'farm' && this.running && !this.inert,
-      // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a desk taking donations, a chalice
-      // holder, a posted room caster.
-      service: !!(this.policy.acceptDonations?.enabled !== false && this.policy.acceptDonations)
-        || !!this.chaliceCfg || !!this.policy.roomEnchant });
+      // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a chalice holder, a posted room
+      // caster, or a donation-taker that is NOT out farming  a desk. Most farmers carry an
+      // acceptDonations policy too, and the first live board read 22 of 23 keepers as "service",
+      // which would have walked farmers between rooms to top up each other's herbs.
+      service: this.isServicePost() });
     // Kept for the party register too. The fleet-wide board is a broadcast — anyone may
     // read it — while a partner needs the same list addressed to it specifically, so
     // that "one of us is short" can become "both of us go to town" rather than each
@@ -24341,6 +24342,13 @@ export class Autopilot {
     const needs = [...(this._needsNow?.keys?.() ?? [])].map(k => String(k).toLowerCase());
     if (!needs.length) return null;
     return this.acceptDonations({ enabled: true, reagents: needs, drop_for_space: [], _default: true });
+  }
+
+  /** A desk, a chalice holder or a posted room caster: worth a giver's short walk (m59-sharing.mjs). */
+  isServicePost() {
+    if (this.chaliceCfg || this.policy.roomEnchant) return true;
+    const d = this.policy.acceptDonations;
+    return !!d && d.enabled !== false && this.mode !== 'farm';
   }
 
   // HAND SPARE REAGENTS TO WHOEVER NEARBY HAS RUN OUT. On by default; `shareSpare: false` turns it off.

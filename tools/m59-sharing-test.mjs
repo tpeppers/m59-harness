@@ -216,6 +216,16 @@ await ok('an explicit acceptDonations list also takes whatever is needed right n
   assert.equal(r?.accepted, true, JSON.stringify(r)); assert.ok(calls.includes('accept'));
 });
 
+await ok('a SERVICE post is a desk, not every farmer that takes donations', () => {
+  const ap = Object.create(Autopilot.prototype);
+  ap.policy = { acceptDonations: { enabled: true } }; ap.mode = 'farm';
+  assert.equal(ap.isServicePost(), false, 'a farmer that takes donations is not a desk');
+  ap.mode = 'survive';
+  assert.equal(ap.isServicePost(), true, 'a posted donation-taker is');
+  ap.policy = { acceptDonations: { enabled: false } };
+  assert.equal(ap.isServicePost(), false);
+});
+
 await ok('the keeper wires all three halves into every pass, the game hook and the shared store', () => {
   const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   assert.ok(ap.includes('await this.acceptNeededGift()'));
