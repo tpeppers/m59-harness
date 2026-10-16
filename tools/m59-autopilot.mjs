@@ -2862,6 +2862,25 @@ export class Autopilot {
       // not for a smaller floor than the keeper already runs on.
       for (const [k, n] of mine.needs) if (!needs.has(k) && n > 0) needs.set(k, n);
     }
+    // AND A SPELL THIS CHARACTER HAS BEEN CASTING THAT IT CAN NO LONGER AFFORD ONCE MORE. Running out
+    // is usually the last cast spending the last reagent, not a refusal: a desk asked for nothing
+    // while it has no emerald is never told "you don't have the reagents", because nobody asks it to
+    // cast (DUM's desk rule passes on an empty desk). So the spells this client has sent are kept,
+    // and one that can no longer be paid for raises the same shortfall the refusal would.
+    const sent = c.lastCastSent;
+    if (sent?.name) (this._castSpells ??= new Map()).set(String(sent.name).toLowerCase(), sent.at);
+    for (const [spell, at] of [...(this._castSpells ?? [])]) {
+      if (Date.now() - at > SHORTFALL_TTL_MS) { this._castSpells.delete(spell); continue; }
+      const cost = spellCost(spell);
+      if (!cost?.reagents?.length) continue;
+      if (!cost.reagents.some(([item, n]) => this.countOfKind(item) < n)) continue;
+      const fresh = cost.reagents.some(([item]) => !this._reagentShortfall?.has(String(item).toLowerCase()));
+      this._reagentShortfall = shortfallTargets(cost, this._reagentShortfall ?? new Map());
+      if (fresh) {
+        this.note('cannot afford another cast: asking the fleet', { spell, reagents: cost.reagents });
+        try { this.ledgerEvent('reagent_shortfall', { spell, by: 'spent', room: this.s.world?.room?.num ?? null }); } catch {}
+      }
+    }
     // AND WHAT THIS CHARACTER RAN OUT OF IN THE MIDDLE OF A CAST (noteReagentRefusal). A target, not
     // a moment: it stands until the pack holds it, or until nobody has answered for SHORTFALL_TTL_MS.
     if (this._reagentShortfall?.size) {

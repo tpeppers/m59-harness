@@ -95,6 +95,24 @@ await ok('the keeper learns it from the refusal and puts it on the board', () =>
   assert.equal(ap.noteReagentRefusal('no such spell'), null);
 });
 
+await ok('a desk whose last cast spent its last emerald asks on its own — nobody has to hear a refusal', () => {
+  // DUM's desk rule never asks an empty desk to cast, so the refusal would never come.
+  const ap = Object.create(Autopilot.prototype);
+  ap.policy = {}; ap.mode = 'survive'; ap.running = true; ap.inert = false;
+  ap.notes = []; ap.note = (w, d) => ap.notes.push({ w, ...d }); ap.ledgerEvent = () => {};
+  ap.reagentCount = () => ({ elderberry: 9, herbs: 9 }); ap.larder = () => [{}]; ap.loadout = () => null;
+  ap.countOfKind = k => (k === 'emerald' ? 0 : 9);
+  const c = { inventory: [{ id: 1, nameRsc: 1, amount: 0 }], rsc: { get: () => 'long sword' }, me: { name: 'Desk' },
+    lastCastSent: { at: Date.now(), name: 'Remove Curse' } };
+  ap.s = { client: c, name: 'deskagent', world: { room: { num: 2 } } };
+  ap.declareInterest();
+  assert.equal(ap._needsNow.get('emerald'), SHORTFALL_CASTS, JSON.stringify([...ap._needsNow]));
+  assert.ok(ap.notes.some(x => x.w === 'cannot afford another cast: asking the fleet'));
+  // And once the gift lands the need is gone.
+  ap.countOfKind = () => 99; ap.declareInterest();
+  assert.equal(ap._needsNow.get('emerald') ?? 0, 0);
+});
+
 // ------------------------------------------------------------------------------ give
 const desk = { agent: 'hk1', character: 'Desk', room: 2, hops: 1, service: true, needs: { emerald: 10 } };
 const mate = { agent: 't4', character: 'Mate', room: 38, hops: 0, service: false, needs: { herb: 30 } };
