@@ -1,5 +1,12 @@
 # Movement, collision and routing
 
+Fine travel retains its goal across repeated, positively owned shelter
+recoveries until the original leg deadline. A fixed three-recovery count must
+not strand a living fourth recovery. Each cycle still checks body identity,
+room, movement ownership, cancellation and confirmed position; a dead, changed
+or foreign body cannot resume. `m59-fine-traffic-refuge-test.mjs` reproduces four
+recoveries through the real controller and fake keeper before any movement.
+
 Wrong-exit masks may include an extra interior row or column. A confirmed
 arrival on that guard can leave its connected interior buffer; the actual
 boundary exclusions and existing current-cell departure allowance remain

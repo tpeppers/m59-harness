@@ -120,8 +120,8 @@ export function activeOwnedFineRecovery(ctx,status){
     isActiveRecoveryDecision(d);
   if(!owned)return false;
   // A completed rest can precede the keeper's next decision pulse. Its normal
-  // fine tool already accepts a healthy body; do not consume all three recovery
-  // attempts waiting for that completed `recovering` label to disappear.
+  // fine tool already accepts a healthy body; do not wait for that completed
+  // `recovering` label to disappear.
   const health=status?.hp,vigor=status?.vigor?.value;
   if(d.status==='recovering'&&Number.isFinite(health?.max)&&health.max>0&&
       Number.isFinite(health.value)&&health.value>=health.max&&Number.isFinite(vigor)&&vigor>=80)return false;
@@ -268,10 +268,9 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
   let expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     if(activeOwnedFineRecovery(ctx,l)){
-      if(recoveries>=3){
-        ctx.state.islandRecoveryFailure={room,reason:'attempt_budget',position:l.you,hp:l.hp,vigor:l.vigor};
-        throw Error('fine_route_recovery_budget');
-      }
+      // Repeated damage may require another legitimate shelter cycle. The
+      // original leg deadline bounds this work; every cycle still proves the
+      // same live body, recovery owner and cancellation fence before resuming.
       if(!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l})){
         ctx.state.islandRecoveryFailure={room,reason:'controller_incomplete',position:l.you,hp:l.hp,vigor:l.vigor};
         throw Error('fine_route_recovery_incomplete');
@@ -352,7 +351,7 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
       }
     }
     if(error>tolerance||!atRefuge()||reply.arrived!==true){
-      if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
+      if(await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
         recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
       }
       if(islandTrafficRefusal(reply)&&trafficWaits++<120){await new Promise(r=>setTimeout(r,1000));if(Math.hypot(body.x-before.x,body.y-before.y)>=64)cut=null;continue;}
