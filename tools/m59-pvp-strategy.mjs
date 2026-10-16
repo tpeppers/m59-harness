@@ -48,7 +48,7 @@
 //        fight here even where the character's pvp_rooms would refuse: return fire on a hit, the war
 //        response on a hostile sighting. The server's own rules, the safety flag and every refused-target
 //        memory still apply; this only lifts OUR room list, for this room, for ENGAGE_WINDOW_MS.
-//   { do: 'sortie', room, home, row?, col?, max_ms?, idle_ms?, home_hold_ms?, why? }
+//   { do: 'sortie', room, home, row?, col?, max_ms?, idle_ms?, home_hold_ms?, wait_home_fight?, why? }
 //        a deliberate excursion to fight in ONE other map. The body is taken exactly as a flight takes
 //        it -- the walk out ignores the fight it is leaving, which is the point -- and travels to `room`,
 //        then (given row and col) walks to that square. Once there: our room list is lifted for that
@@ -57,6 +57,9 @@
 //        flight, held there for `home_hold_ms` -- after `idle_ms` with no hostile in the map, after
 //        `max_ms` in all, or the moment the body is anywhere but `room` or `home` (a sortie never
 //        follows anybody a second map out). A `flee_to` decided during it replaces it.
+//        `wait_home_fight: true` keeps a posted sortie waiting while its HOME is still fighting: a fleet-mate's
+//        attacked/engaged alarm from `home` counts as a hostile for the idle clock. A guard posted outside a door
+//        waits for the fight inside to come out, not for the outside map to stay quiet.
 //   { do: 'hold_fire', ms?, why? }
 //        do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's
 //        alarm both pass over them for `ms` (default HOLD_FIRE_MS, renewed by deciding again). It never
@@ -192,7 +195,8 @@ export function validateDecision(d) {
     const max_ms = ms(d.max_ms, DEFAULT_SORTIE_MS, SORTIE_MAX_MS), idle_ms = ms(d.idle_ms, DEFAULT_SORTIE_IDLE_MS, SORTIE_MAX_MS);
     const home_hold_ms = ms(d.home_hold_ms, 0, MAX_HOLD_MS);
     if ([max_ms, idle_ms, home_hold_ms].some(Number.isNaN)) return { decision: null, error: 'max_ms, idle_ms and home_hold_ms are non-negative milliseconds' };
-    return { decision: { do: 'sortie', room, home, ...(hasSquare ? { row, col } : {}), max_ms, idle_ms, home_hold_ms, why } };
+    return { decision: { do: 'sortie', room, home, ...(hasSquare ? { row, col } : {}), max_ms, idle_ms, home_hold_ms,
+      wait_home_fight: d.wait_home_fight === true, why } };
   }
   const hold_ms = ms(d.hold_ms, 0, MAX_HOLD_MS), max_ms = ms(d.max_ms, DEFAULT_FLIGHT_MS, MAX_HOLD_MS);
   if (Number.isNaN(hold_ms) || Number.isNaN(max_ms)) return { decision: null, error: 'hold_ms and max_ms are non-negative milliseconds' };

@@ -1104,7 +1104,7 @@ the records it describes.
   hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
   the suspension text, that inside the list nothing changes, and that every keeper gate asks the
   one function) and
-  `node tools/m59-pvp-strategy-test.mjs` (107 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
+  `node tools/m59-pvp-strategy-test.mjs` (111 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
   that no assignment, `default`, an unknown verb, a throw, a promise or a slow decide is silence and the
   old behaviour, that agent beats character beats default and `null` stops the fall-through, that a local
   module overrides a private one of the same name and an edited one reloads, that `flee_to` takes the body,
@@ -1113,7 +1113,7 @@ the records it describes.
   operator's combat order is never preempted, that `engage` lifts pvp_rooms for that room only, that a
   `sortie` walks out ignoring the fight it leaves, posts on its square with the room list lifted and the
   keeper held, answers a hit there, walks home when the map goes quiet, never follows a second map out,
-  and is replaced by a `flee_to`, that `alarm_elsewhere` is opt-in by `moments`, asked only for a fight next door and once per
+  and is replaced by a `flee_to`, that `wait_home_fight` keeps a posted guard waiting while its home map's alarms say the fight goes on (and only its home's), that `alarm_elsewhere` is opt-in by `moments`, asked only for a fight next door and once per
   window, that a groan (the pain sound) reads as the kod health band and reaches the strategy as
   `player_health` for players not ours, that `hold_fire` passes over a hostile on sight and on alarm but
   never stops return fire, and that a menagerie host is never assigned anything) and

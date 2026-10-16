@@ -271,6 +271,8 @@ export class CombatMode {
     this.sortie = null; this.lastSortie = null; this.alarmAskedAt = new Map();
     // hold_fire: player (lower case) -> until. The groan book is read through latestHealth.
     this.holdFire = new Map(); this.lastGroan = null;
+    // The last attacked/engaged alarm heard from each map, by map number (sortie wait_home_fight).
+    this.alarmRoomAt = new Map();
   }
 
   status() {
@@ -590,6 +592,10 @@ export class CombatMode {
     // ready before anybody is hit. Kept here and reported in `combat status` (war.threat).
     this.warThreat = { enemy: a.enemy, room: Number(a.room), reporter: a.reporter ?? null,
       basis: a.basis ?? null, at: a.at ?? this.now() };
+    if (a.basis !== 'sighted' && Number(a.room) > 1) {
+      this.alarmRoomAt.set(Number(a.room), Math.max(this.alarmRoomAt.get(Number(a.room)) ?? 0, Number(a.at ?? this.now())));
+      if (this.alarmRoomAt.size > 128) this.alarmRoomAt.clear();
+    }
     if (!this.warEnabled() || this.warLeashed()) return false;
     if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
     if (Number(a.room) !== this.s.world?.room?.num) {
@@ -1788,7 +1794,7 @@ export class CombatMode {
     const s = this.s, here = s.world?.room?.num, now = this.now();
     if (this.sortie && this.sortie.room === d.room) return false;
     const sortie = { room: d.room, home: d.home, row: d.row ?? null, col: d.col ?? null, max_ms: d.max_ms ?? DEFAULT_SORTIE_MS,
-      idle_ms: d.idle_ms ?? DEFAULT_SORTIE_IDLE_MS, home_hold_ms: d.home_hold_ms ?? 0, strategy: d.strategy ?? null, why: d.why ?? null,
+      idle_ms: d.idle_ms ?? DEFAULT_SORTIE_IDLE_MS, home_hold_ms: d.home_hold_ms ?? 0, wait_home_fight: d.wait_home_fight === true, strategy: d.strategy ?? null, why: d.why ?? null,
       threat: threat ?? null, trigger, from: here, started_at: now, phase: 'going' };
     if (here === d.room) {
       if (this.active && !this.active.pvp && !this.active.watchId) return false;
@@ -1852,6 +1858,12 @@ export class CombatMode {
     // ONE MAP OUT AND NO FURTHER: anywhere but the sortie map ends it, and anywhere but home walks back.
     if (here !== t.room) { this.endSortie(`left the sortie map for ${here}`, { home: here !== t.home }); return; }
     if (this.roomCount().hostiles_here > 0) t.last_hostile_at = now;
+    // A GUARD WAITS FOR THE FIGHT IT IS GUARDING. Rehearsal, 2026-10-16: two door guards posted outside the bastion
+    // went home after 30 quiet seconds while the enemy was still fighting inside, and it walked out to nobody.
+    if (t.wait_home_fight) {
+      const home = this.alarmRoomAt.get(t.home) ?? 0;
+      if (home > t.last_hostile_at && home <= now) t.last_hostile_at = home;
+    }
     if (this.active?.pvp) return;                       // a fight in progress finishes first
     if (now >= t.until) this.endSortie('max_ms reached');
     else if (now - t.last_hostile_at >= t.idle_ms) this.endSortie(`no hostile for ${Math.round(t.idle_ms / 1000)}s`);

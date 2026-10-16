@@ -373,6 +373,33 @@ const walker = f => { const walks = []; f.s.walkTo = async (col, row) => { walks
   f.mode.stop('test');
 }
 
+console.log('combat mode: a guard waits for the fight at home (wait_home_fight)');
+{
+  const guard = wait => (m, x) => x.sortie_room ? null : (x.room === 38 && x.hostile)
+    ? { do: 'sortie', room: 2, home: 38, row: 4, col: 42, idle_ms: 20_000, wait_home_fight: wait, strategy: 'double-down' } : null;
+  ok('wait_home_fight is carried only when literally true', ps.validateDecision({ do: 'sortie', room: 2, home: 38, wait_home_fight: true }).decision.wait_home_fight === true
+    && ps.validateDecision({ do: 'sortie', room: 2, home: 38, wait_home_fight: 'yes' }).decision.wait_home_fight === false);
+  for (const wait of [true, false]) {
+    reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: guard(wait) }); walker(f);
+    put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 }); f.c.room.objects.clear(); await f.mode.tick();
+    // The fight goes on in 38 for 50 s; the guard in 2 sees nobody, but hears the room's alarms every 10 s.
+    for (let i = 0; i < 5; i++) {
+      f.advance(10_000);
+      f.mode.onWarAlarm({ at: Date.now() + (i + 1) * 10_000 + 0, room: 38, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' });
+      f.mode.alarmRoomAt.set(38, f.mode.now());   // the fixture clock, not the wall clock, is the keeper's now
+      f.mode.sortieTick();
+    }
+    if (wait) ok('wait_home_fight: still posted after 50 s of fighting at home', f.mode.sortie?.phase === 'posted', JSON.stringify(f.mode.lastSortie));
+    else ok('without it: home after idle_ms, whatever the fight at home', !f.mode.sortie && /no hostile/.test(f.mode.lastSortie?.end_reason), JSON.stringify(f.mode.lastSortie));
+    if (wait) {
+      f.mode.alarmRoomAt.set(599, f.mode.now());
+      f.advance(25_000); f.mode.sortieTick();
+      ok('a fight in some OTHER map does not hold it; home quiet for idle_ms ends it', !f.mode.sortie && /no hostile/.test(f.mode.lastSortie?.end_reason), JSON.stringify(f.mode.lastSortie));
+    }
+    f.mode.stop?.('test');
+  }
+}
+
 console.log('combat mode: alarm_elsewhere');
 {
   reset(); const f = fixture({ room: 38, pvpRooms: [38] });
