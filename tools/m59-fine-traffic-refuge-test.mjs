@@ -52,8 +52,14 @@ const scratch=mkdtempSync(join(tmpdir(),'m59-fine-traffic-')),old=process.env.M5
 const jam=JSON.parse(readFileSync(new URL('./fixtures/hollows-occupied-guide-2502.json',import.meta.url)));
 const agent='fine-traffic-fixture',room={num:2502,object_id:77};let pose={...from},reads=0,moves=0,guideMode=false;
 let confirmationMode=false,confirmationReads=0,simulatedTime=null;const wallNow=Date.now;
+let recoveryMode=false,recoveryHP=10,recoveryStands=0,recoveryRests=0;
+const recoverySnapshot=()=>({agent,in_game:true,connected:true,room,you:pose,hp:{value:recoveryHP,max:20},vigor:{value:200},objects:[],
+ autopilot_status:{faculties:{movement:{owner:'fleetscript:traffic',expires_in_ms:120000}},
+  safe_spot:{works:true,at:{row:pose.row,col:pose.col}},
+  survival_decisions:{current:{status:recoveryStands<4?'recovering':'completed',strategy:'seek_refuge'}}}});
 const server=createServer((request,response)=>{
  const blocked=++reads<=20;response.setHeader('content-type','application/json');
+ if(recoveryMode){response.end(JSON.stringify({...recoverySnapshot(),position_read:{...pose,at:Date.now(),room_object_id:77}}));return;}
  if(confirmationMode){confirmationReads++;simulatedTime+=2000;}
  response.end(JSON.stringify({agent,in_game:true,room,you:pose,hp:{value:20,max:20},vigor:{value:200},objects:guideMode?jam.bodies:blocked?crowd:[],
   autopilot_status:{faculties:{movement:{owner:'fleetscript:traffic',expires_in_ms:120000}}},
@@ -63,6 +69,11 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const registry=join(scratch,'bands.json');writeFileSync(registry,JSON.stringify({'fine-traffic-test':server.address().port-99}));process.env.M59_KEEPER_BAND_REGISTRY=registry;
 try{
  const ctx={agent,fleet:'fine-traffic-test',origin:{source:'fleetscript',name:'traffic',run_id:'fixture'},state:{},call:async(name,args)=>{
+  if(recoveryMode){
+   if(name==='status'||name==='look')return recoverySnapshot();
+   if(name==='rest_up'){recoveryRests++;recoveryHP=20;return {rested:true};}
+   if(name==='rest'&&args.stand){recoveryStands++;recoveryHP=recoveryStands<4?10:20;return {standing:true};}
+  }
   if(name==='walk_to'){assert(reads>20,'no packet may leave while the scene remains blocked');moves++;
    if(guideMode){const a=protocolToClient(pose),b=protocolToClient(args),obstacles=blockingBodySnapshot(new Map(jam.bodies.map(o=>[o.id,o])),pose.id);
     const traced=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false,obstacles});
@@ -89,4 +100,9 @@ try{
  assert(recovered.ok);assert(simulatedTime-began>15000);assert.equal(moves,0,'unconfirmed position must never authorize a movement packet');
  assert(confirmationReads>10,'the scoped reader waits for actual ordered confirmation');
  console.log('A confirmed body wait beyond fifteen simulated seconds spends its existing leg deadline; standalone reads stay bounded and no unconfirmed movement is emitted.');
+ Date.now=wallNow;confirmationMode=false;guideMode=false;recoveryMode=true;pose={...from};ctx.state={};moves=0;
+ const repeated=await checkedIslandWalk(ctx,{x:pose.x,y:pose.y},{room:2502,budgetMs:90000});
+ assert(repeated.ok);assert.equal(recoveryRests,4);assert.equal(recoveryStands,4);assert.equal(moves,0);
+ assert.equal(ctx.state.islandRecoveryFailure,undefined);
+ console.log('Four positively owned recovery cycles retain the original fine goal and leg budget; a fixed three-attempt cap cannot strand the fourth living recovery.');
 }finally{Date.now=wallNow;await new Promise(r=>server.close(r));if(old==null)delete process.env.M59_KEEPER_BAND_REGISTRY;else process.env.M59_KEEPER_BAND_REGISTRY=old;rmSync(scratch,{recursive:true,force:true});}
