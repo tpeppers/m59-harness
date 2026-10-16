@@ -76,6 +76,7 @@ export function isFinePassageStop(geo,p) {
 // Recover to the real goal when local, or to a proved suffix of a compatible rail.
 // Failed waypoints are never substituted for a distant destination.
 const searchProgress=new WeakMap();
+const IN_ROOM_REACH=3;
 export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,selfId,
   roomFlags=0,overrideDepths=null,sectorHeights=null,avoidSquares=null,seedOnly=false,maxNodes=16000,maxMs=500,
   threats=[],threatWeight=0,threatRadius=4}={}) {
@@ -124,6 +125,28 @@ export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,
     const [row,col]=key.split('>')[0].split(',').map(Number),line=bakedPath(table,room,{row,col},anchor);
     for(const [index,q] of (line??[]).entries())if(Math.max(Math.abs(q.row-from.row),Math.abs(q.col-from.col))<=(seedOnly?1:24))
       candidates.push({square:q,rail:{from:q,squares:line.slice(index)},distance:Math.hypot(q.row-from.row,q.col-from.col)});
+  }
+  // AN IN-ROOM GOAL CAN RIDE A RAIL TOO. The block above only knows lines that END at an exit,
+  // so a walk to a square inside the room -- a quarry approach, above all -- had no rail at all,
+  // and its one candidate was the goal itself through a 24-square fine box. Ukgoth (599),
+  // 2026-10-16: Kermit and Rizzo at r9c56-57 hunted a troll at r31c51 for an hour; the coarse
+  // line south down column 57 is not on the fine floor, and the walk that is (1,66>71,2: west
+  // along rows 9-13 to column 29, south, then back east to 30,51) leaves that box. So every
+  // baked line that passes within IN_ROOM_REACH of the goal offers its boarding squares near
+  // the body, cut at the waypoint nearest the goal; the caller walks the rest from there.
+  if(!anchor&&!seedOnly)for(const key of Object.keys(r?.routes??{})) {
+    const [a,b]=key.split('>').map(p=>p.split(',').map(Number));
+    let line=null;
+    try{line=bakedPath(table,room,{row:a[0],col:a[1]},{row:b[0],col:b[1]});}catch{line=null;}
+    if(!line?.length)continue;
+    let end=-1,best=Infinity;
+    for(const [i,q] of line.entries()){const d=Math.max(Math.abs(q.row-to.row),Math.abs(q.col-to.col));if(d<best){best=d;end=i;}}
+    if(best>IN_ROOM_REACH)continue;
+    for(let index=0;index<end;index++){
+      const q=line[index];
+      if(Math.max(Math.abs(q.row-from.row),Math.abs(q.col-from.col))>24)continue;
+      candidates.push({square:q,rail:{from:q,squares:line.slice(index,end+1)},distance:Math.hypot(q.row-from.row,q.col-from.col)});
+    }
   }
   const progressKey=JSON.stringify([room,table?.geometryManifestSha256,from.x,from.y,to.row,to.col,roomFlags,state(overrideDepths),state(sectorHeights),
     bodySignature(objects,selfId),[...(avoidSquares??[])].sort()]);

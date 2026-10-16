@@ -119,3 +119,22 @@ test('learnDeviationEdge: a confirmed geometry slide is learned once; a body or 
   c.self = { ...c.self, x: 3690 };
   assert.equal(s.learnDeviationEdge(failure(), fresh()), false, 'the body is no longer where the refusal was confirmed');
 });
+
+// THE HUNT, 2026-10-16. Kermit and Rizzo stood at r9c56-57 for an hour hunting a troll at r31c51:
+// every quarry approach was refused (`movement_deviation`, then `object_blocked` with each other
+// beside them) and deferred. The coarse approach runs south down column 57, which the fine floor
+// does not support; the walk that does is the baked zigzag 1,66>71,2 -- west along rows 8-13 to
+// column 29, south, back east to 30,51. planRailDeparture offered rails only toward EXIT anchors,
+// so an in-room goal never saw it. Now any baked line passing beside the goal is a candidate.
+for (const [label, x, y, mate] of [['Kermit alone at r9c57', 3648, 604, null], ['Kermit beside Rizzo', 3648, 604, [3629, 597]]]) {
+  test(`${label}: the quarry approach to r30c50 rides the west-east rail and arrives`, { skip: why ?? false }, async () => {
+    const { s, c, packets } = fixture(x, y);
+    if (mate) c.room.objects.set(2, { id: 2, flags: 4, x: mate[0], y: mate[1], row: Math.floor(mate[1] / 64), col: Math.floor(mate[0] / 64) });
+    c.room.objects.set(3, { id: 3, flags: 9, x: 51 * 64 + 32, y: 31 * 64 + 32, row: 31, col: 51 });
+    const a = s.world.approachSquare(51, 31);
+    assert.ok(a, 'the troll has an approach square');
+    const out = await s.walkTo(a.col, a.row, { maxSteps: a.steps + 8 });
+    assert.equal(out.arrived, true, `arrived: ${JSON.stringify(out).slice(0, 300)}`);
+    assert.ok(packets.some(p => Math.floor(p.x / 64) <= 31), 'went west along the rail rather than down column 57');
+  });
+}
