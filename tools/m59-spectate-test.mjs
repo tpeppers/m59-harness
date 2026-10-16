@@ -60,16 +60,32 @@ const mapFile = join(tmp, 'map.json');
 writeFileSync(mapFile, JSON.stringify({ rooms: { 345: { num: 345, roomRsc: ROOM_RSC, rows: 20, cols: 30 } } }));
 
 const SEEDS = [3571238106, 184153256, 462, 697447458, 184166115];
-const received = []; let hungUp = null, srvSock = null;
+// The menu's seeds after a BP_REQ_QUIT: new ones, as SynchedSendMenuChoice makes them.
+const SEEDS2 = [1234567891, 98765432, 777, 424242424, 31337];
+const getChoice = seeds => { const b = Buffer.alloc(21); b[0] = 22; seeds.forEach((v, i) => b.writeUInt32LE(v, 1 + i * 4)); return b; };
+const received = [], menu = []; let hungUp = null, srvSock = null, usedCharacter = null;
 const server = net.createServer(sock => {
-  srvSock = sock; const st = new Stream(SEEDS); let game = false;
+  srvSock = sock; let st = null, game = false, menuSeeds = SEEDS;
   frames(sock, (p, sec) => {
-    if (!game) { if (p[0] === 1) { const b = Buffer.alloc(21); b[0] = 22; SEEDS.forEach((v, i) => b.writeUInt32LE(v, 1 + i * 4)); sock.write(plain(b)); sock.write(plain(Buffer.from([25]))); game = true; } return; }
+    // Menu mode (synched.c) is not checksummed. AP_LOGIN gets the seeds and the game; AP_REQ_GAME (4)
+    // after a quit gets the game on the seeds the menu handed out.
+    if (!game) {
+      menu.push(p[0]);
+      if (p[0] === 1) sock.write(plain(getChoice(SEEDS)));
+      if (p[0] === 1 || p[0] === 4) { sock.write(plain(Buffer.from([25]))); st = new Stream(menuSeeds); game = true; }
+      return;
+    }
     const want = st.sec(p);
     if (want !== sec) { hungUp = `op ${p[0]}: got 0x${sec.toString(16)} want 0x${want.toString(16)}`; sock.destroy(); return; }
     received.push(p[0]);
     // The server answers a resend request (BP_SEND_PLAYER, 40) the way blakserv does: with BP_PLAYER.
     if (p[0] === 40) sock.write(plain(bpPlayer()));
+    // A look (116) is answered with the object's description (BP_LOOK, 207).
+    if (p[0] === 116) sock.write(plain(bytes(207, u32(p.readUInt32LE(1)), u32(0), u32(0))));
+    // BP_REQ_QUIT: out of the world, BP_QUIT, then the menu with new seeds (game.c:421, SynchedDoMenu).
+    if (p[0] === 54) { sock.write(plain(Buffer.from([149]))); sock.write(plain(getChoice(SEEDS2))); menuSeeds = SEEDS2; game = false; }
+    // BP_USE_CHARACTER: back in the world, which starts with BP_PLAYER.
+    if (p[0] === 46) { usedCharacter = p.readUInt32LE(1); sock.write(plain(bpPlayer())); }
   });
 });
 await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -121,10 +137,43 @@ const sent1 = received.length;
 humanSend(reqMove(4, 4)); humanSend(bytes(103, 0, u32(55))); await tick();
 ok('the person\'s own movement and attacks are dropped while the keeper drives', received.length === sent1);
 
+// The keeper's looks: the description goes to the keeper, never into a window on the person's screen.
+const h0 = toHuman.length;
+keeper.look(77); await tick(80);
+ok('a description the KEEPER asked for never opens on the person\'s screen', received.includes(116) && !toHuman.slice(h0).some(p => p[0] === 207) && session.stats.swallowed_looks === 1,
+   JSON.stringify({ toHuman: toHuman.slice(h0).map(p => p[0]), swallowed: session.stats.swallowed_looks }));
+humanSend(bytes(116, u32(78))); await tick(80);
+ok('the person\'s own look still opens', toHuman.slice(h0).some(p => p[0] === 207 && p.readUInt32LE(1) === 78));
+
+// The keeper's survival logoff, the way Session.rejoin does it attached: ask, drop the socket, re-attach.
+const h1 = toHuman.length, r1 = received.length, m1 = menu.length;
+await keeper.attachedLogoff(); keeper.sock.destroy(); await tick(80);
+ok('a keeper\'s survival logoff really takes the character out of the world', received.slice(r1).join() === '54' && session.status().away?.phase === 'menu',
+   JSON.stringify({ sent: received.slice(r1), away: session.status().away }));
+ok('and the person\'s client sees none of it: no BP_QUIT, no menu', !toHuman.slice(h1).some(p => [149, 22, 25].includes(p[0])), JSON.stringify(toHuman.slice(h1).map(p => p[0])));
+humanSend(reqMove(5, 5)); humanSend(bytes(110, 1, u16(2), Buffer.from('hi'))); await tick();
+ok('nothing the person\'s client sends reaches a server sitting at its menu', menu.length === m1 && received.length === r1 + 1);
+const keeper2 = new M59Client({ verbose: false });
+await keeper2.login('t15', 'unused'); await tick(150);
+ok('the keeper re-attaching brings the character back: AP_REQ_GAME, then BP_USE_CHARACTER for it', menu.slice(m1).join() === '4' && usedCharacter === PLAYER_ID && !session.away,
+   JSON.stringify({ menu: menu.slice(m1), usedCharacter, away: session.status().away }));
+ok('on the menu\'s NEW seeds, which the server accepted', hungUp === null && received.slice(r1).includes(46), hungUp ?? JSON.stringify(received.slice(r1)));
+ok('the person\'s client gets the re-entry as a room burst, and still no menu', toHuman.slice(h1).some(p => p[0] === 130) && !toHuman.slice(h1).some(p => [149, 22, 25].includes(p[0])));
+ok('the keeper is attached again once the character is back', keeper2.state === 'game' && session.attached?.agent === 't15' && received.slice(r1).includes(40));
+
+// Taking control back in the middle of a logoff brings the character straight back to the person.
+const m2 = menu.length; usedCharacter = null;
+await keeper2.attachedLogoff(); await tick(80);
+ok('(a second logoff, the keeper still attached)', session.status().away?.phase === 'menu');
+session.clearGate('keeper:t15'); await tick(80);
+ok('taking control back mid-logoff returns the character at once', !session.away && usedCharacter === PLAYER_ID && menu.slice(m2).join() === '4' && hungUp === null,
+   JSON.stringify({ usedCharacter, menu: menu.slice(m2), away: session.status().away, hungUp }));
+ok('(the keeper takes the controls again)', session.setGate({ holder: 'keeper:t15', reason: 'spectate' }).ok);
+
 // Take control back.
 session.clearGate('keeper:t15');
 const sent2 = received.length;
-keeper.send(100, u16(7 * 64 + 32), u16(9 * 64 + 32), Buffer.from([18]), u32(345)); await tick();
+keeper2.send(100, u16(7 * 64 + 32), u16(9 * 64 + 32), Buffer.from([18]), u32(345)); await tick();
 ok('taking control back silences the keeper on its very next packet', received.length === sent2 && session.attached.stats.dropped_not_holder > 0);
 humanSend(reqMove(4, 5)); await tick();
 ok('and the person steers again', received.at(-1) === 100 && received.length === sent2 + 1);
@@ -135,7 +184,7 @@ const reply = await new Promise(r => { second.on('connect', () => second.write(J
 ok('a second keeper cannot attach to the same session', /already attached/.test(reply));
 second.destroy();
 
-keeper.sock.destroy(); await tick();
+keeper2.sock.destroy(); await tick();
 ok('when the keeper goes away the session forgets it', session.attached === null);
 
 human.destroy(); front.close(); server.close(); attachSrv.close();
