@@ -10,7 +10,7 @@ import {originLabel,keeperMovementPreemption} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
-import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
+import {checkIslandCancellation,observeIslandTraveller,withIslandObservationDeadline} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {knownRefugeCell,confirmRefugeCellArrival} from './m59-refuge-activation.mjs';
@@ -223,7 +223,10 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
   }
   return {...observation,error};
 }
-export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
+export async function checkedIslandWalk(ctx,target,options={}){
+  return withIslandObservationDeadline(ctx,Date.now()+(options.budgetMs??180000),()=>checkedIslandWalkWithinBudget(ctx,target,options));
+}
+async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
   const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),started=Date.now();
   let goal=protocolToClient(target);
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
