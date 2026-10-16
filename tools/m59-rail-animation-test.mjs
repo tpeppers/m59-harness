@@ -19,3 +19,14 @@ console.log('rail animation: same aim, bounded wait, room change, cancellation a
 let clock=0,bodyCalls=0;
 const bodyWait=await waitForRailAnimation(async()=>++bodyCalls===1?{arrived:false,reason:'object_blocked'}:{arrived:true},{room:579,readRoom:async()=>579,retryBodies:true,now:()=>clock,wait:async ms=>{clock+=ms}});
 assert.equal(bodyCalls,2);assert(bodyWait.arrived);
+
+clock=0;bodyCalls=0;
+const bodyTimeout=await waitForRailAnimation(async()=>{bodyCalls++;return {reason:'object_blocked'};},{room:579,readRoom:async()=>579,retryBodies:true,timeoutMs:2000,now:()=>clock,wait:async ms=>{clock+=ms}});
+assert.equal(bodyTimeout.body_timeout,true);assert.equal(bodyCalls,3);assert.equal(clock,2000);
+bodyCalls=0;
+const bodyRoomChange=await waitForRailAnimation(async()=>{bodyCalls++;return {reason:'object_blocked'};},{room:579,readRoom:async()=>578,retryBodies:true});
+assert.equal(bodyRoomChange.reason,'left_room');assert.equal(bodyCalls,1);
+for(const reply of [{reason:'object_blocked',cancelled:true},{reason:'unknown_position'},{reason:'geometry_blocked'}]){
+ bodyCalls=0;assert.equal(await waitForRailAnimation(async()=>{bodyCalls++;return reply;},{room:579,readRoom:async()=>579,retryBodies:true}),reply);assert.equal(bodyCalls,1);
+}
+console.log('rail body wait: timeout, changed room, cancellation and terrain guards passed');

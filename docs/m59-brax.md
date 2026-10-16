@@ -134,6 +134,6 @@ lever messages, keeper survival recovery gates, and the Windows mutex retry.
 The 2026-10-16 full-shadow trial ended **1/24**, with no recorded deaths.
 The original dispatch and three corrected retries retained actual positions
 and all failures. Three lift ascents occurred; the final batch carried seven,
-but only Rizzo reached827. Farming did not start because a majority did not
-arrive. This supersedes any fleet-scale inference from the earlier3/3 trial.
+but only Rizzo reached 827. Farming did not start because a majority did not
+arrive. This supersedes any fleet-scale inference from the earlier 3/3 trial.
 See [full trial results](m59-brax-shadow-trial.md) for failure stages and limits.
