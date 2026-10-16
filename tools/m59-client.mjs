@@ -25,7 +25,8 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
 import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
-import { AudioObservations } from './m59-audio-observations.mjs';
+import { AudioObservations, parseAudio } from './m59-audio-observations.mjs';
+import { groanBand } from './m59-player-health.mjs';
 import { MonsterAttention } from './m59-monster-attention.mjs';
 import { retireGeneration, closeGeneration } from './m59-idgen.mjs';
 import {
@@ -1577,6 +1578,10 @@ export class M59Client {
     if ([170,171,172].includes(op)) {
       try { if(this.audioObservations.receive(op,body,this.rsc))this.emit('audio',{}); }
       catch(e) { this.log('audio packet rejected: '+e.message); }
+      // A PAIN SOUND NAMES ITS PLAYER AND, BY WHICH ONE IT IS, THEIR HEALTH BAND (m59-player-health.mjs).
+      try { const a = op === 170 ? parseAudio(op, body, this.rsc) : null, g = a && groanBand(a.stem);
+            if (g && a.source) this.emit('groan', { source: a.source, band: g.band, gender: g.gender, stem: a.stem }); }
+      catch { /* audio is evidence, never a reason to drop a packet */ }
       return;
     }
     const r = new Reader(body);

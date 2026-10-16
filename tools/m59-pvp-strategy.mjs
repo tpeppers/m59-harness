@@ -20,11 +20,22 @@
 //   attacked_by_player   a player's blow landed on us (CombatMode.beginPvP)
 //   player_seen          a non-fleetmate player is in our room (CombatMode.scanForEnemies), once per
 //                        player per room every PLAYER_SEEN_EVERY_MS
+//   alarm_elsewhere      a fleet-mate's war alarm (attacked / engaged, never a bare sighting) names a
+//                        map OTHER than ours (CombatMode.onWarAlarm), once per map and enemy every
+//                        PLAYER_SEEN_EVERY_MS. `player` is the enemy; `alarm_room`, `reporter` and
+//                        `basis` say where and who. This is how a character hears a fight next door.
+//                        OPT-IN: asked only of a module whose `moments` lists it, because a strategy written
+//                        before this moment existed would read "a hostile, elsewhere" as one of its own.
 //
 // THE FACTS, every moment (a frozen object):
 //   moment, character, agent, room, player, hostile (war book / server enemy mark), basis,
 //   pvp_allowed_here (the character's own pvp_rooms answer), health_pct, max_health,
-//   in_flight, flight_room, hold_room, now
+//   in_flight, flight_room, hold_room, now,
+//   allies_here (fleet-mates in the room, NOT counting this character), hostiles_here (players in the
+//   room the war book or the server marks hostile), sortie_room / sortie_phase (the sortie in force, or
+//   null), alarm_room / reporter (alarm_elsewhere only),
+//   player_health -- the fleet's groan-based estimate of the player's health (m59-player-health.mjs):
+//   { band 1-4, min_pct, max_pct, age_ms, room } from the last time anyone of ours heard them hurt, or null
 //
 // THE DECISIONS — a CLOSED set, like the playbook verbs. Anything else is reported and ignored.
 //   null | 'default' | { do: 'default' }    what the harness already does; silence
@@ -37,6 +48,19 @@
 //        fight here even where the character's pvp_rooms would refuse: return fire on a hit, the war
 //        response on a hostile sighting. The server's own rules, the safety flag and every refused-target
 //        memory still apply; this only lifts OUR room list, for this room, for ENGAGE_WINDOW_MS.
+//   { do: 'sortie', room, home, row?, col?, max_ms?, idle_ms?, home_hold_ms?, why? }
+//        a deliberate excursion to fight in ONE other map. The body is taken exactly as a flight takes
+//        it -- the walk out ignores the fight it is leaving, which is the point -- and travels to `room`,
+//        then (given row and col) walks to that square. Once there: our room list is lifted for that
+//        map, the keeper is held in it (explicit orders too), and the ordinary war response and return
+//        fire engage whoever is hostile there. It ends -- and the body walks back to `home` as a
+//        flight, held there for `home_hold_ms` -- after `idle_ms` with no hostile in the map, after
+//        `max_ms` in all, or the moment the body is anywhere but `room` or `home` (a sortie never
+//        follows anybody a second map out). A `flee_to` decided during it replaces it.
+//   { do: 'hold_fire', ms?, why? }
+//        do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's
+//        alarm both pass over them for `ms` (default HOLD_FIRE_MS, renewed by deciding again). It never
+//        stops return fire -- a player who hits us is answered exactly as before.
 //
 // WHERE THE FILES ARE (all optional, all this machine's — gitignored, never committed):
 //   strategies   substrate/pvp-strategies/<name>.mjs (or M59_PVP_STRATEGY_DIR), then every directory in
@@ -52,6 +76,7 @@
 // A STRATEGY MODULE:
 //   export default {
 //     name: 'bastion', describe: '...',
+//     moments: ['attacked_by_player', 'player_seen', 'alarm_elsewhere'],   // optional; default the first two
 //     decide(moment, facts, options) { return { do: 'flee_to', room: options.room } },
 //   };
 // It must be fast and must not throw; a throw, or more than DECIDE_BUDGET_MS, is reported and
@@ -64,14 +89,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
 
-export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
-export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage']);
+export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
+/** What a module hears when it does not say: the moments that existed before `moments` did. */
+export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
+export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire']);
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
 export const STRIKES = 3;
 export const MAX_HOLD_MS = 4 * 3600_000;
 export const DEFAULT_FLIGHT_MS = 10 * 60_000;
 export const ENGAGE_WINDOW_MS = 60_000;
 export const PLAYER_SEEN_EVERY_MS = 5_000;
+export const SORTIE_MAX_MS = 15 * 60_000;
+export const DEFAULT_SORTIE_MS = 3 * 60_000;
+export const DEFAULT_SORTIE_IDLE_MS = 30_000;
+export const HOLD_FIRE_MS = 6_000;
+export const HOLD_FIRE_MAX_MS = 60_000;
 
 export const pvpStrategyDir = (env = process.env) => env.M59_PVP_STRATEGY_DIR || join(SUBSTRATE, 'pvp-strategies');
 export const pvpStrategyDirsFile = (env = process.env) => env.M59_PVP_STRATEGY_DIRS_FILE || join(SUBSTRATE, 'pvp-strategy-dirs.json');
@@ -143,9 +175,25 @@ export function validateDecision(d) {
   if (verb === 'default') return { decision: null };
   const why = d.why == null ? null : String(d.why).slice(0, 200);
   if (verb === 'engage') return { decision: { do: 'engage', why } };
+  if (verb === 'hold_fire') {
+    const v = d.ms == null ? HOLD_FIRE_MS : Number(d.ms);
+    if (!Number.isFinite(v) || v < 0) return { decision: null, error: 'hold_fire ms is non-negative milliseconds' };
+    return { decision: { do: 'hold_fire', ms: Math.min(v, HOLD_FIRE_MAX_MS), why } };
+  }
   const room = Number(d.room);
-  if (!Number.isInteger(room) || room <= 1) return { decision: null, error: `flee_to needs a room number above 1, not ${JSON.stringify(d.room)}` };
+  if (!Number.isInteger(room) || room <= 1) return { decision: null, error: `${verb} needs a room number above 1, not ${JSON.stringify(d.room)}` };
   const ms = (v, dflt, max) => v == null ? dflt : (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.min(Number(v), max) : NaN);
+  if (verb === 'sortie') {
+    const home = Number(d.home);
+    if (!Number.isInteger(home) || home <= 1 || home === room) return { decision: null, error: `sortie needs a home room above 1 that is not its room, not ${JSON.stringify(d.home)}` };
+    const hasSquare = d.row != null || d.col != null;
+    const row = Number(d.row), col = Number(d.col);
+    if (hasSquare && !(Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0)) return { decision: null, error: 'sortie row and col are whole squares, given together' };
+    const max_ms = ms(d.max_ms, DEFAULT_SORTIE_MS, SORTIE_MAX_MS), idle_ms = ms(d.idle_ms, DEFAULT_SORTIE_IDLE_MS, SORTIE_MAX_MS);
+    const home_hold_ms = ms(d.home_hold_ms, 0, MAX_HOLD_MS);
+    if ([max_ms, idle_ms, home_hold_ms].some(Number.isNaN)) return { decision: null, error: 'max_ms, idle_ms and home_hold_ms are non-negative milliseconds' };
+    return { decision: { do: 'sortie', room, home, ...(hasSquare ? { row, col } : {}), max_ms, idle_ms, home_hold_ms, why } };
+  }
   const hold_ms = ms(d.hold_ms, 0, MAX_HOLD_MS), max_ms = ms(d.max_ms, DEFAULT_FLIGHT_MS, MAX_HOLD_MS);
   if (Number.isNaN(hold_ms) || Number.isNaN(max_ms)) return { decision: null, error: 'hold_ms and max_ms are non-negative milliseconds' };
   return { decision: { do: 'flee_to', room, hold_ms, hold_orders: d.hold_orders === true, max_ms, why } };
@@ -205,6 +253,7 @@ export class PvpStrategyHost {
   decide(moment, facts) {
     const m = this.module, a = this.assignment;
     if (!m || !a || this.isHost || this.strikes >= STRIKES || !PVP_MOMENTS.includes(moment)) return null;
+    if (!(Array.isArray(m.moments) ? m.moments : DEFAULT_MOMENTS).includes(moment)) return null;
     let raw;
     const t0 = this.now();
     try { raw = m.decide(moment, Object.freeze({ ...facts, moment }), Object.freeze({ ...a.options })); }

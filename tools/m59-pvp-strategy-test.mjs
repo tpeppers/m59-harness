@@ -33,6 +33,7 @@ process.env.M59_WAR_ALARM_FILE = join(BOOKS, 'war-alarms.jsonl');
 process.env.M59_GRUDGE_FILE = join(BOOKS, 'grudges.json');
 process.env.M59_PVP_HOLD_DIR = join(BOOKS, 'holds');
 process.env.M59_PVP_DIR = join(BOOKS, 'pvp');
+process.env.M59_PLAYER_HEALTH_FILE = join(BOOKS, 'player-health.jsonl');
 const LOCAL = join(BOOKS, 'local'), PRIVATE = join(BOOKS, 'private'), EXTRA = join(BOOKS, 'extra');
 for (const d of [LOCAL, PRIVATE, EXTRA]) mkdirSync(d, { recursive: true });
 const ENV = { M59_PVP_STRATEGY_DIR: LOCAL, M59_PVP_STRATEGY_PATH: PRIVATE,
@@ -132,6 +133,16 @@ console.log('the host');
   ok('a promise is silence and a strike', b.decide('player_seen', { player: 'P' }) === null && b.strikes === 2);
   b.decide('player_seen', { player: 'T' });
   ok('three strikes stand the module down', b.decide('player_seen', { player: 'G' }) === null);
+  writeFileSync(join(LOCAL, 'old.mjs'), "export default { decide: () => 'engage' };");
+  writeFileSync(join(LOCAL, 'next.mjs'), "export default { moments: ['player_seen', 'alarm_elsewhere'], decide: () => 'engage' };");
+  assign({ agents: { t5: 'old', t6: 'next' } });
+  const old = new ps.PvpStrategyHost({ fleet: 'test', agent: 't5', character: 'A', env: ENV }); await old.refresh();
+  const nxt = new ps.PvpStrategyHost({ fleet: 'test', agent: 't6', character: 'B', env: ENV }); await nxt.refresh();
+  ok('alarm_elsewhere is opt-in: a module that does not list it is never asked',
+    old.decide('alarm_elsewhere', { player: 'G' }) === null && old.decide('player_seen', { player: 'G' })?.do === 'engage');
+  ok('a module that lists its moments hears exactly those', nxt.decide('alarm_elsewhere', { player: 'G' })?.do === 'engage'
+    && nxt.decide('attacked_by_player', { player: 'G' }) === null);
+  assign({ default: 'bad' });
   const host = new ps.PvpStrategyHost({ fleet: 'test', agent: 'hk1', character: 'Them', isHost: true, env: ENV });
   await host.refresh();
   ok('a menagerie host is never given a strategy, even by a default', host.decide('player_seen', { player: 'G' }) === null
@@ -284,6 +295,165 @@ console.log('combat mode: engage');
   f.mode.stop('test');
   f.s.world.room.num = 577;
   ok('and only in that room', !!f.mode.pvpRoomsRefusal());
+}
+
+console.log('the sortie decision');
+{
+  const v = d => ps.validateDecision(d);
+  ok('sortie needs a home that is a room and not its own room', !!v({ do: 'sortie', room: 2 }).error
+    && !!v({ do: 'sortie', room: 2, home: 2 }).error && !!v({ do: 'sortie', room: 2, home: 1 }).error);
+  const d = v({ do: 'sortie', room: 2, home: 38, row: 4, col: 42 }).decision;
+  ok('sortie carries room, home, square and the default clocks', d?.do === 'sortie' && d.room === 2 && d.home === 38
+    && d.row === 4 && d.col === 42 && d.max_ms === ps.DEFAULT_SORTIE_MS && d.idle_ms === ps.DEFAULT_SORTIE_IDLE_MS
+    && d.home_hold_ms === 0, JSON.stringify(d));
+  ok('a square is row AND col, whole squares', !!v({ do: 'sortie', room: 2, home: 38, row: 4 }).error
+    && !!v({ do: 'sortie', room: 2, home: 38, row: 4.5, col: 3 }).error);
+  ok('max_ms is clamped to the sortie ceiling', v({ do: 'sortie', room: 2, home: 38, max_ms: 99 * 3600_000 }).decision.max_ms === ps.SORTIE_MAX_MS);
+  ok('no square is a whole-map sortie', !('row' in v({ do: 'sortie', room: 2, home: 38 }).decision));
+}
+
+console.log('combat mode: sortie');
+const HOSTILE = P | OF.ENEMY;
+const runner = (m, x) => x.sortie_room ? null
+  : (x.room === 38 && x.hostile) ? { do: 'sortie', room: 2, home: 38, row: 4, col: 42, max_ms: 120_000, idle_ms: 20_000,
+      home_hold_ms: 60_000, strategy: 'double-down' } : null;
+const walker = f => { const walks = []; f.s.walkTo = async (col, row) => { walks.push({ row, col }); f.c.self.row = row; f.c.self.col = col; return { arrived: true }; }; return walks; };
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: runner }); const walks = walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('a hostile entering the bastion sends the runner OUT: the body is taken as a flight',
+    f.mode.active?.flight?.room === 2 && f.mode.active.flight.sortie && f.mode.sortie?.phase === 'going',
+    JSON.stringify(f.mode.status().pvp_strategy));
+  ok('the facts counted the hostile', f.asked.some(a => a.hostiles_here === 1 && a.allies_here === 0), JSON.stringify(f.asked));
+  ok('the walk out ignores the fight it is leaving: no war engagement preempts it',
+    f.mode.beginWar('Morpheus', { basis: 'war_flag', room: 38 }) === false && !!f.mode.active?.flight);
+  f.c.room.objects.clear();
+  await f.mode.tick();
+  ok('the router walked to the sortie map, then to the post square', f.travels.at(-1)?.to === 2 && walks.at(-1)?.row === 4 && walks.at(-1)?.col === 42,
+    JSON.stringify({ travels: f.travels.map(t => t.to), walks }));
+  ok('posted: no active order, sortie posted', !f.mode.active && f.mode.sortie?.phase === 'posted' && f.mode.sortie.post?.arrived === true, JSON.stringify(f.mode.status().pvp_strategy));
+  ok('our room list is lifted in the sortie map (pvp_rooms is [38])', f.mode.pvpRoomsRefusal() === null);
+  ok('the keeper is held in the sortie map, explicit orders too', f.keeper.pvpStrategyHold?.room === 2 && f.keeper.pvpStrategyHold.orders === true);
+  put(f, 2, HOSTILE); Object.assign(f.c.room.objects.get(2), { row: 4, col: 43 }); hitBy(f); await f.mode.tick();
+  ok('a hit in the sortie map is answered with return fire', !!f.mode.active?.pvp && f.sent.includes('attack:2'), f.sent.join());
+  f.mode.stop('test'); f.c.room.objects.clear();
+  f.advance(10_000); f.mode.sortieTick();
+  ok('still posted inside idle_ms', f.mode.sortie?.phase === 'posted');
+  f.advance(25_000); f.mode.sortieTick();
+  ok('quiet for idle_ms: the sortie ends and the body walks home as a flight', !f.mode.sortie && f.mode.lastSortie?.phase === 'ended'
+    && /no hostile/.test(f.mode.lastSortie.end_reason) && f.mode.active?.flight?.room === 38, JSON.stringify(f.mode.lastSortie));
+  ok('the sortie hold and the lifted room list are gone', !f.keeper.pvpStrategyHold?.sortie && !f.mode.strategyEngage?.sortie);
+  await f.mode.tick();
+  ok('home, and held there for home_hold_ms', f.s.world.room.num === 38 && f.keeper.pvpStrategyHold?.room === 38);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: runner }); walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 }); f.c.room.objects.clear(); await f.mode.tick();
+  f.s.world.room.num = 599; f.mode.sortieTick();
+  ok('ONE MAP OUT: a body anywhere else ends the sortie and walks home, never onward',
+    !f.mode.sortie && /left the sortie map for 599/.test(f.mode.lastSortie?.end_reason) && f.mode.active?.flight?.room === 38);
+  await f.mode.tick();
+  ok('and the walk is to home, not further', f.travels.map(t => t.to).join() === '2,38', f.travels.map(t => t.to).join());
+}
+{
+  const retreat = (m, x) => x.sortie_room === 2 && x.room === 2 && x.health_pct < 40 && x.allies_here + 1 <= x.hostiles_here
+    ? { do: 'flee_to', room: 38, hold_ms: 60_000, strategy: 'double-down' } : runner(m, x);
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: retreat }); walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 }); f.c.room.objects.clear(); await f.mode.tick();
+  f.c.hp = 30; put(f, 2, HOSTILE); hitBy(f);
+  ok('a flee_to decided during a sortie replaces it: the retreat', !f.mode.sortie && /replaced by a flight to 38/.test(f.mode.lastSortie?.end_reason)
+    && f.mode.active?.flight?.room === 38 && !f.mode.active.flight.sortie, JSON.stringify(f.mode.status().pvp_strategy));
+  f.mode.stop('test');
+}
+{
+  reset(); const f = fixture({ room: 2, pvpRooms: [38], strategy: (m, x) => ({ do: 'sortie', room: 2, home: 38, strategy: 'd' }) });
+  put(f, 2, HOSTILE); hitBy(f); await f.mode.tick();
+  ok('a sortie decided in its own map posts in place and the hit is still answered',
+    f.mode.sortie?.phase === 'posted' && !f.travels.length && f.sent.includes('attack:2'), f.sent.join() + ' ' + JSON.stringify(f.mode.status()));
+  f.mode.stop('test');
+}
+
+console.log('combat mode: alarm_elsewhere');
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38] });
+  ok('no strategy: an alarm from another map is only a report', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === false
+    && !f.travels.length && !f.mode.active);
+}
+{
+  const insider = (m, x) => m === 'alarm_elsewhere' && x.alarm_room === 2 && x.hostiles_here === 0
+    ? { do: 'sortie', room: 2, home: 38, idle_ms: 20_000, strategy: 'double-down' } : null;
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: insider }); walker(f);
+  ok('a bare sighting next door is never asked', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'sighted' }) === false
+    && !f.asked.length);
+  ok('a fight next door asks the strategy, which sorties', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === true
+    && f.asked.some(a => a.moment === 'alarm_elsewhere' && a.alarm_room === 2 && a.reporter === 'Statler' && a.player === 'Morpheus')
+    && f.mode.sortie?.room === 2, JSON.stringify(f.asked));
+  const n = f.asked.length;
+  f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'attacked' });
+  ok('asked at most once per map and enemy per window', f.asked.length === n);
+  await f.mode.tick();
+  ok('and it lands in the fight next door', f.s.world.room.num === 2 && f.mode.sortie?.phase === 'posted', JSON.stringify(f.mode.status()));
+}
+
+console.log('groans: health bands off the pain sound');
+{
+  const ph = await import('./m59-player-health.mjs');
+  const { parseAudio } = await import('./m59-audio-observations.mjs');
+  ok('the eight pain sounds are the four bands; anything else is not a groan',
+    ph.groanBand('ouchm1')?.band === 1 && ph.groanBand('ouchf4')?.band === 4 && ph.groanBand('ouchf4').gender === 'f'
+    && ph.groanBand('ouchm5') === null && ph.groanBand('hit') === null && ph.groanBand(null) === null);
+  ok('the bands are the kod thresholds (GetOuchSound: >75, >50, >25, else)',
+    ph.GROAN_BANDS[1].min_pct === 76 && ph.GROAN_BANDS[2].max_pct === 75 && ph.GROAN_BANDS[3].max_pct === 50 && ph.GROAN_BANDS[4].max_pct === 25);
+  const b = Buffer.alloc(25); b.writeUInt32LE(901, 0); b.writeUInt32LE(2, 4); b[8] = 0;
+  const a = parseAudio(170, b, new Map([[901, 'ouchm3.wav']]));
+  ok('a BP_PLAY_WAVE of ouchm3 names its source object and reads band 3', a?.source === 2 && ph.groanBand(a.stem)?.band === 3, JSON.stringify(a));
+  const src = readFileSync(new URL('./m59-client.mjs', import.meta.url), 'utf8');
+  ok('the client emits it as a groan event with the source', /this\.emit\('groan', \{ source: a\.source, band: g\.band/.test(src));
+  ph.resetHealthCache();
+  const t0 = Date.now();
+  ok('recorded once a second per player and band', ph.recordGroan({ name: 'Morpheus', band: 2, at: t0 }) === true
+    && ph.recordGroan({ name: 'Morpheus', band: 2, at: t0 + 10 }) === false);
+  ph.recordGroan({ name: 'Morpheus', band: 4, room: 38, reporter: 'Us', at: t0 + 20 });
+  const h = ph.latestHealth('morpheus', { now: t0 + 1000 });
+  ok('the latest reading wins, by name in any case', h?.band === 4 && h.max_pct === 25 && h.room === 38 && h.age_ms === 980, JSON.stringify(h));
+  ok('an old reading is no reading', ph.latestHealth('Morpheus', { now: t0 + 200_000, maxAgeMs: 120_000 }) === null);
+  ok('nobody heard: null', ph.latestHealth('Bob', { now: t0 + 1000 }) === null);
+  ph.resetHealthCache();
+}
+{
+  reset(); const ph = await import('./m59-player-health.mjs'); ph.resetHealthCache();
+  const f = fixture({ room: 38, strategy: () => null });
+  put(f, 2, P | OF.ENEMY); put(f, 1, P);
+  f.mode.event({ kind: 'groan', source: 2, band: 3 });
+  f.mode.event({ kind: 'groan', source: 1, band: 1 });
+  ok('CombatMode records a groan from a player who is not ours, never our own', ph.latestHealth('Morpheus')?.band === 3
+    && ph.latestHealth('Us') === null && f.mode.lastGroan?.name === 'Morpheus');
+  f.mode.event({ kind: 'appeared', id: 2 });
+  ok('and the strategy sees it as player_health', f.asked.some(a => a.player === 'Morpheus' && a.player_health?.band === 3 && a.player_health.max_pct === 50),
+    JSON.stringify(f.asked.map(a => a.player_health)));
+  ph.resetHealthCache();
+}
+
+console.log('combat mode: hold_fire');
+{
+  const v = d => ps.validateDecision(d);
+  ok('hold_fire is a decision with a bounded window', v('hold_fire').decision?.ms === ps.HOLD_FIRE_MS
+    && v({ do: 'hold_fire', ms: 10 * 60_000 }).decision.ms === ps.HOLD_FIRE_MAX_MS && !!v({ do: 'hold_fire', ms: -1 }).error);
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: (m, x) => x.player === 'Morpheus' ? { do: 'hold_fire', ms: 6000, strategy: 'd' } : null });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('a held hostile is not engaged on sight', !f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  ok('nor by a fleet-mate\'s alarm in this room', f.mode.onWarAlarm({ at: Date.now(), room: 38, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === false);
+  hitBy(f); await f.mode.tick();
+  ok('but a hit is still answered: hold_fire never stops return fire', !!f.mode.active?.pvp && f.sent.includes('attack:2'), f.sent.join());
+  f.mode.stop('test');
+  f.advance(7000);
+  ok('the hold lapses unless decided again', f.mode.fireHeld('Morpheus') === false);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => null });
+  put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('without hold_fire the same hostile IS engaged on sight (the control)', !!f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  f.mode.stop('test');
 }
 
 console.log('the keeper');

@@ -379,6 +379,9 @@ __pycache__/
 /substrate/war.json
 /substrate/war-*.json
 /substrate/war-alarms*.jsonl
+# The groan book (tools/m59-player-health.mjs): other players' health bands as our characters heard
+# them hurt. Names real players; one fleet's operational state.
+/substrate/player-health*.jsonl
 # The PvP return delay's per-character record (tools/m59-pvp-return.mjs): when a player last
 # killed each character and who. Runtime state that must survive a keeper restart, names real
 # players and our characters, and is one fleet's.
