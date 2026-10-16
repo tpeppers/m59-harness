@@ -199,4 +199,31 @@ ok('the keeper home is moved before every leg and restored at the end', () => {}
   assert.equal(restore[0].always, true, 'the restore must run however the errand ends');
 }
 
+// A LEG THAT DOES NOT APPLY GOES NOWHERE, AND NO WALK OUTRUNS ITS HOME (Pepe, 2026-10-16: on a
+// resume=2 run, stage 1's hunt walked 852 -> 150, the room preflight had read, with the keeper
+// homed and confined to 852). Every dynamic walk either stays where the body is, or has a home
+// step naming exactly that room; and the room is read back after every walk.
+ok('a skipped leg stays put, and every walk that leaves has its home', () => {});
+{
+  const steps = await script.steps({ faction: 'princess', agent: 't5', agents: ['t5'], max_rooms: 3,
+                                     resume: 2, rooms: '568' });
+  const states = [
+    { needShield: true, here: 852, stage: { n: 2, target: 'rebel soldier', order: [568] } },  // resume=2 hunt
+    { needShield: true, here: 568, stage: { n: 2, killed: true } },                            // stage-2 report
+    { needShield: true, needJoin: true, here: 852, joinAsk: { room: 109 } },                    // join hand-over
+  ];
+  let left = 0;
+  steps.forEach((s, i) => {
+    if (s.do !== 'walk' || typeof s.to !== 'function' || s.always) return;
+    for (const st of states) {
+      const to = s.to(st);
+      if (to === st.here) continue;
+      assert.deepEqual(steps[i - 1].home(st), [to], `walk ${i} leaves ${st.here} for ${to} without its home`);
+      left++;
+    }
+    assert.equal(steps[i + 1]?.do, 'verify', `walk ${i} is not followed by a read of where the body is`);
+  });
+  assert.ok(left >= 3, `only ${left} walks left the room`);
+}
+
 console.log(`faction-shield: ${n} groups passed${kod ? ' (hints read from the kod)' : ' (no kod tree: built-in hints)'}`);

@@ -414,6 +414,24 @@ export const script = {
       return { ok: true, restored: state.homeBefore };
     }, 'could not put the keeper\'s home back'), always: true, restoresHome: true };
 
+    // ONE LEG = ONE DESTINATION, NAMED ONCE. Operator, 2026-10-16, watching Pepe on a resume=2
+    // run: stage 1's hunt did not apply, so its walk fell back to `st.here` — the room preflight
+    // had read (150), never updated by the walks since — and set out from 852 for 150 with the
+    // keeper still homed and confined to 852, which fought the walk until the run was stopped.
+    // Two faults, one cure: the home and the walk now resolve from the same `destOf`, so a walk
+    // leaves the room only when the home names where it is going; and the room is read back
+    // after every leg, so a leg that does not apply walks to where the body actually stands.
+    const hereNow = verify(async ({ agent: me, state }) => {
+      const room = Number((await observe(me).catch(() => null))?.room);
+      if (Number.isFinite(room)) state.here = room;
+      return { ok: true, here: state.here ?? null };
+    }, 'could not read where the body is');
+    const leg = (destOf, label, opts = {}) => [
+      homeTo(st => { const d = destOf(st); return d == null ? null : [d]; }, label),
+      walk(st => destOf(st) ?? st.here ?? spec.room, { candidates, ...opts }),
+      hereNow,
+    ];
+
     const mark = verify(async ({ agent: me, call, state }) => {
       state.cursor = await cursorNow(call, me);
       return true;
@@ -493,13 +511,12 @@ export const script = {
     // Already a soldier: every leg below resolves to nothing — a walk to where the body stands,
     // a gate with no key, a say with no text.
     const active = st => st.hasShield !== true;
-    const stay = st => (active(st) ? spec.room : (st.here ?? spec.room));
+    const atLiege = st => (active(st) ? spec.room : null);
     const needJoin = st => st.needJoin === true && !st.hasShield;
     const joinSteps = [
       // Everyone starts at the liege: the join asks there, and the shield asks there too. A
       // character that already carries the shield resolves every leg to where it stands.
-      homeTo(st => (active(st) ? [spec.room] : null), 'the liege'),
-      walk(stay, { candidates }),
+      ...leg(atLiege, 'the liege'),
       gate(st => (active(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (needJoin(st) && !st.resumedJoin ? spec.leader : null), 'liege'),
       verify(async ({ agent: me, call, state }) => {
@@ -539,16 +556,14 @@ export const script = {
         state.buy = { ...seller, item };
         return { ok: true, buy: item, at: `${seller.seller} (${seller.room})` };
       }, 'could not decide where to get the join item'),
-      homeTo(st => (active(st) ? [st.buy?.room ?? stay(st)] : null), 'the join item\'s shop'),
-      walk(st => st.buy?.room ?? stay(st), { candidates }),
+      ...leg(st => (active(st) ? st.buy?.room ?? spec.room : null), 'the join item\'s shop'),
       shop(st => st.buy?.seller ?? null,
            st => (st.buy ? [{ match: new RegExp(`^${st.buy.item}$`, 'i'), amount: 1 }] : []),
            { optional: true }),
 
       // HAND IT OVER — to the liege (duke, jonas) or to the letter's recipient (princess).
-      homeTo(st => (active(st) ? [(needJoin(st) ? st.joinAsk?.room : null) ?? stay(st)] : null),
+      ...leg(st => (active(st) ? (needJoin(st) ? st.joinAsk?.room : null) ?? spec.room : null),
              'the join hand-over'),
-      walk(st => (needJoin(st) ? st.joinAsk?.room : null) ?? stay(st), { candidates }),
       gate(st => (needJoin(st) ? `npc:${st.joinAsk?.target ?? spec.leader}` : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (needJoin(st) ? st.joinAsk?.target : null), 'join recipient'),
       mark,
@@ -603,10 +618,8 @@ export const script = {
       ];
       for (let i = 0; i < maxR; i++) {
         out.push(
-          homeTo(st => (hunting(st, n) && st.stage.order?.[i] ? [st.stage.order[i]] : null),
-                 `stage ${n}, flag room ${i + 1}`),
-          walk(st => (hunting(st, n) && st.stage.order?.[i]) || st.here || spec.room,
-               { candidates, optional: true }),
+          ...leg(st => (hunting(st, n) ? st.stage.order?.[i] ?? null : null),
+                 `stage ${n}, flag room ${i + 1}`, { optional: true }),
           // SCOUT. A room is worth fighting in only when the exact troop is standing in it.
           verify(async ({ agent: me, call, state }) => {
             const view = await call('look', { agent: me }, 30_000).catch(() => null);
@@ -654,8 +667,7 @@ export const script = {
       // Only the stage that has just been killed reports — a resume=2 run skips stage 1's report.
       const due = st => st.needShield && !st.promoted && st.stage?.n === n && st.stage.killed === true;
       return [
-      homeTo(st => (due(st) ? [spec.room] : null), `stage ${n} report`),
-      walk(st => (due(st) ? spec.room : (st.here ?? spec.room)), { candidates }),
+      ...leg(st => (due(st) ? spec.room : null), `stage ${n} report`),
       gate(st => (due(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (due(st) ? spec.leader : null), 'liege'),
       mark,
@@ -684,8 +696,7 @@ export const script = {
     };
 
     const shieldSteps = [
-      homeTo(st => (active(st) ? [spec.room] : null), 'the liege'),
-      walk(stay, { candidates }),
+      ...leg(atLiege, 'the liege'),
       gate(st => (active(st) ? liegeGate : null), { timeoutMs: 20 * 60_000 }),
       ...closeOn(st => (st.needShield && !st.promoted && !resumeStage ? spec.leader : null), 'liege'),
       mark,
