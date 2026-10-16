@@ -93,14 +93,18 @@ export function parseArgs(s) {
 }
 
 // ------------------------------------------------------------------ the desk's file
+export const MAX_ARGS = 6;
 export function renderPlanView({ pid, ack, control = 'none', status = '', entries = [], messages = [] }, now = Date.now()) {
   const L = [['M59PLAN', 1, now, pid, ack, control, enc(status)].join('\t')];
   for (const e of entries.slice(0, 256)) {
     if (!idOk(e.id)) continue;
     const flags = (e.running ? 'r' : '') + (e.disabled ? 'd' : '') + (e.configure ? 'c' : '');
     L.push(['E', e.id, enc(e.group ?? ''), enc(e.icon ?? ''), enc(e.title), flags || '-', enc(e.describe ?? '')].join('\t'));
-    for (const a of (e.args ?? []).slice(0, 8)) {
-      if (!/^[a-z0-9_]{1,40}$/.test(a.id) || !['choice', 'count', 'text', 'boolean'].includes(a.type)) continue;
+    // AT MOST SIX ARGUMENTS, the client's MAX_ARGS (planpane.c). Its parser rejects the WHOLE reply on
+    // a seventh, and a seventh is what a FleetScript with seven params reflects (stock-desk), so every
+    // reply was dropped and the PLAN tab said the desk was not answering. Valid ones first, then cut.
+    const args = (e.args ?? []).filter(a => /^[a-z0-9_]{1,40}$/.test(a.id) && ['choice', 'count', 'text', 'boolean'].includes(a.type));
+    for (const a of args.slice(0, MAX_ARGS)) {
       L.push(['A', e.id, a.id, a.type, enc(a.title ?? a.id), enc(a.default ?? '')].join('\t'));
       for (const o of (a.options ?? []).slice(0, 600)) L.push(['O', e.id, a.id, enc(o.value), enc(o.label ?? o.value)].join('\t'));
     }
