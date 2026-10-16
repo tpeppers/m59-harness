@@ -36,6 +36,7 @@ export async function withTraversalAdmission(ctx,{room,read,run,waitQueued=null,
   while(!lease){
    if(now()>=deadline)throw Error('traversal_admission_queue_budget');
    const p=await own();
+   if(now()>=deadline)throw Error('traversal_admission_queue_budget');
    const got=store.reserve(ctx.agent,room,token);
    if(!got)throw Error('traversal_admission_store_unavailable');
    if(got.ok){lease=got.lease;break;}

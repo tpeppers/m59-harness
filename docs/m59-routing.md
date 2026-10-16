@@ -153,6 +153,17 @@ advance along the proved western continuation without moving that creature.
 `FINE_GUIDE_ADVANCE_VERSION` is 1 for callers that must refuse older deployed
 harnesses before starting or funding an expedition.
 
+Nested position confirmation uses the existing hop, fine-leg or admission
+deadline through `withIslandObservationDeadline`. A living body with a proved
+movement lease may pause for an ordered confirmation beyond the standalone
+reader's fifteen seconds; it still sends no movement from an unconfirmed
+position. The scope belongs to that exact context, and nested deadlines can
+only shorten it. Missing health, disconnection or broker errors retain a
+separate fifteen-second bound. Death, foreign ownership and operator
+cancellation still refuse immediately. A late queue read cannot acquire a
+ticket after its deadline. Failure evidence retains the position timestamp
+and room object handle so freshness failures can be distinguished later.
+
 The shared declared-crossing controller can refine a takeoff from current
 bodies, wait at an observed unoccupied reversible refuge, and resume after a
 caller-verified keeper recovery. Recovery resumes from the actual healthy

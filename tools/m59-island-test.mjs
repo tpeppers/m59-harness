@@ -11,7 +11,7 @@ import {protocolToClient} from './m59-finepos.mjs';
 import {chordWalkable,cutRail} from './m59-railcut.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {doorStates} from './m59-doorbake.mjs';
-import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
+import {observeIslandTraveller,islandReadOwner,withIslandObservationDeadline} from './m59-island-observation.mjs';
 import {shadowDispelResetTimers,shadowDispelIdentityMatches} from './m59-island-lab-dispel.mjs';
 assert.deepEqual(shadowDispelResetTimers('Timer Remaining ms Object Message\n123 10000 1667 ReplaceIllusions\n124 20000 1667 ReplaceIllusions\n125 5000 1667 GenerateMonster\n126 5000 99 ReplaceIllusions',1667),[123,124]);
 assert.throws(()=>shadowDispelResetTimers('',null),/room_unconfirmed/);
@@ -120,6 +120,40 @@ await assert.rejects(observeIslandTraveller({...heldCtx,call:async()=>++leaseRea
 let transportReads=0;
 assert.equal((await observeIslandTraveller(heldCtx,async()=>{if(++transportReads===1)throw Error('fetch failed');return look(2502);},{pollMs:0})).room.num,2502);
 await assert.rejects(observeIslandTraveller(heldCtx,async()=>{throw Error('island_keeper_identity_mismatch');}),/identity_mismatch/);
+await assert.rejects(withIslandObservationDeadline(heldCtx,0,()=>observeIslandTraveller(heldCtx,async()=>({hp:null}))),/recovery_budget/,
+ 'an unconfirmed response cannot renew an already expired leg');
+await assert.rejects(withIslandObservationDeadline(heldCtx,0,()=>withIslandObservationDeadline(heldCtx,Date.now()+60000,
+ ()=>observeIslandTraveller(heldCtx,async()=>({hp:null})))),/recovery_budget/,'nested reads cannot extend the original deadline');
+await assert.rejects(withIslandObservationDeadline(heldCtx,0,()=>observeIslandTraveller(heldCtx,async()=>({hp:null}),
+ {deadline:Date.now()+60000})),/recovery_budget/,'an explicit nested confirmation deadline also cannot extend its parent');
+const otherContext={...heldCtx,state:{}};
+let scopedOtherReads=0;
+assert.equal((await withIslandObservationDeadline(heldCtx,0,()=>observeIslandTraveller(otherContext,async()=>++scopedOtherReads<2?{hp:null}:look(2502),{pollMs:0}))).room.num,2502,
+ 'another context does not inherit an expired deadline');
+await assert.rejects(withIslandObservationDeadline(heldCtx,Date.now()+60000,()=>observeIslandTraveller(heldCtx,async()=>look(1))),/traveller_died/);
+await assert.rejects(withIslandObservationDeadline(heldCtx,Date.now()+60000,()=>observeIslandTraveller({...heldCtx,call:async()=>({})},async()=>({hp:null}))),/health_unreadable/);
+assert.throws(()=>withIslandObservationDeadline(heldCtx,Infinity,()=>{}),/finite/);
+const realObservationNow=Date.now;let observationClock=realObservationNow();
+try{
+ Date.now=()=>observationClock;
+ const began=observationClock;
+ await assert.rejects(withIslandObservationDeadline(heldCtx,began+60000,()=>observeIslandTraveller(heldCtx,async()=>({hp:null}),{
+  pollMs:1000,sleep:async()=>{observationClock+=2000;}})),/recovery_budget/);
+ assert(observationClock-began>=15000&&observationClock-began<20000,'unknown health retains its short bound inside a longer owned leg');
+ for(const unavailable of [{...heldStatus,connected:false},{...heldStatus,broker_error:'temporary keeper read error'}]){
+  const start=observationClock;
+  await assert.rejects(withIslandObservationDeadline(heldCtx,start+60000,()=>observeIslandTraveller(heldCtx,
+   async()=>({body:look(2502),snapshot:unavailable}),{valid:()=>false,bodyOf:v=>v.body,statusOf:v=>v.snapshot,
+    pollMs:1000,sleep:async()=>{observationClock+=2000;}})),/recovery_budget/);
+  assert(observationClock-start>=15000&&observationClock-start<20000,'disconnected or erroneous snapshots do not extend a cached healthy body');
+ }
+ const foreign={autopilot_status:{faculties:{movement:{owner:'fleetscript:other',expires_in_ms:60000}}}};
+ await assert.rejects(withIslandObservationDeadline(heldCtx,observationClock+60000,()=>observeIslandTraveller(heldCtx,
+  async()=>({body:{hp:null},snapshot:foreign}),{bodyOf:v=>v.body,statusOf:v=>v.snapshot})),/health_unreadable/);
+ const cancelledStatus={...heldStatus,movement:{last_cancel:{at:101,by:{source:'operator'},by_label:'operator:new-order'}}};
+ await assert.rejects(withIslandObservationDeadline(heldCtx,observationClock+60000,()=>observeIslandTraveller(heldCtx,
+  async()=>({body:{hp:null},snapshot:cancelledStatus}),{bodyOf:v=>v.body,statusOf:v=>v.snapshot})),/cancelled_by_operator/);
+}finally{Date.now=realObservationNow;}
 let reconnectReads=0;
 const reconnectCtx={agent:'fixture',call:async name=>name==='look'?(++reconnectReads<3?{hp:null}:look(2500,13)):{movement:{last_preempted:{by:{source:'keeper'},preempted:{to:2501,ordered_by:'our-order'}}}}};
 assert.equal((await readIslandJourney(reconnectCtx,{to:2501,orderedBy:'our-order',pollMs:0})).hp.value,13);
