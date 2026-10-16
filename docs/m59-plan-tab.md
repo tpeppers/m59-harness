@@ -211,6 +211,31 @@ asked for each look and swallows the answers to the keeper's. The keeper still r
 A plan proxy started before this change has no attach port. Restart it (close it, then
 press L again) or the desk will say the keeper cannot drive.
 
+## Known problems, to fix later (2026-10-16)
+
+- **Two desks can answer one client.** The single-desk guard is a heartbeat per *substrate*
+  (`<substrate>/plan-desk.json`), but every desk writes replies into the same client folder
+  (`substrate/client-context/plan/`). A terminal started without `M59_PLAN_SUBSTRATE` started
+  a trunk-substrate desk beside the prod-deploy one already running. Both then handled each
+  request: the reply file was rewritten twice a second, and a Full Auto courier tick could run
+  twice. The fix: make the guard (and `m59-tui.mjs ensurePlanDesk`) key on the client folder,
+  not the substrate, and say which substrate the running desk serves. A desk pass costs about
+  8 ms, so this is a correctness problem, not a load problem.
+- **The terminal's desk uses the wrong substrate.** Without `M59_PLAN_SUBSTRATE`, L's desk reads
+  the trunk's `substrate/`, while the prod fleet's loops (and the courier's request files) live
+  in the prod-deploy checkout's.
+- **A spectated logoff that is meant to stay off is cut to 20 s.** `AWAY_MAX_MS` in
+  `m59-proxy.mjs` caps it, but a farm-buff "wait it out" asks for up to 60 s. Raising the cap
+  needs a live check of how long the server lets a connection sit on the character menu.
+- **The client's `table_lookup` crash** (`meridian.exe+0x44095`) is not investigated.
+- **The roster copy is still in the public history** (commit `853af8c1`), waiting on a decision
+  to rewrite it.
+
+The machine-wide slowdown while the dev client ran was the client, not the desk: performance
+mode (`gpuefficiency=false`) presented up to 120 uncapped frames a second, focused or not.
+Fixed in the client fork (`d9d78a6e`): it now presents on vblank and draws at most 30 fps
+when the window isn't focused or is minimized.
+
 ## Files
 
 | file | side | what |
