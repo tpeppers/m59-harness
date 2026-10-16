@@ -44,6 +44,7 @@ import { parseRoomContents, objId } from './m59-parse.mjs';
 import { gateRefusal, newGate, gateLive, gateDrops, gateView } from './m59-proxy-gate.mjs';
 import { ProxyTrade } from './m59-proxy-trade.mjs';
 import { serveAttach } from './m59-proxy-attach.mjs';
+import { OpcodeToken } from './m59-proxy-token.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
 
@@ -185,6 +186,10 @@ export class ProxySession extends EventEmitter {
     this.inGame = false;
     this.lastEpoch = 0;
     this.stats = { fromClient: 0, fromServer: 0, injected: 0, rewritten: 0 };
+    // THE SERVER'S OPCODE TOKEN (m59-proxy-token.mjs): one copy decodes what the server sent, the
+    // other encodes what the client receives. Identical until we forge or swallow a message.
+    this.fromServerToken = new OpcodeToken();
+    this.toClientToken = new OpcodeToken();
     // Where a human's own move requests get written down. One file per proxy run, because
     // a walk is a session and mixing two people's sessions into one trace would make the
     // step-to-step comparisons below meaningless.
@@ -436,10 +441,14 @@ export class ProxySession extends EventEmitter {
     this.emit('client-packet', payload);
   }
 
-  fromServer(payload, epoch, whole) {
+  fromServer(wire, epoch, whole) {
     this.stats.fromServer++;
-    // An attached keeper (m59-proxy-attach.mjs, spectate) sees every frame, swallowed or not.
-    this.emit('server-frame', whole);
+    // Everything below reads the PLAIN opcode. A real client pings, so its stream is token-scrambled
+    // (m59-proxy-token.mjs) and reading the wire byte misidentified BP_PLAYER, room contents, trades.
+    const payload = (this.fromServerToken ??= new OpcodeToken()).decode(wire);
+    // An attached keeper (m59-proxy-attach.mjs, spectate) sees every frame, swallowed or not, PLAIN:
+    // its client never pings and reads token 0.
+    this.emit('server-frame', payload[0] === wire[0] ? whole : plainFrame(payload, epoch));
     this.emit('received-server-packet', payload);
     // The client keeps the epoch byte of the LAST server message and stamps it on
     // everything it sends (clientd3d/com.c:409-410). So anything we forge towards the
@@ -565,8 +574,10 @@ export class ProxySession extends EventEmitter {
     }
     // Server -> client: forward the ORIGINAL bytes. Rebuilding them can only
     // introduce differences, and the client is entitled to exactly what the server
-    // said.
-    this.client.write(whole);
+    // said. Re-encoded only when a forged or swallowed message has moved the client's token
+    // walk off the server's; then the bytes differ and the meaning does not.
+    const out = (this.toClientToken ??= new OpcodeToken()).encode(payload);
+    this.client.write(out[0] === wire[0] ? whole : plainFrame(out, epoch));
     this.emit('server-packet', payload);
   }
 
@@ -586,7 +597,7 @@ export class ProxySession extends EventEmitter {
   // check is compiled out entirely — `#if 0` around clientd3d/com.c:433. We compute
   // the CRC correctly anyway (it costs nothing and the #if 0 could come back).
   toClient(payload) {
-    this.client.write(plainFrame(Buffer.from(payload), this.serverEpoch));
+    this.client.write(plainFrame((this.toClientToken ??= new OpcodeToken()).encode(Buffer.from(payload)), this.serverEpoch));
     this.stats.forged++;
   }
 

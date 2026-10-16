@@ -5,6 +5,8 @@
 # server's characters, rewritten by a running keeper. Same class as the sheets.
 /substrate/keeper-*.json
 /substrate/keeper-*.log
+# Spectate keepers: a password-free roster copy (names every account and character), heartbeats, logs.
+/substrate/spectate/
 
 # The client's own art: 5,355 PNGs decoded from its .bgf files, 40 MB of it, and
 # not ours to redistribute. Regenerate from any local client with
