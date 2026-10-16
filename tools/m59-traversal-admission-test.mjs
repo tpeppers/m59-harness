@@ -206,7 +206,15 @@ try{
   }});
   assert(existsSync(join(dir,'.spot-claims')),'ordinary CLI defaults scope the shared store to the actual roster directory');
  }
- console.log('Traversal admission checks passed: parallel callers, reserved entry, confirmed exit, stopped body, cancellation, a crashed driver and default roster scoping.');
+ {
+  let clock=Date.now(),reserved=false;const deadline=clock+100;
+  await assert.rejects(withTraversalAdmission({agent:'late',state:{}},{room,deadline,now:()=>clock,
+   store:{reserve:()=>{reserved=true;throw Error('expired admission must not reserve');}},
+   read:async()=>{clock=deadline+1;return {agent:'late',room:2501,confirmed:true,at:clock};},
+   run:async()=>{throw Error('expired admission must not run');}}),/traversal_admission_queue_budget/);
+  assert.equal(reserved,false,'a confirmation arriving after the queue deadline cannot grant admission');
+ }
+ console.log('Traversal admission checks passed: parallel callers, reserved entry, confirmed exit, stopped body, cancellation, a crashed driver, late confirmation and default roster scoping.');
 }finally{
  const target=resolve(dir),base=resolve(tmpdir())+sep;
  if(!target.startsWith(base))throw Error('scratch cleanup escaped temporary directory');
