@@ -93,7 +93,9 @@ import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameN
          sipVerdict, SIP_TOOK, SIP_REFUSED_PVP, dutyEligible, passTo, draftAlternate, carriesCup } from './m59-chalice.mjs';
 import { rideChaliceNow } from './m59-chalice-ride.mjs';
 import * as wandDuty from './m59-wand-duty.mjs';
-import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget, touchedCreatures } from './m59-deskpractice.mjs';
+import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget, touchedCreatures, spellCost } from './m59-deskpractice.mjs';
+import { claimGift, releaseGift } from './m59-interest-store.mjs';
+import { normalizeShare, planGift, shortfallTargets, SHORTFALL_TTL_MS } from './m59-sharing.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -2860,9 +2862,45 @@ export class Autopilot {
       // not for a smaller floor than the keeper already runs on.
       for (const [k, n] of mine.needs) if (!needs.has(k) && n > 0) needs.set(k, n);
     }
+    // AND A SPELL THIS CHARACTER HAS BEEN CASTING THAT IT CAN NO LONGER AFFORD ONCE MORE. Running out
+    // is usually the last cast spending the last reagent, not a refusal: a desk asked for nothing
+    // while it has no emerald is never told "you don't have the reagents", because nobody asks it to
+    // cast (DUM's desk rule passes on an empty desk). So the spells this client has sent are kept,
+    // and one that can no longer be paid for raises the same shortfall the refusal would.
+    const sent = c.lastCastSent;
+    if (sent?.name) (this._castSpells ??= new Map()).set(String(sent.name).toLowerCase(), sent.at);
+    for (const [spell, at] of [...(this._castSpells ?? [])]) {
+      if (Date.now() - at > SHORTFALL_TTL_MS) { this._castSpells.delete(spell); continue; }
+      const cost = spellCost(spell);
+      if (!cost?.reagents?.length) continue;
+      if (!cost.reagents.some(([item, n]) => this.countOfKind(item) < n)) continue;
+      const fresh = cost.reagents.some(([item]) => !this._reagentShortfall?.has(String(item).toLowerCase()));
+      this._reagentShortfall = shortfallTargets(cost, this._reagentShortfall ?? new Map());
+      if (fresh) {
+        this.note('cannot afford another cast: asking the fleet', { spell, reagents: cost.reagents });
+        try { this.ledgerEvent('reagent_shortfall', { spell, by: 'spent', room: this.s.world?.room?.num ?? null }); } catch {}
+      }
+    }
+    // AND WHAT THIS CHARACTER RAN OUT OF IN THE MIDDLE OF A CAST (noteReagentRefusal). A target, not
+    // a moment: it stands until the pack holds it, or until nobody has answered for SHORTFALL_TTL_MS.
+    if (this._reagentShortfall?.size) {
+      const now = Date.now();
+      for (const [kind, s] of [...this._reagentShortfall]) {
+        const have = this.countOfKind(kind);
+        if (have >= s.target || now - s.since > SHORTFALL_TTL_MS) { this._reagentShortfall.delete(kind); continue; }
+        needs.set(kind, Math.max(needs.get(kind) ?? 0, s.target - have));
+        if (!wants.includes(kind)) wants.push(kind);
+        spare.delete(kind);
+      }
+    }
+    this._needsNow = needs;
     skills.interest.declare(this.name ?? this.s.name, { wants, needs, spare,
       room: this.s.world?.room?.num ?? null, character: c.me?.name ?? null,
-      farming: this.mode === 'farm' && this.running && !this.inert });
+      farming: this.mode === 'farm' && this.running && !this.inert,
+      // A SERVICE CHARACTER IS WORTH A WALK (m59-sharing.mjs): a desk taking donations, a chalice
+      // holder, a posted room caster.
+      service: !!(this.policy.acceptDonations?.enabled !== false && this.policy.acceptDonations)
+        || !!this.chaliceCfg || !!this.policy.roomEnchant });
     // Kept for the party register too. The fleet-wide board is a broadcast — anyone may
     // read it — while a partner needs the same list addressed to it specifically, so
     // that "one of us is short" can become "both of us go to town" rather than each
@@ -16677,6 +16715,12 @@ export class Autopilot {
     // And post what we need and what we can spare, for the same reason: the sell and
     // drop paths read the aggregate, and a stale board sells somebody else's herbs.
     this.declareInterest();
+    // TAKE WHAT WE ASKED FOR, AND HAND OVER WHAT OTHERS ASKED FOR  in every mode, with no policy
+    // (m59-sharing.mjs). Receiving costs one reply when a fleetmate's offer is waiting; giving looks
+    // at the board at most once per `shareSpare.every_ms` and only when this body is quiet.
+    await this.acceptNeededGift().catch(error => this.note('gift accept failed', { why: error.message }));
+    if (await this.shareSpareReagents().catch(error => {
+      this.note('sharing pass failed', { why: error.message }); return false; })) return;
     // POST OUR SITUATION FOR OUR PARTNER, every pass and before any decision that reads
     // theirs. A partner acts on health, room and whether we are behind a wall; all
     // three are read from the register rather than asked for over the wire, so a
@@ -24219,8 +24263,8 @@ export class Autopilot {
     return { shed: true, dropped: name };
   }
 
-  async acceptDonations() {
-    const cfg = this.policy.acceptDonations;
+  async acceptDonations(cfgIn = null) {
+    const cfg = cfgIn ?? this.policy.acceptDonations;
     if (!cfg || cfg.enabled === false) return;
     const c = this.s?.client;
     const t = c?.trade;
@@ -24230,6 +24274,9 @@ export class Autopilot {
 
     const takes = [].concat(cfg.reagents ?? Autopilot.DONATION_TAKES)
       .map(x => String(x).trim().toLowerCase()).filter(Boolean);
+    // WHATEVER THIS CHARACTER NEEDS RIGHT NOW is always on the take list (m59-sharing.mjs): a desk
+    // configured for emeralds that runs out of herbs takes the herbs a fleetmate brings.
+    for (const k of (this._needsNow?.keys?.() ?? [])) if (!takes.includes(k)) takes.push(String(k).toLowerCase());
     // CHALICE FARMING PASSES THROUGH HERE BOTH WAYS: the cup itself, handed between the
     // holder and the alternate, and the traveller's tip. Refusing either would cancel a
     // hand-off the fleet arranged, with every log on both sides reading "declined".
@@ -24239,6 +24286,9 @@ export class Autopilot {
     const offered = (t.theirs || []).map(i => String(i.name || '').toLowerCase());
 
     const refuse = async (why) => {
+      // THE DEFAULT PATH NEVER CANCELS: an offer it does not recognise may belong to another flow
+      // (a supply exchange, a person trading by hand), so it is left exactly as it was.
+      if (cfg._default) return { accepted: false, why, left_open: true };
       await this.s.pacer.submit('act', () => c.cancelOffer()).catch(() => {});
       this.note('declined a trade', { from: t.withName, offered: t.theirs, why });
       return { accepted: false, why };
@@ -24280,6 +24330,75 @@ export class Autopilot {
          + 'opportunity, so the donor never has to coordinate a moment with us' });
     this.progress(`took reagents from ${t.withName}`);
     return { accepted: true, from: t.withName, took: t.theirs };
+  }
+
+  // ACCEPT WHAT WE NEED, WITH NO POLICY. A fleetmate's offer made only of things this keeper has on
+  // the board as a need is taken; anything else is left open (acceptDonations, cfg._default).
+  async acceptNeededGift() {
+    const t = this.s?.client?.trade;
+    if (!t || t.role !== 'recipient') return null;
+    if (this.policy.acceptDonations) return this.acceptDonations();
+    const needs = [...(this._needsNow?.keys?.() ?? [])].map(k => String(k).toLowerCase());
+    if (!needs.length) return null;
+    return this.acceptDonations({ enabled: true, reagents: needs, drop_for_space: [], _default: true });
+  }
+
+  // HAND SPARE REAGENTS TO WHOEVER NEARBY HAS RUN OUT. On by default; `shareSpare: false` turns it off.
+  // Spare is what this keeper would sell: above its own floor and its own needs, and not on its
+  // sale-protected list. The decision is planGift (m59-sharing.mjs); this half claims, walks, offers
+  // and counts what actually left the pack. Returns true when it walked or traded this pass.
+  async shareSpareReagents() {
+    const cfg = normalizeShare(this.policy.shareSpare);
+    if (!cfg.enabled) return false;
+    const now = Date.now();
+    if (now - (this._shareAt ?? 0) < cfg.every_ms) return false;
+    this._shareAt = now;
+    const c = this.s?.client;
+    if (!c || !this.running || this.inert || c.trade) return false;
+    if (this.facultyHeld('economy')) return false;           // a bot holds trading
+    const v = c.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.8) return false;
+    if ((this.frozenUntil && now < this.frozenUntil) || this.threat?.()?.landing > 0) return false;
+    const here = this.s.world?.room?.num;
+    if (here == null) return false;
+    const walkOk = cfg.walk_for !== 'none' && cfg.radius > 0 && !this.facultyHeld('movement');
+    const rooms = walkOk ? this.deliveryNeighbourhood(here, { radius_rooms: cfg.radius }) : new Map([[Number(here), 0]]);
+    const me = this.name ?? this.s.name;
+    const demands = skills.interest.demandsNear(rooms, { except: me, farmingOnly: false, maxAgeMs: 120_000 });
+    if (!demands.length) return false;
+    const kinds = [...new Set(demands.flatMap(d => Object.keys(d.needs)))];
+    const have = Object.fromEntries(kinds.map(k => [k, this.countOfKind(k)]));
+    const keep = Object.fromEntries(kinds.map(k => [k, this.ownFloorFor(k) + (this._needsNow?.get?.(k) ?? 0)]));
+    this._shareBackoff ??= new Map();
+    const { gift } = planGift({ demands, have, keep, protectedNames: this.saleProtectedNames(), here,
+      cfg: walkOk ? cfg : { ...cfg, walk_for: 'none' }, backoff: this._shareBackoff, now });
+    if (!gift) return false;
+    const claimed = Object.keys(gift.give).filter(k => claimGift(me, gift.needer, k));
+    if (!claimed.length) return false;
+    const backoff = (why) => { this._shareBackoff.set(gift.needer, Date.now() + cfg.backoff_ms);
+      this.note('spare reagents not delivered', { to: gift.character, room: gift.room, why }); };
+    try {
+      if (gift.room !== here) {
+        this.doing = 'travelling';
+        const walked = await this.travel(gift.room, { origin: keeperOrigin('share_spare'), maxHops: cfg.radius })
+          .catch(error => ({ arrived: false, reason: error.message }));
+        if (!walked?.arrived) { backoff(walked?.reason ?? 'the walk did not arrive'); return true; }
+      }
+      const wanted = Object.fromEntries(claimed.map(k => [k, gift.give[k]]));
+      const r = await this.giveFarmReagents({ character: gift.character }, wanted)
+        .catch(error => ({ gave: {}, why: error.message }));
+      if (!Object.keys(r?.gave ?? {}).length) { backoff(r?.why ?? 'nothing left the pack'); return true; }
+      this.tally.gifts_given = (this.tally.gifts_given || 0) + 1;
+      this.note('gave spare reagents to an ally', { to: gift.character, room: gift.room, gave: r.gave,
+        service: gift.service, why: 'they ran short and this pack held them beyond its own needs; '
+          + 'a reagent handed to a crewmate is not bought back at the spread' });
+      try { this.ledgerEvent('gift', { to: gift.needer, character: gift.character, gave: r.gave,
+        room: this.s.world?.room?.num ?? null, walked: gift.room !== here }); } catch {}
+      this.progress(`gave ${Object.entries(r.gave).map(([k, n]) => n + ' ' + k).join(', ')} to ${gift.character}`);
+      return true;
+    } finally {
+      for (const k of claimed) releaseGift(me, gift.needer, k);
+    }
   }
 
   // BUFF WHOEVER ELSE IS STANDING HERE. A caster's second job.
@@ -31449,6 +31568,25 @@ export class Autopilot {
   // A CURSE WAS LIFTED. `item` is the name the server gave, or null for the cast's own line (which
   // names nothing). Recorded as `uncursed` so a release can be audited; the item's own cursed mark
   // is cleared so the ranking may consider it again once it is revealed.
+  // RAN OUT IN THE MIDDLE OF A CAST: "You don't have the reagents to cast <spell>!" (spell.kod:52).
+  // The first time is the trigger (operator, 2026-10-16): the spell's reagents, from the kod
+  // catalogue, go on the fleet board as a need, and every keeper nearby with them spare hands them
+  // over (shareSpareReagents). Nothing has to be configured on the character that ran dry.
+  noteReagentRefusal(spell) {
+    const cost = spellCost(spell);
+    if (!cost?.reagents?.length) {
+      this.note('ran out of reagents for a spell the catalogue does not cost', { spell });
+      return null;
+    }
+    this._reagentShortfall = shortfallTargets(cost, this._reagentShortfall ?? new Map());
+    const asked = Object.fromEntries([...this._reagentShortfall].map(([k, s]) => [k, s.target]));
+    this.note('ran out of reagents: asking the fleet', { spell, reagents: cost.reagents, targets: asked,
+      why: 'a cast refused for reagents is a need the fleet can answer; anyone nearby with them spare will hand them over' });
+    try { this.ledgerEvent('reagent_shortfall', { spell, targets: asked, room: this.s.world?.room?.num ?? null }); } catch {}
+    try { this.declareInterest(); } catch {}
+    return asked;
+  }
+
   noteUncursed(item, said = null) {
     const c = this.s.client;
     if (item && c?._cursedItemIds) c._cursedItemIds.delete(`name:${item}`);

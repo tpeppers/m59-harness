@@ -17,6 +17,7 @@
 // caller did not ask for. A skill that gives up says why, at which stage, and what
 // the state was when it stopped.
 
+import { writeDeclaration, forgetDeclaration, readDeclarations } from './m59-interest-store.mjs';
 import { isSpared, sparePatternsOf, provokeExempt } from './m59-spare.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isEnemyHit } from './m59-combatlog.mjs';
@@ -1794,19 +1795,53 @@ export const itemIsProtected = (name, wanted = []) =>
 export const interest = {
   byAgent: new Map(),          // agent -> wants, exact needs, spare, room and freshness
 
+  // `service`: this character serves others from a post (a desk, a room caster), so a gift to it
+  // is worth a short walk. See m59-sharing.mjs.
   declare(agent, { wants = [], needs = new Map(), spare = new Map(), room = null,
-                   character = null, farming = false } = {}) {
-    this.byAgent.set(agent, {
+                   character = null, farming = false, service = false } = {}) {
+    const rec = {
       wants: new Set(wants.map(w => String(w).toLowerCase())),
       needs: needs instanceof Map ? needs : new Map(Object.entries(needs)),
       spare: spare instanceof Map ? spare : new Map(Object.entries(spare)),
       room: room == null ? null : Number(room),
       character: character == null ? null : String(character),
       farming: !!farming,
+      service: !!service,
       at: Date.now(),
-    });
+    };
+    this.byAgent.set(agent, rec);
+    // AND TO EVERY OTHER KEEPER PROCESS. The Map above is this process only; see
+    // m59-interest-store.mjs for what reading only it used to cost.
+    // Written when it CHANGES, or every 20s as a heartbeat: this runs every keeper pass, and readers
+    // drop anything older than a couple of minutes, so a once-a-second rewrite buys nothing.
+    const out = { ...rec, wants: [...rec.wants], needs: Object.fromEntries(rec.needs),
+                  spare: Object.fromEntries(rec.spare) };
+    const body = JSON.stringify({ ...out, at: 0 });
+    const last = (this._written ??= new Map()).get(agent);
+    if (!last || last.body !== body || rec.at - last.at >= 20_000) {
+      if (writeDeclaration(agent, out)) this._written.set(agent, { body, at: rec.at });
+    }
   },
-  forget(agent) { this.byAgent.delete(agent); },
+  forget(agent) { this.byAgent.delete(agent); forgetDeclaration(agent); },
+
+  // THE WHOLE FLEET'S BOARD: every other keeper's published declaration, with this process's own
+  // entries laid over the top (they are newer than anything on disk). Every reader below asks this
+  // rather than `byAgent`, which since the keeper-process split holds one character.
+  records() {
+    const out = new Map();
+    for (const r of readDeclarations()) {
+      out.set(String(r.agent), {
+        wants: new Set([].concat(r.wants ?? []).map(w => String(w).toLowerCase())),
+        needs: new Map(Object.entries(r.needs ?? {})),
+        spare: new Map(Object.entries(r.spare ?? {})),
+        room: r.room == null ? null : Number(r.room),
+        character: r.character == null ? null : String(r.character),
+        farming: !!r.farming, service: !!r.service, at: Number(r.at),
+      });
+    }
+    for (const [agent, rec] of this.byAgent) out.set(agent, rec);
+    return out;
+  },
 
   // Who wants a thing by this name — matched loosely, because the server hands us
   // display names ("herb", "elderberry") and callers think in kinds.
@@ -1814,7 +1849,7 @@ export const interest = {
     const n = String(name || '').toLowerCase();
     if (!n) return [];
     const out = [];
-    for (const [agent, rec] of this.byAgent) {
+    for (const [agent, rec] of this.records()) {
       if (agent === except) continue;
       for (const w of rec.wants) if (n.includes(w) || w.includes(n)) { out.push(agent); break; }
     }
@@ -1825,7 +1860,7 @@ export const interest = {
   // Who is carrying spare of a thing, most first. Used to pair a giver with a needer.
   holdersOf(kind) {
     const k = String(kind || '').toLowerCase();
-    return [...this.byAgent].filter(([, r]) => (r.spare.get(k) ?? 0) > 0)
+    return [...this.records()].filter(([, r]) => (r.spare.get(k) ?? 0) > 0)
       .map(([agent, r]) => ({ agent, count: r.spare.get(k) }))
       .sort((a, b) => b.count - a.count);
   },
@@ -1847,15 +1882,17 @@ export const interest = {
   // farmers crossing a room boundary between the poll and the arrival — and the old
   // behaviour reported that as "farmer left the room or is dead" and carried the goods
   // home. The neighbourhood is the unit that survives that.
-  demandsNear(rooms, { except = null, maxAgeMs = 90_000 } = {}) {
+  // `farmingOnly` keeps farm delivery to what it always meant (farmers out on a station); sharing
+  // asks with it off, because the desk that ran dry is exactly the character that is NOT farming.
+  demandsNear(rooms, { except = null, maxAgeMs = 90_000, farmingOnly = true } = {}) {
     const within = rooms instanceof Map ? rooms
       : new Map([...rooms].map(r => [Number(r), 0]));
     const now = Date.now();
-    return [...this.byAgent]
-      .filter(([agent, rec]) => agent !== except && rec.farming && rec.room != null &&
+    return [...this.records()]
+      .filter(([agent, rec]) => agent !== except && (rec.farming || !farmingOnly) && rec.room != null &&
         within.has(rec.room) && now - rec.at <= maxAgeMs)
       .map(([agent, rec]) => ({ agent, character: rec.character, room: rec.room,
-        hops: within.get(rec.room) ?? 0,
+        hops: within.get(rec.room) ?? 0, service: !!rec.service,
         needs: Object.fromEntries([...rec.needs].map(([kind, amount]) =>
           [String(kind).toLowerCase(), Math.max(0, Math.floor(Number(amount) || 0))])), at: rec.at }))
       .filter(rec => Object.values(rec.needs).some(amount => amount > 0))
@@ -1863,7 +1900,7 @@ export const interest = {
   },
 
   board() {
-    return [...this.byAgent].map(([agent, r]) => ({
+    return [...this.records()].map(([agent, r]) => ({
       agent, character: r.character, room: r.room, farming: r.farming,
       wants: [...r.wants], needs: Object.fromEntries(r.needs), spare: Object.fromEntries(r.spare),
     }));
