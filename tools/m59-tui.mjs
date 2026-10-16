@@ -615,7 +615,7 @@ async function ensurePlanProxy(host, port) {
   if (await listeningOn(PLAN_PROXY_PORT)) return { started: false, ok: true };
   const child = spawn(process.execPath,
     [join(REPO, 'tools', 'm59-proxy.mjs'), '--listen', String(PLAN_PROXY_PORT), '--bind', '127.0.0.1',
-     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--attach', String(PLAN_ATTACH_PORT), '--fleet-state', STATE_FILE],
+     '--server', `${host}:${port}`, '--observe', '--gate-control', String(PLAN_GATE_PORT), '--attach', String(PLAN_ATTACH_PORT), '--fleet-state', STATE_FILE, '--fleet', FLEET === '' ? '-' : FLEET],
     { stdio: 'ignore', detached: true, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) { if (await listeningOn(PLAN_PROXY_PORT, 300)) return { started: true, ok: true }; await new Promise(r => setTimeout(r, 250)); }
