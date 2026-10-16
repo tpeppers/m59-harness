@@ -60,6 +60,10 @@ export const script = { name: 'zheng-he-lap', describe: 'test lap', params: { ag
   const lines = v.trimEnd().split('\n');
   ok('the view header says who has the controls', lines[0] === 'M59PLAN\t1\t7\t1\t5\tkeeper\ts%20t');
   ok('a tab inside a title cannot break the row', lines[1].split('\t').length === 7 && lines[1].includes('T%20ab'));
+  const seven = renderPlanView({ pid: 1, ack: 0, entries: [{ id: 'fs.stock-desk', title: 'S',
+    args: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(id => ({ id, type: 'text' })) }] }, 7);
+  ok('a row never carries more arguments than the client accepts (a seventh dropped the whole reply)',
+    seven.split('\n').filter(l => l.startsWith('A\t')).length === 6);
   ok('args and options follow their entry', lines[2].startsWith('A\ta.b\tx\tchoice') && lines[3].startsWith('O\ta.b\tx\tv\tL'));
   ok('results ride at the end', lines.at(-2) === 'M\t5\t1\tdone' && lines.at(-1) === 'END');
 }
