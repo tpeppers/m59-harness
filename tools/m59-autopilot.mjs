@@ -34,6 +34,7 @@ import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
 import { isSpared, grantProvoke, endProvoke } from './m59-spare.mjs';
 import * as skills from './m59-skills.mjs';
+import {stalePullReason} from './m59-quarry-identity.mjs';
 import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
@@ -23463,10 +23464,16 @@ export class Autopilot {
       // prey in the room, three orc corpses beside the pull. Drop it here, where the id is read.
       if (this.pendingPull?.target_id != null) {
         const pulled = c.room.objects.get(this.pendingPull.target_id);
-        if (!pulled || !(pulled.flags & OF.ATTACKABLE)) {
+        const pulledName = pulled ? c.rsc.get(pulled.nameRsc) : null;
+        const stale = stalePullReason(this.pendingPull, {
+          room: room?.num, object: pulled, name: pulledName,
+          attackable: !!(pulled?.flags & OF.ATTACKABLE), player: !!(pulled?.flags & OF.PLAYER),
+          matches: !!pulledName && this.huntMatch(this.pendingPull.target)(pulledName),
+        });
+        if (stale) {
           this.note('the pulled quarry is gone — choosing again', {
             target: this.pendingPull.target, target_id: this.pendingPull.target_id,
-            why: pulled ? 'it is no longer attackable (dead)' : 'it is no longer in the room',
+            actual: pulledName, why: stale,
             note: 'a vanished quarry says nothing about the wall, so the square is not charged' });
           this.pendingPull = null;
         }
@@ -28342,7 +28349,7 @@ export class Autopilot {
     // already records as leaving Camilla and Floyd standing at Jasper with sixteen stacks
     // and nobody who would pay for any of it.
     const reag = this.reagentCount();
-    const canCook = reag.elderberry >= 2 && reag.herbs >= 2;
+    const canCook = this.foodCookingAllowed?.() !== false && reag.elderberry >= 2 && reag.herbs >= 2;
     // ENOUGH TO BUY SOMETHING AFTER THE FLOAT IS TAKEN OUT, AND NOT MORE OFTEN THAN THE
     // SHELF CAN CHANGE.
     //
@@ -28641,7 +28648,7 @@ export class Autopilot {
         const needs = hungerNeedsTown(this.wantedFightFloor(), c?.vitals?.()?.vigor?.scale_max ?? VIGOR_CAP);
         if (!needs) return { wanted: false, why: 'its fight floor is one resting reaches' };
         if (this.larder(c).length) return { wanted: false, why: 'it has food now' };
-        if (reag.elderberry >= 2 && reag.herbs >= 2) return { wanted: false, why: 'it can cook now' };
+        if (this.foodCookingAllowed?.() !== false && reag.elderberry >= 2 && reag.herbs >= 2) return { wanted: false, why: 'it can cook now' };
         return { wanted: true };
       }
       case 'bank': {
@@ -30211,7 +30218,7 @@ export class Autopilot {
                                    'this is a standalone pass' };
     const cfg = this.policy.guildWants;
     if (!cfg?.enabled) return null;
-    const plan = guildPlan();
+    const plan = this.guildContributionPlan ? this.guildContributionPlan(guildPlan()) : guildPlan();
     if (!plan) return null;                       // no plan is not an empty plan
     const store = new StorageCache();
     const chests = store.allChests(), rent = store.readRent();
