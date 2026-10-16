@@ -1575,6 +1575,15 @@ class Session {
   // WHAT A REMOVE CURSE RELEASED (operator, 2026-09-27: uncursing is free to use as often as
   // desired, "but keepers should note what gets released"). The lines go only to the character
   // that was freed, so this is the one place they can be recorded; the keeper writes the ledger row.
+  // A WEAPON HANDED BACK (BP_INVENTORY_ADD, `got`). Only the caster hears that a weapon was dedicated,
+  // so the owner's keeper is told the ids that came back and re-reads any it had already read.
+  noteWeaponArrived(ev) {
+    const ids = (ev?.items ?? []).map(s => /\(id (-?\d+)\)/.exec(String(s))?.[1]).filter(Boolean).map(Number);
+    if (!ids.length) return;
+    const keeper = autopilotIfAny(this.name);
+    if (keeper?.s === this) keeper.noteWeaponArrived?.(ids);
+  }
+
   noteUncursed(ev) {
     const text = ev?.text;
     const item = unCursedFromSaid(text);
@@ -2434,6 +2443,8 @@ class Session {
       // server, whatever took it; there is nothing to poll and nothing to ask afterwards,
       // because by then it is gone. See noteLeftPack.
       if (ev.kind === 'left') this.noteLeftPack(ev);
+      // AND AN ITEM ARRIVING: a weapon handed back may have been dedicated while it was away.
+      if (ev.kind === 'got') this.noteWeaponArrived(ev);
       // THE SERVER'S OWN SAVE, WRITTEN DOWN AS A BOUNDARY. BP_WAIT/BP_UNWAIT bracket the
       // pause (user.kod:2154, :2182), and m59-savelog.mjs uses these rows to partition the
       // ledger into windows — so what we record and what the checkpoint holds describe the

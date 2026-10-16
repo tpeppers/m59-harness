@@ -152,6 +152,18 @@ export class WeaponMagicBook {
     return hit;
   }
 
+  /**
+   * FORGET what was learned about these ids, so the next sweep looks again. For a weapon coming BACK:
+   * a dedication cast by somebody else is announced only to the caster, and the hand-back keeps the
+   * id, so the owner's old "mundane" reading survived for its whole 45 minutes unless a sweep happened
+   * to run while the weapon was away. Returns the ids that had a reading.
+   */
+  forget(ids = []) {
+    const hit = [];
+    for (const id of ids) if (this.readings.delete(Number(id))) hit.push(Number(id));
+    return hit;
+  }
+
   /** Drop readings for ids no longer carried, and for ids now wearing a different name. */
   reconcile(items = []) {
     const live = new Map(items.filter(i => i?.id != null).map(i => [Number(i.id), norm(i.name)]));

@@ -31622,7 +31622,22 @@ export class Autopilot {
 
   // THE OTHER DIRECTION: "Your <name> is now dedicated to Kraanan." (name given) or "This weapon is
   // already dedicated to Kraanan." (null). Re-open the readings it could be about and look again now,
-  // so a fresh dedication — or one the book had filed as mundane — reaches the swap within a sweep.
+  // so a fresh dedication ï¿½ or one the book had filed as mundane ï¿½ reaches the swap within a sweep.
+  // A WEAPON HANDED BACK: forget its reading and look again now. The troll crew's dedications are cast
+  // by a fleet-mate, who alone hears "Your <name> is now dedicated to Kraanan", and the weapon comes back
+  // under the same id -- so the owner's book went on calling it mundane. East Jasper, 2026-10-16
+  // 22:07-22:13: three of Scooter's long swords dedicated by Pepe and by himself, and all still read
+  // mundane, so DUM held him at the stage room and dedicated the next spare.
+  noteWeaponArrived(ids = []) {
+    const forgotten = this.weaponMagicBook().forget(ids);
+    if (!forgotten.length) return;
+    this._weaponMagicAt = 0;
+    this._magicSwapDue = true;
+    this.note('WEAPON BACK IN THE PACK', { ids: forgotten,
+      why: 'a weapon returned under an id the book had read; somebody may have dedicated it, so read it again' });
+    this.sweepWeaponMagic().catch(() => {});
+  }
+
   noteDedication(name = null) {
     const reopened = this.weaponMagicBook().reopen(name);
     this._weaponMagicAt = 0;
