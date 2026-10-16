@@ -27,7 +27,7 @@ const KeeperProxy=Function('keeperAction','return class KeeperProxy {need(){retu
 const proxy=new KeeperProxy();proxy.client=c;
 const b=broker.indexOf("name: 'inventory_drop'"),run=broker.indexOf('run: async (a,caller)=>{',b),finish=broker.indexOf('\n    },',run);
 const handler=Function('session','KeeperProxy','COMMANDER_FLEET','process','controlToken','requireControlSession','exactRosterAuthority',
-  'requireRtsRoom','exactDrop','executeExactDrop','return async(a,caller)=>{'+broker.slice(run+'run: async (a,caller)=>{'.length,finish)+'}')( 
+  'requireRtsRoom','exactDrop','executeExactDrop','return async(a,caller)=>{'+broker.slice(run+'run: async (a,caller)=>{'.length,finish)+'}')(
   ()=>proxy,KeeperProxy,'fixture',{pid:77},x=>x,(_s,caller)=>{assert.equal(caller.local,true);if(!owned)throw Error('lease lost');return {lease:{record:{owner:'fixture-owner'}}};},
   (_s,row)=>assert.equal(row.character,'Fixture'),(_s,room)=>{assert.equal(room,39);return {room_object_id:222};},exactDrop,executeExactDrop);
 const args={fleet:'fixture',broker_pid:77,agent:'t1',character:'Fixture',room:39,player_id:17,item:31,expected_item_name:'herb',

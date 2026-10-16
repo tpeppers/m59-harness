@@ -78,6 +78,9 @@ export async function executeExactDrop(session,args,{authority,now=Date.now,wait
     sent=true;
     return live.drop([current.wire]);
   });
+  // Pacer may suppress an action during concentration without invoking it.
+  // That is not a sent request, even if an unrelated inventory push arrives.
+  need(sent,'drop was held; no drop packet sent');
   // Wait only for pushed observations. No inventory/equipment request is sent.
   try {await (wait?wait(c,before):c.waitFor({since:before,kinds:['inventory','message'],timeoutMs:2000}));}catch{}
   const current=c.inventory?.find(i=>i.id===args.item),remaining=args.expected_amount-args.amount;

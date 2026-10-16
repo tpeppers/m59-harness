@@ -55,6 +55,9 @@ try {
   c=make();const unconfirmed=await executeExactDrop({pacer:{submit:async(_,fn)=>fn()}},args,{authority:()=>c,now:()=>now,wait:async()=>{}});
   assert.equal(unconfirmed.confirmed,false);assert.equal(c.packets.length,1);
   c=make();await assert.rejects(executeExactDrop({job:{done:false}},args,{authority:()=>c,now:()=>now}));assert.equal(c.packets.length,0);
+  c=make();await assert.rejects(executeExactDrop({pacer:{submit:async()=>({held:true})}},args,
+    {authority:()=>c,now:()=>now,wait:async()=>{throw Error('must not await an unsent packet');}}),/no drop packet sent/);
+  assert.equal(c.packets.length,0);
   c=make();const full=await executeExactDrop({pacer:{submit:async(_,fn)=>fn()}},{...args,amount:17},
     {authority:()=>c,now:()=>now,wait:async()=>{c.inventory=[];}});assert.equal(full.confirmed,true);
   c=make();let bound=true;const disconnected=await executeExactDrop({pacer:{submit:async(_,fn)=>fn()}},{...args,amount:17},
