@@ -30,18 +30,22 @@ export async function sendIntent(body,{dir=INTENT_DIR(),viewer=true,sessionPath}
   const h=await fetch(base+'/health',{signal:AbortSignal.timeout(2000)}).then(r=>r.json());
   need(h.kind===service.kind&&h.pid===service.pid&&h.fleet===body.fleet&&h.broker_pid===body.broker_pid&&
     !h.error&&Date.now()-h.at<=6000,'inventory service is not current');
-  const equip=body.state==='equip';
+  const equip=body.state==='equip',drop=body.state==='drop';
   need(!equip||(h.equip_schema===1&&body.source==='operator'&&body.location==='pack'),'invalid equip request');
-  const response=await fetch(base+(equip?'/equip':'/intent'),{method:'POST',headers:{'Content-Type':'application/json',
-    'X-M59-Intent-Token':service.token},body:JSON.stringify(body),signal:AbortSignal.timeout(equip?15000:3000)});
+  if(drop&&!(h.drop_schema===1&&h.drop_available===true)){const e=Error('Drop backend is not ready');e.code='DROP_UNAVAILABLE';throw e;}
+  need(!drop||(body.source==='operator'&&body.location==='pack'),'invalid drop request');
+  const response=await fetch(base+(drop?'/drop':equip?'/equip':'/intent'),{method:'POST',headers:{'Content-Type':'application/json',
+    'X-M59-Intent-Token':service.token},body:JSON.stringify(body),signal:AbortSignal.timeout(equip||drop?15000:3000)});
   const result=await response.json();need(response.ok&&result.ok,'inventory change refused');
   return result;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+  let drop=false;
   try {
     const hex=process.argv[2];
     need(typeof hex==='string'&&hex.length<=16384&&/^(?:[a-f0-9]{2})+$/i.test(hex),'bounded request required');
     const body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(hex,'hex')));
-    const result=await sendIntent(body);process.exitCode=result.blocked?10:0;
-  }catch {process.stderr.write('Inventory change refused; refresh and retry.\n');process.exitCode=4;}
+    drop=body.state==='drop';
+    const result=await sendIntent(body);process.exitCode=drop&&!result.dropped?12:result.blocked?10:0;
+  }catch(e) {process.stderr.write(drop?'Drop unconfirmed; inspect pack/ground before issuing another.\n':'Inventory change refused; refresh and retry.\n');process.exitCode=e.code==='DROP_UNAVAILABLE'?13:drop?12:4;}
 }

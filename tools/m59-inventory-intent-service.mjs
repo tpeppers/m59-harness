@@ -1,4 +1,4 @@
-// Local inventory planning; only an authenticated explicit /equip click can send an order.
+// Local inventory planning; only authenticated explicit /equip and /drop send orders.
 import {readFileSync,readdirSync,existsSync,writeFileSync,mkdirSync,renameSync,statSync,unlinkSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -7,6 +7,7 @@ import {randomBytes,timingSafeEqual,randomUUID} from 'node:crypto';
 import {INTENT_DIR,identityOf,identityKey,itemIdentity,readIntent,setIntent,setWithdrawal,planInventory,atomicJson} from './m59-inventory-intent.mjs';
 import {packCapacity,readVaultPlan,storageViewerText} from './m59-inventory-storage.mjs';
 import {checkedEquip,equipOnce} from './m59-inventory-equip.mjs';
+import {checkedDrop,dropOnce} from './m59-inventory-drop.mjs';
 import {rosterFor} from './m59-devclient.mjs';
 import {estimateItemSellValue} from './m59-item-value.mjs';
 const need=(ok,why)=>{if(!ok)throw Error(why);};
@@ -85,6 +86,7 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
     account:r.account.toLowerCase(),character:r.character}]));
   const token=randomBytes(32).toString('hex');let plans=[],health=null,busy=false,lastError='starting',lastTick=0;
   const equipping=new Set();
+  const confirmedDrops=new Map();
   const writeViews=()=>{
     writeText(join(dir,'viewer.tsv'),viewerText(plans,{fleet,broker_pid:health.pid,now:lastTick}));
     writeText(join(dir,'viewer-storage.tsv'),storageViewerText(plans,{fleet,broker_pid:health.pid,now:lastTick},encode));
@@ -195,17 +197,31 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
     if(req.headers.origin||req.socket.remoteAddress!=='127.0.0.1'){req.resume();reply(403,{error:'local clients only'});return;}
     // `poll_ms` and `failures` are reported because a service that has quietly backed off to
     // 30s looks identical to one that is keeping up, and the difference is the whole point.
-    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,storage_schema:1,equip_schema:1,fleet,pid:process.pid,
+    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,storage_schema:1,equip_schema:1,drop_schema:1,drop_available:health?.inventory_drop===1,fleet,pid:process.pid,
       broker,broker_root:health?.root||brokerRoot,broker_pid:health?.pid,plans:plans.length,clients:plans.filter(p=>p.paused).length,
       active_equips:equipping.size,at:lastTick,error:lastError,poll_ms:waitMs,failures});return;}
     if(req.method==='GET'&&req.url==='/plans'){reply(200,{fleet,broker_pid:health?.pid,at:lastTick,plans});return;}
-    if(req.method!=='POST'||!['/intent','/equip'].includes(req.url)||!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){req.resume();reply(404,{error:'unsupported request'});return;}
+    if(req.method!=='POST'||!['/intent','/equip','/drop'].includes(req.url)||!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){req.resume();reply(404,{error:'unsupported request'});return;}
     const supplied=Buffer.from(String(req.headers['x-m59-intent-token']||'')),expected=Buffer.from(token);
     if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected)){req.resume();reply(403,{error:'intent token required'});return;}
     let body='';req.on('data',b=>{body+=b;if(body.length>8192)req.destroy();});
     req.on('end',async()=>{try{
       need(!lastError&&fresh(lastTick,Date.now()),'service is not current');
       const request=JSON.parse(body),binding={fleet,broker_pid:health.pid};
+      if(req.url==='/drop'){
+        need(health.inventory_drop===1,'drop backend has not been released');
+        const target=checkedDrop(plans,request,binding,{dir}),agent=target.plan.agent;
+        need(!equipping.has(agent),'item action already pending');
+        // Consume before starting: disconnects must not turn into duplicate drops.
+        const now=Date.now();for(const [key,at] of confirmedDrops)if(now-at>15000)confirmedDrops.delete(key);
+        const key=JSON.stringify([request.broker_pid,agent,request.player_id,request.item_id,request.clicked_at]);
+        need(!confirmedDrops.has(key)&&confirmedDrops.size<256,'drop confirmation already consumed');
+        confirmedDrops.set(key,now);equipping.add(agent);
+        try{reply(200,await dropOnce(target,binding,{rpc,currentPlan:()=>{
+          if(lastError||health.pid!==binding.broker_pid||!fresh(lastTick,Date.now()))return null;
+          return plans.find(p=>p.agent===agent);
+        }}));}finally{equipping.delete(agent);}return;
+      }
       if(req.url==='/equip'){
         const target=checkedEquip(plans,request,binding,{dir}),agent=target.plan.agent;
         need(!equipping.has(agent),'equip already pending');equipping.add(agent);
