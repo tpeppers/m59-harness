@@ -952,7 +952,7 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
   const listen = Number(arg('--listen', 5960));
   const host = h, port = Number(p || 5959);
 
-  const communicationStateFile=process.argv.includes('--no-communications')?null:arg('--fleet-state',resolveFleet().stateFile);
+  const communicationStateFile=process.argv.includes('--no-communications')?null:(arg('--fleet-state',null)??resolveFleet().stateFile);
   if(communicationStateFile)proxyCommunicationsConfig({stateFile:communicationStateFile,host,port});
 
   // SAY WHAT THIS PROXY FRONTS, so a client launcher can find the right one by itself.
