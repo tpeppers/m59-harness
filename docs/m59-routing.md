@@ -1,5 +1,12 @@
 # Movement, collision and routing
 
+Fine travel retains its goal across repeated, positively owned shelter
+recoveries until the original leg deadline. A fixed three-recovery count must
+not strand a living fourth recovery. Each cycle still checks body identity,
+room, movement ownership, cancellation and confirmed position; a dead, changed
+or foreign body cannot resume. `m59-fine-traffic-refuge-test.mjs` reproduces four
+recoveries through the real controller and fake keeper before any movement.
+
 Wrong-exit masks may include an extra interior row or column. A confirmed
 arrival on that guard can leave its connected interior buffer; the actual
 boundary exclusions and existing current-cell departure allowance remain
@@ -152,6 +159,17 @@ on r52c14: its exact destination stays blocked, while the optional guide can
 advance along the proved western continuation without moving that creature.
 `FINE_GUIDE_ADVANCE_VERSION` is 1 for callers that must refuse older deployed
 harnesses before starting or funding an expedition.
+
+Nested position confirmation uses the existing hop, fine-leg or admission
+deadline through `withIslandObservationDeadline`. A living body with a proved
+movement lease may pause for an ordered confirmation beyond the standalone
+reader's fifteen seconds; it still sends no movement from an unconfirmed
+position. The scope belongs to that exact context, and nested deadlines can
+only shorten it. Missing health, disconnection or broker errors retain a
+separate fifteen-second bound. Death, foreign ownership and operator
+cancellation still refuse immediately. A late queue read cannot acquire a
+ticket after its deadline. Failure evidence retains the position timestamp
+and room object handle so freshness failures can be distinguished later.
 
 The shared declared-crossing controller can refine a takeoff from current
 bodies, wait at an observed unoccupied reversible refuge, and resume after a

@@ -5,7 +5,7 @@ import {withTourWalkOwnership} from './m59-node-tour-policy.mjs';
 import {walkHollowsOut,approachIslandDoor,approachKonimaMainland,approachMainlandCaveExit,eatIslandAtWall,checkIslandCancellation,readIslandFinePosition,readIslandOccupancy,waitAtIslandTrafficRefuge} from './m59-island-finewalk.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
-import {observeIslandTraveller,islandReadOwner} from './m59-island-observation.mjs';
+import {observeIslandTraveller,islandReadOwner,withIslandObservationDeadline} from './m59-island-observation.mjs';
 import {entryTrafficCandidate,reversibleEntry,retreatAndRetryEntry} from './m59-entry-recovery.mjs';
 import {loadMap} from './m59-map.mjs';
 import {withTraversalAdmission} from './m59-traversal-admission.mjs';
@@ -131,6 +131,9 @@ export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
   return ready;
 }
 export async function ordinaryHop(ctx,to,options={}){
+  return withIslandObservationDeadline(ctx,Date.now()+(options.budgetMs??180000),()=>ordinaryHopWithinBudget(ctx,to,options));
+}
+async function ordinaryHopWithinBudget(ctx,to,options={}){
   ctx.state??={};ctx.state.islandCancelFence??=Date.now();
   return withTourWalkOwnership(ctx.agent,async()=>{
     try{
@@ -161,7 +164,7 @@ export async function ordinaryHop(ctx,to,options={}){
 }
 // A keeper may briefly have no body while its survival rung reconnects. Wait
 // only for recovery of this exact order; missing health alone proves nothing.
-export async function readIslandJourney(ctx,{to,orderedBy,deadline=Date.now()+15000,pollMs=1000}={}){
+export async function readIslandJourney(ctx,{to,orderedBy,deadline,pollMs=1000}={}){
   try{return await observeIslandTraveller(ctx,()=>ctx.fleet?readIslandFinePosition(ctx):ctx.call('look',{agent:ctx.agent}),{to,orderedBy,deadline,pollMs});}
   catch(e){if(e.message==='traveller_health_unreadable_recovery_budget')throw Error('traveller_reconnect_budget');throw e;}
 }
@@ -224,7 +227,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   leg.request=await request();leg.retries=0;
   let attemptStarted=Date.now(),statusMissingSince=null;const recoveryWalls=new Map();
   for(;;){
-    await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:Math.min(start+budgetMs,Date.now()+15000),pollMs}),p=sample(l);
+    await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:start+budgetMs,pollMs}),p=sample(l);
     if(p.room===to){leg.ok=true;leg.end=p;break;}
     if(p.room!==first.room.num){leg.reason='unexpected_room_'+p.room;leg.status=await call('status',{agent,brief:true});break;}
     const s=await call('status',{agent,brief:true});
@@ -308,7 +311,12 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   if(leg.end.room===to){leg.ok=true;delete leg.reason;}
   return leg;
 }
-export async function admittedIslandTransit(ctx,{from,to,room=2505,budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,hop=ordinaryHop,read=readIslandFinePosition,
+export async function admittedIslandTransit(ctx,options={}){
+ const queueBudgetMs=options.queueBudgetMs??ISLAND_CONVOY_WAIT_MS;
+ if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_island_queue_budget');
+ return withIslandObservationDeadline(ctx,Date.now()+queueBudgetMs,()=>admittedIslandTransitWithinBudget(ctx,options));
+}
+async function admittedIslandTransitWithinBudget(ctx,{from,to,room=2505,budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,hop=ordinaryHop,read=readIslandFinePosition,
  readCached=null,readOccupancy=readIslandOccupancy,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
  if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_island_queue_budget');
  const takeHop=async destination=>{

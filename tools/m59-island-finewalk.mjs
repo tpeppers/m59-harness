@@ -10,7 +10,7 @@ import {originLabel,keeperMovementPreemption} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
 import {fallJumpsIn} from './m59-falljump.mjs';
 import {cutFineRailAsync} from './m59-fine-rail.mjs';
-import {checkIslandCancellation,observeIslandTraveller} from './m59-island-observation.mjs';
+import {checkIslandCancellation,observeIslandTraveller,withIslandObservationDeadline} from './m59-island-observation.mjs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {blockingBodySnapshot,floorConstraintAllows} from './m59-body-detour.mjs';
 import {knownRefugeCell,confirmRefugeCellArrival} from './m59-refuge-activation.mjs';
@@ -120,8 +120,8 @@ export function activeOwnedFineRecovery(ctx,status){
     isActiveRecoveryDecision(d);
   if(!owned)return false;
   // A completed rest can precede the keeper's next decision pulse. Its normal
-  // fine tool already accepts a healthy body; do not consume all three recovery
-  // attempts waiting for that completed `recovering` label to disappear.
+  // fine tool already accepts a healthy body; do not wait for that completed
+  // `recovering` label to disappear.
   const health=status?.hp,vigor=status?.vigor?.value;
   if(d.status==='recovering'&&Number.isFinite(health?.max)&&health.max>0&&
       Number.isFinite(health.value)&&health.value>=health.max&&Number.isFinite(vigor)&&vigor>=80)return false;
@@ -223,7 +223,10 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
   }
   return {...observation,error};
 }
-export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
+export async function checkedIslandWalk(ctx,target,options={}){
+  return withIslandObservationDeadline(ctx,Date.now()+(options.budgetMs??180000),()=>checkedIslandWalkWithinBudget(ctx,target,options));
+}
+async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
   const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),started=Date.now();
   let goal=protocolToClient(target);
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
@@ -265,10 +268,9 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
   let expectedFloor=floorAt(geo,goal.x,goal.y);
   while(Date.now()-started<budgetMs){
     if(activeOwnedFineRecovery(ctx,l)){
-      if(recoveries>=3){
-        ctx.state.islandRecoveryFailure={room,reason:'attempt_budget',position:l.you,hp:l.hp,vigor:l.vigor};
-        throw Error('fine_route_recovery_budget');
-      }
+      // Repeated damage may require another legitimate shelter cycle. The
+      // original leg deadline bounds this work; every cycle still proves the
+      // same live body, recovery owner and cancellation fence before resuming.
       if(!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l})){
         ctx.state.islandRecoveryFailure={room,reason:'controller_incomplete',position:l.you,hp:l.hp,vigor:l.vigor};
         throw Error('fine_route_recovery_incomplete');
@@ -349,7 +351,7 @@ export async function checkedIslandWalk(ctx,target,{room,budgetMs=180000,onSampl
       }
     }
     if(error>tolerance||!atRefuge()||reply.arrived!==true){
-      if(recoveries<3&&await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
+      if(await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,since:recoverySince,read,onSample,active:true,initial:l})){
         recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
       }
       if(islandTrafficRefusal(reply)&&trafficWaits++<120){await new Promise(r=>setTimeout(r,1000));if(Math.hypot(body.x-before.x,body.y-before.y)>=64)cut=null;continue;}
