@@ -106,3 +106,11 @@ Private runtime evidence is intentionally gitignored. In the trial worktree:
 - `substrate/brax-shadow-admin-cutoff.json`: construction cutoff.
 
 Do not publish the source snapshot or roster: they contain private credentials.
+
+## Regression validation
+
+The saved fixes completed `npm run test:movement`: **81 suites, zero
+regressions**, with the existing named baseline failures unchanged. Focused
+body-wait tests additionally cover expiry, changed rooms, cancellation,
+unknown positions and terrain refusals. Offline regressions validate those
+contracts; the live acceptance result remains 1/24.
