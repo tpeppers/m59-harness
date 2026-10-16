@@ -23,6 +23,7 @@ import { sourceForPush, sameValue } from './m59-policy-sources.mjs';
 import { KEY_FACULTY } from './m59-strategy-schema.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
+import {executeExactDrop} from './m59-inventory-drop.mjs';
 import {currentSurvivalDecision,isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
@@ -1757,6 +1758,7 @@ const server = createServer(async (req, res) => {
       json({
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
+        inventory_drop: 1,
         combat_mode: 3,
         audio_observations: 1,
         intent_observations: 1,
@@ -2014,6 +2016,10 @@ const server = createServer(async (req, res) => {
                 return { target, swings: log };
               }, { controlToken, leaseToken });
             json({ accepted: true, started_at: job.startedAt, target, swings });
+            return;
+          }
+          case 'rts_inventory_drop_intent': {
+            json(await executeExactDrop(session,args,{authority:()=>requireKeeperRtsAuthority(args,'drop')}));
             return;
           }
           case 'rts_context_intent': {

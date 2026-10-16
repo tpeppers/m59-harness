@@ -33,6 +33,7 @@
 // the trade this whole file exists to make.
 
 import { identifiedAs } from './m59-item-signature.mjs';
+import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
 import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
@@ -2235,17 +2236,20 @@ async function verifiedKeeperWriteTarget(agent, index) {
     pid,
   };
   const proxy = sessions.get(agent);
+  let inventoryDrop=0;
   if (proxy instanceof KeeperProxy) {
     if (proxy._identityConflict)
       throw new Error(`${agent}: keeper identity conflict (${proxy._identityConflict}); refusing write`);
     const proof = await proxy.refreshLiveness({ force: true });
     if (!proof.accepted)
       throw new Error(`${agent}: keeper identity could not be verified; refusing write`);
+    inventoryDrop=proof.inventory_drop===1?1:0;
     const valid = validateKeeperSample(proxy._liveness.sample, expected);
     if (!valid.ok) throw new Error(`${agent}: ${valid.reason}; refusing write`);
   } else {
     const reply = await keeperLiveAt(port, { timeoutMs: 3000 });
     if (!reply.ok) throw new Error(`${agent}: keeper identity endpoint returned ${reply.status}`);
+    inventoryDrop=reply.value?.inventory_drop===1?1:0;
     const valid = validateKeeperSample(reply.value, expected);
     if (!valid.ok) throw new Error(`${agent}: ${valid.reason}; refusing write`);
   }
@@ -2256,7 +2260,7 @@ async function verifiedKeeperWriteTarget(agent, index) {
       Number(current?.port ?? keeperPort(agent, index)) !== port ||
       !recordedKeeperAlive(current) || !cachedKeeperOwnershipGuard(agent, pid))
     throw new Error(`${agent}: keeper allocation changed during identity proof; refusing write`);
-  return Object.freeze({ port, identity: Object.freeze(expected), record: rec });
+  return Object.freeze({ port, identity: Object.freeze(expected), record: rec, inventory_drop:inventoryDrop });
 }
 
 // SIXTY SECONDS IS RIGHT FOR AN ACTION AND WRONG FOR A JOURNEY.
@@ -2277,7 +2281,7 @@ async function verifiedKeeperWriteTarget(agent, index) {
 async function keeperAction(agent, index, name, args, { timeoutMs = 60_000, beforeSend = null } = {}) {
   try {
     const target = await verifiedKeeperWriteTarget(agent, index);
-    beforeSend?.();
+    beforeSend?.(target);
     const res = await fetch(`http://127.0.0.1:${target.port}/action`, {
       method: 'POST',
       headers: keeperIdentityHeaders(target.identity),
@@ -3326,7 +3330,7 @@ class KeeperProxy {
         // The liveness poll is the broker's most regular contact with each keeper, so the
         // save clock learns of a save here within one poll.
         if (Array.isArray(reply.value?.saves)) saveClock.observeAll(reply.value.saves, this.name);
-        const result = { accepted: true, legacy: reply.legacy,
+        const result = { accepted: true, legacy: reply.legacy, inventory_drop:reply.value?.inventory_drop===1?1:0,
           status: this._liveness.status({ processAlive: this._processAlive() }) };
         this._acceptedLivenessProof = {
           at: Date.now(), pid: Number(expected.pid), result,
@@ -3621,7 +3625,10 @@ class KeeperProxy {
   // snapshot-only proxy, or `startJob` threw before a packet was sent. Send a typed
   // intent instead; the keeper validates it again and installs the real Session job.
   async rtsIntent(kind, args = {}) {
-    const result = await keeperAction(this.name, this._index, `rts_${kind}_intent`, args);
+    const result = await keeperAction(this.name, this._index, `rts_${kind}_intent`, args,
+      kind==='inventory_drop'?{timeoutMs:6000,beforeSend:target=>{
+        if(target.inventory_drop!==1)throw Error('This keeper does not support confirmed Drop yet');
+      }}:{});
     if (result?.error) throw new Error(result.error);
     return result;
   }
@@ -9549,6 +9556,30 @@ const TOOLS = [
       return { accepted: true, agent: a.agent, room: actualRoom,
                destination: { col, row }, max_steps: maxSteps,
                control_token: token, lease_token: a.lease_token, started_at: job.startedAt };
+    },
+  },
+  {
+    name: 'inventory_drop',
+    description: 'Drop one exact carried item or stack quantity after explicit confirmation, under a short commander lease. No name re-resolution, retries, or game reads.',
+    schema: {type:'object',properties:{
+      agent:{type:'string'},character:{type:'string'},fleet:{type:'string'},broker_pid:{type:'integer'},
+      player_id:{type:'integer'},room:{type:'integer'},item:{type:'integer'},expected_item_name:{type:'string'},
+      amount:{type:'integer',minimum:1},expected_amount:{type:'integer',minimum:1},deadline_at:{type:'integer'},
+      control_token:{type:'string'},lease_token:{type:'string'},server_host:{type:'string'},server_port:{type:'integer'}},
+      required:['agent','character','fleet','broker_pid','player_id','room','item','expected_item_name','amount','expected_amount','deadline_at','control_token','lease_token','server_host','server_port']},
+    run: async (a,caller)=>{
+      const s=session(a.agent),c=s.need(),token=controlToken(a.control_token);
+      if(a.fleet!==COMMANDER_FLEET||a.broker_pid!==process.pid)throw Error('Drop broker identity changed');
+      const authority=requireControlSession(s,caller,a.server_host,a.server_port,a.lease_token);
+      exactRosterAuthority(s,{character:a.character,host:a.server_host,port:a.server_port});
+      const room=requireRtsRoom(s,a.room,'inventory-drop');exactDrop(c,a);
+      if(s instanceof KeeperProxy)return s.rtsIntent('inventory_drop',{...a,control_token:token,
+        room_object_id:room.room_object_id,commander_owner:authority.lease.record.owner});
+      return executeExactDrop(s,a,{authority:()=>{
+        requireControlSession(s,caller,a.server_host,a.server_port,a.lease_token);
+        exactRosterAuthority(s,{character:a.character,host:a.server_host,port:a.server_port});
+        requireRtsRoom(s,a.room,'drop',room.room_object_id);return s.need();
+      }});
     },
   },
   {
@@ -19004,7 +19035,8 @@ async function callTool(name, args, caller) {
     const idAgent = args?.agent ?? (name === 'supply' ? args?.from : null) ?? null;
     const idSession = idAgent ? sessions.get(idAgent) ?? null : null;
     let idsReresolved = null;
-    if (idSession && args && typeof args === 'object') {
+    // Confirmed drops must refuse stale ids, never retarget by name after a save.
+    if (idSession && args && typeof args === 'object' && name !== 'inventory_drop') {
       const refs = judgeArgs(args, { tool: name, agent: idAgent, registry: idRegistry, clock: saveClock });
       if (refs.length) {
         const candidates = await freshIdCandidates(idSession).catch(() => []);
@@ -19417,6 +19449,7 @@ function brokerHealth() {
     session_driver: SESSION_DRIVER,
     ...liveSessionIdentity(readiness),
     tools: TOOLS.length,
+    inventory_drop: 1,
     commander: { ...commanderSettings(process.env, COMMANDER_FLEET), broker_pid: process.pid },
     // A verifier must be able to distinguish a collision-safe capture from one made
     // while the deliberately permissive exit fallback was enabled.  Report the

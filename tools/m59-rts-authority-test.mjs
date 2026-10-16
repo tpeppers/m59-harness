@@ -105,11 +105,11 @@ assert.deepEqual(rtsJobReport({ ...baseJob, done: false, finishedAt: undefined,
 
 const brokerPath = fileURLToPath(new URL('./m59-broker.mjs', import.meta.url));
 const skillsPath = fileURLToPath(new URL('./m59-skills.mjs', import.meta.url));
-// Session moved to m59-game.mjs and the mover verbs went with it. This reads the broker
-// for its own sections and the game module for the Session ones; a suite that greps only
-// one does not fail, it matches an empty haystack and passes.
+// Session movement now lives in its own module. Put that implementation before
+// the broker's proxy methods so section searches test the actual packet hooks.
 const gamePath = fileURLToPath(new URL('./m59-game.mjs', import.meta.url));
-const broker = readFileSync(brokerPath, 'utf8') + '\n' + readFileSync(gamePath, 'utf8');
+const walkPath = fileURLToPath(new URL('./m59-session-walk.mjs', import.meta.url));
+const broker = readFileSync(walkPath, 'utf8') + '\n' + readFileSync(gamePath, 'utf8') + '\n' + readFileSync(brokerPath, 'utf8');
 const skills = readFileSync(skillsPath, 'utf8');
 const section = (start, end) => {
   const from = broker.indexOf(start);
