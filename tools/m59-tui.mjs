@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
   from './m59-shortcuts.mjs';
-import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs } from './m59-devclient.mjs';
+import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs, proxyFor } from './m59-devclient.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
 import * as webui from './m59-webui.mjs';
 // The geometry debug maps -- every room by number, plus an index. Imported rather than
@@ -683,6 +683,11 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
     const pd = ensurePlanDesk();
     S.status = pp.ok ? c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${PLAN_PROXY_PORT}, desk ${pd.started ? 'started' : 'up'}… `)
                      : c.red(`PLAN proxy would not come up on ${PLAN_PROXY_PORT} — launching direct, no lock or Full Auto `);
+    // AND CONNECT THROUGH IT. Starting the proxy is not enough: the client is launched with an
+    // explicit host and port, so without this it went straight to the server and the PLAN tab
+    // reported no gate-capable proxy carrying it. Only when 5962 fronts THIS character's server
+    // (its advert says so): a proxy for another server would log the client into the wrong world.
+    if (pp.ok && proxyFor(realHost, realPort)?.listen === PLAN_PROXY_PORT) { host = '127.0.0.1'; port = String(PLAN_PROXY_PORT); }
     draw();
   }
   if (viaProxy) {
