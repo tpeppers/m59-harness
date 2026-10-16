@@ -180,6 +180,15 @@ packets were sent and how many moves were mirrored. `GET http://127.0.0.1:8931/g
 the same under `attached`. The spectate keeper's heartbeat is
 `substrate/spectate/<agent>.json`.
 
+**The keeper is handed a de-scrambled stream.** A real client pings, and the server answers
+each ping by XOR-scrambling the opcode byte of every later message with a sliding token
+(`tools/m59-proxy-token.mjs`). The harness's own client never pings and reads token 0, so the
+proxy decodes the stream before the keeper and its own parsers see it. It re-encodes for your
+client whenever it has forged or swallowed a message, because either one shifts your client's
+token walk by one. The first live relinquish ran without this: the keeper read garbage, the
+session fell back to character select, and the client crashed in `char.dll`. The spectate
+keeper's output is in `substrate/spectate/<agent>.log`.
+
 A plan proxy started before this change has no attach port. Restart it (close it, then
 press L again) or the desk will say the keeper cannot drive.
 

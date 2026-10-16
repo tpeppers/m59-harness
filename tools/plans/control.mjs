@@ -14,7 +14,7 @@
 // proxy, because the keeper PROCESS cannot share the human's socket. That gap is the main
 // finding in docs/m59-client-vs-harness.md, and this row says so rather than pretending.
 
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, openSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -64,12 +64,18 @@ const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const spectateBeat = agent => { try { return JSON.parse(readFileSync(join(HARNESS, 'substrate', 'spectate', `${agent}.json`), 'utf8')); } catch { return null; } };
 const spectateAlive = agent => { const h = spectateBeat(agent); if (!h || Date.now() - h.at > 10_000 || /^stopped/.test(h.state)) return null;
   try { process.kill(h.pid, 0); return h; } catch { return null; } };
+function logFd(agent) {
+  try { const d = join(HARNESS, 'substrate', 'spectate'); mkdirSync(d, { recursive: true }); return openSync(join(d, `${agent}.log`), 'a'); }
+  catch { return 'ignore'; }
+}
 function startSpectate(ctx, advert, playerId) {
   if (spectateAlive(ctx.client.agent)) return { ok: true, already: true };
   if (!advert.attach) return { ok: false, why: 'this proxy has no attach port (start it with --attach), so no keeper can drive' };
   const child = spawn(process.execPath, [join(HARNESS, 'tools', 'm59-spectate-keeper.mjs'), '--fleet', ctx.fleet === '' ? '-' : ctx.fleet,
     '--agent', ctx.client.agent, '--attach-port', String(advert.attach), '--player', String(playerId)],
-    { cwd: HARNESS, detached: true, stdio: 'ignore', windowsHide: true });
+    // ITS OUTPUT GOES TO substrate/spectate/<agent>.log. It was discarded, and the first live failure
+    // (a scrambled stream, see m59-proxy-token.mjs) had to be reconstructed from crash dumps instead.
+    { cwd: HARNESS, detached: true, stdio: ['ignore', logFd(ctx.client.agent), logFd(ctx.client.agent)], windowsHide: true });
   child.unref();
   return { ok: true, pid: child.pid };
 }
