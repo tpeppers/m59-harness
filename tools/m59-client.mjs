@@ -848,6 +848,18 @@ export class M59Client {
     });
   }
 
+  // ATTACHED: dropping our socket logs nobody off, because the connection the server knows belongs to
+  // the person's client. So a rejoin first asks the proxy to log the character off on that connection
+  // (BP_REQ_QUIT, honoured only while we hold the gate; ProxySession.logoffAway), and the re-attach
+  // that follows is what brings it back. Resolves once the request is on the wire.
+  attachedLogoff() {
+    return new Promise(resolve => {
+      if (!this.attach || this.state !== 'game' || !this.sock || this.sock.destroyed) return resolve(false);
+      const t = setTimeout(() => resolve(false), 1000);
+      this.sock.write(frame(Buffer.from([BP.REQ_QUIT]), 0), () => { clearTimeout(t); resolve(true); });
+    });
+  }
+
   connect() {
     if (this.attach) return this.connectAttached();
     return new Promise((resolve, reject) => {

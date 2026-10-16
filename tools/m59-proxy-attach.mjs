@@ -29,6 +29,11 @@
 // substrate/m59-map.json; an unknown room is never forged into, so the worst case is a view
 // that lags until the server's next room burst, never a crash.
 //
+// A KEEPER'S SURVIVAL LOGOFF IS DONE HERE. Its BP_REQ_QUIT (holder only) becomes
+// ProxySession.logoffAway on the shared connection, and its re-attach, answered only once the
+// character is back in the world, is what ends the logoff. Its BP_REQ_LOOKs are tagged, so the
+// descriptions they return never open a window on the person's screen.
+//
 // Handshake: the keeper's first line is JSON {"agent":"t15","player":<objId>}\n; the proxy
 // answers one JSON line, then raw frames flow both ways. Loopback only.
 
@@ -41,6 +46,7 @@ import { gateLive } from './m59-proxy-gate.mjs';
 
 const HEADER = 7;
 const BP_PLAYER = 130, BP_REQ_MOVE = 100, BP_REQ_TURN = 101, BP_MOVE = 200, BP_TURN = 201;
+const BP_REQ_QUIT = 54, BP_REQ_LOOK = 116;
 const DEFAULT_MAP = join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', 'm59-map.json');
 
 let ROOMS = null;
@@ -101,11 +107,21 @@ export function attachKeeper(session, sock, { agent, log = () => {}, mapFile = D
       if (buf.length < HEADER + len) return;
       const payload = Buffer.from(buf.subarray(HEADER, HEADER + len));
       buf = buf.subarray(HEADER + len);
-      if (!session.inGame || !payload.length) continue;
+      if (!session.inGame || session.away || !payload.length) continue;
       if (!(gateLive(session.gate) && session.gate.holder === holder)) { stats.dropped_not_holder++; continue; }
+      // LOGGING OFF TO SURVIVE. The keeper's client sends BP_REQ_QUIT and then drops this socket
+      // (m59-client.mjs attachedLogoff); the proxy takes the character out of the world on the shared
+      // connection and brings it back when the keeper re-attaches (ProxySession.logoffAway).
+      if (payload[0] === BP_REQ_QUIT) {
+        const r = session.logoffAway({ by: holder });
+        if (r.ok) stats.logoffs = (stats.logoffs ?? 0) + 1; else stats.refused++;
+        log(`keeper ${agent} logoff: ${r.ok ? 'out of the world' : 'refused — ' + r.why}`);
+        continue;
+      }
       const r = session.injectOwned(payload);
       if (!r.sent) { stats.refused++; continue; }
       stats.injected++;
+      if (payload[0] === BP_REQ_LOOK) session.noteLook('keeper');
       const forged = forgeFor(payload, { playerId: session.playerId, dims: session.attachDims });
       if (forged) { session.toClient(forged); stats.forged++; }
     }
@@ -135,10 +151,24 @@ export function serveAttach(port, getSession, log = m => console.error(m), opts 
       const s = getSession(hello.player != null ? Number(hello.player) : null);
       if (!s || !/^[a-z0-9_-]{1,40}$/.test(String(hello.agent ?? ''))) { sock.end('{"ok":false,"why":"no such session or bad agent"}\n'); return; }
       if (s.attached) { sock.end(JSON.stringify({ ok: false, why: `keeper ${s.attached.agent} is already attached` }) + '\n'); return; }
-      sock.write(JSON.stringify({ ok: true, player: s.playerId }) + '\n');
-      attachKeeper(s, sock, { agent: String(hello.agent), log, ...opts });
       const rest = head.subarray(nl + 1);
-      if (rest.length) sock.emit('data', rest);
+      const accept = () => {
+        if (sock.destroyed) return;
+        if (s.attached) { sock.end(JSON.stringify({ ok: false, why: `keeper ${s.attached.agent} is already attached` }) + '\n'); return; }
+        sock.write(JSON.stringify({ ok: true, player: s.playerId }) + '\n');
+        attachKeeper(s, sock, { agent: String(hello.agent), log, ...opts });
+        if (rest.length) sock.emit('data', rest);
+      };
+      // A keeper coming back from its survival logoff is what ends the logoff. It is answered only once
+      // the character is in the world again, so the resend requests it opens with are not lost on a menu.
+      if (s.away) {
+        const back = () => { s.off('closed', gone); accept(); };
+        const gone = () => { s.off('back', back); sock.end('{"ok":false,"why":"the session closed during the logoff"}\n'); };
+        s.once('back', back); s.once('closed', gone);
+        s.awayReturn(`keeper ${hello.agent} re-attached`);
+        return;
+      }
+      accept();
     };
     sock.on('data', onHead);
     sock.on('error', () => {});
