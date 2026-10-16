@@ -262,8 +262,23 @@ export function isCursedItem(c, o = null, name = null) {
   const set = c?._cursedItemIds;
   if (!set) return false;
   if (o && set.has(o.id)) return true;
+  // A NAME-LEVEL MARK DOES NOT REACH AN ITEM THE SERVER GRADES NORMAL. A curse is an item attribute,
+  // and an item carrying one grades 200 when identified and 100 when not (GetRarity, item.kod:714-730),
+  // so rarity 0 is the server saying this object has nothing hidden at all. The name mark exists to
+  // survive the renumbering of a save; it was never meant to poison the TWIN — a pack of eight long
+  // swords, one of them cursed, refused all eight, the Kraanan-dedicated one included.
+  if (o && o.rarity != null && Number(o.rarity) === 0) return false;
   return set.has(`name:${String(n).trim().toLowerCase()}`);
 }
+
+// MYSTIC SWORDS ARE ALWAYS A TROLL WEAPON. Operator, 2026-10-16: "mystic swords (even cursed,
+// summoned, etc.) should be considered valid for attacking trolls with". The class sets
+// ATCK_WEAP_MAGIC itself (mystswrd.kod:57), so every mystic sword passes a troll's non-magic
+// resistance with no dedication. Against trolls neither a ban list nor a curse takes one out of the
+// ranking. The ONE thing that still does is the magic-loot gate (isMagicGrade: an identified,
+// non-cursed magic mystic sword is saved for PvP), and with it the unread gate — grade 100 may be
+// that same valuable item, so it waits for reveal unless it is our own summon.
+export const isMysticSword = (name) => /\bmystic sword\b/i.test(String(name || ''));
 
 
 // DO NOT PUT ON WHAT NOBODY HAS READ. The operator's rule, 2026-09-17: avoid USING magic items.
@@ -593,8 +608,10 @@ export const isBannedWeapon = (name, banned = null) => {
 };
 
 export function weaponRanking(c, { priority = null, banned = null,
-                                   allowUnrevealed = false } = {}) {
+                                   allowUnrevealed = false, trollQuarry = false } = {}) {
   const broken = brokenSet(c);
+  // Against trolls a mystic sword is exempt from the ban and the curse filters (isMysticSword).
+  const trollMystic = (name) => trollQuarry === true && isMysticSword(name);
   const rows = (c.inventory || [])
     .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '' }))
     // isCursed is checked here rather than in weaponScore, because scoring it zero would
@@ -603,7 +620,7 @@ export function weaponRanking(c, { priority = null, banned = null,
     .filter(x => // isCursedItem, not isCursed: the name only says "cursed" once the attribute has
     // been identified, so the name test alone hands us the very weapon we must not
     // pick up. See the block above isCursedItem.
-    !isJunk(x.name) && !isCursedItem(c, x.o, x.name) &&
+    !isJunk(x.name) && (trollMystic(x.name) || !isCursedItem(c, x.o, x.name)) &&
                  // A PvP-only weapon is never a farming weapon (m59-pvp-gear.mjs).
                  (c.pvpGearActive || !isPvpOnly(x.name)) &&
                  // AND NOT ONE NOBODY HAS READ. isCursedItem learns from the server's refusal to
@@ -615,7 +632,7 @@ export function weaponRanking(c, { priority = null, banned = null,
                  // wielded one ranked it out and swapped straight back to a long sword.
                  !(allowUnrevealed !== true && isUnrevealed(x.o) && !isOwnSummon(c, x.o)) &&
                  !isMagicGrade(x.o) &&
-                 !isBannedWeapon(x.name, banned) &&
+                 (trollMystic(x.name) || !isBannedWeapon(x.name, banned)) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
       const skill = proficiencyFor(x.name);
@@ -723,7 +740,11 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
   // restricts nothing, for the same reason a throwing veto does not veto.
   let only = null;
   try { only = s?.equipOnly?.() ?? null; } catch { only = null; }
-  const rankedAll = weaponRanking(c, { priority, banned, allowUnrevealed });
+  // AND WHETHER THE QUARRY IS TROLLS (`s.equipTrollQuarry`, Autopilot huntsTrolls): against them a
+  // mystic sword is always a candidate (isMysticSword). A hook that throws exempts nothing.
+  let trollQuarry = false;
+  try { trollQuarry = s?.equipTrollQuarry?.() === true; } catch { trollQuarry = false; }
+  const rankedAll = weaponRanking(c, { priority, banned, allowUnrevealed, trollQuarry });
   const onlyRx = Array.isArray(only) && only.length
     ? only.map(w => new RegExp(`\\b${String(w).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s?')}\\b`, 'i'))
     : null;
@@ -803,6 +824,26 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
       // hands full, broken, cannot use — and anything else is noise that happened to
       // arrive at the same time. Noise is still worth keeping, under a name that does not
       // claim it is the reason.
+      //
+      // THE HAND WILL NOT LET GO. Using a weapon first unuses the one in hand, and a cursed one
+      // refuses ("<Item> seems to cling to your hand!", wacursed.kod:35). Every other candidate would
+      // be refused the same way, so stop and say WHICH weapon holds the hand — marked by id only, so
+      // its same-named twins stay choosable — and tell the owner (`s.onCursedInHand`), who files for
+      // a remove curse. This used to land in `rejected` as "the server never added it to the use
+      // list and said nothing about why", with the one sentence that explained it filed as noise.
+      const cling = texts.find(t => CURSE_SAID.test(t));
+      if (cling) {
+        const inHand = [...now].map(id => (c.inventory || []).find(o => o.id === id))
+          .filter(o => o && weaponScore(c.rsc.get(o.nameRsc) || '') > 0)
+          .map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' }));
+        for (const w of inHand) markCursedItem(c, { id: w.id });
+        try { s.onCursedInHand?.(inHand, cling); } catch { /* the result below still says it */ }
+        rejected.push({ name: cand.name, id: cand.o.id, why: `refused: ${cling}` });
+        return { wielding: null, verified: false, rejected, cursed_in_hand: inHand, said: cling,
+                 considered: ranked.map(x => x.name),
+                 note: `the weapon in hand (${inHand.map(w => w.name).join(', ') || 'unnamed'}) is ` +
+                       'cursed and cannot be put down — it needs a remove curse' };
+      }
       const refusal = texts.find(t => handsFullText(t) || /can'?t use|cannot use|not able to use|too heavy|do not have/i.test(t));
       rejected.push({ name: cand.name, id: cand.o.id,
                       why: handsFullText(refusal || '')

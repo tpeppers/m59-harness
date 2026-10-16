@@ -324,6 +324,14 @@ export function farmRoomDenials(noWallRooms = null, cappedRooms = null) {
 // before we believe it works. Two passes' worth: one quiet reading is also what you
 // get from a monster that happened to be walking away.
 const PROOF_MS = 12_000;
+// HOW MANY SWAPS OFF THE SAME WEAPON, REFUSED IN A ROW WITH NO REASON, MAKE A CURSE SUSPECT.
+const CURSE_SUSPECT_REFUSALS = 3;
+// Why a swap did not happen, in the note's own words, from equipBest's result.
+const swapWhyNot = (r, swapped) => swapped ? {} : {
+  why_not: r?.cursed_in_hand?.length ? `cursed in hand: ${r.cursed_in_hand.map(w => w.name).join(', ')}`
+    : r?.vetoed ? 'vetoed' : r?.cancelled ? 'cancelled' : r?.already_wielded ? 'the ranking kept the weapon in hand'
+    : r?.rejected?.length ? r.rejected.map(x => x.why).join('; ').slice(0, 300)
+    : (r?.note ?? r?.why ?? 'unknown') };
 // AND HOW LONG AFTER SETTLING ON THE SQUARE BEFORE DAMAGE IS THE SQUARE'S FAULT.
 //
 // Being hit is resolved on the server and arrives here as a packet. Our arrival is also
@@ -1966,6 +1974,10 @@ export class Autopilot {
     // wielded weapon is swung INSTEAD of the touch (player.kod:4712-4729). One veto, at the one
     // function they all share, rather than ten guards that drift.
     if (session) session.equipVeto = () => this.touchEquipVeto();
+    // AGAINST TROLLS A MYSTIC SWORD IS ALWAYS A CANDIDATE (skills.isMysticSword), asked at the same door.
+    if (session) session.equipTrollQuarry = () => this.huntsTrolls();
+    // AND A HAND THAT WILL NOT LET GO IS A CURSE SUSPECT, whichever of the ten call sites heard it.
+    if (session) session.onCursedInHand = (items, said) => this.noteCurseSuspect({ items, said, certain: true });
     // AND WHICH WEAPONS IT MAY CHOOSE AT ALL, from the same one place (`trainingWeaponOnlyNow`).
     if (session) session.equipOnly = () => this.trainingWeaponOnlyNow();
     attachReplayRecorder(session,this);
@@ -2901,6 +2913,12 @@ export class Autopilot {
     return Array.isArray(b) && b.length ? b : null;
   }
 
+  /** Is the quarry trolls? Against them every mystic sword is a candidate (skills.isMysticSword). */
+  huntsTrolls() {
+    const h = this.policy?.hunt;
+    return h != null && [].concat(h).some(x => /\btrolls?\b/i.test(String(x ?? '')));
+  }
+
   /**
    * Is this character bare ON PURPOSE right now?
    *
@@ -3527,6 +3545,8 @@ export class Autopilot {
     // in the message we threw away.
     const said = (ev?.events || []).filter(e => e.text).map(e => e.text);
     const cursed = said.some(t => skills.noteCursedFromMessage(c, t, held.id));
+    if (cursed) this.noteCurseSuspect({ items: [{ id: held.id, name }], certain: true,
+      said: said.find(t => skills.CURSE_SAID.test(t)) ?? null });
     const ready = !skills.isArmed(c);
     return { ready, removed: name, ...(cursed ? { cursed: true, said } : {}),
              ...(ready ? {} : { why: cursed
@@ -31307,8 +31327,72 @@ export class Autopilot {
     if (!c?.inventory) return null;
     const sum = this.weaponMagicBook().summary(this.packWeapons(c), this.wieldedWeaponId(c),
       undefined, skills.brokenSet(c));
+    // A SUSPECT WHOSE WEAPON IS NO LONGER IN HAND IS OVER, however it came off (broke, uncursed).
+    const inHand = this.wieldedWeaponId(c);
+    if (this._curseSuspect && inHand != null && inHand !== this._curseSuspect.id)
+      this.clearCurseSuspect('the suspected weapon is no longer in hand');
     return { ...sum, prefer_magic: this.policy?.preferMagicWeapon === true,
-             swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0 };
+             swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0,
+             curse_suspect: this._curseSuspect ?? null };
+  }
+
+  // A CURSE SUSPECT: the weapon in hand will not come off, so the keeper cannot arm itself for its
+  // work, and the cure is somebody else's spell. Published on `weapon_magic.curse_suspect` for a bot
+  // to act on (meridian59-dum-bot desk-uncurse-a-visitor walks the wearer to the desk). Operator,
+  // 2026-10-16: "an un-curse DUM-bot request that gets triggered if a bot finds itself cursed and
+  // needing to switch weapons for farming reasons".
+  //
+  // CERTAIN or SUSPECTED. Certain is the server's own sentence ("seems to cling to your hand",
+  // wacursed.kod:35). Suspected is CURSE_SUSPECT_REFUSALS swaps off the same weapon refused in a row
+  // with no reason given -- operator, 2026-09-27: "any suspected curse should just get a remove
+  // curse", because a remove curse on a clean target is refused before any mana or emerald is spent.
+  // `since` is stable for one incident (same weapon in hand), so a bot can count its own attempts.
+  noteCurseSuspect({ items = [], said = null, certain = false, why = null } = {}) {
+    const held = (items ?? [])[0] ?? null;
+    const prev = this._curseSuspect;
+    const same = prev && held && prev.id === held.id;
+    if (same && (prev.certain || !certain)) { prev.last_at = Date.now(); return prev; }
+    const now = Date.now();
+    this._curseSuspect = { id: held?.id ?? null, name: held?.name ?? null, certain: !!certain,
+      said: said ?? null, since: same ? prev.since : now, last_at: now,
+      why: why ?? (certain ? 'the server said the weapon in hand clings to the hand'
+                           : 'swaps off the weapon in hand keep being refused') };
+    this.note('CURSE SUSPECTED', { ...this._curseSuspect,
+      note: 'the weapon in hand will not come off; a remove curse is the cure' });
+    try { this.ledgerEvent('curse_suspected', { item: held?.name ?? null, item_id: held?.id ?? null,
+      certain: !!certain, said: said ?? null, room: this.s.world?.room?.num ?? null }); } catch {}
+    return this._curseSuspect;
+  }
+
+  clearCurseSuspect(why) {
+    this._swapRefusals = null;
+    const was = this._curseSuspect;
+    if (!was) return;
+    this._curseSuspect = null;
+    this.note('curse suspect cleared', { item: was.name, item_id: was.id, why });
+    try { this.ledgerEvent('curse_suspect_cleared', { item: was.name, item_id: was.id, why,
+      held_ms: Date.now() - was.since }); } catch {}
+  }
+
+  // One swap's outcome. Returns whether the hand changed. Only a use the server actually REFUSED
+  // counts toward a suspicion: a veto, a cancel, a ranking that kept the held weapon, an empty
+  // candidate list or a broken candidate is not the hand refusing to let go.
+  noteSwapOutcome(r, before, after) {
+    const swapped = after != null && after !== before;
+    if (swapped) { this.clearCurseSuspect('a swap went through: the hand let go'); return true; }
+    if (r?.cursed_in_hand?.length) return false;          // filed already, by onCursedInHand
+    const refused = (Array.isArray(r?.rejected) ? r.rejected : [])
+      .filter(x => !/broken/i.test(String(x?.why ?? '')));
+    if (before == null || r?.vetoed || r?.cancelled || r?.already_wielded || !refused.length) return false;
+    const n = this._swapRefusals?.held === before ? this._swapRefusals.count + 1 : 1;
+    this._swapRefusals = { held: before, count: n };
+    if (n >= CURSE_SUSPECT_REFUSALS) {
+      const c = this.s.client;
+      const o = (c?.inventory || []).find(x => x.id === before);
+      this.noteCurseSuspect({ items: [{ id: before, name: o ? (c.rsc.get(o.nameRsc) || null) : null }],
+        certain: false, why: `${n} swaps off the weapon in hand refused in a row, no reason given` });
+    }
+    return false;
   }
 
   // A CURSE WAS LIFTED. `item` is the name the server gave, or null for the cast's own line (which
@@ -31317,6 +31401,9 @@ export class Autopilot {
   noteUncursed(item, said = null) {
     const c = this.s.client;
     if (item && c?._cursedItemIds) c._cursedItemIds.delete(`name:${item}`);
+    // The remove curse unused whatever it freed (player.kod RemoveCurseAllItems); the next equip is
+    // free to choose, and the suspect is answered.
+    this.clearCurseSuspect(item ? `remove curse released the ${item}` : 'a remove curse took');
     this.note(item ? 'CURSE LIFTED' : 'remove curse took', { item: item ?? null, said,
       why: item ? `remove curse released the ${item}` : 'a remove curse found a cursed item on this body' });
     this.ledgerEvent('uncursed', { item: item ?? null, said, room: this.s.world?.room?.num ?? null });
@@ -31541,9 +31628,11 @@ export class Autopilot {
       if (!spare) return null;
       if (!due && Date.now() - (this._magicSwapAt ?? 0) < 30_000) return null;
       this._magicSwapAt = Date.now();
+      const before = this.wieldedWeaponId(c);
       const r = await skills.equipBest(this.s, { priority: this.weaponPriorityNow?.() ?? null, banned: this.bannedWeaponsNow?.() ?? null })
         .catch(e => ({ ok: false, why: e.message }));
-      this.note('MUNDANE SWAP', { to: spare.id, result: r?.ok ?? null,
+      const swapped = this.noteSwapOutcome(r, before, this.wieldedWeaponId(c));
+      this.note('MUNDANE SWAP', { to: spare.id, result: swapped, ...swapWhyNot(r, swapped),
         why: 'prefer_mundane_weapon: the dedicated weapon is kept for the troll rooms' });
       return r;
     }
@@ -31558,14 +31647,20 @@ export class Autopilot {
     // would pick an enchanted scimitar its owner bans, equipBest would refuse it, and the keeper
     // would try again every thirty seconds.
     const banned = this.bannedWeaponsNow?.() ?? null;
+    // EXCEPT A MYSTIC SWORD AGAINST TROLLS, which no ban takes out (skills.isMysticSword).
+    const trolls = this.huntsTrolls();
     const id = magicSwap({ ...sum, weapons: (sum?.weapons ?? []).filter(w => w.wielded ||
-      !skills.isBannedWeapon(w.name, banned)) }, rank);
+      (trolls && skills.isMysticSword(w.name)) || !skills.isBannedWeapon(w.name, banned)) }, rank);
     if (id == null) return null;
     if (!due && Date.now() - (this._magicSwapAt ?? 0) < 30_000) return null;
     this._magicSwapAt = Date.now();
+    const before = this.wieldedWeaponId(c);
     const r = await skills.equipBest(this.s, { priority, banned })
       .catch(e => ({ ok: false, why: e.message }));
-    this.note('MAGIC SWAP', { to: id, result: r?.ok ?? null,
+    // THE RESULT IS WHETHER THE HAND CHANGED. This read `r?.ok`, a field equipBest never returns,
+    // so every swap -- the ones that worked included -- was journalled `result: null`.
+    const swapped = this.noteSwapOutcome(r, before, this.wieldedWeaponId(c));
+    this.note('MAGIC SWAP', { to: id, result: swapped, ...swapWhyNot(r, swapped),
       why: 'the weapon in hand is not read as magic and a same-rank spare is' });
     return r;
   }
