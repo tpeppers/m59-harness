@@ -13,6 +13,7 @@ import {protocolToClient,clientToProtocol,squareCentreClient} from './m59-finepo
 import {applyAncientFloors,liftWaitMs} from './m59-moving-platform.mjs';
 import {evidenceDirFor,resolveControlUrl} from './m59-fleetpath.mjs';
 import {planBodyDetour} from './m59-body-detour.mjs';
+import {distanceToRail} from './m59-railfollow.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -144,14 +145,34 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
       if(!keeper)await sleep(500);
     }
     if(!keeper)throw Error('Brax requires a verified keeper');
-    const url=new URL(`http://127.0.0.1:${keeper.port}/state`);
-    for(const [key,value]of Object.entries({fresh:1,agent,character:keeper.character,keeper_pid:keeper.pid}))url.searchParams.set(key,String(value));
-    const response=await fetch(url,{signal:AbortSignal.timeout(30000)}),s=await response.json();
-    if(!response.ok||identityMismatch(keeper,identityOf(response.headers,s)))throw Error('Brax keeper identity changed');
-    if(s.hp?.value<=0||s.room?.num===1)throw Error('Brax character died');
-    return s;
+    for(let attempt=0;attempt<3;attempt++){
+      const url=new URL(`http://127.0.0.1:${keeper.port}/state`);
+      for(const [key,value]of Object.entries({position:1,agent,character:keeper.character,keeper_pid:keeper.pid}))url.searchParams.set(key,String(value));
+      let response,s;
+      try{response=await fetch(url,{signal:AbortSignal.timeout(Math.max(1,Math.min(30000,end-Date.now())))});s=await response.json();}
+      catch(error){
+        if(attempt===2||Date.now()>end)throw error;
+        log('keeper-read-retry',{attempt,reason:error.message});
+        const next=(await scanKeepers({fleet,timeoutMs:5000})).get(agent);
+        if(next&&next.character!==keeper.character)throw Error('Brax keeper character changed');
+        if(next)keeper=next;
+        await sleep(500);continue;
+      }
+      if(!response.ok||identityMismatch(keeper,identityOf(response.headers,s)))throw Error('Brax keeper identity changed');
+      if(s.hp?.value<=0||s.room?.num===1)throw Error('Brax character died');
+      const pose=s.position_read;
+      if(pose&&pose.id===s.you?.id&&pose.room_object_id===s.room?.object_id)return {...s,you:{...s.you,...pose}};
+      log('position-read-unconfirmed',{attempt});await sleep(500);
+    }
+    throw Error('Brax actual position could not be confirmed');
   };
-  const command=async(name,args={})=>{const reply=await call(name,{agent,...args});log('command',{name,args,reply});return reply;};
+  const command=async(name,args={})=>{
+    for(let attempt=0;attempt<3;attempt++){
+      const reply=await call(name,{agent,...args});log('command',{name,args,reply});
+      if(!String(reply?.error??'').includes('keeper identity could not be verified; refusing write')||attempt===2)return reply;
+      await read();await sleep(1000);
+    }
+  };
   const until=async(test,why,budget=180000)=>{const deadline=Math.min(end,Date.now()+budget);for(;;){const result=await test();if(result)return result;if(Date.now()>deadline)throw Error(why);await sleep(500);}};
   const position=s=>({...protocolToClient(s.you),row:s.you.row,col:s.you.col});
   const rawWalkPoint=async(point,room=579)=>{
@@ -202,7 +223,9 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
     }
   };
   const cut=async(to,label)=>{
-    const s=await read(),geo=roomGeometry(s.room.num),from=position(s),edge=edgeOf(geo);
+    const s=await read(),geo=roomGeometry(s.room.num);
+    if(s.room.num===579)applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(s.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
+    const from=position(s),edge=edgeOf(geo);
     const proof=cutRail(from,to,{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
     if(!proof.ok||!proof.bridgeOk)throw Error('Brax '+label+' exact route not proved');
     const leg=railLeg({waypoints:proof.waypoints},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
@@ -296,6 +319,15 @@ export async function runBrax(ctx,{gatherMs=60000,timeoutMs=1200000,approachFile
       await until(async()=>{const t=await read();return t.room.num===579?t:null;},'Brax east entrance not reached',240000);
     }
     await command('cancel_movement');await command('rest',{stand:true});
+    // Ordinary travel lands beside the eastern exit, not at the recorded rail head.
+    // Survival may also have moved us to cover. Prove a walk from the actual body.
+    const approach=JSON.parse(readFileSync(approachFile,'utf8')).stones.find(stone=>stone.node==='brax')?.routes[0];
+    const head=approach?.legs[0]?.waypoints[0];if(!head)throw Error('Brax approach rail has no head');
+    s=await read();const here=position(s),geo=roomGeometry(579);
+    applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(s.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
+    const floor=floorAt(geo,here.x,here.y);
+    const alreadyOnRail=approach.legs.filter(l=>l.kind==='walk').some(l=>{const near=distanceToRail(l.waypoints,here,{floor});return near.onShelf&&near.d<=1024;});
+    if(!alreadyOnRail)await cut(head,'rail-entry');
     await follow(approachFile,'cliffs');
     s=await read();if(s.room.num!==579||Math.hypot(position(s).x-55808,position(s).y-32000)>160)throw Error('Brax south takeoff not reached');
     const server=(await(await fetch(new URL('health',controlURL))).json()).game_server;

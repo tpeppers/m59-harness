@@ -642,7 +642,7 @@ export class World {
   // reached by walking to the boundary square and stepping past it; a `go` exit
   // requires standing on an EXACT square (Room.SomethingTryGo matches row and col
   // exactly), which is why the square is reported rather than a direction.
-  exits() {
+  exits({cachedOnly=false}={}) {
     const room = this.room, geo = this.geometry, me = this.self;
     if (!room) return [];
     const origin = this.origin();
@@ -688,12 +688,14 @@ export class World {
         const portals = this._dynamicPortalExits(geo, me);
         return portals.length ? [...sharedHit, ...portals] : sharedHit;
       }
+      if(cachedOnly)return null;
       const result = immutableExitCopy(this._computeExits(room, geo, me, origin));
       if (shared) touchCache(shared, key, result, SHARED_EXIT_CACHE_CAP);
       touchCache(this._exitCache, key, result, LOCAL_EXIT_CACHE_CAP);
       const portals = this._dynamicPortalExits(geo, me);
       return portals.length ? [...result, ...portals] : result;
     }
+    if(cachedOnly)return null;
     const result = immutableExitCopy(this._computeExits(room, geo, me, origin));
     const portals = this._dynamicPortalExits(geo, me);
     return portals.length ? [...result, ...portals] : result;

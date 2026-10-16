@@ -1,3 +1,4 @@
+import {cutRail} from './m59-railcut.mjs';
 import {planBodyDetour,blockingBodySnapshot} from './m59-body-detour.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {squareCentreClient} from './m59-finepos.mjs';
@@ -86,3 +87,11 @@ const deletePending=groupJournal('windows-delete-pending',{directory,openMutex:(
 }});
 assert.equal((await deletePending.change(()=>({count:1}))).count,1);
 assert.equal(mutexOpenCalls,2,'a Windows delete-pending refusal retries without deleting an unowned lock');
+
+// Recorded public travel arrival and a keeper refuge must both board by legal walking.
+const entryGeo=roomGeometry(579),railHead={x:74880,y:38400};
+for(const from of [{x:72192,y:39424},{x:47360,y:48640}]){
+ const entry=cutRail(from,railHead,{edge:(a,b)=>entryGeo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true,bounds:{w:entryGeo.cols*1024,h:entryGeo.rows*1024},floorAt:(x,y)=>floorAt(entryGeo,x,y)});
+ assert(entry.ok&&entry.bridgeOk,'normal entry and observed refuge must have a checked walking connector');
+ assert(Math.hypot(entry.waypoints.at(-1).x-railHead.x,entry.waypoints.at(-1).y-railHead.y)<1);
+}
