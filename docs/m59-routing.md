@@ -1105,6 +1105,18 @@ and it is an aim rather than a promise — `_traceMoverStep` still decides wheth
 lands. It also does nothing about a body that is *hitting* you: that is `underFire`, and the
 answer there is still to move, not to thread.
 
+**AND THE LADDER ASSUMES THE BODY IS GOING SOMEWHERE.** Queue, sidestep, lane and perp walk all
+wait for, or slip past, a blocker that is itself travelling. An IDLE body in a one-lane passage is
+neither: there is no side, no lane, and it never leaves. East Jasper (350), 2026-10-16: the stairs
+from West Jasper land at r51c28, inside a tunnel (r51c27..c34) that is the only way between the two
+halves of the town, and `nearestSafeSpot` scored that square the room's best wall — `can_reach_you`
+is zero anywhere in a pipe. So idle characters settled INTO the tunnel to rest, and Fozzie stood
+behind Scooter there for forty-five minutes. `tools/m59-thoroughfare.mjs` is the fix, in two halves:
+a square is a **choke** when its open neighbours cannot reach one another within three squares
+without passing through it; resting (`restingSquare`) skips chokes (`avoidChokes`, combat walls
+unchanged), and an idle keeper standing in one with another player within two squares walks out to
+open ground away from them (`Autopilot.makeWay`, tactic `make_way`). `m59-thoroughfare-test.mjs`.
+
 ## FIVE SOURCES OF "AN EXIT", AND ONE VIEW THAT UNIONS THEM
 
 ```bash

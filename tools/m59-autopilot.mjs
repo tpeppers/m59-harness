@@ -68,6 +68,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { verdictFromRow, safeWallVerdict } from './m59-safewall.mjs';
 import { RoomGeometry } from './m59-roo.mjs';
+import { thoroughfareYield } from './m59-thoroughfare.mjs';
 import { recordRest } from './m59-restwatch.mjs';
 // `exposureAt` is the FORMULA for a safe wall and `RoomGeometry` says which grid the monster
 // uses. Imported so the survival ladder can ask the geometry directly instead of asking the
@@ -7255,6 +7256,8 @@ export class Autopilot {
           // that failed to hold, and the only history consulted here — the safe-spot book
           // is retired and its failure column is inverted (see m59-safewall.mjs).
           unreachable: this.unreachableSpots ?? null,
+          // Never a seat in a passage: see m59-thoroughfare.mjs (East Jasper's stair tunnel).
+          avoidChokes: true,
         });
         if (wall && Number.isInteger(wall.col) && Number.isInteger(wall.row)) {
           const steps = Math.max(Math.abs(wall.col - me.col), Math.abs(wall.row - me.row));
@@ -7649,6 +7652,42 @@ export class Autopilot {
   // floor of the room that killed them, that spell is the whole plan. They walked out
   // bare-handed and died again. Mana genuinely does refill by sitting, unlike vigor, so
   // waiting for it is a wait that ends.
+  // AN IDLE BODY IN A PASSAGE IS A WALL THAT NEVER MOVES. Every rung of the walker's body
+  // ladder assumes the blocker is going somewhere; an idle character is not, and in a one-lane
+  // tunnel there is no side to step round it. East Jasper, 2026-10-16: Scooter idle at r51c28
+  // in the stair tunnel, Fozzie behind him travelling east for forty-five minutes. So an idle
+  // keeper standing in a choke with another player within two squares walks out to open
+  // ground, away from them (thoroughfareYield). Any player, not only ours: a stranger is
+  // blocked by the same body. Rate-limited, so a refused walk is not retried every pass.
+  async makeWay() {
+    const s = this.s, c = s.client, geo = s.world?.geometry, me = c?.self;
+    if (!geo || !me || !c?.room?.objects || this.inert) return false;
+    if (this._madeWayAt && Date.now() - this._madeWayAt < 60_000) return false;
+    const players = [...c.room.objects.values()]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) && Number.isFinite(o.row) && Number.isFinite(o.col));
+    const plan = thoroughfareYield(geo, me, players);
+    if (!plan) return false;
+    this._madeWayAt = Date.now();
+    const room = s.world?.room;
+    const from = { row: me.row, col: me.col };
+    this.doing = 'making way';
+    const t0 = Date.now();
+    const w = await s.walkTo(plan.to.col, plan.to.row, { maxSteps: plan.steps + 8 })
+      .catch(e => ({ arrived: false, reason: e.message }));
+    this.movedAt = Date.now();
+    recordTactic({ character: this.who?.() ?? s.name ?? null, room: Number(room?.num ?? 0),
+                   tactic: 'make_way', trigger: 'idle_in_choke', worked: !!w?.arrived,
+                   ms: Date.now() - t0, hp_lost: 0, attempted: true,
+                   note: `r${from.row}c${from.col} -> r${plan.to.row}c${plan.to.col} ` +
+                         `(${plan.steps} step(s), ${plan.clear ? 'clear of' : 'only out of'} the passage) ` +
+                         `for a player at r${plan.from_player.row}c${plan.from_player.col}` +
+                         (w?.arrived ? '' : `; ${w?.reason ?? 'did not arrive'}`) });
+    this.note(w?.arrived ? 'made way in a passage' : 'could not make way in a passage', {
+      room: room?.name, from, to: plan.to, steps: plan.steps, reason: w?.reason ?? null,
+      because: 'an idle body in a one-lane passage is a wall nobody can walk round' });
+    return true;
+  }
+
   async hibernate(why, { mana = 0.95 } = {}) {
     const s = this.s;
     if (!this.sanctuary()) return false;
@@ -21334,6 +21373,8 @@ export class Autopilot {
       // prod 2026-09-26: twelve staged, every weapon `unknown`, zero dedications. The sweep is
       // rate-limited (60 s, two looks, paced) and does not move the character.
       this.sweepWeaponMagic().catch(() => {});
+      // OUT OF THE PASSAGE BEFORE ANYTHING THAT SITS STILL. See makeWay.
+      if (await this.makeWay().catch(() => false)) return HANDLED;
       if (await this.eatToFloor(ctx) === 'ate') return HANDLED;
       if (await this.hibernate('idle: no job to do').catch(() => false)) return HANDLED;
       return HANDLED;

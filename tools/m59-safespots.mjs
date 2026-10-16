@@ -44,6 +44,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RoomGeometry } from './m59-roo.mjs';
 import {fineChokesFor} from './m59-pocket-rails.mjs';
+import {isChokeSquare} from './m59-thoroughfare.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 
 // The eight neighbours, in clockwise order, so that a run of blocked ones can be
@@ -938,8 +939,14 @@ export function nearestSafeSpot(geo, from, {
   //     nearest refuge behind. Without `onward` nothing here changes.
   onward = null,
   forwardBias = 1,
+  // A PASSAGE IS NOT A SEAT. `can_reach_you` is zero in the middle of any one-lane tunnel,
+  // so a tunnel scores as the best wall in the room. Resting asks for this (restingSquare):
+  // East Jasper's stair tunnel, r51c28, was where every idle character sat, and the only way
+  // between the two halves of the town. Off for combat walls. See m59-thoroughfare.mjs.
+  avoidChokes = false,
 } = {}) {
   if (!geo || !from) return null;
+  const chokeCache = avoidChokes ? new Map() : null;
   const onwardSquare = onward && Number.isFinite(onward.row) && Number.isFinite(onward.col) ? onward : null;
   const distanceMatters = !onwardSquare;
   const cheb = (a, b) => Math.max(Math.abs(a.col - b.col), Math.abs(a.row - b.row));
@@ -1037,6 +1044,7 @@ export function nearestSafeSpot(geo, from, {
     // / "leaving the room to recover safely" / "could not leave", and then the character
     // died. Nothing recorded the failure, so every pass made the identical choice.
     if (unreachable?.has(key(s.col, s.row))) continue;
+    if (chokeCache && isChokeSquare(geo, s.row, s.col, { cache: chokeCache })) continue;
     // NOR AN ISLAND — A SQUARE WITH NOWHERE TO STEP IN FROM.
     //
     // NOBODY MAY BE SENT TO SHELTER THEY CANNOT REACH, and the reachability flood below does
