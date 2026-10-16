@@ -228,8 +228,6 @@ press L again) or the desk will say the keeper cannot drive.
   `m59-proxy.mjs` caps it, but a farm-buff "wait it out" asks for up to 60 s. Raising the cap
   needs a live check of how long the server lets a connection sit on the character menu.
 - **The client's `table_lookup` crash** (`meridian.exe+0x44095`) is not investigated.
-- **The roster copy is still in the public history** (commit `853af8c1`), waiting on a decision
-  to rewrite it.
 
 The machine-wide slowdown while the dev client ran was the client, not the desk: performance
 mode (`gpuefficiency=false`) presented up to 120 uncapped frames a second, focused or not.
