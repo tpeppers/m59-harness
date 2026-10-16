@@ -1104,14 +1104,17 @@ the records it describes.
   hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
   the suspension text, that inside the list nothing changes, and that every keeper gate asks the
   one function) and
-  `node tools/m59-pvp-strategy-test.mjs` (63 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
+  `node tools/m59-pvp-strategy-test.mjs` (89 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
   that no assignment, `default`, an unknown verb, a throw, a promise or a slow decide is silence and the
   old behaviour, that agent beats character beats default and `null` stops the fall-through, that a local
   module overrides a private one of the same name and an edited one reloads, that `flee_to` takes the body,
   walks to the room, ends on arrival and holds there, that a blow on the road or a war engagement does not
   restart or preempt it, that a sighting flees once per window, that a failed flight backs off, that an
-  operator's combat order is never preempted, that `engage` lifts pvp_rooms for that room only, and that a
-  menagerie host is never assigned anything) and
+  operator's combat order is never preempted, that `engage` lifts pvp_rooms for that room only, that a
+  `sortie` walks out ignoring the fight it leaves, posts on its square with the room list lifted and the
+  keeper held, answers a hit there, walks home when the map goes quiet, never follows a second map out,
+  and is replaced by a `flee_to`, that `alarm_elsewhere` is asked only for a fight next door and once per
+  window, and that a menagerie host is never assigned anything) and
   `node tools/m59-wand-shot-test.mjs` (15 — **why a wand zap was refused**: that the server's
   "behind you" test and staircase line of sight are transcribed, that a stale target square is
   charged to `stale` and a missing one to `other_room` ahead of every other gate, that any zap,

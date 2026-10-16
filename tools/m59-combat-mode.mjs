@@ -25,7 +25,7 @@ import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
-import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS } from './m59-pvp-strategy.mjs';
+import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS } from './m59-pvp-strategy.mjs';
 // A strategy flight that did not land waits this long before another may start.
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
@@ -266,6 +266,8 @@ export class CombatMode {
     // none, every moment below is answered by the behaviour that was already here.
     this.pvpStrategy = null; this.pvpSeenAt = new Map(); this.strategyEngage = null;
     this.flightBackoffUntil = 0; this.lastFlight = null;
+    // A SORTIE in force (m59-pvp-strategy.mjs `sortie`), the last one, and the alarm_elsewhere throttle.
+    this.sortie = null; this.lastSortie = null; this.alarmAskedAt = new Map();
   }
 
   status() {
@@ -392,9 +394,12 @@ export class CombatMode {
     if (this.warSeen.size > 512) this.warSeen.clear();
     // THE STRATEGY SEES EVERY STRANGER, hostile or not (m59-pvp-strategy.mjs `player_seen`): a flight
     // ends the scan here; an `engage` lifts this room's pvp_rooms refusal for the scan just below.
+    if (this.sortie?.phase === 'posted' && this.sortie.room === room && seen.some(p => p.verdict?.hostile))
+      this.sortie.last_hostile_at = now;
     for (const p of seen) {
       const d = this.consultSeen(p.name, p.verdict, room, now);
       if (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted')) { this.raiseWarAlarm(p.name, 'sighted', room); return; }
+      if (d?.do === 'sortie' && this.beginSortie(d, p.name, 'sighted') === 'going') { this.raiseWarAlarm(p.name, 'sighted', room); return; }
     }
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
     // OUTSIDE pvp_rooms a fighter is a sentinel too (m59-pvp-rooms.mjs): no engagement, but the
@@ -580,7 +585,18 @@ export class CombatMode {
       basis: a.basis ?? null, at: a.at ?? this.now() };
     if (!this.warEnabled() || this.warLeashed()) return false;
     if (String(a.reporter ?? '').toLowerCase() === String(me).toLowerCase()) return false;
-    if (Number(a.room) !== this.s.world?.room?.num) return false;
+    if (Number(a.room) !== this.s.world?.room?.num) {
+      // A FIGHT NEXT DOOR. Silence -- no strategy, a sighting, or null -- is what was always here: an
+      // alarm from another map is a report. Only a strategy's `sortie` turns it into a journey.
+      if (!this.pvpStrategy || a.basis === 'sighted' || !(Number(a.room) > 1)) return false;
+      const key = `${Number(a.room)}|${String(a.enemy).toLowerCase()}`, now = this.now();
+      if (now - (this.alarmAskedAt.get(key) ?? -Infinity) < PLAYER_SEEN_EVERY_MS) return false;
+      this.alarmAskedAt.set(key, now);
+      if (this.alarmAskedAt.size > 256) this.alarmAskedAt.clear();
+      const d = this.consultPvpStrategy('alarm_elsewhere', a.enemy, { hostile: true, basis: a.basis ?? null,
+        alarm_room: Number(a.room), reporter: a.reporter ?? null });
+      return d?.do === 'sortie' ? !!this.beginSortie(d, a.enemy, 'alarm') : false;
+    }
     // A sighting in our map is a report, not a call to arms: our own scan sees the same enemy
     // and engages on its own terms. Only a fight in progress pulls the room in by alarm.
     if (a.basis === 'sighted') return false;
@@ -1568,9 +1584,10 @@ export class CombatMode {
 
   pvpStrategyStatus() {
     const host = this.pvpStrategy;
-    if (!host && !this.lastFlight) return null;
+    if (!host && !this.lastFlight && !this.sortie && !this.lastSortie) return null;
     const keeper = this.keeper?.();
     return { ...(host?.status?.() ?? {}), flight: this.active?.flight ?? null, last_flight: this.lastFlight,
+      sortie: this.sortie, last_sortie: this.lastSortie,
       engage: this.strategyEngage, hold: keeper?.pvpStrategyHold ?? null,
       backoff_until: this.flightBackoffUntil > this.now() ? this.flightBackoffUntil : null };
   }
@@ -1588,7 +1605,25 @@ export class CombatMode {
       health_pct: Number.isFinite(v?.value) && max > 0 ? Math.round(100 * v.value / max) : null,
       max_health: Number.isFinite(max) ? max : null,
       in_flight: !!this.active?.flight, flight_room: this.active?.flight?.room ?? null,
-      hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(), ...extra };
+      hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(),
+      ...this.roomCount(), sortie_room: this.sortie?.room ?? null, sortie_phase: this.sortie?.phase ?? null,
+      alarm_room: null, reporter: null, ...extra };
+  }
+
+  /** Who is in the room with us: fleet-mates (not counting us) and players marked hostile. */
+  roomCount() {
+    const c = this.s.client, now = this.now();
+    let allies_here = 0, hostiles_here = 0;
+    try {
+      for (const o of c?.room?.objects?.values?.() ?? []) {
+        if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
+        const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
+        if (!name) continue;
+        if (this.isOurs(name)) { allies_here++; continue; }
+        if (war.warHostility({ name, flags: o.flags }, { fleetmate: false, now })?.hostile) hostiles_here++;
+      }
+    } catch { /* a count we could not take is zero, never a throw on the strategy path */ }
+    return { allies_here, hostiles_here };
   }
 
   /** Ask the character's strategy; null is "the behaviour that was already here". */
@@ -1633,9 +1668,11 @@ export class CombatMode {
   }
 
   /** Take the body and travel to `d.room`, as survival. False when there is nothing to do. */
-  beginFlight(d, threat, trigger) {
+  beginFlight(d, threat, trigger, { sortie = null } = {}) {
     const s = this.s, c = s.client, here = s.world?.room?.num, now = this.now();
     if (!s.live || !c?.self || !(here > 1) || c.vitals?.()?.health?.value === 0) return false;
+    // A flee_to decided during a sortie REPLACES it -- the retreat is the strategy's call, not the sortie's.
+    if (!sortie && this.sortie && trigger !== 'sortie_over') this.endSortie(`replaced by a flight to ${d.room}`, { home: false });
     if (here === d.room) { this.setStrategyHold(d, threat); return false; }
     if (this.active?.flight || now < this.flightBackoffUntil) return false;
     // An operator's combat order is the operator's: a strategy does not preempt one.
@@ -1664,7 +1701,8 @@ export class CombatMode {
       phase: 'fleeing', phaseRevision: 0, targetId: null, targetName: null,
       attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false,
       flight: { room: d.room, from: here, threat, trigger, strategy: d.strategy ?? null, why: d.why ?? null,
-        hold_ms: d.hold_ms ?? 0, hold_orders: d.hold_orders === true, decision_id: decision.id, started_at: now, arrived_at: null } };
+        hold_ms: d.hold_ms ?? 0, hold_orders: d.hold_orders === true, decision_id: decision.id, started_at: now, arrived_at: null,
+        ...(sortie ? { sortie } : {}) } };
     updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'pvp_strategy_flight' });
     this.record('pvp_strategy_flight', this.active);
     s.pacer?.wake?.();
@@ -1685,8 +1723,101 @@ export class CombatMode {
       demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
     }
     f.arrived_at = this.now();
+    if (f.sortie) {
+      // THE POST: a named square, best effort. Not reaching it is not a reason to go home -- the map is.
+      if (Number.isInteger(f.sortie.row) && Number.isInteger(f.sortie.col) && typeof s.walkTo === 'function') {
+        const w = await s.walkTo(f.sortie.col, f.sortie.row, { maxSteps: 40, movementGeneration: s.movementGeneration,
+          controlToken: o.id }).catch(e => ({ arrived: false, reason: e.message }));
+        this.guard(o);
+        f.sortie.post = { arrived: w?.arrived === true, reason: w?.arrived ? null : (w?.reason ?? null) };
+      }
+      this.stop(`PvP strategy sortie reached ${f.room}`);
+      this.postSortie();
+      return;
+    }
     this.setStrategyHold({ room: f.room, hold_ms: f.hold_ms, hold_orders: f.hold_orders, strategy: f.strategy }, f.threat);
     this.stop(`PvP strategy flight reached ${f.room}`);
+  }
+
+  // ------------------------------------------------------------------ sorties
+  //
+  // m59-pvp-strategy.mjs `sortie`: walk out to ONE other map as a flight walks (ignoring the fight being
+  // left), fight there with our room list lifted and the keeper held in it, and walk home when it goes
+  // quiet. The keeper process ticks `sortieTick` every 250 ms; nothing here ever follows a player out of
+  // the sortie map.
+
+  /** Start a sortie: 'going' (a flight owns the body), 'posted' (already in the map; fight on), or false. */
+  beginSortie(d, threat, trigger) {
+    const s = this.s, here = s.world?.room?.num, now = this.now();
+    if (this.sortie && this.sortie.room === d.room) return false;
+    const sortie = { room: d.room, home: d.home, row: d.row ?? null, col: d.col ?? null, max_ms: d.max_ms ?? DEFAULT_SORTIE_MS,
+      idle_ms: d.idle_ms ?? DEFAULT_SORTIE_IDLE_MS, home_hold_ms: d.home_hold_ms ?? 0, strategy: d.strategy ?? null, why: d.why ?? null,
+      threat: threat ?? null, trigger, from: here, started_at: now, phase: 'going' };
+    if (here === d.room) {
+      if (this.active && !this.active.pvp && !this.active.watchId) return false;
+      if (this.sortie) this.endSortie('replaced by another sortie', { home: false });
+      this.sortie = sortie; this.postSortie(); return 'posted';
+    }
+    if (this.sortie) this.endSortie('replaced by another sortie', { home: false });
+    this.sortie = sortie;
+    if (!this.beginFlight({ do: 'flee_to', room: d.room, hold_ms: 0, max_ms: Math.min(sortie.max_ms, 600_000),
+      strategy: d.strategy, why: d.why }, threat, trigger, { sortie })) { this.sortie = null; return false; }
+    this.s.recorder?.line?.('combat', { event: 'pvp_strategy_sortie', phase: 'going', room: d.room, home: d.home,
+      target: threat ?? null, trigger, strategy: d.strategy ?? null, why: d.why ?? null });
+    return 'going';
+  }
+
+  /** Arrived (or already there): lift our room list, hold the keeper in the map, and look around. */
+  postSortie() {
+    const t = this.sortie, now = this.now();
+    if (!t) return;
+    t.phase = 'posted'; t.arrived_at = now; t.until = t.started_at + t.max_ms; t.last_hostile_at = now;
+    this.strategyEngage = { room: t.room, until: t.until, player: t.threat, strategy: t.strategy, sortie: true };
+    const keeper = this.keeper?.();
+    if (keeper) keeper.pvpStrategyHold = { room: t.room, until: t.until, orders: true, strategy: t.strategy,
+      threat: t.threat, set_at: now, sortie: true };
+    this.s.recorder?.line?.('combat', { event: 'pvp_strategy_sortie', phase: 'posted', room: t.room, home: t.home,
+      post: t.row != null ? { row: t.row, col: t.col } : null, strategy: t.strategy });
+    try { this.scanForEnemies(this.s.client); } catch { /* the next object change scans again */ }
+  }
+
+  /** End the sortie; with `home`, walk back as a flight and hold there for home_hold_ms. */
+  endSortie(reason, { home = true } = {}) {
+    const t = this.sortie;
+    if (!t) return;
+    this.sortie = null;
+    const keeper = this.keeper?.();
+    if (this.strategyEngage?.sortie) this.strategyEngage = null;
+    if (keeper?.pvpStrategyHold?.sortie) keeper.pvpStrategyHold = null;
+    t.phase = 'ended'; t.ended_at = this.now(); t.end_reason = reason;
+    this.lastSortie = t;
+    this.s.recorder?.line?.('combat', { event: 'pvp_strategy_sortie', phase: 'ended', room: t.room, home: t.home,
+      reason, strategy: t.strategy });
+    if (!home) return;
+    const here = this.s.world?.room?.num;
+    const back = { do: 'flee_to', room: t.home, hold_ms: t.home_hold_ms, hold_orders: true, max_ms: 600_000,
+      strategy: t.strategy, why: `sortie over: ${reason}` };
+    if (here === t.home) this.setStrategyHold(back, t.threat);
+    else this.beginFlight(back, t.threat, 'sortie_over');
+  }
+
+  /** Every 250 ms from the keeper process: keep a posted sortie honest, and end it when it is over. */
+  sortieTick() {
+    const t = this.sortie, s = this.s, c = s.client;
+    if (!t) return;
+    if (!s.live || !c?.self || c.vitals?.()?.health?.value === 0) { this.endSortie('no live body', { home: false }); return; }
+    if (t.phase === 'going') {
+      // The flight owns the walk; if it ended without posting, so did the sortie.
+      if (!this.active?.flight?.sortie) this.endSortie('the walk out did not arrive', { home: false });
+      return;
+    }
+    const here = s.world?.room?.num, now = this.now();
+    // ONE MAP OUT AND NO FURTHER: anywhere but the sortie map ends it, and anywhere but home walks back.
+    if (here !== t.room) { this.endSortie(`left the sortie map for ${here}`, { home: here !== t.home }); return; }
+    if (this.roomCount().hostiles_here > 0) t.last_hostile_at = now;
+    if (this.active?.pvp) return;                       // a fight in progress finishes first
+    if (now >= t.until) this.endSortie('max_ms reached');
+    else if (now - t.last_hostile_at >= t.idle_ms) this.endSortie(`no hostile for ${Math.round(t.idle_ms / 1000)}s`);
   }
 
   beginPvP(evidence, observedAt = this.now()) {
@@ -1700,7 +1831,9 @@ export class CombatMode {
     // `outside` below reads null); `flee_to` takes the body and travels, as survival.
     const strategyDecision = this.consultPvpStrategy('attacked_by_player', evidence.character,
       { hostile: true, basis: 'attacked' });
-    const fled = strategyDecision?.do === 'flee_to' && this.beginFlight(strategyDecision, evidence.character, 'attacked');
+    const fled = (strategyDecision?.do === 'flee_to' && this.beginFlight(strategyDecision, evidence.character, 'attacked'))
+      || (strategyDecision?.do === 'sortie' && this.beginSortie(strategyDecision, evidence.character, 'attacked') === 'going');
+    if (this.sortie?.phase === 'posted' && this.sortie.room === s.world.room.num) this.sortie.last_hostile_at = this.now();
     // OUTSIDE pvp_rooms (operator, 2026-10-11: "stop people from fighting back outside of
     // 599/2/38"). No return fire and the body is NOT taken: the keeper's own ladder (flee below the
     // line, playDead, panic logoff) is the survival that applies, as for anything else hurting us
@@ -2237,6 +2370,7 @@ export class CombatMode {
       // re-planned on every packet that shows the same player.
       if (!f.arrived_at) this.flightBackoffUntil = this.now() + FLIGHT_BACKOFF_MS;
       this.lastFlight = f;
+      if (f.sortie && !f.arrived_at && this.sortie === f.sortie) this.endSortie(`the walk out stopped: ${reason}`, { home: false });
       finishSurvivalDecision(this.s, f.decision_id, f.outcome, reason);
     }
     withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId, origin: keeperOrigin('combat_mode') }), o.id);

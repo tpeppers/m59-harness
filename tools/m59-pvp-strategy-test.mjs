@@ -286,6 +286,104 @@ console.log('combat mode: engage');
   ok('and only in that room', !!f.mode.pvpRoomsRefusal());
 }
 
+console.log('the sortie decision');
+{
+  const v = d => ps.validateDecision(d);
+  ok('sortie needs a home that is a room and not its own room', !!v({ do: 'sortie', room: 2 }).error
+    && !!v({ do: 'sortie', room: 2, home: 2 }).error && !!v({ do: 'sortie', room: 2, home: 1 }).error);
+  const d = v({ do: 'sortie', room: 2, home: 38, row: 4, col: 42 }).decision;
+  ok('sortie carries room, home, square and the default clocks', d?.do === 'sortie' && d.room === 2 && d.home === 38
+    && d.row === 4 && d.col === 42 && d.max_ms === ps.DEFAULT_SORTIE_MS && d.idle_ms === ps.DEFAULT_SORTIE_IDLE_MS
+    && d.home_hold_ms === 0, JSON.stringify(d));
+  ok('a square is row AND col, whole squares', !!v({ do: 'sortie', room: 2, home: 38, row: 4 }).error
+    && !!v({ do: 'sortie', room: 2, home: 38, row: 4.5, col: 3 }).error);
+  ok('max_ms is clamped to the sortie ceiling', v({ do: 'sortie', room: 2, home: 38, max_ms: 99 * 3600_000 }).decision.max_ms === ps.SORTIE_MAX_MS);
+  ok('no square is a whole-map sortie', !('row' in v({ do: 'sortie', room: 2, home: 38 }).decision));
+}
+
+console.log('combat mode: sortie');
+const HOSTILE = P | OF.ENEMY;
+const runner = (m, x) => x.sortie_room ? null
+  : (x.room === 38 && x.hostile) ? { do: 'sortie', room: 2, home: 38, row: 4, col: 42, max_ms: 120_000, idle_ms: 20_000,
+      home_hold_ms: 60_000, strategy: 'double-down' } : null;
+const walker = f => { const walks = []; f.s.walkTo = async (col, row) => { walks.push({ row, col }); f.c.self.row = row; f.c.self.col = col; return { arrived: true }; }; return walks; };
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: runner }); const walks = walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 });
+  ok('a hostile entering the bastion sends the runner OUT: the body is taken as a flight',
+    f.mode.active?.flight?.room === 2 && f.mode.active.flight.sortie && f.mode.sortie?.phase === 'going',
+    JSON.stringify(f.mode.status().pvp_strategy));
+  ok('the facts counted the hostile', f.asked.some(a => a.hostiles_here === 1 && a.allies_here === 0), JSON.stringify(f.asked));
+  ok('the walk out ignores the fight it is leaving: no war engagement preempts it',
+    f.mode.beginWar('Morpheus', { basis: 'war_flag', room: 38 }) === false && !!f.mode.active?.flight);
+  f.c.room.objects.clear();
+  await f.mode.tick();
+  ok('the router walked to the sortie map, then to the post square', f.travels.at(-1)?.to === 2 && walks.at(-1)?.row === 4 && walks.at(-1)?.col === 42,
+    JSON.stringify({ travels: f.travels.map(t => t.to), walks }));
+  ok('posted: no active order, sortie posted', !f.mode.active && f.mode.sortie?.phase === 'posted' && f.mode.sortie.post?.arrived === true, JSON.stringify(f.mode.status().pvp_strategy));
+  ok('our room list is lifted in the sortie map (pvp_rooms is [38])', f.mode.pvpRoomsRefusal() === null);
+  ok('the keeper is held in the sortie map, explicit orders too', f.keeper.pvpStrategyHold?.room === 2 && f.keeper.pvpStrategyHold.orders === true);
+  put(f, 2, HOSTILE); Object.assign(f.c.room.objects.get(2), { row: 4, col: 43 }); hitBy(f); await f.mode.tick();
+  ok('a hit in the sortie map is answered with return fire', !!f.mode.active?.pvp && f.sent.includes('attack:2'), f.sent.join());
+  f.mode.stop('test'); f.c.room.objects.clear();
+  f.advance(10_000); f.mode.sortieTick();
+  ok('still posted inside idle_ms', f.mode.sortie?.phase === 'posted');
+  f.advance(25_000); f.mode.sortieTick();
+  ok('quiet for idle_ms: the sortie ends and the body walks home as a flight', !f.mode.sortie && f.mode.lastSortie?.phase === 'ended'
+    && /no hostile/.test(f.mode.lastSortie.end_reason) && f.mode.active?.flight?.room === 38, JSON.stringify(f.mode.lastSortie));
+  ok('the sortie hold and the lifted room list are gone', !f.keeper.pvpStrategyHold?.sortie && !f.mode.strategyEngage?.sortie);
+  await f.mode.tick();
+  ok('home, and held there for home_hold_ms', f.s.world.room.num === 38 && f.keeper.pvpStrategyHold?.room === 38);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: runner }); walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 }); f.c.room.objects.clear(); await f.mode.tick();
+  f.s.world.room.num = 599; f.mode.sortieTick();
+  ok('ONE MAP OUT: a body anywhere else ends the sortie and walks home, never onward',
+    !f.mode.sortie && /left the sortie map for 599/.test(f.mode.lastSortie?.end_reason) && f.mode.active?.flight?.room === 38);
+  await f.mode.tick();
+  ok('and the walk is to home, not further', f.travels.map(t => t.to).join() === '2,38', f.travels.map(t => t.to).join());
+}
+{
+  const retreat = (m, x) => x.sortie_room === 2 && x.room === 2 && x.health_pct < 40 && x.allies_here + 1 <= x.hostiles_here
+    ? { do: 'flee_to', room: 38, hold_ms: 60_000, strategy: 'double-down' } : runner(m, x);
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: retreat }); walker(f);
+  put(f, 2, HOSTILE); f.mode.event({ kind: 'appeared', id: 2 }); f.c.room.objects.clear(); await f.mode.tick();
+  f.c.hp = 30; put(f, 2, HOSTILE); hitBy(f);
+  ok('a flee_to decided during a sortie replaces it: the retreat', !f.mode.sortie && /replaced by a flight to 38/.test(f.mode.lastSortie?.end_reason)
+    && f.mode.active?.flight?.room === 38 && !f.mode.active.flight.sortie, JSON.stringify(f.mode.status().pvp_strategy));
+  f.mode.stop('test');
+}
+{
+  reset(); const f = fixture({ room: 2, pvpRooms: [38], strategy: (m, x) => ({ do: 'sortie', room: 2, home: 38, strategy: 'd' }) });
+  put(f, 2, HOSTILE); hitBy(f); await f.mode.tick();
+  ok('a sortie decided in its own map posts in place and the hit is still answered',
+    f.mode.sortie?.phase === 'posted' && !f.travels.length && f.sent.includes('attack:2'), f.sent.join() + ' ' + JSON.stringify(f.mode.status()));
+  f.mode.stop('test');
+}
+
+console.log('combat mode: alarm_elsewhere');
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38] });
+  ok('no strategy: an alarm from another map is only a report', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === false
+    && !f.travels.length && !f.mode.active);
+}
+{
+  const insider = (m, x) => m === 'alarm_elsewhere' && x.alarm_room === 2 && x.hostiles_here === 0
+    ? { do: 'sortie', room: 2, home: 38, idle_ms: 20_000, strategy: 'double-down' } : null;
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: insider }); walker(f);
+  ok('a bare sighting next door is never asked', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'sighted' }) === false
+    && !f.asked.length);
+  ok('a fight next door asks the strategy, which sorties', f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'engaged' }) === true
+    && f.asked.some(a => a.moment === 'alarm_elsewhere' && a.alarm_room === 2 && a.reporter === 'Statler' && a.player === 'Morpheus')
+    && f.mode.sortie?.room === 2, JSON.stringify(f.asked));
+  const n = f.asked.length;
+  f.mode.onWarAlarm({ at: Date.now(), room: 2, reporter: 'Statler', enemy: 'Morpheus', basis: 'attacked' });
+  ok('asked at most once per map and enemy per window', f.asked.length === n);
+  await f.mode.tick();
+  ok('and it lands in the fight next door', f.s.world.room.num === 2 && f.mode.sortie?.phase === 'posted', JSON.stringify(f.mode.status()));
+}
+
 console.log('the keeper');
 {
   const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');

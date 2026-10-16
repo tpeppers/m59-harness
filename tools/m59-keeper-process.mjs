@@ -423,6 +423,8 @@ session.combat.leaderCharacter = () => {
   return m ? fleet?.[m[1]]?.credentials?.character ?? menagerieRoster?.[m[1]]?.credentials?.character ?? null : null;
 };
 setInterval(() => { session.combat.warbandTick?.().catch?.(() => {}); }, 250).unref?.();
+// PVP STRATEGY SORTIES (CombatMode.sortieTick): end a posted sortie when its map goes quiet or the body leaves it.
+setInterval(() => { try { session.combat.sortieTick?.(); } catch { /* the next tick retries */ } }, 250).unref?.();
 // SWARM FOLLOW (m59-swarm-follow.mjs): the driver's state, read at most once a second, and this
 // keeper's SIGHTING written once a second while a swarm is on -- the room it is in, whether it sees
 // the leader, its maximum health. Only a keeper that sees the leader knows his room NUMBER, and
