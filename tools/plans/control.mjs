@@ -43,7 +43,9 @@ async function http(port, path, body = null) {
 export async function findSession(client, proxies = gateProxies()) {
   for (const a of proxies) {
     const srv = `${a.server?.host}:${a.server?.port}`.toLowerCase();
-    if (client.server && client.server !== srv) continue;
+    // ...or the proxy's own listen address: a client the fleet terminal points at the proxy names
+    // where it connected (127.0.0.1:5962), not the server behind it.
+    if (client.server && client.server !== srv && client.server !== `127.0.0.1:${a.listen}`) continue;
     try {
       const g = await http(a.gate_control, '/gate');
       const s = (g.sessions ?? []).find(s => ((s.player_id ?? 0) & 0x0fffffff) === client.player_id);
