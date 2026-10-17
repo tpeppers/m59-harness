@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import{coalesceCheckedRailLeg}from'./m59-rail-coalesce.mjs';
+import{loadMap as coalesceMap,roomExitSquares as coalesceExitSquares}from'./m59-map.mjs';
 import {unsentRailAnimationRefusal,waitForRailGeometry,provedRailMove,unsentRailGeometryRefusal} from './m59-rail-observer.mjs';
 // FOLLOW A FINE ROUTE EXACTLY, OR STOP AND SAY WHERE IT CAME OFF.
 //
@@ -64,7 +66,7 @@ import { auditNodeWalk } from './m59-node-route-audit.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
 import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint, waitForRailAnimation, railBoarding, passedRailAim } from './m59-railfollow.mjs';
 import {planRailForwardGap,railEndQueueReady} from './m59-rail-traffic.mjs';
-import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
+import {fineRecoveryInterruption} from './m59-fine-recovery-gate.mjs';
 import { createRailObserver,refusedRailWrite,resumeObservedRailWalk,waitForConfirmedRailLanding,unsentRailJumpRefusal } from './m59-rail-observer.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {planDeclaredTakeoff,canJoinDeclaredTakeoff} from './m59-jump-takeoff.mjs';
@@ -82,7 +84,7 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'serialize-jumps', 'native-rail', 'queue-end', 'origin-json', 'keeper-position', 'precise-waypoints', 'wait-bodies', 'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
+                       'serialize-jumps', 'coalesce-rail', 'native-rail', 'queue-end', 'origin-json', 'convoy-json', 'keeper-position', 'precise-waypoints', 'wait-bodies', 'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
 
 {
   const unknown = argv.filter(a => a.startsWith('--')).map(a => a.slice(2).split('=')[0])
@@ -104,6 +106,9 @@ const AGENT = flag('agent');
 const TO    = flag('to');
 const DRY   = has('dry-run');
 const ORIGIN=flag('origin-json')?JSON.parse(flag('origin-json')):{source:'operator',name:'fineclimb',run_id:String(process.pid)};
+// A directed checked rail shares admission only with its declared owner/cohort.
+const CONVOY=flag('convoy-json')?JSON.parse(flag('convoy-json')):null;
+if(CONVOY&&(CONVOY.key!==originLabel(ORIGIN)||!Array.isArray(CONVOY.characters)||CONVOY.characters.length<1||CONVOY.characters.length>25||CONVOY.characters.some(n=>typeof n!=='string'||!n)))throw Error('invalid fineclimb convoy');
 // How far off a waypoint the body may be before the follow is declared to have come off.
 const TOL   = Number(flag('tolerance', 1.6));       // squares
 const STEPS = Number(flag('steps', 6));             // fine steps allowed per waypoint
@@ -205,12 +210,9 @@ if (!DRY) {
 }
 
 const observeRaw=has('keeper-position')?createRailObserver({fleet:FLEET,agent:AGENT}):null;
-const checkObserved=s=>{const decision=s.autopilot_status?.survival_decisions?.current;
- if(s.autopilot_status?.recovery_travel){receipt({kind:'keeper-recovery',reply:{arrived:false,reason:'keeper_recovery_trip_active',trip_id:s.autopilot_status.recovery_travel.id}});throw Error('keeper_recovery_trip_active');}
- if(isActiveRecoveryDecision(decision)&&decision.source==='keeper'){
-  receipt({kind:'keeper-recovery',reply:{arrived:false,reason:'keeper_recovery_active',decision_id:decision.id}});
-  throw Error('keeper_recovery_active');
- }
+const checkObserved=s=>{
+ const interruption=fineRecoveryInterruption(s);
+ if(interruption){receipt({kind:'keeper-recovery',reply:interruption});throw Error(interruption.reason);}
  return s;
 };
 const observe=observeRaw?async()=>checkObserved(await observeRaw()):null;
@@ -475,7 +477,8 @@ for (const [li, leg] of plan.legs.entries()) {
         await sleep(500);continue;
       }
     }
-    const j = await call('jump' , { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
+    if(observeRaw)await observeRaw();
+    const j = observeRaw?await observeRaw.action('jump',{to_row:leg.to.row,to_col:leg.to.col,origin:ORIGIN},{timeoutMs:60000}):await call('jump' , { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
     if(observe&&unsentRailGeometryRefusal(j)&&Date.now()<jumpDeadline){
       receipt({kind:'native-flight-unsent',leg:li+1,reply:j});await sleep(500);continue;
     }
@@ -543,7 +546,8 @@ for (const [li, leg] of plan.legs.entries()) {
   if(has('native-rail')&&observeRaw){
     const next=plan.legs[li+1],nextJump=next?.kind==='jump'?{room:ROOM,from:next.from,to:next.to,from_fine:next.declared_from??next.fromFine,to_fine:next.declared_to??next.toFine}:null;
     let nativeDone=false;
-    const pending=observeRaw.action('walk_rail',{room:ROOM,leg,nextJump,queueEnd:has('queue-end')&&li===plan.legs.length-1,origin:ORIGIN})
+    const nativeLeg=has('coalesce-rail')?coalesceCheckedRailLeg(R.geo,leg,{avoidSquares:coalesceExitSquares(coalesceMap().rooms[ROOM],{rows:R.geo.rows,cols:R.geo.cols,includeInland:true})}):leg;
+    const pending=observeRaw.action('walk_rail',{room:ROOM,leg:nativeLeg,nextJump,queueEnd:has('queue-end')&&li===plan.legs.length-1,...(CONVOY?{convoy:CONVOY}:{}),origin:ORIGIN})
       .then(reply=>({reply}),error=>({error})).finally(()=>{nativeDone=true;});
     // Keep a landing claim only until the confirmed body clears it.
     while(activeCrossing&&!nativeDone){await sleep(250);await clearCrossing();}

@@ -499,9 +499,22 @@ export function railBoarding(legs,body,{floor,within=2048,strictFloor=false,geo=
 
 // A body detour can pass an aim. Reaching backward into its follower is not progress.
 // Require a close, exact-floor match on the same dense leg before advancing.
-export function passedRailAim(leg,aim,body,{floor,within=256}={}){
+export function passedRailAim(leg,aim,body,{floor,within=256,geo=null}={}){
  const points=leg.sourceWaypoints,at=points?.findIndex(p=>p.x===aim.x&&p.y===aim.y);
  if(!(at>=0))return false;
- const board=railBoarding([{kind:'walk',waypoints:points}],body,{floor,within,strictFloor:true});
+ const board=railBoarding([{kind:'walk',waypoints:points}],body,{floor,within,strictFloor:true,geo});
  return !!board&&board.denseIndex>at;
+}
+
+
+// Recognize a reached ground endpoint before replaying an earlier rail leg.
+// This proves only the same nearby shelf; movement still checks every body.
+export function railEndReached(geo,body,end,{within=0,heightTolerance=16}={}){
+ if(!geo?.collisionReady||body?.predicted||![body?.x,body?.y,end?.x,end?.y,within,heightTolerance].every(Number.isFinite)||within<0||heightTolerance<0)return false;
+ const distance=Math.hypot(body.x-end.x,body.y-end.y);if(distance>within)return false;
+ const floor=geo.floorBaseAtClient(body.x,body.y),targetFloor=geo.floorBaseAtClient(end.x,end.y);
+ if(!Number.isFinite(floor)||!Number.isFinite(targetFloor)||Math.abs(floor-targetFloor)>heightTolerance)return false;
+ if(distance===0)return true;
+ const proof=geo.traceFineMoveClient(body.x,body.y,end.x,end.y,{slide:false});
+ return proof.arrived===true&&proof.blocked!==true;
 }

@@ -1,0 +1,292 @@
+{
+  "room": 579,
+  "source": "actual normal-return planning log poses; platform reset heights independently observed at17:53:40Z",
+  "poses": [
+    {
+      "agent": "braxshadow22",
+      "position": {
+        "id": 7490,
+        "col": 58,
+        "row": 21,
+        "x": 3728,
+        "y": 1367,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540957
+      }
+    },
+    {
+      "agent": "braxshadow16",
+      "position": {
+        "id": 7477,
+        "col": 59,
+        "row": 22,
+        "x": 3808,
+        "y": 1440,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540964
+      }
+    },
+    {
+      "agent": "braxshadow03",
+      "position": {
+        "id": 7446,
+        "col": 53,
+        "row": 19,
+        "x": 3424,
+        "y": 1248,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540968
+      }
+    },
+    {
+      "agent": "braxshadow14",
+      "position": {
+        "id": 7473,
+        "col": 53,
+        "row": 21,
+        "x": 3425,
+        "y": 1377,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540973
+      }
+    },
+    {
+      "agent": "braxshadow19",
+      "position": {
+        "id": 7480,
+        "col": 57,
+        "row": 21,
+        "x": 3679,
+        "y": 1377,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540979
+      }
+    },
+    {
+      "agent": "braxshadow08",
+      "position": {
+        "id": 7458,
+        "col": 53,
+        "row": 22,
+        "x": 3440,
+        "y": 1444,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540983
+      }
+    },
+    {
+      "agent": "braxshadow20",
+      "position": {
+        "id": 7483,
+        "col": 58,
+        "row": 22,
+        "x": 3744,
+        "y": 1440,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540988
+      }
+    },
+    {
+      "agent": "braxshadow18",
+      "position": {
+        "id": 7479,
+        "col": 59,
+        "row": 21,
+        "x": 3808,
+        "y": 1376,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540993
+      }
+    },
+    {
+      "agent": "braxshadow12",
+      "position": {
+        "id": 7468,
+        "col": 58,
+        "row": 21,
+        "x": 3744,
+        "y": 1376,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259540999
+      }
+    },
+    {
+      "agent": "braxshadow21",
+      "position": {
+        "id": 7486,
+        "col": 52,
+        "row": 21,
+        "x": 3360,
+        "y": 1376,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541006
+      }
+    },
+    {
+      "agent": "braxshadow02",
+      "position": {
+        "id": 7443,
+        "col": 60,
+        "row": 24,
+        "x": 3872,
+        "y": 1568,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541002
+      }
+    },
+    {
+      "agent": "braxshadow17",
+      "position": {
+        "id": 7478,
+        "col": 59,
+        "row": 23,
+        "x": 3807,
+        "y": 1505,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541077
+      }
+    },
+    {
+      "agent": "braxshadow10",
+      "position": {
+        "id": 7460,
+        "col": 57,
+        "row": 19,
+        "x": 3680,
+        "y": 1248,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541081
+      }
+    },
+    {
+      "agent": "braxshadow05",
+      "position": {
+        "id": 7448,
+        "col": 47,
+        "row": 45,
+        "x": 3040,
+        "y": 2912,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541085
+      }
+    },
+    {
+      "agent": "braxshadow24",
+      "position": {
+        "id": 7495,
+        "col": 58,
+        "row": 19,
+        "x": 3744,
+        "y": 1248,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541089
+      }
+    },
+    {
+      "agent": "braxshadow23",
+      "position": {
+        "id": 7494,
+        "col": 51,
+        "row": 24,
+        "x": 3296,
+        "y": 1568,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541097
+      }
+    },
+    {
+      "agent": "braxshadow06",
+      "position": {
+        "id": 7452,
+        "col": 52,
+        "row": 19,
+        "x": 3360,
+        "y": 1248,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541102
+      }
+    },
+    {
+      "agent": "braxshadow04",
+      "position": {
+        "id": 7447,
+        "col": 48,
+        "row": 43,
+        "x": 3104,
+        "y": 2784,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259541152
+      }
+    },
+    {
+      "agent": "braxshadow09",
+      "position": {
+        "id": 7459,
+        "col": 47,
+        "row": 42,
+        "x": 3056,
+        "y": 2736,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259594739
+      }
+    },
+    {
+      "agent": "braxshadow01",
+      "position": {
+        "id": 7439,
+        "col": 53,
+        "row": 22,
+        "x": 3424,
+        "y": 1440,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259597598
+      }
+    },
+    {
+      "agent": "braxshadow07",
+      "position": {
+        "id": 7456,
+        "col": 57,
+        "row": 22,
+        "x": 3680,
+        "y": 1440,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259597625
+      }
+    },
+    {
+      "agent": "braxshadow11",
+      "position": {
+        "id": 7463,
+        "col": 52,
+        "row": 22,
+        "x": 3360,
+        "y": 1440,
+        "facing": null,
+        "room_object_id": 1552,
+        "at": 1792259603795
+      }
+    }
+  ]
+}

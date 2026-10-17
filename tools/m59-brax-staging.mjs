@@ -1,3 +1,5 @@
+import{equipCarriedTravelWeapon}from'./m59-convoy-travel-gear.mjs';
+import{feedConvoyBeforeDeparture}from'./m59-convoy-provision.mjs';
 import {appendFileSync,mkdirSync,readFileSync} from 'node:fs';
 import {loadMap,roomExitSquares} from './m59-map.mjs';
 import {roomGeometry} from './m59-ground.mjs';
@@ -24,31 +26,7 @@ export function braxFoodShare(items,{reserve=80,wanted=100}={}){
  }
  return share;
 }
-async function feedBraxGroup(contexts,read){
- for(const actor of contexts){
-  let state=await read(actor);if(state.room.num===827||!(state.vigor?.value<80))continue;
-  for(let bite=0;bite<12&&state.vigor.value<120;bite++){
-   let pack=await actor.call('inventory',{agent:actor.agent});
-   let meal=pack.items?.find(i=>foodValue(i.name)?.nutrition>0);
-   if(!meal){
-    for(const donor of contexts){
-     if(donor===actor)continue;const other=await read(donor);
-     if(other.room.num!==state.room.num||isActiveRecoveryDecision(other.autopilot_status?.survival_decisions?.current))continue;
-     const stock=await donor.call('inventory',{agent:donor.agent}),share=braxFoodShare(stock.items??[]);
-     if(!share.length)continue;
-     const delivery=await donor.call('supply',{from:donor.agent,to:actor.agent,what:share,ids_as_of:stock.ids_as_of,who_travels:'neither'},60000);
-     console.log('BRAX food share '+JSON.stringify({from:donor.agent,to:actor.agent,supplied:delivery.supplied,reason:delivery.reason}));
-     if(delivery.supplied)break;
-    }
-    pack=await actor.call('inventory',{agent:actor.agent});meal=pack.items?.find(i=>foodValue(i.name)?.nutrition>0);
-   }
-   if(!meal)break;
-   const before=state.vigor.value;await actor.call('act',{agent:actor.agent,verb:'eat',target:meal.id});await sleep(2500);state=await read(actor);
-   if(!(state.vigor.value>before))break;
-  }
-  console.log('BRAX prepared vigor '+JSON.stringify({agent:actor.agent,vigor:state.vigor.value}));
- }
-}
+async function feedBraxGroup(contexts,read){return feedConvoyBeforeDeparture(contexts,{read,skipRoom:room=>room===827,log:detail=>console.log('BRAX '+JSON.stringify(detail))});}
 export async function prepareBraxGroup(ctx,members,{approachFile,includeDestination=false,scope='travel',observerOf=createRailObserver}={}){
  const origin=ctx.origin??currentCallOrigin(),key=ctx.fleet+':'+originLabel(origin)+':'+scope+':'+[...members].sort().join(',');
  let group=cohorts.get(key);
@@ -63,6 +41,7 @@ export async function prepareBraxGroup(ctx,members,{approachFile,includeDestinat
   const contexts=[...group.contexts.values()],readers=new Map(contexts.map(c=>[c.agent,observerOf({fleet:c.fleet,agent:c.agent})]));
   const read=async c=>{const s=await readers.get(c.agent)();checkIslandCancellation(c,s);return s;};
   const release=c=>{const entry=group.ready.get(c.agent);if(!entry.released){entry.released=true;entry.resolve(true);console.log('BRAX departure-ready '+c.agent);}};
+  await Promise.all(contexts.map(async c=>{const result=await equipCarriedTravelWeapon(c,{read});c.state.braxTravelGear=result;console.log('BRAX '+JSON.stringify({kind:'travel-gear',agent:c.agent,...result}));}));
   await feedBraxGroup(contexts,read);
   const snapshots=await Promise.all(contexts.map(async c=>[c,await read(c)]));
   const rooms=[...new Set(snapshots.map(([,s])=>s.room.num))].filter(room=>includeDestination||room!==827);

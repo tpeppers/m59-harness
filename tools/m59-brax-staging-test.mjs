@@ -76,7 +76,7 @@ console.log('Brax convoy: '+advances+' forward rail moves and '+clears+' clearan
  const people=new Map(f.actors.map(o=>[o.id,{...o,name:'actor'+o.id,is_player:true}])),members=f.actors.map(o=>'staging'+o.id),released=new Set();
  let unblock,started;const moving=new Promise(r=>{unblock=r;}),firstWalk=new Promise(r=>{started=r;});let moves=0;
  const origin={source:'fleetscript',name:'progressive-stage-test',run_id:'isolated'},contexts=members.map((agent,i)=>({agent,fleet:'test-progressive',origin,state:{},call:async(name,args)=>{
-  assert.equal(name,'walk_to');assert(!released.has(agent),'a released actor belongs to its onward driver');moves++;if(moves===1){started();await moving;}
+  if(name==='inventory')return{items:[]};assert.equal(name,'walk_to');assert(!released.has(agent),'a released actor belongs to its onward driver');moves++;if(moves===1){started();await moving;}
   Object.assign(people.get(i+1),{x:args.x,y:args.y,row:Math.floor(args.y/64),col:Math.floor(args.x/64)});return {arrived:true};
  }}));
  const roomOf=id=>({2:38,3:826,4:827,5:833}[id]??39);

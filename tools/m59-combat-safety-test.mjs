@@ -93,6 +93,7 @@ console.log('\ncombat event collection');
     },
   };
   const session = {
+    client: c,
     need: () => c,
     faceToward: async () => {},
     pacer: { submit: async (_kind, action) => action() },
@@ -138,6 +139,7 @@ console.log('the trailing sweep');
     },
   };
   const session = {
+    client: c,
     need: () => c,
     faceToward: async () => {},
     pacer: { submit: async (_kind, action) => action() },
@@ -181,7 +183,7 @@ console.log('a refused swing names itself');
       return { events: ring.filter(e => e.seq > since && (!want || want.has(e.kind))), seq, timedOut: false };
     },
   };
-  const session = { need: () => c, faceToward: async () => {},
+  const session = { client: c, need: () => c, faceToward: async () => {},
                     pacer: { submit: async (_k, action) => action() } };
   const exchange = await Session.prototype.attackRounds.call(session, target.id, 4);
   ok('a seated refusal is reported as could_not_swing, not as a miss',

@@ -1,0 +1,8 @@
+import assert from'node:assert/strict';import{equipCarriedTravelWeapon}from'./m59-convoy-travel-gear.mjs';
+const origin={source:'fleetscript',name:'test-convoy',run_id:'one'},base=()=>({pid:12,you:{id:18},room:{num:39},hp:{value:72,max:72},equipment_items:[],autopilot_status:{faculties:{movement:{owner:"fleetscript:test-convoy",expires_in_ms:60000}},policy:{trainingWeaponOnly:true}}});
+function fixture(){const s=base(),calls=[];const ctx={agent:'test18',origin,state:{},async call(name,args){calls.push({name,args});if(name==='inventory')return{items:[{id:7967,name:'axe'}]};if(name==='autopilot')return{};if(name==='act'){s.equipment_items=[{id:7967,name:'axe'}];return{used:true};}throw Error(name);}};return{s,calls,ctx,read:async()=>s};}
+{const f=fixture(),r=await equipCarriedTravelWeapon(f.ctx,{read:f.read});assert(r.equipped&&r.relaxedTrainingWeaponOnly);assert.equal(r.weapon,'axe');assert.equal(f.calls.filter(x=>x.name==='act').length,1);assert.equal(f.calls.find(x=>x.name==='act').args.target,7967);}
+{const f=fixture();f.s.equipment_items=[{id:1,name:'hammer'}];assert((await equipCarriedTravelWeapon(f.ctx,{read:f.read})).unchanged);assert.equal(f.calls.length,0);}
+{const f=fixture();f.s.autopilot_status.recovery_travel={to:2};assert((await equipCarriedTravelWeapon(f.ctx,{read:f.read})).held);assert.equal(f.calls.length,0);}
+{const f=fixture();let n=0;await assert.rejects(equipCarriedTravelWeapon(f.ctx,{read:async()=>{n++;return n===1?f.s:{...f.s,pid:13};}}),/body_or_recovery_changed/);assert(!f.calls.some(x=>x.name==='act'));}
+console.log('captured unarmed axe carrier equips existing stock before shared waits; armed actors unchanged; protected recovery and replacement clients receive no use packet');

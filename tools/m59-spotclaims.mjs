@@ -334,6 +334,12 @@ export function reserveFilePassage(agent, room, zone, {flow=null}={}) {
     return { ok: true };
   });
 }
+// Retag only this process's existing reservation. It remains held throughout;
+// this admits no new body and never releases another live keeper's claim.
+export function retagOwnFilePassage(agent,room,zone,flow){
+ if(!fileSpotClaimsEnabled())return null;if(typeof flow!=='string'||!flow||flow.length>2048)throw Error('invalid passage convoy flow');
+ return withLock(dir=>{const all=records(dir,'passage'),own=all.find(r=>r.agent===String(agent));if(!own)return{ok:false,reason:'passage_not_held'};if(own.pid!==process.pid||own.room!==room||own.zone!==zone)return{ok:false,reason:'passage_owner_or_location_changed'};if(own.flow===flow)return{ok:true,changed:false};const{_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,flow,updated_at:Date.now()});remove(_path);return{ok:true,changed:true};});
+}
 export function releaseFilePassage(agent) {
   if (!fileSpotClaimsEnabled()) return null;
   return withLock(dir => {

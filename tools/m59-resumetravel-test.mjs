@@ -259,7 +259,7 @@ console.log('\nand when nothing refuses, it goes');
 console.log('\nthe wiring the keeper cannot check for itself');
 {
   ok('the broker hands travelJob its destination, not just the room name',
-     /goTravelling\(`travelling to \$\{where\}`, \{ to: dest \}\)/.test(BROKER_SRC));
+     /goTravelling\(`travelling to \$\{where\}`, \{ to: dest, origin: opts.origin \}\)/.test(BROKER_SRC));
   // An unrecognised key is REPORTED, never applied and never dropped — so a policy the
   // keeper reads has to exist in the schema or it can never be set at all.
   for (const key of ['resume_travel', 'resume_travel_attempts', 'resume_travel_within_ms'])
@@ -390,8 +390,7 @@ console.log('');
 console.log('FIT TO GO ON MEANS THE WALL HAS STOPPED PAYING, NOT AN ABSOLUTE NUMBER');
 {
   const src = KEEPER_SRC;
-  const fn = src.slice(src.indexOf('async resumeSuspendedJourney'),
-                       src.indexOf('async resumeSuspendedJourney') + 14000);
+  const fn = Autopilot.prototype.resumeSuspendedJourney.toString();
   // Full health is the right bar for a character resting somewhere safe and the wrong one for
   // one stalled mid-journey — because a stalled character is usually stalled SOMEWHERE IT
   // CANNOT HEAL, and then the gate never opens. Measured, both characters, the same shape:

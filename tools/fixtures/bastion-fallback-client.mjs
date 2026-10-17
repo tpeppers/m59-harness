@@ -26,16 +26,16 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
   const attached=attachStepMasks(map);
   if(!attached.ok)throw Error('Bastion tests require the collision routing table');
 
-  function fixture(entry,{bodies=false,wireNames=false,maxPackets=512,maxMs=30000}={}) {
+  function fixture(entry,{bodies=false,wireNames=false,selfId=entry.from.id??1,maxPackets=512,maxMs=30000}={}) {
     const deadline=Date.now()+maxMs;
     let room=entry.from.room,pending=null;
     const packets=[],crossings=[],events=[],asks=[];
-    const c={selfId:1,evSeq:0,rsc:new Map(),roomContentsRequested:0,roomContentsReceived:0,state:'game',
+    const c={selfId,evSeq:0,rsc:new Map(),roomContentsRequested:0,roomContentsReceived:0,state:'game',
       room:{id:10000+room,flags:0,objects:new Map()},
       get self(){return this.room.objects.get(this.selfId);},
       vitals:()=>({health:{value:100,max:100},vigor:{value:200,max:200}}),
       face(){},stand(){return true;},rest(){return true;},
-      predictSelf(p){this.room.objects.set(1,{...this.self,...p,predicted:true});},
+      predictSelf(p){this.room.objects.set(this.selfId,{...this.self,...p,predicted:true});},
       moveTo(x,y){
         if(packets.length>=maxPackets)throw Error('offline bastion packet budget exhausted');
         const r=map.rooms[room],row=Math.floor(y/64),col=Math.floor(x/64);
@@ -54,7 +54,7 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
     function enter(n,p) {
       const r=map.rooms[n],geo=geometryFor(r);
       room=n;c.roomNameRsc=r.nameRsc;c.roomRsc=r.roomRsc;c.room={id:10000+n,security:geo.security,flags:0,objects:new Map()};
-      c.room.objects.set(1,{id:1,flags:4,...p,row:Math.floor(p.y/64),col:Math.floor(p.x/64),predicted:false});
+      c.room.objects.set(c.selfId,{id:c.selfId,flags:4,...p,row:Math.floor(p.y/64),col:Math.floor(p.x/64),predicted:false});
     }
     function applyPending(){
       if(!pending)return;

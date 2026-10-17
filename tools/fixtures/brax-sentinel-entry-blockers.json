@@ -1,0 +1,147 @@
+{
+  "room": 589,
+  "to": 579,
+  "pose": {
+    "x": 2880,
+    "y": 1408,
+    "row": 22,
+    "col": 45
+  },
+  "bodies": [
+    {
+      "id": 7973,
+      "name": "black spider",
+      "flags": 9,
+      "x": 1376,
+      "y": 2208,
+      "row": 34,
+      "col": 21
+    },
+    {
+      "id": 7972,
+      "name": "black spider",
+      "flags": 9,
+      "x": 2272,
+      "y": 2144,
+      "row": 33,
+      "col": 35
+    },
+    {
+      "id": 7971,
+      "name": "orc",
+      "flags": 9,
+      "x": 608,
+      "y": 3040,
+      "row": 47,
+      "col": 9
+    },
+    {
+      "id": 7970,
+      "name": "orc",
+      "flags": 9,
+      "x": 1952,
+      "y": 2080,
+      "row": 32,
+      "col": 30
+    },
+    {
+      "id": 7969,
+      "name": "black spider",
+      "flags": 9,
+      "x": 1696,
+      "y": 416,
+      "row": 6,
+      "col": 26
+    },
+    {
+      "id": 7968,
+      "name": "black spider",
+      "flags": 9,
+      "x": 864,
+      "y": 2784,
+      "row": 43,
+      "col": 13
+    },
+    {
+      "id": 7967,
+      "name": "orc",
+      "flags": 9,
+      "x": 1120,
+      "y": 2272,
+      "row": 35,
+      "col": 17
+    },
+    {
+      "id": 7966,
+      "name": "black spider",
+      "flags": 9,
+      "x": 864,
+      "y": 2848,
+      "row": 44,
+      "col": 13
+    },
+    {
+      "id": 7959,
+      "name": "black spider",
+      "flags": 9,
+      "x": 736,
+      "y": 2720,
+      "row": 42,
+      "col": 11
+    },
+    {
+      "id": 7958,
+      "name": "black spider",
+      "flags": 9,
+      "x": 1312,
+      "y": 2336,
+      "row": 36,
+      "col": 20
+    },
+    {
+      "id": 7957,
+      "name": "black spider",
+      "flags": 9,
+      "x": 736,
+      "y": 2656,
+      "row": 41,
+      "col": 11
+    },
+    {
+      "id": 7956,
+      "name": "orc",
+      "flags": 9,
+      "x": 928,
+      "y": 2912,
+      "row": 45,
+      "col": 14
+    },
+    {
+      "id": 7955,
+      "name": "black spider",
+      "flags": 9,
+      "x": 480,
+      "y": 3040,
+      "row": 47,
+      "col": 7
+    },
+    {
+      "id": 7954,
+      "name": "orc",
+      "flags": 9,
+      "x": 800,
+      "y": 2656,
+      "row": 41,
+      "col": 12
+    },
+    {
+      "id": 7953,
+      "name": "black spider",
+      "flags": 9,
+      "x": 1056,
+      "y": 2336,
+      "row": 36,
+      "col": 16
+    }
+  ]
+}

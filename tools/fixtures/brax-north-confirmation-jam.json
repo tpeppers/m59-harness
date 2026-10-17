@@ -1,0 +1,355 @@
+{
+  "room": 579,
+  "to": 578,
+  "observed": {
+    "2": 250,
+    "3": 250,
+    "4": 540,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 510,
+    "10": 214
+  },
+  "players": [
+    {
+      "id": 7443,
+      "name": "Brax Bbbb",
+      "x": 3896,
+      "y": 236,
+      "flags": 5
+    },
+    {
+      "id": 7456,
+      "name": "Brax Gggg",
+      "x": 3552,
+      "y": 520,
+      "flags": 4160750093
+    },
+    {
+      "id": 7446,
+      "name": "Brax Cccc",
+      "x": 3552,
+      "y": 488,
+      "flags": 4160750093
+    },
+    {
+      "id": 7468,
+      "name": "Brax Llll",
+      "x": 3644,
+      "y": 347,
+      "flags": 4160750093
+    },
+    {
+      "id": 7463,
+      "name": "Brax Kkkk",
+      "x": 3676,
+      "y": 337,
+      "flags": 4160750093
+    },
+    {
+      "id": 7460,
+      "name": "Brax Jjjj",
+      "x": 3708,
+      "y": 331,
+      "flags": 4160750093
+    },
+    {
+      "id": 7486,
+      "name": "Brax Uuuu",
+      "x": 3584,
+      "y": 384,
+      "flags": 4160750093
+    },
+    {
+      "id": 7494,
+      "name": "Brax Wwww",
+      "x": 3740,
+      "y": 326,
+      "flags": 4160750093
+    },
+    {
+      "id": 7458,
+      "name": "Brax Hhhh",
+      "x": 3552,
+      "y": 424,
+      "flags": 4160750093
+    },
+    {
+      "id": 7439,
+      "name": "Brax Aaaa",
+      "x": 3552,
+      "y": 456,
+      "flags": 4160750093
+    },
+    {
+      "id": 7448,
+      "name": "Brax Eeee",
+      "x": 3772,
+      "y": 320,
+      "flags": 4160750093
+    },
+    {
+      "id": 7483,
+      "name": "Brax Tttt",
+      "x": 3804,
+      "y": 320,
+      "flags": 4160750093
+    },
+    {
+      "id": 7459,
+      "name": "Brax Iiii",
+      "x": 3861,
+      "y": 291,
+      "flags": 4160750093
+    },
+    {
+      "id": 7452,
+      "name": "Brax Ffff",
+      "x": 3872,
+      "y": 160,
+      "flags": 4160750093
+    }
+  ],
+  "bodies": [
+    {
+      "id": 7973,
+      "name": "battered skeleton",
+      "x": 2720,
+      "y": 1184,
+      "flags": 9
+    },
+    {
+      "id": 7972,
+      "name": "battered skeleton",
+      "x": 3678,
+      "y": 615,
+      "flags": 9
+    },
+    {
+      "id": 7971,
+      "name": "battered skeleton",
+      "x": 3602,
+      "y": 616,
+      "flags": 9
+    },
+    {
+      "id": 7970,
+      "name": "battered skeleton",
+      "x": 3924,
+      "y": 601,
+      "flags": 9
+    },
+    {
+      "id": 7969,
+      "name": "skeleton",
+      "x": 3498,
+      "y": 602,
+      "flags": 9
+    },
+    {
+      "id": 7968,
+      "name": "battered skeleton",
+      "x": 3603,
+      "y": 1966,
+      "flags": 9
+    },
+    {
+      "id": 7967,
+      "name": "skeleton",
+      "x": 3416,
+      "y": 622,
+      "flags": 9
+    },
+    {
+      "id": 7966,
+      "name": "battered skeleton",
+      "x": 3993,
+      "y": 1071,
+      "flags": 9
+    },
+    {
+      "id": 7965,
+      "name": "battered skeleton",
+      "x": 3542,
+      "y": 726,
+      "flags": 9
+    },
+    {
+      "id": 7964,
+      "name": "battered skeleton",
+      "x": 3865,
+      "y": 658,
+      "flags": 9
+    },
+    {
+      "id": 7963,
+      "name": "battered skeleton",
+      "x": 2724,
+      "y": 598,
+      "flags": 9
+    },
+    {
+      "id": 7962,
+      "name": "battered skeleton",
+      "x": 3563,
+      "y": 663,
+      "flags": 9
+    },
+    {
+      "id": 7949,
+      "name": "orc",
+      "x": 3758,
+      "y": 676,
+      "flags": 9
+    },
+    {
+      "id": 7948,
+      "name": "black spider",
+      "x": 1683,
+      "y": 2408,
+      "flags": 9
+    },
+    {
+      "id": 7947,
+      "name": "black spider",
+      "x": 2398,
+      "y": 1233,
+      "flags": 9
+    },
+    {
+      "id": 7946,
+      "name": "orc",
+      "x": 879,
+      "y": 1553,
+      "flags": 9
+    },
+    {
+      "id": 7945,
+      "name": "orc",
+      "x": 3994,
+      "y": 603,
+      "flags": 9
+    },
+    {
+      "id": 7944,
+      "name": "black spider",
+      "x": 2387,
+      "y": 1302,
+      "flags": 9
+    },
+    {
+      "id": 1577,
+      "name": "lever",
+      "x": 3840,
+      "y": 1600,
+      "flags": 2048
+    },
+    {
+      "id": 1576,
+      "name": "lever",
+      "x": 3264,
+      "y": 1600,
+      "flags": 2048
+    },
+    {
+      "id": 1575,
+      "name": "lever",
+      "x": 3840,
+      "y": 1024,
+      "flags": 2048
+    },
+    {
+      "id": 1574,
+      "name": "lever",
+      "x": 3264,
+      "y": 1024,
+      "flags": 2048
+    },
+    {
+      "id": 1573,
+      "name": "lever",
+      "x": 3550,
+      "y": 1374,
+      "flags": 2048
+    },
+    {
+      "id": 1572,
+      "name": "lever",
+      "x": 3936,
+      "y": 81,
+      "flags": 2048
+    },
+    {
+      "id": 1571,
+      "name": "lever",
+      "x": 3904,
+      "y": 81,
+      "flags": 2048
+    },
+    {
+      "id": 1570,
+      "name": "lever",
+      "x": 3872,
+      "y": 81,
+      "flags": 2048
+    },
+    {
+      "id": 1569,
+      "name": "lever",
+      "x": 3840,
+      "y": 81,
+      "flags": 2048
+    },
+    {
+      "id": 1568,
+      "name": "lever",
+      "x": 3825,
+      "y": 96,
+      "flags": 2048
+    },
+    {
+      "id": 1567,
+      "name": "lever",
+      "x": 3825,
+      "y": 128,
+      "flags": 2048
+    },
+    {
+      "id": 1566,
+      "name": "lever",
+      "x": 3825,
+      "y": 160,
+      "flags": 2048
+    },
+    {
+      "id": 1565,
+      "name": "lever",
+      "x": 3825,
+      "y": 192,
+      "flags": 2048
+    },
+    {
+      "id": 1564,
+      "name": "lever",
+      "x": 3856,
+      "y": 207,
+      "flags": 2048
+    },
+    {
+      "id": 1563,
+      "name": "Journal of the Watcher of the Brax Arena",
+      "x": 3856,
+      "y": 112,
+      "flags": 65
+    },
+    {
+      "id": 1562,
+      "name": "mana node",
+      "x": 1968,
+      "y": 3328,
+      "flags": 2230272
+    }
+  ]
+}

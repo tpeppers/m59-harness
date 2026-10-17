@@ -2501,3 +2501,246 @@ Runtime provenance hashes the fine-guide book along with the map, route, track
 and fall-jump data. Changes to those navigation inputs mark the executing
 source dirty, so a recorded route identifies its actual guide content as well
 as its code commit.
+
+
+## Published fine doorways and convoy egress
+
+A legacy coarse exit anchor may name the square beside its actual fine opening.
+The prepared fine-exit check validates the confirmed body's canonical protocol
+cell against fine_stand_on, the fine distance and terrain bridge. Walking back
+to the coarse label can leave the doorway and re-enter a monster's reach.
+
+For ordinary open-ground room exits, m59-queued-room-exit.mjs uses validated
+edgeCandidatesOf tuples and bounded fine planning. Do not call World.exits()
+repeatedly in a parent convoy coordinator: the Ukgoth origin floods measured
+23.6 seconds per call and starved every actor's lease heartbeat. Parent planning
+yields between actors. Direct native walk actions register the same own-walk
+window as broker movement so a lease retake cannot cancel its own operation.
+
+Native walk_rail accepts explicit convoy membership independently of queuePath.
+Optional bodyDetour on open ground preserves the complete proved rail and finds
+a bounded path around actual bodies to a later original bend. It never skips
+through geometry directly to an arbitrary endpoint. Exact cliff queues retain
+their strict lane rules. Captured return fixtures include stationary skeletons
+as well as fleet bodies; player-only reproductions missed the original jam.
+
+A returned, explicitly ended position-confirmation or same-actor not-in-game
+error may be followed by a fresh owned body/recovery observation and bounded
+replanning within the original deadline. Transport timeouts, reset connections,
+foreign leases and another actor's error do not authorize repeating a POST.
+
+The opening check also runs during a native leg and after each local detour
+bend. Checking only at admission misses a body that enters the opening later
+and makes it chase old waypoints backward into its followers. A positively
+observed declared crossing during the approach is accepted only for the named
+destination, same socket, unchanged movement generation and a living body.
+Only explicitly unsent body refusals wait and retry; a sent or ambiguous
+crossing is never repeated.
+
+Same-floor rail coalescing is opt-in and retains the original dense rail. Each
+chord is terrain-checked and avoids every mandatory exit square; jumps and
+strict shelves retain their original boundaries. Healthy body-only suspended
+journeys can resume at the ordinary travel reserve only after proof that the
+owned job ended for traffic, with no wound, ailment, protected recovery,
+cancellation or other active movement. This prevents tiny rest thresholds
+from leaving healthy 69-vigor travelers waiting forever for an 80-vigor rest
+that their policy never starts.
+
+Passage reservations belong to the current keeper process as well as the actor.
+A newly admitted convoy may retag only that process's own held reservation,
+with the same confirmed body still inside its recorded zone and explicit
+convoy membership. Another live holder remains authoritative. Exit flows use
+the published destination/branch tuple, so nearby fine endpoints on the same
+branch do not create opposing reservations. Native progress reports the
+adoption and the last admission refusal, including its holder and zone.
+
+A room-exit objective can explicitly follow the same living actor's current
+owned keeper recovery across an ordinary room boundary. It clears its former
+refuge fence and replans from the new confirmed body after recovery. Fixed-room
+rails retain their room fence. Old preemption evidence alone, another actor,
+a foreign lease or death cannot authorize the boundary handoff.
+
+An ended movement deviation under a rest=false FleetScript may resume at the
+ordinary road vigor reserve when fully healthy. Its terminal deviation must
+belong to that exact job and destination, and the keeper first confirms its
+current body under the same client, room and movement generation. It then
+rechecks cancellation, ownership and recovery. A transport timeout is not an
+ended deviation and does not authorize a repeated action.
+
+Published GO exits use the same independent queue controller as boundary exits.
+Their activation target is the exact published row/col, not necessarily its
+center: a stair cell can contain a wall through its center and still have a
+legal usable portion. A confirmed body already in that cell activates directly;
+other bodies use stock-traceable fine routing to a point inside it. Locked and
+unpublished cells are excluded. GO openings with the same directed arrival
+share convoy admission. Brax travelers continue independently through39->38->2
+and the ordinary2->599 boundary before the remaining road journey.
+
+A keeper taking back a road journey captures its issuer, run and guard before
+cancelling movement. Rearming or recovery must preserve that exact suspended
+objective; a null owner makes an ordinary pause look like a lost controller.
+
+Queued exit approaches shorten only stock-traceable chords on the same shelf.
+They retain the original dense source, exact published activation/boundary cell,
+all exit avoidance, jump boundaries, and native body-gap checks. Captured native
+fixtures reduce castle-cohort movement from172–202 to71–82 packets; this is an
+offline packet comparison, not a measured five-minute group arrival.
+
+Terrain planning runs in two reusable worker isolates. A captured22-character
+platform-to-north search previously occupied the controller event loop for52.9s,
+expiring otherwise healthy HTTP reads. The off-loop replay retains all22 terrain
+refusals while allowing heartbeat callbacks (largest observed gap93ms). A north
+exit refusal does not prove that every homeward outlet is unreachable: test the
+other published outlets before imposing another lift circuit. After awaiting a
+plan, re-read the current body, room, sector heights, lease and cancellation;
+a plan cannot authorize movement after ownership or recovery changes.
+
+The fineclimb wrapper uses the native fine-walk recovery rule: protected keeper
+trips retain movement, and active health recovery blocks a wounded body. A
+completed recovery label on a full-health body alone does not block its next
+walk. Confirmed lift activation is logged before the ascent wait; activation and
+validated completion remain separate measurements if a run is interrupted.
+
+A road's travelling hold retains its explicit issuer even before the live
+Session move order exists. Capture the parent origin and guard before taking
+a nested recovery wall; the inner cell walk cannot become the resumed road's
+issuer. Repeated suspension and resume keep the same original run identity.
+This preserves strict owner checks instead of licensing a new route after
+an ambiguous transport failure or an unrelated cancellation.
+
+Checked native exits use the raw map's physical fine stand/edge tuples, rather
+than a coarse road boarding anchor that can sit behind the queue. A confirmed
+body at an unlocked GO cell may activate an equivalent published GO cell only
+when destination and directed arrival branch match exactly. Progress records
+the requested and resolved cells and the leg endpoint with explicit units.
+Neither change expands legal movement or relaxes collision checks.
+
+Convoy preparation equips an actor's own carried travel weapon before shared
+food or crowd waits. It prefers a carried hammer, verifies actual equipment
+afterward, and respects active recovery and body/control changes. A temporary
+hammer that has expired is an explicit travel gear shortfall; strict hammer
+provisioning remains a separate farming prerequisite.
+
+Exit search gives each of at most four selected published candidates its own
+bounded terrain proof. A nearer unreachable opening cannot exhaust a shared
+two-second cutoff and suppress the next legal opening. Candidate diagnostics
+retain the actual stand point, result, refusal and search duration. The worker
+queue and caller's absolute deadline still bound the overall planning request.
+
+Brax travel clears hammer-only training while retaining the actual equipped
+weapon and hammer preference. A conjured hammer expiring during travel must
+not make a carrier of another usable weapon leave the route to rearm. Farming
+orders separately restore and verify strict equipped hammers.
+
+Narrow checked corridors may use clear-prefix queuing while retaining a checked
+local detour when a known NPC blocks that prefix. A confirmed body already past
+an aim advances only after a close, same-component geometry proof. It does not
+backtrack into a follower merely to align with an old point. Players remain
+live collision obstacles, and every detour retains the normal native proofs.
+
+Stock move.c checks blocking objects in two dimensions, even during a fall.
+A queued takeoff blocked by a known NPC may prove a forward or sideways
+adjustment of at most a quarter square inside its original column. It retains
+the full ground and flight collision proof, and never uses this adjustment to
+bypass a player or cross the neighboring lane. Actual-only probes still wait.
+
+Known cohorts of five or more stage one center operator and four corner
+operators on unchanged platform floor while boarding. They still activate the
+center first and verify puzzle readiness before each corner pull. Once the
+lift is positively raised, a rider's unloading failure remains individual;
+it cannot invalidate the solved puzzle for healthy peers. Every later ride
+still waits for the complete observed reset deadline.
+
+Native GO accounting records whether the paced callback actually emitted the
+command, and the event ordinal at that moment. A concentration drop is unsent,
+and pre-send spell feedback cannot suppress the bounded silent retry. Only a
+wholly unsent cast hold permits the checked crossing to wait and re-plan; a
+previously transmitted request retains its ambiguity.
+
+Set M59_RAIL_TRACE_DIR to an ignored directory such as substrate/rail-inputs
+for private reproduction evidence. Each supported native movement action saves
+its consumed arguments and last observed scene before its single POST, plus a
+wire-request digest and a separate outcome. Read kind, observation time, raw
+body IDs, flags and moving floors remain explicit. Unknown fields, chat,
+credentials and reusable control tokens are omitted. A missing outcome means
+the action may have executed; it never licenses an automatic repeated write.
+
+
+Declared jumps carry the same FleetScript origin through the broker and native
+keeper as walks. The native jump owns its posture and actual step as one move
+order, so a keeper interruption can name the exact preempted run. Brax and
+precise rail followers use one identity-fenced native jump request and retain
+its ordered input scene. They never repeat an ambiguous flight. Yielded or
+ended survival labels are not active recovery; a positively owned active
+recovery may finish only within the jump's original deadline.
+
+A solved lift retires when every rider has either cleared or recorded an
+individual failure. This transition is checked both on failure and on the
+last healthy exit. Otherwise an early failed rider could leave the journal
+permanently in its leaving phase even after every other rider had departed.
+A historical all-terminal group still requires the normal observed puzzle
+reset before another group can use the levers.
+
+A reached rail endpoint can be recognized through an explicit nearby-distance,
+actual-floor and ordinary ground-connection proof. Its default distance is
+zero. Brax uses its existing bounded south-queue contract before replaying the
+approach. Platform height does not determine whether a traveler reached the
+separate cliff shelf. In particular, a body near r31c55 can be thousands of
+floor units below the r32c55 ledge and must climb normally.
+
+For a published edge crossing, an actual body in the same boundary cell may
+reuse a terrain-connected stage within one square of its fine anchor.
+This avoids walking back into a blocker merely to center on the anchor.
+The outward movement still checks collision, directed exit identity and the
+server's actual room transition. Wall-separated, predicted, other-cell and
+distant poses cannot reuse that stage.
+
+
+The public Brax cliff follower passes the same origin-keyed convoy and exact
+character roster through fineclimb's CLI to each native checked walking leg.
+The native walker derives the directed flow from the checked room and endpoint.
+Without this handoff, a following fleetmate can be refused by an exclusive
+passage claim even while following the same route. Standalone CLI calls without
+a convoy retain exclusive admission. Foreign keys, empty/oversized rosters and
+invalid names refuse before an action; physical collision, unknown occupants,
+opposing flows, jump ordering and exact shelf checks remain authoritative.
+
+Queued egress uses the existing distance-priced, goal-directed flood within
+the same two bounded lattice phases. A breadth-first flood exhausted the fixed
+budget exploring unrelated shelves in the recorded 17-body Ancient return
+component. The goal-directed version proves those routes and the native replay
+drains all17 bodies with the recorded NPCs retained. This is a geometry/packet
+regression result, not a live travel-time or survival claim. Twenty-two captured
+unreachable platform searches still refuse under bounded worker budgets while
+the controller's timers remain responsive.
+
+
+Brax boarding reserves each assigned landing column separately while keeping
+alignment and flight under the original shared gate. The takeoff planner may
+legitimately choose a diagonal trajectory, so independent flight gates would
+not establish independent paths. Release the shared flight gate only after a
+server-confirmed connected landing; retain the column reservation until the
+landed body advances32 wire units onto the platform. This overlaps parking
+with the next different-column fall. Every packet still obeys live collision
+and declared-flight checks. A same-column follower waits for its own landing
+clearance, and one owner cannot release another column's reservation.
+
+City legs share the enclosing route deadline, with a bounded600-second leg
+limit. A90-second survival freeze, an ordinary health tick up to60 seconds,
+and the walking itself can exceed a separate180-second leg timer. Following
+owned recovery under the original route budget is a continuation, not a retry
+of an ambiguous transport operation.
+
+The shadow trial was paused by the operator before a fresh all24 successful
+migration or the requested new farming hour. The last completed outbound attempt
+reached the Graveyard with23of24, on two positively validated lift trips carrying
+18and5. This establishes useful route/queue fixes, not an all24 reliability or
+five-minute p90 claim. Preserve individual failures and distinguish public route
+qualification from private recovery/return attempts.
+
+The native straight queue may advance up to96 wire units (1.5 squares) when its
+entire prefix is collision-clear. The former48-unit horizon could strand the
+captured five-person offset landing jam; the same retained-body native regression
+clears with the existing1.5-square queue convention. Distance-based pacing,
+actual-body confirmation, floor checks and final-send collision checks remain
+unchanged. This is a bounded regression repair, not a new live migration result.

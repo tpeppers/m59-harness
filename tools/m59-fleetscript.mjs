@@ -360,7 +360,7 @@ export const isTransportFailure = (e) =>
 // its own `{source: 'fleetscript', name, run_id}` on the steps it compiles; anything else that
 // drives through this `call` — a standalone tool, a helper module — is an operator's script and
 // is named after it. Explicit `args.origin` always wins.
-const MOVE_TOOLS = new Set(['travel', 'walk_to', 'crawl_to', 'cancel_movement']);
+const MOVE_TOOLS = new Set(['travel', 'walk_to', 'crawl_to', 'jump', 'cancel_movement']);
 let callOrigin = null;
 const scriptOrigin = () => moveOrigin({ source: 'operator',
   name: String(process.argv[1] ?? 'a script').replace(/\\/g, '/').split('/').pop() || 'a script' });

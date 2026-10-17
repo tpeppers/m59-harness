@@ -161,6 +161,19 @@ try{
  assert.deepEqual(await nativeRecovery({foreignAfterRest:true}),{ok:false,rests:1,reason:'foreign_broker_lease'});
  assert.deepEqual(await nativeRecovery({changedBodyAfterRest:true}),{ok:false,rests:1,reason:'interrupted_without_owned_recovery'});
  await assert.rejects(nativeRecovery({cancelAfterRest:true}),/cancelled_by_operator/);
+ // Captured13: its own refuge approach crossed589->579 while the exit
+ // controller waited. Fixed-room walks still reject that boundary change.
+ async function crossingRecovery({allow=true,foreign=false,changedBody=false,active=true,dead=false}={}){
+  let reads=0;const first={...initial,room:{num:589,object_id:1584},you:{id:7471,x:232,y:2912,row:45,col:3},hp:{value:14,max:20}};
+  const x={...ctx,state:{islandCancelFence:1},call:async name=>{assert.equal(name,'status');return{autopilot_status:{faculties:{movement:ownLease}}};}};
+  const ok=await recoverIslandFineWalk(x,{initial:first,active:true,pollMs:1,deadline:Date.now()+1000,allowRecoveryRoomChanges:allow,read:async()=>{reads++;return{l:{room:{num:579,object_id:1552},you:{id:changedBody?999:7471,x:4576,y:2528,row:39,col:71},hp:{value:dead?0:reads===1?5:20,max:20},vigor,
+    autopilot_status:{faculties:{movement:foreign?{...ownLease,owner:'fleetscript:foreign'}:ownLease},survival_decisions:{current:active&&reads===1?{source:'keeper',strategy:'nearest_refuge',status:'approaching',ended_at:null,chosen_refuge:{room:579,row:30,col:60}}:null}}}};}});
+  return{ok,reason:x.state.islandRecoveryFailure?.reason};
+ }
+ assert.deepEqual(await crossingRecovery(),{ok:true,reason:undefined});
+ for(const options of[{allow:false},{changedBody:true},{active:false}])assert.deepEqual(await crossingRecovery(options),{ok:false,reason:'actor_changed'});
+ assert.equal((await crossingRecovery({foreign:true})).ok,false);
+ assert.deepEqual(await crossingRecovery({dead:true}),{ok:false,reason:'traveller_died'});
  console.log('native recovery snapshot: stale broker absence cannot end a current owned recovery; completed interrupted rest keeps its actor, cancellation and lease fences');
  console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
  proactive=false;pre=null;pose={id:1,x:2112,y:3080,row:48,col:33};hp={value:20,max:20};

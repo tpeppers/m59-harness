@@ -157,10 +157,10 @@ await test('pending survival keeps its protected faculty; explicit handoffs stil
   assert.equal(await k.continueSurvivalDecision(),false);
   assert.equal(currentSurvivalDecision(s).strategy,'yield_to_controller');
   k.releaseFaculties();
-  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'new recovery'});
+  const next=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'new recovery'});
   k.busy={until:Date.now()+10000};
-  assert.equal(await k.continueSurvivalDecision(),false);
-  assert.equal(currentSurvivalDecision(s).strategy,'yield_to_controller');
+  assert.equal(await k.continueSurvivalDecision(),true,'a busy errand does not lease protected survival');
+  assert.equal(currentSurvivalDecision(s).id,next.id);assert.equal(calls,2);
 });
 await test('decision history and recorded paths remain bounded',()=>{
   const {s}=fixture();let d;
@@ -232,7 +232,7 @@ await test('explicit survival ownership handoff stops an immediate replacement c
   const {s,k,calls}=fixture();
   chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
   k.takeRecoverySpot=async()=>{
-    calls.push('first');k.busy={until:Date.now()+10000};
+    calls.push('first');k.claimFaculties({faculties:['survival'],by:'explicit survival controller',mayYield:['survival']});
     chooseSurvivalDecision(s,{strategy:'route_refuge',reason:'try another wall'});
   };
   assert.equal(await k.continueSurvivalDecision(),false);

@@ -349,6 +349,7 @@ export class M59Client {
     // is a pre-save one (and `idsAsOf()` says so).
     this.saveRefreshJitterMs = 1500;
     this.spells = [];
+    this.spellsAt = null;
     this.skills = [];
     this.trade = null;               // the open offer, if any
     // A trade is a tiny state machine whose dangerous edge is ACCEPT.  A monotonic
@@ -792,14 +793,11 @@ export class M59Client {
       const s = st(n);
       if (!s) continue;
       out[n] = { value: s.value, max: s.currentMax, pct: ratio(s.value, s.currentMax) };
-      // A value above its own ceiling is not a parse error — it is what a character
-      // granted health or mana over the admin socket looks like, because the grant
-      // writes piMana without touching piMax_mana. Saying so beats reporting 913%:
-      // every affordability check downstream reads `value`, and the ceiling is what
-      // it will actually regenerate to once spent.
+      // Preserve both observed numbers. Ceiling changes (including death) can
+      // temporarily put value above max; this pair cannot establish its cause.
       if (s.value > s.currentMax)
-        out[`${n}_over_max`] = `${n} is ${s.value} against a ceiling of ${s.currentMax}; the ceiling is ` +
-          `the real one, so this was granted rather than earned and will not refill past ${s.currentMax} once spent`;
+        out[`${n}_over_max`] = `${n} is ${s.value} against the observed ceiling ${s.currentMax}; ` +
+          `the cause is unestablished and stat updates may still be settling`;
     }
 
     const v = st('vigor');
@@ -886,6 +884,7 @@ export class M59Client {
   }
 
   _connectionClosed() {
+    try { this.onConnectionClosed?.(); } catch { /* telemetry cannot affect socket cleanup */ }
     this.audioObservations.reset();
     this.monsterAttention.reset();
     this.log('connection closed');
@@ -2481,6 +2480,7 @@ export class M59Client {
         const res = parseSpells(body);
         if (!this.check('SPELLS', res)) break;
         this.spells = res.spells;
+        this.spellsAt = Date.now();
         // The list is what puts names to the ability numbers, and the two arrive in
         // either order — a BP_STAT can land before the list that explains it.
         this.nameAbilities();
@@ -2668,6 +2668,7 @@ export class M59Client {
       out.writeUInt8(this.epoch & 0xff, 6);
       payload.copy(out, HEADER);
       this.sock.write(out);
+      try { this.onPacketSent?.(op); } catch { /* telemetry cannot affect a delivered packet */ }
       this._outboundActivity();
       return;
     }

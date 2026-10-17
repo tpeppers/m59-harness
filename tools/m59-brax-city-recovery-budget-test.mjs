@@ -1,0 +1,6 @@
+import assert from'node:assert/strict';import{readFileSync}from'node:fs';import{runInNewContext}from'node:vm';
+const source=readFileSync(new URL('./m59-brax.mjs',import.meta.url),'utf8'),start=source.indexOf('      for(const[from,to]of[[39,38]'),end=source.indexOf('      await travelBraxRoad',start);assert(start>=0&&end>start);
+let clock=1000,room=39;const routeEnd=clock+900000,budgets=[],characters=['Actor'];
+const run=runInNewContext('(async function(){'+source.slice(start,end)+'})',{read:async()=>({room:{num:room}}),ctx:{},native:()=>{},state:{braxConvoyCharacters:characters},end:routeEnd,Date:{now:()=>clock},Math,log:()=>{},queuedRoomExit:async(_ctx,to,options)=>{budgets.push(options.timeoutMs);assert(options.timeoutMs<=routeEnd-clock,'each city leg remains inside the original route deadline');assert(options.timeoutMs>200000,'known freeze plus resource recovery cannot exhaust an arbitrary three-minute leg timer');assert.equal(options.characters,characters);clock+=200000;room=to;return{arrived:true};}});
+await run();assert.deepEqual(budgets,[600000,600000,500000]);assert.equal(room,599);
+console.log('actual city-exit wrapper allows bounded owned recovery beyond180s and always shares the unchanged original route deadline and convoy; this is a modeled clock-budget test, not live travel timing');

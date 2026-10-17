@@ -1,3 +1,4 @@
+import{healReadiness}from'./m59-recovery-heal.mjs';
 // m59-game.mjs — Session class and its dependencies, extracted from m59-broker.mjs.
 //
 // Phase 3: Per-character keeper processes. The Session class (3400 lines) and its
@@ -64,6 +65,9 @@ import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '..
 import { StorageCache } from './m59-storage.mjs';
 import { Recorder } from './m59-recorder.mjs';
 import { CommunicationsArchive } from './m59-communications.mjs';
+import {recordDeathNotice} from './m59-death-notices.mjs';
+import {publishFleetHealth} from './m59-fleet-health.mjs';
+import {SessionEvidence,sessionEvidenceKind} from './m59-session-evidence.mjs';
 import {attachPlayerEvidence} from './m59-player-evidence-store.mjs';
 
 // ── IMPORTS THE PORTED SESSION NEEDS ────────────────────────────────────────────
@@ -894,7 +898,7 @@ class Pacer {
     this.prodByKind.get(kind).push(Date.now());
     const job = { kind, fn: bindPacketScope(kind, authority?.bind ? authority.bind(fn) : fn), minGapForKind,
                   guard: authority?.guard, priority: authority?.priority ?? 0,
-                  resolve: null, reject: null, queuedAt: Date.now() };
+                  resolve: null, reject: null, queuedAt: Date.now(), walkInTrance, breakTrance };
     // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
     // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
     // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes
@@ -970,6 +974,19 @@ class Pacer {
         }
         await new Promise(r => setImmediate(r));
         if (this.q[0] !== job) continue;
+        // A cast may have started AFTER this packet entered the queue. Its
+        // trance must fence the actual send as well as submit().
+        if(this.holdUntil>Date.now()){
+          if(job.kind==='cast'&&this.holdAuto&&!job.breakTrance){
+            this.q.shift();const delay=Math.max(0,this.holdUntil-Date.now())+50;
+            setTimeout(()=>{try{job.guard?.();this.submit(job.kind,()=>{job.guard?.();return job.fn();},job.minGapForKind,{urgent:job.urgent,walkInTrance:job.walkInTrance,breakTrance:job.breakTrance}).then(job.resolve,job.reject);}catch(error){job.reject(error);}},delay);continue;
+          }
+          if(job.kind==='cast'&&job.breakTrance)this.breakTrance('a queued cast that chose to replace it');
+          else if(!(job.kind==='move'&&job.walkInTrance)&&!(job.kind==='read'&&this.holdAuto)&&!Pacer.CONCENTRATION_SAFE.has(job.kind)){
+            this.q.shift();this.heldDropped??=new Map();this.heldDropped.set(job.kind,(this.heldDropped.get(job.kind)??0)+1);
+            job.resolve({held:true,kind:job.kind,reason:this.holdReason,ms_left:this.holdUntil-Date.now()});continue;
+          }
+        }
         this.q.shift();
         try { job.guard?.(); } catch (e) { job.reject(e); continue; }
         this.lastSent = Date.now();
@@ -2152,7 +2169,7 @@ class Session {
         // own hold; neither a survival takeover nor a new owner is ours to renew.
         if (ours && keeper.inert === ours && !ours.cancelled) ours.at = Date.now();
         if (keeper.inert) return;
-        keeper.goTravelling(`travelling to ${where}`, { to: dest });
+        keeper.goTravelling(`travelling to ${where}`, { to: dest, origin: opts.origin });
         ours = keeper.inert;
       };
       assert_();
@@ -2483,6 +2500,23 @@ class Session {
     // needs these.
     this.credentials = { account, password, character, host, port };
     const c = new M59Client({ host, port, verbose: false, resources });
+    // Install before login: fatal messages/stat pushes can precede this.client = c.
+    let evidence=null;
+    try{
+      const identity={host:String(host).toLowerCase(),port:Number(port),character:String(character??'').trim().toLowerCase()};
+      if(JSON.stringify(this.sessionEvidence?.identity)!==JSON.stringify(identity))this.sessionEvidence=new SessionEvidence({...identity,agent:this.name});
+      evidence=this.sessionEvidence;
+      const evidenceWorld=new World(c,worldMap);
+      const body=event=>({room:evidenceWorld.room?.num??null,posture_command:c.lastPostureCommand??null,position:c.self?{row:c.self.row,col:c.self.col,x:c.self.x,y:c.self.y,predicted:!!c.self.predicted}:null,vitals:c.vitals?.()??null,ailments:(c.ailments?.()??[]).slice(0,16).map(e=>String(e.name??'').slice(0,80)),...(['login','connection','inventory','spells'].includes(event?.kind)||event?.kind==='stat'&&event.name==='health'||event?.kind==='action'&&['REQ_CAST','HEAL_CHECK','HEAL_RESULT'].includes(event.opcode)?{healing_resources:healReadiness(c)}:{})});
+      const observe=event=>{if(!sessionEvidenceKind(event))return;try{evidence.observe(c,event,body(event));}catch{}};
+      evidence.begin(c,{why:this.lastRejoin?.why??'join'});
+      c.onConnectionClosed=()=>{try{evidence.end(c,'socket closed',body({kind:'connection'}));}catch{}};
+      c.onPacketSent=opcode=>{if([BP.REQ_MOVE,BP.REQ_TURN,BP.REQ_ATTACK,BP.REQ_CAST,BP.REQ_USE,BP.REQ_APPLY,BP.ACTION,BP.USERCOMMAND].includes(opcode))observe({kind:'action',opcode:BPNAME[opcode]??opcode});};
+      c.observeSessionEvidence=observe;
+      c.sessionEvidenceBody=()=>body({kind:'connection'});
+      observe({kind:'login',phase:'started'});
+    }catch{ /* diagnostics never prevent login */ }
+
     c.onCommunication = ev => this.communications?.record(ev, c);
     this.travelObservedRoom = null;
     c.combatReady = false;
@@ -2510,6 +2544,8 @@ class Session {
     // only until one blow has landed. Installed by Autopilot.passBuddy; absent, it vetoes nothing.
     c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id) || !!this.buddyVeto?.(id);
     c.onEvent = ev => {
+      c.observeSessionEvidence?.(ev);
+      if(ev.kind==='message')recordDeathNotice({host,port},ev,{observer:c.me?.name??character,sessionId:evidence?.active?.id,isFleetmate});
       // FIRST, so every consumer below -- the combat override included -- already knows.
       try { observeRefusal(this, c, ev); } catch { /* bookkeeping never costs an event */ }
       if (!c.combatReady && ev.kind === 'message') loginCombatEvents.push(ev);
@@ -2574,7 +2610,8 @@ class Session {
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
-      if (ev.kind === 'stat' && ev.name === 'health') this.noteHealth(ev);
+      if (ev.kind === 'stat' && ev.name === 'health') { this.noteHealth(ev); if(this.client===c)publishFleetHealth(this); }
+      if(this.client===c&&c.combatReady&&(ev.kind==='stat'&&ev.name==='health'||ev.kind==='inventory'||ev.kind==='spells'))void this.activeSelfHealTick?.(ev.kind==='stat'?'health_push':ev.kind+'_ready')?.catch(error=>c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_ERROR',reason:String(error.message).slice(0,300)}));
       if (ev.kind === 'travel-cast') {
         try { recordEvent(c.me?.name ?? this.name, 'travel_cast', { spell: ev.spell }); } catch {}
       }
@@ -2605,6 +2642,7 @@ class Session {
     } catch (error) {
       // A failed login never becomes this.client, so nobody else can close its socket.
       // Reconnect backoff would otherwise leak one connected/stalled socket per attempt.
+      try { evidence?.end(c,'login failed: '+error.message); } catch {}
       try { c.stopKeepalive?.(); } catch {}
       try { c.sock?.destroy?.(); } catch {}
       throw error;
@@ -2615,6 +2653,7 @@ class Session {
     // `loginPhase === 'ready'` is judging a login in progress (suspected: the 2026-10-03 t9 reports).
     c.loginStartedAt = Date.now();
     c.loginPhase = 'installed';
+    c.observeSessionEvidence?.({kind:'login',phase:'installed'});
     // A NEW CONNECTION HAS NO TRANCE TO PROTECT. The cast hold lives on the PACER, which outlives
     // the socket, so a relog during a cast inherited it -- and the hold resolves every `read` as
     // `{held:true}` without sending it. Measured 2026-10-03 on t9 practising poison fog: two
@@ -2734,7 +2773,9 @@ class Session {
     } finally {
       c.combatReady = true;
       c.loginPhase = 'ready';
+      c.observeSessionEvidence?.({kind:'login',phase:'ready'});
       c.loginReadyAt = Date.now();
+      for(let healingRead=0;healingRead<2;healingRead++){const healed=await this.activeSelfHealTick?.('login_ready')?.catch(error=>c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_ERROR',reason:String(error.message).slice(0,300)}));if(healed)break;}
       // ONE LINE PER LOGIN, with the clock: how long it took, what was asked and what came back,
       // and any read that failed or was sent around the pacer. The 2026-10-03 hunt had nothing
       // but a "joined" time to go on.
@@ -2829,6 +2870,7 @@ class Session {
     // afterward. Ordinary character creation retains its existing settle waits.
     const fastReplay=this.replayFastReads===true&&Number(port)===17959&&
       ['127.0.0.1','localhost','::1'].includes(host);
+    try { this.sessionEvidence?.end(this.client,'rejoin: '+why,this.client?.sessionEvidenceBody?.()??{room:this.world?.room?.num??null,vitals:this.client?.vitals?.()??null}); } catch {}
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
     if(!fastReplay)await new Promise(r => setTimeout(r, 900));

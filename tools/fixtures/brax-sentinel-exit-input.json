@@ -1,0 +1,544 @@
+{
+  "note": "Exact consumed native movement fields and ordered pre-action scene. Other characters and monsters remain at their actual observed snapshot positions in this socketless reproduction; no claim about later motion.",
+  "source": "substrate/rail-inputs/braxshadow24-1792273506206-33859908-5e32-46fd-9208-d39a94ba2240.input.json",
+  "capturedAt": 1792273506206,
+  "scene": {
+    "agent": "braxshadow24",
+    "character": "Brax Xxxx",
+    "pid": 30408,
+    "in_game": true,
+    "connected": true,
+    "room": {
+      "num": 589,
+      "object_id": 1584,
+      "name": "Under the shadow of the Sentinel"
+    },
+    "you": {
+      "id": 7495,
+      "x": 116,
+      "y": 2808,
+      "row": 43,
+      "col": 1,
+      "room_object_id": 1584,
+      "at": 1792273506203
+    },
+    "position_read": {
+      "id": 7495,
+      "x": 116,
+      "y": 2808,
+      "row": 43,
+      "col": 1,
+      "room_object_id": 1584,
+      "at": 1792273506203
+    },
+    "hp": {
+      "value": 26,
+      "max": 26
+    },
+    "mana": {
+      "value": 25,
+      "max": 25
+    },
+    "vigor": {
+      "value": 80
+    },
+    "doors": {
+      "observed": {
+        "1": 290
+      },
+      "movements": {
+        "1": {
+          "height": 290,
+          "type": 4,
+          "speed": 8,
+          "at": 1792272926044
+        }
+      },
+      "settling_until": 1792272934044
+    },
+    "objects": [
+      {
+        "id": 7459,
+        "x": 140,
+        "y": 2812,
+        "row": 43,
+        "col": 2,
+        "flags": 525,
+        "name": "Brax Iiii"
+      },
+      {
+        "id": 7981,
+        "x": 352,
+        "y": 2848,
+        "row": 44,
+        "col": 5,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7980,
+        "x": 938,
+        "y": 281,
+        "row": 4,
+        "col": 14,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7979,
+        "x": 288,
+        "y": 2912,
+        "row": 45,
+        "col": 4,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7978,
+        "x": 288,
+        "y": 2848,
+        "row": 44,
+        "col": 4,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7977,
+        "x": 800,
+        "y": 2528,
+        "row": 39,
+        "col": 12,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7976,
+        "x": 164,
+        "y": 2847,
+        "row": 44,
+        "col": 2,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7975,
+        "x": 608,
+        "y": 3104,
+        "row": 48,
+        "col": 9,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7974,
+        "x": 96,
+        "y": 2784,
+        "row": 43,
+        "col": 1,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7973,
+        "x": 96,
+        "y": 2848,
+        "row": 44,
+        "col": 1,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7972,
+        "x": 1248,
+        "y": 2400,
+        "row": 37,
+        "col": 19,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7971,
+        "x": 2016,
+        "y": 864,
+        "row": 13,
+        "col": 31,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7970,
+        "x": 800,
+        "y": 544,
+        "row": 8,
+        "col": 12,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7969,
+        "x": 864,
+        "y": 1376,
+        "row": 21,
+        "col": 13,
+        "flags": 9,
+        "name": "black spider"
+      },
+      {
+        "id": 7968,
+        "x": 672,
+        "y": 3104,
+        "row": 48,
+        "col": 10,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7967,
+        "x": 227,
+        "y": 2846,
+        "row": 44,
+        "col": 3,
+        "flags": 9,
+        "name": "orc"
+      },
+      {
+        "id": 7491,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "shilling"
+      },
+      {
+        "id": 7492,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "blue mushroom"
+      },
+      {
+        "id": 7493,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "herb"
+      },
+      {
+        "id": 7688,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "red mushroom"
+      },
+      {
+        "id": 7689,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "long sword"
+      },
+      {
+        "id": 7690,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "diamond"
+      },
+      {
+        "id": 7691,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "emerald"
+      },
+      {
+        "id": 7692,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "blue dragon scale"
+      },
+      {
+        "id": 7693,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "sapphire"
+      },
+      {
+        "id": 7694,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "ruby"
+      },
+      {
+        "id": 7695,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "purple mushroom"
+      },
+      {
+        "id": 7696,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "orc tooth"
+      },
+      {
+        "id": 7829,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 4112,
+        "name": "wand"
+      },
+      {
+        "id": 7857,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "silver arrows"
+      },
+      {
+        "id": 7870,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "circlet"
+      },
+      {
+        "id": 7871,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "dark angel feather"
+      },
+      {
+        "id": 7869,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "long sword"
+      },
+      {
+        "id": 7882,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 4112,
+        "name": "wand"
+      },
+      {
+        "id": 7881,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "long sword"
+      },
+      {
+        "id": 7880,
+        "x": 352,
+        "y": 2912,
+        "row": 45,
+        "col": 5,
+        "flags": 16,
+        "name": "long sword"
+      },
+      {
+        "id": 1585,
+        "x": 2080,
+        "y": 2912,
+        "row": 45,
+        "col": 32,
+        "flags": 2230272,
+        "name": "mana node"
+      }
+    ],
+    "cast": {
+      "active": false,
+      "role": null
+    },
+    "recovery": {}
+  },
+  "args": {
+    "room": 589,
+    "timeoutMs": 301268,
+    "queuePath": false,
+    "bodyDetour": true,
+    "leg": {
+      "kind": "walk",
+      "waypoints": [
+        {
+          "x": 832,
+          "y": 43904,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 512,
+          "y": 43584,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        }
+      ],
+      "sourceWaypoints": [
+        {
+          "x": 832,
+          "y": 43904,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 800,
+          "y": 43872,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 768,
+          "y": 43840,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 736,
+          "y": 43808,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 704,
+          "y": 43776,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 672,
+          "y": 43744,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 640,
+          "y": 43712,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 608,
+          "y": 43680,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 576,
+          "y": 43648,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 544,
+          "y": 43616,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        },
+        {
+          "x": 512,
+          "y": 43584,
+          "row": 43,
+          "col": 1,
+          "f": 0
+        }
+      ]
+    },
+    "exit": {
+      "to": 579,
+      "row": 43,
+      "col": 1
+    },
+    "origin": {
+      "source": "fleetscript",
+      "name": "regroup-victoria (private normal return only)",
+      "run_id": "mvcx6k0e-39332",
+      "at": 1792273189839
+    },
+    "convoy": {
+      "key": "fleetscript:regroup-victoria (private normal return only)#mvcx6k0e-39332",
+      "characters": [
+        "Brax Jjjj",
+        "Brax Cccc",
+        "Brax Llll",
+        "Brax Eeee",
+        "Brax Dddd",
+        "Brax Gggg",
+        "Brax Hhhh",
+        "Brax Iiii",
+        "Brax Ffff",
+        "Brax Aaaa",
+        "Brax Nnnn",
+        "Brax Pppp",
+        "Brax Kkkk",
+        "Brax Xxxx",
+        "Brax Vvvv",
+        "Brax Tttt",
+        "Brax Oooo",
+        "Brax Uuuu",
+        "Brax Wwww",
+        "Brax Mmmm",
+        "Brax Rrrr",
+        "Brax Ssss",
+        "Brax Bbbb",
+        "Brax Qqqq"
+      ]
+    }
+  }
+}

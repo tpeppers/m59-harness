@@ -1,3 +1,5 @@
+import{errorEvidence}from'./m59-error-evidence.mjs';
+import{queuedRoomExit}from'./m59-queued-room-exit.mjs';
 import {rollingGatherCutoff} from './m59-crossing-queue.mjs';
 // Ordinary player movement to Brax. Administrative setup belongs in the lab driver.
 import {readFileSync,writeFileSync,mkdirSync,renameSync,existsSync,appendFileSync} from 'node:fs';
@@ -21,11 +23,13 @@ import {braxPuzzleReadiness,braxLeverUsable,braxFailedReadyAfter,BRAX_SOLVED_RES
 import {applyAncientFloors,liftWaitMs} from './m59-moving-platform.mjs';
 import {evidenceDirFor,resolveControlUrl} from './m59-fleetpath.mjs';
 import {planBodyDetour} from './m59-body-detour.mjs';
-import {railBoarding} from './m59-railfollow.mjs';
-import {createRailObserver,refusedRailWrite,waitForRailState,waitForRailGeometry,unsentRailAnimationRefusal,resumeObservedRailWalk,readRailMoveCheck,provedRailMove,unsentRailGeometryRefusal} from './m59-rail-observer.mjs';
+import {railBoarding,railEndReached} from './m59-railfollow.mjs';
+import {createRailObserver,confirmedRailBody,refusedRailWrite,waitForRailState,waitForRailGeometry,unsentRailAnimationRefusal,resumeObservedRailWalk,readRailMoveCheck,provedRailMove,unsentRailGeometryRefusal} from './m59-rail-observer.mjs';
 import {originLabel} from './m59-move-origin.mjs';
 import {currentCallOrigin} from './m59-fleetscript.mjs';
-import {checkedIslandWalk,recoverIslandFineWalk,checkIslandCancellation} from './m59-island-finewalk.mjs';
+import {checkedIslandWalk,recoverIslandFineWalk,activeOwnedFineRecovery,checkIslandCancellation} from './m59-island-finewalk.mjs';
+
+import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -53,9 +57,15 @@ export function freePlatformStation(members,objects,selfId,near=null){
 export const CORNERS=[{row:16,col:51,stand:{row:17,col:51}},{row:16,col:60,stand:{row:17,col:60}},
   {row:25,col:51,stand:{row:24,col:51}},{row:25,col:60,stand:{row:24,col:60}}];
 export const cornerWork=(index,count)=>{
-  const assignments=count===1?[[0,1,2,3]]:count===2?[[0,2],[1,3]]:count===3?[[0,1],[2],[3]]:[[0],[1],[2],[3]];
+  const assignments=count===1?[[0,1,2,3]]:count===2?[[0,2],[1,3]]:count===3?[[0,1],[2],[3]]:count===4?[[0],[1],[2],[3]]:[[],[0],[1],[2],[3]];
   return (assignments[index]??[]).map(i=>CORNERS[i]);
 };
+// Operators may walk to unchanged platform stand cells while boarding. Activation
+// still waits for the center/corner state proof in pull().
+export function braxWorkStand(index,expectedCount,station=index){
+ if(index===0)return{row:22,col:55};
+ return cornerWork(index,expectedCount)[0]?.stand??platformSlot(station);
+}
 export function platformAims(from,to){
   const inside=p=>p.x>=50*1024&&p.x<=61*1024&&p.y>=14*1024&&p.y<=26*1024;
   if(!inside(from)||!inside(to))return [to];
@@ -101,7 +111,20 @@ export function ownedBraxRoadRecovery(s,origin,since){
  if(origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0)||!(s.hp?.value>0))return false;
  return [s.movement?.last_preempted,...(s.movement?.preemptions??[])].some(p=>p?.at>=since&&p.by?.source==='keeper'&&p.preempted?.ordered_by===originLabel(origin));
 }
-export const readyAfterSurvival=(s,minHealth=0.9)=>Number(s.hp?.value)>0&&Number(s.hp?.max)>0&&s.hp.value/s.hp.max>=minHealth&&!s.autopilot_status?.survival_decisions?.current;
+// Only a returned, stopped walking operation can resume from a newly read body.
+// An unknown child/HTTP outcome never enters this path.
+export function braxEndedCliffContinuation(ctx,reply,current,{since=0}={}){
+ const s=confirmedRailBody(current),rail=s?.movement?.rail,origin=ctx.origin??currentCallOrigin(),owner=originLabel(origin),lease=s?.autopilot_status?.faculties?.movement;
+ if(reply?.reason!=='position_confirmation_timeout'||!s||s.room.num!==579||!(s.hp?.value>0)||reply.position?.id!==s.you.id||rail?.room!==579||rail.phase!=='stopped'||!(rail.startedAt>=since&&rail.endedAt>=rail.startedAt)||origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0))return null;
+ const cancelled=reply.cancelled_by_origin,cancel=s.movement.last_cancel;
+ if(cancelled&&originLabel(cancelled)!==owner&&cancelled.source!=='keeper'||cancel?.at>=since&&cancel.by?.source!=='keeper'&&cancel.by_label!==owner)return null;
+ if(activeOwnedFineRecovery(ctx,s))return 'owned-recovery';
+ if(!braxActiveRecovery(s)&&!s.autopilot_status?.recovery_travel&&!s.autopilot_status?.recovering_from_death&&!s.job?.busy&&!s.movement?.order&&s.hp.max>0&&s.hp.value/s.hp.max>=Math.max(.9,ctx.minHealth??.9)&&s.vigor?.value>=40)return 'observed-ready';
+ return null;
+}
+
+export const braxActiveRecovery=s=>{const d=s.autopilot_status?.survival_decisions?.current;return !!d&&(typeof d!=='object'||isActiveRecoveryDecision(d));};
+export const readyAfterSurvival=(s,minHealth=0.9)=>Number(s.hp?.value)>0&&Number(s.hp?.max)>0&&s.hp.value/s.hp.max>=minHealth&&!braxActiveRecovery(s);
 export const braxArrival=s=>Number(s.room?.num)===827&&Number(s.hp?.value)>0;
 // A confirmed body on the connected lift is a completed first fall even if
 // ordinary landing clearance has moved it off the single serialized aim.
@@ -149,8 +172,17 @@ export function ensureBraxApproach({sourceFile=join(root,'substrate/node-tour-ra
   const temporary=out+'.'+randomUUID();writeFileSync(temporary,JSON.stringify({stones:[{node:'brax',room:579,routes:[route]}]}));renameSync(temporary,out);return out;
 }
 
-export function chooseBraxBoarding(geo,body,objects){
- const lanes=[55,56].sort((a,b)=>Math.abs(body.x-(a*64+32))-Math.abs(body.x-(b*64+32)));
+export function braxSouthQueueReached(geo,s){
+ return s.room?.num===579&&s.hp?.value>0&&s.you&&!s.you.predicted&&railEndReached(geo,{...protocolToClient(s.you),predicted:s.you.predicted},{x:55808,y:32000},{within:1536});
+}
+
+export function braxBoardingLaneKey(server,col){
+ if(typeof server?.host!=='string'||!server.host||!Number.isInteger(server.port)||server.port<=0||![55,56].includes(col))throw Error('invalid Brax boarding lane');
+ return [server.host,server.port,579,'platform-landing',col].join(':');
+}
+export function chooseBraxBoarding(geo,body,objects,{columns=[55,56]}={}){
+ if(!Array.isArray(columns)||!columns.length||columns.some(c=>![55,56].includes(c)))throw Error('invalid Brax boarding columns');
+ const lanes=[...new Set(columns)].sort((a,b)=>Math.abs(body.x-(a*64+32))-Math.abs(body.x-(b*64+32)));
  for(const col of lanes){const x=(col-1)*1024+512,declaration={room:579,from:{row:32,col},to:{row:25,col},from_fine:{x,y:32000},to_fine:{x,y:25088}};
   const plan=planDeclaredTakeoff(geo,body,declaration,{objects,selfId:body.id});if(plan.found)return {col,x,plan};}
  return null;
@@ -168,6 +200,7 @@ export function braxBoardingComplete(group,now){
 // while the rest of that same request has already stopped. A new request still
 // goes through the complete observed reset/readiness proof.
 export function braxAdmissionGroup(g,observed,{now,requestKey,expectedAgents=null,gatherMs=60000,id=randomUUID}={}){
+ if(g?.raisedAt!=null&&g.phase==='leaving'&&g.members?.length&&g.members.every(m=>m.gone||m.failure))g.phase='departed';
  if(g?.failure&&g.requestKey===requestKey)throw Error(g.failure);
  if(!g||g.phase==='waiting-reset'||g.phase==='departed'||g.failure){
   const ready=braxPuzzleReadiness(g,observed,now);
@@ -178,6 +211,24 @@ export function braxAdmissionGroup(g,observed,{now,requestKey,expectedAgents=nul
     readiness:{verifiedAt:now,readyAfter:ready.readyAfter,source:ready.source}};
  }
  return g;
+}
+
+// Once the lift is positively raised, an individual unloading/onward failure
+// cannot invalidate the solved puzzle for healthy riders or later arrivals.
+export function braxRecordMemberExit(group,ticket){
+ const member=group.members?.find(m=>m.ticket===ticket);if(!member)throw Error('unknown Brax rider exit');
+ member.gone=true;if(group.members.every(m=>m.gone||m.failure))group.phase='departed';return group;
+}
+
+export function braxRecordMemberFailure(group,ticket,reason,now){
+ const member=group.members?.find(m=>m.ticket===ticket);
+ if(member)member.failure={at:now,reason};
+ group.readyAfter=braxFailedReadyAfter(group,now);
+ if(member?.gone||Number.isFinite(group.raisedAt)){
+  if(group.members?.length&&group.members.every(m=>m.gone||m.failure))group.phase='departed';
+  return group;
+ }
+ group.failure=reason;return group;
 }
 
 export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=1800000,approachFile=join(root,'substrate/brax-rails.json'),resumeRaisedAt=null,resumeNorthLedge=false}={}){
@@ -202,6 +253,7 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
       let response,s;
       try{response=await fetch(url,{signal:AbortSignal.timeout(Math.max(1,Math.min(30000,end-Date.now())))});s=await response.json();}
       catch(error){
+        log('keeper-read-failure',{attempt,error:errorEvidence(error)});
         if(attempt===2||Date.now()>end)throw error;
         log('keeper-read-retry',{attempt,reason:error.message});
         const next=(await scanKeepers({fleet,timeoutMs:5000})).get(agent);
@@ -280,21 +332,24 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     }
   };
   const follow=async(file,label)=>{
-    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',controlURL.port,'--agent',agent,'--rail','brax','--rail-file',file,'--origin-json',JSON.stringify(ctx.origin??currentCallOrigin()),'--no-hop','--native-rail','--serialize-jumps','--wait-bodies','--keeper-position','--precise-waypoints','--steps','32','--stride','8',...(label==='cliffs'?['--queue-end']:[]),'--receipt',join(out,id+'-'+label+'-commands.jsonl')];
+    const invokedAt=Date.now();
+    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',controlURL.port,'--agent',agent,'--rail','brax','--rail-file',file,'--origin-json',JSON.stringify(ctx.origin??currentCallOrigin()),'--convoy-json',JSON.stringify({key:originLabel(ctx.origin??currentCallOrigin()),characters:state.braxConvoyCharacters??[keeper.character]}),'--no-hop','--native-rail','--coalesce-rail','--serialize-jumps','--wait-bodies','--keeper-position','--precise-waypoints','--steps','32','--stride','8',...(label==='cliffs'?['--queue-end']:[]),'--receipt',join(out,id+'-'+label+'-commands.jsonl')];
     const commandsFile=join(out,id+'-'+label+'-commands.jsonl');
     const result=await new Promise(done=>execFile(process.execPath,args,{cwd:root,timeout:Math.max(1,end-Date.now()),maxBuffer:8e6,windowsHide:true},(error,stdout,stderr)=>done({error,stdout,stderr})));
     writeFileSync(join(out,id+'-'+label+'.txt'),result.stdout+'\n'+result.stderr);
     if(result.error){
-      const rows=existsSync(commandsFile)?readFileSync(commandsFile,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
+      const rows=existsSync(commandsFile)?readFileSync(commandsFile,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(row=>Date.parse(row.at)>=invokedAt):[];
       const last=rows.findLast(row=>row.kind==='keeper-recovery')?.reply??rows.filter(row=>['native-walk','walk','alignment','jump'].includes(row.kind)).at(-1)?.reply;
-      const survival=keeperSurvivalInterruption(last),failure={kind:'child_exit',code:result.error.code??null,signal:result.error.signal??null,error:result.error.message,stderr:result.stderr.slice(-3000)};
+      const outcome=rows.findLast(row=>row.kind==='outcome');let survival=keeperSurvivalInterruption(last),continuation=null;const failure={kind:'child_exit',code:result.error.code??null,signal:result.error.signal??null,error:result.error.message,stderr:result.stderr.slice(-3000)};
       try{
-        const current=await read({fine:false}),order=current.movement?.order,owner=originLabel(ctx.origin??currentCallOrigin());
-        failure.native={pid:current.pid,room:current.room,you:current.you,order,rail:current.movement?.rail};
-        if(!survival&&!current.autopilot_status?.recovery_travel&&order?.ordered_by===owner){await command('cancel_movement');failure.ownedOperationCancelled=true;}
+        const current=await read(),order=current.movement?.order,owner=originLabel(ctx.origin??currentCallOrigin());
+        if(label==='cliffs'&&outcome?.came_off?.kind==='native-walk')continuation=braxEndedCliffContinuation(ctx,outcome.came_off.reply,current,{since:invokedAt});
+        survival ||= continuation==='owned-recovery';
+        failure.native={pid:current.pid,room:current.room,you:current.you,position_read:current.position_read,hp:current.hp,mana:current.mana,vigor:current.vigor,faculties:current.autopilot_status?.faculties,recovery:current.autopilot_status?.survival_decisions?.current,preemptions:current.movement?.preemptions,order,rail:current.movement?.rail,continuation};
+        if(!survival&&!continuation&&!current.autopilot_status?.recovery_travel&&order?.ordered_by===owner){await command('cancel_movement');failure.ownedOperationCancelled=true;}
       }catch(error){failure.observationError=error.message;}
       log('rail-child-failure',failure);
-      throw Object.assign(Error('Brax '+label+' rail follower stopped'),{survival,interruption:survival?last:null,outcome:rows.findLast(row=>row.kind==='outcome')??failure});
+      throw Object.assign(Error('Brax '+label+' rail follower stopped'),{survival,interruption:survival?last:null,endedConfirmation:!!continuation,confirmationEnded:continuation==='observed-ready',outcome:outcome??failure});
     }
   };
   const cut=async(to,label)=>{
@@ -313,15 +368,20 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     const declaration={room:579,from:{row:to.row===25?32:15,col:to.col},to:{row:to.row,col:to.col},
       from_fine:{x:to.x,y:to.row===25?32000:14848},to_fine:{x:to.x,y:to.y}};
     for(;;){
-      const current=await waitForRailGeometry(read,{room:579,deadline,owner:originLabel(ctx.origin??currentCallOrigin()),since:start}),geo=roomGeometry(579);
+      const current=await waitForRailGeometry(async()=>{const s=await native();checkIslandCancellation(ctx,s);if(s.pid!==keeper.pid)throw Error('Brax jump keeper changed');return s;},{room:579,deadline,owner:originLabel(ctx.origin??currentCallOrigin()),since:start}),geo=roomGeometry(579);
       if(current.room.num!==579)throw Error('Brax jump room changed');
+      if(braxActiveRecovery(current)){
+        log('jump-recovery-wait',{to,hp:current.hp,vigor:current.vigor,decision:current.autopilot_status?.survival_decisions?.current});
+        if(!activeOwnedFineRecovery(ctx,current)||!await recoverIslandFineWalk(ctx,{deadline,since:start,active:true,initial:current,read:async()=>({l:await read()})}))throw Object.assign(Error('Brax jump recovery did not complete within the original deadline'),{observation:current});
+        continue;
+      }
       applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(current.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
       const plan=planDeclaredTakeoff(geo,current.you,declaration,{objects:new Map(current.objects.map(o=>[o.id,o])),selfId:current.you.id,stayInLane:to.row===8});
       if(!plan.found){
         if(!planDeclaredTakeoff(geo,current.you,declaration).found)throw Object.assign(Error('Brax actual takeoff cannot prove the declared flight'),{observation:{room:current.room,you:current.you,doors:current.doors,objects:current.objects,plan,declaration}});
         if(queueOnBlocked)return false;
         if(Date.now()>=deadline)throw Error('Brax jump body wait exhausted');
-        log('jump-body-wait',{to,position:position(current)});await sleep(1000);continue;
+        log('jump-body-wait',{to,position:position(current),keeper_pid:current.pid,room_object_id:current.room.object_id,declaration,plan,hp:current.hp,mana:current.mana,vigor:current.vigor,recovery:current.autopilot_status?.survival_decisions?.current,observed:current.doors.observed,objects:current.objects.filter(o=>(o.flags&1)&&Number.isFinite(o.x)&&Number.isFinite(o.y)).map(({id,x,y,row,col,flags,name})=>({id,x,y,row,col,flags,name}))});await sleep(1000);continue;
       }
       if(Math.hypot(plan.takeoff.x-current.you.x,plan.takeoff.y-current.you.y)>0){
         const alignment=await command('walk_to',{...plan.takeoff,fine:true,max_steps:8,stride:8,arrive_within:0,exact_arrival:true,hold_shelf:true});
@@ -336,7 +396,7 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
         if(Date.now()>=deadline)throw Error('Brax native flight readiness timed out');
         await sleep(500);continue;
       }
-      const reply=await command('jump',{to_row:to.row,to_col:to.col});
+      const args={to_row:to.row,to_col:to.col,origin:ctx.origin??currentCallOrigin()},reply=await native.action('jump',args,{timeoutMs:Math.max(1,deadline-Date.now())});log('command',{name:'jump',args,reply});
       if(unsentRailGeometryRefusal(reply)){
         log('native-flight-unsent',{to,reply});
         if(queueOnBlocked)return false;
@@ -349,10 +409,10 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
         break;
       }
       const waiting=await read();
-      if(waiting.room.num!==579||waiting.autopilot_status?.survival_decisions?.current)throw Error('Brax jump interrupted by keeper recovery');
+      if(waiting.room.num!==579)throw Object.assign(Error('Brax jump room changed after an unsent refusal'),{reply,observation:waiting});
       if(queueOnBlocked)return false;
       if(Date.now()>=deadline)throw Error('Brax jump body wait exhausted');
-      log(reply.mover?.reason==='casting_hold'?'jump-cast-wait':'jump-body-wait',{to,position:position(waiting),reply});await sleep(1000);
+      log(reply.mover?.reason==='casting_hold'?'jump-cast-wait':'jump-body-wait',{to,position:position(waiting),hp:waiting.hp,mana:waiting.mana,vigor:waiting.vigor,recovery:waiting.autopilot_status?.survival_decisions?.current,reply});await sleep(1000);
     }
     // The existing mover may choose a body-clearing lane within this square.
     // Accept that legal adjustment, then independently require the expected shelf below.
@@ -396,15 +456,9 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     await command('cancel_movement');log('entered',{room:to});
   };
   const northEgress=async()=>{
-    const s=await read(),geo=roomGeometry(579),target=clientToProtocol({x:62976,y:512});
-    const avoidSquares=roomExitSquares(loadMap().rooms[579],{rows:geo.rows,cols:geo.cols,to:578,includeInland:true,from:{row:s.you.row,col:s.you.col,confirmed:true}});
-    avoidSquares.delete(s.you.row+','+s.you.col);
-    const plan=planQueuedEgress(geo,s.you,target,{avoidSquares});
-    if(!plan.found)throw Object.assign(Error('Brax north egress not proved'),{reply:plan});
-    const reply=await native.action('walk_rail',{room:579,leg:plan.leg,queuePath:true,exit:{to:578,row:1,col:62},convoy:{key:originLabel(ctx.origin??currentCallOrigin()),characters:state.braxConvoyCharacters??[keeper.character]},timeoutMs:Math.min(180000,end-Date.now()),origin:ctx.origin??currentCallOrigin()},{timeoutMs:Math.min(190000,end-Date.now())});
-    log('north-egress',{reply});
-    if(!reply.arrived)throw Object.assign(Error('Brax north egress stopped'),{reply});
-    log('north-clear',{target,atExit:true});
+    const reply=await queuedRoomExit(ctx,578,{observe:native,branch:{row:1,col:62},queuePath:true,characters:state.braxConvoyCharacters??[keeper.character],timeoutMs:Math.min(180000,end-Date.now())});
+    log('north-egress',{reply});if(!reply.arrived)throw Object.assign(Error('Brax north egress stopped'),{reply});
+    log('north-clear',{atExit:true});
   };
   const northFall=async(col,{approached=false}={})=>{
     const p=position(await read());
@@ -414,6 +468,7 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     await northEgress();
   };
   const onward=async(room,to,label,row,col,next)=>{
+    if(room===578||room===826){const actual=await read();if(actual.room.num===next)return;if(actual.room.num!==room)throw Error('Brax '+label+' unexpected recovery room');const reply=await queuedRoomExit(ctx,next,{observe:native,characters:state.braxConvoyCharacters,timeoutMs:Math.min(600000,end-Date.now())});log('queued-onward',{label,room,to:next,reply});return;}
     for(let attempt=0;attempt<3;attempt++){
       const s=await read();if(s.room.num===next)return;
       if(s.room.num!==room)throw Error('Brax '+label+' unexpected recovery room');
@@ -449,11 +504,11 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     if(!state.brax.success)throw Error('Ancient Graveyard of Brax not reached');
     // Arrival completes the travel order. A null post prevents a former room
     // enchantment worker from interpreting Brax as a new stationary casting post.
-    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null});return true;
+    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null,training_weapon_only:false});return true;
   };
   try{
     let s=await read();log('start',{room:s.room,you:s.you,hp:s.hp});
-    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null});
+    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null,training_weapon_only:false});
     if(braxArrival(s)){log('already-at-objective');return await finish();}
     if(s.room.num===833){log('resume-goad');return await finish();}
     if(s.room.num===826){log('resume-caverns');return await finish();}
@@ -487,25 +542,30 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     if(!aboardAlready){
     if(s.room.num!==579||s.you.col<=2){
       const owner=originLabel(ctx.origin??currentCallOrigin());
+      for(const[from,to]of[[39,38],[38,2],[2,599]]){const city=await read();if(city.room.num===from){const reply=await queuedRoomExit(ctx,to,{observe:native,queuePath:from===38,characters:state.braxConvoyCharacters,timeoutMs:Math.min(600000,end-Date.now())});log('queued-city-exit',{from,to,reply});}}
       await travelBraxRoad({read:()=>read({fine:false}),command,owner,onWait:data=>log('road-wait',data),trafficReady:async(_state,traffic)=>{const current=await read();return roadTrafficGap(roomGeometry(current.room.num),current,traffic);},to:589,deadline:Math.min(end,Date.now()+600000)});
-      await travelBraxRoad({read:()=>read({fine:false}),command,owner,onWait:data=>log('road-wait',data),trafficReady:async(_state,traffic)=>{const current=await read();return roadTrafficGap(roomGeometry(current.room.num),current,traffic);},to:579,maxHops:1,deadline:Math.min(end,Date.now()+240000)});
+      const entry=await queuedRoomExit(ctx,579,{observe:native,characters:state.braxConvoyCharacters,timeoutMs:Math.min(600000,end-Date.now())});log('queued-entry',{from:589,to:579,reply:entry});
     }
     await command('cancel_movement');await command('rest',{stand:true});
-    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null});
+    await command('autopilot',{action:'set',mode:'idle',assigned_room:null,roam:false,town_trips:false,farm_strategy:null,training_weapon_only:false});
     // Ordinary travel lands beside the eastern exit, not at the recorded rail head.
     // Survival may also have moved us to cover. Prove a walk from the actual body.
     const approach=JSON.parse(readFileSync(approachFile,'utf8')).stones.find(stone=>stone.node==='brax')?.routes[0];
     const head=approach?.legs[0]?.waypoints[0];if(!head)throw Error('Brax approach rail has no head');
+    let endedCliffContinuations=0;
     for(;;){
       s=await read();const here=position(s),geo=roomGeometry(579),legStart=Date.now();
       applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(s.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
       const floor=floorAt(geo,here.x,here.y);
+      if(braxSouthQueueReached(geo,s)){log('south-queue-continuation',{position:s.you,floor,observed:s.doors.observed});break;}
       const alreadyOnRail=!!railBoarding(approach.legs,here,{floor,within:1024,strictFloor:true,geo});
       try{
         if(!alreadyOnRail)await checkedIslandWalk(ctx,clientToProtocol(head),{room:579,allowEdgeTo:589,budgetMs:Math.min(600000,end-Date.now()),
           stopWhen:current=>{const at=protocolToClient(current.you),floor=floorAt(geo,at.x,at.y);return railBoarding(approach.legs,at,{floor,within:1024,strictFloor:true,geo});}});
         await follow(approachFile,'cliffs');break;
       }catch(error){
+        if(error.endedConfirmation&&++endedCliffContinuations>3)throw Error('Brax cliff confirmation continuation budget exhausted');
+        if(error.confirmationEnded){log('cliff-confirmation-recovered',{attempt:endedCliffContinuations,position:(await read()).you});continue;}
         let initial=await read({fine:false});
         const recoveryTrip=keeperRecoveryTripSince(initial,legStart)||error.interruption?.reason==='keeper_recovery_trip_active'||initial.room.num!==579&&ownedBraxRoadRecovery(initial,ctx.origin??currentCallOrigin(),start);
         if(!error.survival&&!recoveryTrip)throw error;
@@ -549,26 +609,37 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     log('admitted',{batch:batchId,slot:me.slot,readiness:g.readiness});
     // One boarding trajectory at a time keeps the common landing clear.
     const lane=me.slot%2,col=55+lane,x=55808+lane*1024;
-    const boardingGate=crossingGate([server.host,server.port,579,'platform-boarding'].join(':')),boardingOwner={pid:process.pid,token:ticket,agent};
+    // Keep alignment/flight exclusive: a legal takeoff may be diagonal.
+    // Only the already confirmed landing/parking stage may overlap the next fall.
+    const boardingGate=crossingGate([server.host,server.port,579,'platform-boarding'].join(':')),
+      landingGate=crossingGate(braxBoardingLaneKey(server,col)),boardingOwner={pid:process.pid,token:ticket,agent};
     const boardingDeadline=Math.min(end,Date.now()+360000);
     let boarded=false,boardingState;
+    const checkBoarding=async()=>{
+      const current=await update(g=>{});if(current.failure)throw Error(current.failure);
+      boardingState=await read({fine:false});if(boardingState.room.num!==579)throw Error('Brax boarding room changed');const geo=roomGeometry(579);
+      applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(boardingState.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
+    };
+    const readyToBoard=()=>aboardAlready||boardingState.in_game===true&&boardingState.connected!==false&&boardingState.you&&!boardingState.you.predicted&&!!chooseBraxBoarding(roomGeometry(579),boardingState.you,new Map(boardingState.objects.map(o=>[o.id,o])),{columns:[col]});
     while(!boarded){
-      await waitForCrossing(boardingGate,boardingOwner,{deadline:boardingDeadline,check:async()=>{
-        const current=await update(g=>{});if(current.failure)throw Error(current.failure);
-        boardingState=await read({fine:false});if(boardingState.room.num!==579)throw Error('Brax boarding room changed');const geo=roomGeometry(579);
-        applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(boardingState.doors.observed).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>geo});
-      },ready:()=>aboardAlready||boardingState.in_game===true&&boardingState.connected!==false&&boardingState.you&&!boardingState.you.predicted&&!!chooseBraxBoarding(roomGeometry(579),boardingState.you,new Map(boardingState.objects.map(o=>[o.id,o])))});
+      await waitForCrossing(landingGate,boardingOwner,{deadline:boardingDeadline,check:checkBoarding,ready:readyToBoard});
       try{
-        if(!aboardAlready){const current=await read(),chosen=chooseBraxBoarding(roomGeometry(579),current.you,new Map(current.objects.map(o=>[o.id,o])));if(!chosen)continue;
-          if(await jump({row:25,col:chosen.col,x:chosen.x,y:25088},4000,{queueOnBlocked:true})===false)continue;}
-        const landing=(await read()).you;
-        await releaseAfterClearance(boardingGate,boardingOwner,walkPoint(platformSlot(me.station??me.slot)),{
-          read,clear:s=>{
-            const p=protocolToClient(s.you),floor=floorAt(roomGeometry(579),p.x,p.y);
-            return s.room.num===579&&Math.hypot(s.you.x-landing.x,s.you.y-landing.y)>=32&&Number.isFinite(floor)&&Math.abs(floor-4000)<=16;
-          },onClear:s=>log('boarding-clear',{actual:s.you,landing})});
-        await update(g=>{g.members.find(m=>m.ticket===ticket).aboard=true;});log('aboard',{batch:batchId,slot:me.slot});boarded=true;
-      }finally{await boardingGate.release(boardingOwner);if(!boarded)await sleep(500);}
+        await waitForCrossing(boardingGate,boardingOwner,{deadline:boardingDeadline,check:checkBoarding,ready:readyToBoard});
+        try{
+          if(!aboardAlready){const current=await read(),chosen=chooseBraxBoarding(roomGeometry(579),current.you,new Map(current.objects.map(o=>[o.id,o])),{columns:[col]});if(!chosen)continue;
+            if(await jump({row:25,col:chosen.col,x:chosen.x,y:25088},4000,{queueOnBlocked:true})===false)continue;}
+          const landing=(await read()).you;
+          // jump() returned only after an actual connected landing on floor4000.
+          // The next column may start while this character walks into the grid.
+          await boardingGate.release(boardingOwner);
+          await releaseAfterClearance(landingGate,boardingOwner,walkPoint(braxWorkStand(me.slot,g.expectedAgents?.length??g.members.length,me.station??me.slot)),{
+            read,clear:s=>{
+              const p=protocolToClient(s.you),floor=floorAt(roomGeometry(579),p.x,p.y);
+              return s.room.num===579&&Math.hypot(s.you.x-landing.x,s.you.y-landing.y)>=32&&Number.isFinite(floor)&&Math.abs(floor-4000)<=16;
+            },onClear:s=>log('boarding-clear',{actual:s.you,landing})});
+          await update(g=>{g.members.find(m=>m.ticket===ticket).aboard=true;});log('aboard',{batch:batchId,slot:me.slot});boarded=true;
+        }finally{await boardingGate.release(boardingOwner);}
+      }finally{await landingGate.release(boardingOwner);if(!boarded)await sleep(500);}
     }
     g=await until(async()=>{const g=await update(g=>{if(g.phase==='boarding'&&braxBoardingComplete(g,Date.now()))g.phase='center';});if(g.failure)throw Error(g.failure);return g.phase!=='boarding'?g:null;},'Brax group did not assemble',420000);
     if(me.slot===0){
@@ -584,7 +655,8 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     g=await until(async()=>{let g=await update(g=>{});if(g.failure)throw Error(g.failure);return g.members.every(m=>m.corners)?g:null;},'Brax corner work incomplete',120000);
     if(me.slot===0){
       await until(async()=>(await read()).doors.observed?.[3]===800,'Brax puzzle did not raise lift',10000);
-      await update(g=>{g.phase='rising';g.raisedAt??=Date.now();g.readyAfter=g.raisedAt+BRAX_SOLVED_RESET_MS;});
+      g=await update(g=>{g.phase='rising';g.raisedAt??=Date.now();g.readyAfter=g.raisedAt+BRAX_SOLVED_RESET_MS;});
+      log('lift-raised',{batch:batchId,raisedAt:g.raisedAt,targetHeight:800});
     }
     g=await phase(['rising','leaving','departed']);
     // Full 550/15 seconds plus margin, then validate the packet and floor.
@@ -607,14 +679,11 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
     if(!departure.arrived&&!departure.joined_takeoff)throw Object.assign(Error('Brax native departure lane did not clear'),{reply:departure});
     await northFall(col,{approached:true});
     // Walk off the landing before the next member uses the same trajectory.
-    await update(g=>{g.members.find(m=>m.ticket===ticket).gone=true;if(g.members.every(m=>m.gone))g.phase='departed';});
+    await update(g=>braxRecordMemberExit(g,ticket));
     return await finish();
-  }catch(e){log('failure',{reason:e.message,interruption:e.interruption??null,railOutcome:e.outcome??null,fine:state.islandFineFailure??null,recovery:state.islandRecoveryFailure??null,observation:e.observation??state.islandObservationFailure??null,reply:e.reply??null});state.brax.failure=e.message;
+  }catch(e){log('failure',{reason:e.message,error:errorEvidence(e),interruption:e.interruption??null,railOutcome:e.outcome??null,fine:state.islandFineFailure??null,recovery:state.islandRecoveryFailure??null,observation:e.observation??state.islandObservationFailure??null,reply:e.reply??null});state.brax.failure=e.message;
     if(journal&&batchId)await update(g=>{
-      // After a member has cleared the landing, its onward travel cannot abort riders.
-      if(g.members.find(m=>m.ticket===ticket)?.gone)return;
-      g.failure=e.message;
-      g.readyAfter=braxFailedReadyAfter(g,Date.now());
+      braxRecordMemberFailure(g,ticket,e.message,Date.now());
     }).catch(()=>{});
     return {ok:false,why:e.message};
   }

@@ -1,0 +1,380 @@
+{
+  "source": "actual trial19 return queue: left opening occupied by black spider, own adjacent opening legal",
+  "room": 579,
+  "to": 578,
+  "observed": {
+    "2": 250,
+    "3": 250,
+    "4": 540,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 510,
+    "10": 214
+  },
+  "players": [
+    {
+      "id": 7478,
+      "name": "Brax Qqqq",
+      "flags": 525,
+      "row": 1,
+      "col": 18,
+      "x": 1152,
+      "y": 96
+    },
+    {
+      "id": 7447,
+      "name": "Brax Dddd",
+      "flags": 4160750093,
+      "row": 6,
+      "col": 18,
+      "x": 1200,
+      "y": 396
+    },
+    {
+      "id": 7458,
+      "name": "Brax Hhhh",
+      "flags": 4160750093,
+      "row": 4,
+      "col": 18,
+      "x": 1200,
+      "y": 268
+    },
+    {
+      "id": 7475,
+      "name": "Brax Oooo",
+      "flags": 525,
+      "row": 9,
+      "col": 19,
+      "x": 1216,
+      "y": 580
+    },
+    {
+      "id": 7473,
+      "name": "Brax Nnnn",
+      "flags": 4160750093,
+      "row": 2,
+      "col": 18,
+      "x": 1154,
+      "y": 130
+    },
+    {
+      "id": 7471,
+      "name": "Brax Mmmm",
+      "flags": 525,
+      "row": 3,
+      "col": 18,
+      "x": 1200,
+      "y": 204
+    }
+  ],
+  "bodies": [
+    {
+      "id": 7948,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 18,
+      "col": 40,
+      "x": 2578,
+      "y": 1176
+    },
+    {
+      "id": 7947,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 9,
+      "col": 41,
+      "x": 2641,
+      "y": 593
+    },
+    {
+      "id": 7946,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 12,
+      "col": 41,
+      "x": 2642,
+      "y": 800
+    },
+    {
+      "id": 7945,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 14,
+      "col": 41,
+      "x": 2671,
+      "y": 922
+    },
+    {
+      "id": 7944,
+      "name": "skeleton",
+      "flags": 9,
+      "row": 11,
+      "col": 41,
+      "x": 2655,
+      "y": 749
+    },
+    {
+      "id": 7943,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 30,
+      "col": 41,
+      "x": 2670,
+      "y": 1939
+    },
+    {
+      "id": 7942,
+      "name": "skeleton",
+      "flags": 9,
+      "row": 31,
+      "col": 45,
+      "x": 2908,
+      "y": 2028
+    },
+    {
+      "id": 7941,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 12,
+      "col": 42,
+      "x": 2720,
+      "y": 800
+    },
+    {
+      "id": 7940,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 22,
+      "col": 41,
+      "x": 2642,
+      "y": 1430
+    },
+    {
+      "id": 7939,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 19,
+      "col": 41,
+      "x": 2656,
+      "y": 1248
+    },
+    {
+      "id": 7938,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 13,
+      "col": 41,
+      "x": 2644,
+      "y": 872
+    },
+    {
+      "id": 7937,
+      "name": "battered skeleton",
+      "flags": 9,
+      "row": 28,
+      "col": 69,
+      "x": 4448,
+      "y": 1824
+    },
+    {
+      "id": 7928,
+      "name": "orc",
+      "flags": 9,
+      "row": 12,
+      "col": 48,
+      "x": 3104,
+      "y": 800
+    },
+    {
+      "id": 7927,
+      "name": "black spider",
+      "flags": 9,
+      "row": 24,
+      "col": 8,
+      "x": 544,
+      "y": 1568
+    },
+    {
+      "id": 7926,
+      "name": "black spider",
+      "flags": 9,
+      "row": 2,
+      "col": 19,
+      "x": 1248,
+      "y": 160
+    },
+    {
+      "id": 7925,
+      "name": "orc",
+      "flags": 9,
+      "row": 26,
+      "col": 7,
+      "x": 480,
+      "y": 1696
+    },
+    {
+      "id": 7924,
+      "name": "orc",
+      "flags": 9,
+      "row": 11,
+      "col": 66,
+      "x": 4256,
+      "y": 736
+    },
+    {
+      "id": 7923,
+      "name": "black spider",
+      "flags": 9,
+      "row": 1,
+      "col": 17,
+      "x": 1120,
+      "y": 111
+    },
+    {
+      "id": 1577,
+      "name": "lever",
+      "flags": 2048,
+      "row": 25,
+      "col": 60,
+      "x": 3840,
+      "y": 1600
+    },
+    {
+      "id": 1576,
+      "name": "lever",
+      "flags": 2048,
+      "row": 25,
+      "col": 51,
+      "x": 3264,
+      "y": 1600
+    },
+    {
+      "id": 1575,
+      "name": "lever",
+      "flags": 2048,
+      "row": 16,
+      "col": 60,
+      "x": 3840,
+      "y": 1024
+    },
+    {
+      "id": 1574,
+      "name": "lever",
+      "flags": 2048,
+      "row": 16,
+      "col": 51,
+      "x": 3264,
+      "y": 1024
+    },
+    {
+      "id": 1573,
+      "name": "lever",
+      "flags": 2048,
+      "row": 21,
+      "col": 55,
+      "x": 3550,
+      "y": 1374
+    },
+    {
+      "id": 1572,
+      "name": "lever",
+      "flags": 2048,
+      "row": 1,
+      "col": 61,
+      "x": 3936,
+      "y": 81
+    },
+    {
+      "id": 1571,
+      "name": "lever",
+      "flags": 2048,
+      "row": 1,
+      "col": 61,
+      "x": 3904,
+      "y": 81
+    },
+    {
+      "id": 1570,
+      "name": "lever",
+      "flags": 2048,
+      "row": 1,
+      "col": 60,
+      "x": 3872,
+      "y": 81
+    },
+    {
+      "id": 1569,
+      "name": "lever",
+      "flags": 2048,
+      "row": 1,
+      "col": 60,
+      "x": 3840,
+      "y": 81
+    },
+    {
+      "id": 1568,
+      "name": "lever",
+      "flags": 2048,
+      "row": 1,
+      "col": 59,
+      "x": 3825,
+      "y": 96
+    },
+    {
+      "id": 1567,
+      "name": "lever",
+      "flags": 2048,
+      "row": 2,
+      "col": 59,
+      "x": 3825,
+      "y": 128
+    },
+    {
+      "id": 1566,
+      "name": "lever",
+      "flags": 2048,
+      "row": 2,
+      "col": 59,
+      "x": 3825,
+      "y": 160
+    },
+    {
+      "id": 1565,
+      "name": "lever",
+      "flags": 2048,
+      "row": 3,
+      "col": 59,
+      "x": 3825,
+      "y": 192
+    },
+    {
+      "id": 1564,
+      "name": "lever",
+      "flags": 2048,
+      "row": 3,
+      "col": 60,
+      "x": 3856,
+      "y": 207
+    },
+    {
+      "id": 1563,
+      "name": "Journal of the Watcher of the Brax Arena",
+      "flags": 65,
+      "row": 1,
+      "col": 60,
+      "x": 3856,
+      "y": 112
+    },
+    {
+      "id": 1562,
+      "name": "mana node",
+      "flags": 2230272,
+      "row": 52,
+      "col": 30,
+      "x": 1968,
+      "y": 3328
+    }
+  ]
+}

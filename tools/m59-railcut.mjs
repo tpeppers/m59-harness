@@ -71,8 +71,8 @@ export const snap = (v, lattice = LATTICE) => Math.round(v / lattice) * lattice;
  * `edge(a, b)` is the mover's trace, passed in rather than imported, so this module has no opinion
  * about what walking means and cannot drift from whatever the mover actually enforces.
  */
-export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, cap = 400_000, cost = null, maxMs = 2000 }) {
-  if(typeof cost==='function')return pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs});
+export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, cap = 400_000, cost = null, maxMs = 2000, deadline = Infinity }) {
+  if(typeof cost==='function')return pricedFlood(seed,{edge,bounds,lattice,stopAt,cap,cost,maxMs:Number.isFinite(deadline)?Math.min(maxMs,Math.max(1,deadline-performance.now())):maxMs});
   const key = (x, y) => `${x},${y}`;
   const parent = new Map([[key(seed.x, seed.y), null]]);
   const q = [seed];
@@ -81,6 +81,7 @@ export function flood(seed, { edge, bounds, lattice = LATTICE, stopAt = null, ca
                 [lattice, lattice], [lattice, -lattice], [-lattice, lattice], [-lattice, -lattice]];
   let head = 0;
   while (head < q.length && parent.size < cap) {
+    if(Number.isFinite(deadline)&&performance.now()>=deadline){parent.reason='rail request deadline';parent.complete=false;return parent;}
     const p = q[head++];
     if (stopKey && key(p.x, p.y) === stopKey) break;
     for (const [dx, dy] of dirs) {
@@ -145,7 +146,10 @@ export function chainTo(parent, goal) {
  * stepped, and the original hand-cut rails were all built and "verified" this way, with ONE trace
  * across spans up to 24,320 units. That is a claim about an endpoint, not about a path.
  */
-export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, alternateSeeds = true, cost = null, maxMs = 2000 } = {}) {
+export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, alternateSeeds = true, cost = null, maxMs = 2000, deadline = Infinity } = {}) {
+  const expired=()=>Number.isFinite(deadline)&&performance.now()>=deadline;
+  const budgetFailure=()=>({ok:false,bridgeOk:false,why:'rail request deadline',visited:0});
+  if(expired())return budgetFailure();
   const seed = { x: snap(body.x, lattice), y: snap(body.y, lattice) };
   const target = { x: snap(goal.x, lattice), y: snap(goal.y, lattice) };
   const bridge = Math.hypot(seed.x - body.x, seed.y - body.y);
@@ -156,19 +160,23 @@ export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE, 
   if (!bridgeOk && alternateSeeds) {
     const candidates = [];
     for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+      if(expired())return budgetFailure();
       const p = { x: seed.x + dx * lattice, y: seed.y + dy * lattice };
       const distance = Math.hypot(p.x - body.x, p.y - body.y);
       if (!distance || p.x < 0 || p.y < 0 || p.x >= bounds.w || p.y >= bounds.h) continue;
       if (chordWalkable(body, p, { edge, lattice }).ok) candidates.push({ p, distance });
     }
     for (const { p } of candidates.sort((a, b) => a.distance - b.distance).slice(0, 8)) {
-      const cut = cutRail(p, goal, { edge, bounds, floorAt, lattice, alternateSeeds: false, cost, maxMs });
+      if(expired())return budgetFailure();
+      const cut = cutRail(p, goal, { edge, bounds, floorAt, lattice, alternateSeeds: false, cost, maxMs, deadline });
       if (cut.ok && cut.bridgeOk) return { ...cut, bridgeOk: true, alternateSeed: true,
         waypoints: [{ ...body, f: floorAt?.(body.x, body.y) ?? null }, ...cut.waypoints],
         legs: cut.legs + 1 };
     }
   }
-  const parent = flood(seed, { edge, bounds, lattice, stopAt: target, cost, maxMs });
+  if(expired())return budgetFailure();
+  const remaining=Number.isFinite(deadline)?Math.min(maxMs,Math.max(1,deadline-performance.now())):maxMs;
+  const parent = flood(seed, { edge, bounds, lattice, stopAt: target, cost, maxMs:remaining, deadline });
   if(parent.complete===false)return {ok:false,why:parent.reason,visited:parent.size,seed,target,bridge,bridgeOk};
   const chain = chainTo(parent, target);
   if (!chain) return { ok: false, why: 'the flood did not reach the goal', visited: parent.size,

@@ -933,3 +933,15 @@ substrate/island-admin/
 
 # Local Brax route trials, generated rails, coordination and movement receipts.
 /substrate/brax-*
+
+/substrate/session-evidence/
+
+/substrate/fleet-health/
+
+/substrate/death-notices/
+
+# Opt-in private movement reproduction inputs/outcomes.
+substrate/rail-inputs/
+
+# Full local regression failure logs (never runtime source).
+/substrate/movement-suite-reports/

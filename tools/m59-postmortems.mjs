@@ -61,6 +61,8 @@ import http from 'node:http';
 import { postmortemSurvivalDecisions } from './m59-survival-decisions.mjs';
 import { deathImpact } from './m59-death-impact.mjs';
 import { deathTimeFromName } from './m59-death-tally.mjs';
+import {postmortemSocketLocation,postmortemSessionHistory} from './m59-postmortem-sessions.mjs';
+import {loadMap} from './m59-map.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR || here('../substrate/postmortems');
@@ -238,6 +240,14 @@ export function causeOf(pm) { return attributeDeath(pm); }
 export function locate(pm) {
   const death = pm?.at ?? null;
   if (death == null) return { trusted: false, why: 'no time of death recorded' };
+
+  const socket=postmortemSocketLocation(pm);
+  if(socket.conflicts.length)return{trusted:false,source:'socket_conflict',conflicting_rooms:socket.conflicts,why:'fatal socket observations disagree about the room; no location is selected'};
+  if(socket.location){const x=socket.location;let named=pm.where?.num===x.num?pm.where.room:null;
+    if(!named){try{named=loadMap().rooms[x.num]?.name??null;}catch{}}
+    return{trusted:true,source:x.source,room:named??'Room '+x.num,num:x.num,row:x.row,col:x.col,stale_ms:death-x.at,session_id:x.session_id,why:'fatal own-socket observation in this room, independent of missing keeper frames'};
+  }
+
 
   // The event stream first. A hit segment is the only witness that keeps working while
   // the keeper is blind, and it names the square rather than the room.
@@ -421,6 +431,7 @@ export function digest(file) {
     impact: deathImpact(pm),
     cause, where, keeper: keeperOf(pm),
     survival_decisions: postmortemSurvivalDecisions(pm),
+    socket_history: postmortemSessionHistory(pm),
     replay: pm.replay ?? null,
     was: {
       doing: pm.was?.doing ?? null, hunting: pm.was?.hunting ?? null,

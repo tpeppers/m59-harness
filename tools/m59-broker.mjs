@@ -34,7 +34,7 @@
 
 import { identifiedAs } from './m59-item-signature.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
-import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
+import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
@@ -8649,6 +8649,7 @@ const TOOLS = [
       agent: { type: 'string' },
       to_col: { type: 'number', description: 'landing column; must be a DECLARED landing from where you stand' },
       to_row: { type: 'number', description: 'landing row' },
+      origin: MOVE_ORIGIN_SCHEMA,
     }, required: ['agent', 'to_col', 'to_row'] },
     run: async (a) => {
       const s = session(a.agent);
@@ -8659,7 +8660,7 @@ const TOOLS = [
       // is not a World — so asking here answered "no geometry for this room" for every
       // character on the architecture production now runs.
       if (typeof s.walkFine === 'function' && s._index !== undefined && !s.world?.geometry)
-        return keeperAction(s.name, s._index, 'jump', { to_row: a.to_row, to_col: a.to_col });
+        return keeperAction(s.name, s._index, 'jump', { to_row: a.to_row, to_col: a.to_col, origin: a.origin ?? { source:'mcp',name:'jump' } });
       const geo = s.world?.geometry;
       if (!geo?.declaredFallJumps) throw new Error(`${a.agent}: no geometry for this room`);
       // ONLY A DECLARED JUMP, AND THAT IS THE WHOLE SAFEGUARD.
@@ -8735,11 +8736,13 @@ const TOOLS = [
         throw new Error(`${a.agent}: ${me.row},${me.col} -> ${a.to_row},${a.to_col} is not a declared ` +
                         `fall-jump or a one-square variation of one. Declared near here: ` +
                         (table.map(j => `${j.from.row},${j.from.col}->${j.to.row},${j.to.col}`).join(' ') || 'none'));
+      return withMoveOrder(s,{kind:'walk',to:'declared jump to r'+a.to_row+'c'+a.to_col,origin:moveOrigin(a.origin,{source:'mcp',name:'jump'})},async()=>{
       const before = { col: me.col, row: me.row };
       const declaration=declaredFine.find(j=>j.from.row===declared.from.row&&j.from.col===declared.from.col&&
         j.to.row===declared.to.row&&j.to.col===declared.to.col);
       const move=declaredJumpMoveOptions(declaration,s.client?.vitals?.()?.vigor?.value);
       if(!move.ok)return {made:false,moved:false,reason:move.reason};
+      const posture=await prepareDeclaredJump(s);if(!posture.ok)return {made:false,moved:false,...posture};
       const r = await s.step(a.to_col, a.to_row, move.options);
       const now = s.client?.self;
       const landed = now ? { col: now.col, row: now.row } : null;
@@ -8760,6 +8763,7 @@ const TOOLS = [
                floor, landing_floor: wanted,
                made: floor != null && wanted != null && Math.abs(floor - wanted) <= 64,
                moved: !!r?.moved, reason: r?.reason ?? null };
+      });
     },
   },
   {
@@ -11212,8 +11216,9 @@ const TOOLS = [
       const s=session(a.agent),health=num(a.to,0.9),maxSeconds=num(a.max_seconds,120);
       // The keeper owns the wire and the rest clock. A proxy's emulated client
       // cannot run a local rest loop through independently refreshed snapshots.
-      return s instanceof KeeperProxy?s.rest({health,vigor:health,max_seconds:maxSeconds}):
-        skills.restUntil(s,{health,vigor:health,maxSeconds});
+      const targets=skills.normalizeRestTargets({health,vigor:80});
+      return s instanceof KeeperProxy?s.rest({...targets,max_seconds:maxSeconds}):
+        skills.restUntil(s,{...targets,maxSeconds});
     },
   },
   {

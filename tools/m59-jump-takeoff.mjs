@@ -34,20 +34,25 @@ export function declaredJumpMoveOptions(declaration,vigor){
 export function planDeclaredTakeoff(geo,body,declaration,{objects,selfId,roomFlags=0,overrideDepths=null,maxMs=500,stayInLane=false,actualOnly=false}={}){
   if(!geo?.collisionReady||!declaration?.from_fine||!declaration?.to_fine||![body?.x,body?.y].every(Number.isFinite))
     return {found:false,reason:'declared_fine_takeoff_unavailable'};
+  if(stayInLane&&Math.floor(body.x/64)!==declaration.from.col)return{found:false,reason:'declared_lane_mismatch'};
   const started=performance.now(),from=protocolToClient(body),landing=declaration.to_fine,
     options={slide:false,obstacles:blockingBodySnapshot(objects,selfId),roomFlags,overrideDepths},floor=geo.floorBaseAtClient(from.x,from.y);
   const shelf=geo.floorBaseAtClient(declaration.from_fine.x,declaration.from_fine.y);
   if(!Number.isFinite(floor)||!Number.isFinite(shelf)||Math.abs(floor-shelf)>64)return {found:false,reason:'declared_takeoff_wrong_shelf'};
+  let laneNpcAlignment=null;
   // Once a queued traveler has a terrain-proved flight from its actual lip,
   // another body is a wait, not a reason to cross the neighboring queue.
   if((stayInLane||actualOnly)&&Math.abs(Math.floor(body.y/64)-declaration.from.row)<=1&&Math.abs(Math.floor(body.x/64)-declaration.from.col)<=1){
     const terrain=geo.traceFineMoveClient(from.x,from.y,landing.x,landing.y,{...options,obstacles:[],fall:true,timedFall:true});
     if(terrain.arrived){
       const dx=landing.x-from.x,dy=landing.y-from.y,length2=dx*dx+dy*dy;
-      const occupied=options.obstacles.some(o=>{const t=length2?Math.max(0,Math.min(1,((o.x-from.x)*dx+(o.y-from.y)*dy)/length2)):0;return Math.hypot(o.x-from.x-t*dx,o.y-from.y-t*dy)<MIN_NOMOVEON;});
+      const blockers=options.obstacles.filter(o=>{const t=length2?Math.max(0,Math.min(1,((o.x-from.x)*dx+(o.y-from.y)*dy)/length2)):0;return Math.hypot(o.x-from.x-t*dx,o.y-from.y-t*dy)<MIN_NOMOVEON;});
+      const occupied=blockers.length>0;
       const flight=occupied?null:geo.traceFineMoveClient(from.x,from.y,landing.x,landing.y,{...options,fall:true,timedFall:true});
-      return flight?.arrived?{found:true,takeoff:{x:body.x,y:body.y},landing:clientToProtocol(landing),flight_ms:flight.fall_motion.elapsed_ms,ms:Math.round(performance.now()-started)}:
-        {found:false,reason:'declared_lane_occupied'};
+      if(flight?.arrived)return{found:true,takeoff:{x:body.x,y:body.y},landing:clientToProtocol(landing),flight_ms:flight.fall_motion.elapsed_ms,ms:Math.round(performance.now()-started)};
+      const knownNpc=blockers.length>0&&blockers.every(o=>Number.isInteger(objects?.get(o.id)?.flags)&&!(objects.get(o.id).flags&4));
+      if(actualOnly||!stayInLane||!knownNpc)return{found:false,reason:'declared_lane_occupied',blockers:blockers.map(o=>({id:o.id,...clientToProtocol(o),flags:objects?.get(o.id)?.flags??null}))};
+      laneNpcAlignment=blockers.map(o=>o.id);
     }
   }
   if(actualOnly)return {found:false,reason:'actual_takeoff_unproved'};
@@ -56,6 +61,12 @@ export function planDeclaredTakeoff(geo,body,declaration,{objects,selfId,roomFla
     for(let y=row*64;y<(row+1)*64;y+=8)for(let x=col*64;x<(col+1)*64;x+=8)candidates.push({x,y});
   candidates.sort((a,b)=>Math.hypot(a.x-body.x,a.y-body.y)-Math.hypot(b.x-body.x,b.y-body.y));
   for(const takeoff of candidates){
+    if(stayInLane){
+      const dx=landing.x-from.x,dy=landing.y-from.y;
+      if(Math.floor(takeoff.x/64)!==declaration.from.col||Math.floor(body.x/64)!==declaration.from.col||
+         Math.hypot(takeoff.x-body.x,takeoff.y-body.y)>16||
+         (takeoff.x-body.x)*dx+(takeoff.y-body.y)*dy<0)continue;
+    }
     // The public jump verb permits only the declared source's one-square
     // neighborhood, even when a farther same-shelf flight is physically valid.
     if(Math.abs(Math.floor(takeoff.y/64)-declaration.from.row)>1||Math.abs(Math.floor(takeoff.x/64)-declaration.from.col)>1)continue;
@@ -70,7 +81,7 @@ export function planDeclaredTakeoff(geo,body,declaration,{objects,selfId,roomFla
     const dx=landing.x-p.x,dy=landing.y-p.y,length2=dx*dx+dy*dy;
     if(options.obstacles.some(o=>{const t=length2?Math.max(0,Math.min(1,((o.x-p.x)*dx+(o.y-p.y)*dy)/length2)):0;return Math.hypot(o.x-p.x-t*dx,o.y-p.y-t*dy)<MIN_NOMOVEON;}))continue;
     const flight=geo.traceFineMoveClient(p.x,p.y,landing.x,landing.y,{...options,fall:true,timedFall:true});
-    if(flight.arrived)return {found:true,takeoff,landing:clientToProtocol(landing),flight_ms:flight.fall_motion.elapsed_ms,ms:Math.round(performance.now()-started)};
+    if(flight.arrived)return {found:true,takeoff,...(laneNpcAlignment?{alignment:{same_lane:true,npc_blockers:laneNpcAlignment}}:{}),landing:clientToProtocol(landing),flight_ms:flight.fall_motion.elapsed_ms,ms:Math.round(performance.now()-started)};
   }
   return {found:false,reason:'no_proved_nearby_takeoff'};
 }
