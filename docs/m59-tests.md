@@ -1112,7 +1112,11 @@ the records it describes.
   written only by the keeper it names and never for a monster or a fleetmate, that "of the The Second
   Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
   that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
-  that a test fake without a real Recorder writes nothing) and
+  that a test fake without a real Recorder writes nothing),  `node tools/m59-victory-taunt-test.mjs` (33 — **who broadcasts after a won battle**: that the LAST
+  kill names the speaker, that a killer who is human-piloted, has no lines or cannot afford the
+  broadcast hands over to the strongest who can, that a mana refusal in prose tries the next, that an
+  unsettled, stale, traded or already-answered battle is never taunted, and that a win the ledger turns
+  into a trade stays silent) and
   `node tools/m59-pvp-rooms-test.mjs` (53 — **where a player may be fought at all, `pvp_rooms`**:
   that silence allows every room and `[599,2,38]` allows 599 and refuses 576, that an unknown room
   is not a listed one, that the broker refuses a non-integer room naming the key, that outside the

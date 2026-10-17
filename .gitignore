@@ -317,6 +317,15 @@ __pycache__/
 # nobody wants arriving from somebody else's afternoon. The shape is in tuning.example.json.
 /substrate/tuning.json
 
+# VICTORY TAUNTS. substrate/victory-taunts.json is what each character broadcasts to the whole
+# server after a won PvP battle (tools/m59-victory-taunt.mjs). It names the fleet's characters and
+# speaks for them, so it is this machine's; the shape is substrate/victory-taunts.example.json.
+# The state and log beside it are runtime.
+/substrate/victory-taunts.json
+/substrate/victory-taunt-state.json
+/substrate/victory-taunt.jsonl
+/substrate/victory-taunt.log
+
 # CAST ROLE TAGS. substrate/cast-roles.json tags characters with a role that casting strategies read
 # as ctx.role (tools/m59-spellgear.mjs). Per-character ORDERS, like tuning.json; the shape is
 # substrate/cast-roles.example.json.

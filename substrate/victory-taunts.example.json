@@ -1,0 +1,17 @@
+{
+  "_doc": "Copy to substrate/victory-taunts.json (gitignored). One list per CHARACTER NAME; after a won PvP battle the last killer broadcasts one of its own lines, or the strongest character with mana does. Characters without lines never speak. See tools/m59-victory-taunt.mjs.",
+  "settings": {
+    "settle_ms": 60000,
+    "max_age_ms": 1800000,
+    "broadcast_mana_percent": 50,
+    "max_attempts": 3,
+    "poll_ms": 15000,
+    "channel": "broadcast"
+  },
+  "characters": {
+    "Example Character": [
+      "The walls held. Next!",
+      "That was the whole fight? Encore!"
+    ]
+  }
+}
