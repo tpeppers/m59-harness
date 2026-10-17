@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
 
 const LIVE_TIMEOUT_MS = 700;
+const pendingBandScans = new WeakMap();
 
 /** Scan the band. Map agent -> { port, agent, character, pid, in_game }. */
 export async function scanKeepers({ fleet, band = null, fetchImpl = fetch, timeoutMs = LIVE_TIMEOUT_MS } = {}) {
@@ -35,17 +36,20 @@ export async function scanKeepers({ fleet, band = null, fetchImpl = fetch, timeo
     const { lookupKeeperBand } = await import('./runtime/keeper-bands.mjs');
     band = lookupKeeperBand(fleet, { registryPath: process.env.M59_KEEPER_BAND_REGISTRY || undefined });
   }
-  const found = new Map();
-  if (!band) return found;
-  const probes = [];
-  for (let port = band.base; port <= band.end; port++)
-    probes.push(fetchImpl(`http://127.0.0.1:${port}/live`, { signal: AbortSignal.timeout(timeoutMs) })
-      .then(r => r.ok ? r.json() : null)
-      .then(v => { if (v?.agent) found.set(String(v.agent), { port, agent: String(v.agent),
-        character: v.character ?? null, pid: v.pid ?? null, in_game: v.in_game ?? null }); })
-      .catch(() => {}));
-  await Promise.all(probes);
-  return found;
+  if (!band) return new Map();
+  let pending=pendingBandScans.get(fetchImpl);if(!pending){pending=new Map();pendingBandScans.set(fetchImpl,pending);}
+  const key=`${band.base}:${band.end}:${timeoutMs}`;
+  if(pending.has(key))return pending.get(key);
+  const request=(async()=>{
+    const found=new Map(),probes=[];
+    for(let port=band.base;port<=band.end;port++)
+      probes.push(fetchImpl(`http://127.0.0.1:${port}/live`,{signal:AbortSignal.timeout(timeoutMs)})
+        .then(r=>r.ok?r.json():null)
+        .then(v=>{if(v?.agent)found.set(String(v.agent),{port,agent:String(v.agent),character:v.character??null,pid:v.pid??null,in_game:v.in_game??null});})
+        .catch(()=>{}));
+    await Promise.all(probes);return found;
+  })().finally(()=>pending.delete(key));
+  pending.set(key,request);return request;
 }
 
 /** The keeper for `who` — an agent id (t6) or a character name (Beaker), case-insensitive. */

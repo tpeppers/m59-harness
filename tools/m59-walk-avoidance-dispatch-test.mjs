@@ -79,3 +79,30 @@ console.log('Forbidden squares survive fine/square dispatch, proxy JSON and keep
  const execute=runInNewContext('(async function(args){switch("operate_door"){'+keeper.slice(a,b)+'}})',{asWalkOrder:(_args,_label,fn)=>fn(),session:{openOperableDoor:async options=>{seen=options;return {opened:true};}},json:()=>{}});
  await execute({targets});assert.deepEqual(seen.targets,targets,'shared door targeting survives the broker and keeper boundaries');
 }
+
+{
+ const from=keeper.indexOf("          case 'walk_fine': {"),to=keeper.indexOf('\n          }',from)+12;
+ let moved=false,reply;const session={keeperRecoveryTravel:{id:'owned-trip'},walkFine:async()=>{moved=true;return{};},client:{vitals:()=>({health:{value:20,max:20}})}};
+ const execute=runInNewContext('(async function(args){switch("walk_fine"){'+keeper.slice(from,to)+'}})',{session,currentSurvivalDecision:()=>null,isActiveRecoveryDecision,Set,asWalkOrder:(_a,_l,fn)=>fn(),json:r=>{reply=r;}});
+ await execute({x:2160,y:2648,origin:{source:'fleetscript'}});assert.equal(moved,false);assert.equal(reply.reason,'keeper_recovery_trip_active');
+ session.keeperRecoveryTravel=null;await execute({x:2160,y:2648,origin:{source:'fleetscript'}});assert(moved,'completed detours release script movement');
+}
+
+{
+ const from=keeper.indexOf("          case 'walk_rail': {"),to=keeper.indexOf('\n          }',from)+12;
+ let reply;const session={keeperRecoveryTravel:{id:'native-owned-trip'}};
+ const execute=runInNewContext('(async function(args){switch("walk_rail"){'+keeper.slice(from,to)+'}})',{session,json:r=>{reply=r;}});
+ await execute({origin:{source:'fleetscript'}});assert.equal(reply.reason,'keeper_recovery_trip_active','native rail execution cannot compete with a keeper recovery trip');
+}
+
+
+{
+ const start=keeper.indexOf("    if (req.method === 'GET' && path === '/movecheck') {"),end=keeper.indexOf("    if (req.method === 'GET' && path === '/log')",start);
+ let seen,response,status;const session={client:{self:{id:7,row:32,col:55,x:3520,y:2080},room:{security:8},state:'game'},world:{geometry:{security:8}},collisionVertical:{min:8160,max:8160},validateFineTarget:(x,y,options)=>{seen={x,y,options};return{available:true,moved:true,arrived:true,target:{x,y}};}};
+ const execute=runInNewContext('(function(req,path,url){'+keeper.slice(start,end)+'})',{session,json:(r,code)=>{response=r;status=code;},Number});
+ execute({method:'GET'},'/movecheck',new URL('http://localhost/movecheck?x=3616&y=1632&slide=1&fall=1&timed_fall=1'));
+ assert.equal(seen.x,3616);assert.equal(seen.y,1632);assert(seen.options.slide&&seen.options.fall&&seen.options.timedFall);assert(response.validation.arrived);assert.equal(response.vertical_motion.min,8160);
+ seen=null;execute({method:'GET'},'/movecheck',new URL('http://localhost/movecheck?x=3616'));assert.equal(seen,null);assert.equal(status,400,'an incomplete fine target never invokes movement validation');
+ execute({method:'GET'},'/movecheck',new URL('http://localhost/movecheck'));assert.equal(response.neighbors.length,4,'existing cardinal diagnostics remain available');
+ console.log('native movecheck: named exact target is a read-only validator call; incomplete targets refuse and existing diagnostics remain intact');
+}

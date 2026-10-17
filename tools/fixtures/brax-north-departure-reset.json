@@ -1,0 +1,357 @@
+{
+  "source": "qualified-current-cohort-01, braxshadow03, 2026-10-17; actual receipts, not a reconstructed live body field",
+  "raisedAt": 1792220392731,
+  "observed": {
+    "2": 800,
+    "3": 800,
+    "4": 510,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 540,
+    "10": 314
+  },
+  "events": [
+    {
+      "at": "2026-10-17T07:01:15.841Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1060
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 1,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1060,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:16.506Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1060
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1060,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:17.031Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1060
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1060,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:17.545Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1060
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1060,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:29.061Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1050
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 1,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1050,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:33.885Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1024
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 1,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1024,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:34.395Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1024
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1024,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:34.908Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1024
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1024,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:35.421Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 1024
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 0,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 1024,
+          "row": 16,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:44.010Z",
+      "event": "departure-advance",
+      "target": {
+        "x": 3552,
+        "y": 992
+      },
+      "reply": {
+        "arrived": true,
+        "completed_aims": 1,
+        "total_aims": 1,
+        "steps": 1,
+        "body_waits": 0,
+        "position": {
+          "id": 7448,
+          "x": 3552,
+          "y": 992,
+          "row": 15,
+          "col": 55
+        }
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:44.739Z",
+      "event": "command",
+      "name": "walk_to",
+      "args": {
+        "x": 3552,
+        "y": 992,
+        "fine": true,
+        "max_steps": 180,
+        "stride": 48,
+        "arrive_within": 4,
+        "exact_arrival": true,
+        "hold_shelf": true
+      },
+      "reply": {
+        "arrived": true,
+        "position": {
+          "col": 55,
+          "row": 15,
+          "x": 3552,
+          "y": 992
+        },
+        "shelf_refusals": 0,
+        "dest_floor": 12800,
+        "steps": 0,
+        "log": []
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:45.332Z",
+      "event": "command",
+      "name": "walk_to",
+      "args": {
+        "x": 3560,
+        "y": 992,
+        "fine": true,
+        "max_steps": 8,
+        "stride": 8,
+        "arrive_within": 0,
+        "exact_arrival": true,
+        "hold_shelf": true
+      },
+      "reply": {
+        "arrived": true,
+        "position": {
+          "col": 55,
+          "row": 15,
+          "x": 3560,
+          "y": 992
+        },
+        "shelf_refusals": 0,
+        "dest_floor": 12800,
+        "steps": 1,
+        "log": []
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:47.405Z",
+      "event": "command",
+      "name": "walk_to",
+      "args": {
+        "x": 3616,
+        "y": 992,
+        "fine": true,
+        "max_steps": 8,
+        "stride": 8,
+        "arrive_within": 0,
+        "exact_arrival": true,
+        "hold_shelf": true
+      },
+      "reply": {
+        "arrived": true,
+        "position": {
+          "col": 56,
+          "row": 15,
+          "x": 3616,
+          "y": 992
+        },
+        "shelf_refusals": 0,
+        "dest_floor": 12800,
+        "steps": 7,
+        "log": []
+      }
+    },
+    {
+      "at": "2026-10-17T07:01:52.464Z",
+      "event": "command",
+      "name": "walk_to",
+      "args": {
+        "x": 3464,
+        "y": 976,
+        "fine": true,
+        "max_steps": 8,
+        "stride": 8,
+        "arrive_within": 0,
+        "exact_arrival": true,
+        "hold_shelf": true
+      },
+      "reply": {
+        "arrived": false,
+        "reason": "left the shelf",
+        "note": "standing on 4000 with the route on 12800 (started on 12800); stopped rather than walking on below it",
+        "shelf_refusals": 0,
+        "dest_floor": 12800,
+        "position": {
+          "col": 55,
+          "row": 15,
+          "x": 3567,
+          "y": 989
+        },
+        "steps": 7,
+        "log": []
+      }
+    },
+    {
+      "at": "2026-10-17T07:02:30.692Z",
+      "event": "failure",
+      "reply": null,
+      "reason": "Brax actual takeoff cannot prove the declared flight"
+    }
+  ]
+}

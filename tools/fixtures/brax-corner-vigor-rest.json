@@ -1,0 +1,199 @@
+{
+  "agent": "braxshadow15",
+  "character": "Brax Oooo",
+  "hp": {
+    "value": 20,
+    "max": 20
+  },
+  "vigor": {
+    "value": 78
+  },
+  "room": {
+    "name": "An ancient place, its origin forgotten",
+    "num": 579,
+    "object_id": 1552
+  },
+  "you": {
+    "id": 7483,
+    "col": 52,
+    "row": 22,
+    "x": 3360,
+    "y": 1440,
+    "facing": null,
+    "room_object_id": 1552,
+    "at": 1792227999649
+  },
+  "decision": {
+    "version": 1,
+    "id": "42760-1792227999238-371",
+    "episode_id": "42760-1792227849675-1",
+    "strategy": "nearest_refuge",
+    "reason": "nothing in this room is more defensible than open floor (walls considered 177, reachable from here 124, one-way 124, eligible 0)",
+    "reason_code": "approach_interrupted",
+    "hp": {
+      "value": 20,
+      "max": 20
+    },
+    "threat": {
+      "source": "cached visible bodies; not an attribution of attacks",
+      "bodies": [
+        {
+          "id": 7463,
+          "row": 24,
+          "col": 51,
+          "flags": 525,
+          "distance": 2
+        },
+        {
+          "id": 7941,
+          "row": 27,
+          "col": 57,
+          "flags": 9,
+          "distance": 5
+        },
+        {
+          "id": 7490,
+          "row": 23,
+          "col": 58,
+          "flags": 525,
+          "distance": 6
+        },
+        {
+          "id": 7942,
+          "row": 27,
+          "col": 59,
+          "flags": 9,
+          "distance": 7
+        },
+        {
+          "id": 7935,
+          "row": 29,
+          "col": 49,
+          "flags": 9,
+          "distance": 7
+        },
+        {
+          "id": 7456,
+          "row": 17,
+          "col": 60,
+          "flags": 525,
+          "distance": 8
+        },
+        {
+          "id": 7449,
+          "row": 24,
+          "col": 60,
+          "flags": 525,
+          "distance": 8
+        },
+        {
+          "id": 7943,
+          "row": 30,
+          "col": 56,
+          "flags": 9,
+          "distance": 8
+        },
+        {
+          "id": 7921,
+          "row": 30,
+          "col": 50,
+          "flags": 9,
+          "distance": 8
+        },
+        {
+          "id": 7920,
+          "row": 30,
+          "col": 49,
+          "flags": 9,
+          "distance": 8
+        },
+        {
+          "id": 7481,
+          "row": 31,
+          "col": 55,
+          "flags": 525,
+          "distance": 9
+        },
+        {
+          "id": 7939,
+          "row": 13,
+          "col": 51,
+          "flags": 9,
+          "distance": 9
+        },
+        {
+          "id": 7934,
+          "row": 31,
+          "col": 43,
+          "flags": 9,
+          "distance": 9
+        },
+        {
+          "id": 7940,
+          "row": 31,
+          "col": 42,
+          "flags": 9,
+          "distance": 10
+        },
+        {
+          "id": 7933,
+          "row": 32,
+          "col": 47,
+          "flags": 9,
+          "distance": 10
+        },
+        {
+          "id": 7944,
+          "row": 31,
+          "col": 41,
+          "flags": 9,
+          "distance": 11
+        }
+      ],
+      "omitted": 10,
+      "scan_truncated": false
+    },
+    "room": 579,
+    "position": {
+      "row": 22,
+      "col": 52
+    },
+    "vigor": 78,
+    "chosen_refuge": null,
+    "path": null,
+    "path_length": null,
+    "path_source": null,
+    "chosen_at": 1792227999238,
+    "selected_at": null,
+    "status": "pending",
+    "previous_decision_id": "42760-1792227999123-370",
+    "replacement_id": null,
+    "replan_count": 1,
+    "original_reason": "hurt in a room that spawns monsters — a wall before a rest",
+    "mitigation": "reassess from the current position",
+    "source": "recovery",
+    "movement_generation": 3,
+    "epoch": "48bf8129db74+2a331917",
+    "damage_taken": 0,
+    "last_hp": 20,
+    "min_hp": 20,
+    "activated_at": null,
+    "arrived_at": null,
+    "ended_at": null,
+    "outcome": null,
+    "age_ms": 411,
+    "cancelled_ago_ms": null,
+    "duration_ms": 411
+  },
+  "observed": {
+    "2": 800,
+    "3": 250,
+    "4": 540,
+    "5": 340,
+    "6": 340,
+    "7": 340,
+    "8": 340,
+    "9": 510,
+    "10": 214
+  }
+}

@@ -320,16 +320,16 @@ export function fileSpotHeldBy(agent, { snapshot = null } = {}) {
 // Passage claims use the same fleet/server namespace and atomic store as walls.
 // No timeout can evict a live body from a passage. Only its owner releases it
 // after a confirmed exit; dead-process claims are removed by records().
-export function reserveFilePassage(agent, room, zone) {
+export function reserveFilePassage(agent, room, zone, {flow=null}={}) {
   if (!fileSpotClaimsEnabled()) return null;
   return withLock(dir => {
     const all = records(dir, 'passage');
-    const conflict = all.find(r => r.room === room && r.zone === zone && r.agent !== String(agent));
+    const conflict = all.find(r => r.room === room && r.zone === zone && r.agent !== String(agent) && !(flow&&r.flow===flow));
     if (conflict) return { ok: false, agent: conflict.agent };
     const own = all.find(r => r.agent === String(agent));
-    if (own?.room === room && own.zone === zone) return { ok: true };
+    if (own?.room === room && own.zone === zone) return (own.flow??null)===flow?{ok:true}:{ok:false,reason:'passage_flow_changed'};
     if (own) return { ok: false, reason: 'passage_exit_unconfirmed' };
-    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone,
+    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone, flow,
       pid: process.pid, updated_at: Date.now() });
     return { ok: true };
   });

@@ -81,4 +81,14 @@ await ok('arguments: the name survives whichever flags are absent (--port withou
   assert.ok(src.includes("(?:Program Files[\\\\/])?Git[\\\\/]"), "Git Bash's /live -> C:/Program Files/Git/live is undone");
 });
 
+
+await ok('simultaneous band scans share probes without retaining completed keeper identities',async()=>{
+ let probes=0,version=1,release;const held=new Promise(r=>release=r);
+ const fetchImpl=async url=>{probes++;await held;return{ok:true,json:async()=>({agent:'a'+new URL(url).port,character:'A',pid:version})};};
+ const options={band:{base:9511,end:9512},fetchImpl};
+ const scans=Array.from({length:24},()=>scanKeepers(options));assert.equal(probes,2);release();
+ const results=await Promise.all(scans);assert(results.every(m=>m===results[0]));assert.equal(probes,2);
+ version=2;const next=await scanKeepers(options);assert.equal(probes,4);assert.equal(next.get('a9511').pid,2);
+});
+
 console.log(`\n${n} passed`);

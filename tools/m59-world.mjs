@@ -1097,6 +1097,7 @@ export class World {
             (alternates.length ? ` — ${alternates.length} other square(s) on that boundary also cross` : '')
           : `walk ${e.leaveName} past the room edge`,
         condition: e.condition ? `${e.condition.name}${e.condition.threshold}` : null,
+        edge_condition: e.condition ? {...e.condition} : null,
         reachable: true,
         // THE MOVER'S FLOOD ALREADY ANSWERED THIS. `grid_only` means no staging square for
         // this crossing was reachable under collision and the coarse grid was used instead

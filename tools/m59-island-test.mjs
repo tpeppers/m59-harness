@@ -412,7 +412,9 @@ await assert.rejects(withIslandSafeLegs(policyCtx,async()=>{throw Error('crossin
 await withIslandSafeLegs(policyCtx,async()=>{policy={safeLegs:false};});assert.equal(policy.safeLegs,false);
 const waypoints=[{x:512,y:512},{x:1536,y:512},{x:2560,y:512}],body=waypoints[0],aim={...waypoints[2],i:2},squares=new Set(['1,2']);
 assert.equal(islandFineStepBudget({x:0,y:0},{x:24*128,y:24*128}),8);
-assert.equal(islandFineStepBudget({x:0,y:0},{x:24*128,y:0}),6);
+assert.equal(islandFineStepBudget({x:0,y:0},{x:24*128,y:0}),8);
+assert.equal(islandFineStepBudget({x:8320,y:8192},{x:8448,y:8576},{stride:128}),8);
+assert.equal(islandFineStepBudget({x:0,y:0},{x:6144,y:0},{stride:16}),26);
 assert(islandTrafficRefusal({reason:'ran out of steps',shelf_refusals:11,geometry_rejections:['object_blocked']}));
 assert(!islandTrafficRefusal({reason:'ran out of steps',geometry_rejections:['geometry_blocked']}));
 let confirmationReads=0;

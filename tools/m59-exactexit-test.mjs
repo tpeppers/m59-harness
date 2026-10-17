@@ -38,7 +38,7 @@ import { loadMap } from './m59-map.mjs';
 import { attachStepMasks, activeRoutes, anchorFor } from './m59-routes.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const game = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+const game = readFileSync(join(HERE, 'm59-session-walk.mjs'), 'utf8');
 const pilot = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
 
 let pass = 0, fail = 0;

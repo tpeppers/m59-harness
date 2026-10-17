@@ -1,0 +1,31 @@
+{
+  "room": 39,
+  "you": {
+    "id": 1,
+    "x": 1772,
+    "y": 759,
+    "row": 11,
+    "col": 27,
+    "predicted": false
+  },
+  "objects": [],
+  "traffic": {
+    "room": 39,
+    "to": 589,
+    "exits": [
+      {
+        "row": 9,
+        "col": 27
+      },
+      {
+        "row": 9,
+        "col": 24
+      },
+      {
+        "row": 8,
+        "col": 27
+      }
+    ],
+    "finished_at": 1792209024557
+  }
+}

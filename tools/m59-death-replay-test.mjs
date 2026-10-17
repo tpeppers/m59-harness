@@ -318,3 +318,10 @@ await test('capture cost is measured independently of worker serialization and d
   assert.ok(times[95]<50,'capture consumed a material part of the one-second survival tick');
 });
 console.log(`${passed} death replay scenarios passed`);
+
+
+{
+ const {s,k}=fixture();s.collisionVertical={roomId:579,min:4000,max:8160,settleAt:15000,mode:'unmodelled'};
+ const scene=captureCachedScene(s,k);assert.deepEqual(scene.controller.vertical_motion,s.collisionVertical);
+ s.collisionVertical.min=0;assert.equal(scene.controller.vertical_motion.min,4000,'captured height uncertainty is copied, not a mutable live reference');
+}

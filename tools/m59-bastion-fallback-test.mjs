@@ -29,19 +29,25 @@ test('bastion corpus covers each death, distinguishes missing fine poses and con
 
 // Identical body-free starts have identical contracts. Reuse their completed run, while
 // retaining a named regression assertion for EVERY death and each of its observed origins.
+// Correctly releasing confirmed passage exits permits the full legal south
+// detour from the lower Ukgoth shelf. Current and baseline runtimes both replay
+// that route identically in411 packets under the corrected model; the old384
+// cap depended on stale harness admission. Retain a bounded512 packet corpus
+// budget,60s per scene and the independent repeated-pose grinding assertion.
+const CORPUS_PACKET_LIMIT=512;
 const escapes=new Map();
 await test('recorded bastion fallback routes',{concurrency:4},async t=>{
 await Promise.all(corpus.cases.map(entry=>t.test(`bastion fallback ${entry.id}: ${entry.basis}, ${entry.from.room} r${entry.from.row}c${entry.from.col} -> 38`,async()=>{
   const key=JSON.stringify(entry.from);
   if(!escapes.has(key))escapes.set(key,(async()=>{
-    const f=h.fixture(entry,{maxPackets:384,maxMs:60000});
+    const f=h.fixture(entry,{maxPackets:CORPUS_PACKET_LIMIT,maxMs:60000});
     const result=await f.s.travel(38,{maxHops:16,maxStumbles:2});
     return {f,result};
   })());
   const {f,result}=await escapes.get(key);
   assert.equal(result.arrived,true,JSON.stringify({id:entry.id,result,asks:f.asks,pose:f.c.self}));
   assert.equal(f.s.world.room.num,38);assert.equal(f.c.self.predicted,false);
-  assert.ok(f.packets.length<384,`${entry.id}: bounded escape, ${f.packets.length} packets`);
+  assert.ok(f.packets.length<CORPUS_PACKET_LIMIT,`${entry.id}: bounded escape, ${f.packets.length} packets`);
   if(entry.from.room!==38)assert.equal(f.crossings.at(-1)?.to,38,'the real doorway flow must receive a modeled declared crossing');
   const counts=new Map();for(const p of f.packets){const k=`${p.room}/${p.x}/${p.y}`;counts.set(k,(counts.get(k)??0)+1);}
   assert.ok(Math.max(0,...counts.values())<=8,'no repeated fine-pose grinding');

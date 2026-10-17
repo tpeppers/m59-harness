@@ -30,3 +30,8 @@ for(const reply of [{reason:'object_blocked',cancelled:true},{reason:'unknown_po
  bodyCalls=0;assert.equal(await waitForRailAnimation(async()=>{bodyCalls++;return reply;},{room:579,readRoom:async()=>579,retryBodies:true}),reply);assert.equal(bodyCalls,1);
 }
 console.log('rail body wait: timeout, changed room, cancellation and terrain guards passed');
+
+bodyCalls=0;
+const arrivedAfterBody={arrived:true,geometry_rejections:['object_blocked']};
+assert.equal(await waitForRailAnimation(async()=>{bodyCalls++;return arrivedAfterBody;},{room:579,readRoom:async()=>579,retryBodies:true}),arrivedAfterBody);
+assert.equal(bodyCalls,1,'a completed arrival never repeats because of earlier body refusals');

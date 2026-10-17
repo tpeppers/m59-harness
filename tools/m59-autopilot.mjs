@@ -161,7 +161,7 @@ import { loadoutFor, loadoutMtime, POLICY_KEYS, keepTest, sellTest, dropRank, wa
 // farm, etc.) come later, gated on the m59-combat-test suite per docs/BT-PLAN.md.
 import { getArmedTree, updateBlackboard } from './m59-bt-nodes.mjs';
 import { RUNNING } from './m59-bt.mjs';
-import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // One resolver, shared with the broker's `tithe` tool — see titheFleet in m59-tithe.mjs
@@ -1960,6 +1960,28 @@ function journeyIncident(ap, { kind = null, outcome = {}, to = null, startedIn =
       epoch: epochId('movement'),
     });
   } catch (e) { if (process.env.M59_INCIDENT_DEBUG) console.error('[incident]', e); }
+}
+
+// Fine-route scripts own a whole journey, including gaps between walking legs.
+// Apply the same optional arm=false doctrine as ordinary/suspended travel.
+export function scriptedWalkDefersArming(pilot){
+ const owner=pilot.facultyOwner?.('movement');
+ return pilot.mode==='idle'&&typeof owner==='string'&&owner.startsWith('fleetscript:')&&
+  pilot.facultyOwner?.('work')===owner&&pilot.travelGuard().arm!==true;
+}
+
+// A healthy scripted traveler follows its existing rest=false road doctrine.
+// A small vigor deficit below the resting cap is not an urgent recovery while
+// it still has the normal road reserve. Health, ailments and exhaustion retain
+// the keeper's recovery behavior; farming and foreign leases never use this.
+export function scriptedWalkDefersVigorRest(pilot,v){
+ const owner=pilot.facultyOwner?.('movement'),guard=pilot.travelGuard?.();
+ if(pilot.stopping||pilot.mode!=='idle'||pilot.suspendedJourney||pilot.inert?.travelling||pilot.recoverUntilWhole||
+    typeof owner!=='string'||!owner.startsWith('fleetscript:')||pilot.facultyOwner?.('work')!==owner||guard?.rest!==false||
+    typeof pilot.facultyHeld!=='function'||['survival','recovery','combat'].some(k=>pilot.facultyHeld(k))||pilot.s?.combat?.active?.pvp||
+    (pilot.s?.client?.ailments?.()??[]).length)return false;
+ const hp=v?.health,vigor=v?.vigor?.value,floor=Math.max(pilot.policy?.travelVigorFloor??TRAVEL_VIGOR_FLOOR,pilot.policy?.ordinaryVigorFloor??ORDINARY_VIGOR_FLOOR);
+ return Number.isFinite(hp?.max)&&hp.max>0&&Number.isFinite(hp.value)&&hp.value>=hp.max&&Number.isFinite(vigor)&&vigor>=floor;
 }
 
 export class Autopilot {
@@ -6035,7 +6057,7 @@ export class Autopilot {
     const owned=d0 && d0.strategy!=='yield_to_controller' && !this.stopping
       && !(this.inert&&!this.inert.travelling)
       && !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat');
-    if(owned && this._survivalReplan?.key===observed && this._survivalReplan.geometry===this.s.world?.geometry
+    if(owned && !scriptedWalkDefersVigorRest(this,this.s.client?.vitals?.()) && this._survivalReplan?.key===observed && this._survivalReplan.geometry===this.s.world?.geometry
         && Date.now()<this._survivalReplan.until)return true;
     const attempted=new Set();
     let handled=false;
@@ -6073,8 +6095,8 @@ export class Autopilot {
       this.clearSurvivalJam('death');
       finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
     }
-    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80) {
-      finishSurvivalDecision(s,d.id,'recovered','health and resting vigor restored');return false;
+    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedWalkDefersVigorRest(this,v)) {
+      finishSurvivalDecision(s,d.id,'recovered',scriptedWalkDefersVigorRest(this,v)?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain
     // with this keeper. Busy announces the holder's errand; it does not lease
@@ -9934,15 +9956,17 @@ export class Autopilot {
   // never resurrect it from a saved local after control changes.
   async recoveryTravel(room, opts = {}) {
     if (!this.suspendedJourney) this.suspendJourney('recovery detour');
-    if (this.inert?.travelling) {
-      this.cancelForSurvival(null,'recovery detour retains the destination',
-        {preserveId:currentSurvivalDecision(this.s)?.id,origin:keeperOrigin('recovery_detour')});
-      this.revive('recovery detour retains the destination');
-    }
-    this.ledgerEvent('travel_recovery_detour', {
-      to: room, resume_to: this.suspendedJourney?.to ?? null,
-    });
-    return this.travel(room, { ...opts, recoveryDetour: true, origin: opts?.origin ?? keeperOrigin('recovery_detour') });
+    // A fine walk also owns packets even though it is not goTravelling.
+    // Cancel that generation before starting a protected detour, and publish
+    // its lifetime so a controller cannot re-enter between fine requests.
+    this.cancelForSurvival(null,'recovery detour retains the destination',
+      {preserveId:currentSurvivalDecision(this.s)?.id,origin:keeperOrigin('recovery_detour')});
+    if (this.inert?.travelling) this.revive('recovery detour retains the destination');
+    const trip={id:process.pid+'-'+Date.now(),to:room,at:Date.now(),origin:keeperOrigin('recovery_detour')};
+    this.s.keeperRecoveryTravel=trip;
+    this.ledgerEvent('travel_recovery_detour', {to:room,resume_to:this.suspendedJourney?.to??null});
+    try{return await this.travel(room,{...opts,recoveryDetour:true,origin:opts?.origin??trip.origin});}
+    finally{if(this.s.keeperRecoveryTravel===trip)this.s.keeperRecoveryTravel=null;}
   }
 
   async travel(room, opts) {
@@ -12009,7 +12033,6 @@ export class Autopilot {
           nearby_threats: record.threats?.present_at_the_end ?? [],
           players_present: record.threats?.players_present ?? [],
         };
-        const { appendFileSync } = require('node:fs');
         appendFileSync(POSTMORTEM_DIR + '/../deaths.jsonl', JSON.stringify(logLine) + '\n');
       } catch { /* non-fatal */ }
       return file;
@@ -13094,6 +13117,7 @@ export class Autopilot {
       // answer that question", and undefined reads as the second. With nothing attached
       // every entry is the string 'keeper', which is the case m59-faculty-test pins.
       faculties: this.facultyStatus(),
+      recovery_travel: this.s.keeperRecoveryTravel??null,
       // NULL UNLESS THIS CHARACTER IS WORKING A LEVER PUZZLE (room 2600 on the way to 2601).
       // `waiting` is the line an operator looks for: a lone traveller at a lever square reads
       // "waiting for a second lever puller" here rather than looking wedged.
@@ -18617,7 +18641,7 @@ export class Autopilot {
     // parent is suspended deadlocks unarmed travellers on conjuring/policy loops,
     // even though the same journey deliberately allows walking unarmed when active.
     // Later flee/rest/ownership/resume gates still decide whether it may set off.
-    if (this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true) {
+    if (this.suspendedJourney && this.travelGuard(this.suspendedJourney.guard).arm !== true || scriptedWalkDefersArming(this)) {
       this.clearRefusal('UNARMED_NO_DONOR');
       this.clearRefusal('UNARMED_CANNOT_CAST');
       if (['MANA_FOR_CREATE_WEAPON', 'VIGOR_FOR_CREATE_WEAPON'].includes(this.waitingOn?.code))
@@ -19843,7 +19867,7 @@ export class Autopilot {
     const rawVigor = this.s.client?.vitals?.()?.vigor?.value ?? null;
     const spent = Number.isFinite(rawVigor)
       && rawVigor < (this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR);
-    const hurt = (hp !== null && hp < restAt) || (vig !== null && vig < vigorRestAt) || spent;
+    const hurt = (hp !== null && hp < restAt) || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v);
     if(hurt && this.currentRecoveryWall()) {
       await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the

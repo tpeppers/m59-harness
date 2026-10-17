@@ -1,0 +1,47 @@
+{
+  "source": "live corrected boarding trial; first group failure",
+  "at": "2026-10-17T05:58:22.091Z",
+  "room": 579,
+  "from": {
+    "x": 3576,
+    "y": 2096
+  },
+  "to": {
+    "row": 25,
+    "col": 55,
+    "x": 3552,
+    "y": 1632
+  },
+  "reply": {
+    "jumped": false,
+    "asked": {
+      "row": 25,
+      "col": 55
+    },
+    "from": {
+      "row": 32,
+      "col": 55
+    },
+    "aimed_at_fine": true,
+    "landed": {
+      "row": 32,
+      "col": 55
+    },
+    "arrived": false,
+    "reason": "declared jump refused: geometry_blocked",
+    "mover": {
+      "moved": false,
+      "position": {
+        "x": 3576,
+        "y": 2096,
+        "col": 55,
+        "row": 32
+      },
+      "left_room": false,
+      "validation": {},
+      "geometry_blocked": true,
+      "reason": "geometry_blocked"
+    }
+  },
+  "reproduction": "real Session/Pacer starts Create Food hold at the final move submission"
+}

@@ -31,7 +31,7 @@ import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
-import {declaredJumpMoveOptions} from './m59-jump-takeoff.mjs';
+import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
 // The addressing predicate, and WHY an order is not ours. Lifted out of this file so it can
 // be tested without starting a keeper — see m59-keeper-address.mjs.
 import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
@@ -1518,7 +1518,7 @@ function state() {
     job: rtsJobReport(session.job) ?? null,
     // WHO IS STEERING THE BODY, AND WHO LAST TOOK A MOVE FROM ITS ORDERER (m59-move-origin.mjs).
     // Published here as well as in autopilot_status so a keeper with no autopilot still answers.
-    movement: movementReport(session),
+    movement: {...movementReport(session),rail:session.railProgress??null},
     // AND WHETHER SOMEBODY ELSE IS HOLDING IT STILL. `KeeperProxy.status()` reported
     // `inert: null` unconditionally, so a character standing still because a supply
     // exchange had deliberately stopped its keeper was indistinguishable on the board from
@@ -2627,7 +2627,18 @@ const server = createServer(async (req, res) => {
           // and cannot represent a walkable strip narrower than one, which is exactly what
           // the ledges in 579 and the catwalk in 108 are. Without this a bot cannot walk a
           // sliver, and slivers are where the interesting places in this game are.
+          case 'walk_rail': {
+            if(args.origin?.source==='fleetscript'&&session.keeperRecoveryTravel){json({arrived:false,reason:'keeper_recovery_trip_active',trip_id:session.keeperRecoveryTravel.id});return;}
+            const recovery=currentSurvivalDecision(session),health=session.client?.vitals?.()?.health;
+            if(args.origin?.source==='fleetscript'&&health?.value<health?.max&&isActiveRecoveryDecision(recovery)){
+              json({arrived:false,reason:'keeper_recovery_active',decision_id:recovery.id});return;
+            }
+            const {walkCheckedRail}=await import('./m59-rail-walk.mjs');
+            json(await asWalkOrder(args,'checked rail in room '+args.room,()=>walkCheckedRail(session,args)));
+            return;
+          }
           case 'walk_fine': {
+            if(args.origin?.source==='fleetscript'&&session.keeperRecoveryTravel){json({arrived:false,reason:'keeper_recovery_trip_active',trip_id:session.keeperRecoveryTravel.id});return;}
             const recovery=currentSurvivalDecision(session),health=session.client?.vitals?.()?.health;
             if(args.origin?.source==='fleetscript'&&health?.value<health?.max&&isActiveRecoveryDecision(recovery)){
               json({arrived:false,reason:'keeper_recovery_active',decision_id:recovery.id});return;
@@ -2755,6 +2766,7 @@ const server = createServer(async (req, res) => {
           //
           // Same shape as `route`, which is already handled this way for the same reason.
           case 'jump': {
+            if(args.origin?.source==='fleetscript'&&session.keeperRecoveryTravel){json({jumped:false,arrived:false,reason:'keeper_recovery_trip_active',trip_id:session.keeperRecoveryTravel.id});return;}
             const geo = session.world?.geometry;
             if (!geo?.declaredFallJumps) { json({ error: 'no geometry for this room' }, 409); return; }
             const me = session.client?.self;
@@ -2833,6 +2845,8 @@ const server = createServer(async (req, res) => {
               Number(x.to.row) === Number(match.row) && Number(x.to.col) === Number(match.col));
             const move=declaredJumpMoveOptions(land,session.client?.vitals?.()?.vigor?.value);
             if(!move.ok){json({jumped:false,arrived:false,reason:move.reason});return;}
+            const posture=await prepareDeclaredJump(session);
+            if(!posture.ok){json({jumped:false,arrived:false,...posture});return;}
             const r = await session.step(toCol, toRow, move.options);
             const now = session.client?.self;
             const moved = !!now && (now.row !== before.row || now.col !== before.col);
@@ -4224,6 +4238,14 @@ const server = createServer(async (req, res) => {
         collisionInvalidated: c?.room?.collisionInvalidated ?? null,
         inGame: c?.state,
       };
+      if(url.searchParams.has('x')||url.searchParams.has('y')){
+        const x=Number(url.searchParams.get('x')),y=Number(url.searchParams.get('y'));
+        if(!Number.isFinite(x)||!Number.isFinite(y)||!url.searchParams.has('x')||!url.searchParams.has('y'))return json({error:'movecheck needs named finite x and y'},400);
+        const options={slide:url.searchParams.get('slide')==='1',fall:url.searchParams.get('fall')==='1',timedFall:url.searchParams.get('timed_fall')==='1'};
+        out.query={x,y,...options};out.vertical_motion=session.collisionVertical??null;
+        out.validation=session.validateFineTarget(x,y,options);
+        return json(out);
+      }
       const half = 32;
       out.neighbors = [];
       for (const [dir, dc, dr] of [['E',1,0],['W',-1,0],['N',0,-1],['S',0,1]]) {

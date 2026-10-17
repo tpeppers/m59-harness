@@ -1,0 +1,32 @@
+{
+  "room": {
+    "name": "An ancient place, its origin forgotten",
+    "num": 579,
+    "object_id": 1552
+  },
+  "you": {
+    "id": 7483,
+    "col": 55,
+    "row": 20,
+    "x": 3576,
+    "y": 1336,
+    "facing": null,
+    "room_object_id": 1552,
+    "at": 1792227353022
+  },
+  "hp": {
+    "value": 20,
+    "max": 20
+  },
+  "observed": {
+    "2": 250,
+    "3": 250,
+    "4": 540,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 510,
+    "10": 214
+  }
+}

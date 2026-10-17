@@ -17,16 +17,16 @@ export function floorConstraintAllows(geo,p,minimumFloor){
   return Number.isFinite(height)&&height>=minimumFloor;
 }
 
-export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
-  overrideDepths = null, avoidSquares = null, minimumFloor = null, goalSquare = null, goalSquares = null, marginSquares = 2, maxRangeSquares = 8, spacingUnits = 8, maxNodes = 768, maxMs = 35,
+function searchBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0,
+  overrideDepths = null, avoidSquares = null, minimumFloor = null, goalSquare = null, goalSquares = null, marginSquares = 2, maxRangeSquares = 8, maxGoalRangeSquares = 24, spacingUnits = 8, maxNodes = 768, maxMs = 35,
   threats = [], threatWeight = 0, threatRadius = 4, now = performance.now.bind(performance) } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'collision_geometry_unavailable' };
   if (![from?.x, from?.y, goal?.x, goal?.y].every(Number.isFinite))
     return { found: false, reason: 'own_position_unknown' };
-  if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > Math.max(8, Math.min(24, maxRangeSquares)) * 64)
+  if (Math.max(Math.abs(goal.x - from.x), Math.abs(goal.y - from.y)) > Math.max(8, Math.min(128, maxGoalRangeSquares, maxRangeSquares)) * 64)
     return { found: false, reason: 'body detour exceeds local bounds' };
-  const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = spacingUnits === 16 ? 16 : 8;
+  const obstacles = blockingBodySnapshot(objects, selfId), startTime = now(), spacing = [1,2,4,8,16].includes(spacingUnits) ? spacingUnits : 8;
   const dangers=threats.map(t=>({x:Number.isFinite(t.x)?t.x:t.col*64+32,y:Number.isFinite(t.y)?t.y:t.row*64+32}))
     .filter(t=>Number.isFinite(t.x)&&Number.isFinite(t.y));
   const pressure=p=>threatWeight>0?dangers.reduce((cost,t)=>Math.max(cost,
@@ -119,4 +119,21 @@ export function planBodyDetour(geo, from, goal, { objects, selfId, roomFlags = 0
     }
   }
   return { found: false, reason: open.length ? 'body detour budget exhausted' : 'no clear local body route', nodes };
+}
+
+// A coarse lattice can miss a legal narrow gap. Refine the search, never the
+// collision rules, using the remainder of the original time/node budget.
+// Refinement is opt-in: ordinary departure searches retain their completed
+// refusal/cache contract and bounded legacy candidate costs.
+export function planBodyDetour(geo,from,goal,options={}){
+ const now=options.now??performance.now.bind(performance),start=now(),maxMs=options.maxMs??35,maxNodes=options.maxNodes??768;
+ let result=searchBodyDetour(geo,from,goal,options),nodes=result.nodes??0;
+ let spacing=[1,2,4,8,16].includes(options.spacingUnits)?options.spacingUnits:8;
+ while(!result.found&&result.reason==='no clear local body route'&&spacing>4&&options.refine===true){
+  spacing/=2;const remainingMs=maxMs-(now()-start),remainingNodes=maxNodes-nodes;
+  if(remainingMs<=0||remainingNodes<=0)break;
+  result=searchBodyDetour(geo,from,goal,{...options,spacingUnits:spacing,maxMs:remainingMs,maxNodes:remainingNodes});
+  nodes+=result.nodes??0;result={...result,nodes,refinedSpacingUnits:spacing};
+ }
+ return result;
 }
