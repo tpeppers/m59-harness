@@ -20,6 +20,8 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
+import { castRole } from './m59-spellgear.mjs';
 import {keeperRecoveryRescueReady} from './m59-move-origin.mjs';
 import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import { SWARM_MIN_MAX_HEALTH } from './m59-swarm-follow.mjs';
@@ -3243,7 +3245,7 @@ export class Autopilot {
     st.lastCastAt = now;
     st.castAttempts++;
     const before = c.evSeq;
-    await s.pacer.submit('cast', () => c.cast(spell.id, [selfId]), 1050);
+    await withCastRite(s, { spell, targets: [selfId], why: 'maintainTouchSpell' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [selfId]), 1050));
     await c.waitFor?.({ since: before, kinds: ['message', 'stat'], timeoutMs: 3000 })?.catch?.(() => {});
     const seen = this.observeTouchSpell(c);
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
@@ -3834,7 +3836,7 @@ export class Autopilot {
         { mana: manaBefore, needs: CREATE_FOOD_MANA, have_reagents: r,
           note: 'mana comes back by resting; the reagents are already in the pack' });
     const had = new Set((c.inventory || []).map(o => o.id));
-    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+    await withCastRite(s, { spell, targets: [], why: 'cookSomething' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
     await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});
     await new Promise(x => setTimeout(x, 1000));
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -3997,7 +3999,7 @@ export class Autopilot {
     // weapon survives ReqNewHold (creaweap.kod:116-129).
     await skills.freeRoomFor(s).catch(() => null);
     const had = new Set((c.inventory || []).map(o => o.id));
-    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+    await withCastRite(s, { spell, targets: [], why: 'makeWeapon' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
     await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});
     await new Promise(x => setTimeout(x, 1000));
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -4180,7 +4182,7 @@ export class Autopilot {
     await skills.standToAct(s).catch(() => null);
     this.sittingFor = null;
     const had = new Set((c.inventory || []).map(o => o.id));
-    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+    await withCastRite(s, { spell, targets: [], why: 'trainingWeaponRoulette' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
     await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});
     await new Promise(x => setTimeout(x, 1000));
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -6994,7 +6996,7 @@ export class Autopilot {
     this._selfCastAt.set(want, Date.now());
     const mana = c.vitals?.()?.mana?.value ?? null;
     const before = c.evSeq;
-    await s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050);
+    await withCastRite(s, { spell, targets: [c.selfId], why: 'castSelfSpell' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050));
     await c.waitFor?.({ since: before, kinds: ['message', 'stat'], timeoutMs: 2500 })?.catch?.(() => {});
     const after = c.vitals?.()?.mana?.value ?? null;
     const landed = mana != null && after != null && after < mana;
@@ -7912,7 +7914,7 @@ export class Autopilot {
       const manaBefore = c.vitals?.()?.mana?.value ?? null;
       const reagentsBefore = e.service === 'create food' ? this.reagentCount() : null;
       // Both creation spells take no target, so the target list is empty.
-      await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+      await withCastRite(s, { spell, targets: [], why: 'runProvision' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
       await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});
       await new Promise(x => setTimeout(x, 1200));
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -13078,6 +13080,9 @@ export class Autopilot {
       // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
       // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.
       farm_strategy: this.farmStrategyStatus(),
+      // THE CAST RITE (m59-castrite.mjs): this character's cast role, the costume it is wearing for a
+      // spell right now and what it will put back, or the last one it took off.
+      cast_rite: { role: castRole(this.s?.name), ...riteStatus(this.s) },
       // THE ORDERS, WITH THE FILE'S OVERLAY TAKEN BACK OUT, whenever a strategy engine exists. The
       // broker seeds an order from this, never from `policy` above: seeding from the effective
       // policy is how a file's keys were persisted into the roster and carried after the file was
@@ -16747,6 +16752,9 @@ export class Autopilot {
     // (m59-sharing.mjs). Receiving costs one reply when a fleetmate's offer is waiting; giving looks
     // at the board at most once per `shareSpare.every_ms` and only when this body is quiet.
     await this.acceptNeededGift().catch(error => this.note('gift accept failed', { why: error.message }));
+    // IDLE GEAR (m59-castrite.mjs): a casting strategy's say over what is worn when nothing is being
+    // cast -- a disciple robe left on outside an inn comes off. A no-op without such a strategy.
+    await idleGearCheck(s, { why: 'pass' }).catch(error => this.note('idle gear check failed', { why: error.message }));
     if (await this.shareSpareReagents().catch(error => {
       this.note('sharing pass failed', { why: error.message }); return false; })) return;
     // POST OUR SITUATION FOR OUR PARTNER, every pass and before any decision that reads
@@ -24203,7 +24211,7 @@ export class Autopilot {
 
     this.lastHealAt = Date.now();
     const manaBefore = c.vitals()?.mana?.value ?? null;
-    await s.pacer.submit('cast', () => c.cast(spell.id, [other.id]), 1050);
+    await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [other.id]), 1050));
     const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     // A CAST THAT SPENT NO MANA DID NOT HAPPEN, and here it usually means the target was
     // already whole. Remember that for a few minutes so the next pass tries somebody else.
@@ -24644,7 +24652,7 @@ export class Autopilot {
                note: 'buy emeralds on the next trip that DOES walk — the reserve is what ' +
                      'keeps this option open, and it is the first thing a sell pass takes' };
 
-    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+    await withCastRite(s, { spell, targets: [], why: 'rescueToShop' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
 
     // POLL THE ROOM. Not the reply, which says nothing useful, and not mana, which lies.
     const waitMs = Math.max(5000, Math.min(60_000, Number(cfg.wait_ms) || 30_000));
@@ -25416,7 +25424,7 @@ export class Autopilot {
     const spell = (c.spells || []).find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === name);
     if (!spell) return { cast: false, why: `does not know ${name}` };
     try { await skills.standToAct(s); } catch {}
-    await s.pacer.submit('cast', () => c.cast(spell.id, [targetId]), 1050);
+    await withCastRite(s, { spell, targets: [targetId], why: 'chaliceCast' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [targetId]), 1050));
     await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     return { cast: true };
   }
@@ -26934,7 +26942,7 @@ export class Autopilot {
       await skills.standToAct(s);
       const beforeReagents = ench.reagents.map(([n]) => this.reagentOnHand(n));
       // NO TARGET. This is the whole difference from buffAllies -- see ROOM_ENCHANTS.
-      await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+      await withCastRite(s, { spell, targets: [], why: 'roomEnchant' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
       await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
       const paid = ench.reagents.every(([n, k], i) => beforeReagents[i] - this.reagentOnHand(n) >= k);
       // An early renewal can be refused while the old enchantment is still up.
@@ -27163,7 +27171,7 @@ export class Autopilot {
     this._practiceAt = now;
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
-    await s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050);
+    await withCastRite(s, { spell, targets: targets, why: 'practiceAtDesk' }, () => s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050));
     await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
@@ -27263,7 +27271,7 @@ export class Autopilot {
 
       this.lastBuffAt = Date.now();
       this._buffedAt.set(`${target.id}:${buff.name}`, Date.now());
-      await s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050);
+      await withCastRite(s, { spell, targets: [target.id], why: 'buffAllies' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050));
       const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 })
         .catch(() => ({ events: [] }));
       this.tally.buffs_given = (this.tally.buffs_given || 0) + 1;

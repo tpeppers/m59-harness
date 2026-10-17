@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { OF, blocksMovement } from './m59-parse.mjs';
 import { withBodyCommand } from './m59-body-command.mjs';
+import { withCastRite } from './m59-castrite.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
 import { effectsAt, groundEffectSquares, groundEffectOnSegment } from './m59-ground-effects.mjs';
 import { parsePlayerCombat } from './m59-player-evidence.mjs';
@@ -895,7 +896,8 @@ export class CombatMode {
       if (this.attackReadiness(o, target).timer_remaining_ms > 0) return true;
       await this.stand(o);
       if (aim === 'target') await this.faceCombatTarget(o);
-      await this.s.pacer.submit('cast', () => {
+      // A CASTING STRATEGY MAY DRESS FOR THIS CAST FIRST (m59-castrite.mjs): robe on, plate off.
+      await withCastRite(this.s, { spell, pvp: !!o.pvp, why: 'pvp opener' }, () => this.s.pacer.submit('cast', () => {
         const live = c.room.objects.get(o.targetId);
         const ready = this.attackReadiness(o, live, { sight: aim === 'target', facing: aim === 'target' });
         o.lastReadiness = { action: 'opener', ...ready };
@@ -908,7 +910,7 @@ export class CombatMode {
         if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
         try { this.s.lastPlayerAttackAt = this.now(); } catch {}
         this.record('opener_cast', o);
-      }, 1050);
+      }, 1050));
       return true;
     }
     return false;
@@ -1303,7 +1305,7 @@ export class CombatMode {
       await withBodyCommand(s, () => withPacketScope(() => {}, async () => {
         for (const ally of allies) for (const sp of known) {
           if (this.active) return;                      // a fight started: stop buffing
-          await s.pacer.submit('cast', () => { c.cast(sp.id, [ally]); }, 1500);
+          await withCastRite(s, { spell: sp, targets: [ally], why: 'warband buff' }, () => s.pacer.submit('cast', () => { c.cast(sp.id, [ally]); }, 1500));
         }
       }), 'warband-buff');
       this.warbandBuffed = { at: this.now(), allies: allies.length, spells: known.map(sp => exactName(c, sp)) };
@@ -2707,14 +2709,14 @@ export class CombatMode {
       const spell = (c.spells ?? []).find(sp => exactName(c, sp) === step.spell.toLowerCase());
       demand(spell, 'spell is no longer known');
       if (step.target === 'target') await this.faceCombatTarget(o);
-      await s.pacer.submit('cast', () => {
+      await withCastRite(s, { spell, pvp: !!o.pvp, why: 'combat sequence' }, () => s.pacer.submit('cast', () => {
         const live = c.room.objects.get(o.targetId);
         if (!this.attackReadiness(o, live, { sight: step.target === 'target', facing: step.target === 'target' }).ready) return;
         c.cast(spell.id, step.target === 'none' ? [] : [step.target === 'self' ? c.selfId : live.id]);
         this.attackReadyAt = this.now() + this.spellTimerMs(step.spell);
         o.casts++; o.pendingAdvance = true;
         o.nextAt = this.now() + step.hold_ms;
-      }, 1050);
+      }, 1050));
     }
   }
 

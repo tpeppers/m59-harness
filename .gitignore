@@ -317,6 +317,11 @@ __pycache__/
 # nobody wants arriving from somebody else's afternoon. The shape is in tuning.example.json.
 /substrate/tuning.json
 
+# CAST ROLE TAGS. substrate/cast-roles.json tags characters with a role that casting strategies read
+# as ctx.role (tools/m59-spellgear.mjs). Per-character ORDERS, like tuning.json; the shape is
+# substrate/cast-roles.example.json.
+/substrate/cast-roles.json
+
 # WHAT THE GUILD HALL SHOULD HOLD. substrate/guild-plan.json is an end state for chests in
 # a hall this fleet bought on one server, and every character reads it on every town trip
 # and holds items back from vendors to satisfy it. Committed, it withholds goods across

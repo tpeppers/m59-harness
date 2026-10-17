@@ -1,0 +1,556 @@
+{
+ "builtAt": "2026-10-17T01:48:44.258Z",
+ "source": "kod/object/item",
+ "items": [
+  {
+   "name": "ant mask",
+   "cls": "antmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/antmask.kod"
+  },
+  {
+   "name": "axe",
+   "cls": "axe",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -15,
+   "special": null,
+   "how": "WEAPON_TYPE_SLASH WEAPON_QUALITY_NORMAL (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/axe.kod"
+  },
+  {
+   "name": "battle bow",
+   "cls": "battlebow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -30,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow/battlbow.kod"
+  },
+  {
+   "name": "black dagger",
+   "cls": "blackdagger",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -5,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_LOW (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/bkdagger.kod"
+  },
+  {
+   "name": "bow",
+   "cls": "bow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -25,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow.kod"
+  },
+  {
+   "name": "chain armor",
+   "cls": "chainarmor",
+   "slot": "armour",
+   "hands": 0,
+   "mod": -15,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/chain.kod"
+  },
+  {
+   "name": "circlet",
+   "cls": "circlet",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/circlet.kod"
+  },
+  {
+   "name": "cow mask",
+   "cls": "cowmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/cowmask.kod"
+  },
+  {
+   "name": "crossbow",
+   "cls": "crossbow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -25,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/crossbow.kod"
+  },
+  {
+   "name": "daemon skeleton mask",
+   "cls": "daemonmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/daemmask.kod"
+  },
+  {
+   "name": "Dark Blade of Roq",
+   "cls": "uniqueweapon",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -5,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_LOW (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/unique.kod"
+  },
+  {
+   "name": "fey mask",
+   "cls": "feymask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/feymask.kod"
+  },
+  {
+   "name": "gold round shield",
+   "cls": "goldshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/shield/goldshld.kod"
+  },
+  {
+   "name": "gold sword",
+   "cls": "goldsword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -10,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_NORMAL (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/goldswrd.kod"
+  },
+  {
+   "name": "hammer",
+   "cls": "hammer",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "WEAPON_TYPE_BLUDGEON WEAPON_QUALITY_NORMAL (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/hammer.kod"
+  },
+  {
+   "name": "helm",
+   "cls": "simplehelm",
+   "slot": "helm",
+   "hands": 0,
+   "mod": -5,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/simphelm.kod"
+  },
+  {
+   "name": "herald shield",
+   "cls": "guildshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": null,
+   "special": "guildshield",
+   "how": "by school (guilshld.kod:564)",
+   "file": "kod/object/item/passitem/defmod/shield/guilshld.kod"
+  },
+  {
+   "name": "ivy circlet",
+   "cls": "ivycirclet",
+   "slot": "helm",
+   "hands": 0,
+   "mod": null,
+   "special": "ivycirclet",
+   "how": "by school (ivycircl.kod:83)",
+   "file": "kod/object/item/passitem/defmod/helmet/ivycircl.kod"
+  },
+  {
+   "name": "knight's shield",
+   "cls": "knightshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/shield/knhtshld.kod"
+  },
+  {
+   "name": "kriipa mask",
+   "cls": "kriipamask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/kriipmsk.kod"
+  },
+  {
+   "name": "leather armor",
+   "cls": "leatherarmor",
+   "slot": "armour",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/leather.kod"
+  },
+  {
+   "name": "light robes",
+   "cls": "lightrobe",
+   "slot": "armour",
+   "hands": 0,
+   "mod": 10,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/robe/lghtrobe.kod"
+  },
+  {
+   "name": "long sword",
+   "cls": "longsword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -10,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_NORMAL (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/longswrd.kod"
+  },
+  {
+   "name": "longbow",
+   "cls": "longbow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -20,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow/longbow.kod"
+  },
+  {
+   "name": "mace",
+   "cls": "mace",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": 5,
+   "special": null,
+   "how": "WEAPON_TYPE_BLUDGEON WEAPON_QUALITY_LOW (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/mace.kod"
+  },
+  {
+   "name": "magic bow",
+   "cls": "magicbow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -25,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow/magicbow.kod"
+  },
+  {
+   "name": "magic spirit helmet",
+   "cls": "helm",
+   "slot": "helm",
+   "hands": 0,
+   "mod": -5,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/helm.kod"
+  },
+  {
+   "name": "mask",
+   "cls": "facemask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask.kod"
+  },
+  {
+   "name": "mummy mask",
+   "cls": "mummymask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/mummymsk.kod"
+  },
+  {
+   "name": "mystic sword",
+   "cls": "mysticsword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -15,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_HIGH (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/mystswrd.kod"
+  },
+  {
+   "name": "nerudite armor",
+   "cls": "neruditearmor",
+   "slot": "armour",
+   "hands": 0,
+   "mod": -20,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/neruarmr.kod"
+  },
+  {
+   "name": "nerudite bow",
+   "cls": "neruditebow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow/nerubow.kod"
+  },
+  {
+   "name": "nerudite sword",
+   "cls": "neruditesword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -5,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_NERUDITE (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/neruswd.kod"
+  },
+  {
+   "name": "orc shield",
+   "cls": "orcshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": null,
+   "special": "orcshield",
+   "how": "by school (orcshld.kod:72)",
+   "file": "kod/object/item/passitem/defmod/shield/orcshld.kod"
+  },
+  {
+   "name": "plate armor",
+   "cls": "platearmor",
+   "slot": "armour",
+   "hands": 0,
+   "mod": -30,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/plate.kod"
+  },
+  {
+   "name": "practice bow",
+   "cls": "practicebow",
+   "slot": "weapon",
+   "hands": 2,
+   "mod": -10,
+   "special": null,
+   "how": "viSpell_modifier via rangedweapon",
+   "file": "kod/object/item/passitem/weapon/ranged/bow/pracbow.kod"
+  },
+  {
+   "name": "rat mask",
+   "cls": "ratmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/ratmask.kod"
+  },
+  {
+   "name": "robes",
+   "cls": "robe",
+   "slot": "armour",
+   "hands": 0,
+   "mod": 10,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/robe.kod"
+  },
+  {
+   "name": "robes of the disciple",
+   "cls": "disciplerobe",
+   "slot": "armour",
+   "hands": 0,
+   "mod": null,
+   "special": "disciplerobe",
+   "how": "by school (robedisc.kod:137)",
+   "file": "kod/object/item/passitem/defmod/armor/robe/robedisc.kod"
+  },
+  {
+   "name": "scale armor",
+   "cls": "scalearmor",
+   "slot": "armour",
+   "hands": 0,
+   "mod": -20,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/armor/scale.kod"
+  },
+  {
+   "name": "scimitar",
+   "cls": "scimitar",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -20,
+   "special": null,
+   "how": "WEAPON_TYPE_SLASH WEAPON_QUALITY_HIGH (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/scimitar.kod"
+  },
+  {
+   "name": "shield of the Duke's army",
+   "cls": "dukeshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": null,
+   "special": "dukeshield",
+   "how": "by school (dukeshld.kod:153)",
+   "file": "kod/object/item/passitem/defmod/shield/soldshld/dukeshld.kod"
+  },
+  {
+   "name": "shield of the Princess' army",
+   "cls": "princessshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier via soldiershield",
+   "file": "kod/object/item/passitem/defmod/shield/soldshld/prinshld.kod"
+  },
+  {
+   "name": "shield of the rebel militia",
+   "cls": "rebelshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier via soldiershield",
+   "file": "kod/object/item/passitem/defmod/shield/soldshld/reblshld.kod"
+  },
+  {
+   "name": "short sword",
+   "cls": "shortsword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -5,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_LOW (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/shrtswrd.kod"
+  },
+  {
+   "name": "shrunken head mask",
+   "cls": "shrunkenheadmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/shrnkmsk.kod"
+  },
+  {
+   "name": "skull mask",
+   "cls": "skullmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/skullmsk.kod"
+  },
+  {
+   "name": "small round shield",
+   "cls": "metalshield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/shield/metlshld.kod"
+  },
+  {
+   "name": "soldier's shield",
+   "cls": "soldiershield",
+   "slot": "shield",
+   "hands": 1,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier via soldiershield",
+   "file": "kod/object/item/passitem/defmod/shield/soldshld.kod"
+  },
+  {
+   "name": "spiritual hammer",
+   "cls": "spiritualhammer",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": null,
+   "special": "spiritualhammer",
+   "how": "by school (spirhamm.kod:163)",
+   "file": "kod/object/item/passitem/weapon/spirhamm.kod"
+  },
+  {
+   "name": "sword of Riija",
+   "cls": "riijasword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": null,
+   "special": "riijasword",
+   "how": "by school (riijaswd.kod:192)",
+   "file": "kod/object/item/passitem/weapon/riijaswd.kod"
+  },
+  {
+   "name": "Sword of the Hunt",
+   "cls": "huntersword",
+   "slot": "weapon",
+   "hands": 1,
+   "mod": -15,
+   "special": null,
+   "how": "WEAPON_TYPE_THRUST WEAPON_QUALITY_HIGH (weapon.kod:386)",
+   "file": "kod/object/item/passitem/weapon/huntsw.kod"
+  },
+  {
+   "name": "torch",
+   "cls": "torch",
+   "slot": "shield",
+   "hands": 1,
+   "mod": null,
+   "special": "torch",
+   "how": "by school (torch.kod:295)",
+   "file": "kod/object/item/passitem/defmod/shield/torch.kod"
+  },
+  {
+   "name": "troll mask",
+   "cls": "trollmask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/trollmsk.kod"
+  },
+  {
+   "name": "xeochicatl mask",
+   "cls": "xeomask",
+   "slot": "helm",
+   "hands": 0,
+   "mod": 0,
+   "special": null,
+   "how": "viSpell_modifier",
+   "file": "kod/object/item/passitem/defmod/helmet/mask/xeomask.kod"
+  }
+ ]
+}

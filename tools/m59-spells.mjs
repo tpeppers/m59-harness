@@ -157,7 +157,8 @@ export function compile(root = M59_ROOT) {
       const head = /^(\w+)\s+is\s+(\w+)/m.exec(text);
       if (!head) continue;
       classes.set(head[1].toLowerCase(), { parent: head[2].toLowerCase(),
-        postCast: classVar(text, 'viPostCast_time', consts) });
+        postCast: classVar(text, 'viPostCast_time', consts),
+        castTime: classVar(text, 'viCast_time', consts) });
       const num = classVar(text, 'viSpell_num', consts);
       if (num === null || typeof num !== 'number') continue;
 
@@ -187,7 +188,8 @@ export function compile(root = M59_ROOT) {
   // uses 1s; Hold overrides it to 2s; Lightning inherits 2s through AttackSpell.
   try {
     const base = fs.readFileSync(path.join(root, 'kod/object/passive/spell.kod'), 'utf8');
-    classes.set('spell', { parent: null, postCast: classVar(base, 'viPostCast_time', consts) });
+    classes.set('spell', { parent: null, postCast: classVar(base, 'viPostCast_time', consts),
+                           castTime: classVar(base, 'viCast_time', consts) });
   } catch {}
   for (const sp of spells) {
     let cls = sp.cls.toLowerCase();
@@ -198,6 +200,22 @@ export function compile(root = M59_ROOT) {
       const entry = classes.get(cls);
       if (!entry) break;
       if (Number.isFinite(entry.postCast)) { sp.post_cast_ms = entry.postCast * 1000; break; }
+      cls = entry.parent;
+    }
+  }
+  // THE CASTING TRANCE (trance.kod), inherited the same way. `viCast_time` is already in
+  // milliseconds (enchwp.kod:52 `viCast_time = 30000`), unlike viPostCast_time's seconds, and the
+  // trance actually lasts viCast_time * (150 - spellpower) / 100 (spell.kod GetTranceTime). Zero is
+  // a spell with no trance at all (spell.kod:1835). m59-trance.mjs is the reader.
+  for (const sp of spells) {
+    let cls = sp.cls.toLowerCase();
+    const seen = new Set();
+    sp.cast_time_ms = 0;
+    while (cls && !seen.has(cls)) {
+      seen.add(cls);
+      const entry = classes.get(cls);
+      if (!entry) break;
+      if (Number.isFinite(entry.castTime)) { sp.cast_time_ms = entry.castTime; break; }
       cls = entry.parent;
     }
   }

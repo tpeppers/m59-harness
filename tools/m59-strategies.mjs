@@ -103,11 +103,19 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // all, and whether to log off for a few seconds. ctx and the answer's closed shape are beside
 //     // Autopilot.farmBuffContext. Cheap: no I/O, no waiting.
 //     async farmBuff(ctx) { return null; },
+//     // CASTING hooks (m59-castrite.mjs) -------------------------------------------
+//     // Asked before every cast routed through withCastRite: gear to swap on for this spell, and
+//     // whether to put it back after the trance, after a linger, or never. ctx and the answer's
+//     // closed shape are documented at the top of m59-castrite.mjs.
+//     async castRite(ctx) { return null; },
+//     // Asked on every room change and every few seconds of a keeper pass while nothing is being
+//     // cast: gear steps to fix what is worn now, and names the keeper must not wear by itself.
+//     async idleGear(ctx) { return null; },
 //     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'townTrip', 'wandDuty', 'farmBuff'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
@@ -116,7 +124,8 @@ export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'p
 // not 'how do I get through' but 'should we all go now'. Keeping it a separate kind is what
 // lets a convoy strategy be listed, enabled and audited without the solo mover consulting it.
 // 'combat' (2026-10-05) is asked inside a fight, by CombatMode, about the wand volley.
-export const KINDS = ['travel', 'town', 'convoy', 'combat'];
+// 'casting' (2026-10-16) is asked around a cast and about idle gear, by m59-castrite.mjs.
+export const KINDS = ['travel', 'town', 'convoy', 'combat', 'casting'];
 const KNOWN = new Set([...REQUIRED, ...HOOKS, 'describe', 'settings']);
 
 /**

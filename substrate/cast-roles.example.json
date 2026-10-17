@@ -1,0 +1,6 @@
+{
+  "describe": "Cast role tags (tools/m59-spellgear.mjs). Copy to substrate/cast-roles.json (gitignored) or use `node tools/m59-spellgear.mjs tag <agent> <role>`. A tag is handed to casting strategies as ctx.role and means nothing to the harness itself. Keys are roster agent slots.",
+  "roles": {
+    "t5": "mage"
+  }
+}

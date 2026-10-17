@@ -170,6 +170,8 @@ const COMBAT_FACE_HOLD_MS = 1500;
 // dropping our swings and moves.
 const PACKETS_PER_SECOND = Number(process.env.M59_RATE || 5);
 // How long a login read may wait for the pacer before it is sent directly (Session.joinOnce).
+// How long a cast with a trance may go unannounced before the automatic hold decides no trance began.
+export const TRANCE_CONFIRM_MS = Number(process.env.M59_TRANCE_CONFIRM_MS || 3000);
 export const LOGIN_READ_STALL_MS = Number(process.env.M59_LOGIN_READ_STALL_MS || 5000);
 const ATTACK_INTERVAL_MS = 1050;     // IsOkayAttackTime, plus a little
 
@@ -398,6 +400,8 @@ let worldMap = loadMap();
 // (fine BSP) instead of the coarse grid (monster perspective).
 import { attachStepMasks } from './m59-routes.mjs';
 import { installDoorObserver } from './m59-ceiling-doors.mjs';
+import { tranceMs, classifyTranceLine } from './m59-trance.mjs';
+import { idleGearCheck } from './m59-castrite.mjs';
 let geometryStartupMode = 'eager';
 try {
   const masks = attachStepMasks(worldMap, {
@@ -806,32 +810,78 @@ class Pacer {
   // by a tick that has long since been superseded. Dropping is also visible: `heldDropped`
   // counts what was suppressed and by kind, so a hold that misbehaves shows up as a number
   // rather than as a character that mysteriously stopped moving.
-  holdForCast(ms, reason = 'casting') {
+  holdForCast(ms, reason = 'casting', { auto = false, spell = null } = {}) {
     // BOUNDED, ALWAYS. A hold that outlives its cast is a deaf character, so it can never be
     // open-ended: the longest trance in the game is 30s and this allows double that.
     const capped = Math.max(0, Math.min(Number(ms) || 0, 60_000));
     this.holdUntil = Date.now() + capped;
     this.holdReason = reason;
+    // AN AUTOMATIC HOLD is one the session opened itself because a cast with a trance left the
+    // socket (Session.noteCastSent) -- as opposed to one a caller opened and will release. Only an
+    // automatic hold is ended by the session's evidence (the trance broke, the cast was refused,
+    // we were hit), because only for those is nobody else holding the other end.
+    this.holdAuto = auto ? { spell, at: Date.now(), confirmed: false } : null;
     return this.holdUntil;
   }
 
-  releaseCastHold() { this.holdUntil = 0; this.holdReason = null; }
+  releaseCastHold() { this.holdUntil = 0; this.holdReason = null; this.holdAuto = null; }
+
+  // THE SESSION'S EVIDENCE THAT AN AUTOMATIC TRANCE IS OVER (broken, refused, hit, changed room).
+  // A caller's own hold is never touched here: the caller releases what it opened.
+  endAutoTrance(why) {
+    if (!this.holdAuto || !this.holdUntil) return false;
+    this.lastTranceEnd = { spell: this.holdAuto.spell, why, at: Date.now() };
+    this.releaseCastHold();
+    return true;
+  }
+
+  // AN EXPLICIT DECISION TO BREAK CONCENTRATION. Nothing in the harness breaks a trance by
+  // accident; something that genuinely means to (it would rather run than finish the spell) says
+  // so here, and the reason is kept where holdStatus can show it.
+  breakTrance(reason = 'explicit') {
+    const was = this.holdStatus();
+    if (!was.active) return false;
+    this.lastTranceEnd = { spell: this.holdAuto?.spell ?? null, why: 'broken: ' + reason, at: Date.now() };
+    this.releaseCastHold();
+    return true;
+  }
 
   /** Is concentration being held right now, and what has it suppressed? */
   holdStatus() {
     const active = !!this.holdUntil && Date.now() < this.holdUntil;
     return { active, reason: active ? this.holdReason : null,
              ms_left: active ? this.holdUntil - Date.now() : 0,
+             auto: active && !!this.holdAuto, spell: active ? this.holdAuto?.spell ?? null : null,
+             last_end: this.lastTranceEnd ?? null,
              dropped: Object.fromEntries(this.heldDropped ?? []) };
   }
 
   static CONCENTRATION_SAFE = CONCENTRATION_SAFE;
 
-  submit(kind, fn, minGapForKind = 0) {
+  submit(kind, fn, minGapForKind = 0, { walkInTrance = false, breakTrance = false, urgent = false } = {}) {
     const authority = this.authority?.();
     // Concentration first: a packet sent during a casting trance breaks it.
     if (this.holdUntil) {
-      if (Date.now() >= this.holdUntil) { this.holdUntil = 0; this.holdReason = null; }
+      if (Date.now() >= this.holdUntil) { this.holdUntil = 0; this.holdReason = null; this.holdAuto = null; }
+      // A SECOND CAST WAITS OUT AN AUTOMATIC TRANCE instead of breaking it (EVENT_CAST). The
+      // session opened that hold because a spell is charging that nobody asked to abandon; a
+      // caller that does want to abandon it says `breakTrance`. A caller's own hold is different:
+      // its opening cast must reach the wire, which is why `cast` is concentration-safe at all.
+      else if (kind === 'cast' && this.holdAuto && !breakTrance) {
+        const until = this.holdUntil;
+        return new Promise(resolve => setTimeout(resolve, Math.max(0, until - Date.now()) + 50))
+          .then(() => this.submit(kind, fn, minGapForKind, { walkInTrance, breakTrance, urgent }));
+      }
+      else if (kind === 'cast' && breakTrance) this.breakTrance('a cast that chose to replace it');
+      // WALKING DOES NOT BREAK A TRANCE; RUNNING DOES (user.kod:2958). A move whose caller has
+      // said it must happen mid-trance goes out, and M59Client.moveTo clamps it to walking speed
+      // while a trance is held, so it cannot be a run.
+      else if (kind === 'move' && walkInTrance) { /* allowed through, at walking speed */ }
+      // A READ IS A QUESTION, NOT AN ACTION: nothing raises a trance event for an inventory or stat
+      // request (trance.kod:96 is sent only by the events listed above). A caller's own hold keeps
+      // the stricter list it was written with; the automatic hold, which nobody asked for at the
+      // call site, must not leave the code after a cast reading a stale pack.
+      else if (kind === 'read' && this.holdAuto) { /* a query: allowed through */ }
       else if (!Pacer.CONCENTRATION_SAFE.has(kind)) {
         this.heldDropped = this.heldDropped ?? new Map();
         this.heldDropped.set(kind, (this.heldDropped.get(kind) ?? 0) + 1);
@@ -849,11 +899,14 @@ class Pacer {
     // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
     // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes
     // the swing to every 3s instead of every 1s.
-    const isUrgent = kind === 'attack' || kind === 'cast';
+    // A CAST RITE'S GEAR PACKETS (`urgent`, m59-castrite.mjs) go the same way: the cast they dress
+    // for waits on them, so a robe queued behind a walk's moves is a cast delayed by the walk.
+    job.urgent = urgent;
+    const isUrgent = kind === 'attack' || kind === 'cast' || urgent;
     if (isUrgent) {
       // Insert after any other urgent packets but before non-urgent ones.
       let i = 0;
-      while (i < this.q.length && (this.q[i].kind === 'attack' || this.q[i].kind === 'cast')) i++;
+      while (i < this.q.length && (this.q[i].kind === 'attack' || this.q[i].kind === 'cast' || this.q[i].urgent)) i++;
       this.q.splice(i, 0, job);
     } else {
       this.q.push(job);
@@ -1594,6 +1647,43 @@ class Session {
 
   // RAN OUT IN THE MIDDLE OF A CAST (spell.kod:52). The sentence goes only to the caster, so this is
   // the one place it can be caught; the keeper turns it into a need on the fleet board (m59-sharing.mjs).
+  // A CAST WITH A TRANCE JUST LEFT THE SOCKET: HOLD STILL UNTIL IT ENDS.
+  //
+  // Only two of the harness's cast sites ever held concentration (the keeper's `/action cast` and
+  // blink); the autopilot's own casts -- buffs, heals, create food, practice, room enchantments --
+  // held nothing, so the next tick's move, sit or item use broke any of the sixty-odd spells that
+  // charge (m59-trance.mjs). This is the one place every cast passes after it is sent, so the hold
+  // is opened here, sized to the LONGEST the trance can last (spellpower 1). A caller that opened
+  // its own hold keeps it; this never replaces one.
+  //
+  // It ends early on the evidence: no "You focus your whole will" within a few seconds means no
+  // trance was entered (refused, failed the roll); "concentration is broken", a refusal, a hit or a
+  // room change means it is already over. Completion has no generic sentence (trance.kod:58), so a
+  // trance that runs its course ends by the clock.
+  noteCastSent(info) {
+    const pacer = this.pacer;
+    if (!pacer || pacer.holdStatus?.().active) return;
+    const ms = tranceMs(info?.name);
+    if (!ms) return;
+    const until = pacer.holdForCast(ms + 750, `trance ${info.name}`, { auto: true, spell: String(info.name).toLowerCase() });
+    const auto = pacer.holdAuto;
+    const t = setTimeout(() => {
+      if (pacer.holdAuto === auto && pacer.holdUntil === until && !auto.confirmed)
+        pacer.endAutoTrance('no trance started');
+    }, this.tranceConfirmMs ?? TRANCE_CONFIRM_MS);
+    t.unref?.();
+  }
+
+  noteTranceLine(ev) {
+    const said = classifyTranceLine(ev?.text);
+    if (!said) return;
+    const auto = this.pacer?.holdAuto;
+    if (!auto) return;
+    if (said.kind === 'start' && (!said.spell || !auto.spell || said.spell === auto.spell)) auto.confirmed = true;
+    else if (said.kind === 'broken') this.pacer.endAutoTrance('concentration broken');
+    else if (said.kind === 'refused' && !auto.confirmed) this.pacer.endAutoTrance('cast refused');
+  }
+
   noteReagentRefusal(ev) {
     const spell = reagentRefusalSpell(ev?.text);
     if (!spell) return;
@@ -1646,6 +1736,9 @@ class Session {
     // stamp and re-asks its own question, because what counts as "hurt enough" belongs to
     // the keeper's policy and not to a packet handler.
     this.damagedAt = now;
+    // ANY HEALTH LOST BREAKS A TRANCE (player.kod:5765), so an automatic hold is over: holding the
+    // body still past this point would protect nothing and stop the survival ladder moving it.
+    this.pacer?.endAutoTrance?.('hit');
     this.replayRecorder?.capture('health_loss',{before,value,max,at:now});
     if(value===0)this.replayRecorder?.death({reason:'fatal health push',where:{room:this.world?.room?.num??null},fatal_at:now});
     traceSurvival(this, 'health_loss', { pushed_at: now, before, value, max,
@@ -2432,7 +2525,15 @@ class Session {
         try { this.sightings.event(ev, c); } catch { /* bookkeeping never costs an event */ }
       }
       if (ev.kind === 'ability') this.noteAdvancement(ev);
-      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); this.noteReagentRefusal(ev); }
+      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); this.noteUncursed(ev); this.noteReagentRefusal(ev); this.noteTranceLine(ev); }
+      // CHANGING ROOM BREAKS A TRANCE (player.kod:1457), so an automatic hold has nothing left to protect.
+      if (ev.kind === 'room-entered') {
+        this.pacer?.endAutoTrance?.('changed room');
+        // LEAVING A ROOM IS WHEN IDLE GEAR IS CHECKED (a robe worn in the inn comes off at the door).
+        // Off the event loop's back, and a no-op unless a strategy answers idleGear.
+        const t = setTimeout(() => idleGearCheck(this, { why: 'room change', force: true }).catch(() => {}), 250);
+        t.unref?.();
+      }
       if ((ev.kind === 'message' || ev.kind === 'said') && ev.text) this.noteFactionIntel(ev);
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
       // exactly the reason a bank balance is: whatever walked a character to a vaultman
@@ -2524,6 +2625,10 @@ class Session {
       this.pacer.releaseCastHold();
     }
     c.beforeGameMutation = () => bodyAuthority(this).guard();
+    // EVERY CAST WITH A TRANCE IS WAITED OUT, whichever of the harness's cast sites sent it
+    // (noteCastSent), and no move sent while one charges can be a run (M59Client.moveTo).
+    c.onCastSent = info => this.noteCastSent(info);
+    c.inTrance = () => !!this.pacer?.holdStatus?.().active;
     c.beforeMove = target => {
       const hazard = this.groundEffectBlock(c.self, target);
       if (hazard) throw Object.assign(new Error('ground_effect_blocked'), {

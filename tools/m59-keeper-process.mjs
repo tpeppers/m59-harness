@@ -16,6 +16,7 @@ process.env.M59_KEEPER = '1';
 //   8. Handles SIGTERM gracefully
 
 import { configureInterestStore } from './m59-interest-store.mjs';
+import { withCastRite } from './m59-castrite.mjs';
 import { attributesIncomplete, attrHealDue, droppedStatMessages, statTraceOf, loginSettling, combatReadyOverdue, ATTR_HEAL_TICK_MS } from './m59-attr-heal.mjs';
 import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToAdopt, leasesToAdopt } from './m59-keeper-carry.mjs';
 // WHO SET EACH POLICY KEY, and which faculty a strategy-governed key belongs to (a push that lands
@@ -4762,6 +4763,9 @@ const server = createServer(async (req, res) => {
               // just as surely as a move packet does. So the hold goes on the PACER, which
               // is the single door every packet leaves by, and the caller sizes it from the
               // spell rather than from a default that suits one spell.
+              // A CASTING STRATEGY MAY DRESS FOR THIS CAST FIRST (m59-castrite.mjs). Its gear steps
+              // run BEFORE the hold below, because an item use during the trance fizzles it.
+              await withCastRite(session, { spell, targets, why: 'keeper action' }, async () => {
               const loop = session._tickLoop;
               const hold = Number(args.holdMs) || 15000;
               const since = c.evSeq;
@@ -4798,6 +4802,7 @@ const server = createServer(async (req, res) => {
                 session.pacer.releaseCastHold?.();
                 if (loop) loop._frozen = false;
               }
+              });
             }
             break;
           }

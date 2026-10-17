@@ -282,3 +282,31 @@ export default {
 //     return word.stuck_why ? { do: 'hold', why: word.stuck_why } : null;
 //   },
 // };
+
+// ------------------------------------------------------------------------------- casting
+// A CASTING strategy (m59-castrite.mjs) dresses a character for a spell and undresses it after.
+// The engine asks `castRite` before every routed cast and `idleGear` on every room change; both see
+// every carried item with its spellpower modifier for the spell (m59-spellpower.mjs, kod-cited).
+// Silence -- no file, `enabled: false`, a null answer -- casts exactly as before.
+//
+// export default {
+//   name: 'cast-gear',
+//   kind: 'casting',
+//   enabled: false,
+//   describe: 'disciple robes only while casting; never idle outside an inn',
+//   async castRite(ctx) {
+//     if (!ctx.pvp) return null;                        // only fights pay for the costume change
+//     const body = ctx.equipped.find(i => i.slot === 'armour');
+//     const robe = ctx.items.filter(i => i.disciple_robe && !i.cursed)
+//       .sort((a, b) => b.spell_modifier - a.spell_modifier)[0];
+//     if (!robe || robe.equipped || robe.spell_modifier <= (body?.spell_modifier ?? 0)) return null;
+//     // A TARGET per slot; the engine finds the packets and pops the stash after the linger.
+//     return { wear: { armour: robe.id }, restore: 'linger', linger_ms: 20_000,
+//              while_fighting: true, why: `robe ${robe.spell_modifier} over ${body?.name ?? 'bare'}` };
+//   },
+//   async idleGear(ctx) {
+//     if (ctx.room.inn) return null;                    // the robe may be worn at the fire
+//     const worn = ctx.equipped.filter(i => i.disciple_robe);
+//     return { forbid: ['robes of the disciple'], steps: worn.map(i => ({ unequip: i.id })) };
+//   },
+// };

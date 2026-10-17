@@ -1094,6 +1094,11 @@ export class M59Client {
         || !Number.isInteger(y) || y < 0 || y > 0xffff)
       throw new RangeError(`movement coordinates must be unsigned 16-bit integers, got (${x},${y})`);
     this.beforeMove?.({ x, y });
+    // NOTHING SENT DURING A TRANCE IS A RUN. A move faster than USER_WALKING_SPEED raises
+    // EVENT_RUN and fizzles the spell (user.kod:2958); a walk does not. The Pacer drops moves while
+    // a trance is held unless the caller explicitly asked to walk through it, and this makes that
+    // walk -- or any move that reached the socket some other way -- a walk.
+    if (speed > 18 && this.inTrance?.()) speed = 18;
     this.send(BP.REQ_MOVE, u16b(y), u16b(x), u8b(speed), u32(objId(room || 0)));
     // OUR OWN TRAIL, AT THE RATE WE ACTUALLY WALK IT.
     //
@@ -1256,6 +1261,9 @@ export class M59Client {
       const spell = this.spells?.find(s => objId(s.id) === objId(spellId));
       const name = String(spell?.name ?? this.rsc?.get?.(spell?.nameRsc) ?? '').toLowerCase();
       if (name === 'rescue' || name === 'elusion') this.emit('travel-cast', { spell: name });
+      // The session's trance hold (Session.noteCastSent) is opened from here, so it covers every
+      // cast site there is rather than the ones that remembered to ask.
+      this.onCastSent?.({ id: objId(spellId), name, targets: [].concat(targets) });
     } catch { /* recording must not change whether a cast is sent */ }
   }
 

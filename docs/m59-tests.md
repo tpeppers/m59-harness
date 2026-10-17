@@ -7,6 +7,23 @@ injects Windows acquisition sharing errors into the actual file store and
 checks bounded retries, live-owner protection and persistent denial. These
 are offline contracts; populated delivery measurements remain separate.
 
+`m59-castrite-test.mjs` (31) pins the trance door and cast rites against the
+real Pacer, Session and M59Client methods. With no casting strategy, a wrapped
+cast sends exactly what it sent before. A caller's own cast hold is unchanged.
+Every cast with a trance is now held: a second cast waits, reads pass, and the
+hold ends on the broken, refused, hit or no-start evidence. No move sent during
+a trance is a run. A rite dresses before the cast, never during the trance, and
+restores exactly what it changed. Idle gear takes a robe off outside an inn, and
+`wearBest` will not put a forbidden robe back on. See docs/m59-cast-rites.md.
+`m59-spellgear-test.mjs` (17) pins the costume-change framework. A role tag alone
+changes nothing. A strategy's `wear` target becomes the fewest legal packets, with
+a bow freed explicitly, and an illegal target is refused. The stash is popped by
+the same transition after the linger. The keeper's equipBest and wearBest stand
+down while a rite is open, and a failed cast still pops. Rite packets jump the
+queue ahead of movement. `prefer_weapons` ranks first after the magic-first rule,
+and without it ranking is unchanged. The mage policy's own tests are in
+m59-private beside it.
+
 `m59-recovery-pacer-test.mjs` runs the actual five-packet scheduler, Session
 stand and refuge-return code behind thirty queued reads. It checks that active
 recovery reaches stand and movement without bypassing normal pacing, while

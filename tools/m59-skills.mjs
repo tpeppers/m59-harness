@@ -18,6 +18,7 @@
 // the state was when it stopped.
 
 import { writeDeclaration, forgetDeclaration, readDeclarations } from './m59-interest-store.mjs';
+import { withCastRite } from './m59-castrite.mjs';
 import { isSpared, sparePatternsOf, provokeExempt } from './m59-spare.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { isEnemyHit } from './m59-combatlog.mjs';
@@ -654,6 +655,13 @@ export function weaponRanking(c, { priority = null, banned = null,
   // rooms the mundane twin wins the tie inside the family. Never the cross-family "magic first" rule below.
   const preferMundane = c._preferMundane === true && !!magic;
   const mundane = r => (magic?.has(r.o.id) ? 0 : 1) ^ (preferMundane ? 1 : 0);
+  // A STRATEGY'S WEAPON PREFERENCE (`c._preferWeapons`, set from a casting strategy's idleGear
+  // `prefer_weapons`, m59-castrite.mjs): name patterns ranked first, in order. Null -- no strategy, or
+  // one that does not say -- ranks exactly as before. It ranks after the magic-first rule, so an
+  // enchanted blade still beats whatever a strategy prefers against trolls, and ahead of the family
+  // priority and proficiency, which is the point of having it.
+  const prefer = Array.isArray(c._preferWeapons) && c._preferWeapons.length ? c._preferWeapons : null;
+  const preferRank = prefer ? (r => { const n = r.name.toLowerCase(); const i = prefer.findIndex(p => n.includes(p)); return i === -1 ? prefer.length : i; }) : () => 0;
   if (priority?.length) {
     const rank = (n) => {
       const i = priority.findIndex(p => n.toLowerCase().includes(String(p).toLowerCase()));
@@ -665,13 +673,13 @@ export function weaponRanking(c, { priority = null, banned = null,
     // by its priority alone. Trolls resist a mundane blade by 80 (troll.kod:64-67): an enchanted long
     // sword in an axe trainee's hand beats its conjured axe outright. It was a tie-break inside the
     // family, and a hunter stood in the stage room holding an enchanted long sword he would not wield.
-    return rows.sort((a, b) => (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || rank(a.name) - rank(b.name) ||
+    return rows.sort((a, b) => (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || preferRank(a) - preferRank(b) || rank(a.name) - rank(b.name) ||
       mundane(a) - mundane(b) || b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
   // bigger one you are not. Unread abilities fall back to the crude name score rather
   // than sorting as zero, which would put the greatsword last on a fresh login.
-  return rows.sort((a, b) => (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
+  return rows.sort((a, b) => preferRank(a) - preferRank(b) || (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
     b.base - a.base);
 }
 
@@ -724,6 +732,10 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
   let veto = null;
   try { veto = s?.equipVeto?.() ?? null; } catch { veto = null; }
   if (veto) return { wielding: null, verified: false, refused: true, vetoed: true, note: String(veto) };
+  // A CAST RITE IS DRESSED FOR A SPELL (m59-castrite.mjs): the mace or the empty hand is deliberate,
+  // and the rite puts the fighting weapon back itself in a moment. Re-arming now would undo the
+  // costume between it and the cast.
+  if (s?._rite) return { wielding: null, verified: false, refused: true, vetoed: true, note: 'a cast rite is dressed for a spell' };
   const c = s.need();
   if (refresh) {
     await s.pacer.submit('read', () => c.requestInventory());
@@ -1054,12 +1066,19 @@ export function armourOf(c, { allowUnrevealed = false, exclude = null } = {}) {
 export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
                                     allowUnrevealed = false, exclude = null,
                                     beforeMutation = null, shouldCancel = null } = {}) {
+  // A cast rite is dressed for a spell (see equipBest): its robe is deliberate and goes back itself.
+  if (s?._rite) return { worn: [], stripped: [], skipped: [{ why: 'a cast rite is dressed for a spell' }], rejected: [], deferred: true };
   const c = s.need();
   if (refresh) {
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
-  const have = armourOf(c, { allowUnrevealed, exclude });
+  // A CASTING STRATEGY MAY FORBID A PIECE AS IDLE WEAR (m59-castrite.mjs idleGear `forbid`): a
+  // disciple robe scores 20 against plate's -140 here, so without this the keeper would put on by
+  // itself the robe the strategy wears only while casting.
+  const forbidden = typeof s.gearForbidden === 'function' ? s.gearForbidden : null;
+  const excluded = forbidden ? (n) => !!exclude?.(n) || !!forbidden(n) : exclude;
+  const have = armourOf(c, { allowUnrevealed, exclude: excluded });
   const broken = brokenSet(c);
   const worn = [], skipped = [], rejected = [];
   // Same reason as equipBest: an empty slot because everything for it is unread is a reveal
@@ -1568,7 +1587,7 @@ export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
   if (spell && (frac() ?? 1) < target) {
     for (let i = 0; i < 3 && (frac() ?? 1) < target; i++) {
       const before2 = frac();
-      await s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050);
+      await withCastRite(s, { spell, targets: [c.selfId], why: 'heal' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [c.selfId]), 1050));
       await c.waitFor({ kinds: ['stat', 'message'], timeoutMs: 3000 });
       used.push(c.rsc.get(spell.nameRsc));
       if ((frac() ?? 0) <= (before2 ?? 0)) break;      // out of mana or reagents

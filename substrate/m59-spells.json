@@ -1,5 +1,5 @@
 {
- "builtAt": "2026-10-10T00:15:02.723Z",
+ "builtAt": "2026-10-17T00:37:07.505Z",
  "spells": [
   {
    "num": 0,
@@ -16,6 +16,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "touchattackspell"
   },
   {
@@ -38,6 +39,7 @@
    "required_karma": 10,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target,&User)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n           \r\n         return FALSE;\r\n      }\r\n      \r\n      if Send(target,@GetHealth) >= Send(target,@GetMaxHealth)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=heal_unnecessary_rsc,\r\n              #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 600,
    "name": "minor heal"
   },
   {
@@ -60,6 +62,7 @@
    "required_karma": 10,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "detect evil"
   },
   {
@@ -82,6 +85,7 @@
    "required_karma": 10,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "holy symbol"
   },
   {
@@ -104,6 +108,7 @@
    "required_karma": 10,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &User)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         Send(who, @MsgSendUser, #message_rsc=breathoflife_notonself_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % no giving if less than 10 hps\r\n      if Send(who,@GetHealth) <= 10\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=breathoflife_toohurt_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % max hps of 1.5 times target's hps or 150.\r\n      % Don't cast if we're at/over max and have Mark of Dishonor active.\r\n      if Send(target,@GetHealth) >= ((Send(target,@GetMaxHealth) * 3) / 2)\r\n         OR Send(target,@GetHealth) >= MAX_TOTAL_AMOUNT\r\n         OR ((Send(target,@GetHealth) >= Send(target,@GetMaxHealth))\r\n             AND send(target,@IsEnchanted,#byClass=&MarkOfDishonor))\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=breathoflife_unnecessary_rsc,\r\n\t           #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "breath of life"
   },
   {
@@ -126,6 +131,7 @@
    "required_karma": 10,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oKiller;\r\n   \r\n      oKiller = send(SYS,@GetLastMurderer);\r\n\r\n      if oKiller = $ OR (NOT send(oKiller,@IsLoggedOn))\r\n         OR (isClass(oKiller,&DM) AND NOT send(oKiller,@IsHuntable))\r\n      { \r\n         send(who,@MsgSendUser,#message_rsc=Seance_No_Murderer_rsc);\r\n\r\n         return FALSE;\r\n      }  \r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "seance"
   },
   {
@@ -148,6 +154,7 @@
    "required_karma": 20,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "holy touch"
   },
   {
@@ -170,6 +177,7 @@
    "required_karma": 20,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target,&Player)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target,#parm1=vrName,\r\n              #parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % Check if there's actually a cursed item on the player.\r\n      if NOT Send(target,@IsCursedByItems)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=RemoveCurse_bad_target);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "remove curse"
   },
   {
@@ -196,6 +204,7 @@
    "required_karma": 20,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target, oPoison;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n\t      return False;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &User)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=spell_bad_target,#parm1=vrName,\r\n\t      #parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n\t      return False;\r\n      }\r\n\r\n      %% make sure target is indeed poisoned\r\n      oPoison = Send(SYS,@FindSpellByNum,#num=SID_POISON);\r\n      if not Send(target,@IsEnchanted,#what=oPoison) \r\n      {\r\n\t      Send(who, @MsgSendUser, #message_rsc=curepoison_unnecessary,\r\n           #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName)); \r\n\t      return False;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "cure poison"
   },
   {
@@ -222,6 +231,7 @@
    "required_karma": 20,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oWeapon;\r\n      oWeapon = first(lTargets);\r\n      if oWeapon = $ or not isClass(oWeapon,&weapon)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=holyweapon_no_can,\r\n\t    #parm1=send(oWeapon,@getdef),#parm2=send(oWeapon,@getname));\r\n\t return False;\r\n      }\r\n      if Send(oWeapon,@CheckSpellFlag,#flag=ATCK_SPELL_HOLY)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=holyweapon_already_done);\r\n\t return False;\r\n      }\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "holy weapon"
   },
   {
@@ -248,6 +258,7 @@
    "required_karma": 20,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "resist acid"
   },
   {
@@ -270,6 +281,7 @@
    "required_karma": 30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % Can't cast just after attacking someone\r\n      if Send(who, @GetLastPlayerAttackTime) + \r\n         Send(Send(SYS, @GetSettings), @TeleportAttackDelaySec) >\r\n         GetTime()\r\n      {\r\n         Send(who, @MsgSendUser, #message_rsc = spell_too_soon_since_attacking);\r\n         return FALSE;\r\n      }\r\n      \r\n      if Send(who,@FindHolding,#class=&Token)\r\n      {\r\n        send(who,@MsgSendUser,#message_rsc=Rescue_Token_Cancel);\r\n        \r\n        return FALSE;\r\n      }\r\n\r\n      if NOT send(who,@CanRescue)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=Rescue_Already_Cast);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "rescue"
   },
   {
@@ -296,6 +308,7 @@
    "required_karma": 30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return False;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &User) or not send(target,@IsEnchanted,#byClass=&Disease)\r\n      {\r\n         Send(who, @MsgSendUser, #message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         return False;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "cure disease"
   },
   {
@@ -318,6 +331,7 @@
    "required_karma": 30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &User)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if Send(target,@GetHealth) >= Send(target,@GetMaxHealth)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=hospice_unnecessary_rsc,\r\n              #parm1=Send(target,@GetCapDef), #parm2=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 600,
    "name": "hospice"
   },
   {
@@ -344,6 +358,7 @@
    "required_karma": 30,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "holy resolve"
   },
   {
@@ -366,6 +381,7 @@
    "required_karma": 30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local oTarget;\r\n\r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is a weapon or armor\r\n      if NOT (IsClass(oTarget,&Item) AND Send(oTarget,@CanIdentify))\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            send(who,@MsgSendUser,#message_rsc=identify_cant,\r\n                 #parm1=send(oTarget,@GetDef),#parm2=send(oTarget,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 15000,
    "name": "identify"
   },
   {
@@ -392,6 +408,7 @@
    "required_karma": 30,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "spiritual hammer"
   },
   {
@@ -418,6 +435,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom, i, oActive;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % check if combat already banned in room\r\n      if Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_MOB_COMBAT)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_COMBAT)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=truce_unnecessary);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if NOT Send(who,@CheckPlayerFlag,#flag=PFLAG_PKILL_ENABLE)\r\n      {\r\n         for i in Send(oRoom,@GetHolderActive)\r\n         {\r\n            % Can't be cast by an unangeled character if there's another\r\n            %  character in the room that's attacked another player too\r\n            %  recently, or if there's a logoff ghost in the room.\r\n            oActive = Send(oRoom,@HolderExtractObject,#data=i);\r\n            if (IsClass(oActive,&Player)\r\n                AND oActive <> who\r\n                AND NOT Send(oActive,@CanHelpPlayer))\r\n               OR isClass(oActive,&LogoffGhost)\r\n            {\r\n               Send(who,@MsgSendUser,#message_rsc=truce_guardian);\r\n\r\n               return FALSE;\r\n            }\r\n         }\r\n      }\r\n\r\n      % Check to see if the room restricts guild attacks.\r\n      % Check to see if the person is attackable in the area, is on a PvP\r\n      %  server, or is a DM.\r\n      if (NOT Send(oRoom,@AllowGuildAttack,#what=who))\r\n         AND Send(SYS,@IsPKAllowed)\r\n         AND NOT IsClass(who,&DM)\r\n      {\r\n         for i in Send(oRoom,@GetHolderActive)\r\n         {\r\n            % Only allow to be cast in towns unguilded if a monster is there.\r\n            % Unless monster is something a player can trigger/summon.\r\n            oActive = Send(oRoom,@HolderExtractObject,#data=i);\r\n            if IsClass(oActive,&Monster)\r\n               AND NOT ((Send(oActive,@GetBehavior) & AI_NPC)\r\n                        OR Send(oActive,@IsIllusion)\r\n                        OR Send(oActive,@IsSummoned)\r\n                        OR IsClass(oActive,&Revenant))\r\n            {\r\n               propagate;\r\n            }\r\n         }\r\n\r\n         % Tried to cast unguilded in town with no monsters.  Denied!\r\n         Send(who,@MsgSendUser,#message_rsc=truce_no_towns);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 3000,
+   "cast_time_ms": 0,
    "name": "truce"
   },
   {
@@ -444,6 +462,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % check for enchantment already applied\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=forcesoflight_already_enchanted);\r\n\t      \r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "forces of light"
   },
   {
@@ -466,6 +485,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n\r\n      if target = who\r\n      {\r\n         % No casting on self.\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=MarkOfDishonor_no_self);\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if NOT IsClass(target,&Player)\r\n         AND NOT IsClass(target,&Monster)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),\r\n                 #parm3=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if Send(target,@IsEnchanted,#what=self)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=MarkOfDishonor_already_enchanted,\r\n                 #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mark of dishonor"
   },
   {
@@ -492,6 +512,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target, i, lEnchantment, bHasEnchantment, oSpell;\r\n\r\n      % If castable on others, there can be only one target.\r\n      if pbCan_Cast_on_others AND Length(lTargets) = 1\r\n      {\r\n         target = First(lTargets);\r\n      }\r\n\r\n      % If it's only self cast, spoof self as target for the\r\n      % rest of the checks.\r\n      if NOT pbCan_Cast_on_others\r\n      {\r\n         target = who;\r\n      }\r\n      \r\n      % If there's no target by now, something weird is going on.\r\n      if target = $\r\n      {\r\n         Debug(\"No valid target found for purify.\");\r\n         return FALSE;\r\n      }  \r\n\r\n      if not IsClass(target, &User)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      % The target must have an enchantment\r\n      lEnchantment = send(target,@GetEnchantmentList);\r\n      bHasEnchantment = IsClass(who,&DM);\r\n\r\n      if lEnchantment <> $\r\n      {\r\n         for i in lEnchantment\r\n         {\r\n            oSpell = Nth(i,2);\r\n            if Send(oSpell,@IsPersonalEnchantment)\r\n               AND send(oSpell,@CanBeRemovedByPlayer)\r\n               AND send(oSpell,@IsHarmful)\r\n            {\r\n               bHasEnchantment = TRUE;\r\n               \r\n               break;\r\n            }\r\n         }\r\n      }\r\n\r\n      if NOT bHasEnchantment\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=purify_not_enchanted, \r\n              #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      % Can only cast purify on yourself, to curb massive mule abuse.\r\n      if NOT pbCan_cast_on_others AND target <> who\r\n      {\r\n         Send(who,@WaveSendUser,#wave_rsc=spell_fail_wav);\r\n         Send(who,@MsgSendUser,#message_rsc=purify_spell_self_cast_rsc,#parm1=vrName);\r\n      \treturn FALSE;\r\n      }\r\n\r\n      propagate;   \r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "purify"
   },
   {
@@ -518,6 +539,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n      % check if room already has this\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=QorBane_unnecessary);\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "qorbane"
   },
   {
@@ -544,6 +566,7 @@
    "required_karma": 40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target,&Battler) OR IsClass(target,&Revenant)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),\r\n                 #parm3=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,\r\n                 #parm1=vrName);\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if Send(target,@IsEnchanted,#what=self)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=Dazzle_already_enchanted,\r\n                 #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "dazzle"
   },
   {
@@ -566,6 +589,7 @@
    "required_karma": 50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &User)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n      \r\n      if Send(target,@GetHealth) >= Send(target,@GetMaxHealth)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=majorheal_unnecessary_rsc,\r\n              #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "major heal"
   },
   {
@@ -583,6 +607,7 @@
    "required_karma": 50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      if Send(who,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Umbrella_already_enchanted);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "umbrella"
   },
   {
@@ -605,6 +630,7 @@
    "required_karma": 50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget;\r\n\r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is a weapon or armor\r\n      if (not isClass(oTarget,&item)) or not send(oTarget,@CanIdentify)\r\n      {\r\n         send(who,@msgsenduser,#message_rsc=reveal_cant,\r\n              #parm1=send(oTarget,@GetDef),#parm2=send(oTarget,@GetName));\r\n                \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "reveal"
   },
   {
@@ -631,6 +657,7 @@
    "required_karma": 50,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "final rites"
   },
   {
@@ -657,6 +684,7 @@
    "required_karma": 50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target, i, lEnchantment, bHasEnchantment, oSpell;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }  \r\n\r\n      target = First(lTargets);\r\n\r\n      if NOT IsClass(target,&User)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),\r\n                 #parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      % The target must have an enchantment\r\n      lEnchantment = Send(target,@GetEnchantmentList);\r\n      bHasEnchantment = IsClass(who,&DM);\r\n\r\n      if lEnchantment <> $\r\n      {\r\n         for i in lEnchantment\r\n         {\r\n            oSpell = Nth(i,2);\r\n            if Send(oSpell,@IsPersonalEnchantment)\r\n               AND Send(oSpell,@CanBeRemovedByPlayer)\r\n               AND NOT Send(oSpell,@IsHarmful)\r\n            {\r\n               bHasEnchantment = TRUE;\r\n               \r\n               break;\r\n            }\r\n         }\r\n      }\r\n\r\n      if NOT bHasEnchantment\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Purge_not_enchanted, \r\n              #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "purge"
   },
   {
@@ -683,6 +711,7 @@
    "required_karma": 60,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      target = first(ltargets);\r\n      if not IsClass(target, &DeadBody)\r\n         or (send(target,@GetDearlyDeparted) = $)\r\n         or Send(target,@GetResurrected)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=Send(self,@GetName),#parm2=Send(target,@GetDef),\r\n              #parm3=Send(target,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "portal of life"
   },
   {
@@ -713,6 +742,7 @@
    "required_karma": 60,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oTarget;\r\n\r\n      oTarget = First(lTargets);\r\n\r\n      if NOT IsClass(oTarget,&Item)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=bond_bad_target);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "bond"
   },
   {
@@ -739,6 +769,7 @@
    "required_karma": -10,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "unholy resolve"
   },
   {
@@ -765,6 +796,7 @@
    "required_karma": -10,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=darkness_unnecessary);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "darkness"
   },
   {
@@ -787,6 +819,7 @@
    "required_karma": -10,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "detect good"
   },
   {
@@ -809,6 +842,7 @@
    "required_karma": -10,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "cloak"
   },
   {
@@ -831,6 +865,7 @@
    "required_karma": -20,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "acid touch"
   },
   {
@@ -857,6 +892,7 @@
    "required_karma": -20,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oWeapon;\r\n      oWeapon = first(lTargets);\r\n      if oWeapon = $ or not isClass(oWeapon,&weapon)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=unholyweapon_no_can,\r\n\t    #parm1=send(oWeapon,@getdef),#parm2=send(oWeapon,@getname));\r\n\t return False;\r\n      }\r\n      if Send(oWeapon,@CheckSpellFlag,#flag=ATCK_SPELL_UNHOLY)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=unholyweapon_already_done);\r\n\t return False;\r\n      }\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "unholy weapon"
   },
   {
@@ -879,6 +915,7 @@
    "required_karma": -20,
    "extra_cost_rule": "   CanPayCosts(who=$,lTargets=$)\r\n   {\r\n      % check for enchantment already applied\r\n      if Send(who,@CheckPlayerFlag,#flag=PFLAG_INVISIBLE)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=fade_already_enchanted);\r\n         \r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "fade"
   },
   {
@@ -901,6 +938,7 @@
    "required_karma": -20,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % check for enchantment already applied\r\n      if Send(who,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=KaraholsCurse_already_enchanted_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "karahols curse"
   },
   {
@@ -923,6 +961,7 @@
    "required_karma": -30,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "vampiric drain"
   },
   {
@@ -945,6 +984,7 @@
    "required_karma": -30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a corpse\r\n      if Length(lTargets) <> 1\r\n      {\r\n\t      return FALSE;\r\n      }\r\n\r\n      if send(who,@GetMana) >= (send(who,@GetMaxMana) * 3)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=defile_max);\r\n\r\n\t      return FALSE; \r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &DeadBody)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=Send(self,@GetName),#parm2=Send(target,@GetDef),\r\n              #parm3=Send(target,@GetName));\r\n\r\n\t      return FALSE;\r\n      }\r\n\r\n      if NOT Send(target,@WasGoodPlayer)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=defile_not_good);           \r\n\r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "defile"
   },
   {
@@ -967,6 +1007,7 @@
    "required_karma": -30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target, oPalsy;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &Battler) or IsClass(target,&Revenant)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_no_self_target,\r\n\t           #parm1=vrName);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      oPalsy = Send(SYS,@FindSpellByNum,#num=SID_PALSY);\r\n      if Send(target,@IsEnchanted,#what=oPalsy)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=enfeeble_already_enchanted);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "enfeeble"
   },
   {
@@ -989,6 +1030,7 @@
    "required_karma": -30,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "poison fog"
   },
   {
@@ -1015,6 +1057,7 @@
    "required_karma": -30,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n   \t   Send(who,@MsgSendUser,#message_rsc=Silence_unnecessary);\r\n   \t   \r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "silence"
   },
   {
@@ -1037,6 +1080,7 @@
    "required_karma": -40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &Battler) OR IsClass(target,&Revenant)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),\r\n                 #parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,#parm1=vrName);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if Send(target,@IsEnchanted,#what=self)\r\n      {\r\n         if IsClass(target,&Battler) AND NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=hold_already_enchanted,\r\n                 #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n    \r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "hold"
   },
   {
@@ -1063,6 +1107,7 @@
    "required_karma": -40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget;\r\n   \r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is enchantable\r\n      if NOT isClass(oTarget,&weapon) OR NOT send(oTarget,@CanEnchant,#oSpell=self)\r\n      {\r\n         Send(who, @MsgSendUser,#message_rsc=curseweapon_fails,\r\n              #parm1=send(oTarget,@getcapdef),#parm2=send(oTarget,@getname));\r\n            \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "curse weapon"
   },
   {
@@ -1085,6 +1130,7 @@
    "required_karma": -40,
    "extra_cost_rule": "   CanPayCosts(who = $,lTargets=$)\r\n   {\r\n      local oRoom, oTarget;\r\n\r\n      oRoom = send(who,@GetOwner);\r\n      oTarget = First(lTargets);\r\n\r\n      if not isclass(oTarget,&DeadBody)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=Animate_bad_target,#parm1=send(oTarget,@GetDef),#parm2=send(oTarget,@Getname));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if send(send(first(lTargets),@GetOwner),@SafePlayerAttack)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=Animate_failed_rsc,#parm1=send(oTarget,@GetCorpseName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if (send(oRoom,@CountHoldingHowMany,#class=&monster) > 25)\r\n         or (send(oRoom,@CountHoldingSummoned) > \r\n             Send(Send(SYS, @GetSettings), @GetPlayerSummonedObjectLimit))\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=Animate_failed_rsc,#parm1=send(oTarget,@GetCorpseName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "animate"
   },
   {
@@ -1111,6 +1157,7 @@
    "required_karma": -40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n      % check if room already has this\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=ShalilleBane_unnecessary);\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "shalillebane"
   },
   {
@@ -1133,6 +1180,7 @@
    "required_karma": -40,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      % Ask room if we're allowed to cast here.  For example, portals into \r\n      % guild halls are a bad idea.\r\n      if (NOT Send(Send(who,@GetOwner),@CanHavePlayerPortal))\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_location,#parm1=vrName);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "shadow rift"
   },
   {
@@ -1155,6 +1203,7 @@
    "required_karma": -40,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "splash of acid"
   },
   {
@@ -1181,6 +1230,7 @@
    "required_karma": -50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if (NOT IsClass(target,&Battler)) OR IsClass(target,&Revenant)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target,#parm1=vrName,\r\n                 #parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,#parm1=vrName);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if Send(target,@IsEnchanted,#what=self)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=blind_already_enchanted,\r\n\t              #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "blind"
   },
   {
@@ -1203,6 +1253,7 @@
    "required_karma": -50,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "invisibility"
   },
   {
@@ -1233,6 +1284,7 @@
    "required_karma": -50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the first target item is an item and\r\n      % the second is a user.\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &User) OR IsClass(target,&DM)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target, #parm1=vrName);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 5000,
+   "cast_time_ms": 3000,
    "name": "swap"
   },
   {
@@ -1259,6 +1311,7 @@
    "required_karma": -50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oCaster;\r\n      \r\n      if lTargets = $\r\n      {\r\n         lTargets = [who];\r\n      }\r\n      \r\n      % Check for availability of mana node links.\r\n      if Send(who,@GetNodeList) = 0\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=Nodeburst_fail);\r\n\r\n\t      return FALSE;\r\n      }\r\n\r\n      for oCaster in plRecentCasters\r\n      {\r\n         if who = oCaster\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=Nodeburst_not_today);\r\n\r\n            return FALSE;\r\n         }\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "nodeburst"
   },
   {
@@ -1285,6 +1338,7 @@
    "required_karma": -50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % Check for enchantment already applied\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=deathlink_already_enchanted);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "death link"
   },
   {
@@ -1315,6 +1369,7 @@
    "required_karma": -50,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "blood inheritance"
   },
   {
@@ -1341,6 +1396,7 @@
    "required_karma": -60,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "gaze of the basilisk"
   },
   {
@@ -1358,6 +1414,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 500,
    "name": "create weapon"
   },
   {
@@ -1384,6 +1441,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 500,
    "name": "create food"
   },
   {
@@ -1410,6 +1468,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oWeapon, oTarget, iCurrentGlow;\r\n\r\n      oTarget = first(lTargets);\r\n      if oTarget = $\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      if NOT IsClass(oTarget,&Weapon)\r\n      {\r\n         if IsClass(oTarget,&User)\r\n         {\r\n            oWeapon = Send(oTarget,@LookupPlayerWeapon);\r\n            if oWeapon = $\r\n            {\r\n               Send(who,@MsgSendUser,#message_rsc=GlowWeapon_no_weapon,\r\n                    #parm1=Send(oTarget,@GetDef),#parm2=Send(oTarget,@GetName));\r\n                    \r\n               return FALSE;\r\n            }\r\n            else\r\n            {\r\n               oTarget = oWeapon;\r\n            }\r\n         }\r\n         else\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=GlowWeapon_no_can,\r\n                 #parm1=Send(oTarget,@GetDef),#parm2=Send(oTarget,@GetName));\r\n                 \r\n            return FALSE;\r\n         }\r\n\r\n      }\r\n      else\r\n      {\r\n         if Send(oTarget,@GetHits) = 0\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=GlowWeapon_broken,\r\n                 #parm1=Send(oTarget,@GetDef),#parm2=Send(oTarget,@GetName));\r\n\r\n            return FALSE;\r\n         }\r\n      }\r\n\r\n      % Do not allow people to recast to a lower power level\r\n      %  This is to allow people to cast spell multiple times to get the\r\n      %  \"best\" results without the spell being overly 'bot-able.\r\n\r\n      piLightLevel = Send(self,@GetLightLevel,#iSpellPower=iSpellPower);\r\n      iCurrentGlow = Send(oTarget,@GetAttributeData,#ItemAtt=WA_GLOWING);\r\n      if iCurrentGlow <> $\r\n         AND Nth(iCurrentGlow,3) >= piLightLevel\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=GlowWeapon_already_stronger);\r\n\r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "glow"
   },
   {
@@ -1432,6 +1491,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &User)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Relay_notonself_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % no giving if less than 15 vigor\r\n      if Send(who,@GetVigor) <= 15\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Relay_toolow_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % max of 150 or so.\r\n      if Send(target,@GetVigor) >= MAX_TOTAL_AMOUNT \r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Relay_unnecessary_rsc,\r\n              #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "relay"
   },
   {
@@ -1458,6 +1518,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "bless"
   },
   {
@@ -1484,6 +1545,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "super strength"
   },
   {
@@ -1510,6 +1572,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oWeapon;\r\n      oWeapon = first(lTargets);\r\n      if oWeapon = $ or not isClass(oWeapon,&weapon)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=enchantweapon_no_can,\r\n\t    #parm1=send(oWeapon,@getdef),#parm2=send(oWeapon,@getname));\r\n\t return False;\r\n      }\r\n      if Send(oWeapon,@CheckTypeFlag,#flag=ATCK_WEAP_MAGIC)\r\n      {\r\n\t Send(who, @MsgSendUser, #message_rsc=enchantweapon_already_done);\r\n\t return False;\r\n      }\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "enchant weapon"
   },
   {
@@ -1532,6 +1595,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "haste"
   },
   {
@@ -1549,6 +1613,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "resist poison"
   },
   {
@@ -1571,6 +1636,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "night vision"
   },
   {
@@ -1597,6 +1663,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "magic shield"
   },
   {
@@ -1627,6 +1694,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget;\r\n   \r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is an item\r\n      if (not isClass(oTarget,&item) or (not send(oTarget,@CanEnchant,#oSpell=self)))\r\n      {\r\n         Send(who, @MsgSendUser,#message_rsc=shroud_fails,\r\n            #parm1=send(oTarget,@getcapdef),\r\n\t\t\t#parm2=send(oTarget,@getname));\r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "shroud"
   },
   {
@@ -1644,6 +1712,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "detect invisible"
   },
   {
@@ -1670,6 +1739,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n      % check if room already has martyrsbg\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=martyrsbg_unnecessary);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "martyrs battleground"
   },
   {
@@ -1696,6 +1766,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "free action"
   },
   {
@@ -1722,6 +1793,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget, iHits, iMaxHits;\r\n\r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is an item that can be mended.\r\n      if NOT (isClass(oTarget,&Item) AND send(oTarget,@CanMend))\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=mend_not_weaponry,\r\n              #parm1=Send(oTarget,@GetDef),#parm2=Send(oTarget,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      iHits = Send(oTarget,@GetHits);\r\n      iMaxHits = Send(oTarget,@GetMaxHits);\r\n\r\n      % Is the item broken?\r\n      if iHits = 0\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=mend_beyond_hope, \r\n              #parm1=Send(oTarget,@GetCapDef),#parm2=Send(oTarget,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % Is the item already at perfect condition?\r\n      if iHits = iMaxHits AND iHits > 0\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=mend_full_healed, \r\n              #parm1=Send(oTarget,@GetCapDef),#parm2=Send(oTarget,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mend"
   },
   {
@@ -1744,6 +1816,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who=$)\r\n   {\r\n      if send(send(who,@GetOwner),@GetEnchantmentList) = $\r\n      {\r\n         Send(who, @MsgSendUser, #message_rsc=spell_bad_location, #parm1=vrName);\r\n         return FALSE;\r\n      }\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "discordance"
   },
   {
@@ -1766,6 +1839,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      %% we need to do our own check rather than use the one in spell.kod\r\n      if IsClass(who,&Player) AND send(who,@GetMana) < 12\r\n      {\r\n         Send(who,@WaveSendUser,#wave_rsc=spell_fail_wav);\r\n         Send(who,@MsgSendUser,#message_rsc=spell_insufficient_magic,#parm1=vrName);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mana bomb"
   },
   {
@@ -1796,6 +1870,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "dispel illusion"
   },
   {
@@ -1822,6 +1897,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "deflect"
   },
   {
@@ -1848,6 +1924,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "eagle eyes"
   },
   {
@@ -1874,6 +1951,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % check for enchantment already applied\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=killingfields_already_enchanted);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "killing fields"
   },
   {
@@ -1896,6 +1974,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "resist magic"
   },
   {
@@ -1918,6 +1997,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "armor of gort"
   },
   {
@@ -1940,6 +2020,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "hunt"
   },
   {
@@ -1966,6 +2047,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower=0)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % Check if an anti-magic field already exists\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=AntiMagicAura_unnecessary);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 600,
    "name": "antimagic aura"
   },
   {
@@ -1988,6 +2070,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who=$)\r\n   {\r\n      local oPrism;\r\n\r\n      if IsClass(who,&Player)\r\n         AND (Send(who,@CheckPlayerFlag,#flag=PFLAG_SAFETY)\r\n              OR NOT Send(self,@CheckPlayerFlag,#flag=PFLAG_PKILL_ENABLE))\r\n      {\r\n         Send(who,@MsgSendUser,#message=Shatterlock_safety);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      oPrism = Send(self,@FindPrism,#who=who);\r\n      if NOT IsClass(Send(oPrism,@GetOwner),&GuildHall)\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "shatterlock"
   },
   {
@@ -2010,6 +2093,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "zap"
   },
   {
@@ -2032,6 +2116,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n      % check if room already has light\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n\t Send(who,@MsgSendUser,#message_rsc=light_unnecessary);\r\n\t return False;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "light"
   },
   {
@@ -2054,6 +2139,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "fog"
   },
   {
@@ -2076,6 +2162,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "sweep"
   },
   {
@@ -2098,6 +2185,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target, &User)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),\r\n              #parm3=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=MysticTouch_notonself_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % No giving if less than mana cost\r\n      if Send(who,@GetMana) <= (viMana + MINIMUM_MANA)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=MysticTouch_nomana_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % Max mana of 1.5 times target's max mana or 75\r\n      if Send(target,@GetMana) >= ((Send(target,@GetMaxMana) * 3) / 2)\r\n         OR Send(target,@GetMana) >= MAX_TOTAL_AMOUNT \r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=MysticTouch_unnecessary_rsc,\r\n\t           #parm1=Send(target,@GetDef),#parm2=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mystic touch"
   },
   {
@@ -2120,6 +2208,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "touch of flame"
   },
   {
@@ -2142,6 +2231,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "icy fingers"
   },
   {
@@ -2168,6 +2258,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "resist fire"
   },
   {
@@ -2194,6 +2285,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "resist cold"
   },
   {
@@ -2220,6 +2312,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 4000,
    "name": "bramble wall"
   },
   {
@@ -2246,6 +2339,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      % check for enchantment already applied\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=winds_already_enchanted);\r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "winds"
   },
   {
@@ -2272,6 +2366,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "resist shock"
   },
   {
@@ -2298,6 +2393,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n      \r\n      oRoom = Send(who,@GetOwner);\r\n      \r\n      % Check for enchantment already applied.\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=heat_already_enchanted);\r\n         \r\n         return FALSE;\r\n      }\r\n      \r\n      % Disallow in non-combat areas.  Towns, for example\r\n      if Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_COMBAT)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_PK)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_GUILD_PK_ONLY)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_location,#parm1=vrName);\r\n         \r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "heat"
   },
   {
@@ -2320,6 +2416,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % check for enchantment already applied\r\n      if Send(who,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=manafocus_already_enchanted,\r\n              #parm1=Send(self,@GetIndef),#parm2=Send(self,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 7000,
    "name": "mana focus"
   },
   {
@@ -2342,6 +2439,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "spider web"
   },
   {
@@ -2368,6 +2466,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "shocking fury"
   },
   {
@@ -2394,6 +2493,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "fireball"
   },
   {
@@ -2420,6 +2520,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target, oWeapon;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if not IsClass(target, &User)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc=spell_no_self_target,\r\n\t           #parm1=vrName);\r\n         }\r\n         return FALSE;\r\n      }\r\n      oWeapon = Send(Target,@LookupPlayerWeapon);\r\n      if oWeapon = $ or not send(oWeapon,@CanWeaken)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            send(who,@msgsenduser,#message_rsc=brittle_nothing);\r\n         }\r\n         return FALSE;\r\n      }\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "brittle"
   },
   {
@@ -2446,6 +2547,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "firewall"
   },
   {
@@ -2472,6 +2574,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "blast of fire"
   },
   {
@@ -2498,6 +2601,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "explosive frost"
   },
   {
@@ -2524,6 +2628,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "lightning bolt"
   },
   {
@@ -2550,6 +2655,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "earthquake"
   },
   {
@@ -2576,6 +2682,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target,&Player)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n                 #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 5000,
+   "cast_time_ms": 6000,
    "name": "shatter"
   },
   {
@@ -2598,6 +2705,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n      \r\n      oRoom = Send(who,@GetOwner);\r\n      \r\n      % Check for enchantment already applied\r\n      if Send(oRoom,@IsEnchanted,#what=self)\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=sandstorm_already_enchanted);\r\n\t      return FALSE;\r\n      }\r\n\r\n      if Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_COMBAT)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_PK)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_GUILD_PK_ONLY)\r\n      {\r\n\t      Send(who, @MsgSendUser, #message_rsc=spell_bad_location,#parm1=vrName);\r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "sandstorm"
   },
   {
@@ -2624,6 +2732,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "ring of flames"
   },
   {
@@ -2650,6 +2759,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "spore burst"
   },
   {
@@ -2676,6 +2786,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "lightning wall"
   },
   {
@@ -2693,6 +2804,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "blink"
   },
   {
@@ -2715,6 +2827,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget, iDrawFX;\r\n\r\n      oTarget = first(lTargets);\r\n\r\n      if NOT IsClass(oTarget,&Player)\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      % check for lighting effect already applied\r\n      iDrawfX = Send(oTarget,@GetPlayerDrawFX);\r\n\r\n      if (iDrawFX & DRAWFX_BLACK) = DRAWFX_BLACK\r\n         OR (iDrawFX & DRAWFX_SECONDTRANS) = DRAWFX_SECONDTRANS\r\n      {\r\n\t      Send(who,@MsgSendUser,#message_rsc=shadowform_already_affected);\r\n\r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 3000,
    "name": "shadow form"
   },
   {
@@ -2741,6 +2854,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      if lTargets = $\r\n      {\r\n         lTargets = [who];\r\n      }\r\n      \r\n      % check for enchantment already applied\r\n      if Send(first(lTargets),@IsEnchanted,#what=self)\r\n      {\r\n         Send(first(lTargets),@MsgSendUser,#message_rsc=anonymity_already_enchanted,\r\n              #parm1=Send(self,@GetIndef),#parm2=Send(self,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 5000,
    "name": "anonymity"
   },
   {
@@ -2763,6 +2877,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "flash"
   },
   {
@@ -2789,6 +2904,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "feign death"
   },
   {
@@ -2815,6 +2931,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n\r\n      if who = first(lTargets)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=forgetspell_cast_self);\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if not isclass(First(lTargets),&Player)\r\n      {\r\n         return FALSE;\r\n      }\r\n \r\n      % check for enchantment already applied\r\n      if Send(First(lTargets),@CheckPlayerFlag,#Flag=PFLAG_FORGOTTEN)\r\n      {\r\n         if not bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=forgetspell_already_enchanted,\r\n                 #parm1=Send(First(lTargets),@GetIndef),#parm2=Send(First(lTargets),@GetName));\r\n         }\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "forget"
   },
   {
@@ -2837,6 +2954,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget;\r\n\r\n      oTarget = First(lTargets);\r\n      if (NOT IsClass(oTarget,&Player)) OR IsClass(oTarget,&DM)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Foresight_notplayer,\r\n              #parm1=Send(oTarget,@GetDef),#parm2=Send(oTarget,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "foresight"
   },
   {
@@ -2863,6 +2981,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 2000,
    "name": "bait"
   },
   {
@@ -2885,6 +3004,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local lRooms;\r\n\r\n      lRooms = send(self,@GetYellList,#who=who);\r\n      \r\n      if Length(lRooms) = 0\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Eavesdrop_no_rooms);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "eavesdrop"
   },
   {
@@ -2911,6 +3031,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % check for enchantment already applied\r\n\r\n      if Send(who,@IsEnchanted,#what=self)\r\n         OR Send(who,@CheckPlayerFlag,#flag=PFLAG_MORPHED)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=illusionaryform_already_affected);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 6000,
    "name": "illusionary form"
   },
   {
@@ -2941,6 +3062,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $)\r\n   {\r\n      local oRoom;\r\n      \r\n      oRoom = send(who,@GetOwner);\r\n\r\n      if not send(who,@CheckPlayerFlag,#flag=PFLAG_PKILL_ENABLE)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=spell_guardian);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if send(oRoom,@CountHoldingHowMany,#class=&Monster) > 25\r\n         OR send(oRoom,@CountHoldingHowMany,#class=&Reflection) > 10\r\n         OR send(oRoom,@CountHoldingSummoned) > \r\n            send(Send(SYS, @GetSettings), @GetPlayerSummonedObjectLimit)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=summonreflection_failed_rsc);\r\n         \r\n         return FALSE;\r\n      }\r\n     \r\n      % limit reflections\r\n      if send(self,@CountPlayerReflections,#who=who) >= piPlayerReflectionLimit\r\n         AND NOT send(who,@PlayerIsImmortal)\r\n         AND NOT piPlayerReflectionLimit = 0\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=summonreflection_limit_rsc);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "reflection"
   },
   {
@@ -2967,6 +3089,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "illusionary wounds"
   },
   {
@@ -2993,6 +3116,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n\r\n      if NOT IsClass(target,&Battler) OR IsClass(target,&Revenant)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,#parm1=vrName);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if (IsClass(target,&Player)\r\n          AND Send(target,@IsEnchanted,#what=self))\r\n         OR (IsClass(target,&Monster)\r\n             AND send(target,@IsEnchanted,#what=send(SYS,@FindSpellBynum,#num=SID_PALSY)))\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Vertigo_already_enchanted,\r\n              #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n    \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "vertigo"
   },
   {
@@ -3019,6 +3143,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "illusionary firewall"
   },
   {
@@ -3045,6 +3170,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target, oDementia;\r\n      \r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target,&Battler)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),\r\n              #parm3=Send(target,@GetName));\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,\r\n                 #parm1=vrName);\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      oDementia = Send(SYS,@FindSpellByNum,#num=SID_DEMENTIA);\r\n      if Send(target,@IsEnchanted,#what=oDementia)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=dement_already_enchanted);\r\n         }\r\n\r\n         return FALSE;\r\n      }\r\n\t \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "dement"
   },
   {
@@ -3071,6 +3197,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, ltargets = $)\r\n   {\r\n      local oRoom, oTarget;\r\n      \r\n      if ltargets  = $\r\n      {\r\n         % For some reason, the client is Sending a null list if you\r\n         %  target a number item with a spell.  for now, assume it's bad.\r\n         Send(who,@MsgSendUser,#message_rsc=apparition_fizzle);\r\n      }\r\n\r\n      oRoom = Send(who,@GetOwner);\r\n\r\n      if Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_COMBAT)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_NO_PK)\r\n         OR Send(oRoom,@CheckRoomFlag,#flag=ROOM_GUILD_PK_ONLY)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_location,#parm1=vrName);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      if Send(oRoom,@CountHoldingHowMany,#class=&monster) > 15\r\n         OR Send(oRoom,@CountHoldingSummoned)\r\n            > Send(Send(SYS, @GetSettings), @GetPlayerSummonedObjectLimit)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=summonapparition_failed_rsc);\r\n\r\n         return FALSE;\r\n      }\r\n      \r\n      oTarget = First(ltargets);\r\n\r\n      if NOT IsClass(oTarget,&battler)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=summonapparition_failed_inanimate,\r\n              #parm1=Send(oTarget,@GetCapDef),#parm2=Send(oTarget,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 4000,
    "name": "apparition"
   },
   {
@@ -3097,6 +3224,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      % if they are already boosted above max health, then return FALSE\r\n      if send(who,@GetHealth) >= send(who,@GetMaxHealth) \r\n      {\r\n         if NOT bItemCast\r\n         {\r\n\t         send(who,@MsgSendUser,#message_rsc=denial_failed_rsc);\r\n         }\r\n\t      \r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 1000,
    "name": "denial"
   },
   {
@@ -3123,6 +3251,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, iSpellPower = 0)\r\n   {\r\n      local oTarget;\r\n   \r\n      oTarget = First(lTargets);\r\n\r\n      % Check that target is enchantable\r\n      if (NOT isClass(oTarget,&Item))\r\n         OR (NOT send(oTarget,@CanEnchant,#oSpell=self))\r\n      {\r\n         Send(who, @MsgSendUser,#message_rsc=artifice_fails,\r\n              #parm1=send(oTarget,@GetCapDef),#parm2=send(oTarget,@GetName));\r\n              \r\n\t      return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 10000,
    "name": "artifice"
   },
   {
@@ -3149,6 +3278,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % Check for enchantment already applied\r\n      if Send(who,@CheckPlayerFlag,#flag=PFLAG_MORPHED)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=morph_already_enchanted,\r\n              #parm1=Send(self,@GetIndef),#parm2=Send(self,@GetName));\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "morph"
   },
   {
@@ -3175,6 +3305,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local  oTarget, oRoom;\r\n\r\n      oTarget = First(lTargets);\r\n\r\n      % Check (and deny) casting on yourself.\r\n      if who = oTarget\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=summonEvilTwin_no_self);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % Don't cast on non-players or morphed players.\r\n      if NOT IsClass(oTarget,&Player)\r\n         OR Send(oTarget,@CheckPlayerFlag,#flag=PFLAG_MORPHED)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=summonEvilTwin_bad_target,\r\n              #parm1=Send(First(ltargets),@GetDef),\r\n              #parm2=Send(First(ltargets),@GetName));\r\n            \r\n         return FALSE;\r\n      }\r\n      else\r\n      {\r\n         % Is a player.  Check for valid attack.\r\n         if NOT Send(who,@AllowPlayerAttack,#victim=oTarget)\r\n         {\r\n            return FALSE;\r\n         }\r\n      }\r\n\r\n      oRoom = Send(SYS,@UtilGetRoom,#what=who);\r\n\r\n      if Send(oRoom,@CountHoldingHowMany,#class=&Monster) > 25\r\n         OR Send(oRoom,@CountHoldingHowMany,#class=&EvilTwin) > 0\r\n         OR Send(oRoom,@CountHoldingSummoned) > \r\n            Send(Send(SYS,@GetSettings), @GetPlayerSummonedObjectLimit)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=summonEvilTwin_failed_rsc);\r\n         \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 500,
    "name": "evil twin"
   },
   {
@@ -3201,6 +3332,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      % Can cast on any battler (player or monster) unless it's a revenant or supermonster.\r\n      % Casting on a player is just for roleplay.  See CastSpell().\r\n\r\n      target = First(lTargets);\r\n      if NOT IsClass(target,&Battler) OR IsClass(target,&Revenant)\r\n               OR IsClass(target,&Lich) OR IsClass(target,&DeadLich)\r\n               OR IsClass(target,&LupoggKing) OR IsClass(target,&Ghost)\r\n               OR IsClass(target,&SpiderQueen) OR IsClass(target,&Brambles)\r\n               OR IsClass(target,&OrcPitBoss) OR IsClass(target,&Yeti)\r\n               OR IsClass(target,&OrcPitBossBody)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_bad_target, \r\n              #parm1=vrName,#parm2=Send(target,@GetDef),#parm3=Send(target,@GetName));\r\n         }\r\n         return FALSE;\r\n      }\r\n\r\n      if target = who\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,#parm1=vrName);\r\n         }\r\n         return FALSE;\r\n      }\r\n\r\n      % check for enchantment already applied\r\n      if Send(target,@IsEnchanted,#what=self)\r\n      {\r\n         if NOT bItemCast\r\n         {\r\n            Send(who,@MsgSendUser,#message_rsc=seduce_already_enchanted,\r\n\t           #parm1=Send(target,@GetCapDef),#parm2=Send(target,@GetName));\r\n         }\r\n         return False;\r\n      }\r\n      if Send(target,@getMaster) <> $\t     %% target has a master already.\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;   % Check other things higher up\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "seduce"
   },
   {
@@ -3223,6 +3355,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 20000,
    "name": "summon cow"
   },
   {
@@ -3245,6 +3378,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $, bItemCast = FALSE)\r\n   {\r\n      local oRoom, iRoomNum;\r\n\r\n      % Can't cast just after attacking someone\r\n      if Send(who, @GetLastPlayerAttackTime) + \r\n         Send(Send(SYS, @GetSettings), @TeleportAttackDelaySec) >\r\n         GetTime()\r\n      {\r\n         Send(who, @MsgSendUser, #message_rsc = spell_too_soon_since_attacking);\r\n         return FALSE;\r\n      }         \r\n\r\n      if pbCanCastFromAnywhere\r\n      {\r\n         propagate;\r\n      }\r\n\r\n      % Can only cast from certain rooms.  This was added because being\r\n      % able to escapt from anywhere was too powerful.\r\n\r\n      oRoom = Send(who, @GetOwner);\r\n      iRoomNum = Send(oRoom, @GetRoomNum);\r\n\r\n      if (iRoomNum <> RID_TOS AND iRoomNum <> RID_MARION AND\r\n          iRoomNum <> RID_BARLOQUE AND iRoomNum <> RID_CORNOTH AND\r\n          iRoomNum <> RID_JASPER AND iRoomNum <> RID_KOC_INN)\r\n      {\r\n         % In your guild hall?\r\n         if oRoom <> Send(who, @GetGuildHall)\r\n         {\r\n            Send(who, @MsgSendUser, #message_rsc = Elusion_cant_cast_here);\r\n            return FALSE;\r\n         }\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "elusion"
   },
   {
@@ -3271,6 +3405,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "truth"
   },
   {
@@ -3297,6 +3432,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "invigorate"
   },
   {
@@ -3319,6 +3455,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mirth"
   },
   {
@@ -3341,6 +3478,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "melancholy"
   },
   {
@@ -3358,6 +3496,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "warp time"
   },
   {
@@ -3384,6 +3523,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "civility"
   },
   {
@@ -3410,6 +3550,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "conciliation"
   },
   {
@@ -3432,6 +3573,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oRoom;\r\n\r\n      oRoom = send(who,@GetOwner);\r\n\r\n      % Check to see if the room restricts guild attacks.\r\n      if NOT send(oRoom,@AllowGuildAttack,#what=who)\r\n         AND Send(SYS,@IsPKAllowed)\r\n         AND NOT IsClass(who,&DM)\r\n      {\r\n         % Tried to cast unguilded in town.  Denied!\r\n         Send(who,@MsgSendUser,#message_rsc=Spellbane_no_towns);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "spellbane"
   },
   {
@@ -3454,6 +3596,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   { \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "distill"
   },
   {
@@ -3480,6 +3623,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "sacred resonance"
   },
   {
@@ -3506,6 +3650,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "profane resonance"
   },
   {
@@ -3532,6 +3677,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "restorate"
   },
   {
@@ -3554,6 +3700,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      % Stop unguilded casting of Jig in towns.\r\n      if NOT (IsClass(who,&DM) AND Send(who,@PlayerIsImmortal))\r\n         AND Send(Send(who,@GetOwner),@CheckRoomFlag,#flag=ROOM_GUILD_PK_ONLY)\r\n         AND (Send(who,@GetGuild) = $\r\n              OR NOT Send(who,@CheckPlayerFlag,#flag=PFLAG_MURDERER))\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_bad_location,\r\n              #parm1=Send(self,@GetName));\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "jig"
   },
   {
@@ -3576,6 +3723,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "disharmony"
   },
   {
@@ -3598,6 +3746,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mana convergence"
   },
   {
@@ -3624,6 +3773,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "rejuvenate"
   },
   {
@@ -3650,6 +3800,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "crystalize mana"
   },
   {
@@ -3676,6 +3827,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 5000,
+   "cast_time_ms": 0,
    "name": "slitherbolt"
   },
   {
@@ -3693,6 +3845,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who=$, lTargets = $)\r\n   \"Checks to be sure that only DMs use this command.\"\r\n   {\r\n      if NOT isClass(who,&DM)\r\n      {\r\n         send(who,@RemoveSpell,#num=viSpell_num);\r\n         debug(\"Player\",send(who,@GetName),\"had\",send(self,@GetName),\"--removed\");\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      if NOT (send(who,@GreenNamed)\r\n              OR send(SYS,@GetChaosNight)\r\n              OR isClass(first(lTargets),&Monster)\r\n              OR isClass(first(lTargets),&DM))\r\n      {\r\n         send(who,@DontInterfere);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 2000,
+   "cast_time_ms": 0,
    "name": "smite"
   },
   {
@@ -3710,6 +3863,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      if not IsClass(First(lTargets),&User)\r\n      {\r\n\t send(who,@MsgSendUser,#message_rsc=pardon_failed,\r\n\t      #parm1=Send(First(lTargets),@GetDef),#parm2=Send(First(lTargets),@getname));\r\n\t return False;\r\n      }\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "pardon"
   },
   {
@@ -3727,6 +3881,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(lTargets=$)\r\n   {\r\n      if (not isClass(first(lTargets),&User)) and\r\n            not (isClass(first(lTargets),&Reflection)) and\r\n            not (isClass(first(lTargets),&EvilTwin))\r\n      {\r\n         return FALSE;\r\n      }\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "page"
   },
   {
@@ -3744,6 +3899,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      if not IsClass(First(lTargets),&User)\r\n      {\r\n         send(who,@MsgSendUser,#message_rsc=villify_failed,\r\n              #parm1=Send(First(lTargets),@GetDef),#parm2=Send(First(lTargets),@GetTrueName));\r\n              \r\n         return FALSE;\r\n      }\r\n      \r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "villify"
   },
   {
@@ -3761,6 +3917,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local target;\r\n      \r\n      % Can cast spell if the 1 target item is a user\r\n      if Length(lTargets) <> 1\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      if NOT isClass(who,&DM)\r\n      {\r\n         send(who,@RemoveSpell,#num=viSpell_num);\r\n         debug(\"Player\",send(who,@GetName),\"had\",send(self,@GetName),\"--removed\");\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      target = First(lTargets);\r\n\r\n      if target = who\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=spell_no_self_target,#parm1=vrName);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      % DM's can't cast on monsters, but admins can.\r\n      %  This may seem counterintuitive, but the rationale is that\r\n      %  superior hold is the best way to see if a player has pkk.\r\n      %  However, we don't want dms to help players kill the lich, etc.\r\n      if (getClass(who) = &DM) AND isClass(target,&Monster)\r\n      {\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "dmhold"
   },
   {
@@ -3778,6 +3935,7 @@
    "required_karma": 0,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      local oTarget;\r\n     \r\n      % check for enchantment already applied\r\n      \r\n      oTarget = first(lTargets);\r\n\r\n      % Only castable on items.\r\n      if NOT IsClass(oTarget,&Item)\r\n      {\r\n         return FALSE;\r\n      }\r\n      \r\n      if send(oTarget,@HasAttribute,#itematt=IA_ENGRAVED)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=engrave_already_engraved,\r\n              #parm1=send(oTarget,@GetCapDef),#parm2=send(oTarget,@GetName));\r\n              \r\n         return FALSE;\r\n      }    \r\n      \r\n      if isClass(oTarget,&NumberItem)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=engrave_cant_engrave,\r\n              #parm1=send(oTarget,@GetDef),#parm2=send(oTarget,@GetName));\r\n              \r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
    "post_cast_ms": 1000,
+   "cast_time_ms": 30000,
    "name": "engrave"
   },
   {
@@ -3795,6 +3953,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "deliverance"
   },
   {
@@ -3812,6 +3971,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "damn"
   },
   {
@@ -3829,6 +3989,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "bonk"
   },
   {
@@ -3846,6 +4007,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "scry"
   },
   {
@@ -3863,6 +4025,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "armageddon"
   },
   {
@@ -3880,6 +4043,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "insight"
   },
   {
@@ -3897,6 +4061,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "evaluate"
   },
   {
@@ -3914,6 +4079,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "squelch"
   },
   {
@@ -3931,6 +4097,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "agility boon"
   },
   {
@@ -3948,6 +4115,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "aim boon"
   },
   {
@@ -3965,6 +4133,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "stamina boon"
   },
   {
@@ -3982,6 +4151,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "strength boon"
   },
   {
@@ -3999,6 +4169,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mysticism boon"
   },
   {
@@ -4016,6 +4187,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "intellect boon"
   },
   {
@@ -4033,6 +4205,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "mana boon"
   },
   {
@@ -4050,6 +4223,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "hp boon"
   },
   {
@@ -4067,6 +4241,7 @@
    "required_karma": 0,
    "extra_cost_rule": null,
    "post_cast_ms": 1000,
+   "cast_time_ms": 0,
    "name": "vigor boon"
   }
  ]
