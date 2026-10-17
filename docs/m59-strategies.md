@@ -111,6 +111,8 @@ export default {
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
 | `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
 
+**A GUARD ZONE OVERRIDES IT FOR ONE CHARACTER.** `autopilot action=start guard_zone={ room, from: {row, col}, to: {row, col} }` (or `{ room, squares }`) is an operator order to one character, stored as `policy.guardZone` (`normGuardZone`, which keeps the drawn `rect`). In its own room it is the area `huntAreaHere` uses, in place of the strategy file's `huntArea`; `guard_zone: null` hands the room back to the file. The field command's room map draws one by dragging a rectangle (operator 2026-10-16).
+
 `protect` is additive on purpose: a strategy that replaced the list would quietly unprotect the
 reagents the roster put there, and the next sell would take them.
 

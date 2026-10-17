@@ -201,7 +201,7 @@ import { huntPrioritySpec, huntPriorityProblems } from './m59-hunt-priority.mjs'
 import { lootOnlySpec } from './m59-loot-filter.mjs';
 // FARMING STRATEGY FILES: the assignment is validated here; the file is applied in the keeper.
 import { loadFarmStrategy, ordersFromStatus, strategyResidue } from './m59-strategy-engine.mjs';
-import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS, fieldFor as farmStrategyField } from './m59-strategy-schema.mjs';
+import { ARG_KEYS as FARM_STRATEGY_ARG_KEYS, fieldFor as farmStrategyField, normGuardZone } from './m59-strategy-schema.mjs';
 // The shelter helpers. The safe-spot book is RETIRED — removed outright on 2026-09-20 rather
 // than merely left unimported, because two operator chat verbs in this file were still writing
 // `verified` marks into it. There is nothing to import now. See tools/m59-safewall.mjs for the
@@ -12077,6 +12077,12 @@ const TOOLS = [
           'ticks of 6s, bounded 10..75). "before_swing" casts only before a swing, the old ' +
           'behaviour. Both keep the stop-line, punch-line and unknown-state triggers and the ' +
           'rate limit. autopilot status reports it as touch_spell.timing' },
+      guard_zone: { type: ['object', 'null'],
+        description: 'GUARD ZONE: where in ONE room THIS character may choose prey, and where it walks back to when ' +
+          'idle. { room, from: { row, col }, to: { row, col } } is the rectangle between two coarse squares, either ' +
+          'corner first; { room, squares: [[row, col], ...] } is any shape. Wins over the huntArea of a farming strategy ' +
+          'in its room; null clears it (the area of the strategy, if any, applies again). Operator 2026-10-16, drawn ' +
+          'on the field command map' },
       farm_strategy: { type: ['string', 'null'],
         description: 'ASSIGN A FARMING STRATEGY FILE by name: substrate/farm-strategies/<name>.mjs ' +
           '(orders for THIS machine, gitignored; examples in substrate/farm-strategies.example/). The file ' +
@@ -13304,6 +13310,10 @@ const TOOLS = [
       if (a.travel_vigor_floor !== undefined) p.policy.travelVigorFloor = Number(a.travel_vigor_floor);
       if (a.travel_shelter_detour !== undefined) p.policy.travelShelterDetour = Number(a.travel_shelter_detour);
       if (a.retreat_to_inn !== undefined) p.policy.retreatToInn = a.retreat_to_inn === true;
+      if (a.guard_zone !== undefined) {
+        try { p.policy.guardZone = normGuardZone(a.guard_zone); }
+        catch (e) { return { started: false, reason: `guard_zone refused: ${e.message}`, note: 'nothing was changed: the character keeps the posture it has' }; }
+      }
       // 0 or null means NO LIMIT, not "never pull anything". There is no sensible reading
       // of "fetch things within zero steps", and the default is unlimited — see pull() —
       // so this is the only way to express "put the ceiling back where it was" and then

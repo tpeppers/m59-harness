@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Autopilot } from './m59-autopilot.mjs';
-import { STRATEGY_FIELDS, validateStrategy, normHuntArea } from './m59-strategy-schema.mjs';
+import { STRATEGY_FIELDS, validateStrategy, normHuntArea, normGuardZone } from './m59-strategy-schema.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
@@ -67,6 +67,37 @@ await ok('passFarm: the area filter runs after the avoid filter and before ranki
   assert.ok(at('const huntArea = this.huntAreaHere(room?.num)') < at('found = rankQuarries('));
   assert.ok(at('OUTSIDE THE HUNT AREA WITH NOTHING TO DO') > 0
     && at('OUTSIDE THE HUNT AREA WITH NOTHING TO DO') < at('HOLDING A WALL IN A ROOM THAT SPAWNS IS WORK'));
+});
+
+// THE GUARD ZONE (policy.guardZone, the broker's `guard_zone`): one character's operator-drawn area, which wins
+// over a strategy's huntArea in its own room. Operator 2026-10-16, drawn on the field command map.
+await ok('guard zone: a dragged rectangle, either corner first, becomes its squares and remembers the rect', () => {
+  const z = normGuardZone({ room: 38, from: { row: 9, col: 14 }, to: [7, 12] });
+  assert.deepEqual(z.rect, { row1: 7, col1: 12, row2: 9, col2: 14 });
+  assert.equal(z.squares.length, 9);
+  assert.ok(z.squares.some(([r, c]) => r === 7 && c === 12) && z.squares.some(([r, c]) => r === 9 && c === 14));
+  assert.deepEqual(normGuardZone({ room: 38, squares: [[1, 2]] }), { room: 38, squares: [[1, 2]] });
+  assert.equal(normGuardZone(null), null);
+});
+await ok('guard zone refusals name guardZone, and a rectangle over 4000 squares is refused', () => {
+  assert.throws(() => normGuardZone({ room: 38, from: { row: 1.5, col: 2 }, to: { row: 3, col: 3 } }), /guardZone\.from/);
+  assert.throws(() => normGuardZone({ room: 1, squares: [[1, 1]] }), /guardZone\.room/);
+  assert.throws(() => normGuardZone({ room: 38, from: [0, 0], to: [100, 100] }), /4000/);
+});
+await ok('guard zone wins over the strategy area in its room, and the strategy area applies elsewhere', () => {
+  const ap = keeper({ room: 38, squares: [[7, 14]] });
+  ap.policy.guardZone = normGuardZone({ room: 38, from: [1, 1], to: [2, 2] });
+  assert.ok(ap.huntAreaHere(38).has('1,1') && !ap.huntAreaHere(38).has('7,14'));
+  ap.policy = { huntArea: { room: 38, squares: [[7, 14]] }, guardZone: { room: 41, squares: [[3, 3]] } };
+  assert.ok(ap.huntAreaHere(38).has('7,14') && ap.huntAreaHere(41).has('3,3'));
+  ap.policy = { ...ap.policy, guardZone: null };
+  assert.ok(ap.huntAreaHere(38).has('7,14') && ap.huntAreaHere(41) === null);
+});
+await ok('the broker takes guard_zone on autopilot and refuses a bad one before anything changes', () => {
+  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  assert.ok(/guard_zone: \{ type: \['object', 'null'\]/.test(BROKER));
+  assert.ok(BROKER.includes('p.policy.guardZone = normGuardZone(a.guard_zone)'));
+  assert.ok(BROKER.indexOf('guard_zone refused') < BROKER.indexOf('const keeper_push = await pushPolicyToKeeper(a.agent, p)'));
 });
 
 console.log(`\n${n} passed`);

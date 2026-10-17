@@ -209,6 +209,31 @@ export function normHuntArea(v) {
   return { room, squares };
 }
 
+// A GUARD ZONE is the same shape as a hunt area, given to ONE character as an order rather than to everyone
+// who runs a strategy file, and it wins over the file's area in its room (Autopilot.huntAreaHere). Operator
+// 2026-10-16: "assign a Guard zone ... click-and-drag ... from this (coarse grid square) to this". So besides
+// { room, squares } it takes the rectangle as drawn, { room, from: {row, col}, to: {row, col} }, either corner
+// first. Kept as `{ room, squares, rect? }` so a reader can draw the rectangle it was given.
+/** { room, squares } | { room, from, to } -> { room, squares, rect? }, or null. */
+export function normGuardZone(v) {
+  if (v === null) return null;
+  if (v && typeof v === 'object' && !Array.isArray(v) && v.from != null && v.to != null) {
+    const corner = (q, which) => {
+      const row = Number(Array.isArray(q) ? q[0] : q?.row), col = Number(Array.isArray(q) ? q[1] : q?.col);
+      if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0)
+        throw new Error(`guardZone.${which} ${JSON.stringify(q)} is not a whole { row, col }`);
+      return { row, col };
+    };
+    const a = corner(v.from, 'from'), b = corner(v.to, 'to');
+    const rect = { row1: Math.min(a.row, b.row), col1: Math.min(a.col, b.col), row2: Math.max(a.row, b.row), col2: Math.max(a.col, b.col) };
+    if ((rect.row2 - rect.row1 + 1) * (rect.col2 - rect.col1 + 1) > 4000) throw new Error('guardZone rectangle covers more than 4000 squares');
+    const squares = [];
+    for (let row = rect.row1; row <= rect.row2; row++) for (let col = rect.col1; col <= rect.col2; col++) squares.push([row, col]);
+    return { ...normHuntArea({ room: v.room, squares }), rect };
+  }
+  try { return normHuntArea(v); } catch (e) { throw new Error(e.message.replace(/huntArea/g, 'guardZone')); }
+}
+
 /** The file's value laid over another writer's: replaced, or (merge 'union') added to it. */
 export function mergeOver(field, base, value) {
   if (field?.merge !== 'union' || !Array.isArray(value)) return value;

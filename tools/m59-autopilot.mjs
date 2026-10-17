@@ -2354,6 +2354,9 @@ export class Autopilot {
       pullWithin: null,
       // { room, squares } -- where in a room prey may be chosen (m59-strategy-schema.mjs huntArea). null = anywhere.
       huntArea: null,
+      // { room, squares, rect? } -- ONE character's operator-drawn hunt area (normGuardZone). Wins over huntArea
+      // in its own room, so a strategy file's area is the fallback, never the override. null = none.
+      guardZone: null,
       // WHETHER A FIGHT OPENS BY WALKING TO A WALL. Renamed 2026-09-10 from
       // `requireSafeWall`, which had grown four jobs and only one of them was this.
       //
@@ -2999,8 +3002,11 @@ export class Autopilot {
   // HUNT PRIORITY (m59-hunt-priority.mjs). The ordering lives there; this binds it to the
   // keeper's own name reader and hunt matcher, and remembers the last choice for status.
   /** The hunt area's squares for this room (a Set of "row,col"), or null when the whole room is fair game. */
+  // A GUARD ZONE in this room is the area; otherwise the strategy's hunt area is (operator 2026-10-16: a drawn
+  // zone is an order to one character, and a file assigned to fifteen must not take it back).
   huntAreaHere(roomNum) {
-    const a = this.policy?.huntArea;
+    const g = this.policy?.guardZone;
+    const a = g && Number(g.room) === Number(roomNum) ? g : this.policy?.huntArea;
     if (!a || Number(a.room) !== Number(roomNum) || !Array.isArray(a.squares) || !a.squares.length) return null;
     if (this._huntAreaFor !== a) { this._huntAreaFor = a; this._huntAreaSet = new Set(a.squares.map(([r, c]) => `${r},${c}`)); }
     return this._huntAreaSet;
