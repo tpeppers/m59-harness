@@ -237,8 +237,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const h = await fetch(broker + '/health').then(r => r.json()).catch(() => null);
   if (!h) { console.error(`no broker answering on ${broker}`); process.exit(3); }
   if ((h.fleet ?? '') !== fleet) { console.error(`broker on ${broker} holds "${h.fleet}", not "${fleet}" — refusing`); process.exit(3); }
-  const report = () => pvpReport({ days: 1, stateFile, ledger: [], alarms: [] });
-  const fullReport = () => pvpReport({ days: 1, stateFile, alarms: [] });
+  const report = () => pvpReport({ days: 1, stateFile, ledger: [], alarms: [], telemetry: false });
+  const fullReport = () => pvpReport({ days: 1, stateFile, alarms: [], telemetry: false });
   const state = readState();
   if (argv.includes('--status')) {
     const rep = fullReport();

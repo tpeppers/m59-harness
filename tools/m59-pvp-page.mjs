@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { NAV, STYLE, esc, ago } from './m59-page-chrome.mjs';
 import { pvpReport, DEFAULT_GAP_MS } from './m59-pvp.mjs';
+import { describeAction, locText, OUTCOME_LABEL, battleTimeline } from './m59-pvp-telemetry.mjs';
 import { movementMapFile } from './m59-map-path.mjs';
 
 // Room numbers to names, read once from the movement map. A page that cannot read it shows the
@@ -45,7 +46,13 @@ function roomsLabel(b) {
   }).join(' → ') || '<span class="dim">room unknown</span>';
 }
 
+function describeCombat(e) { return describeBase({ ...e, loc: null }); }
 function describe(e) {
+  if (e.kind === 'combat' && e.loc && e.event !== 'pvp_outcome') return describeCombat(e) + ` <span class="dim">@ ${esc(locText(e.loc))}</span>` +
+    (e.detail?.spell ? ` <span class="dim">· ${esc(e.detail.spell)}${e.detail.waiting ? `, waiting on ${esc(e.detail.waiting)}` : ''}${e.detail.readiness?.why ? `, ${esc(e.detail.readiness.why)}` : ''}</span>` : '');
+  return describeBase(e);
+}
+function describeBase(e) {
   if (e.kind === 'death') {
     const guess = e.guess ? ' <span class="dim">(killer inferred)</span>' : '';
     const how = e.how ? ` <span class="dim">· ${esc(e.how)}</span>` : '';
@@ -68,10 +75,24 @@ function describe(e) {
         const cls = lo.direction === 'outgoing' ? (lo.outcome === 'hit' ? 'good' : 'dim') : (lo.outcome === 'hit' ? 'bad' : 'dim');
         return `${who}: <span class="${cls}">${esc(lo.text ?? `${lo.direction} ${lo.outcome}`)}</span>`;
       }
+      case 'opener_cast': return `${who} casts its opener${e.opener ? ` <b>${esc(e.opener)}</b>` : ''} at ${esc(target)} <span class="dim">(#${esc(e.opener_casts ?? '?')} this fight)</span>`;
+      case 'opener_wait': return `${who}'s opener waits <span class="dim">— ${esc(e.detail?.waiting ?? '')}</span>`;
+      case 'opener_strategy_fault': return `${who}'s opener strategy faulted <span class="bad">— ${esc(e.detail?.fault?.why ?? '')}</span>`;
       case 'finished': return `${who} stands down <span class="dim">— ${esc(e.reason ?? e.outcome ?? '')}</span>`;
       default: return `${who} ${esc(e.event)}`;
     }
   }
+  if (e.kind === 'action') {
+    const cls = e.verb === 'cast' ? (e.outcome === 'spell_landed' || e.outcome === 'spell_cast' ? 'good' : e.outcome ? 'bad' : '')
+      : e.verb === 'traverse' ? 'map' : e.verb === 'attack' ? 'dim' : '';
+    return `<span class="${cls}">${esc(describeAction(e))}</span>`;
+  }
+  if (e.kind === 'heard') {
+    const cls = /landed|upkeep/.test(e.cls) ? 'good' : /^spell_|gear_broken|refused|cant_see/.test(e.cls) ? 'bad' : 'dim';
+    return `<span class="dim">${esc(e.heard_by.length > 1 ? `${e.heard_by.length} hear` : `${e.observer} hears`)}:</span> <span class="${cls}">${esc(e.text)}</span>` +
+      (e.cls !== 'other' ? ` <span class="dim">· ${esc(e.cls)}</span>` : '');
+  }
+  if (e.kind === 'taunt') return `<span class="good">📣 ${esc(e.character ?? '?')} broadcasts “${esc(e.line ?? '')}”</span> <span class="dim">· ${esc(e.why ?? '')}</span>`;
   if (e.kind === 'alarm') return `<b>${esc(e.observer ?? '?')}</b> raises the alarm: ${esc(e.enemies?.[0] ?? '?')} <span class="dim">(${esc(e.basis)})</span>`;
   return `${e.observer ? `<b>${esc(e.observer)}</b> ` : ''}${esc(e.text ?? e.event ?? e.kind)}`;
 }
@@ -121,11 +142,21 @@ function sceneSvg(scene) {
 function battleHtml(b, i) {
   const [label, colour] = RESULT[b.result] ?? [b.result, 'var(--dim)'];
   const foes = b.enemies.map(f => `<b>${esc(f.name)}</b>${f.guild ? ` <span class="dim">of ${esc(f.guild.replace(/^the\s+/i, ''))}</span>` : ''}`).join(', ') || '<span class="dim">unnamed</span>';
-  const timeline = b.events;
+  const tm = b.telemetry;
+  const timeline = tm ? battleTimeline(b) : b.events;
   const t0 = b.start;
   const rows = timeline.map(e => `<tr${e.context ? ' class="ctx"' : ''}><td class="num">${offset(e.at - t0)}</td><td class="dim">${esc(utc(e.at).slice(11, 19))}</td><td>${e.room != null ? esc(e.room) : ''}</td><td>${describe(e)}</td></tr>`).join('');
   const oursRows = b.ours.map(o => `<tr><td>${esc(o.name)}</td><td class="num">${o.kills || ''}</td><td class="num">${o.deaths ? `<span class="bad">${o.deaths}</span>` : ''}</td><td class="num">${o.volleys || ''}</td><td class="num">${o.refused || ''}</td><td class="num">${o.hits_out || ''}</td><td class="num">${o.hits_in || ''}</td></tr>`).join('');
   const rec = b.reconstructed;
+  const did = tm?.characters?.length ? `<table class="ours"><thead><tr><th>What ours did</th><th>Maps</th><th>Swings</th><th>Casts</th><th>Landed</th><th>Wasted</th><th>Failed</th><th>No reply</th><th>Gear</th><th>Spells</th></tr></thead><tbody>${
+    tm.characters.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.maps.join(' → '))}</td><td class="num">${c.attacks || ''}${c.vetoed ? ` <span class="dim">(${c.vetoed} vetoed)</span>` : ''}</td>
+      <td class="num">${c.casts || ''}</td><td class="num">${c.landed ? `<span class="good">${c.landed}</span>` : ''}</td><td class="num">${c.wasted ? `<span class="bad">${c.wasted}</span>` : ''}</td>
+      <td class="num">${c.failed ? `<span class="bad">${c.failed}</span>` : ''}</td><td class="num">${c.no_reply || ''}</td>
+      <td class="num">${c.gear || ''}${c.gear_broken ? ` <span class="bad">(${c.gear_broken} broken)</span>` : ''}</td>
+      <td class="dim">${esc(Object.entries(c.spells).map(([sp, v]) => `${sp} ×${v.sent}: ${Object.entries(v.outcomes).map(([k, n]) => `${OUTCOME_LABEL[k] ?? k} ${n}`).join(', ')}`).join('; '))}</td></tr>`).join('')
+  }</tbody></table>` : '';
+  const taunt = tm?.taunt?.line ? `<p class="taunt">📣 <b>${esc(tm.taunt.character)}</b>: “${esc(tm.taunt.line)}” <span class="dim">· ${esc(tm.taunt.why ?? '')}${tm.taunt.killer ? ` · last kill ${esc(tm.taunt.killer)}` : ''}</span></p>`
+    : tm?.taunt ? `<p class="taunt dim">No victory taunt went out (last kill ${esc(tm.taunt.killer ?? '?')}).</p>` : '';
   return `<section class="panel battle" id="${esc(b.id)}">
     <div class="bhead">
       <span class="badge" style="background:${colour}">${esc(label)}</span>
@@ -145,7 +176,9 @@ function battleHtml(b, i) {
     </div>
     ${rec?.title ? `<p class="rtitle">${esc(rec.title)}</p>` : ''}
     ${rec?.scene ? sceneSvg(rec.scene) : ''}
+    ${taunt}
     ${b.ours.length ? `<table class="ours"><thead><tr><th>Ours</th><th>Kills</th><th>Deaths</th><th>Volleys</th><th>Refused</th><th>Hits</th><th>Hit by</th></tr></thead><tbody>${oursRows}</tbody></table>` : ''}
+    ${did}
     ${rec ? `<div class="caveat"><b>What this was rebuilt from.</b> ${esc(rec.provenance ?? '')}${rec.notes?.length ? `<ul>${rec.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}</div>` : ''}
     <details${i === 0 || timeline.length <= 30 ? ' open' : ''}><summary>Timeline · ${timeline.length} events · from ${esc(b.sources.join(', '))}</summary>
       <table class="tl"><tbody>${rows}</tbody></table></details>
@@ -186,6 +219,8 @@ export function renderPvp({ days = 7, gapMs = DEFAULT_GAP_MS, characters = null,
   details summary { cursor:pointer; color:var(--dim); font-size:.85rem; margin-top:.6rem; }
   table.tl td { font-size:.82rem; border-bottom:none; padding:.15rem .5rem; }
   table.tl tr.ctx td { opacity:.6; }
+  table.tl .map { color:var(--accent); font-weight:600; }
+  .taunt { margin:.3rem 0 .5rem; }
   .scene { margin:.4rem 0 .8rem; overflow-x:auto; }
   .scene .sq { fill:none; stroke:var(--line); }
   .scene .path { stroke:var(--bad); stroke-dasharray:4 3; stroke-width:1.5; }

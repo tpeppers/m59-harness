@@ -16,6 +16,7 @@ import { sameRoomDoorPlan } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import * as pvplog from './m59-pvp.mjs';
+import { locStamp, squaresBetween } from './m59-pvp-telemetry.mjs';
 import * as wandShot from './m59-wand-shot.mjs';
 import { Recorder } from './m59-recorder.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
@@ -75,6 +76,14 @@ const square = (p, label) => {
   return { row: p.row, col: p.col };
 };
 const exactName = (c, o) => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').trim().toLowerCase();
+// WHO SENT A PACKET: the first frames outside the client and this telemetry, as `fn@file`. Only
+// computed for a packet sent inside a PvP window, so its cost is a stack walk per swing in a fight.
+function callerOf() {
+  const frames = String(new Error().stack ?? '').split('\n').slice(1)
+    .map(l => /at (?:async )?(?:([^\s(]+) \()?.*?([\w.-]+\.mjs):\d+/.exec(l))
+    .filter(m => m && m[2] !== 'm59-client.mjs' && !/noteFightAction|tapSent|callerOf/.test(m[1] ?? ''));
+  return frames.slice(0, 3).map(m => `${(m[1] ?? 'anon').replace(/^.*\./, '')}@${m[2].replace(/^m59-|\.mjs$/g, '')}`).join('<') || null;
+}
 const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 
 export function normalizeCombatOrder(input) {
@@ -879,7 +888,7 @@ export class CombatMode {
       catch (e) { this.noteOpenerFault(o, st.name, `threw: ${e.message}`); continue; }
       if (answer == null) continue;
       if (answer.wait === true && answer.cast == null) {
-        o.openerWaiting = st.name;
+        if (o.openerWaiting !== st.name) { o.openerWaiting = st.name; this.record('opener_wait', o); }
         if (o.openerAim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned)
           await this.approachCombat(o, target, { sight: true });
         return true;
@@ -1399,6 +1408,72 @@ export class CombatMode {
       pvplog.appendFightMessage({ kind: 'message', at: now, observer: this.pvpObserver(),
         room: this.s.world?.room?.num ?? null, fight: this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null,
         shot: this.openShot?.shot_id ?? null, text: String(text) });
+    } catch { /* never stop the event loop for a log line */ }
+  }
+
+  // IS A PVP WINDOW OPEN: a fight on, or the 30 s tail after one. The same test noteFightMessage uses.
+  pvpWindow(now = Date.now()) {
+    return this.pvpLogging() && !!(this.active?.pvp || now < (this.pvpTailUntil ?? 0));
+  }
+
+  // WHERE THIS BODY IS, as the standard stamp: map number, coarse square, fine offset (KOD units).
+  pvpLoc(client = this.s.client) {
+    try { return locStamp(this.s.world?.room?.num ?? null, client?.self ?? null); } catch { return null; }
+  }
+
+  tapClient(client) {
+    if (!client?.tapAction || client.__pvpTap === this) return;
+    try { client.__pvpUntap?.(); } catch {}
+    client.__pvpTap = this;
+    client.__pvpUntap = client.tapAction((a, c) => this.noteFightAction(a, c));
+  }
+
+  // EVERY PACKET THIS BODY SENDS IN A PVP WINDOW, whoever sent it: a swing, a cast (the opener, a
+  // heal, a cast rite's spell), a robe put on or a plate taken off. Before this, the PvP record had
+  // the opener's DECISION and nothing of the gear swap around it or the server's answer to it.
+  // Each row carries where the body stood and where its target stood, and `via` names the code
+  // that sent it -- the cheapest honest answer to "why did it do that".
+  noteFightAction(a, client) {
+    try {
+      if (client !== this.s.client) return;
+      const now = a.at ?? Date.now();
+      if (!this.pvpWindow(now)) return;
+      const o = this.active;
+      const loc = this.pvpLoc(client);
+      const objOf = id => id == null ? null : client.room?.objects?.get?.(id) ?? (client.inventory ?? []).find(i => i.id === id) ?? null;
+      const nameOf = obj => obj ? (client.rsc?.get?.(obj.nameRsc) ?? obj.name ?? null) : null;
+      const targetId = a.target ?? (a.targets?.length === 1 ? a.targets[0] : null);
+      const tObj = targetId === client.selfId ? null : objOf(targetId);
+      const tLoc = tObj && tObj.x != null ? locStamp(loc?.map ?? null, tObj) : null;
+      const mana = a.verb === 'cast' ? client.vitals?.()?.mana : null;
+      const rite = a.verb === 'cast' && this.s._rite ? `${this.s._rite.source ?? 'rite'}${this.s._rite.why ? `:${this.s._rite.why}` : ''}` : null;
+      pvplog.appendAction({ kind: 'action', verb: a.verb, at: now, observer: this.pvpObserver(client),
+        room: loc?.map ?? null, loc, fight: o?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        ...(a.spell !== undefined ? { spell: a.spell } : {}),
+        ...(a.item != null ? { item: a.item, item_name: nameOf(objOf(a.item)) } : {}),
+        ...(targetId != null ? { target: targetId, target_name: targetId === client.selfId ? 'self' : nameOf(tObj),
+          target_player: tObj ? !!(tObj.flags & OF.PLAYER) : null, target_loc: tLoc, dist: squaresBetween(loc, tLoc) } : {}),
+        ...(a.vetoed ? { vetoed: true } : {}),
+        ...(mana ? { mana: mana.value ?? null, max_mana: mana.max ?? null } : {}),
+        ...(rite ? { rite } : {}),
+        phase: o?.phase ?? null, intent: o ? [o.order?.action, o.order?.target].filter(Boolean).join(' ') || null : null,
+        via: callerOf() });
+    } catch { /* telemetry never stops a packet */ }
+  }
+
+  // A MAP CHANGE IN A PVP WINDOW. Fights cross maps -- a door in Castle Victoria, a run to an inn --
+  // and who was where during which part of a fight is half of what the record is for.
+  notePvpTraverse(client) {
+    try {
+      const num = this.s.world?.room?.num ?? null;
+      if (num == null) return;
+      const prev = this.pvpLastRoom;
+      this.pvpLastRoom = num;
+      if (prev == null || prev === num || !this.pvpWindow()) return;
+      pvplog.appendAction({ kind: 'action', verb: 'traverse', at: Date.now(), observer: this.pvpObserver(client),
+        room: num, from: prev, to: num, loc: this.pvpLoc(client),
+        fight: this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        phase: this.active?.phase ?? null });
     } catch { /* never stop the event loop for a log line */ }
   }
 
@@ -2304,6 +2379,8 @@ export class CombatMode {
 
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
+    this.tapClient(client);
+    this.notePvpTraverse(client);
     this.observeWar(ev, client);
     if (ev.kind === 'groan') { try { this.observeGroan(ev, client); } catch { /* evidence only */ } }
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
@@ -2533,12 +2610,25 @@ export class CombatMode {
     // gone from every recording before anybody asked to see it.
     if (pvp && this.pvpLogging()) {
       const row = pvplog.combatRow(event, { at: this.now(), observer: this.pvpObserver(),
-        room: this.s.world?.room?.num ?? null, target: o.order.target ?? null, pvp, reason: o.reason ?? null });
+        room: this.s.world?.room?.num ?? null, target: o.order.target ?? null, pvp, reason: o.reason ?? null,
+        loc: this.pvpLoc(), detail: this.milestoneDetail(event, o) });
       if (row) pvplog.appendPvp(row);
       this.lastPvpFight = pvp.decision_id ?? this.lastPvpFight ?? null;
       if (event === 'finished') { this.pvpTailUntil = Date.now() + 30_000; this.closeWandShot(); this.sealPvp('finished', o); }
       else if (pvplog.COMBAT_EVENTS.has(event)) this.sealPvp('during', o);
     }
+  }
+
+  // The decision behind a milestone, for the record: what the opener asked for and why it waited,
+  // how ready the body was. Small on purpose -- the actions file has the packets.
+  milestoneDetail(event, o) {
+    if (event === 'opener_cast' || event === 'opener_wait' || event === 'opener_strategy_fault') {
+      const r = o.lastReadiness;
+      return { spell: o.openerSpell ?? null, aim: o.openerAim ?? null, waiting: o.openerWaiting ?? null,
+        fault: o.pvp?.opener_fault ?? null, phase: o.phase ?? null,
+        readiness: r ? { ready: r.ready ?? null, positioned: r.positioned ?? null, timer_remaining_ms: r.timer_remaining_ms ?? null, why: r.why ?? r.reason ?? null } : null };
+    }
+    return o.phase ? { phase: o.phase } : null;
   }
 
   // Only a session with a REAL flight recorder writes the durable log: a live keeper has one, and

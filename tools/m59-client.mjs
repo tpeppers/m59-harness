@@ -1176,9 +1176,26 @@ export class M59Client {
     try { vetoed = !!this.attackVeto?.(id); } catch { vetoed = false; }
     this.attackLog.push({ at: Date.now(), id, ...(vetoed ? { vetoed: true } : {}) });
     if (this.attackLog.length > 500) this.attackLog.splice(0, this.attackLog.length - 500);
-    if (vetoed) { this.attacksVetoed = (this.attacksVetoed ?? 0) + 1; return false; }
+    if (vetoed) { this.attacksVetoed = (this.attacksVetoed ?? 0) + 1; this.tapSent?.('attack', { target: objId(id), vetoed: true }); return false; }
     this.noteAttackTarget(id, 'attack');
     this.send(BP.REQ_ATTACK, u8b(info), u32(objId(id)));
+    this.tapSent?.('attack', { target: objId(id) });
+  }
+
+  // WHAT THIS BODY JUST DID, FOR WHOEVER IS LISTENING. Every attack, cast, use, unuse, apply and
+  // activate passes through here AFTER its packet is sent, so a listener sees every one of them
+  // whichever caller sent it. The PvP telemetry (m59-combat-mode.mjs noteFightAction) is the
+  // first listener: before it, a hold cast by a mage's opener and the robe it put on to cast it
+  // left no trace anywhere durable. Not an event: `emit` would push into the event ring and
+  // evict combat text. Free with no listener; a listener that throws is ignored.
+  tapAction(fn) {
+    (this.actionTaps ??= new Set()).add(fn);
+    return () => this.actionTaps?.delete(fn);
+  }
+  tapSent(verb, detail) {
+    if (!this.actionTaps?.size) return;
+    const a = { verb, at: Date.now(), ...detail };
+    for (const fn of this.actionTaps) { try { fn(a, this); } catch { /* telemetry never stops a packet */ } }
   }
 
   // WHAT WE LAST SWUNG OR CAST AT, BY NAME. A spoken refusal ("Only those in guilds may attack
@@ -1211,13 +1228,13 @@ export class M59Client {
     this.combatLog.push({ at: Date.now(), kind, text: t.slice(0, 120) });
     if (this.combatLog.length > 500) this.combatLog.splice(0, this.combatLog.length - 500);
   }
-  use(id)               { this.send(BP.REQ_USE, u32(objId(id))); }
-  unuse(id)             { this.send(BP.REQ_UNUSE, u32(objId(id))); }
+  use(id)               { this.send(BP.REQ_USE, u32(objId(id))); this.tapSent?.('use', { item: objId(id) }); }
+  unuse(id)             { this.send(BP.REQ_UNUSE, u32(objId(id))); this.tapSent?.('unuse', { item: objId(id) }); }
   get(id)               { this.send(BP.REQ_GET, u32(objId(id))); }
   buy(id)               { this.send(BP.REQ_BUY, u32(objId(id))); }
   action(n)             { this.send(BP.ACTION, u8b(n)); }
   contents(id)          { this.send(BP.SEND_OBJECT_CONTENTS, u32(objId(id))); }
-  activate(id)          { this.send(BP.REQ_ACTIVATE, u32(objId(id))); }
+  activate(id)          { this.send(BP.REQ_ACTIVATE, u32(objId(id))); this.tapSent?.('activate', { item: objId(id) }); }
 
   // BP_REQ_DROP is {2,LIST_OBJ_PARM} — a LIST of ids, not one id. The single-item
   // form is the common case, so accept either.
@@ -1265,6 +1282,7 @@ export class M59Client {
       // cast site there is rather than the ones that remembered to ask.
       this.onCastSent?.({ id: objId(spellId), name, targets: [].concat(targets) });
     } catch { /* recording must not change whether a cast is sent */ }
+    this.tapSent?.('cast', { spell: this.lastCastSent?.name ?? null, spell_id: objId(spellId), targets: [].concat(targets).map(objId) });
   }
 
   // BP_REQ_APPLY {4,OBJECT} {4,OBJECT} — use one item on another.
@@ -1272,6 +1290,7 @@ export class M59Client {
     this.send(BP.REQ_APPLY, u32(objId(what)), u32(objId(onWhat)));
     this.lastApplySent = { at: Date.now(), what: objId(what), on: objId(onWhat) };
     this.noteAttackTarget(onWhat, 'apply');
+    this.tapSent?.('apply', { item: objId(what), target: objId(onWhat) });
   }
 
   // There is no BP_REQ_GIVE in sprocket.c's table despite the opcode existing, so

@@ -57,15 +57,16 @@ import { fileURLToPath } from 'node:url';
 import { fleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { parseGuildCombat, normName, ALARM_FILE, WAR_FILE } from './m59-war.mjs';
+import { battleTelemetry, readSide, readTaunts } from './m59-pvp-telemetry.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..', '..');
 
 export const DEFAULT_GAP_MS = 10 * 60_000;
 // Bookkeeping rows: they mark the END of a decision, not contact, so they never extend a battle.
-const BOOKKEEPING = new Set(['finished', 'waiting', 'visible', 'pvp_offline', 'pvp_restored']);
+const BOOKKEEPING = new Set(['finished', 'waiting', 'visible', 'pvp_offline', 'pvp_restored', 'opener_wait', 'opener_strategy_fault']);
 // What the combat tee writes. Anything else the combat mode records is movement or gear.
 export const COMBAT_EVENTS = new Set(['pvp_attacked', 'triggered', 'wand_volley', 'wand_refused', 'opener_cast',
-  'pvp_outcome', 'pvp_rebound', 'pvp_retargeted', 'finished']);
+  'pvp_outcome', 'pvp_rebound', 'pvp_retargeted', 'finished', 'opener_wait', 'opener_strategy_fault']);
 
 let fleetCache;
 const currentFleet = () => {
@@ -90,7 +91,11 @@ export function appendPvp(row, { dir = pvpDirFor() } = {}) {
   } catch { return false; }
 }
 
-// TWO SIDE FILES, BESIDE THE BATTLE LOG AND NEVER IN IT. The battle reader (readPvpLog) and the
+// THREE SIDE FILES, BESIDE THE BATTLE LOG AND NEVER IN IT. (The third, actions-<day>.jsonl — every
+// swing, cast and gear change a body sent in a PvP window, and every map change, each with its
+// location stamp — is written by appendAction below and read by m59-pvp-telemetry.mjs.)
+//
+// The first two: The battle reader (readPvpLog) and the
 // clip recorder (m59-pvp-capture.mjs) read exactly `<day>.jsonl`; a shot or a chat line in there
 // would stretch battles and open captures. These carry the evidence for ONE question — why a zap
 // was refused (tools/m59-wand-shot.mjs) — and every server line heard while a fight was on.
@@ -106,6 +111,8 @@ function appendSide(prefix, row, dir) {
 export function appendShot(row, { dir = pvpDirFor() } = {}) { return appendSide('shots', row, dir); }
 /** One server line heard during a PvP window. Never throws. */
 export function appendFightMessage(row, { dir = pvpDirFor() } = {}) { return appendSide('messages', row, dir); }
+/** One thing a body SENT during a PvP window — a swing, a cast, a gear change — or a map change (m59-pvp-telemetry.mjs). Never throws. */
+export function appendAction(row, { dir = pvpDirFor() } = {}) { return appendSide('actions', row, dir); }
 
 /** Shot rows between two times, oldest first. */
 export function readShots({ dir = pvpDirFor(), since = 0, until = Date.now() } = {}) {
@@ -153,10 +160,10 @@ export function deathRowFromMessage(text, { me, isOurs = () => false, at = Date.
 }
 
 /** A combat-mode record as a compact PvP row, or null when it is not a PvP milestone. */
-export function combatRow(event, { at = Date.now(), observer, room = null, target = null, pvp = null, reason = null } = {}) {
+export function combatRow(event, { at = Date.now(), observer, room = null, target = null, pvp = null, reason = null, loc = null, detail = null } = {}) {
   if (!COMBAT_EVENTS.has(event) || !pvp) return null;
   const lo = pvp.last_outcome;
-  return { kind: 'combat', event, at, observer, room, target, reason,
+  return { kind: 'combat', event, at, observer, room, target, reason, ...(loc ? { loc } : {}), ...(detail ? { detail } : {}),
     decision: pvp.decision_id ?? null, outcome: pvp.outcome ?? null,
     attackers: (pvp.attackers ?? []).map(a => ({ character: a.character,
       incoming_hits: a.incoming_hits ?? 0, incoming_misses: a.incoming_misses ?? 0,
@@ -477,8 +484,10 @@ function warGuilds() {
  * The page's data. Every source is injectable; with none given it reads this checkout's fleet.
  * `characters` is the fleet's character names (the broker passes fleetCharacters()).
  */
+export const TAUNT_LOG = (env = process.env) => env.M59_TAUNT_LOG ?? join(HERE, 'substrate', 'victory-taunt.jsonl');
+
 export function pvpReport({ days = 7, gapMs = DEFAULT_GAP_MS, now = Date.now(), characters = null, stateFile = null,
-                            log, ledger, alarms, reconstructed, members, aliases } = {}) {
+                            log, ledger, alarms, reconstructed, members, aliases, actions, messages, taunts, telemetry = true } = {}) {
   const since = now - days * 86_400_000;
   aliases ??= rosterAliases(stateFile ?? '');
   const names = new Set([...(characters ?? []), ...aliases.values()].map(normName));
@@ -499,6 +508,14 @@ export function pvpReport({ days = 7, gapMs = DEFAULT_GAP_MS, now = Date.now(), 
     r.alarms++; r.last = Math.max(r.last, a.at); if (a.room != null) r.rooms.add(a.room); sightings.set(k, r);
   }
   for (const b of battles) for (const f of b.enemies) f.guild ??= members[normName(f.name)]?.guild ?? null;
+  // WHAT EACH OF OURS DID, WHERE, AND WHAT THE SERVER SAID BACK (m59-pvp-telemetry.mjs). Side files,
+  // so they never stretch a battle; joined to each battle by time and by who was in it.
+  if (telemetry) {
+    actions = (actions ?? readSide('actions', { dir: pvpDirFor(), since, until: now })).map(r => ({ ...r, observer: canon(r.observer) }));
+    messages = (messages ?? readSide('messages', { dir: pvpDirFor(), since, until: now })).map(r => ({ ...r, observer: canon(r.observer) }));
+    taunts ??= readTaunts(TAUNT_LOG(), { since, until: now });
+    for (const b of battles) b.telemetry = battleTelemetry(b, { actions, messages, taunts });
+  }
   const total = k => battles.reduce((s, b) => s + b[k], 0);
   return {
     generated_at: now, since, days, gap_ms: gapMs,
@@ -517,12 +534,49 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const { resolveFleet } = await import('./m59-fleetpath.mjs');
   const { stateFile } = resolveFleet(argv);
   const r = pvpReport({ days: Number(arg('--days', 7)), gapMs: Number(arg('--gap', 10)) * 60_000, stateFile });
-  if (argv.includes('--json')) { console.log(JSON.stringify(r, (k, v) => k === 'events' ? undefined : v, 2)); process.exit(0); }
-  const t = r.totals;
-  console.log(`${t.battles} battles in ${r.days}d: ${t.kills} kills, ${t.our_deaths} deaths, ${t.hits_out} hits landed, ${t.volleys} volleys (${t.refused} refused${t.volleys ? `, ${Math.round(100 * t.refused / t.volleys)}% of volleys` : ''})`);
-  for (const b of r.battles) {
-    const foes = b.enemies.map(f => f.name).join(', ') || '?';
-    console.log(`${new Date(b.start).toISOString()}  ${(b.duration_ms / 1000).toFixed(1).padStart(7)}s  ${b.result.padEnd(8)} ` +
-      `vs ${foes}  rooms ${b.rooms.join(',') || '?'}  K${b.kills}/D${b.our_deaths} hits ${b.hits_out}${b.reconstructed ? '  [reconstructed]' : ''}`);
+  // --battle latest | <id> | <ISO prefix>: one battle as a text log — every swing, cast, gear change and
+  // map crossing with its location stamp, and every server sentence the fleet heard, in time order.
+  if (argv.includes('--battle')) {
+    const want = arg('--battle', 'latest');
+    const b = want === 'latest' ? r.battles[0] : r.battles.find(x => x.id === want || x.id.includes(want));
+    if (!b) { console.error(`no battle matching "${want}" in the last ${r.days}d`); process.exitCode = 1; }
+    else {
+      const { battleText, OUTCOME_LABEL } = await import('./m59-pvp-telemetry.mjs');
+      const textOf = e => {
+        if (e.kind === 'death') return `${e.our_death ? 'DEATH' : 'KILL'} ${e.victim} killed by ${e.killer ?? '?'}${e.how ? ` · ${e.how}` : ''}`;
+        if (e.kind === 'alarm') return `${e.observer} raises the alarm: ${e.enemies?.[0] ?? '?'} (${e.basis})`;
+        if (e.kind !== 'combat') return `${e.observer ?? ''} ${e.text ?? e.event ?? e.kind}`;
+        const at = e.loc ? ` @ ${e.loc.map != null ? `m${e.loc.map} ` : ''}r${e.loc.row}c${e.loc.col}${e.loc.fx != null ? ` +${e.loc.fx}/+${e.loc.fy}` : ''}` : '';
+        const lo = e.last_outcome;
+        if (e.event === 'pvp_outcome' && lo) return `${e.observer}: ${lo.text ?? `${lo.direction} ${lo.outcome}`}`;
+        if (e.event === 'opener_cast') return `${e.observer} casts its opener ${e.opener ?? ''} at ${e.target ?? '?'} (#${e.opener_casts ?? '?'})${at}`;
+        return `${e.observer} ${e.event}${e.target ? ` ${e.target}` : ''}${e.reason ? ` — ${e.reason}` : ''}${at}`;
+      };
+      console.log(`${b.id}  ${b.result}  vs ${b.enemies.map(f => f.name).join(', ')}  rooms ${b.rooms.join(',')}  K${b.kills}/D${b.our_deaths}`);
+      const tm = b.telemetry;
+      if (tm?.taunt?.line) console.log(`taunt: ${tm.taunt.character}: "${tm.taunt.line}" (${tm.taunt.why})`);
+      for (const c of tm?.characters ?? []) {
+        const sp = Object.entries(c.spells).map(([n, v]) => `${n}×${v.sent} [${Object.entries(v.outcomes).map(([k, x]) => `${OUTCOME_LABEL[k] ?? k} ${x}`).join(', ')}]`).join('; ');
+        console.log(`  ${c.name.padEnd(12)} maps ${c.maps.join('>') || '?'}  swings ${c.attacks}  casts ${c.casts}${sp ? ` ${sp}` : ''}  gear ${c.gear}${c.gear_broken ? ` (${c.gear_broken} broken)` : ''}`);
+      }
+      console.log(battleText(b, { describeEvent: textOf }));
+    }
+  } else if (argv.includes('--json')) { console.log(JSON.stringify(r, (k, v) => k === 'events' ? undefined : v, 2)); }
+  else {
+    const t = r.totals;
+    console.log(`${t.battles} battles in ${r.days}d: ${t.kills} kills, ${t.our_deaths} deaths, ${t.hits_out} hits landed, ${t.volleys} volleys (${t.refused} refused${t.volleys ? `, ${Math.round(100 * t.refused / t.volleys)}% of volleys` : ''})`);
+    for (const b of r.battles) {
+      const foes = b.enemies.map(f => f.name).join(', ') || '?';
+      console.log(`${new Date(b.start).toISOString()}  ${(b.duration_ms / 1000).toFixed(1).padStart(7)}s  ${b.result.padEnd(8)} ` +
+        `vs ${foes}  rooms ${b.rooms.join(',') || '?'}  K${b.kills}/D${b.our_deaths} hits ${b.hits_out}${b.reconstructed ? '  [reconstructed]' : ''}`);
+      const tm = b.telemetry;
+      if (tm?.taunt?.line) console.log(`    taunt: ${tm.taunt.character}: "${tm.taunt.line}"`);
+      const casts = tm?.casts ?? [];
+      if (casts.length) {
+        const by = {};
+        for (const c of casts) by[c.outcome] = (by[c.outcome] ?? 0) + 1;
+        console.log(`    casts: ${casts.length} — ${Object.entries(by).map(([k, n]) => `${k} ${n}`).join(', ')}  (--battle ${b.id} for the full log)`);
+      }
+    }
   }
 }
