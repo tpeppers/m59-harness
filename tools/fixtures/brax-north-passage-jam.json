@@ -1,0 +1,551 @@
+{
+  "agent": "braxshadow16",
+  "from": {
+    "id": 7485,
+    "col": 56,
+    "row": 7,
+    "x": 3613,
+    "y": 483,
+    "facing": null,
+    "room_object_id": 1552,
+    "at": 1792224723069
+  },
+  "room": {
+    "name": "An ancient place, its origin forgotten",
+    "num": 579,
+    "object_id": 1552
+  },
+  "hp": {
+    "value": 77,
+    "max": 77
+  },
+  "objects": [
+    {
+      "id": 7483,
+      "name": "Brax Oooo",
+      "x": 3588,
+      "y": 2118,
+      "row": 33,
+      "col": 56,
+      "flags": 525,
+      "is_player": true
+    },
+    {
+      "id": 7463,
+      "name": "Brax Iiii",
+      "x": 3488,
+      "y": 2016,
+      "row": 31,
+      "col": 54,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7481,
+      "name": "Brax Nnnn",
+      "x": 3537,
+      "y": 2092,
+      "row": 32,
+      "col": 55,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7508,
+      "name": "Brax Xxxx",
+      "x": 3597,
+      "y": 485,
+      "row": 7,
+      "col": 56,
+      "flags": 525,
+      "is_player": true
+    },
+    {
+      "id": 7503,
+      "name": "Brax Vvvv",
+      "x": 3616,
+      "y": 2016,
+      "row": 31,
+      "col": 56,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7490,
+      "name": "Brax Rrrr",
+      "x": 3553,
+      "y": 2097,
+      "row": 32,
+      "col": 55,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7486,
+      "name": "Brax Qqqq",
+      "x": 3614,
+      "y": 503,
+      "row": 7,
+      "col": 56,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7467,
+      "name": "Brax Jjjj",
+      "x": 3598,
+      "y": 511,
+      "row": 7,
+      "col": 56,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7456,
+      "name": "Brax Ffff",
+      "x": 3536,
+      "y": 2192,
+      "row": 34,
+      "col": 55,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7452,
+      "name": "Brax Eeee",
+      "x": 3630,
+      "y": 506,
+      "row": 7,
+      "col": 56,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7449,
+      "name": "Brax Dddd",
+      "x": 3552,
+      "y": 2016,
+      "row": 31,
+      "col": 55,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7441,
+      "name": "Brax Aaaa",
+      "x": 3536,
+      "y": 2068,
+      "row": 32,
+      "col": 55,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "id": 7960,
+      "name": "battered skeleton",
+      "x": 4002,
+      "y": 1639,
+      "row": 25,
+      "col": 62,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7959,
+      "name": "skeleton",
+      "x": 2976,
+      "y": 1952,
+      "row": 30,
+      "col": 46,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7958,
+      "name": "battered skeleton",
+      "x": 3998,
+      "y": 1234,
+      "row": 19,
+      "col": 62,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7957,
+      "name": "battered skeleton",
+      "x": 4455,
+      "y": 1959,
+      "row": 30,
+      "col": 69,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7956,
+      "name": "battered skeleton",
+      "x": 4182,
+      "y": 2131,
+      "row": 33,
+      "col": 65,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7955,
+      "name": "skeleton",
+      "x": 2656,
+      "y": 1888,
+      "row": 29,
+      "col": 41,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7954,
+      "name": "skeleton",
+      "x": 3499,
+      "y": 2003,
+      "row": 31,
+      "col": 54,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7953,
+      "name": "battered skeleton",
+      "x": 3104,
+      "y": 1824,
+      "row": 28,
+      "col": 48,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7952,
+      "name": "skeleton",
+      "x": 3432,
+      "y": 2003,
+      "row": 31,
+      "col": 53,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7951,
+      "name": "battered skeleton",
+      "x": 2721,
+      "y": 1899,
+      "row": 29,
+      "col": 42,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7950,
+      "name": "skeleton",
+      "x": 2714,
+      "y": 1951,
+      "row": 30,
+      "col": 42,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7949,
+      "name": "battered skeleton",
+      "x": 2982,
+      "y": 2013,
+      "row": 31,
+      "col": 46,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7927,
+      "name": "black spider",
+      "x": 3346,
+      "y": 2003,
+      "row": 31,
+      "col": 52,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7926,
+      "name": "orc",
+      "x": 3567,
+      "y": 1966,
+      "row": 30,
+      "col": 55,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7925,
+      "name": "orc",
+      "x": 2330,
+      "y": 1755,
+      "row": 27,
+      "col": 36,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7924,
+      "name": "orc",
+      "x": 2336,
+      "y": 1824,
+      "row": 28,
+      "col": 36,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7923,
+      "name": "orc",
+      "x": 1700,
+      "y": 2594,
+      "row": 40,
+      "col": 26,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 7922,
+      "name": "orc",
+      "x": 1817,
+      "y": 2518,
+      "row": 39,
+      "col": 28,
+      "flags": 9,
+      "is_player": false
+    },
+    {
+      "id": 1577,
+      "name": "lever",
+      "x": 3840,
+      "y": 1600,
+      "row": 25,
+      "col": 60,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1576,
+      "name": "lever",
+      "x": 3264,
+      "y": 1600,
+      "row": 25,
+      "col": 51,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1575,
+      "name": "lever",
+      "x": 3840,
+      "y": 1024,
+      "row": 16,
+      "col": 60,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1574,
+      "name": "lever",
+      "x": 3264,
+      "y": 1024,
+      "row": 16,
+      "col": 51,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1573,
+      "name": "lever",
+      "x": 3550,
+      "y": 1374,
+      "row": 21,
+      "col": 55,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1572,
+      "name": "lever",
+      "x": 3936,
+      "y": 81,
+      "row": 1,
+      "col": 61,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1571,
+      "name": "lever",
+      "x": 3904,
+      "y": 81,
+      "row": 1,
+      "col": 61,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1570,
+      "name": "lever",
+      "x": 3872,
+      "y": 81,
+      "row": 1,
+      "col": 60,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1569,
+      "name": "lever",
+      "x": 3840,
+      "y": 81,
+      "row": 1,
+      "col": 60,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1568,
+      "name": "lever",
+      "x": 3825,
+      "y": 96,
+      "row": 1,
+      "col": 59,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1567,
+      "name": "lever",
+      "x": 3825,
+      "y": 128,
+      "row": 2,
+      "col": 59,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1566,
+      "name": "lever",
+      "x": 3825,
+      "y": 160,
+      "row": 2,
+      "col": 59,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1565,
+      "name": "lever",
+      "x": 3825,
+      "y": 192,
+      "row": 3,
+      "col": 59,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1564,
+      "name": "lever",
+      "x": 3856,
+      "y": 207,
+      "row": 3,
+      "col": 60,
+      "flags": 2048,
+      "is_player": false
+    },
+    {
+      "id": 1563,
+      "name": "Journal of the Watcher of the Brax Arena",
+      "x": 3856,
+      "y": 112,
+      "row": 1,
+      "col": 60,
+      "flags": 65,
+      "is_player": false
+    },
+    {
+      "id": 1562,
+      "name": "mana node",
+      "x": 1968,
+      "y": 3328,
+      "row": 52,
+      "col": 30,
+      "flags": 2230272,
+      "is_player": false
+    }
+  ],
+  "observed": {
+    "2": 250,
+    "3": 250,
+    "4": 540,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 510,
+    "10": 214
+  },
+  "movements": {
+    "2": {
+      "height": 250,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565941
+    },
+    "3": {
+      "height": 250,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565941
+    },
+    "4": {
+      "height": 540,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565942
+    },
+    "5": {
+      "height": 200,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565938
+    },
+    "6": {
+      "height": 200,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565939
+    },
+    "7": {
+      "height": 200,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565939
+    },
+    "8": {
+      "height": 200,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565939
+    },
+    "9": {
+      "height": 510,
+      "type": 4,
+      "speed": 15,
+      "at": 1792224565942
+    },
+    "10": {
+      "height": 214,
+      "type": 5,
+      "speed": 0,
+      "at": 1792224292177
+    }
+  }
+}

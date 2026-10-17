@@ -2,6 +2,7 @@
 // g9.kod:17-53,181-230; clientd3d/roomanim.c:487 (KOD height units/second).
 import {sharedRoomGeometry,applySectorHeights} from './m59-roo.mjs';
 import {forgetReach,noteDoorState} from './m59-routes.mjs';
+import {ancientBakedMask} from './m59-moving-platform-masks.mjs';
 
 export const BRAX_LIFT={room:579,sector:3,down:250,up:800,speed:15};
 export const liftWaitMs=({down=250,up=800,speed=15}={})=>{
@@ -10,7 +11,7 @@ export const liftWaitMs=({down=250,up=800,speed=15}={})=>{
 };
 // Sector 10 is a ceiling (skeleton cubbies), never a platform floor.
 const ranges={2:[250,800],3:[250,800],4:[510,540],5:[200,340],6:[200,340],7:[200,340],8:[200,340],9:[510,540]};
-const baselines=new WeakMap(), animations=new WeakMap();
+const baselines=new WeakMap(), animations=new WeakMap(), unbakedStates=new WeakMap();
 export function applyAncientFloors(map,roomNum,observed,event=null,{geometryOf=sharedRoomGeometry,now=Date.now()}={}){
   if(Number(roomNum)!==579)return null;
   const geo=geometryOf(map.rooms[roomNum]);
@@ -25,11 +26,13 @@ export function applyAncientFloors(map,roomNum,observed,event=null,{geometryOf=s
     const floor=seen?.type===4&&Number.isFinite(seen.height)&&seen.height>=0?seen.height*16:base[index];
     overrides.push({index,floor});
   }
-  let changed=false;
+  let changed=false,unbaked=unbakedStates.get(geo)??false;
   if(overrides.some(o=>geo.sectors[o.index].floorHeight!==o.floor)){
-    const result=applySectorHeights(geo,overrides,{mask:new Uint8Array(geo.rows*geo.cols)});
+    // Fingerprint the shipped geometry before its first override. Unknown states
+    // retain observed fine geometry but offer no unproved coarse edges. Never bake here.
+    const baked=ancientBakedMask(geo,overrides,base);unbaked=!baked;unbakedStates.set(geo,unbaked);
+    const result=applySectorHeights(geo,overrides,{mask:baked??new Uint8Array(geo.rows*geo.cols)});
     if(result.why)throw Error(result.why);
-    if(!geo.attachStepMask(geo.buildStepMask()))throw Error('moving floor mask refused');
     geo._declaredJumps=null;geo._declaredReverse=null;
     forgetReach(roomNum);changed=true;
   }
@@ -43,6 +46,6 @@ export function applyAncientFloors(map,roomNum,observed,event=null,{geometryOf=s
     active.set(event.sector,{until,indices:overrides.filter(o=>geo.sectors[o.index].serverId===event.sector).map(o=>o.index)});
   }
   animations.set(geo,active);
-  return {changed,state,settledAt:active.size?Math.max(...[...active.values()].map(a=>a.until)):null,
+  return {changed,unbaked,state,settledAt:active.size?Math.max(...[...active.values()].map(a=>a.until)):null,
     sectorIndices:[...new Set([...active.values()].flatMap(a=>a.indices))]};
 }

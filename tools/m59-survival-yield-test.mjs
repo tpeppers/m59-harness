@@ -1,0 +1,20 @@
+// Offline regression through real Session cancellation and keeper replacement policy.
+import assert from 'node:assert/strict';
+import {Session} from './m59-game.mjs';
+import {Autopilot} from './m59-autopilot.mjs';
+import {attachSurvivalDecisions,chooseSurvivalDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
+const health={value:20,max:20},c={selfId:1,self:{id:1,row:21,col:54,x:3512,y:1360},room:{id:1552,objects:new Map()},vitals:()=>({health,vigor:{value:163}})};
+const s=Object.assign(Object.create(Session.prototype),{client:c,movementGeneration:0,cancelledMovementTokens:new Set(),world:{room:{num:579}},need:()=>c});
+const k={s,currentRecoveryWall:()=>null,inert:null,suspendedJourney:null};let callbacks=0;
+attachSurvivalDecisions(s,{onCancel:(why,d)=>{callbacks++;return Autopilot.prototype.replacementSurvivalChoice.call(k,why,d);}});
+const busy='busy: fleetscript (walk-to-brax (public)) — fleetscript:walk-to-brax (public)';
+const origin={source:'fleetscript',name:'walk-to-brax (public)'};
+const yielded=chooseSurvivalDecision(s,{strategy:'yield_to_controller',status:'yielded',reason:'previous controller ended'});
+s.cancelMovement(null,busy,{origin});
+assert.equal(currentSurvivalDecision(s).id,yielded.id,'claiming the captured healthy yielded body cannot resurrect a refuge episode');assert.equal(callbacks,0);
+s.cancelMovement(null,'new actual recovery',{origin:{source:'keeper'},replacement:{strategy:'nearest_refuge',reason:'new danger'}});
+assert.notEqual(currentSurvivalDecision(s).id,yielded.id,'an explicit new recovery remains allowed');
+health.value=10;const hurt=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
+s.cancelMovement(null,busy,{origin});
+assert.equal(callbacks,1);assert.equal(currentSurvivalDecision(s).strategy,'nearest_refuge');assert.equal(currentSurvivalDecision(s).episode_id,hurt.episode_id,'an active hurt recovery stays protected across a script claim');
+console.log('survival yield: real cancellation cannot resurrect an inactive episode; explicit new danger and active hurt recovery remain protected');

@@ -457,7 +457,7 @@ export async function waitForRailAnimation(walk,{room,readRoom,timeoutMs=45000,r
   now=Date.now,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}){
   const deadline=now()+timeoutMs;
   let reply=await walk();
-  const bodyBlocked=r=>retryBodies&&!r?.cancelled&&(r?.reason==='object_blocked'||r?.geometry_rejections?.includes('object_blocked'));
+  const bodyBlocked=r=>retryBodies&&r?.arrived!==true&&!r?.cancelled&&(r?.reason==='object_blocked'||r?.geometry_rejections?.includes('object_blocked'));
   while(reply?.reason==='collision_geometry_changed'||bodyBlocked(reply)){
     if(await readRoom()!==room)return {...reply,reason:'left_room'};
     if(now()>=deadline)return {...reply,...(bodyBlocked(reply)?{body_timeout:true}:{animation_timeout:true})};
@@ -465,4 +465,43 @@ export async function waitForRailAnimation(walk,{room,readRoom,timeoutMs=45000,r
     reply=await walk();
   }
   return reply;
+}
+
+// A retried multi-leg route starts at the actual shelf already reached.
+export function railBoarding(legs,body,{floor,within=2048,strictFloor=false,geo=null}={}){
+ let best=null;
+ for(let leg=0;leg<legs.length;leg++){
+  if(legs[leg].kind!=='walk')continue;
+  if(strictFloor){
+   const points=legs[leg].sourceWaypoints??legs[leg].waypoints;
+   for(let index=0;index<points.length;index++){
+    const p=points[index],d=Math.hypot(p.x-body.x,p.y-body.y);
+    if(!Number.isFinite(floor)||!Number.isFinite(p.f)||d>within)continue;
+    if(Math.abs(p.f-floor)>(geo?MAX_STEP_HEIGHT:16))continue;
+    if(geo){
+      // A clipped arrival can stand one ordinary step below an authored point.
+      // Numeric proximity alone is never permission to join across a wall/gully.
+      const height=geo.floorBaseAtClient(p.x,p.y);
+      if(!Number.isFinite(height)||Math.abs(height-p.f)>16)continue;
+      const entry=geo.traceFineMoveClient(body.x,body.y,p.x,p.y,{slide:false});
+      if(!entry.arrived||entry.blocked)continue;
+    }
+    if(!best||d<best.d)best={leg,i:index,d,onShelf:true,floorKnown:true,entry:p,denseIndex:index};
+   }
+   continue;
+  }
+  const d=distanceToRail(legs[leg].waypoints,body,{floor});
+  if(!d.onShelf||d.d>within)continue;
+  if(!best||d.d<best.d)best={...d,leg};
+ }
+ return best;
+}
+
+// A body detour can pass an aim. Reaching backward into its follower is not progress.
+// Require a close, exact-floor match on the same dense leg before advancing.
+export function passedRailAim(leg,aim,body,{floor,within=256}={}){
+ const points=leg.sourceWaypoints,at=points?.findIndex(p=>p.x===aim.x&&p.y===aim.y);
+ if(!(at>=0))return false;
+ const board=railBoarding([{kind:'walk',waypoints:points}],body,{floor,within,strictFloor:true});
+ return !!board&&board.denseIndex>at;
 }

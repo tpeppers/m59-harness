@@ -1,0 +1,332 @@
+{
+  "description": "q09 ordinary return entrance jam; no outbound migration began",
+  "room": 578,
+  "body": {
+    "id": 7485,
+    "x": 3168,
+    "y": 1760,
+    "flags": 525,
+    "name": "traveler-self",
+    "row": 27,
+    "col": 49
+  },
+  "objects": [
+    {
+      "id": 7478,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-0"
+    },
+    {
+      "id": 7508,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-1"
+    },
+    {
+      "id": 7466,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-2"
+    },
+    {
+      "id": 7498,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-3"
+    },
+    {
+      "id": 7453,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-4"
+    },
+    {
+      "id": 7512,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-5"
+    },
+    {
+      "id": 7441,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-6"
+    },
+    {
+      "id": 7448,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-7"
+    },
+    {
+      "id": 7473,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-8"
+    },
+    {
+      "id": 7470,
+      "x": 3168,
+      "y": 1760,
+      "row": 27,
+      "col": 49,
+      "flags": 4160750093,
+      "name": "traveler-9"
+    },
+    {
+      "id": 7458,
+      "x": 3128,
+      "y": 1744,
+      "row": 27,
+      "col": 48,
+      "flags": 4160750093,
+      "name": "traveler-10"
+    },
+    {
+      "id": 7490,
+      "x": 3040,
+      "y": 1768,
+      "row": 27,
+      "col": 47,
+      "flags": 4160750093,
+      "name": "traveler-11"
+    },
+    {
+      "id": 7501,
+      "x": 3040,
+      "y": 1936,
+      "row": 30,
+      "col": 47,
+      "flags": 4160750093,
+      "name": "traveler-12"
+    },
+    {
+      "id": 8213,
+      "x": 3039,
+      "y": 2030,
+      "row": 31,
+      "col": 47,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 8211,
+      "x": 735,
+      "y": 547,
+      "row": 8,
+      "col": 11,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 7449,
+      "x": 1832,
+      "y": 2088,
+      "row": 32,
+      "col": 28,
+      "flags": 4160750093,
+      "name": "traveler-15"
+    },
+    {
+      "id": 8203,
+      "x": 3027,
+      "y": 2076,
+      "row": 32,
+      "col": 47,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 7489,
+      "x": 3024,
+      "y": 1784,
+      "row": 27,
+      "col": 47,
+      "flags": 4160750093,
+      "name": "traveler-17"
+    },
+    {
+      "id": 7465,
+      "x": 2920,
+      "y": 2400,
+      "row": 37,
+      "col": 45,
+      "flags": 4160750093,
+      "name": "traveler-18"
+    },
+    {
+      "id": 8199,
+      "x": 2475,
+      "y": 2577,
+      "row": 40,
+      "col": 38,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 7513,
+      "x": 2176,
+      "y": 2432,
+      "row": 38,
+      "col": 34,
+      "flags": 525,
+      "name": "traveler-20"
+    },
+    {
+      "id": 7487,
+      "x": 1808,
+      "y": 1912,
+      "row": 29,
+      "col": 28,
+      "flags": 525,
+      "name": "traveler-21"
+    },
+    {
+      "id": 7463,
+      "x": 2656,
+      "y": 2384,
+      "row": 37,
+      "col": 41,
+      "flags": 4160750093,
+      "name": "traveler-22"
+    },
+    {
+      "id": 7445,
+      "x": 1672,
+      "y": 1840,
+      "row": 28,
+      "col": 26,
+      "flags": 4160750093,
+      "name": "traveler-23"
+    },
+    {
+      "id": 8195,
+      "x": 2350,
+      "y": 1902,
+      "row": 29,
+      "col": 36,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 8194,
+      "x": 939,
+      "y": 2002,
+      "row": 31,
+      "col": 14,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 8193,
+      "x": 617,
+      "y": 604,
+      "row": 9,
+      "col": 9,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 8192,
+      "x": 2327,
+      "y": 2580,
+      "row": 40,
+      "col": 36,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 8191,
+      "x": 2779,
+      "y": 1563,
+      "row": 24,
+      "col": 43,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 8190,
+      "x": 2258,
+      "y": 2148,
+      "row": 33,
+      "col": 35,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 8189,
+      "x": 2722,
+      "y": 685,
+      "row": 10,
+      "col": 42,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 8188,
+      "x": 1893,
+      "y": 1567,
+      "row": 24,
+      "col": 29,
+      "flags": 9,
+      "name": "black spider"
+    },
+    {
+      "id": 8187,
+      "x": 2475,
+      "y": 2012,
+      "row": 31,
+      "col": 38,
+      "flags": 9,
+      "name": "troll"
+    },
+    {
+      "id": 7495,
+      "x": 1552,
+      "y": 1720,
+      "row": 26,
+      "col": 24,
+      "flags": 4160750093,
+      "name": "traveler-33"
+    }
+  ],
+  "returned_failure": {
+    "ok": false,
+    "bridgeOk": true,
+    "why": "priced rail did not reach the goal",
+    "seed": {
+      "x": 49664,
+      "y": 27136
+    },
+    "visited": 63,
+    "body_obstacles": 19
+  }
+}

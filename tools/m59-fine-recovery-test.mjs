@@ -144,6 +144,24 @@ try{
  assert.deepEqual(await replacedApproach({foreignAfterHit:true}),{ok:false,rests:1,stands:0,statusReads:4});
  assert.deepEqual(await replacedApproach({expired:true}),{ok:false,rests:0,stands:0,statusReads:0});
  await assert.rejects(replacedApproach({cancelAfterHit:true}),/cancelled_by_operator/);
+ // The body/lease/recovery read is current while the broker snapshot lacks
+ // that lease; the older mixed-snapshot implementation returned false at once.
+ async function nativeRecovery({foreignAfterRest=false,cancelAfterRest=false,changedBodyAfterRest=false}={}){
+  let health=13,rests=0;const nativeStatus=()=>({room:initial.room,you:changedBodyAfterRest&&rests?{...initial.you,id:2}:initial.you,hp:{value:health,max:20},vigor,
+    movement:{},autopilot_status:{faculties:{movement:ownLease},safe_spot:{works:true,at:{row:initial.you.row,col:initial.you.col}},survival_decisions:{current:{source:'keeper',strategy:'logoff_safe',status:'recovering',ended_at:null}}}});
+  const x={...ctx,state:{islandCancelFence:1},call:async name=>{
+   if(name==='status')return {movement:cancelAfterRest&&rests?{last_cancel:{at:2,by:{source:'operator'}}}:{},autopilot_status:{faculties:foreignAfterRest&&rests?{movement:{...ownLease,owner:'fleetscript:foreign'}}:{}}};
+   if(name==='rest_up'){rests++;health=20;return {interrupted:'normal keeper recovery stage changed'};}
+   throw Error('unexpected native snapshot request '+name);
+  }};
+  const ok=await recoverIslandFineWalk(x,{initial:nativeStatus(),active:true,deadline:Date.now()+1000,pollMs:1,read:async()=>({l:nativeStatus()})});
+  return {ok,rests,reason:x.state.islandRecoveryFailure?.reason};
+ }
+ assert.deepEqual(await nativeRecovery(),{ok:true,rests:1,reason:undefined},'a completed healthy owned recovery may resume even when its rest result was interrupted');
+ assert.deepEqual(await nativeRecovery({foreignAfterRest:true}),{ok:false,rests:1,reason:'foreign_broker_lease'});
+ assert.deepEqual(await nativeRecovery({changedBodyAfterRest:true}),{ok:false,rests:1,reason:'interrupted_without_owned_recovery'});
+ await assert.rejects(nativeRecovery({cancelAfterRest:true}),/cancelled_by_operator/);
+ console.log('native recovery snapshot: stale broker absence cannot end a current owned recovery; completed interrupted rest keeps its actor, cancellation and lease fences');
  console.log('Fine recovery retains its confirmed refuge across completed keeper episodes and rejects foreign, expired, moved, reused and cancelled ownership.');
  proactive=false;pre=null;pose={id:1,x:2112,y:3080,row:48,col:33};hp={value:20,max:20};
  const beforeLower=moves;

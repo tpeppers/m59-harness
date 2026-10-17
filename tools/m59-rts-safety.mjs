@@ -27,6 +27,7 @@
 // Every identity and staleness check at the call sites stays too: those guard against a spell or
 // target changing underfoot between intent and packet, which retiring a policy does not make safe.
 import { originLabel, describePreemption } from './m59-move-origin.mjs';
+import {journeyTrafficWait} from './m59-trip-telemetry.mjs';
 
 export function rtsCastArityOk(targets, hasTarget) {
   if (!Number.isSafeInteger(targets) || targets < 0) return false;
@@ -121,7 +122,9 @@ export function rtsJobReport(job, now = Date.now()) {
         },
       }
     : {};
+  const traffic=job.kind==='travel'&&!cancelled&&!job.error?journeyTrafficWait(job.result):null;
   return {
+    ...(traffic?{traffic_wait:{...traffic,finished_at:job.finishedAt}}:{}),
     last_action: job.label,
     took_s: elapsed,
     ...(job.origin ? { ordered_by: originLabel(job.origin), origin: job.origin } : {}),

@@ -132,32 +132,46 @@ export function ownsFineRecovery(ctx,status,{since=null,active=false,established
     ((active||established)&&activeOwnedFineRecovery(ctx,status));
 }
 export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
+  const fail=(reason,status=null,l=null)=>{
+    (ctx.state??={}).islandRecoveryFailure={at:Date.now(),reason,since,deadline,
+      actor:l&&{id:l.you?.id,room:l.room?.num,room_object_id:l.room?.object_id,x:l.you?.x,y:l.you?.y},hp:l?.hp,vigor:l?.vigor,
+      lease:status?.autopilot_status?.faculties?.movement,decision:status?.autopilot_status?.survival_decisions?.current&&{
+        id:status.autopilot_status.survival_decisions.current.id,status:status.autopilot_status.survival_decisions.current.status,strategy:status.autopilot_status.survival_decisions.current.strategy}};
+    return false;
+  };
+  delete (ctx.state??={}).islandRecoveryFailure;
   const actor=l=>({id:l.you?.id,room:l.room?.num,roomId:l.room?.object_id,x:l.you?.x,y:l.you?.y});
   const covered=l=>knownRefugeCell(roomGeometry(l.room?.num),l.you);
   let actorFence=initial&&activeOwnedFineRecovery(ctx,initial)?actor(initial):null;
   let refugeFence=initial&&activeOwnedFineRecovery(ctx,initial)&&covered(initial)?actor(initial):null;
   for(;;){
-    if(Date.now()>=deadline)return false;
-    const s=await ctx.call('status',{agent:ctx.agent,brief:true});
-    checkIslandCancellation(ctx,s);
+    if(Date.now()>=deadline)return fail('deadline');
+    const broker=await ctx.call('status',{agent:ctx.agent,brief:true});
+    checkIslandCancellation(ctx,broker);
+    const {l}=await read();checkIslandCancellation(ctx,l);
+    const brokerLease=broker.autopilot_status?.faculties?.movement,origin=ctx.origin??currentCallOrigin();
+    if(brokerLease?.owner&&brokerLease.expires_in_ms>0&&brokerLease.owner!==origin.source+':'+origin.name)return fail('foreign_broker_lease',broker,l);
+    // Use one current native snapshot for body, recovery and lease. Mixing its
+    // current body with the broker's older recovery label can falsely end a live wait.
+    const s=l.autopilot_status?.faculties?l:broker;
     // Once positively observed, follow this controller's live recovery lease
     // across keeper refuge/logoff replacements. Their own preemptions can
     // replace last_preempted without ending the traveler's recovery.
     const owned=ownsFineRecovery(ctx,s,{since,active,established:Number.isInteger(actorFence?.id)&&actorFence.id>0});
-    if(!owned&&!actorFence&&!refugeFence)return false;
-    const {l}=await read(),wall=s.autopilot_status?.safe_spot;
+    if(!owned&&!actorFence&&!refugeFence)return fail('recovery_not_owned',s,l);
+    const wall=s.autopilot_status?.safe_spot;
     const observedActor=actor(l);
-    if(actorFence&&(observedActor.id!==actorFence.id||observedActor.room!==actorFence.room||observedActor.roomId!==actorFence.roomId))return false;
+    if(actorFence&&(observedActor.id!==actorFence.id||observedActor.room!==actorFence.room||observedActor.roomId!==actorFence.roomId))return fail('actor_changed',s,l);
     if(owned)actorFence=actor(l);
     if(!owned){
       const origin=ctx.origin??currentCallOrigin(),lease=s.autopilot_status?.faculties?.movement,order=s.movement?.order,p=actor(l);
       if(origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0)||
         (order&&order.origin?.source!=='keeper'&&order.ordered_by!==originLabel(origin))||
-        !Number.isInteger(p.id)||p.id<=0||p.id!==actorFence?.id||p.room!==actorFence.room||p.roomId!==actorFence.roomId)return false;
+        !Number.isInteger(p.id)||p.id<=0||p.id!==actorFence?.id||p.room!==actorFence.room||p.roomId!==actorFence.roomId)return fail('controller_or_lease_changed',s,l);
       // A completed keeper escape may have arrived at another fine pose. A
       // positively read healthy body can resume its goal without more resting.
       if(Number.isFinite(l.hp?.max)&&l.hp.max>0&&l.hp.value>=l.hp.max)return true;
-      if(!refugeFence||Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return false;
+      if(!refugeFence||Math.hypot(p.x-refugeFence.x,p.y-refugeFence.y)>1||!covered(l))return fail('completed_outside_refuge',s,l);
     }
     const decision=s.autopilot_status?.survival_decisions?.current;
     const chosen=decision?.chosen_refuge,order=s.movement?.order;
@@ -171,16 +185,27 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
       if(covered(l))refugeFence=actor(l);
       const rested=await ctx.call('rest_up',{agent:ctx.agent,to:1,max_seconds:30},45000);
       if(rested?.interrupted){
-        const next=await ctx.call('status',{agent:ctx.agent,brief:true});checkIslandCancellation(ctx,next);
-        if(Date.now()>=deadline||!activeOwnedFineRecovery(ctx,next))return false;
+        const nextBroker=await ctx.call('status',{agent:ctx.agent,brief:true});checkIslandCancellation(ctx,nextBroker);
+        const nextBody=(await read()).l;checkIslandCancellation(ctx,nextBody);
+        const nextBrokerLease=nextBroker.autopilot_status?.faculties?.movement;
+        if(nextBrokerLease?.owner&&nextBrokerLease.expires_in_ms>0&&nextBrokerLease.owner!==origin.source+':'+origin.name)return fail('foreign_broker_lease',nextBroker,nextBody);
+        const next=nextBody.autopilot_status?.faculties?nextBody:nextBroker;
+        const nextLease=next.autopilot_status?.faculties?.movement,nextActor=actor(nextBody),nextOrder=next.movement?.order;
+        const same=nextActor.id===actorFence?.id&&nextActor.room===actorFence.room&&nextActor.roomId===actorFence.roomId;
+        const kept=nextLease?.owner===origin.source+':'+origin.name&&nextLease.expires_in_ms>0&&(!nextOrder||nextOrder.origin?.source==='keeper'||nextOrder.ordered_by===originLabel(origin));
+        if(Date.now()>=deadline)return fail('interrupted_deadline',next,nextBody);
+        if(!activeOwnedFineRecovery(ctx,next)){
+          if(same&&kept&&nextBody.hp?.max>0&&nextBody.hp.value>=nextBody.hp.max&&nextBody.vigor?.value>=80)return true;
+          return fail('interrupted_without_owned_recovery',next,nextBody);
+        }
         await new Promise(r=>setTimeout(r,Math.min(pollMs,Math.max(1,deadline-Date.now()))));continue;
       }
       await read();await eatIslandAtWall(ctx,onSample);const recovered=await read();
-      if(recovered.l.hp.value<recovered.l.hp.max){if(Date.now()>=deadline)return false;continue;}
+      if(recovered.l.hp.value<recovered.l.hp.max){if(Date.now()>=deadline)return fail('deadline');continue;}
       await ctx.call('rest',{agent:ctx.agent,stand:true});return true;
     }
-    if(Date.now()>=deadline)return false;
-    if(s.movement?.order&&s.movement.order.origin?.source!=='keeper'&&s.movement.order.ordered_by!==originLabel(ctx.origin??currentCallOrigin()))return false;
+    if(Date.now()>=deadline)return fail('deadline');
+    if(s.movement?.order&&s.movement.order.origin?.source!=='keeper'&&s.movement.order.ordered_by!==originLabel(ctx.origin??currentCallOrigin()))return fail('foreign_movement',s,l);
     await new Promise(r=>setTimeout(r,pollMs));
   }
 }
@@ -209,7 +234,7 @@ export function shelteredIslandAim(waypoints,body,{fromIndex=0,aim,squares,edge,
   }
   return aim;
 }
-export const islandFineStepBudget=(body,aim)=>Math.ceil(Math.hypot(aim.x-body.x,aim.y-body.y)/(16*48))+2;
+export const islandFineStepBudget=(body,aim,{stride=48}={})=>Math.max(8,Math.ceil(Math.hypot(aim.x-body.x,aim.y-body.y)/(16*stride))+2);
 export function cutIslandRail(body,goal,options){
   return cutRail(body,goal,options);
 }
@@ -226,7 +251,7 @@ export async function confirmIslandFineArrival(read,aim,{attempts=3,settleMs=250
 export async function checkedIslandWalk(ctx,target,options={}){
   return withIslandObservationDeadline(ctx,Date.now()+(options.budgetMs??180000),()=>checkedIslandWalkWithinBudget(ctx,target,options));
 }
-async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null}={}){
+async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,onSample=()=>{},allowEdgeTo=null,validatePosition=null,minimumFloor=null,guideNext=null,stopWhen=null}={}){
   const {agent,call}=ctx,geo=copyFineGeometry(roomGeometry(room)),started=Date.now();
   let goal=protocolToClient(target);
   const chordBudget=4096,bodyScopeSquares=2*chordBudget/1024+2;
@@ -272,7 +297,7 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
       // original leg deadline bounds this work; every cycle still proves the
       // same live body, recovery owner and cancellation fence before resuming.
       if(!await recoverIslandFineWalk(ctx,{deadline:started+budgetMs,read,onSample,active:true,initial:l})){
-        ctx.state.islandRecoveryFailure={room,reason:'controller_incomplete',position:l.you,hp:l.hp,vigor:l.vigor};
+        ctx.state.islandRecoveryFailure??={room,reason:'controller_incomplete',position:l.you,hp:l.hp,vigor:l.vigor};
         throw Error('fine_route_recovery_incomplete');
       }
       recoveries++;recoverySince=Date.now();({l,body}=await read());cut=null;continue;
@@ -281,6 +306,8 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
       cut=null;await new Promise(r=>setTimeout(r,Math.min(100,l.door_settling_until-Date.now())));
       ({l,body}=await read());continue;
     }
+    const connection=stopWhen?.(l);
+    if(connection)return {ok:true,targetReached:false,connected:connection,commands,recuts,shelteredStops,end:l.you};
     const distance=Math.hypot(body.x-goal.x,body.y-goal.y),actualFloor=floorAt(geo,body.x,body.y);
     if(distance<=128&&Number.isFinite(actualFloor)&&Number.isFinite(expectedFloor)&&Math.abs(actualFloor-expectedFloor)<=384)
       return {ok:true,commands,recuts,shelteredStops,end:l.you};
@@ -338,8 +365,10 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
     const refugeArrival=cut.partial&&cut.refuge&&aim.i===cut.waypoints.length-1;
     const tolerance=refugeArrival?16:128;
     const atRefuge=()=>!refugeArrival||l.you.row===cut.refuge.row&&l.you.col===cut.refuge.col;
-    const before=body,commandAt=Date.now(),reply=await call('walk_to',{agent,...wire,fine:true,stride,max_steps:Math.ceil(Math.hypot(body.x-aim.x,body.y-aim.y)/(16*stride))+2,arrive_within:refugeArrival?0:3,exact_arrival:true,hold_shelf:true,
-      avoid_squares:[...avoidance].map(k=>{const [row,col]=k.split(',').map(Number);return {row,col};})},30000);
+    const before=body,commandAt=Date.now(),request={agent,...wire,fine:true,stride,max_steps:islandFineStepBudget(body,aim,{stride}),arrive_within:refugeArrival?0:3,exact_arrival:true,hold_shelf:true,
+      avoid_squares:[...avoidance].map(k=>{const [row,col]=k.split(',').map(Number);return {row,col};})};
+    const beforeObservation={room:l.room,you:l.you,hp:l.hp,objects:l.objects,sector_movements:l.sector_movements,sector_heights:l.sector_heights,hold:l.hold};
+    const reply=await call('walk_to',request,30000);
     commands++;({l,body}=await read());
     let error=Math.hypot(body.x-aim.x,body.y-aim.y);
     if(reply.arrived===true&&(error>tolerance||!atRefuge())){
@@ -357,7 +386,7 @@ async function checkedIslandWalkWithinBudget(ctx,target,{room,budgetMs=180000,on
       if(islandTrafficRefusal(reply)&&trafficWaits++<120){await new Promise(r=>setTimeout(r,1000));if(Math.hypot(body.x-before.x,body.y-before.y)>=64)cut=null;continue;}
       if(reply.shelf_refusals>0&&stride>8){stride=Math.max(8,Math.floor(stride/2));cut=null;continue;}
       if(Math.hypot(body.x-before.x,body.y-before.y)<64||++recuts>4){
-        ctx.state.islandFineFailure={room,target,wire,before,body,reply,commandAt,recoverySince,status:await call('status',{agent,brief:true})};
+        ctx.state.islandFineFailure={room,target,wire,before,body,request,before_observation:beforeObservation,reply,commandAt,recoverySince,status:await call('status',{agent,brief:true})};
         throw Error('fine_route_ended_short_'+(reply.reason??'position'));
       }
       cut=null;

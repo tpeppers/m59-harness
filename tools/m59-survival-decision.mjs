@@ -133,6 +133,10 @@ export function finishSurvivalDecision(s,id,outcome,reason=null) {
 export function cancelSurvivalDecision(s,reason,{replacement=null,preserveId=null}={}) {
   const t=state(s),d=t.current;
   if(!d||d.id===preserveId) return d;
+  // Cancelling movement cannot revive a decision that already yielded or ended.
+  // New danger chooses a new intent explicitly; active recoveries still replace
+  // atomically through onCancel, including under a director movement lease.
+  if(!replacement&&(d.strategy==='yield_to_controller'||d.ended_at!=null||['yielded','ended'].includes(d.status)))return d;
   let spec=replacement;
   if(!spec) { try {spec=t.onCancel?.(reason,d);} catch {t.errors++;} }
   spec??={strategy:'reassess_survival',reason,reason_code:'movement_cancelled'};

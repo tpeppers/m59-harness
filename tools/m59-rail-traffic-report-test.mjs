@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {railTrafficReport} from './m59-rail-traffic-report.mjs';
+const actor=(agent,id,blockedBy,movedAt,extra={})=>({agent,room:{num:579},you:{id,x:id*32,y:64,row:1,col:1},movement:{rail:{room:579,phase:'waiting-body',movedAt,blockedBy,aim:4,total_aims:12,...extra}}});
+const flowing=railTrafficReport([actor('tail',1,2,0),actor('front',2,null,9500)],{now:10000});
+assert.equal(flowing.stalled,1);assert.deepEqual(flowing.queues[0].chain,['tail','front']);assert.equal(flowing.queues[0].termination,'moving-front');
+const cycle=railTrafficReport([actor('a',1,2,0),actor('b',2,1,0)],{now:10000});assert(cycle.queues.every(q=>q.termination==='cycle'));
+const unknown=railTrafficReport([actor('a',1,null,0),actor('done',2,null,0,{endedAt:100})],{now:10000});assert.equal(unknown.actors[1].active,false);assert.equal(unknown.queues[0].termination,'no-body-identified');
+const different=actor('other-room',2,null,9500);different.room.num=578;
+assert.equal(railTrafficReport([actor('a',1,2,0),different],{now:10000}).queues[0].termination,'outside-roster-body');
+console.log('rail queue diagnosis: moving front, body chain, cycle, unidentified blockage, completed leg and room identity passed');

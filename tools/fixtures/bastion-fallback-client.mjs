@@ -15,6 +15,7 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
   const imp=file=>import(pathToFileURL(path.join(root,'tools',file)));
   const {Session}=await imp('m59-game.mjs'),{World}=await imp('m59-world.mjs');
   const {bodyAuthority}=await imp('m59-body-command.mjs');
+  const {releaseConfirmedPassage}=await imp('m59-passage-admission.mjs');
   const {geometryFor}=await imp('m59-safespots.mjs');
   const {attachStepMasks}=await imp('m59-routes.mjs');
   const {selectedEdgeAt,codeExits}=await imp('m59-map.mjs');
@@ -25,7 +26,7 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
   const attached=attachStepMasks(map);
   if(!attached.ok)throw Error('Bastion tests require the collision routing table');
 
-  function fixture(entry,{bodies=false,maxPackets=512,maxMs=30000}={}) {
+  function fixture(entry,{bodies=false,wireNames=false,maxPackets=512,maxMs=30000}={}) {
     const deadline=Date.now()+maxMs;
     let room=entry.from.room,pending=null;
     const packets=[],crossings=[],events=[],asks=[];
@@ -65,12 +66,17 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
       events.push({seq:++c.evSeq,kind:'room-contents',room:c.room.id});
     }
     enter(room,entry.from);
-    if(bodies)for(const body of entry.bodies??[])c.room.objects.set(body.id,{...body});
+    const roomObject=body=>{
+      if(!wireNames||typeof body.name!=='string')return {...body};
+      const {name,...raw}=body,nameRsc=body.nameRsc??1000000+Number(body.id);
+      c.rsc.set(nameRsc,name);return {...raw,nameRsc};
+    };
+    if(bodies)for(const body of entry.bodies??[])c.room.objects.set(body.id,roomObject(body));
     const s=Object.assign(Object.create(Session.prototype),{client:c,movementGeneration:0,name:'offline-bastion',
       cancelledMovementTokens:new Set(),movementCancellationChecks:new Map(),
       need:()=>c,moveSpeed:()=>18,movementWasCancelled:(g,t)=>Session.prototype.movementWasCancelled.call(s,g,t)||packets.length>=maxPackets||Date.now()>deadline,
       pacer:{async submit(_kind,run){applyPending();bodyAuthority(s).guard();return run();},wake(){}},
-      async confirmPosition(){c.roomContents();return c.self;},
+      async confirmPosition(){c.roomContents();releaseConfirmedPassage(s);return c.self;},
       async refreshRoomIdentity(){c.roomContents();return {confirmed:true,room:s.world.room};},
       async _askStrategies(){return null;},_blinkPointHere:()=>null,
       noteTransit(){},planSameRoomDoors:()=>null,
@@ -79,7 +85,7 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
     s.world=new World(c,map);s.threatsHere=()=>[];
     const leave=s.leaveVia;
     s.leaveVia=async function(exit,options){const at=packets.length,r=await leave.call(this,exit,options);asks.push({room:map.rooms[room].num,to:exit.to,stage:exit.stand_on,reason:r.reason,left:r.left,packets:packets.length-at,position:{...c.self}});return r;};
-    return {s,c,packets,crossings,asks,applyPending};
+    return {s,c,packets,crossings,asks,applyPending,roomObject};
   }
   return {fixture,map,Session,imp};
 }

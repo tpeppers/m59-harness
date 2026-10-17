@@ -95,7 +95,8 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
     froze_at:k?.frozeAt,freezes_without_gain:k?.freezesWithoutGain,
     posture_command:c?.lastPostureCommand??null,
     position_reads:{requested:c?.roomContentsRequested,received:c?.roomContentsReceived,lost:c?.roomContentsLost??0},
-    movement_generation:s.movementGeneration,movement_attempts:recentMoveAttempts(s.name),decision:currentSurvivalDecision(s),
+    movement_generation:s.movementGeneration,vertical_motion:s.collisionVertical??null,
+    movement_attempts:recentMoveAttempts(s.name),decision:currentSurvivalDecision(s),
     pvp_survival:s.combat?.pvpStatus?.()??null,
     variant:k?.replayVariant??null,start_actions:k?.replayStartActions??null},0,controllerGaps);
   scene.capture.controller_gaps=[...new Set(controllerGaps)];

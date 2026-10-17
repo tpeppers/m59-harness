@@ -28,13 +28,14 @@ import { recordCrossing } from './m59-crossings.mjs';
 import { finePath, fineRouteDetour, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { BP, M59Client } from './m59-client.mjs';
+import {preparedFineExitStage} from './m59-session-walk.mjs';
 import { isFleetmate } from './m59-party.mjs';
 import { overlapExempt } from './m59-roo.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
 import {verticalMotionRange,nextVerticalMotion,waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 
 import {
-  COND, LEAVE, edgeCandidatesOf, edgeExitsOf, findPath,
+  COND, LEAVE, edgeCandidatesOf, edgeExitsOf, edgeConditionAllows, findPath,
   geometryManifest, movementMapReadiness, roomResourceDirs, setGeometryProvenance,
   resourcePathWithin,
 } from './m59-map.mjs';
@@ -1287,6 +1288,7 @@ const stepFine = compileSessionMethod(brokerSource,
     squaresPerSecond: () => 5 });
 const ordinaryStep = compileSessionMethod(brokerSource,
   'async step(col, row, {', 'step', {
+    MAX_STEP_HEIGHT,
     waitForVerticalSettlement,
     MOVE_INTERVAL_MS: 0, ROOM_RESYNC_MS: Number.POSITIVE_INFINITY,
     KOD_FINENESS, squaresPerSecond: () => 2.5,
@@ -1492,7 +1494,7 @@ const rideTrack = compileSessionMethod(brokerSource,
 let leaveViaRoutesFixture = null;
 const leaveVia = compileSessionMethod(brokerSource,
   'async leaveVia(exit, {', 'leaveVia', {
-    isTerminalMovementReason, KOD_FINENESS, MOVE_INTERVAL_MS: 0, atEdgeOpening,
+    isTerminalMovementReason, preparedFineExitStage, KOD_FINENESS, MOVE_INTERVAL_MS: 0, atEdgeOpening,
     // THE REAL 1. A character one square short of the opening now STEPS in rather than
     // fanning nine headings for it, and this is the distance that decides which. Stubbing
     // it to 0 would quietly retire the branch that stops a body sliding off a two-wide spur.
@@ -1555,7 +1557,7 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     CROSSING_STALL_MS: 120_000,
     // And the real evade window, because this site casts without a wall too.
     BLINK_EVADE_MS: 5_000,
-    isTerminalMovementReason, spreadEdges, orderExits: exits => exits, KOD_FINENESS,
+    isTerminalMovementReason, spreadEdges, edgeConditionAllows, orderExits: exits => exits, KOD_FINENESS,
     // THE REAL ONE, because what it decides IS the thing under test in the budget cases
     // below — which of the flattened candidates count as different attempts — and a stub
     // returning the list unchanged would restore exactly the bug it was written for.
@@ -4471,6 +4473,34 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
   const result=await walkFine.call(session,100,200,{holdShelf:true,stride:8,maxSteps:4,arriveWithin:3,exactArrival:true});
   ok('shelf guard preserves unsent body refusals for traffic waits',packets===0&&result.geometry_rejections.includes('object_blocked'),JSON.stringify(result));
   ok('exact stalled microsteps shrink below the requested ceiling',Math.max(...reaches)<=8.000001&&Math.min(...reaches)<2,JSON.stringify(reaches));
+}
+
+// A blocked body slide can predict a different shelf before the guarded send.
+{
+ let packets=0;
+ const client={selfId:1,self:{x:100,y:100,row:1,col:1},room:{id:1,objects:new Map()}};
+ const geometry={leafAtClient:()=>({sector:{}}),floorBaseAtClient:x=>x===1456?0:6400};
+ const session={client,world:{geometry,room:{num:579}},need(){return client;},movementWasCancelled(){return false;},
+  validateFineTarget(){return {available:true,moved:true,target:{x:155,y:100},reason:'object_blocked',objectId:2};},
+  async stepFine(){packets++;throw Error('unsafe slide must remain unsent');}};
+ const result=await walkFine.call(session,200,100,{holdShelf:true,stride:8,maxSteps:1,arriveWithin:3,exactArrival:true});
+ ok('unsafe body slide preserves its collision reason for a bounded wait',packets===0&&result.geometry_rejections.includes('object_blocked'),JSON.stringify(result));
+}
+
+// A body can move after the fan's shelf prediction and before paced dispatch.
+// Drive the real walk, step and queue; only the two collision observations differ.
+{
+  let raced=false;
+  const geometry={leafAtClient:()=>({sector:{}}),floorBaseAtClient:(x)=>x===1456?0:6400};
+  const f=fakeBrokerSession(geometry,{x:100,y:100,beforePaced(kind){if(kind==='move')raced=true;}});
+  f.session.world.room={num:579};f.session.stepFine=stepFine;
+  let admissions=0;f.session.claimPassageMove=()=>{admissions++;return null;};
+  f.session.validateFineTarget=(x,y)=>({available:true,moved:true,arrived:true,blocked:false,target:raced?{x:155,y:100}:{x:Math.round(x),y:Math.round(y)}});
+  const result=await walkFine.call(f.session,200,100,{holdShelf:true,stride:8,maxSteps:1,arriveWithin:3,exactArrival:true});
+  ok('paced shelf guard rejects the changed resolved endpoint without a packet',f.packets.length===0&&result.geometry_rejections.includes('shelf_changed_before_send'),JSON.stringify({packets:f.packets,result}));
+  ok('an unsafe unsent endpoint does not acquire a passage reservation',admissions===0,String(admissions));
+  const ordinary=await stepFine.call(f.session,155,100);
+  ok('ordinary unguarded movement retains its legal descending endpoint',ordinary.moved&&f.packets.length===1,JSON.stringify(ordinary));
 }
 
 // Ancient's third fall must fit below the overhang after losing height, while

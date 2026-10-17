@@ -5,38 +5,106 @@
  "_coordinates": "Square records in this file use named 1-based KOD `row` and `col` fields; JSON property order is not a positional convention. OPTIONAL `from_fine`/`to_fine` carry named {x,y} in CLIENT/BSP units (1024 to the square), and when present they are what the geometry validates against: a square is a summary and on jumping ground it is a false one — r40c33 spans 3520 to 10880, the valley floor and the high ledge in one square with one stand point. The squares remain the index every caller asks by; the fine points are the truth. See docs/m59-coordinates.md and docs/m59-routing.md.",
  "jumps": [
   {
-   "room": 2505, "room_name": "Konima's Ascension",
-   "from": {"row": 27, "col": 64}, "to": {"row": 23, "col": 60},
-   "from_fine": {"x": 65024, "y": 27136}, "to_fine": {"x": 61312, "y": 22528},
-   "kind": "fall", "requires": {"running": true},
+   "room": 2505,
+   "room_name": "Konima's Ascension",
+   "from": {
+    "row": 27,
+    "col": 64
+   },
+   "to": {
+    "row": 23,
+    "col": 60
+   },
+   "from_fine": {
+    "x": 65024,
+    "y": 27136
+   },
+   "to_fine": {
+    "x": 61312,
+    "y": 22528
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
    "observed_by": "Local native ordinary courier on 2026-10-15: independent server reads confirmed the exact r23c60 refuge point x3896/y1472, floor 12186. Initial and final HP20/V200, no skills or spells, monsters enabled, no measured admin mutations. Stock gravity also passes at 8, 16, 33 and 50 ms frames.",
    "note": "Preferred return. Walk one square west along the same right-hand shelf from r27c65, then drop northwest directly onto the r23c60 refuge. This bypasses the r25c60-64 cluster. Continue west through the next refuge at r19c51. Misses still take the southbound gutter; no retry from a lower floor."
   },
   {
-   "room": 2505, "room_name": "Konima's Ascension",
-   "from": {"row": 27, "col": 65}, "to": {"row": 29, "col": 63},
-   "from_fine": {"x": 66048, "y": 27136}, "to_fine": {"x": 64000, "y": 29184},
-   "kind": "fall", "requires": {"running": true},
+   "room": 2505,
+   "room_name": "Konima's Ascension",
+   "from": {
+    "row": 27,
+    "col": 65
+   },
+   "to": {
+    "row": 29,
+    "col": 63
+   },
+   "from_fine": {
+    "x": 66048,
+    "y": 27136
+   },
+   "to_fine": {
+    "x": 64000,
+    "y": 29184
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
    "observed_by": "Local native ordinary courier on 2026-10-15: independent server fine-position read confirmed the lower landing at r29c63, then ordinary walking reached the r33c59 gutter refuge. 20 HP and 200 vigor throughout, no skills or spells, monsters enabled, no admin mutations during the measured crossing.",
    "note": "Return shortcut into the southbound gutter. Continue through r31c64 and r33c64 to r33c59, then west toward r72c1. Do not attempt to climb directly back to the outbound takeoff."
   },
   {
-   "room": 2505, "room_name": "Konima's Ascension",
-   "from": {"row": 46, "col": 80}, "to": {"row": 46, "col": 84},
-   "from_fine": {"x": 81408, "y": 46592}, "to_fine": {"x": 85504, "y": 46592},
-   "kind": "fall", "requires": {"running": true},
+   "room": 2505,
+   "room_name": "Konima's Ascension",
+   "from": {
+    "row": 46,
+    "col": 80
+   },
+   "to": {
+    "row": 46,
+    "col": 84
+   },
+   "from_fine": {
+    "x": 81408,
+    "y": 46592
+   },
+   "to_fine": {
+    "x": 85504,
+    "y": 46592
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
    "observed_by": "Local native ordinary courier on 2026-10-15: server independently confirmed r46c84, floor 6400. HP stayed 20; vigor 200 to 198. No skills or spells, monsters enabled, no measured admin mutations.",
    "note": "Outbound downhill shortcut. The return route is generated separately; this declaration grants no reverse climb."
   },
   {
    "room": 2505,
    "room_name": "Konima's Ascension",
-   "from": {"row": 27, "col": 60},
-   "to": {"row": 27, "col": 65},
-   "from_fine": {"x": 60928, "y": 27136},
-   "to_fine": {"x": 66048, "y": 27136},
+   "from": {
+    "row": 27,
+    "col": 60
+   },
+   "to": {
+    "row": 27,
+    "col": 65
+   },
+   "from_fine": {
+    "x": 60928,
+    "y": 27136
+   },
+   "to_fine": {
+    "x": 66048,
+    "y": 27136
+   },
    "kind": "fall",
-   "requires": {"running": true},
+   "requires": {
+    "running": true
+   },
    "observed_by": "Operator proposed the crossing 2026-10-14; ordinary local native courier confirmed r27c60 to r27c65 on 2026-10-15 with 20 HP, 200 vigor, no skills or spells, and monsters enabled. Server fine position and landing floor 15040 confirmed independently of the predicted move reply.",
    "note": "One way. A miss belongs to the lower floor and must use the southbound gutter to r33c59; do not retry this jump from below. The reverse crossing is not declared."
   },

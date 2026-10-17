@@ -7,7 +7,7 @@
 //   node tools/m59-shadow-run.mjs --list                       what can be run
 //   node tools/m59-shadow-run.mjs farm-loop-test --dry         say what it would do, touch nothing
 //   node tools/m59-shadow-run.mjs farm-loop-test --from run    the fleet is already up, just run it
-//   node tools/m59-shadow-run.mjs farm-loop-test --no-skills   a bare body, to isolate geometry
+//   node tools/m59-shadow-run.mjs farm-loop-test --no-skills   leave construction abilities unchanged
 //   node tools/m59-shadow-run.mjs farm-loop-test --no-items --no-guild   no pack, gear or guild
 //   node tools/m59-shadow-run.mjs farm-loop-test --trim-items  also delete what prod does not carry
 //
@@ -294,6 +294,13 @@ async function build() {
   const dressArgs = dressFlags(argv);
   const dressed = await node(SHADOW_TOOL, dressArgs, { cwd, env: shadowToolEnv() });
   if (dressed.code !== 0) { say('  dress FAILED'); return false; }
+  if(!has('--no-skills')){
+    const verified=await node(join(HERE,'m59-shadow-abilities.mjs'),[
+      '--fleet',FLEET,'--roster',ROSTER,'--server',`${GAME_HOST}:${GAME_PORT}`,'--admin',`${ADMIN_HOST}:${ADMIN_PORT}`,
+      '--snapshot',join(process.env.M59_SHADOW_SUBSTRATE||dirname(dirname(ROSTER)),'shadow-snapshot.json'),
+      '--construction','--apply']);
+    if(verified.code!==0){say('  ability reconciliation/readback FAILED');return false;}
+  }
   return true;
 }
 

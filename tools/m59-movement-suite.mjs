@@ -29,11 +29,26 @@
 // `UNSAFE_GUARANTEES` in m59-fleetscript.mjs: the absence of movement in the list is itself
 // the finding.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {resolve} from 'node:path';
 
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-brax-entry-test.mjs','actual Temple arrivals complete the correct road entrance and clipped crowd arrivals join only through proved ordinary ground'],
+  ['m59-queued-takeoff-test.mjs','twenty-five movers retain collision bodies through the legal north exit; an actual jam recovers with checked convoy admission'],
+  ['m59-brax-staging-test.mjs','selected convoy bodies disperse through bounded collision-proved ordinary walks without controlling foreign bodies'],
+  ['m59-moving-platform-masks-test.mjs','Ancient live floor updates use fingerprinted native masks without blocking or admitting unknown states'],
+  ['m59-road-journey-test.mjs', 'owned road queues wait for actual body gaps and source health floors'],
+  ['m59-fine-posture-test.mjs', 'fine movement stands after rest and preserves queued cancellation'],
+  ['m59-rail-traffic-report-test.mjs','cached queue diagnosis identifies moving fronts, cycles, foreign blockers and geometry/reservation stalls without steering bodies'],
+  ['m59-postmortem-ledger-test.mjs','ESM postmortems append durable death summaries as well as individual detailed records'],
+  ['m59-rail-walk-test.mjs','native checked legs retain collision, posture, shelf and generation fences with local body queues'],
+  ['m59-survival-yield-test.mjs','inactive survival intents remain yielded across movement claims; active recovery and explicit new danger stay protected'],
+  ['m59-keeper-test.mjs','common keeper band scans share concurrent probes and refresh completed process identities'],
+  ['m59-conditional-anchor-test.mjs','conditional edges retain compatible anchors and cross from the actual prepared eastern Brax exit without mixing branch coordinates'],
+  ['m59-rail-action-http-test.mjs','native long actions use an explicit absolute HTTP budget and never repeat ambiguous writes'],
+  ['m59-rail-observer-test.mjs','ordered rail own-body reads, keeper identity, refused writes and actual multi-leg shelf resumption'],
   ['m59-world-cached-exits-test.mjs', 'status reads use exact-origin cached exits without synchronous route planning'],
   ['m59-spotclaims-lock-test.mjs','Windows sharing races retry atomic acquisition without removing live owners or bypassing persistent permission errors'],
   ['m59-courier-purchases-test.mjs','courier maximum loads use live quotes, preserve one-attempt purchase evidence and reconcile delivered, lost and held acquisition value'],
@@ -53,6 +68,7 @@ const SUITES = [
   ['m59-safeleg-policy-test.mjs','live safe-leg policy accepts required and advisory modes without dropping the transport constraint'],
   ['m59-falljump-choice-test.mjs', 'adjacent declared falls prefer the requested landing while retaining eligible variation fallback'],
   ['m59-moving-platform-test.mjs', 'Ancient Place lift heights and timing retain legal running falls and reject wrong lift states'],
+  ['m59-brax-puzzle-test.mjs', 'server reentrant reset reproduces the late lever lock; observed baseline and phase fences prevent premature pulls'],
   ['m59-brax-test.mjs', '25-player platform stations, divided levers, endpoint-keyed atomic group journal and live-room objective'],
   ['m59-rail-animation-test.mjs', 'rail aims wait for room animation without advancing, changing rooms, ignoring cancellation or waiving collisions'],
   ['m59-deviation-routing-test.mjs', 'confirmed rail bends take bounded local detours; exit-candidate exhaustion reaches the journey replanner without relaxing unknown-position or ownership guards'],
@@ -70,7 +86,7 @@ const SUITES = [
   ['m59-shadow-journey-test.mjs', 'shadow replay resumes yielded or ended journey ownership and preserves active recovery'],
   ['m59-pivot-crowd-test.mjs', 'real optimized rail and pivot routes detour before confirmation waits; paced blockers and ownership remain guarded'],
   ['m59-travel-continuity-test.mjs', 'a recovering walk retains its objective, refused edges, mandatory avoidance and survival ownership'],
-  ['m59-passage-admission-test.mjs', 'narrow passages admit one keeper across processes and release only a confirmed exit'],
+  ['m59-passage-admission-test.mjs', 'narrow passages exclude unrelated traffic, share explicit same-destination convoys across processes, and release only confirmed individual exits'],
   ['m59-island-composition-test.mjs', 'Island work compiles before departure and required safe chains refuse direct fallback'],
   ['m59-pvp-readiness-test.mjs', 'PvP wand holds retain pursuit; sight, facing and shared cooldown are rechecked at dispatch; Castle chamber doors are shared'],
   ['m59-death-prevention-test.mjs', 'poisoned recovery and refuge approaches, including exits, retain confirmed progress and cancel stalled movement'],
@@ -204,6 +220,9 @@ const failureNames = (out) => out.split('\n')
 console.log('\n=== #movement suites ===\n');
 let regressions = 0, fixed = 0, missing = 0, ran = 0;
 const summary = [];
+// Keep complete failure evidence: the last three lines can be route startup
+// notices while the actual node:test assertion was printed much earlier.
+const failureDirectory=resolve('substrate/movement-suite-reports',Date.now()+'-'+process.pid);
 
 for (const [file, why, timeoutMs=300_000] of SUITES) {
   const path = 'tools/' + file;
@@ -236,6 +255,7 @@ for (const [file, why, timeoutMs=300_000] of SUITES) {
   const mark = verdict.startsWith('ok') ? '  ok  ' : '  XX  ';
   console.log(mark + file.padEnd(30) + verdict.padEnd(20) + secs + 's');
   for (const n of newFails) console.log('          NEW FAILURE: ' + n);
+  if(crashed||newFails.length){mkdirSync(failureDirectory,{recursive:true});const evidence=resolve(failureDirectory,file+'.log');writeFileSync(evidence,out);console.log('          full failure output: '+evidence);}
   if (crashed) {
     console.log('          exit ' + r.status + (r.error ? ' — ' + r.error.message : ''));
     console.log('          ' + out.trim().split('\n').slice(-3).join('\n          '));

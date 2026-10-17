@@ -9,8 +9,8 @@ import {narrowPassages,claimPassageMove,releaseConfirmedPassage,passageExitNeeds
 import {Session} from './m59-session.mjs';
 if(process.argv[2]==='worker'){
   configureSpotClaimStore({directory:process.argv[3],namespace:'trial'});
-  process.on('message', command=>process.send(command==='claim'
-    ? reserveFilePassage(process.argv[4],99,'pipe') : releaseFilePassage(process.argv[4])));
+  process.on('message', command=>process.send(command==='claim'||command?.action==='claim'
+    ? reserveFilePassage(process.argv[4],99,'pipe',{flow:command?.flow??null}) : releaseFilePassage(process.argv[4])));
 }else{
   const geo={rows:5,cols:9,collisionReady:true,walkable:(r,c)=>
     (r>=2&&r<=4&&((c>=1&&c<=3)||(c>=7&&c<=9)))||(r===3&&c>=4&&c<=6)};
@@ -51,6 +51,24 @@ if(process.argv[2]==='worker'){
   wire.client.self=point(3,7);assert(releaseConfirmedPassage(wire));
   assert((await Session.prototype.queueValidatedMove.call(opposing,416,224)).sent);
   opposing.client.self=point(3,3);releaseConfirmedPassage(opposing);
+  // Explicit same-destination convoy members may follow through a coarse zone;
+  // unknown humans and a different declared flow retain exclusive admission.
+  a.passageConvoy={flow:'route-to-east',characters:['known-b']};
+  b.passageConvoy={flow:'route-to-east',characters:['known-a']};
+  a.client.self=point(3,3);b.client.self=point(3,7);
+  a.client.rsc=new Map([[123,'known-b']]);
+  a.client.room.objects.set('b',{id:'b',nameRsc:123,flags:4,...point(3,5)});
+  assert.equal(claimPassageMove(a,point(3,4)),null);
+  assert.equal(claimPassageMove(b,point(3,6)),null);
+  const foreign=body('foreign',3);foreign.passageConvoy={flow:'opposing-route',characters:['known-b']};
+  assert.equal(claimPassageMove(foreign,point(3,4)).traffic,'passage_admission');
+  a.client.self=point(3,7);assert(releaseConfirmedPassage(a));
+  assert(claimPassageMove(foreign,point(3,4)),'one convoy exit cannot release another member');
+  b.client.self=point(3,3);assert(releaseConfirmedPassage(b));
+  foreign.client.room.objects.set('human',{id:'human',name:'unknown human',flags:4,...point(3,5)});
+  assert.equal(claimPassageMove(foreign,point(3,4)).objectId,'human');
+  foreign.client.room.objects.clear();assert.equal(claimPassageMove(foreign,point(3,4)),null);
+  foreign.client.self=point(3,7);releaseConfirmedPassage(foreign);
   // Both sides race in separate OS processes before either body is visible.
   const dir=mkdtempSync(join(tmpdir(),'m59-passage-'));
   const workers=['a','b'].map(name=>fork(fileURLToPath(import.meta.url),['worker',dir,name],{stdio:['ignore','ignore','inherit','ipc']}));
@@ -61,9 +79,15 @@ if(process.argv[2]==='worker'){
     const winner=answers.findIndex(r=>r.ok),loser=1-winner;
     assert(!(await ask(workers[loser],'claim')).ok);
     await ask(workers[winner],'release');assert((await ask(workers[loser],'claim')).ok);
+    await Promise.all(workers.map(p=>ask(p,'release')));
+    const shared=await Promise.all(workers.map(p=>ask(p,{action:'claim',flow:'same checked destination'})));
+    assert(shared.every(r=>r.ok),'both processes atomically hold the same explicit convoy flow');
+    assert(!(await ask(workers[0],{action:'claim',flow:'different destination'})).ok);
+    await ask(workers[0],'release');assert(!(await ask(workers[0],'claim')).ok,'the second live member still holds its admission');
+    await ask(workers[1],'release');assert((await ask(workers[0],'claim')).ok);
   }finally{
     await Promise.all(workers.map(p=>new Promise(resolve=>{p.once('exit',resolve);p.kill();})));
     rmSync(dir,{recursive:true,force:true});
   }
-  console.log('Passage admission: geometry, opposing traffic, confirmed exits, human occupancy and cross-process race passed.');
+  console.log('Passage admission: geometry, opposing traffic, confirmed exits, human occupancy, shared convoy flow and cross-process race passed.');
 }

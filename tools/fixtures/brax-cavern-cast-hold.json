@@ -1,0 +1,56 @@
+{
+  "source": "live shadow public Brax retry",
+  "at": "2026-10-17T04:59:27.709Z",
+  "room": 826,
+  "start": {
+    "x": 584,
+    "y": 576
+  },
+  "target": {
+    "x": 592,
+    "y": 600
+  },
+  "returned_failure": {
+    "arrived": false,
+    "reason": "blocked \u00e2\u20ac\u201d every heading refused, at every reach tried",
+    "shelf_refusals": 0,
+    "dest_floor": 8000,
+    "last_step": {
+      "aimed": {
+        "x": 598,
+        "y": 584
+      },
+      "from": {
+        "x": 584,
+        "y": 576
+      },
+      "reach": 16,
+      "moved": false,
+      "reason": null,
+      "locally_validated": null,
+      "geometry_blocked": true,
+      "position": {
+        "x": 584,
+        "y": 576,
+        "col": 9,
+        "row": 9
+      },
+      "note": "local client collision rejected this move before any packet was sent"
+    },
+    "position": {
+      "col": 9,
+      "row": 9,
+      "x": 584,
+      "y": 576
+    },
+    "steps": 3,
+    "log": [],
+    "geometry_rejections": []
+  },
+  "reproduction": {
+    "kind": "ordinary create-food casting hold",
+    "holdMs": 1500,
+    "before": "real Session/Pacer reproduced identical failure with zero movement packets",
+    "after": "waits for hold and reaches target in one ordinary packet"
+  }
+}

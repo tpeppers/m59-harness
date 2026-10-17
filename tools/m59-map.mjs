@@ -559,7 +559,7 @@ export function writeMapAtomic(file, map) {
   }
 }
 
-function edgeConditionAllows(condition, candidate) {
+export function edgeConditionAllows(condition, candidate) {
   if (!condition) return true;
   const { type, threshold } = condition;
   if (type === COND.ROW_GT) return candidate.row > threshold;

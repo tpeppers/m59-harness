@@ -282,6 +282,39 @@ same(F.createCmds(cp), ['create object Money number INT 73109', 'create object R
      'the 73,109 shillings are one stack');
 ok(cw.unknown.some(u => u.name === 'scroll'), 'and a chest\'s bare `scroll` (no grade recorded) is refused by its family shape');
 
+// Starter abilities and stale clone abilities must not survive an additive dress.
+const abilities={abilities:{skills:[{name:'hammer wielding',ability:41}],spells:[{name:'minor heal',ability:37}]}};
+const wanted=F.wantedShadowAbilities(abilities),heal=wanted.spells[0].id,hammer=wanted.skills[0].id,zap=F.shadowAbilityId('spells','zap');
+const actual={skills:[{id:hammer,ability:5}],spells:[{id:heal,ability:5},{id:zap,ability:5}]};
+const abilityPlan=F.planShadowAbilities(123,abilities,actual);
+ok(abilityPlan.commands.includes(`send object 123 RemoveSpell num INT ${zap} isDM INT 1`),'extra starter zap is removed');
+ok(abilityPlan.commands.indexOf(`send object 123 RemoveSpell num INT ${heal} isDM INT 1`)<abilityPlan.commands.indexOf(`send object 123 AddSpell num INT ${heal} iability INT 37 bDM INT 1`),'a starter ability is removed before restoring its source value');
+same(F.planShadowAbilities(123,abilities,wanted).commands,[],'a verified matching clone is idempotent');
+same(F.parseAbilityCompounds(': INT 10105\n: INT -45141\n'),[{id:101,ability:5},{id:451,ability:41}],'server compound list encoding decodes ids and ability values');
+ok(F.shadowAbilityDifferences(wanted,actual).length===3,'readback detects extra, wrong spell value and wrong skill value');
+let unknownRefused=false;try{F.planShadowAbilities(123,{abilities:{skills:[],spells:[{name:'not a real spell',ability:5}]}},actual);}catch{unknownRefused=true;}
+ok(unknownRefused,'unknown source abilities refuse the setup before mutation');
+
+// Read-mutate-read uses authoritative compound lists, and rejects a silent setup failure.
+{
+ const makeFake=()=>{
+  let state={skills:[{id:hammer,ability:5}],spells:[{id:heal,ability:5},{id:zap,ability:5}]},writes=0;
+  return {get writes(){return writes;},resolve:async()=>({Clone:123}),dm:async commands=>commands.map(command=>{
+   let out='';if(command==='show object 123')out='OBJECT 123 is CLASS User\nplSkills = LIST 10\nplSpells = LIST 11';
+   else if(command.startsWith('show list'))out=state[command.endsWith('10')?'skills':'spells'].map(r=>': INT '+(r.id*100+r.ability)).join('\n');
+   else {writes++;const m=/ (Remove|Add)(Skill|Spell) num INT (\d+)(?: iability INT (\d+))?/.exec(command);if(m){const k=m[2]==='Skill'?'skills':'spells';state[k]=state[k].filter(r=>r.id!==Number(m[3]));if(m[1]==='Add')state[k].push({id:Number(m[3]),ability:Number(m[4])});}}
+   return '> '+command+'\n'+out+'\n';
+  }).join('')};
+ };
+ const fake=makeFake(),rec={...abilities,shadow_name:'Clone'};
+ let refused=false;try{await F.mirrorShadowAbilities([rec],fake);}catch{refused=true;}
+ ok(refused&&fake.writes===0,'verify-only refuses extras without mutating');
+ const result=await F.mirrorShadowAbilities([rec],{...fake,apply:true});ok(result.verified===1&&fake.writes>0,'construction reconciliation is verified from a second live read');
+ const {abilitySetupRefusal}=await import('./m59-shadow-abilities.mjs');
+ ok(!!abilitySetupRefusal({fleet:'prod',server:'127.0.0.1:15959',construction:true,apply:true}),'reproducer refuses production fleet');
+ ok(!!abilitySetupRefusal({fleet:'shadow',server:'127.0.0.1:15959',construction:false,apply:true}),'reproducer cannot mutate outside construction');
+}
+
 // ------------------------------------------------------------------ the shim
 console.log('\nthe shim forwards every dress flag it accepts');
 same(dressFlags(['x', '--no-items', '--no-guild']), ['dress', '--no-items', '--no-guild'], '--no-items and --no-guild reach dress');

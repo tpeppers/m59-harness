@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {unsentRailAnimationRefusal,waitForRailGeometry,provedRailMove,unsentRailGeometryRefusal} from './m59-rail-observer.mjs';
 // FOLLOW A FINE ROUTE EXACTLY, OR STOP AND SAY WHERE IT CAME OFF.
 //
 //   node tools/m59-fineclimb.mjs --agent shadow01 --to 52,30
@@ -54,12 +55,20 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import {randomUUID} from 'node:crypto';
+import {crossingGate,waitForCrossing} from './m59-crossing-queue.mjs';
 import { rosterGameEndpoint,stateFileFor } from './m59-fleetpath.mjs';
 import {railIdentityProblem} from './m59-node-tour-policy.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
 import { auditNodeWalk } from './m59-node-route-audit.mjs';
 import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
-import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint, waitForRailAnimation } from './m59-railfollow.mjs';
+import { distanceToRail, unexpectedFall, landingCheck, quantizeRailPoint, waitForRailAnimation, railBoarding, passedRailAim } from './m59-railfollow.mjs';
+import {planRailForwardGap,railEndQueueReady} from './m59-rail-traffic.mjs';
+import {isActiveRecoveryDecision} from './m59-survival-decision.mjs';
+import { createRailObserver,refusedRailWrite,resumeObservedRailWalk,waitForConfirmedRailLanding,unsentRailJumpRefusal } from './m59-rail-observer.mjs';
+import {originLabel} from './m59-move-origin.mjs';
+import {planDeclaredTakeoff,canJoinDeclaredTakeoff} from './m59-jump-takeoff.mjs';
+import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import { exactFloor } from './m59-noderails.mjs';
 import { clientToProtocol, protocolToClient } from './m59-finepos.mjs';
 
@@ -73,13 +82,8 @@ const flag = (n, d = null) => {
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
                        'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
-                       'wait-bodies', 'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
-if (has('help') || !argv.length) {
-  console.log(readFileSync(new URL(import.meta.url), 'utf8')
-    .split('\n').slice(1).filter(l => l.startsWith('//'))
-    .map(l => l.replace(/^\/\/ ?/, '')).join('\n').split('\n\n').slice(0, 2).join('\n\n'));
-  process.exit(argv.length ? 0 : 2);
-}
+                       'serialize-jumps', 'native-rail', 'queue-end', 'origin-json', 'keeper-position', 'precise-waypoints', 'wait-bodies', 'exact-walk', 'rail', 'exit', 'direction', 'rail-file', 'board-within', 'receipt', 'expected-game']);
+
 {
   const unknown = argv.filter(a => a.startsWith('--')).map(a => a.slice(2).split('=')[0])
                       .filter(a => !KNOWN.has(a));
@@ -88,11 +92,18 @@ if (has('help') || !argv.length) {
     process.exit(2);
   }
 }
+if (has('help') || !argv.length) {
+  console.log(readFileSync(new URL(import.meta.url), 'utf8')
+    .split('\n').slice(1).filter(l => l.startsWith('//'))
+    .map(l => l.replace(/^\/\/ ?/, '')).join('\n').split('\n\n').slice(0, 2).join('\n\n'));
+  process.exit(argv.length ? 0 : 2);
+}
 const PORT  = Number(flag('port', 8971));
 const FLEET = flag('fleet', 'shadow');
 const AGENT = flag('agent');
 const TO    = flag('to');
 const DRY   = has('dry-run');
+const ORIGIN=flag('origin-json')?JSON.parse(flag('origin-json')):{source:'operator',name:'fineclimb',run_id:String(process.pid)};
 // How far off a waypoint the body may be before the follow is declared to have come off.
 const TOL   = Number(flag('tolerance', 1.6));       // squares
 const STEPS = Number(flag('steps', 6));             // fine steps allowed per waypoint
@@ -157,7 +168,8 @@ const toClient = v => protocolToClient({x:v,y:v}).x;
 const toProto = v => clientToProtocol({x:v,y:v}).x;
 const receipt = data => { if(flag('receipt')) appendFileSync(flag('receipt'), JSON.stringify({at:new Date().toISOString(),...data})+'\n'); };
 
-function call(name, args, ms = 120000) {
+function rawCall(name, args, ms = 120000) {
+  if(['walk_to','cancel_movement','travel','jump'].includes(name))args={...args,origin:ORIGIN};
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
                                 params: { name, arguments: args } });
   return new Promise(done => {
@@ -192,9 +204,22 @@ if (!DRY) {
   if(problem){console.error('fineclimb: REFUSING '+problem);process.exit(2);}
 }
 
+const observeRaw=has('keeper-position')?createRailObserver({fleet:FLEET,agent:AGENT}):null;
+const checkObserved=s=>{const decision=s.autopilot_status?.survival_decisions?.current;
+ if(s.autopilot_status?.recovery_travel){receipt({kind:'keeper-recovery',reply:{arrived:false,reason:'keeper_recovery_trip_active',trip_id:s.autopilot_status.recovery_travel.id}});throw Error('keeper_recovery_trip_active');}
+ if(isActiveRecoveryDecision(decision)&&decision.source==='keeper'){
+  receipt({kind:'keeper-recovery',reply:{arrived:false,reason:'keeper_recovery_active',decision_id:decision.id}});
+  throw Error('keeper_recovery_active');
+ }
+ return s;
+};
+const observe=observeRaw?async()=>checkObserved(await observeRaw()):null;
+const observeCached=observeRaw?async()=>checkObserved(await observeRaw.cached()):null;
 const look = async () => {
-  const l = await call('look', { agent: AGENT }, 40000);
+  const l = observe?await observe().catch(e=>({_error:e.message})):await call('look', { agent: AGENT }, 40000);
   if (l?._error) return { _error: l._error };
+  const cancel=l?.movement?.last_cancel;
+  if(observe&&cancel?.at>=ORIGIN.at&&cancel.by?.source!=='keeper'&&cancel.by_label!==originLabel(ORIGIN))throw Error('rail_cancelled_by_operator');
   const node = [...(Array.isArray(l?.objects) ? l.objects : []),
                 ...(Array.isArray(l?.scenery) ? l.scenery : [])]
     .find(o => /mana node/i.test(String(o?.name ?? '')));
@@ -202,6 +227,17 @@ const look = async () => {
            x: l?.you?.x, y: l?.you?.y, hp: l?.hp?.value, node };
 };
 
+async function call(name,args,ms=120000){
+ for(let attempt=0;attempt<5;attempt++){
+  const reply=await rawCall(name,args,ms);
+  if(observe&&name==='walk_to'&&reply?.reason==='position_confirmation_timeout')return resumeObservedRailWalk(reply,()=>rawCall(name,args,ms),{
+    observe,room:ROOM,owner:originLabel(ORIGIN),since:ORIGIN.at,
+    onObserved:data=>receipt({kind:'position-confirmation-recovered',...data})});
+  if(!observe||name!=='walk_to'||!refusedRailWrite(reply,AGENT)||attempt===4)return reply;
+  const body=await observe();if(body.room?.num!==ROOM)throw Error('rail room changed before retrying refused write');
+  receipt({kind:'refused-write-retry',attempt,reason:reply.error});await sleep(1000);
+ }
+}
 const at0 = await look();
 if (at0._error) { console.error(`fineclimb: ${at0._error}`); process.exit(1); }
 const ROOM = Number(flag('room', at0.room));
@@ -236,7 +272,7 @@ const fromPt = (at0.x != null && at0.y != null)
 // be 1,249 round trips for a walk of forty squares. `aims` is the same line decimated to its
 // straight runs, so every aim is a chord made of steps the flood already accepted.
 const railLegs = RAIL
-  ? RAIL.legs.map(l => (l.kind === 'walk' ? { ...l, waypoints: l.aims ?? l.waypoints } : l))
+  ? RAIL.legs.map(l => (l.kind === 'walk' ? { ...l, sourceWaypoints:l.waypoints, waypoints: l.aims ?? l.waypoints } : l))
   : null;
 const plan = RAIL
   ? { ok: true, legs: railLegs, jumps: RAIL.jumps, all_declared: RAIL.all_declared,
@@ -281,8 +317,9 @@ if (RAIL && !DRY) {
     process.exit(2);
   }
   const here = { x: toClient(at0.x), y: toClient(at0.y) };
-  const d = distanceToRail(first, here, { floor: bodyFloor(here.x, here.y) });
-  if (!(d.d <= BOARD * F)) {
+  const board = railBoarding(railLegs,here,{floor:bodyFloor(here.x,here.y),within:BOARD*F,strictFloor:has('precise-waypoints'),geo:R.geo});
+  const d=board??distanceToRail(first,here,{floor:bodyFloor(here.x,here.y)});
+  if (!board) {
     console.log(`not on the rail: ${(d.d / F).toFixed(1)} square(s) from it ` +
                 `(nearest segment ${d.i}, shelf ${d.onShelf === false ? 'DIFFERENT' : 'same'}, ` +
                 `floor ${d.floorKnown ? 'read' : 'UNREADABLE'}), --board-within is ${BOARD}`);
@@ -302,10 +339,16 @@ if (RAIL && !DRY) {
   // The aims before the boarding point are dropped. They are behind the body, and walking back
   // to the start of a line you are already standing on is the same wasted travel `aimAhead` was
   // written to stop.
-  if (d.i > 0) {
+  if(board.leg>0){railLegs.splice(0,board.leg);console.log(`resuming at route leg ${board.leg+1}`);}
+  if(board.entry){
+    const leg=railLegs.find(l=>l.kind==='walk'),dense=leg.sourceWaypoints,indices=new Map(dense.map((p,i)=>[p.x+','+p.y,i]));
+    const remaining=leg.waypoints.filter(p=>(indices.get(p.x+','+p.y)??-1)>=board.denseIndex);
+    leg.waypoints=[...(board.d>128?[board.entry]:[]),...remaining];
+    console.log('boarding actual floor at dense point '+board.denseIndex+', '+leg.waypoints.length+' aims remain');
+  }else if (d.i > 0) {
     const leg = railLegs.find(l => l.kind === 'walk');
     if (leg && d.i < leg.waypoints.length - 1) {
-      leg.waypoints = leg.waypoints.slice(d.i);
+      leg.waypoints = leg.waypoints.slice(d.i+1);
       console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off — ` +
                   `${leg.waypoints.length} aim(s) remain on this leg`);
     } else {
@@ -334,12 +377,29 @@ if (!plan.all_declared)
 await call('cancel_movement', { agent: AGENT }, 20000).catch(() => null);
 
 const t0 = Date.now();
-let came_off = null, pos = at0, hops = 0;
+let came_off = null, pos = at0, hops = 0, queuedEnd = false;
 // The body's own floor, one waypoint ago — see the fall test below.
 let lastFloor = (at0?.x != null) ? bodyFloor(toClient(at0.x), toClient(at0.y)) : null;
+const crossingOwner={pid:process.pid,token:randomUUID(),agent:AGENT},crossingGates=new Map();let activeCrossing=null;
+const gateFor=leg=>{
+ const key=[rostered.host,rostered.port,ROOM,leg.from.row,leg.from.col,leg.to.row,leg.to.col].join(':');
+ if(!crossingGates.has(key))crossingGates.set(key,crossingGate(key));return crossingGates.get(key);
+};
+const releaseCrossing=async()=>{if(activeCrossing){await activeCrossing.gate.release(crossingOwner);activeCrossing=null;}};
+const clearCrossing=async()=>{
+ if(!activeCrossing?.landed||!observe)return;
+ const live=await observe(),p=protocolToClient(live.you),target=activeCrossing.target;
+ if(live.room.num===ROOM&&Math.hypot(p.x-target.x,p.y-target.y)>=512&&bodyFloor(p.x,p.y)>=activeCrossing.floor-384){
+  receipt({kind:'crossing-clear',actual:live.you});await releaseCrossing();
+ }
+};
+try{
 outer:
 for (const [li, leg] of plan.legs.entries()) {
   if (leg.kind === 'jump') {
+    const jumpDeadline=Date.now()+600000;let crossed=false;
+    while(!crossed){
+    if(activeCrossing&&!activeCrossing.landed)await releaseCrossing();
     // LINE UP ON THE DECLARED TAKE-OFF FIRST. A fall is a trajectory: it starts where it
     // starts. The walk leaves the body on the right SHELF but not the right POINT, and the
     // keeper's one-square tolerance then lets the jump fire from beside the take-off, where
@@ -348,42 +408,108 @@ for (const [li, leg] of plan.legs.entries()) {
     // `arrive_within` matters as much as the target: the default is 40 kod units, which is
     // 640 client units and two thirds of a square, so a line-up "arrives" while still a
     // square and a half out.
-    const aim = leg.declared_from ?? leg.fromFine;
+    let aim = leg.declared_from ?? leg.fromFine;
+    const declaration={room:ROOM,from:leg.from,to:leg.to,from_fine:aim,to_fine:leg.declared_to??leg.toFine};
+    if(has('precise-waypoints')&&observe){
+      let planned,claimed=false;const deadline=jumpDeadline;
+      for(;;){
+        const live=await waitForRailGeometry(observe,{room:ROOM,deadline:jumpDeadline,owner:originLabel(ORIGIN),since:t0}),cancel=live.movement?.last_cancel;
+        if(live.room.num!==ROOM||cancel?.at>=t0&&cancel.by?.source!=='keeper'&&cancel.by_label!==originLabel(ORIGIN))throw Error('declared_takeoff_cancelled_or_room_changed');
+        planned=planDeclaredTakeoff(R.geo,live.you,declaration,{objects:new Map(live.objects.map(o=>[o.id,o])),selfId:live.you.id});
+        if(planned.found){
+          if(!has('serialize-jumps'))break;
+          const gate=gateFor(leg);
+          {
+            let queued;
+            await waitForCrossing(gate,crossingOwner,{deadline,check:async()=>{
+              queued=await observeCached();const cancel=queued.movement?.last_cancel;
+              if(queued.room.num!==ROOM||cancel?.at>=t0&&cancel.by?.source!=='keeper'&&cancel.by_label!==originLabel(ORIGIN))throw Error('declared_takeoff_cancelled_or_room_changed');
+            },ready:()=>queued.in_game===true&&queued.connected!==false&&queued.you&&!queued.you.predicted&&planDeclaredTakeoff(R.geo,queued.you,declaration,{objects:new Map(queued.objects.map(o=>[o.id,o])),selfId:queued.you.id}).found});
+            activeCrossing={gate,landed:false,target:declaration.to_fine,floor:bodyFloor(declaration.to_fine.x,declaration.to_fine.y)};
+            const current=await observe();planned=planDeclaredTakeoff(R.geo,current.you,declaration,{objects:new Map(current.objects.map(o=>[o.id,o])),selfId:current.you.id});
+            if(planned.found){claimed=true;break;}await releaseCrossing();
+          }
+        }
+        // An unusable claimant must not hold a physically earlier traveler
+        // behind its gate. Only a fresh body-clear flight can retain admission.
+        if(!planned.found&&activeCrossing)await releaseCrossing();
+        const terrain=planDeclaredTakeoff(R.geo,live.you,declaration);
+        receipt({kind:'takeoff-wait',leg:li+1,reason:planned.reason,terrain:terrain.found});
+        if(!terrain.found||Date.now()>=deadline)break;
+        await sleep(1000);
+      }
+      if(has('serialize-jumps')&&!claimed&&planned.found)planned={found:false,reason:'crossing_queue_budget_exhausted'};
+      receipt({kind:'takeoff-plan',leg:li+1,planned});
+      if(!planned.found){came_off={leg:li+1,kind:'alignment',why:planned.reason};break outer;}
+      aim=protocolToClient(planned.takeoff);
+    }
     let aligned = false, previousDistance = Infinity, refusals = 0;
     for (let k = 0; k < 8; k++) {
       const q = await look();
       if (q?._error || q?.room !== ROOM) break;
       const distance = Math.hypot(toClient(q.x) - aim.x, toClient(q.y) - aim.y);
-      if (distance < 110) { aligned = true; break; }
+      if (distance < (has('precise-waypoints')?1:110)) { aligned = true; break; }
       if (distance >= previousDistance - 16) refusals++; else refusals = 0;
       if (refusals >= 2) break;
       previousDistance = distance;
       const alignment = await call('walk_to', { agent: AGENT, x: toProto(aim.x), y: toProto(aim.y),
-                              max_steps: 8, stride: 8, arrive_within: 3,
+                              max_steps: 8, stride: 8, arrive_within: has('precise-waypoints')?0:3, exact_arrival:has('precise-waypoints'),
                               hold_shelf: true }, 60000).catch(() => null);
       receipt({kind:'alignment',leg:li+1,aim,body:q,reply:alignment});
     }
-    if (!aligned) { came_off = { leg:li+1, kind:'alignment', why:'takeoff_not_reached', aim, actual:await look() }; receipt(came_off); console.log(JSON.stringify(came_off)); break; }
-    const j = await call('jump', { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
+    if (!aligned) { came_off = { leg:li+1, kind:'alignment', why:'takeoff_not_reached', aim, actual:await look() }; receipt(came_off); console.log(JSON.stringify(came_off)); break outer; }
+    if(has('precise-waypoints')&&observe){
+      const live=await observe(),body=protocolToClient(live.you),target=declaration.to_fine;
+      const proof=R.geo.traceFineMoveClient(body.x,body.y,target.x,target.y,{slide:false,fall:true,timedFall:true,obstacles:blockingBodySnapshot(new Map(live.objects.map(o=>[o.id,o])),live.you.id)});
+      if(!proof.arrived){
+        const terrain=R.geo.traceFineMoveClient(body.x,body.y,target.x,target.y,{slide:false,fall:true,timedFall:true});
+        if(terrain.arrived&&Date.now()<jumpDeadline){receipt({kind:'flight-body-wait',leg:li+1});await sleep(500);continue;}
+        came_off={leg:li+1,kind:'alignment',why:'actual_takeoff_flight_unproved'};receipt(came_off);break outer;
+      }
+    }
+    if(observe){
+      const target=clientToProtocol(declaration.to_fine),probe=await observeRaw.probeMove(target,{slide:true,fall:true,timedFall:true});
+      if(!provedRailMove(probe,target)){
+        receipt({kind:'native-flight-wait',leg:li+1,probe});
+        if(Date.now()>=jumpDeadline)throw Error('native_flight_wait_budget_exhausted');
+        await sleep(500);continue;
+      }
+    }
+    const j = await call('jump' , { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
+    if(observe&&unsentRailGeometryRefusal(j)&&Date.now()<jumpDeadline){
+      receipt({kind:'native-flight-unsent',leg:li+1,reply:j});await sleep(500);continue;
+    }
+    if(observe&&unsentRailAnimationRefusal(j)&&Date.now()<jumpDeadline){
+      receipt({kind:'unsent-jump-animation-wait',leg:li+1,reply:j});
+      await waitForRailGeometry(observe,{room:ROOM,deadline:jumpDeadline,owner:originLabel(ORIGIN),since:t0});continue;
+    }
+    if(observe&&unsentRailJumpRefusal(j)&&Date.now()<jumpDeadline){
+      const live=await observe(),point=protocolToClient(live.you),shelf=bodyFloor(declaration.from_fine.x,declaration.from_fine.y);
+      if(live.room.num===ROOM&&Math.abs(bodyFloor(point.x,point.y)-shelf)<=64){
+        receipt({kind:'unsent-jump-replan',leg:li+1,reply:j,actual:live.you});await sleep(500);continue;
+      }
+    }
     // A FALL IS CONFIRMED BY THE SERVER, NOT BY THE REPLY. The mover answers `predicted: true`
     // and usually `geometry_blocked` — our local trace refuses what the client does anyway —
     // and the body is still on the take-off if you read it at once. A moment later it is on
     // the landing. Reading immediately recorded a jump that WORKED as one that did nothing,
     // twice, and each time sent the follower down the post-jump route from the take-off,
     // which is how it ended in the gully.
-    // The keeper conservatively carries a vertical range for up to five seconds.
-    // A subsequent timed fall must begin from a settled, known shelf.
-    await sleep(5500);
-    pos = await look();
     const target = leg.declared_to ?? leg.toFine;
+    let confirmedLanding;
+    if(observe){
+      confirmedLanding=await waitForConfirmedRailLanding({read:observe,room:ROOM,target,floorAt:bodyFloor,owner:originLabel(ORIGIN),since:ORIGIN.at});
+      const s=confirmedLanding.state;pos={room:s.room.num,row:s.you.row,col:s.you.col,x:s.you.x,y:s.you.y,hp:s.hp.value};
+    }else{await sleep(5500);pos=await look();}
     const landedPoint = pos.x == null ? null : protocolToClient(pos);
-    const landing = landingCheck(landedPoint,target,{floor:landedPoint ? bodyFloor(landedPoint.x,landedPoint.y):null,wantedFloor:bodyFloor(target.x,target.y)});
-    const ok = pos.room === ROOM && landing.ok;
+    const landing = confirmedLanding?.landing??landingCheck(landedPoint,target,{floor:landedPoint ? bodyFloor(landedPoint.x,landedPoint.y):null,wantedFloor:bodyFloor(target.x,target.y)});
+    const ok = pos.room === ROOM && landing.ok && confirmedLanding?.ok!==false;
     receipt({kind:'jump',leg:li+1,target,body:pos,landing,reply:j});
     console.log(`  leg ${li + 1}  JUMP r${leg.from.row}c${leg.from.col} -> r${leg.to.row}c${leg.to.col}  ` +
                 `${ok ? 'JUMPED' : 'REFUSED'}  now r${pos.row}c${pos.col} hp ${pos.hp}` +
                 (ok ? '' : `\n           ${j?._error ?? j?.reason ?? JSON.stringify(j).slice(0, 200)}`));
-    if (!ok) { came_off = { leg: li + 1, kind: 'jump' }; break; }
+    if (!ok) { came_off = { leg: li + 1, kind: 'jump' }; break outer; }
+    if(activeCrossing)activeCrossing.landed=true;
     // A DECLARED JUMP *IS* A FALL, AND THE FALL DETECTOR HAS TO BE TOLD SO.
     //
     // `lastFloor` is the body's own floor one waypoint ago, and the next walk leg trips on a
@@ -404,15 +530,60 @@ for (const [li, leg] of plan.legs.entries()) {
       const landed = lx == null ? null : bodyFloor(lx, toClient(pos.y));
       if (landed != null) lastFloor = landed;
     }
+    crossed=true;
+    }
     continue;
   }
+  if(has('precise-waypoints')&&observe&&plan.legs[li+1]?.kind==='jump'){
+    const next=plan.legs[li+1],live=await observe(),declaration={room:ROOM,from:next.from,to:next.to,from_fine:next.declared_from??next.fromFine,to_fine:next.declared_to??next.toFine};
+    if(live.room.num===ROOM&&live.hp.value>0&&canJoinDeclaredTakeoff(R.geo,live.you,declaration)){
+      receipt({kind:'joined-declared-approach',leg:li+1,actual:live.you});pos=await look();continue;
+    }
+  }
+  if(has('native-rail')&&observeRaw){
+    const next=plan.legs[li+1],nextJump=next?.kind==='jump'?{room:ROOM,from:next.from,to:next.to,from_fine:next.declared_from??next.fromFine,to_fine:next.declared_to??next.toFine}:null;
+    let nativeDone=false;
+    const pending=observeRaw.action('walk_rail',{room:ROOM,leg,nextJump,queueEnd:has('queue-end')&&li===plan.legs.length-1,origin:ORIGIN})
+      .then(reply=>({reply}),error=>({error})).finally(()=>{nativeDone=true;});
+    // Keep a landing claim only until the confirmed body clears it.
+    while(activeCrossing&&!nativeDone){await sleep(250);await clearCrossing();}
+    const result=await pending;if(result.error)throw result.error;const r=result.reply;
+    receipt({kind:'native-walk',leg:li+1,reply:r});
+    if(['keeper_recovery_trip_active','keeper_recovery_active'].includes(r.reason)){receipt({kind:'keeper-recovery',reply:r});throw Error(r.reason);}
+    pos=await look();
+    if(r.queue_ready){queuedEnd=true;break outer;}
+    if(r.arrived||r.joined_takeoff){await clearCrossing();continue;}
+    came_off={leg:li+1,kind:'native-walk',why:r.reason??'rail_not_reached',reply:r};break outer;
+  }
   for (const [wi, wp] of leg.waypoints.entries()) {
+    const nextJump=plan.legs[li+1];
+    if(has('precise-waypoints')&&observe&&nextJump?.kind==='jump'){
+      const live=await observe(),declaration={room:ROOM,from:nextJump.from,to:nextJump.to,from_fine:nextJump.declared_from??nextJump.fromFine,to_fine:nextJump.declared_to??nextJump.toFine};
+      if(live.room.num===ROOM&&canJoinDeclaredTakeoff(R.geo,live.you,declaration,{objects:new Map(live.objects.map(o=>[o.id,o])),selfId:live.you.id})){
+        receipt({kind:'joined-declared-approach',leg:li+1,waypoint:wi+1,actual:live.you});pos=await look();break;
+      }
+    }
     const wire = quantizeRailPoint(wp,{floorAt:bodyFloor,edge:(a,b)=>R.geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
     if(!wire.ok){came_off={leg:li+1,waypoint:wi+1,why:wire.reason,asked:wp};receipt(came_off);console.log(JSON.stringify(came_off));break outer;}
-    const w = await waitForRailAnimation(() => call('walk_to', { agent: AGENT, ...wire.protocol,
-                                      max_steps: STEPS, stride: STRIDE,
-                                      arrive_within: 3, hold_shelf: true, exact_arrival: has('exact-walk') }, 60000), { room: ROOM, readRoom: async () => (await look()).room, retryBodies:has('wait-bodies'),timeoutMs:has('wait-bodies')?90000:45000 });
+    const attemptWalk=async()=>{
+      const reply=await call('walk_to',{agent:AGENT,...wire.protocol,max_steps:STEPS,stride:STRIDE,arrive_within:3,hold_shelf:true,exact_arrival:has('exact-walk')||has('precise-waypoints')},60000);
+      const blocked=reply?.arrived!==true&&!reply?.cancelled&&(reply?.reason==='object_blocked'||reply?.geometry_rejections?.includes('object_blocked'));
+      if(!blocked||!observe||!has('precise-waypoints'))return reply;
+      const current=await observe();if(current.room.num!==ROOM)return reply;
+      if(has('queue-end')&&li===plan.legs.length-1){
+        const queued=railEndQueueReady(R.geo,current.you,leg,{objects:new Map(current.objects.map(o=>[o.id,o])),selfId:current.you.id});
+        if(queued.ready)return {...reply,reason:'rail_end_queue_ready',queue_end:queued,position:current.you};
+      }
+      const gap=planRailForwardGap(R.geo,current.you,leg,{objects:new Map(current.objects.map(o=>[o.id,o])),selfId:current.you.id,afterAim:wp});
+      if(!gap.found)return reply;
+      const advanced=await call('walk_to',{agent:AGENT,...gap.target,max_steps:STEPS,stride:STRIDE,arrive_within:0,hold_shelf:true,exact_arrival:true},60000),actual=await observe(),point=protocolToClient(actual.you);
+      receipt({kind:'forward-gap',leg:li+1,waypoint:wi+1,gap,reply:advanced,actual:actual.you});
+      if(actual.room.num===ROOM&&passedRailAim(leg,wp,point,{floor:bodyFloor(point.x,point.y)}))return {...advanced,arrived:false,reason:'rail_gap_advance',position:actual.you};
+      return reply;
+    };
+    const w=await waitForRailAnimation(attemptWalk,{room:ROOM,readRoom:async()=>(await look()).room,retryBodies:has('wait-bodies'),timeoutMs:has('wait-bodies')?(has('serialize-jumps')?600000:90000):45000});
     receipt({kind:'walk',leg:li+1,waypoint:wi+1,aim:wp,wire,reply:w});
+    if(w?.queue_end?.ready){queuedEnd=true;pos=await look();receipt({kind:'queue-ready',leg:li+1,waypoint:wi+1,queue:w.queue_end});break outer;}
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
     const p = w?.position;
@@ -428,7 +599,10 @@ for (const [li, leg] of plan.legs.entries()) {
       console.log(`  leg ${li + 1}  waypoint ${wi + 1}/${leg.waypoints.length}: ${w._error}`);
       came_off = { leg: li + 1, waypoint: wi + 1, why: w._error }; break outer;
     }
-    if (has('exact-walk') && w?.arrived !== true) {
+    if(has('precise-waypoints')&&!w?.cancelled&&w?.arrived!==true&&passedRailAim(leg,wp,{x:cx,y:cy},{floor:bodyFloor(cx,cy)})){
+      receipt({kind:'passed-aim',leg:li+1,waypoint:wi+1,body:pos});lastFloor=bodyFloor(cx,cy);continue;
+    }
+    if ((has('exact-walk')||has('precise-waypoints')) && w?.arrived !== true) {
       came_off={leg:li+1,waypoint:wi+1,why:w?.reason??'exact_waypoint_not_reached',got:pos};
       break outer;
     }
@@ -496,6 +670,7 @@ for (const [li, leg] of plan.legs.entries()) {
       break outer;
     }
     if (hBody != null) lastFloor = hBody;
+    await clearCrossing();
     if (off > TOL) {
       console.log(`  leg ${li + 1}  CAME OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
                   `asked r${wp.row}c${wp.col} (fine ${wp.x},${wp.y}), body at ` +
@@ -506,16 +681,18 @@ for (const [li, leg] of plan.legs.entries()) {
     }
   }
   console.log(`  leg ${li + 1}  walk ${leg.waypoints.length} waypoint(s) -> r${pos.row}c${pos.col}`);
+  await clearCrossing();
 }
+}finally{await releaseCrossing();}
 
 const end = await look();
-const arrived = end.room === ROOM && Math.abs(end.row - toRow) < 3 && Math.abs(end.col - toCol) < 3;
-receipt({kind:'outcome',arrived,came_off,end});
+const arrived = !queuedEnd && !came_off && end.room === ROOM && Math.abs(end.row - toRow) < 3 && Math.abs(end.col - toCol) < 3;
+receipt({kind:'outcome',arrived,queue_ready:queuedEnd,came_off,end});
 console.log('');
-console.log(`${arrived ? 'ARRIVED' : 'did not arrive'} — r${end.row}c${end.col} in room ${end.room}, ` +
+console.log(`${queuedEnd ? 'QUEUE READY' : arrived ? 'ARRIVED' : 'did not arrive'} — r${end.row}c${end.col} in room ${end.room}, ` +
             `hp ${end.hp}, ${Math.round((Date.now() - t0) / 1000)}s` +
             (hops ? `, ${hops} hop(s) round something in the way` : '') +
             (end.node ? `\n  sees "${end.node.name}" at r${end.node.row}c${end.node.col}, ${end.node.distance} away` : ''));
 if (came_off) console.log(`  came off at leg ${came_off.leg}` +
                           (came_off.waypoint ? ` waypoint ${came_off.waypoint}` : ''));
-process.exit(arrived ? 0 : 1);
+process.exit(arrived||queuedEnd ? 0 : 1);

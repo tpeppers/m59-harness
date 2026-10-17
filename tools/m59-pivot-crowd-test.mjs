@@ -3,13 +3,14 @@ import {mkdtempSync,readFileSync} from 'node:fs';import {tmpdir} from 'node:os';
 const scratch=mkdtempSync(join(tmpdir(),'m59-optimized-crowd-'));
 for(const [key,file] of Object.entries({M59_TACTICS_DIR:'tactics',M59_TRAILS_DIR:'trails',M59_LEDGER_DIR:'ledger',M59_SHELTER_DIR:'shelters',M59_SPOT_CLAIMS_DIR:'claims',M59_CROSSINGS_LEARNED:'crossings.json',M59_COLLISION_TRACE_FILE:'collision.jsonl'}))process.env[key]=join(scratch,file);
 const {Session}=await import('./m59-game.mjs'),{geometryFor}=await import('./m59-safespots.mjs');
+const {M59Client}=await import('./m59-client.mjs');
 const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
 function fixture({cancel=false,late=false,cancelPaced=false}={}){
  const geo=geometryFor(map.rooms[596]),packets=[],reads=[];
  const self={id:1,flags:4,x:1406,y:1973,row:30,col:21,degrees:0};
  const worm={id:2,flags:9,x:1390,y:1962,row:30,col:21,nameRsc:2};
  const c={selfId:1,self,evSeq:0,rsc:new Map([[2,'groundworm']]),room:{id:596,security:geo.security,flags:0,objects:new Map([[1,self],[2,worm]])},
-  vitals:()=>({health:{value:13,max:20},vigor:{value:80,max:200}}),face(){},
+  vitals:()=>({health:{value:13,max:20},vigor:{value:80,max:200}}),face(){},userCommand(){},stand:M59Client.prototype.stand,
   predictSelf(next){this.self={...this.self,...next,predicted:true};this.room.objects.set(1,this.self);},
   roomContents(){reads.push('background');return reads.length;},
   moveTo(x,y){packets.push({x,y});this.predictSelf({x,y,row:Math.floor(y/64),col:Math.floor(x/64)});if(cancel)s.movementGeneration++;}}

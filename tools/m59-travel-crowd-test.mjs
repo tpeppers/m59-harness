@@ -102,9 +102,11 @@ test('local pour rounds a body, while an impassable crowd and search exhaustion 
 function approachFixture(closed=false) {
  const geo=flatGeometry({closed}),calls=[],self={id:1,flags:4,x:100,y:100,row:1,col:1};
  geo.finePathProtocol=()=>({found:true,waypoints:[{x:220,y:100}]});
- const c={selfId:1,self,room:{id:5,objects:new Map([[1,self],[2,{...body}]]),flags:0}};
+ const c={selfId:1,self,room:{id:5,objects:new Map([[1,self],[2,{...body}]]),flags:0},
+  userCommand(){},stand:M59Client.prototype.stand};
  const s=Object.assign(Object.create(Session.prototype),{client:c,world:{room:{num:574},geometry:geo},movementGeneration:0,
   need:()=>c,movementWasCancelled:g=>g!==s.movementGeneration,
+  pacer:{async submit(_kind,invoke){return invoke();}},
   validateFineTarget(x,y){const t=geo.traceFineMoveClient(protocolToClient(c.self.x),protocolToClient(c.self.y),protocolToClient(x),protocolToClient(y),
     {obstacles:[{id:2,x:protocolToClient(body.x),y:protocolToClient(body.y)}]});return t;},
   async stepFine(x,y){const r=this.validateFineTarget(x,y);calls.push({x,y,...r});if(r.moved)Object.assign(c.self,{x,y,row:Math.floor(y/64),col:Math.floor(x/64)});return r;},
@@ -125,7 +127,7 @@ test('ordinary fine travel rounds live bodies before a heading fan; closed crowd
  for(const closed of [false,true]) {
   const {s,c,calls}=approachFixture(closed);delete s.walkFine;
   const r=await s.walkFine(220,100,{maxSteps:24,arriveWithin:1,exactArrival:true});
-  assert.equal(r.arrived,!closed);
+  assert.equal(r.arrived,!closed);assert.equal(c.lastPostureCommand?.verb,'stand','the ordinary fine mover stands through the actual client method');
   if(closed){assert.equal(r.reason,'object_blocked');assert.equal(calls.length,0);}
   else {assert.equal(c.self.x,220);assert.ok(calls.every(v=>v.moved));assert.ok(r.log.some(v=>v.body_detour));}
  }

@@ -73,7 +73,7 @@ import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation}
  */
 import { boundedRegionEntry, boundedSilentGo, deferNearRefusedStage, distinctStagesFirst, spreadEdges } from './m59-world.mjs';
 
-import { forgetInferredExit } from './m59-map.mjs';
+import { forgetInferredExit,edgeConditionAllows } from './m59-map.mjs';
 
 import * as exitgap from './m59-exitgap.mjs';
 // The door table and the decision about which door is in the way. Pure and file-backed; it
@@ -83,6 +83,16 @@ import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 import { planDoorChain } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
+
+// A checked fine controller may already have delivered the actual body to the
+// published opening. Rewalking its coarse cell can undo that exact approach.
+export function preparedFineExitStage(geo,body,exit){
+ if(!geo?.collisionReady||body?.predicted||body?.row!==exit?.stand_on?.row||body?.col!==exit?.stand_on?.col||
+    ![body?.x,body?.y,exit?.fine_stand_on?.x,exit?.fine_stand_on?.y].every(Number.isFinite)||
+    Math.hypot(body.x-exit.fine_stand_on.x,body.y-exit.fine_stand_on.y)>16)return false;
+ const t=geo.traceFineMoveClient(protocolToClient(body.x),protocolToClient(body.y),protocolToClient(exit.fine_stand_on.x),protocolToClient(exit.fine_stand_on.y),{slide:false});
+ return t?.arrived===true&&t.blocked!==true;
+}
 
 export function sessionWalkPrototype(deps) {
   const {
@@ -936,7 +946,10 @@ export function sessionWalkPrototype(deps) {
     // guard in m59-collision-test only knows about MODULE-scope names, so a local declared in
     // the wrong block passes both. The test below pins the position rather than the spelling.
     let laneAim = null;   // set by laneClearing; the fall aims here when it exists
-    let declaredTimedFall = false;
+    // The public jump tool already validates neighboring takeoffs against the
+    // declared shelf. Its timed fall can therefore start outside the exact
+    // declaration square; retain full flight validation for those lanes too.
+    let declaredTimedFall = fall && timedFall;
     if (fall && before) {
       const vig = (() => { try { return c.vitals?.()?.vigor?.value ?? null; } catch { return null; } })();
       const isDeclared = declaredJumpNeedsRun(this.world?.room?.num, before, { row, col });
@@ -1092,7 +1105,17 @@ export function sessionWalkPrototype(deps) {
             const ax = Math.round(fromX + ox), ay = Math.round(fromY + oy);
             const bx = Math.round(toXc + ox), by = Math.round(toYc + oy);
             if (!hasFloor(ax, ay) || !hasFloor(bx, by)) continue;
-            const m = gapAlong(ax, ay, bx, by, bodies);
+            if(declaredTimedFall){
+              const wanted=g.floorBaseAtClient(protocolToClient(toXc),protocolToClient(toYc));
+              const landed=g.floorBaseAtClient(protocolToClient(bx),protocolToClient(by));
+              if(!Number.isFinite(wanted)||!Number.isFinite(landed)||Math.abs(wanted-landed)>MAX_STEP_HEIGHT)continue;
+              // Only the landing changes; the body never moved to the hypothetical
+              // shifted takeoff. Prove this real flight with every live blocker.
+              const flight=g.traceFineMoveClient(protocolToClient(fromX),protocolToClient(fromY),protocolToClient(bx),protocolToClient(by),
+                {slide:false,fall:true,timedFall:true,obstacles:bodies.map(o=>({x:protocolToClient(o.x),y:protocolToClient(o.y)}))});
+              if(!flight?.arrived||flight.blocked)continue;
+            }
+            const m = gapAlong(declaredTimedFall?fromX:ax,declaredTimedFall?fromY:ay,bx,by,bodies);
             if (!(m.gap >= NOMOVEON_KOD)) continue;
             if (!best || m.gap > best.gap) best = { x: bx, y: by, gap: m.gap, off: off * sign };
           }
@@ -1397,6 +1420,9 @@ export function sessionWalkPrototype(deps) {
       const leftRoom = c.room.id !== roomId;
       const at = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : before;
       return { moved: false, position: at, left_room: leftRoom,
+               // Retain the exact failed geometry question for replay, including
+               // live bodies and vertical bounds. A fallback label alone loses it.
+               validation,
                geometry_blocked: validation.blocked !== false,
                ...(validation.traffic ? {traffic:validation.traffic,zone:validation.zone} : {}),
                ...(validation.animation ? { animation: validation.animation } : {}),
@@ -1502,10 +1528,12 @@ export function sessionWalkPrototype(deps) {
     // Local escape packets are all-or-nothing. A moving monster invalidates a
     // leg instead of clipping it and forcing a blocking read in attack range.
     const queued = await this.queueValidatedMove(x, y,
-      { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous,
+      { speed: this.moveSpeed(), slide: !continuous, unclipped:continuous, targetGuard:options?.targetGuard,
         minGap:Math.max(MOVE_INTERVAL_MS,Math.ceil(1000*Math.hypot(x-before.x,y-before.y)/(KOD_FINENESS*squaresPerSecond(this.moveSpeed())))),
         beforeMutation:(kind,details)=>this.client===c&&!this.movementWasCancelled(generation,token)
           &&(typeof options?.beforeMutation!=='function'||options.beforeMutation(kind,details)!==false) });
+    if(queued.held)return {moved:false,left_room:c.room.id!==startRoom,geometry_blocked:false,
+      reason:'casting_hold',hold:queued,position:before};
     const validation = queued.validation ?? {};
     if (!queued.sent) {
       // Return the collision refusal to the walker so it can fan or replan.
@@ -1514,6 +1542,7 @@ export function sessionWalkPrototype(deps) {
         moved: false, position: p0 ? { x: p0.x, y: p0.y, col: p0.col, row: p0.row } : null,
         left_room: c.room.id !== startRoom,
         geometry_blocked: validation.blocked !== false,
+        validation,
         ...(validation.traffic ? {traffic:validation.traffic,zone:validation.zone} : {}),
         reason: validation.reason,
         ...(validation.animation ? { animation: validation.animation } : {}),
@@ -1797,6 +1826,31 @@ export function sessionWalkPrototype(deps) {
   } = {}) {
     const c = this.need();
     const startRoom = c.room.id;
+    // A casting pacer deliberately drops moves. That is a timed hold, not a
+    // collision; wait without spending the fine walk's packet or stall budget.
+    const waitForCast=async()=>{
+      const until=Date.now()+10000;
+      while(this.pacer?.holdStatus?.().active){
+        if(this.client!==c||c.room.id!==startRoom||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({});
+        if(Date.now()>=until)return {arrived:false,reason:'casting_hold',hold:this.pacer.holdStatus()};
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      if(this.client!==c||c.room.id!==startRoom||this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({});
+      return null;
+    };
+    const initialCast=await waitForCast();if(initialCast)return {...initialCast,steps:0,log:[]};
+    // ResetPlayerFlagList sets NO_MOVE while resting. A locally predicted step
+    // cannot prove the server accepted it. Stand once after a rest/room change,
+    // rather than adding a posture packet to every fine waypoint in a convoy.
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return this.cancelledMovement({steps:0,log:[]});
+    if (typeof this.standBeforeGo === 'function' &&
+        (c.lastPostureCommand?.verb !== 'stand' || c.lastPostureCommand.room_object_id !== startRoom)) {
+      await this.standBeforeGo({shouldCancel:()=>this.client!==c || c.room.id!==startRoom ||
+        this.movementWasCancelled(movementGeneration,controlToken)});
+      if (this.client!==c || c.room.id!==startRoom || this.movementWasCancelled(movementGeneration,controlToken))
+        return this.cancelledMovement({steps:0,log:[]});
+    }
     let me = c.self ?? await this.selfOrResync();
     if (!me) return { arrived: false, reason: 'own_position_unknown',
                       note: 'own position is unknown and a re-read did not recover it' };
@@ -1880,6 +1934,7 @@ export function sessionWalkPrototype(deps) {
     let bodyDetours = 0;
 
     walkSteps: for (let i = 0; i < maxSteps; i++) {
+      const castWait=await waitForCast();if(castWait)return {...castWait,steps:i,log};
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return this.cancelledMovement({ steps: i, log });
       me = c.self ?? await this.selfOrResync();
@@ -2070,11 +2125,22 @@ export function sessionWalkPrototype(deps) {
                 hereFloor - landFloor > MAX_STEP_HEIGHT &&
                 (destFloor == null || Math.abs(landFloor - destFloor) > MAX_STEP_HEIGHT)) {
               shelfRefusals++;
+              // A body can slide a nonzero prediction off the shelf. Retain its
+              // explicit collision reason even though this guard sends no packet.
+              if(prediction.reason==='object_blocked')geometryRejections.add('object_blocked');
               continue;
             }
           }
         }
-        const r = await this.stepFine(aimX, aimY,{bodyDetour:bodyDetour&&!holdShelf,movementGeneration,controlToken});
+        const r = await this.stepFine(aimX, aimY,{bodyDetour:bodyDetour&&!holdShelf,movementGeneration,controlToken,
+          targetGuard:shelfGeo?({from,to})=>{
+            const here=floorOf(from.x,from.y)??destFloor,land=floorOf(to.x,to.y);
+            if(here==null||land==null||here-land>MAX_STEP_HEIGHT&&(destFloor==null||Math.abs(land-destFloor)>MAX_STEP_HEIGHT)){
+              shelfRefusals++;return {reason:'shelf_changed_before_send',note:'resolved paced endpoint leaves the requested shelf'};
+            }
+            return null;
+          }:null});
+        if(r.reason==='casting_hold'){i--;continue walkSteps;}
         if (r.traffic === 'passage_admission') {
           geometryRejections.add('object_blocked');
           log.push({step:i,traffic:r.traffic,zone:r.zone});
@@ -2129,6 +2195,7 @@ export function sessionWalkPrototype(deps) {
                      moved: r.moved, travelled: r.travelled, reason: r.reason ?? null,
                      locally_validated: r.locally_validated ?? null,
                      geometry_blocked: r.geometry_blocked ?? null,
+                     validation:r.validation??null,
                      position: r.position ?? null, note: (r.note ?? '').slice(0, 90) };
         if (r.left_room || (c.room.id !== startRoom)) {
           log.push({ step: i, left_room: true });
@@ -2234,7 +2301,8 @@ export function sessionWalkPrototype(deps) {
       }
       me = c.self;
     }
-    return { arrived: false, reason: 'ran out of steps',
+    return { arrived: false, reason: 'ran out of steps',steps:maxSteps,stride,last_step:lastStep,
+             avoid_square_count:avoidSquares?.size??0,origin_avoided:avoidSquares?.has?.(`${me?.row},${me?.col}`)??false,
              ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
                ...(shelfUnavailable ? { shelf_guard: 'REQUESTED BUT UNAVAILABLE — no geometry in this session; the walk was NOT guarded' } : {}),
              position: me ? { col: me.col, row: me.row, x: me.x, y: me.y } : null, log,
@@ -5956,7 +6024,8 @@ export function sessionWalkPrototype(deps) {
     // Every failure below falls through to exactly the walk this function always did, so a
     // room with no baked route, a stale table, or a rail that cannot be joined costs one
     // attempt and nothing else. `M59_RAIL=0` switches it off for comparison.
-    if (process.env.M59_RAIL !== '0' && exit.to != null) {
+    if (process.env.M59_RAIL !== '0' && exit.to != null &&
+        !(exit.kind==='edge'&&typeof preparedFineExitStage==='function'&&preparedFineExitStage(this.world.geometry,c.self,exit))) {
       // ASKED BY DESTINATION, NOT BY THE SQUARE THIS EXIT HAPPENS TO OFFER.
       //
       // `exit.stand_on` is one crossable square among many on a boundary — 598's west edge
@@ -6722,7 +6791,9 @@ export function sessionWalkPrototype(deps) {
       // No reachable boundary square, says the square grid — the same verdict it
       // gives for a cliff ledge, and wrong for the same reason. Pick the nearest
       // floor square actually on that boundary and walk to it with fine BSP collision.
-      const walk = await this.walkTo(exit.stand_on.col, exit.stand_on.row,
+      const walk = typeof preparedFineExitStage==='function'&&preparedFineExitStage(this.world.geometry,c.self,exit)
+        ? {arrived:true,reused_fine_stage:true,position:{x:c.self.x,y:c.self.y}}
+        : await this.walkTo(exit.stand_on.col, exit.stand_on.row,
                                      { maxSteps: budget(exit), movementGeneration, controlToken,
                                        clearance: LEAVE_VIA_CLEARANCE,
                                        avoidSquares: wrongDoor?.size ? wrongDoor : null });
@@ -8341,6 +8412,12 @@ export function sessionWalkPrototype(deps) {
         }
       } catch (err) { why = `anchorFor threw: ${err.message}`; }
       if (!anchor || anchor.row == null) { anchorTrace.push(why ?? `anchor had no row for ${e.to}`); continue; }
+      // A destination may have several conditional edge branches landing on
+      // different islands. A baked anchor for its other branch must not inherit
+      // this branch's unrelated fine crossing tuple. Keep the proved live candidates.
+      if(e.kind==='edge'&&e.edge_condition&&!edgeConditionAllows(e.edge_condition,anchor)){
+        anchorTrace.push(`skipped anchor r${anchor.row}c${anchor.col} outside ${e.condition}`);continue;
+      }
       const already = spread.filter(x => Number(x.to) === Number(e.to) &&
                                          x.stand_on?.row === anchor.row && x.stand_on?.col === anchor.col);
       if (already.length) {

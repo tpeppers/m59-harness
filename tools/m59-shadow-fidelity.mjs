@@ -154,6 +154,80 @@ export function chestRecord(c) {
            observed_at: c.observed_at ?? null };
 }
 
+// Ability mirroring is a replacement of known ability state, not an additive grant.
+// Fresh characters have starter spells, and reused clones may retain old skills.
+const abilityConstants=JSON.parse(readFileSync(KODDB,'utf8')).constants??{};
+const normAbility=name=>String(name??'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+const skillAliases={'fencing':'PROFICIENCY_SWORD','mace fighting':'PROFICIENCY_MACE','scimitar wielding':'PROFICIENCY_SCIMITAR',
+ 'hammer wielding':'PROFICIENCY_HAMMER','axe wielding':'PROFICIENCY_AXE','archery':'PROFICIENCY_BOW','short sword fighting':'PROFICIENCY_SHORT_SWORD'};
+export function shadowAbilityId(kind,name){
+ const normalized=normAbility(name),prefix=kind==='spells'?'SID':'SKID';
+ const suffix=kind==='skills'&&skillAliases[normalized]||kind==='spells'&&normalized==='kara hol s curse'&&'KARAHOLS_CURSE'||normalized.toUpperCase().replace(/ /g,'_');
+ const raw=abilityConstants[prefix+'_'+suffix],id=Number(raw?.value??raw);
+ return Number.isSafeInteger(id)&&id>0?id:null;
+}
+export const parseAbilityCompounds=text=>[...String(text??'').matchAll(/^:\s+INT (-?\d+)\s*$/gm)].map(m=>{
+ const value=Math.abs(Number(m[1]));return {id:Math.trunc(value/100),ability:value%100};
+});
+export function wantedShadowAbilities(record){
+ const wanted={skills:[],spells:[]};
+ for(const kind of ['skills','spells']){
+  if(!Array.isArray(record?.abilities?.[kind]))throw Error('shadow snapshot missing '+kind);
+  for(const row of record.abilities[kind]){
+   if(row.ability==null||!Number.isFinite(Number(row.ability)))throw Error('shadow ability number missing: '+row.name);
+   if(Number(row.ability)<=0)continue;
+   const id=shadowAbilityId(kind,row.name);if(id==null)throw Error('unknown shadow ability: '+row.name);
+   wanted[kind].push({id,ability:Math.min(99,Math.round(Number(row.ability)))});
+  }
+ }
+ return wanted;
+}
+export function shadowAbilityDifferences(wanted,actual){
+ const differences=[];
+ for(const kind of ['skills','spells']){
+  if(!Array.isArray(actual?.[kind]))throw Error('shadow live ability list unread: '+kind);
+  const want=new Map(wanted[kind].map(r=>[r.id,r.ability])),have=new Map(actual[kind].map(r=>[r.id,r.ability]));
+  for(const [id,ability]of have)if(!want.has(id))differences.push({kind,id,extra:ability});
+  for(const [id,ability]of want)if(have.get(id)!==ability)differences.push({kind,id,wanted:ability,actual:have.get(id)??null});
+ }
+ return differences;
+}
+export function planShadowAbilities(object,record,actual){
+ if(!Number.isSafeInteger(object)||object<=0)throw Error('invalid shadow holder');
+ const wanted=wantedShadowAbilities(record),differences=shadowAbilityDifferences(wanted,actual),commands=[];
+ for(const kind of ['skills','spells']){
+  const suffix=kind==='spells'?'Spell':'Skill',want=new Map(wanted[kind].map(r=>[r.id,r.ability])),have=new Map(actual[kind].map(r=>[r.id,r.ability]));
+  for(const [id,ability]of have)if(want.get(id)!==ability)commands.push(`send object ${object} Remove${suffix} num INT ${id} isDM INT 1`);
+  for(const [id,ability]of want)if(have.get(id)!==ability)commands.push(`send object ${object} Add${suffix} num INT ${id} iability INT ${ability} bDM INT 1`);
+ }
+ if(commands.length)commands.push(`send object ${object} RefigureSchoolsLists`,`send object ${object} InvalidateData`);
+ return {wanted,differences,commands};
+}
+
+export async function mirrorShadowAbilities(records,{resolve,dm,apply=false}){
+ // Validate every source row before even resolving live object ids.
+ const wanted=records.map(wantedShadowAbilities),ids=await resolve(records.map(c=>c.shadow_name));
+ const holders=records.map(c=>ids[c.shadow_name]);if(holders.some(id=>!Number.isSafeInteger(id)||id<=0))throw Error('shadow ability holder missing');
+ const read=async()=>{
+  const heads=splitReplies(await dm(holders.map(id=>`show object ${id}`)),holders.map(id=>`show object ${id}`)).map(parseShowObject);
+  const commands=[...new Set(heads.flatMap(h=>['skills','spells'].map(kind=>{
+   if(h[kind]===undefined)throw Error('shadow ability property unread');return h[kind]?`show list ${h[kind]}`:null;
+  }).filter(Boolean)))];
+  const blocks=commands.length?splitReplies(await dm(commands),commands):[],lists=new Map(commands.map((command,i)=>{
+   if(blocks[i]==null)throw Error('shadow ability list reply missing');return [command,parseAbilityCompounds(blocks[i])];
+  }));
+  return heads.map(h=>({skills:h.skills?lists.get(`show list ${h.skills}`):[],spells:h.spells?lists.get(`show list ${h.spells}`):[]}));
+ };
+ const before=await read(),plans=records.map((c,i)=>planShadowAbilities(holders[i],c,before[i]));
+ const commands=plans.flatMap(p=>p.commands);
+ if(apply&&commands.length){
+  const out=await dm(commands);if(/can't handle|not a valid|invalid|Cannot find|no access|Unknown command|Missing parameter/i.test(splitReplies(out,commands).join('\n')))throw Error('shadow ability setup rejected');
+ }
+ const after=apply?await read():before,differences=records.map((c,i)=>({character:c.shadow_name,differences:shadowAbilityDifferences(wanted[i],after[i])})).filter(r=>r.differences.length);
+ if(differences.length)throw Error('shadow ability readback mismatch: '+differences.map(r=>r.character+' ('+r.differences.length+')').join(', '));
+ return {verified:records.length,commands:apply?commands.length:0};
+}
+
 // ---------------------------------------------------------------- stable slots
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 export const shadowName = (i) => {
@@ -358,6 +432,7 @@ export function parseShowObject(block) {
     id: num(/OBJECT (\d+) is CLASS/), class: cls,
     number: num(/piNumber\s+= INT (-?\d+)/),
     passive: list('plPassive'), active: list('plActive'), using: list('plUsing'),
+    skills: list('plSkills'), spells: list('plSpells'),
     members: list('plMembers'),
     guild: obj('poGuild'), owner: obj('poOwner'), guildOwner: obj('poGuild_owner'),
     roomNum: num(/piRoom_num\s+= INT (\d+)/), mature: num(/piMature\s+= INT (-?\d+)/),

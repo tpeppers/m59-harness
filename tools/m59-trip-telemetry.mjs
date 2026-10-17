@@ -73,3 +73,13 @@ export function compactRefusals(refusals, { max = 6, whyChars = 160 } = {}) {
   });
   return list.length > max ? [...list.slice(0, max), { more: list.length - max }] : list;
 }
+
+// A completed travel job may have exhausted only temporarily occupied exits.
+// Publish a bounded, named-coordinate proof; mixed or sent refusals stay failures.
+export function journeyTrafficWait(result){
+ if(result?.arrived!==false||!Array.isArray(result.refusals)||!result.refusals.length)return null;
+ if(!result.refusals.every(r=>r?.stage==='walk'&&r?.why==='object_blocked'&&r.crossing_packet_sent!==true&&Number.isInteger(r.stand_on?.row)&&Number.isInteger(r.stand_on?.col)))return null;
+ const room=Number(result.room?.num),to=Number(result.destination);
+ if(!Number.isInteger(room)||!Number.isInteger(to))return null;
+ return {room,to,exits:result.refusals.slice(0,8).map(r=>({row:r.stand_on.row,col:r.stand_on.col}))};
+}

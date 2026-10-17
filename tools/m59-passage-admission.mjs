@@ -59,7 +59,7 @@ export function releaseConfirmedPassage(session) {
   if (!held || !me || me.predicted) return false;
   if (session.client.room?.id === held.roomId && contains(held.zone,me)) return false;
   if (held.file) releaseFilePassage(held.agent);
-  else if (local.get(held.key) === session) local.delete(held.key);
+  else {const members=local.get(held.key);members?.delete(session);if(members?.size===0)local.delete(held.key);}
   session._passage = null;
   return true;
 }
@@ -76,15 +76,16 @@ export function claimPassageMove(session, target) {
     traffic:'passage_admission',zone:zone.id,...extra});
   if (session._passage) return refusal({note:'the previous passage exit is not confirmed'});
   for (const o of c.room?.objects?.values?.() ?? [])
-    if (o.id !== c.selfId && (o.flags & OF.PLAYER) && contains(zone,o))
+    if (o.id !== c.selfId && (o.flags & OF.PLAYER) && contains(zone,o)&&!session.passageConvoy?.characters?.includes(typeof o.name==='string'?o.name:c.rsc?.get?.(o.nameRsc)))
       return refusal({objectId:o.id,note:'another player is still in the passage'});
   const agent = String(session.name ?? c.selfId), resource = namespace(session)+'|'+zone.id;
-  const file = reserveFilePassage(agent, Number(session.world.room.num), zone.id);
+  const flow=session.passageConvoy?.flow??null;
+  const file = reserveFilePassage(agent, Number(session.world.room.num), zone.id,{flow});
   if (file && !file.ok) return refusal({note:'another keeper holds passage admission',holder:file.agent});
   if (!file) {
-    const owner = local.get(resource);
-    if (owner && owner !== session) return refusal({note:'another session holds passage admission'});
-    local.set(resource,session);
+    const members=local.get(resource)??new Map();
+    if([...members].some(([owner,heldFlow])=>owner!==session&&!(flow&&heldFlow===flow)))return refusal({note:'another session holds passage admission'});
+    members.set(session,flow);local.set(resource,members);
   }
   session._passage = {zone,agent,file:!!file,key:resource,roomId:c.room.id};
   return null;

@@ -3705,10 +3705,15 @@ class Session {
   }
 
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units, not a grid tuple.
-  async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, timedFall = false, beforeMutation = null,
+  async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, timedFall = false, beforeMutation = null, targetGuard = null,
                                     minGap = MOVE_INTERVAL_MS, expectedRoomId = null,
                                     offMap = false, unclipped = false, maxDeviation = null } = {}) {
     const c = this.need();
+    const submitMove=async fn=>{
+      const result=await this.pacer.submit('move',fn,minGap);
+      return result?.held?{sent:false,validation:{available:false,moved:false,blocked:false,
+        reason:'casting_hold',hold:result}}:result;
+    };
     const roomId = expectedRoomId ?? c.room.id;
     if (c.room.id !== roomId) return { sent: false, validation: {
       available: false, moved: false, blocked: true, reason: 'room_changed_before_move',
@@ -3736,7 +3741,7 @@ class Session {
     // "undo" its way through a wall.
     if (offMap) {
       const target = { x: Math.round(x), y: Math.round(y) };
-      return this.pacer.submit('move', () => {
+      return submitMove(() => {
         if (c.room.id !== roomId) return { sent: false, validation: {
           available: false, moved: false, blocked: true, reason: 'room_changed_before_move' } };
         const observed = c.self;
@@ -3798,7 +3803,7 @@ class Session {
         });
         return { sent: true, roomId, eventSeq, before, target,
                  validation: sentValidation };
-      }, minGap);
+      });
     }
 
     // Ordinary route steps may slide a little; a large predicted miss is not
@@ -3827,7 +3832,7 @@ class Session {
     // Pay that simulated time, then repeat the proof against the live scene.
     const fallDelayMs = timedFall ? initial.fall_motion?.elapsed_ms ?? 0 : 0;
     if (fallDelayMs > 0) await new Promise(resolve => setTimeout(resolve, fallDelayMs));
-    return this.pacer.submit('move', () => {
+    return submitMove(() => {
       // Pacing can delay this callback while an asynchronous room entry, teleport,
       // or older room read changes the world beneath it. Bind the packet to the room
       // it was requested in and recompute from the live start immediately before send.
@@ -3850,6 +3855,10 @@ class Session {
         return {sent:false,validation:{available:false,moved:false,blocked:true,reason:'movement_cancelled'}};
       const hazard = this.groundEffectBlock?.(c.self, validation.target);
       if (hazard) return { sent: false, validation: hazard };
+      // A paced body slide may differ from the walker's earlier shelf prediction.
+      // Refuse its resolved endpoint before acquiring passage admission for an unsent move.
+      const targetRefusal = typeof targetGuard === 'function' ? targetGuard({from:before,to:validation.target,validation}) : null;
+      if(targetRefusal)return {sent:false,validation:{...validation,...targetRefusal,moved:false,blocked:true}};
       // Atomic passage admission at the send boundary for steps, rails and jumps.
       const admission = this.claimPassageMove?.(validation.target);
       if (admission) return { sent: false, validation: admission };
@@ -3902,7 +3911,7 @@ class Session {
           validation.motionZ,destinationFloor,Date.now(),{normalWalk:!fall&&!timedFall});
       }
       return { sent: true, roomId, eventSeq, before, target: validation.target, validation };
-    }, minGap);
+    });
   }
 
   // ONE SQUARE, AND NOT A ROOM RE-READ TO GO WITH IT.
