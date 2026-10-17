@@ -18,6 +18,7 @@
 // A tool with no header comment shows up as NO SUMMARY. That is a prompt to write one, not a bug.
 
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,8 +48,20 @@ function summarize(file) {
   return null;
 }
 
+// A GITIGNORED TOOL IS THIS MACHINE'S, NOT THE REPOSITORY'S. m59-shadow.mjs is ignored on purpose
+// (it carries the shape of a real roster), so a checkout that has one would commit an index row a
+// clean clone can never regenerate, and `--check` would then fail everywhere else. Asked of git;
+// without git everything is listed, as before.
+function ignoredBy(files) {
+  const r = spawnSync('git', ['check-ignore', '--stdin'], { cwd: TOOLS, input: files.join('\n'), encoding: 'utf8' });
+  if (r.status !== 0 && r.status !== 1) return new Set();     // 1 = nothing ignored; anything else = no git
+  return new Set(String(r.stdout).split(/\r?\n/).filter(Boolean).map((p) => p.replace(/^.*[\\/]/, '')));
+}
+
 function collect() {
-  const files = readdirSync(TOOLS).filter((f) => f.endsWith('.mjs') && f !== 'm59-index.mjs');
+  const all = readdirSync(TOOLS).filter((f) => f.endsWith('.mjs') && f !== 'm59-index.mjs');
+  const ignored = ignoredBy(all);
+  const files = all.filter((f) => !ignored.has(f));
   const rows = files.sort().map((f) => ({
     file: f,
     name: f.replace(/^m59-/, '').replace(/\.mjs$/, ''),

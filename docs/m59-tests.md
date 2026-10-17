@@ -2073,3 +2073,22 @@ case asserts that the rail keeps the declared r36c16 -> r38c10 jump instead of
 choosing the longer r38c8 landing by planar clearance. Predicted rail starts
 must be refreshed before planning, and a takeover during that read forbids a
 packet. Ordinary steps also recheck a cancelled control token during pacing.
+
+## m59-roomyield-test.mjs (31) — a farm's kills against what its room can make
+
+`m59-roomyield.mjs` answers "is this farm working" with three numbers beside the kill rate:
+how many character-hours were really spent in the room, the room's spawn **ceiling**, and what
+the five-minute samples say the bodies were doing. The test pins the parts that are arithmetic
+on kod and therefore easy to get quietly wrong. Ukgoth makes ~218 trolls an hour because a room
+always rolls at the five-player rate (`vbScaleSpawnRateWithPlayers = FALSE`, monsroom.kod:22),
+so headcount is never a multiplier. A room class that declares no generator **inherits**
+MonsterRoom's. The first draft read an undeclared field as `Number('') === 0`, which gave
+Castle Victoria no ceiling at all. Weights summing under 100 are empty ticks
+(`TryCreateMonster` makes nothing past the end of its table), so CV's 40+20 is 60% of its rolls,
+not 100%. A silence longer than the gap is not residency. A journey places a body where it
+ended. A room NAME is not a room number. And a kill sharing its creature with another
+character's row inside 1.5 s is counted as **shared**: a keeper writes `killed` when its target
+vanishes, so one skeleton can be two rows. Measured in CV on 2026-10-16: 843 rows in an hour
+against a generator that can make 540. The last three cases load the committed room tables,
+so a broken join between `tools/rooms.json`, `substrate/m59-spawns.json` and
+`substrate/m59-map.json` fails here rather than printing a dash.
