@@ -942,3 +942,11 @@ substrate/island-admin/
 
 # Local Brax route trials, generated rails, coordination and movement receipts.
 /substrate/brax-*
+
+# PvP reenactments for video (m59-reenact*). The tooling is private: it lives in m59-private,
+# which `sync.mjs install` puts here, the m59-shadow.mjs arrangement. substrate/reenact/ is the lab
+# stand-ins' credentials plus scripts and run receipts that name real players.
+/tools/m59-reenact*.mjs
+/docs/m59-reenact.md
+/substrate/reenact.example.json
+/substrate/reenact/
