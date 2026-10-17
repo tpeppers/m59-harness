@@ -231,7 +231,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     for (const { name, lines } of taunts.lines.values()) { console.log(name); for (const l of lines) console.log(`  - ${l}`); }
     process.exit(0);
   }
-  if (taunts.missing) { console.error(`no taunt file at ${TAUNT_FILE()} — copy substrate/victory-taunts.example.json and fill it in`); process.exit(2); }
+  if (taunts.missing) { console.error(`no taunt file at ${arg('--taunts', TAUNT_FILE())} — copy substrate/victory-taunts.example.json and fill it in`); process.exit(2); }
   const call = async (name, args) => controlRpc(broker, name, args);
   // Refuse a broker that is not holding this fleet: a taunt from the wrong fleet is someone else's voice.
   const h = await fetch(broker + '/health').then(r => r.json()).catch(() => null);
@@ -244,10 +244,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     const rep = fullReport();
     for (const b of rep.battles.filter(b => b.result === 'won').slice(0, 5))
       console.log(`${new Date(b.start).toISOString()} won vs ${b.enemies.map(e => e.name).join(', ')}  last kill ${lastKiller(b) ?? '?'}  ${state.answered.has(b.id) ? `answered (${state.answered.get(b.id).spoke ?? 'nobody'})` : 'unanswered'}`);
-    const { order, skipped } = speakerOrder({ killer: null, fleet: (await call('fleet', {})).fleet ?? [], lines: taunts.lines, percent: taunts.settings.broadcast_mana_percent });
-    console.log(`would speak now, no killer named: ${order.slice(0, 3).map(o => `${o.character} (L${o.level}, mana ${o.mana}/${o.max_mana})`).join(', ') || 'nobody'}${skipped ? '' : ''}`);
-    process.exit(0);
-  }
+    const { order } = speakerOrder({ killer: null, fleet: (await call('fleet', {})).fleet ?? [], lines: taunts.lines, percent: taunts.settings.broadcast_mana_percent });
+    console.log(`would speak now, no killer named: ${order.slice(0, 3).map(o => `${o.character} (L${o.level}, mana ${o.mana}/${o.max_mana})`).join(', ') || 'nobody'}`);
+    // No process.exit after a fetch: on Windows it trips a libuv assertion on the way out.
+  } else {
   if (!state.primed && !argv.includes('--backfill')) {
     for (const b of fullReport().battles) if (b.result === 'won') state.answered.set(b.id, { at: b.end, result: 'won', spoke: null, primed: true });
     if (!dryRun) writeState(state);
@@ -263,4 +263,5 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   say(`victory taunts for fleet ${fleet}: ${taunts.lines.size} characters, ${[...taunts.lines.values()].reduce((s, e) => s + e.lines.length, 0)} lines${dryRun ? ' (dry run)' : ''}`);
   await once();
   if (!argv.includes('--once')) setInterval(once, taunts.settings.poll_ms);
+  }
 }
