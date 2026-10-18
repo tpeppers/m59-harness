@@ -2099,3 +2099,160 @@ vanishes, so one skeleton can be two rows. Measured in CV on 2026-10-16: 843 row
 against a generator that can make 540. The last three cases load the committed room tables,
 so a broken join between `tools/rooms.json`, `substrate/m59-spawns.json` and
 `substrate/m59-map.json` fails here rather than printing a dash.
+
+
+## Brax return queues, socket evidence and healing
+
+- m59-queued-room-exit-test.mjs checks actual native crossings at legacy coarse/fine anchor mismatches.
+- m59-queued-body-egress-test.mjs retains captured stationary monsters and shared fleet bodies through all graveyard/cavern exits.
+- m59-queued-exit-recovery-test.mjs allows only known ended native operations to replan after fresh identity and ownership proof.
+- m59-session-evidence-test.mjs checks socket handoff races, reconnect health baselines, bounds, scope and diagnostic write failures.
+- m59-death-notices-test.mjs checks authoritative peer witnesses, duplicate broadcasts and ambiguous multi-death gaps.
+- m59-death-location-test.mjs refuses guessed offline locations and resolves actual fatal socket locations.
+- m59-recovery-heal-test.mjs exercises the real recovery and fieldrest ally-healing methods, resource checks and recycled target IDs.
+- m59-rest-timing-test.mjs checks 60-second server regeneration gaps, genuine stalls, vigor ceilings, deadlines and damage with an injected clock.
+
+Native fixture packet counts are offline regression evidence, not live group
+arrival times. A migration benchmark requires all 24 actual room-39 baselines
+at one common departure, with deaths and failed preparation attempts retained.
+
+- m59-native-doorway-queue-test.mjs retains a recorded 16-character doorway pileup and stationary monsters, and checks that an intended approach crossing ends without chasing stale backward bends.
+- m59-brax-native-onward-test.mjs exercises captured Sentinel, eastern Cragged and Cavern positions against native collision and retained monsters.
+- m59-traffic-resume-native-test.mjs invokes the actual keeper resume method, including the formerly stuck healthy 69-vigor case.
+- m59-convoy-provision-test.mjs covers parallel personal meals, one cohort stock scan, confirmed ordinary trades and donor reserves.
+- m59-rail-coalesce-test.mjs checks opt-in same-floor chords, dense source retention and mandatory exits.
+- m59-active-self-heal-test.mjs covers actual travel healing, single pending casts, login waiting and send-time takeovers.
+- Healing tests also cover delayed HP after initial mana payment, paid failed spells and critical last-mana self recovery. Rest timing tests include native absolute/fractional vigor boundaries and requested mana.
+
+The crowded socketless tests use immediate peer position broadcasts and static
+monsters. They do not reproduce network delay or monster AI, and their packet
+counts are not a substitute for live arrival percentiles.
+
+Additional renewed Brax regressions cover actual file-backed passage claims,
+old convoy adoption by the same process, and an injected ended north-head
+confirmation failure. The socketless fixture alone cannot prove live-file
+admission behavior. Tests reject another process's claim, predicted bodies,
+missing convoy membership, and changed rooms. The native resume fixture now
+includes the captured full-health62-vigor deviation, fresh confirmation and
+send-time cancellation/identity/health changes. Fine recovery tests separately
+exercise opted-in same-actor room transitions and strict fixed-room refusal.
+Session evidence tests overflow the action window before and after reconnect,
+then reload pinned login, health and fatal anchors from disk.
+
+The castle regression replays all24 actual Victoria start poses with captured
+non-fleet blockers and real isolated file-backed passage claims, then drains
+two published GO transitions and the outside boundary independently per actor.
+Captured players are excluded from static blockers by roster identity, even
+when a legacy flag-derived is_player field is false. A separate test invokes
+the actual unarmed takeback and verifies ownership survives cancellation.
+
+For live reproduction, archive effective runtime policy as well as source
+bytes. An old clone's near-zero recovery thresholds or disabled travel guards
+can materially differ from the current fleet. Preserve the original clone
+snapshot, record any aligned fields and their source, and keep earlier deaths
+and failed attempts separate from the corrected run.
+
+Recorded queue reproductions preserve each actor's actual numeric ID and flags;
+the simulated client's own-body ID, predictions, room entry and peer-scene sync
+must agree. The 17-body return-cliff fixture includes the captured NPCs and
+real file-backed claims. Socketless results certify packet/geometry behavior,
+not live monster survival or wall-clock speed. Combat session doubles must
+bind `client` to the same object returned by `need()`, otherwise socket-change
+guards cancel before the behavior under test. Source contract checks inspect
+the actual method instead of fixed-length text windows.
+
+The travel-origin regression invokes actual initial holds, nested wedge
+shelter recovery and repeated suspension. Issuer and guard are captured before
+a nested cell order can replace the parent road order. An explicit origin
+remains available before Session registers that road and on subsequent resumes.
+
+Captured exit regressions preserve the six-person castle GO jam and nine-person
+graveyard boundary jam, including overlapping bodies, actual numeric IDs and
+static NPCs. Real isolated file claims and immediate peer position updates
+exercise complete queue drain. The castle head already occupies a legal alias
+and sends zero movement packets; a different directed arrival branch is a
+negative case. These remain socketless geometry checks, not live speed results.
+Travel-gear tests exercise the actual captured unarmed/carrying-axe case,
+changed sockets and protected recovery. Farm vigor tests invoke the real
+recovery method and unchanged effective combat floor.
+
+Movement-input evidence tests verify that consumed arguments and an immutable
+observed scene survive one action and an ambiguous transport failure, without
+repeating the POST or storing credentials/chat. The offset-corridor test retains
+captured body IDs, peer-observed flags and skeletons, with delayed room snapshots.
+Its continued corridor is explicitly reconstructed and terrain-proved; it is
+not described as an exact replay of an original request that was never logged.
+The NPC flight fixture similarly labels its later body capture and historical
+high-floor validation separately. Future opt-in traces retain the missing inputs.
+
+
+The jump-ownership regression executes the actual native handler and broker
+forwarding branch, plus a local fake broker for the public FleetScript call.
+It verifies one action, the same issuer during posture and movement, exact
+preemption attribution, and the difference between yielded and live recovery.
+The lift-member test covers a failed rider followed later by the final healthy
+exit, not just repeated failure callbacks.
+
+The south-queue fixture keeps separate real snapshots and timestamps.
+The actual raised-lift r32c55 ledge is positive; the nearby r31c55 body is a
+negative because its floor is 4736 client units lower. No reconstructed floor
+or position is presented as a captured fact.
+
+The Sentinel regression preserves an exact consumed native request and its
+ordered pre-action scene. The original replay waited without emitting movement
+while trying to reach an occupied anchor. Reusing the proved current boundary
+stage crosses in two legal packets with every recorded blocking body retained.
+The test checks their presence before every movement packet and retains wall,
+prediction, other-cell and distance negatives. Snapshot NPCs are static in
+this socketless reproduction; this does not certify live survival or timing.
+The vital-evidence regression exercises the actual client reader with transient
+post-death ceilings and refuses unsupported grant attribution.
+
+
+m59-fineclimb-convoy-test.mjs executes the actual Brax child wrapper, CLI
+validation and native-action branch. It requires the exact origin/cohort to
+survive all three boundaries and rejects foreign or malformed metadata.
+m59-return-cliff-queue-test.mjs covers the separate physical admission behavior
+with all17 captured bodies/NPCs. The bounded egress planner uses the existing
+goal-directed flood; m59-queued-exit-async-test.mjs verifies22 requests to the
+specifically published eastern north shelf, responsive timers, and a later usable request after a deadline.
+
+m59-farm-observation-test.mjs checks a requested target beyond twelve nearer
+non-target monsters, guarded potential-idle classification, cached/unreported
+position status, and missing/new-connection health samples. The recovery-heal
+suite includes paid explicit spell failure coincident with an HP regeneration
+tick; this must remain an unconfirmed heal.
+
+
+m59-active-recovery-state-test.mjs executes the actual keeper logoff activation,
+then checks native/public fine-walk protection and an interrupted-rest active
+replacement using captured partial failure evidence. The surrounding full
+state and resource progress are modeled and labeled. Ended and yielded intents
+remain negative cases. The full24-scenario survival decision regression is
+also in the movement gate; legacy busy announcements preserve survival, while
+explicit protected-faculty handoffs still yield.
+
+m59-brax-boarding-lanes-test.mjs checks real declared-lane geometry and file
+claims, then executes the actual boarding block with modeled flight
+acknowledgements. The next column starts after a confirmed landing and before
+the first parking walk finishes; flights never overlap. The city recovery
+budget test executes the actual wrapper on a modeled clock and retains the
+original overall deadline. These are control/geometry regressions, not live
+survival or speed measurements.
+
+m59-brax-trial-observation-test.mjs distinguishes admitted/boarded/validated
+riders, deduplicates physical group trips, rejects later arrivals outside the
+completed trial window and preserves individual failures despite an aggregate
+dispatch success flag. Partial arrivals never produce a full-roster p90.
+
+The readable socket-history test checks first/last/fatal health, observed gaps
+and overlapping handoffs, poison text, last living supplies, post-death health,
+strong fatal-room precedence, conflicting rooms, scope/time fences and HTML
+escaping. The trial timing reader derives stage intervals only from positive
+matching-trip receipts. Missing stages remain missing, and every interval
+percentile is explicitly an observed subset rather than a full-fleet claim.
+
+The asynchronous platform refusal test explicitly requests the eastern north
+opening at r1c62. A generic request for room578 can consider different western
+openings and cannot establish access to the isolated eastern Brax component.
+The test does not assert every exit from every platform pose is unreachable.

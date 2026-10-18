@@ -1,0 +1,172 @@
+{
+  "room": 39,
+  "to": 38,
+  "source": "actual timed public29 castle jam; final native aim retained, earlier prefix omitted because the head is already there",
+  "players": [
+    {
+      "id": 7483,
+      "name": "captured-head",
+      "flags": 4160750093,
+      "x": 1785,
+      "y": 571,
+      "row": 8,
+      "col": 27
+    },
+    {
+      "id": 7468,
+      "name": "captured-follower1",
+      "flags": 4160750093,
+      "x": 1876,
+      "y": 519,
+      "row": 8,
+      "col": 29
+    },
+    {
+      "id": 7456,
+      "name": "captured-follower2",
+      "flags": 4160750093,
+      "x": 1837,
+      "y": 555,
+      "row": 8,
+      "col": 28
+    },
+    {
+      "id": 7448,
+      "name": "captured-follower3",
+      "flags": 4160750093,
+      "x": 2312,
+      "y": 528,
+      "row": 8,
+      "col": 36
+    },
+    {
+      "id": 7447,
+      "name": "captured-follower4",
+      "flags": 4160750093,
+      "x": 1875,
+      "y": 488,
+      "row": 7,
+      "col": 29
+    },
+    {
+      "id": 7443,
+      "name": "captured-follower5",
+      "flags": 4160750093,
+      "x": 1794,
+      "y": 588,
+      "row": 9,
+      "col": 28
+    }
+  ],
+  "bodies": [
+    {
+      "id": 8165,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1429,
+      "y": 543,
+      "row": 8,
+      "col": 22
+    },
+    {
+      "id": 7924,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 2016,
+      "y": 608,
+      "row": 9,
+      "col": 31
+    },
+    {
+      "id": 7922,
+      "name": "zombie",
+      "flags": 9,
+      "x": 2336,
+      "y": 736,
+      "row": 11,
+      "col": 36
+    },
+    {
+      "id": 7921,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1376,
+      "y": 608,
+      "row": 9,
+      "col": 21
+    },
+    {
+      "id": 3292,
+      "name": "Tendrath",
+      "flags": 2098689,
+      "x": 224,
+      "y": 544,
+      "row": 8,
+      "col": 3
+    },
+    {
+      "id": 7920,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1504,
+      "y": 544,
+      "row": 8,
+      "col": 23
+    },
+    {
+      "id": 7919,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 2336,
+      "y": 864,
+      "row": 13,
+      "col": 36
+    },
+    {
+      "id": 7918,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1824,
+      "y": 864,
+      "row": 13,
+      "col": 28
+    },
+    {
+      "id": 7917,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1888,
+      "y": 608,
+      "row": 9,
+      "col": 29
+    },
+    {
+      "id": 7916,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1957,
+      "y": 728,
+      "row": 11,
+      "col": 30
+    },
+    {
+      "id": 1682,
+      "name": "mana node",
+      "flags": 2230272,
+      "x": 2944,
+      "y": 832,
+      "row": 13,
+      "col": 46
+    }
+  ],
+  "head": 7483,
+  "aim": {
+    "x": 1785,
+    "y": 576
+  },
+  "exit": {
+    "to": 38,
+    "row": 9,
+    "col": 27
+  }
+}

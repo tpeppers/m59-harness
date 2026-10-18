@@ -4,13 +4,13 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fork} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {configureSpotClaimStore,reserveFilePassage,releaseFilePassage} from './m59-spotclaims.mjs';
-import {narrowPassages,claimPassageMove,releaseConfirmedPassage,passageExitNeedsConfirmation} from './m59-passage-admission.mjs';
+import {configureSpotClaimStore,reserveFilePassage,releaseFilePassage,retagOwnFilePassage} from './m59-spotclaims.mjs';
+import {narrowPassages,claimPassageMove,releaseConfirmedPassage,passageExitNeedsConfirmation,adoptPassageConvoy} from './m59-passage-admission.mjs';
 import {Session} from './m59-session.mjs';
 if(process.argv[2]==='worker'){
   configureSpotClaimStore({directory:process.argv[3],namespace:'trial'});
   process.on('message', command=>process.send(command==='claim'||command?.action==='claim'
-    ? reserveFilePassage(process.argv[4],99,'pipe',{flow:command?.flow??null}) : releaseFilePassage(process.argv[4])));
+    ? reserveFilePassage(process.argv[4],99,'pipe',{flow:command?.flow??null}) : command?.action==='retag' ? retagOwnFilePassage(process.argv[4],99,'pipe',command.flow) : releaseFilePassage(process.argv[4])));
 }else{
   const geo={rows:5,cols:9,collisionReady:true,walkable:(r,c)=>
     (r>=2&&r<=4&&((c>=1&&c<=3)||(c>=7&&c<=9)))||(r===3&&c>=4&&c<=6)};
@@ -69,6 +69,11 @@ if(process.argv[2]==='worker'){
   assert.equal(claimPassageMove(foreign,point(3,4)).objectId,'human');
   foreign.client.room.objects.clear();assert.equal(claimPassageMove(foreign,point(3,4)),null);
   foreign.client.self=point(3,7);releaseConfirmedPassage(foreign);
+  const incumbent=body('incumbent',3);incumbent.passageConvoy={flow:'old-run',characters:['Incumbent']};incumbent.client.me={name:'Incumbent'};assert.equal(claimPassageMove(incumbent,point(3,4)),null);incumbent.client.self=point(3,5);incumbent.passageConvoy={flow:'new-run',characters:['Incumbent']};
+  incumbent.client.self.predicted=true;assert.equal(adoptPassageConvoy(incumbent).adopted,false);incumbent.client.self.predicted=false;
+  incumbent.passageConvoy.characters=[];assert.equal(adoptPassageConvoy(incumbent).adopted,false);incumbent.passageConvoy.characters=['Incumbent'];
+  const roomId=incumbent.client.room.id;incumbent.client.room.id++;assert.equal(adoptPassageConvoy(incumbent).adopted,false);incumbent.client.room.id=roomId;
+  assert(adoptPassageConvoy(incumbent).adopted);incumbent.client.self=point(3,7);releaseConfirmedPassage(incumbent);
   // Both sides race in separate OS processes before either body is visible.
   const dir=mkdtempSync(join(tmpdir(),'m59-passage-'));
   const workers=['a','b'].map(name=>fork(fileURLToPath(import.meta.url),['worker',dir,name],{stdio:['ignore','ignore','inherit','ipc']}));
@@ -82,6 +87,14 @@ if(process.argv[2]==='worker'){
     await Promise.all(workers.map(p=>ask(p,'release')));
     const shared=await Promise.all(workers.map(p=>ask(p,{action:'claim',flow:'same checked destination'})));
     assert(shared.every(r=>r.ok),'both processes atomically hold the same explicit convoy flow');
+    configureSpotClaimStore({directory:dir,namespace:'trial'});
+    assert.equal(retagOwnFilePassage('a',99,'pipe','not-my-process').ok,false,'a different process cannot retag the live holder');
+    configureSpotClaimStore({enabled:false});
+    assert((await ask(workers[0],{action:'retag',flow:'new checked destination'})).ok);
+    assert(!(await ask(workers[0],{action:'claim',flow:'new checked destination'})).ok,'the other live incumbent is not silently retagged');
+    assert((await ask(workers[1],{action:'retag',flow:'new checked destination'})).ok);
+    assert((await ask(workers[0],{action:'claim',flow:'new checked destination'})).ok);
+    await Promise.all(workers.map(p=>ask(p,{action:'retag',flow:'same checked destination'})));
     assert(!(await ask(workers[0],{action:'claim',flow:'different destination'})).ok);
     await ask(workers[0],'release');assert(!(await ask(workers[0],'claim')).ok,'the second live member still holds its admission');
     await ask(workers[1],'release');assert((await ask(workers[0],'claim')).ok);

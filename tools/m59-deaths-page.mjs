@@ -62,6 +62,21 @@ function renderDigest(d) {
       (x.replacement_id ? ' · replacement '+safeText(x.replacement_id) : '') +
       ' · '+safeText(x.outcome || x.status)+'</div>';
   }).join('') : '<span class="dim">No explicit survival decisions in this older record.</span>';
+  var sockets=d.socket_history;
+  var socketText=sockets&&sockets.available?(sockets.sessions||[]).map(function(x){
+    var hp=function(h){return h?safeText(h.value)+'/'+safeText(h.max)+(h.room!=null?' (room '+safeText(h.room)+')':''):'unobserved';};
+    var gap=x.boundary?(x.boundary.offline_gap_ms!=null?'observed boundary gap '+safeText(x.boundary.offline_gap_ms)+'ms':x.boundary.overlap_ms!=null?'overlapping handoff '+safeText(x.boundary.overlap_ms)+'ms':'boundary time unknown'):'first retained socket';
+    var lines=(x.last_events||[]).map(function(e){return '<div><span class="t">'+((e.at-d.at)/1000).toFixed(1)+'s</span> '+safeText(e.kind)+' '+safeText(e.name||e.phase||e.opcode||'')+' '+safeText(e.text||e.reason||(e.value!=null?e.value:''))+(e.room!=null?' · room '+safeText(e.room):'')+'</div>';}).join('');
+    var messages=(x.last_messages||[]).map(function(e){return '<div><span class="t">'+((e.at-d.at)/1000).toFixed(1)+'s</span> '+safeText(e.text)+'</div>';}).join('');
+    var resources=x.last_live_resources;
+    var resourceText=resources?'<div>last live resource observation: mana '+safeText(resources.mana==null?'unread':resources.mana)+' · herbs '+safeText(resources.herbs==null?'unread':resources.herbs)+' · known heals '+safeText(resources.known_heals==null?'unread':resources.known_heals.length?resources.known_heals.join(', '):'none')+'</div>':'';
+    var heal=x.last_healing;
+    return '<div><b>Socket '+safeText(x.id)+' · PID '+safeText(x.pid)+'</b> · '+safeText(gap)+'<div>first HP '+hp(x.first_health)+' · last HP '+hp(x.last_health)+' · '+safeText(x.end_reason||'no close observed')+'</div>'+
+      (x.post_death_health?'<div>post-death observation: '+hp(x.post_death_health)+'</div>':'')+
+      (x.first_health&&x.first_health.ailments.length?'<div>first observed ailments: '+safeText(x.first_health.ailments.join(', '))+'</div>':'')+
+      (heal?'<div>last heal '+safeText(heal.spell)+' · mana paid '+safeText(heal.mana_spent)+' · observed net HP '+safeText(heal.health_gain)+' · server '+safeText(heal.server_outcome)+' · confirmed '+safeText(heal.confirmed)+'</div>':'')+
+      (x.events_dropped?'<div>rolling events omitted: '+safeText(x.events_dropped)+'; first/last health and fatal anchors retained</div>':'')+resourceText+messages+lines+'</div>';
+  }).join(''):'';
   var place = w.trusted
     ? w.room + ' <span class="dim">r' + w.row + 'c' + w.col + '</span>'
     : '<span class="guess">not known — ' + w.why + '</span>';
@@ -104,6 +119,7 @@ function renderDigest(d) {
   '</div>' +
   (evidence ? '<div class="log"><b>Death attribution</b>'+evidence+'</div>' : '') +
   '<div class="log"><b>Survival decisions</b>'+survival+'</div>' +
+  (socketText?'<div class="log"><b>Socket history</b><div>'+safeText(sockets.note)+'</div>'+socketText+'</div>':'') +
   (text ? '<div class="log">' + text + '</div>' : '');
 }
 `;

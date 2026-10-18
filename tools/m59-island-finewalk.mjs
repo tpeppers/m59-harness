@@ -131,7 +131,7 @@ export function ownsFineRecovery(ctx,status,{since=null,active=false,established
   return keeperMovementPreemption(status,originLabel(ctx.origin??currentCallOrigin()),{since})||
     ((active||established)&&activeOwnedFineRecovery(ctx,status));
 }
-export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{}}={}){
+export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active=false,initial=null,pollMs=1000,onSample=()=>{},allowRecoveryRoomChanges=false}={}){
   const fail=(reason,status=null,l=null)=>{
     (ctx.state??={}).islandRecoveryFailure={at:Date.now(),reason,since,deadline,
       actor:l&&{id:l.you?.id,room:l.room?.num,room_object_id:l.room?.object_id,x:l.you?.x,y:l.you?.y},hp:l?.hp,vigor:l?.vigor,
@@ -161,8 +161,22 @@ export async function recoverIslandFineWalk(ctx,{deadline,read,since=null,active
     if(!owned&&!actorFence&&!refugeFence)return fail('recovery_not_owned',s,l);
     const wall=s.autopilot_status?.safe_spot;
     const observedActor=actor(l);
-    if(actorFence&&(observedActor.id!==actorFence.id||observedActor.room!==actorFence.room||observedActor.roomId!==actorFence.roomId))return fail('actor_changed',s,l);
+    if(l.room?.num===1||!(l.hp?.value>0))return fail('traveller_died',s,l);
+    if(actorFence&&(observedActor.id!==actorFence.id||observedActor.room!==actorFence.room||observedActor.roomId!==actorFence.roomId)){
+      // A room-exit objective may follow its own keeper's ordinary refuge trip
+      // across a boundary. A fixed-room rail still refuses that change. Never
+      // infer ownership from an old cancellation or carry a refuge into a new room.
+      if(!allowRecoveryRoomChanges||observedActor.id!==actorFence.id||!activeOwnedFineRecovery(ctx,s))return fail('actor_changed',s,l);
+      refugeFence=null;
+    }
     if(owned)actorFence=actor(l);
+    // last_preempted is historical evidence, not a live recovery lock. A
+    // completed full-health detour must not wait forever outside a refuge.
+    const currentLease=s.autopilot_status?.faculties?.movement;
+    if(actorFence&&origin?.source==='fleetscript'&&currentLease?.owner===origin.source+':'+origin.name&&currentLease.expires_in_ms>0&&
+       !activeOwnedFineRecovery(ctx,s)&&!s.autopilot_status?.recovery_travel&&!s.movement?.order&&!s.job?.busy&&
+       l.you?.id===actorFence.id&&l.room?.num===actorFence.room&&l.room?.object_id===actorFence.roomId&&
+       Number.isFinite(l.hp?.max)&&l.hp.max>0&&l.hp.value>=l.hp.max)return true;
     if(!owned){
       const origin=ctx.origin??currentCallOrigin(),lease=s.autopilot_status?.faculties?.movement,order=s.movement?.order,p=actor(l);
       if(origin?.source!=='fleetscript'||lease?.owner!==origin.source+':'+origin.name||!(lease.expires_in_ms>0)||

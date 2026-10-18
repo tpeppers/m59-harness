@@ -1,0 +1,60 @@
+{
+  "note": "Captured returned native confirmation-timeout result and stopped native progress. Tests model the still-owned recovery/ready lease explicitly; that lease was not preserved in the old failure snapshot, and is not claimed to be a capture. No replay of an ambiguous transport request.",
+  "source": "C:\\Users\\taimp\\.codex\\worktrees\\brax-group-route\\prod-deploy\\substrate\\brax-attempts\\braxshadow24-1792274479343.jsonl",
+  "reply": {
+    "arrived": false,
+    "reason": "position_confirmation_timeout",
+    "cancelled": true,
+    "position": {
+      "id": 7495,
+      "x": 3680,
+      "y": 2744,
+      "row": 42,
+      "col": 57,
+      "flags": 525
+    },
+    "completed_aims": 15,
+    "total_aims": 59,
+    "steps": 29
+  },
+  "rail": {
+    "room": 579,
+    "startedAt": 1792274492390,
+    "updatedAt": 1792274511465,
+    "phase": "stopped",
+    "requested_exit": null,
+    "leg_end_client": {
+      "x": 33575,
+      "y": 40868
+    },
+    "passage_adoption": null,
+    "aim": 15,
+    "total_aims": 59,
+    "movedAt": 1792274511465,
+    "position": {
+      "id": 7495,
+      "x": 3680,
+      "y": 2744,
+      "row": 42,
+      "col": 57,
+      "flags": 525
+    },
+    "target": {
+      "x": 3707,
+      "y": 2770
+    },
+    "reason": "position_confirmation_timeout",
+    "blockedBy": null,
+    "last_refusal": {
+      "reason": "position_confirmation_timeout",
+      "traffic": null,
+      "zone": null,
+      "holder": null,
+      "admission_reason": null,
+      "note": "the endpoint was safe, but no further fine move is allowed until position is re-observed"
+    },
+    "waitSince": null,
+    "body_waits": 1,
+    "endedAt": 1792274511465
+  }
+}

@@ -162,6 +162,7 @@ const fakeKeeper = ({ travel, ledger, lastCancel = null, name = 't9' }) => {
                       { at: 2, room: 48, row: 10, col: 12, x: 800, y: 672, health: 30 }] },
     goTravelling: () => {}, revive: () => {}, answerWedge: async () => null,
     restBeforeSettingOut: async () => ({ rested: false }), travelHoldMode: () => 'on',
+    travelGuard: Autopilot.prototype.travelGuard,
     recordFrame: () => {}, hitDamageTotal: () => 0, pvpReturnGate: () => null,
     travelInterrupted: () => false, eatBeforeTravel: async () => {},
     ledgerEvent: (kind, row) => ledger.push({ kind, ...row }), detailEvent: () => {},

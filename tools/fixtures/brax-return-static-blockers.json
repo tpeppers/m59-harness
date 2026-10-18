@@ -1,0 +1,256 @@
+{
+  "schema": "m59-ordinary-egress-capture/v1",
+  "source": "2026-10-17 ordinary shadow return; stationary skeletons blocked strict queues",
+  "cases": [
+    {
+      "room": 827,
+      "to": 826,
+      "poses": [
+        {
+          "x": 490,
+          "y": 508
+        },
+        {
+          "x": 556,
+          "y": 400
+        },
+        {
+          "x": 688,
+          "y": 360
+        }
+      ],
+      "bodies": [
+        {
+          "id": 1000,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 2208,
+          "y": 1760
+        },
+        {
+          "id": 1001,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 471,
+          "y": 1007
+        },
+        {
+          "id": 1002,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 2333,
+          "y": 1563
+        },
+        {
+          "id": 1003,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 798,
+          "y": 866
+        },
+        {
+          "id": 1004,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 668,
+          "y": 401
+        },
+        {
+          "id": 1005,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 545,
+          "y": 1055
+        },
+        {
+          "id": 1006,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 473,
+          "y": 416
+        },
+        {
+          "id": 1007,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 2154,
+          "y": 1187
+        },
+        {
+          "id": 1008,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 493,
+          "y": 476
+        },
+        {
+          "id": 1009,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1760,
+          "y": 1248
+        },
+        {
+          "id": 1010,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 678,
+          "y": 546
+        },
+        {
+          "id": 1011,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1568,
+          "y": 1056
+        },
+        {
+          "id": 1012,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1760,
+          "y": 1312
+        },
+        {
+          "id": 1013,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1497,
+          "y": 1562
+        },
+        {
+          "id": 1014,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1632,
+          "y": 1760
+        },
+        {
+          "id": 1015,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 809,
+          "y": 539
+        },
+        {
+          "id": 1016,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 529,
+          "y": 420
+        },
+        {
+          "id": 1017,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 861,
+          "y": 923
+        },
+        {
+          "id": 1018,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 2222,
+          "y": 1180
+        },
+        {
+          "id": 1019,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 546,
+          "y": 536
+        },
+        {
+          "id": 1020,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 928,
+          "y": 672
+        },
+        {
+          "id": 1021,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 812,
+          "y": 297
+        },
+        {
+          "id": 1022,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 2144,
+          "y": 992
+        },
+        {
+          "id": 1023,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 1618,
+          "y": 1244
+        },
+        {
+          "id": 1024,
+          "name": "daemon skeleton",
+          "flags": 9,
+          "x": 536,
+          "y": 916
+        },
+        {
+          "id": 1025,
+          "name": "soulsap willow tree",
+          "flags": 9,
+          "x": 2208,
+          "y": 1696
+        },
+        {
+          "id": 1026,
+          "name": "soulsap willow tree",
+          "flags": 9,
+          "x": 1312,
+          "y": 480
+        },
+        {
+          "id": 1027,
+          "name": "soulsap willow tree",
+          "flags": 9,
+          "x": 640,
+          "y": 960
+        },
+        {
+          "id": 1028,
+          "name": "soulsap willow tree",
+          "flags": 9,
+          "x": 2016,
+          "y": 768
+        }
+      ]
+    },
+    {
+      "room": 826,
+      "to": 578,
+      "poses": [
+        {
+          "x": 1476,
+          "y": 1044
+        },
+        {
+          "x": 2247,
+          "y": 1248
+        },
+        {
+          "x": 1958,
+          "y": 1171
+        },
+        {
+          "x": 2704,
+          "y": 1272
+        },
+        {
+          "x": 1632,
+          "y": 1120
+        }
+      ],
+      "bodies": []
+    }
+  ]
+}

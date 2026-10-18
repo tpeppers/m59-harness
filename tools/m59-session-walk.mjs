@@ -87,9 +87,17 @@ import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-g
 // A checked fine controller may already have delivered the actual body to the
 // published opening. Rewalking its coarse cell can undo that exact approach.
 export function preparedFineExitStage(geo,body,exit){
- if(!geo?.collisionReady||body?.predicted||body?.row!==exit?.stand_on?.row||body?.col!==exit?.stand_on?.col||
-    ![body?.x,body?.y,exit?.fine_stand_on?.x,exit?.fine_stand_on?.y].every(Number.isFinite)||
-    Math.hypot(body.x-exit.fine_stand_on.x,body.y-exit.fine_stand_on.y)>16)return false;
+ if(geo?.collisionReady&&exit?.kind==='go'&&!exit.locked&&body&&!body.predicted&&[body.x,body.y].every(Number.isFinite)&&Math.floor(body.x/64)===body.col&&Math.floor(body.y/64)===body.row&&body.row===exit.stand_on?.row&&body.col===exit.stand_on?.col)return true;
+ if(!geo?.collisionReady||body?.predicted||!Number.isFinite(body?.x)||!Number.isFinite(body?.y)||
+    Math.floor(body.x/64)!==body?.col||Math.floor(body.y/64)!==body?.row||
+    Math.floor(exit?.fine_stand_on?.x/64)!==body.col||Math.floor(exit?.fine_stand_on?.y/64)!==body.row||
+    ![body?.x,body?.y,exit?.fine_stand_on?.x,exit?.fine_stand_on?.y].every(Number.isFinite))return false;
+ const distance=Math.hypot(body.x-exit.fine_stand_on.x,body.y-exit.fine_stand_on.y),outside=exit.edge_target;
+ // A body already in this published boundary cell need not first walk back
+ // to its nominal anchor through a blocker. A nearby ordinary ground
+ // connection proves the stage; leaveVia still collision-checks the crossing.
+ const nearbyBoundary=exit.kind==='edge'&&distance<=64&&[outside?.x,outside?.y].every(Number.isFinite);
+ if(distance>16&&!nearbyBoundary)return false;
  const t=geo.traceFineMoveClient(protocolToClient(body.x),protocolToClient(body.y),protocolToClient(exit.fine_stand_on.x),protocolToClient(exit.fine_stand_on.y),{slide:false});
  return t?.arrived===true&&t.blocked!==true;
 }
@@ -6717,9 +6725,12 @@ export function sessionWalkPrototype(deps) {
         // tries, and a redundant stand costs one packet against a whole lost journey.
         send: async () => {
           await this.standBeforeGo();
-          return this.pacer.submit('move', () =>
-            (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
-              ? false : c.go(), DOOR_SETTLE_MS);
+          let emitted=false,sequence=null;
+          const result=await this.pacer.submit('move', () => {
+            if(this.movementWasCancelled(movementGeneration,controlToken)||leftExpectedRoom())return false;
+            sequence=c.evSeq;c.go();emitted=true;return true;
+          },DOOR_SETTLE_MS);
+          return{sent:emitted,sequence,reason:result?.held?'casting_hold':'go_not_sent'};
         },
         waitForEntry: async since => {
           const started = Date.now();
@@ -6734,6 +6745,7 @@ export function sessionWalkPrototype(deps) {
       if (go.cancelled)
         return this.cancelledMovement({ go_attempts: go.attempts,
                                         crossing_packet_sent: go.attempts > 0 });
+      if(go.unsent)return{left:false,stage:'go',reason:go.reason,unsent:true,go_attempts:go.attempts,crossing_packet_sent:go.attempts>0};
       if (go.unconfirmed_transition) return staleExit();
       const entered = go.entered, messages = go.messages, goAttempts = go.attempts;
       // SAY WHETHER A PACKET ACTUALLY WENT OUT. `boundedSilentGo` counts its `send()`

@@ -1,6 +1,6 @@
 // #movement: admit one body to a connected narrow passage, in either direction.
 // Geometry identifies candidates; collision remains the packet proof.
-import {reserveFilePassage, releaseFilePassage} from './m59-spotclaims.mjs';
+import {reserveFilePassage, releaseFilePassage, retagOwnFilePassage} from './m59-spotclaims.mjs';
 import {OF} from './m59-parse.mjs';
 import {fineChokesFor} from './m59-pocket-rails.mjs';
 const cache = new WeakMap(), local = new Map();
@@ -63,6 +63,14 @@ export function releaseConfirmedPassage(session) {
   session._passage = null;
   return true;
 }
+export function adoptPassageConvoy(session){
+ const held=session._passage,c=session.client,me=c?.self,convoy=session.passageConvoy;
+ if(!held||!convoy?.flow)return{adopted:false,reason:'no_owned_passage_or_convoy'};
+ const name=c.me?.name??me?.name??c.rsc?.get?.(me?.nameRsc);
+ if(!me||me.predicted||c.room?.id!==held.roomId||!contains(held.zone,me)||!convoy.characters?.includes(name))return{adopted:false,reason:'incumbent_body_or_membership_unconfirmed'};
+ if(held.file){const reply=retagOwnFilePassage(held.agent,Number(session.world.room.num),held.zone.id,convoy.flow);if(!reply?.ok)return{adopted:false,reason:reply?.reason??'claim_unavailable'};}else{const members=local.get(held.key);if(!members?.has(session))return{adopted:false,reason:'local_claim_not_held'};members.set(session,convoy.flow);}
+ held.flow=convoy.flow;return{adopted:true,zone:held.zone.id,flow:convoy.flow};
+}
 export function passageExitNeedsConfirmation(session, target) {
   return !!session._passage && !contains(session._passage.zone,target);
 }
@@ -81,12 +89,12 @@ export function claimPassageMove(session, target) {
   const agent = String(session.name ?? c.selfId), resource = namespace(session)+'|'+zone.id;
   const flow=session.passageConvoy?.flow??null;
   const file = reserveFilePassage(agent, Number(session.world.room.num), zone.id,{flow});
-  if (file && !file.ok) return refusal({note:'another keeper holds passage admission',holder:file.agent});
+  if (file && !file.ok) return refusal({note:'another keeper holds passage admission',holder:file.agent,admission_reason:file.reason??'conflicting_flow'});
   if (!file) {
     const members=local.get(resource)??new Map();
     if([...members].some(([owner,heldFlow])=>owner!==session&&!(flow&&heldFlow===flow)))return refusal({note:'another session holds passage admission'});
     members.set(session,flow);local.set(resource,members);
   }
-  session._passage = {zone,agent,file:!!file,key:resource,roomId:c.room.id};
+  session._passage = {zone,agent,file:!!file,key:resource,roomId:c.room.id,flow};
   return null;
 }

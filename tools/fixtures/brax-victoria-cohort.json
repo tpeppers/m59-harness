@@ -1,0 +1,422 @@
+{
+  "source": "actual trial13 common Victoria departure positions, with captured Castle39 non-player bodies; later-room replies are socketless declared transitions",
+  "room": 39,
+  "players": [
+    {
+      "id": 7439,
+      "col": 27,
+      "row": 9,
+      "x": 1771,
+      "y": 580,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605466,
+      "name": "Brax Aaaa",
+      "flags": 525
+    },
+    {
+      "id": 7443,
+      "col": 28,
+      "row": 9,
+      "x": 1800,
+      "y": 603,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605458,
+      "name": "Brax Bbbb",
+      "flags": 525
+    },
+    {
+      "id": 7446,
+      "col": 33,
+      "row": 15,
+      "x": 2144,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605470,
+      "name": "Brax Cccc",
+      "flags": 525
+    },
+    {
+      "id": 7447,
+      "col": 30,
+      "row": 15,
+      "x": 1976,
+      "y": 960,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605474,
+      "name": "Brax Dddd",
+      "flags": 525
+    },
+    {
+      "id": 7448,
+      "col": 28,
+      "row": 15,
+      "x": 1824,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605462,
+      "name": "Brax Eeee",
+      "flags": 525
+    },
+    {
+      "id": 7452,
+      "col": 34,
+      "row": 15,
+      "x": 2192,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605479,
+      "name": "Brax Ffff",
+      "flags": 525
+    },
+    {
+      "id": 7456,
+      "col": 29,
+      "row": 15,
+      "x": 1888,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605484,
+      "name": "Brax Gggg",
+      "flags": 525
+    },
+    {
+      "id": 7458,
+      "col": 28,
+      "row": 8,
+      "x": 1854,
+      "y": 532,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605489,
+      "name": "Brax Hhhh",
+      "flags": 525
+    },
+    {
+      "id": 7459,
+      "col": 28,
+      "row": 9,
+      "x": 1836,
+      "y": 607,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605541,
+      "name": "Brax Iiii",
+      "flags": 525
+    },
+    {
+      "id": 7460,
+      "col": 29,
+      "row": 8,
+      "x": 1883,
+      "y": 520,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605494,
+      "name": "Brax Jjjj",
+      "flags": 525
+    },
+    {
+      "id": 7463,
+      "col": 28,
+      "row": 8,
+      "x": 1824,
+      "y": 544,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605711,
+      "name": "Brax Kkkk",
+      "flags": 525
+    },
+    {
+      "id": 7468,
+      "col": 28,
+      "row": 8,
+      "x": 1824,
+      "y": 544,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605795,
+      "name": "Brax Llll",
+      "flags": 525
+    },
+    {
+      "id": 7471,
+      "col": 32,
+      "row": 15,
+      "x": 2048,
+      "y": 960,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605808,
+      "name": "Brax Mmmm",
+      "flags": 525
+    },
+    {
+      "id": 7473,
+      "col": 27,
+      "row": 8,
+      "x": 1745,
+      "y": 566,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605498,
+      "name": "Brax Nnnn",
+      "flags": 525
+    },
+    {
+      "id": 7475,
+      "col": 27,
+      "row": 15,
+      "x": 1776,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605503,
+      "name": "Brax Oooo",
+      "flags": 525
+    },
+    {
+      "id": 7477,
+      "col": 28,
+      "row": 8,
+      "x": 1824,
+      "y": 544,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605508,
+      "name": "Brax Pppp",
+      "flags": 525
+    },
+    {
+      "id": 7478,
+      "col": 28,
+      "row": 8,
+      "x": 1794,
+      "y": 532,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605518,
+      "name": "Brax Qqqq",
+      "flags": 525
+    },
+    {
+      "id": 7479,
+      "col": 29,
+      "row": 8,
+      "x": 1887,
+      "y": 556,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605514,
+      "name": "Brax Rrrr",
+      "flags": 525
+    },
+    {
+      "id": 7480,
+      "col": 28,
+      "row": 8,
+      "x": 1851,
+      "y": 562,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605701,
+      "name": "Brax Ssss",
+      "flags": 525
+    },
+    {
+      "id": 7483,
+      "col": 28,
+      "row": 8,
+      "x": 1801,
+      "y": 567,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605522,
+      "name": "Brax Tttt",
+      "flags": 525
+    },
+    {
+      "id": 7486,
+      "col": 28,
+      "row": 8,
+      "x": 1824,
+      "y": 544,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605527,
+      "name": "Brax Uuuu",
+      "flags": 525
+    },
+    {
+      "id": 7490,
+      "col": 28,
+      "row": 8,
+      "x": 1824,
+      "y": 544,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605536,
+      "name": "Brax Vvvv",
+      "flags": 525
+    },
+    {
+      "id": 7494,
+      "col": 31,
+      "row": 15,
+      "x": 2016,
+      "y": 976,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605531,
+      "name": "Brax Wwww",
+      "flags": 525
+    },
+    {
+      "id": 7495,
+      "col": 29,
+      "row": 9,
+      "x": 1869,
+      "y": 589,
+      "facing": null,
+      "room_object_id": 1681,
+      "at": 1792249605616,
+      "name": "Brax Xxxx",
+      "flags": 525
+    }
+  ],
+  "bodies": [
+    {
+      "id": 7937,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1440,
+      "y": 864,
+      "row": 13,
+      "col": 22
+    },
+    {
+      "id": 7909,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1504,
+      "y": 544,
+      "row": 8,
+      "col": 23
+    },
+    {
+      "id": 7907,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1376,
+      "y": 544,
+      "row": 8,
+      "col": 21
+    },
+    {
+      "id": 7898,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1438,
+      "y": 942,
+      "row": 14,
+      "col": 22
+    },
+    {
+      "id": 7897,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1504,
+      "y": 928,
+      "row": 14,
+      "col": 23
+    },
+    {
+      "id": 7896,
+      "name": "zombie",
+      "flags": 9,
+      "x": 2276,
+      "y": 873,
+      "row": 13,
+      "col": 35
+    },
+    {
+      "id": 7894,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1440,
+      "y": 352,
+      "row": 5,
+      "col": 22
+    },
+    {
+      "id": 7893,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 1440,
+      "y": 736,
+      "row": 11,
+      "col": 22
+    },
+    {
+      "id": 7892,
+      "name": "zombie",
+      "flags": 9,
+      "x": 1502,
+      "y": 337,
+      "row": 5,
+      "col": 23
+    },
+    {
+      "id": 7891,
+      "name": "battered skeleton",
+      "flags": 9,
+      "x": 928,
+      "y": 608,
+      "row": 9,
+      "col": 14
+    },
+    {
+      "id": 7976,
+      "name": "scimitar",
+      "flags": 16,
+      "x": 1792,
+      "y": 549,
+      "row": 8,
+      "col": 28
+    },
+    {
+      "id": 7975,
+      "name": "scimitar",
+      "flags": 16,
+      "x": 1792,
+      "y": 549,
+      "row": 8,
+      "col": 28
+    },
+    {
+      "id": 7926,
+      "name": "scimitar",
+      "flags": 16,
+      "x": 1792,
+      "y": 549,
+      "row": 8,
+      "col": 28
+    },
+    {
+      "id": 1682,
+      "name": "mana node",
+      "flags": 2230272,
+      "x": 2944,
+      "y": 832,
+      "row": 13,
+      "col": 46
+    }
+  ]
+}

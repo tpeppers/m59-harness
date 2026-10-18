@@ -1,0 +1,163 @@
+{
+  "note": "Actual captured body IDs, peer-observed flags, current poses and current aims. Dense forward corridor/continuation aims are explicitly reconstructed and terrain-proved; original full request was not captured. Delayed ordered peer snapshots model stale occupancy; no immediate movement broadcasts.",
+  "capturedAt": 1792269298561,
+  "players": [
+    {
+      "id": 7446,
+      "x": 1182,
+      "y": 424,
+      "row": 6,
+      "col": 18,
+      "flags": 4160750093,
+      "name": "Queue peer 03",
+      "aim": {
+        "x": 1184,
+        "y": 416
+      },
+      "flagsObservedBy": "braxshadow05"
+    },
+    {
+      "id": 7459,
+      "x": 1184,
+      "y": 352,
+      "row": 5,
+      "col": 18,
+      "flags": 4160750093,
+      "name": "Queue peer 09",
+      "aim": {
+        "x": 1184,
+        "y": 416
+      },
+      "flagsObservedBy": "braxshadow03"
+    },
+    {
+      "id": 7479,
+      "x": 1168,
+      "y": 351,
+      "row": 5,
+      "col": 18,
+      "flags": 4160750093,
+      "name": "Queue peer 18",
+      "aim": {
+        "x": 1184,
+        "y": 352
+      },
+      "flagsObservedBy": "braxshadow03"
+    },
+    {
+      "id": 7480,
+      "x": 1200,
+      "y": 361,
+      "row": 5,
+      "col": 18,
+      "flags": 4160750093,
+      "name": "Queue peer 19",
+      "aim": {
+        "x": 1184,
+        "y": 352
+      },
+      "flagsObservedBy": "braxshadow03"
+    }
+  ],
+  "bodies": [
+    {
+      "id": 7448,
+      "x": 1412,
+      "y": 965,
+      "row": 15,
+      "col": 22,
+      "flags": 4160750093,
+      "name": "Brax Eeee"
+    },
+    {
+      "id": 8046,
+      "x": 1187,
+      "y": 484,
+      "row": 7,
+      "col": 18,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8044,
+      "x": 2080,
+      "y": 544,
+      "row": 8,
+      "col": 32,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8028,
+      "x": 1452,
+      "y": 927,
+      "row": 14,
+      "col": 22,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8027,
+      "x": 1053,
+      "y": 493,
+      "row": 7,
+      "col": 16,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8024,
+      "x": 1248,
+      "y": 672,
+      "row": 10,
+      "col": 19,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8023,
+      "x": 1311,
+      "y": 487,
+      "row": 7,
+      "col": 20,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8011,
+      "x": 1376,
+      "y": 800,
+      "row": 12,
+      "col": 21,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8010,
+      "x": 1184,
+      "y": 928,
+      "row": 14,
+      "col": 18,
+      "flags": 9,
+      "name": "skeleton"
+    },
+    {
+      "id": 8009,
+      "x": 928,
+      "y": 736,
+      "row": 11,
+      "col": 14,
+      "flags": 9,
+      "name": "zombie"
+    },
+    {
+      "id": 8007,
+      "x": 1110,
+      "y": 490,
+      "row": 7,
+      "col": 17,
+      "flags": 9,
+      "name": "skeleton"
+    }
+  ]
+}

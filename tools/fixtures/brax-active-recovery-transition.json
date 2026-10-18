@@ -1,0 +1,35 @@
+{
+  "description": "Exact partial structured failure evidence from normal41-19; complete native state in the test is explicitly modeled around these captured fields. No live health or resource changes.",
+  "trial": "normal-victoria-regroup-41",
+  "agent": "braxshadow19",
+  "failure": {
+    "at": 1792278864903,
+    "reason": "interrupted_without_owned_recovery",
+    "since": 1792278832484,
+    "deadline": 1792279432484,
+    "actor": {
+      "id": 7480,
+      "room": 827,
+      "room_object_id": 3319,
+      "x": 1424,
+      "y": 720
+    },
+    "hp": {
+      "value": 10,
+      "max": 75
+    },
+    "vigor": {
+      "value": 78
+    },
+    "lease": {
+      "owner": "fleetscript:regroup-victoria (private normal return only)",
+      "expires_in_ms": 22348,
+      "why": "fleet errand: regroup-victoria (private normal return only)"
+    },
+    "decision": {
+      "id": "37540-1792278862611-15",
+      "status": "active",
+      "strategy": "logoff_safe"
+    }
+  }
+}

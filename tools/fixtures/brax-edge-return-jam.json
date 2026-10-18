@@ -1,0 +1,784 @@
+{
+  "room": 827,
+  "to": 826,
+  "head": 7463,
+  "source": "actual normal30 nine-body return jam; next native aim recorded; unique published physical cell r3c1; exact original final fine tuple not exposed by telemetry",
+  "players": [
+    {
+      "id": 7463,
+      "name": "edge-head",
+      "flags": 4160750093,
+      "x": 107,
+      "y": 243,
+      "row": 3,
+      "col": 1
+    },
+    {
+      "id": 7495,
+      "name": "edge-follower1",
+      "flags": 525,
+      "x": 150,
+      "y": 306,
+      "row": 4,
+      "col": 2
+    },
+    {
+      "id": 7459,
+      "name": "edge-follower2",
+      "flags": 4160750093,
+      "x": 120,
+      "y": 293,
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": 7478,
+      "name": "edge-follower3",
+      "flags": 4160750093,
+      "x": 150,
+      "y": 306,
+      "row": 4,
+      "col": 2
+    },
+    {
+      "id": 7494,
+      "name": "edge-follower4",
+      "flags": 4160750093,
+      "x": 140,
+      "y": 288,
+      "row": 4,
+      "col": 2
+    },
+    {
+      "id": 7486,
+      "name": "edge-follower5",
+      "flags": 4160750093,
+      "x": 108,
+      "y": 280,
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": 7490,
+      "name": "edge-follower6",
+      "flags": 4160750093,
+      "x": 97,
+      "y": 258,
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": 7477,
+      "name": "edge-follower7",
+      "flags": 4160750093,
+      "x": 113,
+      "y": 263,
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": 7479,
+      "name": "edge-follower8",
+      "flags": 4160750093,
+      "x": 124,
+      "y": 277,
+      "row": 4,
+      "col": 1
+    }
+  ],
+  "bodies": [
+    {
+      "id": 8324,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1056,
+      "y": 160,
+      "row": 2,
+      "col": 16
+    },
+    {
+      "id": 8266,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 2016,
+      "y": 1440,
+      "row": 22,
+      "col": 31
+    },
+    {
+      "id": 8201,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1760,
+      "y": 1312,
+      "row": 20,
+      "col": 27
+    },
+    {
+      "id": 8178,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 2272,
+      "y": 1120,
+      "row": 17,
+      "col": 35
+    },
+    {
+      "id": 8173,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1764,
+      "y": 1385,
+      "row": 21,
+      "col": 27
+    },
+    {
+      "id": 8166,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1056,
+      "y": 224,
+      "row": 3,
+      "col": 16
+    },
+    {
+      "id": 8162,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1575,
+      "y": 1500,
+      "row": 23,
+      "col": 24
+    },
+    {
+      "id": 8161,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1708,
+      "y": 1237,
+      "row": 19,
+      "col": 26
+    },
+    {
+      "id": 8159,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1711,
+      "y": 1443,
+      "row": 22,
+      "col": 26
+    },
+    {
+      "id": 8151,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 554,
+      "y": 663,
+      "row": 10,
+      "col": 8
+    },
+    {
+      "id": 8149,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 481,
+      "y": 986,
+      "row": 15,
+      "col": 7
+    },
+    {
+      "id": 8147,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1637,
+      "y": 1234,
+      "row": 19,
+      "col": 25
+    },
+    {
+      "id": 8145,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1769,
+      "y": 1252,
+      "row": 19,
+      "col": 27
+    },
+    {
+      "id": 8095,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1824,
+      "y": 1376,
+      "row": 21,
+      "col": 28
+    },
+    {
+      "id": 8093,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 538,
+      "y": 431,
+      "row": 6,
+      "col": 8
+    },
+    {
+      "id": 8092,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 1693,
+      "y": 1367,
+      "row": 21,
+      "col": 26
+    },
+    {
+      "id": 8091,
+      "name": "daemon skeleton",
+      "flags": 9,
+      "x": 476,
+      "y": 401,
+      "row": 6,
+      "col": 7
+    },
+    {
+      "id": 8090,
+      "name": "narthyl worm",
+      "flags": 9,
+      "x": 1685,
+      "y": 1311,
+      "row": 20,
+      "col": 26
+    },
+    {
+      "id": 3377,
+      "name": "vase",
+      "flags": 64,
+      "x": 2272,
+      "y": 928,
+      "row": 14,
+      "col": 35
+    },
+    {
+      "id": 3376,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 672,
+      "y": 736,
+      "row": 11,
+      "col": 10
+    },
+    {
+      "id": 3375,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 608,
+      "y": 608,
+      "row": 9,
+      "col": 9
+    },
+    {
+      "id": 3374,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 736,
+      "y": 896,
+      "row": 14,
+      "col": 11
+    },
+    {
+      "id": 3373,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 928,
+      "y": 928,
+      "row": 14,
+      "col": 14
+    },
+    {
+      "id": 3372,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 1632,
+      "y": 1632,
+      "row": 25,
+      "col": 25
+    },
+    {
+      "id": 3371,
+      "name": "slimy deposit",
+      "flags": 64,
+      "x": 2016,
+      "y": 640,
+      "row": 10,
+      "col": 31
+    },
+    {
+      "id": 3370,
+      "name": "soulsap willow tree",
+      "flags": 131137,
+      "x": 2208,
+      "y": 1696,
+      "row": 26,
+      "col": 34
+    },
+    {
+      "id": 3369,
+      "name": "soulsap willow tree",
+      "flags": 131137,
+      "x": 1312,
+      "y": 480,
+      "row": 7,
+      "col": 20
+    },
+    {
+      "id": 3368,
+      "name": "soulsap willow tree",
+      "flags": 131137,
+      "x": 640,
+      "y": 960,
+      "row": 15,
+      "col": 10
+    },
+    {
+      "id": 3367,
+      "name": "soulsap willow tree",
+      "flags": 131137,
+      "x": 2016,
+      "y": 768,
+      "row": 12,
+      "col": 31
+    },
+    {
+      "id": 3366,
+      "name": "spine vine",
+      "flags": 64,
+      "x": 864,
+      "y": 352,
+      "row": 5,
+      "col": 13
+    },
+    {
+      "id": 3365,
+      "name": "spine vine",
+      "flags": 64,
+      "x": 1632,
+      "y": 672,
+      "row": 10,
+      "col": 25
+    },
+    {
+      "id": 3364,
+      "name": "spine vine",
+      "flags": 64,
+      "x": 1824,
+      "y": 1632,
+      "row": 25,
+      "col": 28
+    },
+    {
+      "id": 3363,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 992,
+      "y": 608,
+      "row": 9,
+      "col": 15
+    },
+    {
+      "id": 3362,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 1152,
+      "y": 720,
+      "row": 11,
+      "col": 18
+    },
+    {
+      "id": 3361,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 816,
+      "y": 512,
+      "row": 8,
+      "col": 12
+    },
+    {
+      "id": 3360,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 1168,
+      "y": 464,
+      "row": 7,
+      "col": 18
+    },
+    {
+      "id": 3359,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 960,
+      "y": 256,
+      "row": 4,
+      "col": 15
+    },
+    {
+      "id": 3358,
+      "name": "coal oak tree",
+      "flags": 64,
+      "x": 1280,
+      "y": 864,
+      "row": 13,
+      "col": 20
+    },
+    {
+      "id": 3357,
+      "name": "gnarlwood tree",
+      "flags": 64,
+      "x": 2304,
+      "y": 1120,
+      "row": 17,
+      "col": 36
+    },
+    {
+      "id": 3356,
+      "name": "grave",
+      "flags": 64,
+      "x": 2240,
+      "y": 1504,
+      "row": 23,
+      "col": 35
+    },
+    {
+      "id": 3355,
+      "name": "grave",
+      "flags": 64,
+      "x": 2144,
+      "y": 544,
+      "row": 8,
+      "col": 33
+    },
+    {
+      "id": 3354,
+      "name": "grave",
+      "flags": 64,
+      "x": 960,
+      "y": 1056,
+      "row": 16,
+      "col": 15
+    },
+    {
+      "id": 3353,
+      "name": "grave",
+      "flags": 64,
+      "x": 704,
+      "y": 1088,
+      "row": 17,
+      "col": 11
+    },
+    {
+      "id": 3352,
+      "name": "grave",
+      "flags": 64,
+      "x": 832,
+      "y": 1056,
+      "row": 16,
+      "col": 13
+    },
+    {
+      "id": 3351,
+      "name": "grave",
+      "flags": 64,
+      "x": 512,
+      "y": 1120,
+      "row": 17,
+      "col": 8
+    },
+    {
+      "id": 3350,
+      "name": "grave",
+      "flags": 64,
+      "x": 1792,
+      "y": 576,
+      "row": 9,
+      "col": 28
+    },
+    {
+      "id": 3349,
+      "name": "grave",
+      "flags": 64,
+      "x": 2368,
+      "y": 576,
+      "row": 9,
+      "col": 37
+    },
+    {
+      "id": 3348,
+      "name": "grave",
+      "flags": 64,
+      "x": 2368,
+      "y": 768,
+      "row": 12,
+      "col": 37
+    },
+    {
+      "id": 3347,
+      "name": "grave",
+      "flags": 64,
+      "x": 2208,
+      "y": 768,
+      "row": 12,
+      "col": 34
+    },
+    {
+      "id": 3346,
+      "name": "grave",
+      "flags": 64,
+      "x": 1696,
+      "y": 1696,
+      "row": 26,
+      "col": 26
+    },
+    {
+      "id": 3345,
+      "name": "grave",
+      "flags": 64,
+      "x": 2112,
+      "y": 1504,
+      "row": 23,
+      "col": 33
+    },
+    {
+      "id": 3344,
+      "name": "grave",
+      "flags": 64,
+      "x": 1824,
+      "y": 768,
+      "row": 12,
+      "col": 28
+    },
+    {
+      "id": 3343,
+      "name": "grave",
+      "flags": 64,
+      "x": 1536,
+      "y": 800,
+      "row": 12,
+      "col": 24
+    },
+    {
+      "id": 3342,
+      "name": "skull",
+      "flags": 64,
+      "x": 1984,
+      "y": 576,
+      "row": 9,
+      "col": 31
+    },
+    {
+      "id": 3341,
+      "name": "skull",
+      "flags": 64,
+      "x": 928,
+      "y": 1184,
+      "row": 18,
+      "col": 14
+    },
+    {
+      "id": 3340,
+      "name": "skull",
+      "flags": 64,
+      "x": 2016,
+      "y": 928,
+      "row": 14,
+      "col": 31
+    },
+    {
+      "id": 3339,
+      "name": "skull",
+      "flags": 64,
+      "x": 2048,
+      "y": 416,
+      "row": 6,
+      "col": 32
+    },
+    {
+      "id": 3338,
+      "name": "skull",
+      "flags": 64,
+      "x": 608,
+      "y": 480,
+      "row": 7,
+      "col": 9
+    },
+    {
+      "id": 3337,
+      "name": "skull",
+      "flags": 64,
+      "x": 672,
+      "y": 1248,
+      "row": 19,
+      "col": 10
+    },
+    {
+      "id": 3336,
+      "name": "skull",
+      "flags": 64,
+      "x": 1120,
+      "y": 1056,
+      "row": 16,
+      "col": 17
+    },
+    {
+      "id": 3335,
+      "name": "skull",
+      "flags": 64,
+      "x": 1984,
+      "y": 1728,
+      "row": 27,
+      "col": 31
+    },
+    {
+      "id": 3334,
+      "name": "skull",
+      "flags": 64,
+      "x": 1472,
+      "y": 1824,
+      "row": 28,
+      "col": 23
+    },
+    {
+      "id": 3333,
+      "name": "skull",
+      "flags": 64,
+      "x": 1504,
+      "y": 1568,
+      "row": 24,
+      "col": 23
+    },
+    {
+      "id": 3332,
+      "name": "skull",
+      "flags": 64,
+      "x": 2112,
+      "y": 1728,
+      "row": 27,
+      "col": 33
+    },
+    {
+      "id": 3331,
+      "name": "skull",
+      "flags": 64,
+      "x": 2144,
+      "y": 480,
+      "row": 7,
+      "col": 33
+    },
+    {
+      "id": 3330,
+      "name": "skull",
+      "flags": 64,
+      "x": 1968,
+      "y": 480,
+      "row": 7,
+      "col": 30
+    },
+    {
+      "id": 3329,
+      "name": "skull",
+      "flags": 64,
+      "x": 2016,
+      "y": 1088,
+      "row": 17,
+      "col": 31
+    },
+    {
+      "id": 3328,
+      "name": "skull",
+      "flags": 64,
+      "x": 1504,
+      "y": 512,
+      "row": 8,
+      "col": 23
+    },
+    {
+      "id": 3327,
+      "name": "skull",
+      "flags": 64,
+      "x": 1504,
+      "y": 1088,
+      "row": 17,
+      "col": 23
+    },
+    {
+      "id": 3326,
+      "name": "skull",
+      "flags": 64,
+      "x": 1824,
+      "y": 1120,
+      "row": 17,
+      "col": 28
+    },
+    {
+      "id": 3325,
+      "name": "skull",
+      "flags": 64,
+      "x": 1760,
+      "y": 480,
+      "row": 7,
+      "col": 27
+    },
+    {
+      "id": 3324,
+      "name": "skull",
+      "flags": 64,
+      "x": 480,
+      "y": 1152,
+      "row": 18,
+      "col": 7
+    },
+    {
+      "id": 3323,
+      "name": "skull",
+      "flags": 0,
+      "x": 976,
+      "y": 480,
+      "row": 7,
+      "col": 15
+    },
+    {
+      "id": 3322,
+      "name": "skull",
+      "flags": 0,
+      "x": 608,
+      "y": 704,
+      "row": 11,
+      "col": 9
+    },
+    {
+      "id": 3321,
+      "name": "skull",
+      "flags": 0,
+      "x": 1760,
+      "y": 864,
+      "row": 13,
+      "col": 27
+    },
+    {
+      "id": 3320,
+      "name": "skull",
+      "flags": 0,
+      "x": 800,
+      "y": 1152,
+      "row": 18,
+      "col": 12
+    }
+  ],
+  "aim": {
+    "x": 144,
+    "y": 296
+  },
+  "exit": {
+    "to": 826,
+    "row": 3,
+    "col": 1
+  }
+}

@@ -154,16 +154,35 @@ export function planStraightQueueAdvance(geo,body,head,{objects,selfId=body?.id,
 // Keep a landing connected to its onward corridor in one native order. A short
 // clearance endpoint must not become a parked destination in front of followers.
 // This is a terrain proof; the native mover rechecks actual bodies at every packet.
-export function planQueuedEgress(geo,body,target,{avoidSquares=new Set()}={}){
+export function planQueuedEgress(geo,body,target,{avoidSquares=new Set(),maxMs=2000}={}){
  if(!geo?.collisionReady||body?.predicted||![body?.x,body?.y,target?.x,target?.y].every(Number.isFinite))return {found:false,reason:'egress_origin_unconfirmed'};
  const from=protocolToClient(body),goal=protocolToClient(target),floor=(x,y)=>floorAt(geo,x,y),bounds={w:geo.cols*1024,h:geo.rows*1024};
  const edge=(a,b)=>{if(avoidSquares.has(Math.floor(b.y/1024)+1+','+(Math.floor(b.x/1024)+1)))return false;const t=geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{slide:false});return t?.arrived===true&&t.blocked!==true;};
- let lattice=64,cut=cutRail(from,goal,{edge,bounds,floorAt:floor,lattice,maxMs:1000});
+ // Goal-directed distance pricing reuses the existing A* flood. A breadth-first
+ // flood can spend the entire bounded budget exploring unrelated shelves.
+ const cost=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y);
+ const phaseBudget=Math.max(1,maxMs/2);
+ let lattice=64,cut=cutRail(from,goal,{edge,bounds,floorAt:floor,lattice,cost,maxMs:phaseBudget,deadline:performance.now()+phaseBudget});
  // A valid nearest bridge can still seed the wrong side of a narrow lip.
  // Retry one finer phase before declaring the actual endpoint disconnected.
- if(!cut.ok||!cut.bridgeOk){lattice=32;cut=cutRail(from,goal,{edge,bounds,floorAt:floor,lattice,maxMs:1000});}
+ if(!cut.ok||!cut.bridgeOk){lattice=32;cut=cutRail(from,goal,{edge,bounds,floorAt:floor,lattice,cost,maxMs:phaseBudget,deadline:performance.now()+phaseBudget});}
  if(!cut.ok||!cut.bridgeOk)return {found:false,reason:'egress_ground_route_unproved',cut:{why:cut.why,visited:cut.visited}};
  const leg=railLeg({waypoints:cut.waypoints},{edge,bounds,floorAt:floor,lattice});
  if(leg.unvalidated)return {found:false,reason:'egress_leg_unproved'};
  return {found:true,leg:{...leg,sourceWaypoints:leg.waypoints,waypoints:leg.aims}};
+}
+
+// Open-ground convoy callers may go around a stationary body and rejoin a
+// later proved bend. Shelf queues opt out and retain their exact line.
+export function planRailBodyDetour(geo,body,leg,{objects,selfId=body?.id,fromIndex=0,maxMs=100}={}){
+ if(!geo?.collisionReady||body?.predicted||!leg?.waypoints?.length)return{found:false,reason:'detour_origin_unconfirmed'};
+ const started=performance.now(),others=blockingBodySnapshot(objects,selfId),from=protocolToClient(body),height=floorAt(geo,from.x,from.y);
+ for(let index=fromIndex;index<Math.min(leg.waypoints.length,fromIndex+16);index++){
+  const p=leg.waypoints[index],goal=clientToProtocol(p),distance=Math.hypot(goal.x-body.x,goal.y-body.y),floor=floorAt(geo,p.x,p.y);
+  if(distance<4||distance>8*64||!Number.isFinite(floor)||!Number.isFinite(height)||others.some(o=>Math.hypot(o.x-p.x,o.y-p.y)<28*16))continue;
+  const remaining=maxMs-(performance.now()-started);if(remaining<=0)break;
+  const route=planBodyDetour(geo,body,goal,{objects,selfId,refine:true,minimumFloor:Math.min(height,floor)-384,maxRangeSquares:8,maxGoalRangeSquares:8,marginSquares:3,maxNodes:6000,maxMs:remaining});
+  if(route.found)return{...route,index,target:goal};
+ }
+ return{found:false,reason:'no_proved_forward_body_detour'};
 }

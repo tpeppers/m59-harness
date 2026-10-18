@@ -57,10 +57,12 @@ ok('a deaf client the guard hides is reported, and every rejoin names its reason
   const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/if \(overdue && !attrHealGuardLogged\.has\(cl\)\)[\s\S]{0,400}heal is held/.test(src));
   const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
-  assert.ok(/async rejoin\(why = 'unspecified'\)[\s\S]{0,600}this\.lastRejoin = \{/.test(game));
+  const connection=game.slice(game.indexOf('  async rejoinConnection('),game.indexOf('  async ',game.indexOf('  async rejoinConnection(')+10));
+  assert.ok(connection.includes('this.lastRejoin = {'), 'the actual connection attempt records its reason');
+  assert.ok(game.includes('this.rejoinConnection(why,options)'), 'deduplicated rejoin forwards the reason and options');
   assert.ok(game.includes('login complete in'), 'each login says how long its reads took');
   const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  assert.ok(ap.includes('this.s.rejoin(why)'), 'the autopilot passes its reason');
+  assert.ok(/this\.s\.rejoin\(why(?:,|\))/.test(ap), 'the autopilot passes its reason');
   assert.equal(statTraceOf({ createdAt: 1, statTrace: {}, loginPhase: 'reads', loginStartedAt: 5 }).login_phase, 'reads');
 });
 ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login reads', () => {

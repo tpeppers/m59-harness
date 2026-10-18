@@ -950,3 +950,15 @@ substrate/island-admin/
 /docs/m59-reenact.md
 /substrate/reenact.example.json
 /substrate/reenact/
+
+/substrate/session-evidence/
+
+/substrate/fleet-health/
+
+/substrate/death-notices/
+
+# Opt-in private movement reproduction inputs/outcomes.
+substrate/rail-inputs/
+
+# Full local regression failure logs (never runtime source).
+/substrate/movement-suite-reports/

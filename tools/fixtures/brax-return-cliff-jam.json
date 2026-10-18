@@ -1,0 +1,1064 @@
+{
+  "description": "actual26 return cliff jam; retain real player IDs/flags and actual visible static bodies; goal578 is proved from this progressed component",
+  "room": 579,
+  "to": 578,
+  "observed": {
+    "2": 250,
+    "3": 250,
+    "4": 540,
+    "5": 200,
+    "6": 200,
+    "7": 200,
+    "8": 200,
+    "9": 510,
+    "10": 214
+  },
+  "players": [
+    {
+      "agent": "braxshadow01",
+      "name": "Brax Aaaa",
+      "id": 7439,
+      "col": 28,
+      "row": 39,
+      "x": 1855,
+      "y": 2551,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812980,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow02",
+      "name": "Brax Bbbb",
+      "id": 7443,
+      "col": 26,
+      "row": 37,
+      "x": 1712,
+      "y": 2408,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812915,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow03",
+      "name": "Brax Cccc",
+      "id": 7446,
+      "col": 16,
+      "row": 35,
+      "x": 1024,
+      "y": 2284,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812932,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow04",
+      "name": "Brax Dddd",
+      "id": 7447,
+      "col": 25,
+      "row": 36,
+      "x": 1634,
+      "y": 2330,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812964,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow05",
+      "name": "Brax Eeee",
+      "id": 7448,
+      "col": 27,
+      "row": 37,
+      "x": 1728,
+      "y": 2408,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812956,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow06",
+      "name": "Brax Ffff",
+      "id": 7452,
+      "col": 19,
+      "row": 34,
+      "x": 1268,
+      "y": 2224,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812976,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow07",
+      "name": "Brax Gggg",
+      "id": 7456,
+      "col": 32,
+      "row": 35,
+      "x": 2080,
+      "y": 2272,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812972,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow08",
+      "name": "Brax Hhhh",
+      "id": 7458,
+      "col": 26,
+      "row": 37,
+      "x": 1709,
+      "y": 2390,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261813261,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow09",
+      "name": "Brax Iiii",
+      "id": 7459,
+      "col": 28,
+      "row": 39,
+      "x": 1839,
+      "y": 2542,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812919,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow10",
+      "name": "Brax Jjjj",
+      "id": 7460,
+      "col": 18,
+      "row": 34,
+      "x": 1204,
+      "y": 2224,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812985,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow13",
+      "name": "Brax Mmmm",
+      "id": 7471,
+      "col": 14,
+      "row": 35,
+      "x": 952,
+      "y": 2288,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812967,
+      "flags": 525,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow14",
+      "name": "Brax Nnnn",
+      "id": 7473,
+      "col": 17,
+      "row": 33,
+      "x": 1120,
+      "y": 2144,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812990,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow17",
+      "name": "Brax Qqqq",
+      "id": 7478,
+      "col": 28,
+      "row": 38,
+      "x": 1804,
+      "y": 2492,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812940,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow18",
+      "name": "Brax Rrrr",
+      "id": 7479,
+      "col": 26,
+      "row": 37,
+      "x": 1680,
+      "y": 2421,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812927,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow19",
+      "name": "Brax Ssss",
+      "id": 7480,
+      "col": 29,
+      "row": 40,
+      "x": 1888,
+      "y": 2592,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812936,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow22",
+      "name": "Brax Vvvv",
+      "id": 7490,
+      "col": 20,
+      "row": 34,
+      "x": 1332,
+      "y": 2224,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812949,
+      "flags": 4160750093,
+      "is_player": true
+    },
+    {
+      "agent": "braxshadow24",
+      "name": "Brax Xxxx",
+      "id": 7495,
+      "col": 21,
+      "row": 34,
+      "x": 1396,
+      "y": 2224,
+      "facing": null,
+      "room_object_id": 1552,
+      "at": 1792261812952,
+      "flags": 525,
+      "is_player": true
+    }
+  ],
+  "bodies": [
+    {
+      "id": 7947,
+      "name": "orc",
+      "flags": 9,
+      "is_player": false,
+      "col": 16,
+      "row": 25,
+      "x": 1056,
+      "y": 1632,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": null,
+        "samples": 0
+      }
+    },
+    {
+      "id": 7929,
+      "name": "orc",
+      "flags": 9,
+      "is_player": false,
+      "col": 41,
+      "row": 22,
+      "x": 2659,
+      "y": 1441,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": null,
+        "samples": 0
+      }
+    },
+    {
+      "id": 7928,
+      "name": "black spider",
+      "flags": 9,
+      "is_player": false,
+      "col": 22,
+      "row": 38,
+      "x": 1450,
+      "y": 2457,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": null,
+        "samples": 0
+      }
+    },
+    {
+      "id": 7927,
+      "name": "orc",
+      "flags": 9,
+      "is_player": false,
+      "col": 35,
+      "row": 43,
+      "x": 2274,
+      "y": 2769,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": null,
+        "samples": 0
+      }
+    },
+    {
+      "id": 7926,
+      "name": "orc",
+      "flags": 9,
+      "is_player": false,
+      "col": 32,
+      "row": 36,
+      "x": 2071,
+      "y": 2329,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": null,
+        "samples": 0
+      }
+    },
+    {
+      "id": 7925,
+      "name": "orc",
+      "flags": 9,
+      "is_player": false,
+      "col": 16,
+      "row": 26,
+      "x": 1056,
+      "y": 1696,
+      "attention": {
+        "aggro_at_me": null,
+        "aggro_any": null,
+        "players": [
+          {
+            "player_id": 7448,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7471,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7446,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7490,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7495,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7479,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7458,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7460,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7443,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7452,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7473,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7478,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7447,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7459,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7480,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7456,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          },
+          {
+            "player_id": 7439,
+            "closing_samples": 0,
+            "aggro_at_player": null
+          }
+        ],
+        "confidence": "unknown",
+        "basis": "repeated server-observed movement toward fresh, confirmed player positions; hidden target not transmitted",
+        "observed_at": 1792261806815,
+        "samples": 0
+      }
+    },
+    {
+      "id": 1577,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 60,
+      "row": 25,
+      "x": 3840,
+      "y": 1600,
+      "attention": null
+    },
+    {
+      "id": 1576,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 51,
+      "row": 25,
+      "x": 3264,
+      "y": 1600,
+      "attention": null
+    },
+    {
+      "id": 1575,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 60,
+      "row": 16,
+      "x": 3840,
+      "y": 1024,
+      "attention": null
+    },
+    {
+      "id": 1574,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 51,
+      "row": 16,
+      "x": 3264,
+      "y": 1024,
+      "attention": null
+    },
+    {
+      "id": 1573,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 55,
+      "row": 21,
+      "x": 3550,
+      "y": 1374,
+      "attention": null
+    },
+    {
+      "id": 1572,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 61,
+      "row": 1,
+      "x": 3936,
+      "y": 81,
+      "attention": null
+    },
+    {
+      "id": 1571,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 61,
+      "row": 1,
+      "x": 3904,
+      "y": 81,
+      "attention": null
+    },
+    {
+      "id": 1570,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 60,
+      "row": 1,
+      "x": 3872,
+      "y": 81,
+      "attention": null
+    },
+    {
+      "id": 1569,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 60,
+      "row": 1,
+      "x": 3840,
+      "y": 81,
+      "attention": null
+    },
+    {
+      "id": 1568,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 59,
+      "row": 1,
+      "x": 3825,
+      "y": 96,
+      "attention": null
+    },
+    {
+      "id": 1567,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 59,
+      "row": 2,
+      "x": 3825,
+      "y": 128,
+      "attention": null
+    },
+    {
+      "id": 1566,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 59,
+      "row": 2,
+      "x": 3825,
+      "y": 160,
+      "attention": null
+    },
+    {
+      "id": 1565,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 59,
+      "row": 3,
+      "x": 3825,
+      "y": 192,
+      "attention": null
+    },
+    {
+      "id": 1564,
+      "name": "lever",
+      "flags": 2048,
+      "is_player": false,
+      "col": 60,
+      "row": 3,
+      "x": 3856,
+      "y": 207,
+      "attention": null
+    },
+    {
+      "id": 1563,
+      "name": "Journal of the Watcher of the Brax Arena",
+      "flags": 65,
+      "is_player": false,
+      "col": 60,
+      "row": 1,
+      "x": 3856,
+      "y": 112,
+      "attention": null
+    },
+    {
+      "id": 1562,
+      "name": "mana node",
+      "flags": 2230272,
+      "is_player": false,
+      "col": 30,
+      "row": 52,
+      "x": 1968,
+      "y": 3328,
+      "attention": null
+    }
+  ]
+}

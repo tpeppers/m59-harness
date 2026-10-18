@@ -2033,8 +2033,16 @@ export async function boundedSilentGo({
       return { cancelled: false, entered: null, messages, attempts,
                unconfirmed_transition: true };
 
-    const attemptBefore = sequence();
-    await send();
+    const queuedBefore = sequence();
+    const emission = await send();
+    const attemptBefore = Number.isSafeInteger(emission?.sequence) ? emission.sequence : queuedBefore;
+    if(emission?.sent===false){
+      const observed=eventsSince(before).find(event=>event.kind==='room-entered');
+      if(observed)return{cancelled:false,entered:observed,messages,attempts};
+      if(!stillCurrent())return{cancelled:false,entered:null,messages,attempts,unconfirmed_transition:true};
+      return{cancelled:cancelled(),entered:null,messages,attempts,unsent:true,
+        reason:emission.reason??'go_not_sent'};
+    }
     attempts++;
     entered = await waitForEntry(attemptBefore) ?? null;
     // Only messages produced after this go count. A stand-up acknowledgement or

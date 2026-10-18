@@ -115,7 +115,7 @@ assert(!passedRailAim({sourceWaypoints:dense},dense[2],{x:300,y:0},{floor:0}));
 
 {
  const {readFileSync}=await import('node:fs'),{runInNewContext}=await import('node:vm');
- const source=readFileSync(new URL('./m59-fineclimb.mjs',import.meta.url),'utf8'),start=source.indexOf('    if(observe){\n      const target=clientToProtocol(declaration.to_fine),probe='),end=source.indexOf("    const j = await call('jump'",start);assert(start>=0&&end>start);
+ const source=readFileSync(new URL('./m59-fineclimb.mjs',import.meta.url),'utf8'),start=source.indexOf('    if(observe){\n      const target=clientToProtocol(declaration.to_fine),probe='),end=source.indexOf("    if(observeRaw)await observeRaw();",start);assert(start>=0&&end>start);
  let probes=0;const code=source.slice(start,end),execute=runInNewContext('(async function(){while(true){'+code+'return true;}})',{observe:async()=>({}),observeRaw:{probeMove:async()=>{probes++;return{};}},clientToProtocol:p=>p,declaration:{to_fine:{x:1,y:2}},provedRailMove:()=>true});
  assert(await execute());assert.equal(probes,1,'the executable CLI branch uses its native observer, retaining methods across the survival-check wrapper');
 }

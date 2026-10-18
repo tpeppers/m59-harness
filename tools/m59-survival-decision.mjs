@@ -6,7 +6,7 @@ export const SURVIVAL_DECISION_VERSION = 1;
 // Callers bind the live lease/order separately before yielding to this intent.
 export function isActiveRecoveryDecision(d){
   return !!d&&d.strategy!=='yield_to_controller'&&d.ended_at==null&&
-    ['pending','approaching','arrived','holding','recovering'].includes(d.status);
+    ['pending','active','approaching','arrived','holding','recovering'].includes(d.status);
 }
 const states = new WeakMap();
 const MAX_HISTORY = 64, MAX_PATH = 256;

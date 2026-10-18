@@ -77,11 +77,23 @@ for(const [index,source]of route.legs.entries()){
  const s={client:{self:captured.you,selfId:captured.you.id,room:{objects:new Map()},vitals:()=>v,ailments:()=>[]},world:{room:captured.room},movementGeneration:5};
  const pilot={s,mode:'idle',policy:{},stopping:false,facultyOwner:()=> 'fleetscript:walk-to-brax (public)',facultyHeld:()=>false,travelGuard:()=>({rest:false}),operatorSurvivalStandDown:()=>false};
  assert(scriptedWalkDefersVigorRest(pilot,v));
- for(const change of [{mode:'farm'},{stopping:true},{recoverUntilWhole:true},{suspendedJourney:{to:827}},{facultyOwner:()=> 'keeper'},{facultyOwner:k=>k==='movement'?'fleetscript:walk-to-brax (public)':'keeper'},{facultyHeld:()=>true},{travelGuard:()=>({rest:true})}])assert(!scriptedWalkDefersVigorRest({...pilot,...change},v));
+ assert(scriptedWalkDefersVigorRest({...pilot,travelGuard:()=>({rest:true})},v),'work rest policy does not impose80 vigor on a healthy fine journey');
+ for(const change of [{mode:'farm'},{stopping:true},{recoverUntilWhole:true},{suspendedJourney:{to:827}},{facultyOwner:()=> 'keeper'},{facultyOwner:k=>k==='movement'?'fleetscript:walk-to-brax (public)':'keeper'},{facultyHeld:()=>true}])assert(!scriptedWalkDefersVigorRest({...pilot,...change},v));
  assert(!scriptedWalkDefersVigorRest(pilot,{...v,health:{value:19,max:20}}));assert(!scriptedWalkDefersVigorRest(pilot,{...v,vigor:{value:39}}));
  assert(!scriptedWalkDefersVigorRest({...pilot,s:{...s,client:{...s.client,ailments:()=>['poison']}}},v));
  const pending=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:captured.decision.original_reason,status:'pending'});
  assert.equal(await Autopilot.prototype.continueSurvivalDecisionStep.call(pilot),false);
  assert.equal(currentSurvivalDecision(s),null);assert.equal(pending.outcome,'recovered');
- console.log('captured full-health78-vigor lever worker: existing scripted road doctrine completes nonurgent recovery; wounds, exhaustion, ailments, post-death recovery and foreign/protected ownership retain recovery');
+ console.log('captured full-health78-vigor lever worker: scripted travel reserve completes nonurgent vigor recovery independently of work rest policy; wounds, exhaustion, ailments, post-death recovery and foreign/protected ownership retain recovery');
 }
+
+{
+ const f=h.fixture({from:{room:579,...clientToProtocol(leg.waypoints[0])}});f.s.confirmPosition=async()=>null;
+ const result=await withBodyCommand(f.s,()=>walkCheckedRail(f.s,{room:579,leg,queuePath:true}),'ended-native-confirmation');
+ assert.equal(result.reason,'position_confirmation_timeout');assert.equal(result.operationEnded,true);assert.equal(f.s.railProgress.phase,'stopped');assert(f.s.railProgress.endedAt);assert.equal(f.packets.length,0);
+ console.log('an ended confirmation failure publishes a stopped native order, without inventing movement or hiding unknown failures');
+}
+
+{const{crossCheckedRailExit}=await import('./m59-rail-walk.mjs');for(const sent of[false,undefined,true]){let calls=0,clock=0;const mock={movementGeneration:1,movementWasCancelled:()=>false,world:{room:{num:827},exits:()=>[{kind:'edge',to:826,direction:'west',stand_on:{row:3,col:1}}]},confirmPosition:async()=>true,leaveViaAny:async()=>{calls++;return calls>1?{left:true}:{left:false,tried:[{stage:'edge',crossing_packet_sent:sent,why:'object_blocked'}]};}};const r=await crossCheckedRailExit(mock,{to:826,row:3,col:1},{now:()=>clock,wait:async ms=>clock+=ms,timeoutMs:2000});assert.equal(calls,sent===false?2:1);assert.equal(!!r.left,sent===false);}console.log('captured doorway EDGE blockage waits only for an explicitly unsent crossing; unknown or sent edge actions never retry');}
+
+{const{crossCheckedRailExit}=await import('./m59-rail-walk.mjs'),f=h.fixture({from:{room:827,x:96,y:224},bodies:[{id:400,name:'waiting-peer',flags:5,x:80,y:224,row:3,col:1}]},{bodies:true,wireNames:true,maxPackets:50,maxMs:20000});let waits=0,clock=0;const r=await withBodyCommand(f.s,()=>crossCheckedRailExit(f.s,{to:826,row:3,col:1},{timeoutMs:5000,now:()=>clock,wait:async ms=>{waits++;clock+=ms;f.c.room.objects.delete(400);}}),'real-native-doorway-queue');assert(r.left);assert.equal(f.s.world.room.num,826);assert.equal(waits,1);assert.equal(f.packets.length,1);console.log('real native blocked doorway clears in the same owned crossing, then sends exactly one successful packet');}

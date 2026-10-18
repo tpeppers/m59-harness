@@ -261,3 +261,173 @@ observed. Tests: `node tools/m59-healing-wands-test.mjs`.
 
 The loot filter also leaves healing wands with the server's broken animation group
 (3) on the ground, preventing pickup/drop loops across farmers and reconnects.
+
+
+## Ordinary recovery healing and reconnect evidence
+
+Active keeper recovery can use a known affordable heal before passive rest.
+Minor heal costs three mana and one herb; the helper keeps a mana reserve and
+rechecks socket, body, room, resources and recovery ownership at the actual
+paced send. Healthy farmers can also heal a wounded fleetmate without requiring
+the coop strategy. Ally HP comes from that character's own ready socket, with
+matching game endpoint, room, body ID, name and a maximum age of five seconds.
+Missing reports never become invented HP. A recycled target ID cancels the cast.
+Mana paid and observed HP gain are separate measurements: a paid ally cast alone
+does not prove how much health the recipient gained.
+
+SessionEvidence starts before login and writes separate socket UUID records,
+linked across reconnects and keeper handoffs. It retains bounded combat text,
+health/mana/vigor, room/pose, paced action opcodes, login phases and close reasons.
+Independent files prevent a late old-socket close from overwriting the new
+keeper's evidence. Payloads, passwords and player speech are excluded. The
+postmortem retains original event times and separate socket health baselines;
+missing time is not synthesized into damage. Peer fleet sockets can preserve an
+authoritative victim-specific server death notice. Multiple separate deaths in
+an offline interval remain ambiguous.
+
+The death-location helper only recovers a known non-Underworld room from a recent
+fatal health push or personal death message. A last-alive room across an offline
+gap is insufficient. This resolves the observed case where a zombie killed a
+character in room 39 while its keeper had no decision frames: socket evidence
+proved the location even though the old frame-only postmortem left it blank.
+
+Ordinary health and mana regeneration timers can take up to 60 seconds in the
+server. restUntil therefore allows 65 seconds without progress while one of
+those requested resources is pending, bounded by the caller's original timeout.
+Damage and cancellation still interrupt immediately. Vigor-only recovery still
+reports a ceiling promptly: normal sitting restores at most 80 of 200 vigor.
+
+Known self-healing also runs on ready health/resource events while ordinary
+travel owns movement. One pending cast and a short cooldown prevent callback
+races; login readiness waits for an already queued heal before resuming a road
+journey. Socket, room, body, generation, resources, human control and protected
+faculties are checked again at the paced send. This grants no spells or items.
+
+Healing telemetry distinguishes unread inventories/spellbooks from known empty
+ones, and records affordability, mana reserve, sent casts, mana payment,
+observed HP gain and exact server success/failure feedback. The first mana
+packet can precede the heal, so one bounded observation window follows later
+feedback without sending another cast. Mana payment alone does not confirm
+an ally heal. Critical self recovery can spend its last three mana on a known
+minor heal; ordinary recovery keeps a one-mana reserve.
+
+The native rest API accepts vigor as a fraction or an absolute value above one
+on the 200 scale: 0.4 and 80 both mean the ordinary resting ceiling. Its default
+and rest_up target that attainable ceiling, and native rest forwards explicit
+mana targets. Health and mana remain fractions of their own maxima.
+
+Reconnect evidence keeps login-ready, first/last health and up to eight fatal
+observations outside each socket's rolling action window. The event count
+dropped by that window is explicit. Killer-message and fatal-room attribution
+read the preserved anchors too. This retains a login-to-death transition after
+heavy action traffic; it does not infer damage or a killer during an offline
+gap. Independent socket files preserve late old-keeper close observations.
+
+Healing readiness diagnostics deduplicate unchanged resource refreshes by
+functional state while retaining unread/ready distinctions. Repeated inventory
+timestamps cannot crowd useful combat evidence out of the recent window.
+
+A ready character that already knows cure poison may use its carried herbs and
+elderberries through the same protected self-recovery path. Local cpoison.kod
+costs10mana,2herbs and1elderberry; the selection keeps a one-mana reserve. A
+successful cast can weaken the poison rather than remove it, so payment, exact
+server weakening feedback and observed removal are recorded separately. No
+spell, reagent or ally ailment is assumed.
+
+Route transport failures retain bounded error names, messages, socket codes,
+addresses, ports, stacks and nested causes, including the final failed read.
+Arbitrary request and credential properties are excluded. A generic fetch
+failure must not replace its underlying timeout or connection evidence.
+
+Recovery healing establishes standing for the current room through the urgent
+pacer before casting. Both sends recheck ownership. The pacer checks spell
+concentration again when draining a queued packet: a rest or run queued before
+a new cast cannot interrupt its trance, while safe reads remain available.
+
+Cross-session evidence keeps the last structured healing result outside the
+rolling event window. It retains mana payment, the server outcome, observed HP
+gain and the last posture command; a command is not an authoritative posture
+observation. An unpaid coincident regeneration tick is not a confirmed spell.
+Ally healing contributes the same evidence, with the recipient's fresh own-socket
+HP reports and timestamps. Those reports describe net observed health, not
+damage or healing inferred across an offline gap. Structured fields are
+whitelisted before any human-readable reason is clipped.
+
+A fully healthy farmer with known gear, inventory and nearby matching prey may
+hand a vigor-only rest back to farm work once it meets the existing effective
+fighting floor (70 with an empty larder). The earlier rest gate must not demand
+80 and prevent the later 70-vigor combat gate from running. Post-death recovery,
+ailments, casting, wounded health, unread inventory and protected ownership
+retain their recovery behavior. The farm rung still applies its full target,
+weapon, food, vigor and engagement checks before attacking.
+
+Ordinary idle keepers may provide the same observed-fleetmate healing as farmers.
+The caster must still be healthy, know and afford the spell, and have no work
+lease, PvP control, freeze or cast rite. The target must have a fresh matching
+own-socket report, be below90% and miss at least3HP. This reaches the normal
+readiness threshold without spending casts on nearly whole allies. Self-health
+and send-time body, room, identity and ownership checks remain authoritative.
+
+
+Resource telemetry preserves both current value and observed ceiling when
+asynchronous stat pushes temporarily disagree, including around death.
+An over-ceiling value alone does not establish an administrative grant.
+Retain the raw sequence and report the cause as unestablished.
+
+A full mana bar does not make an unknown or reagent-starved healing spell
+available. Post-mortem readiness evidence distinguishes unread inventories,
+zero herbs, unknown heals and affordable casts. Likewise, observed poison
+before a disconnect and matching health on the next login do not establish
+damage inside the offline gap. A later named victim-only death message can
+identify the final killer while the earlier poison remains a separately
+observed contributor.
+
+
+Healing confirmation must respect explicit server failure even when the cast
+spent mana and an ordinary regeneration tick raised HP in the same observation
+window. Keep those three facts separate: mana paid, net observed HP change, and
+server outcome. A failed or unnecessary cast is never a confirmed heal.
+
+The farm observation helper retains every visible requested target, including
+targets beyond the nearest twelve generic monsters. It records raw object flags,
+distances, connection revision, prediction status, and the keeper's recent
+combat, casting and recovery decisions. Full health, full mana, sufficient vigor
+and nearby requested prey identify a sampled potential idle opportunity; they
+do not prove line of sight, reachability or engagement eligibility. Report sample
+counts as sample counts, not inferred idle durations. Missing socket samples and
+new keeper/connection identities reset consecutive health-ceiling confirmations;
+a missing first sample must not terminate the measurement.
+
+
+The shared recovery predicate includes the native active state. The actual
+keeper sets active before awaiting its logoff/reconnect action and can publish
+that state while a previously awaited rest returns interrupted. Omitting it
+misclassifies owned recovery as an ended handoff. Pending, active, approaching,
+arrived, holding and recovering decisions remain protected until ended;
+yield_to_controller is explicitly excluded. An announcement that an errand is
+busy does not itself lease survival. A protected-faculty handoff remains
+explicit.
+
+Completed migration accounting uses the exact receipt set and the trial's end
+timestamp. A later retry or another public run cannot supply an arrival for an
+earlier failed run. Individual actor outcomes and positive living arrivals are
+reported separately from aggregate dispatch success. Lift admissions, boarding
+before launch and individual height validation are distinct observations;
+duplicate raised receipts for the same group are one physical trip.
+
+The readable death digest and death detail page expose the collected linked
+socket history: each session's first and last observed HP, final combat messages,
+fatal anchors, last structured healing verdict and last living reagent/spell
+readiness. Within the retained evidence, the last combat messages are selected separately
+from the last movement events. Older text already evicted by the bounded writer
+window remains unavailable.
+A post-death Underworld HP/inventory observation is displayed separately and
+cannot replace fatal HP or the last living supply observation. Explicit observed
+close-to-open gaps and overlapping handoffs remain distinct from unobserved
+boundaries; no cross-session HP delta is presented as measured damage.
+Fatal own-socket room evidence takes precedence over stale keeper frames.
+Conflicting fatal rooms remain unplaced. Text from the new history is escaped
+before rendering, and unrelated character evidence is refused.
+The history is bounded to the retained four sessions; missing or dropped evidence
+is reported rather than reconstructed. Reader changes take effect on the next
+normal broker load and do not require restarting a live trial.

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import{affordablePoisonCure,castRecoveryCure}from'./m59-recovery-cure.mjs';
+import{scriptedTrafficResumeReady,scriptedDeviationResumeCandidate}from'./m59-traffic-resume.mjs';
+import{deathLocationFromSessions}from'./m59-death-location.mjs';
 // The keeper: a background loop that holds a character's baseline state so the model
 // driving it does not have to.
 //
@@ -20,6 +23,9 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import {findDeathNotice} from './m59-death-notices.mjs';
+import {affordableHeal,castRecoveryHeal,healReadiness} from './m59-recovery-heal.mjs';
+import {publishFleetHealth,readFleetHealth} from './m59-fleet-health.mjs';
 import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
 import { castRole } from './m59-spellgear.mjs';
 import {keeperRecoveryRescueReady} from './m59-move-origin.mjs';
@@ -1970,18 +1976,32 @@ export function scriptedWalkDefersArming(pilot){
   pilot.facultyOwner?.('work')===owner&&pilot.travelGuard().arm!==true;
 }
 
-// A healthy scripted traveler follows its existing rest=false road doctrine.
+// A healthy scripted idle journey uses the normal travel vigor reserve.
 // A small vigor deficit below the resting cap is not an urgent recovery while
 // it still has the normal road reserve. Health, ailments and exhaustion retain
 // the keeper's recovery behavior; farming and foreign leases never use this.
 export function scriptedWalkDefersVigorRest(pilot,v){
- const owner=pilot.facultyOwner?.('movement'),guard=pilot.travelGuard?.();
+ const owner=pilot.facultyOwner?.('movement');
  if(pilot.stopping||pilot.mode!=='idle'||pilot.suspendedJourney||pilot.inert?.travelling||pilot.recoverUntilWhole||
-    typeof owner!=='string'||!owner.startsWith('fleetscript:')||pilot.facultyOwner?.('work')!==owner||guard?.rest!==false||
+    typeof owner!=='string'||!owner.startsWith('fleetscript:')||pilot.facultyOwner?.('work')!==owner||
     typeof pilot.facultyHeld!=='function'||['survival','recovery','combat'].some(k=>pilot.facultyHeld(k))||pilot.s?.combat?.active?.pvp||
     (pilot.s?.client?.ailments?.()??[]).length)return false;
  const hp=v?.health,vigor=v?.vigor?.value,floor=Math.max(pilot.policy?.travelVigorFloor??TRAVEL_VIGOR_FLOOR,pilot.policy?.ordinaryVigorFloor??ORDINARY_VIGOR_FLOOR);
  return Number.isFinite(hp?.max)&&hp.max>0&&Number.isFinite(hp.value)&&hp.value>=hp.max&&Number.isFinite(vigor)&&vigor>=floor;
+}
+
+// The farm rung already owns its effective fight/food floor. Do not send a
+// healthy, armed farmer to a wall for the last few vigor points above that floor.
+export function farmVigorWorkReady(pilot,v){
+ const s=pilot.s,c=s?.client,h=v?.health,raw=v?.vigor?.value;
+ if(pilot.mode!=='farm'||!pilot.policy?.hunt||pilot.stopping||pilot.inert||pilot.suspendedJourney||pilot.recoverUntilWhole||s?.combat?.active||s?._rite||
+    !c?.combatReady||c.state!=='game'||c.self?.predicted||!c.self||!Number.isFinite(c.inventoryAt)||!Number.isFinite(h?.max)||!(h.max>0&&h.value>=h.max)||!Number.isFinite(raw)||
+    (c.ailments?.()??[]).length||pilot.checkFreeze?.()||typeof pilot.facultyHeld!=='function'||['work','movement','survival','recovery','combat'].some(k=>pilot.facultyHeld(k))||
+    pilot.armedForSure?.()!==true||pilot.policy.assignedRoom!=null&&Number(pilot.policy.assignedRoom)!==Number(s.world?.room?.num))return false;
+ const d=currentSurvivalDecision(s);if(['turn_required','frozen_without_action'].includes(d?.phase))return false;
+ const quarry=skills.findCreature(s,pilot.policy.hunt,{match:pilot.huntMatch()}).some(o=>Math.hypot(o.col-c.self.col,o.row-c.self.row)<=8);if(!quarry)return false;
+ const floor=Number(pilot.fightFloor()),cap=Number(pilot.restVigorCeiling())*200;
+ return Number.isFinite(floor)&&Number.isFinite(cap)&&raw>=Math.max(pilot.policy.ordinaryVigorFloor??ORDINARY_VIGOR_FLOOR,Math.min(floor,cap));
 }
 
 export class Autopilot {
@@ -1989,6 +2009,7 @@ export class Autopilot {
     this.s = session;
     this.healingWands = new HealingWands();
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
+    session.activeSelfHealTick = trigger => this.activeSelfHealing(trigger);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
     if (session) session.beforeEquip = (c) => this.syncMagicSet(c);
     // THE SPARE LIST IS READ BY THE SESSION, because the attack veto and findCreature live there
@@ -4936,6 +4957,8 @@ export class Autopilot {
   // tracks when we last moved and last swung. Damage arriving after a swing is
   // retaliation and says nothing at all about the square.
   observe() {
+    publishFleetHealth(this.s);
+    void Promise.resolve(this.s.activeSelfHealTick?.('keeper_observe')).catch(error=>this.note?.('active self heal failed',{why:error.message}));
     const s = this.s, c = s.client, me = c?.self;
     const room = s.world?.room, now = Date.now();
     const health = c?.vitals?.()?.health?.value ?? null;
@@ -6095,8 +6118,9 @@ export class Autopilot {
       this.clearSurvivalJam('death');
       finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
     }
-    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedWalkDefersVigorRest(this,v)) {
-      finishSurvivalDecision(s,d.id,'recovered',scriptedWalkDefersVigorRest(this,v)?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
+    const scriptedReady=scriptedWalkDefersVigorRest(this,v),farmReady=farmVigorWorkReady(this,v);
+    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80 || scriptedReady || farmReady) {
+      finishSurvivalDecision(s,d.id,'recovered',farmReady?'healthy farm ready above its effective fighting vigor floor':scriptedReady?'scripted journey health and road vigor restored':'health and resting vigor restored');return false;
     }
     // A director leases movement for its entire run, while survival/recovery remain
     // with this keeper. Busy announces the holder's errand; it does not lease
@@ -6148,6 +6172,16 @@ export class Autopilot {
       const generation=s.movementGeneration,client=s.client;
       const cancelled=()=>currentSurvivalDecision(s)?.id!==d.id || s.client!==client
         || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
+      // The active recovery path used to bypass healUp and wait on vigor alone.
+      // Keep the same wall, movement generation and decision while casting one heal.
+      if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client)){
+        this._recoveryHealAt=Date.now();
+        const healing=await castRecoveryHeal(s,{shouldCancel:cancelled});
+        this.note('recovery heal',healing);
+        if(healing.cast)this.recordCast(healing.spell,{ok:healing.confirmed,...healing});
+        if(cancelled())return true;
+        if(pct(client.vitals()?.health)>=1)return true;
+      }
       const r=await skills.restUntil(s,{health:1,vigor:REST_VIGOR_CAP,maxSeconds:8,
         shouldCancel:cancelled,
         beforeMutation:()=>{if(cancelled())throw Error('survival recovery interrupted');},
@@ -9976,6 +10010,10 @@ export class Autopilot {
     const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
             chalice: _chalice, chaliceRoom: _chaliceRoom, explicitOrder = false,
             approachLeg = false, ...sessionOpts } = opts ?? {};
+    // Capture the issuer before a nested shelter walk replaces the live cell order.
+    const capturedTravelOrigin = sessionOpts.origin ?? (Number(this.inert?.to) === Number(room) ? this.inert?.origin : null)
+      ?? (Number(liveMoveOrder(this.s)?.to) === Number(room) ? liveMoveOrder(this.s)?.origin : null);
+    const journeyGuard = { ...this.travelGuard(this.inert?.travelling ? this.inert.guard : null) };
     // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
     // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
     // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
@@ -10136,7 +10174,8 @@ export class Autopilot {
           this.survivalInterruptedPass = this.passes;
           this.suspendedJourney ??= { to: Number(room), why: `travelling to ${room}`,
             at: Date.now(), trigger: why, attempts: (this.inert?.attempts ?? 0) + 1,
-            deaths_at: this.tally?.deaths ?? 0 };
+            deaths_at: this.tally?.deaths ?? 0, guard: journeyGuard,
+            ...(capturedTravelOrigin ? { origin: capturedTravelOrigin } : {}) };
           this.s.cancelMovement?.(null, why, { origin: keeperOrigin('wedge_shelter') });
           this.revive(why);
           this.note('journey paused at the wall after a wedge', { to: Number(room) });
@@ -10216,7 +10255,7 @@ export class Autopilot {
     const startedIn = Number(this.s?.world?.room?.num ?? NaN) || null;
     // WHO ORDERED THIS JOURNEY. The prototype wrapper (installMoveOrders, bottom of this file)
     // has registered it as the live move order; read it here, before anything can cancel it.
-    const journeyOrigin = this.s?.moveOrder?.origin ?? moveOrigin(opts?.origin ?? null);
+    const journeyOrigin = capturedTravelOrigin ?? moveOrigin(null);
     // WHERE THE BODY STOOD WHEN IT SET OUT, square and fine point, for the incident log.
     const startAt = (me => me ? { room: startedIn, row: me.row, col: me.col, x: me.x, y: me.y } : null)(this.s.client?.self);
     const v0 = this.s.client?.vitals?.()?.health;
@@ -10271,7 +10310,7 @@ export class Autopilot {
     if (!this.inert) {
       if(recoveryDetour && this.suspendedJourney)
         this.ledgerEvent('travel_parent_retained',{to:room,resume_to:this.suspendedJourney.to});
-      this.goTravelling(`travelling to ${room}`, { to: room, recoveryDetour });
+      this.goTravelling(`travelling to ${room}`, { to: room, recoveryDetour, origin: capturedTravelOrigin });
       ourTravelHold = this.inert;
       // Renew only this live owner's lease. Recreating a revoked hold erased the
       // watchdog's suspended destination while the cancelled mover was unwinding.
@@ -11915,13 +11954,16 @@ export class Autopilot {
     // time, unmatched.
     const near = () => skills.deathBroadcastFor(name, c.events ?? [], at);
     const anywhere = () => skills.deathBroadcastFor(name, c.events ?? [], null);
-    const already = near() ?? anywhere();
+    const liveTimes=(this.s.sessionEvidence?.records??[]).flatMap(r=>r.events.filter(e=>e.kind==='stat'&&e.name==='health'&&e.value>0&&e.room!=null&&e.room!==1&&e.at<=at).map(e=>e.at));
+    const lastAlive=liveTimes.length?Math.max(...liveTimes):null;
+    const peer=()=>findDeathNotice(this.s.credentials,name,{at,since:lastAlive==null?at-30000:Math.max(at-890000,Math.min(at-30000,lastAlive))});
+    const already = near() ?? anywhere() ?? peer();
     if (already) return already;
     await c.waitFor({ kinds: ['message'], timeoutMs: waitMs }).catch(() => null);
     // `dt` is null on the fallback, which is the honest answer: we know the killer and we
     // do not know how long ago, because the thing that would have told us is the clock we
     // just admitted was wrong.
-    return near() ?? anywhere();
+    return near() ?? anywhere() ?? peer();
   }
 
   postMortem(reason = 'died') {
@@ -11929,6 +11971,10 @@ export class Autopilot {
     if (decision) finishSurvivalDecision(this.s,decision.id,'died',reason);
     const frames = (this.recent5 || []).filter(f => !/underworld/i.test(f.room || ''));
     const last = frames[frames.length - 1] || null;
+    const capturedAt=Date.now(),sessionEvidence=this.s.sessionEvidence?.snapshot?.()??null;
+    const fatalLocation=deathLocationFromSessions(sessionEvidence,{at:capturedAt});
+    const where=fatalLocation?{room:last?.num===fatalLocation.num?last.room:null,...fatalLocation}
+      :last?{room:last.room,num:last.num,col:last.col,row:last.row}:null;
     // Rank frames on the true count, not the capped name list — otherwise every frame
     // with 6-or-more ties at 6 and "the worst moment" is just the first one that
     // saturated the cap. Falls back to the list length for records written before
@@ -11938,7 +11984,7 @@ export class Autopilot {
     return {
       character: this.s.client?.me?.name ?? this.s.name ?? null,
       agent: this.s.name ?? null,
-      at: Date.now(), reason,
+      at: capturedAt, reason,
       // WHAT IT WAS DOING. The question everyone asks first.
       was: {
         doing: last?.doing ?? this.doing ?? this.lastDoing ?? null,
@@ -11954,7 +12000,7 @@ export class Autopilot {
         // and only the first of those is evidence. Null here is the honest "no frame".
         ever_swung: last ? (last.ever_swung ?? null) : null,
       },
-      where: last ? { room: last.room, num: last.num, col: last.col, row: last.row } : null,
+      where,
       vitals: {
         last_health: last?.health ?? null, level: last?.max ?? null,
         last_vigor: last?.vigor ?? null,
@@ -11980,9 +12026,10 @@ export class Autopilot {
       combat: this.s.combat?.status?.() ?? null,
       pvp_survival: this.s.combat?.pvpStatus?.() ?? null,
       replay: reason==='died' ? this.s.replayRecorder?.death({reason,character:this.s.client?.me?.name??this.s.name,
-        where:last?{room:last.num,row:last.row,col:last.col}:null,
+        where:where?{room:where.num,row:where.row,col:where.col}:null,
         survival_decisions:survivalDecisionSnapshot(this.s)})??null : null,
       text: this.recentText(30),
+      session_evidence: sessionEvidence,
       // WHERE THE DAMAGE ACTUALLY LANDED, which the three above cannot say.
       //
       // Frames are one per pass and a pass can be a multi-minute travel await, so the
@@ -13599,7 +13646,7 @@ export class Autopilot {
   // journey taken back mid-hop could not be resumed even in principle: the destination had
   // never been stored anywhere a later pass could read. `takeBack` even reported it as
   // `was_travelling_to: <the why string>`, which reads like a destination and is not one.
-  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0, recoveryDetour = false } = {}) {
+  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0, recoveryDetour = false, origin = null } = {}) {
     // Already travelling for this reason: refresh nothing, the deadline is the caller's.
     // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
     // could not do it. Restored after the 2026-09-04 merge dropped it.
@@ -13882,7 +13929,7 @@ export class Autopilot {
                    to: (to != null && Number.isFinite(Number(to)) && Number(to) > 0)
                        ? Number(to) : null,
                    attempts: Number(attempts) || 0,
-                   origin: Number(liveMoveOrder(this.s)?.to)===Number(to) ? liveMoveOrder(this.s)?.origin : null };
+                   origin: origin ?? (Number(liveMoveOrder(this.s)?.to)===Number(to) ? liveMoveOrder(this.s)?.origin : null) };
     // A NEW JOURNEY RETIRES ANY SUSPENDED ONE. Whoever issued this said where the character
     // should be going now, and an older objective coming back to life underneath a live
     // instruction is two directions on one body — the thing this whole boundary exists to
@@ -17672,6 +17719,12 @@ export class Autopilot {
             }
           }
         }
+        // Preserve victim-specific messages that crossed a socket boundary. Their
+        // original times remain intact; the attribution code retains its normal windows.
+        for(const e of this.s.sessionEvidence?.messages?.({since:death.at-30000,until:death.at+5000})??[]) {
+          if(!(pm.text??[]).some(old=>old.at===e.at&&old.kind===e.kind&&old.text===e.text))(pm.text??=[]).push(e);
+        }
+        pm.session_evidence=this.s.sessionEvidence?.snapshot?.()??pm.session_evidence??null;
         applyDeathAttribution(pm);
         const attribution = pm.death_attribution;
         // WAS IT A PLAYER? Decided here, from evidence available at death time, and stamped
@@ -18021,6 +18074,7 @@ export class Autopilot {
     // everything carried. That asymmetry is why `travel_hold_pvp` refuses a rest with people
     // about, and it is the same argument here.
     const takeBack = (what, why, detail = {}, { abandon = false } = {}) => {
+      const pausedOrigin=Number(liveMoveOrder(s)?.to)===Number(held.to)?liveMoveOrder(s)?.origin:held.origin;
       const stopped = (() => {
         try { return this.cancelForSurvival(null, 'a travel guard rung taking the character back', { origin: keeperOrigin('travel_guard') }); } catch (e) { return { cancelled: false, why: e.message }; }
       })();
@@ -18043,6 +18097,7 @@ export class Autopilot {
       else if (held.to != null) {
         this.suspendedJourney ??= {
           to: held.to, why: was, at: Date.now(), trigger: what,
+          ...(pausedOrigin?{origin:pausedOrigin}:{}),guard:{...held.guard},
           attempts: (held.attempts ?? 0) + 1,
           // The death count AT SUSPENSION. Resuming a journey the character died on is the
           // Cccc failure with extra steps, so the resume compares this against the live
@@ -19867,7 +19922,7 @@ export class Autopilot {
     const rawVigor = this.s.client?.vitals?.()?.vigor?.value ?? null;
     const spent = Number.isFinite(rawVigor)
       && rawVigor < (this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR);
-    const hurt = (hp !== null && hp < restAt) || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v);
+    const hurt = (hp !== null && hp < restAt) || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
     if(hurt && this.currentRecoveryWall()) {
       await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
@@ -19963,6 +20018,7 @@ export class Autopilot {
     // farmers in the original bug this call was added to fix: "a character holding a wall
     // never reaches [passFarm], because this stage handles the pass and returns first."
     if (this.hold) await this.releaseRestedHold();
+    if(this.hold)await this.healObservedFleetmate().catch(e=>this.note('observed ally heal failed',{why:e.message}));
 
     // A posted room caster works from its refuge. Ordinary errands are below this
     // recovery stage and cannot run while it is holding a wall.
@@ -21434,6 +21490,8 @@ export class Autopilot {
       return false;
     })) return HANDLED;
 
+    await this.healObservedFleetmate().catch(e=>this.note('observed ally heal failed',{why:e.message}));
+
     // Someone else is standing here and we can mend them: do that first. It costs a
     // second and it is the only action available that helps another character.
     if ((STRATEGIES[this.policy.strategy] || {}).medic) await this.medic().catch(() => {});
@@ -21854,7 +21912,17 @@ export class Autopilot {
       return this.resumeDeclined('still mending — health is below the start floor and climbing',
                                  { health: Math.round(hp * 100) + '%', floor, flat: this.resumeFlat ?? 0 });
     const vig = vigorPct(v);
-    if (vig !== null && vig < this.restVigorCeiling() && stillMending)
+    const continuationOptions={travelFloor:TRAVEL_VIGOR_FLOOR,ordinaryFloor:ORDINARY_VIGOR_FLOOR};
+    if(scriptedDeviationResumeCandidate(this,j,v,continuationOptions)){
+      const c=this.s.client,roomId=c.room?.id,generation=this.s.movementGeneration;
+      const confirmed=await this.s.confirmPosition({timeoutMs:1500});
+      if(!confirmed||this.s.client!==c||c.room?.id!==roomId||this.s.movementGeneration!==generation||this.suspendedJourney!==j||
+         !scriptedTrafficResumeReady(this,j,this.s.client?.vitals?.()??v,{...continuationOptions,confirmedBody:c.self}))
+        return this.resumeDeclined('ended deviation awaits a fresh healthy owned body');
+      continuationOptions.confirmedBody=c.self;
+    }
+    const continuingTraffic=scriptedTrafficResumeReady(this,j,this.s.client?.vitals?.()??v,continuationOptions);
+    if (vig !== null && vig < this.restVigorCeiling() && stillMending && !continuingTraffic)
       return this.resumeDeclined('still mending — vigor is under the resting cap and climbing',
                                  { vigor: vig, cap: REST_VIGOR_CAP, flat: this.resumeFlat ?? 0 });
     // Already there. Nothing to resume, and reporting it as a resume would put a journey in
@@ -21868,7 +21936,7 @@ export class Autopilot {
       why: 'the survival ladder ended the movement, not the objective',
     });
     recordEvent(this.who(), 'travel_resumed', { to: j.to, trigger: j.trigger, attempts: j.attempts });
-    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard });
+    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard, origin: j.origin });
     const ours = this.inert;
     let outcome = null;
     try {
@@ -24160,6 +24228,58 @@ export class Autopilot {
     { name: 'hospice',    mana: 10, reagents: [['herb', 3]] },
     { name: 'minor heal', mana: 3,  reagents: [['herb', 1]] },
   ]);
+
+  // Protected self recovery can run while a normal road job awaits movement.
+  // The cast shares pacing/rite holds; it never selects a new destination.
+  activeSelfHealing(trigger='health_push'){
+    if(this._activeSelfHealPromise)return trigger.startsWith('login_ready')?this._activeSelfHealPromise:Promise.resolve(false);
+    const pending=this.tryActiveSelfHeal(trigger);let tracked;
+    tracked=Promise.resolve(pending).finally(()=>{if(this._activeSelfHealPromise===tracked)this._activeSelfHealPromise=null;});
+    this._activeSelfHealPromise=tracked;return tracked;
+  }
+  async tryActiveSelfHeal(trigger='health_push'){
+    const s=this.s,c=s?.client,v=c?.vitals?.(),hp=pct(v?.health),now=Date.now(),cure=affordablePoisonCure(c);
+    if(this.stopping||!c?.combatReady||c.state!=='game'||!(hp>0&&(hp<0.9||cure))||s.live===false||this._activeSelfHealPending||s._rite||s.combat?.active||this.checkFreeze()||
+      this.inert&&!this.inert.travelling||['survival','recovery','combat'].some(k=>this.facultyHeld(k))||now-(this._recoveryHealAt??0)<3000)return false;
+    const readiness=healReadiness(c),{inventory_at,spells_at,...resources}=readiness,key=JSON.stringify([c.loginStartedAt,hp,inventory_at!=null,spells_at!=null,resources]);
+    if(this._healReadinessKey!==key){this._healReadinessKey=key;c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_CHECK',reason:JSON.stringify({trigger,...readiness})});}
+    if(!readiness.affordable&&!cure)return false;
+    const generation=s.movementGeneration,self=c.selfId,room=c.room?.id;
+    const cancelled=()=>this.stopping||s.client!==c||!c.combatReady||c.state!=='game'||s.live===false||this.inert&&!this.inert.travelling||c.selfId!==self||c.room?.id!==room||s.movementWasCancelled?.(generation)||s.combat?.active||this.checkFreeze()||['survival','recovery','combat'].some(k=>this.facultyHeld(k));
+    this._activeSelfHealPending=true;this._recoveryHealAt=now;
+    try{const result=await (cure?castRecoveryCure:castRecoveryHeal)(s,{shouldCancel:cancelled});this.note('active self heal',{trigger,...readiness,...result});
+      c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_RESULT',reason:JSON.stringify({trigger,...result})});
+      if(result.cast)this.recordCast(result.spell,{ok:result.confirmed,...result});else if(this._recoveryHealAt===now)this._recoveryHealAt=0;return result.cast;
+    }finally{this._activeSelfHealPending=false;}
+  }
+
+  // Health reports come from the ally's own socket, scoped to endpoint and body.
+  // Stale or unobserved allies never acquire an invented HP value.
+  async healObservedFleetmate() {
+    const s=this.s,c=s.client,now=Date.now(),credentials=s.credentials;
+    if(!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||!c?.combatReady||!credentials||this.checkFreeze()||s._rite
+       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c)||now-(this._observedAllyHealAt??0)<3000)return false;
+    const candidates=[...c.room.objects.values()].filter(o=>o.id!==c.selfId&&(o.flags&OF.PLAYER)&&
+      allyVerdict({name:c.rsc.get(o.nameRsc)??'',flags:o.flags},{friends:this.policy?.buffAllies?.friends??[]}).ally)
+      .map(o=>({o,report:readFleetHealth({...credentials,character:c.rsc.get(o.nameRsc)},{room:s.world?.room?.num,bodyId:o.id,now})}))
+      .filter(({report:r})=>r&&r.health.value/r.health.max<0.9&&r.health.max-r.health.value>=3)
+      .sort((a,b)=>a.report.health.value/a.report.health.max-b.report.health.value/b.report.health.max);
+    const target=candidates[0];if(!target)return false;
+    const generation=s.movementGeneration,bodyId=c.selfId,room=c.room.id;
+    const cancelled=()=>s.client!==c||c.selfId!==bodyId||c.room.id!==room||s.movementWasCancelled?.(generation)||!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||this.checkFreeze()||!(pct(c.vitals()?.health)>=0.9)||
+      !readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id})||
+      String(c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'').trim().toLowerCase()!==target.report.character.trim().toLowerCase()||
+      !allyVerdict({name:c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'',flags:c.room.objects.get(target.o.id)?.flags??0},{friends:this.policy?.buffAllies?.friends??[]}).ally;
+    this._observedAllyHealAt=now;
+    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled});
+    const afterReport=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});
+    result.target_report_before_at=target.report.at;
+    if(afterReport&&afterReport.at>=target.report.at){result.target_health_after=afterReport.health;result.target_report_after_at=afterReport.at;}
+    c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_RESULT',reason:JSON.stringify({trigger:'observed_fleetmate',...result})});
+    this.note('observed ally heal',{target:target.report.character,report_age_ms:now-target.report.at,...result});
+    if(result.cast){this.lastHealAt=now;this.recordCast(result.spell,{ok:result.confirmed,target:target.report.character,...result});}
+    return result.cast;
+  }
 
   async medic() {
     const s = this.s, c = s.need();

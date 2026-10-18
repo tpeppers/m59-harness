@@ -363,7 +363,8 @@ console.log('poison is not something hitting us');
 
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const fail = AP.indexOf('THIS IS NOT A SAFE SPOT');
-  const before = AP.slice(Math.max(0, fail - 2600), fail);
+  const observed = Autopilot.prototype.observe.toString();
+  const before = observed.slice(0, observed.indexOf('THIS IS NOT A SAFE SPOT'));
   ok('a wall is not discredited while the character is ailing', /ailments\?\.\(\)/.test(before));
   // ONLY when nothing is adjacent. Something standing on us while we are also poisoned is
   // still a wall that failed, and the one-failure rule must keep applying to it.

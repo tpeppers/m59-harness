@@ -2372,13 +2372,18 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, 
 // route back to a weapon is `create weapon` at 15 mana. Health and vigor can both be full
 // while that character is still unable to arm itself, and sitting is the only place mana
 // comes back at any speed.
-export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAULT_REST_UNTIL,
+export function normalizeRestTargets(args={}){
+ const fraction=(value,fallback)=>Number.isFinite(Number(value))?Math.max(0,Math.min(1,Number(value))):fallback;
+ const raw=Number(args.vigor??args.to_vigor??args.toVigor??80);
+ return{health:fraction(args.health??args.to_health??args.toHealth??0.99,0.99),mana:fraction(args.mana??args.to_mana??args.toMana??0,0),vigor:Number.isFinite(raw)?Math.max(0,Math.min(1,raw>1?raw/200:raw)):0.4};
+}
+export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = 0.4,
                                      mana = 0,
                                      maxSeconds = 120, abortOnDamage = true,
                                      beforeMutation = null, beforeCleanup = null,
-                                     shouldCancel = null } = {}) {
+                                     shouldCancel = null, now = Date.now, wait = sleep } = {}) {
   const c = s.need();
-  const restStartedAt = Date.now(), restSequence = c.evSeq;
+  const restStartedAt = now(), restSequence = c.evSeq;
   const incomingHit = () => (c.events ?? []).some(e => e.kind === 'message'
     && (restSequence != null ? e.seq > restSequence : e.at >= restStartedAt)
     && isEnemyHit(e.text));
@@ -2399,8 +2404,8 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
     if (typeof beforeMutation === 'function') beforeMutation('rest');
     return c.rest();
   });
-  const t0 = Date.now();
-  let stalled = 0, last = -1, interrupted = null;
+  const t0 = now();
+  let stalled = 0, last = -1, interrupted = null, lastProgressAt = t0;
   let cleanupSkipped = null;
   // The best health seen SO FAR in this rest, not the health we sat down at: a rest
   // that climbs 12 -> 16 and is then hit back to 14 is being interrupted, and
@@ -2414,9 +2419,9 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
       const {turnAtProvedRefuge}=await import('./m59-refuge-activation.mjs');
       await turnAtProvedRefuge(s,{shouldCancel,beforeMutation});
     }
-    while (Date.now() - t0 < maxSeconds * 1000 &&
+    while (now() - t0 < maxSeconds * 1000 &&
            !(typeof shouldCancel === 'function' && shouldCancel())) {
-      await sleep(3000);
+      await wait(3000);
       v = await read();
       const hp = v?.health?.value ?? null;
       // Poison can coexist with a skeleton hitting us. Positive server attack
@@ -2453,10 +2458,18 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
       // it, a character sitting for mana alone — health and vigor already at their
       // ceilings, which is exactly the post-death case — reads as stalled after three
       // checks and stands up nine seconds in, every time.
-      const now = (vitalFrac(v, 'health') ?? 0) + (vitalFrac(v, 'vigor') ?? 0)
+      const progress = (vitalFrac(v, 'health') ?? 0) + (vitalFrac(v, 'vigor') ?? 0)
                 + (mana > 0 ? (vitalFrac(v, 'mana') ?? 0) : 0);
-      if (Math.abs(now - last) < 0.001) { if (++stalled >= 3) break; } else stalled = 0;
-      last = now;
+      if (Math.abs(progress - last) < 0.001) stalled++;
+      else { stalled = 0; lastProgressAt = now(); }
+      // Player.CalculateHealthTime/CalculateManaTime cap ordinary ticks at 60s.
+      // Three quiet 3s reads do not disprove recovery, especially a low-HP mule
+      // or a timer scheduled before vigor recovered. Vigor alone still stalls
+      // promptly at its resting ceiling; callers must request <=80 of 200.
+      const timedResourcePending = (vitalFrac(v, 'health') ?? 1) < health ||
+        (vitalFrac(v, 'mana') ?? 1) < mana;
+      if (stalled >= 3 && now() - lastProgressAt >= (timedResourcePending ? 65000 : 9000)) break;
+      last = progress;
     }
   } finally {
     // Standing is cleanup for a rest that already began. It is intentionally still
@@ -2481,7 +2494,7 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
   return {
     rested: true,
     ...(cancelled ? { cancelled: true } : {}),
-    seconds: Math.round((Date.now() - t0) / 1000),
+    seconds: Math.round((now() - t0) / 1000),
     from: started, vitals: v,
     reached_target: done(),
     ...(cleanupSkipped ? { cleanup_stand_skipped: cleanupSkipped } : {}),

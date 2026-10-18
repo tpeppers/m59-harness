@@ -392,7 +392,7 @@ assert(!keeperSurvivalInterruption({reason:'keeper_recovery_active'}));
  for(const [owned,recovery,expected]of [[true,false,1],[false,false,0],[true,true,0]]){
   let cancels=0;const owner='ours',failure=Object.assign(Error('child failed'),{code:1});
   const follow=runInNewContext('(function(){'+source.slice(begin,end)+'return follow;})()',{
-   fleet:'shadow',controlURL:{port:'8991'},agent:'a',ctx:{origin:{}},currentCallOrigin:()=>({}),originLabel:()=>owner,join:(...s)=>s.join('/'),out:'/evidence',id:'a-1',root:'/',process:{execPath:'node'},end:Date.now()+10000,Date,Math,JSON,Error,
+   state:{braxConvoyCharacters:['Test']},keeper:{character:'Test'},fleet:'shadow',controlURL:{port:'8991'},agent:'a',ctx:{origin:{}},currentCallOrigin:()=>({}),originLabel:()=>owner,join:(...s)=>s.join('/'),out:'/evidence',id:'a-1',root:'/',process:{execPath:'node'},end:Date.now()+10000,Date,Math,JSON,Error,
    execFile:(_node,_args,_options,done)=>done(failure,'','HeadersTimeoutError UND_ERR_HEADERS_TIMEOUT'),writeFileSync:()=>{},existsSync:()=>true,readFileSync:()=>JSON.stringify({kind:'jump',reply:{jumped:true}}),keeperSurvivalInterruption:()=>false,
    read:async()=>({pid:4,room:{num:579},you:{id:7},movement:{order:{ordered_by:owned?owner:'another'},rail:{phase:'waiting-body'}},autopilot_status:{recovery_travel:recovery?{}:null}}),
    command:async name=>{assert.equal(name,'cancel_movement');cancels++;},log:()=>{}

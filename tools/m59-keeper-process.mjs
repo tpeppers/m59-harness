@@ -2675,15 +2675,10 @@ const server = createServer(async (req, res) => {
           // `escapeUnderworld` were also `Promise.resolve(null)`, so a keeper-backed
           // character asked to recover did nothing and said it was fine.
           case 'rest': {
-            const health = Number(args.health ?? args.to_health ?? args.toHealth ?? 0.99);
-            const vigor = Number(args.vigor ?? args.to_vigor ?? args.toVigor ?? 80);
+            const targets=skills.normalizeRestTargets(args);
             const maxSeconds = Math.max(5, Math.min(300,
               Number(args.max_seconds ?? args.maxSeconds ?? 90) || 90));
-            const r = await skills.restUntil(session, {
-              health: Number.isFinite(health) ? Math.max(0, Math.min(1, health)) : 0.99,
-              vigor: Number.isFinite(vigor) ? Math.max(0, Math.min(200, vigor)) : 80,
-              maxSeconds,
-            });
+            const r = await skills.restUntil(session, {...targets,maxSeconds});
             json(r);
             return;
           }
@@ -2845,6 +2840,7 @@ const server = createServer(async (req, res) => {
               Number(x.to.row) === Number(match.row) && Number(x.to.col) === Number(match.col));
             const move=declaredJumpMoveOptions(land,session.client?.vitals?.()?.vigor?.value);
             if(!move.ok){json({jumped:false,arrived:false,reason:move.reason});return;}
+            await asWalkOrder(args, 'declared jump to r'+toRow+'c'+toCol, async()=>{
             const posture=await prepareDeclaredJump(session);
             if(!posture.ok){json({jumped:false,arrived:false,...posture});return;}
             const r = await session.step(toCol, toRow, move.options);
@@ -2856,6 +2852,7 @@ const server = createServer(async (req, res) => {
                    arrived: !!now && now.row === toRow && now.col === toCol,
                    ...(moved ? {} : { reason: r?.reason?`declared jump refused: ${r.reason}`:'declared jump landing not observed' }),
                    mover: r ?? null });
+            });
             return;
           }
           // SWING AT SOMETHING. The broker's `fight` calls `Session.attackRounds`, and a

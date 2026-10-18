@@ -1,3 +1,4 @@
+import{beginRailInputEvidence,railEvidenceScene}from'./m59-rail-input-evidence.mjs';
 import {request as httpRequest} from 'node:http';
 import {protocolToClient} from './m59-finepos.mjs';
 import {landingCheck} from './m59-railfollow.mjs';
@@ -40,8 +41,9 @@ export function confirmedRailBody(s){
    ![p.x,p.y,p.row,p.col].every(Number.isFinite)||Math.floor(p.x/64)!==p.col||Math.floor(p.y/64)!==p.row)return null;
  return {...s,you:{...s.you,...p}};
 }
-export function createRailObserver({fleet,agent,discover=()=>discoverRailKeepers(fleet),fetchImpl=fetch,actionFetch=fetchImpl===fetch?postRailAction:fetchImpl,wait=sleep,attempts=4,now=Date.now,readinessMs=30000}={}){
- let keeper;
+export function createRailObserver({fleet,agent,discover=()=>discoverRailKeepers(fleet),fetchImpl=fetch,actionFetch=fetchImpl===fetch?postRailAction:fetchImpl,wait=sleep,attempts=4,now=Date.now,readinessMs=30000,traceDirectory=process.env.M59_RAIL_TRACE_DIR}={}){
+ let keeper,lastObservation;
+ const remember=(state,kind)=>{if(traceDirectory)lastObservation={at:now(),kind,scene:railEvidenceScene(state)};return state;};
  const observe=async()=>{
   const deadline=now()+Math.min(30000,Math.max(1,readinessMs));
   const readOnce=async()=>{
@@ -65,19 +67,29 @@ export function createRailObserver({fleet,agent,discover=()=>discoverRailKeepers
    }
    throw last??Error('rail observation timed out');
   };
-  return waitForRailState(readOnce,{deadline,now,wait});
+  return remember(await waitForRailState(readOnce,{deadline,now,wait}),'ordered-own-body');
  };
  // One identity-fenced request owns a complete walking leg. A timeout is
  // ambiguous and is never retried here.
  observe.action=async(name,args,{timeoutMs=660000}={})=>{
   if(!keeper)await observe();
+  const own=args?.origin?.source==='fleetscript'&&['walk_rail','walk_fine','walk_to','walk','step','jump'].includes(name);
+  const walks=own?(globalThis.__m59OwnWalks??=new Map()):null,previous=walks?.get(agent),until=now()+timeoutMs;
+  if(walks)walks.set(agent,Math.max(previous??0,until));
+  let evidence;
+  try{
+  const wireBody=JSON.stringify({name,args,agent,character:keeper.character,keeper_pid:keeper.pid});
+  evidence=beginRailInputEvidence({directory:traceDirectory,agent,keeper,name,args,wireBody,observation:lastObservation,now});
   const r=await actionFetch('http://127.0.0.1:'+keeper.port+'/action',{
    method:'POST',headers:{'content-type':'application/json'},
-   body:JSON.stringify({name,args,agent,character:keeper.character,keeper_pid:keeper.pid}),signal:AbortSignal.timeout(timeoutMs)});
+   body:wireBody,signal:AbortSignal.timeout(timeoutMs)});
   const reply=await r.json(),conflict=identityMismatch(keeper,identityOf(r.headers,reply));
   if(conflict||r.status===409)throw Error('rail action identity/refusal: '+(conflict??reply.error));
   if(!r.ok||reply.error)throw Error('rail action refused: '+(reply.error??r.status));
-  return reply;
+  const traceError=evidence?.finish({reply});
+  return evidence?{...reply,input_evidence:{id:evidence.id,inputFile:evidence.inputFile,outcomeFile:evidence.outcomeFile,...(traceError?{write_error:traceError}:{})}}:reply;
+  }catch(error){evidence?.finish({error});throw error;}
+  finally{if(walks&&walks.get(agent)===Math.max(previous??0,until)){if(previous>now())walks.set(agent,previous);else walks.delete(agent);}}
  };
  observe.cached=async()=>{
   const deadline=now()+Math.min(30000,Math.max(1,readinessMs));let last;
@@ -88,7 +100,7 @@ export function createRailObserver({fleet,agent,discover=()=>discoverRailKeepers
     for(const [key,value]of Object.entries({agent,character:keeper.character,keeper_pid:keeper.pid}))u.searchParams.set(key,String(value));
     const r=await fetchImpl(u,{signal:AbortSignal.timeout(Math.max(1,Math.min(12000,deadline-now())))}),state=await r.json(),identity=identityOf(r.headers,state),conflict=identityMismatch(keeper,identity);
     if(conflict||r.status===409||!identity.agent||!identity.character||identity.pid==null)throw Object.assign(Error('rail cached keeper identity/read changed: '+(conflict??'unverified keeper')),{terminal:true});
-    if(!r.ok)throw Error('rail cached observation HTTP '+r.status);return state;
+    if(!r.ok)throw Error('rail cached observation HTTP '+r.status);return remember(state,'cached');
    }catch(e){
     if(e.terminal)throw e;last=e;
     if(attempt+1<attempts&&now()<deadline){
