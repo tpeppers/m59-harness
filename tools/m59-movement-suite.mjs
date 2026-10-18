@@ -207,6 +207,8 @@ const SUITES = [
    'a code exit is a transit only from a door that walks to its trigger, and a shut lift is waited for'],
   ['m59-move-origin-test.mjs',
    'every move order names its issuer, a cancel names whose move it took, and a failure leaves one replayable incident'],
+  ['m59-body-held-square-test.mjs',
+   'a monster standing on the next square\'s stand point is walked round into that square, not re-aimed at for ever (Rowlf, Ukgoth r19c35)'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

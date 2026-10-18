@@ -118,6 +118,14 @@ through a nested shelter order.
 
 ## Travel and combat regressions
 
+- `m59-body-held-square-test.mjs` (5): **a body standing on the next square's stand point does
+  not close the square.** Real 599 geometry with the 2026-10-18 positions: Rowlf in the r19c35 wall
+  pocket, whose only mover step out is r20c34, and the Guardian of Zjiria five units from r20c34's
+  stand point. The point detour is refused, the square detour (`goalSquare`) lands inside r20c34
+  clear of the body, `Session.enterBodyHeldSquare` walks it and says `via: 'body_held_square'`, a
+  cancelled walk sends nothing, and a square behind the pocket's walls stays `object_blocked`.
+  walkTo's `aroundBlockedWaypoint` calls it when the fine walk to the stand point is object_blocked.
+
 - `m59-move-origin-test.mjs` (18): **who ordered a move and who cancelled it**, and the movement
   incident log (`docs/m59-boundary.md`, provenance; `docs/m59-routing.md`, the incident log). A
   cancel by another issuer records BOTH sides on `Session.cancelMovement` — the canceller's origin

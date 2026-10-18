@@ -262,6 +262,32 @@ export function sessionWalkPrototype(deps) {
     return {...result,via:'fine_waypoint_departure',deviation:d};
   }
 
+  /**
+   * INTO A SQUARE WHOSE STAND POINT A BODY IS STANDING ON. walkTo aims every coarse step at
+   * the next square's stand point, and when a stationary monster stands on that point the
+   * fine detour to it can never arrive: the point is inside the body's MIN_NOMOVEON zone.
+   * The square is still enterable around the body's edge, so this asks planBodyDetour for
+   * ANY collision-proved point inside it (goalSquare), on the 8-unit lattice with refinement,
+   * since the gap past a body in a wall pocket can be a sliver. See the Rowlf note in walkTo.
+   */
+  async enterBodyHeldSquare(square,{avoidSquares=null,movementGeneration=this.movementGeneration,controlToken,
+    beforeMutation=null,maxSteps=24}={}) {
+    const c=this.need(),geo=this.world?.geometry;
+    if(!geo?.collisionReady||!c.self||c.self.predicted||!Number.isInteger(square?.row)||!Number.isInteger(square?.col))
+      return {arrived:false,reason:'object_blocked',detour_reason:'no geometry or own position'};
+    if(this.movementWasCancelled(movementGeneration,controlToken))return this.cancelledMovement({steps:0});
+    const goal=geo.standPointWire?.(square.row,square.col)??{x:square.col*KOD_FINENESS+32,y:square.row*KOD_FINENESS+32};
+    const avoid=new Set([...(avoidSquares??[]),...(this.hazardSquares?.()??[])]);
+    avoid.delete(`${square.row},${square.col}`);
+    const plan=planBodyDetour(geo,c.self,goal,{goalSquare:square,objects:c.room.objects,selfId:c.selfId,
+      roomFlags:c.room.flags??0,overrideDepths:c.room.overrideDepths,avoidSquares:avoid,
+      marginSquares:2,maxRangeSquares:8,spacingUnits:8,refine:true,maxNodes:3000,maxMs:100});
+    if(!plan.found||!plan.waypoints.length)return {arrived:false,reason:'object_blocked',detour_reason:plan.reason};
+    if(plan.waypoints.length>maxSteps)return {arrived:false,reason:'object_blocked',detour_reason:'body-held square detour exceeds step budget'};
+    const result=await this.walkDepartureLegs(plan.waypoints,square,{movementGeneration,controlToken,beforeMutation,maxSteps});
+    return {...result,via:'body_held_square'};
+  }
+
   async walkDepartureLegs(waypoints,square,{movementGeneration=this.movementGeneration,controlToken,beforeMutation=null,maxSteps=48,shelterFallback=true}={}) {
     const c=this.need(),roomId=c.room.id;
     if(waypoints.length>maxSteps)return {arrived:false,reason:'departure detour exceeds step budget'};
@@ -3541,6 +3567,24 @@ export function sessionWalkPrototype(deps) {
         if (fine.arrived && c.self?.row===next.row && c.self?.col===next.col) {
           // The fine detour's incoming square is not the old coalesced origin.
           prevSquare=null;pulled=undefined;stalledOn=null;stalledTimes=0;return null;
+        }
+        // THE BODY IS STANDING ON THE STAND POINT, SO ASK FOR THE SQUARE, NOT THE POINT.
+        // Ukgoth (599), 2026-10-18: Rowlf at r19c35, a wall pocket whose ONLY mover step out
+        // is r20c34, with the Guardian of Zjiria 5 units from r20c34's stand point. Every exit
+        // candidate re-aimed at that point, the detour to it was refused inside the body's
+        // zone after ten nodes, and he stood there forty minutes beside a clear fine line
+        // past the Guardian's edge. Any collision-proved point inside the square is a
+        // landing; the walk carries on from wherever that is.
+        if (fine.reason==='object_blocked' && typeof this.enterBodyHeldSquare==='function') {
+          const held=await this.enterBodyHeldSquare(next,{avoidSquares:mandatoryAvoid,movementGeneration,controlToken,
+            beforeMutation,maxSteps:Math.min(24,Math.max(0,maxSteps-taken))});
+          taken+=held?.steps??0;
+          if (held?.cancelled || this.movementWasCancelled(movementGeneration,controlToken))
+            return this.cancelledMovement({steps:taken,replans});
+          if (held?.left_room) return {...held,arrived:false,steps:taken,replans};
+          if (held?.arrived && c.self?.row===next.row && c.self?.col===next.col) {
+            prevSquare=null;pulled=undefined;stalledOn=null;stalledTimes=0;return null;
+          }
         }
         const why=fine.reason??'local body detour did not reach the waypoint';
         if (await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why}))
