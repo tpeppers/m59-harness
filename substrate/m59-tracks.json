@@ -15927,6 +15927,105 @@
    "samples": 6,
    "seen": 1,
    "straightened": true
+  },
+  "49:45>593": {
+   "room": 49,
+   "from": 45,
+   "to": 593,
+   "waypoints": [
+    {
+     "x": 1312,
+     "y": 1760
+    },
+    {
+     "x": 1280,
+     "y": 1640
+    },
+    {
+     "x": 1272,
+     "y": 1632
+    },
+    {
+     "x": 880,
+     "y": 1592
+    },
+    {
+     "x": 760,
+     "y": 1472
+    },
+    {
+     "x": 664,
+     "y": 1392
+    },
+    {
+     "x": 592,
+     "y": 1304
+    },
+    {
+     "x": 552,
+     "y": 784
+    },
+    {
+     "x": 496,
+     "y": 728
+    },
+    {
+     "x": 496,
+     "y": 696
+    },
+    {
+     "x": 760,
+     "y": 432
+    },
+    {
+     "x": 888,
+     "y": 432
+    },
+    {
+     "x": 952,
+     "y": 496
+    },
+    {
+     "x": 1128,
+     "y": 496
+    },
+    {
+     "x": 1232,
+     "y": 392
+    },
+    {
+     "x": 1328,
+     "y": 152
+    },
+    {
+     "x": 1336,
+     "y": 144
+    },
+    {
+     "x": 1392,
+     "y": 120
+    },
+    {
+     "x": 1392,
+     "y": 40
+    }
+   ],
+   "entered": {
+    "row": 27,
+    "col": 20
+   },
+   "left": {
+    "row": 0,
+    "col": 21
+   },
+   "samples": 0,
+   "seen": 0,
+   "straightened": true,
+   "threaded": {
+    "at": "2026-10-18T19:41:18.317Z",
+    "by": "fine 8-unit lattice BFS from the 45 arrival r27c20 to the north edge, every leg traceFineMoveClient(slide:false)",
+    "why": "no crossing 45 > 593 had ever been recorded, and the baked route through the canyon fences does not walk; operator wants traffic both ways"
+   }
   }
  }
 }
