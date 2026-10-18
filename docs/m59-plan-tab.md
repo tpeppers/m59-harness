@@ -34,12 +34,20 @@ restarts picks up the last ack it wrote for each client, so it does not run a re
 folder, so a client launched from the trunk while the broker's desk runs in prod-deploy used to
 say only "the plan desk is not answering". Now every desk also watches the client folders of
 the repository's other checkouts (`git worktree list`, the ones with a `plan/` folder, re-listed
-each minute). It answers any client there that no desk serves. The PLAN tab's status line and
+every five minutes). It answers any client there that no desk serves. The PLAN tab's status line and
 a greyed-out **Desk** row say which checkout the desk runs from, which fleet it serves, and the
 `m59-tui.mjs` command that launches the right client. Nothing runs for that client: a request
 typed there is refused with the same note, so it is never left waiting for a desk that might
 pick it up later. A folder whose own desk beat within the last minute is skipped, so the short
 gap in a broker handover isn't answered as "no desk".
+
+**An idle desk costs almost nothing.** While a client is open, the desk works once a second,
+because the client rewrites its request every second and calls a reply older than six seconds
+"not answering" (`planpane.c` `Fresh`); going slower would need a client change. With no client
+open, it reads nothing: it checks file timestamps only, waits on a watch of each `plan/` folder,
+and wakes every ten seconds to write its heartbeat. Measured: 0.078% of a core idle (it was
+0.94%, re-reading 57 closed clients' files and the 157 KB roster every second), and a client
+opening mid-idle answered in 31 ms.
 
 **The fleet terminal's L** starts the gate-capable proxy (5962, gate control 8931), and the
 plan desk only if none is serving the client folder, and `dev.bat` goes through that proxy.

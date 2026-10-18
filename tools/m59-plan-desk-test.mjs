@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck,
-         checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS } from './m59-plan-desk.mjs';
+         checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS, freshRequests } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
 import { readHolds, reservedPercent, acceptGiftFrom, deliverTo } from './m59-human-handoff.mjs';
 
@@ -269,6 +269,20 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
   ok('a refused request is refused once', (readFileSync(out, 'utf8').match(/\nM\t3\t/g) ?? []).length === 1);
   writeFileSync(join(deskDir, 'plan', 'desk.json'), JSON.stringify({ pid: 5151, at: 0 }));
   ok('with no desk anywhere, nothing is written', serveStrays({ ownDir: deskDir, folders: [deskDir, strayDir], state: new Map(), alive }) === 0);
+}
+
+// AN IDLE DESK READS NOTHING: a closed client's request file is skipped on its timestamp alone.
+{
+  const idleDir = join(tmp, 'idle', 'cc'), inDir = join(idleDir, 'plan', 'in');
+  mkdirSync(inDir, { recursive: true });
+  writeFileSync(join(inDir, '5.tsv'), 'not even a request');            // would fail to parse if it were read
+  const old = (Date.now() - 3600_000) / 1000; utimesSync(join(inDir, '5.tsv'), old, old);
+  ok('a closed client\'s file is not fresh', freshRequests(inDir).length === 0);
+  let loaded = 0;
+  const idle = await createDesk({ fleet: 'test', dir: idleDir, substrate: join(tmp, 'idle', 'sub'),
+    providerDirs: [], roster: () => { loaded++; return []; } });
+  ok('with no client open, a tick neither loads the roster nor serves anyone', await idle.tick() === 0 && loaded === 0);
+  ok('and says once that nobody is at a keyboard', readFileSync(join(tmp, 'idle', 'sub', 'human-presence.json'), 'utf8') === '{}');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

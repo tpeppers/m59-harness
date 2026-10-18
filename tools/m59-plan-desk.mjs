@@ -43,7 +43,7 @@
 // A request is executed AT MOST ONCE: its sequence must exceed every sequence already
 // acknowledged for that client pid, and the ack is written before the next tick reads.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, existsSync, statSync, watch } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -261,14 +261,16 @@ export function elsewhereView({ pid, ack, dir, desks, messages = [] }, now = Dat
 
 // One pass over the other folders. `state` keeps each stray client's ack and messages.
 export function serveStrays({ ownDir, folders, state = new Map(), now = Date.now(), alive = pidAlive, log = () => {} }) {
+  // Which other folders have a client open at all -- stat only. Usually none, and then nothing else is read.
+  const open = folders.filter(d => !sameDir(d, ownDir)).map(d => [d, freshRequests(join(d, 'plan', 'in'), now)]).filter(([, f]) => f.length);
+  if (!open.length) return 0;
   const desks = desksIn(folders, { now, alive });
   if (!desks.length) return 0;
   let served = 0;
-  for (const dir of folders) {
-    if (sameDir(dir, ownDir) || liveDesk({ dir }, { now, alive })) continue;
+  for (const [dir, files] of open) {
+    if (liveDesk({ dir }, { now, alive })) continue;
     try { if (now - statSync(join(dir, 'plan', 'desk.json')).mtimeMs < STRAY_QUIET_MS) continue; } catch { /* never had one */ }
     const inDir = join(dir, 'plan', 'in');
-    let files; try { files = readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f)); } catch { continue; }
     for (const f of files) {
       let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
       if (!req || String(req.pid) + '.tsv' !== f) continue;
@@ -298,17 +300,32 @@ export function rosterAgents(stateFile) {
   } catch { return []; }
 }
 
+// THE REQUEST FILES OF CLIENTS THAT ARE OPEN, by modification time alone. A closed client's file
+// stays behind forever (prod's folder held 57, the oldest four days old), and reading and parsing
+// every one of them each second -- then the providers, then a 157 KB roster -- was what an idle
+// desk spent its time on. Nothing is read unless something is fresh.
+export function freshRequests(inDir, now = Date.now()) {
+  let names; try { names = readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f)); } catch { return []; }
+  return names.filter(f => { try { const t = statSync(join(inDir, f)).mtimeMs; return t <= now + 1000 && now - t <= FRESH_MS; } catch { return false; } });
+}
+
 export async function createDesk({ fleet, dir, substrate, providerDirs, log = console.error, roster = null }) {
   const state = new Map();   // pid -> { ack, messages }
   roster ??= () => rosterAgents(resolveFleet(['--fleet', fleet === '' ? '-' : fleet]).stateFile);
+  let presenceWritten = null;
   async function tick(now = Date.now()) {
     const inDir = join(dir, 'plan', 'in');
-    if (!existsSync(inDir)) return 0;
+    const files = freshRequests(inDir, now);
+    if (!files.length) {
+      // Nobody at a keyboard: say so once, not every second.
+      if (substrate && presenceWritten !== '{}') { try { writeAtomic(join(substrate, 'human-presence.json'), '{}'); presenceWritten = '{}'; } catch {} }
+      return 0;
+    }
     const providers = await loadProviders(providerDirs);
     const agents = roster();
     const presence = {};
     let served = 0;
-    for (const f of readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f))) {
+    for (const f of files) {
       let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
       if (!req || String(req.pid) + '.tsv' !== f) continue;
       const st = state.get(req.pid) ?? { ack: lastAck(dir, req.pid), messages: [] };
@@ -338,7 +355,8 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
     }
     // WHO IS AT A KEYBOARD, AND WITH WHOM. The broker has no room for a piloted character (its
     // keeper is offline); the client does. Scripts that meet people read this, never the client files.
-    if (substrate) { try { writeAtomic(join(substrate, 'human-presence.json'), JSON.stringify(presence, null, 1)); } catch {} }
+    if (substrate) { try { presenceWritten = JSON.stringify(presence, null, 1);
+                           writeAtomic(join(substrate, 'human-presence.json'), presenceWritten); } catch {} }
     return served;
   }
   return { tick, state };
@@ -367,28 +385,43 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
     const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet, dir, substrate, root: HARNESS, parent });
     for (const f of beats) { try { writeAtomic(f, h); } catch {} }
   };
-  // The other checkouts' client folders, re-listed once a minute (a worktree can appear any time).
-  // ONLY THOSE WITH A plan/ FOLDER, which a client or a desk has used: this machine had 333
-  // checkouts, and reading all of them every two seconds cost ~100ms a pass to answer three.
+  // The other checkouts' client folders, re-listed every five minutes (a worktree can appear any
+  // time, and listing 333 of them is a 200ms git call). ONLY THOSE WITH A plan/ FOLDER, which a
+  // client or a desk has used: reading all of them cost ~100ms a pass to answer three.
   const strays = new Map();
   let folders = [], listedAt = 0;
-  const strayPass = () => {
-    if (Date.now() - listedAt > 60_000) {
-      folders = clientFolders(checkoutRoots(HARNESS), [process.env.M59_CLIENT_CONTEXT_DIR, dir]).filter(d => existsSync(join(d, 'plan')));
-      listedAt = Date.now();
+  const watchers = new Map();
+  let wake = null;
+  const relist = () => {
+    folders = clientFolders(checkoutRoots(HARNESS), [process.env.M59_CLIENT_CONTEXT_DIR, dir]).filter(d => existsSync(join(d, 'plan')));
+    listedAt = Date.now();
+    // WOKEN BY THE CLIENT, NOT BY A TIMER. Each plan/ folder is watched; a client writing its
+    // request (it rewrites it every second while open) is what ends an idle wait.
+    for (const d of folders) if (!watchers.has(d)) {
+      try { watchers.set(d, watch(join(d, 'plan'), { recursive: true }, (_, name) => { if (/^in[\\/]/.test(String(name ?? ''))) wake?.(); })); }
+      catch { /* unwatchable: the idle timeout still covers it */ }
     }
-    try { serveStrays({ ownDir: dir, folders, state: strays, log: m => console.error(m) }); }
-    catch (e) { console.error(`plan desk strays: ${e.message}`); }
   };
+  mkdirSync(join(dir, 'plan'), { recursive: true });
   process.on('exit', () => {
     for (const f of beats) { try { const h = JSON.parse(readFileSync(f, 'utf8')); if (h.pid === process.pid) writeFileSync(f, JSON.stringify({ ...h, at: 0 })); } catch {} }
   });
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
-  for (let n = 0; ; n++) {
+  // TWO SPEEDS. While a client is open: once a second, because the client rewrites its request
+  // every second and calls a reply older than six seconds "not answering" (planpane.c Fresh).
+  // While none is: nothing, until a watched folder changes or IDLE_BEAT_MS passes -- that is the
+  // heartbeat, which must stay inside DESK_FRESH_MS or a second desk would think this one dead.
+  const IDLE_BEAT_MS = 10_000;
+  let beatAt = 0;
+  for (;;) {
     if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
-    if (n % 5 === 0) heartbeat();
-    if (n % 2 === 1) strayPass();   // inside the client's 6s freshness window
-    try { await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); }
-    await new Promise(r => setTimeout(r, 1000));
+    if (Date.now() - listedAt > 300_000) relist();
+    if (Date.now() - beatAt >= 5000) { heartbeat(); beatAt = Date.now(); }
+    let busy = 0;
+    try { busy += await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); busy++; }
+    try { busy += serveStrays({ ownDir: dir, folders, state: strays, log: m => console.error(m) }); }
+    catch (e) { console.error(`plan desk strays: ${e.message}`); }
+    await new Promise(r => { const t = setTimeout(r, busy ? 1000 : IDLE_BEAT_MS); if (!busy) wake = () => { clearTimeout(t); wake = null; r(); }; });
+    wake = null;
   }
 }
