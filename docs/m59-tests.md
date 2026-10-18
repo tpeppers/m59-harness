@@ -1112,13 +1112,15 @@ the records it describes.
   written only by the keeper it names and never for a monster or a fleetmate, that "of the The Second
   Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
   that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
-  that a test fake without a real Recorder writes nothing),  `node tools/m59-pvp-telemetry-test.mjs` (9 — **what each of ours DID in a fight**: that every cast is
+  that a test fake without a real Recorder writes nothing),  `node tools/m59-pvp-telemetry-test.mjs` (10 — **what each of ours DID in a fight**: that every cast is
   joined to the reply its caster heard (landed, already in effect, failed, no mana) and a cast with none
   says `no reply heard`, that an old fight's opener rows stand in as casts, that a robe swap and a broken
   armour are counted, that a third-person line is kept once with who heard it while "your wand" stays per
   body, that a map change and every swing carry the `m38 r15c17 +12/+40` stamp, that the client's tap
-  sees every attack/cast/use/unuse and a throwing listener never stops a packet, and that a keeper writes
-  an action row only inside a PvP window),
+  sees every attack/cast/use/unuse and a throwing listener never stops a packet, that a keeper writes
+  an action row only inside a PvP window, and that an enemy's rendered look is kept once per fight and on
+  every change while a fleetmate's never is, and what ours picked up is kept for two minutes after an enemy
+  died and not otherwise),
   `node tools/m59-victory-taunt-test.mjs` (33 — **who broadcasts after a won battle**: that the LAST
   kill names the speaker, that a killer who is human-piloted, has no lines or cannot afford the
   broadcast hands over to the strongest who can, that a mana refusal in prose tries the next, that an
