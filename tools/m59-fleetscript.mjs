@@ -847,11 +847,15 @@ export const KNOWN_TRAPS = Object.freeze({
   // What made the eleven refusals unreadable was a separate bug, now fixed in 2de4001
   // (#movement): walk_to's fallback used a 1.5-square arrival tolerance, so stepping one
   // square outward to cross a boundary reported `arrived: true, steps: 0` without moving.
-  49: "Kardde's Canyon - leavable NORTH to 593 (anchor r1c21, and the whole rim " +
-      "r1c19..r1c22 walks in one step). Its SOUTH exit to 45, the Badlands node, is " +
-      "unreachable from the room body: the anchor is on a 6016 rim above ground at " +
-      "3840 against a 384 climb cap, so it is a one-way drop in. Plan through the " +
-      "south edge and the walk never ends.",
+  //
+  // ROOM 49 HAS BEEN REMOVED TOO, 2026-10-18, and for the reason the 599 note gives. Operator:
+  // "It's not a trap, you can just travel both ways if your movement code can handle it". The
+  // "one-way drop" was our model: the room is a maze of one-sided fences at a single height,
+  // and the way to the south exit is the loop r13c19 > r17c16 > r11c15 > r13c11 > r21c10 >
+  // r25c19, which every leg of the re-threaded track 49:593>45 now proves with the mover's own
+  // trace. The same day, t2 and t5 journeyed 547 > 45 through it and arrived. What failed the
+  // others was a struck track and a bake that planned straight down column 19 through the
+  // fences — routing defects, which this list exists to stop hiding.
 
   // 555 — THE FOREST SHRINE. The operator's answer to "what is actually a trap", and it is
   // the first entry that clears the bar the 599 removal set: name the mechanism, show it is
@@ -938,7 +942,6 @@ export const TRAP_WAY_OUT = Object.freeze({
   // The exit a keeper standing in the low part of each room reports, and the only one that
   // works from there. Read by diagnostics and by the stuck guide; NOT by the walker.
   599: 589,   // south, r71c2. From the 589 landing (r67c3) it is the only door reachable at all.
-  49: 593,    // north, r1c21. South to 45 is a one-way drop: 6016 rim over 3840 ground, 384 cap.
   // 555 has exactly ONE edge exit and no go-exits: west to 556, arriving r7c59. There is no
   // second door to get wrong. `PunishPlayer` teleports a failed crossing back to r9c3 — inside
   // the room, not out of it — so the west edge is the only way a character leaves under its
@@ -4995,6 +4998,10 @@ export async function fleetScript({
             // and all five ended up standing in the canyon re-issuing a walk that cannot
             // complete, with the way home almost as bad. The router was right that a route
             // exists; every step of it was correct; the destination is not reachable.
+            //
+            // CORRECTED 2026-10-18: 49 is no longer in KNOWN_TRAPS (see the note where it was).
+            // The destination WAS reachable; the walk was what failed. The check stays, for the
+            // traps that are real.
             //
             // Waived by the same waiver that waives `trapCheck`, because a rescue walks in on
             // purpose and this must not be the thing that stops it.
