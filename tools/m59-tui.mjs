@@ -46,6 +46,7 @@ import * as maps from './m59-roomserve.mjs';
 import { commitmentOf, stepSelection, firstSelectable, allCommitted } from './m59-commitment.mjs';
 import { mergeTuiRow, fleetFreshness } from './m59-tui-state.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
+import { liveDesk } from './m59-plan-desk.mjs';
 import {
   KEEPER_BAND_WIDTH,
   discoverKeeperStates,
@@ -622,11 +623,11 @@ async function ensurePlanProxy(host, port) {
   return { started: true, ok: false };
 }
 function ensurePlanDesk() {
-  // The desk refreshes this heartbeat every few seconds; a stale or missing one means start another.
-  try {
-    const h = JSON.parse(readFileSync(join(PLAN_SUBSTRATE, 'plan-desk.json'), 'utf8'));
-    if (Date.now() - h.at < 30_000) { try { process.kill(h.pid, 0); return { started: false }; } catch {} }
-  } catch { /* none yet */ }
+  // NORMALLY THE BROKER'S DESK IS ALREADY HERE (m59-broker.mjs startPlanDesk). This starts one only
+  // when no desk is serving the client folder dev.bat points at -- a broker from before that, or
+  // one started with M59_NO_PLAN_DESK=1 -- and the desk itself refuses to be a second.
+  const dir = env.M59_CLIENT_CONTEXT_DIR || join(REPO, 'substrate', 'client-context');
+  if (liveDesk({ dir, substrate: PLAN_SUBSTRATE })) return { started: false };
   const child = spawn(process.execPath,
     [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', PLAN_SUBSTRATE],
     { stdio: 'ignore', detached: true, windowsHide: true, cwd: REPO });

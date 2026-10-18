@@ -2,7 +2,13 @@
 // THE PLAN DESK: what the fleet can be asked to do, rendered into the dev client's PLAN tab.
 //
 //   node tools/m59-plan-desk.mjs --fleet prod [--substrate C:\code\m59-lab\prod-deploy\substrate]
-//                                [--dir substrate/client-context] [--once]
+//                                [--dir substrate/client-context] [--once] [--parent <pid>]
+//
+// NORMALLY YOU DO NOT START THIS. The broker does (m59-broker.mjs startPlanDesk): one desk per
+// broker, on the broker's own substrate, stopped when the broker stops, restarted if it dies,
+// and taken over by the successor across a live handover. `--parent` is how it knows its
+// broker: the desk leaves when that pid does, so even a broker killed with taskkill /F does
+// not leave one behind. M59_NO_PLAN_DESK=1 (or --no-plan-desk) keeps a broker from starting it.
 //
 // The PLAN tab in the patched client (Meridian59/module/merintr/clientcontext.c) is a list
 // that works like Spells: one row per thing you can make the fleet do, double-click to run,
@@ -169,6 +175,36 @@ export async function runRequest(req, { entries, owner }, ctx) {
   } catch (err) { return { ok: false, message: `${e.title}: ${err.message}` }; }
 }
 
+// ------------------------------------------------------------------ one desk per client folder
+// THE GUARD IS THE CLIENT FOLDER, not the substrate. Every desk writes its replies into the
+// client folder, so two desks on two substrates still answered one client twice (the 2026-10-16
+// "two desks" problem in docs/m59-plan-tab.md). The substrate heartbeat is still written, for a
+// fleet terminal from before this that looks only there.
+export const DESK_FRESH_MS = 30_000;
+export const deskBeatFiles = ({ dir, substrate = null }) =>
+  [join(dir, 'plan', 'desk.json'), ...(substrate ? [join(substrate, 'plan-desk.json')] : [])];
+export const pidAlive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+export function liveDesk({ dir, substrate = null }, { exceptPid = null, now = Date.now(), alive = pidAlive } = {}) {
+  for (const file of deskBeatFiles({ dir, substrate })) {
+    try {
+      const h = JSON.parse(readFileSync(file, 'utf8'));
+      if (h.pid > 0 && h.pid !== exceptPid && now - h.at < DESK_FRESH_MS && alive(h.pid)) return { ...h, file };
+    } catch { /* none, or half-written */ }
+  }
+  return null;
+}
+// Two desks that both started before either beat: the one that started later steps aside.
+export const yieldsTo = (other, me) => (other.since ?? 0) < me.since || ((other.since ?? 0) === me.since && other.pid < me.pid);
+
+// WHAT THIS CLIENT WAS LAST TOLD, so a desk that restarts (a broker handover, a crash) does not
+// run again a request its predecessor already acknowledged and the client has not yet dropped.
+export function lastAck(dir, pid) {
+  try {
+    const h = readFileSync(join(dir, 'plan', 'out', `${pid}.tsv`), 'utf8').split('\n', 1)[0].split('\t');
+    return h[0] === 'M59PLAN' && num(h[3]) === pid ? (num(h[4]) || 0) : 0;
+  } catch { return 0; }
+}
+
 // ------------------------------------------------------------------ the loop
 export function rosterAgents(stateFile) {
   try {
@@ -191,7 +227,7 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
     for (const f of readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f))) {
       let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
       if (!req || String(req.pid) + '.tsv' !== f) continue;
-      const st = state.get(req.pid) ?? { ack: 0, messages: [] };
+      const st = state.get(req.pid) ?? { ack: lastAck(dir, req.pid), messages: [] };
       const me = agents.find(a => a.account === req.account) ?? null;
       const ctx = { fleet, substrate, harness: HARNESS, dir, now, log, agents,
                     client: { ...req, agent: me?.agent ?? null }, desk: st };
@@ -234,17 +270,25 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
   const desk = await createDesk({ fleet, dir, substrate, providerDirs });
   console.error(`plan desk: fleet ${fleet || '(unnamed)'}, substrate ${substrate}, files under ${join(dir, 'plan')}`);
   if (argv.includes('--once')) { console.error(`served ${await desk.tick()} client(s)`); process.exit(0); }
-  // ONE DESK PER SUBSTRATE. The fleet terminal's L starts one when this heartbeat is missing or stale
-  // (m59-tui.mjs ensurePlanDesk), so a second start here would mean two desks answering one client.
-  const beat = join(substrate, 'plan-desk.json');
-  try {
-    const h = JSON.parse(readFileSync(beat, 'utf8'));
-    if (h.pid !== process.pid && Date.now() - h.at < 30_000) { try { process.kill(h.pid, 0); console.error(`a plan desk (pid ${h.pid}) is already serving ${substrate}`); process.exit(0); } catch {} }
-  } catch { /* none */ }
-  const heartbeat = () => { try { writeAtomic(beat, JSON.stringify({ pid: process.pid, at: Date.now(), fleet, dir })); } catch {} };
-  process.on('exit', () => { try { const h = JSON.parse(readFileSync(beat, 'utf8')); if (h.pid === process.pid) writeFileSync(beat, JSON.stringify({ ...h, at: 0 })); } catch {} });
+  // ONE DESK PER CLIENT FOLDER. The broker starts one (startPlanDesk) and so does the fleet
+  // terminal's L when no broker has (m59-tui.mjs ensurePlanDesk); either way a second is refused.
+  const parent = Number(arg('parent', 0)) || null;
+  const me = { pid: process.pid, since: Date.now() };
+  const held = liveDesk({ dir, substrate }, { exceptPid: process.pid });
+  if (held) { console.error(`a plan desk (pid ${held.pid}) is already serving ${held.dir ?? dir}`); process.exit(0); }
+  const beats = deskBeatFiles({ dir, substrate });
+  const heartbeat = () => {
+    const other = liveDesk({ dir, substrate }, { exceptPid: process.pid });
+    if (other && yieldsTo(other, me)) { console.error(`plan desk pid ${other.pid} also started; this one (pid ${process.pid}) steps aside`); process.exit(0); }
+    const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet, dir, substrate, parent });
+    for (const f of beats) { try { writeAtomic(f, h); } catch {} }
+  };
+  process.on('exit', () => {
+    for (const f of beats) { try { const h = JSON.parse(readFileSync(f, 'utf8')); if (h.pid === process.pid) writeFileSync(f, JSON.stringify({ ...h, at: 0 })); } catch {} }
+  });
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
   for (let n = 0; ; n++) {
+    if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
     if (n % 5 === 0) heartbeat();
     try { await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); }
     await new Promise(r => setTimeout(r, 1000));

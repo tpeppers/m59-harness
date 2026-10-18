@@ -768,6 +768,12 @@ async function cmdStatus() {
               (stalled ? c.dim(`  ·  ${stalled} flagged by the stall detector` +
                                ` (a travelling character trips it — see ms_since_moved)`) : ''));
   console.log(`  log        ${existsSync(LOG_FILE) ? LOG_FILE : '(none yet)'}`);
+  // THE PLAN DESK rides with the broker (startPlanDesk); absent on a broker from before that.
+  const pd = h.plan_desk;
+  if (pd) console.log(`  plan desk  ${pd.off ? c.dim(`off (${pd.off})`)
+    : pd.running ? `pid ${pd.pid}  ${c.dim(pd.dir)}`
+    : pd.foreign_pid ? c.dim(`pid ${pd.foreign_pid} (not this broker's) is serving ${pd.dir}`)
+    : c.bad('down') + c.dim(' — the broker restarts it within 10s; see substrate/plan-desk-*.log')}`);
   // HAS PROD MOVED UNDER US? The baked collision map is evidence about somebody else's
   // server, and that server can be patched without telling us. Every room where the live
   // security value disagreed with the bake is listed here, so "they changed a room" is a

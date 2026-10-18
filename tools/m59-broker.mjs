@@ -126,6 +126,7 @@ import * as descriptions from './m59-describe.mjs';
 import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-session.mjs';
 import {normalizeSafeLegPolicy} from './m59-safelegs.mjs';
 import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import { liveDesk } from './m59-plan-desk.mjs';
 import {
   BROKER_FLEET_LOCK_KIND,
   addFleetLockGuard,
@@ -4723,6 +4724,7 @@ function installBrokerOwnershipHandlers() {
   if (brokerOwnershipHandlersInstalled) return;
   brokerOwnershipHandlersInstalled = true;
   process.on('exit', () => {
+    stopPlanDesk();
     suspendKeeperLivenessSweep();
     for (const [agent, record] of keeperProcesses) {
       if (!recordedKeeperAlive(record) && keeperProcesses.get(agent) === record)
@@ -4743,6 +4745,7 @@ async function beginBrokerShutdown(reason = 'shutdown', exitCode = 0) {
   // This gate is set before the first await. Timers, reconciliation and every spawn lane
   // observe it, so no keeper can appear after the stop snapshot and ownership release.
   brokerStopping = true;
+  stopPlanDesk();
   suspendKeeperLivenessSweep();
   if (reconcileTimer !== null) clearTimeout(reconcileTimer);
   reconcileTimer = null;
@@ -6340,6 +6343,80 @@ function startWeaponErrands() {
   const t = setInterval(() => { if (brokerQuiet()) return; try { serviceWeaponRequests(); } catch { /* never a fatal */ } },
                         WEAPON_ERRAND_POLL);
   t.unref?.();
+}
+
+// THE PLAN DESK (tools/m59-plan-desk.mjs), which fills the dev client's PLAN tab, started and
+// stopped with the broker. It used to be started by hand, or by the fleet terminal's L, and a
+// desk somebody forgets to start is a PLAN tab that says nobody is answering.
+//
+// A CHILD, NOT A LOOP IN HERE. Its providers import FleetScripts and read files every second,
+// and none of that belongs on the event loop the 500ms keeper watchdog runs on.
+//
+// ONE PER CLIENT FOLDER, whoever started it: a desk already serving that folder (a fleet
+// terminal's, another checkout's) is left alone, and this one starts when that one goes. The
+// desk leaves on its own when this pid does (`--parent`), so a broker killed with taskkill /F
+// leaves none behind, and a live handover hands the folder to the successor's desk within one
+// PLAN_DESK_POLL of the retiring broker letting go. Its log is substrate/plan-desk-<fleet>.log.
+// M59_NO_PLAN_DESK=1 or --no-plan-desk: none, as before.
+const PLAN_DESK_POLL = 10_000;
+const PLAN_DESK_DIR = resolve(process.env.M59_CLIENT_CONTEXT_DIR || join(BROKER_ROOT, 'substrate', 'client-context'));
+const PLAN_DESK_SUBSTRATE = join(BROKER_ROOT, 'substrate');
+let planDeskChild = null, planDeskOff = null, planDeskForeign = null;
+
+function startPlanDesk() {
+  if (process.env.M59_NO_PLAN_DESK === '1' || argv.includes('--no-plan-desk')) {
+    planDeskOff = process.env.M59_NO_PLAN_DESK === '1' ? 'M59_NO_PLAN_DESK=1' : '--no-plan-desk';
+    console.error(`[plan-desk] not started (${planDeskOff})`);
+    return;
+  }
+  const ensure = () => {
+    if (brokerStopping || brokerRetired) return;
+    if (planDeskChild && !spawnedChildExited(planDeskChild)) return;
+    const other = liveDesk({ dir: PLAN_DESK_DIR, substrate: PLAN_DESK_SUBSTRATE });
+    if (other) {
+      if (planDeskForeign !== other.pid)
+        console.error(`[plan-desk] pid ${other.pid} is already serving ${other.dir ?? PLAN_DESK_DIR}` +
+                      `${other.substrate ? ` from ${other.substrate}` : ''}; this broker starts its own when that one stops`);
+      planDeskForeign = other.pid;
+      return;
+    }
+    planDeskForeign = null;
+    const logPath = join(PLAN_DESK_SUBSTRATE, `plan-desk-${FLEET || 'default'}.log`);
+    let out = 'ignore';
+    try { mkdirSync(dirname(logPath), { recursive: true }); out = openSync(logPath, 'a'); }
+    catch { /* a desk without a log still answers the client */ }
+    try {
+      planDeskChild = spawn(process.execPath,
+        [fileURLToPath(new URL('./m59-plan-desk.mjs', import.meta.url)), '--fleet', FLEET === '' ? '-' : FLEET,
+         '--substrate', PLAN_DESK_SUBSTRATE, '--dir', PLAN_DESK_DIR, '--parent', String(process.pid)],
+        { stdio: ['ignore', out, out], cwd: BROKER_ROOT, windowsHide: true });
+      const child = planDeskChild;
+      console.error(`[plan-desk] started pid ${child.pid} on ${PLAN_DESK_DIR}`);
+      child.on('exit', (code, signal) => {
+        if (!brokerStopping && !brokerRetired)
+          console.error(`[plan-desk] pid ${child.pid} exited (${signal ?? code}); ` +
+                        `restarting within ${PLAN_DESK_POLL / 1000}s unless another desk holds the folder`);
+      });
+      child.on('error', e => console.error(`[plan-desk] ${e.message}`));
+    } catch (e) { console.error(`[plan-desk] could not start: ${e.message}`); }
+    if (out !== 'ignore') { try { closeSync(out); } catch { /* the child holds it now */ } }
+  };
+  ensure();
+  const t = setInterval(ensure, PLAN_DESK_POLL);
+  t.unref?.();
+}
+
+function stopPlanDesk() {
+  const child = planDeskChild;
+  planDeskChild = null;
+  if (child && !spawnedChildExited(child)) { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
+}
+
+function planDeskHealth() {
+  if (planDeskOff) return { running: false, off: planDeskOff };
+  const live = planDeskChild && !spawnedChildExited(planDeskChild);
+  return { running: !!live, pid: live ? planDeskChild.pid : null, dir: PLAN_DESK_DIR,
+           foreign_pid: live ? null : planDeskForeign };
 }
 
 // ONE ABILITY READ, and then write down what it found.
@@ -19438,6 +19515,7 @@ function brokerHealth() {
     pid: process.pid,
     root: BROKER_ROOT,
     fleet: FLEET || 'default',
+    plan_desk: planDeskHealth(),
     state: STATE_FILE,
     // A STAGED START STILL WAITING: `held` characters are warm and out of the world until
     // `dormancy` start_all. `requested` is this process's flag; the holds outlive it on disk.
@@ -21240,6 +21318,7 @@ function runBrokerHandover() {
     ].filter(Boolean),
     commit() {
       brokerRetired = true;
+      stopPlanDesk();   // the successor's desk takes the client folder on its next poll
       listenerIdentity?.close();
       pendingFleetTransfer = null;
       // Nothing of the fleet's is ours any more. No release (the successor holds every claim),
@@ -21371,6 +21450,7 @@ async function runAsSuccessor() {
       startPilotWatch();
       startAbilitySweep();
       startWeaponErrands();
+      startPlanDesk();
     },
   }, {
     warmMs: Number(process.env.M59_HANDOFF_WARM_MS || 240_000),
@@ -21440,6 +21520,7 @@ if (argv.includes('--selftest')) {
     startPilotWatch();
     startAbilitySweep();
     startWeaponErrands();
+    startPlanDesk();
     if (dashboardPort != null) serveDashboard(dashboardPort);
   } else {
     serveStdio();
@@ -21449,6 +21530,7 @@ if (argv.includes('--selftest')) {
     startPilotWatch();
     startAbilitySweep();
     startWeaponErrands();
+    startPlanDesk();
   }
 }
 
