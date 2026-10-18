@@ -12,7 +12,7 @@ import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision
   updateSurvivalDecision } from './m59-survival-decision.mjs';
 import * as war from './m59-war.mjs';
 import * as gear from './m59-pvp-gear.mjs';
-import { sameRoomDoorPlan } from './m59-world.mjs';
+import { sameRoomDoorPlan, renderState } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import * as pvplog from './m59-pvp.mjs';
@@ -1461,6 +1461,52 @@ export class CombatMode {
     } catch { /* telemetry never stops a packet */ }
   }
 
+  // WHAT EACH ENEMY LOOKED LIKE, AND WHAT OURS PICKED UP AFTER ONE DIED. A reenactment of a fight
+  // (m59-reenact) dresses a stand-in for every body in it, and on 2026-10-17 the fleet's own looks
+  // could be read off the keepers but Morpheus's could not: nothing had kept the overlay stack the
+  // server sent us while he stood in Castle Victoria, nor what fell when he died. So, in a PvP window:
+  //
+  //   verb 'appearance'  each non-fleet player in the room, rendered exactly as the client holds it
+  //                      (renderState: body icon and translation, face, hair, clothes, one overlay
+  //                      per worn item). Once per fight per player, and again when the server sends
+  //                      that body a new look (a weapon drawn, a robe put on).
+  //   verb 'loot'        what this body picked up off the floor, while the window is open or for two
+  //                      minutes after an enemy died in the room: Robin's pickup on 2026-10-17 came
+  //                      35 s after the kill, past the 30 s tail.
+  notePvpAppearances(client) {
+    try {
+      if (!this.pvpWindow()) return;
+      const fight = this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null;
+      if (this.pvpLooksFight !== fight) { this.pvpLooksFight = fight; this.pvpLooks = new Map(); }
+      const room = this.s.world?.room?.num ?? null;
+      for (const o of client.room?.objects?.values?.() ?? []) {
+        if (o.id === client.selfId || !(o.flags & OF.PLAYER)) continue;
+        const name = client.rsc?.get?.(o.nameRsc) ?? o.name ?? null;
+        if (!name || this.isOurs(name)) continue;
+        const rev = o.appearanceRevision ?? 0;
+        if (this.pvpLooks.get(name) === rev) continue;
+        this.pvpLooks.set(name, rev);
+        const r = renderState(client, o);
+        pvplog.appendAction({ kind: 'action', verb: 'appearance', at: Date.now(), observer: this.pvpObserver(client),
+          room, fight, target_name: name, target_loc: o.x != null ? locStamp(room, o) : null,
+          appearance: r.appearance, revision: rev });
+      }
+    } catch { /* telemetry never stops a fight */ }
+  }
+
+  notePvpLoot(items, client = this.s.client) {
+    try {
+      const now = Date.now();
+      if (!this.pvpLogging() || !(this.pvpWindow(now) || now < (this.pvpLootUntil ?? 0))) return;
+      if (!items?.length) return;
+      const room = this.s.world?.room?.num ?? null;
+      pvplog.appendAction({ kind: 'action', verb: 'loot', at: now, observer: this.pvpObserver(client), room,
+        loc: this.pvpLoc(client), fight: this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        after_death_of: now < (this.pvpLootUntil ?? 0) ? this.pvpLootVictim ?? null : null,
+        items: items.map(i => ({ name: i.name ?? null, amount: i.amount ?? null })) });
+    } catch { /* telemetry never stops a pickup */ }
+  }
+
   // A MAP CHANGE IN A PVP WINDOW. Fights cross maps -- a door in Castle Victoria, a run to an inn --
   // and who was where during which part of a fight is half of what the record is for.
   notePvpTraverse(client) {
@@ -2381,6 +2427,7 @@ export class CombatMode {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.tapClient(client);
     this.notePvpTraverse(client);
+    if (ev.kind === 'room-contents' || ev.kind === 'appeared' || ev.kind === 'changed' || ev.kind === 'moved') this.notePvpAppearances(client);
     this.observeWar(ev, client);
     if (ev.kind === 'groan') { try { this.observeGroan(ev, client); } catch { /* evidence only */ } }
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
@@ -2645,6 +2692,13 @@ export class CombatMode {
   // log holds each line once. Our kills were recorded nowhere before this.
   recordPvpDeath(ev, client) {
     if (!this.pvpLogging()) return;
+    try {
+      // Any enemy's death heard here opens the loot window, whoever wrote the death row.
+      // The guild-combat broadcast is war.parseGuildCombat's ("of the The Second Swines");
+      // parseDeathBroadcast reads the other forms and returns null for this one.
+      const g = war.parseGuildCombat(ev.text), b = g ? { who: g.victim } : parseDeathBroadcast(ev.text);
+      if (b?.who && !this.isOurs(b.who)) { this.pvpLootUntil = Date.now() + 120_000; this.pvpLootVictim = b.who; }
+    } catch { /* evidence only */ }
     try {
       const row = pvplog.deathRowFromMessage(ev.text, { me: this.pvpObserver(client),
         isOurs: n => this.isOurs(n), at: Number.isFinite(ev.at) ? ev.at : this.now(),

@@ -184,5 +184,41 @@ await test('the keeper writes an action row only inside a PvP window, with the b
   fake.s.recorder.stop();
 });
 
+await test('an enemy\'s look is kept once per fight and on every change, and what fell when he died', () => {
+  const fake = Object.create(CombatMode.prototype);
+  const me = { id: 1, x: 640, y: 640, nameRsc: 0 };
+  const foe = { id: 99, x: 19 * 64, y: 15 * 64, name: 'Morpheus', flags: 0x0004, iconRsc: 29379, translation: 9, appearanceRevision: 1,
+    overlays: [{ iconRsc: 20068, hotspot: 1, animate: { translation: 3 } }] };
+  const mate = { id: 98, x: 18 * 64, y: 15 * 64, name: 'Zoot', flags: 0x0004, appearanceRevision: 1, overlays: [] };
+  const client = Object.create(M59Client.prototype);
+  client.send = () => {}; client.selfId = 1; client.me = { name: 'Janice' };
+  client.room = { objects: new Map([[1, me], [99, foe], [98, mate]]) }; client.rsc = new Map();
+  fake.s = { name: 'Janice', recorder: new Recorder('Janice', { directory: join(dir, 'rec2') }), world: { room: { num: 38 } }, client };
+  fake.fleetmate = n => n === 'Zoot';
+  fake.active = { pvp: { decision_id: 'd-look' }, phase: 'engaging', order: { action: 'defend', target: 'Morpheus' } };
+  fake.pvpTailUntil = 0;
+  const day = new Date().toISOString().slice(0, 10);
+  const rows = () => tm.readSide('actions', { dir: process.env.M59_PVP_DIR, since: Date.parse(day), until: Date.now() + 1000 });
+  const looks = () => rows().filter(r => r.verb === 'appearance' && r.fight === 'd-look');
+  fake.notePvpAppearances(client); fake.notePvpAppearances(client);
+  assert.equal(looks().length, 1, 'once per fight, not once per packet');
+  assert.equal(looks()[0].target_name, 'Morpheus', 'a fleetmate is never recorded');
+  assert.equal(looks()[0].appearance.icon_rsc, 29379);
+  assert.equal(looks()[0].appearance.overlays[0].hotspot, 1);
+  foe.appearanceRevision = 2; fake.notePvpAppearances(client);
+  assert.equal(looks().length, 2, 'a new look from the server is a new row');
+  // The loot window outlives the fight: two minutes after an enemy death.
+  fake.active = null; fake.pvpTailUntil = 0;
+  fake.recordPvpDeath({ text: '### Morpheus of the Human Resistance has been slaughtered by Floyd of the The Second Swines in guild combat.', at: Date.now() }, client);
+  fake.notePvpLoot([{ name: 'scimitar' }, { name: 'shilling', amount: 312 }], client);
+  const loot = () => rows().filter(r => r.verb === 'loot');
+  assert.equal(loot().length, 1);
+  assert.equal(loot()[0].after_death_of, 'Morpheus');
+  assert.deepEqual(loot()[0].items, [{ name: 'scimitar', amount: null }, { name: 'shilling', amount: 312 }]);
+  fake.pvpLootUntil = 0; fake.notePvpLoot([{ name: 'herb' }], client);
+  assert.equal(loot().length, 1, 'an ordinary pickup outside any window is not PvP evidence');
+  fake.s.recorder.stop();
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${tests} passed`);

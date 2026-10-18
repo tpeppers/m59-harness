@@ -5271,6 +5271,8 @@ class Session {
     // twenty-one. A handler that starts a fleet-wide anything from here starts it once per
     // looting character. Act on `character`, or check argv[1] before doing something global.
     if (taken.length) {
+      // The PvP record keeps what fell when an enemy died (m59-combat-mode.mjs notePvpLoot).
+      try { this.combat?.notePvpLoot?.(taken, c); } catch { /* evidence only */ }
       try {
         recordEvent(c.me?.name ?? this.name ?? null, 'looted', {
           agent: this.name ?? undefined,
