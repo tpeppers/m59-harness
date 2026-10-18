@@ -8,11 +8,12 @@
 // client depends on, at-most-once execution, and that the courier rows are reflected from
 // the lap's own tables rather than written down twice.
 
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck } from './m59-plan-desk.mjs';
+import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck,
+         checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
 import { readHolds, reservedPercent, acceptGiftFrom, deliverTo } from './m59-human-handoff.mjs';
 
@@ -231,6 +232,43 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
   mkdirSync(join(dir, 'plan', 'out'), { recursive: true });
   writeFileSync(join(dir, 'plan', 'out', '77.tsv'), renderPlanView({ pid: 77, ack: 12 }));
   ok('a restarted desk resumes from the ack its predecessor wrote', lastAck(dir, 77) === 12 && lastAck(dir, 78) === 0);
+}
+
+// A CLIENT WITH NO DESK IS TOLD WHERE ONE IS (serveStrays).
+{
+  const roots = checkoutRoots('x', () => 'worktree C:/a\nHEAD 1\nbranch refs/heads/main\n\nworktree C:/b\nHEAD 2\ndetached\n');
+  ok('every checkout is listed from git worktree list', roots.length === 2 && roots[1].replace(/\\/g, '/').endsWith('C:/b'), JSON.stringify(roots));
+  ok('a client folder named twice is listed once',
+     clientFolders(['C:/a'], ['C:/a/substrate/client-context', 'C:/z']).length === 2);
+  const deskDir = join(tmp, 'stray-desk', 'cc'), strayDir = join(tmp, 'stray-client', 'cc'), quietDir = join(tmp, 'stray-quiet', 'cc');
+  for (const d of [deskDir, strayDir, quietDir]) mkdirSync(join(d, 'plan', 'in'), { recursive: true });
+  const alive = pid => pid === 5151;
+  writeFileSync(join(deskDir, 'plan', 'desk.json'), JSON.stringify({ pid: 5151, at: Date.now(), fleet: 'prod', dir: deskDir,
+    substrate: join(tmp, 'stray-desk', 'substrate'), root: 'C:\\code\\m59-lab\\prod-deploy' }));
+  const req = (dirX, reqs) => writeFileSync(join(dirX, 'plan', 'in', '777.tsv'),
+    [`M59PLANREQ\t1\t${Date.now()}\t777\t${enc('127.0.0.1:5959')}\t${enc('t1')}\t${enc('Kermit')}\t99\t1`,
+     ...reqs.map(([q, e]) => `R\t${q}\t${e}\t`), 'END', ''].join('\n'));
+  req(strayDir, [[3, 'courier']]); req(quietDir, []); req(deskDir, []);
+  // quietDir's own desk beat moments ago (a handover): it must be left alone.
+  writeFileSync(join(quietDir, 'plan', 'desk.json'), JSON.stringify({ pid: 9999, at: Date.now() }));
+  const state = new Map();
+  const n = serveStrays({ ownDir: deskDir, folders: [deskDir, strayDir, quietDir], state, alive });
+  const out = join(strayDir, 'plan', 'out', '777.tsv');
+  const text = existsSync(out) ? readFileSync(out, 'utf8') : '';
+  const head = text.split('\n')[0].split('\t');
+  ok('a client nobody serves is answered', n === 1 && head[0] === 'M59PLAN' && Date.now() - Number(head[2]) < 5000, text.slice(0, 200));
+  ok('and told where the desk runs and what to launch',
+     decodeURIComponent(head[6]).includes('C:\\code\\m59-lab\\prod-deploy') && decodeURIComponent(head[6]).includes('m59-tui.mjs') &&
+     /\nE\tdesk\.elsewhere\t[^\n]*\td\t/.test(text));
+  ok('a request typed there is refused and acknowledged, never left pending', head[4] === '3' && /\nM\t3\t0\tnot%20run/.test(text));
+  ok('the desk does not answer its own folder this way', !existsSync(join(deskDir, 'plan', 'out', '777.tsv')));
+  ok('a folder whose desk beat moments ago (a handover) is left alone', !existsSync(join(quietDir, 'plan', 'out', '777.tsv')));
+  const old = (Date.now() - STRAY_QUIET_MS - 5000) / 1000; utimesSync(join(quietDir, 'plan', 'desk.json'), old, old);
+  serveStrays({ ownDir: deskDir, folders: [deskDir, strayDir, quietDir], state, alive });
+  ok('once that desk has been gone a minute, its client is told too', existsSync(join(quietDir, 'plan', 'out', '777.tsv')));
+  ok('a refused request is refused once', (readFileSync(out, 'utf8').match(/\nM\t3\t/g) ?? []).length === 1);
+  writeFileSync(join(deskDir, 'plan', 'desk.json'), JSON.stringify({ pid: 5151, at: 0 }));
+  ok('with no desk anywhere, nothing is written', serveStrays({ ownDir: deskDir, folders: [deskDir, strayDir], state: new Map(), alive }) === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -30,8 +30,21 @@ a broker without one.
 left alone: a broker waits for it to go, and a second desk refuses to start. A desk that
 restarts picks up the last ack it wrote for each client, so it does not run a request again.
 
+**A client with no desk is told where one is.** Each client reads its own checkout's client
+folder, so a client launched from the trunk while the broker's desk runs in prod-deploy used to
+say only "the plan desk is not answering". Now every desk also watches the client folders of
+the repository's other checkouts (`git worktree list`, the ones with a `plan/` folder, re-listed
+each minute). It answers any client there that no desk serves. The PLAN tab's status line and
+a greyed-out **Desk** row say which checkout the desk runs from, which fleet it serves, and the
+`m59-tui.mjs` command that launches the right client. Nothing runs for that client: a request
+typed there is refused with the same note, so it is never left waiting for a desk that might
+pick it up later. A folder whose own desk beat within the last minute is skipped, so the short
+gap in a broker handover isn't answered as "no desk".
+
 **The fleet terminal's L** starts the gate-capable proxy (5962, gate control 8931), and the
 plan desk only if none is serving the client folder, and `dev.bat` goes through that proxy.
+If a desk for the same fleet is running in another checkout, L starts none: it says in the
+status line where that desk is, and the PLAN tab says the same.
 `M59_TUI_NO_PLAN=1` launches the old way.
 
 While prod-deploy predates this work (no deploy cut), run the terminal from the **trunk**

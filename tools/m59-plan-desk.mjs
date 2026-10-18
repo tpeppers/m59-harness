@@ -46,6 +46,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { resolveFleet } from './m59-fleetpath.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -205,6 +206,89 @@ export function lastAck(dir, pid) {
   } catch { return 0; }
 }
 
+// ------------------------------------------------------------------ a desk elsewhere
+// A CLIENT WITH NO DESK IS TOLD WHERE ONE IS. dev.bat points a client at ITS checkout's client
+// folder, and the desk runs with the broker -- usually prod-deploy's. A client launched from the
+// trunk then said only "the plan desk is not answering" while a desk for the same fleet was up one
+// checkout over. So every desk also looks at the client folders of this repository's other
+// checkouts, and answers any client there that no desk serves: who is serving, from where, and
+// which client to launch. It runs nothing for that client; a request typed there is refused, so
+// it is never left pending for a desk that might pick it up minutes later.
+//
+// NOT DURING A HANDOVER. A folder whose own desk beat within STRAY_QUIET_MS is a desk restarting
+// (the broker's successor starts its own within ten seconds), and answering it as deskless would
+// refuse a request its real desk is about to run.
+export const STRAY_QUIET_MS = 60_000;
+const sameDir = (a, b) => { const n = p => resolve(p).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b); };
+
+// Every checkout of this repository, by `git worktree list`: the trunk, prod-deploy, work-*.
+export function checkoutRoots(harness = HARNESS, run = null) {
+  run ??= () => execFileSync('git', ['-C', harness, 'worktree', 'list', '--porcelain'],
+    { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  try { return run().split('\n').filter(l => l.startsWith('worktree ')).map(l => resolve(l.slice(9).trim())); }
+  catch { return [harness]; }
+}
+export function clientFolders(roots, extra = []) {
+  const out = [];
+  for (const d of [...roots.map(r => join(r, 'substrate', 'client-context')), ...extra.filter(Boolean)])
+    if (!out.some(o => sameDir(o, d))) out.push(resolve(d));
+  return out;
+}
+// The live desks among those folders, each with the checkout it runs from.
+export function desksIn(folders, opts = {}) {
+  const out = [];
+  for (const dir of folders) { const d = liveDesk({ dir }, opts); if (d && !out.some(o => o.pid === d.pid)) out.push(d); }
+  return out;
+}
+const deskRoot = d => d.root ?? (d.substrate ? dirname(d.substrate) : null);
+
+export function elsewhereView({ pid, ack, dir, desks, messages = [] }, now = Date.now()) {
+  const d = desks[0];
+  const root = deskRoot(d) ?? '(unknown checkout)';
+  const launch = `node "${join(root, 'tools', 'm59-tui.mjs')}" --fleet ${d.fleet || '-'}`;
+  const status = `NO PLAN DESK FOR THIS CLIENT. A desk for fleet ${d.fleet || '(unnamed)'} is running from ` +
+    `${root} -- launch the client from there: ${launch}`;
+  const entries = [{ id: 'desk.elsewhere', group: 'Desk', icon: '', disabled: true,
+    title: `The desk is running from ${root}`,
+    describe: [`This client reads ${dir}, and no plan desk serves it, so nothing here can run.`,
+      `A desk for fleet ${d.fleet || '(unnamed)'} is up (pid ${d.pid}) in ${root}, answering the client folder ${d.dir}.`,
+      `To use it, close this client and launch the one from that checkout: ${launch} (then L), or prod.ps1 for prod.`,
+      ...(desks.length > 1 ? [`Other desks: ${desks.slice(1).map(o => `${deskRoot(o)} (fleet ${o.fleet || '-'})`).join('; ')}.`] : [])]
+      .join('\n\n') }];
+  return renderPlanView({ pid, ack, control: 'none', status, entries, messages }, now);
+}
+
+// One pass over the other folders. `state` keeps each stray client's ack and messages.
+export function serveStrays({ ownDir, folders, state = new Map(), now = Date.now(), alive = pidAlive, log = () => {} }) {
+  const desks = desksIn(folders, { now, alive });
+  if (!desks.length) return 0;
+  let served = 0;
+  for (const dir of folders) {
+    if (sameDir(dir, ownDir) || liveDesk({ dir }, { now, alive })) continue;
+    try { if (now - statSync(join(dir, 'plan', 'desk.json')).mtimeMs < STRAY_QUIET_MS) continue; } catch { /* never had one */ }
+    const inDir = join(dir, 'plan', 'in');
+    let files; try { files = readdirSync(inDir).filter(f => /^\d+\.tsv$/.test(f)); } catch { continue; }
+    for (const f of files) {
+      let req; try { req = parsePlanRequest(readFileSync(join(inDir, f), 'utf8'), now); } catch { req = null; }
+      if (!req || String(req.pid) + '.tsv' !== f) continue;
+      const key = `${resolve(dir)}|${req.pid}`;
+      const st = state.get(key) ?? { ack: lastAck(dir, req.pid), messages: [] };
+      for (const r of req.requests.filter(r => r.seq > st.ack).sort((a, b) => a.seq - b.seq)) {
+        st.ack = r.seq;
+        st.messages.push({ seq: r.seq, ok: false, message: `not run: no plan desk serves this client. The desk is ` +
+          `running from ${deskRoot(desks[0])}; launch the client from there.` });
+        st.messages = st.messages.slice(-12);
+        log(`[plan stray] ${dir} pid ${req.pid}: refused ${r.entry} -- its desk runs from ${deskRoot(desks[0])}`);
+      }
+      try { writeAtomic(join(dir, 'plan', 'out', f), elsewhereView({ pid: req.pid, ack: st.ack, dir, desks, messages: st.messages }, Date.now())); }
+      catch { continue; }
+      state.set(key, st); served++;
+    }
+  }
+  return served;
+}
+
 // ------------------------------------------------------------------ the loop
 export function rosterAgents(stateFile) {
   try {
@@ -280,8 +364,21 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
   const heartbeat = () => {
     const other = liveDesk({ dir, substrate }, { exceptPid: process.pid });
     if (other && yieldsTo(other, me)) { console.error(`plan desk pid ${other.pid} also started; this one (pid ${process.pid}) steps aside`); process.exit(0); }
-    const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet, dir, substrate, parent });
+    const h = JSON.stringify({ pid: process.pid, at: Date.now(), since: me.since, fleet, dir, substrate, root: HARNESS, parent });
     for (const f of beats) { try { writeAtomic(f, h); } catch {} }
+  };
+  // The other checkouts' client folders, re-listed once a minute (a worktree can appear any time).
+  // ONLY THOSE WITH A plan/ FOLDER, which a client or a desk has used: this machine had 333
+  // checkouts, and reading all of them every two seconds cost ~100ms a pass to answer three.
+  const strays = new Map();
+  let folders = [], listedAt = 0;
+  const strayPass = () => {
+    if (Date.now() - listedAt > 60_000) {
+      folders = clientFolders(checkoutRoots(HARNESS), [process.env.M59_CLIENT_CONTEXT_DIR, dir]).filter(d => existsSync(join(d, 'plan')));
+      listedAt = Date.now();
+    }
+    try { serveStrays({ ownDir: dir, folders, state: strays, log: m => console.error(m) }); }
+    catch (e) { console.error(`plan desk strays: ${e.message}`); }
   };
   process.on('exit', () => {
     for (const f of beats) { try { const h = JSON.parse(readFileSync(f, 'utf8')); if (h.pid === process.pid) writeFileSync(f, JSON.stringify({ ...h, at: 0 })); } catch {} }
@@ -290,6 +387,7 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
   for (let n = 0; ; n++) {
     if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
     if (n % 5 === 0) heartbeat();
+    if (n % 2 === 1) strayPass();   // inside the client's 6s freshness window
     try { await desk.tick(); } catch (e) { console.error(`plan desk tick: ${e.stack ?? e.message}`); }
     await new Promise(r => setTimeout(r, 1000));
   }

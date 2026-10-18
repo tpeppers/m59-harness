@@ -46,7 +46,7 @@ import * as maps from './m59-roomserve.mjs';
 import { commitmentOf, stepSelection, firstSelectable, allCommitted } from './m59-commitment.mjs';
 import { mergeTuiRow, fleetFreshness } from './m59-tui-state.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
-import { liveDesk } from './m59-plan-desk.mjs';
+import { liveDesk, desksIn, clientFolders, checkoutRoots } from './m59-plan-desk.mjs';
 import {
   KEEPER_BAND_WIDTH,
   discoverKeeperStates,
@@ -628,6 +628,11 @@ function ensurePlanDesk() {
   // one started with M59_NO_PLAN_DESK=1 -- and the desk itself refuses to be a second.
   const dir = env.M59_CLIENT_CONTEXT_DIR || join(REPO, 'substrate', 'client-context');
   if (liveDesk({ dir, substrate: PLAN_SUBSTRATE })) return { started: false };
+  // A DESK FOR THIS FLEET IN ANOTHER CHECKOUT (the broker's, in prod-deploy) is the one whose loops
+  // run; a second here, on this checkout's substrate, is the "two desks" problem again. That desk
+  // answers this client with where it is running, and the status line says so here.
+  const elsewhere = desksIn(clientFolders(checkoutRoots(REPO))).find(d => (d.fleet || '') === (FLEET || ''));
+  if (elsewhere) return { started: false, elsewhere };
   const child = spawn(process.execPath,
     [join(REPO, 'tools', 'm59-plan-desk.mjs'), '--fleet', FLEET === '' ? '-' : FLEET, '--substrate', PLAN_SUBSTRATE],
     { stdio: 'ignore', detached: true, windowsHide: true, cwd: REPO });
@@ -682,8 +687,11 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   if (devExe && WIN && !viaProxy && !GATE && !REMOTE && env.M59_TUI_NO_PLAN !== '1') {
     const pp = await ensurePlanProxy(realHost, realPort);
     const pd = ensurePlanDesk();
-    S.status = pp.ok ? c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${PLAN_PROXY_PORT}, desk ${pd.started ? 'started' : 'up'}… `)
-                     : c.red(`PLAN proxy would not come up on ${PLAN_PROXY_PORT} — launching direct, no lock or Full Auto `);
+    const where = pd.elsewhere ? (pd.elsewhere.root ?? dirname(pd.elsewhere.substrate ?? '')) : null;
+    S.status = !pp.ok ? c.red(`PLAN proxy would not come up on ${PLAN_PROXY_PORT} — launching direct, no lock or Full Auto `)
+             : where ? c.yellow(`PLAN: the ${FLEET || 'unnamed'} desk runs from ${where}, not this checkout — ` +
+                                `the PLAN tab will say so; launch from there to use it… `)
+             : c.dim(`PLAN: proxy ${pp.started ? 'started' : 'up'} on ${PLAN_PROXY_PORT}, desk ${pd.started ? 'started' : 'up'}… `);
     // AND CONNECT THROUGH IT. Starting the proxy is not enough: the client is launched with an
     // explicit host and port, so without this it went straight to the server and the PLAN tab
     // reported no gate-capable proxy carrying it. Only when 5962 fronts THIS character's server
