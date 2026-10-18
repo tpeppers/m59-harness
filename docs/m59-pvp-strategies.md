@@ -103,6 +103,10 @@ strategy decision (a strategy still has no speech verb), a mode of the character
 - **What:** `substrate/pvp-callouts.json` (gitignored; `{ "lines": [...] }`, `{enemy}` and `{me}` filled in),
   else the generic `substrate/pvp-callouts.example.json`. Re-read when it changes. Lines recently used by anyone
   in the fleet are avoided.
+- **Whose voice:** a line is a string (anyone may say it) or `{ "text": "...", "voice": "Piggy" }` — `voice` a
+  character name or a list (`["Statler", "Waldorf"]`), matched case-insensitively. A voiced line is only ever
+  picked for a speaker it names (operator, 2026-10-18: *"ensure those only play when picking a line for that
+  specific muppet"*), so Kermit never says "Moi does not miss", and a voice nobody in the fleet has is never said.
 - **The record:** every `say` the body sends in a PvP window or in the minute after a hostile arrived is an
   `actions` row with `text` and `say_type` (and `callout` for a callout); speech HEARD in that time is a
   `messages` row of kind `said` with the `speaker`. `m59-pvp.mjs --battle` and the /pvp page print both in

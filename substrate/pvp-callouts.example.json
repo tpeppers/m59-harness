@@ -1,5 +1,5 @@
 {
-  "note": "The shape of substrate/pvp-callouts.json (gitignored: this machine's lines). tools/m59-pvp-callout.mjs says one out loud when a hostile player enters a loud character's map (policy pvp_loud, or a combat order). {enemy} is the player's name, {me} the speaker's. These generic lines are used when no local file exists.",
+  "note": "The shape of substrate/pvp-callouts.json (gitignored: this machine's lines). tools/m59-pvp-callout.mjs says one out loud when a hostile player enters a loud character's map (policy pvp_loud, or a combat order). {enemy} is the player's name, {me} the speaker's. These generic lines are used when no local file exists. A line may instead be { \"text\", \"voice\" }: voice is a character name or a list of names, and that line is only picked for a speaker it names.",
   "lines": [
     "Wrong room, {enemy}.",
     "This ends here.",
@@ -8,6 +8,10 @@
     "Target acquired: {enemy}.",
     "Nobody leaves this map on their own feet.",
     "Clock's ticking, {enemy}.",
-    "Battle stations. {enemy} is here."
+    "Battle stations. {enemy} is here.",
+    {
+      "text": "{me} here. You picked the wrong frog, {enemy}.",
+      "voice": "Kermit"
+    }
   ]
 }

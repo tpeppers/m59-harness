@@ -16,9 +16,14 @@
 // which is also the record of every callout made. Fifteen fighters in Castle Victoria do not all shout.
 //
 // THE LINES are this machine's: substrate/pvp-callouts.json (gitignored; m59-private carries the fleet's),
-// falling back to the committed substrate/pvp-callouts.example.json. Either a bare array of strings or
+// falling back to the committed substrate/pvp-callouts.example.json. Either a bare array of lines or
 // { "lines": [...] }. `{enemy}` is replaced with the player's name and `{me}` with the speaker's. Re-read when
 // the file changes, so new lines need no restart.
+//
+// A LINE IN ONE MUPPET'S VOICE IS THAT MUPPET'S. Operator, 2026-10-18: "ensure those only play when picking a
+// line for that specific muppet". A line is a string (anyone may say it) or { "text", "voice" }, where
+// `voice` is a character name or a list of them, matched against the speaker case-insensitively. Kermit
+// never says "Moi does not miss"; a voice nobody in the fleet has is a line nobody says.
 //
 // THE LOG. What is said goes out through M59Client.say, whose tap (tapSent 'say') lands in the PvP actions
 // file with the text, the say type and -- for a callout -- the player that triggered it. Speech HEARD during
@@ -37,14 +42,30 @@ export const CHORUS = 2;                   // ...and at most this many loud char
 export const MAX_PAUSE_MS = 1_500;         // the random pause before speaking, so the chorus is not one tick
 export const STARTUP_QUIET_MS = 15_000;    // a keeper just started sees everyone as "arriving"
 
+const voiceKey = name => String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** Lines as { text, voices }: `voices` is null for anyone, else the lower-cased names that may say it. */
 export function parseCallouts(raw) {
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.lines) ? raw.lines : null;
   if (!list) throw new Error('callouts: expected an array of lines or { "lines": [...] }');
-  const lines = list.map(s => String(s ?? '').trim()).filter(Boolean);
+  const lines = [];
+  for (const entry of list) {
+    const object = entry !== null && typeof entry === 'object';
+    const text = String((object ? entry.text : entry) ?? '').trim();
+    if (!text) continue;
+    if (object && entry.voice != null && typeof entry.voice !== 'string' && !Array.isArray(entry.voice))
+      throw new Error(`callouts: "${text}": voice must be a name or a list of names`);
+    const voices = object && entry.voice != null ? [entry.voice].flat().map(voiceKey).filter(Boolean) : [];
+    if (object && entry.voice != null && !voices.length) throw new Error(`callouts: "${text}": empty voice`);
+    lines.push({ text, voices: voices.length ? voices : null });
+  }
   if (!lines.length) throw new Error('callouts: no lines');
-  if (lines.some(l => l.length > 200)) throw new Error('callouts: a line is longer than 200 characters');
+  if (lines.some(l => l.text.length > 200)) throw new Error('callouts: a line is longer than 200 characters');
   return lines;
 }
+
+/** May `me` say this line? A plain string or an unvoiced line: anyone. A voiced one: only those named. */
+export const speaksLine = (line, me) => typeof line === 'string' || !line?.voices || line.voices.includes(voiceKey(me));
 
 const cache = { file: null, mtime: 0, lines: null, error: null };
 /** The lines in force: the local file, else the example. Never throws; `error` says why it fell back. */
@@ -62,15 +83,19 @@ export function loadCallouts({ file = CALLOUTS_FILE(), example = CALLOUTS_EXAMPL
   return { lines: [], file: null, error: cache.error ?? 'no callout lines' };
 }
 
-/** A random line, avoiding the ones said most recently (fleet-wide), with {enemy}/{me} filled in. */
+/** A random line this speaker may say, avoiding the ones said most recently (fleet-wide), with {enemy}/{me}
+ *  filled in. `index` is the line's position in the whole file, so the recent list stays fleet-wide. */
 export function pickCallout(lines, { recent = [], enemy = '', me = '', random = Math.random } = {}) {
   if (!lines?.length) return null;
+  const mine = lines.map((l, i) => i).filter(i => speaksLine(lines[i], me));
+  if (!mine.length) return null;
   const used = new Set(recent);
-  const fresh = lines.map((l, i) => i).filter(i => !used.has(i));
-  const pool = fresh.length ? fresh : lines.map((l, i) => i);
+  const fresh = mine.filter(i => !used.has(i));
+  const pool = fresh.length ? fresh : mine;
   const index = pool[Math.floor(random() * pool.length) % pool.length];
-  const text = lines[index].replaceAll('{enemy}', String(enemy)).replaceAll('{me}', String(me)).replace(/\s+/g, ' ').trim();
-  return { index, text };
+  const line = lines[index], raw = typeof line === 'string' ? line : line.text;
+  const text = raw.replaceAll('{enemy}', String(enemy)).replaceAll('{me}', String(me)).replace(/\s+/g, ' ').trim();
+  return { index, text, ...(typeof line === 'object' && line.voices ? { voice: line.voices } : {}) };
 }
 
 const dayOf = at => new Date(at).toISOString().slice(0, 10);

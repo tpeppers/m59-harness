@@ -43,10 +43,32 @@ const settled = f => { f.advance(callout.STARTUP_QUIET_MS + 1); return f; };
 console.log('m59-pvp-callout-test');
 
 await test('lines: an array or {lines}, blanks dropped, an empty list refused', () => {
-  assert.deepEqual(callout.parseCallouts(['a', ' ', 'b']), ['a', 'b']);
-  assert.deepEqual(callout.parseCallouts({ lines: ['x'] }), ['x']);
+  assert.deepEqual(callout.parseCallouts(['a', ' ', 'b']), [{ text: 'a', voices: null }, { text: 'b', voices: null }]);
+  assert.deepEqual(callout.parseCallouts({ lines: ['x'] }), [{ text: 'x', voices: null }]);
   assert.throws(() => callout.parseCallouts({ lines: [] }), /no lines/);
   assert.throws(() => callout.parseCallouts({}), /expected/);
+});
+
+await test('a voiced line is parsed with its names; a bad voice is refused', () => {
+  assert.deepEqual(callout.parseCallouts([{ text: 'Hi-YAH!', voice: 'Piggy' }, { text: 'Doh ho ho!', voice: ['Statler', ' Waldorf '] }]),
+    [{ text: 'Hi-YAH!', voices: ['piggy'] }, { text: 'Doh ho ho!', voices: ['statler', 'waldorf'] }]);
+  assert.throws(() => callout.parseCallouts([{ text: 'x', voice: 7 }]), /voice must be/);
+  assert.throws(() => callout.parseCallouts([{ text: 'x', voice: [] }]), /empty voice/);
+});
+
+await test('a voiced line is only picked for its muppet; generic lines for anyone', () => {
+  const lines = callout.parseCallouts(['Generic, {enemy}.', { text: 'Moi does not miss.', voice: 'Piggy' },
+    { text: 'Wocka wocka.', voice: 'Fozzie' }, { text: 'Doh ho ho!', voice: ['Statler', 'Waldorf'] }]);
+  const said = me => new Set(Array.from({ length: 40 }, (_, k) => callout.pickCallout(lines, { me, random: () => k / 40 }).text));
+  assert.deepEqual([...said('Kermit')], ['Generic, .'], 'Kermit gets the generic line');
+  assert.ok(![...said('Kermit')].some(t => /Moi|Wocka|Doh/.test(t)), 'Kermit says no one else\'s line');
+  assert.ok(said('Piggy').has('Moi does not miss.') && !said('Piggy').has('Wocka wocka.'), 'Piggy says hers, not Fozzie\'s');
+  assert.ok(said('piggy').has('Moi does not miss.'), 'names match case-insensitively');
+  assert.ok(said('Waldorf').has('Doh ho ho!') && said('Statler').has('Doh ho ho!'), 'a shared voice is either of theirs');
+  const p = callout.pickCallout(lines, { me: 'Fozzie', recent: [0], random: () => 0 });
+  assert.equal(p.text, 'Wocka wocka.'); assert.equal(p.index, 2, 'index is the position in the whole file');
+  assert.deepEqual(p.voice, ['fozzie']);
+  assert.equal(callout.pickCallout([{ text: 'Bork!', voices: ['swedish chef'] }], { me: 'Kermit' }), null, 'nothing he may say');
 });
 
 await test('the committed example has lines, and the fleet file overrides it', () => {

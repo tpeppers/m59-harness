@@ -1129,7 +1129,8 @@ the records it describes.
   an action row only inside a PvP window, and that an enemy's rendered look is kept once per fight and on
   every change while a fleetmate's never is, and what ours picked up is kept for two minutes after an enemy
   died and not otherwise),
-  `node tools/m59-pvp-callout-test.mjs` (13 — **loud PvP**: that a loud character says one line, `{enemy}`
+  `node tools/m59-pvp-callout-test.mjs` (15 — **loud PvP**: that a line in one muppet's voice (`voice`) is only
+  picked for that muppet, case-insensitively, while unvoiced lines go to anyone; that a loud character says one line, `{enemy}`
   filled, when a hostile arrives, and the actions row carries the quote, the callout and the location stamp;
   that a hostile still present, or back inside two minutes, is not a new arrival; that a quiet policy, a
   `loud: false` order, a non-hostile stranger and a keeper just started stay silent while a loud order's

@@ -489,7 +489,7 @@ export class CombatMode {
       if (!v.speak) { this.lastCallout = { at: Date.now(), player: name, room, skipped: v.why }; return; }
       const { lines, file, error } = callout.loadCallouts();
       const pick = callout.pickCallout(lines, { recent: rows.slice(-40).map(r => r.index), enemy: name, me });
-      if (!pick) { this.lastCallout = { at: Date.now(), player: name, room, skipped: error ?? 'no lines' }; return; }
+      if (!pick) { this.lastCallout = { at: Date.now(), player: name, room, skipped: error ?? (lines.length ? `no line ${me} may say` : 'no lines') }; return; }
       const at = Date.now(), loc = this.pvpLoc(c);
       pvplog.appendCallout({ kind: 'callout', at, speaker: me, player: name, room, loc, basis, index: pick.index,
         text: pick.text, chorus: v.why, lines_file: file });
