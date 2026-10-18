@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFi
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc } from './m59-plan-desk.mjs';
+import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
 import { readHolds, reservedPercent, acceptGiftFrom, deliverTo } from './m59-human-handoff.mjs';
 
@@ -207,6 +207,30 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
   let n = null; const ncall = async (name, a) => { if (a.action === 'status') return { trade: n }; if (a.action === 'offer') { n = { role: 'offerer', mayAccept: false }; return { offered: true }; } if (a.action === 'cancel') { n = null; return { cancelled: true }; } return {}; };
   const nr = await deliverTo(ncall, 'hk2', 'Kermit', [{ id: 1 }], { pollMs: 10, timeoutMs: 80 });
   ok('a person who never counters leaves no open trade behind', !nr.delivered && n === null, JSON.stringify(nr));
+}
+
+// ONE DESK PER CLIENT FOLDER (the broker's, or the terminal's, never both).
+{
+  const dir = join(tmp, 'guard-client'), subA = join(tmp, 'guard-a'), subB = join(tmp, 'guard-b');
+  mkdirSync(join(dir, 'plan'), { recursive: true }); mkdirSync(subA, { recursive: true }); mkdirSync(subB, { recursive: true });
+  const alive = pid => pid !== 999;
+  ok('no heartbeat, no desk', liveDesk({ dir, substrate: subA }, { alive }) === null);
+  writeFileSync(join(dir, 'plan', 'desk.json'), JSON.stringify({ pid: 4242, at: Date.now(), since: 1, substrate: subB, dir }));
+  ok('a desk on ANOTHER substrate still holds the client folder', liveDesk({ dir, substrate: subA }, { alive })?.pid === 4242);
+  ok('a desk does not see itself', liveDesk({ dir, substrate: subA }, { alive, exceptPid: 4242 }) === null);
+  writeFileSync(join(dir, 'plan', 'desk.json'), JSON.stringify({ pid: 4242, at: Date.now() - 60_000, since: 1 }));
+  ok('a stale heartbeat holds nothing', liveDesk({ dir, substrate: subA }, { alive }) === null);
+  writeFileSync(join(dir, 'plan', 'desk.json'), JSON.stringify({ pid: 999, at: Date.now(), since: 1 }));
+  ok('a dead pid holds nothing', liveDesk({ dir, substrate: subA }, { alive }) === null);
+  writeFileSync(join(subA, 'plan-desk.json'), JSON.stringify({ pid: 4343, at: Date.now() }));
+  ok('an older desk that beats only in the substrate is still seen', liveDesk({ dir, substrate: subA }, { alive })?.pid === 4343);
+  ok('of two that started together, the later steps aside',
+     yieldsTo({ pid: 5, since: 100 }, { pid: 6, since: 200 }) && !yieldsTo({ pid: 6, since: 200 }, { pid: 5, since: 100 }));
+  ok('a tie goes to the lower pid',
+     yieldsTo({ pid: 5, since: 100 }, { pid: 6, since: 100 }) && !yieldsTo({ pid: 6, since: 100 }, { pid: 5, since: 100 }));
+  mkdirSync(join(dir, 'plan', 'out'), { recursive: true });
+  writeFileSync(join(dir, 'plan', 'out', '77.tsv'), renderPlanView({ pid: 77, ack: 12 }));
+  ok('a restarted desk resumes from the ack its predecessor wrote', lastAck(dir, 77) === 12 && lastAck(dir, 78) === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

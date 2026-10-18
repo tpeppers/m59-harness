@@ -16,9 +16,23 @@ fs zheng-he-lap agents=hk2            a FleetScript REPL line, exactly as if typ
 
 ## Running it
 
-**The normal way: the fleet terminal's L.** A normal launch now starts the gate-capable proxy
-(5962, gate control 8931) and the plan desk if they aren't already up, and `dev.bat` goes
-through that proxy. Nothing else needs starting. `M59_TUI_NO_PLAN=1` launches the old way.
+**The broker runs the desk.** `m59-service.mjs start` (any broker, from 2026-10-17) starts the
+plan desk as a child on the broker's own substrate, restarts it if it dies, stops it when
+the broker stops, and hands it to the successor across a live `restart`. `m59-service status`
+shows it on the `plan desk` line; its log is `substrate/plan-desk-<fleet>.log`. It writes
+into `M59_CLIENT_CONTEXT_DIR` if the broker was started with that set, otherwise into the
+broker's checkout's `substrate/client-context` -- which is where `dev.bat` points when the
+fleet terminal runs from the same checkout. `M59_NO_PLAN_DESK=1` (or `--no-plan-desk`) starts
+a broker without one.
+
+**One desk per client folder.** The heartbeat is `<client folder>/plan/desk.json` (and still
+`<substrate>/plan-desk.json`). A desk already serving the folder, whoever started it, is
+left alone: a broker waits for it to go, and a second desk refuses to start. A desk that
+restarts picks up the last ack it wrote for each client, so it does not run a request again.
+
+**The fleet terminal's L** starts the gate-capable proxy (5962, gate control 8931), and the
+plan desk only if none is serving the client folder, and `dev.bat` goes through that proxy.
+`M59_TUI_NO_PLAN=1` launches the old way.
 
 While prod-deploy predates this work (no deploy cut), run the terminal from the **trunk**
 against the prod fleet, with the roster and the desk pointed at prod-deploy:
@@ -221,9 +235,12 @@ press L again) or the desk will say the keeper cannot drive.
   twice. The fix: make the guard (and `m59-tui.mjs ensurePlanDesk`) key on the client folder,
   not the substrate, and say which substrate the running desk serves. A desk pass costs about
   8 ms, so this is a correctness problem, not a load problem.
+  **Fixed 2026-10-17:** the guard is the client folder, and the heartbeat names its substrate.
 - **The terminal's desk uses the wrong substrate.** Without `M59_PLAN_SUBSTRATE`, L's desk reads
   the trunk's `substrate/`, while the prod fleet's loops (and the courier's request files) live
-  in the prod-deploy checkout's.
+  in the prod-deploy checkout's. **Mostly moot from 2026-10-17:** the broker's desk is on the
+  broker's substrate and is already up when L looks, so L starts none. It still applies to a
+  broker from before that, or one started with `M59_NO_PLAN_DESK=1`.
 - **A spectated logoff that is meant to stay off is cut to 20 s.** `AWAY_MAX_MS` in
   `m59-proxy.mjs` caps it, but a farm-buff "wait it out" asks for up to 60 s. Raising the cap
   needs a live check of how long the server lets a connection sit on the character menu.
