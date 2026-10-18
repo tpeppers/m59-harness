@@ -113,6 +113,8 @@ export function appendShot(row, { dir = pvpDirFor() } = {}) { return appendSide(
 export function appendFightMessage(row, { dir = pvpDirFor() } = {}) { return appendSide('messages', row, dir); }
 /** One thing a body SENT during a PvP window — a swing, a cast, a gear change — or a map change (m59-pvp-telemetry.mjs). Never throws. */
 export function appendAction(row, { dir = pvpDirFor() } = {}) { return appendSide('actions', row, dir); }
+/** One loud-PvP callout (m59-pvp-callout.mjs): who said what to whom. Also the fleet-wide chorus count. Never throws. */
+export function appendCallout(row, { dir = pvpDirFor() } = {}) { return appendSide('callouts', row, dir); }
 
 /** Shot rows between two times, oldest first. */
 export function readShots({ dir = pvpDirFor(), since = 0, until = Date.now() } = {}) {

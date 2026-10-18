@@ -1022,7 +1022,7 @@ export class M59Client {
   //
   // Every one of these refusals arrives as prose, not as an error, so the only
   // way to know a line was actually said is to watch for the SAID echo.
-  say(text, type = 1)   { this.send(BP.SAY_TO, u8b(type), pstr(text)); }
+  say(text, type = 1)   { this.send(BP.SAY_TO, u8b(type), pstr(text)); this.tapSent?.('say', { text: String(text), say_type: ({ 1: 'say', 2: 'yell', 3: 'broadcast' })[type] ?? String(type) }); }
   yell(text)            { this.say(text, 2); }
   broadcast(text)       { this.say(text, 3); }
   emote(text)           { this.say(text, 6); }

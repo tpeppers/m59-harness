@@ -7218,6 +7218,7 @@ const TOOLS = [
       target: { type: 'string' }, room: { type: ['string', 'integer'], description: 'Assigned map: select units already there, then remain there' },
       rooms: { type: 'array', items: { type: ['string', 'integer'] }, description: 'Standing farm watch maps; all automated recipients watch while farming normally, including later arrivals' },
       when_absent: { enum: ['wait', 'farm'], description: 'farm installs a durable passive watch; normal behavior until same-map visibility, and recovery automatically rearms it' },
+      loud: { type: 'boolean', description: 'LOUD PVP (default true): each unit says a callout line when a hostile player enters its map. false keeps the order quiet' },
       agents: { type: 'array', items: { type: 'string' } }, command_id: { type: 'string' },
       map: { type: 'integer' }, position: { type: 'object' }, door: { type: 'object' },
       ttl_ms: { type: 'integer' }, stop_below: { type: 'number' },
@@ -7237,6 +7238,7 @@ const TOOLS = [
       fleet_state: { type: 'string', description: 'Expected absolute roster path; mismatches refuse before dispatch' },
       target: { type: ['string', 'number'], description: 'Exact player name; visible object id for attack only' },
       when_absent: { enum: ['wait', 'farm'] },
+      loud: { type: 'boolean', description: 'LOUD PVP (default true): say a callout line when a hostile player enters the map' },
       watch_maps: { type: 'array', items: { type: 'integer' }, description: 'Assigned maps for a standing farm watch' },
       map: { type: 'integer', description: 'Stable map number, e.g. 38' },
       position: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' } }, required: ['row', 'col'] },
@@ -12353,6 +12355,11 @@ const TOOLS = [
           'walks 38 and 39 to room 2, which is monster-free and NOT player-safe. A refuge outside ' +
           'this list is refused and the character takes a local wall instead. Empty or null ' +
           'restores the ordinary search.' },
+      pvp_loud: { type: 'boolean',
+        description: 'LOUD PVP: when a hostile player (war book or server enemy mark) enters this ' +
+          'character\'s map, say a random line out loud from substrate/pvp-callouts.json ({enemy} is ' +
+          'their name). At most two loud characters speak to one arrival, fleet-wide. What is said, and ' +
+          'what is heard in the minute after, goes into the PvP record with the quotes. Default false.' },
       pvp_rooms: { type: ['array', 'null'], items: { type: 'integer', minimum: 1 },
         description: 'the MAP room numbers (room.num, never object ids) where this character may ' +
           'fight a PLAYER at all. Set and non-empty, it does NOT return fire after a player hit, ' +
@@ -13052,6 +13059,10 @@ const TOOLS = [
       // that dropped a typo would leave the character fighting where the operator said not to,
       // so a non-integer throws, naming the key. null or [] clears it (every room).
       if (a.pvp_rooms !== undefined) p.policy.pvpRooms = validatePvpRooms(a.pvp_rooms);
+      if (a.pvp_loud !== undefined) {
+        if (typeof a.pvp_loud !== 'boolean') throw new Error('pvp_loud must be true or false');
+        p.policy.pvpLoud = a.pvp_loud;
+      }
       // AN UNRECOGNISED KEY IS REFUSED, NEVER DROPPED. `purpose` sat outside a schema for a
       // year with every keeper's audit switched off because a setting that silently does
       // nothing reads exactly like one that works — so a typo here is an error with the

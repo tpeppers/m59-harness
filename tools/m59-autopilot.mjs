@@ -2134,6 +2134,9 @@ export class Autopilot {
       // (m59-pvp-rooms.mjs; operator, 2026-10-11: "stop people from fighting back outside of
       // 599/2/38"). A key HERE for the same reason as pvpReturnDelayMs above.
       pvpRooms: null,
+      // LOUD PVP (m59-pvp-callout.mjs): say a line out loud when a hostile player enters our map, from
+      // substrate/pvp-callouts.json. Off by default -- silence is the behaviour that was already there.
+      pvpLoud: false,
       // TRAIN A TOUCH SPELL BY SWINGING IT — 'acid touch', 'touch of flame', 'holy touch',
       // 'icy fingers', 'zap', or null (inert). On the assigned farm room in farm mode the keeper
       // keeps the hand EMPTY (a wielded weapon suppresses the touch, player.kod:4712-4729) and the
@@ -13140,6 +13143,7 @@ export class Autopilot {
       pvp_rooms: { rooms: pvpRoomsOf(this.policy),
         room: this.s?.world?.room?.num ?? null,
         allowed_here: pvpAllowedHere(this.policy, this.s?.world?.room?.num) },
+      pvp_loud: this.policy?.pvpLoud === true,
       // THE TOUCH SPELL BEING TRAINED, and whether the server last said it was on. Null when
       // touch_spell is unset. `blocked_reason` is why it is not being cast (mana, reagents, an
       // unknown spell) while the character fights bare.

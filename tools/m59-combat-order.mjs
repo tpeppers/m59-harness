@@ -22,6 +22,7 @@ export function parseCombatCLI(argv) {
   const options = {}, words = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--check') { options.action = 'ready'; continue; }
+    if (argv[i] === '--quiet') { options.quiet = true; continue; }   // no loud-PvP callouts (m59-pvp-callout.mjs)
     if (argv[i].startsWith('--')) {
       const key = argv[i].slice(2);
       if (!['fleet', 'room', 'maps', 'when-absent', 'agents', 'command-id', 'ttl'].includes(key) ||
@@ -33,14 +34,15 @@ export function parseCombatCLI(argv) {
   const phrase = words.join(' ').trim(), match = /^(kill|attack) +(.+)$/i.exec(phrase);
   const action = options.action ?? match?.[1].toLowerCase() ?? phrase.toLowerCase();
   if (!['kill', 'attack', 'ready', 'status', 'stop'].includes(action) ||
-      (options.action && phrase)) throw Error('usage: m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name" | --check | status|stop [--command-id ID]');
+      (options.action && phrase)) throw Error('usage: m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name" [--quiet] | --check | status|stop [--command-id ID]');
   return { action, ...(match ? { target: match[2] } : {}),
     ...(options.room ? { room: options.room } : {}),
     ...(options.maps ? { rooms: options.maps.split(',').map(Number) } : {}),
     ...(options['when-absent'] ? { when_absent: options['when-absent'] } : {}),
     ...(options.agents ? { agents: options.agents.split(',') } : {}),
     ...(options['command-id'] ? { command_id: options['command-id'] } : {}),
-    ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}) };
+    ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}),
+    ...(options.quiet ? { loud: false } : {}) };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

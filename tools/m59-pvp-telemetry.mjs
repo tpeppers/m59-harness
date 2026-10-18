@@ -149,7 +149,8 @@ export function battleTelemetry(battle, { actions = [], messages = [], taunts = 
     (ours.has(norm(r.observer)) || (r.room != null && rooms.has(r.room)) || (r.loc?.map != null && rooms.has(r.loc.map)) ||
      (r.verb === 'traverse' && (rooms.has(r.from) || rooms.has(r.to))));
   const acts = actions.filter(inBattle).sort((a, b) => a.at - b.at);
-  const heard = messages.filter(inBattle).map(m => ({ ...m, ...classifyMessage(m.text) })).sort((a, b) => a.at - b.at);
+  // Speech (kind 'said', m59-pvp-callout.mjs) is chat, never a game sentence: it is not classified.
+  const heard = messages.filter(inBattle).map(m => ({ ...m, ...(m.kind === 'said' ? { cls: 'chat' } : classifyMessage(m.text)) })).sort((a, b) => a.at - b.at);
 
   // Every cast, joined to its reply. A fight from before the actions file existed still has its
   // opener's `opener_cast` milestone, written in the same tick the cast packet went out, so those
@@ -172,11 +173,12 @@ export function battleTelemetry(battle, { actions = [], messages = [], taunts = 
   }
   // Per character: what it sent, and what came of it.
   const per = new Map();
-  const me = n => { const k = norm(n); if (!per.has(k)) per.set(k, { name: n, attacks: 0, vetoed: 0, casts: 0, landed: 0, wasted: 0, failed: 0, no_reply: 0, gear: 0, gear_broken: 0, maps: [], spells: {} }); return per.get(k); };
+  const me = n => { const k = norm(n); if (!per.has(k)) per.set(k, { name: n, attacks: 0, vetoed: 0, casts: 0, landed: 0, wasted: 0, failed: 0, no_reply: 0, gear: 0, gear_broken: 0, said: 0, callouts: 0, maps: [], spells: {} }); return per.get(k); };
   for (const a of acts) {
     const p = me(a.observer);
     if (a.verb === 'attack') { p.attacks++; if (a.vetoed) p.vetoed++; }
     if (a.verb === 'use' || a.verb === 'unuse') p.gear++;
+    if (a.verb === 'say') { p.said++; if (a.callout) p.callouts++; }
     if (a.verb === 'traverse' && a.to != null && p.maps.at(-1) !== a.to) { if (!p.maps.length && a.from != null) p.maps.push(a.from); p.maps.push(a.to); }
     if (a.loc?.map != null && !p.maps.length) p.maps.push(a.loc.map);
   }
@@ -199,8 +201,17 @@ export function battleTelemetry(battle, { actions = [], messages = [], taunts = 
   // A third-person line is heard by everyone in the room; the timeline keeps it once.
   const seen = new Map();
   const lines = [];
+  const saidBy = acts.filter(a => a.verb === 'say');
   for (const m of heard) {
     if (m.cls === 'death') continue;            // the battle already has its deaths
+    if (m.cls === 'chat') {
+      // One of ours, heard saying what its own action row already says: the echo, not a second line.
+      if (saidBy.some(a => norm(a.observer) === norm(m.speaker) && a.text === m.text && Math.abs(m.at - a.at) <= 3000)) continue;
+      const k = `said|${norm(m.speaker)}|${m.text}`, twin = seen.get(k);
+      if (twin && m.at - twin.at <= 1500) { if (!twin.heard_by.includes(m.observer)) twin.heard_by.push(m.observer); continue; }
+      const row = { ...m, heard_by: [m.observer] };
+      seen.set(k, row); lines.push(row); continue;
+    }
     const third = m.cls === 'cast_seen' || (m.cls === 'other' && !/\b(you|your|yours)\b/i.test(m.text));
     const key = third ? m.text : null;
     const twin = key ? seen.get(key) : null;
@@ -214,6 +225,10 @@ export function battleTelemetry(battle, { actions = [], messages = [], taunts = 
     actions: [...acts, ...sent.filter(a => a.inferred)].sort((a, b) => a.at - b.at), casts, messages: lines,
     characters: [...per.values()].sort((a, b) => a.name.localeCompare(b.name)),
     traversals: acts.filter(a => a.verb === 'traverse'),
+    // Every word said: ours (action rows, callouts marked) and theirs (heard), in time order.
+    speech: [...saidBy.map(a => ({ at: a.at, speaker: a.observer, ours: true, say_type: a.say_type ?? 'say', text: a.text ?? '', room: a.room ?? null, callout: a.callout ?? null })),
+      ...lines.filter(m => m.cls === 'chat').map(m => ({ at: m.at, speaker: m.speaker, ours: false, say_type: m.say_type ?? 'say', text: m.text, room: m.room ?? null, heard_by: m.heard_by }))]
+      .sort((a, b) => a.at - b.at),
     taunt: taunt ? { at: taunt.at, character: taunt.spoke?.character ?? null, line: taunt.spoke?.line ?? null,
       why: taunt.spoke?.why ?? null, killer: taunt.killer ?? null, tried: taunt.tried ?? [] } : null,
   };
@@ -233,6 +248,8 @@ export function describeAction(a) {
     case 'unuse': return `${a.observer} takes off ${a.item_name ?? `#${a.item}`}${where}${tail}`;
     case 'apply': return `${a.observer} applies ${a.item_name ?? `#${a.item}`}${tgt}${where}${tail}`;
     case 'activate': return `${a.observer} activates ${a.item_name ?? `#${a.item}`}${where}${tail}`;
+    case 'say': return `${a.observer} ${a.say_type === 'yell' ? 'yells' : a.say_type === 'broadcast' ? 'broadcasts' : 'says'} "${a.text ?? ''}"` +
+      `${a.callout ? ` (callout: ${a.callout.player} entered the map${a.callout.basis ? `, ${a.callout.basis}` : ''})` : ''}${where}`;
     case 'traverse': return `${a.observer} crosses map ${a.from ?? '?'} → ${a.to ?? '?'}${a.loc ? ` arriving @ ${locText(a.loc)}` : ''}`;
     default: return `${a.observer} ${a.verb}${where}`;
   }
@@ -290,6 +307,7 @@ export function battleText(b, { describeEvent = e => `${e.kind} ${e.event ?? ''}
     const off = ((e.at - t0) / 1000).toFixed(3);
     const ts = new Date(e.at).toISOString().slice(11, 23);
     const body = e.kind === 'action' ? describeAction(e)
+      : e.kind === 'heard' && e.cls === 'chat' ? `${e.speaker ?? '?'} ${e.say_type === 'yell' ? 'yells' : e.say_type === 'broadcast' ? 'broadcasts' : 'says'} "${e.text}"  (heard by ${e.heard_by?.join(', ') ?? e.observer})`
       : e.kind === 'heard' ? `${e.heard_by?.length > 1 ? `${e.heard_by.length} hear` : `${e.observer} hears`}: ${e.text}${e.cls !== 'other' ? `  [${e.cls}]` : ''}`
       : e.kind === 'taunt' ? `📣 ${e.character} broadcasts "${e.line}" (${e.why})`
       : describeEvent(e);

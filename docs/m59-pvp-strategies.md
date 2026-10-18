@@ -87,6 +87,27 @@ and is null when nobody has heard that player hurt in the last two minutes.
 - It cannot say anything to anybody: no speech verb, by the playbook's rule that text on a shared server must
   be a literal somebody chose.
 
+## Loud PvP: a line said out loud when a hostile arrives
+
+Operator, 2026-10-18: *"randomized (said outloud, via say) PVP-activation phrases ... used when a hostile target
+enters the same map as a LOUD PVP target ... a mode that characters can choose to enable and when enabling PVP
+mode, and anything said, quotes should always be included in PvP logs."* `tools/m59-pvp-callout.mjs`; not a
+strategy decision (a strategy still has no speech verb), a mode of the character:
+
+- **On:** policy `pvp_loud: true` (`autopilot start|set`), or a `combat` / `combat_order` that does not say
+  `loud: false` (orders are loud by default; `m59-combat-order.mjs ... --quiet` sends one quiet). Off by default.
+- **When:** a player the war book or the server marks hostile, or the player a combat order names, who was not in
+  the map at the keeper's previous scan nor in the 2 minutes before it. One line per character per arrival after a
+  random pause of up to 1.5 s, and at most **two** loud characters per arrival fleet-wide, counted through
+  `substrate/pvp/<fleet>/callouts-<day>.jsonl` (also the record of every callout). Not in a keeper's first 15 s.
+- **What:** `substrate/pvp-callouts.json` (gitignored; `{ "lines": [...] }`, `{enemy}` and `{me}` filled in),
+  else the generic `substrate/pvp-callouts.example.json`. Re-read when it changes. Lines recently used by anyone
+  in the fleet are avoided.
+- **The record:** every `say` the body sends in a PvP window or in the minute after a hostile arrived is an
+  `actions` row with `text` and `say_type` (and `callout` for a callout); speech HEARD in that time is a
+  `messages` row of kind `said` with the `speaker`. `m59-pvp.mjs --battle` and the /pvp page print both in
+  quotes, drop our own echo, keep a line heard by many once, and list "What was said" per battle.
+
 ## Reading what it did
 
 the keeper's `/state` (and `/action status`) → `combat.pvp_strategy`: the loaded strategy and file, its last decision, the flight

@@ -84,8 +84,12 @@ function describeBase(e) {
   }
   if (e.kind === 'action') {
     const cls = e.verb === 'cast' ? (e.outcome === 'spell_landed' || e.outcome === 'spell_cast' ? 'good' : e.outcome ? 'bad' : '')
-      : e.verb === 'traverse' ? 'map' : e.verb === 'attack' ? 'dim' : '';
+      : e.verb === 'traverse' ? 'map' : e.verb === 'attack' ? 'dim' : e.verb === 'say' ? 'said' : '';
     return `<span class="${cls}">${esc(describeAction(e))}</span>`;
+  }
+  if (e.kind === 'heard' && e.cls === 'chat') {
+    const verb = e.say_type === 'yell' ? 'yells' : e.say_type === 'broadcast' ? 'broadcasts' : 'says';
+    return `<b>${esc(e.speaker ?? '?')}</b> ${verb} <span class="said">“${esc(e.text)}”</span> <span class="dim">· heard by ${esc((e.heard_by ?? [e.observer]).join(', '))}</span>`;
   }
   if (e.kind === 'heard') {
     const cls = /landed|upkeep/.test(e.cls) ? 'good' : /^spell_|gear_broken|refused|cant_see/.test(e.cls) ? 'bad' : 'dim';
@@ -157,6 +161,9 @@ function battleHtml(b, i) {
   }</tbody></table>` : '';
   const taunt = tm?.taunt?.line ? `<p class="taunt">📣 <b>${esc(tm.taunt.character)}</b>: “${esc(tm.taunt.line)}” <span class="dim">· ${esc(tm.taunt.why ?? '')}${tm.taunt.killer ? ` · last kill ${esc(tm.taunt.killer)}` : ''}</span></p>`
     : tm?.taunt ? `<p class="taunt dim">No victory taunt went out (last kill ${esc(tm.taunt.killer ?? '?')}).</p>` : '';
+  // EVERYTHING SAID, in quotes: ours (callouts marked) and theirs.
+  const said = tm?.speech?.length ? `<div class="speech"><b>What was said</b><ul>${tm.speech.map(x =>
+    `<li><span class="dim">${esc(utc(x.at).slice(11, 19))}${x.room != null ? ` m${esc(x.room)}` : ''}</span> <b>${esc(x.speaker ?? '?')}</b>${x.ours ? '' : ' <span class="bad">(them)</span>'}: <span class="said">“${esc(x.text)}”</span>${x.callout ? ` <span class="dim">· callout as ${esc(x.callout.player)} arrived</span>` : ''}</li>`).join('')}</ul></div>` : '';
   return `<section class="panel battle" id="${esc(b.id)}">
     <div class="bhead">
       <span class="badge" style="background:${colour}">${esc(label)}</span>
@@ -177,6 +184,7 @@ function battleHtml(b, i) {
     ${rec?.title ? `<p class="rtitle">${esc(rec.title)}</p>` : ''}
     ${rec?.scene ? sceneSvg(rec.scene) : ''}
     ${taunt}
+    ${said}
     ${b.ours.length ? `<table class="ours"><thead><tr><th>Ours</th><th>Kills</th><th>Deaths</th><th>Volleys</th><th>Refused</th><th>Hits</th><th>Hit by</th></tr></thead><tbody>${oursRows}</tbody></table>` : ''}
     ${did}
     ${rec ? `<div class="caveat"><b>What this was rebuilt from.</b> ${esc(rec.provenance ?? '')}${rec.notes?.length ? `<ul>${rec.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}</div>` : ''}
@@ -221,6 +229,8 @@ export function renderPvp({ days = 7, gapMs = DEFAULT_GAP_MS, characters = null,
   table.tl tr.ctx td { opacity:.6; }
   table.tl .map { color:var(--accent); font-weight:600; }
   .taunt { margin:.3rem 0 .5rem; }
+  .said { font-style: italic; }
+  .speech ul { margin:.2rem 0 .5rem; padding-left:1.1rem; }
   .scene { margin:.4rem 0 .8rem; overflow-x:auto; }
   .scene .sq { fill:none; stroke:var(--line); }
   .scene .path { stroke:var(--bad); stroke-dasharray:4 3; stroke-width:1.5; }

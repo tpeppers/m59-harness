@@ -29,6 +29,7 @@ import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
 import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS } from './m59-pvp-strategy.mjs';
 import { recordGroan, latestHealth } from './m59-player-health.mjs';
+import * as callout from './m59-pvp-callout.mjs';
 // A strategy flight that did not land waits this long before another may start.
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
@@ -89,7 +90,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff', 'loud']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -135,8 +136,11 @@ export function normalizeCombatOrder(input) {
   });
   demand(actions.some(s => s.do !== 'wait'), 'sequence must contain an attack or cast');
   demand(input.repeat == null || typeof input.repeat === 'boolean', 'repeat must be boolean');
+  // LOUD by default (operator, 2026-10-18: "we want all actual engaging PVP targets to be loud for now"):
+  // a callout when a hostile enters the map (m59-pvp-callout.mjs). `loud: false` keeps an order quiet.
+  demand(input.loud == null || typeof input.loud === 'boolean', 'loud must be boolean');
   const order = { action: input.action, target: typeof input.target === 'string' ? input.target.trim() : input.target,
-    ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true,
+    ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true, loud: input.loud ?? true,
     // A WARBAND ORDER follows the swarm leader's target, which may be a monster: it names an
     // object id and is the one kind of order allowed to target something that is not a player.
     ...(input.warband === true && Number.isSafeInteger(input.target) ? { warband: true } : {}),
@@ -265,6 +269,8 @@ export class CombatMode {
     this.active = null; this.last = null; this.timer = null;
     this.revision = 0; this.cancelled = new Set(); this.safetyLease = null; this.safetyRequest = null;
     this.watch = null;
+    this.calloutPresent = new Map(); this.calloutSeen = new Map(); this.calloutBornAt = this.now();
+    this.calloutCtx = null; this.pvpSpeechUntil = 0;
     this.lastPvP = null;
     // THE WAR RESPONSE is off until the owning process says otherwise (`warEligibility`). The
     // keeper process wires it; a broker in-process session and every test that does not ask
@@ -408,6 +414,7 @@ export class CombatMode {
       if (!(o.flags & OF.GUILDMATE) && war.needsLook(name, { now })) unknown.push({ o, name });
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
+    this.noteCalloutArrivals(c, seen, room, now);
     // THE STRATEGY SEES EVERY STRANGER, hostile or not (m59-pvp-strategy.mjs `player_seen`): a flight
     // ends the scan here; an `engage` lifts this room's pvp_rooms refusal for the scan just below.
     if (this.sortie?.phase === 'posted' && this.sortie.room === room && seen.some(p => p.verdict?.hostile))
@@ -431,6 +438,78 @@ export class CombatMode {
       this.raiseWarAlarm(hostile.name, 'sighted', room);
     }
     if (unknown.length && war.enemyGuilds().length) this.lookForGuild(c, unknown, ours, now);
+  }
+
+  // LOUD PVP (m59-pvp-callout.mjs). A hostile player -- or the one a combat order names -- who was not in
+  // this map at the previous scan, and not for ARRIVAL_GAP_MS before that, has ARRIVED. Any arrival opens
+  // the speech window (what is said for the next minute goes to the PvP record, ours and theirs); a loud
+  // character also says a line, after a short random pause and inside the fleet-wide chorus cap.
+  noteCalloutArrivals(c, seen, room, now = this.now()) {
+    try {
+      const orderTarget = String(this.active?.order?.target ?? this.watch?.order?.target ?? '').toLowerCase();
+      const here = new Set();
+      for (const p of seen) {
+        const key = String(p.name).toLowerCase();
+        if (!(p.verdict?.hostile || (orderTarget && key === orderTarget))) continue;
+        here.add(key);
+        const was = this.calloutPresent.get(room)?.has(key);
+        const last = this.calloutSeen.get(`${room}|${key}`);
+        this.calloutSeen.set(`${room}|${key}`, now);
+        if (was || (last != null && now - last < callout.ARRIVAL_GAP_MS)) continue;
+        this.pvpSpeechUntil = Math.max(this.pvpSpeechUntil, Date.now() + 60_000);
+        if (now - this.calloutBornAt < callout.STARTUP_QUIET_MS || !this.isLoud()) continue;
+        const pause = Math.floor(Math.random() * callout.MAX_PAUSE_MS);
+        const basis = p.verdict?.hostile ? p.verdict.basis ?? 'hostile' : 'combat order';
+        this.schedule(() => this.sayCallout(p.name, room, basis), pause);
+      }
+      this.calloutPresent.set(room, here);
+      if (this.calloutPresent.size > 64) this.calloutPresent.clear();
+      if (this.calloutSeen.size > 512) this.calloutSeen.clear();
+    } catch { /* a callout never stops a scan */ }
+  }
+
+  /** Loud: the policy's `pvp_loud`, or a loud combat order (an order is loud unless it says otherwise). */
+  isLoud() {
+    const order = this.active?.order ?? this.watch?.order ?? null;
+    if (order && order.loud != null) return order.loud === true;
+    return this.keeper?.()?.policy?.pvpLoud === true;
+  }
+
+  sayCallout(name, room, basis) {
+    try {
+      const c = this.s.client, s = this.s;
+      if (!s.live || !c?.self || s.world?.room?.num !== room || c.vitals?.()?.health?.value === 0) return;
+      const present = [...(c.room?.objects?.values?.() ?? [])].some(o => (o.flags & OF.PLAYER) &&
+        String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase() === String(name).toLowerCase());
+      if (!present || typeof c.say !== 'function') return;
+      const me = this.pvpObserver(c);
+      const dir = pvplog.pvpDirFor();
+      const rows = callout.recentCallouts(dir, Date.now());
+      const v = callout.chorusVerdict(rows, { room, player: name, speaker: me, now: Date.now() });
+      if (!v.speak) { this.lastCallout = { at: Date.now(), player: name, room, skipped: v.why }; return; }
+      const { lines, file, error } = callout.loadCallouts();
+      const pick = callout.pickCallout(lines, { recent: rows.slice(-40).map(r => r.index), enemy: name, me });
+      if (!pick) { this.lastCallout = { at: Date.now(), player: name, room, skipped: error ?? 'no lines' }; return; }
+      const at = Date.now(), loc = this.pvpLoc(c);
+      pvplog.appendCallout({ kind: 'callout', at, speaker: me, player: name, room, loc, basis, index: pick.index,
+        text: pick.text, chorus: v.why, lines_file: file });
+      this.calloutCtx = { player: name, basis, index: pick.index, chorus: v.why };
+      try { c.say(pick.text); } finally { this.calloutCtx = null; }
+      this.lastCallout = { at, player: name, room, text: pick.text };
+      this.pvpSpeechUntil = Math.max(this.pvpSpeechUntil, at + 60_000);
+    } catch (e) { this.lastCallout = { at: Date.now(), player: name, room, error: e.message }; }
+  }
+
+  // SPEECH HEARD IN A PVP WINDOW, or in the minute after a hostile arrived: kind 'said', with the speaker.
+  // System prose goes through noteFightMessage; chat never did, so a fight's words were nowhere.
+  noteFightSaid(ev) {
+    try {
+      const now = Date.now();
+      if (!this.pvpLogging() || !(this.pvpWindow(now) || now < this.pvpSpeechUntil)) return;
+      pvplog.appendFightMessage({ kind: 'said', at: now, observer: this.pvpObserver(),
+        room: this.s.world?.room?.num ?? null, fight: this.active?.pvp?.decision_id ?? this.lastPvpFight ?? null,
+        speaker: ev.name ?? null, say_type: ev.type ?? null, text: String(ev.text ?? '') });
+    } catch { /* never stop the event loop for a log line */ }
   }
 
   lookForGuild(c, unknown, ours, now) {
@@ -1437,7 +1516,9 @@ export class CombatMode {
     try {
       if (client !== this.s.client) return;
       const now = a.at ?? Date.now();
-      if (!this.pvpWindow(now)) return;
+      // Anything SAID is kept through the speech window as well, and a callout always.
+      const speech = a.verb === 'say';
+      if (!this.pvpWindow(now) && !(speech && this.pvpLogging() && (this.calloutCtx || now < this.pvpSpeechUntil))) return;
       const o = this.active;
       const loc = this.pvpLoc(client);
       const objOf = id => id == null ? null : client.room?.objects?.get?.(id) ?? (client.inventory ?? []).find(i => i.id === id) ?? null;
@@ -1454,6 +1535,7 @@ export class CombatMode {
         ...(targetId != null ? { target: targetId, target_name: targetId === client.selfId ? 'self' : nameOf(tObj),
           target_player: tObj ? !!(tObj.flags & OF.PLAYER) : null, target_loc: tLoc, dist: squaresBetween(loc, tLoc) } : {}),
         ...(a.vetoed ? { vetoed: true } : {}),
+        ...(speech ? { text: a.text ?? '', say_type: a.say_type ?? null, ...(this.calloutCtx ? { callout: { ...this.calloutCtx } } : {}) } : {}),
         ...(mana ? { mana: mana.value ?? null, max_mana: mana.max ?? null } : {}),
         ...(rite ? { rite } : {}),
         phase: o?.phase ?? null, intent: o ? [o.order?.action, o.order?.target].filter(Boolean).join(' ') || null : null,
@@ -2432,6 +2514,7 @@ export class CombatMode {
     if (ev.kind === 'groan') { try { this.observeGroan(ev, client); } catch { /* evidence only */ } }
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
+    if (ev.kind === 'said') this.noteFightSaid(ev);
     if (ev.kind === 'message' && ev.text) this.noteFightMessage(ev.text);
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);

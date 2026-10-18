@@ -1121,6 +1121,13 @@ the records it describes.
   an action row only inside a PvP window, and that an enemy's rendered look is kept once per fight and on
   every change while a fleetmate's never is, and what ours picked up is kept for two minutes after an enemy
   died and not otherwise),
+  `node tools/m59-pvp-callout-test.mjs` (13 — **loud PvP**: that a loud character says one line, `{enemy}`
+  filled, when a hostile arrives, and the actions row carries the quote, the callout and the location stamp;
+  that a hostile still present, or back inside two minutes, is not a new arrival; that a quiet policy, a
+  `loud: false` order, a non-hostile stranger and a keeper just started stay silent while a loud order's
+  target counts as hostile; that a third loud keeper is held back by the fleet-wide chorus of two; that speech
+  heard in the minute after an arrival is kept with its speaker; and that the battle text quotes ours and
+  theirs, drops our echo and keeps a line heard by many once),
   `node tools/m59-victory-taunt-test.mjs` (33 — **who broadcasts after a won battle**: that the LAST
   kill names the speaker, that a killer who is human-piloted, has no lines or cannot afford the
   broadcast hands over to the strongest who can, that a mana refusal in prose tries the next, that an
