@@ -45,6 +45,8 @@ import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { isPvpOnly } from './m59-pvp-gear.mjs';
 import { floorSnapshot } from './m59-loot-filter.mjs';
+import { killDropItems } from './m59-killdrop.mjs';
+import { recordEvent } from './m59-ledger.mjs';
 import { withMoveOrder, keeperOrigin } from './m59-move-origin.mjs';
 import { planRecoveryApproach } from './m59-fine-refuge-reach.mjs';
 
@@ -3149,6 +3151,23 @@ async function fightWithIntent(s, {
     out.looted = l.taken;
     out.refused = l.refused?.length ? l.refused : undefined;
     out.carrying = l.carrying;
+  } else if (!(foe.flags & OF.PLAYER)) {
+    // A KILL THAT DID NOT LOOT STILL DROPPED SOMETHING — a blocker cleared mid-journey, a
+    // provoked lure. lootFloor writes `kill_drop` for the kills that loot; this is the same row
+    // for the ones that do not, read off the room cache, every item left. A later sweep that
+    // picks one up still counts: m59-lootfate.mjs matches `looted` by id.
+    try {
+      const floor = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && (o.flags & OF.GETTABLE))
+        .map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || null, amount: o.amount || 1,
+                     icon_rsc: o.iconRsc, unrevealed: isUnrevealed(o) }));
+      const items = killDropItems({ floor, before: floorBefore,
+        refused: floor.map(o => ({ id: o.id, why: 'NO LOOT PASS — this fight was told not to loot' })) });
+      if (items?.length) recordEvent(c.me?.name ?? s.name ?? null, 'kill_drop', {
+        agent: s.name ?? undefined, creature: foeName, room: s.world?.room?.num ?? null,
+        items, count: items.length, taken: 0, loot: false,
+      });
+    } catch { /* bookkeeping must never interrupt play */ }
   }
   return out;
 }

@@ -2185,6 +2185,12 @@ export class M59Client {
                  && Date.now() - this.lastItemRequest.at <= REQUEST_BREADCRUMB_MS
                  ? this.lastItemRequest.verb : null,
           after_ms: this.lastItemRequest ? Date.now() - this.lastItemRequest.at : null,
+          // WHO WAS ACROSS THE TABLE. `accept_offer` is both a sale to a merchant and a hand-off
+          // to a fleet-mate, and only the counterparty tells them apart (m59-lootfate.mjs). The
+          // trade can end a moment before its removes arrive, so the one just closed counts too.
+          to: this.trade?.withName
+              ?? (this.lastTradeWith && Date.now() - this.lastTradeWith.at <= 10_000
+                  ? this.lastTradeWith.name : null),
         });
         break;
       }
@@ -2430,6 +2436,7 @@ export class M59Client {
       // inventory to find out which.
       case BP.OFFER_CANCELED: {
         const was = this.trade;
+        if (was?.withName) this.lastTradeWith = { name: was.withName, at: Date.now() };
         this.tradeRevision++;
         this.trade = null;
         this.pendingOfferTo = null;

@@ -95,6 +95,7 @@ import * as exitgap from './m59-exitgap.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
+import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 import { moveOrigin, originLabel, recordMovementCancel, describePreemption, installMoveOrders } from './m59-move-origin.mjs';
@@ -1890,6 +1891,9 @@ class Session {
         // worth reading: the item left and we had requested nothing that could explain it.
         after: ev.after ?? null,
         after_ms: ev.after_ms ?? null,
+        // The trade's counterparty, when one was open: a merchant's name is a sale, a
+        // fleet-mate's is a hand-off. Omitted when no trade was involved.
+        ...(ev.to ? { to: ev.to } : {}),
         // False means it was not in the inventory we were holding — a stale id, or a pack
         // we had never read. Still evidence something left; just not evidence of what.
         known: ev.known !== false,
@@ -4957,6 +4961,11 @@ class Session {
     const manhattan = o => Math.abs(o.col - me0.col) + Math.abs(o.row - me0.row);
 
     let cands = [...c.room.objects.values()].filter(o => o.id !== c.selfId && (o.flags & OF.GETTABLE));
+    // The whole floor, before any filter, for the `kill_drop` row below (m59-killdrop.mjs).
+    const floorSeen = kill?.before instanceof Set
+      ? cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || null, amount: o.amount || 1,
+                          icon_rsc: o.iconRsc, unrevealed: skills.isUnrevealed(o) }))
+      : null;
 
     // NEVER PICK THESE UP.
     //
@@ -5241,7 +5250,7 @@ class Session {
       });
       const ev = await c.waitFor({ since: before, kinds: ['got', 'message', 'vanished'], timeoutMs: 3000 });
       const got = ev.events.find(e => e.kind === 'got');
-      if (got) taken.push({ id: o.id, name, amount: o.amount || undefined });
+      if (got) taken.push({ id: o.id, name, amount: o.amount || undefined, icon_rsc: o.iconRsc });
       else refused.push({ id: o.id, name, why: ev.events.filter(e => e.text).map(e => e.text).join('; ') || 'no reply' });
     }
     setIntentTarget(this,null);
@@ -5300,10 +5309,28 @@ class Session {
           // (m59-world.mjs:493) and is the same idiom the hit book uses twelve hundred lines
           // up. If the map does not know the room this is null again, which is correct.
           room: this.world?.room?.num ?? null,
-          items: taken.map(t => ({ id: t.id, name: t.name, amount: t.amount })),
+          // icon_rsc names an unidentified item's class (m59-item-signature.mjs).
+          items: taken.map(t => ({ id: t.id, name: t.name, amount: t.amount, icon_rsc: t.icon_rsc })),
           count: taken.length,
         });
       } catch { /* a ledger write must never cost us the loot we just picked up */ }
+    }
+
+    // WHAT THIS KILL DROPPED, TAKEN OR NOT — the denominator `looted` cannot supply. Only after
+    // a kill (fight() hands us `kill.before`); a sweep of an old floor is not a drop.
+    if (floorSeen) {
+      try {
+        const items = killDropItems({ floor: floorSeen, before: kill.before, taken, refused,
+                                      cancelled: wasCancelled });
+        if (items?.length) recordEvent(c.me?.name ?? this.name ?? null, 'kill_drop', {
+          agent: this.name ?? undefined,
+          creature: kill.name ?? null,
+          room: this.world?.room?.num ?? null,
+          items,
+          count: items.length,
+          taken: items.filter(i => i.taken).length,
+        });
+      } catch { /* bookkeeping must never interrupt play */ }
     }
 
     // THE SIFT COUNTER IS WHAT MAKES `overfarm_percent` MEASURABLE, and it counts what the

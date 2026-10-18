@@ -152,6 +152,13 @@ through a nested shelter order.
   before the claim and every engage gate; a malformed order is refused; a name outside `hunt` is
   reported. Also the policy surfaces for BOTH new keys (`huntPriority`, `lootOnly`): default
   object, JSON round trip through the keeper's push merge, broker schema, setter and reflection.
+- `m59-lootfate-test.mjs` (30): what a kill dropped and what became of it. `killDropItems`
+  takes only what arrived during the fight, matches a name-only refusal (the cursed ring) to one
+  item and not every item of that name, and says "not attempted" rather than inventing a reason;
+  `lootFate` counts an id two kill rows claim once, follows it across hands (a sword handed to the
+  armourer and sold by him is SOLD), calls a stack merged rather than tracing it, and splits
+  unidentified rings by icon class under one name. With no `kill_drop` rows it lists pickups and
+  gives no share.
 - `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
   real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
