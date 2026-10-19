@@ -29,7 +29,7 @@ encounter; outside one it ages out after 30 seconds. Death/disconnect clears it.
 The snapshot is also available to PvP strategy facts and wand/opener hooks.
 
 A private combat strategy may implement `pvpFallback(ctx)`. Without one, the
-harness requests no potion inspections and uses no consumables. The hook sees
+harness requests no potion inspections and uses no potions through this queue. The hook sees
 `personal_threat`, `pvp`, `phase`, `reason`, `now`, `items`
 (`id/name/effect/harmful` for mechanically identified potions),
 `attempted_effects`, and observed personal `enchantments`.
@@ -70,6 +70,52 @@ packet alone does not prove consumption: `fallback_queue.history` records
 The final look/use race cannot be made atomic by this protocol.
 
 Offline checks: `node tools/m59-combat-fallback-test.mjs`.
+
+### Independent support consumables
+
+A private combat strategy can implement `pvpSupport(ctx)` for consumables whose
+server path is independent of the attack timer. Currently this accepts only
+exactly identified **wands of healing** applied to self or visible fleetmates.
+Without an enabled hook, no support inspection or application is requested.
+The context contains `now`, `agent`, `character`, `room`, `phase`, `pvp`,
+`personal_threat`, `items` (`id/name/kind`), and `targets`
+(`id/name/self/health:{value,max}/at`). Its closed answer is:
+
+```js
+{ queue: [{ apply: carriedHealingWandId, to: playerId, below: 0.9, min_missing: 10 }], interval_ms: 1000 }
+```
+
+Thresholds, target priority and interval belong to the private strategy.
+The harness validates the queue and rechecks its health limits immediately
+before sending. It refreshes inventory, obtains an exact charged-wand LOOK
+no older than 500ms, and rechecks connection, room, body, item and ID generation.
+Each charge needs a new inspection. Confirmed exhausted wands are excluded;
+unknown condition temporarily defers that item so another carried wand can run.
+
+Ally HP comes from its own socket's fleet-health report, matched by endpoint,
+character, room and current body ID; reports older than 1.5 seconds are skipped.
+Combat ticks continue publishing health while the ordinary keeper pass is
+suspended. Health changes publish immediately, including within the ordinary
+500ms heartbeat throttle. There is no estimate from groans or enemy observations.
+A shared recipient claim conserves charges when several keepers select the
+same injured player. A claimed or recovered recipient yields to later queue
+entries using the same inspected wand.
+
+Stock `HealWand` inherits `SpecialWand`, not `SpellItem`. It heals 2–10 HP with
+five initial charges; `ReqNewApply` requires a same-room User but does not test
+LOS, distance or facing. It does not read or set the shared attack timer.
+Healing therefore runs asynchronously alongside pursuit, attacks and the
+potion fallback queue, through the ordinary packet pacer. It neither turns
+toward the ally nor changes the offensive target. `UserApply` does break a
+spell trance, so both an active concentration hold and an active cast rite
+defer support. Normal room restrictions (including JIG rooms and arena watcher
+rules) can still refuse an attempt. Status `support_queue.history` records
+**sent**, never an inferred successful heal. Survival retains priority.
+
+Source: `kod/object/item/passitem/specwand/healwand.kod`, `specwand.kod`,
+`kod/object/active/holder/nomoveon/battler/player.kod` (`TryApplyItem`),
+`player/user.kod` (`UserApply`), and `kod/object/active/holder/room.kod`.
+Offline checks: `node tools/m59-combat-support-test.mjs`.
 
 ### Attack prerequisites and pursuit
 

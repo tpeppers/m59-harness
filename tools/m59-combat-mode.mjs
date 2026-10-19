@@ -21,6 +21,8 @@ import * as wandShot from './m59-wand-shot.mjs';
 import { Recorder } from './m59-recorder.mjs';
 import { PersonalThreat } from './m59-personal-threat.mjs';
 import { CombatFallback } from './m59-combat-fallback.mjs';
+import { CombatSupport } from './m59-combat-support.mjs';
+import { publishFleetHealth } from './m59-fleet-health.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import * as swarm from './m59-swarm-follow.mjs';
@@ -276,6 +278,7 @@ export class CombatMode {
     this.lastPvP = null;
     this.personalThreat = new PersonalThreat({ now: this.now });
     this.fallback = new CombatFallback(this);
+    this.support = new CombatSupport(this);
     // THE WAR RESPONSE is off until the owning process says otherwise (`warEligibility`). The
     // keeper process wires it; a broker in-process session and every test that does not ask
     // for it keep the behaviour that was already there.
@@ -300,7 +303,8 @@ export class CombatMode {
     const watch = this.watchStatus();
     const refused_targets = this.refusedStatus();
     const pvp_strategy = this.pvpStrategyStatus();
-    const personal = { personal_threat: this.personalThreatStatus(), fallback_queue: this.fallback.snapshot() };
+    const personal = { personal_threat: this.personalThreatStatus(), fallback_queue: this.fallback.snapshot(),
+      support_queue: this.support.snapshot() };
     if (!o) return { active: false, ...personal, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
       ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
@@ -2822,11 +2826,17 @@ export class CombatMode {
     // Validate even during a slow movement await. Stop/expiry does not wait for it.
     try { this.guard(o); this.refreshTarget(o); } catch (e) { this.combatFailure(o, e.message); return; }
     if (this.active !== o) { this.armTimer(); return; }
+    // The normal keeper pass is suspended in combat. Keep its observed HP
+    // available to fellow keepers even during a long movement await.
+    publishFleetHealth(this.s, { now: this.now() });
     const phaseRevision = o.phaseRevision;
-    if (o.fallbackReason) withBodyCommand(this.s, () => withPacketScope(kind => {
+    withBodyCommand(this.s, () => withPacketScope(kind => {
       demand(o.phaseRevision === phaseRevision, 'combat visibility changed');
       this.guard(o, kind);
-    }, () => this.fallback.offer(o, o.fallbackReason)), o.id);
+    }, () => {
+      this.support.offer(o);
+      if (o.fallbackReason) this.fallback.offer(o, o.fallbackReason);
+    }), o.id);
     if (o.running?.revision === phaseRevision) { this.armTimer(); return; }
     // A stale shelter mover may still be unwinding an await. Its packets were
     // revoked; the new combat phase must not wait for its completion/heartbeat.

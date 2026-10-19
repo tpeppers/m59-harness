@@ -36,6 +36,7 @@ import {resolve} from 'node:path';
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
   ['m59-combat-fallback-test.mjs', 'personal threat and fresh potion fallbacks preserve pursuit, primary attack priority and packet ownership'],
+  ['m59-combat-support-test.mjs', 'independent healing preserves pursuit, attack timers, spell trances and fresh fleet identity'],
   ['m59-movement-region-test.mjs','real client packet boundary refuses off-component falls, transport and unproved exits while stationary survival preempts trades'],
   ['m59-brax-logistics-test.mjs','each ledge side has a reversible exact public rail without an elevator or cross-ledge walk'],
   ['m59-survival-decision-test.mjs','real keeper recovery transitions, explicit protected handoffs, cancellation and replacement chains remain executable'],

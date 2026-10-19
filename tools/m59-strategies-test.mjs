@@ -124,6 +124,20 @@ write('fallback.mjs', `export default { name: 'fallback', kind: 'combat', enable
 }
 rmSync(join(dir, 'fallback.mjs'));
 
+write('support.mjs', `export default {
+  name: 'support', kind: 'combat', enabled: true,
+  pvpSupport() { return {queue:[{apply:7,to:2,below:.9,min_missing:10}],interval_ms:1000}; },
+};`);
+{
+  const loaded = await load({ dir });
+  ok('a combat strategy answering only pvpSupport loads without a warning',
+    loaded.strategies.some(s => s.name === 'support') && !loaded.problems.some(p => p.file === 'support.mjs'));
+  const got = await firstAnswer(loaded, 'pvpSupport', {});
+  ok('support has an independent hook instead of consuming a fallback attack slot',
+    got?.strategy === 'support' && got.answer.queue[0].apply === 7);
+}
+rmSync(join(dir, 'support.mjs'));
+
 // ---------------------------------------------------------------- unrecognised
 write('typo.mjs', `export default {
   name: 'typo', kind: 'travel', enabled: true,
