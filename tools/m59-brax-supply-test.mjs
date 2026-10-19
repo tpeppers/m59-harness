@@ -30,3 +30,8 @@ const laneFailure=new BraxSupplyService({actors,runner:'r',couriers:['a','b'],ca
 console.log('PASS an exchange failure cannot silently free an occupied ledge lane');
 
 assert.equal(braxCourierTarget('hammer',1,8),2,'a courier retaining its own hammer must buy another for the last unarmed farmer');assert.equal(braxCourierTarget('herb',2,80),7);assert.equal(braxCourierTarget('loaf of bread',1,48),5);
+
+// Object handles renumber on save; identity-fenced same character/PID is not a new life.
+reads=0;recoveryService.read=async()=>++reads===1?{...body,character:'Courier A'}:{...body,character:'Courier A',you:{id:8},room:{num:374}};await recoveryService.townTravel('a',374);
+reads=0;recoveryService.read=async()=>++reads===1?{...body,character:'Courier A'}:{...body,character:'Courier A',you:{id:8},room:{num:374},autopilot_status:{last_death:{at:Date.now()}}};await assert.rejects(recoveryService.townTravel('a',374),/body changed/);
+console.log('PASS a save handle change preserves the fenced courier identity; an observed death refuses');

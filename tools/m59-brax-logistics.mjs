@@ -7,6 +7,9 @@ import {queuedRoomExit} from './m59-queued-room-exit.mjs';
 import {regionContains,regionSegmentAllowed} from './m59-movement-region.mjs';
 import {coalesceCheckedRailLeg} from './m59-rail-coalesce.mjs';
 import {clientToProtocol} from './m59-finepos.mjs';
+import {currentCallOrigin} from './m59-fleetscript.mjs';
+import {activeOwnedFineRecovery,ownsFineRecovery,recoverIslandFineWalk} from './m59-island-finewalk.mjs';
+import {checkIslandCancellation,islandReadOwner} from './m59-island-observation.mjs';
 export const BRAX_LEDGE={room:578,farmer:{x:2352,y:2208},courier:{x:2256,y:2208},cavern:{x:3168,y:1760},road:{x:224,y:2336}};
 export function planLedgeRail(from,to,{role,geo=roomGeometry(578)}={}){
  const anchor=BRAX_LEDGE[role];if(!anchor||!regionContains(geo,anchor,from)||!regionContains(geo,anchor,to))throw Error('ledge endpoints outside role component');
@@ -24,12 +27,26 @@ export function planLedgeRail(from,to,{role,geo=roomGeometry(578)}={}){
  return{...short,waypoints:points};
 }
 export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObserver({fleet:ctx.fleet,agent:ctx.agent}),timeoutMs=480000}={}){
+ ctx={...ctx,origin:ctx.origin??currentCallOrigin()};
  if(!['farmer','courier'].includes(role)||!['out','back'].includes(direction))throw Error('invalid Brax service leg');
  const end=Date.now()+timeoutMs,events=[],event=e=>{events.push({at:Date.now(),...e});ctx.log?.(ctx.agent,JSON.stringify(e));};
  const read=async()=>{if(Date.now()>end)throw Error('Brax service leg deadline');const s=await observe();if(!(s.hp?.value>0)||s.room.num===1)throw Error('service actor died');return s;};
  const cross=async to=>{const r=await queuedRoomExit(ctx,to,{observe,characters:[(await read()).character],timeoutMs:Math.min(180000,end-Date.now())});event({kind:'service-exit',to,reply:r});if(!r.arrived)throw Error('service exit failed');};
  const road=async to=>{const before=await read();if(before.room.num===to)return;const r=await ctx.call('travel',{agent:ctx.agent,to,max_hops:8,run_errands:false,avoid:[579,826,827,828,829,830,831,832,833]},Math.max(1,end-Date.now()));event({kind:'courier-road',to,reply:r});if((await read()).room.num!==to)throw Error('courier road did not reach '+to);};
- const fine=async to=>{const s=await read();if(s.room.num!==578)throw Error('ledge rail requires578');const leg=planLedgeRail(s.you,to,{role});const r=await observe.action('walk_rail',{room:578,leg,bodyDetour:true,timeoutMs:Math.min(180000,end-Date.now()),origin:ctx.origin});event({kind:'service-rail',to,reply:r});const actual=await read();if(actual.room.num!==578||Math.hypot(actual.you.x-to.x,actual.you.y-to.y)>12||!regionContains(roomGeometry(578),BRAX_LEDGE[role],actual.you))throw Error('service stand not reached on correct component');};
+ const fine=async to=>{
+  const startedAt=Date.now();for(let attempt=0;attempt<8&&Date.now()<end;attempt++){
+   const s=await read();checkIslandCancellation(ctx,s);if(!islandReadOwner(ctx,s))throw Error('service rail owner changed');if(s.room.num!==578)throw Error('ledge rail requires578');
+   if(activeOwnedFineRecovery(ctx,s)){if(!await recoverIslandFineWalk(ctx,{deadline:end,read:async()=>({l:await observe()}),since:startedAt,initial:s,active:true}))throw Error('service rail recovery incomplete');continue;}
+   const leg=planLedgeRail(s.you,to,{role});let reply,error;
+   try{reply=await observe.action('walk_rail',{room:578,leg,bodyDetour:true,timeoutMs:Math.min(180000,end-Date.now()),origin:ctx.origin});}
+   catch(e){if(e.message!=='rail action refused: rail_position_confirmation_timeout'&&e.message!==`rail action refused: agent "${ctx.agent}" is not in game — call join first`)throw e;error=e;}
+   event({kind:'service-rail',to,reply,error:error?.message});const actual=await read();checkIslandCancellation(ctx,actual);if(!islandReadOwner(ctx,actual))throw Error('service rail owner changed');
+   if(actual.room.num===578&&Math.hypot(actual.you.x-to.x,actual.you.y-to.y)<=12&&regionContains(roomGeometry(578),BRAX_LEDGE[role],actual.you))return;
+   if(ownsFineRecovery(ctx,actual,{since:startedAt,active:true})){if(await recoverIslandFineWalk(ctx,{deadline:end,read:async()=>({l:await observe()}),since:startedAt,initial:actual,active:true})){event({kind:'service-owned-recovery-complete',attempt});continue;}}
+   if((error||reply?.operationEnded&&reply.reason==='position_confirmation_timeout')&&actual.room.num===578&&!actual.job?.busy&&!actual.movement?.order){event({kind:'service-known-ended-replan',attempt});continue;}
+   throw Object.assign(Error('service stand not reached on correct component'),{reply,error:error?.message,actual:{room:actual.room,num:actual.room.num,hp:actual.hp,you:actual.you}});
+  }throw Error('service rail deadline or bounded continuation budget');
+ };
  let s=await read();
  if(role==='farmer'){
   if(direction==='out'){if(s.room.num===827)await cross(826);s=await read();if(s.room.num===826)await cross(578);await fine(BRAX_LEDGE.farmer);}

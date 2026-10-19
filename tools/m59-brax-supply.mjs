@@ -58,7 +58,8 @@ export class BraxSupplyService{
   // The native keeper may retain and resume this exact objective after recovery.
   // Observe that owned journey; never send a second travel order on a timeout.
   for(;;){s=await this.read(agent);await this.event('town-travel-observed',{agent,to,result:r,room:s.room.num,job:s.job,suspended:s.autopilot_status?.suspended_journey});
-   if(s.you?.id!==before.you?.id||s.pid!==before.pid||!(s.hp?.value>0)||s.room.num===1)throw Error('courier body changed during town travel');
+   const renamedHandle=s.you?.id!==before.you?.id,stableCharacter=typeof before.character==='string'&&before.character.length>0&&s.character===before.character,newDeath=(s.autopilot_status?.last_death?.at??0)>(before.autopilot_status?.last_death?.at??0);
+   if(renamedHandle&&!stableCharacter||s.pid!==before.pid||newDeath||!(s.hp?.value>0)||s.room.num===1||Number.isFinite(before.hp?.max)&&s.hp.max<before.hp.max)throw Error('courier body changed during town travel');
    if(s.room.num===to)break;
    const a=s.autopilot_status??{},held=a.suspended_journey,move=s.movement?.order;
    const ownHeld=held?.to===to&&held.ordered_by===r.ordered_by,ownMove=move?.to===to&&move.ordered_by===r.ordered_by;
