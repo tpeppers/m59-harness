@@ -62,6 +62,66 @@
       },
       "why": "The other half of the south gap (see r88c21). This square's centre is the wall's own end cap, where no body fits.",
       "observed_by": "traceFineMoveClient, 2026-09-30"
+    },
+    {
+      "roo": "badland2.roo",
+      "room": 49,
+      "row": 20,
+      "col": 18,
+      "fine": {
+        "x": 18176,
+        "y": 19968
+      },
+      "why": "Kardde's Canyon (49) fence. Walls 230 and 123 run straight down the centre of column 18 (client x = c18+512) from the top of r20 to the top of r24, so r20c18-r23c18 have their centres ON a one-sided wall and belong to both sides. The west half is a sliver reached from r19c17/r20c17/r21c17 by sliding, and joins the rest only by the long loop through r11c12 and r21c10 (271 lattice steps to the 45 exit, against 20 from r24c19). The east half is the corridor to r24c19 and the Badlands exit at r27c20. 2026-10-18: Qor units from 547 were planned r19c17 > r20c18 > ... > r27c20 down the seam and refused (movement_deviation, slipped_off_rail, departure detour exceeds step budget) on 3 of 5 first tries. These points are on the east half, 256 client units clear of the fence, so a slide in from the west that stops on the sliver is refused.",
+      "observed_by": "traceFineMoveClient, 2026-10-18"
+    },
+    {
+      "roo": "badland2.roo",
+      "room": 49,
+      "row": 21,
+      "col": 18,
+      "fine": {
+        "x": 18176,
+        "y": 20992
+      },
+      "why": "Kardde's Canyon fence (see r20c18): the east half, the exit corridor.",
+      "observed_by": "traceFineMoveClient, 2026-10-18"
+    },
+    {
+      "roo": "badland2.roo",
+      "room": 49,
+      "row": 22,
+      "col": 18,
+      "fine": {
+        "x": 18176,
+        "y": 22016
+      },
+      "why": "Kardde's Canyon fence (see r20c18): the east half, the exit corridor.",
+      "observed_by": "traceFineMoveClient, 2026-10-18"
+    },
+    {
+      "roo": "badland2.roo",
+      "room": 49,
+      "row": 23,
+      "col": 18,
+      "fine": {
+        "x": 18176,
+        "y": 23040
+      },
+      "why": "Kardde's Canyon fence (see r20c18): the east half, the exit corridor.",
+      "observed_by": "traceFineMoveClient, 2026-10-18"
+    },
+    {
+      "roo": "badland2.roo",
+      "room": 49,
+      "row": 20,
+      "col": 19,
+      "fine": {
+        "x": 19168,
+        "y": 19840
+      },
+      "why": "Kardde's Canyon fence 221 runs diagonally from r19c19 (0,0) to r21c19 (768,256) and through this square's centre, so the centre belongs to both sides and the bake let r20c19 > r21c18 cross it. Every route from the north entrance (from 593) was planned straight down column 19 and through here, and walking it from where r19c19 > r20c19 actually lands stops at this edge. This point is on the column-19 side, 267 client units east of the fence, where a body arriving from the north is.",
+      "observed_by": "traceFineMoveClient, 2026-10-18"
     }
   ]
 }
