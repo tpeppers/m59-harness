@@ -5,18 +5,21 @@ import {railLeg} from './m59-noderails.mjs';
 import {protocolToClient,clientToProtocol} from './m59-finepos.mjs';
 import {blockingBodySnapshot,planBodyDetour} from './m59-body-detour.mjs';
 import {railBoarding,quantizeRailPoint} from './m59-railfollow.mjs';
-export function chooseCrowdClearanceStep(geo,objects,controlledIds,{exclude=new Set(),eligible=()=>true,avoidSquares=new Set()}={}){
+export function chooseCrowdClearanceStep(geo,objects,controlledIds,{exclude=new Set(),eligible=()=>true,avoidSquares=new Set(),clearance=28,acceptStep=()=>true}={}){
+ clearance=Math.max(28,Math.min(96,Number(clearance)||28));
+ const pressureRadius=Math.max(32,clearance);
  const all=[...objects.values()].filter(o=>Number.isFinite(o.x)&&Number.isFinite(o.y)),bodies=all.filter(o=>(o.flags&1)!==0);let best;
  for(const p of all){
   if(!controlledIds.has(p.id)||exclude.has(p.id)||!eligible(p))continue;
   const others=bodies.filter(o=>o.id!==p.id),clear=q=>Math.min(...others.map(o=>Math.hypot(o.x-q.x,o.y-q.y))),before=clear(p);
-  if(before>=28)continue;
-  const pressure=q=>others.reduce((sum,o)=>sum+Math.max(0,32-Math.hypot(o.x-q.x,o.y-q.y))**2,0),priorPressure=pressure(p);
+  if(before>=clearance)continue;
+  const pressure=q=>others.reduce((sum,o)=>sum+Math.max(0,pressureRadius-Math.hypot(o.x-q.x,o.y-q.y))**2,0),priorPressure=pressure(p);
   const from=protocolToClient(p),height=floorAt(geo,from.x,from.y),obstacles=blockingBodySnapshot(objects,p.id);
   if(!Number.isFinite(height))continue;
   for(const radius of [4,8,16,32,64])for(let i=0;i<32;i++){
    const target={x:Math.round(p.x+radius*Math.cos(i*Math.PI/16)),y:Math.round(p.y+radius*Math.sin(i*Math.PI/16))},point=protocolToClient(target),floor=floorAt(geo,point.x,point.y);
-   if(avoidSquares.has(Math.floor(target.y/64)+','+Math.floor(target.x/64))||!Number.isFinite(floor)||Math.abs(height-floor)>384)continue;
+   const row=Math.floor(target.y/64),col=Math.floor(target.x/64);
+   if(Number.isInteger(geo.rows)&&(row<1||row>geo.rows)||Number.isInteger(geo.cols)&&(col<1||col>geo.cols)||avoidSquares.has(row+','+col)||!acceptStep(p,target)||!Number.isFinite(floor)||Math.abs(height-floor)>384)continue;
    const after=clear(target);if(after<before+1||after<16||pressure(target)>=priorPressure-1)continue;
    const trace=geo.traceFineMoveClient(from.x,from.y,point.x,point.y,{slide:false,obstacles});if(!trace?.arrived||trace.blocked)continue;
    // Spacing must not drop into a pocket whose return crosses a higher lip.

@@ -101,6 +101,29 @@ Defer full packs, preserve unknown transfers, and retain unsold loot. Jasper's r
 merchant Zhieu B'hob buys reagent/gem items; measure actual purse change, including
 its poor prices. Yevitan is a banker and must never be treated as a loot buyer.
 
+## Crowded farm entrances
+
+`stageCrowd` in `m59-crowd-staging.mjs` takes native `readAll`, an owned single-body
+`runStep`, room geometry, a spacing target and finite step/time budgets. It chooses
+only healthy available declared bodies; foreign leases, active casts and movement
+remain untouched. Every step has native collision and reverse-terrain proof. A
+failed or ambiguous step ends the run. A budget ending or no further proved step is
+reported explicitly; neither establishes that every actor has reached the spacing target.
+
+`chooseCrowdClearanceStep` accepts a larger spacing target without changing native
+collision rules. `roomStagingGuard` bounds the entire segment and excludes room
+portals. Collision-valid BSP leaf space beyond the grid is not a staging destination:
+one captured test walked a farmer normally into826 that way. The corrected guard
+rejects that segment and allows an observed edge arrival to leave toward the interior.
+The ordinary return is retained in the trial evidence, with no teleport or reset.
+
+A returning upper runner clears its own crowded827 landing before releasing its
+work lease. When that cannot be proved, the leg reports the obstruction. A later
+service failure resumes the requested farm mode only if native evidence confirms
+that the runner is alive, home, idle, without pending movement and owned by its
+keeper. Pending/unknown legs receive no replacement control. Ended service stalls
+have their own time categories, so a stale phase is not counted as physical hauling.
+
 ## Measurement
 
 `farmObservationDetails` retains recent explicit decisions, fight outcomes, native

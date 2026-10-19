@@ -1,3 +1,5 @@
+import {roomStagingGuard} from './m59-crowd-staging.mjs';
+import {chooseCrowdClearanceStep} from './m59-rail-traffic.mjs';
 // Public, ordinary movement on each side of the Cragged ledge. No admin access.
 import {roomGeometry,floorAt,edgeOf} from './m59-ground.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
@@ -25,6 +27,21 @@ export function planLedgeRail(from,to,{role,geo=roomGeometry(578),coalesce=true}
   else points.push(...dense.waypoints.slice(sourceIndex+1,to+1));sourceIndex=to;
  }
  return{...short,waypoints:points};
+}
+// A successful GO into the farm must not leave the courier runner on top of
+// the entrance cohort. Only this caller-owned body moves, on proved terrain.
+export async function clearBraxLanding(ctx,observe,{maxSteps=4}={}){
+ const events=[];
+ for(let attempt=0;attempt<maxSteps;attempt++){
+  const s=await observe();checkIslandCancellation(ctx,s);if(!islandReadOwner(ctx,s)||s.room.num!==827||!(s.hp?.value>0))throw Error('landing clearance body or authority changed');
+  const objects=new Map((s.objects??[]).map(o=>[o.id,o]));objects.set(s.you.id,{...s.you,flags:5});
+  const others=[...objects.values()].filter(o=>o.id!==s.you.id&&(o.flags&1)&&Number.isFinite(o.x)&&Number.isFinite(o.y));
+  if(!others.some(o=>Math.hypot(o.x-s.you.x,o.y-s.you.y)<28))return{cleared:true,events};
+  const step=chooseCrowdClearanceStep(roomGeometry(827),objects,new Set([s.you.id]),{acceptStep:roomStagingGuard(827,roomGeometry(827))});if(!step)throw Error('no proved room beyond crowded farm landing');
+  const reply=await observe.action('walk_rail',{room:827,leg:{kind:'walk',waypoints:[protocolToClient(step.from),protocolToClient(step.target)]},bodyDetour:false,timeoutMs:15000,origin:ctx.origin??currentCallOrigin()});
+  const after=await observe();events.push({step,reply,position:after.you});if(after.room.num!==827||!(after.hp?.value>0)||Math.hypot(after.you.x-step.target.x,after.you.y-step.target.y)>12)throw Error('landing clearance not actually reached');
+ }
+ throw Error('farm landing clearance step budget exhausted');
 }
 export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObserver({fleet:ctx.fleet,agent:ctx.agent}),timeoutMs=480000}={}){
  ctx={...ctx,origin:ctx.origin??currentCallOrigin()};
@@ -56,5 +73,6 @@ export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObse
   if(direction==='out'){if(![350,568,578].includes(s.room.num))await road(350);if((await read()).room.num===350)await road(568);if((await read()).room.num===568)await road(578);await fine(BRAX_LEDGE.courier);}
   else{if(s.room.num===578){await fine(BRAX_LEDGE.road);await road(568);}if((await read()).room.num===568)await road(350);if((await read()).room.num!==350)throw Error('lower courier did not return Jasper');}
  }
+ if(role==='farmer'&&direction==='back')event({kind:'farm-landing-clearance',reply:await clearBraxLanding(ctx,observe)});
  const final=await read();return{ok:true,role,direction,room:final.room.num,position:final.you,hp:final.hp,events};
 }

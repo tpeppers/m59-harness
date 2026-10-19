@@ -6,3 +6,5 @@ assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,ladd
 assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,survival_decisions:{current:{strategy:'rest',status:'recovering',ended_at:null}}}}).category,'recovery');
 
 assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,activity:'stationary cargo exchange'}}).category,'exchange','a healthy recipient in a trade is not idle');
+
+assert.equal(farmTimeCategory(s,{servicePhase:'service stalled'}).category,'service_stalled');assert.equal(farmTimeCategory({...s,movement:{order:{kind:'walk'}}},{servicePhase:'service stalled'}).category,'internal_hauling');assert.equal(farmTimeCategory(s,{role:'courier',servicePhase:'needs attention'}).category,'courier_stalled');console.log('PASS ended service stalls are not counted as continuing physical travel');

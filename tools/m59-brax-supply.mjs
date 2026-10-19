@@ -41,7 +41,7 @@ export class BraxSupplyService{
  }
  // Ordinary loot export can free the recipient's physical room before provisioning.
  async makeDeliveryRoom(actor,name){
-  const agent=actor.shadow_account,state=await this.read(agent),unit=weighItem(name),free=state.carry?.room_for;
+  const agent=actor.shadow_account,state=await this.read(agent),unit=weighItem(name);let free=state.carry?.room_for;
   if(!unit||!free||!state.carry?.known||state.carry.load?.exact!==true)return;
   const margin=name==='hammer'?0:16;if(free.weight>=unit.weight+margin&&free.bulk>=unit.bulk+margin)return;
   const p=await this.pack(agent),worn=new Set((state.equipment_items??[]).map(i=>i.id));
@@ -54,7 +54,7 @@ export class BraxSupplyService{
    const required=Math.max(stock.weight>0?Math.ceil(Math.max(0,unit.weight+margin-free.weight)/stock.weight):0,stock.bulk>0?Math.ceil(Math.max(0,unit.bulk+margin-free.bulk)/stock.bulk):0);
    const n=Math.min(item.amount>0?item.amount:1,surplus,Math.max(1,required));
    const receipt=await this.transfer(agent,this.runner,item,n);await this.event('recipient-room-export',{agent,item:item.name,quantity:receipt?.quantity??0,for:name});
-   if(receipt?.quantity>0)return; // Re-read capacity at transfer; never assume export guaranteed space.
+   if(receipt?.quantity>0){free=(await this.read(agent)).carry?.room_for;if(!free||free.weight>=unit.weight+margin&&free.bulk>=unit.bulk+margin)return;} // Continue with different surplus until a whole provision fits.
   }
  }
  async deliverLocal(){
@@ -70,7 +70,7 @@ export class BraxSupplyService{
  async collectLocal(){
   const here=await this.read(this.runner);if(Math.min(here.carry?.room_for?.weight??0,here.carry?.room_for?.bulk??0)<200)return;const locals=(await this.localFarmers(here.room.num)).filter(x=>x.actor.shadow_account!==this.runner&&x.state.hp.value/x.state.hp.max>=.9);
   let donors=0;for(const {actor,state}of locals){if(donors>=3)break;const a=actor.shadow_account,p=await this.pack(a),worn=new Set((state.equipment_items??[]).map(i=>i.id));
-   const protectedNames=state.autopilot_status?.policy?.protectedItems??[];
+   const protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
    const candidates=p.items.filter(i=>!worn.has(i.id)&&!protectedNames.some(n=>String(i.name).toLowerCase().includes(String(n).toLowerCase()))&&braxSaleCargo(i.name)).slice(0,2);
    for(const i of candidates){await this.transfer(a,this.runner,i,Math.min(i.amount>0?i.amount:1,10));donors++;}
    const cash=p.items.find(i=>/^shillings?$/.test(i.name));if(cash?.amount>1500&&count((await this.pack(this.runner)).items,'shilling')<10000){await this.transfer(a,this.runner,cash,Math.min(5000,cash.amount-1000));donors++;}
@@ -119,7 +119,7 @@ export class BraxSupplyService{
   for(const from of free(lowerCap)<free(upperCap)?[agent,this.runner]:[this.runner,agent]){
    const to=from===this.runner?agent:this.runner,p=await this.pack(from),state=await this.read(from),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)):p.items.filter(i=>!worn.has(i.id)&&(braxSaleCargo(i.name)||/^shillings?$/.test(i.name)));
-   const budgets=new Map(),protectedNames=state.autopilot_status?.policy?.protectedItems??[];
+   const budgets=new Map(),protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
    for(const item of chosen){if(worn.has(item.id)||from===this.runner&&protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;const reserve=from===agent?(item.name==='hammer'?1:/herbs?/.test(item.name)?5:item.name==='elderberry'?5:item.name==='loaf of bread'?4:0):/^shillings?$/.test(item.name)?500:0;if(!budgets.has(item.name))budgets.set(item.name,Math.max(0,count(p.items,item.name)-reserve));const n=Math.min(item.amount>0?item.amount:1,budgets.get(item.name),/^shillings?$/.test(item.name)?5000:100);if(n){const sent=await this.transfer(from,to,item,n);budgets.set(item.name,budgets.get(item.name)-(sent?.quantity??0));}}
   }
   // Other farmers may still be in upper578 during preparation.
@@ -134,11 +134,19 @@ export class BraxSupplyService{
    if(!Number.isInteger(s.room?.num)||s.room.num===578&&(!Number.isFinite(s.you?.x)||!Number.isFinite(s.you?.y)||Math.hypot(s.you.x-2256,s.you.y-2208)<=64))throw Error('previous courier still occupies or cannot prove clearance of ledge lane: '+previous);
   }this.lastLaneCourier=agent;
  }
+ async failedUpper(agent,error){
+  await this.phase(this.runner,'service stalled');
+  // A failed public leg releases its work lease. Resume only a native, idle,
+  // living body already home with no pending objective; an unknown/live leg waits.
+  try{const s=await this.read(this.runner);if(this.farmRunner&&s.in_game===true&&s.connected===true&&s.room?.num===827&&s.hp?.value>0&&!s.job?.busy&&!s.movement?.order&&s.autopilot_status?.faculties?.work==='keeper'&&s.autopilot_status?.mode==='idle'){
+   await this.runnerMode('farm');await this.phase(this.runner,'farming');await this.event('runner-farm-restored-after-ended-service-failure',{agent:this.runner,courier:agent,serviceError:error.message});
+  }}catch(e){await this.event('runner-service-stalled',{agent:this.runner,courier:agent,error:e.message});}
+ }
  async worker(agent,{until=Infinity,maxCycles=Infinity}={}){
   for(let n=0;n<maxCycles&&!this.stopped&&Date.now()<until;n++){
    try{let s=await this.read(agent);if(s.room.num===578){await this.phase(agent,'returning');await this.runLeg(agent,'courier','back');}
     await this.procure(agent);await this.phase(agent,'waiting for ledge lane');
-    const exchange=this.upperGate.catch(()=>{}).then(async()=>{if(this.stopped||Date.now()>=until)return{skipped:true};await this.admitLane(agent);await this.phase(agent,'outbound');await this.runLeg(agent,'courier','out');return this.exchange(agent);});this.upperGate=exchange.then(()=>{},()=>{});const done=await exchange;if(done.skipped)break;await done.lowerBack;this.cycles[agent]=(this.cycles[agent]??0)+1;await this.event('cycle-complete',{agent,cycles:this.cycles[agent]});
+    const exchange=this.upperGate.catch(()=>{}).then(async()=>{if(this.stopped||Date.now()>=until)return{skipped:true};try{await this.admitLane(agent);await this.phase(agent,'outbound');await this.runLeg(agent,'courier','out');return await this.exchange(agent);}catch(error){await this.failedUpper(agent,error);throw error;}});this.upperGate=exchange.then(()=>{},()=>{});const done=await exchange;if(done.skipped)break;await done.lowerBack;this.cycles[agent]=(this.cycles[agent]??0)+1;await this.event('cycle-complete',{agent,cycles:this.cycles[agent]});
    }catch(e){await this.phase(agent,'needs attention');await this.event('service-failure',{agent,error:e.message});throw e;}
   }
  }
