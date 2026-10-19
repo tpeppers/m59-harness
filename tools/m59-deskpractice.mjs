@@ -348,6 +348,11 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
   for (const want of practice.spells) {
     const s = byName.get(want.name);
     if (!s) { tried.push(`${want.name}: not known`); continue; }
+    // A SPELL AT 99 HAS NOTHING LEFT TO LEARN (the cap; m59-farmpractice.mjs MAXED), so a practice cast
+    // of it only spends the reagents -- two purple mushrooms a Hold. Operator, 2026-10-19: "have Robin stop
+    // practicing it once her skill hits 99%". Skipped only when the ability was actually read; an unread
+    // one is practised as before.
+    if (Number(s.ability) >= 99) { tried.push(`${want.name}: at ${s.ability}, nothing left to learn`); continue; }
     if ((refusedUntil.get(want.name) ?? 0) > now) { tried.push(`${want.name}: refused recently`); continue; }
     // A FLEET-MATE SPELL SPENDS THE CASTER'S OWN VIGOR (relay): only with min_vigor to spare.
     if (want.target === 'fleetmate' && !(Number(vigor) >= (want.min_vigor ?? 150))) {

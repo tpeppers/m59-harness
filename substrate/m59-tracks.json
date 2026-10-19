@@ -14786,20 +14786,16 @@
      "y": 1368
     },
     {
-     "x": 696,
+     "x": 700,
      "y": 1376
     },
     {
-     "x": 832,
-     "y": 1392
+     "x": 836,
+     "y": 1388
     },
     {
-     "x": 872,
-     "y": 1432
-    },
-    {
-     "x": 912,
-     "y": 1472
+     "x": 928,
+     "y": 1480
     },
     {
      "x": 928,
@@ -14807,6 +14803,10 @@
     },
     {
      "x": 968,
+     "y": 1600
+    },
+    {
+     "x": 1128,
      "y": 1600
     },
     {
@@ -14900,6 +14900,58 @@
     "by": "fine 8-unit lattice BFS, every leg traceFineMoveClient(slide:false)",
     "from_unproved": 11,
     "why": "the walked crossing joined sparse samples with straight lines and 11 of 14 legs cut fence corners; riders slid off and three rides struck it"
+   },
+   "kerb": {
+    "at": "2026-10-19T19:44:56.356Z",
+    "why": "KERB, 2026-10-19: between x 976 and 1112 the only way east is a raised strip y 1584-1616 with a one-way drop to 3840 south of it (the lower canyon, 542 lattice steps back to the exit). The leg (968,1600)>(1272,1632) crossed it at y 1614 by x 1104, two units from the edge; Bunsen fell in on 62 crossings, and Robin, Camilla, Pepe and Beaker too. The leg now runs the strip centre, y 1600, to x 1128 where the strip ends.",
+    "replaced": [
+     {
+      "x": 968,
+      "y": 1600
+     },
+     {
+      "x": 1272,
+      "y": 1632
+     }
+    ]
+   },
+   "ramp": {
+    "at": "2026-10-19T20:07:56.576Z",
+    "replaced": [
+     {
+      "x": 688,
+      "y": 1368
+     },
+     {
+      "x": 696,
+      "y": 1376
+     },
+     {
+      "x": 832,
+      "y": 1392
+     },
+     {
+      "x": 872,
+      "y": 1432
+     },
+     {
+      "x": 912,
+      "y": 1472
+     },
+     {
+      "x": 928,
+      "y": 1560
+     },
+     {
+      "x": 968,
+      "y": 1600
+     },
+     {
+      "x": 1128,
+      "y": 1600
+     }
+    ],
+    "why": "RAMP, 2026-10-19: from (688,1368) to the kerb the descent is a chain of strips about 32 wide (5632 band y 1360-1392, 6016 ramp diagonally to (904,1448), 6400 column x 912-944, 6176 step, the 6400 kerb), each with the lower canyon (3840/4224) along its south side. The walked waypoints sat on those south edges, (832,1392) and (872,1432) at zero clearance; Rowlf fell off at r21c12 (828,1394), 2026-10-19 20:01Z. Re-threaded on a 4-unit lattice maximising clearance to the pit, every step and leg traceFineMoveClient(slide:false): worst clearance 0 -> 6, the 6 only at the joints between strips."
    }
   },
   "45:49>615": {
@@ -15946,6 +15998,14 @@
      "y": 1632
     },
     {
+     "x": 1128,
+     "y": 1600
+    },
+    {
+     "x": 968,
+     "y": 1600
+    },
+    {
      "x": 880,
      "y": 1592
     },
@@ -16025,6 +16085,20 @@
     "at": "2026-10-18T19:41:18.317Z",
     "by": "fine 8-unit lattice BFS from the 45 arrival r27c20 to the north edge, every leg traceFineMoveClient(slide:false)",
     "why": "no crossing 45 > 593 had ever been recorded, and the baked route through the canyon fences does not walk; operator wants traffic both ways"
+   },
+   "kerb": {
+    "at": "2026-10-19T19:44:56.359Z",
+    "why": "KERB, 2026-10-19: between x 976 and 1112 the only way east is a raised strip y 1584-1616 with a one-way drop to 3840 south of it (the lower canyon, 542 lattice steps back to the exit). The leg (968,1600)>(1272,1632) crossed it at y 1614 by x 1104, two units from the edge; Bunsen fell in on 62 crossings, and Robin, Camilla, Pepe and Beaker too. The leg now runs the strip centre, y 1600, to x 1128 where the strip ends.",
+    "replaced": [
+     {
+      "x": 1272,
+      "y": 1632
+     },
+     {
+      "x": 880,
+      "y": 1592
+     }
+    ]
    }
   }
  }
