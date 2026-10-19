@@ -2441,9 +2441,20 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
   // room. Said once, before setting out — a warning and a recorded cause, never a silent change
   // of the character's orders (docs/m59-boundary.md). The 2026-10-04 buy-spell walk to 714 was
   // fought this way by an assigned room of 48.
-  const posture = await call('autopilot', { agent, action: 'status' }, 30_000)
-    .then(st => postureConflict(st, to)).catch(() => null);
+  const postureStatus = await call('autopilot', { agent, action: 'status' }, 30_000).catch(() => null);
+  const posture = postureStatus ? postureConflict(postureStatus, to) : null;
   if (posture) ctx.log(agent, `WARNING: ${posture}`);
+  // A CONFINEMENT IS NOT A WARNING, IT IS A REFUSAL — and it arrives too late to see. The keeper's
+  // travel() refuses any journey to a room outside `confine_rooms` (confinement_refused_travel),
+  // but `travel` here is BACKGROUND, so the broker answers `started: true` first and the refusal
+  // lands in a job nobody reads. Bunsen, 2026-10-19: two runs of 45 -> 113, three attempts each,
+  // ~570s apiece polling a body that never left r26c19, ten refusals in the ledger. Lift the
+  // confinement in the errand (and put it back) to walk out on purpose.
+  const confined = (postureStatus?.autopilot_status ?? postureStatus)?.policy?.confineRooms;
+  if (Array.isArray(confined) && confined.length && !confined.map(Number).includes(to))
+    return { ok: false, never_started: true, confined: confined.map(Number),
+             why: `the keeper is confined to ${confined.join('/')} and refuses every journey to ${to} — ` +
+                  'clear confine_rooms for this errand (and restore it after) to walk out on purpose' };
   const withCause = (why) => preempted.length
     ? `${why}. ${preempted.length === 1 ? 'Its journey was' : `Its journey was ${preempted.length} times`} ` +
       `cancelled by another issuer: ${preempted.map(p => p.summary ?? describePreemption(p)).join('; ')}` +

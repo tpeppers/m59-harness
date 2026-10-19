@@ -1268,6 +1268,31 @@ console.log('a walk CANCELLED BY ANOTHER ISSUER says who did it (2026-10-04, buy
   ok('and the cancel is logged as it happens', logs.some(l => /CANCELLED BY ANOTHER ISSUER: walk to 714/.test(l)));
 }
 
+console.log('a walk out of the confinement is refused before it starts (2026-10-19, Bunsen 45 -> 113)');
+{
+  // Background travel answers `started: true` and the keeper's confinement refusal is never
+  // read, so the step polled a motionless body for its whole budget, three times over.
+  const sent = fakeBroker({
+    rooms: { a1: 45 }, unreachable: new Set([113]),
+    autopilotStatus: { mode: 'farm', policy: { assignedRoom: 45, confineRooms: [45] } },
+  });
+  const r = await fleetScript({
+    name: 'leave-45', fleet: 'testfleet', agents: ['a1'], onLog: () => {},
+    pollMs: 5, budgetFloorMs: 20, budgetCapMs: 60, steps: [walk(113)],
+  });
+  ok('the walk fails, naming the confinement', r.results.a1.ok === false
+     && /confined to 45 and refuses every journey to 113/.test(r.results.a1.why ?? ''), JSON.stringify(r.results.a1));
+  ok('and never sends a travel', !sent.some(c => c.name === 'travel'));
+  const sent2 = fakeBroker({
+    rooms: { a1: 45 }, autopilotStatus: { mode: 'farm', policy: { confineRooms: [45, 113] } },
+  });
+  const r2 = await fleetScript({
+    name: 'inside', fleet: 'testfleet', agents: ['a1'], onLog: () => {},
+    pollMs: 5, budgetFloorMs: 20, budgetCapMs: 60, steps: [walk(113)],
+  });
+  ok('a destination inside the confinement still walks', sent2.some(c => c.name === 'travel'), JSON.stringify(r2.results.a1));
+}
+
 console.log('a step marked `anywhere` survives a skipped leg');
 {
   // The Temple of Qor's entrance is shut half the time. The order is: try to walk in (optional),
