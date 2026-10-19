@@ -44,7 +44,7 @@ console.log('\nthe order the keeper decides in');
 {
   // Urgency descending. Each line is a claim about what outranks what, and the comment is
   // the reason — change the array and you are changing one of these claims.
-  ok('there are ten stages', PASS_STAGES.length === 10);
+  ok('there are eleven stages', PASS_STAGES.length === 11);
   ok('being dead is decided first — the Underworld has no graph exits, so a character ' +
      'left there stays there',
      PASS_STAGES[0] === 'passUnderworld');
@@ -72,12 +72,16 @@ console.log('\nthe order the keeper decides in');
      PASS_STAGES[6] === 'passOutside');
   ok('then an errand, which outranks farming and is outranked by everything above it',
      PASS_STAGES[7] === 'passErrand');
+  // THE CURSE CYCLE (m59-curse-cycle.mjs) breaks a curse a cycled ring put on us and drops the ring.
+  // Below survival and every errand, above the job; inert unless a strategy answered `curseCycle`.
+  ok('then the curse cycle, for a character a strategy put on it, below every errand',
+     PASS_STAGES[8] === 'passCurseCycle');
   // THE BUDDY SYSTEM IS THE JOB FOR A PAIRED CHARACTER (m59-buddy.mjs), so it sits directly above
   // the farm it replaces and below every errand and everything protected. It is inert -- CONTINUE
   // -- for anyone whose policy.buddy does not name it, which is every character by default.
   ok('then the buddy system, for a paired character only, directly above the farm',
-     PASS_STAGES[8] === 'passBuddy');
-  ok('and the actual job is last', PASS_STAGES[9] === 'passFarm');
+     PASS_STAGES[9] === 'passBuddy');
+  ok('and the actual job is last', PASS_STAGES[10] === 'passFarm');
 
   ok('every stage names a real method on the keeper',
      PASS_STAGES.every(n => typeof Autopilot.prototype[n] === 'function'));

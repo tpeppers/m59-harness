@@ -689,6 +689,41 @@ which is also the chalice station, so a chalice rider is already standing beside
 `node tools/m59-wand-duty-test.mjs` (43) pins the rules and runs both flows on the real Autopilot
 stage machines, against a keeper-run bank, a person, and a person who never answers.
 
+## The curse cycle: remove curse as a generic identify for rings
+
+Operator, 2026-10-19: a Shal'ille caster who knows **remove curse** picks up the unidentified rings
+everybody else refuses, keeps the good ones for the guild hall, and puts the cursed ones back on the
+floor. Configured like the chalice: a private strategy answers the `curseCycle` hook. The mechanics
+and every refusal are in `tools/m59-curse-cycle.mjs`, which cites the kod for each one.
+
+- **The default does not change.** With no strategy answering, `lootFloor` still refuses every
+  unidentified ring and amulet, because a cursed one equips itself on pickup (`item.kod:514`).
+- **Who may cycle** is decided per pass, on that body: it knows remove curse, has karma of at least
+  +20, has 9 mana, and holds at least one emerald **over the reserve**. The reserve is the larger of
+  the strategy's `reserve`, the loadout's emerald floor and the chalice holder's kept-back emeralds.
+  Any of these failing just switches the cycle off for that pass. It is optional income, not an
+  errand, so it never shops for emeralds.
+- **One ring per sweep.** If the ring was a ring of
+  lethargy, it equipped itself and revealed its name (`lethring.kod` NewUsed). `passCurseCycle`
+  (below errands, above the farm) then casts remove curse on the caster's own id. The spell
+  UNUSES every cursed item worn; the curse is on the wearer, not the item, so wearing it again
+  brings the curse back. The stage then checks that the ring is off the finger
+  and drops it, never before: dropping a worn lethargy ring drains the owner's vigor. The dropped
+  ring lies on the floor named "ring of lethargy", so the `CURSED_ITEMS` name ban keeps everybody
+  from picking it up again.
+- **Only rings.** An amulet is refused when the answer is read (the Amulet of Shadows can kill its
+  wearer). A cursed item worn on purpose (a trainee's Amulet of Shadows) does not stop the cycle:
+  the cast takes it off with the ring, and the stage puts it back on and drops only the ring.
+- **`keep`** is added to the protect lists, so those names are never sold, eaten or overfarmed
+  away. **`hall`** names are carried to the guild chests on the next town trip, even with
+  `guild_wants` off. That trip deposits only those lines of the plan, and only once `hall_min` are
+  held. The chest and the target come from the guild plan, as for every other deposit.
+- Every cycle writes a `curse_cycle` row to the character's ledger (cast, mana before/after, what
+  was dropped, emeralds left).
+
+`node tools/m59-curse-cycle-test.mjs` (52) pins the gate, the one-ring rule, the amulet refusal, the
+wiring into `lootFloor`, `passOnce` and the hall run, and the stage itself against a stub body.
+
 ## Standing orders: one-time tasks for the next town stop
 
 `tools/m59-standing-orders.mjs`. An order in `substrate/town-orders.json` (private, it names
