@@ -117,6 +117,11 @@ Source: `kod/object/item/passitem/specwand/healwand.kod`, `specwand.kod`,
 `player/user.kod` (`UserApply`), and `kod/object/active/holder/room.kod`.
 Offline checks: `node tools/m59-combat-support-test.mjs`.
 
+Keeper `GET /combat-strategies?agent=...&character=...&keeper_pid=...`
+initializes the process's cached combat strategy loader and reports strategy
+names, enabled flags, hooks and load problems. It sends no game packet and
+does not start combat, so a rollout can verify readiness before the next fight.
+
 ### Attack prerequisites and pursuit
 
 The harness checks the live exact target at the packet boundary. Lightning wand

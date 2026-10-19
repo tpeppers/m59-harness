@@ -67,6 +67,14 @@ function fixture() {
 }
 const applications = f => f.sent.filter(s => Array.isArray(s) && s[0] === 'apply');
 try {
+  await test('process strategy diagnostics initialize the cached loader without game actions', async () => {
+    const f = fixture();
+    f.m.wandStrategies.problems = []; f.strategy.kind = 'combat'; f.strategy.hooks = ['pvpSupport'];
+    const before = f.sent.length, status = await f.m.combatStrategyStatus();
+    assert.equal(status.loaded, true); assert.equal(status.strategies[0].enabled, true);
+    assert.deepEqual(status.strategies[0].hooks, ['pvpSupport']); assert.equal(f.sent.length, before);
+    f.m.stop('test');
+  });
   await test('support heals a same-room fleetmate through walls while pursuit continues', async () => {
     const f = fixture(); await f.tick(); assert.deepEqual(applications(f), [['apply', 3, 4]]);
     assert(f.sent.includes('move')); assert.equal(f.m.attackReadyAt ?? 0, 0);

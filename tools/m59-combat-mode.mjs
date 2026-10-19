@@ -917,6 +917,14 @@ export class CombatMode {
     return loaded;
   }
 
+  async combatStrategyStatus() {
+    const loaded = await this.combatStrategies();
+    return { loaded: loaded != null, directory: loaded?.dir ?? null,
+      strategies: (loaded?.strategies ?? []).map(st => ({ name: st.name, kind: st.kind,
+        enabled: st.enabled === true, hooks: st.hooks ?? [] })),
+      problems: loaded?.problems ?? [] };
+  }
+
   async decideWandVolley(o, ctx) {
     const builtin = () => ({ ...gear.chooseWandVolley(ctx), strategy: 'builtin' });
     const loaded = await this.combatStrategies();
