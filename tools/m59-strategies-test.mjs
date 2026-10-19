@@ -111,6 +111,18 @@ write('volley.mjs', `export default { name: 'volley', kind: 'combat', enabled: t
   ok('and it is the one asked for pvpWand', got?.strategy === 'volley' && got.answer.fire === 7, JSON.stringify(got));
 }
 rmSync(join(dir, 'volley.mjs'));
+write('fallback.mjs', `export default { name: 'fallback', kind: 'combat', enabled: true,
+  pvpFallback() { return { queue: [{use: 7}], interval_ms: 1000 }; } };`);
+{
+  const loaded = await load({ dir });
+  ok('a combat strategy answering only pvpFallback loads without a warning',
+    loaded.strategies.some(s => s.name === 'fallback' && s.hooks.join() === 'pvpFallback') &&
+      !loaded.problems.some(p => p.file === 'fallback.mjs'));
+  const got = await firstAnswer(loaded, 'pvpFallback', {});
+  ok('the fallback hook has its own answer rather than taking the opener slot',
+    got?.strategy === 'fallback' && got.answer.queue[0].use === 7);
+}
+rmSync(join(dir, 'fallback.mjs'));
 
 // ---------------------------------------------------------------- unrecognised
 write('typo.mjs', `export default {

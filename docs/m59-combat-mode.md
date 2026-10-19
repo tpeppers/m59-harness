@@ -17,6 +17,60 @@ sent, not hits or kills; server outcome messages are reported separately.
 
 ## Immediate chat orders
 
+### Personal threat and opt-in fallback actions
+
+`combat status` exposes `personal_threat`: `quiet` (0), `engaged` (1),
+or `under_attack` (2). Exact incoming player hit/miss messages, known harmful
+personal enchantments, victim-only hold/resistance messages, and the server's named harmful spell-attempt message
+are personal evidence. Speech, outgoing attacks, sightings, room enchantments
+and fleet alarms are not. An unattributed harmful effect records no invented
+caster and does not authorize a fight. Evidence persists through an active
+encounter; outside one it ages out after 30 seconds. Death/disconnect clears it.
+The snapshot is also available to PvP strategy facts and wand/opener hooks.
+
+A private combat strategy may implement `pvpFallback(ctx)`. Without one, the
+harness requests no potion inspections and uses no consumables. The hook sees
+`personal_threat`, `pvp`, `phase`, `reason`, `now`, `items`
+(`id/name/effect/harmful` for mechanically identified potions),
+`attempted_effects`, and observed personal `enchantments`.
+The threat threshold, desired effects, their order and repeat policy belong to
+the private strategy. Its closed answer is:
+
+```js
+{ queue: [{ use: carriedPotionId }], interval_ms: 1000 }
+```
+
+The interval may be 1000–60000ms and is measured from actual sends. The engine
+considers the queue while pursuing an infeasible primary attack, fleeing, or
+waiting for an absent PvP target. An attack cooldown is an occupied slot,
+not a chance to drink. A feasible primary attack, including turning to take it,
+always wins. Casting concentration is preserved.
+
+Inventory refresh and exact-ID description requests run asynchronously under
+the same body and packet guards as combat. They do not await network replies
+inside pursuit. Immediately before use the engine checks the live primary,
+shared timer, inventory identity/name, save generation and a description no
+older than 500ms. Spoiled, unknown, missing, stale or mismatched descriptions
+never authorize use. A queued request is revoked with its order.
+
+`m59-potions.mjs build` compiles potion names, effects, fresh/spoiled description
+prefixes and post-cast timers from KOD into `substrate/m59-potions.json`.
+The spell catalogue also carries inherited `harmful` facts for threat evidence.
+This is mechanics data, not an automatic list of effects to drink.
+Unidentified generic potions and unmodelled server-specific potions are skipped.
+Stock Distill creates player-made potions labelled and with go-bad time -1, so
+they do not expire. The engine still checks every selected bottle's current
+identity and condition instead of authorizing a use from cached maker text.
+
+Potions pass through SpellItem.CastSpell -> Spell.CanPayCosts ->
+IsOkayAttackTime. A sent potion therefore owns the shared timer for its
+KOD-derived interval. Movement/turning can continue. A successful-looking use
+packet alone does not prove consumption: `fallback_queue.history` records
+`sent`, subsequent exact item removal, and observed effect appearance separately.
+The final look/use race cannot be made atomic by this protocol.
+
+Offline checks: `node tools/m59-combat-fallback-test.mjs`.
+
 ### Attack prerequisites and pursuit
 
 The harness checks the live exact target at the packet boundary. Lightning wand

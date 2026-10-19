@@ -1,0 +1,265 @@
+{
+  "potions": [
+    {
+      "name": "anonymity potion",
+      "effect": "anonymity",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of gray-colored liquid.  Its odor seems familiar, but you can't quite place a finger on it.",
+      "bad_description": "This is a glass vial of slightly cloudy gray-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/anonp.kod"
+    },
+    {
+      "name": "The Widow Qesino's Secret Sauce",
+      "effect": "bait",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of purple-colored liquid.  It smells mighty scrump-dilly-umptious!",
+      "bad_description": "This is a glass vial of slightly cloudy purple-colored liquid.  It smells sort of sickly-sweet.",
+      "source": "kod/object/item/passitem/spelitem/potion/baitp.kod"
+    },
+    {
+      "name": "elixir of cloaking",
+      "effect": "cloak",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of gray-colored liquid.  Its odor seems familiar, but you can't quite place a finger on it.",
+      "bad_description": "This is a glass vial of slightly cloudy gray-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/cloakp.kod"
+    },
+    {
+      "name": "cure disease potion",
+      "effect": "cure disease",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/curedisp.kod"
+    },
+    {
+      "name": "cure poison potion",
+      "effect": "cure poison",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/curepsnp.kod"
+    },
+    {
+      "name": "potion of deflection",
+      "effect": "deflect",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/deflectp.kod"
+    },
+    {
+      "name": "potion of denial",
+      "effect": "denial",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This flask, formed from clear glass and topped by a cork, contains a thick blue fluid.  It looks cool and refreshing, yet something about it seems odd.",
+      "bad_description": "This flask, formed from clear glass and topped by a cork, contains a thick, red fluid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/denialp.kod"
+    },
+    {
+      "name": "potion of evil detection",
+      "effect": "detect evil",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/detevilp.kod"
+    },
+    {
+      "name": "potion of good detection",
+      "effect": "detect good",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/detgoodp.kod"
+    },
+    {
+      "name": "potion of invisibility detection",
+      "effect": "detect invisible",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/detinvip.kod"
+    },
+    {
+      "name": "bottled avian eyesight",
+      "effect": "eagle eyes",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/eageyep.kod"
+    },
+    {
+      "name": "possum potion",
+      "effect": "feign death",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of gray-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy gray-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/feigndp.kod"
+    },
+    {
+      "name": "alembic of free action",
+      "effect": "free action",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/freeactp.kod"
+    },
+    {
+      "name": "potion of haste",
+      "effect": "haste",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of sand-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy sand-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/hastep.kod"
+    },
+    {
+      "name": "Karahol's accursed elixir",
+      "effect": "karahols curse",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of dark-colored liquid.  It smells like a cross between licorice and musk.",
+      "bad_description": "This is a glass vial of dark, cloudy liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/karaholp.kod"
+    },
+    {
+      "name": "potion of shielding",
+      "effect": "magic shield",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/mshieldp.kod"
+    },
+    {
+      "name": "feline vitreous humour",
+      "effect": "night vision",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of orange-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy orange-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/nightvp.kod"
+    },
+    {
+      "name": "pungent elixir",
+      "effect": "nodeburst",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of red-colored liquid.  It has an extremely pungent odor; one whiff is enough to leave your head spinning.  Not surprisingly, it has a large warning label attached to it.  Apparently, this strange elixir has the power to open all of your mana node links to the maximum, supplying you with an instant burst of mana, but permanently severing one node link.",
+      "bad_description": "This is a glass vial of slightly cloudy red-colored liquid.  It has an extremely pungent, acrid odor; one whiff is almost enough to make you pass out.  You would be well advised to heed the large warning label and avoid drinking it.",
+      "source": "kod/object/item/passitem/spelitem/potion/nodebrsp.kod"
+    },
+    {
+      "name": "potion of purification",
+      "effect": "purify",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/purifyp.kod"
+    },
+    {
+      "name": "potion of acid resistance",
+      "effect": "resist acid",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/resacidp.kod"
+    },
+    {
+      "name": "potion of cold resistance",
+      "effect": "resist cold",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/rescoldp.kod"
+    },
+    {
+      "name": "potion of deliverance",
+      "effect": "rescue",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of gray-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy gray-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/rescuep.kod"
+    },
+    {
+      "name": "succulent salve",
+      "effect": "resist fire",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/resfirep.kod"
+    },
+    {
+      "name": "elixir of magic resistance",
+      "effect": "resist magic",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/resmagcp.kod"
+    },
+    {
+      "name": "potion of poison resistance",
+      "effect": "resist poison",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/respoisp.kod"
+    },
+    {
+      "name": "potion of nonconductivity",
+      "effect": "resist shock",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/resshckp.kod"
+    },
+    {
+      "name": "remove curse potion",
+      "effect": "remove curse",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of pale blue-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy pale blue-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/rmcursep.kod"
+    },
+    {
+      "name": "shadow form potion",
+      "effect": "shadow form",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of dark-colored liquid.  It smells like a cross between licorice and musk.",
+      "bad_description": "This is a glass vial of dark, cloudy liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/shadowp.kod"
+    },
+    {
+      "name": "potion of super strength",
+      "effect": "super strength",
+      "harmful": false,
+      "post_cast_ms": 1000,
+      "good_description": "This is a glass vial of sand-colored liquid.  It smells crisp, clean and refreshing.",
+      "bad_description": "This is a glass vial of slightly cloudy sand-colored liquid.  A slight whiff of it is enough to turn your stomach.",
+      "source": "kod/object/item/passitem/spelitem/potion/strengtp.kod"
+    }
+  ]
+}

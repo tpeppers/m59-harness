@@ -19,6 +19,8 @@ import * as pvplog from './m59-pvp.mjs';
 import { locStamp, squaresBetween } from './m59-pvp-telemetry.mjs';
 import * as wandShot from './m59-wand-shot.mjs';
 import { Recorder } from './m59-recorder.mjs';
+import { PersonalThreat } from './m59-personal-threat.mjs';
+import { CombatFallback } from './m59-combat-fallback.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import * as swarm from './m59-swarm-follow.mjs';
@@ -272,6 +274,8 @@ export class CombatMode {
     this.calloutPresent = new Map(); this.calloutSeen = new Map(); this.calloutBornAt = this.now();
     this.calloutCtx = null; this.pvpSpeechUntil = 0;
     this.lastPvP = null;
+    this.personalThreat = new PersonalThreat({ now: this.now });
+    this.fallback = new CombatFallback(this);
     // THE WAR RESPONSE is off until the owning process says otherwise (`warEligibility`). The
     // keeper process wires it; a broker in-process session and every test that does not ask
     // for it keep the behaviour that was already there.
@@ -296,11 +300,12 @@ export class CombatMode {
     const watch = this.watchStatus();
     const refused_targets = this.refusedStatus();
     const pvp_strategy = this.pvpStrategyStatus();
-    if (!o) return { active: false, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
+    const personal = { personal_threat: this.personalThreatStatus(), fallback_queue: this.fallback.snapshot() };
+    if (!o) return { active: false, ...personal, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
       ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
       ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
-    return { active: !!this.active, order_id: o.id, action: o.order.action,
+    return { active: !!this.active, ...personal, order_id: o.id, action: o.order.action,
       target: o.order.target, map: o.order.map ?? o.room, position: o.order.position,
       door: o.order.door, phase: o.phase, accepted_at: o.acceptedAt,
       armed_at: o.armedAt ?? null, triggered_at: o.triggeredAt ?? null,
@@ -768,6 +773,7 @@ export class CombatMode {
     const needsSight = pick ? pick.timer !== false : wands.some(w => w.timer) || unidentified.length > 0;
     let live = c.room.objects.get(o.targetId);
     const ready = this.attackReadiness(o, live, { sight: needsSight, timer: needsSight });
+    o.fallbackPrimary = { sight: needsSight, timer: needsSight };
     o.lastReadiness = { action: 'wand', ...ready };
     if (!ready.positioned) {
       return 'approach';
@@ -828,6 +834,7 @@ export class CombatMode {
       me: me ? { row: me.row, col: me.col, hp: health?.value ?? null, max_hp: health?.max ?? null } : null,
       shots: (o.wandShots ?? []).map(x => ({ ...x })),
       readiness: this.attackReadiness(o, t, { sight: true }),
+      personal_threat: this.personalThreatStatus(),
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
     };
   }
@@ -870,6 +877,8 @@ export class CombatMode {
 
   async approachCombat(o, target, { sight = false } = {}) {
     if (!target || !o.client.self) return;
+    o.fallbackReason = 'pursuit';
+    this.fallback.offer(o, o.fallbackReason);
     o.lastReadiness = this.attackReadiness(o, target, { sight, range: sight ? null : 2 });
     // Door planning must precede the square router even at close range. The fine
     // same-room planner carries Castle Victoria's exact trigger/landing fixes.
@@ -960,6 +969,7 @@ export class CombatMode {
       last_cast_at: o.openerAt ?? null, last_spell: o.openerSpell ?? null,
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
       readiness: this.attackReadiness(o, target, { sight: true }),
+      personal_threat: this.personalThreatStatus(),
       heard: this.heardHere() };
     for (const st of asked) {
       let answer;
@@ -968,8 +978,10 @@ export class CombatMode {
       if (answer == null) continue;
       if (answer.wait === true && answer.cast == null) {
         if (o.openerWaiting !== st.name) { o.openerWaiting = st.name; this.record('opener_wait', o); }
-        if (o.openerAim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned)
+        if (o.openerAim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned) {
+          o.fallbackPrimary = { sight: true };
           await this.approachCombat(o, target, { sight: true });
+        }
         return true;
       }
       const name = typeof answer.cast === 'string' ? answer.cast.trim().toLowerCase() : null;
@@ -979,6 +991,7 @@ export class CombatMode {
       if (!['target', 'self', 'none'].includes(aim)) { this.noteOpenerFault(o, st.name, `target must be target, self or none, not ${aim}`); continue; }
       o.lastReadiness = { action: 'opener', ...this.attackReadiness(o, target, { sight: aim === 'target' }) };
       if (aim === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned) {
+        o.fallbackPrimary = { sight: true };
         await this.approachCombat(o, target, { sight: true }); return true;
       }
       if (this.attackReadiness(o, target).timer_remaining_ms > 0) return true;
@@ -1689,6 +1702,8 @@ export class CombatMode {
     const result = parsePlayerCombat(ev.text, names);
     if (!result) return;
     if (result.direction === 'incoming') {
+      this.personalThreat.note({ kind: result.outcome === 'hit' ? 'player_hit' : 'player_miss',
+        attacker: result.character }, { engaged: this.personalThreatStatus().level !== 'quiet' });
       // THEIR STROKE REACHED US, so AllowGuildAttack (symmetric) no longer refuses them: a
       // guild-only refusal of this player here is stale. Forgotten FIRST, so return fire below
       // runs exactly as it would for anybody else (m59-refused-targets.mjs forgetRefused).
@@ -1811,6 +1826,11 @@ export class CombatMode {
       backoff_until: this.flightBackoffUntil > this.now() ? this.flightBackoffUntil : null };
   }
 
+  personalThreatStatus() {
+    const o = this.active, t = o?.client?.room?.objects?.get?.(o.targetId);
+    return this.personalThreat.snapshot({ engaged: !!(o && (o.pvp || o.flight || t?.flags & OF.PLAYER)) });
+  }
+
   strategyFacts(player, extra = {}) {
     const s = this.s, v = s.client?.vitals?.()?.health;
     const max = v?.max ?? v?.scale_max;
@@ -1821,6 +1841,7 @@ export class CombatMode {
     return { character: this.character?.() ?? characterName(s, s.client), agent: this.agentId ?? null,
       room: s.world?.room?.num ?? null, player, hostile: false, basis: null,
       pvp_allowed_here: !ownRefusal && !this.pvpForbiddenHere(),
+      personal_threat: this.personalThreatStatus(),
       health_pct: Number.isFinite(v?.value) && max > 0 ? Math.round(100 * v.value / max) : null,
       max_health: Number.isFinite(max) ? max : null,
       in_flight: !!this.active?.flight, flight_room: this.active?.flight?.room ?? null,
@@ -2507,6 +2528,9 @@ export class CombatMode {
 
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
+    if (this.s.world?.room?.num === 1) this.personalThreat.reset();
+    this.personalThreat.observe(ev, client, { engaged: this.personalThreatStatus().level !== 'quiet', skipCombat: true });
+    this.fallback.observe(ev);
     this.tapClient(client);
     this.notePvpTraverse(client);
     if (ev.kind === 'room-contents' || ev.kind === 'appeared' || ev.kind === 'changed' || ev.kind === 'moved') this.notePvpAppearances(client);
@@ -2799,6 +2823,10 @@ export class CombatMode {
     try { this.guard(o); this.refreshTarget(o); } catch (e) { this.combatFailure(o, e.message); return; }
     if (this.active !== o) { this.armTimer(); return; }
     const phaseRevision = o.phaseRevision;
+    if (o.fallbackReason) withBodyCommand(this.s, () => withPacketScope(kind => {
+      demand(o.phaseRevision === phaseRevision, 'combat visibility changed');
+      this.guard(o, kind);
+    }, () => this.fallback.offer(o, o.fallbackReason)), o.id);
     if (o.running?.revision === phaseRevision) { this.armTimer(); return; }
     // A stale shelter mover may still be unwinding an await. Its packets were
     // revoked; the new combat phase must not wait for its completion/heartbeat.
@@ -2825,7 +2853,12 @@ export class CombatMode {
 
   async advance(o) {
     const s = this.s, c = o.client;
-    if (o.flight) return this.advanceFlight(o);
+    o.fallbackReason = null;
+    o.fallbackPrimary = { range: 2 };
+    if (o.flight) {
+      o.fallbackReason = 'flight'; this.fallback.offer(o, o.fallbackReason);
+      return this.advanceFlight(o);
+    }
     if (!o.pvp && effectsAt(c, c.self).length) {
       demand(await escapeGroundEffect(s), 'ground effect underfoot; no safe escape step');
       return;
@@ -2862,6 +2895,7 @@ export class CombatMode {
       o.phase = 'armed'; o.armedAt = this.now(); this.record('armed', o); return;
     }
     if (o.phase === 'armed' || o.phase === 'waiting') {
+      if (o.pvp) { o.fallbackReason = 'target_absent'; this.fallback.offer(o, o.fallbackReason); }
       await this.restoreSafety();
       if (o.pvp && this.active === o && o.phase === 'waiting') await this.shelterFromMonsters(o);
       return;
@@ -2905,6 +2939,7 @@ export class CombatMode {
       await this.approachCombat(o, target); return;
     }
     if (step.do === 'cast' && step.target === 'target' && !this.attackReadiness(o, target, { sight: true }).positioned) {
+      o.fallbackPrimary = { sight: true };
       await this.approachCombat(o, target, { sight: true }); return;
     }
     if (this.attackReadiness(o, target).timer_remaining_ms > 0) return;
