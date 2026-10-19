@@ -26,7 +26,7 @@
 // It cost a night to learn that the hard way: room 27's stone read as unreachable from every
 // entrance, four different measurements agreed, and the operator had already melded it. The
 // room had six orcs in it.
-import { walk, crawlTo, rest, act, verify } from '../m59-fleetscript.mjs';
+import { walk, walkTo, crawlTo, rest, act, verify } from '../m59-fleetscript.mjs';
 
 // EVERY MANA NODE IN THE WORLD, read out of the room classes that create them and stated in
 // the KOD's own order — ROW FIRST. `tools/m59-mananode.mjs` carries the same table; that file
@@ -162,6 +162,15 @@ export const script = {
       // the trap check that refuses a route through a room we know keeps characters.
       walk(spot.room),
       act('rest', { stand: true }),
+
+      // MOST OF THE ROOM IS A WALK, NOT A CRAWL. A body that starts deep inside the stone's room
+      // (a farmer already posted there) has the whole room to cross, and `crawlTo` was built for the
+      // last squares: one hop at a time, waiting out every body. Robin in The Badlands (45),
+      // 2026-10-19, started 34 squares from the stone in a room of ten groundworms and gave up boxed
+      // in by bodies at r30c18 after eight waits. `walkTo` plans around what is standing there.
+      // OPTIONAL: a walk the planner cannot finish still leaves the crawl to try from wherever it
+      // stopped, which is the behaviour this script had before.
+      walkTo(spot.col, spot.row, { within: 4, room: spot.room, optional: true, deadlineMs: 300_000 }),
 
       // The last squares. `within: 2` because the meld box is 2 per axis and the stone's own
       // square is often not standable.
