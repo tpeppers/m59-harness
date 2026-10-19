@@ -27170,8 +27170,10 @@ export class Autopilot {
       } else if (this._practiceSessionAt && now - this._practiceSessionAt < entry.every_ms) return null;
     }
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return null;
+    // The pushed ability rides along so choosePractice can skip a spell already at 99.
     const spells = (c.spells || []).map(sp => ({
-      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));
+      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0,
+      ability: c.abilities?.get?.(sp.id)?.ability ?? null }));
     const role = this.chaliceRole();
     const services = role === 'holder' || role === 'alternate' ? offeredServices(this.chaliceCfg) : [];
     const one = { ...cfg, spells: [entry] };
@@ -27236,8 +27238,10 @@ export class Autopilot {
     // the open — the desk this was written for is a 20-max-health body.
     if (this.isRoomEnchantPost?.() && !this.holdWorks()) return false;
 
+    // The pushed ability rides along so choosePractice can skip a spell already at 99.
     const spells = (c.spells || []).map(sp => ({
-      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));
+      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0,
+      ability: c.abilities?.get?.(sp.id)?.ability ?? null }));
     const role = this.chaliceRole();
     const services = role === 'holder' || role === 'alternate' ? offeredServices(chalice) : [];
     const reserve = deskReserve({ practice: cfg, services, known: spells.map(x => x.name),

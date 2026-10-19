@@ -495,5 +495,20 @@ console.log('\nthe Qor drills: the game\'s punctuation, the kod\'s lower-case co
      normalizePractice({ spells: ['cloak'], keep: { 'entroot berry': -1 } }).problems.some(p => /keep\./.test(p)));
 }
 
+console.log('\na spell at 99 is not practised');
+{
+  const practice = normalizePractice({ spells: ['purify', 'holy symbol'] });
+  const reserve = deskReserve({ services: [], known: ['purify', 'holy symbol'], keep: {} });
+  const rich = have({ emerald: 20, elderberry: 40 });
+  const both = (a, b) => [{ name: 'purify', targets: 0, ability: a }, { name: 'holy symbol', targets: 0, ability: b }];
+  const at99 = choosePractice({ practice, spells: both(99, 40), mana: { value: 100, max: 120 }, have: rich, reserve });
+  ok('purify at 99 is skipped for holy symbol', at99.cast?.name === 'holy symbol', JSON.stringify(at99));
+  const all99 = choosePractice({ practice, spells: both(99, 99), mana: { value: 100, max: 120 }, have: rich, reserve });
+  ok('everything at 99: nothing cast, and the why says so', !all99.cast && /nothing left to learn/.test(all99.why),
+     JSON.stringify(all99));
+  const unread = choosePractice({ practice, spells: both(null, null), mana: { value: 100, max: 120 }, have: rich, reserve });
+  ok('an unread ability is practised as before', unread.cast?.name === 'purify', JSON.stringify(unread));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
