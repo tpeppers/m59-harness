@@ -13118,6 +13118,7 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      loadout_retention: { present: !!this.loadout(), carry_floors: this.carryFloors() },
       // WHICH OF THIS CHARACTER'S WEAPONS BYPASS NONMAGIC, as READ (look text, a lapse), never
       // assumed. Rides out on status so the keeper-backed fleet row gets it with no rebuild.
       weapon_magic: this.weaponMagicStatus(),

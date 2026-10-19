@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {cloneLoadout,withCarryFloors} from './m59-shadow-loadout.mjs';
+import {normalise} from './m59-loadout.mjs';
+import {planPickup,OVERFARM_DEFAULTS} from './m59-overfarm.mjs';
+const src={format:'m59-loadout/1',character:'Original',agent:'t1',plan:{weapon_level:0,learning_target:null},gear:{weapon:['axe'],slots:{}},carry:[{item:'herb',min:0,max:40}],policy:{buy_food:false},custom:{t1:'Original'}};
+const r=cloneLoadout(src,{character:'Shadow',agent:'copy1',identities:{t1:'copy1',Original:'Shadow'},overlay:{gear:{...src.gear,weapon:['hammer']},carry:withCarryFloors(src.carry,{herb:20,hammer:1,'loaf of bread':6}),policy:{}}});
+assert.deepEqual(r.loadout.custom,{copy1:'Shadow'});assert.equal(r.loadout.plan.weapon_level,0);assert.equal(r.loadout.plan.learning_target,null);assert.equal(src.carry[0].min,0);assert.equal(src.policy.buy_food,false);assert.deepEqual(r.changes.policy.source,{buy_food:false});
+assert.equal(normalise(r.loadout).loadout.carry.find(i=>i.item==='herb').min,20);
+const policy={...OVERFARM_DEFAULTS,enabled:true,overfarm_percent:300};
+const pack=[{id:1,name:'hammer',amount:1,equipped:true},{id:2,name:'hammer',amount:1},{id:3,name:'loaf of bread',amount:6},{id:4,name:'herb',amount:25}];
+const plan=planPickup({pack,floor:[{id:9,name:'ruby',amount:500}],capacity:500,policy,floors:{'loaf of bread':6,herb:20}});
+const dropped=plan.swaps.flatMap(s=>s.drop);assert(!dropped.some(i=>i.id===1));assert(!dropped.some(i=>i.id===3));assert(dropped.every(i=>i.id!==4||i.amount<=5));
+const wornOnly=planPickup({pack:[pack[0]],floor:[{name:'ruby',amount:100}],capacity:75,policy});assert.equal(wornOnly.swaps.length,0);
+assert.deepEqual(withCarryFloors([{item:'herb',min:0,max:2}],{herb:20}),[{item:'herb',min:20,max:20}]);
+assert.throws(()=>withCarryFloors([],{herb:-1}));assert.throws(()=>cloneLoadout(src,{}));
+console.log('PASS external loadout cloning, explicit scenario overlays, consumable stock floors and worn-kit eviction protection');

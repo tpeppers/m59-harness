@@ -5172,7 +5172,8 @@ class Session {
         overfarmPlan = planPickup({
           floor: cands.map(o => ({ id: o.id, name: named(o), amount: o.amount || 1 })),
           pack: (c.inventory || []).map(o => ({ name: c.rsc.get(o.nameRsc) || o.name,
-                                                amount: o.amount || 1, id: o.id })),
+            amount: o.amount || 1, id: o.id,
+            equipped: (c.equipment?.()?.equipped ?? []).some(e => e.id === o.id) })),
           policy: ofPolicy, protect, floors: this._overfarmFloors, capacity: cap.weight_max,
           sifted: this._overfarm.sifted,
         });
@@ -5182,9 +5183,12 @@ class Session {
         for (const swap of overfarmPlan.swaps) {
           for (const giving of swap.drop) {
             const held = (c.inventory || []).find(o =>
-              (c.rsc.get(o.nameRsc) || o.name) === giving.name);
+              giving.id != null ? o.id === giving.id : (c.rsc.get(o.nameRsc) || o.name) === giving.name);
+            // A queued costume change can equip a former spare after planning.
+            if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held?.id)) continue;
             if (!held) continue;
             await this.pacer.submit('drop', () => {
+              if ((c.equipment?.()?.equipped ?? []).some(e => e.id === held.id)) return;
               if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });
               return c.drop([dropSpec(held, giving.amount)]);
             }).catch(() => {});

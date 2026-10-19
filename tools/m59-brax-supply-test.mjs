@@ -49,3 +49,12 @@ console.log('PASS upper budget export funds a Jasper load while retaining its ow
 
 let readyCalls=0;const readyService=new BraxSupplyService({actors,runner:'r',couriers:['a','b'],call:async name=>{if(name==='inventory')return{items:[hammer]};readyCalls++;return{supplied:false,reason:'stationary body not ready: body is not ready for a stationary exchange'};},read:async()=>({carry:{known:true,load:{exact:true},room_for:{weight:500,bulk:500}}}),runLeg(){}});assert((await readyService.transfer('a','r',hammer,1)).deferred);assert((await readyService.transfer('a','r',hammer,1)).deferred);assert.equal(readyCalls,1);
 console.log('PASS pre-offer native readiness refusal defers without repeated calls or claiming delivery');
+
+// stop() cannot release a queued ticket into a new trip after the deadline.
+let release;const gate=new Promise(r=>{release=r}),legs=[];
+const stopped=new BraxSupplyService({actors,runner:'r',couriers:['a','b'],call(){},read:async()=>({room:{num:350}}),runLeg:async(...args)=>legs.push(args)});stopped.upperGate=gate;stopped.procure=async()=>{};const worker=stopped.worker('a',{maxCycles:1});await new Promise(r=>setTimeout(r,0));stopped.stop();release();await worker;assert.equal(legs.length,0);console.log('PASS unstarted queued trips are cancelled by stop without touching accepted legs');
+
+const roomExports=[];const roomService=new BraxSupplyService({actors:[...actors,{shadow_account:'f',role:'farmer'}],runner:'r',couriers:['a','b'],read:async()=>({carry:{known:true,load:{exact:true},room_for:{weight:20,bulk:-20}},equipment_items:[{id:1}],autopilot_status:{policy:{protectedItems:['sapphire']},loadout_retention:{carry_floors:{emerald:10}}}}),call(){},runLeg(){}});
+roomService.pack=async()=>({items:[{id:1,name:'long sword',amount:0},{id:2,name:'sapphire',amount:100},{id:3,name:'emerald',amount:10},{id:4,name:'axe',amount:0}]});roomService.transfer=async(from,to,item,n)=>{roomExports.push({from,to,item:item.name,n});return{quantity:n};};await roomService.makeDeliveryRoom({shadow_account:'f'},'hammer');assert.deepEqual(roomExports,[{from:'f',to:'r',item:'axe',n:1}]);console.log('PASS kit-room export retains worn, protected and floored stock and sends only actual surplus loot');
+
+assert.equal(braxNeeds(c,[{name:'mushroom',amount:50}],{protectedNames:['mushroom']})['loaf of bread'],6);assert.equal(braxNeeds(c,[{name:'loaf of bread',amount:6}],{protectedNames:['mushroom']})['loaf of bread'],0);console.log('PASS food held out of the native larder does not satisfy courier meal demand');

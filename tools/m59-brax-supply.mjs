@@ -1,12 +1,13 @@
 // Rolling Brax supply service. Dependencies own fleet identity, ordinary RPC and public legs.
 // Couriers work independently; only the upper-runner handoff is serialized.
 import {randomUUID} from 'node:crypto';
-import {foodValue,weighItem} from './m59-items.mjs';
+import {foodValue,weighItem,itemNameKey} from './m59-items.mjs';
 import {buyCourierGoods} from './m59-courier-purchases.mjs';
 const count=(items,name)=>items.filter(i=>i.name?.toLowerCase()===name).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
-export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10}={}){
+export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10,protectedNames=[]}={}){
  const knows=re=>(actor.abilities?.spells??[]).some(s=>s.ability>0&&re.test(s.name));
- const haveFood=items.reduce((n,i)=>n+(foodValue(i.name)?.nutrition??0)/20*(i.amount>0?i.amount:1),0);
+ const protectedFood=new Set(protectedNames.map(itemNameKey));
+ const haveFood=items.filter(i=>!protectedFood.has(itemNameKey(i.name))).reduce((n,i)=>n+(foodValue(i.name)?.nutrition??0)/20*(i.amount>0?i.amount:1),0);
  return{hammer:count(items,'hammer')?0:1,'loaf of bread':Math.max(0,Math.ceil(food-haveFood)),herb:knows(/minor heal|major heal|hospice|create food/i)?Math.max(0,(knows(/minor heal|major heal|hospice/i)?herbs:6)-count(items,'herb')-count(items,'herbs')):0,elderberry:knows(/create food/i)?Math.max(0,elderberries-count(items,'elderberry')):0};
 }
 export function braxCourierTarget(name,demand,cap){const reserve=name==='hammer'?1:name==='herb'||name==='elderberry'?5:name==='loaf of bread'?4:0;return Math.min(cap,Math.max(0,demand??0)+reserve);}
@@ -21,7 +22,7 @@ export class BraxSupplyService{
  async event(kind,detail={}){await this.emit({at:Date.now(),kind,...detail});}
  async pack(agent){for(let attempt=0;attempt<4;attempt++){const p=await this.call('inventory',{agent,fresh:true});if(Array.isArray(p?.items)&&p.ids_stale!==true)return p;if(attempt<3)await this.wait(500);}throw Error('inventory unconfirmed '+agent);}
  async localFarmers(room){const out=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(s.hp?.value>0&&s.room?.num===room)out.push({actor:c,state:s});}return out;}
- async needs(){const rows=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;const p=await this.pack(c.shadow_account);rows.push({agent:c.shadow_account,needs:braxNeeds(c,p.items)});}return rows;}
+ async needs(){const rows=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;const p=await this.pack(c.shadow_account);rows.push({agent:c.shadow_account,needs:braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]})});}return rows;}
  async transfer(from,to,item,amount){
   if(!(amount>0))return null;if((this.notReadyUntil.get(from)??0)>Date.now()||(this.notReadyUntil.get(to)??0)>Date.now()){await this.event('trade-deferred',{from,to,item:item.name,reason:'recent native stationary readiness refusal'});return{quantity:0,deferred:true};}const id=randomUUID(),p=await this.pack(from),i=p.items.find(x=>x.id===item.id&&x.name===item.name);if(!i)throw Error('cargo changed before submission');
   const key=to+':'+i.name,signature=items=>JSON.stringify(items.map(x=>[x.name,x.amount>0?x.amount:1]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
@@ -38,11 +39,29 @@ export class BraxSupplyService{
   if(r.reason_code==='receiver_full'&&!r.partial&&!(r.amounts?.length)&&r.not_received?.length&&r.not_received.every(x=>x.received===0&&x.giver_lost===0)){this.capacityBlocks.set(key,signature((await this.pack(to)).items));await this.event('capacity-prediction-refuted',{id,from,to,item:i.name,amount,predictedCarry:cap,result:r});return{quantity:0,deferred:true};}
   if(!r.supplied||r.amounts?.some(m=>m.giver_lost<m.asked))throw Object.assign(Error('cargo transfer not verified: '+(r.reason??r.error??'unknown')),{receipt:r});return{...r,quantity:amount};
  }
+ // Ordinary loot export can free the recipient's physical room before provisioning.
+ async makeDeliveryRoom(actor,name){
+  const agent=actor.shadow_account,state=await this.read(agent),unit=weighItem(name),free=state.carry?.room_for;
+  if(!unit||!free||!state.carry?.known||state.carry.load?.exact!==true)return;
+  const margin=name==='hammer'?0:16;if(free.weight>=unit.weight+margin&&free.bulk>=unit.bulk+margin)return;
+  const p=await this.pack(agent),worn=new Set((state.equipment_items??[]).map(i=>i.id));
+  const protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
+  const floors=state.autopilot_status?.loadout_retention?.carry_floors??{};
+  for(const item of p.items){
+   if(worn.has(item.id)||!braxSaleCargo(item.name)||protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;
+   const floor=Number(Object.entries(floors).find(([n])=>n.toLowerCase()===item.name.toLowerCase())?.[1]??0),surplus=count(p.items,item.name)-floor;
+   const stock=weighItem(item.name);if(!stock||surplus<=0)continue;
+   const required=Math.max(stock.weight>0?Math.ceil(Math.max(0,unit.weight+margin-free.weight)/stock.weight):0,stock.bulk>0?Math.ceil(Math.max(0,unit.bulk+margin-free.bulk)/stock.bulk):0);
+   const n=Math.min(item.amount>0?item.amount:1,surplus,Math.max(1,required));
+   const receipt=await this.transfer(agent,this.runner,item,n);await this.event('recipient-room-export',{agent,item:item.name,quantity:receipt?.quantity??0,for:name});
+   if(receipt?.quantity>0)return; // Re-read capacity at transfer; never assume export guaranteed space.
+  }
+ }
  async deliverLocal(){
   const upper=await this.read(this.runner),locals=await this.localFarmers(upper.room.num);locals.sort((a,b)=>{const healer=x=>(x.actor.abilities?.spells??[]).some(s=>/minor heal|major heal|hospice/i.test(s.name));return Number(healer(b))-Number(healer(a))||a.state.hp.max-b.state.hp.max;});
   for(const {actor,state}of locals){const a=actor.shadow_account;if(a===this.runner||state.hp.value/state.hp.max<.9)continue;
-   const need=braxNeeds(actor,(await this.pack(a)).items);
-   for(const [name,want]of Object.entries(need)){if(want<=0)continue;const p=await this.pack(this.runner),wear=new Set(((await this.read(this.runner)).equipment_items??[]).map(i=>i.id)),items=p.items.filter(i=>i.name===name||name==='herb'&&i.name==='herbs');const reserve=name==='hammer'?1:name==='herb'?20:name==='elderberry'?10:2;
+   const need=braxNeeds(actor,(await this.pack(a)).items,{protectedNames:[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])]});
+   for(const [name,want]of Object.entries(need)){if(want<=0)continue;await this.makeDeliveryRoom(actor,name);const p=await this.pack(this.runner),wear=new Set(((await this.read(this.runner)).equipment_items??[]).map(i=>i.id)),items=p.items.filter(i=>i.name===name||name==='herb'&&i.name==='herbs');const reserve=name==='hammer'?1:name==='herb'?20:name==='elderberry'?10:2;
     let left=Math.min(want,Math.max(0,items.reduce((n,i)=>n+(i.amount>0?i.amount:1),0)-reserve));
     for(const item of items){if(wear.has(item.id))continue;const n=Math.min(left,item.amount>0?item.amount:1);if(n>0){const sent=await this.transfer(this.runner,a,item,n);left-=sent?.quantity??0;}if(!left)break;}
    }
@@ -106,7 +125,7 @@ export class BraxSupplyService{
   // Other farmers may still be in upper578 during preparation.
   await this.phase(this.runner,'local distribution');await this.deliverLocal();
   const lowerBack=this.runLeg(agent,'courier','back');this.pending.add(lowerBack);lowerBack.finally(()=>this.pending.delete(lowerBack)).catch(()=>{});
-  await this.phase(this.runner,'returning');await this.runLeg(this.runner,'farmer','back');await this.phase(this.runner,'local distribution');await this.deliverLocal();await this.phase(this.runner,'farming');if(this.farmRunner)await this.runnerMode('farm');
+  await this.phase(this.runner,'returning');await this.runLeg(this.runner,'farmer','back');await this.phase(this.runner,'local distribution');await this.deliverLocal();await this.phase(this.runner,'farming');if(this.farmRunner&&!this.stopped)await this.runnerMode('farm');
   // Release the lane gate once upper is home and lower has cleared its stand.
   const start=Date.now();for(;;){const s=await this.read(agent);if(s.room.num!==578||Math.hypot(s.you.x-2256,s.you.y-2208)>64)break;if(Date.now()-start>60000)throw Error('lower courier did not clear exchange lane');await this.wait(1000);}return {lowerBack};
  }
@@ -119,7 +138,7 @@ export class BraxSupplyService{
   for(let n=0;n<maxCycles&&!this.stopped&&Date.now()<until;n++){
    try{let s=await this.read(agent);if(s.room.num===578){await this.phase(agent,'returning');await this.runLeg(agent,'courier','back');}
     await this.procure(agent);await this.phase(agent,'waiting for ledge lane');
-    const exchange=this.upperGate.catch(()=>{}).then(async()=>{await this.admitLane(agent);await this.phase(agent,'outbound');await this.runLeg(agent,'courier','out');return this.exchange(agent);});this.upperGate=exchange.then(()=>{},()=>{});const done=await exchange;await done.lowerBack;this.cycles[agent]=(this.cycles[agent]??0)+1;await this.event('cycle-complete',{agent,cycles:this.cycles[agent]});
+    const exchange=this.upperGate.catch(()=>{}).then(async()=>{if(this.stopped||Date.now()>=until)return{skipped:true};await this.admitLane(agent);await this.phase(agent,'outbound');await this.runLeg(agent,'courier','out');return this.exchange(agent);});this.upperGate=exchange.then(()=>{},()=>{});const done=await exchange;if(done.skipped)break;await done.lowerBack;this.cycles[agent]=(this.cycles[agent]??0)+1;await this.event('cycle-complete',{agent,cycles:this.cycles[agent]});
    }catch(e){await this.phase(agent,'needs attention');await this.event('service-failure',{agent,error:e.message});throw e;}
   }
  }

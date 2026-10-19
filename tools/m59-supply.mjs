@@ -645,11 +645,28 @@ export async function supplyBetween(a, deps) {
     // `dropSpec` is the one place that question is answered, and it answers it from the
     // server's own tag with the quantity only as a fallback.
     const offered = items.map(o => dropSpec(o, o.amount ?? null));
-    await give.offer(them.id, offered);
+    const offerGiveSeq = await give.seq();
+    const offerReply = await give.offer(them.id, offered);
+    if (offerReply?.error || offerReply?.refused || offerReply?.sent === false)
+      return { supplied: false, reason: 'native offer submission refused', submission: offerReply };
     if (!await recv.sawOffer(recvSeq, 6000)) {
+      // Refusals can cancel BEFORE the receiver gets an offer window. Preserve both
+      // streams and actual deltas here, just as on the post-accept failure path.
+      const said = [...await give.saidSince(offerGiveSeq), ...await recv.saidSince(recvSeq)];
       await give.cancelOffer();
-      return { supplied: false, reason: 'the offer never reached them',
-               notes: notes.length ? notes : undefined };
+      const giverAfter = countsOf(await give.inventory(), nameOf);
+      const receiverAfter = countsOf(await recv.inventory(), recvName);
+      const quantities = new Map();
+      for (const item of items) { const name = nameOf(item); quantities.set(name, (quantities.get(name) || 0) + (item.amount || 1)); }
+      const notReceived = [...quantities].map(([name,asked]) => ({ name, asked,
+        giver_lost: (giveBefore.get(name) || 0) - (giverAfter.get(name) || 0),
+        received: (receiverAfter.get(name) || 0) - (recvBefore.get(name) || 0) }));
+      const failure = offerFailureFrom(said);
+      return { supplied: false, reason: failure?.why ?? 'the offer never reached them',
+        ...(failure ? { reason_code: failure.code, server_said: failure.said } : {}),
+        submission: offerReply, said, not_received: notReceived,
+        partial: notReceived.some(q => q.giver_lost !== 0 || q.received !== 0),
+        notes: notes.length ? notes : undefined };
     }
     const giveSeq = await give.seq();
     await recv.counterOffer([]);

@@ -41,6 +41,20 @@ source policy, recursively remap selected actor identities, list scenario differ
 and compare every expected key against the actual keeper policy. False, zero, null
 and nested fields must survive. Do not reproduce from broker defaults.
 
+Policy is only one input: source `substrate/loadouts/<character>.json` files also
+control gear, carrying minimums, selling and procurement. `cloneLoadout` remaps
+identities and records explicit scenario differences, including absent source files.
+Copy source sections before applying the task overlay; audit keeper
+`loadout_retention` as well as the full policy. Suppress replay of source loadout
+policy only when the native policy manifest already contains it plus task changes.
+
+Use positive **carry minimums** for operational stock (hammer, edible food, healing
+herbs and cooking elderberry). Do not add consumable food to `protectedItems` for
+this purpose: that list excludes it from the larder. A carry floor holds stock back
+from eviction but still lets food be eaten and spells consume reagents. Native loot
+eviction also excludes equipped objects by ID and rechecks before the paced drop;
+a same-name spare must not cause the worn object to be selected instead.
+
 The farming overlay stations827, targets narthyl worms first for Qor casters and
 daemon skeletons first for others, equips hammers with hammer-only training, disables
 personal town/buy/delivery/strategy/buddy errands, and retains source survival/healing
@@ -63,11 +77,14 @@ cash decrease and item increase. Nonstackable stock may require separate, reconc
 purchases. Unknown purchase results stop that worker. Transient autosave handle invalidation
 repeats bounded inventory reads only, never an accepted purchase or trade. Every cargo transfer checks
 both receiver capacities, protects worn/reserved stock, journals intent/result and
-requires inventory deltas. A partial stack is explicitly partial. Unweighable cargo
+requires inventory deltas. Pre-window offer failures retain native submission and both
+message streams, and reconcile both inventories before classifying capacity. A partial stack is explicitly partial. Unweighable cargo
 and unknown receiver load defer. Native capacity refusals override table predictions;
 only a proved zero-transfer full-pack refusal is deferred, and it cannot produce
 another offer until the receiver pack changes. Pre-offer readiness refusals wait
-without claiming delivery. Medicine is packed before heavy bread. Purple/blue/red mushrooms are reagents, not
+without claiming delivery. Stopping the service prevents unstarted queued trips while
+finite accepted legs finish; do not keep ordinary farmers working past the measurement
+deadline while waiting for that cleanup. Medicine is packed before heavy bread. Purple/blue/red mushrooms are reagents, not
 food. Critical hammers use exact known capacity; optional cargo keeps a margin.
 
 Use `supply` with `stationary:true` and `who_travels:'neither'`. This requires the

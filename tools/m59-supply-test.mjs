@@ -187,6 +187,15 @@ function twoInOneRoom(extra = {}) {
   return { giver, recv };
 }
 
+// A server rejection may cancel before any receiver offer window exists.
+{
+ const {giver,recv}=twoInOneRoom();recv._fake.willSeeOffer=false;
+ const base=giver.tradeStep.bind(giver);giver.tradeStep=async(op,args)=>op==='said'?{said:["Zoot can't carry all the items you have offered."]}:base(op,args);
+ const out=await supplyBetween({from:'g',to:'r',what:'reagents',amount:2,who_travels:'neither'},deps({g:giver,r:recv}));
+ ok('pre-window refusal keeps native capacity cause',out.reason_code==='receiver_full');
+ ok('pre-window refusal proves both unchanged inventories',out.not_received?.length===2&&out.not_received.every(q=>q.received===0&&q.giver_lost===0)&&out.partial===false);
+ ok('a failed offer is not countered or accepted',!giver._fake.log.includes('trade:accept')&&!recv._fake.log.includes('trade:counter'));
+}
 // ---------------------------------------------------------------- the exchange
 section('A HAND-OVER IN ONE ROOM, WHICH IS THE CASE EVERY OTHER ONE REDUCES TO');
 {

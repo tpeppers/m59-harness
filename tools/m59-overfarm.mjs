@@ -304,6 +304,7 @@ export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
     return null;
   };
   const spareOf = (it) => {
+    if (it.equipped) return 0; // Worn kit is never a loot-eviction candidate.
     const held = Number(it.amount) || 1;
     const f = floorOf(it.name);
     if (f == null) return listHas(protect, it.name) ? 0 : held;
