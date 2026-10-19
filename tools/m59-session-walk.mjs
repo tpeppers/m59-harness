@@ -44,7 +44,7 @@ import {waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import {turnAtProvedRefuge} from './m59-refuge-activation.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
-import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
+import { recallTrack, tracksLeavingBy, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planSafeLegs, planFineSafeLeg, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
 import {planFineRailRefugeAsync} from './m59-fine-rail.mjs';
@@ -7765,9 +7765,22 @@ export function sessionWalkPrototype(deps) {
     // therefore arrive just after stepFine reports `left_room:false`.
     const roomId = c.room?.id;
     const leftTheRoom = () => roomId != null && c.room?.id !== roomId;
-    const track = ignoreStrikes
+    let track = ignoreStrikes
       ? recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom), loadTracks(), {})
       : recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
+    // A JOURNEY THAT STARTED IN THIS ROOM HAS NO ENTRY DOOR — a resumed or re-issued walk, or
+    // one after a rest. Ride whichever track out by the same door has the nearest station
+    // instead of planning the crossing bare (tracksLeavingBy: Kardde's Canyon, 2026-10-19).
+    // `fromRoom` becomes that track's, so its strikes and clears land on the track ridden.
+    if (!track?.waypoints?.length && fromRoom == null && c.self) {
+      const me = c.self, g = this.world?.geometry ?? null;
+      const nearest = t => Math.min(...t.waypoints.filter(wp => !g || typeof g.walkable !== 'function'
+        || g.walkable(Math.floor(wp.y / KOD_FINENESS) + 1, Math.floor(wp.x / KOD_FINENESS) + 1))
+        .map(wp => Math.hypot(wp.x - me.x, wp.y - me.y)));
+      const best = tracksLeavingBy(here, Number(toRoom), loadTracks(), ignoreStrikes ? {} : undefined)
+        .map(o => ({ ...o, d: nearest(o.track) })).sort((a, b) => a.d - b.d)[0];
+      if (best && Number.isFinite(best.d)) { track = best.track; fromRoom = best.from; }
+    }
     if (!track?.waypoints?.length) return { rode: false, why: 'no track' };
     // AN UNPROVEN STITCH IS TRIED ONCE, WITH THE WALKED ROUTE STILL UNDERNEATH IT.
     //

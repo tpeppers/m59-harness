@@ -209,6 +209,8 @@ const SUITES = [
    'every move order names its issuer, a cancel names whose move it took, and a failure leaves one replayable incident'],
   ['m59-body-held-square-test.mjs',
    'a monster standing on the next square\'s stand point is walked round into that square, not re-aimed at for ever (Rowlf, Ukgoth r19c35)'],
+  ['m59-track-midroom-test.mjs',
+   'a journey that starts inside a room rides the track out by the same door, not the bare plan (Kardde\'s Canyon 49 -> 45)'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

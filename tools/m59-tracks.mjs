@@ -527,6 +527,26 @@ export function recallTrack(room, from, to, tracks = loadTracks(), strikes = loa
   return null;
 }
 
+/**
+ * Every unstruck track in this room that leaves by `to`, whatever door it came in by, as
+ * `[{ from, track }]`. For a journey that STARTS inside the room and so has no entry door:
+ * recallTrack then asks for `room:?>to`, which almost never exists, and the crossing was
+ * planned bare. Kardde's Canyon (49), prod 2026-10-19: every re-issued or resumed journey to
+ * 45 started mid-room, never rode the threaded 49:593>45, and walked the baked route into the
+ * fence pocket at r20-23 c17-18 — exits_exhausted for 40-67 minutes per character. The caller
+ * picks the one whose stations it is nearest (rideTrack's own join rule).
+ */
+export function tracksLeavingBy(room, to, tracks = loadTracks(), strikes = loadStrikes()) {
+  const prefix = `${room}:`, suffix = `>${to}`;
+  return Object.entries(tracks)
+    .filter(([key, track]) => key.startsWith(prefix) && key.endsWith(suffix)
+      && (strikes[key] ?? 0) < STRIKES_BEFORE_REJECT && track?.waypoints?.length)
+    .map(([key, track]) => {
+      const from = key.slice(prefix.length, key.length - suffix.length);
+      return { from: from === '?' ? null : Number(from), track };
+    });
+}
+
 // ---------------------------------------------------------------------------- CLI
 const direct = process.argv[1] &&
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));

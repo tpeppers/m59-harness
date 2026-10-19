@@ -118,6 +118,11 @@ through a nested shelter order.
 
 ## Travel and combat regressions
 
+- `m59-track-midroom-test.mjs` (6): **a journey that starts inside a room still rides its track.**
+  A resumed or re-issued walk has no entry door, so `rideTrack` asked for `room:?>to` and planned
+  bare; `tracksLeavingBy` offers every unstruck track out by the same door and the nearest is ridden,
+  with its strikes and clears on its own key. Kardde's Canyon (49) to 45, prod 2026-10-19: 40-67
+  minutes per character in the fence pocket. Fails with `no track` on the old walker.
 - `m59-body-held-square-test.mjs` (5): **a body standing on the next square's stand point does
   not close the square.** Real 599 geometry with the 2026-10-18 positions: Rowlf in the r19c35 wall
   pocket, whose only mover step out is r20c34, and the Guardian of Zjiria five units from r20c34's
