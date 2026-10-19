@@ -211,6 +211,13 @@ console.log('--- quarry selection skips proved-unreachable prey, as fight() does
   ok('...and dropped when its quarry is gone or no longer attackable',
      AP.slice(guard, planned).includes('!(pulled.flags & OF.ATTACKABLE)')
        && AP.slice(guard, planned).includes('this.pendingPull = null;'));
+
+  // THE THIRD: an attacker hit back at is chosen from inReachOfUs() and never walked to, so
+  // the unreachable-square memory must not be handed to the fight that is pinned to it.
+  // Pepe, Badlands (45), prod 2026-10-18: `broke off` every 1.5s at a groundworm in reach.
+  const swing = AP.indexOf('const f = await skills.fight(s, { target: engageName,');
+  ok('the hit-back fight drops the prey-avoid memory for a bystander',
+     swing > 0 && AP.slice(swing, swing + 2000).includes('avoid: bystander ? null : this.preyAvoid('));
 }
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');

@@ -23823,7 +23823,16 @@ export class Autopilot {
                                         // Prey this character has already proved it cannot walk
                                         // to, skipped by SQUARE so a respawn in the same corner
                                         // is skipped too. Null when there is none.
-                                        avoid: this.preyAvoid(s.world?.room?.num ?? null),
+                                        //
+                                        // NOT FOR A BYSTANDER. It was chosen from inReachOfUs():
+                                        // already within reach, so no walk is involved, and an
+                                        // unreachable-square memory says nothing about it. Passed
+                                        // anyway, fight() is pinned to its id (exactTargetId), drops
+                                        // it, answers "try one of the names above", and the next
+                                        // pass picks the same attacker. Pepe, Badlands (45), prod
+                                        // 2026-10-18: a groundworm two squares off, `broke off`
+                                        // every 1.5s, zero landed hits.
+                                        avoid: bystander ? null : this.preyAvoid(s.world?.room?.num ?? null),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
