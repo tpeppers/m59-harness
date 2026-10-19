@@ -138,7 +138,7 @@ export class BraxSupplyService{
   await this.phase(this.runner,'service stalled');
   // A failed public leg releases its work lease. Resume only a native, idle,
   // living body already home with no pending objective; an unknown/live leg waits.
-  try{const s=await this.read(this.runner);if(this.farmRunner&&s.in_game===true&&s.connected===true&&s.room?.num===827&&s.hp?.value>0&&!s.job?.busy&&!s.movement?.order&&s.autopilot_status?.faculties?.work==='keeper'&&s.autopilot_status?.mode==='idle'){
+  try{const s=await this.read(this.runner);if(this.farmRunner&&!this.stopped&&s.in_game===true&&s.connected===true&&s.room?.num===827&&s.hp?.value>0&&!s.job?.busy&&!s.movement?.order&&s.autopilot_status?.faculties?.work==='keeper'&&s.autopilot_status?.mode==='idle'){
    await this.runnerMode('farm');await this.phase(this.runner,'farming');await this.event('runner-farm-restored-after-ended-service-failure',{agent:this.runner,courier:agent,serviceError:error.message});
   }}catch(e){await this.event('runner-service-stalled',{agent:this.runner,courier:agent,error:e.message});}
  }
