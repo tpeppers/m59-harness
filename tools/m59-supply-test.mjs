@@ -405,6 +405,23 @@ section('SUPPLIED MEANS ALL OF IT');
      JSON.stringify(out.not_received));
 }
 
+section('A PARTIAL STACK IS NOT A COMPLETE DELIVERY');
+{
+ const {giver,recv}=twoInOneRoom({nothingMoves:true});
+ giver._fake.onAccept=()=>{giver._fake.items.find(o=>o.id===12).amount-=1;recv._fake.items.find(o=>o.name==='herbs').amount+=1;};
+ const out=await supplyBetween({from:'g',to:'r',what:[{id:12,amount:2}],who_travels:'neither'},deps({g:giver,r:recv}));
+ ok('one received out of two is not supplied',out.supplied===false);
+ ok('the partial stack retains actual and requested quantities',out.partial===true&&out.not_received[0]?.received===1&&out.not_received[0]?.asked===2);
+}
+section('STATIONARY GIFTS CARRY THEIR OWNED HANDSHAKE TOKEN');
+{
+ const {giver,recv}=twoInOneRoom();
+ const out=await supplyBetween({from:'g',to:'r',what:'reagents',amount:2,who_travels:'neither',stationary:true},deps({g:giver,r:recv}));
+ ok('stationary proxy exchange is verified',out.supplied===true);
+ ok('the native offer receives the owned token',typeof giver._fake.lastOffer?.stationary_token==='string');
+ ok('both stationary holds release afterwards',!giver._fake.held&&!recv._fake.held);
+}
+
 section('A COUNTEROFFER THAT NEVER ARRIVES MEANS THE ACCEPT ENDED THE TRADE');
 {
   const { giver, recv } = twoInOneRoom({ nothingMoves: true });

@@ -1,3 +1,4 @@
+import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
 // m59-keeper-process.mjs — One process per character. Runs the GOAP loop
 // and a small HTTP API.
 //
@@ -3011,6 +3012,8 @@ const server = createServer(async (req, res) => {
           // STAND STILL WHILE SOMEBODY ELSE DRIVES. See holdKeeper above for why this is
           // here rather than in the broker, and why the tick driver is held a different
           // way from the goap one.
+          case 'stationary_trade_hold': { json(holdStationaryTrade(session, String(args.why??'stationary exchange'), Number(args.max_ms??20000), args.token??null)); return; }
+          case 'stationary_trade_release': { json(releaseStationaryTrade(session,args.token)); return; }
           case 'hold': {
             json(holdKeeper(String(args.why ?? 'an errand owns this character'),
                             Math.max(5000, Math.min(Number(args.max_ms ?? 180000), 900000)),
@@ -3447,6 +3450,7 @@ const server = createServer(async (req, res) => {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
             const op = String(args.op ?? '');
+            if (args.stationary_token && ['offer','counter','accept'].includes(op)) requireStationaryTrade(session,args.stationary_token);
             let amount = Math.floor(Number(args.amount) || 0);
             // BANK EVERYTHING ABOVE A WALKING FLOAT. The broker sends `keep` instead of an
             // amount when the number could not be known where the request was built — the
@@ -3627,7 +3631,7 @@ const server = createServer(async (req, res) => {
                 const items = idList(args.items);
                 if (!items.length) { json({ error: 'offer needs items' }, 400); return; }
                 const since = c.evSeq;
-                await session.pacer.submit('trade', () => c.offer(to, items));
+                await session.pacer.submit('trade', () => { if(args.stationary_token) requireStationaryTrade(session,args.stationary_token); return c.offer(to, items); });
                 json({ sent: true, since, to_id: to, count: items.length, trade: view() });
                 return;
               }
@@ -3645,7 +3649,7 @@ const server = createServer(async (req, res) => {
               case 'counter': {
                 const items = idList(args.items);
                 const since = c.evSeq;
-                await session.pacer.submit('trade', () => c.counterOffer(items));
+                await session.pacer.submit('trade', () => { if(args.stationary_token) requireStationaryTrade(session,args.stationary_token); return c.counterOffer(items); });
                 json({ sent: true, since, count: items.length, trade: view() });
                 return;
               }
@@ -3685,7 +3689,7 @@ const server = createServer(async (req, res) => {
               // ENDED the trade rather than completing it.
               case 'accept': {
                 const before = view();
-                await session.pacer.submit('trade', () => c.acceptOffer());
+                await session.pacer.submit('trade', () => { if(args.stationary_token) requireStationaryTrade(session,args.stationary_token); return c.acceptOffer(); });
                 json({ sent: true, may_accept_before: before?.may_accept ?? null, trade: view() });
                 return;
               }

@@ -204,6 +204,8 @@ export function planShadowAbilities(object,record,actual){
  return {wanted,differences,commands};
 }
 
+export const shadowAbilityResponseRejected = text => /can't handle|not a valid|\binvalid(?:\b|_)|Cannot find|no access|Unknown command|Missing parameter/i.test(String(text));
+
 export async function mirrorShadowAbilities(records,{resolve,dm,apply=false}){
  // Validate every source row before even resolving live object ids.
  const wanted=records.map(wantedShadowAbilities),ids=await resolve(records.map(c=>c.shadow_name));
@@ -221,7 +223,7 @@ export async function mirrorShadowAbilities(records,{resolve,dm,apply=false}){
  const before=await read(),plans=records.map((c,i)=>planShadowAbilities(holders[i],c,before[i]));
  const commands=plans.flatMap(p=>p.commands);
  if(apply&&commands.length){
-  const out=await dm(commands);if(/can't handle|not a valid|invalid|Cannot find|no access|Unknown command|Missing parameter/i.test(splitReplies(out,commands).join('\n')))throw Error('shadow ability setup rejected');
+  const out=await dm(commands);if(shadowAbilityResponseRejected(splitReplies(out,commands).join('\n')))throw Error('shadow ability setup rejected');
  }
  const after=apply?await read():before,differences=records.map((c,i)=>({character:c.shadow_name,differences:shadowAbilityDifferences(wanted[i],after[i])})).filter(r=>r.differences.length);
  if(differences.length)throw Error('shadow ability readback mismatch: '+differences.map(r=>r.character+' ('+r.differences.length+')').join(', '));

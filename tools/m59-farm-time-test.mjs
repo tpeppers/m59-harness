@@ -1,0 +1,6 @@
+import assert from'node:assert/strict';import{farmTimeCategory,integrateFarmTimes}from'./m59-farm-time.mjs';
+const s={in_game:true,connected:true,room:{num:827},hp:{value:70,max:70},mana:{value:20,max:20},vigor:{value:100},autopilot_status:{ladder:{stage:'passFarm'},activity:'holding a proven safe spot'}};
+assert.equal(farmTimeCategory(s).category,'healthy_wait');assert.equal(farmTimeCategory({...s,hp:null}).category,'unknown_or_disconnected');assert.equal(farmTimeCategory({...s,room:{num:1}}).category,'death_recovery');assert.equal(farmTimeCategory({...s,hp:{value:20,max:70}}).category,'recovery');assert.equal(farmTimeCategory(s,{servicePhase:'collect'}).category,'internal_hauling');assert.equal(farmTimeCategory(s,{role:'courier'}).category,'courier_service');assert.deepEqual(integrateFarmTimes({at:1000,category:'recovery'},{at:101000}),{category:'recovery',ms:30000,unknownMs:70000});console.log('PASS recovery/healthy waits/service roles and capped missing-observation gaps');
+
+assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,ladder:{stage:'passFleeAndRest'}}}).category,'healthy_wait','briefly evaluating the survival rung is not observed recovery');
+assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,survival_decisions:{current:{strategy:'rest',status:'recovering',ended_at:null}}}}).category,'recovery');

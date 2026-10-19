@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
 // Moving supplies from whoever has them to whoever needs them, in one call, between two
 // characters one broker is driving.
 //
@@ -73,7 +74,8 @@ const IN_PROCESS_HOLD = 'in-process';
 // still needs an errand hold is the character standing still waiting to be met — otherwise
 // its keeper walks it back to its hunting ground and the mover chases it — and both ends
 // for the handshake itself, which is seconds rather than minutes.
-export function supplyOps(sess, { isProxied, autopilotIfAny }) {
+export function supplyOps(sess, { isProxied, autopilotIfAny, stationary = false }) {
+  let stationaryToken = null;
   const proxied = !!isProxied(sess);
   // RE-READ, NEVER CAPTURE. `KeeperProxy.client` is rebuilt from each snapshot and the old
   // object is thrown away, so a `const c = sess.need()` taken before a refresh is a picture
@@ -125,11 +127,13 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
     // deadline was supposed to protect.
     async hold(why, maxMs = 180_000, token = null) {
       if (proxied) {
-        const r = await sess.holdStill(why, maxMs, token);
+        const r = await sess.holdStill(why, stationary ? 20000 : maxMs, token, stationary);
+        if(stationary && r?.held)stationaryToken=r.hold?.token;
         if (r?.error) return { held: false, reason: r.error };
         return { held: !!r?.held, token: r?.hold?.token ?? null,
                  renewed: !!r?.renewed, reason: r?.reason };
       }
+      if(stationary){const r=holdStationaryTrade(sess,why,20000,token);if(r.held)stationaryToken=r.hold.token;return{...r,token:r.hold?.token};}
       const p = autopilotIfAny(sess.name);
       if (!p?.running) return { held: false, reason: 'no keeper is running' };
       // OURS ALREADY: renew it. `goInert` returns early when the keeper is already inert,
@@ -150,9 +154,10 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
     },
     async release(why, token) {
       if (proxied) {
-        const r = await sess.releaseHold(why, token);
+        const r = await sess.releaseHold(why, token, stationary);
         return { released: !!r?.released, reason: r?.reason ?? r?.error };
       }
+      if(stationary)return releaseStationaryTrade(sess,token);
       try { autopilotIfAny(sess.name)?.start(); return { released: true }; }
       catch (e) { return { released: false, reason: e.message }; }
     },
@@ -178,8 +183,8 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
       return sess.pacer.submit('trade', () => c().cancelOffer()).catch(() => null);
     },
     async offer(toId, items) {
-      if (proxied) return sess.tradeStep('offer', { to_id: toId, items });
-      return sess.pacer.submit('trade', () => c().offer(toId, items));
+      if (proxied) return sess.tradeStep('offer', { to_id: toId, items, ...(stationary?{stationary_token:stationaryToken}:{}) });
+      return sess.pacer.submit('trade', () => {if(stationary)requireStationaryTrade(sess,stationaryToken);return c().offer(toId, items);});
     },
     async sawOffer(since, timeoutMs) {
       if (proxied) {
@@ -191,8 +196,8 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
       return !!w?.events?.length;
     },
     async counterOffer(items = []) {
-      if (proxied) return sess.tradeStep('counter', { items });
-      return sess.pacer.submit('trade', () => c().counterOffer(items));
+      if (proxied) return sess.tradeStep('counter', { items, ...(stationary?{stationary_token:stationaryToken}:{}) });
+      return sess.pacer.submit('trade', () => {if(stationary)requireStationaryTrade(sess,stationaryToken);return c().counterOffer(items);});
     },
     async sawCounter(since, timeoutMs) {
       if (proxied) {
@@ -204,8 +209,8 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
       return { saw: !!w?.events?.length, may_accept: c().trade?.mayAccept ?? null };
     },
     async acceptOffer() {
-      if (proxied) return sess.tradeStep('accept');
-      return sess.pacer.submit('trade', () => c().acceptOffer());
+      if (proxied) return sess.tradeStep('accept', stationary?{stationary_token:stationaryToken}:{});
+      return sess.pacer.submit('trade', () => {if(stationary)requireStationaryTrade(sess,stationaryToken);return c().acceptOffer();});
     },
     // EVERYTHING THE SERVER SAID TO THIS SIDE SINCE `since`.
     //
@@ -292,7 +297,8 @@ export async function supplyBetween(a, deps) {
   const gs = session(a.from), rs = session(a.to);
   gs.need(); rs.need();
   if (a.from === a.to) throw new Error('a character cannot supply itself');
-  const give = supplyOps(gs, deps), recv = supplyOps(rs, deps);
+  if(a.stationary===true && a.who_travels!=='neither')throw Error('stationary supply requires who_travels=neither');
+  const give = supplyOps(gs, {...deps,stationary:a.stationary===true}), recv = supplyOps(rs, {...deps,stationary:a.stationary===true});
   const giverName = give.name(), receiverName = recv.name();
 
   // What to hand over. Reagents are matched by name because the server gives us
@@ -554,7 +560,7 @@ export async function supplyBetween(a, deps) {
     // ours and takes a new one for the other end.
     for (const ops of [give, recv]) {
       const h = await takeHold(ops, 'a supply exchange owns this character', 120_000);
-      if (!h.held) notes.push(`could not hold ${ops.name()} for the trade: ${h.reason}`);
+      if (!h.held) { if(a.stationary) return {supplied:false,reason:'stationary body not ready: '+h.reason}; notes.push(`could not hold ${ops.name()} for the trade: ${h.reason}`); }
     }
 
     // The receiver has to be visible to the giver for the offer to resolve — and the
@@ -684,7 +690,9 @@ export async function supplyBetween(a, deps) {
       // hammer that moved reported `asked: 0, received: 1`. Measured on shadow the first
       // time a mixed offer worked. Nothing was wrong with the delivery; the report was
       // arithmetic nonsense, which is the kind of thing that gets believed.
-      (received > 0 ? moved : missed).push({ name: n, asked: o.amount || 1, received, giver_lost });
+      const verdict={ name:n,asked:o.amount||1,received,giver_lost };
+      if(received>0)moved.push(verdict);
+      if(received<(o.amount||1))missed.push(verdict);
     }
     // SUPPLIED MEANS ALL OF IT. A partial hand-over is something the caller has to know
     // about and retry: the almoner cooks immediately after a delivery, and a half-filled

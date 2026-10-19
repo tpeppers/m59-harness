@@ -35,6 +35,8 @@ import {resolve} from 'node:path';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-movement-region-test.mjs','real client packet boundary refuses off-component falls, transport and unproved exits while stationary survival preempts trades'],
+  ['m59-brax-logistics-test.mjs','each ledge side has a reversible exact public rail without an elevator or cross-ledge walk'],
   ['m59-survival-decision-test.mjs','real keeper recovery transitions, explicit protected handoffs, cancellation and replacement chains remain executable'],
   ['m59-active-recovery-state-test.mjs','actual keeper active logoff activation remains owned across native/public gates and interrupted-rest replacements'],
   ['m59-brax-boarding-lanes-test.mjs','separate landing columns overlap parking while shared alignment/flight and same-column clearance remain exclusive'],

@@ -3671,6 +3671,7 @@ export const SELL_TO = [
   /\bizzio\b/i,        // close to it, with rules of its own
   /herbutte/i,         // Sparkling Stone Shop, Barloque — gems. Verified: paid 856.
   /joguer/i,           // Joguer's Herbs and Roots, Barloque — mushrooms, herbs, elderberry
+  /zhieu b['’]hob/i,   // Jasper reagent buyer: jsmerch.kod ObjectDesired; sales still require receipts.
   /quintor/i,          // Quintor's Smithy, Jasper — weapons and armour
   /fehr['’]loi qan/i,  // Royal Blacksmith of Barloque — the established equipment circuit
   /paddock|solomon|pietro/i,   // inns and grocers we have traded with

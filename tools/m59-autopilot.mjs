@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {stationaryTradeActive} from './m59-stationary-trade.mjs';
 import{affordablePoisonCure,castRecoveryCure}from'./m59-recovery-cure.mjs';
 import{scriptedTrafficResumeReady,scriptedDeviationResumeCandidate}from'./m59-traffic-resume.mjs';
 import{deathLocationFromSessions}from'./m59-death-location.mjs';
@@ -2104,6 +2105,7 @@ export class Autopilot {
       buyReagents: true,
       // Independent DUM coordination strategies. null is deliberately inert: assigning
       // either strategy is what widens the keeper's behaviour, not merely installing it.
+      movementRegion: null,
       farmCleanup: null,
       farmDelivery: null,
       // SIFT MORE THAN THE PACK HOLDS AND CARRY THE BEST OF IT. Inert as null like its
@@ -12789,6 +12791,7 @@ export class Autopilot {
     for (const k of ['at', 'pass', 'what'])
       if (k in e) { e[`detail_${k}`] = e[k]; delete e[k]; }
     e.at = Date.now(); e.pass = this.passes; e.what = what;
+    this.lastDecision = { ...e, stage: this.passStage ?? null };
     this.journal.push(e);
     if (this.journal.length > 200) this.journal.splice(0, this.journal.length - 200);
     if (what in DEBUG_STATES) this.flagDebug(what, e);
@@ -13189,6 +13192,8 @@ export class Autopilot {
       // it is the number the whole watchdog exists to bound the damage from. Null before
       // the keeper has started, never absent while it is running.
       entry: this.s?.enteredVia ?? null,
+      last_decision: this.lastDecision ? {...this.lastDecision, age_ms: Date.now()-this.lastDecision.at} : null,
+      farm_combat: this.farmCombat ?? null,
       ladder: {
         stage: this.passStage ?? null,
         stage_age_ms: this.passStageAt ? Date.now() - this.passStageAt : null,
@@ -13253,6 +13258,7 @@ export class Autopilot {
         } : null,
       } : { enabled: false },
       coordination: {
+        movement_region: { contract: this.policy.movementRegion, last_refusal: this.s.movementRegionStatus ?? null },
         farm_cleanup: { enabled: !!this.policy.farmCleanup?.enabled, ...this.coordination.cleanup },
         farm_delivery: { enabled: !!this.policy.farmDelivery?.enabled, ...this.coordination.delivery,
           pending: this.pendingFarmDelivery ? {
@@ -20633,6 +20639,7 @@ export class Autopilot {
   // bodies at once, so `heardOrder` checks the speaker against the ROSTER, not against the
   // text. See m59-follow.mjs and the assertions in m59-follow-test.mjs.
   async passFollow(ctx) {
+    if (stationaryTradeActive(this.s)) { this.doing = 'stationary cargo exchange'; return HANDLED; }
     const { s, c } = ctx;
     // A separate cursor from the social responder's: both read `said` and consuming the
     // stream out from under the other would make each one intermittently deaf.
@@ -23814,6 +23821,7 @@ export class Autopilot {
         claimQuarry(this.s.name, room?.num, claimedSwing);
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
+      this.farmCombat = {at:Date.now(),pending:true,target:engageName,target_id:claimedSwing,holding:!!holding};
       const f = await skills.fight(s, { target: engageName,
                                         // The same predicate that chose the quarry. An order naming
                                         // several creatures is not a string, and fight() would
@@ -23842,6 +23850,7 @@ export class Autopilot {
                                         weaponPriority: this.weaponPriorityNow(engageName),
                                         bannedWeapons: this.bannedWeaponsNow() });
 
+      this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8)};
       if(this.finishFailedCombatApproach(f))return HANDLED;
 
       // With equip:false fight() cannot know which prepared weapon shattered. Remember

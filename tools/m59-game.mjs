@@ -1,3 +1,5 @@
+import {observeStationaryMutation} from './m59-stationary-trade.mjs';
+import {guardRegionPacket} from './m59-movement-region.mjs';
 import{healReadiness}from'./m59-recovery-heal.mjs';
 // m59-game.mjs — Session class and its dependencies, extracted from m59-broker.mjs.
 //
@@ -2667,7 +2669,7 @@ class Session {
       c.loginHoldReleased = this.pacer.holdStatus();
       this.pacer.releaseCastHold();
     }
-    c.beforeGameMutation = () => bodyAuthority(this).guard();
+    c.beforeGameMutation = (op, parts) => { bodyAuthority(this).guard(); observeStationaryMutation(this, op); guardRegionPacket(this, autopilotIfAny(this.name)?.policy?.movementRegion, op, parts); };
     // EVERY CAST WITH A TRANCE IS WAITED OUT, whichever of the harness's cast sites sent it
     // (noteCastSent), and no move sent while one charges can be a run (M59Client.moveTo).
     c.onCastSent = info => this.noteCastSent(info);

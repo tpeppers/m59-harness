@@ -2681,7 +2681,7 @@ export class M59Client {
     // owner as paced packets. Connection maintenance and observation stay free.
     if (this.state === 'game' && (op === BP.ACTION || op === BP.USERCOMMAND ||
         (op >= BP.REQ_MOVE && op <= BP.CHANGE_DESCRIPTION && op !== BP.REQ_LOOK && op !== BP.REQ_INVENTORY) ||
-        op === BP.REQ_DEPOSIT || op === BP.REQ_WITHDRAWAL_ITEMS)) this.beforeGameMutation?.(op);
+        op === BP.REQ_DEPOSIT || op === BP.REQ_WITHDRAWAL_ITEMS)) this.beforeGameMutation?.(op, parts);
     // WHAT WE JUST ASKED FOR. Read by the `left` event to name a cause; see REQUEST_VERB.
     const verb = REQUEST_VERB[op === BP.USERCOMMAND ? 'uc' + (parts[0]?.[0] ?? '') : op];
     if (verb) this.lastItemRequest = { verb, at: Date.now() };

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {movementRegionSpec} from './m59-movement-region.mjs';
 // The MCP broker supervisor/API: one broker plus N keeper child processes, with
 // arbitrary agents driving their player characters. The optional lab runtime is the
 // separate one-process/shared-atlas entry point.
@@ -3759,11 +3760,11 @@ class KeeperProxy {
   // does not know how long the caller's errand is — so an errand outlasting its own hold has
   // to be able to say so. Presenting no token, or the wrong one, is refused: this is not a
   // way to take somebody else's.
-  async holdStill(why, maxMs, token) {
-    return keeperAction(this.name, this._index, 'hold', { why, max_ms: maxMs, token });
+  async holdStill(why, maxMs, token, stationary = false) {
+    return keeperAction(this.name, this._index, stationary ? 'stationary_trade_hold' : 'hold', { why, max_ms: maxMs, token });
   }
-  async releaseHold(why, token) {
-    return keeperAction(this.name, this._index, 'release', { why, token });
+  async releaseHold(why, token, stationary = false) {
+    return keeperAction(this.name, this._index, stationary ? 'stationary_trade_release' : 'release', { why, token });
   }
 
   // COMMANDER OWNERSHIP LIVES BESIDE THE KEEPER THAT OWNS THE SOCKET.
@@ -11058,6 +11059,7 @@ const TOOLS = [
                    '`what` came from (ms). Lets a pre-save id be translated through the generation ' +
                    'it was read in' },
       amount: { type: 'number', description: 'per reagent kind, default 2 of each — one casting' },
+      stationary: { type: 'boolean', description: 'No travel; short survival-preemptible cargo exchange. Requires who_travels=neither.' },
       who_travels: { type: 'string', enum: ['from', 'to', 'neither'],
                      description: 'default "from"' },
       // A DELIVERY THAT NEVER RETURNS IS NOT A SLOW DELIVERY. Twelve travel attempts, each
@@ -12348,6 +12350,7 @@ const TOOLS = [
           'attacked one of us within the hour, which is the closest thing to "PvP is anticipated" ' +
           'that exists here. "room" counts only the player standing here. "ignore" is the behaviour ' +
           'from before this existed.' },
+      movement_region: { type: ['object','null'], description: 'Hard movement boundary: version1, id, rooms, optional per-room protocol fine anchor x/y. Blocks off-region movement at packet send.' },
       confine_rooms: { type: 'array', items: { type: 'number' },
         description: 'the rooms this character may be in AT ALL. Unlike assigned_room this is ' +
           'honoured by the SURVIVAL refuge too, which is the largest hole in any confinement ' +
@@ -13052,6 +13055,7 @@ const TOOLS = [
       if (a.defend_chase !== undefined) p.policy.defendChase = !!a.defend_chase;
       // The rooms a character may be in AT ALL, including when the survival ladder is the
       // thing doing the moving. null or [] clears it and restores the ordinary refuge search.
+      if (a.movement_region !== undefined) p.policy.movementRegion = movementRegionSpec(a.movement_region);
       if (a.confine_rooms !== undefined)
         p.policy.confineRooms = Array.isArray(a.confine_rooms) && a.confine_rooms.length
           ? a.confine_rooms.map(Number).filter(Number.isFinite) : null;
