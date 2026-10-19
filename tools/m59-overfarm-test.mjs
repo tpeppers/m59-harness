@@ -98,6 +98,24 @@ section('an unknown value is not a value of zero');
 }
 
 // ---------------------------------------------------------------------------------------
+section('a kept id is kept, whatever its name (2026-10-19: 77 of 129 dedications dropped)');
+{
+  // Two hammers, one dedicated. By name they are the same item and score the same, which is how
+  // Gonzo traded the dedicated one for a wand of healing seven minutes after it was enchanted.
+  const pack = [{ id: 10, name: 'hammer', amount: 1 }, { id: 11, name: 'hammer', amount: 1 }];
+  const cap = 2 * unitCost('hammer').cost;
+  const plan = keepIds => planPickup({ floor: [{ id: 1, name: 'ruby', amount: 5 }], pack,
+    capacity: cap, sifted: cap * 1.2, policy: ON, keepIds });
+  const free = plan(null);
+  eq(free.swaps[0]?.drop[0]?.id, 10, 'with nothing kept the first hammer goes, and the swap names its id');
+  const one = plan([10]);
+  eq(one.swaps[0]?.drop[0]?.id, 11, 'with the dedicated hammer kept, the OTHER one is traded');
+  const both = plan(new Set([10, 11]));
+  eq(both.swaps.length, 0, 'with both kept, nothing is traded');
+  ok(/nothing in the pack may be dropped/.test(both.leave[0]?.why ?? ''), 'and the ruby is left, saying why');
+}
+
+// ---------------------------------------------------------------------------------------
 section('protected is protected');
 {
   const full = planPickup({
@@ -235,8 +253,10 @@ section('the policy survives the wiring');
 
   const autopilot = src('./m59-autopilot.mjs');
   ok(/^\s*overfarm: null,/m.test(autopilot), 'the autopilot policy defaults it to null — inert, not empty');
-  ok(/s\.setOverfarmPolicy\?\.\(this\.policy\.overfarm \?\? null, this\.protectedItemNames\(\),\s*this\.carryFloors\(\)\)/.test(autopilot),
-     "every pass installs it with the fleet's protected names AND its carry floors");
+  ok(/s\.setOverfarmPolicy\?\.\(this\.policy\.overfarm \?\? null, this\.protectedItemNames\(\),\s*this\.carryFloors\(\), \(\) => this\.overfarmKeepIds\(\)\)/.test(autopilot),
+     "every pass installs it with the fleet's protected names, its carry floors AND the kept weapon ids");
+  ok(/overfarmKeepIds\(\) \{[\s\S]{0,200}weaponMagicBook\(\)\.keepIds\(\)[\s\S]{0,200}wieldedWeaponId\(\)/.test(autopilot),
+     'the kept ids are the magic weapons and the one in hand');
   ok(/carryFloors\(\) \{/.test(autopilot), 'and the floors come from the loadout carry minimums');
   ok(/if \(name && Number\.isFinite\(min\) && min > 0\) out\[name\] = min;/.test(autopilot),
      'a floor of zero is not reported — it would read downstream as "all of this is surplus"');
@@ -245,8 +265,10 @@ section('the policy survives the wiring');
   const game = src('./m59-game.mjs');
   ok(/overfarm = this\._overfarmPolicy \?\? null/.test(game),
      'lootFloor defaults the policy from the session, so all six call sites inherit it');
-  ok(/setOverfarmPolicy\(policy = null, protect = \[\], floors = null\)/.test(game),
-     'the session accepts a policy, the protected names and the carry floors');
+  ok(/setOverfarmPolicy\(policy = null, protect = \[\], floors = null, keepIds = null\)/.test(game),
+     'the session accepts a policy, the protected names, the carry floors and the kept ids');
+  ok(/giving\.id != null \? inv\.find\(o => o\.id === giving\.id\)/.test(game),
+     'a swap drops the stack the plan chose BY ID, not the first one wearing its name');
   ok(/floors: this\._overfarmFloors/.test(game),
      'and the live pickup passes the floors through, or the overflow rule is inert');
   ok(/endOverfarmLap\(\)/.test(game), 'and can close a lap');

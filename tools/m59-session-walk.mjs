@@ -62,7 +62,8 @@ const SAFE_LEG_CORRIDORS = new Map();
 const DEVIATION_EDGE_TTL_MS = Number(process.env.M59_DEVIATION_EDGE_TTL_MS || 30 * 60 * 1000);
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
-import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation} from './m59-passage-admission.mjs';
+import {queueLineGuard} from './m59-rail-traffic.mjs';
+import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation, passageQueueAdvance} from './m59-passage-admission.mjs';
 
 /**
  * Build the walking half of a Session. Returns a prototype whose methods m59-game.mjs
@@ -361,6 +362,7 @@ export function sessionWalkPrototype(deps) {
     return {...onward,steps:steps+(onward.steps??0),departure_detour:true};
   }
 
+  passageQueueAdvance(target) { return passageQueueAdvance(this,target); }
   claimPassageMove(target) { return claimPassageMove(this, target); }
   releaseConfirmedPassage() { return releaseConfirmedPassage(this); }
   passageExitNeedsConfirmation(target) { return passageExitNeedsConfirmation(this, target); }
@@ -1399,7 +1401,15 @@ export function sessionWalkPrototype(deps) {
     // A LANE CHANGE IS A STEP OF ITS OWN. `threadInto` decides whether this one needs one and
     // returns both halves; the argument, the measurements and why a diagonal cannot do it are
     // on the method. A fall never asks — it is already leaving the floor.
-    if (!fall) {
+    const queueHead=!fall?(this.world?.geometry?.standPointWire?.(row,col)??{x:col*KOD_FINENESS+half,y:row*KOD_FINENESS+half}):null;
+    let convoyQueue=queueHead?this.passageQueueAdvance?.(queueHead):null;
+    if(convoyQueue?.queued&&c.self?.predicted){await this.confirmPosition();convoyQueue=this.passageQueueAdvance?.(queueHead);}
+    if(convoyQueue?.queued){
+      if(!convoyQueue.found||Math.hypot(convoyQueue.target.x-queueHead.x,convoyQueue.target.y-queueHead.y)>1)
+        return {moved:false,left_room:false,reason:'object_blocked',traffic:'convoy_queue',objectId:convoyQueue.predecessor,zone:convoyQueue.zone,position:before};
+      aim=convoyQueue.target;
+    }
+    if (!fall&&!convoyQueue?.queued) {
       const threaded = this.threadInto(before, row, col);
       aim = threaded.aim;
       // A squeeze can cost more than one packet. Each waypoint is a proved leg from the last, so
@@ -1437,7 +1447,8 @@ export function sessionWalkPrototype(deps) {
     const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,unclipped:declaredTimedFall,
         maxDeviation: timedFall||typeof this.confirmMovementDeviation!=='function' ? null : KOD_FINENESS,
         beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false),
-        minGap: Math.max(gap, owed), expectedRoomId: roomId });
+        minGap: Math.max(gap, owed), expectedRoomId: roomId,
+        targetGuard:convoyQueue?.queued?({from,to})=>queueLineGuard(from,queueHead,to):null });
     // `col`/`row` are `step`'s ARGUMENTS, which are where it is going — not where it is.
     // The first cut of this called them `from`, and a trace of an oscillating walk then read
     // as a character teleporting between two distant squares. Both ends are recorded now:
@@ -2001,6 +2012,18 @@ export function sessionWalkPrototype(deps) {
                    Math.round(closest) + ' units, inside one square' };
       let progressed = false;
 
+      const convoyQueue=this.passageQueueAdvance?.({x:destX,y:destY});
+      if(convoyQueue?.queued){
+        if(me.predicted){if(!await this.confirmPosition())return {arrived:false,reason:'position_confirmation_timeout',steps:i,log};continue;}
+        if(!convoyQueue.found)return {arrived:false,reason:'object_blocked',traffic:'convoy_queue',objectId:convoyQueue.predecessor,zone:convoyQueue.zone,steps:i,log};
+        const queued=await this.stepFine(convoyQueue.target.x,convoyQueue.target.y,{bodyDetour:true,movementGeneration,controlToken,
+          targetGuard:({from,to})=>queueLineGuard(from,{x:destX,y:destY},to)});
+        log.push({step:i,traffic:'convoy_queue',predecessor:convoyQueue.predecessor,reply:queued});
+        if(queued.cancelled||queued.left_room||isTerminalMovementReason(queued.reason))return {...queued,arrived:false,steps:i,log};
+        if(!queued.moved)return {...queued,arrived:false,traffic:'convoy_queue',steps:i,log};
+        continue;
+      }
+
       // A live body calls for a local route, before trying nine headings into it.
       // Stay on the caller's shelf mode for ledges; this ordinary-ground detour
       // uses the actual client trace and never bypasses passage admission.
@@ -2175,10 +2198,10 @@ export function sessionWalkPrototype(deps) {
             return null;
           }:null});
         if(r.reason==='casting_hold'){i--;continue walkSteps;}
-        if (r.traffic === 'passage_admission') {
+        if (r.traffic === 'passage_admission'||r.traffic==='convoy_queue') {
           geometryRejections.add('object_blocked');
           log.push({step:i,traffic:r.traffic,zone:r.zone});
-          await new Promise(resolve=>setTimeout(resolve,1000));
+          await new Promise(resolve=>setTimeout(resolve,150));
           continue walkSteps; // never fan into another part of the same passage
         }
         // AND CHECK WHERE IT ACTUALLY WENT. The trace is a model and the body is the fact: if
@@ -3614,10 +3637,10 @@ export function sessionWalkPrototype(deps) {
       // The re-aim used to be duplicated here. `step` owns it now — it is the primitive every
       // fall passes through, and two homes for one heuristic is how they drift apart.
       const r = await this.step(next.col, next.row, { beforeMutation, fall: !!next.fall });
-      if (r.traffic === 'passage_admission') {
+      if (r.traffic === 'passage_admission'||r.traffic==='convoy_queue') {
         taken += hop;
         queue.unshift(next);
-        await new Promise(resolve=>setTimeout(resolve,1000));
+        await new Promise(resolve=>setTimeout(resolve,150));
         continue; // bounded by maxSteps; do not learn a hole or sidestep admission
       }
       // Every packetless result yields (see _yieldIfPacketless): the guard below yields every

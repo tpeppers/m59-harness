@@ -1,3 +1,4 @@
+import {crossingAdmissionConflict} from './m59-crossing-queue.mjs';
 // m59-spotclaims.mjs — Atomic wall reservations shared by keeper processes.
 //
 // Production runs one keeper per OS process. An in-memory Map therefore cannot stop two
@@ -320,25 +321,39 @@ export function fileSpotHeldBy(agent, { snapshot = null } = {}) {
 // Passage claims use the same fleet/server namespace and atomic store as walls.
 // No timeout can evict a live body from a passage. Only its owner releases it
 // after a confirmed exit; dead-process claims are removed by records().
-export function reserveFilePassage(agent, room, zone, {flow=null}={}) {
+export function reserveFilePassage(agent, room, zone, {flow=null,entryPending=false,entry=null,character=null}={}) {
   if (!fileSpotClaimsEnabled()) return null;
   return withLock(dir => {
     const all = records(dir, 'passage');
-    const conflict = all.find(r => r.room === room && r.zone === zone && r.agent !== String(agent) && !(flow&&r.flow===flow));
+    const conflict = all.find(r => r.room === room && r.zone === zone && crossingAdmissionConflict(r,{agent:String(agent),flow,entry}));
     if (conflict) return { ok: false, agent: conflict.agent };
     const own = all.find(r => r.agent === String(agent));
+    if(own&&own.pid!==process.pid)return {ok:false,reason:'passage_owner_process_changed'};
     if (own?.room === room && own.zone === zone) return (own.flow??null)===flow?{ok:true}:{ok:false,reason:'passage_flow_changed'};
     if (own) return { ok: false, reason: 'passage_exit_unconfirmed' };
-    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone, flow,
+    writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone, flow, entryPending, entry, character,
       pid: process.pid, updated_at: Date.now() });
     return { ok: true };
   });
+}
+export function filePassageSnapshot(){
+ if(!fileSpotClaimsEnabled())return null;
+ return withLock(dir=>records(dir,'passage').map(({_path,_name,...record})=>record));
 }
 // Retag only this process's existing reservation. It remains held throughout;
 // this admits no new body and never releases another live keeper's claim.
 export function retagOwnFilePassage(agent,room,zone,flow){
  if(!fileSpotClaimsEnabled())return null;if(typeof flow!=='string'||!flow||flow.length>2048)throw Error('invalid passage convoy flow');
  return withLock(dir=>{const all=records(dir,'passage'),own=all.find(r=>r.agent===String(agent));if(!own)return{ok:false,reason:'passage_not_held'};if(own.pid!==process.pid||own.room!==room||own.zone!==zone)return{ok:false,reason:'passage_owner_or_location_changed'};if(own.flow===flow)return{ok:true,changed:false};const{_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,flow,updated_at:Date.now()});remove(_path);return{ok:true,changed:true};});
+}
+// Called only after the owning native session observes its body inside the zone.
+export function confirmFilePassageEntry(agent,room,zone){
+ if(!fileSpotClaimsEnabled())return null;
+ return withLock(dir=>{const own=records(dir,'passage').find(r=>r.agent===String(agent));
+  if(!own||own.pid!==process.pid||own.room!==room||own.zone!==zone)return false;
+  if(!own.entryPending)return true;
+  const {_path,_name,...record}=own;writeExclusive(dir,'passage',String(agent),{...record,entryPending:false,updated_at:Date.now()});remove(_path);return true;
+ });
 }
 export function releaseFilePassage(agent) {
   if (!fileSpotClaimsEnabled()) return null;

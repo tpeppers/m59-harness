@@ -50,3 +50,11 @@ export function rollingGatherCutoff({cutoff,hardCutoff,idleMs},now){
  if(![cutoff,hardCutoff,idleMs,now].every(Number.isFinite)||idleMs<0||hardCutoff<cutoff)throw Error('invalid gathering window');
  return now>cutoff?cutoff:Math.max(cutoff,Math.min(hardCutoff,now+idleMs));
 }
+
+// Shared by native passage admission and scripted crossings. A convoy may have
+// multiple bodies in a long corridor, but only one unconfirmed entrance packet.
+// Unknown flows remain exclusive; a timeout never proves physical clearance.
+export function crossingAdmissionConflict(held,request){
+ if(held.agent===request.agent)return false;
+ return !(request.flow&&held.flow===request.flow)||!!(request.entry&&held.entry&&request.entry!==held.entry)||held.entryPending===true;
+}

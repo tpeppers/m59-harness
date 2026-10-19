@@ -2744,3 +2744,6 @@ captured five-person offset landing jam; the same retained-body native regressio
 clears with the existing1.5-square queue convention. Distance-based pacing,
 actual-body confirmation, floor checks and final-send collision checks remain
 unchanged. This is a bounded regression repair, not a new live migration result.
+
+Ordinary narrow-passage admission and convoy line rules are documented in
+[m59-convoy-queues.md](m59-convoy-queues.md).

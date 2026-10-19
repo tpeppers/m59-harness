@@ -8,7 +8,7 @@ import {blockingBodySnapshot} from './m59-body-detour.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {floorAt} from './m59-ground.mjs';
 import {quantizeRailPoint,passedRailAim} from './m59-railfollow.mjs';
-import {planRailForwardGap,railEndQueueReady,planStraightQueueAdvance,planRailBodyDetour} from './m59-rail-traffic.mjs';
+import {planRailForwardGap,railEndQueueReady,planStraightQueueAdvance,planRailBodyDetour,queueLineGuard} from './m59-rail-traffic.mjs';
 import {canJoinDeclaredTakeoff} from './m59-jump-takeoff.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const refusalDetail=r=>!r?.moved?{reason:r?.reason??null,traffic:r?.traffic??r?.validation?.traffic??null,zone:r?.zone??r?.validation?.zone??null,holder:r?.validation?.holder??r?.holder??null,admission_reason:r?.validation?.admission_reason??null,note:r?.note??r?.validation?.note??null}:null;
@@ -132,7 +132,7 @@ async function executeCheckedRail(session,{room,leg,exit=null,nextJump=null,queu
     if(!gap.found){
      // Preserve the people queue; a known NPC directly blocking the next prefix
      // can use the same fully checked local detour as open-ground convoy travel.
-     if(queuePath){
+     if(queuePath&&!stayInLane){
       const npcObjects=new Map([...c.room.objects].filter(([id,o])=>id!==c.selfId&&Number.isInteger(o.flags)&&(o.flags&1)&&!(o.flags&4)));
       if(npcObjects.size){
        const b=c.self,dx=wire.protocol.x-b.x,dy=wire.protocol.y-b.y,length=Math.hypot(dx,dy),scale=length?Math.min(48,length)/length:0;
@@ -148,7 +148,7 @@ async function executeCheckedRail(session,{room,leg,exit=null,nextJump=null,queu
     }
     await session.standBeforeGo({shouldCancel:fence});if(fence())return finish(session.cancelledMovement({}));
     const r=await session.stepFine(gap.target.x,gap.target.y,{bodyDetour:true,movementGeneration:generation,
-      targetGuard:({from,to})=>{const a=protocolToClient(from),b=protocolToClient(to),start=floor(a.x,a.y),land=floor(b.x,b.y);return Number.isFinite(start)&&Number.isFinite(land)&&Math.abs(start-gap.height)<=16&&Math.abs(land-gap.floor)<=16?null:{reason:'shelf_changed_before_send'};}});
+      targetGuard:({from,to})=>{const line=queueLineGuard(from,wire.protocol,to);if(line)return line;const a=protocolToClient(from),b=protocolToClient(to),start=floor(a.x,a.y),land=floor(b.x,b.y);return Number.isFinite(start)&&Number.isFinite(land)&&Math.abs(start-gap.height)<=16&&Math.abs(land-gap.floor)<=16?null:{reason:'shelf_changed_before_send'};}});
     steps+=r.moved?1:0;Object.assign(progress,{updatedAt:now(),position:position(),reason:r.reason??null,blockedBy:r.objectId??null,last_refusal:refusalDetail(r)});onProgress({index,aim,reply:r});
     if(fence()||r.cancelled||r.left_room)return finish({...r,arrived:false});
     if(r.moved){progress.movedAt=now();continue;}

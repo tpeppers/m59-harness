@@ -137,6 +137,7 @@ const SUITES = [
   ['m59-shadow-journey-test.mjs', 'shadow replay resumes yielded or ended journey ownership and preserves active recovery'],
   ['m59-pivot-crowd-test.mjs', 'real optimized rail and pivot routes detour before confirmation waits; paced blockers and ownership remain guarded'],
   ['m59-travel-continuity-test.mjs', 'a recovering walk retains its objective, refused edges, mandatory avoidance and survival ownership'],
+  ['m59-convoy-traffic-test.mjs','ordinary fleet convoys share an entrance only after native confirmation, opposing mouths remain exclusive and lanes retain their line'],
   ['m59-passage-admission-test.mjs', 'narrow passages exclude unrelated traffic, share explicit same-destination convoys across processes, and release only confirmed individual exits'],
   ['m59-island-composition-test.mjs', 'Island work compiles before departure and required safe chains refuse direct fallback'],
   ['m59-pvp-readiness-test.mjs', 'PvP wand holds retain pursuit; sight, facing and shared cooldown are rechecked at dispatch; Castle chamber doors are shared'],

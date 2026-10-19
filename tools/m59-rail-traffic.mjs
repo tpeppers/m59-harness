@@ -189,3 +189,26 @@ export function planRailBodyDetour(geo,body,leg,{objects,selfId=body?.id,fromInd
  }
  return{found:false,reason:'no_proved_forward_body_detour'};
 }
+
+// All inputs here are protocol fine points. Identity is supplied by the caller;
+// proximity alone never turns a stranger or a monster into a convoy member.
+export function lineQueuePredecessor(body,head,{objects,selfId=body?.id,isConvoy=()=>false,nameOf=o=>o.name,clearance=32,horizon=128}={}){
+ if(![body?.x,body?.y,head?.x,head?.y].every(Number.isFinite))return null;
+ const dx=head.x-body.x,dy=head.y-body.y,length=Math.hypot(dx,dy);if(!length)return null;
+ let best;
+ for(const o of objects?.values?.()??[]){
+  if(o.id===selfId||!(o.flags&1)||!(o.flags&4)||![o.x,o.y].every(Number.isFinite)||!isConvoy(nameOf(o)))continue;
+  const along=((o.x-body.x)*dx+(o.y-body.y)*dy)/length,across=Math.abs((o.x-body.x)*dy-(o.y-body.y)*dx)/length;
+  if(along<=0||along>Math.min(length+clearance,horizon)||across>=clearance)continue;
+  if(!best||along<best.along)best={...o,along,across};
+ }
+ return best??null;
+}
+// Recheck the actual paced endpoint: a collision slide cannot leave the line
+// whose clear prefix was selected. The mover still checks terrain and all bodies.
+export function queueLineGuard(from,head,to,{tolerance=1}={}){
+ if(![from?.x,from?.y,head?.x,head?.y,to?.x,to?.y].every(Number.isFinite))return {reason:'queue_line_unconfirmed'};
+ const dx=head.x-from.x,dy=head.y-from.y,length=Math.hypot(dx,dy);if(!length)return {reason:'queue_line_finished'};
+ const along=((to.x-from.x)*dx+(to.y-from.y)*dy)/length,across=Math.abs((to.x-from.x)*dy-(to.y-from.y)*dx)/length;
+ return along<0||along>length+1||across>tolerance?{reason:'queue_lane_changed_before_send',traffic:'convoy_queue'}:null;
+}

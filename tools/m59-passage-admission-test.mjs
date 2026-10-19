@@ -55,11 +55,13 @@ if(process.argv[2]==='worker'){
   // unknown humans and a different declared flow retain exclusive admission.
   a.passageConvoy={flow:'route-to-east',characters:['known-b']};
   b.passageConvoy={flow:'route-to-east',characters:['known-a']};
-  a.client.self=point(3,3);b.client.self=point(3,7);
+  a.client.self=point(3,3);b.client.self=point(3,3);
   a.client.rsc=new Map([[123,'known-b']]);
   a.client.room.objects.set('b',{id:'b',nameRsc:123,flags:4,...point(3,5)});
   assert.equal(claimPassageMove(a,point(3,4)),null);
-  assert.equal(claimPassageMove(b,point(3,6)),null);
+  assert(claimPassageMove(b,point(3,4)),'only one unconfirmed entrant may enter even a shared convoy');
+  a.client.self=point(3,4);releaseConfirmedPassage(a);
+  assert.equal(claimPassageMove(b,point(3,4)),null);
   const foreign=body('foreign',3);foreign.passageConvoy={flow:'opposing-route',characters:['known-b']};
   assert.equal(claimPassageMove(foreign,point(3,4)).traffic,'passage_admission');
   a.client.self=point(3,7);assert(releaseConfirmedPassage(a));

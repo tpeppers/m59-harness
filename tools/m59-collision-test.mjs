@@ -30,6 +30,7 @@ import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { BP, M59Client } from './m59-client.mjs';
 import {preparedFineExitStage} from './m59-session-walk.mjs';
 import { isFleetmate } from './m59-party.mjs';
+import {queueLineGuard} from './m59-rail-traffic.mjs';
 import { overlapExempt } from './m59-roo.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
 import {verticalMotionRange,nextVerticalMotion,waitForVerticalSettlement} from './m59-vertical-motion.mjs';
@@ -1288,7 +1289,7 @@ const stepFine = compileSessionMethod(brokerSource,
     squaresPerSecond: () => 5 });
 const ordinaryStep = compileSessionMethod(brokerSource,
   'async step(col, row, {', 'step', {
-    MAX_STEP_HEIGHT,
+    MAX_STEP_HEIGHT, queueLineGuard,
     waitForVerticalSettlement,
     MOVE_INTERVAL_MS: 0, ROOM_RESYNC_MS: Number.POSITIVE_INFINITY,
     KOD_FINENESS, squaresPerSecond: () => 2.5,
@@ -1375,7 +1376,7 @@ const walkFine = compileSessionMethod(brokerSource,
     // stride may grow on clean ground, and the growth is a behaviour rather than a
     // tuning detail — a fixture that walked with a stubbed ceiling would assert the
     // reach of a walker nobody runs.
-    traceMove: () => {}, isTerminalMovementReason, KOD_FINENESS, planBodyDetour,
+    traceMove: () => {}, isTerminalMovementReason, KOD_FINENESS, planBodyDetour, queueLineGuard,
     // THE SHELF GUARD'S THREE. `holdShelf` reads floors, and floors live in CLIENT units
     // while this method works in kod PROTOCOL units, so both converters come with it. Real,
     // not stubbed: what they convert between is the whole point of the guard, and a fixture

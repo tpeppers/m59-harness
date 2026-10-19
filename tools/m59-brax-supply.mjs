@@ -23,8 +23,12 @@ export class BraxSupplyService{
  async pack(agent){for(let attempt=0;attempt<4;attempt++){const p=await this.call('inventory',{agent,fresh:true});if(Array.isArray(p?.items)&&p.ids_stale!==true)return p;if(attempt<3)await this.wait(500);}throw Error('inventory unconfirmed '+agent);}
  async localFarmers(room){const out=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(s.hp?.value>0&&s.room?.num===room)out.push({actor:c,state:s});}return out;}
  async needs(){const rows=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;const p=await this.pack(c.shadow_account);rows.push({agent:c.shadow_account,needs:braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]})});}return rows;}
- async transfer(from,to,item,amount){
-  if(!(amount>0))return null;if((this.notReadyUntil.get(from)??0)>Date.now()||(this.notReadyUntil.get(to)??0)>Date.now()){await this.event('trade-deferred',{from,to,item:item.name,reason:'recent native stationary readiness refusal'});return{quantity:0,deferred:true};}const id=randomUUID(),p=await this.pack(from),i=p.items.find(x=>x.id===item.id&&x.name===item.name);if(!i)throw Error('cargo changed before submission');
+ async transfer(from,to,item,amount,plannedAsOf=null){
+  if(!(amount>0))return null;if((this.notReadyUntil.get(from)??0)>Date.now()||(this.notReadyUntil.get(to)??0)>Date.now()){await this.event('trade-deferred',{from,to,item:item.name,reason:'recent native stationary readiness refusal'});return{quantity:0,deferred:true};}const id=randomUUID(),p=await this.pack(from),i=p.items.find(x=>x.id===item.id&&x.name===item.name);
+  const savedSincePlan=Number.isFinite(plannedAsOf?.inventory_at)&&Number.isFinite(p.ids_as_of?.last_save_at)&&p.ids_as_of.last_save_at>plannedAsOf.inventory_at;
+  // This is a proved pre-submission refusal, not a failed/unknown accepted
+  // transfer. Preserve the cargo and let the next ordinary cycle select afresh.
+  if(!i||savedSincePlan){await this.event('trade-deferred',{id,from,to,item:item.name,asked_id:item.id,reason:savedSincePlan?'planned cargo predates server save':'planned cargo no longer carried',submission:{attempted:false},planned_ids_as_of:plannedAsOf,current_ids_as_of:p.ids_as_of});return{quantity:0,deferred:true,unsubmitted:true};}
   const key=to+':'+i.name,signature=items=>JSON.stringify(items.map(x=>[x.name,x.amount>0?x.amount:1]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
   if(this.capacityBlocks.has(key)){const current=signature((await this.pack(to)).items);if(current===this.capacityBlocks.get(key)){await this.event('trade-deferred',{id,from,to,item:i.name,reason:'server-refused capacity; receiver inventory unchanged'});return{quantity:0,deferred:true};}this.capacityBlocks.delete(key);}
   const receiver=await this.read(to),cap=receiver.carry,unit=weighItem(i.name);
@@ -53,7 +57,7 @@ export class BraxSupplyService{
    const stock=weighItem(item.name);if(!stock||surplus<=0)continue;
    const required=Math.max(stock.weight>0?Math.ceil(Math.max(0,unit.weight+margin-free.weight)/stock.weight):0,stock.bulk>0?Math.ceil(Math.max(0,unit.bulk+margin-free.bulk)/stock.bulk):0);
    const n=Math.min(item.amount>0?item.amount:1,surplus,Math.max(1,required));
-   const receipt=await this.transfer(agent,this.runner,item,n);await this.event('recipient-room-export',{agent,item:item.name,quantity:receipt?.quantity??0,for:name});
+   const receipt=await this.transfer(agent,this.runner,item,n,p.ids_as_of);await this.event('recipient-room-export',{agent,item:item.name,quantity:receipt?.quantity??0,for:name});
    if(receipt?.quantity>0){free=(await this.read(agent)).carry?.room_for;if(!free||free.weight>=unit.weight+margin&&free.bulk>=unit.bulk+margin)return;} // Continue with different surplus until a whole provision fits.
   }
  }
@@ -63,7 +67,7 @@ export class BraxSupplyService{
    const need=braxNeeds(actor,(await this.pack(a)).items,{protectedNames:[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])]});
    for(const [name,want]of Object.entries(need)){if(want<=0)continue;await this.makeDeliveryRoom(actor,name);const p=await this.pack(this.runner),wear=new Set(((await this.read(this.runner)).equipment_items??[]).map(i=>i.id)),items=p.items.filter(i=>i.name===name||name==='herb'&&i.name==='herbs');const reserve=name==='hammer'?1:name==='herb'?20:name==='elderberry'?10:2;
     let left=Math.min(want,Math.max(0,items.reduce((n,i)=>n+(i.amount>0?i.amount:1),0)-reserve));
-    for(const item of items){if(wear.has(item.id))continue;const n=Math.min(left,item.amount>0?item.amount:1);if(n>0){const sent=await this.transfer(this.runner,a,item,n);left-=sent?.quantity??0;}if(!left)break;}
+    for(const item of items){if(wear.has(item.id))continue;const n=Math.min(left,item.amount>0?item.amount:1);if(n>0){const sent=await this.transfer(this.runner,a,item,n,p.ids_as_of);left-=sent?.quantity??0;}if(!left)break;}
    }
   }
  }
@@ -72,8 +76,8 @@ export class BraxSupplyService{
   let donors=0;for(const {actor,state}of locals){if(donors>=3)break;const a=actor.shadow_account,p=await this.pack(a),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
    const candidates=p.items.filter(i=>!worn.has(i.id)&&!protectedNames.some(n=>String(i.name).toLowerCase().includes(String(n).toLowerCase()))&&braxSaleCargo(i.name)).slice(0,2);
-   for(const i of candidates){await this.transfer(a,this.runner,i,Math.min(i.amount>0?i.amount:1,10));donors++;}
-   const cash=p.items.find(i=>/^shillings?$/.test(i.name));if(cash?.amount>1500&&count((await this.pack(this.runner)).items,'shilling')<10000){await this.transfer(a,this.runner,cash,Math.min(5000,cash.amount-1000));donors++;}
+   for(const i of candidates){await this.transfer(a,this.runner,i,Math.min(i.amount>0?i.amount:1,10),p.ids_as_of);donors++;}
+   const cash=p.items.find(i=>/^shillings?$/.test(i.name));if(cash?.amount>1500&&count((await this.pack(this.runner)).items,'shilling')<10000){await this.transfer(a,this.runner,cash,Math.min(5000,cash.amount-1000),p.ids_as_of);donors++;}
   }
  }
  async townTravel(agent,to){
@@ -120,7 +124,7 @@ export class BraxSupplyService{
    const to=from===this.runner?agent:this.runner,p=await this.pack(from),state=await this.read(from),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)):p.items.filter(i=>!worn.has(i.id)&&(braxSaleCargo(i.name)||/^shillings?$/.test(i.name)));
    const budgets=new Map(),protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
-   for(const item of chosen){if(worn.has(item.id)||from===this.runner&&protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;const reserve=from===agent?(item.name==='hammer'?1:/herbs?/.test(item.name)?5:item.name==='elderberry'?5:item.name==='loaf of bread'?4:0):/^shillings?$/.test(item.name)?500:0;if(!budgets.has(item.name))budgets.set(item.name,Math.max(0,count(p.items,item.name)-reserve));const n=Math.min(item.amount>0?item.amount:1,budgets.get(item.name),/^shillings?$/.test(item.name)?5000:100);if(n){const sent=await this.transfer(from,to,item,n);budgets.set(item.name,budgets.get(item.name)-(sent?.quantity??0));}}
+   for(const item of chosen){if(worn.has(item.id)||from===this.runner&&protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;const reserve=from===agent?(item.name==='hammer'?1:/herbs?/.test(item.name)?5:item.name==='elderberry'?5:item.name==='loaf of bread'?4:0):/^shillings?$/.test(item.name)?500:0;if(!budgets.has(item.name))budgets.set(item.name,Math.max(0,count(p.items,item.name)-reserve));const n=Math.min(item.amount>0?item.amount:1,budgets.get(item.name),/^shillings?$/.test(item.name)?5000:100);if(n){const sent=await this.transfer(from,to,item,n,p.ids_as_of);budgets.set(item.name,budgets.get(item.name)-(sent?.quantity??0));}}
   }
   // Other farmers may still be in upper578 during preparation.
   await this.phase(this.runner,'local distribution');await this.deliverLocal();
