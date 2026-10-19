@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {tourPlan,tourComplete,insideNode,TOUR_NODES,cutTourWalk,travelJobActive} from './m59-node-tour.mjs';
+import {tourPlan,tourComplete,insideNode,TOUR_NODES,cutTourWalk,travelJobActive,inRoomNodePlan} from './m59-node-tour.mjs';
 import {STONES} from './m59-stones.mjs';
 import {roomGeometry,edgeOf} from './m59-ground.mjs';
 let count=0;const test=(name,fn)=>{fn();count++;console.log('ok '+name);};
@@ -29,5 +29,21 @@ test('measured Badlands return survives the old 400k cap and reaches the exit sq
   assert.ok(proof.visited>400000);assert.ok(points.length>1);assert.deepEqual(points[0],from);
   const last=points.at(-1);assert.equal(Math.floor(last.x/1024)+1,53);assert.equal(Math.floor(last.y/1024)+1,1);
   const edge=edgeOf(geo);assert.ok(points.slice(1).every((p,i)=>edge(points[i],p)));
+});
+test('in-room Badlands plan: cut to the rail start, rail, meld, cut back to the entrance',()=>{
+  const p=inRoomNodePlan('badlands');
+  assert.deepEqual(p.map(s=>s.kind),['cut','rail','meld','cut']);
+  assert.deepEqual(p[0],{kind:'cut',room:45,x:53856,y:992,row:1,col:53});
+  assert.equal(p[1].node,'badlands');assert.equal(p[2].node,'badlands');
+  assert.deepEqual(p[3],tourPlan().find(s=>s.kind==='cut'&&s.room===45));
+});
+test('in-room plan refuses a stone it has no measured rail start for',()=>assert.throws(()=>inRoomNodePlan('victoria'),/no_in_room_plan_for_victoria/));
+test('a Badlands farmer on the common floor (r28c18) cuts to the rail start; r54c47 under the mesa does not',()=>{
+  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0],edge=edgeOf(geo);
+  const farm={x:18*1024+512,y:28*1024+512},{points}=cutTourWalk(geo,farm,step);
+  assert.ok(points&&points.length>1);assert.equal(points[0].x,farm.x);assert.equal(points[0].y,farm.y);
+  const end=points.at(-1);assert.ok(Math.hypot(end.x-53856,end.y-992)<=64,JSON.stringify(end));assert.equal(end.f,1664); // one lattice step from the rail's first waypoint, on its floor
+  assert.ok(points.slice(1).every((q,i)=>edge(points[i],q)));
+  assert.equal(cutTourWalk(geo,{x:47*1024+512,y:54*1024+512},step).points,null);
 });
 console.log(count+' tour checks passed');

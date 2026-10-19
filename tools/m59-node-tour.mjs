@@ -41,6 +41,19 @@ export function cutTourWalk(geo,from,step){
 }
 export const tourPlan=circuitPlan;
 
+// ALREADY IN THE STONE'S ROOM. A farmer posted beside a stone has no reason to go to room 2 and back to meld it, and
+// a planner walk from the farm floor cannot get onto the stone's shelf: Robin in The Badlands (45), 2026-10-19,
+// stalled at r54c47 with walk_to and at r58c45 crawling (40 hops that "did not take"), floor 1664 under a stone on
+// 4096. So: a checked body-seeded cut to the first waypoint of the stone's measured rail, the rail itself, the
+// circuit's own meld (node memory written), and the circuit's return cut to the room's entrance. Only stones whose
+// rail start is on the room's common floor are listed; anything else answers no plan rather than a guess.
+const IN_ROOM_RAIL_START=Object.freeze({badlands:{room:45,x:53856,y:992,row:1,col:53}});
+export function inRoomNodePlan(node){
+  const start=IN_ROOM_RAIL_START[node];
+  if(!start)throw Error('no_in_room_plan_for_'+node);
+  return [{kind:'cut',...start},{kind:'rail',node},{kind:'meld',node},{kind:'cut',room:start.room,boxFlood:true,row:start.row,col:start.col}];
+}
+
 export function tourReturnPlan(room){
   const travel=to=>({kind:'travel',to});
   const north=[578,576,587,597,598,599,2].map(travel);
@@ -64,7 +77,7 @@ export function tourReturnPlan(room){
 export async function runTour(ctx,options={}){
   return withTourWalkOwnership(ctx.agent,()=>runTourInner(ctx,options));
 }
-async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false,useCache=false,getAll=false}={}){
+async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evidenceDir='substrate/node-tours',fromStep=0,expectedGame=null,recovery=false,useCache=false,getAll=false,inRoom=null}={}){
   fromStep=Number(fromStep);
   if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
@@ -75,15 +88,16 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
     if(identityProblem)throw Error(identityProblem);
   }
   const first=await call('look',{agent});
-  if(!recovery&&fromStep===0&&first.room?.num!==2)throw Error('tour_start_requires_room_2');
+  if(inRoom&&first.room?.num!==STONES[inRoom]?.room)throw Error('in_room_start_requires_room_'+STONES[inRoom]?.room);
+  if(!inRoom&&!recovery&&fromStep===0&&first.room?.num!==2)throw Error('tour_start_requires_room_2');
   if(useCache&&fromStep!==0)throw Error('cache_selection_cannot_resume_by_full_circuit_step');
   const character=health.session_characters?.[agent];
   const server=health.session_game_servers?.[agent]??health.game_server;
-  const memory=useCache&&!recovery?await readNodeMemory({server:server.host+':'+server.port,character}):null;
-  const selection=selectCircuitNodes(memory,{getAll:useCache?getAll:true});
+  const memory=useCache&&!recovery&&!inRoom?await readNodeMemory({server:server.host+':'+server.port,character}):null;
+  const selection=inRoom?{selected:[inRoom],in_room:true}:selectCircuitNodes(memory,{getAll:useCache?getAll:true});
   console.log('TOUR SELECTION '+JSON.stringify(selection));
-  const plan=recovery?tourReturnPlan(first.room.num):tourPlan(selection.selected);
-  if(useCache&&!recovery)await ensureTourRails({railFile,selected:selection.selected});
+  const plan=inRoom?inRoomNodePlan(inRoom):recovery?tourReturnPlan(first.room.num):tourPlan(selection.selected);
+  if((useCache&&!recovery)||inRoom)await ensureTourRails({railFile,selected:selection.selected});
   const usesBakedRails=plan.some(s=>s.kind==='rail');
   const id='five-node-'+Date.now(),record={format:'m59-node-tour/1',id,at:new Date().toISOString(),agent,
     fleet:health.fleet,character,game_server:server,checkout_sha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),
@@ -204,6 +218,7 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
     record.selected_complete=selectedCircuitComplete(record);
     record.recovery_complete=recovery&&record.end.room===2;
     record.partial_complete=!recovery&&fromStep>0;
+    if(inRoom){record.in_room_complete=record.nodes.some(n=>n.stone===inRoom&&['melded','already'].includes(n.status));return record.in_room_complete;}
     return useCache&&!recovery?record.selected_complete:record.complete||record.partial_complete||record.recovery_complete;
   }catch(e){record.failure=String(e.stack??e);console.log('TOUR STOP '+e.message);return false;}
   finally{
