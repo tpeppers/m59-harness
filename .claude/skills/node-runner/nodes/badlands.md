@@ -1,5 +1,29 @@
 # badlands — NODE_BADLANDS, room 45, stone at r63c46
 
+## 2026-10-19 — from INSIDE the room (farmers already posted in 45)
+
+The Qor groundworm farm put five characters in room 45, so the question became meld-from-inside rather
+than the canyon. Two attempts from the farm floor failed for the reason the 09-28 update already gives:
+the stone sits on the mesa at floor 4096, and the farm floor is 1664.
+
+- `mana-node` (28306a93, walkTo within 4 then crawlTo): Robin r28c18 -> r58c45 in under a minute, then
+  10 minutes of crawl with 40 hops that "did not take" against 5 body blocks. Receipt:
+  `substrate/scratch/node-robin2.out`.
+- A planned `walk_to` r63c46 within 2 (local `node-walk-in`) stalled at r54c47 twice: "no movement across
+  two attempts".
+
+Neither is a body problem, and the predicate is the mesa edge. The repair reuses the measured rail rather
+than re-deriving it. `node-in-room agents=<a> node=badlands` (4af59518, `inRoomNodePlan`) does a body-seeded
+cut to the rail's first waypoint (53856,992)/1664, then the strict rail, the circuit meld and the circuit
+return cut. Offline: r28c18 -> 595 checked points, r17c34 -> 291. r54c47 (already under the mesa) does not
+reach it, which is pinned in m59-node-tour-test. **Live result: not yet run.** It was deferred because a red
+alert recalled the farm and it needs a deploy.
+
+Greenfield answer for this run: the tool that would have made this an hour was "does a measured rail
+exist for this stone, and can a cut reach its first waypoint from where I stand?" That is now
+`inRoomNodePlan` plus the cut check. Next candidates are any stone with a promoted rail whose start is
+on its room's common floor.
+
 ## Five-node tour connection
 
 Partial tour `five-node-1790622360454` entered room 49 normally from 593:
