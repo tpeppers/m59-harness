@@ -172,8 +172,29 @@ export function normalisePlan(raw) {
   }
   const reagents = normaliseReagents(raw, problems);
   const coopCaps = normaliseCoopCaps(raw, problems);
-  return { chests, problems, reagents, coop_caps: coopCaps,
+  const everyone = normaliseEveryone(raw, chests, problems);
+  return { chests, problems, reagents, coop_caps: coopCaps, everyone,
            empty: [...chests.values()].every(items => !items.length) };
+}
+
+// THE ITEMS EVERY CHARACTER KEEPS AND DEPOSITS, guild_wants or not. Operator, 2026-10-19: "have everyone mark
+// the reagents for dispel illusion as things to keep and send back to the guild hall into the chest". A
+// character's own `guildWants` makes it haul toward EVERY chest target, which is far more than that; `everyone`
+// names the few items the whole fleet carries home. Each must also have a chest target, or it is reported and
+// dropped -- a fleet-wide keep with nowhere to put it would only fill packs.
+function normaliseEveryone(raw, chests, problems) {
+  const src = raw?.everyone;
+  if (src == null) return [];
+  if (!Array.isArray(src)) { problems.push('"everyone" must be a list of item names'); return []; }
+  const wanted = new Set([...chests.values()].flat().map(i => i.item));
+  const out = [];
+  for (const name of src) {
+    const item = norm(name);
+    if (!item) continue;
+    if (!wanted.has(item)) { problems.push(`"everyone" names "${name}", which no chest has a target for — dropped`); continue; }
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
 }
 
 /**

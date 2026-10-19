@@ -87,7 +87,8 @@ section('the wiring');
      'the exception lives inside the unidentified-jewellery refusal and nowhere else');
   ok(/setCursedPickup\?\.\(this\.policy\.pickupCursed \?\? \[\]\);\s*await this\.applyCurseCycle\(\);/.test(ap),
      'the gate is installed every pass, beside the cursed pickup list');
-  ok(/const hallOnly = cfg\?\.enabled \? null : this\.curseCycleHall\(\);/.test(ap) &&
+  // The narrowing set is the cycle's names plus the guild plan's fleet-wide `everyone` items (2026-10-19).
+  ok(/const hallOnly = cfg\?\.enabled \? null : \[\.\.\.\(this\.curseCycleHall\(\) \?\? \[\]\), \.\.\.\(plan\?\.everyone \?\? \[\]\)\];/.test(ap) &&
      /if \(hallOnly\) plan = restrictPlan\(plan, hallOnly\);/.test(ap),
      'the hall run with guild_wants off is narrowed to the cycle names');
 }

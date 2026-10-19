@@ -5708,8 +5708,12 @@ export class Autopilot {
   }
 
   guildWantedNames() {
-    if (!this.policy.guildWants?.enabled) return [];
-    const plan = guildPlan();
+    // WITHOUT GUILD WANTS OF ITS OWN a character still holds back the plan's `everyone` items while a chest is
+    // short of them (m59-guildwants.mjs normaliseEveryone; operator 2026-10-19, the dispel illusion reagents).
+    const full = guildPlan();
+    const everyone = this.policy.guildWants?.enabled ? null : (full?.everyone ?? []);
+    if (everyone && !everyone.length) return [];
+    const plan = everyone ? restrictPlan(full, everyone) : full;
     if (!plan) return [];
     const coopOwns = this.policy.reagentCoop?.enabled
       ? new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r))) : null;
@@ -30821,9 +30825,11 @@ export class Autopilot {
     const cfg = this.policy.guildWants;
     // THE CURSE CYCLE'S HALL RUN rides this path with guild_wants OFF, narrowed to its own names
     // (`hall`), so carrying rings to the hall does not also switch on every other line of the plan.
-    const hallOnly = cfg?.enabled ? null : this.curseCycleHall();
-    if (!cfg?.enabled && !hallOnly) return null;
+    // AND THE PLAN'S `everyone` ITEMS, which every character carries home whatever its own guild_wants
+    // (operator, 2026-10-19: "have everyone ... send [the dispel illusion reagents] back to the guild hall").
     let plan = this.guildContributionPlan ? this.guildContributionPlan(guildPlan()) : guildPlan();
+    const hallOnly = cfg?.enabled ? null : [...(this.curseCycleHall() ?? []), ...(plan?.everyone ?? [])];
+    if (!cfg?.enabled && !hallOnly.length) return null;
     if (!plan) return null;                       // no plan is not an empty plan
     if (hallOnly) plan = restrictPlan(plan, hallOnly);
     const store = new StorageCache();

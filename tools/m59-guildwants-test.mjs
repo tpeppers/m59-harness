@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { contributionPlan, guildKeepTest, guildShortfall, guildStoreAvailable,
          normalisePlan } from './m59-guildwants.mjs';
 import { GUILD_CHEST_SLOTS, CHEST_BULK_MAX } from './m59-storage.mjs';
+import { restrictPlan } from './m59-curse-cycle.mjs';
+import { readFileSync as readEveryoneSrc } from 'node:fs';
 
 let n = 0;
 const ok = (c, why) => { assert.ok(c, why); n++; };
@@ -184,6 +186,30 @@ eq(guildShortfall({ plan: PLAN, chests: chestsWith(), rent: IN_GUILD })
   ok(at > 0, 'guildWantedNames exists');
   ok(!body.includes('reagentCoop?.enabled) return []'), 'a co-op member no longer gets an empty want list');
   ok(body.includes('coopOwns') && body.includes('!coopOwns?.has(norm(item))'), 'only the co-op reagent list is excluded');
+}
+
+// ------------------------------------------------------------------ everyone (operator, 2026-10-19)
+// The items every character keeps and deposits whatever its own guild_wants: the dispel illusion reagents.
+{
+  const raw = { chests: { r18c2: { items: [{ item: 'dragonfly eye', target: 100 }, { item: 'uncut seraphym', target: 100 },
+                                           { item: 'vial of solagh', target: 50 }, { item: 'diamond', target: 713 }] } },
+                everyone: ['Dragonfly Eye', 'uncut seraphym', 'vial of solagh', 'dragonfly eye', 'firefly eye'] };
+  const plan = normalisePlan(raw);
+  eq(JSON.stringify(plan.everyone), JSON.stringify(['dragonfly eye', 'uncut seraphym', 'vial of solagh']),
+     'everyone is lower-cased and de-duplicated');
+  ok(plan.problems.some(p => /firefly eye.*no chest has a target/.test(p)), 'an everyone item with no chest target is reported and dropped');
+  eq(normalisePlan({ chests: {} }).everyone.length, 0, 'no everyone key is an empty list');
+  const narrow = restrictPlan(plan, plan.everyone);
+  const pack = [{ name: 'dragonfly eye', amount: 7 }, { name: 'vial of solagh', amount: 3 }, { name: 'diamond', amount: 40 }];
+  const give = contributionPlan({ plan: narrow, chests: chestsWith(), pack, rent: IN_GUILD });
+  const items = (give.chests ?? []).flatMap(c => (c.give ?? []).map(g => g.item));
+  ok(items.includes('dragonfly eye') && items.includes('vial of solagh'), 'everyone items are deposited');
+  ok(!items.includes('diamond'), 'a diamond the plan also wants is NOT carried by a character without guild_wants');
+  const src = readEveryoneSrc(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const wanted = src.slice(src.indexOf('  guildWantedNames() {'), src.indexOf('  guildWantedNames() {') + 700);
+  ok(/full\?\.everyone/.test(wanted) && /restrictPlan\(full, everyone\)/.test(wanted), 'guildWantedNames holds back everyone items without guild_wants');
+  const contrib = src.slice(src.indexOf('async contributeGuildWants'), src.indexOf('const store = new StorageCache();', src.indexOf('async contributeGuildWants')));
+  ok(/plan\?\.everyone/.test(contrib) && /restrictPlan\(plan, hallOnly\)/.test(contrib), 'contributeGuildWants deposits everyone items without guild_wants');
 }
 
 console.log(`guild wants: ${n} assertions passed`);
