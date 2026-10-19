@@ -407,6 +407,7 @@ import { attachStepMasks } from './m59-routes.mjs';
 import { installDoorObserver } from './m59-ceiling-doors.mjs';
 import { tranceMs, classifyTranceLine } from './m59-trance.mjs';
 import { idleGearCheck } from './m59-castrite.mjs';
+import { cycleMayLoot } from './m59-curse-cycle.mjs';
 let geometryStartupMode = 'eager';
 try {
   const masks = attachStepMasks(worldMap, {
@@ -4917,6 +4918,14 @@ class Session {
   }
 
   /**
+   * The curse cycle's gate for this pass, `{ open, pickup }` or null (m59-curse-cycle.mjs).
+   * Installed by the autopilot every pass, like the two above; null is the default refusal.
+   */
+  setCurseCycle(gate = null) {
+    this._curseCycle = gate?.open ? { open: true, pickup: [...(gate.pickup ?? [])] } : null;
+  }
+
+  /**
    * A LAP ENDS WHERE THE GOODS DO. Called when the pack is emptied into a merchant, a vault
    * or a guild chest — that is the moment the next 150% starts counting, and it is the only
    * moment, because a lap measured from anything else (a clock, a room change, a restart)
@@ -4993,6 +5002,7 @@ class Session {
     const held = n => [...(c.inventory ?? []), ...(c.equipment?.()?.equipped ?? [])]
       .some(i => String((i?.nameRsc != null && c.rsc.get(i.nameRsc)) || i?.name || '').toLowerCase() === n);
     const takenCursed = new Set();
+    const takenCycle = new Set();
     cands = cands.filter(o => {
       const n = c.rsc.get(o.nameRsc) || '';
       if (CURSED_ITEMS.test(n)) {
@@ -5023,6 +5033,9 @@ class Session {
       // (`IsTargetInRange`), so leaving one where it lies costs nothing: it can be read
       // first and picked up afterwards.
       if (UNREVEALED_JEWELLERY.test(n) && skills.isUnrevealed(o)) {
+        // UNLESS THIS CHARACTER CAN TAKE THE CURSE OFF ITSELF, and the curse cycle's gate is open
+        // this pass (m59-curse-cycle.mjs). Then ONE, and the keeper reads the body back afterwards.
+        if (cycleMayLoot(n, this._curseCycle, takenCycle)) { this._curseCycleTakenAt = Date.now(); return true; }
         cursedSkipped.push(`${n} (unidentified — a cursed ring equips itself on pickup)`);
         return false;
       }
