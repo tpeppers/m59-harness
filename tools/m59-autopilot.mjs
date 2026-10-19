@@ -16659,7 +16659,7 @@ export class Autopilot {
     // this fleet already refuses to sell are also the things it refuses to trade away.
     s.setLootIgnore?.(this.lootIgnoreList());
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
-                          this.carryFloors());
+                          this.carryFloors(), () => this.overfarmKeepIds());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
     s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k) });
     if (!s.live) { this.note('not in game'); return; }
@@ -31709,6 +31709,14 @@ export class Autopilot {
   // a keeper restart, which costs one look per weapon to rebuild — cheap, and honest, because an
   // enchantment may have lapsed in the meantime.
   weaponMagicBook() { return (this._weaponMagic ??= new WeaponMagicBook()); }
+
+  /** Ids the overfarm swap may never trade away: magic weapons (the book) and the one in hand. */
+  overfarmKeepIds() {
+    const ids = this.weaponMagicBook().keepIds();
+    const w = this.wieldedWeaponId();
+    if (w != null && Number(w) >= 0) ids.add(Number(w));
+    return ids;
+  }
 
   packWeapons(c = this.s.client) {
     return (c?.inventory ?? []).map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || '' }))

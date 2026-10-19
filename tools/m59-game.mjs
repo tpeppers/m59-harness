@@ -4895,9 +4895,12 @@ class Session {
     else this._lootOnlyMemory = null;
   }
 
-  setOverfarmPolicy(policy = null, protect = [], floors = null) {
+  // `keepIds` is a FUNCTION returning ids, asked at the moment of the swap: the autopilot's weapon
+  // book learns of a dedication between passes, and a set copied at install time would be a pass old.
+  setOverfarmPolicy(policy = null, protect = [], floors = null, keepIds = null) {
     this._overfarmPolicy = policy ?? null;
     this._overfarmProtect = Array.isArray(protect) ? protect : [];
+    this._overfarmKeepIds = typeof keepIds === 'function' ? keepIds : null;
     // {name: min} from the loadout's carry floors. `protect` says whether a thing may be
     // given up at all; this says how much of it must stay, which is what makes a surplus
     // droppable instead of the whole stack being untouchable.
@@ -5167,11 +5170,16 @@ class Session {
       if (cap?.known && cap.load?.exact) {
         const named = o => c.rsc.get(o.nameRsc) || '';
         this._overfarm ??= { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 };
+        // NEVER TRADE AWAY A DEDICATED WEAPON OR ANYTHING WORN. Both are kept by ID: the name of a
+        // dedicated hammer is "hammer" (m59-weapon-magic.mjs keepIds has the 2026-10-19 count).
+        let keepIds = new Set();
+        try { keepIds = new Set([...(this._overfarmKeepIds?.() ?? [])].map(Number)); } catch {}
+        for (const e of (c.equipment?.()?.equipped ?? [])) if (Number(e?.id) >= 0) keepIds.add(Number(e.id));
         overfarmPlan = planPickup({
           floor: cands.map(o => ({ id: o.id, name: named(o), amount: o.amount || 1 })),
           pack: (c.inventory || []).map(o => ({ name: c.rsc.get(o.nameRsc) || o.name,
                                                 amount: o.amount || 1, id: o.id })),
-          policy: ofPolicy, protect, floors: this._overfarmFloors, capacity: cap.weight_max,
+          policy: ofPolicy, protect, keepIds, floors: this._overfarmFloors, capacity: cap.weight_max,
           sifted: this._overfarm.sifted,
         });
 
@@ -5179,8 +5187,11 @@ class Session {
         // server refuses the pickup and we have thrown something away for nothing.
         for (const swap of overfarmPlan.swaps) {
           for (const giving of swap.drop) {
-            const held = (c.inventory || []).find(o =>
-              (c.rsc.get(o.nameRsc) || o.name) === giving.name);
+            // BY ID, THEN BY NAME AMONG THE UNKEPT. `find` by name alone dropped the FIRST stack of
+            // that name, which for a weapon could be the dedicated one the plan never chose.
+            const inv = c.inventory || [];
+            const held = (giving.id != null ? inv.find(o => o.id === giving.id) : null) ??
+              inv.find(o => (c.rsc.get(o.nameRsc) || o.name) === giving.name && !keepIds.has(Number(o.id)));
             if (!held) continue;
             await this.pacer.submit('drop', () => {
               if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });

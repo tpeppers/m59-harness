@@ -164,6 +164,22 @@ export class WeaponMagicBook {
     return hit;
   }
 
+  /**
+   * THE WEAPONS NOTHING MAY THROW AWAY FOR LOOT: every id read as enchanted, and every id whose
+   * reading a dedication or a lapse re-opened (it is very likely enchanted and simply unread). The
+   * overfarm swap ranks a pack by NAME, so a dedicated hammer and a troll's mundane one score the
+   * same, and on 2026-10-19 77 of 129 fresh dedications were dropped. Gonzo traded his for a wand of
+   * healing seven minutes after Raphael enchanted it. A weapon with NO reading is fresh loot and stays
+   * droppable: protecting the unread would protect every long sword a troll drops.
+   */
+  keepIds() {
+    const out = new Set();
+    for (const [id, r] of this.readings)
+      if (r.bypasses_nonmagic === true || (r.class === 'unknown' && /^(dedication|lapse)$/.test(String(r.source))))
+        out.add(Number(id));
+    return out;
+  }
+
   /** Drop readings for ids no longer carried, and for ids now wearing a different name. */
   reconcile(items = []) {
     const live = new Map(items.filter(i => i?.id != null).map(i => [Number(i.id), norm(i.name)]));

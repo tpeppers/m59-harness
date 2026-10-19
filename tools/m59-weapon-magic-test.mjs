@@ -93,6 +93,16 @@ console.log('WeaponMagicBook: a mundane reading is not for ever');
   ok('and the re-opened ones are looked at again', book.needsLook(pack).map(i => i.id).join() === '1,3');
 }
 
+console.log('WeaponMagicBook: keepIds — what the overfarm swap may never trade away');
+{
+  const book = new WeaponMagicBook({ now: () => 0 });
+  book.record(1, 'hammer', PLAIN); book.record(2, 'hammer', ENCH); book.record(3, 'long sword', PLAIN);
+  ok('an enchanted reading is kept and a mundane one is not', [...book.keepIds()].join() === '2');
+  book.reopen('long sword');
+  ok('a reading a dedication re-opened is kept until a look settles it', [...book.keepIds()].sort().join() === '2,3');
+  ok('a weapon never read at all is not kept (fresh loot stays droppable)', !book.keepIds().has(4));
+}
+
 console.log('magicSwap');
 {
   const rank = n => ({ hammer: 0, 'long sword': 1 }[n] ?? 5);

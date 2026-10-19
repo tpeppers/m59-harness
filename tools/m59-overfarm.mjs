@@ -252,7 +252,7 @@ export function overfarmPhase({ packPercent = null, sifted = 0, capacity = null,
  * @returns {{phase, take, leave, swaps, room, sifted_percent, why}}
  */
 export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
-                             protect = [], floors = null, unbuyable = null,
+                             protect = [], keepIds = null, floors = null, unbuyable = null,
                              might = null, capacity = null, sifted = 0 } = {}) {
   const p = policy;
   const max = capacity ?? (might == null ? null : packMax(might));
@@ -323,7 +323,12 @@ export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
   // zero is not a floor" mistake with the sign flipped.
   const noRebuy = unbuyable ?? (p.unbuyable?.length ? p.unbuyable : null);
   const cannotRebuy = (name) => !!noRebuy && listHas(noRebuy, name);
+  // `keepIds` PROTECTS ONE OBJECT, NOT A NAME. A dedicated hammer is called "hammer" exactly like
+  // the troll's mundane one, so a name list can only protect both or neither (m59-weapon-magic.mjs
+  // keepIds has the incident).
+  const kept = new Set([...(keepIds ?? [])].map(Number));
   const droppable = pack
+    .filter(it => it.id == null || !kept.has(Number(it.id)))
     .map(it => ({ ...it, spare: spareOf(it) }))
     .filter(it => it.spare > 0)
     .map(it => ({ ...it, amount: it.spare, rank: rank(it.name) }))
@@ -374,7 +379,8 @@ export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
         droppable.splice(droppable.indexOf(g), 1);
         free += g.rank.cost * (Number(g.amount) || 1);
       }
-      swaps.push({ take: o, drop: giving.map(g => ({ name: g.name, amount: g.amount, score: g.rank.score })),
+      swaps.push({ take: o, drop: giving.map(g => ({ ...(g.id != null ? { id: g.id } : {}),
+                                                    name: g.name, amount: g.amount, score: g.rank.score })),
         why: `${o.name} scores ${o.rank.score.toFixed(2)} against ` +
              `${giving.map(g => `${g.name} at ${g.rank.score.toFixed(2)}`).join(' + ')} — ` +
              `clears the ${p.swap_margin}x swap margin` });
