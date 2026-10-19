@@ -46,7 +46,8 @@ section('the gate');
   ok(!curseCycleGate(cfg, { ...able, emeralds: 5, floor: 5 }).open,
      'the loadout floor raises the reserve when it is larger');
   ok(!curseCycleGate(cfg, { ...able, mana: 8 }).open, 'shut below 9 mana');
-  ok(!curseCycleGate(cfg, { ...able, cursedWorn: 1 }).open, 'shut while a cursed item is worn');
+  ok(curseCycleGate(cfg, { ...able, cursedWorn: 1 }).open,
+     'a cursed item worn on purpose does not shut it: the curse is on the wearer and goes back on');
   ok(!curseCycleGate(normalizeCurseCycle({ keep: ['magical ring'] }).cfg, able).open,
      'a keep-only answer never opens the pickup');
   ok(uncurseAffordable(cfg, able).ok, 'the uncurse is payable on the same body');
@@ -99,7 +100,7 @@ function body({ worn = [], pack = [], emeralds = 5, karma = 40, mana = 20, landi
   const inventory = [...worn.map(w => mk(w.name, w)), ...pack.map(p => mk(p.name, p)),
                      mk('emerald', { amount: emeralds })];
   let equipped = inventory.slice(0, worn.length).map(o => ({ id: o.id }));
-  const calls = { casts: 0, drops: [] };
+  const calls = { casts: 0, drops: [], uses: [] };
   const c = {
     inventory, spells: [{ id: 1, nameRsc: 'rc' }],
     rsc: { get: k => (k === 'rc' ? 'remove curse' : names.get(k)) },
@@ -107,6 +108,7 @@ function body({ worn = [], pack = [], emeralds = 5, karma = 40, mana = 20, landi
     vitals: () => ({ mana: { value: mana } }),
     equipment: () => ({ known: true, equipped }),
     requestInventory: async () => {}, waitFor: async () => ({ events: [] }),
+    use: id => { calls.uses.push(id); equipped = [...equipped, { id }]; },
     drop: async specs => { for (const sp of specs) {
       const id = sp?.id ?? sp; calls.drops.push(names.get(id));
       const i = c.inventory.findIndex(o => o.id === id); if (i >= 0) c.inventory.splice(i, 1); } },
@@ -138,6 +140,13 @@ section('the stage');
   const { ap, calls } = body({ worn: [{ name: 'ring of lethargy', rarity: 200 }], emeralds: 3 });
   eq(await ap.passCurseCycle({}), CONTINUE, 'with only the reserve left, nothing is spent');
   eq(calls.casts + calls.drops.length, 0, 'no cast and no drop');
+}
+{
+  const { ap, calls } = body({ worn: [{ name: 'amulet of shadows', rarity: 200 }, { name: 'ring of lethargy', rarity: 200 }] });
+  eq(await ap.passCurseCycle({}), HANDLED, 'a ring cursed beside a worn amulet is still handled');
+  eq(calls.drops, ['ring of lethargy'], 'only the ring is dropped');
+  eq(calls.uses, [ap.s.client.inventory.find(o => ap.s.client.rsc.get(o.nameRsc) === 'amulet of shadows').id],
+     'and the amulet the cast took off is put back on');
 }
 {
   const { ap, calls } = body({ worn: [{ name: 'amulet of shadows', rarity: 200 }] });

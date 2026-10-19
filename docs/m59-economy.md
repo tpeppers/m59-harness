@@ -703,16 +703,17 @@ and every refusal are in `tools/m59-curse-cycle.mjs`, which cites the kod for ea
   the strategy's `reserve`, the loadout's emerald floor and the chalice holder's kept-back emeralds.
   Any of these failing just switches the cycle off for that pass. It is optional income, not an
   errand, so it never shops for emeralds.
-- **One ring per sweep, and none while anything cursed is worn.** If the ring was a ring of
+- **One ring per sweep.** If the ring was a ring of
   lethargy, it equipped itself and revealed its name (`lethring.kod` NewUsed). `passCurseCycle`
   (below errands, above the farm) then casts remove curse on the caster's own id. The spell
-  UNUSES the ring rather than uncursing it. The stage then checks that the ring is off the finger
+  UNUSES every cursed item worn; the curse is on the wearer, not the item, so wearing it again
+  brings the curse back. The stage then checks that the ring is off the finger
   and drops it, never before: dropping a worn lethargy ring drains the owner's vigor. The dropped
   ring lies on the floor named "ring of lethargy", so the `CURSED_ITEMS` name ban keeps everybody
   from picking it up again.
 - **Only rings.** An amulet is refused when the answer is read (the Amulet of Shadows can kill its
-  wearer), and a cursed amulet that is worn is never this stage's to drop: a trainee may be wearing
-  one on purpose.
+  wearer). A cursed item worn on purpose (a trainee's Amulet of Shadows) does not stop the cycle:
+  the cast takes it off with the ring, and the stage puts it back on and drops only the ring.
 - **`keep`** is added to the protect lists, so those names are never sold, eaten or overfarmed
   away. **`hall`** names are carried to the guild chests on the next town trip, even with
   `guild_wants` off. That trip deposits only those lines of the plan, and only once `hall_min` are
@@ -720,7 +721,7 @@ and every refusal are in `tools/m59-curse-cycle.mjs`, which cites the kod for ea
 - Every cycle writes a `curse_cycle` row to the character's ledger (cast, mana before/after, what
   was dropped, emeralds left).
 
-`node tools/m59-curse-cycle-test.mjs` (49) pins the gate, the one-ring rule, the amulet refusal, the
+`node tools/m59-curse-cycle-test.mjs` (52) pins the gate, the one-ring rule, the amulet refusal, the
 wiring into `lootFloor`, `passOnce` and the hall run, and the stage itself against a stub body.
 
 ## Standing orders: one-time tasks for the next town stop

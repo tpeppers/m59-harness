@@ -22128,8 +22128,7 @@ export class Autopilot {
       }
       const cfg = this._curseCycleCfg;
       if (!cfg) { s?.setCurseCycle?.(null); this._curseCycleGate = null; return; }
-      const gate = curseCycleGate(cfg, { ...this.curseCycleInputs(),
-        cursedWorn: this.curseCycleWornCursed().length + this.curseCycleLoose().length });
+      const gate = curseCycleGate(cfg, this.curseCycleInputs());
       this._curseCycleGate = gate;
       s?.setCurseCycle?.(gate.open ? { open: true, pickup: cfg.pickup } : null);
     } catch (e) {
@@ -22160,6 +22159,7 @@ export class Autopilot {
     if ((this.threat?.().landing ?? 0) > 0) return CONTINUE;   // not while something is hitting us
 
     let cast = null;
+    const rewore = [];
     if (worn.some(w => w.ring)) {
       const pay = uncurseAffordable(cfg, this.curseCycleInputs());
       if (!pay.ok) {
@@ -22168,6 +22168,9 @@ export class Autopilot {
         return CONTINUE;
       }
       this.doing = 'breaking a curse';
+      // remove curse takes off EVERY cursed item worn, and the curse is on the wearer, not the item.
+      // Whatever is not a ring (a trainee's Amulet of Shadows) was worn on purpose: it goes back on.
+      const rewear = worn.filter(w => !w.ring).map(w => ({ id: w.o.id, name: w.name }));
       try { await skills.standToAct(s); } catch {}
       // castSelfSpell targets our own object id and judges the cast by the mana it spent.
       cast = await this.castSelfSpell(CURSE_CYCLE_SPELL, 'curse cycle: a cycled ring cursed us')
@@ -22181,6 +22184,14 @@ export class Autopilot {
         return cast?.landed ? HANDLED : CONTINUE;
       }
       this.tally.curse_cycle_uncursed = (this.tally.curse_cycle_uncursed || 0) + 1;
+      for (const r of rewear) {
+        // Re-read by id AND name: an id is a handle.
+        const o = (c.inventory ?? []).find(x => x.id === r.id
+          && String(c.rsc?.get?.(x.nameRsc) || '').toLowerCase() === r.name);
+        if (!o || (c.equipment()?.equipped ?? []).some(e => e.id === o.id)) continue;
+        await s.pacer.submit('use', () => c.use(o.id)).catch(() => {});
+        rewore.push(r.name);
+      }
     }
 
     // EVERY CURSED RING IS OFF THE FINGER NOW, so the drop costs nothing: lethring.kod ReqLeaveOwner
@@ -22203,7 +22214,7 @@ export class Autopilot {
     this.tally.curse_cycle_dropped = (this.tally.curse_cycle_dropped || 0) + Math.max(0, dropped.length - left);
     const row = { strategy: this._curseCycleStrategy, cast: cast ? { landed: !!cast.landed,
       mana_before: cast.mana_before ?? null, mana_after: cast.mana_after ?? null } : null,
-      dropped, still_carried: left, room: s.world?.room?.num ?? null,
+      dropped, rewore, still_carried: left, room: s.world?.room?.num ?? null,
       emeralds_left: this.reagentOnHand(CURSE_CYCLE_REAGENT) };
     this.note(left ? 'curse cycle: a cursed ring would not leave the pack' : 'curse cycle: dropped a cursed ring', row);
     this.ledgerEvent('curse_cycle', row);

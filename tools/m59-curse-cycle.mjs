@@ -13,7 +13,10 @@
 //
 //   * `remove curse` (remcurse.kod) is Shal'ille level 2: 9 mana, ONE EMERALD, and karma at or
 //     above +20 (spell.kod GetRequiredKarma, level x 10). Its CastSpell is RemoveCurseAllItems
-//     (player.kod), which UNUSES every cursed item worn -- it does not uncurse the item.
+//     (player.kod), which UNUSES every cursed item worn. The curse is on the WEARER, not the item:
+//     the item stays cursed, and wearing it again puts the curse back. So a cursed item worn on
+//     purpose (a trainee's Amulet of Shadows) is only taken off for a moment -- the keeper puts it
+//     back on after the cast -- and is no reason not to cycle.
 //   * A ring of lethargy reveals itself the moment it is worn (lethring.kod NewUsed ->
 //     RevealHiddenAttributes), so a ring that cursed us is, from then on, NAMED "ring of
 //     lethargy" -- on the floor too. CURSED_ITEMS refuses that name at every pickup, so a ring
@@ -35,7 +38,7 @@
 //     is held back for Rescue; below `reserve + 1` the gate is shut and the cycle is simply off;
 //   * pick up an amulet. The Amulet of Shadows can call @Killed on its owner (shadowam.kod), so
 //     the only jewellery a strategy may name here is a ring. Refused at normalisation, by name;
-//   * pick up a second ring while a cursed one is still worn, or more than one per sweep.
+//   * pick up more than one ring per sweep.
 
 const norm = s => String(s ?? '').trim().toLowerCase();
 const names = v => [...new Set((Array.isArray(v) ? v : v == null ? [] : [v]).map(norm).filter(Boolean))];
@@ -88,7 +91,7 @@ export function normalizeCurseCycle(answer) {
  * be paid for (see `uncurseAffordable`), gate or no gate.
  */
 export function curseCycleGate(cfg, { knowsSpell = false, karma = null, mana = null, emeralds = 0,
-                                       floor = 0, cursedWorn = 0 } = {}) {
+                                       floor = 0 } = {}) {
   if (!cfg?.pickup?.length) return { open: false, why: 'nothing to pick up' };
   if (!knowsSpell) return { open: false, why: `does not know ${CURSE_CYCLE_SPELL}` };
   const k = Number(karma);
@@ -100,7 +103,6 @@ export function curseCycleGate(cfg, { knowsSpell = false, karma = null, mana = n
   const m = Number(mana);
   if (mana == null || !Number.isFinite(m) || m < cfg.mana_min)
     return { open: false, spare, why: `mana ${mana ?? 'unknown'} is below ${cfg.mana_min}` };
-  if (cursedWorn > 0) return { open: false, spare, why: 'a cursed item is still worn' };
   return { open: true, spare, why: 'ok' };
 }
 

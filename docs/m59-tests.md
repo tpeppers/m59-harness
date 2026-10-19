@@ -7,9 +7,10 @@ injects Windows acquisition sharing errors into the actual file store and
 checks bounded retries, live-owner protection and persistent denial. These
 are offline contracts; populated delivery measurements remain separate.
 
-`m59-curse-cycle-test.mjs` (49) pins the curse cycle (docs/m59-economy.md). With no
+`m59-curse-cycle-test.mjs` (52) pins the curse cycle (docs/m59-economy.md). With no
 strategy answering, no unidentified ring is ever picked up. The gate needs remove curse, +20 karma,
 9 mana and an emerald over the reserve. Only one ring is taken per sweep and no amulet ever.
+A worn amulet does not shut the gate, and is put back on after the cast.
 A worn cursed ring is uncursed before it is dropped, never dropped while worn.
 
 `m59-castrite-test.mjs` (31) pins the trance door and cast rites against the
