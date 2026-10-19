@@ -40,3 +40,6 @@ const h3=holdStationaryTrade(s,'stale errand fence',20000);assert(h3.held);asser
 withBodyStage(s,'passFleeAndRest',()=>observeStationaryMutation(s,BP.REQ_MOVE));assert(!stationaryTradeActive(s),'actual survival may still move and preempt');assert(releaseStationaryTrade(s,h3.hold.token).released);
 const h4=holdStationaryTrade(s,'priority recovery',20000);assert(h4.held);withBodyStage(s,'passErrand',()=>withRecoveryCommand(s,()=>observeStationaryMutation(s,BP.REQ_CAST)));assert(!stationaryTradeActive(s),'protected priority recovery keeps its send authority');assert(releaseStationaryTrade(s,h4.hold.token).released);
 console.log('PASS paced stale errand stage cannot cancel stationary trade; protected survival/recovery still preempts');
+
+const h5=holdStationaryTrade(s,'ordinary sharing fence',20000);assert(h5.held);for(const op of [BP.REQ_OFFER,BP.REQ_COUNTEROFFER,BP.ACCEPT_OFFER,BP.CANCEL_OFFER])assert.throws(()=>withBodyStage(s,'passSharing',()=>observeStationaryMutation(s,op)),e=>e.code==='STATIONARY_WORK_HELD');assert(stationaryTradeActive(s));assert(releaseStationaryTrade(s,h5.hold.token).released);
+console.log('PASS an older automatic gift cannot offer/counter/accept/cancel during a stationary exchange');

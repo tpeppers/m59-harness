@@ -8,7 +8,7 @@ export function stationaryTradeActive(s){const h=s?.stationaryTrade,v=s?.client?
 export function holdStationaryTrade(s,why,maxMs=20000,token=null){
  if(s._tickLoop)return{held:false,reason:'stationary survival hold requires GOAP driver'};
  const old=s.stationaryTrade;if(old&&stationaryTradeActive(s)&&old.token!==token)return{held:false,reason:'another stationary exchange owns this body'};
- const health=s.client?.vitals?.()?.health;if(!Number.isInteger(s.world?.room?.num)||!s.client?.combatReady||!health?.max||health.value/health.max<.9||s.job?.busy||s.combat?.active)return{held:false,reason:'body is not ready for a stationary exchange'};
+ const health=s.client?.vitals?.()?.health;if(!Number.isInteger(s.world?.room?.num)||!s.client?.combatReady||!health?.max||health.value/health.max<.9||s.job?.busy||s.combat?.active)return{held:false,reason:'body is not ready for a stationary exchange (hp='+health?.value+'/'+health?.max+', combat_ready='+s.client?.combatReady+', job_busy='+!!s.job?.busy+', combat_active='+!!s.combat?.active+')'};
  if(old&&token&&old.token!==token)return{held:false,reason:'stationary exchange token changed'};
  const h={token:old?.token===token?token:randomUUID(),why,client:s.client,life:s.lifeBoundary??0,health:health.value,room:s.world?.room?.num,expiresAt:Date.now()+Math.max(1000,Math.min(30000,maxMs))};
  s.stationaryTrade=h;s.stationaryTradeRequired=true;return{held:true,hold:stationaryTradeReport(s)};
@@ -17,9 +17,11 @@ export function releaseStationaryTrade(s,token){if(s.stationaryTrade?.token!==to
 export function requireStationaryTrade(s,token){if(!stationaryTradeActive(s)||s.stationaryTrade.token!==token)throw Object.assign(Error('stationary exchange expired or preempted by survival'),{code:'STATIONARY_TRADE_PREEMPTED'});}
 export function observeStationaryMutation(s,op){
  if(s.stationaryTrade&&Date.now()>=s.stationaryTrade.expiresAt){s.stationaryTrade=null;s.stationaryTradeRequired=false;}
+ const authority=bodyAuthority(s),ordinary=authority.stage&&!survivalStages.has(authority.stage)&&authority.priority===0;
+ if(stationaryTradeActive(s)&&ordinary&&[BP.REQ_OFFER,BP.REQ_COUNTEROFFER,BP.ACCEPT_OFFER,BP.CANCEL_OFFER].includes(op)){s.stationaryTrade.lastWorkRefusal={at:Date.now(),stage:authority.stage,op};throw Object.assign(Error('ordinary trade work paused by stationary exchange'),{code:'STATIONARY_WORK_HELD'});}
  if([BP.REQ_OFFER,BP.REQ_COUNTEROFFER,BP.ACCEPT_OFFER].includes(op)&&s.stationaryTradeRequired){requireStationaryTrade(s,s.stationaryTrade?.token);return;}
  if([BP.ACTION,BP.REQ_TURN,BP.REQ_MOVE,BP.REQ_GO,BP.REQ_ATTACK,BP.REQ_SHOOT,BP.REQ_CAST,BP.REQ_USE,BP.REQ_APPLY,BP.REQ_ACTIVATE].includes(op)&&s.stationaryTrade){
-  const authority=bodyAuthority(s);if(stationaryTradeActive(s)&&authority.stage&&!survivalStages.has(authority.stage)&&authority.priority===0){s.stationaryTrade.lastWorkRefusal={at:Date.now(),stage:authority.stage,op};throw Object.assign(Error('ordinary work paused by stationary exchange'),{code:'STATIONARY_WORK_HELD'});}
+  if(stationaryTradeActive(s)&&authority.stage&&!survivalStages.has(authority.stage)&&authority.priority===0){s.stationaryTrade.lastWorkRefusal={at:Date.now(),stage:authority.stage,op};throw Object.assign(Error('ordinary work paused by stationary exchange'),{code:'STATIONARY_WORK_HELD'});}
   s.stationaryTrade.expiresAt=0;s.stationaryTrade.preemptedAt=Date.now();s.stationaryTrade.preemptedByStage=authority.stage;
  }
 }

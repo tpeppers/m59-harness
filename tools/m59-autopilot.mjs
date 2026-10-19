@@ -16833,11 +16833,11 @@ export class Autopilot {
     // TAKE WHAT WE ASKED FOR, AND HAND OVER WHAT OTHERS ASKED FOR  in every mode, with no policy
     // (m59-sharing.mjs). Receiving costs one reply when a fleetmate's offer is waiting; giving looks
     // at the board at most once per `shareSpare.every_ms` and only when this body is quiet.
-    await this.acceptNeededGift().catch(error => this.note('gift accept failed', { why: error.message }));
+    if(!stationaryTradeActive(s))await withBodyStage(s,'passSharing',()=>this.acceptNeededGift()).catch(error => this.note('gift accept failed', { why: error.message }));
     // IDLE GEAR (m59-castrite.mjs): a casting strategy's say over what is worn when nothing is being
     // cast -- a disciple robe left on outside an inn comes off. A no-op without such a strategy.
-    await idleGearCheck(s, { why: 'pass' }).catch(error => this.note('idle gear check failed', { why: error.message }));
-    if (await this.shareSpareReagents().catch(error => {
+    if(!stationaryTradeActive(s))await withBodyStage(s,'passIdleGear',()=>idleGearCheck(s, { why: 'pass' })).catch(error => this.note('idle gear check failed', { why: error.message }));
+    if (!stationaryTradeActive(s)&&await withBodyStage(s,'passSharing',()=>this.shareSpareReagents()).catch(error => {
       this.note('sharing pass failed', { why: error.message }); return false; })) return;
     // POST OUR SITUATION FOR OUR PARTNER, every pass and before any decision that reads
     // theirs. A partner acts on health, room and whether we are behind a wall; all

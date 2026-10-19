@@ -64,12 +64,17 @@ purchases. Unknown purchase results stop that worker. Transient autosave handle 
 repeats bounded inventory reads only, never an accepted purchase or trade. Every cargo transfer checks
 both receiver capacities, protects worn/reserved stock, journals intent/result and
 requires inventory deltas. A partial stack is explicitly partial. Unweighable cargo
-and unknown receiver load defer. Medicine is packed before heavy bread. Purple/blue/red mushrooms are reagents, not
+and unknown receiver load defer. Native capacity refusals override table predictions;
+only a proved zero-transfer full-pack refusal is deferred, and it cannot produce
+another offer until the receiver pack changes. Pre-offer readiness refusals wait
+without claiming delivery. Medicine is packed before heavy bread. Purple/blue/red mushrooms are reagents, not
 food. Critical hammers use exact known capacity; optional cargo keeps a margin.
 
 Use `supply` with `stationary:true` and `who_travels:'neither'`. This requires the
 GOAP keeper driver and finite directional tokens (20s default,30s maximum). Survival
-runs before the stationary hold. Damage, displacement, new life, expiry, casting,
+runs before the stationary hold. Rung identity follows awaited and paced callbacks, including sharing/idle-gear work
+before the ladder. An older ordinary offer/counter/accept/cancel or movement cannot
+destroy the handshake. Protected survival retains priority. Damage, displacement, new life, expiry, casting,
 food use, combat or movement preempts it; queued trade callbacks recheck the token.
 A body below90%HP is not admitted. Record this as a service limitation if injured
 farmers cannot receive provisions. Do not substitute an inert survival-off hold.
