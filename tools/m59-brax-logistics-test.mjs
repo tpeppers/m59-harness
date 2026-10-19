@@ -12,3 +12,8 @@ const observe=async()=>state();observe.action=async(name,args)=>{posts++;assert.
 assert.equal((await runBraxLedgeLeg(ctx,{role:'courier',direction:'out',observe})).ok,true);assert.equal(posts,2);
 position={...BRAX_LEDGE.road};posts=0;observe.action=async()=>{posts++;throw Error('unknown transport disconnect after POST');};await assert.rejects(runBraxLedgeLeg(ctx,{role:'courier',direction:'out',observe}),/unknown transport/);assert.equal(posts,1);
 console.log('PASS public rail origin retained; known-ended confirmation re-observed; ambiguous transport never retried');
+
+// Captured actual corner/interpolation refusal: retain the lock and use one dense continuation.
+position={x:2098,y:2051};posts=0;observe.action=async(name,args)=>{posts++;if(posts===1)throw Error('rail action refused: movement_region: segment leaves returnable component');assert.equal(args.bodyDetour,false);assert.equal(args.leg.waypoints.length,args.leg.sourceWaypoints.length);position={...BRAX_LEDGE.courier};return{arrived:true};};assert((await runBraxLedgeLeg(ctx,{role:'courier',direction:'out',observe})).ok);assert.equal(posts,2);
+position={...BRAX_LEDGE.road};posts=0;observe.action=async()=>{posts++;throw Error('rail action refused: movement_region: segment leaves returnable component');};await assert.rejects(runBraxLedgeLeg(ctx,{role:'courier',direction:'out',observe}),/boundary guard refused/);assert.equal(posts,2,'a second guard refusal must stop rather than repeat a failing route');
+console.log('PASS observed safe body may switch once to dense guarded rail; repeated boundary refusal stops');

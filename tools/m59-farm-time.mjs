@@ -8,6 +8,7 @@ export function farmTimeCategory(s,{role='farmer',servicePhase=null,now=Date.now
  if(room===1||hp.value<=0)return result('death_recovery');
  if(role==='courier')return result(servicePhase==='exchange'?'courier_exchange':'courier_service',servicePhase??activity);
  if(![578,826,827].includes(room))return result('outside_lock');
+ if(/stationary cargo exchange/i.test(activity))return result('exchange',activity);
  if(isActiveRecoveryDecision(a.survival_decisions?.current)||hp.value/hp.max<(a.policy?.restBelow??.6)||/resting|recovering|playing dead/i.test(activity))return result('recovery');
  if(servicePhase)return result(servicePhase==='exchange'?'exchange':'internal_hauling',servicePhase);
  if(room!==827)return result('outside_farming_room');

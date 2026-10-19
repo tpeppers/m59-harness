@@ -4,3 +4,5 @@ assert.equal(farmTimeCategory(s).category,'healthy_wait');assert.equal(farmTimeC
 
 assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,ladder:{stage:'passFleeAndRest'}}}).category,'healthy_wait','briefly evaluating the survival rung is not observed recovery');
 assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,survival_decisions:{current:{strategy:'rest',status:'recovering',ended_at:null}}}}).category,'recovery');
+
+assert.equal(farmTimeCategory({...s,autopilot_status:{...s.autopilot_status,activity:'stationary cargo exchange'}}).category,'exchange','a healthy recipient in a trade is not idle');
