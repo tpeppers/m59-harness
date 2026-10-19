@@ -1,4 +1,4 @@
-import assert from'node:assert/strict';import{BraxSupplyService,braxNeeds,braxCourierTarget}from'./m59-brax-supply.mjs';import{trustedBuyer}from'./m59-skills.mjs';
+import assert from'node:assert/strict';import{BraxSupplyService,braxNeeds,braxCourierTarget,braxSaleCargo}from'./m59-brax-supply.mjs';import{trustedBuyer}from'./m59-skills.mjs';
 const c={abilities:{spells:[{name:'minor heal',ability:40}]}};assert.deepEqual(braxNeeds(c,[]),{hammer:1,'loaf of bread':6,herb:20,elderberry:0});assert.equal(braxNeeds(c,[{name:'hammer',amount:0},{name:'herbs',amount:20}]).herb,0);assert(trustedBuyer("Zhieu B'hob"));assert(!trustedBuyer('Yevitan'));
 assert.throws(()=>new BraxSupplyService({actors:[],runner:'x',couriers:['a','b']}));
 // Separate workers may buy/return while the one upper runner is in use; no convoy barrier.
@@ -35,3 +35,5 @@ assert.equal(braxCourierTarget('hammer',1,8),2,'a courier retaining its own hamm
 reads=0;recoveryService.read=async()=>++reads===1?{...body,character:'Courier A'}:{...body,character:'Courier A',you:{id:8},room:{num:374}};await recoveryService.townTravel('a',374);
 reads=0;recoveryService.read=async()=>++reads===1?{...body,character:'Courier A'}:{...body,character:'Courier A',you:{id:8},room:{num:374},autopilot_status:{last_death:{at:Date.now()}}};await assert.rejects(recoveryService.townTravel('a',374),/body changed/);
 console.log('PASS a save handle change preserves the fenced courier identity; an observed death refuses');
+
+for(const name of ["shield of the Princess' army","shield of the Duke's guard",'shield of the rebel militia','guild shield','wand of healing','quest sword'])assert(!braxSaleCargo(name));for(const name of ['knight shield','axe','sapphire'])assert(braxSaleCargo(name));console.log('PASS faction-bound and protected gear never selected as sale cargo');

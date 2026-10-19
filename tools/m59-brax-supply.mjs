@@ -10,6 +10,7 @@ export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10}={}){
  return{hammer:count(items,'hammer')?0:1,'loaf of bread':Math.max(0,Math.ceil(food-haveFood)),herb:knows(/minor heal|major heal|hospice|create food/i)?Math.max(0,(knows(/minor heal|major heal|hospice/i)?herbs:6)-count(items,'herb')-count(items,'herbs')):0,elderberry:knows(/create food/i)?Math.max(0,elderberries-count(items,'elderberry')):0};
 }
 export function braxCourierTarget(name,demand,cap){const reserve=name==='hammer'?1:name==='herb'||name==='elderberry'?5:name==='loaf of bread'?4:0;return Math.min(cap,Math.max(0,demand??0)+reserve);}
+export function braxSaleCargo(name){return /sapphire|emerald|diamond|ruby|armor|armour|shield|sword|scimitar|mace|axe|gauntlet|helm/i.test(name)&&!/hammer|wand|quest|signet|shield of|soldier.s shield|guild|princess|duke|rebel militia/i.test(name);}
 export class BraxSupplyService{
  constructor({actors,runner,couriers,call,read,runLeg,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true}){
   if(!actors.some(c=>c.shadow_account===runner&&c.role==='farmer')||couriers.length!==2||new Set(couriers).size!==2)throw Error('Brax service needs one selected farmer runner and2 distinct couriers');
@@ -47,7 +48,7 @@ export class BraxSupplyService{
   const here=await this.read(this.runner);if(Math.min(here.carry?.room_for?.weight??0,here.carry?.room_for?.bulk??0)<200)return;const locals=(await this.localFarmers(here.room.num)).filter(x=>x.actor.shadow_account!==this.runner&&x.state.hp.value/x.state.hp.max>=.9);
   let donors=0;for(const {actor,state}of locals){if(donors>=3)break;const a=actor.shadow_account,p=await this.pack(a),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const protectedNames=state.autopilot_status?.policy?.protectedItems??[];
-   const candidates=p.items.filter(i=>!worn.has(i.id)&&!protectedNames.some(n=>String(i.name).toLowerCase().includes(String(n).toLowerCase()))&&/sapphire|emerald|diamond|ruby|armor|armour|shield|sword|scimitar|mace|axe|gauntlet|helm/i.test(i.name)&&!/hammer|wand|quest|signet/i.test(i.name)).slice(0,2);
+   const candidates=p.items.filter(i=>!worn.has(i.id)&&!protectedNames.some(n=>String(i.name).toLowerCase().includes(String(n).toLowerCase()))&&braxSaleCargo(i.name)).slice(0,2);
    for(const i of candidates){await this.transfer(a,this.runner,i,Math.min(i.amount>0?i.amount:1,10));donors++;}
    const cash=p.items.find(i=>/^shillings?$/.test(i.name));if(cash?.amount>1500&&count((await this.pack(this.runner)).items,'shilling')<10000){await this.transfer(a,this.runner,cash,Math.min(5000,cash.amount-1000));donors++;}
   }
@@ -94,7 +95,7 @@ export class BraxSupplyService{
   const upperCap=(await this.read(this.runner)).carry?.room_for,lowerCap=(await this.read(agent)).carry?.room_for;const free=p=>Math.min(p?.weight??0,p?.bulk??0);
   for(const from of free(lowerCap)<free(upperCap)?[agent,this.runner]:[this.runner,agent]){
    const to=from===this.runner?agent:this.runner,p=await this.pack(from),state=await this.read(from),worn=new Set((state.equipment_items??[]).map(i=>i.id));
-   const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)):p.items.filter(i=>!worn.has(i.id)&&/sapphire|emerald|ruby|diamond|armor|armour|shield|sword|mace|axe|scimitar|gauntlet|helm|^shillings?$/.test(i.name)&&!/hammer|wand|quest|signet/.test(i.name));
+   const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)):p.items.filter(i=>!worn.has(i.id)&&(braxSaleCargo(i.name)||/^shillings?$/.test(i.name)));
    const budgets=new Map(),protectedNames=state.autopilot_status?.policy?.protectedItems??[];
    for(const item of chosen){if(worn.has(item.id)||from===this.runner&&protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;const reserve=from===agent?(item.name==='hammer'?1:/herbs?/.test(item.name)?5:item.name==='elderberry'?5:item.name==='loaf of bread'?4:0):/^shillings?$/.test(item.name)?500:0;if(!budgets.has(item.name))budgets.set(item.name,Math.max(0,count(p.items,item.name)-reserve));const n=Math.min(item.amount>0?item.amount:1,budgets.get(item.name),100);if(n){const sent=await this.transfer(from,to,item,n);budgets.set(item.name,budgets.get(item.name)-(sent?.quantity??0));}}
   }
