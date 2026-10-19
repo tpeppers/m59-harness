@@ -9,6 +9,7 @@ export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10}={}){
  const haveFood=items.reduce((n,i)=>n+(foodValue(i.name)?.nutrition??0)/20*(i.amount>0?i.amount:1),0);
  return{hammer:count(items,'hammer')?0:1,'loaf of bread':Math.max(0,Math.ceil(food-haveFood)),herb:knows(/minor heal|major heal|hospice|create food/i)?Math.max(0,(knows(/minor heal|major heal|hospice/i)?herbs:6)-count(items,'herb')-count(items,'herbs')):0,elderberry:knows(/create food/i)?Math.max(0,elderberries-count(items,'elderberry')):0};
 }
+export function braxCourierTarget(name,demand,cap){const reserve=name==='hammer'?1:name==='herb'||name==='elderberry'?5:name==='loaf of bread'?4:0;return Math.min(cap,Math.max(0,demand??0)+reserve);}
 export class BraxSupplyService{
  constructor({actors,runner,couriers,call,read,runLeg,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true}){
   if(!actors.some(c=>c.shadow_account===runner&&c.role==='farmer')||couriers.length!==2||new Set(couriers).size!==2)throw Error('Brax service needs one selected farmer runner and2 distinct couriers');
@@ -74,11 +75,11 @@ export class BraxSupplyService{
   await this.sell(agent,373,"Zhieu B'hob");
   const ctx={agent,state:{},call:this.call};
   for(const [name,room,seller,cap]of [['hammer',374,'Quintor',8],['herb',373,"Zhieu B'hob",80],['elderberry',373,"Zhieu B'hob",50],['loaf of bread',371,'Pietro',48]]){
-   const p=await this.pack(agent),amount=Math.max(0,Math.min(cap,need[name]??0)-count(p.items,name));if(!amount)continue;await this.townTravel(agent,room);
+   const p=await this.pack(agent),amount=Math.max(0,braxCourierTarget(name,need[name],cap)-count(p.items,name));if(!amount)continue;await this.townTravel(agent,room);
    // Nonstackable merchant stock is one object per purchase. Each next purchase
    // is new intent only after the preceding cash+inventory delta is reconciled.
    for(let attempt=0;attempt<cap;attempt++){
-    const current=count((await this.pack(agent)).items,name),remaining=Math.min(cap,need[name]??0)-current;if(remaining<=0)break;
+    const current=count((await this.pack(agent)).items,name),remaining=braxCourierTarget(name,need[name],cap)-current;if(remaining<=0)break;
     const receipt=await this.atMerchant(seller,()=>buyCourierGoods(ctx,{seller,item:name,aliases:name==='herb'?['herbs']:[],amount:remaining,evidenceDir:this.evidenceDir}));await this.event('purchase',{agent,item:name,receipt});
     if(receipt.status==='unreconciled')throw Error('ambiguous purchase; manual inventory reconciliation required');if(receipt.status!=='confirmed'||!(receipt.quantity>0))break;
    }

@@ -1,4 +1,4 @@
-import assert from'node:assert/strict';import{BraxSupplyService,braxNeeds}from'./m59-brax-supply.mjs';import{trustedBuyer}from'./m59-skills.mjs';
+import assert from'node:assert/strict';import{BraxSupplyService,braxNeeds,braxCourierTarget}from'./m59-brax-supply.mjs';import{trustedBuyer}from'./m59-skills.mjs';
 const c={abilities:{spells:[{name:'minor heal',ability:40}]}};assert.deepEqual(braxNeeds(c,[]),{hammer:1,'loaf of bread':6,herb:20,elderberry:0});assert.equal(braxNeeds(c,[{name:'hammer',amount:0},{name:'herbs',amount:20}]).herb,0);assert(trustedBuyer("Zhieu B'hob"));assert(!trustedBuyer('Yevitan'));
 assert.throws(()=>new BraxSupplyService({actors:[],runner:'x',couriers:['a','b']}));
 // Separate workers may buy/return while the one upper runner is in use; no convoy barrier.
@@ -28,3 +28,5 @@ console.log('PASS autosave handle refresh repeats reads only; exact critical ham
 // A rejected upper exchange must not erase the physically occupied lower lane.
 const laneFailure=new BraxSupplyService({actors,runner:'r',couriers:['a','b'],call(){},read:async()=>({room:{num:578},you:{x:2256,y:2208}}),runLeg(){}});laneFailure.lastLaneCourier='a';await assert.rejects(laneFailure.admitLane('b'),/still occupies/);laneFailure.read=async()=>({room:{num:578},you:{x:2100,y:2208}});await laneFailure.admitLane('b');assert.equal(laneFailure.lastLaneCourier,'b');
 console.log('PASS an exchange failure cannot silently free an occupied ledge lane');
+
+assert.equal(braxCourierTarget('hammer',1,8),2,'a courier retaining its own hammer must buy another for the last unarmed farmer');assert.equal(braxCourierTarget('herb',2,80),7);assert.equal(braxCourierTarget('loaf of bread',1,48),5);
