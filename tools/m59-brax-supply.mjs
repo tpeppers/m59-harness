@@ -14,7 +14,7 @@ export function braxSaleCargo(name){return /sapphire|emerald|diamond|ruby|armor|
 export class BraxSupplyService{
  constructor({actors,runner,couriers,call,read,runLeg,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true}){
   if(!actors.some(c=>c.shadow_account===runner&&c.role==='farmer')||couriers.length!==2||new Set(couriers).size!==2)throw Error('Brax service needs one selected farmer runner and2 distinct couriers');
-  Object.assign(this,{actors,runner,couriers,call,read,runLeg,emit,phase,wait,evidenceDir});this.farmRunner=farmRunner;this.farmers=actors.filter(c=>c.role==='farmer');this.stopped=false;this.upperGate=Promise.resolve();this.cycles={};this.pending=new Set();this.shopGates=new Map();this.lastLaneCourier=null;
+  Object.assign(this,{actors,runner,couriers,call,read,runLeg,emit,phase,wait,evidenceDir});this.farmRunner=farmRunner;this.farmers=actors.filter(c=>c.role==='farmer');this.stopped=false;this.upperGate=Promise.resolve();this.cycles={};this.pending=new Set();this.shopGates=new Map();this.lastLaneCourier=null;this.capacityBlocks=new Map();
  }
  async runnerMode(mode){const r=await this.call('autopilot',{agent:this.runner,action:'start',mode});if(r.error||r.keeper_push?.confirmed!==true)throw Error('runner mode not confirmed');}
  async atMerchant(name,fn){const previous=this.shopGates.get(name)??Promise.resolve(),task=previous.catch(()=>{}).then(fn);this.shopGates.set(name,task.then(()=>{},()=>{}));return task;}
@@ -24,6 +24,8 @@ export class BraxSupplyService{
  async needs(){const rows=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;const p=await this.pack(c.shadow_account);rows.push({agent:c.shadow_account,needs:braxNeeds(c,p.items)});}return rows;}
  async transfer(from,to,item,amount){
   if(!(amount>0))return null;const id=randomUUID(),p=await this.pack(from),i=p.items.find(x=>x.id===item.id&&x.name===item.name);if(!i)throw Error('cargo changed before submission');
+  const key=to+':'+i.name,signature=items=>JSON.stringify(items.map(x=>[x.name,x.amount>0?x.amount:1]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  if(this.capacityBlocks.has(key)){const current=signature((await this.pack(to)).items);if(current===this.capacityBlocks.get(key)){await this.event('trade-deferred',{id,from,to,item:i.name,reason:'server-refused capacity; receiver inventory unchanged'});return{quantity:0,deferred:true};}this.capacityBlocks.delete(key);}
   const receiver=await this.read(to),cap=receiver.carry,unit=weighItem(i.name);
   if(!unit||!cap?.known||cap.load?.exact!==true||!cap.room_for){await this.event('trade-deferred',{id,from,to,item:i.name,reason:'capacity unknown'});return{quantity:0,deferred:true};}
   const margin=i.name==='hammer'?0:16;
@@ -32,6 +34,7 @@ export class BraxSupplyService{
   await this.event('trade-intent',{id,from,to,item:i.name,amount});
   const r=await this.call('supply',{from,to,what:[{id:i.id,amount}],ids_as_of:p.ids_as_of,who_travels:'neither',stationary:true},90000);
   await this.event('trade-result',{id,from,to,item:i.name,amount,result:r});
+  if(r.reason_code==='receiver_full'&&!r.partial&&!(r.amounts?.length)&&r.not_received?.length&&r.not_received.every(x=>x.received===0&&x.giver_lost===0)){this.capacityBlocks.set(key,signature((await this.pack(to)).items));await this.event('capacity-prediction-refuted',{id,from,to,item:i.name,amount,predictedCarry:cap,result:r});return{quantity:0,deferred:true};}
   if(!r.supplied||r.amounts?.some(m=>m.giver_lost<m.asked))throw Object.assign(Error('cargo transfer not verified: '+(r.reason??r.error??'unknown')),{receipt:r});return{...r,quantity:amount};
  }
  async deliverLocal(){

@@ -32,3 +32,11 @@ hp=99;assert(!stationaryTradeActive(s));assert.throws(()=>requireStationaryTrade
 assert(releaseStationaryTrade(s,h.hold.token).released);const h2=holdStationaryTrade(s,'second',20000);assert(h2.held);observeStationaryMutation(s,BP.REQ_MOVE);assert(!stationaryTradeActive(s));assert.throws(()=>requireStationaryTrade(s,h2.hold.token),/preempted/);
 assert(!releaseStationaryTrade(s,'wrong').released);assert(releaseStationaryTrade(s,h2.hold.token).released);
 console.log('PASS native Cragged components, direct wire falls/exits/transports, unknown/reconnect quarantine, Underworld escape and survival-preemptible stationary ownership');
+
+// A timed-out ordinary rung retains its own stage through the real authority binding.
+const {withBodyStage,withRecoveryCommand,bodyAuthority}=await import('./m59-body-command.mjs');
+const pendingWork=withBodyStage(s,'passErrand',()=>bodyAuthority(s).bind(()=>observeStationaryMutation(s,BP.REQ_MOVE)));
+const h3=holdStationaryTrade(s,'stale errand fence',20000);assert(h3.held);assert.throws(pendingWork,e=>e.code==='STATIONARY_WORK_HELD');assert(stationaryTradeActive(s),'ordinary delayed work must not destroy the trade lease');
+withBodyStage(s,'passFleeAndRest',()=>observeStationaryMutation(s,BP.REQ_MOVE));assert(!stationaryTradeActive(s),'actual survival may still move and preempt');assert(releaseStationaryTrade(s,h3.hold.token).released);
+const h4=holdStationaryTrade(s,'priority recovery',20000);assert(h4.held);withBodyStage(s,'passErrand',()=>withRecoveryCommand(s,()=>observeStationaryMutation(s,BP.REQ_CAST)));assert(!stationaryTradeActive(s),'protected priority recovery keeps its send authority');assert(releaseStationaryTrade(s,h4.hold.token).released);
+console.log('PASS paced stale errand stage cannot cancel stationary trade; protected survival/recovery still preempts');

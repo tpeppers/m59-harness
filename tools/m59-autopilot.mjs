@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
+import {withBodyStage} from './m59-body-command.mjs';
 import{affordablePoisonCure,castRecoveryCure}from'./m59-recovery-cure.mjs';
 import{scriptedTrafficResumeReady,scriptedDeviationResumeCandidate}from'./m59-traffic-resume.mjs';
 import{deathLocationFromSessions}from'./m59-death-location.mjs';
@@ -16991,7 +16992,7 @@ export class Autopilot {
     if (this.mode === 'farm' && Date.now() - (this.dressedAt ?? 0) > 60_000
         && (!(this.inReachOfUs?.()?.length) || (this.hold && this.holdWorks?.()))) {
       this.dressedAt = Date.now();
-      await this.wearIntoEmptySlots('put on armour we were carrying').catch(() => false);
+      await withBodyStage(this.s,'passDress',()=>this.wearIntoEmptySlots('put on armour we were carrying')).catch(() => false);
     }
     return this.runPassLadder({ s, c, room, v, hp });
   }
@@ -17016,10 +17017,10 @@ export class Autopilot {
    */
   async runStageBounded(stage, ctx) {
     const ms = stageDeadlineMs(stage);
-    if (!(ms > 0)) return this[stage](ctx);
+    if (!(ms > 0)) return withBodyStage(this.s,stage,()=>this[stage](ctx));
     // The async wrapper is what turns a SYNCHRONOUS throw out of the rung into a rejection,
     // so both failure shapes take the same path.
-    const running = (async () => this[stage](ctx))();
+    const running = withBodyStage(this.s,stage,async()=>this[stage](ctx));
     this.stageInFlight ??= new Map();
     const startedAt = Date.now();
     this.stageFlightStartedAt ??= new Map();

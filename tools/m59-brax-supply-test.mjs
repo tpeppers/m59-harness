@@ -37,3 +37,8 @@ reads=0;recoveryService.read=async()=>++reads===1?{...body,character:'Courier A'
 console.log('PASS a save handle change preserves the fenced courier identity; an observed death refuses');
 
 for(const name of ["shield of the Princess' army","shield of the Duke's guard",'shield of the rebel militia','guild shield','wand of healing','quest sword'])assert(!braxSaleCargo(name));for(const name of ['knight shield','axe','sapphire'])assert(braxSaleCargo(name));console.log('PASS faction-bound and protected gear never selected as sale cargo');
+
+// A definite server capacity refusal with both deltas0 is a deferral, not a lost transfer.
+let refusedPosts=0;const fullService=new BraxSupplyService({actors,runner:'r',couriers:['a','b'],call:async(name,args)=>{if(name==='inventory')return{items:args.agent==='a'?[{id:5,name:'loaf of bread',amount:1}]:[{id:6,name:'axe',amount:0}]};refusedPosts++;return{supplied:false,partial:false,reason_code:'receiver_full',amounts:[],not_received:[{received:0,giver_lost:0}]};},read:async()=>({carry:{known:true,load:{exact:true},room_for:{weight:100,bulk:100}}}),runLeg(){}});
+assert((await fullService.transfer('a','r',{id:5,name:'loaf of bread'},1)).deferred);assert((await fullService.transfer('a','r',{id:5,name:'loaf of bread'},1)).deferred);assert.equal(refusedPosts,1,'unchanged rejected inventory cannot trigger another offer');
+console.log('PASS confirmed zero-transfer capacity refusal defers, records disagreement and cannot repeat against unchanged inventory');
