@@ -2000,20 +2000,20 @@ export class CombatMode {
       this.armTimer();
       // The ordinary validated router, under this flight's packet and identity guards -- the same walk
       // an ambush order takes to its map. It does not ask the keeper's confinement: a flight is survival.
-      const legOpts = () => ({ origin: keeperOrigin('pvp_strategy', { run_id: o.id }),
+      const originOpts = () => ({ origin: keeperOrigin('pvp_strategy', { run_id: o.id }),
         movementGeneration: s.movementGeneration, controlToken: o.id });
       // THE WAY IN. Ukgoth's NE corner is reached only from the Cragged Mountains; entered from the other two
       // neighbours a fled body lands on an island two hundred squares of trolls from its allies. So walk to
       // `via` first, planning around the destination (whose far half is no road to it), then step in. A way
       // in that fails is recorded and the flight goes straight in: the wrong half of the bastion beats the road.
       if (f.via != null && f.via_result == null && s.world.room.num !== f.via) {
-        const v = await s.travel(f.via, { ...legOpts(), avoid: [f.room] })
+        const v = await s.travel(f.via, { ...originOpts(), avoid: [f.room] })
           .catch(e => { if (/superseded|stale|generation/i.test(String(e?.message))) throw e; return { arrived: false, reason: e?.message }; });
         this.guard(o);
         f.via_result = { arrived: v?.arrived === true && s.world.room.num === f.via, reason: v?.arrived ? null : (v?.reason ?? null), at: this.now() };
         s.recorder?.line?.('combat', { event: 'pvp_strategy_flight_via', order_id: o.id, room: f.room, via: f.via, ...f.via_result });
       }
-      const result = await s.travel(f.room, { ...legOpts(), ...(f.post ? { arriveNear: f.post } : {}) });
+      const result = await s.travel(f.room, { ...originOpts(), ...(f.post ? { arriveNear: f.post } : {}) });
       this.guard(o);
       demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
     }
