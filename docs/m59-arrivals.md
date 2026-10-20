@@ -27,6 +27,40 @@ With no enabled policy, travel is unchanged. The policy lives in the private
 strategy repository and is installed under `substrate/strategies/`; reload
 keeper code/strategies using the normal keeper handoff after changes.
 
+## The shared desk cup (`desk: true`)
+
+Operator, 2026-10-20: an order to get across the world should use Rescue or
+the Chalice of the Rain when that is quicker — "'Get to Tos' can mean 'rescue
+to Barloque and walk to Tos, if the ETA is quicker'". The selector above only
+knows what a unit CARRIES. The fleet's shared cup at the desk is the only
+teleport most of the fleet has, and no journey considered it.
+
+`tools/m59-desk-travel.mjs` adds it at the keeper's journey gate
+(`Autopilot.travel`), after every refusal there has passed the destination and
+before the body sets out. The policy's `desk: true` turns it on; silence is the
+old behaviour. Options: `deskServeMs` (default 60 s per rider, queue
+included), `deskMarginMs` (default 60 s) and `deskMaxHops` (default 6 rooms to
+the station).
+
+The journey is priced three ways by `arrivalOptions`: walking, the unit's own
+Rescue chains, and walk to the station + served + sip + walk on from where a
+Rescue from the station lands (the guild hall for a verified member — 714,
+which opens onto North Barloque — otherwise the hometown). The desk is taken
+only when its p90 beats every option without it by the margin. So from Ukgoth
+(599) "get to North Barloque" rides (1 room + the ride + 1 room against 12
+rooms), while "get to Tos" walks (7 rooms against 1 + the ride + 8).
+
+The ride is the existing on-demand ride (`rideChaliceNow`), with all of its
+refusals: no desk on duty, the holder, the PvP teleport lockout, below the flee
+line, a ride already in flight. A confinement that does not hold the station
+and the landing, an exact-arrival square or a puzzle hand-off also walk. A
+refused or failed ride backs that destination off for ten minutes and the
+journey walks from wherever the body is; a landing continues the journey
+through the same gate, where the unit's own Rescue may still apply. Each
+choice and outcome is a `desk_travel` ledger row.
+
+Validation: `m59-desk-travel-test` (offline, real map).
+
 The selector considers walking, a single teleport, and two-stage combinations
 of chalice and learned Rescue. It can approach the orc caves or Pool of Vigor
 before teleporting. Guild-region precedence is evaluated at each landing.

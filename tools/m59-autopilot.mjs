@@ -10046,7 +10046,7 @@ export class Autopilot {
     // an existing suspended objective, even if they use ordinary travel().
     const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
             chalice: _chalice, chaliceRoom: _chaliceRoom, explicitOrder = false,
-            approachLeg = false, ...sessionOpts } = opts ?? {};
+            approachLeg = false, deskRide = true, ...sessionOpts } = opts ?? {};
     // Capture the issuer before a nested shelter walk replaces the live cell order.
     const capturedTravelOrigin = sessionOpts.origin ?? (Number(this.inert?.to) === Number(room) ? this.inert?.origin : null)
       ?? (Number(liveMoveOrder(this.s)?.to) === Number(room) ? liveMoveOrder(this.s)?.origin : null);
@@ -10231,6 +10231,26 @@ export class Autopilot {
                                      to: room, startedIn: Number(this.s?.world?.room?.num ?? NaN) || null,
                                      startedAt: Date.now(), origin: this.s?.moveOrder?.origin ?? null });
         return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
+      }
+    }
+
+    // THE SHARED CHALICE AS A WAY THERE (m59-desk-travel.mjs). Here, after every gate above has passed the
+    // destination, and before the body sets out: when the private `rescueTravel` policy says `desk: true` and
+    // walking to the desk, being served and walking on from the landing beats walking (and the unit's own
+    // Rescue) by the margin, ride it, then continue from the landing through this same gate. Not on the ride's
+    // own legs (`chalice`, `_rideNow`), not on a station approach leg, and never twice in one journey. Silence,
+    // a refusal or a failed ride all fall through to the walk.
+    if (deskRide && !_chalice && !approachLeg && !this._rideNow && room != null) {
+      const { deskRideFirst } = await import('./m59-desk-travel.mjs');
+      const desk = await deskRideFirst(this, Number(room), sessionOpts).catch(e => {
+        this.note('chalice desk planning failed; walking', { why: e.message }); return null; });
+      if (desk?.landed) {
+        if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
+          return { arrived: false, paused: true, cancelled: true, reason: 'travel paused after the chalice desk ride', via_desk: desk.room };
+        // The landing does not change who ordered the journey: the continuation carries the same issuer.
+        const rest = await this.travel(room, { ...(opts ?? {}), deskRide: false,
+          origin: opts?.origin ?? capturedTravelOrigin ?? keeperOrigin('desk_travel') });
+        return { ...(rest ?? {}), via_desk: { landed_in: desk.room, saves_ms: desk.decision?.saves_ms ?? null } };
       }
     }
 

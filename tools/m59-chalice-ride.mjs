@@ -121,6 +121,38 @@ export function refusalCode(why = '') {
   return 'skipped';
 }
 
+const vitalsOf = ap => {
+  const h = ap.s?.client?.vitals?.()?.health;
+  return { health: h?.max > 0 ? h.value / h.max : null, dead: (h?.max > 0 && h.value <= 0) || ap.hereRoom() === UNDERWORLD };
+};
+
+/**
+ * MAY THIS CHARACTER RIDE NOW, asked of the live keeper without starting anything: the very preflight
+ * `rideChaliceNow` runs, with the same inputs. A journey planner (m59-desk-travel.mjs) asks it before it
+ * prices the desk. Returns `{cfg, store, pre}`; `cfg` is null when chalice farming is off on this keeper.
+ */
+export async function rideNowCheck(ap, opts = {}) {
+  const o = rideNowOptions(opts);
+  let cfg = null;
+  try { cfg = await ap.refreshChaliceConfig?.(); } catch {}
+  cfg ??= ap.chaliceCfg;
+  if (!cfg) return { cfg: null, store: null, pre: { ok: false, code: 'off', why: 'chalice farming is not configured on this keeper' } };
+  const store = ap.chaliceStore();
+  const tripRide = ap.townTrip?.chalice;
+  const riding = !!ap._rideNow || !!(tripRide && !['decide', 'off', 'done'].includes(tripRide.stage));
+  const here = ap.hereRoom();
+  let state = null;
+  try { state = store.read(); } catch {}
+  const pre = rideNowPreflight({
+    cfg, role: ap.chaliceRole(), me: ap.who(), riding, queue: o.queue, maxHops: o.maxHops,
+    stationHops: here === cfg.station_room ? 0 : ap.hopsTo(cfg.station_room),
+    carrying: !!ap.chaliceInPack(), lastPlayerAttackAt: ap.lastPlayerSwingAt?.() ?? null,
+    duty: state?.duty ?? null, humans: state?.human ?? null, state,
+    fleeBelow: Number(ap.policy?.fleeBelow ?? 0.4), ...vitalsOf(ap),
+  });
+  return { cfg, store, pre };
+}
+
 /**
  * Drive one ride to a landing or a refusal. `ap` is the rider's Autopilot. Returns
  *   {ok:true, landed:true, room, guild_hall, ms, total_ms, ticket, server}
@@ -134,29 +166,10 @@ export async function rideChaliceNow(ap, opts = {}) {
     try { ap.chaliceEvent?.('ride_now_refused', { code, why, ...extra }); } catch {}
     return { ok: false, landed: false, refused: code, why, ...extra };
   };
-  let cfg = null;
-  try { cfg = await ap.refreshChaliceConfig?.(); } catch {}
-  cfg ??= ap.chaliceCfg;
+  const { cfg, store, pre } = await rideNowCheck(ap, opts);
   if (!cfg) return refuse('off', 'chalice farming is not configured on this keeper');
-  const store = ap.chaliceStore();
-  const me = ap.who();
-  const vitalsNow = () => {
-    const v = ap.s?.client?.vitals?.();
-    const h = v?.health;
-    return { health: h?.max > 0 ? h.value / h.max : null, dead: (h?.max > 0 && h.value <= 0) || ap.hereRoom() === UNDERWORLD };
-  };
-  const tripRide = ap.townTrip?.chalice;
-  const riding = !!ap._rideNow || !!(tripRide && !['decide', 'off', 'done'].includes(tripRide.stage));
-  const here = ap.hereRoom();
+  const vitalsNow = () => vitalsOf(ap);
   const fleeBelow = Number(ap.policy?.fleeBelow ?? 0.4);
-  let state = null;
-  try { state = store.read(); } catch {}
-  const pre = rideNowPreflight({
-    cfg, role: ap.chaliceRole(), me, riding, queue: o.queue, maxHops: o.maxHops,
-    stationHops: here === cfg.station_room ? 0 : ap.hopsTo(cfg.station_room),
-    carrying: !!ap.chaliceInPack(), lastPlayerAttackAt: ap.lastPlayerSwingAt?.() ?? null,
-    duty: state?.duty ?? null, humans: state?.human ?? null, state, fleeBelow, ...vitalsNow(),
-  });
   if (!pre.ok) return refuse(pre.code, pre.why, pre.wait_ms ? { wait_ms: Math.round(pre.wait_ms) } : {});
 
   // THE DIRECTIONAL FACULTIES, only where the keeper still has them: a FleetScript errand that holds

@@ -15,6 +15,11 @@ export async function rescueTravelPolicy(ctx,{loaded=null}={}){
  const result=await firstAnswer(loaded??await strategyCache,'rescueTravel',ctx,{onError:(...e)=>console.error('[rescueTravel]',...e)});
  return result?.answer??null;
 }
+// Directed crossing times for the current movement epoch, from every roster character's transit book.
+export function currentEdges(){
+ const epoch=epochFor();
+ return transitEvidence(hometownRoster().map(r=>loadBook(r.character)),{since:epoch.dirty?Infinity:Date.parse(epoch.at)||Infinity});
+}
 export function affordableRescue(c,count=1){
  if((c.inventory??[]).some(i=>/token/i.test(i.name??c.rsc?.get(i.nameRsc)??'')))return null;
  const spell=(c.spells??[]).find(sp=>norm(sp.name??c.rsc.get(sp.nameRsc))==='rescue');
@@ -60,7 +65,7 @@ export async function tryRescueTravel(s,to,opts={}){
  if(stopped()||Date.now()-(s.lastPlayerAttackAt??0)<600000)return null;
  const context=await verifiedRescueContext(s,policy);if(!context)return null;
  const caps=await rescueTravelCapabilities(s);if(!caps.length)return null;
- const epoch=epochFor(),edges=transitEvidence(hometownRoster().map(r=>loadBook(r.character)),{since:epoch.dirty?Infinity:Date.parse(epoch.at)||Infinity});
+ const edges=currentEdges();
  const blocked=[...(s.barredRooms??[]),...(opts.avoid??[]),...(policy.blocked??[])];
  const plans=arrivalOptions({map:s.world.map,from:s.world.room.num,to,...context,methods:caps,edges,
   maxRescues:policy.double===true?2:1,blocked,confine:policy.confine??[],fallbackMs:policy.fallbackMs??20000});

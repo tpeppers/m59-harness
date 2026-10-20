@@ -34,23 +34,37 @@ export function arrivalOptions({map,from,to,guildHall=null,homeRoom=null,methods
  const walk=(a,b)=>{if(a===b)return {kind:'walk',from:a,to:b,hops:[]};if(!legal(b))return null;const p=findPath(map,a,b,{avoid:banned});return p.found&&p.hops.every(h=>legal(Number(h.to)))?{kind:'walk',from:a,to:b,hops:p.hops}:null;};
  const options=[],seen=new Set();
  const name=n=>`${map.rooms[n]?.name??'Map'} [${n}]`;
- function add(legs){const key=JSON.stringify(legs);if(seen.has(key))return;seen.add(key);options.push({legs,...estimateRoute(legs,edges,{fallbackMs,overheadMs:from===to?0:overheadMs}),label:legs.filter(l=>l.kind!=='walk'||l.hops.length).map(l=>l.kind==='walk'?`Walk ${name(l.from)} → ${name(l.to)}`:`${l.kind==='chalice'?'Chalice':'Rescue'} → ${name(l.to)}`).join(' · ')||'Already there'});}
+ const teleport={chalice:'Chalice',desk:'Chalice desk',spell:'Rescue'};
+ function add(legs){const key=JSON.stringify(legs);if(seen.has(key))return;seen.add(key);options.push({legs,...estimateRoute(legs,edges,{fallbackMs,overheadMs:from===to?0:overheadMs}),label:legs.filter(l=>l.kind!=='walk'||l.hops.length).map(l=>l.kind==='walk'?`Walk ${name(l.from)} → ${name(l.to)}`:`${teleport[l.kind]??'Rescue'} → ${name(l.to)}`).join(' · ')||'Already there'});}
  const direct=walk(from,to);if(direct)add([direct]);
  if(!methods.length||from===to)return options;
+ // THE SHARED DESK CUP ({kind:'desk', station, serve_ms}): walk to the station, wait to be served, sip, land
+ // where a Rescue from the STATION lands, walk on. Offered only from its station, never chained into
+ // mid-route; a carried cup or a learned Rescue may still follow it from the landing.
+ const desks=methods.filter(m=>m.kind==='desk'),own=methods.filter(m=>m.kind!=='desk');
+ for(const d of desks){
+  const station=Number(d.station);if(!Number.isInteger(station)||!legal(station)&&station!==from)continue;
+  const approach=walk(from,station);if(!approach)continue;
+  const landing=predictedRescueRoom(station,{guildHall,homeRoom});if(!landing||landing===station||!legal(landing))continue;
+  const leg={kind:'desk',from:station,to:landing,power:d.power??1,action_ms:d.serve_ms??60000};
+  const tail=walk(landing,to);if(tail)add([approach,leg,tail]);
+  if(own.length&&maxRescues>1)visitFrom(landing,[approach,leg],['desk'],new Set([station,landing]));
+ }
+ if(!own.length)return options.sort((a,b)=>a.p90_ms-b.p90_ms);
+ function visitFrom(room,legs,used,visited){
+  if(used.length>=maxRescues)return;
+  const landing=predictedRescueRoom(room,{guildHall,homeRoom});if(!landing||landing===room||visited.has(landing)||!legal(landing))return;
+  for(const method of own){
+   const count=used.filter(x=>x===method.kind).length+1;if(count>method.uses)continue;
+   const leg={kind:method.kind,from:room,to:landing,power:method.power??1,action_ms:method.action_ms??1000};
+   const next=[...legs,leg],tail=walk(landing,to);if(tail)add([...next,tail]);
+   visitFrom(landing,next,[...used,method.kind],new Set([...visited,landing]));
+  }
+ }
  const starts=[from,...(staging?[2500,2510,59,...(guildHall?[guildHall]:[])]:[])];
  for(const start of new Set(starts)){
   const approach=walk(from,start);if(!approach)continue;
-  function visit(room,legs,used,visited){
-   if(used.length>=maxRescues)return;
-   const landing=predictedRescueRoom(room,{guildHall,homeRoom});if(!landing||landing===room||visited.has(landing)||!legal(landing))return;
-   for(const method of methods){
-    const count=used.filter(x=>x===method.kind).length+1;if(count>method.uses)continue;
-    const leg={kind:method.kind,from:room,to:landing,power:method.power??1,action_ms:method.action_ms??1000};
-    const next=[...legs,leg],tail=walk(landing,to);if(tail)add([...next,tail]);
-    visit(landing,next,[...used,method.kind],new Set([...visited,landing]));
-   }
-  }
-  visit(start,[approach],[],new Set([start]));
+  visitFrom(start,[approach],[],new Set([start]));
  }
  return options.sort((a,b)=>a.p90_ms-b.p90_ms);
 }
