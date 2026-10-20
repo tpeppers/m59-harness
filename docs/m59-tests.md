@@ -1176,7 +1176,7 @@ the records it describes.
   hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
   the suspension text, that inside the list nothing changes, and that every keeper gate asks the
   one function) and
-  `node tools/m59-pvp-strategy-test.mjs` (111 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
+  `node tools/m59-pvp-strategy-test.mjs` (149 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
   that no assignment, `default`, an unknown verb, a throw, a promise or a slow decide is silence and the
   old behaviour, that agent beats character beats default and `null` stops the fall-through, that a local
   module overrides a private one of the same name and an edited one reloads, that `flee_to` takes the body,
@@ -1188,7 +1188,11 @@ the records it describes.
   and is replaced by a `flee_to`, that `wait_home_fight` keeps a posted guard waiting while its home map's alarms say the fight goes on (and only its home's), that `alarm_elsewhere` is opt-in by `moments`, asked only for a fight next door and once per
   window, that a groan (the pain sound) reads as the kod health band and reaches the strategy as
   `player_health` for players not ours, that `hold_fire` passes over a hostile on sight and on alarm but
-  never stops return fire, and that a menagerie host is never assigned anything) and
+  never stops return fire, that a `joust` swings its exchange, backs away inside the room to `gap` squares
+  without swinging until `period_ms` has passed, re-paces on every blow with `pvp_episode` in the facts, lifts
+  pvp_rooms like `engage`, only evades at `swings: 0` and ends on any other answer, that `joustRetreat` slips
+  along a wall rather than into a corner, that a `rescue` ambush is accepted outside the confinement, travels,
+  and engages an attacker already standing there, and that a menagerie host is never assigned anything) and
   `node tools/m59-wand-shot-test.mjs` (15 — **why a wand zap was refused**: that the server's
   "behind you" test and staircase line of sight are transcribed, that a stale target square is
   charged to `stale` and a missing one to `other_room` ahead of every other gate, that any zap,

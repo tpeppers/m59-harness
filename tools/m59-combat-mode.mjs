@@ -34,6 +34,31 @@ import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } f
 import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS } from './m59-pvp-strategy.mjs';
 import { recordGroan, latestHealth } from './m59-player-health.mjs';
 import * as callout from './m59-pvp-callout.mjs';
+// A joust exchange that has not sent its swings in this long gives up and evades (the attacker is keeping away).
+export const JOUST_EXCHANGE_MAX_MS = 4_000;
+
+/**
+ * Where a jousting body steps back to: a standable square in this room at least `gap` from the attacker, near
+ * where it already stands and not in a corner (a corner is where a chase ends). Pure; null when there is none.
+ */
+export function joustRetreat(geo, me, attacker, gap) {
+  if (!geo?.standable || !me || !attacker) return null;
+  let best = null;
+  const reach = Math.ceil(gap) + 2;
+  for (let dr = -reach; dr <= reach; dr++) for (let dc = -reach; dc <= reach; dc++) {
+    const row = me.row + dr, col = me.col + dc;
+    if (row < 1 || col < 1 || (geo.rows && row > geo.rows) || (geo.cols && col > geo.cols)) continue;
+    if (!geo.standable(row, col)) continue;
+    const clear = Math.hypot(row - attacker.row, col - attacker.col);
+    if (clear < gap) continue;
+    let open = 0;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if ((a || b) && geo.standable(row + a, col + b)) open++;
+    const score = Math.min(clear, gap + 2) - 0.35 * Math.hypot(dr, dc) + 0.25 * open;
+    if (!best || score > best.score) best = { row, col, score };
+  }
+  return best && { row: best.row, col: best.col };
+}
+
 // A strategy flight that did not land waits this long before another may start.
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
@@ -94,7 +119,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff', 'loud']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff', 'loud', 'rescue']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -157,6 +182,11 @@ export function normalizeCombatOrder(input) {
     // A KEEP-OFF ambush (m59-keepoff.mjs) waits NEAR a logoff ghost, not on one exact square, and
     // engages a target already standing there -- several characters share one ghost.
     if (input.keepoff === 'wait' || input.keepoff === 'rush') order.keepoff = input.keepoff;
+    // A RESCUE ambush goes to a fight already in progress: near the square is enough, and the target is
+    // ALREADY in the room, so it engages him there rather than waiting for an entry that never comes.
+    demand(input.rescue == null || typeof input.rescue === 'boolean', 'rescue must be boolean');
+    demand(!(input.rescue && order.keepoff), 'rescue and keepoff are different orders');
+    if (input.rescue === true) order.rescue = true;
     if (input.door != null) {
       order.door = square(input.door, 'door arrival area');
       order.door.radius = input.door.radius ?? 1;
@@ -1859,7 +1889,19 @@ export class CombatMode {
       in_flight: !!this.active?.flight, flight_room: this.active?.flight?.room ?? null,
       hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(),
       ...this.roomCount(), sortie_room: this.sortie?.room ?? null, sortie_phase: this.sortie?.phase ?? null,
-      alarm_room: null, reporter: null, player_health: this.playerHealth(player), ...extra };
+      alarm_room: null, reporter: null, player_health: this.playerHealth(player), pvp_episode: this.pvpEpisode(),
+      ...extra };
+  }
+
+  /** The return-fire fight in progress, as a strategy sees it (m59-pvp-strategy.mjs `pvp_episode`), or null. */
+  pvpEpisode() {
+    const o = this.active, p = o?.pvp;
+    if (!p) return null;
+    const v = this.s.client?.vitals?.()?.health, j = p.joust;
+    return { elapsed_ms: this.now() - p.chosen_at, start_health: p.start_health ?? null,
+      health: Number.isFinite(v?.value) ? v.value : null, attacks_sent: p.attacks,
+      incoming_hits: p.incoming_hits, incoming_misses: p.incoming_misses, attackers: p.attackers.map(a => a.character),
+      joust: j ? { phase: j.phase, exchanges: j.exchanges, period_ms: j.period_ms, swings: j.swings } : null };
   }
 
   /** The fleet's groan-based estimate for a player, or null. Never throws on the strategy path. */
@@ -1917,7 +1959,9 @@ export class CombatMode {
       this.s.recorder?.line?.('combat', { event: 'pvp_strategy_decision', moment, target: player, room: here,
         strategy: d.strategy ?? null, decision: d.do, to: d.room ?? null, why: d.why ?? null });
     }
-    if (d.do === 'engage' && here > 1) this.strategyEngage = { room: here, until: this.now() + ENGAGE_WINDOW_MS, player, strategy: d.strategy ?? null };
+    // A joust is a fight too: it lifts our room list here exactly as `engage` does.
+    if ((d.do === 'engage' || d.do === 'joust') && here > 1)
+      this.strategyEngage = { room: here, until: this.now() + Math.max(ENGAGE_WINDOW_MS, d.do === 'joust' ? d.ms : 0), player, strategy: d.strategy ?? null };
     if (d.do === 'hold_fire') {
       this.holdFire.set(String(player).toLowerCase(), this.now() + (d.ms ?? HOLD_FIRE_MS));
       if (this.holdFire.size > 256) this.holdFire.clear();
@@ -2128,6 +2172,63 @@ export class CombatMode {
     else if (now - t.last_hostile_at >= t.idle_ms) this.endSortie(`no hostile for ${Math.round(t.idle_ms / 1000)}s`);
   }
 
+  // ------------------------------------------------------------------ the joust
+  //
+  // m59-pvp-strategy.mjs `joust`: return fire in timed exchanges. An exchange is `swings` attacks sent by the
+  // ordinary attack path below; then the body backs away INSIDE THIS ROOM until it is `gap` squares clear of
+  // the attacker, and the next exchange starts `period_ms` after the last one began. The point is the clock,
+  // not the distance: a fight that trades a blow every few seconds instead of every second lasts several times
+  // as long, which is what lets help arrive while it is still going on.
+
+  /** Install, re-pace or (d null) end the joust on the fight `o`. */
+  applyJoust(o, d) {
+    const p = o?.pvp, now = this.now();
+    if (!p) return;
+    if (!d) {
+      if (p.joust) { p.joust = null; this.record('pvp_joust_ended', o); }
+      return;
+    }
+    const fresh = !p.joust;
+    const j = p.joust ??= { phase: 'exchange', phase_at: now, exchange_started_at: now, sent_at_start: (o.attacks ?? 0) + (o.casts ?? 0),
+      exchanges: 0, started_at: now };
+    Object.assign(j, { period_ms: d.period_ms, swings: d.swings, gap: d.gap, until: now + d.ms, why: d.why ?? null,
+      strategy: d.strategy ?? null });
+    if (fresh) this.record('pvp_joust_started', o);
+  }
+
+  /**
+   * One combat tick under a joust. true: the tick was the joust's (an evading step, or standing clear);
+   * false: the ordinary attack path takes it (an exchange, or no joust at all).
+   */
+  async joustTick(o, target) {
+    const p = o.pvp, j = p?.joust, now = this.now();
+    if (!j) return false;
+    if (now >= j.until) { p.joust = null; this.record('pvp_joust_ended', o); return false; }
+    const sent = (o.attacks ?? 0) + (o.casts ?? 0);
+    if (j.phase === 'exchange') {
+      // An exchange ends when its swings are sent, or when it cannot land them (the attacker keeps away).
+      if (sent - j.sent_at_start < j.swings && now - j.phase_at < JOUST_EXCHANGE_MAX_MS) return false;
+      j.phase = 'evade'; j.phase_at = now; j.exchanges++;
+      this.record('pvp_joust_evade', o);
+    }
+    if (j.swings > 0 && now >= j.exchange_started_at + j.period_ms) {
+      j.phase = 'exchange'; j.phase_at = now; j.exchange_started_at = now; j.sent_at_start = sent;
+      this.record('pvp_joust_exchange', o);
+      return false;
+    }
+    const c = o.client, me = c.self;
+    if (!me || !target) return true;
+    if (Math.hypot(target.row - me.row, target.col - me.col) >= j.gap) return true;
+    const away = joustRetreat(this.s.world?.geometry, me, target, j.gap);
+    const next = away && safeCombatStep(this.s, { ...away, exact: false }, { fineBody: true });
+    if (!next) { j.last_step = { at: now, reason: away ? 'no safe step away' : 'no square clear of the attacker' }; return true; }
+    await this.stand(o);
+    const before = { row: me.row, col: me.col };
+    const result = next.fine ? await this.s.stepFine(next.x, next.y) : await this.s.step(next.col, next.row, { confirm: true });
+    j.last_step = { at: now, from: before, toward: away, reason: result?.reason ?? null };
+    return true;
+  }
+
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
@@ -2214,7 +2315,8 @@ export class CombatMode {
           decision_id: decision.id, chosen_at: this.now(), last_attacked_at: at,
           first_evidence: evidence.text, attackers: [], attacks: 0,
           incoming_hits: 0, incoming_misses: 0, outgoing_hits: 0, outgoing_misses: 0,
-          reconnects: 0, ended_at: null, outcome: null } };
+          reconnects: 0, ended_at: null, outcome: null,
+          start_health: Number.isFinite(c.vitals?.()?.health?.value) ? c.vitals().health.value : null, joust: null } };
       updateSurvivalDecision(s, decision.id, { activated_at: this.now(), phase: 'return_fire' });
       s.pacer.wake?.();
     }
@@ -2227,6 +2329,9 @@ export class CombatMode {
     }
     a.last_attacked_at = Math.max(a.last_attacked_at, at);
     p.last_attacked_at = Math.max(p.last_attacked_at, at);
+    // THE JOUST (m59-pvp-strategy.mjs): every blow asks the strategy again, and its latest answer paces the
+    // fight. Any answer other than `joust` -- silence included -- is ordinary return fire again.
+    if (this.pvpStrategy) this.applyJoust(o, strategyDecision?.do === 'joust' ? strategyDecision : null);
     this.syncPvP(o);
     this.record('pvp_attacked', o);
     this.wake();
@@ -2373,7 +2478,8 @@ export class CombatMode {
     const keeper = this.keeper();
     const confine = keeper?.policy?.confineRooms ?? [];
     if (order.map) {
-      demand(!confine.length || confine.map(Number).includes(order.map), 'ambush map is outside confinement');
+      // A RESCUE is the fleet answering its own alarm; like a strategy flight it does not ask the confinement.
+      demand(order.rescue || !confine.length || confine.map(Number).includes(order.map), 'ambush map is outside confinement');
       const map = s.world.map?.rooms?.[String(order.map)];
       demand(map && order.position.row <= map.rows && order.position.col <= map.cols, 'ambush position is outside the known map');
     }
@@ -2911,18 +3017,18 @@ export class CombatMode {
         this.guard(o);
         demand(result?.arrived && s.world.room.num === o.order.map, result?.reason ?? 'ambush map was not reached');
       }
-      if (o.order.keepoff) {
+      if (o.order.keepoff || o.order.rescue) {
         // KEEP-OFF: near his ghost is enough (several of us share it), and if he is already standing
-        // here there is nothing to wait for.
+        // here there is nothing to wait for. A RESCUE is the same shape: the fight is already here.
         const here = combatTarget(c, o.order.target);
         const near = Math.hypot(c.self.row - o.order.position.row, c.self.col - o.order.position.col) <= 2;
         if (!here && !near) {
           const next = safeCombatStep(s, { ...o.order.position, exact: false });
-          demand(next, 'no safe path to the logoff ghost');
+          demand(next, o.order.rescue ? 'no safe path to the fight' : 'no safe path to the logoff ghost');
           await this.stand(o); await s.step(next.col, next.row); return;
         }
         o.room = s.world.room.num; o.roomObject = c.room.id; o.armedAt = this.now();
-        o.phase = 'waiting'; o.phaseRevision++; this.record('keepoff_waiting', o);
+        o.phase = 'waiting'; o.phaseRevision++; this.record(o.order.rescue ? 'rescue_arrived' : 'keepoff_waiting', o);
         this.refreshTarget(o); return;
       }
       if (c.self.row !== o.order.position.row || c.self.col !== o.order.position.col) {
@@ -2941,6 +3047,7 @@ export class CombatMode {
     }
     const target = c.room.objects.get(o.targetId);
     if (!target || exactName(c, target) !== o.targetName) { this.refreshTarget(o); return; }
+    if (o.pvp?.joust && await this.joustTick(o, target)) return;
     await this.prepareSafety(o);
     if (o.pvp || this.targetAtWar(o) || o.order.warband) {
       // THE OPENER (pvpOpener, above) goes first, and its first cast goes even before the gear: an

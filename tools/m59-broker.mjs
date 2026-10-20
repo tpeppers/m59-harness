@@ -7249,6 +7249,7 @@ const TOOLS = [
       map: { type: 'integer', description: 'Stable map number, e.g. 38' },
       position: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' } }, required: ['row', 'col'] },
       door: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' }, radius: { type: 'number' } }, required: ['row', 'col'], description: 'Optional arrival area in the ambush map; omitted means any entry' },
+      rescue: { type: 'boolean', description: 'ambush only: a fight already in progress. Travel to the map, get within 2 squares of `position`, and engage the target ALREADY there (a plain ambush waits for a fresh entry)' },
       ttl_ms: { type: 'integer' }, stop_below: { type: 'number' },
       sequence: { type: 'array', items: { type: 'object' }, description: '1..16 attack/cast/wait actions' },
       repeat: { type: 'boolean' }, order_id: { type: 'string', description: 'Optional exact order id for stopping without cancelling a replacement' },

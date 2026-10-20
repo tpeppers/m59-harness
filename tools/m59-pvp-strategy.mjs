@@ -34,6 +34,9 @@
 //   allies_here (fleet-mates in the room, NOT counting this character), hostiles_here (players in the
 //   room the war book or the server marks hostile), sortie_room / sortie_phase (the sortie in force, or
 //   null), alarm_room / reporter (alarm_elsewhere only),
+//   pvp_episode -- the return-fire fight in progress, or null: { elapsed_ms, start_health, health, attacks_sent,
+//   incoming_hits, incoming_misses, attackers, joust: { phase, exchanges, period_ms, swings } | null }.
+//   (start_health - health) / exchanges is the net cost of one exchange, healing included,
 //   player_health -- the fleet's groan-based estimate of the player's health (m59-player-health.mjs):
 //   { band 1-4, min_pct, max_pct, age_ms, room } from the last time anyone of ours heard them hurt, or null
 //
@@ -67,6 +70,14 @@
 //        do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's
 //        alarm both pass over them for `ms` (default HOLD_FIRE_MS, renewed by deciding again). It never
 //        stops return fire -- a player who hits us is answered exactly as before.
+//   { do: 'joust', period_ms?, swings?, gap?, ms?, why? }
+//        return fire in TIMED EXCHANGES rather than continuously: `swings` attacks (0-5, default 1), then the
+//        body backs away inside this room until `gap` squares (2-10, default 4) separate it from the attacker,
+//        and the next exchange starts `period_ms` (JOUST_MIN_PERIOD_MS..JOUST_MAX_PERIOD_MS, default 6 s) after
+//        the last one began. `swings: 0` only evades. It lasts `ms` (default 60 s; every blow asks again, so a
+//        strategy re-paces as the fight goes) and lifts our room list here as `engage` does. Any other answer
+//        to a later blow -- null included -- ends it and the fight is ordinary return fire again. It never
+//        leaves the room: it slows a fight down, it does not run from one.
 //
 // WHERE THE FILES ARE (all optional, all this machine's — gitignored, never committed):
 //   strategies   substrate/pvp-strategies/<name>.mjs (or M59_PVP_STRATEGY_DIR), then every directory in
@@ -98,7 +109,7 @@ const SUBSTRATE = join(HERE, '..', 'substrate');
 export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
 /** What a module hears when it does not say: the moments that existed before `moments` did. */
 export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
-export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire']);
+export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire', 'joust']);
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
 export const STRIKES = 3;
 export const MAX_HOLD_MS = 4 * 3600_000;
@@ -110,6 +121,11 @@ export const DEFAULT_SORTIE_MS = 3 * 60_000;
 export const DEFAULT_SORTIE_IDLE_MS = 30_000;
 export const HOLD_FIRE_MS = 6_000;
 export const HOLD_FIRE_MAX_MS = 60_000;
+export const JOUST_MIN_PERIOD_MS = 2_000;
+export const JOUST_MAX_PERIOD_MS = 30_000;
+export const JOUST_PERIOD_MS = 6_000;
+export const JOUST_MS = 60_000;
+export const JOUST_MAX_MS = 15 * 60_000;
 
 export const pvpStrategyDir = (env = process.env) => env.M59_PVP_STRATEGY_DIR || join(SUBSTRATE, 'pvp-strategies');
 export const pvpStrategyDirsFile = (env = process.env) => env.M59_PVP_STRATEGY_DIRS_FILE || join(SUBSTRATE, 'pvp-strategy-dirs.json');
@@ -185,6 +201,16 @@ export function validateDecision(d) {
     const v = d.ms == null ? HOLD_FIRE_MS : Number(d.ms);
     if (!Number.isFinite(v) || v < 0) return { decision: null, error: 'hold_fire ms is non-negative milliseconds' };
     return { decision: { do: 'hold_fire', ms: Math.min(v, HOLD_FIRE_MAX_MS), why } };
+  }
+  if (verb === 'joust') {
+    const num = (v, dflt) => v == null ? dflt : Number(v);
+    const period = num(d.period_ms, JOUST_PERIOD_MS), swings = num(d.swings, 1), gap = num(d.gap, 4), len = num(d.ms, JOUST_MS);
+    if (!Number.isFinite(period) || period < 0) return { decision: null, error: 'joust period_ms is non-negative milliseconds' };
+    if (!Number.isInteger(swings) || swings < 0 || swings > 5) return { decision: null, error: 'joust swings is a whole number 0..5' };
+    if (!Number.isFinite(gap) || gap < 2 || gap > 10) return { decision: null, error: 'joust gap is 2..10 squares' };
+    if (!Number.isFinite(len) || len < 0) return { decision: null, error: 'joust ms is non-negative milliseconds' };
+    return { decision: { do: 'joust', period_ms: Math.min(Math.max(period, JOUST_MIN_PERIOD_MS), JOUST_MAX_PERIOD_MS),
+      swings, gap, ms: Math.min(len, JOUST_MAX_MS), why } };
   }
   const room = Number(d.room);
   if (!Number.isInteger(room) || room <= 1) return { decision: null, error: `${verb} needs a room number above 1, not ${JSON.stringify(d.room)}` };

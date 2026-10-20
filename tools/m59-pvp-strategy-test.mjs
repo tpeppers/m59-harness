@@ -559,5 +559,102 @@ console.log('the keeper');
     /new PvpStrategyHost\(\{[^}]*isHost: isHostCharacter/.test(kp) && /pvpStrategy\.refresh\(\)/.test(kp));
 }
 
+console.log('the joust decision');
+{
+  const v = d => ps.validateDecision(d);
+  const d = v({ do: 'joust' }).decision;
+  ok('joust has defaults: one swing, 6 s, 4 squares, 60 s', d?.do === 'joust' && d.swings === 1 && d.period_ms === ps.JOUST_PERIOD_MS
+    && d.gap === 4 && d.ms === ps.JOUST_MS, JSON.stringify(d));
+  ok('the period is clamped into its band', v({ do: 'joust', period_ms: 10 }).decision.period_ms === ps.JOUST_MIN_PERIOD_MS
+    && v({ do: 'joust', period_ms: 1e9 }).decision.period_ms === ps.JOUST_MAX_PERIOD_MS);
+  ok('swings is 0..5 whole, gap 2..10', !!v({ do: 'joust', swings: 6 }).error && !!v({ do: 'joust', swings: 1.5 }).error
+    && !!v({ do: 'joust', gap: 1 }).error && v({ do: 'joust', swings: 0 }).decision?.swings === 0);
+  ok('ms is clamped to the ceiling', v({ do: 'joust', ms: 1e12 }).decision.ms === ps.JOUST_MAX_MS);
+}
+
+console.log('combat mode: joust');
+{
+  let answer = { do: 'joust', period_ms: 4000, swings: 1, gap: 4, ms: 60_000, strategy: 'fleeta' };
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => answer });
+  put(f, 2, P); hitBy(f);
+  ok('a joust decision rides on return fire', !!f.mode.active?.pvp && f.mode.active.pvp.joust?.phase === 'exchange'
+    && f.mode.active.pvp.joust.period_ms === 4000, JSON.stringify(f.mode.active?.pvp?.joust));
+  ok('the fight records where it started', f.mode.active.pvp.start_health === 100);
+  await f.mode.tick();
+  ok('the first exchange swings', f.sent.filter(x => x === 'attack:2').length === 1, f.sent.join());
+  const moves = () => f.sent.filter(x => x.startsWith('move:')).length;
+  f.advance(1100); await f.mode.tick();
+  const t = f.c.room.objects.get(2);
+  ok('its swing sent, the body backs away instead of swinging again', f.mode.active.pvp.joust.phase === 'evade'
+    && f.mode.active.pvp.joust.exchanges === 1 && moves() === 1 && f.sent.filter(x => x === 'attack:2').length === 1, f.sent.join());
+  ok('away from the attacker', Math.hypot(f.c.self.row - t.row, f.c.self.col - t.col) > 1, JSON.stringify(f.c.self));
+  for (let i = 0; i < 6; i++) { f.advance(200); await f.mode.tick(); }
+  ok('still evading inside the period, never swinging', f.mode.active.pvp.joust.phase === 'evade'
+    && f.sent.filter(x => x === 'attack:2').length === 1);
+  const far = Math.hypot(f.c.self.row - t.row, f.c.self.col - t.col);
+  ok('it stops once it is gap squares clear', far >= 4, String(far));
+  hitBy(f);
+  const facts = f.asked.at(-1);
+  ok('the next blow asks again, with the fight so far', facts.pvp_episode?.start_health === 100 && facts.pvp_episode.joust?.exchanges === 1
+    && facts.pvp_episode.attackers.includes('Morpheus'), JSON.stringify(facts.pvp_episode));
+  f.advance(2000); await f.mode.tick();
+  ok('the period is up: the next exchange begins', f.mode.active.pvp.joust.phase === 'exchange', JSON.stringify(f.mode.active.pvp.joust));
+  for (let i = 0; i < 12 && f.sent.filter(x => x === 'attack:2').length < 2; i++) { f.advance(300); await f.mode.tick(); }
+  ok('and it closes and swings again', f.sent.filter(x => x === 'attack:2').length === 2, f.sent.join());
+  answer = null; hitBy(f);
+  ok('any other answer ends the joust: ordinary return fire', !!f.mode.active?.pvp && f.mode.active.pvp.joust === null
+    && f.lines.some(l => l.event === 'pvp_joust_ended'));
+  f.mode.stop('test');
+}
+{
+  reset(); const f = fixture({ room: 576, pvpRooms: [38], strategy: () => ({ do: 'joust', period_ms: 6000, swings: 1, gap: 4, ms: 60_000, strategy: 'fleeta' }) });
+  put(f, 2, P); hitBy(f); await f.mode.tick();
+  ok('a joust lifts our room list as engage does: it fights where pvp_rooms refused', !!f.mode.active?.pvp?.joust
+    && f.sent.includes('attack:2'), f.sent.join());
+  f.mode.stop('test');
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => ({ do: 'joust', period_ms: 6000, swings: 0, gap: 3, ms: 60_000, strategy: 'fleeta' }) });
+  put(f, 2, P); hitBy(f);
+  for (let i = 0; i < 8; i++) { f.advance(500); await f.mode.tick(); }
+  ok('swings 0 only evades', !f.sent.includes('attack:2') && f.sent.some(x => x.startsWith('move:')), f.sent.join());
+  f.mode.stop('test');
+}
+{
+  const { joustRetreat } = await import('./m59-combat-mode.mjs');
+  const room = (rows, cols) => ({ rows, cols, standable: (r, c) => r >= 1 && c >= 1 && r <= rows && c <= cols });
+  const r = joustRetreat(room(20, 20), { row: 10, col: 10 }, { row: 10, col: 9 }, 4);
+  ok('a retreat square is gap clear of the attacker', r && Math.hypot(r.row - 10, r.col - 9) >= 4, JSON.stringify(r));
+  ok('and on the far side of us from him', r.col > 10, JSON.stringify(r));
+  const corner = joustRetreat(room(20, 20), { row: 2, col: 2 }, { row: 3, col: 3 }, 4);
+  ok('backed into a corner, it slips along a wall rather than into the corner', corner && !(corner.row === 1 && corner.col === 1)
+    && Math.hypot(corner.row - 3, corner.col - 3) >= 4, JSON.stringify(corner));
+  ok('no geometry: no square', joustRetreat(null, { row: 1, col: 1 }, { row: 2, col: 2 }, 4) === null);
+}
+
+console.log('combat mode: a rescue ambush');
+{
+  const { normalizeCombatOrder } = await import('./m59-combat-mode.mjs');
+  const base = { action: 'ambush', target: 'Morpheus', map: 38, position: { row: 5, col: 7 } };
+  ok('rescue is carried on an ambush', normalizeCombatOrder({ ...base, rescue: true }).rescue === true
+    && !('rescue' in normalizeCombatOrder(base)));
+  ok('rescue is boolean and not a keep-off', throwsLike(() => normalizeCombatOrder({ ...base, rescue: 'yes' }), /rescue must be boolean/)
+    && throwsLike(() => normalizeCombatOrder({ ...base, rescue: true, keepoff: 'rush' }), /different orders/));
+  reset(); const f = fixture({ room: 576, pvpRooms: [38] });
+  f.s.world.map = { rooms: { 38: { rows: 50, cols: 70 } } };
+  f.keeper.policy.confineRooms = [576];
+  const r = f.mode.issue({ ...base, rescue: true, position: { row: 5, col: 6 } });
+  ok('a rescue is accepted outside the confinement', !!f.mode.active && f.mode.active.order.rescue === true, JSON.stringify(r));
+  const plain = f.s.travel.bind(f.s);
+  f.s.travel = async (to, opts) => { const res = await plain(to, opts); put(f, 2, P); return res; };
+  await f.mode.tick();
+  ok('it travels to the fight', f.travels.at(-1)?.to === 38 && f.s.world.room.num === 38, JSON.stringify(f.travels.map(t => t.to)));
+  for (let i = 0; i < 6 && !f.sent.includes('attack:2'); i++) { f.advance(1100); f.mode.event({ kind: 'moved', id: 2 }); await f.mode.tick(); }
+  ok('and engages the attacker already standing there (a plain ambush would wait for an entry)',
+    f.lines.some(l => l.event === 'rescue_arrived') && f.sent.includes('attack:2'), f.sent.join() + ' ' + f.mode.active?.phase);
+  f.mode.stop('test');
+}
+
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

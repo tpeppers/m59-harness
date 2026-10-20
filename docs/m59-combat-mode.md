@@ -518,6 +518,13 @@ and the order waits for that exact name to reappear, even under a new object ID.
 It never follows the player into another map. An armed character displaced from its selected position ends the
 ambush rather than firing from the wrong spot.
 
+A **rescue** ambush (`rescue: true`) is for a fight already in progress: it
+travels to its map, stops once it is within 2 squares of `position` (or the
+moment the target is visible), and engages the named player ALREADY there --
+the case a plain ambush deliberately does not fire on. Like a PvP strategy
+flight it does not ask the keeper's confinement. It cannot be combined with
+`keepoff`. Combat line `rescue_arrived`.
+
 Orders remain until stopped, replaced, completed or interrupted by survival or
 connection/room identity changes. There is no default timeout; explicit
 `ttl_ms` is 1000 through 1800000. The default sequence repeats one attack. Sequences have
