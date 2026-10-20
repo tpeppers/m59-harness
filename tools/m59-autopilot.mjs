@@ -28233,9 +28233,14 @@ export class Autopilot {
   // A KIND IS A NORMALISED ITEM NAME, and the two reagents also answer to their `shareKind`
   // alias — the server says "herbs" where the board says "herb", and a delivery that
   // matched only one of those spellings would carry the right thing and fail to find it.
+  // And the kod catalogue names `enchant weapon`'s reagent `orctooth` (enchwp.kod:65) where the
+  // pack says `orc tooth`, so the letters-only key is the one both sides agree on — the broker's
+  // reagent check learned this 2026-09-11. Without it Raphael, carrying 30, asked the fleet for
+  // orc teeth on every pass (2026-10-20).
   matchesKind(name, kind) {
-    const n = String(name || '');
-    return skills.shareKind(n) === kind || norm(n) === String(kind || '').toLowerCase();
+    const n = String(name || ''), key = x => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return skills.shareKind(n) === kind || norm(n) === String(kind || '').toLowerCase()
+      || (!!key(kind) && key(n) === key(kind));
   }
 
   countOfKind(kind) {

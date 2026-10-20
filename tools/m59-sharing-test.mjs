@@ -113,6 +113,15 @@ await ok('a desk whose last cast spent its last emerald asks on its own — nobo
   assert.equal(ap._needsNow.get('emerald') ?? 0, 0);
 });
 
+await ok('a pack\'s "orc tooth" pays enchant weapon\'s "orctooth" — no phantom shortfall', () => {
+  // Raphael, 2026-10-20: 30 orc teeth carried, "cannot afford another cast" every pass.
+  const ap = Object.create(Autopilot.prototype);
+  ap.packAsItems = () => [{ name: 'orc tooth', amount: 30 }, { name: 'elderberry', amount: 70 }];
+  assert.equal(ap.countOfKind('orctooth'), 30);
+  assert.equal(ap.countOfKind('elderberry'), 70);
+  assert.equal(ap.countOfKind('emerald'), 0);
+});
+
 // ------------------------------------------------------------------------------ give
 const desk = { agent: 'hk1', character: 'Desk', room: 2, hops: 1, service: true, needs: { emerald: 10 } };
 const mate = { agent: 't4', character: 'Mate', room: 38, hops: 0, service: false, needs: { herb: 30 } };
