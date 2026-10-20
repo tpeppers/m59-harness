@@ -1119,6 +1119,43 @@ console.log('\ngear the roster forbids');
      L.bannedGearProblems(inverted, BAN13).some(p => p.kind === 'no_drawable_gear'));
 }
 
+// ---- writeLoadoutPlan: the plan changes, nothing else does
+{
+  console.log('\nwriteLoadoutPlan — only the plan is written');
+  const p = join(process.env.M59_LOADOUT_DIR, 'statler.json');
+  const longWhy = 'x'.repeat(400);
+  const before = { format: 'm59-loadout/1', character: 'Statler', agent: 't3', note: 'keep me',
+    gear: { weapon: ['hammer'], slots: {}, why: 'skeletons resist edges' },
+    carry: [{ item: 'herb', min: 5, max: null, match: 'exact', why: longWhy }],
+    sell_why: 'an operator note normalise does not know', healing_wand_note: 'also kept',
+    plan: { schools: { Faren: 2 }, weapon_level: 3, learning_target: null, learning_queue: [], abilities: [] } };
+  mkdirSync(process.env.M59_LOADOUT_DIR, { recursive: true });
+  writeFileSync(p, JSON.stringify(before));
+  const out = L.writeLoadoutPlan('Statler', { schools: { Kraanan: 4 }, weapon_level: 5,
+    learning_queue: [{ track: 'Kraanan', level: 1 }, { track: 'weapons', level: 5 }, { track: 'Kraanan', level: 9 }] });
+  const after = JSON.parse(readFileSync(p, 'utf8'));
+  ok('the new plan is on disk', after.plan.schools.Kraanan === 4 && after.plan.schools.Faren === undefined &&
+     after.plan.weapon_level === 5);
+  ok('and it went through the same normalising as any plan',
+     after.plan.learning_queue.length === 2 && after.plan.learning_queue[1].track === 'weaponcraft' &&
+     out.problems.some(x => /learning_queue\[2\]/.test(x)));
+  const strip = o => { const x = { ...o }; delete x.plan; delete x.updated; return JSON.stringify(x); };
+  ok('EVERY OTHER FIELD IS BYTE-FOR-BYTE AS IT WAS — unknown fields and long notes included',
+     strip(after) === strip(before) && after.carry[0].why.length === 400 && after.sell_why === before.sell_why);
+  ok('a file that does not exist is created from a blank', (() => {
+    const r = L.writeLoadoutPlan('Newcomer', { schools: { Qor: 3 } }, { agent: 't40' });
+    const j = JSON.parse(readFileSync(r.path, 'utf8'));
+    return j.character === 'Newcomer' && j.agent === 't40' && j.plan.schools.Qor === 3 && Array.isArray(j.carry);
+  })());
+  writeFileSync(join(process.env.M59_LOADOUT_DIR, 'waldorf.json'), '{ not json');
+  ok('an unreadable file is refused, not replaced',
+     (() => { try { L.writeLoadoutPlan('Waldorf', { schools: {} }); return false; } catch { return true; } })() &&
+     readFileSync(join(process.env.M59_LOADOUT_DIR, 'waldorf.json'), 'utf8') === '{ not json');
+  ok('a punctuation collision is refused', (() => {
+    try { L.writeLoadoutPlan('Statler!', { schools: {} }); return false; } catch (e) { return /already holds/.test(e.message); }
+  })());
+}
+
 rmSync(root, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

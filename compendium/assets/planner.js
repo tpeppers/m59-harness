@@ -222,7 +222,10 @@
       var p = planned && L.plan.schools[s];
       out[s] = Math.max(have[s] || 0, p || 0);
     });
-    out.weapon = (L.plan.weapon_level || 0) || observedWeaponLevel();
+    // The plan's Weaponcraft goal counts only when the caller asked for the PLANNED state;
+    // pricing the next school level against a weapon level not yet held overcharged it.
+    // A MAX either way, so a held level-50 sentinel still hides it (learn.mjs levelPointsAt).
+    out.weapon = Math.max(planned ? (L.plan.weapon_level || 0) : 0, observedWeaponLevel());
     return out;
   }
 
@@ -304,7 +307,12 @@
         cost = LEARN.learnCost({
           trackLevels: trackLevels(false), school: school, level: next, intellect: intellect(),
           knowOneAtLevel: countAt(school, next) > 0,
-          prevLevelCount: next > 1 ? countAt(school, next - 1) : 3,
+          // GetNumAtLevel counts what EXISTS at that level in the game (system.kod:1693),
+          // not what this character knows; counting known spells applied the ÷3 relief to
+          // anyone holding a single spell at the level below.
+          prevLevelCount: next > 1 ? D.spells.filter(function (sp) {
+            return sp.school === school && sp.level === next - 1;
+          }).length : 3,
           constants: D.learning,
         });
       }
