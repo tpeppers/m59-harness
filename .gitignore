@@ -967,3 +967,7 @@ substrate/rail-inputs/
 /substrate/movement-suite-reports/
 # The plan desk's heartbeat (m59-plan-desk.mjs); the broker writes it on every start.
 /substrate/plan-desk.json
+
+# Fleet-scoped cached hometown observations and changes.
+/substrate/**/*.hometowns/
+/substrate/*.hometowns/
