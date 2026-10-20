@@ -5477,6 +5477,8 @@ class Session {
   // long trip through one sticky doorway would run out of journey before it ran out of
   // patience.
   async travel(toRoomNum, {
+    allowRescue = true,
+    origin = null,
     // ROOMS THIS JOURNEY PLANS AROUND, on top of the session's barred rooms (operator, 2026-09-28:
     // "Marco can also detour around the flatlands if it's blocked by ants/spiders"). The router
     // already takes an avoid set (World.route); a journey could not say what to add to it.
@@ -5505,6 +5507,12 @@ class Session {
     // stumbles. Omit it and travel behaves exactly as it always did.
     handOffAt = null,
   } = {}) {
+    if (allowRescue) {
+      const {tryRescueTravel} = await import('./m59-rescue-travel.mjs');
+      const shortcut = await tryRescueTravel(this, toRoomNum, {origin, avoid, allowHazard, hazardWhy,
+        maxHops, maxStumbles, movementGeneration, controlToken, onHop, onTrackRest, arriveNear, handOffAt});
+      if (shortcut) return shortcut;
+    }
     const log = [];
     // TIME EXPOSED, PER MAP. See m59-transits.mjs for why this is the number worth having
     // and why "damage taken in transit" is not: there is no safe travel in this game and

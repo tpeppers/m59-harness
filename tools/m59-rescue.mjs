@@ -3,6 +3,7 @@
 import {readFileSync} from 'node:fs';
 import {findPath,AVOID_IN_TRANSIT,NEVER_ENTER} from './m59-map.mjs';
 import {OF} from './m59-parse.mjs';
+import {idsCurrent} from './m59-idgen.mjs';
 const terrain=JSON.parse(readFileSync(new URL('../substrate/m59-rescue-terrain.json',import.meta.url)));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const state=new WeakMap();
@@ -32,6 +33,11 @@ export function chargePossibilities(description){
 export const expendable=possibilities=>possibilities.length>0&&possibilities.every(x=>x.remaining>=2);
 export function rescueRegion(num){
   if(!Number.isInteger(num)||num<=0)return null;
+  // Native GetRegion overrides: Forgotten Paths, island halls, Brax hall,
+  // and historic rooms (their numeric IDs are outside the regional ranges).
+  if([59,705,713].includes(num))return 2000;
+  if(num===715)return 825;
+  if([3,9000,9001,9002,9003].includes(num))return 9000;
   if(num>=1000&&num<1010)return 1000;
   if(num>=1010&&num<=1018)return 1010;
   if(num>=2000&&num<=2499)return 2000;
@@ -51,7 +57,7 @@ export async function inspectChalice(s,item,{fresh=false}={}){
   if(!fresh&&old&&Date.now()-old.at<5000)return old;
   const c=s.need(),since=c.evSeq;
   await s.pacer.submit('look',()=>c.look(item.id));
-  const read=await c.waitFor({since,kinds:['look'],timeoutMs:2000});
+  const read=await c.waitFor({since,kinds:['look'],timeoutMs:2000,match:e=>e.id===item.id});
   const description=read.events.find(e=>e.id===item.id)?.description??'';
   let possibilities=chargePossibilities(description);
   // The description cannot establish a higher count after our own accepted use.
@@ -94,8 +100,9 @@ export function chooseRescueRoute({from,to,landing,walking,tail,capability,block
     estimate_basis:'25-second Rescue bound plus 20 seconds per remaining room; heuristic',
     capability,remaining_hops:to===landing?[]:tail.hops};
 }
-export async function performRescue(s,capability,{destination=null,stopped=()=>false,timeoutMs=35000,onEvent=()=>{}}={}){
-  const v=live(s),c=s.need(),origin=s.world?.room?.num;
+export async function performRescue(s,capability,{destination=null,stopped=()=>false,timeoutMs=35000,onEvent=()=>{},validate=()=>true}={}){
+  const v=live(s),c=s.need(),origin=s.world?.room?.num,generation=c.idsAsOf?.();
+  const idsOK=()=>!c.idsAsOf||(idsCurrent(c.idsAsOf())&&c.idsAsOf().saves_seen===generation?.saves_seen);
   if(v.busy||v.pending)return {arrived:false,refused:true,reason:'rescue already pending'};
   if(stopped())return {arrived:false,cancelled:true};
   v.busy=true;
@@ -107,16 +114,18 @@ export async function performRescue(s,capability,{destination=null,stopped=()=>f
       if(!charge.usable)return {arrived:false,refused:true,reason:'preserving final charge or uncertain reserve'};
     }else if(capability.kind!=='spell')return {arrived:false,refused:true,reason:'unknown rescue method'};
     const since=c.evSeq;
-    const guard=()=>{if(stopped()||s.client!==c||s.combat?.active)throw Error('rescue preempted');};
+    const guard=()=>{if(stopped()||s.client!==c||!idsOK()||s.combat?.active||Date.now()-(s.lastPlayerAttackAt??0)<600000||!validate())throw Error('rescue preempted');};
     await s.pacer.submit('rest',()=>{guard();c.stand();});
     v.pending={from:origin,destination,started_at:Date.now(),kind:capability.kind,status:'awaiting-confirmation'};
     await s.pacer.submit(capability.kind==='chalice'?'use':'cast',()=>{
       guard();
       if(capability.kind==='chalice'){
+        if(!(c.selfId>0)||!items(s).some(i=>i.id===capability.item_id&&isChalice(c,i)))
+          throw Error('rescue chalice identity changed');
         const old=v.charges.get(capability.item_id);
         v.charges.set(capability.item_id,{...old,spent:true,at:0,
           possibilities:old.possibilities.map(p=>({...p,remaining:p.remaining-1}))});
-        c.use(capability.item_id);
+        c.apply(capability.item_id,c.selfId);
         if(!expendable(v.charges.get(capability.item_id).possibilities))
           s.chaliceErrand={kind:'recharge_chalice',state:'pending',item_id:capability.item_id,
             reason:'reserve reached after use',at:Date.now()};
@@ -136,7 +145,8 @@ export async function performRescue(s,capability,{destination=null,stopped=()=>f
         return {arrived:destination==null||room===destination,landed_in:room,via:'rescue',
           elapsed_ms:Date.now()-until+timeoutMs,method:capability.kind};
       }
-      if(/Only those who have walked|cannot rescue|already being rescued|unsuccessful in casting|not enough.*mana|do not have.*reagent|cannot cast|can't cast/i.test(text)){
+      if(/Only those who have walked|attacked a player too recently/i.test(text))s.lastPlayerAttackAt=Date.now();
+      if(/Only those who have walked|attacked a player too recently|Your aggression halts your attempt|cannot rescue|already being rescued|unsuccessful in casting|not enough.*mana|do not have.*reagent|cannot cast|can't cast/i.test(text)){
         // Already-pending replies do not prove that the old timer is gone.
         if(!/already being rescued/i.test(text))v.pending=null;
         return {arrived:false,refused:true,...(/already being rescued/i.test(text)?{pending:true}:{}),reason:text.slice(-500)};

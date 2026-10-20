@@ -1,5 +1,9 @@
 # The boards and the planner
 
+`/arrivals` compares fleet arrival P90s using inspected current resources or
+explicit what-if assumptions. See [arrival estimates](m59-arrivals.md) for
+evidence limits, whole-route simulation and the matching travel selector.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). What each page can honestly answer, and which of them can write.
 
 - **THERE ARE SIX BOARDS AND ONE TAB BAR, AND A PURSE HAS NO RECORD BUT THE SAMPLE.**
