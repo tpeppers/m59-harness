@@ -258,7 +258,8 @@ const ok = (name, cond, extra = '') => {
       walkable: (row, col) => row >= 2 && row <= 8 && col >= 2 && col <= 8,
     };
     const me = { id: 0, col: 5, row: 5 };
-    const objects = new Map([[0, me], ...others.map((o, i) => [i + 1, { id: i + 1, ...o }])]);
+    // A body by default (MOVEON_NO, flags 1); a fixture that says otherwise is something walked over.
+    const objects = new Map([[0, me], ...others.map((o, i) => [i + 1, { id: i + 1, flags: 1, ...o }])]);
     k.s = {
       client: { selfId: 0, self: me, room: { objects } },
       world: {
@@ -287,6 +288,12 @@ const ok = (name, cond, extra = '') => {
      !(taken?.col === 2 && taken?.row === 2), JSON.stringify(taken));
   ok('it takes a different corner rather than giving up on corners',
      taken?.seat === 'corner', JSON.stringify(taken));
+
+  // LOOSE SOIL IS NOT A BODY. A groundworm's trail clump is MOVEON_YES (flags 64, wrmtrail.kod): the client walks
+  // over it, so a corner with only soil in it is as open as an empty one.
+  const soiled = room([{ col: 2, row: 2, flags: 64 }, { col: 2, row: 8, flags: 64 },
+                       { col: 8, row: 2, flags: 64 }, { col: 8, row: 8, flags: 64 }]).restingSquare();
+  ok('a corner with only loose soil in it is still a corner to sit in', soiled?.seat === 'corner', JSON.stringify(soiled));
 
   // All four corners occupied: it must still seat the character somewhere rather than
   // returning nothing, because "nowhere clear to rest" is what leaves it on its feet.

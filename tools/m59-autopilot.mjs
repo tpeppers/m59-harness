@@ -65,7 +65,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import { HealingWands } from './m59-healing-wands.mjs';
 import { FarmWandSupport } from './m59-farm-wand-support.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
-         playerClassName, flaggedAggressor } from './m59-parse.mjs';
+         playerClassName, flaggedAggressor, blocksMovement } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { refusedHere, refusedTargets } from './m59-refused-targets.mjs';
 import {quarryApproachSignature} from './m59-pocket-rails.mjs';
@@ -7453,7 +7453,11 @@ export class Autopilot {
       } catch { /* geometry could not answer; the corner heuristic is still better than
                    sitting where we stand, so fall through rather than refusing to rest */ }
     }
-    const others = [...c.room.objects.values()].filter(o => o.id !== c.selfId);
+    // BODIES ONLY, by the server's MOVEON bits, the same predicate the mover enforces. A groundworm's "Loose soil"
+    // (GroundWormTrailClump, a PassiveObject: flags 64, MOVEON_YES, wrmtrail.kod), loot and slain bodies are walked
+    // over in the client, and The Badlands (45) has twenty soil clumps at a time: counted here, every corner near a
+    // worm read as occupied.
+    const others = [...c.room.objects.values()].filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0));
     const gap = (col, row) => others.length
       ? Math.min(...others.map(o => Math.hypot(o.col - col, o.row - row))) : 99;
     // SIT IN A CORNER, AND IN THE EMPTIEST ONE THERE IS.
