@@ -50,7 +50,7 @@ function save(file,record){const tmp=file+'.'+process.pid+'.tmp';writeFileSync(t
 // same generation and the ordinary travel guards; no inert lease or second driver.
 export async function tryRescueTravel(s,to,opts={}){
  // A map-level teleport cannot prove a requested arrival component or puzzle handoff.
- if(opts.arriveNear||opts.handOffAt)return null;
+ if(opts.arriveNear||opts.handOffAt||s.combat?.active)return null;
  const character=s.credentials?.character,policy=await rescueTravelPolicy({agent:s.name,character,
   spells:(s.client?.spells??[]).map(sp=>s.client.rsc.get(sp.nameRsc)),to});
  if(!policy?.enabled)return null;

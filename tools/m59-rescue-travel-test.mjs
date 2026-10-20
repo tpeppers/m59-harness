@@ -5,6 +5,7 @@ import {executeRescuePlan,verifiedRescueContext,tryRescueTravel} from './m59-res
 const dir=mkdtempSync(join(tmpdir(),'rescue-chain-'));
 assert.equal(await tryRescueTravel({},714,{arriveNear:{row:1,col:1}}),null);
 assert.equal(await tryRescueTravel({},714,{handOffAt:()=>true}),null);
+assert.equal(await tryRescueTravel({combat:{active:true}},714),null);
 function fake({cancel=false,wrong=false,remaining=3}={}){
  let cancelled=false;
  const s={name:'test',credentials:{character:'Test'},live:true,uses:0,world:{room:{num:39}},movementWasCancelled:()=>cancelled,need:()=>c,pacer:{submit:async(k,f)=>f()},travel:async(to)=>{s.world.room={num:to};return {arrived:true};}};
