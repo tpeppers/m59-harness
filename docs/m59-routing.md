@@ -1,5 +1,9 @@
 # Movement, collision and routing
 
+Arrival estimates and opt-in Rescue/chalice chains are documented in
+[m59-arrivals.md](m59-arrivals.md). Ordinary FleetScript walks use the same
+Session travel selector, with native landings checked before a second use.
+
 Fine travel retains its goal across repeated, positively owned shelter
 recoveries until the original leg deadline. A fixed three-recovery count must
 not strand a living fourth recovery. Each cycle still checks body identity,

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {renderArrivals} from './m59-arrivals-page.mjs';
 import {movementRegionSpec} from './m59-movement-region.mjs';
 // The MCP broker supervisor/API: one broker plus N keeper child processes, with
 // arbitrary agents driving their player characters. The optional lab runtime is the
@@ -20848,6 +20849,27 @@ function serveDashboard(port, { handle = null } = {}) {
       return res.end(JSON.stringify(deathReportJSON(url.searchParams.get('file'))));
     }
     // Hometown observations are durable, roster-scoped disk records. Rendering sends no packets.
+    if (url.pathname === '/arrivals') {
+      try {
+        const tool = TOOLS.find(t => t.name === 'fleet');
+        const live = await tool.run({});
+        const readiness = {};
+        if (!url.searchParams.has('mode') || url.searchParams.get('mode') === 'current') {
+          await Promise.all([...sessions].map(async ([agent, s]) => {
+            if (pilotOf(agent)) { readiness[agent] = {unavailable:true,methods:[],reason:'human-piloted'}; return; }
+            try {
+              const gate = await s._journeyGate(Number(url.searchParams.get('to')??50));
+              if (!gate.ok) { readiness[agent] = {unavailable:true,methods:[],reason:gate.why}; return; }
+              readiness[agent] = await keeperAction(agent, s._index, 'arrival_readiness', {to:Number(url.searchParams.get('to')??50)}, {timeoutMs:10000});
+              if (!Array.isArray(readiness[agent]?.methods)) readiness[agent] = {unavailable:true,methods:[],reason:'keeper does not yet report arrival readiness'}; }
+            catch { readiness[agent] = {unavailable:true,methods:[],reason:'keeper readiness unavailable'}; }
+          }));
+        }
+        const html = await renderArrivals({stateFile: STATE_FILE, live: live.fleet ?? [], readiness, query: url.searchParams});
+        res.writeHead(200, {'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
+        return res.end(html);
+      } catch (e) { res.writeHead(500, {'content-type':'text/plain'}); return res.end('Arrival report failed: '+e.message); }
+    }
     if (url.pathname === '/hometowns') {
       try {
         const html = renderHometownsBoard({ stateFile: STATE_FILE });

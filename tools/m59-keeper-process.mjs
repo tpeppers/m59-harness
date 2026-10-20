@@ -5235,6 +5235,10 @@ const server = createServer(async (req, res) => {
             break;
           }
 
+          case 'arrival_readiness': {
+            const {rescueTravelReadiness} = await import('./m59-rescue-travel.mjs');
+            json(await rescueTravelReadiness(session, Number(args.to))); return;
+          }
           case 'look': {
             const id = args.id ?? args.item;
             if (!id) { result = { error: 'no item id' }; break; }

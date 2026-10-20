@@ -35,6 +35,8 @@ import {resolve} from 'node:path';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-arrival-test.mjs', 'Whole-route timing distributions and legal Rescue chains'],
+  ['m59-rescue-travel-test.mjs', 'Confirmed two-stage travel, charge reserve and durable uncertainty'],
   ['m59-combat-fallback-test.mjs', 'personal threat and fresh potion fallbacks preserve pursuit, primary attack priority and packet ownership'],
   ['m59-combat-support-test.mjs', 'independent healing preserves pursuit, attack timers, spell trances and fresh fleet identity'],
   ['m59-movement-region-test.mjs','real client packet boundary refuses off-component falls, transport and unproved exits while stationary survival preempts trades'],

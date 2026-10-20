@@ -83,6 +83,7 @@ export const TABS = [
   { key: 'players', href: '/players', label: 'Players' },
   { key: 'pvp', href: '/pvp', label: 'PVP' },
   { key: 'faction', href: '/faction', label: 'Factions' },
+  { key: 'arrivals', href: '/arrivals', label: 'Arrival P90' },
   { key: 'hometowns', href: '/hometowns', label: 'Hometown / Rescue' },
 ];
 

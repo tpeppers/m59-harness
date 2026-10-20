@@ -60,9 +60,13 @@ export function inRoomNodePlan(node){
 // from rail waypoint 1468 (fineclimb boards within 2). So the cut tries the nearest rail waypoints first, one per
 // 16-waypoint stretch, then the head; the rail follow then boards on the segment the cut ended on. Each try is a
 // checked cut (68 ms for Bunsen's), and a body under the mesa still answers no plan rather than a guess.
-export function railBoardingCut(geo,from,step,waypoints,{tries=6,spacing=16}={}){
+// ALREADY ON THE RAIL IS NOT A CUT. Robin, 03:37Z: 0.27 squares from rail waypoint 3076, so the boarding cut was three
+// fine steps (270 client units) and fineclimb answered "did not arrive" in 1 s, which stopped the run before the rail.
+// Within `onRail` (one square, half fineclimb's --board-within 2) the cut stands down and the rail follow boards there.
+export function railBoardingCut(geo,from,step,waypoints,{tries=6,spacing=16,onRail=1024}={}){
   const head={...step,board:undefined},attempts=[];
   const near=(waypoints??[]).map((p,i)=>({i,p,d:Math.hypot(p.x-from.x,p.y-from.y)})).sort((a,b)=>a.d-b.d),picked=[];
+  if(near.length&&near[0].d<=onRail)return {proof:{ok:true,why:'already_on_rail'},points:null,onRail:true,target:{index:near[0].i},attempts};
   for(const c of near){if(picked.length>=tries)break;if(!picked.some(q=>Math.abs(q.i-c.i)<spacing))picked.push(c);}
   const square=v=>Math.floor(v/1024)+1;
   const candidates=[...picked.map(c=>({index:c.i,step:{kind:'cut',room:step.room,x:c.p.x,y:c.p.y,row:square(c.p.y),col:square(c.p.x)}})),{index:'head',step:head}];
@@ -198,13 +202,16 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
         const p=tourPosition(await read());if(p.room!==step.room)throw Error('cut_wrong_room');
         const geo=roomGeometry(p.room),edge=edgeOf(geo),from={x:p.x_client,y:p.y_client};
         const board=step.board?railBoardingCut(geo,from,step,railWaypoints(step.board)):null;
+        // A boarding cut ends on the rail waypoint it chose, and fineclimb judges arrival against route.to: naming the
+        // rail head there read Bunsen's 14 arrived waypoints as 'did not arrive', 2026-10-20 03:39Z.
         const {proof,points}=board??cutTourWalk(geo,from,step);
-        if(board)leg.board={target:board.target?.index??null,attempts:board.attempts};
+        if(board)leg.board={target:board.target?.index??null,attempts:board.attempts,on_rail:board.onRail||undefined};
+        if(board?.onRail){console.log('already on the rail at waypoint '+board.target.index+': no cut');continue;}
         if(!points){leg.cut=proof;throw Error('body_seeded_cut_failed');}
         writeFileSync(join(out,id+'-'+label+'-cut.json'),JSON.stringify(proof));
         const walk=railLeg({waypoints:points},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});
         const route={ok:true,rail_complete:walk.unvalidated===0,direction:'to_node',exit:'body-cut',exit_label:'body-cut',
-          from:`r${p.row}c${p.col}`,to:`r${step.row}c${step.col}`,legs:[walk],jumps:0,all_declared:true,waypoints:walk.waypoints.length,
+          from:`r${p.row}c${p.col}`,to:`r${(board?.target?.step??step).row}c${(board?.target?.step??step).col}`,legs:[walk],jumps:0,all_declared:true,waypoints:walk.waypoints.length,
           confidence:'body-seeded exact-endpoint walk, checked before following'};
         leg.check=checkRoute(route,{edge});if(!leg.check.ok||leg.check.skipped||!route.rail_complete)throw Error('cut_check_failed');
         const file=join(out,id+'-'+label+'-rail.json');writeFileSync(file,JSON.stringify({stones:[{node:'cut',room:p.room,routes:[route]}]}));

@@ -21,6 +21,7 @@ function fake({remaining=3,capacity=3,complete=true,room=39,learned=false,emeral
   };
   function description(){const pct=Math.floor(100*remaining/capacity);return pct>90?'filled to the brim':pct>65?'mostly full':pct>30?'a few sips':'almost empty';}
   function land(){s.world.room.num=714;c.events.push({seq:++c.evSeq,kind:'message',text:'You feel a holy force rescue you from your current situation.'});}
+  c.apply=(id,target)=>{assert.equal(target,c.selfId);c.use(id);};
   s.need=()=>c;s.remaining=()=>remaining;return s;
 }
 await test('every possible last charge is protected, including ambiguous few sips',()=>{
@@ -31,6 +32,13 @@ await test('every possible last charge is protected, including ambiguous few sip
     if(n===1)assert.equal(expendable(p),false);
   }
   assert.equal(expendable(chargePossibilities('unknown')),false);
+});
+await test('a save after inspecting the cup prevents a queued apply with stale IDs',async()=>{
+  const s=fake();let saves=0;
+  s.client.idsAsOf=()=>({saves_seen:saves,inventory_at:100,last_save_at:100,saving:false});
+  s.pacer.submit=async(kind,fn)=>{if(kind==='use')saves++;return fn();};
+  await assert.rejects(performRescue(s,{kind:'chalice',item_id:11},{destination:714}),/preempted/);
+  assert.equal(s.uses,0);assert.equal(s.remaining(),3);
 });
 await test('guild/region/home precedence matches native Rescue',()=>{
   assert.equal(predictedRescueRoom(39,{guildHall:714,homeRoom:11}),714);

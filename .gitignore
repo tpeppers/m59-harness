@@ -975,3 +975,6 @@ substrate/delivery-notices/
 # Fleet-scoped cached hometown observations and changes.
 /substrate/**/*.hometowns/
 /substrate/*.hometowns/
+
+# Durable private Rescue-chain receipts and timing history
+substrate/rescue-travel/
