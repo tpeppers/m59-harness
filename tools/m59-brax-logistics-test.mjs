@@ -3,7 +3,7 @@ const g=roomGeometry(578),e=edgeOf(g);
 for(const [role,base]of [['farmer',BRAX_LEDGE.cavern],['courier',BRAX_LEDGE.road]])for(const [from,to]of [[base,BRAX_LEDGE[role]],[BRAX_LEDGE[role],base]]){const p=planLedgeRail(from,to,{role});assert(p.waypoints.length);assert(p.waypoints.length<=p.sourceWaypoints.length);if(role==='courier')assert(p.waypoints.length<p.sourceWaypoints.length/2,'proved level chords shorten dense lower route');for(let i=1;i<p.waypoints.length;i++){assert(e(p.waypoints[i-1],p.waypoints[i]));assert(e(p.waypoints[i],p.waypoints[i-1]));}}
 assert.throws(()=>planLedgeRail(BRAX_LEDGE.farmer,BRAX_LEDGE.courier,{role:'farmer'}),/outside/);console.log('PASS exact upper/lower service routes and all reverse segments; cross-ledge route refused');
 
-const {script}=await import('./fleetscripts/brax-ledge-leg.mjs');assert.equal(script.mode,'errand');assert.equal((await script.steps({role:'farmer',direction:'out'})).length,1);await assert.rejects(script.steps({role:'bad',direction:'out'}));
+const {script}=await import('./fleetscripts/brax-ledge-leg.mjs');assert.equal(script.mode,'errand');assert.equal((await script.steps({role:'farmer',direction:'out'})).length,2);await assert.rejects(script.steps({role:'bad',direction:'out'}));
 
 // Native rail input must retain the public owner. Only known-ended replies replan.
 const origin={source:'fleetscript',name:'ledge-test',run_id:'offline'},ctx={agent:'a',fleet:'shadow',origin,state:{}};
@@ -19,3 +19,11 @@ position={...BRAX_LEDGE.road};posts=0;observe.action=async()=>{posts++;throw Err
 console.log('PASS observed safe body may switch once to dense guarded rail; repeated boundary refusal stops');
 
 const {clearBraxLanding}=await import('./m59-brax-logistics.mjs');let lp={id:1,x:160,y:352},landingPosts=0;const lo=async()=>({...state(),room:{num:827},you:{...lp},objects:[{id:2,x:160,y:352,flags:5}]});lo.action=async(name,args)=>{landingPosts++;assert.equal(args.room,827);assert.equal(args.bodyDetour,false);const end=args.leg.waypoints.at(-1);lp={id:1,x:end.x/16+64,y:end.y/16+64};return{arrived:true};};assert((await clearBraxLanding(ctx,lo)).cleared);assert.equal(landingPosts,1);assert(Math.hypot(lp.x-160,lp.y-352)>=28);console.log('PASS returning farmer clears its own crowded landing on bidirectionally proved native terrain');
+
+const {observeCourierJourney}=await import('./m59-courier-journey.mjs');
+let journeyReads=0;const jb={character:'Native courier',pid:7,you:{id:9},hp:{value:70,max:88},room:{num:578}};
+const j=await observeCourierJourney({agent:'a',to:568,before:jb,result:{ordered_by:'operator:test'},deadline:Date.now()+1000,wait:async()=>{},read:async()=>++journeyReads<3?{...jb,autopilot_status:{suspended_journey:{to:568,ordered_by:'operator:test'}}}:{...jb,room:{num:568}}});assert.equal(j.room.num,568);assert.equal(journeyReads,3);
+await assert.rejects(observeCourierJourney({agent:'a',to:568,before:jb,result:{ordered_by:'operator:test'},deadline:Date.now(),wait:async()=>{},read:async()=>({...jb,autopilot_status:{suspended_journey:{to:568,ordered_by:'someone-else'}}})}),/ended before/);
+console.log('PASS courier road observer follows only its accepted recovery objective, never inventing a second trip');
+
+assert.equal((await script.steps({role:'courier',direction:'back',minHealth:.9})).length,1);assert.equal((await script.steps({role:'courier',direction:'back',minHealth:.9}))[0].do,'verify');console.log('PASS captured hurt return cannot be diverted by a generic leading rest; owned rail recovery remains in the return leg');

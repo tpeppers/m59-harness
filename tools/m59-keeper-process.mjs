@@ -1,3 +1,5 @@
+import{executeDeliveryCacheDrop}from'./m59-delivery-cache.mjs';
+import{receiveDeliveryNotice,deliveryNoticesOf}from'./m59-delivery-notices.mjs';
 import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
 // m59-keeper-process.mjs — One process per character. Runs the GOAP loop
 // and a small HTTP API.
@@ -1368,6 +1370,7 @@ function state() {
             // cannot show them cannot be used to tell a squeeze from a collision — which is
             // exactly the diagnosis this projection was needed for on 2026-08-27.
             x: o.x ?? null, y: o.y ?? null,
+            amount: o.amount ?? 0,
             attention: (o.flags & 0x0008) && !(o.flags & 0x0004)
               ? c.monsterAttention?.view(o.id,c.selfId) ?? null : null,
           }));
@@ -1554,6 +1557,8 @@ function state() {
     // `goap` above stays as the compact movement/render shape; this is the operational
     // status shape.  Keeping both named prevents a reader from mistaking one for the other.
     autopilot_status: autopilotStatus,
+    delivery_cache: 1,
+    delivery_notices: deliveryNoticesOf(session),
     // CAN THIS CHARACTER HEAR. The broker's `fleet` reported `listening: false` for every
     // keeper-backed character and it was TRUE -- the chatter was only ever attached on the
     // in-process fallback path. Reported from here now, because here is where the socket is.
@@ -1773,6 +1778,7 @@ const server = createServer(async (req, res) => {
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
         inventory_drop: 1,
+        delivery_cache: 1,
         combat_mode: 3,
         audio_observations: 1,
         intent_observations: 1,
@@ -1910,10 +1916,12 @@ const server = createServer(async (req, res) => {
         json(result);
       }
         catch (e) { json({ error: e.message }, 409); } return; }
+      if(name==='delivery_notice'){try{if(args.notice?.recipient!==agent)throw Error('delivery notice recipient mismatch');json(receiveDeliveryNotice(session,args.notice));}catch(e){json({error:e.message},400);}return;}
       if (!inGame) { json({ error: `${agent}: not in game` }, 409); return; }
       try {
         await session.runCommand(async () => {
         switch (name) {
+          case 'delivery_cache_drop': {json(await executeDeliveryCacheDrop(session,autopilot,args));return;}
           case 'reagent_coop': {
             json(reagentCoopCommand(autopilot, session, args, fleetName));
             return;
@@ -3244,7 +3252,7 @@ const server = createServer(async (req, res) => {
                 .filter(o => o.id !== c.selfId)
                 .map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) ?? '',
                              flags: o.flags ?? 0, is_player: !!((o.flags ?? 0) & 0x0004),
-                             col: o.col ?? null, row: o.row ?? null })),
+                             col: o.col ?? null, row: o.row ?? null, amount: o.amount ?? 0 })),
             });
             return;
           }

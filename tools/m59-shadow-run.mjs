@@ -291,6 +291,8 @@ async function build() {
   // repository's own rule, and the reason `verify` is handed `call` at run time.
   if (made.code !== 0) say('  note: create reported failures — see the lines above');
 
+  // Creation sockets must be closed before a body is placed in hostile terrain.
+  await stopBroker();
   const dressArgs = dressFlags(argv);
   const dressed = await node(SHADOW_TOOL, dressArgs, { cwd, env: shadowToolEnv() });
   if (dressed.code !== 0) { say('  dress FAILED'); return false; }
@@ -301,6 +303,11 @@ async function build() {
       '--construction','--apply']);
     if(verified.code!==0){say('  ability reconciliation/readback FAILED');return false;}
   }
+  const positioned=await node(join(HERE,'m59-shadow-position.mjs'),[
+    '--fleet',FLEET,'--roster',ROSTER,'--server',`${GAME_HOST}:${GAME_PORT}`,'--admin',`${ADMIN_HOST}:${ADMIN_PORT}`,
+    '--snapshot',join(process.env.M59_SHADOW_SUBSTRATE||dirname(dirname(ROSTER)),'shadow-snapshot.json'),
+    '--construction','--apply']);
+  if(positioned.code!==0){say('  saved login position reconciliation FAILED');return false;}
   return true;
 }
 

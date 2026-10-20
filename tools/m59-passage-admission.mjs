@@ -66,13 +66,31 @@ const cellOf = p => key(Math.floor(p.y/64), Math.floor(p.x/64));
 export function passageAlong(geo, from, target) {
   const zones = narrowPassages(geo), n = Math.max(1, Math.ceil(Math.hypot(target.x-from.x,target.y-from.y)/16));
   for (let i = 1; i <= n; i++) {
-    const z = zones.get(cellOf({x:from.x+(target.x-from.x)*i/n,y:from.y+(target.y-from.y)*i/n}));
+    const z = zoneAt(zones,{x:from.x+(target.x-from.x)*i/n,y:from.y+(target.y-from.y)*i/n});
     if (z&&contains(z,{x:from.x+(target.x-from.x)*i/n,y:from.y+(target.y-from.y)*i/n})) return z;
   }
   return null;
 }
 const namespace = s => JSON.stringify([s.client?.host ?? s.host ?? '',s.client?.port ?? s.port ?? '',s.world?.room?.num]);
-const contains=(zone,p)=>zone.fine?Math.abs(p.x-zone.fine.x)<=32&&Math.abs(p.y-zone.fine.y)<=32:zone.cells.has(cellOf(p));
+// Admission follows the body's footprint, not only the square containing its
+// feet. A curved neck can briefly cross a wide cell without clearing the
+// original passage; releasing there strands its leader behind its own convoy.
+export const containsPassageBody=(zone,p)=>{
+ if(zone.fine)return Math.abs(p.x-zone.fine.x)<=48&&Math.abs(p.y-zone.fine.y)<=48;
+ const row=Math.floor(p.y/64),col=Math.floor(p.x/64);
+ for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+  const r=row+dr,c=col+dc;if(!zone.cells.has(key(r,c)))continue;
+  const dx=Math.max(c*64-p.x,0,p.x-(c+1)*64),dy=Math.max(r*64-p.y,0,p.y-(r+1)*64);
+  if(Math.hypot(dx,dy)<=16)return true;
+ }return false;
+};
+const contains=containsPassageBody;
+const zoneAt=(zones,p)=>{
+ const own=zones.get(cellOf(p));if(own&&contains(own,p))return own;
+ const row=Math.floor(p.y/64),col=Math.floor(p.x/64);
+ for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){const z=zones.get(key(row+dr,col+dc));if(z&&contains(z,p))return z;}
+ return null;
+};
 const displayName=(c,o)=>typeof o?.name==='string'?o.name:c?.rsc?.get?.(o?.nameRsc);
 const selfName=s=>s.client?.me?.name??displayName(s.client,s.client?.self);
 const member=(session,name)=>!!name&&(session.passageConvoy?.characters?.some(n=>String(n).trim().toLowerCase()===String(name).trim().toLowerCase())||isFleetmate(selfName(session))&&isFleetmate(name));
@@ -139,6 +157,7 @@ export function claimPassageMove(session, target) {
   if (!zone || contains(zone,me)) return null; // incumbents can leave
   const refusal = extra => ({available:true,moved:false,blocked:true,reason:'object_blocked',
     traffic:'passage_admission',zone:zone.id,...extra});
+  if(session._passage?.zone===zone&&session._passage.roomId===c.room.id)return null;
   if (session._passage) return refusal({note:'the previous passage exit is not confirmed',held_zone:session._passage.zone.id,held_entry_pending:session._passage.entryPending,held_room:session._passage.roomId});
   const agent=String(session.name??c.selfId),resource=namespace(session)+'|'+zone.id;
   const entry=passageEntryKey(geo,zone,me,target),flow=session.passageConvoy?.flow??(entry&&isFleetmate(selfName(session))?'fleet-entry:'+entry:null);

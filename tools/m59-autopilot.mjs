@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
-import {withBodyStage} from './m59-body-command.mjs';
+import {withBodyStage,bodyAuthority} from './m59-body-command.mjs';
 import{affordablePoisonCure,castRecoveryCure}from'./m59-recovery-cure.mjs';
 import{scriptedTrafficResumeReady,scriptedDeviationResumeCandidate}from'./m59-traffic-resume.mjs';
 import{deathLocationFromSessions}from'./m59-death-location.mjs';
@@ -88,6 +88,7 @@ import { nearestSafeSpot, coarseCombatReachFrom, PLAYER_REACH,
          exposureAt, reachableFrom }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
+import { watchFarmDanger } from './m59-stage-danger.mjs';
 import { beginPullProgress, samplePullProgress } from './m59-pull-progress.mjs';
 import { heardOrder, dropCrumb, nextStep, behindBy, exitTakenFrom } from './m59-follow.mjs';
 import { inboxIfAny, unwrapSpeech } from './m59-inbox.mjs';
@@ -6898,7 +6899,7 @@ export class Autopilot {
     // then. Routing to that is routing to where the monster used to be.
     const foe = c.room.objects.get(want.id);
     if (!foe) return { pulled: false, why: 'it is not in the room any more' };
-    const name = c.rsc.get(foe.nameRsc);
+    const name = c.rsc.get(foe.nameRsc), pullRoom = c.room.id, pullSave = c.idsAsOf?.()?.last_save_at;
     const approach = s.world?.approachSquare?.(foe.col, foe.row);
     if (!approach) return { pulled: false, why: 'no square beside it that we can reach' };
     // NO DISTANCE LIMIT. IF WE CAN GET TO IT, IT IS WORTH FETCHING.
@@ -6924,20 +6925,36 @@ export class Autopilot {
     this.doing = 'fighting';
     const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
                        .catch(e => ({ arrived: false, reason: e.message }));
+    bodyAuthority(s).guard();
     this.movedAt = Date.now();
     if (!out.arrived) {
       const terminal = this.terminalMovement(out, 'pull movement');
       if (terminal) return { pulled: false, ...terminal };
       const home = await skills.returnToSpot(s, spot, { maxSteps: 24 }).catch(() => ({ arrived: false }));
       this.movedAt = Date.now();
+      bodyAuthority(s).guard();
       if (!home.arrived) this.releaseHold('could not get back after a failed pull');
       return { pulled: false, why: out.reason || 'could not get to it' };
     }
 
     const it = c.room.objects.get(foe.id);
+    const validQuarry = () => c === s.client && c.room.id === pullRoom &&
+      c.idsAsOf?.()?.last_save_at === pullSave &&
+      c.rsc.get(c.room.objects.get(foe.id)?.nameRsc) === name;
+    if (!validQuarry()) {
+      // A save or changed quarry is not a reason to leave the farmer in the
+      // open at the end of an abandoned fetch. Survival may still preempt this
+      // normal return; a different client or room receives no stale command.
+      if(s.client===c&&c.room.id===pullRoom){
+        const home=await skills.returnToSpot(s,spot,{maxSteps:approach.steps+12}).catch(()=>({arrived:false}));
+        bodyAuthority(s).guard();
+        if(!home.arrived)this.releaseHold('quarry changed and the original wall was not reached');
+      }
+      return {pulled:false, why:'pull quarry identity changed during approach'};
+    }
     if (it) {
       await s.faceToward(it);
-      await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
+      await s.pacer.submit('attack', () => { if(validQuarry()) c.attack(foe.id); }, 1050);
       this.swungAt = Date.now();
       // ONLY WHEN THE THING SWUNG AT IS A PERSON. This path is nearly always a monster, and
       // stamping every swing would ban the whole fleet from the chalice permanently.
@@ -6950,9 +6967,10 @@ export class Autopilot {
     const home = await skills.returnToSpot(s, spot, { maxSteps: approach.steps + 12 })
                              .catch(e => ({ arrived: false, why: e.message }));
     this.movedAt = Date.now();
+    bodyAuthority(s).guard();
     if (!home.arrived) {
       this.releaseHold('could not get back to it after pulling');
-      return { pulled: true, back: false, target: name,
+      return { pulled: true, back: false, target: name, target_id:foe.id,
                why: home.why || 'hit it but could not get back to the wall' };
     }
     // We left and returned, so nothing is proved about the square any more until the
@@ -6961,7 +6979,7 @@ export class Autopilot {
     this.note('pulled it to the wall', {
       target: name, went: approach.steps, back_at: { col: spot.col, row: spot.row },
       why: 'a safe spot is only worth anything if the fight happens at it' });
-    return { pulled: true, back: true, target: name, steps: approach.steps };
+    return { pulled: true, back: true, target: name, target_id:foe.id, steps: approach.steps };
   }
 
   // WALKING UP TO IT, WHEN THERE IS NO WALL TO FETCH IT TO.
@@ -17016,7 +17034,7 @@ export class Autopilot {
    * See STAGE_DEADLINE_MS for why this exists and what it measured. Three properties, each
    * of which is the difference between this and a bare `Promise.race`:
    *
-   *   * THE WORK IS NOT CANCELLED, because a promise cannot be. The rung keeps running and
+   *   * At the deadline THE WORK IS NOT CANCELLED, because a promise cannot be. The rung keeps running and
    *     finishes whatever it was doing; only the ladder stops waiting.
    *   * THE RUNG IS MARKED IN FLIGHT until it settles, so `runPassLadder` skips it rather
    *     than starting a second copy on the same body.
@@ -17033,7 +17051,8 @@ export class Autopilot {
     if (!(ms > 0)) return withBodyStage(this.s,stage,()=>this[stage](ctx));
     // The async wrapper is what turns a SYNCHRONOUS throw out of the rung into a rejection,
     // so both failure shapes take the same path.
-    const running = withBodyStage(this.s,stage,async()=>this[stage](ctx));
+    const stageToken = {cancelled:false};
+    const running = withBodyStage(this.s,stage,async()=>this[stage](ctx),stageToken);
     this.stageInFlight ??= new Map();
     const startedAt = Date.now();
     this.stageFlightStartedAt ??= new Map();
@@ -17052,10 +17071,19 @@ export class Autopilot {
     // which in a test is an "unsettled top-level await" and in a keeper would be a pass that
     // vanishes rather than resolves.
     const overran = new Promise(res => { timer = setTimeout(() => res(STAGE_OVERRAN), ms); });
+    let stopDanger = () => {};
+    const danger = new Promise(resolve => {
+      stopDanger = watchFarmDanger(this, stage, stageToken, detail => {
+        this.tally.survival_stage_interrupts = (this.tally.survival_stage_interrupts || 0) + 1;
+        this.note('farm action yielded immediately to falling health', {stage, ...detail});
+        resolve(STAGE_OVERRAN);
+      });
+    });
     let verdict;
-    try { verdict = await Promise.race([settled, overran]); }
-    finally { clearTimeout(timer); }
+    try { verdict = await Promise.race([settled, overran, danger]); }
+    finally { clearTimeout(timer); stopDanger(); }
 
+    if(stageToken.cancelled)return STAGE_OVERRAN;
     if (verdict === STAGE_OVERRAN) {
       this.tally.stage_overran = (this.tally.stage_overran || 0) + 1;
       this.note('a pass rung overran the ladder deadline — carrying on without it', {
@@ -22421,6 +22449,18 @@ export class Autopilot {
     return HANDLED;
   }
 
+  recordInterruptedFarmOutcome(f,{room,holding,preempted}={}) {
+    const receipt={creature:f?.target??null,room_num:room?.num??null,room:room?.name??null,
+      killed:f?.killed===true,died:f?.died===true,rounds:f?.rounds??null,
+      from_safe_spot:!!holding,preempted,reason:f?.reason??f?.why??null};
+    this.ledgerEvent('interrupted_farm_result',receipt);
+    if(f?.killed===true){
+      this.tally.kills=(this.tally.kills??0)+1;this.killTimes?.push(Date.now());
+      if(this.killTimes?.length>500)this.killTimes.shift();
+      this.ledgerEvent('killed',{...receipt,survival_interrupted:true});
+    }
+  }
+
   async passFarm(ctx) {
     const { s, c, room, v, hp } = ctx;
     // Before any work is chosen: is there an unfinished journey to pick back up? Ahead of
@@ -24027,6 +24067,12 @@ export class Autopilot {
                                         weaponPriority: this.weaponPriorityNow(engageName),
                                         bannedWeapons: this.bannedWeaponsNow() });
 
+      try { bodyAuthority(s).guard(); } catch(error) {
+        // The old invocation may finish its already-sent fight after survival
+        // takes over. Retain a completed receipt without resuming body work.
+        this.recordInterruptedFarmOutcome(f,{room,holding,preempted:error.code??error.message});
+        return HANDLED;
+      }
       this.farmCombat = {at:Date.now(),pending:false,target:engageName,target_id:claimedSwing,holding:!!holding,killed:!!f.killed,died:!!f.died,out_of_reach:!!f.out_of_reach,reason:f.reason??f.why??null,rounds:f.rounds??null,combat:(f.combat??[]).slice(-8)};
       if(this.finishFailedCombatApproach(f))return HANDLED;
 
@@ -24114,13 +24160,15 @@ export class Autopilot {
           return HANDLED;
         }
         const p = quarry ? await this.pull(quarry) : { pulled: false, why: 'nothing to pull' };
+        bodyAuthority(s).guard();
         if (p.pulled && p.back) {
           const waitMs = this.pullFollowWaitMs(p.steps);
           const startedAt = Date.now();
-          const liveQuarry = quarry?.id != null ? c.room.objects.get(quarry.id) ?? quarry : quarry;
+          const pulledId = p.target_id ?? quarry?.id ?? null;
+          const liveQuarry = pulledId != null ? c.room.objects.get(pulledId) : null;
           this.pendingPull = {
             at: startedAt, waitUntil: startedAt + waitMs,
-            target: p.target, target_id: quarry?.id ?? null, steps: p.steps, wait_ms: waitMs,
+            target: p.target, target_id: pulledId, steps: p.steps, wait_ms: waitMs,
             ...beginPullProgress(liveQuarry, pullSpot, { now: startedAt }),
           };
           // DELIBERATELY NOT progress(). A pull is not an achievement, it is an attempt,
@@ -24466,7 +24514,7 @@ export class Autopilot {
     const target=candidates[0];if(!target)return false;
     const generation=s.movementGeneration,bodyId=c.selfId,room=c.room.id;
     const cancelled=()=>s.client!==c||c.selfId!==bodyId||c.room.id!==room||s.movementWasCancelled?.(generation)||!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||this.checkFreeze()||!(pct(c.vitals()?.health)>=0.9)||
-      !readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id})||
+      !(() => {const r=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});return r&&r.health.value/r.health.max<0.9&&r.health.max-r.health.value>=3;})()||
       String(c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'').trim().toLowerCase()!==target.report.character.trim().toLowerCase()||
       !allyVerdict({name:c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'',flags:c.room.objects.get(target.o.id)?.flags??0},{friends:this.policy?.buffAllies?.friends??[]}).ally;
     this._observedAllyHealAt=now;
@@ -24545,8 +24593,12 @@ export class Autopilot {
       .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) &&
                    allyVerdict({ name: c.rsc.get(o.nameRsc) || '', flags: o.flags },
                                { friends: this.policy?.buffAllies?.friends ?? [] }).ally)
-      .sort((a, b) => (this._provenWholeAt.get(a.id) ?? 0) - (this._provenWholeAt.get(b.id) ?? 0));
-    const other = candidates.find(o => !(this._unhurtUntil.get(o.id) > now)) ?? null;
+      .map(o => ({...o, healthReport: s.credentials ? readFleetHealth({...s.credentials,character:c.rsc.get(o.nameRsc)},{room:s.world?.room?.num,bodyId:o.id,now}) : null}))
+      .filter(o => !o.healthReport || o.healthReport.health.value < o.healthReport.health.max)
+      .sort((a,b) => (a.healthReport ? a.healthReport.health.value/a.healthReport.health.max : 1) -
+                    (b.healthReport ? b.healthReport.health.value/b.healthReport.health.max : 1) ||
+                    (this._provenWholeAt.get(a.id)??0)-(this._provenWholeAt.get(b.id)??0));
+    const other = candidates.find(o => o.healthReport || !(this._unhurtUntil.get(o.id) > now)) ?? null;
     if (!other)
       return this.declinedCast(rung.name, candidates.length
         ? 'everyone here read as unhurt on a recent pass'
@@ -24554,7 +24606,11 @@ export class Autopilot {
 
     this.lastHealAt = Date.now();
     const manaBefore = c.vitals()?.mana?.value ?? null;
-    await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => c.cast(spell.id, [other.id]), 1050));
+    await withCastRite(s, { spell, targets: [other.id], why: 'medic' }, () => s.pacer.submit('cast', () => {
+      const r=s.credentials ? readFleetHealth({...s.credentials,character:c.rsc.get(other.nameRsc)},{room:s.world?.room?.num,bodyId:other.id}) : null;
+      if(other.healthReport && (!r || r.health.value>=r.health.max)) return;
+      c.cast(spell.id,[other.id]);
+    }, 1050));
     const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     // A CAST THAT SPENT NO MANA DID NOT HAPPEN, and here it usually means the target was
     // already whole. Remember that for a few minutes so the next pass tries somebody else.

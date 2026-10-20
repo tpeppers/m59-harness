@@ -1,5 +1,13 @@
 # The offline test suites, and what each one pins
 
+`m59-farm-danger-test.mjs` exercises the real bounded farm stage, survival token
+handoff, late queued-command refusal, preserved completed kill receipts and a
+changed-generation pull that returns through real Session movement to its wall.
+`m59-spotclaims-identity-test.mjs` checks batched PID-reuse proof, absent owners,
+unknown identities, concurrent record replacement and retained traversal receipts.
+Both are registered in the movement runner. `m59-active-self-heal-test.mjs` also
+covers a patient becoming whole while the healer's actual paced cast waits.
+
 `m59-courier-purchases-test.mjs` checks capacity-clamped maximum orders,
 separate cash and pack arrival, one-attempt durable receipts, uncertain
 purchases and acquisition-cost loss overhead. `m59-spotclaims-lock-test.mjs`
@@ -2292,3 +2300,23 @@ The asynchronous platform refusal test explicitly requests the eastern north
 opening at r1c62. A generic request for room578 can consider different western
 openings and cannot establish access to the isolated eastern Brax component.
 The test does not assert every exit from every platform pose is unreachable.
+
+
+The Brax logistics gate covers captured stationary-trade readiness refusals,
+concurrent accepted approaches settling before cleanup, the90%-exchange/
+60%-idle-rest deadband, and enforcing the public ledge script's departure health
+floor. These offline fixtures verify control flow; only native recipient gains,
+actual equipped weapons and timed sampling establish successful live logistics
+or farming. The owned-gear test also observes a completed weapon use through a
+later protected recovery without issuing a second toggle.
+
+
+`m59-delivery-cache-test.mjs` executes the native paced exact drop and the real
+service/notice handlers. It checks partial stack quantities, no second packet
+for a consumed token, source floors, changed save/body authority, giver-plus-ground
+confirmation, durable unknown outcomes, optional broker notices, absent-recipient
+continuation and surplus-only cache planning. `m59-supply-test.mjs` additionally
+executes the actual missing-recipient branch and proves it sends no trade packet.
+The public return regression keeps BACK on its checked path instead of adding a
+generic wall-rest detour. These post-hour regressions do not retroactively validate
+the frozen farming hour or constitute another native one-hour trial.

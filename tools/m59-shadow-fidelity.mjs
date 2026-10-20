@@ -553,7 +553,12 @@ export const holdCmd = (holder, id) => `send object ${holder} NewHold what OBJEC
 // a slot conflict or a cursed-already-worn refusal is the game's, not ours.
 export const useCmd = (who, id) => `send object ${who} TryUseItem what OBJECT ${id}`;
 export const unuseCmd = (who, id) => `send object ${who} TryUnuseItem what OBJECT ${id}`;
-export const setNumberCmd = (id, n) => `set object ${id} piNumber INT ${n}`;
+// NumberItem.AddNumber/SubtractNumber notify the owner through
+// ChangeBulkAndWeight. Direct piNumber writes leave its cached load stale.
+export const setNumberCmd = (id,n,from) => {
+ if(![id,n,from].every(Number.isSafeInteger)||id<=0||n<=0||from<=0)throw Error('restack needs a positive object, observed count and target count');
+ return `send object ${id} ${n>=from?'AddNumber':'SubtractNumber'} number INT ${Math.abs(n-from)}`;
+};
 export const deleteCmd = id => `send object ${id} Delete`;
 
 export const createCmds = plan => plan.create.map(c => createCmd(c.class, c.number));
@@ -568,7 +573,7 @@ export function holdingCmds(plan, { holder, wearer = null, created = [], trim = 
                     `the ids would not line up, so nothing is handed over`);
   const cmds = [];
   if (wearer != null) for (const u of plan.unwear) cmds.push(unuseCmd(wearer, u.id));
-  for (const s of plan.setNumber) cmds.push(setNumberCmd(s.id, s.to));
+  for (const s of plan.setNumber) cmds.push(setNumberCmd(s.id, s.to, s.from));
   plan.create.forEach((c, i) => cmds.push(holdCmd(holder, created[i])));
   if (wearer != null) {
     for (const w of plan.wear) cmds.push(useCmd(wearer, w.id));
@@ -742,4 +747,28 @@ if (import.meta.filename === process.argv[1]) {
   else console.log('\nno guild in this snapshot');
   if (unknown.size) console.log(`\nNOT CREATED, no single class: ${[...unknown].map(([n, w]) => `${n} — ${w}`).join('; ')}`);
   if (approx.size) console.log(`APPROXIMATED (class only): ${[...approx.keys()].join(', ')}`);
+}
+
+// UserLogonSetPosition restores piSave_* even if an offline construction body
+// was relocated successfully. Store the intended login pose as part of dress.
+// room is a stable map number, never the transient server room object ID.
+export function shadowLoginPositionCommands(player,room,{row,col,x=col*64+32,y=row*64+32,angle=0}={}){
+ if(![player,room,row,col,x,y,angle].every(Number.isInteger)||[player,room,row,col].some(n=>n<=0)||Math.floor(x/64)!==col||Math.floor(y/64)!==row)
+  throw Error('shadow login position requires a player, stable room number and consistent named fine coordinates');
+ return Object.entries({piSave_room:room,piSave_row:row,piSave_col:col,piSave_fine_row:y%64,piSave_fine_col:x%64,piSave_angle:angle})
+  .map(([key,value])=>`set object ${player} ${key} INT ${value}`);
+}
+
+export async function mirrorShadowLoginPositions(records,{resolve,dm,apply=false}){
+ const poses=records.filter(c=>c.room!=null).map(c=>({name:c.shadow_name,room:c.room,row:c.row,col:c.col,...(c.initialFine??{})}));
+ for(const p of poses)shadowLoginPositionCommands(1,p.room,p);
+ const ids=await resolve(poses.map(p=>p.name));if(poses.some(p=>!Number.isInteger(ids[p.name])||ids[p.name]<=0))throw Error('shadow login holder missing');
+ const reads=poses.map(p=>`show object ${ids[p.name]}`),read=async()=>splitReplies(await dm(reads),reads);
+ const differences=blocks=>poses.flatMap((p,i)=>shadowLoginPositionCommands(ids[p.name],p.room,p).filter(cmd=>{
+  const match=/ (piSave_\w+) INT (-?\d+)$/.exec(cmd),got=new RegExp(match[1]+'\\s+= INT (-?\\d+)','i').exec(blocks[i]??'');return !got||Number(got[1])!==Number(match[2]);
+ }));
+ let commands=differences(await read());
+ if(apply&&commands.length){const response=await dm(commands);if(shadowAbilityResponseRejected(response))throw Error('shadow login setup rejected');}
+ const remaining=apply?differences(await read()):commands;if(remaining.length)throw Error('shadow saved login position readback mismatch ('+remaining.length+')');
+ return{verified:poses.length,commands:apply?commands.length:0};
 }

@@ -33,6 +33,7 @@ import {movementRegionSpec} from './m59-movement-region.mjs';
 // has actually gone out, which turns an invisible failure into visible latency —
 // the trade this whole file exists to make.
 
+import{createDeliveryNoticeTool,receiveDeliveryNotice}from'./m59-delivery-notices.mjs';
 import { identifiedAs } from './m59-item-signature.mjs';
 import {exactDrop,executeExactDrop} from './m59-inventory-drop.mjs';
 import {declaredJumpMoveOptions,prepareDeclaredJump} from './m59-jump-takeoff.mjs';
@@ -7195,6 +7196,7 @@ const combatDispatch = new CombatDispatch({
 });
 
 const TOOLS = [
+  createDeliveryNoticeTool({scope:()=>{const e=brokerGameEndpoints().game_server;if(!e)throw Error('delivery notices require one verified live fleet game endpoint');return JSON.stringify([COMMANDER_FLEET,e.host.toLowerCase(),e.port]);},lookup:agent=>session(agent),ground:async agent=>{const s=session(agent);if(s instanceof KeeperProxy)return s.roomContents();const c=s.need();await s.refresh();return{answered:true,room:s.world?.room?.num,objects:[...c.room.objects.values()].map(o=>({...o,name:c.rsc.get(o.nameRsc)}))};},notify:async(agent,notice)=>{const s=session(agent);return s instanceof KeeperProxy?keeperAction(agent,s._index,'delivery_notice',{notice}):receiveDeliveryNotice(s,notice);}}),
   {
     name: 'war_restart',
     description: 'Restart keepers onto the code on disk WITHOUT logging characters out: each old keeper is told to hand off, a hidden replacement logs in (the server drops the old connection), and the broker swaps to it. Nobody leaves the world, nobody comes back one at a time. `agents` limits it; default is every keeper this broker holds. A replacement that does not reach the world in timeout_ms is stopped and the old keeper carries on.',

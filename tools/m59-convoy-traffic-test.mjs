@@ -21,7 +21,8 @@ if(process.argv[2]==='worker'){
  const pocket={rows:5,cols:3,collisionReady:true,standPointWire:(row,col)=>point(row,col),traceFineMoveClient:()=>({arrived:true,blocked:false}),walkable:(r,c)=>r>=2&&r<=4&&c<=2||r===3&&c===3};
  assert(!narrowPassages(pocket).has('3,3'),'a one-ended wall pocket is not a crossing');
  const zone=narrowPassages(geo).get('3,4');
- assert.equal(passageEntryKey(geo,zone,point(3,3),point(3,4)),passageEntryKey(geo,zone,{...point(3,3),x:251},point(3,4)));
+ assert.equal(passageEntryKey(geo,zone,point(3,3),point(3,4)),passageEntryKey(geo,zone,{...point(3,3),x:239},point(3,4)));
+ assert.equal(passageEntryKey(geo,zone,{...point(3,3),x:251},point(3,4)),null,'a confirmed body already overlapping the mouth is an incumbent');
  assert.notEqual(passageEntryKey(geo,zone,point(3,3),point(3,4)),passageEntryKey(geo,zone,point(3,7),point(3,6)));
  const names=Array.from({length:25},(_,i)=>'Ordinary '+i);setRosterSource(()=>new Set([...names,'Opposing']));configureSpotClaimStore({enabled:false});
  const body=(name,id,col)=>({name,client:{host:'ordinary-test',port:9,selfId:id,me:{name},self:{id,flags:5,...point(3,col)},room:{id:999,objects:new Map()}},world:{room:{num:99},geometry:geo}});
@@ -64,6 +65,15 @@ if(process.argv[2]==='worker'){
  {
   const {bastionHarness}=await import('./fixtures/bastion-fallback-client.mjs'),h=await bastionHarness(),{withBodyCommand}=await h.imp('m59-body-command.mjs');
   setRosterSource(()=>new Set(['Walker','Front']));
+  // Captured 826 curved-neck wide-cell reentry: the front feet are nine
+  // units outside the old cell while its body still occupies the passage.
+  // The former centre-cell model stranded it behind its own admitted convoy.
+  const rear={id:2,flags:5,name:'Front',x:2025,y:1202,row:18,col:31};
+  const capture=h.fixture({from:{room:826,x:2058,y:1207},bodies:[rear]},
+    {bodies:true,wireNames:true,maxPackets:8,maxMs:3000});capture.c.me={name:'Walker'};capture.s.name='Walker';
+  const cleared=await withBodyCommand(capture.s,()=>capture.s.walkFine(2072,1216,{exactArrival:true,holdShelf:true,arriveWithin:3,maxSteps:6}),'curved-neck-clearance');
+  assert(cleared.arrived,'confirmed front footprint can clear its own neck');assert.equal(capture.packets.length,1);
+  assert.deepEqual([capture.c.self.x,capture.c.self.y],[2072,1216]);
   const front={id:2,flags:5,name:'Front',x:2976,y:1888,row:29,col:46};
   const f=h.fixture({from:{room:587,x:2912,y:1888},bodies:[front]},{bodies:true,wireNames:true,maxPackets:50,maxMs:15000});f.c.me={name:'Walker'};f.s.name='Walker';
   const first=await withBodyCommand(f.s,()=>f.s.walkFine(3104,1888,{exactArrival:true,bodyDetour:true,maxSteps:20}),'ordinary-narrow-queue');

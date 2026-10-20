@@ -14,9 +14,9 @@ export function withBodyCommand(session, fn, owner = null) {
 }
 
 // Stage identity follows awaits and paced callbacks; it is not a mutable current-rung label.
-export function withBodyStage(session,stage,fn){
+export function withBodyStage(session,stage,fn,token=null){
  const parent=scope.getStore(),same=parent?.session===session;
- return scope.run({...same?parent:{epoch:session.combatEpoch??0,owner:null},session,stage},fn);
+ return scope.run({...same?parent:{epoch:session.combatEpoch??0,owner:null},session,stage,stageToken:token??(same?parent.stageToken:null)},fn);
 }
 
 // A keeper's active recovery must not spend its escape window behind a
@@ -24,7 +24,7 @@ export function withBodyStage(session,stage,fn){
 // changes queue order only, never who may command the body.
 export function withRecoveryCommand(session, fn) {
   const parent=scope.getStore(),same=parent?.session===session;
-  return scope.run({session,epoch:same?parent.epoch:session.combatEpoch??0,
+  return scope.run({...same?parent:{},session,epoch:same?parent.epoch:session.combatEpoch??0,
     owner:same?parent.owner:null,priority:1},fn);
 }
 
@@ -37,6 +37,10 @@ export function bodyAuthority(session) {
     priority: Math.max(owner ? 2 : 0, context?.session===session ? context.priority??0 : 0),
     bind: fn => () => scope.run(context, fn),
     guard() {
+      if (context?.session === session && context.stageToken?.cancelled) {
+        const error = new Error("ordinary body stage preempted by survival");
+        error.code = "STAGE_PREEMPTED"; throw error;
+      }
       if (epoch !== (session.combatEpoch ?? 0) ||
           (session.combat?.active && owner !== session.combat.active.id))
         throw new BodyCommandPreempted();

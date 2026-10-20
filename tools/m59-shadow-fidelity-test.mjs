@@ -188,7 +188,7 @@ same(F.createCmds(plan), ['create object Money number INT 11869', 'create object
 same(plan.setNumber, [{ id: 700, class: 'Herbs', from: 40, to: 80 }], 'an existing stack is SET to prod\'s number, not topped up');
 same(F.holdingCmds(plan, { holder: 4310, wearer: 4310, created: [9001, 9002, 9003] }), [
   'send object 4310 TryUnuseItem what OBJECT 701',
-  'set object 700 piNumber INT 80',
+  'send object 700 AddNumber number INT 40',
   'send object 4310 NewHold what OBJECT 9001',
   'send object 4310 NewHold what OBJECT 9002',
   'send object 4310 NewHold what OBJECT 9003',
@@ -320,6 +320,27 @@ console.log('\nthe shim forwards every dress flag it accepts');
 same(dressFlags(['x', '--no-items', '--no-guild']), ['dress', '--no-items', '--no-guild'], '--no-items and --no-guild reach dress');
 same(dressFlags(['--no-skills', '--trim-items']), ['dress', '--no-skills', '--trim-items'], 'and --no-skills, --trim-items');
 ok(DRESS_FLAGS.length === 4, 'four of them');
+
+
+const loginCommands=F.shadowLoginPositionCommands(42,578,{row:34,col:36,x:2352,y:2208,angle:128});
+same(loginCommands,['set object 42 piSave_room INT 578','set object 42 piSave_row INT 34','set object 42 piSave_col INT 36','set object 42 piSave_fine_row INT 32','set object 42 piSave_fine_col INT 48','set object 42 piSave_angle INT 128'],'offline clone placement survives UserLogonSetPosition with the stable map number and exact fine offsets');
+let badLogin=false;try{F.shadowLoginPositionCommands(42,578,{row:34,col:36,x:2208,y:2352});}catch{badLogin=true;}ok(badLogin,'swapped or inconsistent login coordinates refuse before writing');
+
+const savedProps=new Map();let savedWrites=0;
+const positionIO={resolve:async()=>({Clone:42}),dm:async commands=>commands.map(cmd=>{
+ const set=/set object 42 (piSave_\w+) INT (-?\d+)/.exec(cmd);if(set){savedWrites++;savedProps.set(set[1],Number(set[2]));}
+ const body=cmd==='show object 42'?': OBJECT 42 is CLASS User\n'+[...savedProps].map(([k,v])=>': '+k+' = INT '+v).join('\n'):': INT 1';return '> '+cmd+'\n'+body+'\n';
+}).join('')};
+const positionRec=[{shadow_name:'Clone',room:578,row:34,col:36,initialFine:{x:2352,y:2208}}];
+let verifyRefused=false;try{await F.mirrorShadowLoginPositions(positionRec,positionIO);}catch{verifyRefused=true;}ok(verifyRefused&&savedWrites===0,'saved login verify-only refuses a mismatched fixture without writing');
+const savedResult=await F.mirrorShadowLoginPositions(positionRec,{...positionIO,apply:true});ok(savedResult.verified===1&&savedWrites===6,'construction updates all six saved login fields and verifies a second native read');
+const savedAgain=await F.mirrorShadowLoginPositions(positionRec,{...positionIO,apply:true});ok(savedAgain.commands===0&&savedWrites===6,'matching saved login pose needs no repeated writes');
+
+console.log('construction restacking preserves native holder counters');
+same(F.setNumberCmd(700,40,80),'send object 700 SubtractNumber number INT 40','shrinking uses the server owner-notifying message');
+same(F.setNumberCmd(700,80,40),'send object 700 AddNumber number INT 40','growing uses the server owner-notifying message');
+{let rejected=false;try{F.setNumberCmd(700,40);}catch(e){rejected=/restack needs/.test(e.message);}ok(rejected,'missing observed count cannot produce an unaccounted raw overwrite');}
+{let rejected=false;try{F.setNumberCmd(700,0,40);}catch(e){rejected=/restack needs/.test(e.message);}ok(rejected,'restacking cannot accidentally delete the whole held object');}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

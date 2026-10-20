@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buyCourierGoods,courierOverhead} from './m59-courier-purchases.mjs';
@@ -22,11 +22,19 @@ try{
   const r=await buyCourierGoods(ctx,{seller:'fixture',item:'practice bow',maximize:true,evidenceDir:scratch,settleMs:15,pollMs:1});
   if(mode==='delayed'){assert.equal(r.status,'confirmed');assert.equal(r.quantity,7);assert.equal(r.spent,7000);assert.equal(asks[0].amount,40);}
   if(mode==='full'){assert.equal(r.status,'limited');assert.equal(r.quantity,0);assert.equal(r.spent,0);}
-  if(mode==='unreconciled')assert.equal(r.status,'unreconciled');
+  if(mode==='unreconciled'){
+   assert.equal(r.status,'unreconciled');
+   const blocked=await buyCourierGoods({agent:ctx.agent,state:{},call:async()=>{throw Error('no quote, read or repeated buy permitted');}},
+    {seller:'fixture',item:'practice bow',amount:1,evidenceDir:scratch});
+   assert.equal(blocked.status,'blocked');assert.equal(blocked.quantity,0);assert.equal(submitted,1);
+   assert.equal(JSON.parse(readFileSync(ctx.state.courierPurchases.file)).purchases[0].status,'unreconciled');
+  }
   if(mode==='stale'||mode==='bad_quote'){assert.equal(submitted,0);assert.equal(r.status,'refused');}
   else assert.equal(submitted,1,'a purchase with delayed or ambiguous evidence is never resent');
   assert.equal(JSON.parse(readFileSync(ctx.state.courierPurchases.file)).purchases[0].status,r.status);
  }
+ writeFileSync(join(scratch,'crashed-1.json'),JSON.stringify({agent:'crashed',purchases:[{seller:'fixture',item:'herb',status:'submitted'}]}));
+ const crash=await buyCourierGoods({agent:'crashed',state:{},call:async()=>{throw Error('must not repeat accepted crash intent');}},{seller:'fixture',item:'herb',evidenceDir:scratch});assert.equal(crash.status,'blocked');
  let ordered=false;
  const arrows={agent:'plural-arrows',state:{},call:async(name,args)=>{
   if(name==='shop'&&!args.buy_ids)return {items:[{id:11,name:'arrows',cost:2}]};

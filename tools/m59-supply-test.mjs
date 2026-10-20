@@ -936,5 +936,13 @@ section('GEAR BY NAME: NEVER WHAT IS WORN, AT MOST THE AMOUNT, NOTHING WHEN THE 
      JSON.stringify(unknown));
 }
 
+
+section('ABSENT RECIPIENT REFUSES BEFORE ANY OFFER');
+{
+ const {giver,recv}=twoInOneRoom();giver._fake.others=[];
+ const out=await supplyBetween({from:'g',to:'r',what:'reagents',who_travels:'neither'},deps({g:giver,r:recv}));
+ ok('missing receiver has a typed unsubmitted receipt',out.reason_code==='recipient_not_visible'&&out.submission?.attempted===false&&out.submission.stage==='recipient_visibility');
+ ok('no cancel/offer/accept was sent and both holds were released',!giver._fake.log.some(x=>x.startsWith('trade:'))&&!recv._fake.log.some(x=>x.startsWith('trade:'))&&!giver._fake.held&&!recv._fake.held);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

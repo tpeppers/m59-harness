@@ -1,3 +1,4 @@
+import {processStartTimes,START_TIME_TOLERANCE_MS} from './runtime/process-identity.mjs';
 import {crossingAdmissionConflict} from './m59-crossing-queue.mjs';
 // m59-spotclaims.mjs — Atomic wall reservations shared by keeper processes.
 //
@@ -332,7 +333,7 @@ export function reserveFilePassage(agent, room, zone, {flow=null,entryPending=fa
     if (own?.room === room && own.zone === zone) return (own.flow??null)===flow?{ok:true}:{ok:false,reason:'passage_flow_changed'};
     if (own) return { ok: false, reason: 'passage_exit_unconfirmed' };
     writeExclusive(dir, 'passage', String(agent), { agent: String(agent), room, zone, flow, entryPending, entry, character,
-      pid: process.pid, updated_at: Date.now() });
+      pid: process.pid, process_started_at:PROCESS_STARTED_AT, updated_at: Date.now() });
     return { ok: true };
   });
 }
@@ -414,4 +415,24 @@ export function releaseFileTraversal(lease,proof){
     for(const r of all)if(r.token===own.token&&r.agent===own.agent)remove(r._path);
     return true;
   });
+}
+
+// Run during service startup, not per movement packet. A recycled live PID
+// cannot own a record written before that process was created. Unknown process
+// identity retains the record. Query outside the mutex, then compare the exact
+// immutable record again under lock before removing positively dead ownership.
+export function reconcileDeadSpotClaims({starts=processStartTimes,live=pidAlive,now=Date.now(),toleranceMs=START_TIME_TOLERANCE_MS}={}){
+ if(!fileSpotClaimsEnabled())return{checked:0,removed:[],unknown:[]};
+ const snapshot=withLock(dir=>readdirSync(dir).filter(n=>/^(claim|passage|participant)-.*\.json$/.test(n)).flatMap(name=>{
+  try{const path=join(dir,name),raw=readFileSync(path,'utf8'),record=JSON.parse(raw);return Number.isSafeInteger(record.pid)&&record.pid>0?[{path,name,raw,record}]:[];}catch{return[];}
+ }));
+ const pids=[...new Set(snapshot.map(s=>s.record.pid).filter(pid=>live(pid)))],born=starts(pids),removed=[],unknown=[];
+ const candidates=snapshot.filter(s=>{
+  const r=s.record;if(!live(r.pid)){s.reason='owner process is absent';return true;}
+  const start=born.get(r.pid),written=Number(r.updated_at??r.claimed_at??r.process_started_at);
+  if(Number.isFinite(start)&&start>0&&start<=now+toleranceMs&&Number.isFinite(written)&&written>0&&written<=now+toleranceMs&&start>written+toleranceMs){s.reason='record predates current process';s.process_created_at=start;return true;}
+  if(!Number.isFinite(start)||!Number.isFinite(written))unknown.push({name:s.name,pid:r.pid});return false;
+ });
+ withLock(()=>{for(const s of candidates){let current;try{current=readFileSync(s.path,'utf8');}catch{continue;}if(current!==s.raw)continue;if(remove(s.path))removed.push({name:s.name,agent:s.record.agent,pid:s.record.pid,record_at:s.record.updated_at??s.record.claimed_at??s.record.process_started_at,process_created_at:s.process_created_at??null,reason:s.reason});}});
+ return{checked:snapshot.length,removed,unknown};
 }

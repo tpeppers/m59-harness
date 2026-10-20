@@ -26,11 +26,33 @@ has a confirmed exit. No timeout evicts a live owner. A visible player without
 matching confirmed admission remains an obstacle, even when its name is in the
 roster. Strangers, human occupants and unknown flows are never assumed clear.
 
+Passage occupancy includes a conservative 16 protocol-unit body margin. A
+confirmed foot point just outside a cell can still overlap its curved neck;
+that body retains ownership until it fully clears. Reentry into the same held
+zone does not require a second ticket. New entrants reserve before their body
+reaches the margin, and unknown overlapping occupants still block entry. The
+captured room826 case at `x=2058,y=1207` to `x=2072,y=1216` exercises this in the
+real Session/collision fixture: the leader clears rather than waiting on its
+followers behind it.
+
+Checked rail telemetry retains the last eight fine-walk refusals, including
+passage admission, so a generic step-budget failure keeps its underlying cause.
+
 The same state is shared atomically across keeper processes using the existing
 fleet/server spot-claim namespace. Records carry entrance, flow, character and
 `entryPending`; updates preserve ownership. Existing script crossing journals
 keep their historical directory name so rolling versions cannot split live locks.
 Do not delete a live claim to unblock a queue.
+
+Service startup reconciles ephemeral wall, passage and participant records
+before new keepers can reuse old PIDs. A batched OS start-time read can prove
+that a record predates the process now holding its PID. Cleanup queries outside
+the mutex, then rechecks the exact unchanged record under lock. Live and unknown
+ownership stays protected. Retained traversal receipts keep their separate
+confirmed-exit contract and are excluded from this cleanup. The native Brax
+qualification exposed a recycled PID belonging to a different shadow character;
+its stale passage record was removed using this proof, without moving a body.
+
 
 ## Keep the line
 

@@ -62,9 +62,9 @@ export function exactDrop(c,args,{now=Date.now(),prior=null}={}) {
   return {wire,identity:{nameRsc:item.nameRsc,iconRsc:item.iconRsc,tag:item.tag,translation:item.translation}};
 }
 const consumed=new WeakMap();
-export async function executeExactDrop(session,args,{authority,now=Date.now,wait}={}) {
+export async function executeExactDrop(session,args,{authority,now=Date.now,wait,beforeDrop=null}={}) {
   need(!session.job||session.job.done,'character has an active order');
-  const c=authority(),initial=exactDrop(c,args,{now:now()});
+  const c=authority();beforeDrop?.(c);const initial=exactDrop(c,args,{now:now()});
   need(typeof args.control_token==='string'&&/^[A-Za-z0-9._:-]{8,160}$/.test(args.control_token),'drop confirmation token required');
   let receipts=consumed.get(session);if(!receipts){receipts=new Map();consumed.set(session,receipts);}
   for(const [token,at] of receipts)if(now()-at>15000)receipts.delete(token);
@@ -74,6 +74,7 @@ export async function executeExactDrop(session,args,{authority,now=Date.now,wait
   await session.pacer.submit('drop',()=>{
     need(!sent,'drop packet already sent');
     const live=authority();need(live===c&&(!session.job||session.job.done),'character control changed before drop');
+    beforeDrop?.(live);
     const current=exactDrop(live,args,{now:now(),prior:initial.identity});
     sent=true;
     return live.drop([current.wire]);

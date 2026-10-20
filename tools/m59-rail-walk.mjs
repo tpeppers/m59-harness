@@ -84,7 +84,7 @@ async function executeCheckedRail(session,{room,leg,exit=null,nextJump=null,queu
   Object.assign(progress,{phase:'detouring-body',body_detour:detour,updatedAt:now()});
   if(!detour.found)return{done:false};
   for(const target of detour.waypoints){
-   const r=await session.walkFine(target.x,target.y,{maxSteps:32,stride:48,arriveWithin:0,holdShelf:true,exactArrival:true,movementGeneration:generation});steps+=Number(r.steps)||0;
+   const r=await session.walkFine(target.x,target.y,{maxSteps:32,stride:48,arriveWithin:0,holdShelf:true,exactArrival:true,movementGeneration:generation});steps+=Number(r.steps)||0;progress.last_detour_walk={at:now(),reason:r.reason??null,steps:r.steps??null,log:(r.log??[]).slice(-8)};
    if(fence()||r.cancelled||r.left_room)return{terminal:finish({...r,arrived:false})};
    if(exitReady?.()){await confirm();if(fence())return{terminal:finish(session.cancelledMovement({}))};if(exitReady())return{terminal:finish({arrived:true,already_at_opening:true})};}
    if(!r.arrived)return{done:false};
@@ -158,7 +158,7 @@ async function executeCheckedRail(session,{room,leg,exit=null,nextJump=null,queu
     waits++;await wait(Math.min(100,Math.max(1,deadline-now())));continue;
    }
    const r=await session.walkFine(wire.protocol.x,wire.protocol.y,{maxSteps:64,stride:48,arriveWithin:3,holdShelf:true,exactArrival:true,bodyDetour,movementGeneration:generation});
-   steps+=Number(r.steps)||0;const after=position();if(before&&after&&Math.hypot(after.x-before.x,after.y-before.y)>0){progress.movedAt=now();progress.waitSince=null;}
+   steps+=Number(r.steps)||0;progress.last_walk={at:now(),arrived:r.arrived,reason:r.reason??null,traffic:r.traffic??null,steps:r.steps??null,log:(r.log??[]).slice(-8)};const after=position();if(before&&after&&Math.hypot(after.x-before.x,after.y-before.y)>0){progress.movedAt=now();progress.waitSince=null;}
    Object.assign(progress,{updatedAt:now(),position:after,reason:r.reason??null,blockedBy:r.objectId??null,last_refusal:refusalDetail(r)});onProgress({index,aim,reply:r});
    if(fence()||r.cancelled)return finish({...r,arrived:false,cancelled:true});
    if(r.arrived){completed++;confirmRetries=0;break;}

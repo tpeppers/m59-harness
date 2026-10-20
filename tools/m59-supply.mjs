@@ -577,6 +577,7 @@ export async function supplyBetween(a, deps) {
                                         (o.name || '').toLowerCase() === wanted);
     if (!them)
       return { supplied: false,
+               reason_code: 'recipient_not_visible', submission: { attempted: false, stage: 'recipient_visibility' },
                reason: `${receiverName} is not in the room with ${giverName}`,
                giver_in: give.room(), receiver_in: recv.room(),
                notes: notes.length ? notes : undefined,

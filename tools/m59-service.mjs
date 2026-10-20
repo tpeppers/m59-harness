@@ -37,7 +37,8 @@ import { openSync, readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSyn
          readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fleetName, lockFileFor } from './m59-fleetpath.mjs';
+import { fleetName, lockFileFor, stateFileFor, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import {configureSpotClaimStore,spotClaimNamespace,reconcileDeadSpotClaims} from './m59-spotclaims.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as webui from './m59-webui.mjs';
 import { movementMapFile } from './m59-map-path.mjs';
@@ -426,6 +427,15 @@ async function cmdStart() {
   mkdirSync(SUB, { recursive: true });
   // Append, never truncate: the log is the only account of what the last run did, and
   // a restart is exactly when you want to read it.
+  // Clean positively dead coordination ownership before new keepers can reuse
+  // those PIDs. Process identity lookup is batched outside the claim mutex.
+  const roster=stateFileFor(FLEET),endpoint=rosterGameEndpoint(roster);
+  if(endpoint){
+    configureSpotClaimStore({directory:process.env.M59_SPOT_CLAIMS_DIR||join(SUB,'.spot-claims'),
+      namespace:process.env.M59_SPOT_CLAIMS_NAMESPACE||spotClaimNamespace({fleetPath:roster,host:endpoint.host,port:endpoint.port})});
+    const hygiene=reconcileDeadSpotClaims();
+    if(hygiene.removed.length)console.log(`coordination: cleared ${hygiene.removed.length} positively dead/recycled process records`);
+  }
   const fd = openSync(LOG_FILE, 'a');
   const args = [join(HERE, 'm59-broker.mjs'), '--http', String(HTTP_PORT),
                 '--dashboard', String(DASH_PORT)];

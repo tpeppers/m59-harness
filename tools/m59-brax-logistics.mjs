@@ -1,3 +1,4 @@
+import {observeCourierJourney} from './m59-courier-journey.mjs';
 import {roomStagingGuard} from './m59-crowd-staging.mjs';
 import {chooseCrowdClearanceStep} from './m59-rail-traffic.mjs';
 // Public, ordinary movement on each side of the Cragged ledge. No admin access.
@@ -49,7 +50,7 @@ export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObse
  const end=Date.now()+timeoutMs,events=[],event=e=>{events.push({at:Date.now(),...e});ctx.log?.(ctx.agent,JSON.stringify(e));};
  const read=async()=>{if(Date.now()>end)throw Error('Brax service leg deadline');const s=await observe();if(!(s.hp?.value>0)||s.room.num===1)throw Error('service actor died');return s;};
  const cross=async to=>{const r=await queuedRoomExit(ctx,to,{observe,characters:[(await read()).character],timeoutMs:Math.min(180000,end-Date.now())});event({kind:'service-exit',to,reply:r});if(!r.arrived)throw Error('service exit failed');};
- const road=async to=>{const before=await read();if(before.room.num===to)return;const r=await ctx.call('travel',{agent:ctx.agent,to,max_hops:8,run_errands:false,avoid:[579,826,827,828,829,830,831,832,833]},Math.max(1,end-Date.now()));event({kind:'courier-road',to,reply:r});if((await read()).room.num!==to)throw Error('courier road did not reach '+to);};
+ const road=async to=>{const before=await read();if(before.room.num===to)return;const r=await ctx.call('travel',{agent:ctx.agent,to,max_hops:8,run_errands:false,avoid:[579,826,827,828,829,830,831,832,833]},Math.max(1,end-Date.now()));event({kind:'courier-road',to,reply:r});await observeCourierJourney({agent:ctx.agent,to,before,result:r,read:()=>read(),deadline:end,emit:event});};
  const fine=async to=>{
   const startedAt=Date.now();let denseFallback=false;for(let attempt=0;attempt<8&&Date.now()<end;attempt++){
    const s=await read();checkIslandCancellation(ctx,s);if(!islandReadOwner(ctx,s))throw Error('service rail owner changed');if(s.room.num!==578)throw Error('ledge rail requires578');

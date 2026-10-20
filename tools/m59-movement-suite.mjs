@@ -36,6 +36,7 @@ import {resolve} from 'node:path';
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
   ['m59-movement-region-test.mjs','real client packet boundary refuses off-component falls, transport and unproved exits while stationary survival preempts trades'],
+  ['m59-delivery-cache-test.mjs','typed absent-recipient deferral, owned no-replay provision drops and verified optional broker pickup notices'],
   ['m59-brax-logistics-test.mjs','each ledge side has a reversible exact public rail without an elevator or cross-ledge walk'],
   ['m59-survival-decision-test.mjs','real keeper recovery transitions, explicit protected handoffs, cancellation and replacement chains remain executable'],
   ['m59-active-recovery-state-test.mjs','actual keeper active logoff activation remains owned across native/public gates and interrupted-rest replacements'],
@@ -54,6 +55,8 @@ const SUITES = [
   ['m59-queued-coalesce-test.mjs','geometry-checked shortened castle approaches retain exact published GO cells and legal native packets'],
   ['m59-brax-coalesced-onward-test.mjs','shortened Sentinel and onward approaches retain captured monster collision and intended room crossings'],
   ['m59-recovery-cure-test.mjs','known source-costed poison cure retains current body/resource guards and distinguishes weakening from removal'],
+  ['m59-spotclaims-identity-test.mjs','stale coordination records cannot survive recycled Windows keeper PIDs; live and unknown ownership remains protected'],
+  ['m59-farm-danger-test.mjs','long farm stages yield promptly to health loss and fence stale callbacks without cancelling recovery'],
   ['m59-active-self-heal-test.mjs','ordinary known self healing protects wounded road and reconnect bodies while preserving final-send ownership and one pending cast'],
   ['m59-native-doorway-queue-test.mjs','the actual packed sixteen-player doorway drains through native packets without walking the front backward through its follower'],
   ['m59-north-exit-recovery-test.mjs','fourteen actual north bodies with real file-backed incumbent claims drain after an ended head confirmation failure'],

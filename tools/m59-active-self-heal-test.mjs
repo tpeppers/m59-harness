@@ -13,3 +13,15 @@ test('login readiness waits for an already pending self-heal before allowing mov
 test('unchanged resource refresh timestamps do not flood the death-evidence window with repeated healing checks',async()=>{const f=fixture();f.c.inventory=[];assert.equal(await Autopilot.prototype.tryActiveSelfHeal.call(f.p,'inventory_ready'),false);f.c.inventoryAt++;f.c.spellsAt++;assert.equal(await Autopilot.prototype.tryActiveSelfHeal.call(f.p,'inventory_ready'),false);assert.equal(f.records.filter(e=>e.opcode==='HEAL_CHECK').length,1);f.c.inventoryAt=null;assert.equal(await Autopilot.prototype.tryActiveSelfHeal.call(f.p,'inventory_ready'),false);assert.equal(f.records.filter(e=>e.opcode==='HEAL_CHECK').length,2);});
 
 test('the actual travel healer treats observed poison before spending its medicine on temporary HP',async()=>{const f=fixture();f.v.health.value=20;f.c.spells.push({id:37,nameRsc:3});f.c.inventory.push({nameRsc:4,amount:2});const get=f.c.rsc.get;f.c.rsc.get=id=>id===3?'cure poison':id===4?'elderberry':get(id);let poison=true,casts=[];f.c.ailments=()=>poison?[{name:'poison'}]:[];f.c.cast=id=>{casts.push(id);f.v.mana.value-=10;poison=false;};assert(await Autopilot.prototype.tryActiveSelfHeal.call(f.p,'inventory_ready'));assert.deepEqual(casts,[37]);assert.equal(f.v.health.value,20);assert.equal(f.s.movementGeneration,4);assert(f.records.some(e=>e.opcode==='HEAL_RESULT'&&JSON.parse(e.reason).poison_cleared));});
+
+// Two clients can change patient health while a healer waits in the real pacer.
+const {publishFleetHealth}=await import('./m59-fleet-health.mjs');
+test('observed ally heal rechecks fresh patient HP at the queued stand/cast boundary',async()=>{
+ for(const becomesWhole of [false,true]){
+  const f=fixture(),patientName='Offline patient '+process.pid,patientHealth={value:5,max:20};f.v.health.value=20;f.p.mode='farm';f.p.inert=null;f.p.policy={buffAllies:{friends:[patientName]}};
+  f.c.room.objects.set(8,{id:8,nameRsc:8,flags:5});const get=f.c.rsc.get;f.c.rsc.get=id=>id===8?patientName:get(id);
+  const patient={credentials:f.s.credentials,world:f.s.world,client:{combatReady:true,state:'game',me:{name:patientName},self:{id:8},selfId:8,vitals:()=>({health:patientHealth})}};
+  publishFleetHealth(patient);f.s.pacer.submit=async(_kind,fn)=>{if(becomesWhole){patientHealth.value=20;patient._healthPublishedAt=0;publishFleetHealth(patient);}return fn();};
+  const result=await Autopilot.prototype.healObservedFleetmate.call(f.p);assert.equal(f.casts(),becomesWhole?0:1);assert.equal(result,!becomesWhole);
+ }
+});

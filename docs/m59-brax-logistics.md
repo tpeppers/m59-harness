@@ -85,7 +85,7 @@ another offer until the receiver pack changes. Pre-offer readiness refusals wait
 without claiming delivery. Stopping the service prevents unstarted queued trips while
 finite accepted legs finish; do not keep ordinary farmers working past the measurement
 deadline while waiting for that cleanup. Medicine is packed before heavy bread. Purple/blue/red mushrooms are reagents, not
-food. Critical hammers use exact known capacity; optional cargo keeps a margin.
+food. Hammers and other cargo keep a sixteen-unit capacity margin. A native receiver-full refusal at the computed75-bulk boundary disproved the previous zero-margin hammer exception; known item classes do not establish the server holder counter.
 
 Use `supply` with `stationary:true` and `who_travels:'neither'`. This requires the
 GOAP keeper driver and finite directional tokens (20s default,30s maximum). Survival
@@ -161,3 +161,134 @@ unholy/shock/fire attacks in the inspected server source. This supports the requ
 hammer setup; it does not establish that20HP support characters can survive contact.
 Current native enemy observations, kill credits and damage postmortems decide whether
 the workforce is effectively engaging rather than merely occupying827.
+
+## Recipient deliveries and ended journeys
+
+The exchange across the Cragged ledge remains stationary. Inside map827 the
+runner uses ordinary `supply` movement: the giver travels for a delivery, the
+receiver travels for collection. This moves the runner while the farmer keeps
+its post; being somewhere in the same room is not trading range. Reconciled
+recipient gains emit `farmer-delivery-confirmed`, separately from ledge cargo
+and completed return cycles.
+
+Road returns observe the exact accepted native journey through protected
+recovery. They never submit a second journey because the first RPC ended early.
+An ended service may return remaining cargo home only after native live body,
+released control and absence of a job or movement are proved. Ambiguous accepted
+trades remain failures; pre-submission stale cargo may defer without an offer.
+
+Courier procurement buys the actor's own food and usable kit before bulk cargo,
+then prioritizes a missing farmer hammer before optional medicine. Once everyone is armed, usable medicine precedes spare weapons. A sixteen-unit native weight
+and bulk margin avoids the near-full-pack purchases that the server could not
+reconcile. Reserves use actual spell knowledge and external carry floors: a cook
+without healing retains six herbs, a healer twenty, and a noncaster no unused
+medicine unless the source loadout explicitly retains it.
+
+Purchase journals survive controller changes. A submitted or unreconciled intent
+blocks another purchase of that agent/seller/item before even quoting again.
+Confirmed independent cargo can still be delivered and other goods procured;
+the unresolved intent stays visible rather than terminating all supply work or
+being silently repeated. Preserve the same journal directory across preparation
+and measurement. Receipts retain the complete shop reply as well as inventory
+and cash deltas.
+
+Idle telemetry requires known health and mana ceilings; values at or above those
+ceilings count as resource-full. An observed over-ceiling mana value is not a
+reason to classify a waiting character as depleted, and absent mana is not proof
+of full resources. Comparisons with earlier reports must disclose this classifier
+change or reclassify the earlier raw samples with the same rule.
+
+The runner distributes existing provisions before collecting more loot. At the
+ledge, medicine precedes spare weapons; a bounded fresh loading pass follows
+verified exports so newly freed capacity is used before either side returns.
+Only independently confirmed remaining cargo is selected again. Partial or
+ambiguous accepted transfers still end the exchange, rather than being replayed.
+
+Pool purchases reserve 256 units of both weight and bulk for exported loot;
+the courier's own travel kit may use that reserve down to the conservative
+sixteen-unit margin. Filling every remaining slot with delivery cargo leaves
+neither side able to accept the other side's load, even when both arrive alive.
+
+Courier merchant calls exclude provision names through the native keeper's
+`skip_names` filter. A copied source loadout ceiling can deliberately outrank
+`keep`, and qualification actually sold seven delivery hammers despite that keep
+list. Filtering those names before offers preserves the delivery cargo while
+retaining the full source loadout rules for everything else; it does not disable
+loadout protection or turn the courier's cargo into a permanent personal floor.
+
+Cargo planning accepts both the native inventory tool's numeric `ids_as_of` plus
+`last_save_at` and the detailed observer stamp. A save newer than the planned
+inventory time defers before submission even if a recycled handle has the same
+item name. This is a new read/plan decision, not a replay of an accepted gift.
+
+While any farmer still needs provisions, collection before the ledge trip takes
+cash but defers additional heavy loot. Filling the upper pack again before an
+incoming delivery defeats reserved lower capacity. Recipient-room exports still
+move the surplus needed to accept a delivery, and existing runner loot is sold
+through the courier as usual. Unarmed farmer demand precedes optional supplies;
+upper stock is capped at current demand, personal reserves and one spare hammer.
+
+The courier stays in town during upper local preparation, then both physical
+approaches overlap under the same exclusive lane gate. Both accepted approaches settle before failure cleanup; one rejection
+cannot abandon the other live actor. A native47/82-HP courier was refused by the
+stationary exchange guard, so arrivals now wait for normal recovery, released
+work/movement, no combat/cast, the correct stand and readiness cooldown. A body
+that recovery moved away may make at most two new ordinary approaches after the
+previous leg is proved ended. Death/new body, timeout or stop ends admission;
+no admin help, blind repeated movement or replay of an ambiguous trade is used.
+
+
+A stationary trade health floor is higher than some source policies' idle-rest
+trigger. In the native qualification a courier remained at75/88HP: below the
+90% exchange floor but above its60% rest trigger. Waiting for an idle recovery
+that has no reason to start cannot close that gap. `BraxSupplyService` accepts
+an explicit `recover(agent,{health})` dependency and requests a full-health goal
+only after the previous body work is known ended and no protected recovery,
+combat, cast or movement is active. Use the public `brax-service-rest` script:
+it uses FleetScript's verified safe-wall rest and verifies the native result.
+Never implement this callback as a heal grant or unguarded rest in the open.
+The request and native readiness observations are recorded, with at most two
+health goals and two reapproaches per actor in a bounded admission attempt.
+
+`brax-ledge-leg` now enforces its advertised `minHealth` with that same ordinary
+rest primitive before departing. It previously passed an unused parameter to
+the route helper. Healthy departures skip rest without moving to another wall;
+a hurt actor must reach verified cover and regenerate normally. The full source
+policy and external loadout remain intact. Qualification, incomplete trips,
+zero-transfer refusals and setup deaths are evidence, not deliveries or part of
+a later successful hour. Farmer deliveries require confirmed receiver gain,
+not just a lower-to-upper exchange or a physically completed return cycle.
+
+
+## Deferred recipients and optional floor caches
+
+`recipient_not_visible` with `submission.attempted:false` is a typed pre-offer
+refusal. Defer that recipient and continue the other direct deliveries. It is
+not permission to retry a partial or unknown accepted trade. Cached room equality
+also does not establish that a recovering/logged-off recipient is visible now.
+
+For the explicitly authorized Brax floor fallback, instantiate the service with
+`cacheDelivery: publicBraxDeliveryCache` imported from `m59-delivery-cache.mjs`.
+The public `brax-cache-delivery` child owns the upper runner for a bounded drop-off
+after direct local distribution. It caches only confirmed provision surplus
+needed by other farmers, above the runner's personal reserves and full native
+loadout floors. Worn, protected or unknown equipment never qualifies. The cache
+is in827, where farmers can retrieve it; putting goods below the578ledge would
+make them unavailable to the locked farmers.
+
+Every drop has a durable intent before one native packet. A missing confirmation
+quarantines the item for reconciliation and prevents another drop, while allowing
+courier movement to continue. A confirmed cache requires a giver quantity loss
+and a matching new ground quantity at the observed square. It is a cache, not a
+confirmed recipient delivery. `delivery_notice` publish/list/ignore provides
+structured optional pickup facts through the broker, persists them, and pushes
+them to an addressed keeper without game speech or movement. Native state exposes
+`delivery_notices`. Offline notification delivery may remain pending; the broker
+list remains available. Nobody waits for a pickup acknowledgement.
+
+The completed trial exposed an additional return hazard: a generic leading rest
+selected r1c15before BACK and could not prove arrival at a working wall. BACK now
+uses the checked return leg's own recovery handling, with no extra generic rest
+route. OUT still enforces its departure floor, and exchange admission retains its
+explicit guarded health goal. See the measured result and post-hour distinction
+in [the resupply capacity report](reports/2026-10-19-brax-resupply-capacity.md).

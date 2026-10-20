@@ -1,5 +1,22 @@
 # The keeper: what it can see, and what it cannot
 
+Long farm actions check falling health every 100ms against the existing flee
+line. They yield immediately to protected recovery, invalidate that invocation's
+body-command authority and cancel its old movement. The promise remains in
+flight until it settles, so no second copy starts. Late paced attacks, nested
+helpers and old pull state updates cannot take the body back. A completed fight
+receipt that arrives after preemption still records its credited kill without
+resuming movement or changing the new recovery decision.
+
+Pulls retain the creature actually selected, including a nearer replacement in
+a crowd. Room, save generation and resolved name are checked again before the
+attack. A changed quarry returns to the original wall when that same live body
+can still do so; ordinary survival can preempt the return.
+
+Observed ally healing rechecks fresh endpoint/room/body-scoped health at the
+paced send. The older medic path also skips observed whole allies and ranks the
+observed wounded first. Unobserved health stays unknown.
+
 Island hop handoffs wait for a positively identified previous job from the
 same controller within the original leg deadline. Shelter or reconnect cleanup
 can exceed a fixed poll allowance after the room changes. Health, room and
@@ -865,3 +882,8 @@ same safe pose does not validate the previously rejected departure.
 FleetScript's minimum journey health is a departure floor, not permission to cancel an active recovery behind confirmed cover. The compiler raises that floor to full health while the keeper reports a recovering decision at its chosen, confirmed safe square, and rechecks this before reclaiming a body that has healed to the ordinary floor. A caller's explicit plateau override remains available. Unknown, predicted or off-refuge observations do not establish this protected state.
 
 Health-loss segments retain bounded observed ailment and incoming-hit evidence. An ailment can coexist with an attack and does not identify the cause of a particular health delta. Empty observed effects also do not prove the absence of sickness. Resistance and cure effects are not recognized as active sickness, and invalidated enchantment IDs are cleared rather than continuing to mask damage. The room587 loss recorded on October12 lacks this causal evidence; poison can be modeled, but its historical presence is unproved.
+
+The immediate farm-danger monitor also respects a short, identity-fenced refuge
+leg with recent confirmed forward progress. Returning to cover inside a farm
+rung must not be cancelled by its own health monitor. A blocked, stale, changed
+owner or changed body releases that exception through the shared refuge proof.

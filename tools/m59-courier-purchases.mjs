@@ -1,5 +1,6 @@
 // Verified, one-attempt purchases for couriers. Capacity decisions stay in shop.
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync,readFileSync,readdirSync,existsSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 
 const count=(items,match)=>items.filter(i=>match.test(i.name??'')).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
@@ -7,14 +8,25 @@ const cash=items=>items.filter(i=>/^shillings?$/i.test(i.name??'')).reduce((n,i)
  if(!Number.isSafeInteger(i.amount)||i.amount<0)throw Error('courier cash unconfirmed');
  return n+i.amount;
 },0);
+export function pendingCourierPurchase({agent,seller,item,aliases=[],evidenceDir='substrate/courier-purchases'}){
+ const directory=resolve(evidenceDir);if(!existsSync(directory))return null;
+ const prefix=String(agent).replace(/[^a-z0-9_-]/gi,'_')+'-',names=new Set([item,...aliases].map(n=>String(n).toLowerCase()));
+ for(const name of readdirSync(directory).filter(n=>n.startsWith(prefix)&&n.endsWith('.json'))){
+  const journal=JSON.parse(readFileSync(resolve(directory,name),'utf8'));if(journal.agent!==agent)continue;
+  const pending=journal.purchases?.find(p=>['submitted','unreconciled'].includes(p.status)&&String(p.seller).toLowerCase()===String(seller).toLowerCase()&&names.has(String(p.item).toLowerCase()));
+  if(pending)return{file:resolve(directory,name),status:pending.status,at:pending.at,item:pending.item,seller:pending.seller};
+ }return null;
+}
 export async function buyCourierGoods(ctx,{seller,item,aliases=[],amount=1,maximize=false,evidenceDir='substrate/courier-purchases',settleMs=15000,pollMs=1000}={}){
  if(!seller||!item||!Number.isSafeInteger(amount)||amount<0)throw Error('invalid courier purchase');
+ const pending=pendingCourierPurchase({agent:ctx.agent,seller,item,aliases,evidenceDir});
+ if(pending)return{at:new Date().toISOString(),seller,item,requested:amount,status:'blocked',quantity:0,pending_previous:pending,note:'An earlier submitted purchase is unresolved; no quote or new buy was sent.'};
  const names=new Set([item,...aliases].map(n=>n.toLowerCase()));
  const match={test:name=>names.has(String(name).toLowerCase())};
  const ledger=ctx.state.courierPurchases??={format:'m59-courier-purchases/1',agent:ctx.agent,at:new Date().toISOString(),purchases:[]};
  if(!ledger.file){
   mkdirSync(resolve(evidenceDir),{recursive:true});
-  ledger.file=resolve(evidenceDir,String(ctx.agent).replace(/[^a-z0-9_-]/gi,'_')+'-'+Date.now()+'.json');
+  ledger.file=resolve(evidenceDir,String(ctx.agent).replace(/[^a-z0-9_-]/gi,'_')+'-'+Date.now()+'-'+randomUUID()+'.json');
  }
  const entry={at:new Date().toISOString(),seller,item,maximize,requested:amount,status:'preparing'};
  ledger.purchases.push(entry);
@@ -31,7 +43,7 @@ export async function buyCourierGoods(ctx,{seller,item,aliases=[],amount=1,maxim
   // Persist intent before sending. Never repeat an ambiguous purchase.
   entry.status='submitted';save();
   const reply=await ctx.call('shop',{agent:ctx.agent,seller,buy_ids:[{id:row.id,amount:entry.requested}]},600000);
-  entry.clamped=reply?.clamped??[];entry.reply_note=reply?.note??reply?.error??null;save();
+  entry.clamped=reply?.clamped??[];entry.reply_note=reply?.note??reply?.error??null;entry.shop_receipt=reply;save();
   const deadline=Date.now()+settleMs;
   do{
    const after=await pack();

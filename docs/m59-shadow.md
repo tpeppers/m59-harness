@@ -289,3 +289,24 @@ the account is made, before the reroll that could fail.
 
 Related: [`m59-fleetscratch.md`](m59-fleetscratch.md) for pads, [`m59-operations.md`](m59-operations.md)
 for the broker lifecycle, [`m59-boundary.md`](m59-boundary.md) for what a claim takes.
+
+## Offline placement must survive first login
+
+`UserLogonSetPosition` restores `piSave_room`, square, fine offsets and angle.
+Relocating an offline construction body alone does not update those fields; its
+first login can therefore return to its initial inn. The construction shim now
+closes creation sockets before dressing or hostile placement, then runs
+`m59-shadow-position.mjs --construction --apply` with explicit loopback game,
+maintenance, roster and snapshot arguments. It stores and reads back the saved
+login pose before the ordinary broker starts. Without `--apply` a mismatch
+refuses without writing. Production and non-construction writes are refused.
+
+This is construction tooling. Never use it to repair a measured trial's failed
+route, revive a casualty or move a live trial's administrative cutoff.
+
+Existing construction stacks are resized through `NumberItem.AddNumber` or
+`SubtractNumber` with the observed delta. Writing `piNumber` directly skips
+`ChangeBulkAndWeight` on the holder and can leave its cached load different from
+the visible inventory. The target and observed counts must both be positive;
+re-running reconciliation then plans no further change. This is a construction
+fix, never permission to repair an active trial's counters or inventory.
