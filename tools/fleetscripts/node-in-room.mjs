@@ -2,7 +2,8 @@
 // room's entrance. For a character already posted in the stone's room (a farmer), where the full get-all-nodes
 // circuit would mean a trip to room 2 and back. See inRoomNodePlan in m59-node-tour.mjs for which stones qualify.
 //
-//   node-in-room agents=t8 node=badlands
+//   node-in-room agents=t8 node=badlands expectedGame=<host:port>    (required on a remote server: fineclimb refuses
+//                                                                    remote_requires_exact_expected_game without it)
 //
 // Operator, 2026-10-19: "go get the node, on each character in that room". One character at a time; the
 // receipt (melded / already) is written to substrate/node-tours/ and to the character's node memory.
@@ -13,7 +14,7 @@ import {runTour,inRoomNodePlan} from '../m59-node-tour.mjs';
 export const script={
   name:'node-in-room',
   describe:"From inside a promoted stone's room: rail to the stone, meld (or read 'already bonded'), back to the entrance",
-  recipe:{run:'node-in-room agents=<a> node=badlands',
+  recipe:{run:'node-in-room agents=<a> node=badlands expectedGame=<host:port>',
     needs:['the character already standing in the stone\'s room, on its common floor']},
   params:{agents:{type:'agents',required:true},node:{type:'string',required:true,describe:'badlands'},
     expectedGame:{type:'string'},railFile:{type:'string',default:'substrate/node-tour-rails.json'},

@@ -9,6 +9,7 @@ import {roomGeometry,floorAt,edgeOf,floodReport} from './m59-ground.mjs';
 import {cutRail} from './m59-railcut.mjs';
 import {railLeg,checkRoute} from './m59-noderails.mjs';
 import {STONES} from './m59-stones.mjs';
+import {resolveControlUrl} from './m59-fleetpath.mjs';
 import {nodeReport,meldVerdict} from './m59-nodecheck.mjs';
 import {epochId} from './m59-epoch.mjs';
 import {updateNodeMemory,readNodeMemory} from './m59-node-memory.mjs';
@@ -51,7 +52,25 @@ const IN_ROOM_RAIL_START=Object.freeze({badlands:{room:45,x:53856,y:992,row:1,co
 export function inRoomNodePlan(node){
   const start=IN_ROOM_RAIL_START[node];
   if(!start)throw Error('no_in_room_plan_for_'+node);
-  return [{kind:'cut',...start},{kind:'rail',node},{kind:'meld',node},{kind:'cut',room:start.room,boxFlood:true,row:start.row,col:start.col}];
+  return [{kind:'cut',...start,board:node},{kind:'rail',node},{kind:'meld',node},{kind:'cut',room:start.room,boxFlood:true,row:start.row,col:start.col}];
+}
+// BOARD THE RAIL WHERE THE BODY IS, NOT ONLY AT ITS HEAD. Bunsen, 2026-10-20 02:49Z: a broker handover cut his first
+// run at waypoint 102 of 361, his keeper then carried him on to r37c33 (floor 2816, on the rail's own shelf), and the
+// cut back to the rail's head at r1c53 flooded 400000 cells without reaching it -- body_seeded_cut_failed, 5.2 squares
+// from rail waypoint 1468 (fineclimb boards within 2). So the cut tries the nearest rail waypoints first, one per
+// 16-waypoint stretch, then the head; the rail follow then boards on the segment the cut ended on. Each try is a
+// checked cut (68 ms for Bunsen's), and a body under the mesa still answers no plan rather than a guess.
+export function railBoardingCut(geo,from,step,waypoints,{tries=6,spacing=16}={}){
+  const head={...step,board:undefined},attempts=[];
+  const near=(waypoints??[]).map((p,i)=>({i,p,d:Math.hypot(p.x-from.x,p.y-from.y)})).sort((a,b)=>a.d-b.d),picked=[];
+  for(const c of near){if(picked.length>=tries)break;if(!picked.some(q=>Math.abs(q.i-c.i)<spacing))picked.push(c);}
+  const square=v=>Math.floor(v/1024)+1;
+  const candidates=[...picked.map(c=>({index:c.i,step:{kind:'cut',room:step.room,x:c.p.x,y:c.p.y,row:square(c.p.y),col:square(c.p.x)}})),{index:'head',step:head}];
+  for(const c of candidates){
+    const {proof,points}=cutTourWalk(geo,from,c.step);attempts.push({index:c.index,ok:!!points,why:points?null:proof.why??null});
+    if(points)return {proof,points,target:c,attempts};
+  }
+  return {proof:{ok:false,why:'no_rail_waypoint_reachable',attempts},points:null,target:null,attempts};
 }
 
 export function tourReturnPlan(room){
@@ -74,6 +93,9 @@ export function tourReturnPlan(room){
   throw Error('no_measured_return_for_room_'+room);
 }
 
+// The broker the fleetscript already proved holds this fleet (guarantee 11), resolved the same way, not the raw
+// env var: node-in-room run from the REPL had no M59_CONTROL_URL and stopped on 'Invalid URL', 2026-10-20 02:39Z.
+const controlUrl=()=>{const r=resolveControlUrl();if(!r.url)throw Error('no broker named: '+r.why);return r.url;};
 export async function runTour(ctx,options={}){
   return withTourWalkOwnership(ctx.agent,()=>runTourInner(ctx,options));
 }
@@ -81,7 +103,7 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
   fromStep=Number(fromStep);
   if(!Number.isInteger(fromStep)||fromStep<0||fromStep>=tourPlan().length)throw Error('invalid_tour_start_step');
   const {agent,call,state}=ctx,out=resolve(root,evidenceDir);mkdirSync(out,{recursive:true});
-  const health=await(await fetch(new URL('health',process.env.M59_CONTROL_URL))).json();
+  const health=await(await fetch(new URL('health',controlUrl()))).json();
   if(useCache){
     const identityProblem=railIdentityProblem({fleet:health.fleet,agent,health,expectedGame,
       rostered:rosterGameEndpoint(stateFileFor(health.fleet)),checkedRail:true});
@@ -149,8 +171,10 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
     }
     await command('cancel_movement',{},label+'-timeout');throw Error('travel_timeout_room_'+to);
   };
+  const railWaypoints=node=>{const stone=JSON.parse(readFileSync(resolve(root,railFile),'utf8')).stones?.find(s=>s.node===node);
+    return (stone?.routes?.find(r=>r.direction==='to_node')?.legs??[]).flatMap(l=>l.waypoints??[]);};
   const follow=async(step,label,file=railFile)=>{
-    const args=['tools/m59-fineclimb.mjs','--fleet',health.fleet,'--port',String(new URL(process.env.M59_CONTROL_URL).port),
+    const args=['tools/m59-fineclimb.mjs','--fleet',health.fleet,'--port',String(new URL(controlUrl()).port),
       '--agent',agent,'--rail',step.node,'--rail-file',resolve(root,file),'--direction',step.direction??'to_node','--no-hop',
       ...(expectedGame?['--expected-game',expectedGame]:[]),
       ...(step.exit?['--exit',step.exit]:[])];
@@ -173,7 +197,9 @@ async function runTourInner(ctx,{railFile='substrate/node-tour-rails.json',evide
       else if(step.kind==='cut'){
         const p=tourPosition(await read());if(p.room!==step.room)throw Error('cut_wrong_room');
         const geo=roomGeometry(p.room),edge=edgeOf(geo),from={x:p.x_client,y:p.y_client};
-        const {proof,points}=cutTourWalk(geo,from,step);
+        const board=step.board?railBoardingCut(geo,from,step,railWaypoints(step.board)):null;
+        const {proof,points}=board??cutTourWalk(geo,from,step);
+        if(board)leg.board={target:board.target?.index??null,attempts:board.attempts};
         if(!points){leg.cut=proof;throw Error('body_seeded_cut_failed');}
         writeFileSync(join(out,id+'-'+label+'-cut.json'),JSON.stringify(proof));
         const walk=railLeg({waypoints:points},{edge,bounds:{w:geo.cols*1024,h:geo.rows*1024},floorAt:(x,y)=>floorAt(geo,x,y)});

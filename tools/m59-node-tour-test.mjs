@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {tourPlan,tourComplete,insideNode,TOUR_NODES,cutTourWalk,travelJobActive,inRoomNodePlan} from './m59-node-tour.mjs';
+import {tourPlan,tourComplete,insideNode,TOUR_NODES,cutTourWalk,travelJobActive,inRoomNodePlan,railBoardingCut} from './m59-node-tour.mjs';
 import {STONES} from './m59-stones.mjs';
 import {roomGeometry,edgeOf} from './m59-ground.mjs';
 let count=0;const test=(name,fn)=>{fn();count++;console.log('ok '+name);};
@@ -33,7 +33,7 @@ test('measured Badlands return survives the old 400k cap and reaches the exit sq
 test('in-room Badlands plan: cut to the rail start, rail, meld, cut back to the entrance',()=>{
   const p=inRoomNodePlan('badlands');
   assert.deepEqual(p.map(s=>s.kind),['cut','rail','meld','cut']);
-  assert.deepEqual(p[0],{kind:'cut',room:45,x:53856,y:992,row:1,col:53});
+  assert.deepEqual(p[0],{kind:'cut',room:45,x:53856,y:992,row:1,col:53,board:'badlands'});
   assert.equal(p[1].node,'badlands');assert.equal(p[2].node,'badlands');
   assert.deepEqual(p[3],tourPlan().find(s=>s.kind==='cut'&&s.room===45));
 });
@@ -45,5 +45,20 @@ test('a Badlands farmer on the common floor (r28c18) cuts to the rail start; r54
   const end=points.at(-1);assert.ok(Math.hypot(end.x-53856,end.y-992)<=64,JSON.stringify(end));assert.equal(end.f,1664); // one lattice step from the rail's first waypoint, on its floor
   assert.ok(points.slice(1).every((q,i)=>edge(points[i],q)));
   assert.equal(cutTourWalk(geo,{x:47*1024+512,y:54*1024+512},step).points,null);
+});
+// Two waypoints of the 2026-10-19 Badlands to_node bake: #1468 on the 2816 shelf, and the last, on the stone's mesa.
+const BADLANDS_RAIL=[{x:46080,y:64448,f:4096},{x:33024,y:31808,f:2816}];
+test('a body already on the Badlands rail shelf (Bunsen r37c33) boards the nearest rail waypoint, not the unreachable head',()=>{
+  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0],edge=edgeOf(geo),from={x:33024,y:37120};
+  assert.equal(cutTourWalk(geo,from,step).points,null); // what body_seeded_cut_failed was, 02:49Z
+  const b=railBoardingCut(geo,from,step,BADLANDS_RAIL);
+  assert.ok(b.points,JSON.stringify(b.attempts));assert.equal(b.target.index,1);
+  const end=b.points.at(-1);assert.ok(Math.hypot(end.x-33024,end.y-31808)<=64,JSON.stringify(end));
+  assert.ok(b.points.slice(1).every((q,i)=>edge(b.points[i],q)));
+});
+test('boarding still refuses a body under the mesa, after trying each candidate and the head',()=>{
+  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0];
+  const b=railBoardingCut(geo,{x:47*1024+512,y:54*1024+512},step,[BADLANDS_RAIL[0]]);
+  assert.equal(b.points,null);assert.deepEqual(b.attempts.map(a=>a.index),[0,'head']);
 });
 console.log(count+' tour checks passed');
