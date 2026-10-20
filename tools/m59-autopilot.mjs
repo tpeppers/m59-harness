@@ -63,6 +63,7 @@ import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOpe
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import { HealingWands } from './m59-healing-wands.mjs';
+import { PotionFreshness } from './m59-potion-freshness.mjs';
 import { FarmWandSupport } from './m59-farm-wand-support.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor, blocksMovement } from './m59-parse.mjs';
@@ -2017,6 +2018,7 @@ export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
     this.healingWands = new HealingWands();
+    this.potionFreshness = new PotionFreshness();
     this.farmWandSupport = new FarmWandSupport(this);
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     session.activeSelfHealTick = trigger => this.activeSelfHealing(trigger);
@@ -16696,6 +16698,16 @@ export class Autopilot {
       await this.continueSurvivalDecision();
   }
 
+  // SPOILED POTIONS OUT OF THE PACK (m59-potion-freshness.mjs): one LOOK at most per pass, each potion every 15 min,
+  // and a potion that has soured (24 h after it was made, kod GO_BAD_TIME) is dropped. Only while nothing is busy:
+  // not mid-fight, not held, not parked. Drinking still re-checks the exact item first (m59-combat-fallback.mjs).
+  async sweepSpoiledPotions() {
+    const free = () => this.running && !this.stopping && !this.inert && !this.parking && !this.busyStatus?.()
+      && !this.checkFreeze() && !this.s.combat?.active;
+    return this.potionFreshness.tick(this.s, { allowed: free, note: r => this.note('potion condition', r) })
+      .catch(e => { this.note('potion check failed', { reason: e.message }); return null; });
+  }
+
   async useHealingWand(cancelled = () => false) {
     if(this.policy?.survivalEnabled===false)return null;
     const free = () => this.running && !this.stopping && !this.inert
@@ -16770,6 +16782,7 @@ export class Autopilot {
     const fromLoadout = this.applyLoadoutPolicyOverlay();
     if (fromLoadout && Object.keys(fromLoadout).length) await this.applyFarmStrategy('loadout');
     await this.useHealingWand();
+    await this.sweepSpoiledPotions();
     // ------------------------------------------------------------------
     // GOAP KEEPER (opt-in via policy.useGOAP)
     //
