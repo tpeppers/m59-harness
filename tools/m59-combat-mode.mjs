@@ -1983,6 +1983,8 @@ export class CombatMode {
       attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false,
       flight: { room: d.room, from: here, threat, trigger, strategy: d.strategy ?? null, why: d.why ?? null,
         hold_ms: d.hold_ms ?? 0, hold_orders: d.hold_orders === true, decision_id: decision.id, started_at: now, arrived_at: null,
+        ...(Number.isInteger(d.via) && d.via !== d.room ? { via: d.via } : {}),
+        ...(Number.isInteger(d.row) && Number.isInteger(d.col) ? { post: { row: d.row, col: d.col } } : {}),
         ...(sortie ? { sortie } : {}) } };
     updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'pvp_strategy_flight' });
     this.record('pvp_strategy_flight', this.active);
@@ -1998,12 +2000,31 @@ export class CombatMode {
       this.armTimer();
       // The ordinary validated router, under this flight's packet and identity guards -- the same walk
       // an ambush order takes to its map. It does not ask the keeper's confinement: a flight is survival.
-      const result = await s.travel(f.room, { origin: keeperOrigin('pvp_strategy', { run_id: o.id }),
+      const legOpts = () => ({ origin: keeperOrigin('pvp_strategy', { run_id: o.id }),
         movementGeneration: s.movementGeneration, controlToken: o.id });
+      // THE WAY IN. Ukgoth's NE corner is reached only from the Cragged Mountains; entered from the other two
+      // neighbours a fled body lands on an island two hundred squares of trolls from its allies. So walk to
+      // `via` first, planning around the destination (whose far half is no road to it), then step in. A way
+      // in that fails is recorded and the flight goes straight in: the wrong half of the bastion beats the road.
+      if (f.via != null && f.via_result == null && s.world.room.num !== f.via) {
+        const v = await s.travel(f.via, { ...legOpts(), avoid: [f.room] })
+          .catch(e => { if (/superseded|stale|generation/i.test(String(e?.message))) throw e; return { arrived: false, reason: e?.message }; });
+        this.guard(o);
+        f.via_result = { arrived: v?.arrived === true && s.world.room.num === f.via, reason: v?.arrived ? null : (v?.reason ?? null), at: this.now() };
+        s.recorder?.line?.('combat', { event: 'pvp_strategy_flight_via', order_id: o.id, room: f.room, via: f.via, ...f.via_result });
+      }
+      const result = await s.travel(f.room, { ...legOpts(), ...(f.post ? { arriveNear: f.post } : {}) });
       this.guard(o);
       demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
     }
     f.arrived_at = this.now();
+    // THE POST: a named square, best effort, as a sortie's -- the room ended the flight, the square is where allies stand.
+    if (f.post && !f.sortie && typeof s.walkTo === 'function') {
+      const w = await s.walkTo(f.post.col, f.post.row, { maxSteps: 40, movementGeneration: s.movementGeneration,
+        controlToken: o.id }).catch(e => ({ arrived: false, reason: e.message }));
+      this.guard(o);
+      f.post.arrived = w?.arrived === true; f.post.reason = w?.arrived ? null : (w?.reason ?? null);
+    }
     if (f.sortie) {
       // THE POST: a named square, best effort. Not reaching it is not a reason to go home -- the map is.
       if (Number.isInteger(f.sortie.row) && Number.isInteger(f.sortie.col) && typeof s.walkTo === 'function') {
