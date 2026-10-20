@@ -183,11 +183,11 @@ checkout were not operated or changed.
 
 ## Publication validation
 
-The final merged build passed all 156 offline movement suites with zero new
+The final merged build passed all 158 offline movement suites with zero new
 regressions; existing assertion baselines were retained. The complete Brax
 logistics package passed, including actual pre-offer supply receipts, controlled
 drop confirmation, optional broker notices and continued distribution. Shadow
 fidelity passed 124 checks and run isolation passed 10 checks. These regressions
 validate the post-hour repairs; they are not another farming-hour measurement.
-The publication includes current main and preserves its independent combat
-support changes. Production deployment remains a separate operation.
+The publication includes main through `2777b86d` and preserves its independent
+combat support, arrival and optional Rescue routing changes. Production deployment remains a separate operation.
