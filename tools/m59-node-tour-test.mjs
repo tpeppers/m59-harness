@@ -53,6 +53,7 @@ test('a body already on the Badlands rail shelf (Bunsen r37c33) boards the neare
   assert.equal(cutTourWalk(geo,from,step).points,null); // what body_seeded_cut_failed was, 02:49Z
   const b=railBoardingCut(geo,from,step,BADLANDS_RAIL);
   assert.ok(b.points,JSON.stringify(b.attempts));assert.equal(b.target.index,1);
+  assert.deepEqual([b.target.step.row,b.target.step.col],[32,33]); // the route's `to`: fineclimb's arrival square, not the head r1c53
   const end=b.points.at(-1);assert.ok(Math.hypot(end.x-33024,end.y-31808)<=64,JSON.stringify(end));
   assert.ok(b.points.slice(1).every((q,i)=>edge(b.points[i],q)));
 });
@@ -60,5 +61,10 @@ test('boarding still refuses a body under the mesa, after trying each candidate 
   const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0];
   const b=railBoardingCut(geo,{x:47*1024+512,y:54*1024+512},step,[BADLANDS_RAIL[0]]);
   assert.equal(b.points,null);assert.deepEqual(b.attempts.map(a=>a.index),[0,'head']);
+});
+test('a body already on the rail (Robin r40c19, 0.27 squares off) gets no cut: the rail follow boards there',()=>{
+  const geo=roomGeometry(45),step=inRoomNodePlan('badlands')[0];
+  const b=railBoardingCut(geo,{x:18944,y:40448},step,[...BADLANDS_RAIL,{x:18752,y:40640,f:2560}]);
+  assert.equal(b.onRail,true);assert.equal(b.points,null);assert.equal(b.target.index,2);assert.deepEqual(b.attempts,[]);
 });
 console.log(count+' tour checks passed');
