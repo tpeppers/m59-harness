@@ -1,5 +1,46 @@
 # badlands — NODE_BADLANDS, room 45, stone at r63c46
 
+## 2026-10-20 — MELDED from inside the room, four characters, one already bonded
+
+`node-in-room agents=<a> node=badlands expectedGame=<host:port>` (deploy-2026-10-19-12), one character at a
+time, 04:37Z–05:47Z on prod. Nothing waived; every walker kept its normal flee line (0.5).
+
+| character | result | max mana | tries |
+|---|---|---|---|
+| Bunsen (t5) | **melded** | 49 → 57 | 1 (after the fixes below) |
+| Robin (t8) | **melded** | 41 → 49 | 1 |
+| Camilla (t9) | already bonded | 65, unchanged | 1 |
+| Beaker (t6) | **melded** | 49 → 57 | 2 (first came off at waypoint 35/287, `object_blocked` on the farm floor) |
+| Pepe (t2) | **melded** | 27 → 33 | 1 |
+
+Receipts in `substrate/node-tours/`; each meld wrote `substrate/node-memory/` (bit 8).
+
+**What the first live runs found, in order.** Each is fixed or worked around; read them before changing the plan.
+
+1. The tour read raw `M59_CONTROL_URL` and the REPL does not set it: `Invalid URL`. Now `resolveControlUrl`, the
+   same call fleetscript guarantee 11 checks (6a7b90d3).
+2. fineclimb on a remote server refuses `remote_requires_exact_expected_game` without `expectedGame`. It is a
+   parameter on purpose, and the recipe names it. Do not default it from the broker's answer.
+3. Two broker handovers by another agent (02:48Z, 03:01Z, deploys 9 and 10) dropped the rail mid-follow with
+   `ECONNRESET`. Not a movement defect, but it is why the next item mattered.
+4. **A body already partway along the rail could not get back to its head.** Bunsen at r37c33 (floor 2816, on the
+   rail's shelf): the cut back to r1c53 flooded 400 000 cells and failed. `railBoardingCut` cuts to the nearest rail
+   waypoints first (6a7b90d3), and does not cut at all within one square of the rail (506031ee).
+5. **The boarding cut's route still named the rail head as `to`**, and fineclimb judges arrival against `to`: 14
+   arrived waypoints read as "did not arrive". Fixed in 506031ee.
+6. **Then the real obstacle: the worms.** The rail crosses the farm floor (rows ~17–30, cols ~15–22). Every run that
+   got a worm hit on the walker ended in `play_dead` ("logging off rather than dying") off `fleeBelow` 0.5, about two
+   hits from full, and the relog put the walker back at its safe spot. The operator's answer: clear the worms, not
+   lower the line. `substrate/scratch/node-escort-run.mjs` (local) does that: it gives the others guard zones on the
+   rail ahead, unions every Badlands body's `look`, and starts the run only when at most one live groundworm is
+   within 3 squares of the next 800 rail waypoints. Staging the walker on the quiet east side (rows 20–28, cols 48–54)
+   before a run made the lull come much sooner.
+
+**What the next person should build** (the skill's greenfield question): the escort belongs in the tour, not in a
+scratch loop. A tour step that waits for a clear stretch ahead, and a re-board when survival moved the body
+mid-rail, would have made this one command. Note too that a guard zone does not pull a keeper off a proven safe
+spot: Robin sat at r28c18 with a zone over r18–26 c20–27 and 0 kills while a worm stood at r22c24 for six minutes.
+
 ## 2026-10-19 — from INSIDE the room (farmers already posted in 45)
 
 The Qor groundworm farm put five characters in room 45, so the question became meld-from-inside rather
