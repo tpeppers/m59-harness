@@ -20,7 +20,8 @@ test('the centre of a square: col is x, row is y, 1024 client units a square', (
 });
 for (const [row, col, who] of [[2, 27, 'the room-2 entrance square, on the north edge (where the recall lands everyone)'],
                                 [3, 27, 'the front of the 15:2xZ stack (Sweetums walked from here in 131 s)'],
-                                [9, 38, 'mid-room (Kermit, second try)']]) {
+                                [9, 38, 'mid-room (Kermit, second try)'],
+                                [21, 25, 'the south-west (Gonzo, 16:11Z)'], [11, 43, 'just short of the east half (Rowlf, 16:11Z)']]) {
   test(`a checked cut from ${who} to the NE post`, () => {
     const p = planFineCutWalk(geo, at(row, col), NE_POST, { room: 599 });
     assert.equal(p.ok, true, p.why);

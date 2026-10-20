@@ -32,7 +32,11 @@ export function planFineCutWalk(geo, from, toSquare, { room = geo?.room ?? null 
     return { ok: false, why: `r${to.row}c${to.col} is outside the room` };
   if (!Number.isFinite(from?.x) || !Number.isFinite(from?.y)) return { ok: false, why: 'no fine position for the body' };
   const target = { kind: 'cut', room, ...to, ...squareCentreClient(to) };
-  const { proof, points } = cutTourWalk(geo, from, target);
+  // The rail cut first (exact endpoint, small budget); the node tour's own wider box flood when it cannot reach.
+  // Gonzo, Ukgoth r21c25, 2026-10-20 16:11Z: "the flood did not reach the goal" from his live fine position, though
+  // both floods reach the post from that square's centre offline.
+  let { proof, points } = cutTourWalk(geo, from, target), via = 'cut';
+  if (!points) { const wide = cutTourWalk(geo, from, { ...target, boxFlood: true }); if (wide.points) { ({ proof, points } = wide); via = 'box-flood'; } }
   if (!points) return { ok: false, why: proof?.why ?? 'no cut', proof };
   const edge = edgeOf(geo);
   const walk = railLeg({ waypoints: points }, { edge, bounds: { w: geo.cols * SQUARE_CLIENT, h: geo.rows * SQUARE_CLIENT }, floorAt: (x, y) => floorAt(geo, x, y) });
@@ -42,7 +46,7 @@ export function planFineCutWalk(geo, from, toSquare, { room = geo?.room ?? null 
     confidence: 'body-seeded exact-endpoint walk, checked before following' };
   const check = checkRoute(route, { edge });
   if (!check.ok || check.skipped || !route.rail_complete) return { ok: false, why: 'the cut did not check', check, route, points };
-  return { ok: true, why: null, route, check, points };
+  return { ok: true, why: null, route, check, points, via };
 }
 // The rail file fineclimb reads, holding just this one route under the stone name 'cut'.
 export const cutRailFile = (room, route) => ({ stones: [{ node: 'cut', room, routes: [route] }] });
