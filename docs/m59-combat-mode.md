@@ -73,6 +73,26 @@ Offline checks: `node tools/m59-combat-fallback-test.mjs`.
 
 ### Independent support consumables
 
+An enabled private `healingWand(ctx)` hook extends the guarded support sender
+to ordinary farming/monster combat and unheld idle/survival keepers. It receives
+`pvp`/`farming`, the positive keeper threshold as `base_below`, `inspected_item`,
+and wand condition evidence (`charged`, `empty`, `unknown`, `inspected_at`).
+Only positive inspections within 30 seconds count as charged; reconnects, ID
+generation changes, item loss and use invalidate that evidence. No exact charge
+count is inferred. The same queue shape below may also include `inspect:true`
+to inspect one unknown wand on a healthy pass. A freshly confirmed exhausted
+healing wand may be dropped; unknown condition never authorizes disposal.
+After LOOK, and again immediately before APPLY, the private hook recomputes
+stock-dependent limits. The paced callback requires a synchronous answer.
+
+The ordinary keeper adapter shares current fleet HP, recipient claims,
+inventory/identity/condition checks and concentration guards with PvP support.
+It runs asynchronously so it does not wait out an inspection before moving or
+attacking. Work holds, external body control, freezes, cast rites, trances and
+PvP ownership defer ordinary support. Absent this opt-in, the original configured
+self-only farming helper remains unchanged. `autopilot_status.healing_wand_support`
+and combat `support_queue` expose actual dispatch thresholds and charged stock.
+
 A private combat strategy can implement `pvpSupport(ctx)` for consumables whose
 server path is independent of the attack timer. Currently this accepts only
 exactly identified **wands of healing** applied to self or visible fleetmates.

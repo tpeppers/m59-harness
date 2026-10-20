@@ -137,6 +137,13 @@ write('support.mjs', `export default {
     got?.strategy === 'support' && got.answer.queue[0].apply === 7);
 }
 rmSync(join(dir, 'support.mjs'));
+write('healing.mjs', `export default {name:'healing',kind:'combat',enabled:true,healingWand(){return null;}};`);
+{
+  const loaded=await load({dir});
+  ok('the shared farming and PvP healingWand hook loads without unknown exports',
+    loaded.strategies.some(s=>s.name==='healing'&&s.hooks.includes('healingWand'))&&!loaded.problems.some(p=>p.file==='healing.mjs'));
+}
+rmSync(join(dir,'healing.mjs'));
 
 // ---------------------------------------------------------------- unrecognised
 write('typo.mjs', `export default {

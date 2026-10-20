@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { OF } from './m59-parse.mjs';
 import { CombatSupport } from './m59-combat-support.mjs';
 import { CombatFallback } from './m59-combat-fallback.mjs';
+import { FarmWandSupport } from './m59-farm-wand-support.mjs';
 import { claimFleetHeal } from './m59-heal-claims.mjs';
 import { publishFleetHealth, readFleetHealth } from './m59-fleet-health.mjs';
 import { bodyAuthority } from './m59-body-command.mjs';
@@ -34,6 +35,7 @@ function fixture() {
     look(id) { sent.push('look:' + id); c.emit('look', { id, description }); },
     async waitFor({ since, kinds, match }) { return { events: events.filter(e => e.seq > since && kinds.includes(e.kind) && (!match || match(e))) }; },
     apply(id, to) { sent.push(['apply', id, to]); }, use(id) { sent.push(['use', id]); },
+    drop(specs) { sent.push(['drop', ...specs]); },
     stand() {}, safety() {}, face(deg) { c.self.degrees = deg; sent.push('face'); }, attack() { sent.push('attack'); },
   };
   c.room.objects.set(2, { id: 2, nameRsc: 2, flags: OF.PLAYER | OF.ATTACKABLE, row: 5, col: 12 });
@@ -66,7 +68,80 @@ function fixture() {
     inventoryReply: v => { inventoryReply = v; }, claim: v => { claim = v; } };
 }
 const applications = f => f.sent.filter(s => Array.isArray(s) && s[0] === 'apply');
+// Synthetic stock policy: deliberately independent of private tuning values.
+function stockPolicy(ctx) {
+  const charged = ctx.items.filter(i=>i.condition==='charged');
+  const below = Math.min(.8,.5+charged.length*.1);
+  const wand = ctx.items.find(i=>i.id===ctx.inspected_item&&i.condition!=='empty') ?? charged[0] ?? ctx.items.find(i=>i.condition==='unknown');
+  const queue = wand ? ctx.targets.filter(t=>t.health.value/t.health.max<below)
+    .map(t=>({apply:wand.id,to:t.id,below,min_missing:2})) : [];
+  return queue.length||ctx.items.some(i=>i.condition!=='charged') ? {queue,inspect:true,interval_ms:1000}:null;
+}
+function stockFixture() {
+  const f=fixture(); delete f.strategy.pvpSupport; f.strategy.healingWand=stockPolicy;
+  for(const id of [7,8]) { f.c.rsc.set(id,'wand of healing'); f.c.inventory.push({id,nameRsc:id}); }
+  return f;
+}
 try {
+  await test('healthy passes inspect usable stock; unknown items never inflate willingness',async()=>{
+    const f=stockFixture();f.reports.clear();f.setHP(100);
+    for(let i=0;i<3;i++){await f.tick();f.advance(1000);}
+    assert.equal(applications(f).length,0);assert.equal(f.m.support.items(f.c).filter(i=>i.condition==='charged').length,3);
+    f.setHP(75);await f.tick();assert.equal(applications(f).length,1);
+    assert.equal(f.m.support.last.charged_wands_at_send,3);assert.equal(f.m.support.last.below,.8);
+    f.m.stop('test');
+  });
+  await test('fresh LOOK recomputes an initially unavailable stock-based healing threshold',async()=>{
+    const f=stockFixture();f.reports.clear();f.setHP(75);
+    for(const id of [3,7])f.m.support.conditions.set(id,{state:'charged',at:1000100,client:f.c});
+    await f.tick();assert.equal(applications(f).length,1);assert.equal(f.m.support.last.below,.8);f.m.stop('test');
+  });
+  await test('stock lost while APPLY is paced lowers willingness before the send',async()=>{
+    const f=stockFixture();f.reports.clear();f.setHP(75);
+    for(const i of f.c.inventory)f.m.support.conditions.set(i.id,{state:'charged',at:1000100,client:f.c});
+    f.before(kind=>{if(kind==='use')f.c.inventory=f.c.inventory.filter(i=>i.id===3);});
+    await f.tick();assert.equal(applications(f).length,0);f.m.stop('test');
+  });
+  await test('condition counts expire and are revoked by inventory loss, save and reconnect',()=>{
+    const f=stockFixture();f.m.support.conditions.set(3,{state:'charged',at:1000100,client:f.c});
+    assert.equal(f.m.support.items(f.c).filter(i=>i.condition==='charged').length,1);
+    f.advance(30001);assert.equal(f.m.support.items(f.c).filter(i=>i.condition==='charged').length,0);
+    f.m.support.conditions.set(3,{state:'charged',at:1030101,client:f.c});f.c.inventory=[];
+    assert.equal(f.m.support.items(f.c).length,0);
+    f.c.inventory=[{id:3,nameRsc:3}];f.m.support.conditions.set(3,{state:'charged',at:1030101,client:f.c});
+    f.c.idsAsOf=()=>({saves_seen:1,inventory_at:1030101});assert.equal(f.m.support.items(f.c)[0].condition,'unknown');
+    f.m.support.conditions.set(3,{state:'charged',at:1030101,client:{}});assert.equal(f.m.support.items(f.c)[0].condition,'unknown');f.m.stop('test');
+  });
+  await test('a healthy opt-in pass drops only a freshly confirmed exhausted healing wand',async()=>{
+    const f=stockFixture();f.reports.clear();f.setHP(100);f.description('The once pristine wand is now a blackened mess.');
+    await f.tick();assert.equal(f.sent.filter(s=>Array.isArray(s)&&s[0]==='drop').length,1);
+    assert.equal(f.m.support.items(f.c).filter(i=>i.condition==='charged').length,0);f.m.stop('test');
+    const unknown=stockFixture();unknown.reports.clear();unknown.setHP(100);unknown.description('unknown');await unknown.tick();
+    assert(!unknown.sent.some(s=>Array.isArray(s)&&s[0]==='drop'));unknown.m.stop('test');
+  });
+  await test('ordinary farming heals an observed fleetmate with the same guarded sender',async()=>{
+    const f=stockFixture();f.setHP(100);f.m.stop('farm');const ap={s:f.s,policy:{healWandBelow:.5},note(){}};
+    const farm=new FarmWandSupport(ap);farm.mode.now=f.m.now;farm.support.health=f.m.support.health;farm.support.claim=()=>true;
+    let sawFarm=false;f.strategy.healingWand=ctx=>{sawFarm=ctx.farming&&!ctx.pvp;return stockPolicy(ctx);};
+    assert.equal(await farm.tick({allowed:()=>true,cancelled:()=>false}),true);await farm.support.task;
+    assert(sawFarm);assert.deepEqual(applications(f),[['apply',3,4]]);
+  });
+  await test('farm support cancels during a lease/takeover and stays opt-in',async()=>{
+    const f=stockFixture();f.m.stop('farm');const farm=new FarmWandSupport({s:f.s,policy:{healWandBelow:.5},note(){}});
+    farm.mode.now=f.m.now;farm.support.health=f.m.support.health;farm.support.claim=()=>true;
+    let allowed=true;f.before(kind=>{if(kind==='use')allowed=false;});
+    await farm.tick({allowed:()=>allowed,cancelled:()=>false});await farm.support.task;assert.equal(applications(f).length,0);
+    f.strategy.enabled=false;assert.equal(await farm.tick({allowed:()=>true,cancelled:()=>false}),false);
+  });
+  await test('the real keeper healing rung delegates ally support without waiting for inspection',async()=>{
+    const {Autopilot}=await import('./m59-autopilot.mjs');
+    const f=stockFixture();f.setHP(100);f.m.stop('farm');
+    const ap={s:f.s,running:true,mode:'farm',policy:{healWandBelow:.5},note(){},busyStatus:()=>null,checkFreeze:()=>false};
+    ap.farmWandSupport=new FarmWandSupport(ap);ap.farmWandSupport.mode.now=f.m.now;
+    ap.farmWandSupport.support.health=f.m.support.health;ap.farmWandSupport.support.claim=()=>true;
+    await Autopilot.prototype.useHealingWand.call(ap);await ap.farmWandSupport.support.task;
+    assert.deepEqual(applications(f),[['apply',3,4]]);
+  });
   await test('process strategy diagnostics initialize the cached loader without game actions', async () => {
     const f = fixture();
     f.m.wandStrategies.problems = []; f.strategy.kind = 'combat'; f.strategy.hooks = ['pvpSupport'];

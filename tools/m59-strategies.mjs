@@ -102,6 +102,14 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // Return {queue:[{apply:wandId,to:playerId,below:0..1,min_missing:2+}],
 //     // interval_ms:1000..60000}, or null. Limits are rechecked at dispatch.
 //     async pvpSupport(ctx) { return null; },
+//     // Stock-aware self/ally healing, in PvP and ordinary farming alike.
+//     // healingWand(ctx) sees pvp/farming, base_below, inspected_item and each
+//     // item's condition (charged/empty/unknown) with inspected_at. Only a
+//     // recent positive LOOK counts as charged; a used wand becomes unknown.
+//     // Same support queue shape; inspect:true permits a bounded healthy LOOK
+//     // to establish stock. This hook must be synchronous at paced dispatch,
+//     // where current stock and target HP are rechecked against its answer.
+//     healingWand(ctx) { return null; },
 //     // Asked by a keeper CONSIDERING a town stop (at most once a minute) and again, unthrottled,
 //     // as one OPENS (ctx.opening = { purpose, trigger, to }). It may start a trip now and/or add
 //     // "while you're in town" favors -- e.g. when two casters run low, the next shopper goes and
@@ -135,7 +143,7 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
