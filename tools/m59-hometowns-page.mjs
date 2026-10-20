@@ -31,7 +31,7 @@ export function renderHometownsBoard(options = {}) {
 ${groups.map(g => `<tr><td><b>${esc(g.town)}</b></td><td>${g.members.length}</td><td>${rows.length ? Math.round(g.members.length / rows.length * 100) : 0}%</td><td>${g.room ?? '—'}</td><td class="members">${g.members.map(who).join(', ') || '—'}</td></tr>`).join('')}
 </tbody></table></div>
 <p>Rescue can use a guild hall or a regional destination instead of the hometown. Home rooms here are hometown destinations, not guaranteed landing rooms. Wandering means the server reported no recognised hometown; Unknown means no confirmed reading is saved.</p>
-<h2>By character</h2><div class="panel table-scroll"><table><thead><tr><th>Character</th><th>Agent</th><th>Hometown</th><th>Home room</th><th>Last checked (UTC)</th><th>Assignment first observed (UTC)</th></tr></thead><tbody>
+<h2>By character</h2><div class="panel table-scroll"><table><thead><tr><th>Character</th><th>Agent</th><th>Hometown</th><th>Home room</th><th>Last confirmed (UTC)</th><th>Assignment first observed (UTC)</th></tr></thead><tbody>
 ${rows.map(r => `<tr><td>${who(r)}</td><td>${esc(r.agent)}</td><td>${esc(r.town)}</td><td>${r.record?.current.room ?? '—'}</td><td>${date(r.record?.checked_at)}</td><td>${r.record ? date(r.record.changed_at) : '—'}</td></tr>`).join('') || '<tr><td colspan="6">No characters in this fleet.</td></tr>'}
 </tbody></table></div><p>Checks are saved on disk with a history of observed changes. “First observed” is when we read that assignment, not when it was made. A failed check keeps the last confirmed reading.</p>
 </div></body></html>`;

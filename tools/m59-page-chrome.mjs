@@ -78,12 +78,12 @@ export const TABS = [
   { key: 'economy', href: '/economy', label: 'Economy' },
   { key: 'inventory', href: '/inventory', label: 'Inventory' },
   { key: 'skills', href: '/skills', label: 'Skills' },
-  { key: 'hometowns', href: '/hometowns', label: 'Hometown / Rescue' },
   { key: 'stats', href: '/stats', label: 'Stats' },
   { key: 'communications', href: '/communications', label: 'Communications' },
   { key: 'players', href: '/players', label: 'Players' },
   { key: 'pvp', href: '/pvp', label: 'PVP' },
   { key: 'faction', href: '/faction', label: 'Factions' },
+  { key: 'hometowns', href: '/hometowns', label: 'Hometown / Rescue' },
 ];
 
 export const NAV = (here) => `
