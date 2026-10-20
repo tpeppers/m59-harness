@@ -541,6 +541,38 @@ export function writeLoadout(character, raw, { force = false } = {}) {
   return { path: p, loadout, problems };
 }
 
+// ONLY THE PLAN, AND EVERYTHING ELSE AS IT WAS ON DISK. `writeLoadout` normalises the whole
+// file, and normalising is lossy on purpose — it is the reader's contract, not an editor's:
+// fields it does not know (`sell_why`, `healing_wand_note`, a gear stanza's `why`) are
+// dropped and long `why` notes are clipped to 200 characters. A page that edits school
+// targets must not quietly erase the operator's reasoning about armour, so this reads the
+// RAW file, replaces `plan` with its normalised form, and writes the rest back untouched.
+export function writeLoadoutPlan(character, plan, { agent = null } = {}) {
+  const p = loadoutPath(character);
+  if (!p) throw new Error(`"${character}" is not a usable character name`);
+  let raw = null;
+  if (fs.existsSync(p)) {
+    // An unreadable file is refused rather than replaced: it holds something, and a plan
+    // edit is not a reason to discard it.
+    try { raw = JSON.parse(fs.readFileSync(p, 'utf8')); }
+    catch (e) { throw new Error(`${path.basename(p)} is not valid JSON (${e.message}) — fix it by hand first`); }
+    if (raw?.character && norm(raw.character) !== norm(character))
+      throw new Error(`${path.basename(p)} already holds "${raw.character}", not "${character}" — ` +
+                      'two names that differ only by punctuation share one file');
+  }
+  const base = raw && typeof raw === 'object' ? raw : blank(character, agent);
+  const { loadout, problems } = normalise({ ...base, plan }, { character: base.character || character });
+  const out = { ...base, character: base.character || character, plan: loadout.plan,
+                updated: new Date().toISOString() };
+  if (!out.agent && agent) out.agent = agent;
+  fs.mkdirSync(LOADOUT_DIR, { recursive: true });
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(out, null, 1));
+  fs.renameSync(tmp, p);
+  return { path: p, loadout: normalise(out, { character: out.character }).loadout,
+           problems: problems.filter(x => /plan|school/.test(x)) };
+}
+
 // ------------------------------------------------------------------ one answer, every character
 //
 // THE GEAR HALF IS THE ONE PART OF A LOADOUT THAT IS ABOUT THE FLEET RATHER THAN ABOUT A

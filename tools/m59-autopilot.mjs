@@ -63,6 +63,7 @@ import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOpe
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import { HealingWands } from './m59-healing-wands.mjs';
+import { FarmWandSupport } from './m59-farm-wand-support.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
@@ -2016,6 +2017,7 @@ export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
     this.healingWands = new HealingWands();
+    this.farmWandSupport = new FarmWandSupport(this);
     session.healingWandTick = cancelled => this.useHealingWand(cancelled);
     session.activeSelfHealTick = trigger => this.activeSelfHealing(trigger);
     // Every equipBest on this session ranks with the book's magic readings (see syncMagicSet).
@@ -13147,6 +13149,7 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      healing_wand_support: this.farmWandSupport?.snapshot() ?? null,
       loadout_retention: { present: !!this.loadout(), carry_floors: this.carryFloors() },
       // WHICH OF THIS CHARACTER'S WEAPONS BYPASS NONMAGIC, as READ (look text, a lapse), never
       // assumed. Rides out on status so the keeper-backed fleet row gets it with no rebuild.
@@ -16671,9 +16674,12 @@ export class Autopilot {
 
   async useHealingWand(cancelled = () => false) {
     if(this.policy?.survivalEnabled===false)return null;
-    const allowed = () => this.running && !this.stopping && !this.inert
+    const free = () => this.running && !this.stopping && !this.inert
       && !this.parking && !this.busyStatus?.() && !this.checkFreeze()
-      && this.mode === 'farm' && !this.s.combat?.active;
+      && !this.s.combat?.active;
+    const supportAllowed = () => free() && ['farm','idle','survive'].includes(this.mode);
+    if (this.farmWandSupport && await this.farmWandSupport.tick({ allowed: supportAllowed, cancelled })) return null;
+    const allowed = () => free() && this.mode === 'farm';
     return this.healingWands.tick(this.s, {
       below: this.policy.healWandBelow, allowed, cancelled,
       note: result => this.note('healing wand', result),

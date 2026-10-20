@@ -231,6 +231,8 @@ import { renderPvp } from './m59-pvp-page.mjs';
 import { renderFaction, factionReport } from './m59-faction-page.mjs';
 import { pvpReport } from './m59-pvp.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
+import { renderHometownsBoard } from './m59-hometowns-page.mjs';
+import { recordHometown, hometownDir } from './m59-hometowns.mjs';
 import { renderDumBoard, renderHarnessBoard } from './m59-observability-page.mjs';
 import { strategyStatsReport } from './m59-strategy-stats.mjs';
 import { renderHero, startScript } from './m59-hero-page.mjs';
@@ -7850,6 +7852,10 @@ const TOOLS = [
                            : `no description for ${t.id}. Look replies DID arrive in that window, ` +
                              `for ${[...new Set(others)].join(', ')} — this call is not going to ` +
                              `hand you one of those as though it were the answer` };
+      if (hit.player && hit.editable && hit.id === c.selfId && c.me?.name) {
+        try { recordHometown(c.me.name, hit.extra, { dir: hometownDir(STATE_FILE) }); }
+        catch (e) { console.error('[hometowns] could not save reading: ' + e.message); }
+      }
       return { id: hit.id, what: hit.what, description: hit.description,
                inscription: hit.inscription,
                // Only players carry these. `editable` true means the server would accept a
@@ -20840,6 +20846,17 @@ function serveDashboard(port, { handle = null } = {}) {
     if (url.pathname === '/deaths/report') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(JSON.stringify(deathReportJSON(url.searchParams.get('file'))));
+    }
+    // Hometown observations are durable, roster-scoped disk records. Rendering sends no packets.
+    if (url.pathname === '/hometowns') {
+      try {
+        const html = renderHometownsBoard({ stateFile: STATE_FILE });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(html);
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        return res.end('/hometowns failed: ' + e.message);
+      }
     }
     // THE ONE BOARD WITH NO CLOCK ON IT. Attributes are fixed at creation and never move,
     // so there is no window to pass and nothing to be stale — it reads the character sheets

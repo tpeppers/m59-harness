@@ -39,11 +39,14 @@
 //
 // THE DECISIONS — a CLOSED set, like the playbook verbs. Anything else is reported and ignored.
 //   null | 'default' | { do: 'default' }    what the harness already does; silence
-//   { do: 'flee_to', room, hold_ms?, hold_orders?, max_ms?, why? }
+//   { do: 'flee_to', room, hold_ms?, hold_orders?, max_ms?, via?, row?, col?, why? }
 //        take the body and travel to `room` now, as survival, through anything; on arrival hold the
 //        character there for `hold_ms` (keeper journeys out of it are refused, explicit orders are not --
 //        unless `hold_orders: true`, which refuses EVERY journey out, a director's `travel` included:
-//        a DUM that walks its units with explicit travel would otherwise send a fled unit straight back)
+//        a DUM that walks its units with explicit travel would otherwise send a fled unit straight back).
+//        `via`: walk to that room first, planning around `room`, then step in -- for a room whose
+//        entrances land on islands that cannot reach each other (if the way in fails, it goes straight in).
+//        row/col: on arrival, walk to that square (best effort; the room, not the square, ends the flight)
 //   { do: 'engage', why? }
 //        fight here even where the character's pvp_rooms would refuse: return fire on a hit, the war
 //        response on a hostile sighting. The server's own rules, the safety flag and every refused-target
@@ -200,7 +203,15 @@ export function validateDecision(d) {
   }
   const hold_ms = ms(d.hold_ms, 0, MAX_HOLD_MS), max_ms = ms(d.max_ms, DEFAULT_FLIGHT_MS, MAX_HOLD_MS);
   if (Number.isNaN(hold_ms) || Number.isNaN(max_ms)) return { decision: null, error: 'hold_ms and max_ms are non-negative milliseconds' };
-  return { decision: { do: 'flee_to', room, hold_ms, hold_orders: d.hold_orders === true, max_ms, why } };
+  // THE WAY IN AND THE SQUARE. A room whose entrances land on different islands is entered by the
+  // NEIGHBOUR, not by a door choice -- Ukgoth's three are edge exits, one per neighbour -- so `via` names
+  // the room to pass through first, and row/col the square to walk to on arrival.
+  const via = d.via == null ? null : Number(d.via);
+  if (via != null && !(Number.isInteger(via) && via > 1 && via !== room)) return { decision: null, error: `flee_to via is a room above 1 that is not its room, not ${JSON.stringify(d.via)}` };
+  const hasSquare = d.row != null || d.col != null, row = Number(d.row), col = Number(d.col);
+  if (hasSquare && !(Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0)) return { decision: null, error: 'flee_to row and col are whole squares, given together' };
+  return { decision: { do: 'flee_to', room, hold_ms, hold_orders: d.hold_orders === true, max_ms, why,
+    ...(via != null ? { via } : {}), ...(hasSquare ? { row, col } : {}) } };
 }
 
 /**

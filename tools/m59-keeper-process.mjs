@@ -1769,6 +1769,12 @@ const server = createServer(async (req, res) => {
   }
 
   try {
+    if (req.method === 'GET' && path === '/combat-strategies') {
+      // Read-only process proof: initialize the cached loader without issuing a
+      // combat order, inspecting inventory, or sending a game packet.
+      json({ agent, character, pid: process.pid, ...await session.combat.combatStrategyStatus() });
+      return;
+    }
     if (req.method === 'GET' && path === '/live') {
       // Cheap process/session proof for the supervisor. This MUST NOT call stateSnapshot:
       // the enriched projection below includes routing, world objects, inventory and GOAP

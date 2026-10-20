@@ -111,6 +111,39 @@ write('volley.mjs', `export default { name: 'volley', kind: 'combat', enabled: t
   ok('and it is the one asked for pvpWand', got?.strategy === 'volley' && got.answer.fire === 7, JSON.stringify(got));
 }
 rmSync(join(dir, 'volley.mjs'));
+write('fallback.mjs', `export default { name: 'fallback', kind: 'combat', enabled: true,
+  pvpFallback() { return { queue: [{use: 7}], interval_ms: 1000 }; } };`);
+{
+  const loaded = await load({ dir });
+  ok('a combat strategy answering only pvpFallback loads without a warning',
+    loaded.strategies.some(s => s.name === 'fallback' && s.hooks.join() === 'pvpFallback') &&
+      !loaded.problems.some(p => p.file === 'fallback.mjs'));
+  const got = await firstAnswer(loaded, 'pvpFallback', {});
+  ok('the fallback hook has its own answer rather than taking the opener slot',
+    got?.strategy === 'fallback' && got.answer.queue[0].use === 7);
+}
+rmSync(join(dir, 'fallback.mjs'));
+
+write('support.mjs', `export default {
+  name: 'support', kind: 'combat', enabled: true,
+  pvpSupport() { return {queue:[{apply:7,to:2,below:.9,min_missing:10}],interval_ms:1000}; },
+};`);
+{
+  const loaded = await load({ dir });
+  ok('a combat strategy answering only pvpSupport loads without a warning',
+    loaded.strategies.some(s => s.name === 'support') && !loaded.problems.some(p => p.file === 'support.mjs'));
+  const got = await firstAnswer(loaded, 'pvpSupport', {});
+  ok('support has an independent hook instead of consuming a fallback attack slot',
+    got?.strategy === 'support' && got.answer.queue[0].apply === 7);
+}
+rmSync(join(dir, 'support.mjs'));
+write('healing.mjs', `export default {name:'healing',kind:'combat',enabled:true,healingWand(){return null;}};`);
+{
+  const loaded=await load({dir});
+  ok('the shared farming and PvP healingWand hook loads without unknown exports',
+    loaded.strategies.some(s=>s.name==='healing'&&s.hooks.includes('healingWand'))&&!loaded.problems.some(p=>p.file==='healing.mjs'));
+}
+rmSync(join(dir,'healing.mjs'));
 
 // ---------------------------------------------------------------- unrecognised
 write('typo.mjs', `export default {

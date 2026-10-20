@@ -157,6 +157,7 @@ export function compile(root = M59_ROOT) {
       const head = /^(\w+)\s+is\s+(\w+)/m.exec(text);
       if (!head) continue;
       classes.set(head[1].toLowerCase(), { parent: head[2].toLowerCase(),
+        harmful: classVar(text, 'viHarmful', consts),
         postCast: classVar(text, 'viPostCast_time', consts),
         castTime: classVar(text, 'viCast_time', consts) });
       const num = classVar(text, 'viSpell_num', consts);
@@ -189,9 +190,22 @@ export function compile(root = M59_ROOT) {
   try {
     const base = fs.readFileSync(path.join(root, 'kod/object/passive/spell.kod'), 'utf8');
     classes.set('spell', { parent: null, postCast: classVar(base, 'viPostCast_time', consts),
+                           harmful: classVar(base, 'viHarmful', consts),
                            castTime: classVar(base, 'viCast_time', consts) });
   } catch {}
   for (const sp of spells) {
+    let harmfulClass = sp.cls.toLowerCase();
+    const harmfulSeen = new Set();
+    sp.harmful = null;
+    while (harmfulClass && !harmfulSeen.has(harmfulClass)) {
+      harmfulSeen.add(harmfulClass);
+      const entry = classes.get(harmfulClass);
+      if (!entry) break;
+      if (/^(?:TRUE|FALSE|0|1)$/i.test(String(entry.harmful))) {
+        sp.harmful = /^(?:TRUE|1)$/i.test(String(entry.harmful)); break;
+      }
+      harmfulClass = entry.parent;
+    }
     let cls = sp.cls.toLowerCase();
     const seen = new Set();
     sp.post_cast_ms = null;

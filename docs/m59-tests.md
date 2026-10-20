@@ -2320,3 +2320,7 @@ executes the actual missing-recipient branch and proves it sends no trade packet
 The public return regression keeps BACK on its checked path instead of adding a
 generic wall-rest detour. These post-hour regressions do not retroactively validate
 the frozen farming hour or constitute another native one-hour trial.
+
+- `node tools/m59-hometowns-test.mjs`: fleet-scoped disk persistence, changed
+  assignment history, failed/stale readings, unknown versus wandering, complete
+  roster grouping, HTML escaping, and dashboard navigation.

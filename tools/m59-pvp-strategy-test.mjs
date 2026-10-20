@@ -85,6 +85,13 @@ console.log('the decision set');
   ok('hold_orders is carried only when it is literally true', v({ do: 'flee_to', room: 38, hold_orders: true }).decision.hold_orders === true
     && v({ do: 'flee_to', room: 38, hold_orders: 'yes' }).decision.hold_orders === false);
   ok('a negative hold is refused', !!v({ do: 'flee_to', room: 38, hold_ms: -1 }).error);
+  const w = v({ do: 'flee_to', room: 599, via: 598, row: 3, col: 65 }).decision;
+  ok('flee_to carries a way in and a post', w?.via === 598 && w.row === 3 && w.col === 65, JSON.stringify(w));
+  ok('...and without them carries neither', !('via' in f) && !('row' in f) && !('col' in f));
+  ok('a way in that is the room itself, or not a room, is refused', !!v({ do: 'flee_to', room: 599, via: 599 }).error
+    && !!v({ do: 'flee_to', room: 599, via: 1 }).error && !!v({ do: 'flee_to', room: 599, via: 'x' }).error);
+  ok('a post is a whole square, given together', !!v({ do: 'flee_to', room: 599, row: 3 }).error
+    && !!v({ do: 'flee_to', room: 599, row: 3, col: 6.5 }).error);
 }
 
 console.log('the module search');
@@ -267,6 +274,41 @@ console.log('combat mode: flee_to on a hit');
   f.mode.active = { id: 'op', order: { action: 'kill', target: 'X' }, client: f.c, phase: 'waiting' };
   ok("an operator's combat order is never preempted by a strategy", f.mode.beginFlight({ do: 'flee_to', room: 38 }, 'Morpheus', 'attacked') === false
     && f.mode.active.id === 'op');
+}
+
+console.log('combat mode: flee_to by way of a neighbour, to a post');
+{
+  // UKGOTH, 2026-10-20. Its NE corner is reached only from the Cragged Mountains (598): entered from 589 or 2 a
+  // fled body lands on the far island. So the flight walks to 598 planning AROUND 599, steps in, and posts.
+  const ukgoth = () => ({ do: 'flee_to', room: 599, via: 598, row: 3, col: 65, hold_ms: 600_000, hold_orders: true, strategy: 'bastion' });
+  reset(); const f = fixture({ room: 579, strategy: ukgoth });
+  const walks = []; f.s.walkTo = async (col, row) => { walks.push({ col, row }); return { arrived: true }; };
+  put(f, 2, P); hitBy(f);
+  ok('the flight carries its way in and its post', f.mode.active?.flight?.via === 598 && f.mode.active.flight.post?.row === 3);
+  await f.mode.tick();
+  ok('it walks to the way in first, planning around the bastion', f.travels.length === 2 && f.travels[0].to === 598
+    && JSON.stringify(f.travels[0].opts.avoid) === '[599]', JSON.stringify(f.travels.map(t => [t.to, t.opts.avoid])));
+  ok('then steps in, asking to land near the post', f.travels[1].to === 599 && f.travels[1].opts.arriveNear?.col === 65
+    && f.travels[1].opts.arriveNear.row === 3);
+  ok('and walks to the post', walks.length === 1 && walks[0].col === 65 && walks[0].row === 3, JSON.stringify(walks));
+  ok('it ends arrived, held, and says how it came in', f.mode.lastFlight?.outcome === 'arrived' && f.keeper.pvpStrategyHold?.room === 599
+    && f.mode.lastFlight.via_result?.arrived === true && f.mode.lastFlight.post?.arrived === true, JSON.stringify(f.mode.lastFlight));
+  ok('the way in is a combat line', f.lines.some(l => l.event === 'pvp_strategy_flight_via' && l.via === 598 && l.arrived === true));
+}
+{
+  reset(); const f = fixture({ room: 598, strategy: () => ({ do: 'flee_to', room: 599, via: 598, strategy: 'bastion' }) });
+  put(f, 2, P); hitBy(f); await f.mode.tick();
+  ok('already standing in the way in: one step, straight in', f.travels.length === 1 && f.travels[0].to === 599
+    && !f.travels[0].opts.arriveNear && f.mode.lastFlight?.outcome === 'arrived', JSON.stringify(f.travels));
+}
+{
+  reset(); const f = fixture({ room: 579, strategy: () => ({ do: 'flee_to', room: 599, via: 598, strategy: 'bastion' }) });
+  const plain = f.s.travel.bind(f.s);
+  f.s.travel = async (to, opts) => to === 598 ? (f.travels.push({ to, opts }), { arrived: false, reason: 'no route' }) : plain(to, opts);
+  put(f, 2, P); hitBy(f); await f.mode.tick();
+  ok('a way in that fails is recorded, and the flight goes straight in', f.travels.map(t => t.to).join() === '598,599'
+    && f.mode.lastFlight?.outcome === 'arrived' && f.mode.lastFlight.via_result?.arrived === false
+    && /no route/.test(f.mode.lastFlight.via_result.reason), JSON.stringify(f.mode.lastFlight));
 }
 
 console.log('combat mode: flee_to on a sighting');

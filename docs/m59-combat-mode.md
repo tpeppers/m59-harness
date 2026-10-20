@@ -17,6 +17,131 @@ sent, not hits or kills; server outcome messages are reported separately.
 
 ## Immediate chat orders
 
+### Personal threat and opt-in fallback actions
+
+`combat status` exposes `personal_threat`: `quiet` (0), `engaged` (1),
+or `under_attack` (2). Exact incoming player hit/miss messages, known harmful
+personal enchantments, victim-only hold/resistance messages, and the server's named harmful spell-attempt message
+are personal evidence. Speech, outgoing attacks, sightings, room enchantments
+and fleet alarms are not. An unattributed harmful effect records no invented
+caster and does not authorize a fight. Evidence persists through an active
+encounter; outside one it ages out after 30 seconds. Death/disconnect clears it.
+The snapshot is also available to PvP strategy facts and wand/opener hooks.
+
+A private combat strategy may implement `pvpFallback(ctx)`. Without one, the
+harness requests no potion inspections and uses no potions through this queue. The hook sees
+`personal_threat`, `pvp`, `phase`, `reason`, `now`, `items`
+(`id/name/effect/harmful` for mechanically identified potions),
+`attempted_effects`, and observed personal `enchantments`.
+The threat threshold, desired effects, their order and repeat policy belong to
+the private strategy. Its closed answer is:
+
+```js
+{ queue: [{ use: carriedPotionId }], interval_ms: 1000 }
+```
+
+The interval may be 1000–60000ms and is measured from actual sends. The engine
+considers the queue while pursuing an infeasible primary attack, fleeing, or
+waiting for an absent PvP target. An attack cooldown is an occupied slot,
+not a chance to drink. A feasible primary attack, including turning to take it,
+always wins. Casting concentration is preserved.
+
+Inventory refresh and exact-ID description requests run asynchronously under
+the same body and packet guards as combat. They do not await network replies
+inside pursuit. Immediately before use the engine checks the live primary,
+shared timer, inventory identity/name, save generation and a description no
+older than 500ms. Spoiled, unknown, missing, stale or mismatched descriptions
+never authorize use. A queued request is revoked with its order.
+
+`m59-potions.mjs build` compiles potion names, effects, fresh/spoiled description
+prefixes and post-cast timers from KOD into `substrate/m59-potions.json`.
+The spell catalogue also carries inherited `harmful` facts for threat evidence.
+This is mechanics data, not an automatic list of effects to drink.
+Unidentified generic potions and unmodelled server-specific potions are skipped.
+Stock Distill creates player-made potions labelled and with go-bad time -1, so
+they do not expire. The engine still checks every selected bottle's current
+identity and condition instead of authorizing a use from cached maker text.
+
+Potions pass through SpellItem.CastSpell -> Spell.CanPayCosts ->
+IsOkayAttackTime. A sent potion therefore owns the shared timer for its
+KOD-derived interval. Movement/turning can continue. A successful-looking use
+packet alone does not prove consumption: `fallback_queue.history` records
+`sent`, subsequent exact item removal, and observed effect appearance separately.
+The final look/use race cannot be made atomic by this protocol.
+
+Offline checks: `node tools/m59-combat-fallback-test.mjs`.
+
+### Independent support consumables
+
+An enabled private `healingWand(ctx)` hook extends the guarded support sender
+to ordinary farming/monster combat and unheld idle/survival keepers. It receives
+`pvp`/`farming`, the positive keeper threshold as `base_below`, `inspected_item`,
+and wand condition evidence (`charged`, `empty`, `unknown`, `inspected_at`).
+Only positive inspections within 30 seconds count as charged; reconnects, ID
+generation changes, item loss and use invalidate that evidence. No exact charge
+count is inferred. The same queue shape below may also include `inspect:true`
+to inspect one unknown wand on a healthy pass. A freshly confirmed exhausted
+healing wand may be dropped; unknown condition never authorizes disposal.
+After LOOK, and again immediately before APPLY, the private hook recomputes
+stock-dependent limits. The paced callback requires a synchronous answer.
+
+The ordinary keeper adapter shares current fleet HP, recipient claims,
+inventory/identity/condition checks and concentration guards with PvP support.
+It runs asynchronously so it does not wait out an inspection before moving or
+attacking. Work holds, external body control, freezes, cast rites, trances and
+PvP ownership defer ordinary support. Absent this opt-in, the original configured
+self-only farming helper remains unchanged. `autopilot_status.healing_wand_support`
+and combat `support_queue` expose actual dispatch thresholds and charged stock.
+
+A private combat strategy can implement `pvpSupport(ctx)` for consumables whose
+server path is independent of the attack timer. Currently this accepts only
+exactly identified **wands of healing** applied to self or visible fleetmates.
+Without an enabled hook, no support inspection or application is requested.
+The context contains `now`, `agent`, `character`, `room`, `phase`, `pvp`,
+`personal_threat`, `items` (`id/name/kind`), and `targets`
+(`id/name/self/health:{value,max}/at`). Its closed answer is:
+
+```js
+{ queue: [{ apply: carriedHealingWandId, to: playerId, below: 0.9, min_missing: 10 }], interval_ms: 1000 }
+```
+
+Thresholds, target priority and interval belong to the private strategy.
+The harness validates the queue and rechecks its health limits immediately
+before sending. It refreshes inventory, obtains an exact charged-wand LOOK
+no older than 500ms, and rechecks connection, room, body, item and ID generation.
+Each charge needs a new inspection. Confirmed exhausted wands are excluded;
+unknown condition temporarily defers that item so another carried wand can run.
+
+Ally HP comes from its own socket's fleet-health report, matched by endpoint,
+character, room and current body ID; reports older than 1.5 seconds are skipped.
+Combat ticks continue publishing health while the ordinary keeper pass is
+suspended. Health changes publish immediately, including within the ordinary
+500ms heartbeat throttle. There is no estimate from groans or enemy observations.
+A shared recipient claim conserves charges when several keepers select the
+same injured player. A claimed or recovered recipient yields to later queue
+entries using the same inspected wand.
+
+Stock `HealWand` inherits `SpecialWand`, not `SpellItem`. It heals 2–10 HP with
+five initial charges; `ReqNewApply` requires a same-room User but does not test
+LOS, distance or facing. It does not read or set the shared attack timer.
+Healing therefore runs asynchronously alongside pursuit, attacks and the
+potion fallback queue, through the ordinary packet pacer. It neither turns
+toward the ally nor changes the offensive target. `UserApply` does break a
+spell trance, so both an active concentration hold and an active cast rite
+defer support. Normal room restrictions (including JIG rooms and arena watcher
+rules) can still refuse an attempt. Status `support_queue.history` records
+**sent**, never an inferred successful heal. Survival retains priority.
+
+Source: `kod/object/item/passitem/specwand/healwand.kod`, `specwand.kod`,
+`kod/object/active/holder/nomoveon/battler/player.kod` (`TryApplyItem`),
+`player/user.kod` (`UserApply`), and `kod/object/active/holder/room.kod`.
+Offline checks: `node tools/m59-combat-support-test.mjs`.
+
+Keeper `GET /combat-strategies?agent=...&character=...&keeper_pid=...`
+initializes the process's cached combat strategy loader and reports strategy
+names, enabled flags, hooks and load problems. It sends no game packet and
+does not start combat, so a rollout can verify readiness before the next fight.
+
 ### Attack prerequisites and pursuit
 
 The harness checks the live exact target at the packet boundary. Lightning wand

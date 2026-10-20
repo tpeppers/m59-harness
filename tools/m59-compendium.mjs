@@ -55,8 +55,11 @@ import { StorageCache, GUILD_CHEST_SLOTS, CHEST_BULK_MAX, chestFullness } from '
 // The loadout format, and the only thing that decides what a character name may become on
 // the filesystem. This server accepts one over a socket; it does not get to invent its own
 // rule for that.
-import { readLoadout, writeLoadout, listLoadouts, loadoutPath, slugOf, normalise, LOADOUT_DIR,
-         applyInventoryToAll } from './m59-loadout.mjs';
+import { readLoadout, writeLoadout, writeLoadoutPlan, listLoadouts, loadoutPath, slugOf, normalise,
+         LOADOUT_DIR, applyInventoryToAll } from './m59-loadout.mjs';
+// The Guild Chest page's half: the board, the sell plan, the sale jobs and their scheduler.
+import { liveBoard, liveCouriers, readSales, saveSellPlan, addJob, cancelJob, nextDue, updateJob,
+         runSaleJob, jobLogFile, normaliseSellPlan, SALES_FILE } from './m59-guild-sale.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -119,6 +122,53 @@ async function broker(name, args = {}, ms = 15000) {
     return JSON.parse(j.result.content[0].text);
   } finally { clearTimeout(t); }
 }
+
+const brokerTool = (name, args, ms) => broker(name, args, ms);
+
+// ------------------------------------------------- the guild sale scheduler
+//
+// A SALE JOB IS A LINE IN substrate/guild-sales.json WITH AN `at`. Every 30 s (and right after a
+// job is filed) the first due one is launched as its own process —
+// `node tools/m59-guild-sale.mjs run --job <id>` — so a sale that walks for twenty minutes does
+// not live inside this web server, and a server restart neither loses a scheduled job (it is on
+// disk) nor kills a running one. One at a time: nextDue() refuses while anything is running.
+//
+// Started only by this file's CLI entry, never by createServer(), so a test that builds a server
+// cannot launch a sale. M59_GUILD_SALE_SCHEDULER=off disables it outright — what a preview against
+// a copy of the plan must set, because the fleet it would drive is the real one.
+const alive = pid => { try { process.kill(Number(pid), 0); return true; } catch { return false; } };
+export const SCHEDULER = {
+  state: { on: false, last_tick: null, last_launch: null, why: 'not started' },
+  timer: null,
+  start({ intervalMs = 30_000 } = {}) {
+    if (process.env.M59_GUILD_SALE_SCHEDULER === 'off') { this.state = { on: false, why: 'M59_GUILD_SALE_SCHEDULER=off' }; return; }
+    this.state = { on: true, last_tick: null, last_launch: null, why: null };
+    this.timer = setInterval(() => this.tick(), intervalMs);
+    this.timer.unref?.();
+    this.tick();
+  },
+  tick() {
+    if (!this.state.on) return;
+    this.state.last_tick = Date.now();
+    try {
+      const book = readSales();
+      // A running job whose process is gone did not finish: say so rather than block the queue.
+      for (const j of book.jobs.filter(x => x.status === 'running' && x.pid && !alive(x.pid)))
+        updateJob(j.id, { status: 'failed', error: `its process (${j.pid}) ended without reporting`, finished: Date.now() });
+      const job = nextDue(readSales());
+      if (!job) return;
+      const logFile = jobLogFile(job.id);
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      const fd = fs.openSync(logFile, 'a');
+      const child = spawn(process.execPath, [path.join(REPO, 'tools', 'm59-guild-sale.mjs'), 'run', '--job', job.id],
+                          { cwd: REPO, detached: true, stdio: ['ignore', fd, fd], windowsHide: true, env: process.env });
+      child.unref();
+      fs.closeSync(fd);
+      updateJob(job.id, { status: 'running', pid: child.pid, started: Date.now() });
+      this.state.last_launch = { id: job.id, pid: child.pid, at: Date.now() };
+    } catch (e) { this.state.why = `last tick failed: ${e.message}`; }
+  },
+};
 
 // ------------------------------------------------- a character, as the page wants it
 //
@@ -465,8 +515,11 @@ export function createServer({ access = 'local' } = {}) {
       try {
         const f = await broker('fleet', {});
         const has = new Set(saved.filter(s => s.loadout).map(s => slugOf(s.loadout.character)));
+        // Faction rides along for the party page's crest: the broker already carries it on every
+        // fleet row (null when the profile has never been read).
         fleet = (f.fleet || []).filter(r => r.character)
-          .map(r => ({ agent: r.agent, character: r.character, loadout: has.has(slugOf(r.character)) }));
+          .map(r => ({ agent: r.agent, character: r.character, loadout: has.has(slugOf(r.character)),
+                       faction: r.faction ?? null, faction_soldier: r.faction_soldier ?? null }));
       } catch { /* no broker: the saved loadouts are still worth listing */ }
       return json(res, {
         dir: LOADOUT_DIR,
@@ -562,6 +615,93 @@ export function createServer({ access = 'local' } = {}) {
           // which file it went to either way: a save that lands somewhere unexpected must
           // not look identical to one that lands where you meant.
           const out = writeLoadout(character, raw, { force: true });
+          return json(res, { ok: true, path: out.path, loadout: out.loadout, problems: out.problems });
+        } catch (e) {
+          res.writeHead(400, JSONH);
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+
+    // ------------------------------------------------------------- the guild chest page
+    //
+    // THE BOARD AND THE BOOK. Reads are the chests' last readings and the plan, never the game;
+    // the one write that reaches the game is a sale JOB, and that only by being filed — the
+    // scheduler below launches it. `dry` is the exception that runs in-process, and it moves
+    // nothing (runSaleJob: no borrow, no travel, no trade, no bank).
+    if (url.pathname === '/_guildchest' && req.method === 'GET') {
+      try {
+        const board = await liveBoard({ root: REPO });
+        const book = readSales();
+        // name -> bulk per unit, so a line added in the page is sized before it is saved.
+        let catalogue = {};
+        try {
+          const items = JSON.parse(fs.readFileSync(path.join(REPO, 'substrate', 'm59-items.json'), 'utf8')).items ?? {};
+          for (const [n, v] of Object.entries(items)) catalogue[n] = Number.isFinite(v?.bulk) ? v.bulk : null;
+        } catch { /* no table */ }
+        return json(res, { ...board, sell_plan: book.sell_plan, jobs: book.jobs.slice(-40).reverse(),
+                           scheduler: SCHEDULER.state, catalogue });
+      } catch (e) { res.writeHead(500, JSONH); return res.end(JSON.stringify({ error: e.message })); }
+    }
+    if (url.pathname === '/_guildsale/couriers' && req.method === 'GET') {
+      try {
+        const out = await liveCouriers({ call: brokerTool, saleBulk: Number(url.searchParams.get('bulk')) || 0 });
+        return json(res, { couriers: out.couriers, desk_open: out.desk });
+      } catch (e) { res.writeHead(502, JSONH); return res.end(JSON.stringify({ error: `the broker: ${e.message}` })); }
+    }
+    if (url.pathname === '/_guildsale/plan' && req.method === 'POST')
+      return readBody(req, res, raw => json(res, saveSellPlan(raw)));
+    if (url.pathname === '/_guildsale/jobs' && req.method === 'POST') {
+      return readBody(req, res, raw => {
+        try {
+          const out = addJob({ at: raw?.at ?? null, courier: raw?.courier || 'auto', items: raw?.items,
+                               proceeds: raw?.proceeds, borrow: raw?.borrow === true });
+          setImmediate(() => SCHEDULER.tick());
+          return json(res, out);
+        } catch (e) { res.writeHead(400, JSONH); return res.end(JSON.stringify({ error: e.message })); }
+      });
+    }
+    if (url.pathname === '/_guildsale/cancel' && req.method === 'POST') {
+      return readBody(req, res, raw => {
+        try { return json(res, { job: cancelJob(String(raw?.id ?? '')) }); }
+        catch (e) { res.writeHead(400, JSONH); return res.end(JSON.stringify({ error: e.message })); }
+      });
+    }
+    if (url.pathname === '/_guildsale/dry' && req.method === 'POST') {
+      return readBody(req, res, async raw => {
+        const lines = [];
+        const sp = normaliseSellPlan({ items: raw?.items, proceeds: raw?.proceeds });
+        try {
+          const result = await runSaleJob({ id: 'dry', courier: raw?.courier || 'auto', items: sp.items, proceeds: sp.proceeds },
+            { call: brokerTool, dry: true, root: REPO, log: (...a) => lines.push(a.join(' ')) });
+          return json(res, { ok: true, log: lines, result, problems: sp.problems });
+        } catch (e) { return json(res, { ok: false, log: lines, error: e.message, problems: sp.problems }); }
+      });
+    }
+    if (url.pathname === '/_guildsale/log' && req.method === 'GET') {
+      const id = String(url.searchParams.get('id') ?? '');
+      if (!/^gs-\d+$/.test(id)) { res.writeHead(400, JSONH); return res.end(JSON.stringify({ error: 'need ?id=gs-N' })); }
+      let text = '';
+      try { text = fs.readFileSync(jobLogFile(id), 'utf8'); } catch { /* not started */ }
+      return json(res, { id, log: text.split('\n').filter(Boolean).slice(-200) });
+    }
+
+    // THE PLAN ALONE, for the party page. Same name guards as /_loadout above; the write
+    // replaces `plan` and leaves every other field of the file exactly as it was on disk,
+    // including the ones `normalise` would drop (see writeLoadoutPlan).
+    if (url.pathname === '/_plan' && req.method === 'POST') {
+      return readBody(req, res, (raw) => {
+        const character = String(raw?.character ?? '').trim();
+        if (/[\\/]|\.\./.test(character) || !slugOf(character)) {
+          res.writeHead(400, JSONH);
+          return res.end(JSON.stringify({ error: `"${character}" is not a usable character name` }));
+        }
+        if (!raw?.plan || typeof raw.plan !== 'object') {
+          res.writeHead(400, JSONH);
+          return res.end(JSON.stringify({ error: 'need {character, plan}' }));
+        }
+        try {
+          const out = writeLoadoutPlan(character, raw.plan, { agent: raw.agent ?? null });
           return json(res, { ok: true, path: out.path, loadout: out.loadout, problems: out.problems });
         } catch (e) {
           res.writeHead(400, JSONH);
@@ -740,6 +880,8 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'm59-compendium.mjs') 
 
   createServer({ access }).listen(port, accessHost(access), () => {
     console.log(`compendium on http://127.0.0.1:${port}/  (access: ${access})`);
+    SCHEDULER.start();
+    console.log(`guild sale scheduler: ${SCHEDULER.state.on ? `on, reading ${SALES_FILE}` : SCHEDULER.state.why}`);
     printLanUrls(port, access);
     if (agent) {
       const url = importUrl(agent, to, port);

@@ -971,3 +971,7 @@ substrate/rail-inputs/
 # Runtime provision-cache intents and optional pickup notices.
 substrate/delivery-cache-intents/
 substrate/delivery-notices/
+
+# Fleet-scoped cached hometown observations and changes.
+/substrate/**/*.hometowns/
+/substrate/*.hometowns/
