@@ -24,7 +24,7 @@ export function braxSaleCargo(name){return /sapphire|emerald|diamond|ruby|armor|
 export class BraxSupplyService{
  constructor({actors,runner,couriers,call,read,runLeg,recover=null,cacheDelivery=null,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true}){
   if(!actors.some(c=>c.shadow_account===runner&&c.role==='farmer')||couriers.length!==2||new Set(couriers).size!==2)throw Error('Brax service needs one selected farmer runner and2 distinct couriers');
-  Object.assign(this,{actors,runner,couriers,call,read,runLeg,recover,cacheDelivery,emit,phase,wait,evidenceDir});this.farmRunner=farmRunner;this.farmers=actors.filter(c=>c.role==='farmer');this.stopped=false;this.upperGate=Promise.resolve();this.cycles={};this.pending=new Set();this.shopGates=new Map();this.lastLaneCourier=null;this.capacityBlocks=new Map();this.notReadyUntil=new Map();this.lastNeeds=new Map();
+  Object.assign(this,{actors,runner,couriers,call,read,runLeg,recover,cacheDelivery,emit,phase,wait,evidenceDir});this.farmRunner=farmRunner;this.farmers=actors.filter(c=>c.role==='farmer');this.stopped=false;this.upperGate=Promise.resolve();this.cycles={};this.pending=new Set();this.shopGates=new Map();this.lastLaneCourier=null;this.capacityBlocks=new Map();this.notReadyUntil=new Map();this.lastNeeds=new Map();this.cachedStock=[];
  }
  async reserve(agent,name,state=null){const s=state??await this.read(agent);return braxProvisionReserve(this.actors.find(c=>c.shadow_account===agent),name,{carryFloors:s.autopilot_status?.loadout_retention?.carry_floors??{}});}
  async runnerMode(mode){const r=await this.call('autopilot',{agent:this.runner,action:'start',mode});if(r.error||r.keeper_push?.confirmed!==true)throw Error('runner mode not confirmed');}
@@ -32,7 +32,16 @@ export class BraxSupplyService{
  async event(kind,detail={}){await this.emit({at:Date.now(),kind,...detail});}
  async pack(agent){for(let attempt=0;attempt<4;attempt++){const p=await this.call('inventory',{agent,fresh:true});if(Array.isArray(p?.items)&&p.ids_stale!==true)return p;if(attempt<3)await this.wait(500);}throw Error('inventory unconfirmed '+agent);}
  async localFarmers(room){const out=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(s.hp?.value>0&&s.room?.num===room&&s.in_game!==false&&s.connected!==false)out.push({actor:c,state:s});}return out;}
- async needs(){const rows=[];for(const c of this.farmers){const agent=c.shadow_account,s=await this.read(agent);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;if(s.in_game===false||s.connected===false){if(this.lastNeeds.has(agent))rows.push({agent,needs:this.lastNeeds.get(agent),deferred:true});continue;}const p=await this.pack(agent),needs=braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]});this.lastNeeds.set(agent,needs);rows.push({agent,needs});}return rows;}
+ async needs(){const rows=[];for(const c of this.farmers){const agent=c.shadow_account,s=await this.read(agent);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;if(s.in_game===false||s.connected===false){if(this.lastNeeds.has(agent))rows.push({agent,needs:this.lastNeeds.get(agent),deferred:true});continue;}const p=await this.pack(agent),needs=braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]});this.lastNeeds.set(agent,needs);rows.push({agent,needs});}
+  // Available floor stock is supply in transit, not a reason to buy it again.
+  // A fresh connected farm view can retire a cache immediately; otherwise its
+  // bounded notice lifetime prevents indefinite suppression during an outage.
+  if(this.cachedStock.length){const seen=await this.read(this.runner),groundKnown=seen.in_game===true&&seen.connected===true&&seen.room?.num===827&&Array.isArray(seen.objects),key=n=>/^herbs?$/.test(n)?'herb':n;
+   this.cachedStock=this.cachedStock.filter(c=>c.expiresAt>Date.now()&&(!groundKnown||seen.objects.some(o=>o.id===c.ground_id&&o.name===c.item&&(o.flags&16))));const pool=new Map(),remainingGround=new Map();
+   for(const c of this.cachedStock){const observed=groundKnown?seen.objects.find(o=>o.id===c.ground_id):null;if(observed&&!remainingGround.has(c.ground_id))remainingGround.set(c.ground_id,observed.amount>0?observed.amount:1);const amount=observed?Math.min(c.quantity,remainingGround.get(c.ground_id)):c.quantity;if(observed)remainingGround.set(c.ground_id,remainingGround.get(c.ground_id)-amount);pool.set(key(c.item),(pool.get(key(c.item))??0)+amount);}
+   for(const row of rows){row.needs={...row.needs};for(const [name,want]of Object.entries(row.needs)){const available=Math.min(want,pool.get(name)??0);row.needs[name]-=available;pool.set(name,(pool.get(name)??0)-available);}}
+  }
+  return rows;}
  async transfer(from,to,item,amount,plannedAsOf=null){
   if(!(amount>0))return null;if((this.notReadyUntil.get(from)??0)>Date.now()||(this.notReadyUntil.get(to)??0)>Date.now()){await this.event('trade-deferred',{from,to,item:item.name,reason:'recent native stationary readiness refusal'});return{quantity:0,deferred:true};}const id=randomUUID(),p=await this.pack(from),i=p.items.find(x=>x.id===item.id&&x.name===item.name);
   const plannedAt=typeof plannedAsOf==='number'?plannedAsOf:plannedAsOf?.inventory_at,lastSave=p.ids_as_of?.last_save_at??p.last_save_at;
@@ -108,7 +117,8 @@ export class BraxSupplyService{
    const wanted=recipients.reduce((n,r)=>n+(r.needs[name]??0),0);if(!wanted)continue;
    const retain=await this.reserve(this.runner,name,state);if(!budgets.has(name))budgets.set(name,Math.max(0,p.items.filter(x=>(/^herbs?$/.test(x.name)?'herb':x.name)===name).reduce((n,x)=>n+(x.amount>0?x.amount:1),0)-retain));const amount=Math.min(i.amount>0?i.amount:1,budgets.get(name),wanted);if(amount>0){items.push({id:i.id,name:i.name,amount,retain});budgets.set(name,budgets.get(name)-amount);}
   }
-  if(!items.length)return;const result=await this.cacheDelivery({agent:this.runner,items,recipients:recipients.map(r=>({agent:r.agent,items:r.needs}))});await this.event('delivery-cache-result',{agent:this.runner,result});
+  if(!items.length)return;const result=await this.cacheDelivery({agent:this.runner,items,recipients:recipients.map(r=>({agent:r.agent,items:r.needs}))});for(const c of result?.caches??[]){if(c.id&&c.ground_id&&c.quantity>0&&!this.cachedStock.some(old=>old.id===c.id))this.cachedStock.push({...c,expiresAt:Date.now()+1800000});}
+  await this.event('delivery-cache-result',{agent:this.runner,result});
   if(result?.uncertain)await this.event('delivery-cache-reconciliation-required',{agent:this.runner,reason:result.reason});
  }
  async collectLocal({cargo=true}={}){

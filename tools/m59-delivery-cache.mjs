@@ -47,7 +47,8 @@ export async function cacheDeliveryCargo(ctx,{items=[],recipients=[],read,drop,n
   const ground=(s.objects??[]).find(o=>o.name===item.name&&(o.flags&16)&&o.row===args.row&&o.col===args.col&&count(o)-(beforeGround.get(o.id)??0)>=wanted.amount);
   if(reply?.requested!==true||reply.confirmed!==true||!valid||!ground||total(p.items,item.name)-total(after.items??[],item.name)!==wanted.amount){intent.status='uncertain';save();return{ok:true,uncertain:true,caches,reason:'drop needs giver and new ground quantity proof'};}
   const cache={id,item:item.name,quantity:wanted.amount,ground_id:ground.id,room:827,row:args.row,col:args.col};intent.status='confirmed';intent.cache=cache;save();const notices=[];
-  for(const target of recipients){const key=/^herbs?$/.test(item.name)?'herb':item.name;if(!(target.items?.[key]>0))continue;try{notices.push(await notify({...cache,action:'publish',agent:target.agent,from:ctx.agent}));}catch(e){notices.push({stored:false,error:e.message});}}
+  const key=/^herbs?$/.test(item.name)?'herb':item.name,targets=recipients.filter(target=>target.items?.[key]>0).map(target=>target.agent);
+  if(targets.length)try{const reply=await notify({...cache,action:'publish_many',agent:ctx.agent,from:ctx.agent,recipients:targets});notices.push(...(reply?.receipts??[reply]));}catch(e){notices.push({stored:false,error:e.message});}
   caches.push({...cache,notices,pickupRequired:false});
  }
  return{ok:true,caches};

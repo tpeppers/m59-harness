@@ -56,7 +56,9 @@ are reported separately rather than improving the ordered cohort denominator.
 | Outside the permitted farm maps |6.22%|
 | Unknown/disconnected |0.62%|
 
-Healthy plus other waiting was **20.17%**.
+Healthy plus other waiting was **20.17%**. That is 254.13 farmer-minutes,
+or an average 12.10 minutes per ordered farmer. Recovery occupied another
+576.81 farmer-minutes, averaging 27.47 minutes per ordered farmer.
 Healthy waiting means known HP and MP at or above observed ceilings and vigor at
 least 70/200; it does not mean every source-policy combat condition was satisfied.
 The stricter nearby-target/resource candidate amounted to 151.43 farmer-minutes
@@ -73,7 +75,7 @@ This refusal happened before any new offer. Treating it like an ambiguous accept
 transfer unnecessarily ended that worker. Its remaining goods were not claimed delivered.
 
 Courier B completed three cycles. A later BACK failed in the public script's new leading
-rest: it selected r1c15in 578 and did not establish a working resting wall there. The
+rest: it selected r1c15 in 578 and did not establish a working resting wall there. The
 bounded cleanup returned the courier normally to Jasper at 19:38:43.562 Pacific; it
 survived a recovery episode that reached 3/82 HP. Both couriers were then home and
 both workers had ended. Deliveries therefore stopped before the farming hour ended.
@@ -142,10 +144,13 @@ These changes were **not** part of the frozen hour and cannot explain its statis
   full source floors, worn/protected kit and caller-owned body. Giver loss and new ground
   quantity must both be confirmed before availability is published. Durable intents prevent
   replay after an uncertain drop; that item is quarantined without forcing the courier to
-  wait for pickup. Floor caches and later pickups have separate accounting.
+  wait for pickup. Available floor quantities also reduce replacement purchases;
+  partial pickups and merged stacks cannot be counted twice. Floor caches and
+  later pickups have separate accounting.
 * Structured broker `delivery_notice` records identify item, quantity, ground handle and
   map/row/column. They are persisted, pushed to the recipient keeper when available,
-  exposed in native state, and can be listed or ignored. Notices never invoke game speech
+  exposed in native state, and can be listed or ignored. A group notification shares
+  one ground proof and bounded parallel metadata delivery. Notices never invoke game speech
   or force a movement order. Pickup may be deferred or ignored, as requested.
 * BACK no longer makes a generic rest detour before the already guarded return rail.
   OUT retains its departure floor; explicit exchange health goals still use ordinary
@@ -172,6 +177,17 @@ is not proved to explain a specific refusal without the original quantity trace.
 preparation casualties selected the 21 survivor cohort and further limit comparisons.
 
 After the audit, only this trial's broker and 26 keepers were stopped. Independent process
-and port checks confirmed native `blakserv`PID 41300 still listening on 15959 for replay work.
+and port checks confirmed native `blakserv` PID 41300 still listening on 15959 for replay work.
 The credential worktree and evidence remain. Production broker 8901 and the deployed
 checkout were not operated or changed.
+
+## Publication validation
+
+The final merged build passed all 156 offline movement suites with zero new
+regressions; existing assertion baselines were retained. The complete Brax
+logistics package passed, including actual pre-offer supply receipts, controlled
+drop confirmation, optional broker notices and continued distribution. Shadow
+fidelity passed 124 checks and run isolation passed 10 checks. These regressions
+validate the post-hour repairs; they are not another farming-hour measurement.
+The publication includes current main and preserves its independent combat
+support changes. Production deployment remains a separate operation.

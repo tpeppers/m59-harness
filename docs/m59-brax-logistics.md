@@ -273,7 +273,7 @@ The public `brax-cache-delivery` child owns the upper runner for a bounded drop-
 after direct local distribution. It caches only confirmed provision surplus
 needed by other farmers, above the runner's personal reserves and full native
 loadout floors. Worn, protected or unknown equipment never qualifies. The cache
-is in827, where farmers can retrieve it; putting goods below the578ledge would
+is in 827, where farmers can retrieve it; putting goods below the 578 ledge would
 make them unavailable to the locked farmers.
 
 Every drop has a durable intent before one native packet. A missing confirmation
@@ -287,8 +287,18 @@ them to an addressed keeper without game speech or movement. Native state expose
 list remains available. Nobody waits for a pickup acknowledgement.
 
 The completed trial exposed an additional return hazard: a generic leading rest
-selected r1c15before BACK and could not prove arrival at a working wall. BACK now
+selected r1c15 before BACK and could not prove arrival at a working wall. BACK now
 uses the checked return leg's own recovery handling, with no extra generic rest
 route. OUT still enforces its departure floor, and exchange admission retains its
 explicit guarded health goal. See the measured result and post-hour distinction
 in [the resupply capacity report](reports/2026-10-19-brax-resupply-capacity.md).
+
+Confirmed floor stock reduces new procurement demand until picked up or its notice
+expires. It does not count as a completed farmer delivery. Repeated demand reads
+do not subtract it twice, and a fresh farm view removes a missing or consumed
+cache so actual shortages can be supplied again.
+
+A `publish_many` notice batch shares one freshly verified cache scene across its
+recipients. It does not repeatedly request room contents for every farmer.
+Keeper notification is metadata-only and bounded to two seconds per parallel
+recipient; durable broker notices remain available when a keeper cannot answer.
