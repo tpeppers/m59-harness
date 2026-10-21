@@ -205,7 +205,11 @@ function reachWanderer(phases, slots, allRooms) {
     return { ok: true };
   }, 'set out for the wanderer')];
   for (let i = 0; i < slots; i++) {
-    steps.push({ ...walk(st => (active(st) ? wandererTarget(st) : st.q?.here ?? null), { candidates: allRooms }), optional: true });
+    // NOT GOING = NULL, never `st.q.here`: `here` is only as fresh as the last look, and a skipped walk
+    // to a stale `here` is a real walk back to wherever the body used to be (live, 2026-10-21: t21
+    // reached the Badlands and was walked straight back to Parrin by the next skipped step). A null
+    // walk is refused at once, and the step is optional.
+    steps.push({ ...walk(st => (active(st) ? wandererTarget(st) : null), { candidates: allRooms }), optional: true });
     steps.push({ ...verify(async ({ agent, call, state }) => {
       if (!active(state)) return { ok: true, skipped: true };
       const v = await look(call, agent);
@@ -281,14 +285,17 @@ function ask({ askWaitMin, cooldownMin }) {
 /** The leg to the priestess: a walk for three of them, the Qor lift for Zuxana. */
 function toPriestess() {
   const going = st => st.q?.phase === 'deliver' && st.q.open?.dest;
-  const steps = [{ ...walk(st => (going(st) && st.q.open.dest.room !== 802 ? st.q.open.dest.room : st.q?.here ?? null),
+  const steps = [{ ...walk(st => (going(st) && st.q.open.dest.room !== 802 ? st.q.open.dest.room : null),
                            { candidates: PRIESTESS_ROOMS }), optional: true }];
   // toTemple(802), each step made conditional on actually going there.
   const to802 = st => going(st) && st.q.open.dest.room === 802;
   for (const s of toTemple(802)) {
-    if (s.do === 'walk') steps.push({ ...s, to: st => (to802(st) ? 802 : st.q?.here ?? null), candidates: [802], optional: true });
+    if (s.do === 'walk') steps.push({ ...s, to: st => (to802(st) ? 802 : null), candidates: [802], optional: true });
     else if (s.do === 'verify') steps.push({ ...s, optional: true, fn: async (ctx) => (to802(ctx.state) ? s.fn(ctx) : { ok: true, skipped: true }) });
-    else steps.push({ ...s, optional: true, ...(s.room != null ? { room: st => (to802(st) ? s.room : -1) } : {}) });
+    // A crawl to a null square is refused before it moves (m59-fleetscript.mjs crawl_to), so the
+    // ~40 lift legs cost nothing when the delivery is not to Zuxana.
+    else steps.push({ ...s, optional: true, col: st => (to802(st) ? s.col : null), row: st => (to802(st) ? s.row : null),
+                      ...(s.room != null ? { room: st => (to802(st) ? s.room : null) } : {}) });
   }
   steps.push({ ...verify(async ({ agent, call, state }) => {
     if (!going(state)) return { ok: true, skipped: true };
