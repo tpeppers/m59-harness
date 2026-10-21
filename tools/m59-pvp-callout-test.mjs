@@ -80,7 +80,7 @@ await test('the committed example has lines, and the fleet file overrides it', (
 await test('a pick fills {enemy} and {me}, and avoids recently used lines', () => {
   const lines = ['Wrong room, {enemy}.', 'I am {me}.', 'Third.'];
   const p = callout.pickCallout(lines, { recent: [1, 2], enemy: 'Morpheus', me: 'Kermit', random: () => 0.9 });
-  assert.deepEqual(p, { index: 0, text: 'Wrong room, Morpheus.' });
+  assert.deepEqual(p, { index: 0, text: 'Wrong room, Morpheus.', template: 'Wrong room, {enemy}.' });
   assert.equal(callout.pickCallout(lines, { recent: [0, 1, 2], random: () => 0 }).index, 0, 'all used: any line');
   assert.equal(callout.pickCallout([], {}), null);
 });

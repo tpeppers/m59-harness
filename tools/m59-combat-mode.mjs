@@ -34,6 +34,8 @@ import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } f
 import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS } from './m59-pvp-strategy.mjs';
 import { recordGroan, latestHealth } from './m59-player-health.mjs';
 import * as callout from './m59-pvp-callout.mjs';
+import * as yelp from './m59-pvp-yelp.mjs';
+import { zalgo, healthLevel } from './m59-zalgo.mjs';
 // A joust exchange that has not sent its swings in this long gives up and evades (the attacker is keeping away).
 export const JOUST_EXCHANGE_MAX_MS = 4_000;
 
@@ -536,14 +538,53 @@ export class CombatMode {
       const { lines, file, error } = callout.loadCallouts();
       const pick = callout.pickCallout(lines, { recent: rows.slice(-40).map(r => r.index), enemy: name, me });
       if (!pick) { this.lastCallout = { at: Date.now(), player: name, room, skipped: error ?? (lines.length ? `no line ${me} may say` : 'no lines') }; return; }
+      // CORRUPTED to the line's own tier, or to how hurt the speaker already is, whichever is deeper.
+      const ys = yelp.loadYelps().settings, hp = c.vitals?.()?.health;
+      const level = Math.max(pick.tier ?? 0, hp?.max ? healthLevel(100 * hp.value / hp.max, ys.thresholds) : 0);
+      const z = level ? zalgo(pick.template, level, { vars: { enemy: name, me }, corruptNames: ys.corrupt_names, budget: ys.budget_bytes })
+        : { text: pick.text, level: 0, truncated: false, utf8: false };
       const at = Date.now(), loc = this.pvpLoc(c);
       pvplog.appendCallout({ kind: 'callout', at, speaker: me, player: name, room, loc, basis, index: pick.index,
-        text: pick.text, chorus: v.why, lines_file: file });
+        text: z.text, ...(level ? { template: pick.template, level, truncated: z.truncated } : {}), chorus: v.why, lines_file: file });
       this.calloutCtx = { player: name, basis, index: pick.index, chorus: v.why };
-      try { c.say(pick.text); } finally { this.calloutCtx = null; }
-      this.lastCallout = { at, player: name, room, text: pick.text };
+      try { if (z.utf8) c.say(z.text, 1, { encoding: 'utf8' }); else c.say(z.text); } finally { this.calloutCtx = null; }
+      this.lastCallout = { at, player: name, room, text: z.text };
       this.pvpSpeechUntil = Math.max(this.pvpSpeechUntil, at + 60_000);
     } catch (e) { this.lastCallout = { at: Date.now(), player: name, room, error: e.message }; }
+  }
+
+  // THE WOLF THAT YELPS (m59-pvp-yelp.mjs). A loud character, in a PvP moment, says one line as its health
+  // falls into each damage zone, corrupted to that zone's Zalgo level. Outside a PvP moment nothing is said
+  // and no zone is spent, but healing still ends the episode.
+  noteYelp(c) {
+    try {
+      const s = this.s, now = Date.now();
+      if (!s.live || c !== s.client || typeof c.say !== 'function') return;
+      const hp = c.vitals?.()?.health;
+      if (!hp?.max) return;
+      const pct = 100 * hp.value / hp.max;
+      const y = yelp.loadYelps();
+      this.yelpTracker ??= new yelp.YelpTracker();
+      const moment = !!(this.active?.pvp || this.pvpWindow(now) || now < this.pvpSpeechUntil);
+      if (!moment || !this.isLoud()) { if (pct >= y.settings.reset_at) this.yelpTracker.reset(); return; }
+      const zone = this.yelpTracker.observe(pct, y.settings);
+      if (!zone) return;
+      const p = this.active?.pvp;
+      const enemy = (p?.last_outcome?.direction === 'incoming' ? p.last_outcome.character : null) ??
+        p?.attackers?.[0]?.character ?? this.lastCallout?.player ?? '';
+      const me = this.pvpObserver(c), room = s.world?.room?.num ?? null;
+      const recent = callout.recentCallouts(pvplog.pvpDirFor(), now).filter(r => r.kind === 'yelp' && r.speaker === me);
+      const pick = yelp.pickYelp(y, zone, { originals: callout.loadCallouts().lines, me, enemy, recent });
+      if (!pick) { this.lastYelp = { at: now, zone, skipped: y.error ?? `no yelp line ${me} may say` }; return; }
+      const z = zalgo(pick.template, zone, { vars: { enemy, me }, corruptNames: y.settings.corrupt_names, budget: y.settings.budget_bytes });
+      pvplog.appendCallout({ kind: 'yelp', at: now, speaker: me, player: enemy || null, room, loc: this.pvpLoc(c), zone,
+        health_pct: Math.round(pct), source: pick.source, index: pick.index, template: pick.template, text: z.text,
+        level: z.level, truncated: z.truncated, lines_file: y.file });
+      this.calloutCtx = { player: enemy || null, yelp: zone, source: pick.source, index: pick.index };
+      try { c.say(z.text, 1, z.utf8 ? { encoding: 'utf8' } : undefined); } finally { this.calloutCtx = null; }
+      this.lastYelp = { at: now, zone, text: z.text };
+      this.pvpSpeechUntil = Math.max(this.pvpSpeechUntil, now + 60_000);
+    } catch (e) { this.lastYelp = { at: Date.now(), error: e.message }; }
   }
 
   // SPEECH HEARD IN A PVP WINDOW, or in the minute after a hostile arrived: kind 'said', with the speaker.
@@ -2688,6 +2729,7 @@ export class CombatMode {
     if (ev.kind === 'room-contents' || ev.kind === 'appeared' || ev.kind === 'changed' || ev.kind === 'moved') this.notePvpAppearances(client);
     this.observeWar(ev, client);
     if (ev.kind === 'groan') { try { this.observeGroan(ev, client); } catch { /* evidence only */ } }
+    if (ev.kind === 'stat' && String(ev.name).toLowerCase() === 'health') this.noteYelp(client);
     if (ev.kind === 'logged-on' || ev.kind === 'logged-off') this.onPlayerListEvent(ev);
     if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
     if (ev.kind === 'said') this.noteFightSaid(ev);
