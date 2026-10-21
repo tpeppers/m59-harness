@@ -1767,6 +1767,16 @@ then the rest); that the shield read refuses another object's description and ne
 negative id; and that a maxed shield walks nowhere and farms nothing. The farm itself is
 `harvest` with its `until` predicate, which the fleetscript suite covers.
 
+**`m59-choose-hometown-test.mjs` (9 groups) — the five sentences, the verdicts, and a permanent
+choice that has to be asked for.** `tools/fleetscripts/choose-hometown.mjs` says a town's sentence in
+the Hall of Genealogy (Cor Noth, 156), which sets the home room LOCKED (Coruniv.kod `SetHomeRoom
+#lock=TRUE`). Read from `M59_ROOT` when present, every sentence and reply must be the kod's own text,
+because the hall matches with `StringEqual` and a sentence one character off is ignored in silence. It
+pins that each town lands on the inn `HOMETOWNS` already knows; that Marion's and Barloque's replies,
+which never name the town, still count, and the "already been chosen" refusal reads as `locked`; that
+the plan declares its one room and passes the trap check; that it refuses without `confirm=true`; and
+that a character already living in the target town walks nowhere and says nothing.
+
 **`m59-faction-intel-test.mjs` (8 groups) — what the fleet overhears about the struggle, and the
 `/faction` board.** The server never reports faction power; `tools/m59-faction-intel.mjs` catches
 the sentences that leak it (flag claims, token returns, councilor thanks and news, townsfolk
