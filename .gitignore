@@ -981,3 +981,21 @@ substrate/delivery-notices/
 
 # Durable private Rescue-chain receipts and timing history
 substrate/rescue-travel/
+
+# LIVE RUNTIME STATE that running prod processes read and write, named by their owners on 2026-10-21
+# when prod-deploy was cleared for a cut (774 untracked files, 630 archived to substrate/scratch/). Each
+# is state, not code: FleeTA dispatcher (fleeta-*), the faction scout (player-factions-*, faction-scout-*),
+# Zheng He's courier (courier-pigeon*), the double-down ledger, human-presence, a prism-quest errand's
+# open quests and saved postures, and the production control loops' per-character state directories.
+# Moving one froze or confused its process, so they live where they are and git stops counting them.
+/substrate/fleeta-*
+/substrate/player-factions-*
+/substrate/faction-scout-*
+/substrate/courier-pigeon*
+/substrate/double-down-prod*
+/substrate/human-presence.json
+/substrate/prism-quest-*
+/substrate/production-*/
+/substrate/production-*-runtime.json
+/substrate/red-alert/
+/substrate/qor-trainer*
