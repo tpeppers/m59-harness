@@ -13,6 +13,12 @@
 //
 //   4. FACING   the target is behind you: "You can't see your selected target."  player.kod:246,4186-4204
 //
+// ALL FOUR ARE Wand's (spelitem/wand.kod). A SpecialWand -- vampiric shock, vampwand.kod -- runs
+// none of them: same room and a combat room are its only gates, so the server accepts a zap
+// through a wall. `wand.server_gates` is false on such a row, its prediction skips the gates it
+// does not have, and `sight.unsighted` marks a shot WE fired without line of sight, which the
+// server will never refuse and summarizeShots counts. CombatMode requires sight for every wand.
+//
 // So the server's reply cannot tell us which gate it was. What can is writing down, AT SEND TIME,
 // every input those gates read, and predicting the answer. A refusal the prediction did not see
 // coming is the interesting one: it means a gate is missing from this model.
@@ -121,10 +127,11 @@ export function buildShot(p) {
     schema: SHOT_SCHEMA, kind: 'shot', shot_id: p.shotId, at: now, fight: p.fight ?? null,
     character: p.character ?? null, room: p.room ?? null,
     target: { id: p.target?.id ?? null, name: p.target?.name ?? null },
-    wand: { id: p.wand?.id ?? null, name: p.wand?.name ?? null, colour: p.wand?.colour ?? null, decoded: !!p.wand?.decoded },
+    wand: { id: p.wand?.id ?? null, name: p.wand?.name ?? null, colour: p.wand?.colour ?? null, decoded: !!p.wand?.decoded,
+            server_gates: p.wand?.serverGates !== false },
     strategy: p.strategy ?? null, why: p.why ?? null, beat: p.beat ?? null,
     sight: {
-      los_mode: LOS_MODE, same_room: sameRoom,
+      los_mode: LOS_MODE, same_room: sameRoom, unsighted: sameRoom && los === false,
       me: me ? { ...me, x: p.me.x ?? null, y: p.me.y ?? null, pos_age_ms: meAge } : null,
       tgt: tgt ? { ...tgt, x: p.target.x ?? null, y: p.target.y ?? null, pos_age_ms: tgtAge } : null,
       dist: me && tgt ? +Math.hypot(tgt.row - me.row, tgt.col - me.col).toFixed(2) : null,
@@ -164,6 +171,8 @@ export function buildShot(p) {
 export function predictCause(shot) {
   const s = shot.sight;
   if (!s.same_room) return 'other_room';
+  // A SpecialWand has no sight, timer or facing gate (vampwand.kod ReqNewApply).
+  if (shot.wand?.server_gates === false) return shot.room_flags.no_combat ? 'no_combat' : 'none';
   if (s.los === false) return (s.tgt?.pos_age_ms ?? 0) > STALE_MS ? 'stale' : 'los';
   if (shot.timer.blocked) return 'timer';
   if (shot.facing.behind === true) return 'facing';
@@ -205,11 +214,14 @@ export function finishShot(shot) {
 
 /** Tally rows by cause: the one number this exists to produce. */
 export function summarizeShots(rows) {
-  const out = { shots: 0, refused: 0, by_cause: {} };
+  // `unsighted` counts shots fired with no line of sight that the server ACCEPTED -- only a
+  // SpecialWand can produce one, and CombatMode should never send it, so anything above 0 is a bug.
+  const out = { shots: 0, refused: 0, unsighted: 0, by_cause: {} };
   for (const r of rows) {
     if (r?.kind !== 'shot') continue;
     out.shots++;
     if (r.refused) out.refused++;
+    if (r.sight?.unsighted && !r.refused) out.unsighted++;
     const k = r.cause ?? 'open';
     out.by_cause[k] = (out.by_cause[k] ?? 0) + 1;
   }

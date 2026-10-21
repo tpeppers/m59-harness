@@ -802,20 +802,26 @@ export class CombatMode {
     // type is identified, retain the ordinary Wand sight/timer prerequisites.
     const pick = picked ?? (unid ? { ...unid, name: 'wand', timer: true } : null);
     // A private hold can arrive without a fire id (e.g. the same volley beat). It still
-    // cannot pin a lightning holder behind a wall. SpecialWand vampiric shock needs
-    // only the same room; do not impose the SpellItem's sight/timer gates on it.
-    const needsSight = pick ? pick.timer !== false : wands.some(w => w.timer) || unidentified.length > 0;
+    // cannot pin a lightning holder behind a wall. SpecialWand vampiric shock has no
+    // attack timer, so it does not reserve the swing.
+    const needsTimer = pick ? pick.timer !== false : wands.some(w => w.timer) || unidentified.length > 0;
+    // EVERY WAND NEEDS LINE OF SIGHT, WHETHER OR NOT THE SERVER ASKS. SpecialWand (vampwand.kod)
+    // checks only the same room -- no LineOfSight, no TargetWithinSightAndRange -- so a vampiric
+    // zap through a wall or a stand of trees is accepted, and to the player on the other end it
+    // is a wallhack. 2026-10-21 04:25Z, Twisted Wood: Zoot drained Rick Deckard from r18c3 at
+    // 10-13 squares, 12 of 14 zaps with no sight by the same model the server's lightning refusals
+    // confirm (3035 of 3039). The server's leniency is not our permission.
     let live = c.room.objects.get(o.targetId);
-    const ready = this.attackReadiness(o, live, { sight: needsSight, timer: needsSight });
-    o.fallbackPrimary = { sight: needsSight, timer: needsSight };
+    const ready = this.attackReadiness(o, live, { sight: true, timer: needsTimer });
+    o.fallbackPrimary = { sight: true, timer: needsTimer };
     o.lastReadiness = { action: 'wand', ...ready };
     if (!ready.positioned) {
       return 'approach';
     }
-    if (!pick || !ready.ready) return hold ?? (needsSight ? 'hold' : null);
+    if (!pick || !ready.ready) return hold ?? (needsTimer ? 'hold' : null);
     await this.stand(o);
     let faceDeg = null;
-    const face = needsSight || decision.face;
+    const face = needsTimer || decision.face;
     if (face) await s.pacer.submit('turn', () => {
       const live = c.room.objects.get(o.targetId), me = c.self;
       if (!live || !me) return;
@@ -828,7 +834,7 @@ export class CombatMode {
       const live = c.room.objects.get(o.targetId);
       // The target can move behind a wall or behind our back while this is paced.
       // Do not count a skipped packet, consume its beat, or advance the cooldown.
-      const ready = this.attackReadiness(o, live, { sight: needsSight, timer: needsSight, facing: face });
+      const ready = this.attackReadiness(o, live, { sight: true, timer: needsTimer, facing: face });
       o.lastReadiness = { action: 'wand', ...ready };
       if (!ready.ready) return;
       if (!c.inventory?.some(w => w.id === pick.o.id) || this.spentWands.has(pick.o.id)) return;
@@ -839,7 +845,7 @@ export class CombatMode {
       c.apply(pick.o.id, live.id);
       this.lastVolleyBeat = sentCtx.beat;
       this.lastWandFireAt = this.now();
-      if (needsSight) this.attackReadyAt = this.now() + wandShot.ATTACK_TIMER_MS;
+      if (needsTimer) this.attackReadyAt = this.now() + wandShot.ATTACK_TIMER_MS;
       if (shot) this.openWandShot(shot);
       this.lastWandId = pick.o.id;
       o.zaps = (o.zaps ?? 0) + 1;
@@ -1496,7 +1502,7 @@ export class CombatMode {
         target: { id: live.id, name: o.targetName ?? exactName(c, live) ?? null, row: live.row, col: live.col,
                   x: live.x, y: live.y, posAt: live.posAt, inRoom: c.room?.objects?.get?.(live.id) === live },
         wand: { id: pick.o?.id ?? null, name: pick.name ?? null, colour: unid?.colour ?? null,
-                decoded: /decoded/i.test(String(decision.why ?? '')) },
+                decoded: /decoded/i.test(String(decision.why ?? '')), serverGates: pick.timer !== false },
         strategy: decision.strategy ?? null, why: decision.why ?? null, beat: ctx?.beat ?? null,
         face: !!decision.face, faceDeg,
         geo: this.s.world?.geometry ?? null,

@@ -101,6 +101,18 @@ await test('accepted despite a predicted refusal is flagged unexpected', () => {
   assert.match(s.hit_text, /Morpheus/);
 });
 
+await test('a SpecialWand behind a wall predicts none, is marked unsighted, and is counted', () => {
+  // vampwand.kod has no sight gate: the server accepts this zap, so the row must not call it
+  // 'unexpected' -- it must say we fired blind (2026-10-21, Twisted Wood).
+  const s = ws.buildShot(base({ geo: wallAtCol5, wand: { id: 9, name: 'wand of vampiric shock', serverGates: false } }));
+  assert.equal(s.wand.server_gates, false); assert.equal(s.predicted, 'none');
+  assert.equal(s.sight.unsighted, true);
+  ws.addReply(s, 'Rick Deckard narrowly dodges your vampiric attack.', 10_100); ws.finishShot(s);
+  assert.equal(s.cause, 'none');
+  assert.equal(ws.summarizeShots([s]).unsighted, 1);
+  assert.equal(ws.summarizeShots([ws.buildShot(base())]).unsighted, 0, 'a clear shot is not unsighted');
+});
+
 await test('summarizeShots divides refused by SHOTS (the 147/182 mistake)', () => {
   const rows = [...Array(182)].map((_, i) => ({ kind: 'shot', refused: i < 147, cause: i < 147 ? 'los' : 'none' }));
   const t = ws.summarizeShots(rows);

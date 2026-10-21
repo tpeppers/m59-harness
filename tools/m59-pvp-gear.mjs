@@ -22,7 +22,9 @@
 //   * wand of vampiric shock (SpecialWand, vampwand.kod). No attack timer, no line of sight, no
 //     facing: same room only. 10-18 charges, decremented BEFORE the effect; at 0 it is BROKEN, not
 //     deleted, and every later apply is refused. Each zap heals the user and pushes its karma
-//     toward -80.
+//     toward -80. THE SERVER NOT CHECKING SIGHT IS NOT PERMISSION: CombatMode.wandVolley requires
+//     line of sight for every wand, this one included (2026-10-21, a zap through the Twisted
+//     Wood at a player 13 squares away). `timer` says only whether the swing is reserved.
 // So a character holding a lightning wand does not swing between volleys (a swing would eat the
 // next zap); one holding only a vampiric wand keeps swinging and zaps on the beat as well.
 //

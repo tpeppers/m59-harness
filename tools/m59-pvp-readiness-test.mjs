@@ -173,11 +173,27 @@ try {
       assert.deepEqual(f.packets('cast')[0].targets, target === 'none' ? [] : [1]); f.mode.stop('test');
     }
   });
-  await test('vampiric shock can fire behind a wall and during a lightning timer; melee still waits', async () => {
-    const f = fixture({ wand: 'wand of vampiric shock' }); f.geo.canMove = () => false;
+  await test('vampiric shock fires during a lightning timer; melee still waits', async () => {
+    const f = fixture({ wand: 'wand of vampiric shock' });
     f.mode.attackReadyAt = 1002100; f.start(); await f.mode.tick();
     assert.equal(f.packets('apply').length, 1); assert.equal(f.packets('attack').length, 0);
     f.advance(2000); await f.mode.tick(); assert.equal(f.packets('attack').length, 1); f.mode.stop('test');
+  });
+  // 2026-10-21, Twisted Wood: the server accepts a vampiric zap through a wall (vampwand.kod has
+  // no LineOfSight), so this harness is the only thing that can refuse it.
+  await test('vampiric shock never fires without line of sight: it approaches instead', async () => {
+    const f = fixture({ wand: 'wand of vampiric shock' });
+    f.geo.canMove = (r, c, tr, tc) => !(c === 5 && tc === 6);   // a wall between us and the target
+    f.start(); await f.mode.tick();
+    assert.equal(f.packets('apply').length, 0, 'no zap through the wall');
+    assert.equal(f.mode.active.lastReadiness?.reason, 'line_of_sight');
+    f.geo.canMove = () => true; f.advance(2000); await f.mode.tick();
+    assert.equal(f.packets('apply').length, 1, 'fires once sight is established'); f.mode.stop('test');
+  });
+  await test('a sight block that appears while the zap is paced cancels a vampiric packet', async () => {
+    const f = fixture({ wand: 'wand of vampiric shock' }); f.start();
+    f.before(kind => { if (kind === 'cast') f.geo.canMove = () => false; });
+    await f.mode.tick(); assert.equal(f.packets('apply').length, 0); f.mode.stop('test');
   });
   await test('melee uses its actual range and facing gate at dispatch', async () => {
     const f = fixture({ wand: null }); f.start();
