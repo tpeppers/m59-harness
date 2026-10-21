@@ -3,6 +3,7 @@
 // Barloque 101). Operator's example, 2026-10-20: "'Get to Tos' can mean 'rescue to barloque and walk to Tos, if
 // the ETA is quicker'" -- from Ukgoth it is NOT quicker for Tos and IS for Barloque, and both are pinned here.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadMap } from './m59-map.mjs';
 import { chooseDeskRide, deskRideFirst } from './m59-desk-travel.mjs';
 
@@ -68,5 +69,17 @@ await ok('keeper glue: no desk policy is silence, and nothing is asked of the de
   const r = await deskRideFirst(ap, 101, {});
   assert.equal(r, null);
   assert.equal(asked, false);
+});
+await ok('every journey a fight issues walks: no Rescue chain on combat, swarm or flight travel (source sweep)', () => {
+  // prod-deploy-ac, 2026-10-21: a FleeTA responder that Rescues lands in the hall, not at the fight.
+  const src = readFileSync(new URL('./m59-combat-mode.mjs', import.meta.url), 'utf8');
+  const calls = [...src.matchAll(/\bs\.travel\(/g)].map(m => {
+    let depth = 0, i = m.index + m[0].length - 1;
+    for (; i < src.length; i++) { if (src[i] === '(') depth++; else if (src[i] === ')' && --depth === 0) break; }
+    return { line: src.slice(0, m.index).split('\n').length, text: src.slice(m.index, i + 1) };
+  });
+  assert.ok(calls.length >= 4, `found ${calls.length} travel calls`);
+  const bare = calls.filter(c => !/allowRescue\s*:/.test(c.text)).map(c => `m59-combat-mode.mjs:${c.line}`);
+  assert.deepEqual(bare, [], 'combat travel without allowRescue');
 });
 console.log(`\n${n} passed, 0 failed`);

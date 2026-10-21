@@ -63,6 +63,13 @@ export function joustRetreat(geo, me, attacker, gap) {
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
 
+// A FIGHT'S JOURNEY WALKS. Session.travel may take a Rescue chain (m59-rescue-travel.mjs) whenever the private
+// rescueTravel policy enables it, and since 2026-10-21 that policy covers the whole fleet. A Rescue lands in the
+// guild hall or at home, not beside the fight: a FleeTA responder, an ambush, a swarm member or a PvP flight
+// would arrive somewhere else, on a clock the dispatcher priced as walking (prod-deploy-ac, 2026-10-21). So
+// every travel this file issues says allowRescue: false.
+const NO_TELEPORT = false;
+
 export const PVP_DANGER_MS = 30_000;
 // What a keeper heard, for the pvpOpener's ctx.heard: long enough to span a room enchantment.
 export const HEARD_MS = 5 * 60_000;
@@ -1219,7 +1226,7 @@ export class CombatMode {
       this.swarmFollow = { at: this.now(), travelling_to: dest, why };
       try {
         const r = await leg(swarm.TRAVEL_LEG_MS, token => s.travel(dest, { origin: keeperOrigin('swarm_follow', { leader: ctx.leader }),
-                                         movementGeneration: s.movementGeneration, controlToken: token }));
+                                         movementGeneration: s.movementGeneration, controlToken: token, allowRescue: NO_TELEPORT }));
         this.swarmFollow = { at: this.now(), arrived: !!r?.arrived, room: s.world?.room?.num, why,
                              ...(r?.arrived ? {} : { reason: r?.reason ?? null }) };
       } finally { this.swarmMoving = false; }
@@ -2057,13 +2064,13 @@ export class CombatMode {
       // `via` first, planning around the destination (whose far half is no road to it), then step in. A way
       // in that fails is recorded and the flight goes straight in: the wrong half of the bastion beats the road.
       if (f.via != null && f.via_result == null && s.world.room.num !== f.via) {
-        const v = await s.travel(f.via, { origin, ...legOpts(), avoid: [f.room] })
+        const v = await s.travel(f.via, { origin, ...legOpts(), avoid: [f.room], allowRescue: NO_TELEPORT })
           .catch(e => { if (/superseded|stale|generation/i.test(String(e?.message))) throw e; return { arrived: false, reason: e?.message }; });
         this.guard(o);
         f.via_result = { arrived: v?.arrived === true && s.world.room.num === f.via, reason: v?.arrived ? null : (v?.reason ?? null), at: this.now() };
         s.recorder?.line?.('combat', { event: 'pvp_strategy_flight_via', order_id: o.id, room: f.room, via: f.via, ...f.via_result });
       }
-      const result = await s.travel(f.room, { origin, ...legOpts(), ...(f.post ? { arriveNear: f.post } : {}) });
+      const result = await s.travel(f.room, { origin, ...legOpts(), ...(f.post ? { arriveNear: f.post } : {}), allowRescue: NO_TELEPORT });
       this.guard(o);
       demand(result?.arrived && s.world.room.num === f.room, result?.reason ?? `flight to ${f.room} did not arrive`);
     }
@@ -3019,7 +3026,7 @@ export class CombatMode {
         await this.stand(o);
         // Ordinary validated router, under this order's packet and survival guards.
         this.armTimer();
-        const result = await s.travel(o.order.map, { origin: keeperOrigin('combat_order', { run_id: o.id }), movementGeneration: s.movementGeneration, controlToken: o.id });
+        const result = await s.travel(o.order.map, { origin: keeperOrigin('combat_order', { run_id: o.id }), movementGeneration: s.movementGeneration, controlToken: o.id, allowRescue: NO_TELEPORT });
         this.guard(o);
         demand(result?.arrived && s.world.room.num === o.order.map, result?.reason ?? 'ambush map was not reached');
       }
