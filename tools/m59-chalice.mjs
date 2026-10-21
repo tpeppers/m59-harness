@@ -207,6 +207,13 @@ export const CHALICE_DEFAULTS = Object.freeze({
   reveal: true,
   // Unrevealed items one traveller may drop for revealing in one visit (3 orc teeth each).
   reveal_max: 3,
+  // MEND (operator, 2026-10-20: archers training on practice bows "travel to a nearby service desk
+  // for mends"). Offered only by a server that knows the spell; one sapphire and one orc tooth a
+  // cast (mend.kod:55-56). Every cast permanently shrinks the item's maximum to 75-94% of what it
+  // was (mend.kod:126-134), so the desk mends only what it is handed, never on its own initiative.
+  mend: true,
+  // Items one traveller may drop for mending in one visit.
+  mend_max: 3,
 
   // THE HUMAN DESK. Operator, 2026-09-25: logging in as the holder used to switch the service
   // off for the whole fleet, because the keeper that served was the thing the login displaced.
@@ -270,7 +277,7 @@ const NUMBERS = {
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   floor_grace_ms: [0, 600_000], handoff_ttl_ms: [1_000, 120_000], duty_max_health: [0, 10_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
-  fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
+  fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10], mend_max: [0, 10],
   restock_min_fraction: [0, 1], chest_detour_hops: [0, 30],
   restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000], rescue_emeralds: [0, 100],
   human_wait_ms: [10_000, 600_000], human_hold_ms: [10_000, 900_000],
@@ -292,7 +299,7 @@ export function normalizeChalice(cfg = null) {
     if (k === 'enabled') continue;
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
     if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
-    if (k === 'uncurse' || k === 'reveal' || k === 'human_desk') { out[k] = v !== false; continue; }
+    if (k === 'uncurse' || k === 'reveal' || k === 'mend' || k === 'human_desk') { out[k] = v !== false; continue; }
     if (k === 'holder_keep') {
       const keep = {};
       if (v && typeof v === 'object' && !Array.isArray(v))
@@ -754,6 +761,7 @@ export const DESK_SERVICES = Object.freeze([
   { kind: 'reveal', label: 'Reveal' },
   { kind: 'ride', label: 'Chalice' },
   { kind: 'fol', label: 'Forces of Light' },
+  { kind: 'mend', label: 'Mend' },
 ]);
 
 /**
@@ -761,20 +769,25 @@ export const DESK_SERVICES = Object.freeze([
  *
  * `have` is reagent counts; `floor` is what the server keeps back (the Rescue emeralds, see
  * `reagentFloor`); `casts` is forces-of-light casts on hand above that floor; `cup` is
- * whether this server carries the chalice. remcurse.kod:55 is one emerald; reveal.kod:55 is
- * three orc teeth.
+ * whether this server carries the chalice; `knows` is which desk spells it has learned (only
+ * mend is asked: it is the one service a holder is not posted for). remcurse.kod:55 is one
+ * emerald; reveal.kod:55 is three orc teeth; mend.kod:55-56 is a sapphire and an orc tooth.
  */
-export function deskMenu({ cfg, have = {}, floor = {}, casts = 0, cup = false } = {}) {
+export function deskMenu({ cfg, have = {}, floor = {}, casts = 0, cup = false, knows = {} } = {}) {
   const spare = (k) => Math.max(0, (Number(have[k]) || 0) - (Number(floor[k]) || 0));
   const out = [];
   for (const s of DESK_SERVICES) {
     if (s.kind === 'uncurse' && cfg?.uncurse === false) continue;
     if (s.kind === 'reveal' && cfg?.reveal === false) continue;
     if (s.kind === 'fol' && !folRoomsOf(cfg).length) continue;
+    // A server that never learned Mend does not list it at all: "unavailable" would read as
+    // "come back later", and no amount of restocking teaches a spell.
+    if (s.kind === 'mend' && (cfg?.mend === false || !knows.mend)) continue;
     let why = null;
     if (s.kind === 'uncurse' && spare('emerald') < 1) why = 'Req. reagents';
     if (s.kind === 'reveal' && spare('orc tooth') < 3) why = 'Req. reagents';
     if (s.kind === 'fol' && !(casts >= 1)) why = 'Req. reagents';
+    if (s.kind === 'mend' && (spare('sapphire') < 1 || spare('orc tooth') < 1)) why = 'Req. reagents';
     if (s.kind === 'ride' && !cup) why = 'cup is elsewhere';
     out.push({ kind: s.kind, label: s.label, ok: !why, why });
   }
@@ -798,6 +811,7 @@ export function parseDeskRequest(text) {
   if (/^(cancel|never ?mind|nvm|forget it)$/.test(t)) return { kind: 'cancel' };
   if (/^(remove ?curse|uncurse|remcurse)$/.test(t)) return { kind: 'uncurse' };
   if (/^reveal$/.test(t)) return { kind: 'reveal' };
+  if (/^(mend|repair)$/.test(t)) return { kind: 'mend' };
   if (/^(chalice|chalice of the rain|ride|cup)$/.test(t)) return { kind: 'ride' };
   const fol = t.match(/^(forces of light|forces|fol|light)(?: (?:in|into|at|room) ?(\d+))?$/);
   if (fol) return { kind: 'fol', ...(fol[2] ? { room: Number(fol[2]) } : {}) };
