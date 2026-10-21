@@ -407,7 +407,7 @@ console.log('\npractice sessions in another room');
      practiceAt > next.indexOf("job('ride', 'go'") && practiceAt > next.indexOf("job('fol', 'go'")
        && practiceAt > next.indexOf("job('desk', 'go'") && practiceAt < next.indexOf('if (cup) return null;'));
   const castStage = AP.slice(AP.indexOf("case 'practice:cast': {"), AP.indexOf("case 'practice:back'"));
-  ok('any waiting ticket ends the session', /\['ride', 'fol', 'uncurse', 'reveal', 'relief', 'return'\]/.test(castStage)
+  ok('any waiting ticket ends the session', /\['ride', 'fol', 'uncurse', 'reveal', 'mend', 'relief', 'return'\]/.test(castStage)
      && castStage.includes('waiting > 0'));
   ok('...as does losing the wall', castStage.includes('!(this.hold && this.holdWorks())'));
   ok('the wall stage never casts in the open', AP.includes("this.chaliceEvent('practice_no_wall'"));

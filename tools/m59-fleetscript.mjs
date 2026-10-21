@@ -2829,6 +2829,20 @@ async function keeperCall(who, name, args, timeoutMs = 20_000) {
 }
 
 /**
+ * ONE KEEPER ACTION FOR A VERIFY STEP, addressed the way the `fight` step addresses it. A long
+ * verify loop (practice-bow) needs the keeper's own `fight` — close, swing, loot — and the broker's
+ * snapshot session cannot run one on a keeper-backed character. Never throws.
+ */
+async function keeperActionFor(fleet, agent, name, args = {}, timeoutMs = 120_000) {
+  try {
+    const ports = await keeperPorts(fleet, { wantAgent: agent });
+    const entry = ports?.get?.(agent);
+    if (!entry) return { error: 'no keeper port for this agent' };
+    return await keeperCall({ ...entry, agent }, name, args, timeoutMs);
+  } catch (e) { return { error: e?.message ?? String(e) }; }
+}
+
+/**
  * Take work, movement and economy off the keeper for the duration and keep them. Returns a
  * release function that is safe to call twice.
  */
@@ -4680,7 +4694,8 @@ async function runStep(ctx, agent, rawStep, state) {
 
     case 'verify': {
       const v = await step.fn({ agent, observe, call, state, fleet: ctx.fleet,
-                               minHealth: ctx.minHealth, fragileBelow: ctx.fragileBelow });
+                               minHealth: ctx.minHealth, fragileBelow: ctx.fragileBelow,
+                               keeper: (name, args, ms) => keeperActionFor(ctx.fleet, agent, name, args, ms) });
       // AN OBJECT IS TRUTHY, AND THIS USED TO BE `Boolean(v)`.
       //
       // So a verify returning `{ ok: false, why: '...' }` — the shape every script on disk

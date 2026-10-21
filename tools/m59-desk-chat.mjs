@@ -172,6 +172,7 @@ export class DeskChat {
       ride: `meet me at ${at}; I will offer it — counter with nothing, then use it and drop it`,
       uncurse: `come and stand by me at ${at}`,
       reveal: `drop the items at my feet at ${at}`,
+      mend: `drop what needs mending at my feet at ${at}, and pick it up when I say done`,
       fol: `lighting ${this.where(room)}`,
     }[r.kind];
     await say(`${entry.label} queued — ${how}. "cancel" withdraws it`);

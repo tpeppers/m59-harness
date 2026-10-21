@@ -25890,6 +25890,33 @@ export class Autopilot {
       this.chaliceEvent('uncursed', { for: traveller, cast: !!them, ...(t.human ? { human: true } : {}) });
       return;
     }
+    // MEND, like reveal, reaches only the caster's pack or its own floor (mend.kod:106-110), so the
+    // traveller dropped what it wants mended here. A sapphire and an orc tooth a cast
+    // (mend.kod:55-56). The server checks nothing about the item: mend.kod refuses a broken one
+    // and a full one before any reagent is spent, and the requester reads the condition back.
+    if (t.kind === 'mend') {
+      const floorNow = [...(this.s.client?.room?.objects?.values?.() ?? [])];
+      const onFloor = new Set(floorNow.map(o => o.id));
+      // A PERSON'S TICKET NAMES NOTHING: they said "mend" and dropped it. Anything gettable on
+      // the floor is a candidate, nearest the server's own reach of `mend_max`.
+      const items = t.items ?? floorNow
+        .filter(o => (o.flags & OF.GETTABLE) && !(o.flags & OF.PLAYER))
+        .slice(0, this.chaliceCfg?.mend_max ?? 3)
+        .map(o => ({ id: o.id, name: this.s.client?.rsc?.get?.(o.nameRsc) ?? '' }));
+      const keep = this.chaliceReagentFloor();
+      let done = 0;
+      for (const item of items.slice(0, this.chaliceCfg?.mend_max ?? 3)) {
+        if (!onFloor.has(item.id)) continue;
+        if (this.reagentOnHand('sapphire') - (keep['sapphire'] ?? 0) < 1) break;
+        if (this.reagentOnHand('orc tooth') - (keep['orc tooth'] ?? 0) < 1) break;
+        const r = await this.chaliceCast('mend', item.id);
+        if (r.cast) done++;
+      }
+      store.mark(t.id, 'done', { note: `mend cast on ${done} of ${items.length}`, mended: done });
+      this.chaliceEvent('mended', { for: traveller, cast_on: done, asked: items.length,
+        ...(t.human ? { human: true } : {}) });
+      return;
+    }
     // REVEAL reaches only the caster's own pack or the floor it stands on (reveal.kod:94), so
     // the traveller dropped the items here. Three orc teeth and thirty mana each.
     //
@@ -25985,8 +26012,10 @@ export class Autopilot {
     if (this._chaliceDeskSaidAt && now - this._chaliceDeskSaidAt < 60_000) return;
     this._chaliceDeskSaidAt = now;
     const floor = this.chaliceReagentFloor();
-    const have = Object.fromEntries(['emerald', 'orc tooth', 'elderberry'].map(k => [k, this.reagentOnHand(k)]));
-    const menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup });
+    const have = Object.fromEntries(['emerald', 'orc tooth', 'elderberry', 'sapphire'].map(k => [k, this.reagentOnHand(k)]));
+    const c = this.s?.client;
+    const knows = { mend: (c?.spells ?? []).some(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? '').toLowerCase() === 'mend') };
+    const menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup, knows });
     const limits = Object.fromEntries(['human_hold_ms', 'human_max_wait_ms', 'ticket_ttl_ms']
       .map(k => [k, cfg[k]]));
     try { store.setDesk(me, { menu, room: cfg.post_room ?? cfg.station_room, fol_room: folRoomsOf(cfg)[0] ?? null, limits }, now); } catch {}
@@ -26658,6 +26687,12 @@ export class Autopilot {
         const t = this.chaliceFleetOnly(store.claimNext(me, { kind, humanOnly: true, ...ttl }), store);
         if (t) return job('desk', 'go', t, { service: kind });
       }
+      // MEND HAS NO RIDE TO RIDE INSIDE: an archer walks here with a worn bow, drops it and files
+      // the ticket (tools/fleetscripts/practice-bow.mjs), so a KEEPER-filed mend is a job too.
+      if (cfg.mend !== false) {
+        const t = this.chaliceFleetOnly(store.claimNext(me, { kind: 'mend', ...ttl }), store);
+        if (t) return job('desk', 'go', t, { service: 'mend' });
+      }
     }
     // PRACTICE IN ANOTHER ROOM, LAST OF ALL. Only when no ride, no forces of light and no desk
     // ticket is waiting, the body is fit, and one cast is affordable above the desk's reserve.
@@ -26788,7 +26823,7 @@ export class Autopilot {
       case 'practice:cast': {
         // THE DESK COMES FIRST. Anybody waiting — a ride, forces of light, a desk service, a
         // relief — ends the session on the spot; so does a hurt body, a lost wall or the clock.
-        const waiting = ['ride', 'fol', 'uncurse', 'reveal', 'relief', 'return']
+        const waiting = ['ride', 'fol', 'uncurse', 'reveal', 'mend', 'relief', 'return']
           .reduce((n, k) => n + (store.openCount?.(k) ?? 0), 0);
         if (!this.chaliceFit() || now > st.until || waiting > 0 || !(this.hold && this.holdWorks())) {
           st.stage = 'back';
@@ -26851,13 +26886,16 @@ export class Autopilot {
       }
 
       // ---- a person asked for remove curse or reveal: wait at the station for them, cast
-      case 'desk:go': return goto(cfg.station_room, 'serve');
+      // A MEND TICKET NAMES THE ROOM ITS FILER IS STANDING IN: the desk's published room, which
+      // is the post room when one is set and not necessarily the chalice station.
+      case 'desk:go': return goto(st.service === 'mend' && Number.isFinite(Number(st.room)) && Number(st.room) > 0
+        ? Number(st.room) : cfg.station_room, 'serve');
       case 'desk:serve': {
         if (!this.playerHere(st.traveller)) {
           if (now - (st.since ?? now) > cfg.human_max_wait_ms) {
             if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: 'requester never arrived' }); } catch {}
             this.chaliceEvent('desk_unserved', { ticket: st.ticket, for: st.traveller, service: st.service,
-              why: 'never arrived at the station', human: true });
+              why: 'never arrived at the station', ...(st.human ? { human: true } : {}) });
             st.ticket = null; st.stage = 'back';
           }
           return true;
@@ -26866,7 +26904,7 @@ export class Autopilot {
         if (!t || ['done', 'abandoned'].includes(t.status)) { st.ticket = null; st.stage = 'back'; return true; }
         await this.chaliceServeTicket(t, store);
         this.chaliceEvent('desk_served', { ticket: st.ticket, for: st.traveller, service: st.service,
-          waited_ms: Date.now() - (t.at ?? Date.now()), human: true });
+          waited_ms: Date.now() - (t.at ?? Date.now()), ...(t.human ? { human: true } : {}) });
         st.ticket = null; st.stage = 'back';
         return true;
       }
