@@ -328,6 +328,9 @@ __pycache__/
 # LOUD PVP CALLOUTS. What a loud character says when a hostile player enters its map
 # (tools/m59-pvp-callout.mjs): this machine's lines; the shape is substrate/pvp-callouts.example.json.
 /substrate/pvp-callouts.json
+# PAIN YELPS. One line per damage zone, said by a loud character in a PvP moment, in Zalgo
+# (tools/m59-pvp-yelp.mjs): this machine's lines; the shape is substrate/pvp-yelps.example.json.
+/substrate/pvp-yelps.json
 
 # CAST ROLE TAGS. substrate/cast-roles.json tags characters with a role that casting strategies read
 # as ctx.role (tools/m59-spellgear.mjs). Per-character ORDERS, like tuning.json; the shape is

@@ -25,6 +25,11 @@
 // `voice` is a character name or a list of them, matched against the speaker case-insensitively. Kermit
 // never says "Moi does not miss"; a voice nobody in the fleet has is a line nobody says.
 //
+// A LINE MAY CARRY A `tier` (1..4): its designed Zalgo corruption level (m59-zalgo.mjs), the Cthulhu set's
+// whispers at 1 and "HE COMES" at 4. A speaker who is hurt says any line at least as corrupted as its health
+// (m59-pvp-yelp.mjs thresholds), so the level said is max(tier, health level). A line with no tier is an
+// ORIGINAL, and is also what a pain yelp mixes in to keep the character's own voice.
+//
 // THE LOG. What is said goes out through M59Client.say, whose tap (tapSent 'say') lands in the PvP actions
 // file with the text, the say type and -- for a callout -- the player that triggered it. Speech HEARD during
 // a PvP window goes to the messages file as kind 'said' with the speaker. The text log (m59-pvp.mjs
@@ -57,7 +62,9 @@ export function parseCallouts(raw) {
       throw new Error(`callouts: "${text}": voice must be a name or a list of names`);
     const voices = object && entry.voice != null ? [entry.voice].flat().map(voiceKey).filter(Boolean) : [];
     if (object && entry.voice != null && !voices.length) throw new Error(`callouts: "${text}": empty voice`);
-    lines.push({ text, voices: voices.length ? voices : null });
+    const tier = object && entry.tier != null ? Number(entry.tier) : null;
+    if (tier != null && !(Number.isSafeInteger(tier) && tier >= 1 && tier <= 4)) throw new Error(`callouts: "${text}": tier must be 1..4`);
+    lines.push({ text, voices: voices.length ? voices : null, ...(tier ? { tier } : {}) });
   }
   if (!lines.length) throw new Error('callouts: no lines');
   if (lines.some(l => l.text.length > 200)) throw new Error('callouts: a line is longer than 200 characters');
@@ -95,7 +102,9 @@ export function pickCallout(lines, { recent = [], enemy = '', me = '', random = 
   const index = pool[Math.floor(random() * pool.length) % pool.length];
   const line = lines[index], raw = typeof line === 'string' ? line : line.text;
   const text = raw.replaceAll('{enemy}', String(enemy)).replaceAll('{me}', String(me)).replace(/\s+/g, ' ').trim();
-  return { index, text, ...(typeof line === 'object' && line.voices ? { voice: line.voices } : {}) };
+  return { index, text, template: raw.replace(/s+/g, ' ').trim(),
+    ...(typeof line === 'object' && line.voices ? { voice: line.voices } : {}),
+    ...(typeof line === 'object' && line.tier ? { tier: line.tier } : {}) };
 }
 
 const dayOf = at => new Date(at).toISOString().slice(0, 10);
@@ -120,7 +129,7 @@ export function recentCallouts(dir, now = Date.now(), windowMs = 10 * 60_000) {
 /** May this character speak to this arrival? The fleet-wide chorus cap, and never twice itself. */
 export function chorusVerdict(rows, { room, player, speaker, now = Date.now(), chorus = CHORUS, windowMs = CHORUS_WINDOW_MS }) {
   const key = String(player).toLowerCase();
-  const same = rows.filter(r => r.room === room && String(r.player).toLowerCase() === key && now - r.at <= windowMs);
+  const same = rows.filter(r => r.kind !== 'yelp' && r.room === room && String(r.player).toLowerCase() === key && now - r.at <= windowMs);
   if (same.some(r => String(r.speaker).toLowerCase() === String(speaker).toLowerCase())) return { speak: false, why: 'already spoke to this arrival' };
   if (same.length >= chorus) return { speak: false, why: `chorus full (${same.length}/${chorus})` };
   return { speak: true, why: `chorus ${same.length + 1}/${chorus}` };

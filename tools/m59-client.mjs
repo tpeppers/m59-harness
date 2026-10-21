@@ -1022,7 +1022,13 @@ export class M59Client {
   //
   // Every one of these refusals arrives as prose, not as an error, so the only
   // way to know a line was actually said is to watch for the SAID echo.
-  say(text, type = 1)   { this.send(BP.SAY_TO, u8b(type), pstr(text)); this.tapSent?.('say', { text: String(text), say_type: ({ 1: 'say', 2: 'yell', 3: 'broadcast' })[type] ?? String(type) }); }
+  // `encoding: 'utf8'` is opt-in: Latin-1 keeps only the low byte above U+00FF, so Zalgo marks (m59-zalgo.mjs)
+  // would go out as digits. Everything else keeps the Latin-1 it always had.
+  say(text, type = 1, { encoding = 'latin1' } = {}) {
+    this.send(BP.SAY_TO, u8b(type), pbuf(Buffer.from(String(text), encoding === 'utf8' ? 'utf8' : 'latin1')));
+    this.tapSent?.('say', { text: String(text), say_type: ({ 1: 'say', 2: 'yell', 3: 'broadcast' })[type] ?? String(type),
+      ...(encoding === 'utf8' ? { encoding: 'utf8' } : {}) });
+  }
   yell(text)            { this.say(text, 2); }
   broadcast(text)       { this.say(text, 3); }
   emote(text)           { this.say(text, 6); }

@@ -1,0 +1,16 @@
+{
+ "_doc": "The shape of substrate/pvp-yelps.json (gitignored: this machine's lines). tools/m59-pvp-yelp.mjs: a LOUD character in a PvP moment says one line as its health falls into each zone (thresholds, percent of max), corrupted to that zone's Zalgo level (tools/m59-zalgo.mjs). With probability mix_original the line is instead an untiered callout from pvp-callouts.json, corrupted the same way. {enemy} is the attacker, {me} the speaker; a line may be { \"text\", \"voice\" } as for callouts. Lines are written plain: the corruption is applied when said.",
+ "settings": {
+  "thresholds": [90, 65, 40, 20],
+  "reset_at": 95,
+  "mix_original": 0.3,
+  "corrupt_names": false,
+  "budget_bytes": 400
+ },
+ "zones": {
+  "1": ["Just a scratch.", "Is that all, {enemy}?"],
+  "2": ["That one hurt.", "You'll pay for that, {enemy}."],
+  "3": ["Medic!", "I'm bleeding here!"],
+  "4": ["Not like this...", "Avenge me!"]
+ }
+}

@@ -1156,6 +1156,15 @@ the records it describes.
   an action row only inside a PvP window, and that an enemy's rendered look is kept once per fight and on
   every change while a fleetmate's never is, and what ours picked up is kept for two minutes after an enemy
   died and not otherwise),
+  `node tools/m59-pvp-yelp-test.mjs` (16 — **the wolf that yelps**: that Zalgo level 1 corrupts exactly one word
+  with single marks, level 2 a quarter to a half of the words, level 4 every letter stacked; that `{enemy}` stays
+  readable unless `corrupt_names`; that the byte budget cuts mid-line at a letter boundary and never mid-mark;
+  that Latin-1 turns `H̸E` into `H8E` while `say(..., { encoding: 'utf8' })` sends the marks and the
+  default stays Latin-1; that a loud character in a PvP moment yelps ONCE per damage zone, a deep hit saying
+  only the deeper zone and healing to 95% starting a new episode; that quiet characters and calm moments say
+  nothing; that a yelp may borrow an untiered ORIGINAL callout in the speaker's own voice and never a tiered
+  one; that an arrival callout is corrupted to max(its tier, the speaker's wounds); and that yelps do not
+  fill the arrival chorus),
   `node tools/m59-pvp-callout-test.mjs` (15 — **loud PvP**: that a line in one muppet's voice (`voice`) is only
   picked for that muppet, case-insensitively, while unvoiced lines go to anyone; that a loud character says one line, `{enemy}`
   filled, when a hostile arrives, and the actions row carries the quote, the callout and the location stamp;
