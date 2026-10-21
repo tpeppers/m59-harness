@@ -67,6 +67,11 @@ function allBodies(c) {
   return c.messages.map((m) => m.body).join('\n;\n');
 }
 
+// Kod class names are case-insensitive, and rooms spell them however they like
+// (&Groundworm for GroundWorm).  Every index below is keyed by the canonical
+// name, or creature pages looking up GroundWorm find nothing.
+const canon = (n) => (cls(db, n) || { name: n }).name;
+
 // plMonsters = [ [&Ant, 60], [&Groundworm, 40] ]
 function spawnTable(c) {
   const out = [];
@@ -75,7 +80,7 @@ function spawnTable(c) {
     if (at < 0) continue;
     const chunk = m.body.slice(at, m.body.indexOf(';', at) + 1);
     for (const g of chunk.matchAll(/\[\s*&(\w+)\s*,\s*(\d+)\s*\]/g)) {
-      out.push({ cls: g[1], weight: parseInt(g[2], 10) });
+      out.push({ cls: canon(g[1]), weight: parseInt(g[2], 10) });
     }
   }
   return out;
@@ -106,7 +111,7 @@ function placedObjects(c) {
         if (!/^new_(row|col|angle)$/i.test(e[1]) && e[1].toLowerCase() !== 'what') extra[e[1]] = e[2];
       }
       out.push({
-        cls: mk[1],
+        cls: canon(mk[1]),
         row: row ? +row[1] : null,
         col: col ? +col[1] : null,
         where: m.name,

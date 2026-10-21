@@ -9,10 +9,12 @@
 //
 // Built from compendium/data/spawns.json, which is extracted from the kod room
 // sources and carries the spawn chance, the population cap, and the cite line for
-// every entry. NOT from the rendered creature pages: groundwormlarva.html claims
+// every entry. NOT from the rendered creature pages: groundwormlarva.html used to claim
 // "no room in the world declares this creature", while the data shows it generated
 // at 70% in OutdoorsF6 and again in OutdoorsF7 — which is exactly where a character
-// of mine kept dying to something the page said could not be there.
+// of mine kept dying to something the page said could not be there. (The pages keyed
+// rooms by the spelling a room used, &Groundworm, not the class GroundWorm; fixed in
+// extract-zones.mjs 2026-10-21, but this file still reads the extracted data directly.)
 //
 // Levels and karma come from tools/monsters.json (viLevel / viKarma straight out of
 // the class definitions), because the danger of a room is the level of the WORST

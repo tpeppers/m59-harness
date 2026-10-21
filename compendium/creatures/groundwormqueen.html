@@ -65,8 +65,13 @@ each roll:  iRnd = random(0, 100); walk the table accumulating weights;
 <strong>20%</strong> check for a game token, and a <strong>3%</strong> check for a newbie signet
 ring if the killer qualifies. Nothing drops at all from an illusion or a summoned creature.
 <span class="cite">kod/object/passive/trestype.kod:228, :246 · monster.kod:4944</span></div><h2>Where to find it</h2>
-<p>No room in the world declares this creature. It is summoned by another creature, placed by an
-administrator, or left over from content that is no longer reachable.</p><h2>Behaviour</h2><h3>How it behaves</h3><div class="tablewrap"><table class="data">
+<p>3 places in the world put this creature into play.
+<em>Share</em> is its weight in that room's spawn table — how often the generator picks it over
+everything else there.</p><div class="tablewrap"><table class="data">
+<thead><tr><th class="sortable" data-col="0">Zone</th><th class="sortable" data-col="1">Region</th><th class="sortable" data-col="2">How</th><th class="num sortable" data-col="3">Share</th><th class="sortable" data-col="4">Declared in</th></tr></thead>
+<tbody><tr><td class="" data-sort="Martyr's Battleground"><a href="../zones/canyon2.html">Martyr's Battleground</a></td><td class="" data-sort="Set pieces">Set pieces</td><td class="" data-sort="generator">generator</td><td class="num " data-sort="15">15%</td><td class=""><code>monsroom/objroom/canyon2.kod</code></td></tr>
+<tr><td class="" data-sort="The Badlands"><a href="../zones/outdoorsk5.html">The Badlands (Set pieces)</a></td><td class="" data-sort="Set pieces">Set pieces</td><td class="" data-sort="generator">generator</td><td class="num " data-sort="70">70%</td><td class=""><code>monsroom/objroom/k5.kod</code></td></tr>
+<tr><td class="" data-sort="Brog's Antechamber"><a href="../zones/orcpitb.html">Brog's Antechamber</a></td><td class="" data-sort="Wilderness">Wilderness</td><td class="" data-sort="generator">generator</td><td class="num " data-sort="30">30%</td><td class=""><code>monsroom/orcpitb.kod</code></td></tr></tbody></table></div><h2>Behaviour</h2><h3>How it behaves</h3><div class="tablewrap"><table class="data">
 <thead><tr><th class="">Flag</th><th class="">What it means</th></tr></thead>
 <tbody><tr><td class=""><code class="k">AI_FIGHT_SINGLEMINDED</code></td><td class="">—</td></tr>
 <tr><td class=""><code class="k">AI_FIGHT_HYPERAGGRESSIVE</code></td><td class="">—</td></tr></tbody></table></div><p class="cite">kod/include/blakston.khd</p><h2>What killing it does to your karma</h2>

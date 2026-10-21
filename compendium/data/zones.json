@@ -6,7 +6,7 @@
   "withExits": 231,
   "exitsResolved": 883,
   "exitsDangling": 18,
-  "monsterClasses": 120,
+  "monsterClasses": 117,
   "regions": [
    "Barloque",
    "Boss lairs",
@@ -570,7 +570,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 5,
     "col": 5
@@ -841,7 +844,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 5,
     "col": 5
@@ -850,7 +857,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -982,7 +989,13 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_HOMETOWN",
+    "ROOM_SANCTUARY",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 5,
     "col": 6
@@ -2653,7 +2666,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 11,
     "col": 5
@@ -2763,7 +2779,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 4,
     "col": 2
@@ -2835,7 +2854,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 2,
     "col": 5
@@ -2844,7 +2866,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Barloquevaultman",
+     "cls": "barloqueVaultman",
      "row": 4,
      "col": 11,
      "where": "CreateStandardObjects",
@@ -2874,7 +2896,7 @@
      }
     },
     {
-     "cls": "QuillPen",
+     "cls": "Quillpen",
      "row": 5,
      "col": 11,
      "where": "CreateStandardObjects",
@@ -2957,8 +2979,16 @@
    "region": "Barloque",
    "roo": "gmhall.roo",
    "music": "bar.mid",
-   "terrain": [],
-   "flags": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP",
+    "TERRAIN_FOUNTAIN"
+   ],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SANCTUARY"
+   ],
    "teleport": {
     "row": 8,
     "col": 7
@@ -3249,61 +3279,61 @@
      }
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 14,
      "col": 6,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 14,
      "col": 18,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 19,
      "col": 6,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 19,
      "col": 18,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 22,
      "col": 7,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 23,
      "col": 14,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 9,
      "col": 10,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 9,
      "col": 14,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 4,
      "col": 9,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 4,
      "col": 14,
      "where": "CreateStandardObjects"
@@ -3390,7 +3420,7 @@
      }
     },
     {
-     "cls": "KocatanBowmaker",
+     "cls": "KocatanBowMaker",
      "row": 3,
      "col": 6,
      "where": "CreateStandardObjects",
@@ -3987,7 +4017,7 @@
      }
     },
     {
-     "cls": "QuillPen",
+     "cls": "Quillpen",
      "row": 14,
      "col": 9,
      "where": "CreateStandardObjects"
@@ -4367,7 +4397,10 @@
     "TERRAIN_SHOP",
     "TERRAIN_CASTLE"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 9,
     "col": 14
@@ -4376,7 +4409,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "BarloqueTailor",
+     "cls": "Barloquetailor",
      "row": 6,
      "col": 8,
      "where": "CreateStandardObjects",
@@ -4473,7 +4506,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "JewelOfFroz",
+     "cls": "JewelofFroz",
      "row": 37,
      "col": 38,
      "where": "CreateJewel",
@@ -4646,8 +4679,14 @@
    "region": "Cor Noth",
    "roo": "corgroc.roo",
    "music": "smithy.mid",
-   "terrain": [],
-   "flags": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP"
+   ],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 5,
     "col": 5
@@ -4723,7 +4762,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 3,
     "col": 3
@@ -4732,7 +4775,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -4886,7 +4929,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "CorNothInnKeeper",
+     "cls": "CorNothInnkeeper",
      "row": 3,
      "col": 11,
      "where": "CreateStandardObjects"
@@ -5396,8 +5439,14 @@
    "region": "Cor Noth",
    "roo": "cortail.roo",
    "music": "city04.mid",
-   "terrain": [],
-   "flags": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP"
+   ],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 6,
     "col": 3
@@ -5501,7 +5550,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 3,
     "col": 25
@@ -5634,7 +5686,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 5,
     "col": 5
@@ -6038,7 +6093,7 @@
      }
     },
     {
-     "cls": "Dukeguard",
+     "cls": "DukeGuard",
      "row": 42,
      "col": 32,
      "where": "CreateStandardObjects",
@@ -6048,7 +6103,7 @@
      }
     },
     {
-     "cls": "Dukeguard",
+     "cls": "DukeGuard",
      "row": 42,
      "col": 27,
      "where": "CreateStandardObjects",
@@ -7159,7 +7214,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "Barstool",
+     "cls": "BarStool",
      "row": 17,
      "col": 2,
      "where": "CreateStandardObjects"
@@ -7189,7 +7244,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "QuillPen",
+     "cls": "Quillpen",
      "row": 12,
      "col": 13,
      "where": "CreateStandardObjects"
@@ -7458,7 +7513,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -7661,7 +7716,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -8042,7 +8097,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -8240,7 +8295,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -8618,7 +8673,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -9092,7 +9147,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -9758,7 +9813,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -10128,7 +10183,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -10599,7 +10654,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -11264,7 +11319,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -11568,7 +11623,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "chest",
+     "cls": "Chest",
      "row": 5,
      "col": 18,
      "where": "CreateStandardObjects",
@@ -11978,7 +12033,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -12223,7 +12278,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -12470,7 +12525,7 @@
      }
     },
     {
-     "cls": "firepit",
+     "cls": "Firepit",
      "row": 12,
      "col": 27,
      "where": "CreateStandardObjects",
@@ -12480,7 +12535,7 @@
      }
     },
     {
-     "cls": "firepit",
+     "cls": "Firepit",
      "row": 17,
      "col": 27,
      "where": "CreateStandardObjects",
@@ -12530,7 +12585,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -12945,7 +13000,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -13194,7 +13249,7 @@
      }
     },
     {
-     "cls": "Hotplate",
+     "cls": "HotPlate",
      "row": null,
      "col": null,
      "where": "CreateHotPlates",
@@ -13369,7 +13424,7 @@
      }
     },
     {
-     "cls": "chest",
+     "cls": "Chest",
      "row": 22,
      "col": 10,
      "where": "CreateStandardObjects"
@@ -13439,7 +13494,10 @@
    "region": "Raza",
    "roo": null,
    "music": null,
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP"
+   ],
    "flags": [
     "ROOM_NO_COMBAT",
     "ROOM_OVERRIDE_DEPTH2",
@@ -13498,7 +13556,10 @@
    "region": "Outlying areas",
    "roo": "guest1.roo",
    "music": "login.mid",
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP"
+   ],
    "flags": [
     "ROOM_NO_COMBAT",
     "ROOM_OVERRIDE_DEPTH2",
@@ -13515,7 +13576,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "HazarInnkeeper",
+     "cls": "HazarInnKeeper",
      "row": 3,
      "col": 9,
      "where": "CreateStandardObjects"
@@ -13759,7 +13820,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -14633,7 +14694,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_GUEST_AREA"
+   ],
    "teleport": {
     "row": 6,
     "col": 8
@@ -14676,7 +14741,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_GUEST_AREA"
+   ],
    "teleport": {
     "row": 6,
     "col": 8
@@ -14695,7 +14764,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -14840,7 +14909,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -15176,7 +15245,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Hazarbartender",
+     "cls": "HazarBartender",
      "row": 8,
      "col": 7,
      "where": "CreateStandardObjects"
@@ -15392,7 +15461,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "NewbPortal",
+     "cls": "Newbportal",
      "row": 2,
      "col": 11,
      "where": "CreateStandardObjects",
@@ -16837,7 +16906,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 7,
     "col": 7
@@ -17092,7 +17164,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -17184,7 +17256,7 @@
      }
     },
     {
-     "cls": "JasperInnkeeper",
+     "cls": "JasperInnKeeper",
      "row": 6,
      "col": 6,
      "where": "CreateStandardObjects"
@@ -17578,7 +17650,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "JasperBlackSmith",
+     "cls": "JasperBlacksmith",
      "row": 13,
      "col": 13,
      "where": "CreateStandardObjects"
@@ -17834,7 +17906,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -19220,7 +19292,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 8,
      "col": 11,
      "where": "CreateStandardObjects",
@@ -19431,7 +19503,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 13,
     "col": 7
@@ -19440,7 +19516,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -19731,7 +19807,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 9,
     "col": 4
@@ -19818,7 +19897,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 6,
     "col": 3
@@ -20388,7 +20470,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "kocatanShopkeeper",
+     "cls": "KocatanShopkeeper",
      "row": 6,
      "col": 21,
      "where": "CreateStandardObjects",
@@ -20926,7 +21008,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 21,
      "col": 19,
      "where": "CreateStandardObjects",
@@ -20936,7 +21018,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 14,
      "col": 34,
      "where": "CreateStandardObjects",
@@ -20946,7 +21028,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 10,
      "col": 37,
      "where": "CreateStandardObjects",
@@ -20956,7 +21038,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 20,
      "col": 35,
      "where": "CreateStandardObjects",
@@ -21123,7 +21205,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 5,
     "col": 8
@@ -21202,7 +21288,7 @@
      }
     },
     {
-     "cls": "Newslink",
+     "cls": "NewsLink",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -21266,7 +21352,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 4,
     "col": 7
@@ -22022,7 +22111,7 @@
      "weight": 60
     },
     {
-     "cls": "Groundworm",
+     "cls": "GroundWorm",
      "weight": 40
     }
    ],
@@ -24245,37 +24334,37 @@
      }
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 26,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 32,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 38,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 44,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 50,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 4,
      "col": 56,
      "where": "CreateStandardObjects"
@@ -24317,13 +24406,13 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 7,
      "col": 61,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 13,
      "col": 61,
      "where": "CreateStandardObjects"
@@ -24335,19 +24424,19 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 28,
      "col": 61,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 34,
      "col": 61,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 40,
      "col": 61,
      "where": "CreateStandardObjects"
@@ -24371,13 +24460,13 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 43,
      "col": 58,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 44,
      "col": 38,
      "where": "CreateStandardObjects"
@@ -24389,13 +24478,13 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 40,
      "col": 31,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 48,
      "col": 57,
      "where": "CreateStandardObjects"
@@ -24407,25 +24496,25 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 14,
      "col": 57,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 9,
      "col": 50,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 9,
      "col": 44,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 12,
      "col": 40,
      "where": "CreateStandardObjects"
@@ -24461,7 +24550,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 30,
      "col": 26,
      "where": "CreateStandardObjects",
@@ -24471,13 +24560,13 @@
      }
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 36,
      "col": 26,
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "TallBush",
+     "cls": "Tallbush",
      "row": 40,
      "col": 26,
      "where": "CreateStandardObjects"
@@ -24836,7 +24925,7 @@
      "weight": 65
     },
     {
-     "cls": "GroundwormLarva",
+     "cls": "GroundWormLarva",
      "weight": 35
     }
    ],
@@ -25629,7 +25718,7 @@
      "weight": 40
     },
     {
-     "cls": "GroundwormLarva",
+     "cls": "GroundWormLarva",
      "weight": 60
     }
    ],
@@ -26422,13 +26511,13 @@
    "generators": [],
    "objects": [
     {
-     "cls": "LadyPheonix",
+     "cls": "ladypheonix",
      "row": null,
      "col": null,
      "where": "Constructed"
     },
     {
-     "cls": "shrine",
+     "cls": "Shrine",
      "row": null,
      "col": null,
      "where": "Constructed",
@@ -26581,7 +26670,7 @@
      "weight": 25
     },
     {
-     "cls": "GroundwormLarva",
+     "cls": "GroundWormLarva",
      "weight": 75
     }
    ],
@@ -27378,7 +27467,7 @@
    },
    "monsters": [
     {
-     "cls": "GroundwormLarva",
+     "cls": "GroundWormLarva",
      "weight": 70
     },
     {
@@ -27541,7 +27630,7 @@
      "weight": 60
     },
     {
-     "cls": "GroundwormLarva",
+     "cls": "GroundWormLarva",
      "weight": 40
     }
    ],
@@ -30865,7 +30954,7 @@
    ],
    "objects": [
     {
-     "cls": "FirePit",
+     "cls": "Firepit",
      "row": 48,
      "col": 5,
      "where": "CreateStandardObjects"
@@ -31891,7 +31980,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Elderberry",
+     "cls": "ElderBerry",
      "row": null,
      "col": null,
      "where": "DoColumnDown",
@@ -32030,7 +32119,7 @@
    ],
    "objects": [
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32041,7 +32130,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32052,7 +32141,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32063,7 +32152,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32080,7 +32169,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32091,7 +32180,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32102,7 +32191,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32113,7 +32202,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32124,7 +32213,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32135,7 +32224,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32146,7 +32235,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32157,7 +32246,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32168,7 +32257,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32179,7 +32268,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32190,7 +32279,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32201,7 +32290,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32212,7 +32301,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32223,7 +32312,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32234,7 +32323,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32245,7 +32334,7 @@
      }
     },
     {
-     "cls": "sign",
+     "cls": "Sign",
      "row": null,
      "col": null,
      "where": "CreateStandardObjects",
@@ -32782,7 +32871,7 @@
      "weight": 30
     },
     {
-     "cls": "Groundworm",
+     "cls": "GroundWorm",
      "weight": 70
     }
    ],
@@ -33368,7 +33457,7 @@
      "weight": 50
     },
     {
-     "cls": "Groundworm",
+     "cls": "GroundWorm",
      "weight": 50
     }
    ],
@@ -34942,11 +35031,11 @@
    },
    "monsters": [
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 90
     },
     {
-     "cls": "DragonflyQueen",
+     "cls": "DragonFlyQueen",
      "weight": 10
     }
    ],
@@ -35087,7 +35176,7 @@
    },
    "monsters": [
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 100
     }
    ],
@@ -35207,7 +35296,7 @@
    },
    "monsters": [
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 100
     }
    ],
@@ -35331,7 +35420,7 @@
      "weight": 10
     },
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 90
     }
    ],
@@ -35429,7 +35518,7 @@
      "weight": 95
     },
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 5
     }
    ],
@@ -35661,7 +35750,7 @@
    },
    "monsters": [
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 90
     },
     {
@@ -36635,7 +36724,7 @@
    },
    "monsters": [
     {
-     "cls": "Dragonfly",
+     "cls": "DragonFly",
      "weight": 100
     }
    ],
@@ -37975,7 +38064,7 @@
    },
    "monsters": [
     {
-     "cls": "DragonflyQueen",
+     "cls": "DragonFlyQueen",
      "weight": 100
     }
    ],
@@ -39319,7 +39408,7 @@
      "weight": 35
     },
     {
-     "cls": "Avarshaman",
+     "cls": "AvarShaman",
      "weight": 25
     }
    ],
@@ -39924,7 +40013,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "ViewpointGlobe",
+     "cls": "ViewPointGlobe",
      "row": 33,
      "col": 27,
      "where": "CreateStandardObjects",
@@ -39941,7 +40030,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "ViewpointGlobe",
+     "cls": "ViewPointGlobe",
      "row": 33,
      "col": 29,
      "where": "CreateStandardObjects",
@@ -39958,7 +40047,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "ViewpointGlobe",
+     "cls": "ViewPointGlobe",
      "row": 35,
      "col": 30,
      "where": "CreateStandardObjects",
@@ -39975,7 +40064,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "ViewpointGlobe",
+     "cls": "ViewPointGlobe",
      "row": 36,
      "col": 30,
      "where": "CreateStandardObjects",
@@ -45147,7 +45236,9 @@
    "region": "Set pieces",
    "roo": "canyons.roo",
    "music": "walk1.mid",
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_MOUNTAIN"
+   ],
    "flags": [],
    "teleport": {
     "row": 19,
@@ -45273,7 +45364,7 @@
      "weight": 85
     },
     {
-     "cls": "GroundwormQueen",
+     "cls": "GroundWormQueen",
      "weight": 15
     }
    ],
@@ -45998,7 +46089,11 @@
    "terrain": [
     "TERRAIN_CASTLE"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SANCTUARY"
+   ],
    "teleport": {
     "row": 8,
     "col": 23
@@ -46607,7 +46702,11 @@
    "terrain": [
     "TERRAIN_CASTLE"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SANCTUARY"
+   ],
    "teleport": {
     "row": 10,
     "col": 16
@@ -46616,7 +46715,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "Basicinnkeeper",
+     "cls": "BasicInnKeeper",
      "row": 25,
      "col": 24,
      "where": "CreateStandardObjects",
@@ -48000,7 +48099,7 @@
    ],
    "objects": [
     {
-     "cls": "yeti",
+     "cls": "Yeti",
      "row": null,
      "col": null,
      "where": "YetiGenTimer"
@@ -48171,7 +48270,7 @@
      "weight": 30
     },
     {
-     "cls": "GroundwormQueen",
+     "cls": "GroundWormQueen",
      "weight": 70
     }
    ],
@@ -48243,7 +48342,7 @@
    ],
    "objects": [
     {
-     "cls": "shrine",
+     "cls": "Shrine",
      "row": null,
      "col": null,
      "where": "Constructed",
@@ -48329,7 +48428,7 @@
      "where": "CreateStandardObjects"
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 7,
      "col": 2,
      "where": "CreateStandardObjects",
@@ -48339,7 +48438,7 @@
      }
     },
     {
-     "cls": "brazier",
+     "cls": "Brazier",
      "row": 10,
      "col": 2,
      "where": "CreateStandardObjects",
@@ -48541,7 +48640,7 @@
      }
     },
     {
-     "cls": "MarionInnKeeper",
+     "cls": "MarionInnkeeper",
      "row": 2,
      "col": 4,
      "where": "CreateStandardObjects",
@@ -48715,7 +48814,13 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_HOMETOWN",
+    "ROOM_SANCTUARY",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 7,
     "col": 8
@@ -50571,7 +50676,7 @@
    ],
    "objects": [
     {
-     "cls": "Kocatanbrazier",
+     "cls": "KocatanBrazier",
      "row": 4,
      "col": 58,
      "where": "CreateStandardObjects",
@@ -50580,7 +50685,7 @@
      }
     },
     {
-     "cls": "Kocatanbrazier",
+     "cls": "KocatanBrazier",
      "row": 9,
      "col": 58,
      "where": "CreateStandardObjects",
@@ -50589,7 +50694,7 @@
      }
     },
     {
-     "cls": "KocatanSentry",
+     "cls": "Kocatansentry",
      "row": 4,
      "col": 61,
      "where": "CreateStandardObjects",
@@ -50923,7 +51028,7 @@
      "weight": 70
     },
     {
-     "cls": "GroundwormQueen",
+     "cls": "GroundWormQueen",
      "weight": 30
     }
    ],
@@ -51621,7 +51726,10 @@
    "region": "Wilderness",
    "roo": "tosgrave.roo",
    "music": "marion.mid",
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_MYSTICAL"
+   ],
    "flags": [],
    "teleport": {
     "row": 14,
@@ -52090,7 +52198,10 @@
    "region": "Outlying areas",
    "roo": "necarena.roo",
    "music": "nec02.mid",
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_LAVA"
+   ],
    "flags": [
     "ROOM_SAFE_DEATH",
     "ROOM_OVERRIDE_DEPTH1"
@@ -52433,7 +52544,14 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_HOMETOWN",
+    "ROOM_SANCTUARY",
+    "ROOM_HARD_LEARN",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 16,
     "col": 6
@@ -55648,7 +55766,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 7,
     "col": 3
@@ -56280,7 +56401,9 @@
    "region": "Tos",
    "roo": "tosarena.roo",
    "music": "pk_fm.mid",
-   "terrain": [],
+   "terrain": [
+    "TERRAIN_CITY"
+   ],
    "flags": [
     "ROOM_SAFE_DEATH",
     "ROOM_OVERRIDE_DEPTH1"
@@ -56750,8 +56873,14 @@
    "region": "Tos",
    "roo": "tosbank.roo",
    "music": "bank.mid",
-   "terrain": [],
-   "flags": [],
+   "terrain": [
+    "TERRAIN_CITY",
+    "TERRAIN_SHOP"
+   ],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 3,
     "col": 6
@@ -56859,10 +56988,13 @@
    "terrain": [
     "TERRAIN_CITY"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
-    "row": null,
-    "col": null
+    "row": 9,
+    "col": 9
    },
    "monsters": [],
    "generators": [],
@@ -57646,7 +57778,11 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2",
+    "ROOM_SAFELOGOFF"
+   ],
    "teleport": {
     "row": 5,
     "col": 5
@@ -57744,8 +57880,8 @@
    ],
    "flags": [],
    "teleport": {
-    "row": null,
-    "col": null
+    "row": 2,
+    "col": 7
    },
    "monsters": [],
    "generators": [],
@@ -57833,8 +57969,8 @@
    ],
    "flags": [],
    "teleport": {
-    "row": null,
-    "col": null
+    "row": 3,
+    "col": 3
    },
    "monsters": [],
    "generators": [],
@@ -57933,7 +58069,10 @@
     "TERRAIN_CITY",
     "TERRAIN_SHOP"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
     "row": 3,
     "col": 3
@@ -58108,8 +58247,8 @@
    ],
    "flags": [],
    "teleport": {
-    "row": null,
-    "col": null
+    "row": 6,
+    "col": 4
    },
    "monsters": [],
    "generators": [],
@@ -58158,10 +58297,13 @@
     "TERRAIN_CITY",
     "TERRAIN_RESIDENCE"
    ],
-   "flags": [],
+   "flags": [
+    "ROOM_NO_COMBAT",
+    "ROOM_OVERRIDE_DEPTH2"
+   ],
    "teleport": {
-    "row": null,
-    "col": null
+    "row": 6,
+    "col": 4
    },
    "monsters": [],
    "generators": [],
@@ -58233,7 +58375,7 @@
    "generators": [],
    "objects": [
     {
-     "cls": "KocatanTradeMaster",
+     "cls": "kocatanTradeMaster",
      "row": 3,
      "col": 7,
      "where": "CreateStandardObjects",
@@ -58635,6 +58777,18 @@
     "col": 2
    },
    {
+    "room": "Duke1",
+    "how": "placed",
+    "row": 42,
+    "col": 32
+   },
+   {
+    "room": "Duke1",
+    "how": "placed",
+    "row": 42,
+    "col": 27
+   },
+   {
     "room": "Duke2",
     "how": "placed",
     "row": 9,
@@ -58713,7 +58867,7 @@
     "col": 7
    }
   ],
-  "Barloquevaultman": [
+  "barloqueVaultman": [
    {
     "room": "BarVault",
     "how": "placed",
@@ -58729,7 +58883,7 @@
     "col": null
    }
   ],
-  "KocatanBowmaker": [
+  "KocatanBowMaker": [
    {
     "room": "BowmakerHut",
     "how": "placed",
@@ -58913,7 +59067,7 @@
     "col": 12
    }
   ],
-  "BarloqueTailor": [
+  "Barloquetailor": [
    {
     "room": "Castle2E",
     "how": "placed",
@@ -58929,7 +59083,7 @@
     "col": 5
    }
   ],
-  "CorNothInnKeeper": [
+  "CorNothInnkeeper": [
    {
     "room": "CorInn",
     "how": "placed",
@@ -58951,20 +59105,6 @@
     "how": "placed",
     "row": 4,
     "col": 3
-   }
-  ],
-  "Dukeguard": [
-   {
-    "room": "Duke1",
-    "how": "placed",
-    "row": 42,
-    "col": 32
-   },
-   {
-    "room": "Duke1",
-    "how": "placed",
-    "row": 42,
-    "col": 27
    }
   ],
   "DeadLich": [
@@ -59023,7 +59163,7 @@
     "col": 9
    }
   ],
-  "HazarInnkeeper": [
+  "HazarInnKeeper": [
    {
     "room": "Guest1",
     "how": "placed",
@@ -59075,7 +59215,7 @@
     "col": 3
    }
   ],
-  "Hazarbartender": [
+  "HazarBartender": [
    {
     "room": "Guest7",
     "how": "placed",
@@ -59099,7 +59239,7 @@
     "col": 13
    }
   ],
-  "JasperInnkeeper": [
+  "JasperInnKeeper": [
    {
     "room": "JasperInn",
     "how": "placed",
@@ -59107,7 +59247,7 @@
     "col": 6
    }
   ],
-  "JasperBlackSmith": [
+  "JasperBlacksmith": [
    {
     "room": "JasperSmithy",
     "how": "placed",
@@ -59155,7 +59295,7 @@
     "col": 10
    }
   ],
-  "KocatanSentry": [
+  "Kocatansentry": [
    {
     "room": "KocatanBank",
     "how": "placed",
@@ -59225,7 +59365,7 @@
     "col": 6
    }
   ],
-  "kocatanShopkeeper": [
+  "KocatanShopkeeper": [
    {
     "room": "KocatanStore",
     "how": "placed",
@@ -59387,7 +59527,7 @@
     "how": "generator"
    }
   ],
-  "Groundworm": [
+  "GroundWorm": [
    {
     "room": "Badland1",
     "weight": 40,
@@ -59766,7 +59906,7 @@
     "how": "generator"
    }
   ],
-  "GroundwormLarva": [
+  "GroundWormLarva": [
    {
     "room": "OutdoorsD4",
     "weight": 35,
@@ -60067,7 +60207,7 @@
     "how": "generator"
    }
   ],
-  "Dragonfly": [
+  "DragonFly": [
    {
     "room": "OutdoorsKA1",
     "weight": 90,
@@ -60102,9 +60242,14 @@
     "room": "OutdoorsKB5",
     "weight": 100,
     "how": "generator"
+   },
+   {
+    "room": "OutdoorsKC4",
+    "weight": 30,
+    "how": "generator"
    }
   ],
-  "DragonflyQueen": [
+  "DragonFlyQueen": [
    {
     "room": "OutdoorsKA1",
     "weight": 10,
@@ -60233,6 +60378,11 @@
     "room": "OutdoorsKE2",
     "weight": 25,
     "how": "generator"
+   },
+   {
+    "room": "OutdoorsKE4",
+    "weight": 25,
+    "how": "generator"
    }
   ],
   "AvarChieftain": [
@@ -60309,26 +60459,12 @@
     "how": "generator"
    }
   ],
-  "DragonFly": [
-   {
-    "room": "OutdoorsKC4",
-    "weight": 30,
-    "how": "generator"
-   }
-  ],
   "KocatanBonePriestess": [
    {
     "room": "OutdoorsKD1",
     "how": "placed",
     "row": 19,
     "col": 40
-   }
-  ],
-  "Avarshaman": [
-   {
-    "room": "OutdoorsKE4",
-    "weight": 25,
-    "how": "generator"
    }
   ],
   "KocatanMadScientist": [
@@ -60561,7 +60697,7 @@
     "col": 13
    }
   ],
-  "GroundwormQueen": [
+  "GroundWormQueen": [
    {
     "room": "Canyon2",
     "weight": 15,
@@ -60578,7 +60714,7 @@
     "how": "generator"
    }
   ],
-  "Basicinnkeeper": [
+  "BasicInnKeeper": [
    {
     "room": "Duke5",
     "how": "placed",
@@ -60593,7 +60729,7 @@
     "how": "generator"
    }
   ],
-  "yeti": [
+  "Yeti": [
    {
     "room": "IceCave1",
     "how": "placed",
@@ -60609,7 +60745,7 @@
     "col": null
    }
   ],
-  "MarionInnKeeper": [
+  "MarionInnkeeper": [
    {
     "room": "MarionInn",
     "how": "placed",
@@ -60760,7 +60896,7 @@
     "col": 4
    }
   ],
-  "KocatanTradeMaster": [
+  "kocatanTradeMaster": [
    {
     "room": "TradingPost",
     "how": "placed",
@@ -60813,6 +60949,21 @@
    },
    {
     "room": "Guest1",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest2",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest3",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest4",
     "row": null,
     "col": null
    },
@@ -60873,6 +61024,106 @@
    },
    {
     "room": "Marion",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "Guest6",
     "row": null,
     "col": null
    },
@@ -61500,6 +61751,56 @@
     "room": "GMHall",
     "row": 3,
     "col": 11
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 14,
+    "col": 6
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 14,
+    "col": 18
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 19,
+    "col": 6
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 19,
+    "col": 18
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 22,
+    "col": 7
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 23,
+    "col": 14
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 9,
+    "col": 10
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 9,
+    "col": 14
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 4,
+    "col": 9
+   },
+   {
+    "room": "BazmansRoom",
+    "row": 4,
+    "col": 14
    },
    {
     "room": "CorGrocer",
@@ -62182,6 +62483,16 @@
     "col": 24
    },
    {
+    "room": "MarionElderHut",
+    "row": 7,
+    "col": 2
+   },
+   {
+    "room": "MarionElderHut",
+    "row": 10,
+    "col": 2
+   },
+   {
     "room": "Throne1",
     "row": 11,
     "col": 3
@@ -62424,6 +62735,16 @@
     "room": "BarloqueJail",
     "row": 2,
     "col": 2
+   },
+   {
+    "room": "Duke1",
+    "row": 42,
+    "col": 32
+   },
+   {
+    "room": "Duke1",
+    "row": 42,
+    "col": 27
    },
    {
     "room": "Duke2",
@@ -63007,41 +63328,19 @@
     "col": 9
    }
   ],
-  "Newslink": [
+  "NewsLink": [
    {
     "room": "BarHall",
     "row": null,
     "col": null
    },
    {
-    "room": "CorHall",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "JasperHall",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "JasperTavern",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "KocatanHall",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "MarHall",
-    "row": null,
-    "col": null
-   }
-  ],
-  "NewsLink": [
-   {
     "room": "BarInn",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "CorHall",
     "row": null,
     "col": null
    },
@@ -63056,12 +63355,32 @@
     "col": null
    },
    {
+    "room": "JasperHall",
+    "row": null,
+    "col": null
+   },
+   {
     "room": "JasperInn",
     "row": null,
     "col": null
    },
    {
+    "room": "JasperTavern",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "KocatanHall",
+    "row": null,
+    "col": null
+   },
+   {
     "room": "KocatanInn",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "MarHall",
     "row": null,
     "col": null
    },
@@ -66055,6 +66374,16 @@
     "col": 40
    },
    {
+    "room": "GuildHall7",
+    "row": 12,
+    "col": 27
+   },
+   {
+    "room": "GuildHall7",
+    "row": 17,
+    "col": 27
+   },
+   {
     "room": "HermitHut",
     "row": 1,
     "col": 2
@@ -66068,6 +66397,11 @@
     "room": "Badland1",
     "row": 44,
     "col": 58
+   },
+   {
+    "room": "OutdoorsG6",
+    "row": 48,
+    "col": 5
    },
    {
     "room": "OutdoorsKA0",
@@ -66105,14 +66439,14 @@
     "col": 6
    }
   ],
-  "Barloquevaultman": [
+  "barloqueVaultman": [
    {
     "room": "BarVault",
     "row": 4,
     "col": 11
    }
   ],
-  "QuillPen": [
+  "Quillpen": [
    {
     "room": "BarVault",
     "row": 5,
@@ -66127,6 +66461,11 @@
     "room": "Gallery",
     "row": 12,
     "col": 13
+   },
+   {
+    "room": "KocatanHallB",
+    "row": 6,
+    "col": 6
    }
   ],
   "GuildCreator": [
@@ -66851,68 +67190,6 @@
     "col": 5
    }
   ],
-  "brazier": [
-   {
-    "room": "BazmansRoom",
-    "row": 14,
-    "col": 6
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 14,
-    "col": 18
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 19,
-    "col": 6
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 19,
-    "col": 18
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 22,
-    "col": 7
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 23,
-    "col": 14
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 9,
-    "col": 10
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 9,
-    "col": 14
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 4,
-    "col": 9
-   },
-   {
-    "room": "BazmansRoom",
-    "row": 4,
-    "col": 14
-   },
-   {
-    "room": "MarionElderHut",
-    "row": 7,
-    "col": 2
-   },
-   {
-    "room": "MarionElderHut",
-    "row": 10,
-    "col": 2
-   }
-  ],
   "Candle": [
    {
     "room": "BowmakerHut",
@@ -66960,7 +67237,7 @@
     "col": 6
    }
   ],
-  "KocatanBowmaker": [
+  "KocatanBowMaker": [
    {
     "room": "BowmakerHut",
     "row": 3,
@@ -68633,7 +68910,7 @@
     "col": null
    }
   ],
-  "BarloqueTailor": [
+  "Barloquetailor": [
    {
     "room": "Castle2E",
     "row": 6,
@@ -68817,7 +69094,7 @@
     "col": 9
    }
   ],
-  "JewelOfFroz": [
+  "JewelofFroz": [
    {
     "room": "Cave3",
     "row": 37,
@@ -68838,7 +69115,7 @@
     "col": null
    }
   ],
-  "CorNothInnKeeper": [
+  "CorNothInnkeeper": [
    {
     "room": "CorInn",
     "row": 3,
@@ -69191,18 +69468,6 @@
     "col": null
    }
   ],
-  "Dukeguard": [
-   {
-    "room": "Duke1",
-    "row": 42,
-    "col": 32
-   },
-   {
-    "room": "Duke1",
-    "row": 42,
-    "col": 27
-   }
-  ],
   "Skull": [
    {
     "room": "Gallery",
@@ -69312,11 +69577,171 @@
     "col": 16
    }
   ],
-  "Barstool": [
+  "BarStool": [
    {
     "room": "Gallery",
     "row": 17,
     "col": 2
+   },
+   {
+    "room": "Guest1",
+    "row": 3,
+    "col": 3
+   },
+   {
+    "room": "Guest1",
+    "row": 5,
+    "col": 10
+   },
+   {
+    "room": "Guest1",
+    "row": 8,
+    "col": 2
+   },
+   {
+    "room": "JasperTavern",
+    "row": 13,
+    "col": 4
+   },
+   {
+    "room": "JasperTavern",
+    "row": 13,
+    "col": 5
+   },
+   {
+    "room": "JasperTavern",
+    "row": 13,
+    "col": 6
+   },
+   {
+    "room": "JasperTavern",
+    "row": 13,
+    "col": 7
+   },
+   {
+    "room": "JasperTavern",
+    "row": 13,
+    "col": 8
+   },
+   {
+    "room": "JasperTavern",
+    "row": 14,
+    "col": 3
+   },
+   {
+    "room": "JasperTavern",
+    "row": 15,
+    "col": 3
+   },
+   {
+    "room": "JasperTavern",
+    "row": 16,
+    "col": 3
+   },
+   {
+    "room": "JasperTavern",
+    "row": 14,
+    "col": 9
+   },
+   {
+    "room": "JasperTavern",
+    "row": 15,
+    "col": 9
+   },
+   {
+    "room": "JasperTavern",
+    "row": 16,
+    "col": 9
+   },
+   {
+    "room": "BarlBar1",
+    "row": 5,
+    "col": 10
+   },
+   {
+    "room": "BarlBar1",
+    "row": 5,
+    "col": 13
+   },
+   {
+    "room": "BarlBar1",
+    "row": 7,
+    "col": 15
+   },
+   {
+    "room": "BarlBar1",
+    "row": 9,
+    "col": 15
+   },
+   {
+    "room": "BarlBar1",
+    "row": 11,
+    "col": 15
+   },
+   {
+    "room": "BarlBar1",
+    "row": 13,
+    "col": 15
+   },
+   {
+    "room": "BarlBar1",
+    "row": 7,
+    "col": 7
+   },
+   {
+    "room": "BarlBar1",
+    "row": 9,
+    "col": 7
+   },
+   {
+    "room": "BarlBar1",
+    "row": 11,
+    "col": 7
+   },
+   {
+    "room": "BarlBar1",
+    "row": 13,
+    "col": 7
+   },
+   {
+    "room": "BarlBar1",
+    "row": 15,
+    "col": 10
+   },
+   {
+    "room": "BarlBar1",
+    "row": 15,
+    "col": 13
+   },
+   {
+    "room": "TosInn",
+    "row": 8,
+    "col": 10
+   },
+   {
+    "room": "TosInn",
+    "row": 8,
+    "col": 9
+   },
+   {
+    "room": "TosInn",
+    "row": 8,
+    "col": 8
+   },
+   {
+    "room": "TosInn",
+    "row": 7,
+    "col": 8
+   },
+   {
+    "room": "TosInn",
+    "row": 6,
+    "col": 8
+   },
+   {
+    "room": "TosInn",
+    "row": 5,
+    "col": 8
    }
   ],
   "Boulder": [
@@ -69483,8 +69908,118 @@
    },
    {
     "room": "Castle2b",
+    "row": 4,
+    "col": 26
+   },
+   {
+    "room": "Castle2b",
+    "row": 4,
+    "col": 32
+   },
+   {
+    "room": "Castle2b",
+    "row": 4,
+    "col": 38
+   },
+   {
+    "room": "Castle2b",
+    "row": 4,
+    "col": 44
+   },
+   {
+    "room": "Castle2b",
+    "row": 4,
+    "col": 50
+   },
+   {
+    "room": "Castle2b",
+    "row": 4,
+    "col": 56
+   },
+   {
+    "room": "Castle2b",
+    "row": 7,
+    "col": 61
+   },
+   {
+    "room": "Castle2b",
+    "row": 13,
+    "col": 61
+   },
+   {
+    "room": "Castle2b",
+    "row": 28,
+    "col": 61
+   },
+   {
+    "room": "Castle2b",
+    "row": 34,
+    "col": 61
+   },
+   {
+    "room": "Castle2b",
+    "row": 40,
+    "col": 61
+   },
+   {
+    "room": "Castle2b",
+    "row": 43,
+    "col": 58
+   },
+   {
+    "room": "Castle2b",
+    "row": 44,
+    "col": 38
+   },
+   {
+    "room": "Castle2b",
+    "row": 40,
+    "col": 31
+   },
+   {
+    "room": "Castle2b",
+    "row": 48,
+    "col": 57
+   },
+   {
+    "room": "Castle2b",
     "row": 30,
     "col": 41
+   },
+   {
+    "room": "Castle2b",
+    "row": 14,
+    "col": 57
+   },
+   {
+    "room": "Castle2b",
+    "row": 9,
+    "col": 50
+   },
+   {
+    "room": "Castle2b",
+    "row": 9,
+    "col": 44
+   },
+   {
+    "room": "Castle2b",
+    "row": 12,
+    "col": 40
+   },
+   {
+    "room": "Castle2b",
+    "row": 30,
+    "col": 26
+   },
+   {
+    "room": "Castle2b",
+    "row": 36,
+    "col": 26
+   },
+   {
+    "room": "Castle2b",
+    "row": 40,
+    "col": 26
    }
   ],
   "SpiderTree": [
@@ -70114,9 +70649,19 @@
     "col": 18
    },
    {
+    "room": "GuildHall5",
+    "row": 5,
+    "col": 18
+   },
+   {
     "room": "GuildHall8",
     "row": 13,
     "col": 27
+   },
+   {
+    "room": "GodRoom",
+    "row": 22,
+    "col": 10
    }
   ],
   "Box": [
@@ -70273,6 +70818,16 @@
     "room": "Gallery",
     "row": 3,
     "col": 4
+   },
+   {
+    "room": "OrcCave6",
+    "row": 4,
+    "col": 58
+   },
+   {
+    "room": "OrcCave6",
+    "row": 9,
+    "col": 58
    }
   ],
   "OrcTorch": [
@@ -70311,7 +70866,7 @@
     "col": 4
    }
   ],
-  "Hotplate": [
+  "HotPlate": [
    {
     "room": "GuildHall1",
     "row": null,
@@ -70508,30 +71063,6 @@
     "col": 49
    }
   ],
-  "chest": [
-   {
-    "room": "GuildHall5",
-    "row": 5,
-    "col": 18
-   },
-   {
-    "room": "GodRoom",
-    "row": 22,
-    "col": 10
-   }
-  ],
-  "firepit": [
-   {
-    "room": "GuildHall7",
-    "row": 12,
-    "col": 27
-   },
-   {
-    "room": "GuildHall7",
-    "row": 17,
-    "col": 27
-   }
-  ],
   "News": [
    {
     "room": "GodRoom",
@@ -70589,173 +71120,11 @@
     "col": 9
    }
   ],
-  "HazarInnkeeper": [
+  "HazarInnKeeper": [
    {
     "room": "Guest1",
     "row": 3,
     "col": 9
-   }
-  ],
-  "BarStool": [
-   {
-    "room": "Guest1",
-    "row": 3,
-    "col": 3
-   },
-   {
-    "room": "Guest1",
-    "row": 5,
-    "col": 10
-   },
-   {
-    "room": "Guest1",
-    "row": 8,
-    "col": 2
-   },
-   {
-    "room": "JasperTavern",
-    "row": 13,
-    "col": 4
-   },
-   {
-    "room": "JasperTavern",
-    "row": 13,
-    "col": 5
-   },
-   {
-    "room": "JasperTavern",
-    "row": 13,
-    "col": 6
-   },
-   {
-    "room": "JasperTavern",
-    "row": 13,
-    "col": 7
-   },
-   {
-    "room": "JasperTavern",
-    "row": 13,
-    "col": 8
-   },
-   {
-    "room": "JasperTavern",
-    "row": 14,
-    "col": 3
-   },
-   {
-    "room": "JasperTavern",
-    "row": 15,
-    "col": 3
-   },
-   {
-    "room": "JasperTavern",
-    "row": 16,
-    "col": 3
-   },
-   {
-    "room": "JasperTavern",
-    "row": 14,
-    "col": 9
-   },
-   {
-    "room": "JasperTavern",
-    "row": 15,
-    "col": 9
-   },
-   {
-    "room": "JasperTavern",
-    "row": 16,
-    "col": 9
-   },
-   {
-    "room": "BarlBar1",
-    "row": 5,
-    "col": 10
-   },
-   {
-    "room": "BarlBar1",
-    "row": 5,
-    "col": 13
-   },
-   {
-    "room": "BarlBar1",
-    "row": 7,
-    "col": 15
-   },
-   {
-    "room": "BarlBar1",
-    "row": 9,
-    "col": 15
-   },
-   {
-    "room": "BarlBar1",
-    "row": 11,
-    "col": 15
-   },
-   {
-    "room": "BarlBar1",
-    "row": 13,
-    "col": 15
-   },
-   {
-    "room": "BarlBar1",
-    "row": 7,
-    "col": 7
-   },
-   {
-    "room": "BarlBar1",
-    "row": 9,
-    "col": 7
-   },
-   {
-    "room": "BarlBar1",
-    "row": 11,
-    "col": 7
-   },
-   {
-    "room": "BarlBar1",
-    "row": 13,
-    "col": 7
-   },
-   {
-    "room": "BarlBar1",
-    "row": 15,
-    "col": 10
-   },
-   {
-    "room": "BarlBar1",
-    "row": 15,
-    "col": 13
-   },
-   {
-    "room": "TosInn",
-    "row": 8,
-    "col": 10
-   },
-   {
-    "room": "TosInn",
-    "row": 8,
-    "col": 9
-   },
-   {
-    "room": "TosInn",
-    "row": 8,
-    "col": 8
-   },
-   {
-    "room": "TosInn",
-    "row": 7,
-    "col": 8
-   },
-   {
-    "room": "TosInn",
-    "row": 6,
-    "col": 8
-   },
-   {
-    "room": "TosInn",
-    "row": 5,
-    "col": 8
    }
   ],
   "Cow": [
@@ -70773,123 +71142,6 @@
     "room": "Newb2",
     "row": 30,
     "col": 59
-   }
-  ],
-  "sign": [
-   {
-    "room": "Guest2",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest3",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest4",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "Guest6",
-    "row": null,
-    "col": null
    }
   ],
   "HazarBlacksmith": [
@@ -70913,14 +71165,14 @@
     "col": 3
    }
   ],
-  "Hazarbartender": [
+  "HazarBartender": [
    {
     "room": "Guest7",
     "row": 8,
     "col": 7
    }
   ],
-  "NewbPortal": [
+  "Newbportal": [
    {
     "room": "Newb8",
     "row": 2,
@@ -70948,7 +71200,7 @@
     "col": 13
    }
   ],
-  "JasperInnkeeper": [
+  "JasperInnKeeper": [
    {
     "room": "JasperInn",
     "row": 6,
@@ -70967,7 +71219,7 @@
     "col": 15
    }
   ],
-  "JasperBlackSmith": [
+  "JasperBlacksmith": [
    {
     "room": "JasperSmithy",
     "row": 13,
@@ -71009,7 +71261,7 @@
     "col": 10
    }
   ],
-  "KocatanSentry": [
+  "Kocatansentry": [
    {
     "room": "KocatanBank",
     "row": 8,
@@ -71062,13 +71314,6 @@
     "col": 5
    }
   ],
-  "Quillpen": [
-   {
-    "room": "KocatanHallB",
-    "row": 6,
-    "col": 6
-   }
-  ],
   "KocatanInnkeeper": [
    {
     "room": "KocatanInn",
@@ -71076,7 +71321,7 @@
     "col": 6
    }
   ],
-  "kocatanShopkeeper": [
+  "KocatanShopkeeper": [
    {
     "room": "KocatanStore",
     "row": 6,
@@ -71300,133 +71545,36 @@
     "col": null
    }
   ],
-  "TallBush": [
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 26
-   },
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 32
-   },
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 38
-   },
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 44
-   },
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 50
-   },
-   {
-    "room": "Castle2b",
-    "row": 4,
-    "col": 56
-   },
-   {
-    "room": "Castle2b",
-    "row": 7,
-    "col": 61
-   },
-   {
-    "room": "Castle2b",
-    "row": 13,
-    "col": 61
-   },
-   {
-    "room": "Castle2b",
-    "row": 28,
-    "col": 61
-   },
-   {
-    "room": "Castle2b",
-    "row": 34,
-    "col": 61
-   },
-   {
-    "room": "Castle2b",
-    "row": 40,
-    "col": 61
-   },
-   {
-    "room": "Castle2b",
-    "row": 43,
-    "col": 58
-   },
-   {
-    "room": "Castle2b",
-    "row": 44,
-    "col": 38
-   },
-   {
-    "room": "Castle2b",
-    "row": 40,
-    "col": 31
-   },
-   {
-    "room": "Castle2b",
-    "row": 48,
-    "col": 57
-   },
-   {
-    "room": "Castle2b",
-    "row": 14,
-    "col": 57
-   },
-   {
-    "room": "Castle2b",
-    "row": 9,
-    "col": 50
-   },
-   {
-    "room": "Castle2b",
-    "row": 9,
-    "col": 44
-   },
-   {
-    "room": "Castle2b",
-    "row": 12,
-    "col": 40
-   },
-   {
-    "room": "Castle2b",
-    "row": 30,
-    "col": 26
-   },
-   {
-    "room": "Castle2b",
-    "row": 36,
-    "col": 26
-   },
-   {
-    "room": "Castle2b",
-    "row": 40,
-    "col": 26
-   }
-  ],
-  "LadyPheonix": [
+  "ladypheonix": [
    {
     "room": "OutdoorsE5",
     "row": null,
     "col": null
    }
   ],
-  "shrine": [
+  "Shrine": [
    {
     "room": "OutdoorsE5",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "OutdoorsKA0",
     "row": null,
     "col": null
    },
    {
     "room": "OutdoorsK5",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "OrcCave5",
+    "row": null,
+    "col": null
+   },
+   {
+    "room": "NecArena",
     "row": null,
     "col": null
    }
@@ -71479,13 +71627,6 @@
     "col": null
    }
   ],
-  "FirePit": [
-   {
-    "room": "OutdoorsG6",
-    "row": 48,
-    "col": 5
-   }
-  ],
   "Skeleton": [
    {
     "room": "OutdoorsG9",
@@ -71500,7 +71641,7 @@
     "col": null
    }
   ],
-  "Elderberry": [
+  "ElderBerry": [
    {
     "room": "Newb6",
     "row": null,
@@ -71596,23 +71737,6 @@
     "col": 61
    }
   ],
-  "Shrine": [
-   {
-    "room": "OutdoorsKA0",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "OrcCave5",
-    "row": null,
-    "col": null
-   },
-   {
-    "room": "NecArena",
-    "row": null,
-    "col": null
-   }
-  ],
   "GhostItem": [
    {
     "room": "OutdoorsKA0",
@@ -71670,7 +71794,7 @@
     "col": null
    }
   ],
-  "ViewpointGlobe": [
+  "ViewPointGlobe": [
    {
     "room": "LichMaze",
     "row": 33,
@@ -71814,14 +71938,14 @@
     "col": 13
    }
   ],
-  "Basicinnkeeper": [
+  "BasicInnKeeper": [
    {
     "room": "Duke5",
     "row": 25,
     "col": 24
    }
   ],
-  "yeti": [
+  "Yeti": [
    {
     "room": "IceCave1",
     "row": null,
@@ -71835,7 +71959,7 @@
     "col": null
    }
   ],
-  "MarionInnKeeper": [
+  "MarionInnkeeper": [
    {
     "room": "MarionInn",
     "row": 2,
@@ -71875,18 +71999,6 @@
     "room": "OrcCave5Extension",
     "row": null,
     "col": null
-   }
-  ],
-  "Kocatanbrazier": [
-   {
-    "room": "OrcCave6",
-    "row": 4,
-    "col": 58
-   },
-   {
-    "room": "OrcCave6",
-    "row": 9,
-    "col": 58
    }
   ],
   "Ghost": [
@@ -72130,7 +72242,7 @@
     "col": 4
    }
   ],
-  "KocatanTradeMaster": [
+  "kocatanTradeMaster": [
    {
     "room": "TradingPost",
     "row": 3,
