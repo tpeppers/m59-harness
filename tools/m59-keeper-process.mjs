@@ -57,6 +57,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet, fleetName as resolvedFleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 import { createSightingsObserver, makeClassifier, TICK_MS as SIGHTINGS_TICK_MS } from './m59-sightings.mjs';
+import { createWorldObserver } from './m59-worldbook.mjs';
 import { hostileBasis } from './m59-ally.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsCastArityOk } from './m59-rts-safety.mjs';
@@ -504,6 +505,33 @@ if (process.env.M59_SIGHTINGS !== '0') {
     setInterval(() => session.sightings?.tick(session.client, { watching: inGame && !!session.live }),
       SIGHTINGS_TICK_MS).unref?.();
   } catch (e) { console.error(`[keeper] ${agent} sightings unavailable: ${e.message}`); }
+}
+
+// THE WORLD BOOK (tools/m59-worldbook.mjs): the NPCs in the room this keeper stands in, and any
+// buy list it opens, written to one file per fleet so every script and the broker's `world` tool
+// can ask "where was Maleval last seen" or "what was Izzio selling". The keeper already holds the
+// whole room; this is the half of it the sightings ledger does not keep. Writes are rate-limited
+// in the observer (on change, or once a minute while a sighting holds). Off with M59_WORLDBOOK=0.
+if (process.env.M59_WORLDBOOK !== '0') {
+  try {
+    const book = createWorldObserver({ dir: ledgerDirFor(resolvedFleetName()), agent,
+      log: m => console.error(`[keeper] ${agent} ${m}`) });
+    session.worldbook = book;
+    setInterval(() => {
+      try {
+        const c = session.client, room = session.world?.room;
+        if (!inGame || !c?.self || !(room?.num > 0)) return;
+        const name = o => c.rsc?.get?.(o.nameRsc) ?? o.name ?? null;
+        const objects = [];
+        for (const o of c.room?.objects?.values?.() ?? [])
+          if (o.id !== c.selfId) objects.push({ name: name(o), flags: o.flags, row: o.row, col: o.col });
+        const bl = c.buyList;
+        book.tick({ room: room.num, room_name: room.name ?? null, objects,
+          buyList: bl?.seller ? { raw: bl, seller: name(bl.seller),
+            items: (bl.items ?? []).map(i => ({ name: name(i), cost: i.cost, amount: i.amount || undefined })) } : null });
+      } catch { /* the book is evidence for scripts; failing to write it never costs the body */ }
+    }, 5000).unref?.();
+  } catch (e) { console.error(`[keeper] ${agent} world book unavailable: ${e.message}`); }
 }
 
 function cancelInitialJoinRetry() {
@@ -1193,6 +1221,7 @@ function state() {
     combat: session?.combat?.status(),
     player_evidence: session?.playerEvidence?.status()??{enabled:false},
     sightings: session?.sightings?.status?.() ?? { enabled: false },
+    worldbook: session?.worldbook?.status?.() ?? { enabled: false },
     connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //

@@ -128,8 +128,9 @@ import * as transits from './m59-transits.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-session.mjs';
 import {normalizeSafeLegPolicy} from './m59-safelegs.mjs';
-import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import { resolveFleet, rosterGameEndpoint, ledgerDirFor } from './m59-fleetpath.mjs';
 import { liveDesk } from './m59-plan-desk.mjs';
+import { readBook, observeShop, npcInfo, whoSells, roomInfo, recent as recentNpcs, WANDERERS } from './m59-worldbook.mjs';
 import {
   BROKER_FLEET_LOCK_KIND,
   addFleetLockGuard,
@@ -10728,6 +10729,9 @@ const TOOLS = [
         const room = s.world?.room;
         recordShopSeen({ name: sellerName, room: room?.num ?? null, room_name: room?.name ?? null,
                          items: shop.items });
+        // And the fleet's world book, keyed by the PERSON, so a wanderer's last stock follows him.
+        observeShop(ledgerDirFor(FLEET), { agent: a.agent, room: room?.num ?? null, room_name: room?.name ?? null,
+                                           seller: sellerName, items: shop.items });
       } catch { /* an observation, not part of the sale */ }
       // buy_names -> buy_ids, against the offer just read (see the schema).
       let unmatched = null;
@@ -13913,6 +13917,39 @@ const TOOLS = [
     },
   },
   {
+    // THE FLEET'S WORLD BOOK (m59-worldbook.mjs). Every keeper writes the NPCs in the room it
+    // stands in, and every buy list it opens, to one file per fleet. This reads it. It is the NPC
+    // half of what m59-sightings.mjs does for players: one character's glimpse is everybody's.
+    name: 'world',
+    description:
+      'What the fleet has SEEN of NPCs: where one was last seen (room, square, when, by whom, and ' +
+      'whether a keeper has since seen that room without him), the last rooms it stood in, and the ' +
+      'last list it was selling. Also: which NPCs stood in a room when a keeper was last there, who ' +
+      'was last seen selling something, and where the five WANDERERS (Maleval, Parrin Aragone, ' +
+      'Miriana, Tendrath, Izzio) are. `fresh` means seen within 3 minutes and not seen gone since — ' +
+      'anything older is a rumour, because a wanderer moves every 30-90 minutes. Written by keepers ' +
+      'every few seconds; costs nothing to ask.',
+    schema: { type: 'object', properties: {
+      npc: { type: 'string', description: 'one NPC by name (or wanderer key: maleval, parrin, miriana, tendrath, izzio)' },
+      room: { type: 'number', description: 'who was in this room the last time a keeper stood in it' },
+      sells: { type: 'string', description: 'whose last-seen buy list contained this' },
+      wanderers: { type: 'boolean', description: 'all five wanderers' },
+      limit: { type: 'number', description: 'with no other argument: the N most recent NPC sightings (default 40)' },
+    } },
+    run: (a) => {
+      const book = readBook(ledgerDirFor(FLEET));
+      const roomName = n => worldMap?.rooms?.[n]?.name ?? null;
+      const clean = i => { if (!i) return null; const { _raw, ...rest } = i; return { ...rest, last_room_name: roomName(i.last_room) }; };
+      if (a.npc) return clean(npcInfo(book, a.npc)) ?? { found: false, note: `no keeper has recorded ${a.npc}` };
+      if (a.room != null) return roomInfo(book, a.room) ?? { found: false, note: `no keeper has stood in ${a.room} since the book began` };
+      if (a.sells) return { matches: whoSells(book, a.sells),
+        note: 'a list is a snapshot of what was offered when it was opened, not stock' };
+      if (a.wanderers) return { wanderers: Object.entries(WANDERERS).map(([k, w]) =>
+        ({ ...(clean(npcInfo(book, k)) ?? { name: w.npc, never_seen: true }), circuit: w.rooms.map(n => ({ room: n, room_name: roomName(n) })) })) };
+      return { recent: recentNpcs(book, { limit: Number(a.limit) || 40 }) };
+    },
+  },
+  {
     name: 'merchants',
     description:
       'Find a merchant: who sells a thing, who teaches a spell or skill, who might buy your loot, ' +
@@ -13939,6 +13976,15 @@ const TOOLS = [
       // The built catalogue plus every shop a character has actually opened (m59-shops-seen.mjs):
       // a merchant seen at a counter is never answered "not found" again.
       const all = withShopsSeen(merchantCatalogue.merchants, loadShopsSeen());
+      // WHERE THE FLEET LAST SAW A WANDERER (m59-worldbook.mjs): every keeper writes the NPCs in its
+      // room, so this is often minutes old rather than the catalogue's July.
+      const book = readBook(ledgerDirFor(FLEET));
+      const lastSeenOf = name => {
+        const i = name ? npcInfo(book, name) : null;
+        if (!i?.seen_at) return {};
+        return { last_seen: { room: i.room, last_room: i.last_room, room_name: roomName(i.last_room), at: i.seen_at,
+                              age_min: i.age_min, fresh: i.fresh, left_at: i.left_at, by: i.by } };
+      };
       const roomName = n => worldMap?.rooms?.[n]?.name ?? null;
       // A MERCHANT IS A CLASS; A PERSON CAN WEAR MORE THAN ONE. Jonas D'Accor is
       // RebelLiege standing in a bar and JealousGeneral walking a circuit, and on the
@@ -13947,7 +13993,8 @@ const TOOLS = [
       const brief = m => ({
         merchant: m.cls, name: m.name ?? null, room: m.room, room_name: roomName(m.room),
         ...(m.wanders ? { wanders: true, circuit: (m.circuit ?? []).map(n => ({ room: n, room_name: roomName(n) })),
-                          room_note: 'this one WALKS — `room` is where he was last seen, not where he is' }
+                          room_note: 'this one WALKS — `room` is where he was last seen, not where he is',
+                          ...lastSeenOf(m.name) }
                       : { wanders: false }),
         ...(m.also?.length ? { also: m.also.map(x => ({ ...x, room_name: roomName(x.room) })),
                                also_note: m.also_note } : {}),
