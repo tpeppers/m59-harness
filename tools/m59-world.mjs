@@ -1230,6 +1230,10 @@ export class World {
           : `walk_to EXACTLY {"col":${g.col},"row":${g.row}} (r${g.row}c${g.col}), then act go — the match is on that one square`,
       });
     }
+    if(fineOriginReach?.complete&&out.some(e=>e.kind==='go'&&e.fine_disconnected)){
+      for(const e of out)if(e.kind==='go'&&!e.fine_disconnected&&e.stand_on&&
+        fineOriginReach.squares.has(`${e.stand_on.row},${e.stand_on.col}`))e.prefer_fine_approach=true;
+    }
     return out;
   }
 

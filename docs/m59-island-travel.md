@@ -408,6 +408,10 @@ coarse-only portal so the ordinary exit executor tries a connected sibling
 first. It does not remove declared portals, infer failure from a timed-out
 search, or freeze operable door geometry. This repairs the bar's adjacent
 exit-square mismatch without a room-specific route or longer town timeout.
+When that proof reveals a partition mismatch, connected siblings use the
+ordinary fine walker before a coarse approach or a rail to the old anchor.
+The same cancellation, actual-room and final-position checks still precede
+`go`; a refused fine approach retains the coarse fallback.
 
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten

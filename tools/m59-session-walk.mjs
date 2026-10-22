@@ -6099,7 +6099,7 @@ export function sessionWalkPrototype(deps) {
     // Every failure below falls through to exactly the walk this function always did, so a
     // room with no baked route, a stale table, or a rail that cannot be joined costs one
     // attempt and nothing else. `M59_RAIL=0` switches it off for comparison.
-    if (process.env.M59_RAIL !== '0' && exit.to != null &&
+    if (process.env.M59_RAIL !== '0' && exit.to != null && !exit.prefer_fine_approach &&
         !(exit.kind==='edge'&&typeof preparedFineExitStage==='function'&&preparedFineExitStage(this.world.geometry,c.self,exit))) {
       // ASKED BY DESTINATION, NOT BY THE SQUARE THIS EXIT HAPPENS TO OFFER.
       //
@@ -6541,10 +6541,24 @@ export function sessionWalkPrototype(deps) {
     const stoppedAfterRailAttempt = await stopAfterAwait();
     if (stoppedAfterRailAttempt) return stoppedAfterRailAttempt;
     if (exit.kind === 'go') {
+      let walk;
+      // A sibling portal proved disconnected by the fine component is evidence
+      // that this partition's coarse approach can also run into its wall. Use
+      // the existing fine walker before spending the coarse retry budget.
+      if(exit.prefer_fine_approach){
+        const half=KOD_FINENESS>>1;
+        const fine=await this.walkFine(exit.stand_on.col*KOD_FINENESS+half,
+          exit.stand_on.row*KOD_FINENESS+half,{maxSteps:budget(exit),movementGeneration,controlToken,
+            avoidSquares:wrongDoor?.size?wrongDoor:null}).catch(()=>null);
+        const stopped=await stopAfterAwait();if(stopped)return stopped;
+        if(fine?.left_room)return {left:true,note:'the room changed during the fine doorway approach'};
+        if(isTerminalMovementReason(fine?.reason))return {left:false,stage:'walk',...fine};
+        if(fine?.arrived)walk={...fine,via:'fine approach around a coarse-only partition'};
+      }
       // CLEARANCE ON, because this is the long routing: crossing a whole room to a
       // boundary square is exactly where hugging the wall makes a step slide, the mover
       // land off plan, and the walker start the bounce. See walkTo's `clearance`.
-      let walk = await this.walkTo(exit.stand_on.col, exit.stand_on.row,
+      if(!walk?.arrived)walk = await this.walkTo(exit.stand_on.col, exit.stand_on.row,
                                    { maxSteps: budget(exit), movementGeneration, controlToken,
                                      clearance: LEAVE_VIA_CLEARANCE });
       const stoppedAfterWalk = await stopAfterAwait();
