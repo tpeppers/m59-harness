@@ -144,6 +144,7 @@ import {
 } from './runtime/fleet-lock.mjs';
 import { HANDOVER_PROTOCOL, RequestHold, handOver, judgeAdoption, canPreservePilotedKeeper, successorOf, successorSpawnSpec,
          takeOver } from './runtime/broker-handover.mjs';
+import { keeperHeapMb } from './m59-keeper-heap.mjs';
 import {createBrokerListenerIdentity} from './runtime/broker-listener-identity.mjs';
 import {
   AccountLeaseRegistry,
@@ -1322,10 +1323,13 @@ async function allocateKeeperPort(agent, index, credentials = null) {
 // collect sooner; it does not make the keeper need less. Keep it well above live + the
 // largest transient (route planning; before the tactics-trim throttle, a 171 MB file parse):
 // set too low, a keeper dies with "JavaScript heap out of memory" instead of slowing down.
-// M59_KEEPER_HEAP_MB=0 leaves Node's own default.
+// M59_KEEPER_HEAP_MB=0 leaves Node's own default. The env is the predecessor's after a live
+// handover, so the number may also live in substrate/keeper-heap-mb, read at every spawn
+// (m59-keeper-heap.mjs).
 function keeperHeapArgs(env = process.env) {
-  const mb = Number(env.M59_KEEPER_HEAP_MB ?? 640);
-  return Number.isFinite(mb) && mb > 0 ? [`--max-old-space-size=${Math.round(mb)}`] : [];
+  const r = keeperHeapMb({ env, file: join(BROKER_ROOT, 'substrate', 'keeper-heap-mb') });
+  if (r.warning) console.error(`[keeper] ${r.warning}`);
+  return r.mb > 0 ? [`--max-old-space-size=${Math.round(r.mb)}`] : [];
 }
 
 // ============================================================================ DORMANCY
