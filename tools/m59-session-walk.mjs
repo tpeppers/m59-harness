@@ -6546,9 +6546,8 @@ export function sessionWalkPrototype(deps) {
       // that this partition's coarse approach can also run into its wall. Use
       // the existing fine walker before spending the coarse retry budget.
       if(exit.prefer_fine_approach){
-        const half=KOD_FINENESS>>1;
-        const fine=await this.walkFine(exit.stand_on.col*KOD_FINENESS+half,
-          exit.stand_on.row*KOD_FINENESS+half,{maxSteps:budget(exit),movementGeneration,controlToken,
+        const fine=await this.approachFine(exit.stand_on.col,
+          exit.stand_on.row,{maxSteps:budget(exit),movementGeneration,controlToken,
             avoidSquares:wrongDoor?.size?wrongDoor:null}).catch(()=>null);
         const stopped=await stopAfterAwait();if(stopped)return stopped;
         if(fine?.left_room)return {left:true,note:'the room changed during the fine doorway approach'};

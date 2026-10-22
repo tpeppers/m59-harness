@@ -33,7 +33,7 @@ try{for(const mode of ['room-change','cancel','fine-refused','ordinary']){
  const s=Object.assign(Object.create(Session.prototype),{client:c,world:{room:{num:2008}},movementGeneration:1,
   need:()=>c,movementWasCancelled:()=>cancelled,cancelledMovement:()=>({cancelled:true,left:false}),
   standBeforeGo:async()=>{},refreshRoomIdentity:async()=>({confirmed:true}),
-  walkFine:async(x,y,o)=>{calls.push('fine');assert.equal(x,30*64+32);assert.equal(y,12*64+32);assert.equal(o.movementGeneration,1);
+  approachFine:async(col,row,o)=>{calls.push('fine');assert.equal(col,30);assert.equal(row,12);assert.equal(o.movementGeneration,1);
    if(mode==='cancel')cancelled=true;
    if(mode==='room-change'){c.room.id=2;s.world.room={num:2000};return {arrived:true,left_room:true};}
    return {arrived:false,reason:'fine approach refused'};},

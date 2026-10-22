@@ -412,7 +412,8 @@ first. It does not remove declared portals, infer failure from a timed-out
 search, or freeze operable door geometry. This repairs the bar's adjacent
 exit-square mismatch without a room-specific route or longer town timeout.
 When that proof reveals a partition mismatch, connected siblings use the
-ordinary fine walker before a coarse approach or a rail to the old anchor.
+planned `approachFine` waypoints before a coarse approach or a rail to the old
+anchor. The local steering fan alone cannot backtrack around this partition.
 The same cancellation, actual-room and final-position checks still precede
 `go`; a refused fine approach retains the coarse fallback.
 
