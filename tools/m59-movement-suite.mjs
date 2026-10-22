@@ -109,6 +109,7 @@ const SUITES = [
   ['m59-rail-action-http-test.mjs','native long actions use an explicit absolute HTTP budget and never repeat ambiguous writes'],
   ['m59-rail-observer-test.mjs','ordered rail own-body reads, keeper identity, refused writes and actual multi-leg shelf resumption'],
   ['m59-world-cached-exits-test.mjs', 'status reads use exact-origin cached exits without synchronous route planning'],
+  ['m59-go-exit-connectivity-test.mjs', 'locked partitions rank fine-connected go portal siblings before coarse-only wall targets without removing fallback exits'],
   ['m59-spotclaims-lock-test.mjs','Windows sharing races retry atomic acquisition without removing live owners or bypassing persistent permission errors'],
   ['m59-courier-purchases-test.mjs','courier maximum loads use live quotes, preserve one-attempt purchase evidence and reconcile delivered, lost and held acquisition value'],
   ['m59-recovery-pacer-test.mjs','active recovery stands and moves ahead of background reads without changing pacing, cancellation, combat authority or concentration'],

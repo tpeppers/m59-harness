@@ -401,6 +401,21 @@ those rooms. An undeclared intermediate room still stops the hop. Chalice
 refill permits the bounded Guest House–Barking Monster–settlement detour,
 and a two-sip receipt stranded in the bar resumes refill without another sip.
 Directional cave legs retain the one-crossing default.
+The settlement detour budgets three minutes per declared hop, up to twelve
+minutes total, rather than sharing a one-hop deadline across four crossings.
+Tower and jungle hops retain the three-minute, one-crossing limit.
+
+Rooms with locked internal doors also check sibling `go` portals against the
+body's fine-geometry component. A complete bounded search can downgrade a
+coarse-only portal so the ordinary exit executor tries a connected sibling
+first. It does not remove declared portals, infer failure from a timed-out
+search, or freeze operable door geometry. This repairs the bar's adjacent
+exit-square mismatch without a room-specific route or relaxed collision checks.
+When that proof reveals a partition mismatch, connected siblings use the
+planned `approachFine` waypoints before a coarse approach or a rail to the old
+anchor. The local steering fan alone cannot backtrack around this partition.
+The same cancellation, actual-room and final-position checks still precede
+`go`; a refused fine approach retains the coarse fallback.
 
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten

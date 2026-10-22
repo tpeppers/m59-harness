@@ -79,8 +79,9 @@ async function hop(ctx,to,record){
   // Town doors can send the router through the adjacent bar instead of the
   // direct guest-house exit. Keep that detour explicit and bounded; cave legs
   // retain ordinaryHop's strict one-room default.
-  const town=[2000,2001,2008,2013,2115].includes(to);
-  const l=await ordinaryHop(ctx,to,{budgetMs:180000,...(town?{maxHops:4,intermediateRooms:[2000,2001,2008,2013]}:{})});record.travel.push(l);
+  const town=to===2000,maxHops=town?4:1;
+  const l=await ordinaryHop(ctx,to,{budgetMs:180000*maxHops,maxHops,
+    ...(town?{intermediateRooms:[2000,2001,2008,2013]}:{})});record.travel.push(l);
   if(!l.ok)throw Error('crossing_failed_'+to);
 }
 // Rescue requires staying still through its delay. Start from a safe wall so
