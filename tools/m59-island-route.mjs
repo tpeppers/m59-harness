@@ -317,21 +317,37 @@ export async function admittedIslandTransit(ctx,options={}){
  return withIslandObservationDeadline(ctx,Date.now()+queueBudgetMs,()=>admittedIslandTransitWithinBudget(ctx,options));
 }
 async function admittedIslandTransitWithinBudget(ctx,{from,to,room=2505,budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,hop=ordinaryHop,read=readIslandFinePosition,
- readCached=null,readOccupancy=readIslandOccupancy,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
+ readCached=null,readOccupancy=readIslandOccupancy,readPiloted=null,admit=withTraversalAdmission,park=waitAtIslandTrafficRefuge,onLeg=()=>{}}={}){
  if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_island_queue_budget');
  const takeHop=async destination=>{
   const leg=await hop(ctx,destination,{budgetMs,recoverAtEntry:true});onLeg(leg);
   if(!leg.ok)throw Error('hop_failed_'+destination);return leg;
  };
+ const isPiloted=agent=>(readPiloted??(async who=>((await ctx.call('pilot',{action:'status'}))?.piloted??[])
+  .some(p=>p.agent===who&&p.alive!==false)))(agent).then(Boolean,()=>false);
  const proof=async(agent,{cached=false}={})=>{
   if(cached){
    // `status brief` still sends stats/spell/skill requests. Polling an active
    // traveler through that verb floods its pacer while it tries to walk.
    const s=await(readCached??cachedRoomReader(ctx))(agent);
-   return {agent,room:s?.connected!==false&&s?.in_game===true?s.room?.num:null,confirmed:false,at:Date.now()};
+   const room=s?.connected!==false&&s?.in_game===true?s.room?.num:null;
+   // Unconfirmed hint only: it invites the full read below, which decides.
+   return {agent,room:room==null&&agent!==ctx.agent&&await isPiloted(agent)?-1:room,confirmed:false,at:Date.now()};
   }
   const observer=agent===ctx.agent?ctx:{...ctx,agent,state:{}};
-  if(agent!==ctx.agent)return readOccupancy(observer);
+  if(agent!==ctx.agent){
+   try{return await readOccupancy(observer);}
+   catch(e){
+    // A HUMAN AT THE KEYBOARD IS NOT IN THE QUEUE. A piloted predecessor's keeper is out
+    // of the world, so its occupancy can never be confirmed, and the stopped ticket its
+    // last fleet driver left behind held the cave for ever: Rowlf waited in the inn for
+    // hours on 2026-10-22 behind a 2505 ticket of Kermit's while the operator flew
+    // Kermit somewhere else entirely. The ticket sequences fleet DRIVERS; a person is
+    // not one, so a pilot claim is the proof that the ticket's driver has left.
+    if(await isPiloted(agent))return {agent,room:-1,confirmed:true,at:Date.now(),piloted:true};
+    throw e;
+   }
+  }
   const l=await read(observer);checkIslandCancellation(ctx,l);
   return {agent,room:l.room?.num,confirmed:!!l.you&&!l.you.predicted&&Number.isInteger(l.you.id),at:Date.now()};
  };

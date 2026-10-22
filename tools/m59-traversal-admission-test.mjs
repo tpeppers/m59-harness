@@ -214,7 +214,20 @@ try{
    run:async()=>{throw Error('expired admission must not run');}}),/traversal_admission_queue_budget/);
   assert.equal(reserved,false,'a confirmation arriving after the queue deadline cannot grant admission');
  }
- console.log('Traversal admission checks passed: parallel callers, reserved entry, confirmed exit, stopped body, cancellation, a crashed driver, late confirmation and default roster scoping.');
+ reset();
+ for(const piloted of [true,false]){
+  // Kermit/Rowlf 2026-10-22: a stopped ticket whose character a human is flying.
+  const held=reserveFileTraversal('flown',room,'piloted-'+piloted).lease;markFileTraversal(held,'stopped');
+  let place=2504;
+  const run=admittedIslandTransit({agent:'b',state:{},call:async()=>assert.fail('the pilot read is injected')},
+   {from:2504,to:2000,queueBudgetMs:400,readCached:async()=>({connected:false,in_game:false}),
+    readOccupancy:async()=>{throw Error('island_occupancy_unconfirmed');},readPiloted:async who=>piloted&&who==='flown',
+    read:async()=>({room:{num:place},you:{id:2,predicted:false}}),park:async()=>true,
+    hop:async(_ctx,to)=>{place=to;return {ok:true,to};}});
+  if(piloted){await run;assert.equal(place,2000,'a piloted predecessor no longer holds the cave');}
+  else{await assert.rejects(run,/traversal_admission_queue_budget|island_occupancy_unconfirmed/);assert.equal(place,2504,'an unconfirmed fleet body still holds it');}
+ }
+ console.log('Traversal admission checks passed: parallel callers, reserved entry, confirmed exit, stopped body, cancellation, a crashed driver, late confirmation, a piloted predecessor and default roster scoping.');
 }finally{
  const target=resolve(dir),base=resolve(tmpdir())+sep;
  if(!target.startsWith(base))throw Error('scratch cleanup escaped temporary directory');
