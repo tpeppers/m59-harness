@@ -6,6 +6,7 @@
 //   practice-bow agents=t4 desk=Loial              # mend only at this desk
 //   practice-bow agents=t4 arrows_min=0            # never fight for arrows; stop when out
 //   practice-bow agents=t1 room=38 supply_from=t10,t11,t16   # take arrows from farmers in the room
+//   practice-bow agents=t1 room=38 supply_from=t10,t11 supply_rooms=39   # ...or walk next door to them
 //
 // Operator, 2026-10-20: "train the bow skills fire and/or archery, stopping when whichever 1-2 of
 // skills possessed reach 99 (i.e., won't continue because doesn't have 99 in archery if the
@@ -83,6 +84,7 @@ export const script = {
     supply_to:     { type: 'number', default: 150, describe: '...up to this many' },
     supply_keep:   { type: 'number', default: 5, describe: 'arrows each giver keeps' },
     supply_wait_s: { type: 'number', default: 900, describe: 'out of arrows with supply_from: wait this long for a giver to have some' },
+    supply_rooms:  { type: 'string', default: null, describe: 'other rooms the ARCHER may walk to for arrows, comma separated (the givers never walk)' },
     burst:         { type: 'number', default: 20, describe: 'shots between condition reads' },
     reach:         { type: 'number', default: 10, describe: 'close to this many squares before shooting' },
     abort_below:   { type: 'number', default: 0.5, describe: 'stop a burst below this health fraction' },
@@ -174,6 +176,26 @@ export const script = {
     //     process to a character this run held came back "no count rose";
     //   - `what` names the stacks by id: `items:` matches reagents only.
     const givers = list(p.supply_from);
+    // THE ARCHER WALKS, NOT THE GIVER (prod-deploy-ac, 2026-10-22: the castle farmers live in 39 and
+    // the archer shoots in 38, so "only givers already in the room" rarely found one). A giver's walk
+    // is what failed before; the archer's is a compiled walk step like the one to the mend desk.
+    const supplyRooms = [...new Set(String(p.supply_rooms ?? '').split(',').map(Number).filter(n => n > 0))];
+    const MIN_TRIP = 10;   // not worth a walk for fewer
+    const spareElsewhere = async (call) => {
+      if (!givers.length || !supplyRooms.length) return null;
+      const fleet = (await call('fleet', {}, 30_000).catch(() => null))?.fleet ?? [];
+      const roomOf = a => Number(fleet.find(r => String(r.agent).toLowerCase() === a)?.room_num);
+      const mine = roomOf(String(agent).toLowerCase());
+      let best = null;
+      for (const g of givers) {
+        const r = roomOf(g);
+        if (r === mine || !supplyRooms.includes(r)) continue;
+        const inv = await call('inventory', { agent: g }, 60_000).catch(() => null);
+        const spare = arrowCount(inv?.items ?? []) - Number(p.supply_keep);
+        if (spare >= MIN_TRIP && (!best || spare > best.spare)) best = { room: r, giver: g, spare };
+      }
+      return best;
+    };
     const pullArrows = async (call) => {
       if (!givers.length) return 0;
       const fleet = (await call('fleet', {}, 30_000).catch(() => null))?.fleet ?? [];
@@ -240,6 +262,15 @@ export const script = {
         if (givers.length && arrowCount(items) < Number(p.supply_below)) {
           await pullArrows(call);
           items = await readPack(call);
+          const goFetch = async () => {
+            if (arrowCount(items) >= Number(p.supply_below)) return false;
+            const there = await spareElsewhere(call);
+            if (!there) return false;
+            st.needArrows = true; st.supplyRoom = there.room;
+            log(`${arrowCount(items)} arrows; ${there.giver} has ${there.spare} spare in ${there.room} — going to fetch them`);
+            return true;
+          };
+          if (await goFetch()) return { ok: true, why: `fetching arrows from ${st.supplyRoom}` };
           if (arrowCount(items) === 0 && Number(p.arrows_min) <= 0) {
             // Out, and told not to fight: wait for a giver to collect some rather than end the run.
             const giveUp = Math.min(Date.now() + Number(p.supply_wait_s) * 1000, until);
@@ -248,6 +279,7 @@ export const script = {
               await sleep(60_000);
               await pullArrows(call);
               items = await readPack(call);
+              if (await goFetch()) return { ok: true, why: `fetching arrows from ${st.supplyRoom}` };
             }
           }
         }
@@ -339,9 +371,23 @@ export const script = {
       return { ok: true, why: `mend ${st.mends}: ${before} -> ${after}` };
     }, 'drop the bow at the desk, wait for the Mend, take it back', `mend ${k + 1}`);
 
+    // ------------------------------------------------------------------ the arrow step
+    // Standing in a supply room (the walk before this took the archer there): take arrows from the
+    // givers here, exactly as in the practice room.
+    const restock = (k) => verify(async ({ call, state }) => {
+      const st = S(state);
+      if (st.done || !st.needArrows) return { ok: true, why: 'no arrow trip' };
+      st.needArrows = false;
+      const got = await pullArrows(call);
+      const now = arrowCount(await readPack(call));
+      log(`arrow trip to ${st.supplyRoom}: +${got}, ${now} now`);
+      return { ok: true, why: `+${got} arrows in ${st.supplyRoom}` };
+    }, 'take arrows from the givers in the supply room', `arrows ${k + 1}`);
+
     // ------------------------------------------------------------------ the plan
     if (!practice) return [verify(async () => ({ ok: false, why: `could not read ${agent}'s room — say room=` }), 'know the practice room')];
-    const rooms = [...new Set([practice, ...(deskRoom ? [deskRoom] : [])])];
+    const rooms = [...new Set([practice, ...(deskRoom ? [deskRoom] : []), ...supplyRooms])];
+    const away = rooms.some(r => r !== practice);
     const steps = [verify(async () => {
       log(`practising in ${practice}; mend desk ${chosen.desk ? `${chosen.desk.name} in ${deskRoom}` : (deskRoom ? `room ${deskRoom}` : `none (${chosen.why})`)}; training ${only.join('+')} where held`);
       return { ok: true };
@@ -349,10 +395,18 @@ export const script = {
     if (asked) steps.push(walk(practice));
     for (let k = 0; k < Math.max(1, Number(p.cycles)); k++) {
       steps.push(train(k));
-      if (deskRoom && deskRoom !== practice) {
-        // To the desk only when the bow is due; otherwise this resolves to where it already is.
-        steps.push(walk(state => (state.pb?.needMend && !state.pb?.done ? deskRoom : practice), { candidates: rooms }));
-        steps.push(mend(k));
+      if (away) {
+        // To the desk when the bow is due, to a supply room when an arrow trip is due; otherwise this
+        // resolves to where the archer already is.
+        steps.push(walk(state => {
+          const pb = state.pb;
+          if (pb?.done) return practice;
+          if (pb?.needMend && deskRoom) return deskRoom;
+          if (pb?.needArrows && pb.supplyRoom) return pb.supplyRoom;
+          return practice;
+        }, { candidates: rooms }));
+        if (deskRoom) steps.push(mend(k));
+        if (supplyRooms.length) steps.push(restock(k));
         steps.push(walk(practice));
       } else if (deskRoom) steps.push(mend(k));
     }

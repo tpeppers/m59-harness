@@ -158,6 +158,25 @@ section('the compiled plan');
      noDesk.filter(s => s.do === 'walk').length === 1 && noDesk.filter(s => s.label?.startsWith('mend')).length === 0);
 }
 
+section('arrow trips to a supply room');
+{
+  const { script } = await import('./fleetscripts/practice-bow.mjs');
+  const base = { agent: 'a1', agents: ['a1'], room: 38, desk_room: null, skills: 'fire', bow: 'practice bow', mend_at: 'poor',
+                 arrows_min: 0, arrows_to: 80, burst: 20, reach: 10, abort_below: 0.5, retire_swings: 80, mend_wait_s: 600,
+                 hours: 24, cycles: 2, supply_from: 't10,t11', supply_below: 40, supply_to: 150, supply_keep: 5, supply_wait_s: 900,
+                 supply_rooms: '39' };
+  const steps = await script.steps(base);
+  const kinds = steps.map(s => s.do === 'verify' ? (s.label ?? 'verify') : `walk:${typeof s.to === 'function' ? 'fn' : s.to}`);
+  ok('no desk, supply room 39: train, walk, arrows, walk back',
+     kinds.join(' ') === 'plan walk:38 train 1 walk:fn arrows 1 walk:38 train 2 walk:fn arrows 2 walk:38', kinds.join(' '));
+  const dyn = steps.find(s => s.do === 'walk' && typeof s.to === 'function');
+  ok('the supply room is a walk candidate', dyn.candidates.join() === '38,39');
+  ok('an arrow trip walks to the supply room', dyn.to({ pb: { needArrows: true, supplyRoom: 39 } }) === 39);
+  ok('a mend comes before an arrow trip', (await script.steps({ ...base, desk_room: 2 })).find(s => s.do === 'walk' && typeof s.to === 'function')
+       .to({ pb: { needMend: true, needArrows: true, supplyRoom: 39 } }) === 2);
+  ok('nothing due: stays in the practice room', dyn.to({ pb: {} }) === 38);
+}
+
 section('the mend desk script');
 {
   const { script } = await import('./fleetscripts/mend-desk.mjs');
