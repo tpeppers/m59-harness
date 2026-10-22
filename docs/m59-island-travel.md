@@ -401,6 +401,9 @@ those rooms. An undeclared intermediate room still stops the hop. Chalice
 refill permits the bounded Guest House–Barking Monster–settlement detour,
 and a two-sip receipt stranded in the bar resumes refill without another sip.
 Directional cave legs retain the one-crossing default.
+The settlement detour budgets three minutes per declared hop, up to twelve
+minutes total, rather than sharing a one-hop deadline across four crossings.
+Tower and jungle hops retain the three-minute, one-crossing limit.
 
 Rooms with locked internal doors also check sibling `go` portals against the
 body's fine-geometry component. A complete bounded search can downgrade a
