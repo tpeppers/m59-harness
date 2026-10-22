@@ -32,6 +32,7 @@
 import { readdirSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { importWithAutoRestore } from './m59-substrate-archive.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const STRATEGY_DIR = join(HERE, '..', 'substrate', 'strategies');
@@ -163,8 +164,8 @@ const KNOWN = new Set([...REQUIRED, ...HOOKS, 'describe', 'settings']);
  * Everything this machine has, with the ones that could not be loaded named rather than
  * dropped. Never throws: a broken strategy must not take the keeper down with it.
  */
-export async function load({ dir = STRATEGY_DIR } = {}) {
-  const out = { dir, strategies: [], problems: [], present: false };
+export async function load({ dir = STRATEGY_DIR, log = m => console.error(m) } = {}) {
+  const out = { dir, strategies: [], problems: [], restored: [], present: false };
   try { if (!existsSync(dir) || !statSync(dir).isDirectory()) return out; }
   catch { return out; }
   out.present = true;
@@ -185,11 +186,23 @@ export async function load({ dir = STRATEGY_DIR } = {}) {
   for (const name of names) {
     const path = join(dir, name);
     let mod;
-    try { mod = await import(pathToFileURL(resolve(path)).href); }
+    // AN ARCHIVED IMPORT IS PUT BACK, NOT READ AS "NO STRATEGY". 2026-10-21: chalice-farming.mjs
+    // imported ../production-robin-guild-posture.mjs after a bare `mv` archived it; this load runs
+    // once per keeper, so every keeper's chalice config came back null and read as "off", and the
+    // problem below was seen by nobody. importWithAutoRestore brings the module (and its other
+    // archived imports) back from substrate/scratch/archive-*/ and retries once; m59-substrate-archive.mjs.
+    try {
+      const r = await importWithAutoRestore(pathToFileURL(resolve(path)).href, { entry: resolve(path), log });
+      mod = r.mod;
+      if (r.restored) out.restored.push({ file: name, summary: r.restored.summary });
+    }
     catch (e) {
       // NAMED, NOT SWALLOWED. See the header: a file that will not parse is not an empty
       // file, and reporting it as one returns the fleet to default behaviour in silence.
+      // And LOUD: the consumers of `load` mostly read `strategies`, so a problem only in the
+      // list is a problem nobody hears.
       out.problems.push({ file: name, why: 'did not load: ' + e.message });
+      log(`[strategies] ${name} DID NOT LOAD -- every hook it answers is OFF in this process: ${e.message}`);
       continue;
     }
     const s = mod?.default;

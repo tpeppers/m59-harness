@@ -67,6 +67,7 @@
 import { statSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { importWithAutoRestore } from './m59-substrate-archive.mjs';
 import { validateStrategy, fieldFor, fieldForKey, mergeOver, STRATEGY_NAME, STRATEGY_HOOKS } from './m59-strategy-schema.mjs';
 import { sameValue } from './m59-policy-sources.mjs';
 import { classifyCombatLine } from './m59-combatlog.mjs';
@@ -179,7 +180,9 @@ export async function loadFarmStrategy(name, { dir = null, resolveItem } = {}) {
              why: `no such farming strategy: ${file} does not exist. Strategies are this machine's ` +
                   `(gitignored); start from substrate/farm-strategies.example/` };
   let mod;
-  try { mod = await import(`${pathToFileURL(resolve(file)).href}?v=${mtime}`); }
+  // An import that fails because a bare `mv` archived one of its modules is put back from
+  // substrate/scratch/archive-*/ and retried once (m59-substrate-archive.mjs, incident 2026-10-21).
+  try { ({ mod } = await importWithAutoRestore(`${pathToFileURL(resolve(file)).href}?v=${mtime}`, { entry: resolve(file) })); }
   catch (e) {
     return { ok: false, name, file, mtime, problems: [], unrecognised: [],
              why: `did not load: ${e.message}` };

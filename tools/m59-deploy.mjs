@@ -39,6 +39,7 @@ import { nextDeployTag, lightweightTagProblem } from './m59-deploytag.mjs';
 
 import { strandedCommits } from './m59-deploy-drift.mjs';
 import { holdsIn, holdRefusals } from './m59-release-consent.mjs';
+import { checkSubstrate, formatCheck } from './m59-substrate-archive.mjs';
 const git = (repo, ...args) => {
   try {
     // stderr ignored: several of these are ASKS, not assertions — `describe --exact-match`
@@ -427,6 +428,18 @@ if (s.error) { console.error(s.error); process.exit(2); }
 if (mode === '--status' || mode === '--verify') {
   report(s);
   const bad = problems(s);
+  // BROKEN SUBSTRATE IMPORTS. 2026-10-21: ~630 files were moved out of prod's substrate with a bare
+  // `mv` to clear it for a cut, and live strategy code still imported some of them -- bastion.mjs's
+  // guards, the courier lap's posture module, chalice-farming's. Nothing failed loudly; keepers ran
+  // the wrong PvP module for hours. A deploy is when prod's substrate gets tidied, so this is where
+  // the check runs. Reported, not a --cut refusal (the phrases the cut filter matches are avoided).
+  try {
+    const sub = checkSubstrate({ substrate: join(PROD, 'substrate') });
+    if (sub.broken.length || sub.configs.length)
+      bad.push(`prod's substrate has ${sub.broken.length} broken import(s) and ${sub.configs.length} strategy ` +
+               'assignment(s) naming a missing module:\n      ' +
+               formatCheck(sub, { cli: `node "${join(PROD, 'tools', 'm59-substrate-archive.mjs')}"` }).split('\n').join('\n      '));
+  } catch (e) { bad.push(`could not check prod's substrate imports: ${e.message}`); }
   if (bad.length) {
     console.log(`\n${bad.length} problem(s):\n`);
     for (const b of bad) console.log(`  * ${b}\n`);

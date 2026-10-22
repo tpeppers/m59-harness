@@ -32,7 +32,7 @@ import { loadFleetScripts, runNamed, applyDefaults, checkParams, asAgents,
 import { fleetName } from './m59-fleetpath.mjs';
 
 const FLEET = fleetName();
-let { scripts, problems } = await loadFleetScripts();
+let { scripts, problems, restored } = await loadFleetScripts();
 
 const say = (...a) => console.log(...a);
 const listScripts = () => {
@@ -57,6 +57,9 @@ function parseArgs(rest) {
 say(`fleet REPL — fleet "${FLEET}"`);
 say(`  public ${PUBLIC_DIR}`);
 say(`  local  ${LOCAL_DIR}`);
+// Archived imports put back by the loader (m59-substrate-archive.mjs) are said again here, beside
+// the menu, because a restore moved files in this machine's substrate and the operator should see it.
+for (const r of restored ?? []) say(`  RESTORED for ${r.file}: ${r.summary}`);
 if (problems.length) {
   say('scripts that would not load:');
   for (const p of problems) say(`  ${p.file}: ${p.why}`);
@@ -91,7 +94,8 @@ rl.on('line', (line) => queue(async () => {
     else if (verb === 'quit' || verb === 'exit') { rl.close(); return; }
     else if (verb === 'list') listScripts();
     else if (verb === 'reload') {
-      ({ scripts, problems } = await loadFleetScripts());
+      ({ scripts, problems, restored } = await loadFleetScripts());
+      for (const r of restored ?? []) say(`  RESTORED for ${r.file}: ${r.summary}`);
       say(`reloaded — ${scripts.size} script(s)`);
       for (const p of problems) say(`  ${p.file}: ${p.why}`);
     }

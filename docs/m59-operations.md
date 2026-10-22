@@ -387,6 +387,49 @@ The password is on `dev.bat`'s command line rather than in its body, which is th
 exposure as the client's own command line, readable to anything that can list processes;
 `shortcuts/` stays gitignored regardless.
 
+## Archiving prod clutter: use the tool, never a bare `mv`
+
+```bash
+node tools/m59-substrate-archive.mjs check                        # every live import that does not resolve
+node tools/m59-substrate-archive.mjs move <paths...>              # dry: what would move, and what refuses
+node tools/m59-substrate-archive.mjs move <paths...> --apply      # into substrate/scratch/archive-<today>/substrate/
+node tools/m59-substrate-archive.mjs move <paths...> --with-importers   # the whole closure instead of a refusal
+node tools/m59-substrate-archive.mjs restore <file-or-module> [--apply]  # it, and its own archived imports
+node tools/m59-substrate-archive.mjs restore-missing [--apply]    # everything `check` reports that an archive holds
+# against prod (read-only until --apply): M59_SUBSTRATE_DIR=C:/code/m59-lab/prod-deploy/substrate
+```
+
+**On 2026-10-21 ~630 files were moved out of prod's `substrate/` with a bare `mv` to clear it for a
+cut, and live code still imported some of them.** `pvp-strategies/bastion.mjs` lost seven guard
+modules, so every keeper's PvP refresh failed and the keepers kept running the module they had
+loaded before (FleeTA) for hours while reporting "bastion"; the courier lap would not import;
+`strategies/chalice-farming.mjs` read as "off"; `cv-lockdown` stayed broken. Nothing errored loudly.
+
+So archiving goes through `m59-substrate-archive.mjs`. It builds the import graph over the substrate
+(static, `export ... from`, dynamic `import('<literal>')`, `new URL('<literal>.mjs', import.meta.url)`,
+`?v=` queries stripped), plus the top-level modules of every directory in a `substrate/*-dirs.json`,
+plus the strategy NAMES in `pvp-strategy[-<fleet>].json` and every `farm_strategy` value — and **`move`
+refuses, moving nothing, when any file in the set is reached by a file staying behind or by an
+assignment**, naming each importer. `--with-importers` archives the closure instead. Files are kept at
+`substrate/<path>` inside the archive with `MOVED.txt` and `README.txt` beside them, which is the layout
+restore reads. Data files are read by name rather than imported: one named by live code is a warning,
+not a refusal. A string built at run time (`import(name)`) cannot be seen by any static scan; the
+automatic restore below is the net under that.
+
+**And reviving an old posture puts its modules back by itself.** When `loadFleetScripts`
+(`m59-fleetlib.mjs`, so the REPL too), `PvpStrategyHost.refresh` (`m59-pvp-strategy.mjs`), the travel /
+town strategy `load` (`m59-strategies.mjs`) or `loadFarmStrategy` hits `ERR_MODULE_NOT_FOUND`, every
+missing in-substrate import that module reaches is restored from the newest
+`substrate/scratch/archive-*/` (only from there, only to its original path in the same substrate,
+never over an existing file; each one logged loudly and appended to the archive's `RESTORED.txt`), and
+the import is retried once. With no archived copy the original error stands, plus the `check` hint.
+A PvP strategy whose refresh is failing while an older module still answers now says so:
+`combat.pvp_strategy.stale`, `loaded_strategy` and a `warning` reading `CONFIGURED "x" BUT RUNNING "y"`.
+**A running keeper has the old loaders until it is restarted** (`m59-service.mjs restart-keepers`).
+
+`m59-deploy.mjs --status`/`--verify` runs `check` against prod's substrate and lists what is broken,
+with the restore command. `node tools/m59-substrate-archive-test.mjs` (56, offline) is the guard.
+
 ## Backing the fleet up, and putting it back
 
 ```bash

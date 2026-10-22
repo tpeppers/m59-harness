@@ -102,6 +102,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { autoRestore, substrateFor } from './m59-substrate-archive.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
@@ -250,12 +251,45 @@ export class PvpStrategyHost {
     Object.assign(this, { fleet, agent, character, isHost, env, now, log, importer });
     this.assignment = null; this.module = null; this.file = null; this.loadedKey = null;
     this.error = null; this.strikes = 0; this.decisions = 0; this.last = null; this.assignmentKey = null;
+    this.loadedStrategy = null; this.lastRestore = null; this.loudSaid = null;
   }
 
+  // CONFIGURED IS NOT LOADED. 2026-10-21: bastion.mjs's imports were archived by a bare `mv`, every
+  // keeper's refresh failed with "Cannot find module", and the keepers kept answering with the module
+  // they had loaded before (FleeTA) for hours while `strategy` read "bastion". `strategy` is the
+  // ASSIGNMENT; `loaded_strategy` is the module actually answering; `stale` and `warning` say so when
+  // they differ. A running keeper picks this up only when it is restarted (restart-keepers).
   status() {
-    return { strategy: this.assignment?.strategy ?? null, file: this.file, loaded: !!this.module,
+    const strategy = this.assignment?.strategy ?? null;
+    const stale = !!(this.module && strategy && this.loadedStrategy && this.loadedStrategy !== strategy);
+    return { strategy, loaded_strategy: this.module ? this.loadedStrategy : null, file: this.file, loaded: !!this.module,
+      stale, warning: stale ? `CONFIGURED "${strategy}" BUT RUNNING "${this.loadedStrategy}" (${this.file})` +
+        (this.error ? ` -- ${this.error}` : '') : null,
       options: this.assignment?.options ?? null, error: this.error, strikes: this.strikes,
-      decisions: this.decisions, last: this.last, assignment_file: pvpAssignmentFile(this.fleet, this.env) };
+      decisions: this.decisions, last: this.last, last_restore: this.lastRestore,
+      assignment_file: pvpAssignmentFile(this.fleet, this.env) };
+  }
+
+  /** Loud once per distinct message: a keeper log line, not a status field nobody reads. */
+  loud(msg) {
+    if (msg === this.loudSaid) return;
+    this.loudSaid = msg;
+    this.log(`[pvp-strategy] LOUD ${this.character ?? this.agent}: ${msg}`);
+  }
+
+  /** import, and on ERR_MODULE_NOT_FOUND restore archived modules and retry once (m59-substrate-archive.mjs). */
+  async importStrategy(where, url) {
+    try { return await this.importer(url); }
+    catch (e) {
+      const substrate = substrateFor(where) ?? substrateFor(pvpAssignmentFile(this.fleet, this.env)) ?? join(SUBSTRATE);
+      const r = autoRestore(e, { entry: where, substrate, log: m => this.log(m) });
+      if (!r.attempted) throw e;
+      this.lastRestore = { at: this.now(), summary: r.summary, restored: r.restored.map(m => m.to), missing: r.missing };
+      if (!r.restored.length) throw new Error(`${e.message} -- ${r.summary}`);
+      this.loud(r.summary);
+      try { return await this.importer(`${url}&restored=${this.now()}`); }
+      catch (e2) { throw new Error(`${e2.message} -- after ${r.summary}`); }
+    }
   }
 
   /** Re-read the assignment and (re)load the module when either changed. Never throws. */
@@ -277,18 +311,21 @@ export class PvpStrategyHost {
       if (!where) { this.clear(`no strategy module "${a.strategy}.mjs" in ${pvpStrategyDirs({ env: this.env }).join(', ')}`); return this.status(); }
       const st = statSync(where), key = `${where}:${st.mtimeMs}`;
       if (key === this.loadedKey && this.module) return this.status();
-      const mod = await this.importer(`${pathToFileURL(where).href}?v=${st.mtimeMs}`);
+      const mod = await this.importStrategy(where, `${pathToFileURL(where).href}?v=${st.mtimeMs}`);
       const m = mod?.default ?? mod?.strategy ?? mod;
       if (typeof m?.decide !== 'function') { this.clear(`${where} exports no decide(moment, facts, options)`); return this.status(); }
       this.module = m; this.file = where; this.loadedKey = key; this.strikes = 0; this.error = null;
+      this.loadedStrategy = a.strategy; this.loudSaid = null;
       this.log(`[pvp-strategy] ${this.character ?? this.agent}: ${a.strategy} loaded from ${where}`);
     } catch (e) {
       this.error = `refresh: ${e.message}`;
+      const st = this.status();
+      this.loud(st.stale ? st.warning : this.error);
     }
     return this.status();
   }
 
-  clear(error) { this.module = null; this.file = null; this.loadedKey = null; this.error = error; }
+  clear(error) { this.module = null; this.file = null; this.loadedKey = null; this.loadedStrategy = null; this.error = error; }
 
   /** The answer for one moment: a validated decision, or null for "do what the harness does". */
   decide(moment, facts) {
@@ -307,7 +344,9 @@ export class PvpStrategyHost {
     if (decision) {
       this.decisions++;
       this.last = { at: this.now(), moment, player: facts?.player ?? null, room: facts?.room ?? null, ...decision };
-      return { ...decision, strategy: a.strategy };
+      // The module that ANSWERED, not the assignment: they differ while a refresh is failing.
+      const strategy = this.loadedStrategy ?? a.strategy;
+      return { ...decision, strategy, ...(strategy !== a.strategy ? { configured_strategy: a.strategy } : {}) };
     }
     return null;
   }

@@ -28,6 +28,7 @@ import { readdirSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseUnsafe, UNSAFE_GUARANTEES, guaranteeText } from './m59-fleetscript.mjs';
+import { importWithAutoRestore } from './m59-substrate-archive.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -65,9 +66,11 @@ function stamp(file) {
  * and only one of them is the operator's fault.
  */
 export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCAL_DIR,
-                                         pvpDir = PVP_DIR, dirs = null } = {}) {
+                                         pvpDir = PVP_DIR, dirs = null,
+                                         log = m => console.error(m) } = {}) {
   const found = new Map();
   const problems = [];
+  const restored = [];
 
   // `dirs` IS FOR A CALLER WITH A DIFFERENT PAIR OF PLACES, not a third place for errands.
   // m59-fleetscratch.mjs passes [['pad', PAD_DIR]] so that a scratch pad gets this module's
@@ -103,10 +106,23 @@ export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCA
         // right trade for an authoring loop and is why this must not be "tidied" back to a
         // bare href. A script is data until it is run (see the note above), so a stranded
         // module holds no fleet state and drives nothing.
+        //
+        // AND AN ARCHIVED IMPORT IS PUT BACK. 2026-10-21: a bare `mv` archived
+        // production-robin-guild-posture.mjs while zheng-he-lap.mjs still imported it, and the
+        // courier lap "will not import" for hours. On ERR_MODULE_NOT_FOUND the missing module (and
+        // every other archived import the script reaches) comes back from substrate/scratch/archive-*/
+        // and the import is retried once -- loudly; see m59-substrate-archive.mjs.
         const v = stamp(path);
-        mod = await import(pathToFileURL(path).href + (v ? `?v=${v}` : ''));
+        const r = await importWithAutoRestore(pathToFileURL(path).href + (v ? `?v=${v}` : ''), { entry: path, log });
+        mod = r.mod;
+        if (r.restored) {
+          restored.push({ file: path, summary: r.restored.summary, moves: r.restored.restored });
+          log(`[fleetlib] ${basename(file)}: ${r.restored.summary}; import retried and succeeded`);
+        }
       } catch (e) {
-        problems.push({ file: path, why: `will not import: ${e.message}` });
+        const hint = e.code === 'ERR_MODULE_NOT_FOUND' && !/substrate-archive\.mjs check/.test(e.message)
+          ? ' (see: node tools/m59-substrate-archive.mjs check)' : '';
+        problems.push({ file: path, why: `will not import: ${e.message}${hint}` });
         continue;
       }
       const script = mod.script ?? mod.default;
@@ -136,7 +152,7 @@ export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCA
       found.set(name, { ...script, name, source, file: path, overrides });
     }
   }
-  return { scripts: found, problems };
+  return { scripts: found, problems, restored };
 }
 
 // EVERY PLACE THE CHECKING STOPPED. The counterpart to being allowed to waive a guarantee

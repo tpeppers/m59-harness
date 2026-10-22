@@ -120,5 +120,12 @@ strategy decision (a strategy still has no speech verb), a mode of the character
 
 the keeper's `/state` (and `/action status`) → `combat.pvp_strategy`: the loaded strategy and file, its last decision, the flight
 in progress or the last one (`outcome: arrived|stopped`, `end_reason`), the hold, any backoff and any error.
+**`strategy` is the assignment; `loaded_strategy` is the module answering.** While a refresh fails they can
+differ — on 2026-10-21 keepers ran FleeTA for hours reporting "bastion" after bastion's imports were archived —
+so status carries `stale: true` and `warning: CONFIGURED "x" BUT RUNNING "y" (file) -- <error>`, the keeper log
+gets one `LOUD` line per distinct failure, and a decision carries `configured_strategy` beside the `strategy`
+that made it. A refresh failing with `ERR_MODULE_NOT_FOUND` first restores the missing modules from
+`substrate/scratch/archive-*/` and retries once (`last_restore` says what came back; docs/m59-operations.md
+"Archiving prod clutter"). Keepers get this only when next restarted (`m59-service.mjs restart-keepers`).
 Every decision writes one `pvp_strategy_decision` combat line per (moment, room, player, decision), and a
 flight writes `pvp_strategy_flight`.
