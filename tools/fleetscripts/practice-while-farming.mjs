@@ -21,6 +21,9 @@
 import { verify } from '../m59-fleetscript.mjs';
 import { planFarmPractice, practiceMatches } from '../m59-farmpractice.mjs';
 
+// THE REPL HANDS PARAMETERS OVER AS STRINGS: `off=false` arrived as the string "false", which is
+// truthy, so asking to KEEP drilling took the school's spells off the list (found 2026-10-22).
+export const isOn = v => v === true || /^(true|yes|1|on)$/i.test(String(v ?? '').trim());
 const list = s => String(s ?? '').split(',').map(x => x.trim()).filter(Boolean);
 const count = (items, item) => (items ?? [])
   .filter(i => String(i.name ?? '').toLowerCase().includes(String(item).toLowerCase()))
@@ -67,7 +70,7 @@ export const script = {
       const policy = ap?.policy ?? {};
       const prior = policy.practiceSpells ?? null;
 
-      if (p.off) {
+      if (isOn(p.off)) {
         const plan = planFarmPractice({ school: p.school, known: ab?.spells ?? [], policy, keepOthers: true });
         const schoolNames = new Set((ab?.spells ?? []).filter(s =>
           String(s.school ?? '').toLowerCase().replace(/[’'`]/g, '') === String(p.school).toLowerCase().replace(/[’'`]/g, ''))
@@ -92,7 +95,7 @@ export const script = {
       // The mode is passed back unchanged: `start` needs one, and this script changes nothing else.
       const r = await call('autopilot', { agent, action: 'start', mode: ap?.mode ?? 'farm',
         practice_spells: state.planned,
-        why: `practice-while-farming school=${p.school}${p.off ? ' off' : ''}` });
+        why: `practice-while-farming school=${p.school}${isOn(p.off) ? ' off' : ''}` });
       if (r?.error) return { ok: false, why: `${agent}: ${r.error}` };
       if (r?.keeper_backed && !(r.keeper_push?.confirmed && r.keeper_push?.ok))
         return { ok: false, why: `${agent}: the keeper did not confirm the push (${JSON.stringify(r.keeper_push ?? null).slice(0, 200)})` };

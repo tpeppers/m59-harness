@@ -4,7 +4,7 @@
 //   node tools/m59-farmpractice-test.mjs
 import assert from 'node:assert/strict';
 import { planFarmPractice, practiceMatches, SELF_SAFE_PARENTS } from './m59-farmpractice.mjs';
-import { script } from './fleetscripts/practice-while-farming.mjs';
+import { script, isOn } from './fleetscripts/practice-while-farming.mjs';
 
 let n = 0;
 const ok = (name, fn) => { fn(); n++; console.log(`ok ${name}`); };
@@ -106,5 +106,30 @@ ok('the fleetscript: a posture that waives only the keeper lease, with a reason,
   const steps = script.steps({ agents: 't6', school: 'qor', gap_s: 60 });
   assert.deepEqual(steps.map(s => s.do), ['verify', 'verify'], 'no walk, no act: nothing moves');
 });
+
+// off=false, typed in the REPL, is the STRING "false". It used to be truthy, and removed the school.
+{
+  assert.equal(isOn('false'), false); assert.equal(isOn('true'), true); assert.equal(isOn(true), true);
+  assert.equal(isOn(false), false); assert.equal(isOn(undefined), false);
+  const pushed = [];
+  const fake = async (tool, args) => {
+    if (tool === 'abilities') return { spells: beaker };
+    if (tool === 'autopilot' && args.action === 'status') return { mode: 'farm', policy: farming };
+    if (tool === 'status') return { mana: { max: 25 } };
+    if (tool === 'inventory') return { items: [{ name: 'entroot berry', amount: 46 }] };
+    if (tool === 'autopilot' && args.action === 'start') { pushed.push(args.practice_spells); return { ok: true }; }
+    return {};
+  };
+  for (const off of ['false', 'true']) {
+    const [plan] = script.steps({ agents: 't6', school: 'qor', gap_s: 60, off });
+    const state = {};
+    const r = await plan.fn({ agent: 't6', call: fake, state });
+    assert.equal(r.ok, true, r.why);
+  }
+  const names = x => (x?.spells ?? []).map(e => e.name ?? e);
+  assert.deepEqual(names(pushed[0]).slice(0, 3), ['detect good', 'darkness', 'cloak'], 'off=false DRILLS the school');
+  assert.ok(!names(pushed[1]).some(n => ['detect good', 'darkness', 'cloak'].includes(n)), 'off=true removes it');
+  n++; console.log('ok off=false from the REPL is false: it drills the school instead of removing it');
+}
 
 console.log(`\n${n} passed`);
