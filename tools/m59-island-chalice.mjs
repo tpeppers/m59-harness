@@ -76,7 +76,11 @@ async function fullCup(ctx){
   return cup;
 }
 async function hop(ctx,to,record){
-  const l=await ordinaryHop(ctx,to,{budgetMs:180000});record.travel.push(l);
+  // Town doors can send the router through the adjacent bar instead of the
+  // direct guest-house exit. Keep that detour explicit and bounded; cave legs
+  // retain ordinaryHop's strict one-room default.
+  const town=[2000,2001,2008,2013,2115].includes(to);
+  const l=await ordinaryHop(ctx,to,{budgetMs:180000,...(town?{maxHops:4,intermediateRooms:[2000,2001,2008,2013]}:{})});record.travel.push(l);
   if(!l.ok)throw Error('crossing_failed_'+to);
 }
 // Rescue requires staying still through its delay. Start from a safe wall so
@@ -199,7 +203,7 @@ export async function withStashLease(ctx,record,fn,{budgetMs=ISLAND_CONVOY_WAIT_
 export function islandRideRecovery(record,room){
   if(!record.sips?.length&&!record.stash)return 'not_started';
   if(record.sips?.length===1&&room===2510)return 'second_sip';
-  if(record.sips?.length===2&&[2000,2001,2013,2115].includes(room))return 'refill';
+  if(record.sips?.length===2&&[2000,2001,2008,2013,2115].includes(room))return 'refill';
   return 'unobserved';
 }
 export async function refillIslandCup(ctx,options={}){
@@ -242,9 +246,9 @@ async function refillOwned(ctx,{record,save,keepItems=true}={}){
 // starts a fresh sip while the outcome of the previous sip is unknown.
 export async function recoverIslandRefill(ctx,{record,save}){
   const room=(await ctx.call('look',{agent:ctx.agent})).room?.num;
-  if(![2000,2001,2013,2115].includes(room))throw Error('refill_recovery_requires_island');
-  if(room===2001)await hop(ctx,2000,record);
-  if(room===2000||room===2001)await hop(ctx,2013,record);
+  if(![2000,2001,2008,2013,2115].includes(room))throw Error('refill_recovery_requires_island');
+  if(room===2001||room===2008)await hop(ctx,2000,record);
+  if(room===2000||room===2001||room===2008)await hop(ctx,2013,record);
   if(room!==2115){
     const at=record.stash.position;
     await ctx.call('walk_to',{agent:ctx.agent,row:at.row,col:at.col,max_steps:100,arrive_within:4},180000);

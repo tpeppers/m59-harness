@@ -394,6 +394,14 @@ twenty serialized refills finish. The active travel and cargo operations keep
 their own bounds; an explicitly shorter queue still expires without taking
 someone else's lease.
 
+An ordinary measured hop defaults to one crossing. Callers that explicitly
+allow a town detour can provide `maxHops` (1–12) and `intermediateRooms`;
+the same ownership, cancellation, health and deadline checks continue across
+those rooms. An undeclared intermediate room still stops the hop. Chalice
+refill permits the bounded Guest House–Barking Monster–settlement detour,
+and a two-sip receipt stranded in the bar resumes refill without another sip.
+Directional cave legs retain the one-crossing default.
+
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten
 seconds, the same owner's next routing attempt may use the normal Blink escape
