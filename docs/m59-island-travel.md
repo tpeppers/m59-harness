@@ -388,6 +388,11 @@ of position timeouts and abandoned cargo. Foreign process identities still use
 the normal batched OS proof. The twenty-waiter regression exercises real stash
 leases and asserts that self checks launch no process; cargo abandonment and
 same-owner recovery retain their existing guards.
+The refill lease now uses the caller's convoy queue budget (four hours by
+default), rather than an unrelated fifteen-minute cap that can expire before
+twenty serialized refills finish. The active travel and cargo operations keep
+their own bounds; an explicitly shorter queue still expires without taking
+someone else's lease.
 
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten

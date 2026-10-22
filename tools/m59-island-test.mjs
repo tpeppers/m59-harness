@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,existsSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip} from './m59-island-chalice.mjs';
+import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip,rideIslandCup} from './m59-island-chalice.mjs';
 import {ordinaryHop,readIslandJourney,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
 import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,activeOwnedFineRecovery,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
@@ -99,6 +99,20 @@ try{
  assert(existsSync(join(dir,'refill.lock')));
  await assert.rejects(withStashLease({agent:'b'},b,async()=>{}),/unrecovered_stash_a/);
  await withStashLease({agent:'a'},a,async()=>{a.stash.items[0].recovered=true;});assert(!existsSync(join(dir,'refill.lock')));
+ // A twenty-body convoy can queue longer than the former fifteen-minute cap.
+ const longA=make('long-a'),longB=make('long-b');let clock=0,waits=0,release;
+ const holding=withStashLease({agent:'long-a'},longA,async()=>new Promise(r=>{release=r;}));
+ await withStashLease({agent:'long-b'},longB,async()=>{}, {now:()=>clock,wait:async()=>{
+  clock+=1000000;if(++waits===2){release();await holding;}
+ }});
+ await holding;assert.equal(waits,2);assert(clock>900000);assert(!existsSync(join(dir,'refill.lock')));
+ const shortA=make('short-a'),shortB=make('short-b');clock=0;
+ const shortHold=withStashLease({agent:'short-a'},shortA,async()=>new Promise(r=>{release=r;}));
+ try{await assert.rejects(withStashLease({agent:'short-b'},shortB,async()=>assert.fail('expired queue entered'),
+  {budgetMs:1000,now:()=>clock,wait:async()=>{clock+=1500;}}),/refill_queue_budget/);}
+ finally{release();await shortHold;}
+ await assert.rejects(withStashLease({agent:'long-a'},longA,async()=>{}, {budgetMs:0}),/invalid_refill_queue_budget/);
+ await assert.rejects(rideIslandCup({agent:'invalid',call:()=>assert.fail('invalid budget mutated the body')},{queueBudgetMs:-1}),/invalid_refill_queue_budget/);
 }finally{rmSync(dir,{recursive:true,force:true});}
 const look=(room,hp=20,max=20)=>({room:{num:room},you:{row:4,col:40,x:2592,y:288},hp:{value:hp,max}});
 const heldOrigin={source:'fleetscript',name:'fixture',run_id:'current'},heldStatus={autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:5000}}}};
