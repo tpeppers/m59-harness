@@ -380,6 +380,18 @@ returns to Ko'catan town. `taskParams` is a JSON object; a task's
 parameters compile before departure. The parent keeps its driver and health
 floors, and a task that waives expedition guarantees is refused.
 
+Repeated ordinary travel failures whose exit approaches all refused on unsent
+body collisions now retain their age across short driver-owned jobs. After ten
+seconds, the same owner's next routing attempt may use the normal Blink escape
+rung. Doors, combat, low health, insufficient mana, missing Blink and the
+per-character opt-out still gate that cast. No admission waiter or active
+external job is interrupted. The caster waits for the actual trance to finish
+before judging its position and replanning; a cancel cannot start another walk.
+
+`RID_TOS_FORGET` (room 59) is a historical name, not a mainland shortcut. Blink
+in the Island Hall of Heroes enters that room, whose coded exits lead back to
+the Island. Use the room graph rather than the numeric ID to locate a landing.
+
 The named `icky-chalice` script supplies the committed acquisition recipe's
 clear-orcs, hold-ten-spiders, dispel and grab stage. Use `home=0`, then
 ordinary verified trade if the courier is different from the caster. A

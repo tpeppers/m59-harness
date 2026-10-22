@@ -148,6 +148,7 @@ const SUITES = [
   ['m59-convoy-traffic-test.mjs','ordinary fleet convoys share an entrance only after native confirmation, opposing mouths remain exclusive and lanes retain their line'],
   ['m59-passage-admission-test.mjs', 'narrow passages exclude unrelated traffic, share explicit same-destination convoys across processes, and release only confirmed individual exits'],
   ['m59-island-composition-test.mjs', 'Island work compiles before departure and required safe chains refuse direct fallback'],
+  ['m59-traffic-blink-test.mjs', 'short driver-owned body refusals retain their age; Blink awaits its trance and preserves doors, health and cancellation'],
   ['m59-pvp-readiness-test.mjs', 'PvP wand holds retain pursuit; sight, facing and shared cooldown are rechecked at dispatch; Castle chamber doors are shared'],
   ['m59-death-prevention-test.mjs', 'poisoned recovery and refuge approaches, including exits, retain confirmed progress and cancel stalled movement'],
   ['m59-escape-test.mjs', 'a missed shifting portal window still tries other fixed portals'],
