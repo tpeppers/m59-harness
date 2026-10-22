@@ -312,6 +312,20 @@ refuses without writing. Production and non-construction writes are refused.
 This is construction tooling. Never use it to repair a measured trial's failed
 route, revive a casualty or move a live trial's administrative cutoff.
 
+An administratively relocated offline player can still occupy the room's
+holdings. Logging in only a subset does not remove the other staged bodies.
+Keep unused clones outside the measured route before starting a subset trial;
+verify the room's native player population rather than counting broker sessions.
+Never remove those bodies during a measured crossing and call it unassisted.
+
+`mode=idle` retains automatic economic errands. A funded clone can leave its
+construction post for banking or selling before a large FleetScript finishes
+preflight and claims its faculties. Set the fixture's persisted
+`policy.townTrips=false` before resuming its keepers, then verify the live
+departure positions, kits, purses and full cups. Script ownership still retains
+normal keeper survival; this setup policy prevents an unowned preparation gap
+from changing the intended starting state.
+
 Existing construction stacks are resized through `NumberItem.AddNumber` or
 `SubtractNumber` with the observed delta. Writing `piNumber` directly skips
 `ChangeBulkAndWeight` on the holder and can leave its cached load different from
