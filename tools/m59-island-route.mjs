@@ -131,6 +131,9 @@ export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
   return ready;
 }
 export async function ordinaryHop(ctx,to,options={}){
+  const {maxHops=1,intermediateRooms=[]}=options;
+  if(!Number.isSafeInteger(maxHops)||maxHops<1||maxHops>12||!Array.isArray(intermediateRooms)||
+    intermediateRooms.some(room=>!Number.isSafeInteger(room)||room<=1))throw Error('invalid_hop_corridor');
   return withIslandObservationDeadline(ctx,Date.now()+(options.budgetMs??180000),()=>ordinaryHopWithinBudget(ctx,to,options));
 }
 async function ordinaryHopWithinBudget(ctx,to,options={}){
@@ -168,10 +171,11 @@ export async function readIslandJourney(ctx,{to,orderedBy,deadline,pollMs=1000}=
   try{return await observeIslandTraveller(ctx,()=>ctx.fleet?readIslandFinePosition(ctx):ctx.call('look',{agent:ctx.agent}),{to,orderedBy,deadline,pollMs});}
   catch(e){if(e.message==='traveller_health_unreadable_recovery_budget')throw Error('traveller_reconnect_budget');throw e;}
 }
-async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{},recoverAtEntry=false,entryRecovery=true}={}){
+async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onSample=()=>{},recoverAtEntry=false,entryRecovery=true,maxHops=1,intermediateRooms=[]}={}){
   const {agent,call}=ctx,start=Date.now(),readBody=()=>ctx.fleet?readIslandFinePosition(ctx):call('look',{agent});
   const first=await observeIslandTraveller(ctx,readBody),leg={ok:false,to,start:location(first),samples:[],damage:0,lowest_hp:first.hp?.value};
   let previous=first.hp?.value;
+  const corridor=new Set([first.room?.num,to,...intermediateRooms]);
   const sample=l=>{
     const p=location(l),hp=l.hp?.value;
     if(!Number.isFinite(hp)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
@@ -208,7 +212,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   const request=async()=>{
     const by=originLabel(ctx.origin??currentCallOrigin());let reply;
     for(;;){
-      reply=await call('travel',{agent,to,background:true,max_hops:1,avoid:[5,587],run_errands:false},30000);
+      reply=await call('travel',{agent,to,background:true,max_hops:maxHops,avoid:[5,587],run_errands:false},30000);
       // Room entry can precede the previous hop's job cleanup. Wait only for
       // this controller's own busy job; never replace another owner's order.
       // Shelter/reconnect cleanup can exceed six polls. The original leg
@@ -218,7 +222,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
       const l=await observeIslandTraveller(ctx,readBody),p=sample(l);
       checkIslandCancellation(ctx,await call('status',{agent,brief:true}));
       if(p.room===to)return {...reply,arrived:true};
-      if(p.room!==first.room.num)throw Error('travel_handoff_unexpected_room');
+      if(!corridor.has(p.room))throw Error('travel_handoff_unexpected_room');
       if(Date.now()-start>=budgetMs)break;
       await pause(pollMs);
     }
@@ -229,7 +233,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
   for(;;){
     await pause(pollMs);const l=await readIslandJourney(ctx,{to,orderedBy:leg.request?.ordered_by,deadline:start+budgetMs,pollMs}),p=sample(l);
     if(p.room===to){leg.ok=true;leg.end=p;break;}
-    if(p.room!==first.room.num){leg.reason='unexpected_room_'+p.room;leg.status=await call('status',{agent,brief:true});break;}
+    if(!corridor.has(p.room)){leg.reason='unexpected_room_'+p.room;leg.status=await call('status',{agent,brief:true});break;}
     const s=await call('status',{agent,brief:true});
     // A failed fresh snapshot contains neither busy nor movement. It cannot
     // prove that the owned journey stopped; keep sampling its live body.
@@ -271,7 +275,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
           leg.recoveries=(leg.recoveries??0)+1;
           let recovered=await observeIslandTraveller(ctx,readBody);sample(recovered);
           if(recovered.room?.num===to){leg.ok=true;break;}
-          if(recovered.room?.num!==first.room.num)throw Error('recovery_unexpected_room');
+          if(!corridor.has(recovered.room?.num))throw Error('recovery_unexpected_room');
           try{await eatIslandAtWall(ctx,sample);}
           catch(e){
             if(e.message!=='meal_unexpected_room')throw e;
@@ -281,7 +285,7 @@ async function hopOwned(ctx,to,{budgetMs=180000,pollMs=1000,idleGraceMs=5000,onS
           }
           const rested=await observeIslandTraveller(ctx,readBody);sample(rested);
           if(rested.room?.num===to){leg.ok=true;break;}
-          if(rested.room?.num!==first.room.num)throw Error('recovery_unexpected_room');
+          if(!corridor.has(rested.room?.num))throw Error('recovery_unexpected_room');
           if(!Number.isFinite(rested.vigor?.value))throw Error('traveller_vigor_unreadable');
           if(rested.hp.value/rested.hp.max<(ctx.minHealth??1)||rested.vigor.value<40)continue;
           await call('rest',{agent,stand:true});

@@ -26,6 +26,7 @@ import{deathLocationFromSessions}from'./m59-death-location.mjs';
 //     find itself somewhere else can find out why.
 
 import {findDeathNotice} from './m59-death-notices.mjs';
+import {noteTrafficJam,trafficBlinkAdvice,waitForBlinkCast} from './m59-traffic-blink.mjs';
 import {affordableHeal,castRecoveryHeal,healReadiness} from './m59-recovery-heal.mjs';
 import {publishFleetHealth,readFleetHealth} from './m59-fleet-health.mjs';
 import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
@@ -10201,9 +10202,26 @@ export class Autopilot {
     // a couple of squares first so the plan starts somewhere new; at the cap the journey
     // is refused the way the confinement refuses one, and the pass falls through. See
     // `answerWedge` and WEDGE_REPEAT_CAP in m59-watchdog.mjs.
+    // A claimed travel job can fail on bodies in a few seconds, before the
+    // healthy watchdog (which stands down for its driver) records a wedge.
+    // Recover only at this same owner's next routing attempt, never by
+    // interrupting its active job, admission wait or cast from the tick loop.
+    const trafficOwner=originLabel(capturedTravelOrigin??moveOrigin(null));
+    const trafficAdvice=trafficBlinkAdvice(this.trafficJam,{place:this.wedgePlace?.(),to:room,owner:trafficOwner});
+    if(trafficAdvice){
+      const blinked=await this.wedgeBlink(trafficAdvice).catch(e=>({moved:false,why:e.message}));
+      if(this.s.movementWasCancelled?.(movementGeneration))return {arrived:false,cancelled:true,reason:'travel cancelled during traffic recovery'};
+      if(blinked?.moved){
+        this.trafficJam=null;
+        if(this.watch)this.watch.wedgeBreak=null;
+        this.tally.traffic_blinks=(this.tally.traffic_blinks??0)+1;
+        this.note('blinked past repeated body traffic',{to:Number(room),attempts:trafficAdvice.repeats,from:{room:trafficAdvice.room,row:trafficAdvice.row,col:trafficAdvice.col},landed:blinked.to});
+      }
+    }
     const wedge = await this.answerWedge(Number(room)).catch(e => {
       this.note('wedge check failed', { why: e.message }); return null;
     });
+    if(wedge?.cancelled||this.s.movementWasCancelled?.(movementGeneration))return {arrived:false,cancelled:true,reason:'travel cancelled during wedge recovery'};
     const askedByWatchdog = !!(this.crowdExit && Date.now() - this.crowdExit.at < 60_000
                                && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
     if (askedByWatchdog) this.crowdExit = null;
@@ -10604,6 +10622,7 @@ export class Autopilot {
       this.travelRouteStops = 0;
       this.travelTrackStops = 0;
     }
+    this.trafficJam=noteTrafficJam(this.trafficJam,{outcome,place:this.wedgePlace?.(),to:room,owner:trafficOwner});
     return outcome;
   }
 
@@ -12727,17 +12746,20 @@ export class Autopilot {
     if (!spell) return this.note('stuck, and this character does not know blink',
       { why: want.why, note: 'Riija 1 — the only in-room escape the game offers' });
 
-    const before = c.self ? { col: c.self.col, row: c.self.row } : null;
+    const before = c.self ? { room:s.world?.room?.num??null,col: c.self.col, row: c.self.row } : null;
+    const generation=s.movementGeneration;
     this.blinkedAt = Date.now();
     await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050).catch(() => {});
+    const quiet=await waitForBlinkCast(s.pacer,{sentAt:c.lastCastSent?.at??this.blinkedAt,cancelled:()=>s.movementWasCancelled?.(generation)===true});
+    if(!quiet.quiet)return {moved:false,cancelled:quiet.cancelled===true,why:quiet.why??'blink cancelled'};
     // THE POSITION IS THE EVIDENCE, not the cast reply. A cast that reports success and
     // leaves the character where it was is the same shape as every other silent refusal
     // in this game, and the whole point here is whether we MOVED.
     await new Promise(r => setTimeout(r, 1200));
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
-    const after = c.self ? { col: c.self.col, row: c.self.row } : null;
-    const moved = !!(before && after && (before.col !== after.col || before.row !== after.row));
+    const after = c.self ? { room:s.world?.room?.num??null,col: c.self.col, row: c.self.row } : null;
+    const moved = !!(before && after && (before.room!==after.room||before.col !== after.col || before.row !== after.row));
     this.tally.blinks = (this.tally.blinks || 0) + 1;
     this.note(moved ? 'blinked free' : 'blinked and did not move', {
       from: before, to: after, why: want.why, mana_before: mana,
@@ -16112,6 +16134,7 @@ export class Autopilot {
     // FIRST, BLINK (see WEDGE_BLINK_COOLDOWN_MS). Blink lands on the room's fixed teleport point, which in a town is open
     // floor reachable from the rest of the room -- a better new start than two squares beside the jam.
     const blinked = await this.wedgeBlink(advice).catch(e => ({ moved: false, why: e.message }));
+    if(blinked?.cancelled)return {cancelled:true};
     if (blinked?.moved) {
       if (w) w.wedgeBreak = null;   // a new square; the next walk is planned from it, not counted against the old one
       this.tally.wedge_blinks = (this.tally.wedge_blinks || 0) + 1;

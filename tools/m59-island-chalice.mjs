@@ -4,7 +4,7 @@ import {readFileSync,mkdirSync,writeFileSync,existsSync,openSync,closeSync,unlin
 import {randomUUID} from 'node:crypto';
 import {resolve,dirname} from 'node:path';
 import {itemClassIndex,KODDB} from './m59-itemclass.mjs';
-import {ordinaryHop,pause,location} from './m59-island-route.mjs';
+import {ordinaryHop,pause,location,ISLAND_CONVOY_WAIT_MS} from './m59-island-route.mjs';
 import {processStartedAt,START_TIME_TOLERANCE_MS} from './runtime/process-identity.mjs';
 export const FULL_CUP=/filled to the brim with pure water/i;
 export function cupIsFull(description){return FULL_CUP.test(String(description??''));}
@@ -76,7 +76,11 @@ async function fullCup(ctx){
   return cup;
 }
 async function hop(ctx,to,record){
-  const l=await ordinaryHop(ctx,to,{budgetMs:180000});record.travel.push(l);
+  // Town doors can send the router through the adjacent bar instead of the
+  // direct guest-house exit. Keep that detour explicit and bounded; cave legs
+  // retain ordinaryHop's strict one-room default.
+  const town=[2000,2001,2008,2013,2115].includes(to);
+  const l=await ordinaryHop(ctx,to,{budgetMs:180000,...(town?{maxHops:4,intermediateRooms:[2000,2001,2008,2013]}:{})});record.travel.push(l);
   if(!l.ok)throw Error('crossing_failed_'+to);
 }
 // Rescue requires staying still through its delay. Start from a safe wall so
@@ -169,23 +173,25 @@ async function restoreEquipment(ctx,item,save){
   item.reequipped=true;save();
 }
 const activeStashTokens=new Set();
-export async function withStashLease(ctx,record,fn){
+export async function withStashLease(ctx,record,fn,{budgetMs=ISLAND_CONVOY_WAIT_MS,now=Date.now,wait=pause}={}){
   if(!record.receipt)throw Error('refill_requires_durable_receipt');
-  const file=resolve(dirname(record.receipt),'refill.lock'),token=randomUUID(),deadline=Date.now()+900000;
+  if(!Number.isSafeInteger(budgetMs)||budgetMs<=0)throw Error('invalid_refill_queue_budget');
+  const file=resolve(dirname(record.receipt),'refill.lock'),token=randomUUID(),deadline=now()+budgetMs;
   const alive=prior=>{try{process.kill(prior.pid,0);}catch(e){if(e.code==='ESRCH')return false;}
     const started=processStartedAt(prior.pid);return !started||!prior.started_at||Math.abs(started-prior.started_at)<=START_TIME_TOLERANCE_MS;};
   const remove=nonce=>{try{const current=JSON.parse(readFileSync(file,'utf8'));if(current.token===nonce)unlinkSync(file);}catch(e){if(e.code!=='ENOENT')throw e;}};
   for(;;){
+    if(now()>=deadline)throw Error('refill_queue_budget');
     try{const fd=openSync(file,'wx');try{writeFileSync(fd,JSON.stringify({token,pid:process.pid,started_at:Date.now()-process.uptime()*1000,agent:ctx.agent,receipt:record.receipt}));}finally{closeSync(fd);}activeStashTokens.add(token);break;}
     catch(e){
       if(e.code!=='EEXIST')throw e;
-      let prior;try{prior=JSON.parse(readFileSync(file,'utf8'));}catch(err){if(err.code==='ENOENT'||err instanceof SyntaxError){if(Date.now()>deadline)throw Error('refill_lock_unreadable');await pause(100);continue;}throw err;}
+      let prior;try{prior=JSON.parse(readFileSync(file,'utf8'));}catch(err){if(err.code==='ENOENT'||err instanceof SyntaxError){if(now()>=deadline)throw Error('refill_lock_unreadable');await wait(100);continue;}throw err;}
       const receipt=existsSync(prior.receipt)?JSON.parse(readFileSync(prior.receipt,'utf8')):null;
       const live=alive(prior),ownFinished=prior.pid===process.pid&&!activeStashTokens.has(prior.token);
       if(receipt?.complete||prior.agent===ctx.agent&&(!live||ownFinished)){remove(prior.token);continue;}
       if(!live||ownFinished)throw Error('refill_waits_for_unrecovered_stash_'+prior.agent);
-      if(Date.now()>deadline)throw Error('refill_queue_budget');
-      await pause(1000);
+      if(now()>=deadline)throw Error('refill_queue_budget');
+      await wait(Math.min(1000,Math.max(1,deadline-now())));
     }
   }
   try{return await fn();}finally{
@@ -197,11 +203,11 @@ export async function withStashLease(ctx,record,fn){
 export function islandRideRecovery(record,room){
   if(!record.sips?.length&&!record.stash)return 'not_started';
   if(record.sips?.length===1&&room===2510)return 'second_sip';
-  if(record.sips?.length===2&&[2000,2001,2013,2115].includes(room))return 'refill';
+  if(record.sips?.length===2&&[2000,2001,2008,2013,2115].includes(room))return 'refill';
   return 'unobserved';
 }
 export async function refillIslandCup(ctx,options={}){
-  return withStashLease(ctx,options.record,()=>refillOwned(ctx,options));
+  return withStashLease(ctx,options.record,()=>refillOwned(ctx,options),{budgetMs:options.queueBudgetMs??ISLAND_CONVOY_WAIT_MS});
 }
 async function refillOwned(ctx,{record,save,keepItems=true}={}){
   if(record.stash)return recoverIslandRefill(ctx,{record,save});
@@ -240,9 +246,9 @@ async function refillOwned(ctx,{record,save,keepItems=true}={}){
 // starts a fresh sip while the outcome of the previous sip is unknown.
 export async function recoverIslandRefill(ctx,{record,save}){
   const room=(await ctx.call('look',{agent:ctx.agent})).room?.num;
-  if(![2000,2001,2013,2115].includes(room))throw Error('refill_recovery_requires_island');
-  if(room===2001)await hop(ctx,2000,record);
-  if(room===2000||room===2001)await hop(ctx,2013,record);
+  if(![2000,2001,2008,2013,2115].includes(room))throw Error('refill_recovery_requires_island');
+  if(room===2001||room===2008)await hop(ctx,2000,record);
+  if(room===2000||room===2001||room===2008)await hop(ctx,2013,record);
   if(room!==2115){
     const at=record.stash.position;
     await ctx.call('walk_to',{agent:ctx.agent,row:at.row,col:at.col,max_steps:100,arrive_within:4},180000);
@@ -278,7 +284,8 @@ export async function recoverIslandRefill(ctx,{record,save}){
   }
   await hop(ctx,2000,record);record.refill.complete=true;save();
 }
-export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true}={}){
+export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true,queueBudgetMs=ISLAND_CONVOY_WAIT_MS}={}){
+  if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_refill_queue_budget');
   const {agent,call,state}=ctx;
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
   const file=resolve(evidenceDir,agent+'-pending.json');mkdirSync(dirname(file),{recursive:true});
@@ -296,7 +303,7 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
       // Island arrival proves both completed teleports without consuming more water.
       if(recovery==='refill'||recovery==='second_sip'){
         previous.sips[1].landed??=location(await call('look',{agent}));
-        await refillIslandCup(ctx,{record:previous,save,keepItems});
+        await refillIslandCup(ctx,{record:previous,save,keepItems,queueBudgetMs});
         previous.end=location(await call('look',{agent}));previous.complete=true;delete previous.failure;save();
         return {ok:true,evidence:file,recovered:true};
       }
@@ -317,7 +324,7 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
     await sipTo(ctx,2510,record,save);
     // A second sip starts only after the first Rescue has landed.
     await sipTo(ctx,2001,record,save);
-    await refillIslandCup(ctx,{record,save,keepItems});
+    await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
     record.end=location(await call('look',{agent}));record.complete=true;save();
     writeFileSync(file.replace('-pending','-'+Date.now()),JSON.stringify(record,null,2));
     return {ok:true,evidence:file};

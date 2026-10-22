@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,existsSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip} from './m59-island-chalice.mjs';
+import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip,rideIslandCup} from './m59-island-chalice.mjs';
 import {ordinaryHop,readIslandJourney,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
 import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,activeOwnedFineRecovery,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
@@ -85,6 +85,7 @@ assert.equal(sipWalks,1);
 await assert.rejects(prepareIslandSip({agent:'fixture',call:async name=>name==='look'?{room:{num:2500},hp:{value:20,max:20}}:{in_a_safe_spot_now:{works:false},spots:[]}},{},()=>{}),/reachable_safe_wall/);
 await assert.rejects(prepareIslandSip({agent:'fixture',call:async()=>({room:{num:2500},hp:{value:19,max:20}})},{},()=>{}),/departure_health/);
 assert.equal(islandRideRecovery({sips:[{},{}]},2001),'refill');
+assert.equal(islandRideRecovery({sips:[{},{}]},2008),'refill');
 assert.equal(islandRideRecovery({sips:[{},{}]},2510),'unobserved');
 assert.equal(islandRideRecovery({sips:[{}]},2500),'unobserved');
 const dir=mkdtempSync(join(tmpdir(),'m59-island-test-'));
@@ -99,6 +100,20 @@ try{
  assert(existsSync(join(dir,'refill.lock')));
  await assert.rejects(withStashLease({agent:'b'},b,async()=>{}),/unrecovered_stash_a/);
  await withStashLease({agent:'a'},a,async()=>{a.stash.items[0].recovered=true;});assert(!existsSync(join(dir,'refill.lock')));
+ // A twenty-body convoy can queue longer than the former fifteen-minute cap.
+ const longA=make('long-a'),longB=make('long-b');let clock=0,waits=0,release;
+ const holding=withStashLease({agent:'long-a'},longA,async()=>new Promise(r=>{release=r;}));
+ await withStashLease({agent:'long-b'},longB,async()=>{}, {now:()=>clock,wait:async()=>{
+  clock+=1000000;if(++waits===2){release();await holding;}
+ }});
+ await holding;assert.equal(waits,2);assert(clock>900000);assert(!existsSync(join(dir,'refill.lock')));
+ const shortA=make('short-a'),shortB=make('short-b');clock=0;
+ const shortHold=withStashLease({agent:'short-a'},shortA,async()=>new Promise(r=>{release=r;}));
+ try{await assert.rejects(withStashLease({agent:'short-b'},shortB,async()=>assert.fail('expired queue entered'),
+  {budgetMs:1000,now:()=>clock,wait:async()=>{clock+=1500;}}),/refill_queue_budget/);}
+ finally{release();await shortHold;}
+ await assert.rejects(withStashLease({agent:'long-a'},longA,async()=>{}, {budgetMs:0}),/invalid_refill_queue_budget/);
+ await assert.rejects(rideIslandCup({agent:'invalid',call:()=>assert.fail('invalid budget mutated the body')},{queueBudgetMs:-1}),/invalid_refill_queue_budget/);
 }finally{rmSync(dir,{recursive:true,force:true});}
 const look=(room,hp=20,max=20)=>({room:{num:room},you:{row:4,col:40,x:2592,y:288},hp:{value:hp,max}});
 const heldOrigin={source:'fleetscript',name:'fixture',run_id:'current'},heldStatus={autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:5000}}}};
@@ -263,6 +278,30 @@ const ok=await ordinaryHop({agent:'fixture',call:async(name,args)=>{
  return name==='look'?look(++reads===1?2000:2013):{};
 }},2013,{pollMs:1});
 assert(ok.ok);assert.equal(ok.damage,0);assert.equal(ok.lowest_hp,20);
+// A declared town corridor tolerates an alternate door route. One-hop cave
+// callers and undeclared intermediate rooms still fail closed.
+async function corridorFixture(options={},middle=72){
+ let bodyReads=0,requests=0,cancelled=0;
+ const result=await ordinaryHop({agent:'corridor-fixture',call:async(name,args)=>{
+  if(name==='look')return look(cancelled?middle:[71,middle,73][Math.min(bodyReads++,2)]);
+  if(name==='travel'){requests++;assert.equal(args.max_hops,options.maxHops??1);return {ordered_by:'corridor-owner'};}
+  if(name==='status')return {busy:true,movement:{order:{kind:'travel',to:73,ordered_by:'corridor-owner'}}};
+  if(name==='cancel_movement')cancelled++;
+  return {};
+ }},73,{pollMs:1,budgetMs:1000,...options});
+ return {result,requests,cancelled};
+}
+const detour=await corridorFixture({maxHops:3,intermediateRooms:[72]});
+assert(detour.result.ok);assert.equal(detour.requests,1);assert.equal(detour.cancelled,0);
+const strictHop=await corridorFixture();
+assert(!strictHop.result.ok);assert.equal(strictHop.result.reason,'unexpected_room_72');assert.equal(strictHop.cancelled,1);
+const outsideCorridor=await corridorFixture({maxHops:3,intermediateRooms:[72]},74);
+assert(!outsideCorridor.result.ok);assert.equal(outsideCorridor.result.reason,'unexpected_room_74');
+for(const options of [{maxHops:0},{maxHops:13},{maxHops:1.5},{intermediateRooms:[1]},{intermediateRooms:'72'}]){
+ let commands=0;
+ await assert.rejects(ordinaryHop({agent:'invalid-corridor',call:async()=>{commands++;}},73,options),/invalid_hop_corridor/);
+ assert.equal(commands,0);
+}
 let directCancelCleanups=0;
 const directCancel={agent:'fixture',origin:{source:'fleetscript',name:'direct-hop',run_id:'fixture'},call:async name=>{
  if(name==='look')return look(2000);
