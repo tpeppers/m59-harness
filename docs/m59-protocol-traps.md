@@ -97,6 +97,13 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Things the wire, the server or the sou
   read once after login and kept: `substrate/abilities/<character>.json`, one file per
   character, `node tools/m59-abilities.mjs` to read it.
 
+- **A known ability can have an unknown percentage.** A fresh skill list can
+  contain `{name: 'fire', ability: null}` after learning. Its presence confirms
+  possession; the missing number does not mean the skill is absent or at zero.
+  The ordinary `learn` verb checks the name. Follow-up errands must preserve
+  that distinction instead of buying again or refusing to return home solely
+  because a proficiency number has not arrived. Leave numeric gains unknown.
+
 - **The skill names are not what they sound like.** Seven of the eight weapon
   proficiencies were invented in this repository until recently: the mace one is
   called **"mace fighting"**, the sword one **"fencing"**, and axe/scimitar/hammer are

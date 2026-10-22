@@ -21,6 +21,14 @@ assert(!shadowDispelIdentityMatches(dispelHealth,{fleet:'island20'},dispelEnv));
 assert(!shadowDispelIdentityMatches({...dispelHealth,fleet:'prod'},{fleet:'prod',stateFile:isolatedDispelState},{...dispelEnv,M59_FLEET:'prod'}));
 assert(!shadowDispelIdentityMatches({...dispelHealth,state:join(tmpdir(),'other.json')},{fleet:'island20',stateFile:isolatedDispelState},dispelEnv));
 assert(!shadowDispelIdentityMatches({...dispelHealth,game_server:{host:'remote',port:15959}},{fleet:'island20',stateFile:isolatedDispelState},dispelEnv));
+const customDispel={fleet:'island20',stateFile:isolatedDispelState,gamePort:16959,adminPort:19997};
+const customDispelHealth={...dispelHealth,game_server:{host:'127.0.0.1',port:16959}};
+const customDispelEnv={...dispelEnv,M59_PORT:'16959',M59_ADMIN_PORT:'19997'};
+assert(shadowDispelIdentityMatches(customDispelHealth,customDispel,customDispelEnv));
+for(const [h,o,e] of [[dispelHealth,customDispel,customDispelEnv],[customDispelHealth,{...customDispel,stateFile:null},customDispelEnv],
+ [customDispelHealth,customDispel,dispelEnv],[customDispelHealth,{...customDispel,gamePort:5959},customDispelEnv],
+ [customDispelHealth,{...customDispel,adminPort:16959},customDispelEnv],[customDispelHealth,{...customDispel,adminPort:0},customDispelEnv]])
+ assert(!shadowDispelIdentityMatches(h,o,e),'a custom lab endpoint must be explicit and match its exact roster and ports');
 const sectors=JSON.parse(readFileSync(new URL('../substrate/m59-variable-sectors.json',import.meta.url))).rooms.find(r=>r.room===27);
 // Live ledge stop: nearest rounded seed is across collision, but a nearby seed
 // on the same floor has a fully proved connection and reaches the takeoff.

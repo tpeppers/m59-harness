@@ -1,5 +1,13 @@
 # The shadow fleet — rehearsing an errand on a copy of production
 
+Held-item trimming must detach the item with `Holder.LeaveHold` before
+calling its `Delete` message. `Delete` alone leaves a stale inventory node
+and cached load behind (`kod/object/active/holder.kod:392`). A later clone can
+then appear to carry duplicate army shields, including an item with no owner;
+the jungle refill cannot drop that phantom item. `deleteHeldCmds` is the shared
+construction primitive, while unheld failed creations still use bare deletion.
+Read back the resulting pack before treating a dressed clone as a valid trial.
+
 A **shadow fleet** is a disposable copy of production's characters standing on the loopback
 test server: same attributes, same max health, same gear, same abilities, different bodies.
 It exists so that "will twenty-three live characters survive this errand" stops being a
@@ -303,6 +311,20 @@ refuses without writing. Production and non-construction writes are refused.
 
 This is construction tooling. Never use it to repair a measured trial's failed
 route, revive a casualty or move a live trial's administrative cutoff.
+
+An administratively relocated offline player can still occupy the room's
+holdings. Logging in only a subset does not remove the other staged bodies.
+Keep unused clones outside the measured route before starting a subset trial;
+verify the room's native player population rather than counting broker sessions.
+Never remove those bodies during a measured crossing and call it unassisted.
+
+`mode=idle` retains automatic economic errands. A funded clone can leave its
+construction post for banking or selling before a large FleetScript finishes
+preflight and claims its faculties. Set the fixture's persisted
+`policy.townTrips=false` before resuming its keepers, then verify the live
+departure positions, kits, purses and full cups. Script ownership still retains
+normal keeper survival; this setup policy prevents an unowned preparation gap
+from changing the intended starting state.
 
 Existing construction stacks are resized through `NumberItem.AddNumber` or
 `SubtractNumber` with the observed delta. Writing `piNumber` directly skips

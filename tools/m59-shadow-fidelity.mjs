@@ -560,6 +560,11 @@ export const setNumberCmd = (id,n,from) => {
  return `send object ${id} ${n>=from?'AddNumber':'SubtractNumber'} number INT ${Math.abs(n-from)}`;
 };
 export const deleteCmd = id => `send object ${id} Delete`;
+// Holder.LeaveHold removes the inventory node and its cached bulk/weight.
+// Item.Delete alone clears the item but leaves that holder reference behind.
+export const deleteHeldCmds = (holder,id) => [
+  `send object ${holder} LeaveHold what OBJECT ${id}`,deleteCmd(id),
+];
 
 export const createCmds = plan => plan.create.map(c => createCmd(c.class, c.number));
 
@@ -579,7 +584,7 @@ export function holdingCmds(plan, { holder, wearer = null, created = [], trim = 
     for (const w of plan.wear) cmds.push(useCmd(wearer, w.id));
     plan.create.forEach((c, i) => { if (c.wear) cmds.push(useCmd(wearer, created[i])); });
   }
-  if (trim) for (const s of plan.surplus) cmds.push(deleteCmd(s.id));
+  if (trim) for (const s of plan.surplus) cmds.push(...deleteHeldCmds(holder,s.id));
   return cmds;
 }
 
