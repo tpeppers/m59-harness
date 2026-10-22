@@ -1062,6 +1062,15 @@ const WEDGE_SIDESTEPS = [
   { name: 'south-east', dc:  2, dr:  2 }, { name: 'north-west', dc: -2, dr: -2 },
   { name: 'north-east', dc:  2, dr: -2 }, { name: 'south-west', dc: -2, dr:  2 },
 ];
+// BLINK BEFORE SIDESTEPPING. Operator, 2026-10-22: "if anyone gets stuck for more than 10-15s, blink! they can blink
+// out! especially in east/west jasper, the blink spots are perfect for getting access to the rest of the room if you're
+// stuck". The ladder's first record arrives WEDGE_LADDER_MS (10s) pinned, so the first rung is a blink at ~10-15s; the
+// sidestep stays as the fallback (no blink known, short of mana, hurt, fighting, or the blink did not move us). A
+// wedge-specific cooldown, not the stall blink's 120s: a second jam in the same Jasper stop deserves a second blink,
+// and the cost is 15 mana. Per-character `blink_when_wedged: false` turns the rung off.
+const WEDGE_BLINK_COOLDOWN_MS = Number(process.env.M59_WEDGE_BLINK_COOLDOWN_MS || 30_000);
+const WEDGE_BLINK_MIN_HEALTH = 0.5;
+const WEDGE_BLINK_DOOR_SQUARES = 2;   // see wedgeBlink: never blink away from a door that is merely slow
 // HOW LONG BETWEEN TWO BLOWS STILL COUNTS AS ONE ATTACK. Damage lands about once a second
 // and misses are ordinary, so a single quiet second is not the end of a fight; six of them
 // is. Only the fight-back edict reads this — see `fightBackCheck`.
@@ -12700,11 +12709,11 @@ export class Autopilot {
    * teleports a working character away from its safe spot. One attempt per cooldown, only
    * when the stall is about MOVEMENT, and never below the mana a cast costs.
    */
-  async blinkFree() {
+  async blinkFree({ cooldownMs = BLINK_COOLDOWN_MS } = {}) {
     const want = this.wantsBlink;
     if (!want) return null;
     this.wantsBlink = null;
-    if (Date.now() - (this.blinkedAt ?? 0) < BLINK_COOLDOWN_MS) return null;
+    if (Date.now() - (this.blinkedAt ?? 0) < cooldownMs) return null;
     const s = this.s, c = s.client;
     if (!c) return null;
     const mana = c.vitals?.()?.mana?.value ?? null;
@@ -15929,6 +15938,37 @@ export class Autopilot {
     } finally { s.movementCancellationChecks.delete(controlToken); }
   }
 
+  // THE WEDGE LADDER'S BLINK RUNG. Gated, never forced: off by policy, fighting (survival and the fight own the body),
+  // under WEDGE_BLINK_MIN_HEALTH, short of mana, or no blink known all fall through to the sidestep. blinkFree does the
+  // cast and judges it by position, never by the cast reply.
+  async wedgeBlink(advice) {
+    if (this.policy?.blinkWhenWedged === false) return { moved: false, why: 'blink_when_wedged is off' };
+    if (this.s?.combat?.active) return { moved: false, why: 'in combat' };
+    const c = this.s?.client, v = c?.vitals?.();
+    const hp = v?.health?.max ? v.health.value / v.health.max : null;
+    if (hp !== null && hp < WEDGE_BLINK_MIN_HEALTH) return { moved: false, why: `health ${Math.round(hp * 100)}%` };
+    if ((v?.mana?.value ?? 0) < BLINK_MANA) return { moved: false, why: 'short of mana' };
+    // NOT AT A DOOR. A door is slow, not jammed: the 382/376 door can hold a body on one square for 100-120s and then
+    // let it through (Piggy, 2026-10-22, 350 c28 r51 beside the 382 door at c27 r52). A blink there lands on the room's
+    // fixed point, usually across the room, and the body has to come back to the same door. Blink cannot fix a door.
+    const door = this.doorNear(advice.room, advice.col, advice.row, WEDGE_BLINK_DOOR_SQUARES);
+    if (door) return { moved: false, why: `beside the door to ${door.to} at ${door.col},${door.row}` };
+    if (!(c?.spells || []).some(sp => (c.rsc.get(sp.nameRsc) || '').toLowerCase() === 'blink'))
+      return { moved: false, why: 'does not know blink' };
+    this.wantsBlink = { why: `wedged ${Math.round((advice.wedged_for_ms ?? 0) / 1000)}s at ${advice.col},${advice.row} ` +
+                              `in room ${advice.room} (watchdog record ${advice.repeats})`, at: Date.now() };
+    return (await this.blinkFree({ cooldownMs: WEDGE_BLINK_COOLDOWN_MS })) ?? { moved: false, why: 'blink cooldown' };
+  }
+
+  // The nearest unlocked door (a go-exit square of the movement map) within `within` squares, or null. Unknown map or
+  // room is null too: the guard then does not stop a blink, which keeps the rung working where geometry is unread.
+  doorNear(room, col, row, within = 2) {
+    const R = this.s?.world?.map?.rooms;
+    const r = Array.isArray(R) ? R.find(x => Number(x?.num) === Number(room)) : (R?.[room] ?? R?.[String(room)]);
+    if (!r || col == null || row == null) return null;
+    return (r.goExits ?? []).find(e => !e.locked && Math.abs(e.col - col) <= within && Math.abs(e.row - row) <= within) ?? null;
+  }
+
   async answerWedge(to = null) {
     const now = Date.now();
     const w = this.watch;
@@ -16069,6 +16109,16 @@ export class Autopilot {
     // vary: start the next plan from a different square.
     const from = this.wedgePlace();
     if (!from) return null;
+    // FIRST, BLINK (see WEDGE_BLINK_COOLDOWN_MS). Blink lands on the room's fixed teleport point, which in a town is open
+    // floor reachable from the rest of the room -- a better new start than two squares beside the jam.
+    const blinked = await this.wedgeBlink(advice).catch(e => ({ moved: false, why: e.message }));
+    if (blinked?.moved) {
+      if (w) w.wedgeBreak = null;   // a new square; the next walk is planned from it, not counted against the old one
+      this.tally.wedge_blinks = (this.tally.wedge_blinks || 0) + 1;
+      recordEvent(this.who(), 'wedge_blinked', { room: advice.room, col: advice.col, row: advice.row, to,
+        repeats: advice.repeats, wedged_for_ms: advice.wedged_for_ms, landed: blinked.to ?? null });
+      return { blinked: true, moved: true, to: blinked.to ?? null };
+    }
     const d = WEDGE_SIDESTEPS[(advice.repeats - 1) % WEDGE_SIDESTEPS.length];
     const aim = { col: from.col + d.dc, row: from.row + d.dr };
     let out;
