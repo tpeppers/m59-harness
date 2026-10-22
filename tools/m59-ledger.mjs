@@ -409,7 +409,15 @@ export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
   const cutoff = Date.now() - sinceMs;
   const samples = [], events = [];
   // Two days of files covers any 24-hour window regardless of when it started.
-  const files = readdirSync(DIR).filter(f => LEDGER_FILE.test(f)).sort().slice(-3);
+  //
+  // AND A FILE WHOSE WHOLE DAY ENDED BEFORE THE CUTOFF IS NOT OPENED. Files are named by UTC
+  // day (`ledgerFile` above), so one dated before the cutoff's UTC day holds no row the
+  // window wants. Without this, every 30-minute read JSON-parsed all three days: 2026-10-21
+  // that was ~134 MB per `fleet` call (killsIn caches only 5s), and the broker's loop
+  // blocked 3-6s some 580 times an hour, starving every driver on it.
+  const firstDay = new Date(cutoff).toISOString().slice(0, 10);
+  const files = readdirSync(DIR).filter(f => LEDGER_FILE.test(f)).sort().slice(-3)
+    .filter(f => f.slice(6, 16) >= firstDay);
   source.files = files.length;
   for (const f of files) {
     for (const line of readFileSync(join(DIR, f), 'utf8').split('\n')) {

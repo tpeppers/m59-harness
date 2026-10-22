@@ -16,7 +16,7 @@
 // fleet's history.
 
 import { readFileSync } from 'node:fs';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,7 +24,6 @@ const dir = mkdtempSync(join(tmpdir(), 'm59-ledger-test-'));
 process.env.M59_LEDGER_DIR = dir;
 
 const T0 = 1785780000000;                       // a fixed instant; nothing here is "now"
-const day = new Date(T0).toISOString().slice(0, 10);
 
 // A healthy reading, and the all-null shape the broker writes when nobody is in game.
 const live = (character, t, level, extra = {}) => ({
@@ -39,8 +38,13 @@ const dark = (character, t) => ({
   activity: null, stalled: 'not in game', strategy: null,
 });
 
+// Named the way the writer names it: by the UTC day of the rows (the latest, when a fixture
+// mixes T0 rows with "now" rows). readLedger skips a file whose day ended before its window,
+// so a "now" row filed under T0's day would be invisible -- as it would be in production.
 function write(rows) {
-  writeFileSync(join(dir, `fleet-${day}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  for (const f of readdirSync(dir)) if (/^fleet-.*\.jsonl$/.test(f)) rmSync(join(dir, f));
+  const last = new Date(Math.max(...rows.map(r => r.t))).toISOString().slice(0, 10);
+  writeFileSync(join(dir, `fleet-${last}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
 }
 
 let pass = 0, fail = 0;
@@ -213,6 +217,28 @@ console.log('a death says whether it happened at a wall');
      /d\.killed_by == null \? null : false/.test(body));
   ok('and how hurt it was when it should have fled comes along too',
      /fled_in_time/.test(body));
+}
+
+// A SHORT WINDOW OPENS ONLY THE DAYS IT REACHES. 2026-10-21: every 30-minute read parsed
+// three whole days (~134 MB), once per `fleet` call, and stalled the broker's loop.
+{
+  const { readLedger } = await import('./m59-ledger.mjs');
+  mkdirSync(dir, { recursive: true });
+  for (const f of readdirSync(dir)) if (/^fleet-.*\.jsonl$/.test(f)) rmSync(join(dir, f));
+  const now = Date.now();
+  const today = new Date(now).toISOString().slice(0, 10);
+  const yesterday = new Date(now - 86_400_000).toISOString().slice(0, 10);
+  writeFileSync(join(dir, `fleet-${yesterday}.jsonl`), JSON.stringify(live('Old', Date.parse(today + 'T00:00:00Z') - 60_000, 30)) + '\n');
+  writeFileSync(join(dir, `fleet-${today}.jsonl`), JSON.stringify(live('New', now - 1_000, 30)) + '\n');
+  // A window that cannot reach yesterday at any hour: from just after today's midnight.
+  const sinceMidnight = now - Date.parse(today + 'T00:00:00Z');
+  const short = readLedger({ sinceMs: Math.max(2_000, sinceMidnight - 1) });
+  ok('a window inside today opens only today\'s file', short.source.files === 1, JSON.stringify(short.source));
+  ok('and still finds today\'s row', short.samples.some(s => s.character === 'New'));
+  const long = readLedger({ sinceMs: sinceMidnight + 3_600_000 });
+  ok('a window reaching back into yesterday still opens yesterday\'s file',
+     long.samples.some(s => s.character === 'Old'), JSON.stringify(long.source));
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
