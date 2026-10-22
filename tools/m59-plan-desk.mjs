@@ -10,7 +10,7 @@
 // broker: the desk leaves when that pid does, so even a broker killed with taskkill /F does
 // not leave one behind. M59_NO_PLAN_DESK=1 (or --no-plan-desk) keeps a broker from starting it.
 //
-// The PLAN tab in the patched client (Meridian59/module/merintr/clientcontext.c) is a list
+// The MANAGE tab (once PLAN) in the patched client (Meridian59/module/merintr/planpane.c) is a list
 // that works like Spells: one row per thing you can make the fleet do, double-click to run,
 // arguments picked from lists the fleet itself supplies. This process is the other half —
 // it decides what the rows ARE, from what is actually running, and it executes what you
@@ -21,24 +21,38 @@
 //     { id, entries(ctx) -> [entry], run(entryId, args, ctx) -> {ok, message} }
 //   and any FleetScript module may export `plans` (same entry shape, with its own `run`),
 //   which tools/plans/fleetscripts.mjs registers next to the script. An entry is
-//     { id, group, icon, title, describe, running?, disabled?, args:[{id, title, type:
-//       'choice'|'count'|'text', options?:[{value,label}], default?}] }
+//     { id, group, icon, title, describe, running?, disabled?, args:[{id, title, type, help?,
+//       optional?, options?:[{value, label, when?}], bounds?:[{min, max, when?}], default?}] }
+//   `type` is choice|count|text|boolean for every client, and from protocol 2 also
+//   agents|number|combo|task (below). `when` is "<other arg id>=<value>": the option or bound
+//   applies only while that other argument holds that value. `optional` lets an empty value through.
 //
 // THE FILES (under --dir, the same M59_CLIENT_CONTEXT_DIR the DUM pane uses; separate
 // names, because the DUM parser rejects any line it does not know):
 //   plan/in/<pid>.tsv    client -> desk, rewritten every second
-//     M59PLANREQ 1 <at> <pid> <server%> <account%> <character%> <player_id> <visible 0|1>
+//     M59PLANREQ <1|2> <at> <pid> <server%> <account%> <character%> <player_id> <visible 0|1>
 //     I <id> <name%> <amount>              inventory, as the client holds it
 //     W <id> <name%>                       other players in the client's room (names only the client can resolve)
 //     R <seq> <entry id> <args%>           requests not yet acknowledged (args: k=v&k=v)
 //     END
-//   plan/out/<pid>.tsv   desk -> client
-//     M59PLAN 1 <at> <pid> <ack> <control: none|keeper|other> <status%>
+//   plan/out/<pid>.tsv   desk -> client, in the protocol the client's request named
+//     M59PLAN <1|2> <at> <pid> <ack> <control: none|keeper|other> <status%>
 //     E <id> <group%> <icon%> <title%> <flags: r running, d disabled, c settings> <describe%>
-//     A <entry> <arg> <type: choice|count|text|boolean> <title%> <default%>
-//     O <entry> <arg> <value%> <label%>
+//     A <entry> <arg> <type> <title%> <default%>                [2: + <help%>]
+//     O <entry> <arg> <value%> <label%>                         [2: + <when%>]
+//     N <entry> <arg> <min> <max> <when%>                       [2 only: a number's slider range]
 //     M <seq> <ok 0|1> <message%>          the result of each request, newest last
 //     END
+//
+// PROTOCOL 2 (the MANAGE tab, 2026-10-21) adds four argument types:
+//   agents  a multi-select list of the fleet; the value is "a,b,c"
+//   number  an edit box, with a slider when an N row gives it a range
+//   combo   an edit box with a dropdown of suggestions; any text is accepted
+//   task    a FleetScript picked from a dropdown, configured in a nested form of its own; the
+//           value is "<entry id>" or "<entry id>?<k=v&k=v>" (the nested form's own args)
+// and sixteen arguments a row instead of six. A protocol-1 client (every client built before it)
+// is still answered in protocol 1: those types go to it as plain text, and it gets six arguments.
+// Its parser rejects the whole reply on any row it does not know, so nothing new is sent to it.
 //
 // A request is executed AT MOST ONCE: its sequence must exceed every sequence already
 // acknowledged for that client pid, and the ack is written before the next tick reads.
@@ -66,10 +80,10 @@ export function parsePlanRequest(text, now = Date.now()) {
   const rows = text.trimEnd().split('\n').map(l => l.split('\t'));
   const h = rows.shift();
   if (rows.pop()?.join('\t') !== 'END') return null;
-  if (h.length !== 9 || h[0] !== 'M59PLANREQ' || h[1] !== '1') return null;
+  if (h.length !== 9 || h[0] !== 'M59PLANREQ' || !['1', '2'].includes(h[1])) return null;
   const at = num(h[2]);
   if (!(at <= now + 1000 && now - at <= FRESH_MS)) return null;
-  const r = { at, pid: num(h[3]), server: dec(h[4])?.toLowerCase(), account: dec(h[5])?.toLowerCase(),
+  const r = { version: Number(h[1]), at, pid: num(h[3]), server: dec(h[4])?.toLowerCase(), account: dec(h[5])?.toLowerCase(),
               character: dec(h[6]), player_id: num(h[7]), visible: h[8] === '1', inventory: [], room: [], requests: [] };
   if (!(r.pid > 0) || !r.account || r.character == null) return null;
   for (const f of rows) {
@@ -99,21 +113,52 @@ export function parseArgs(s) {
   return out;
 }
 
+// "<arg>=<value>" holds while that argument has that value -- or, for a list ("a,b"), contains it.
+export function whenHolds(when, args) {
+  if (!when) return true;
+  const i = when.indexOf('=');
+  if (i < 1) return false;
+  const v = String(args?.[when.slice(0, i)] ?? ''), want = when.slice(i + 1);
+  return v === want || v.split(',').includes(want);
+}
+
 // ------------------------------------------------------------------ the desk's file
-export const MAX_ARGS = 6;
-export function renderPlanView({ pid, ack, control = 'none', status = '', entries = [], messages = [] }, now = Date.now()) {
-  const L = [['M59PLAN', 1, now, pid, ack, control, enc(status)].join('\t')];
+export const MAX_ARGS = 6, MAX_ARGS_V2 = 16, MAX_OPTIONS = 600, MAX_OPTIONS_V2 = 4000;
+const V1_TYPES = ['choice', 'count', 'text', 'boolean'];
+export const ARG_TYPES = [...V1_TYPES, 'agents', 'number', 'combo', 'task'];
+
+// WHAT A PROTOCOL-1 CLIENT IS SENT INSTEAD of a type it cannot draw: a text box with the same
+// default. A choice whose options depend on another argument is one too -- an old client would
+// show every merchant's stock at once and could not narrow it. The desk still validates what is
+// typed against the real type (runRequest), so a downgrade loses the picker, never the checking.
+export function downgradeArg(a) {
+  const dependent = (a.options ?? []).some(o => o.when);
+  if (V1_TYPES.includes(a.type) && !dependent) return a;
+  const hint = a.type === 'agents' ? ' — comma-separated' : a.type === 'task' ? ' — script name' : '';
+  return { ...a, type: 'text', title: `${a.title ?? a.id}${hint}`, options: [], bounds: [] };
+}
+
+export function renderPlanView({ version = 1, pid, ack, control = 'none', status = '', entries = [], messages = [] }, now = Date.now()) {
+  const v2 = version >= 2;
+  const L = [['M59PLAN', v2 ? 2 : 1, now, pid, ack, control, enc(status)].join('\t')];
   for (const e of entries.slice(0, 256)) {
     if (!idOk(e.id)) continue;
     const flags = (e.running ? 'r' : '') + (e.disabled ? 'd' : '') + (e.configure ? 'c' : '');
     L.push(['E', e.id, enc(e.group ?? ''), enc(e.icon ?? ''), enc(e.title), flags || '-', enc(e.describe ?? '')].join('\t'));
-    // AT MOST SIX ARGUMENTS, the client's MAX_ARGS (planpane.c). Its parser rejects the WHOLE reply on
-    // a seventh, and a seventh is what a FleetScript with seven params reflects (stock-desk), so every
-    // reply was dropped and the PLAN tab said the desk was not answering. Valid ones first, then cut.
-    const args = (e.args ?? []).filter(a => /^[a-z0-9_]{1,40}$/.test(a.id) && ['choice', 'count', 'text', 'boolean'].includes(a.type));
-    for (const a of args.slice(0, MAX_ARGS)) {
-      L.push(['A', e.id, a.id, a.type, enc(a.title ?? a.id), enc(a.default ?? '')].join('\t'));
-      for (const o of (a.options ?? []).slice(0, 600)) L.push(['O', e.id, a.id, enc(o.value), enc(o.label ?? o.value)].join('\t'));
+    // AT MOST SIX ARGUMENTS for a protocol-1 client, its MAX_ARGS (planpane.c). That parser rejects the
+    // WHOLE reply on a seventh, and a seventh is what a FleetScript with seven params reflects
+    // (stock-desk), so every reply was dropped and the tab said the desk was not answering. Protocol 2
+    // takes sixteen and skips the rest. Valid ones first, then cut; providers put the required first.
+    const args = (e.args ?? []).filter(a => /^[a-z0-9_]{1,40}$/.test(a.id) && ARG_TYPES.includes(a.type))
+      .map(a => v2 ? a : downgradeArg(a));
+    for (const a of args.slice(0, v2 ? MAX_ARGS_V2 : MAX_ARGS)) {
+      L.push(['A', e.id, a.id, a.type, enc(a.title ?? a.id), enc(a.default ?? ''), ...(v2 ? [enc(a.help ?? '')] : [])].join('\t'));
+      for (const o of (a.options ?? []).slice(0, v2 ? MAX_OPTIONS_V2 : MAX_OPTIONS))
+        L.push(['O', e.id, a.id, enc(o.value), enc(o.label ?? o.value), ...(v2 ? [enc(o.when ?? '')] : [])].join('\t'));
+      if (v2 && a.type === 'number') for (const b of (a.bounds ?? []).slice(0, 64)) {
+        if (!Number.isFinite(b.min) || !Number.isFinite(b.max) || b.max < b.min) continue;
+        L.push(['N', e.id, a.id, Math.trunc(b.min), Math.trunc(b.max), enc(b.when ?? '')].join('\t'));
+      }
     }
   }
   for (const m of messages.slice(-12)) L.push(['M', m.seq, m.ok ? 1 : 0, enc(m.message)].join('\t'));
@@ -161,14 +206,34 @@ export async function runRequest(req, { entries, owner }, ctx) {
   const e = entries.find(x => x.id === req.entry);
   if (!e) return { ok: false, message: `no plan "${req.entry}" here any more` };
   if (e.disabled) return { ok: false, message: `${e.title}: ${e.describe || 'disabled'}` };
+  // Every value first, then the checks: an option or a range can depend on ANOTHER argument's value.
+  for (const a of e.args ?? []) req.args[a.id] = String(req.args[a.id] ?? a.default ?? '').trim();
   for (const a of e.args ?? []) {
-    const v = req.args[a.id] ?? a.default;
-    if (v == null || v === '') return { ok: false, message: `${e.title}: ${a.title ?? a.id} is required` };
-    if (a.type === 'count' && !/^\d{1,6}$/.test(String(v))) return { ok: false, message: `${a.title ?? a.id} must be a whole number` };
-    if (a.type === 'boolean' && !['true', 'false'].includes(String(v))) return { ok: false, message: `${a.title ?? a.id} must be true or false` };
-    if (a.type === 'choice' && a.options?.length && !a.options.some(o => String(o.value) === String(v)))
-      return { ok: false, message: `${a.title ?? a.id}: "${v}" is not one of the offered options` };
-    req.args[a.id] = String(v);
+    const v = req.args[a.id], name = a.title ?? a.id;
+    if (v === '') { if (a.optional) continue; return { ok: false, message: `${e.title}: ${name} is required` }; }
+    const offered = (a.options ?? []).filter(o => whenHolds(o.when, req.args));
+    if (a.type === 'count' && !/^\d{1,6}$/.test(v)) return { ok: false, message: `${name} must be a whole number` };
+    if (a.type === 'boolean' && !['true', 'false'].includes(v)) return { ok: false, message: `${name} must be true or false` };
+    if (a.type === 'choice' && a.options?.length && !offered.some(o => String(o.value) === v))
+      return { ok: false, message: `${name}: "${v}" is not one of the offered options` };
+    if (a.type === 'agents') {
+      const picked = v.split(/[\s,]+/).filter(Boolean);
+      // Left off the list on purpose (the character being piloted): say why, not just "not offered".
+      const barred = picked.map(p => (a.excluded ?? []).find(x => x.value === p)).find(Boolean);
+      if (barred) return { ok: false, message: `${barred.value}: ${barred.why}` };
+      const stray = a.options?.length ? picked.filter(p => !a.options.some(o => String(o.value) === p)) : [];
+      if (!picked.length) return { ok: false, message: `${name}: pick at least one` };
+      if (stray.length) return { ok: false, message: `${name}: ${stray.join(', ')} ${stray.length > 1 ? 'are' : 'is'} not on the list offered` };
+      req.args[a.id] = picked.join(',');
+    }
+    if (a.type === 'number') {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return { ok: false, message: `${name} must be a number` };
+      for (const b of (a.bounds ?? []).filter(b => whenHolds(b.when, req.args)))
+        if (n < b.min || n > b.max) return { ok: false, message: `${name}: ${n} is outside ${b.min}–${b.max}${b.why ? ` (${b.why})` : ''}` };
+    }
+    if (a.type === 'task' && a.options?.length && !a.options.some(o => String(o.value) === v.split('?')[0]))
+      return { ok: false, message: `${name}: "${v.split('?')[0]}" is not one of the offered scripts` };
   }
   try {
     const r = await owner.get(e.id).run(e.id, req.args, ctx, e);
@@ -349,7 +414,7 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
       const control = ctx.control ?? 'none';
       const status = me ? `${me.agent} (${req.character}) on fleet ${fleet || '(unnamed)'}` :
         `account ${req.account} is not in fleet ${fleet || '(unnamed)'}'s roster — fleet plans need a fleet character`;
-      writeAtomic(join(dir, 'plan', 'out', f), renderPlanView({ pid: req.pid, ack: st.ack, control, status,
+      writeAtomic(join(dir, 'plan', 'out', f), renderPlanView({ version: req.version, pid: req.pid, ack: st.ack, control, status,
         entries: after.entries, messages: st.messages }, Date.now()));
       state.set(req.pid, st); served++;
     }

@@ -12,9 +12,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFi
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck,
+import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck, whenHolds, runRequest, downgradeArg,
          checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS, freshRequests } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
+import { replLine, replValue, valuesFor, taskValue } from './plans/fleetscripts.mjs';
 import { readHolds, reservedPercent, acceptGiftFrom, deliverTo } from './m59-human-handoff.mjs';
 
 let passed = 0, failed = 0;
@@ -208,6 +209,93 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
   let n = null; const ncall = async (name, a) => { if (a.action === 'status') return { trade: n }; if (a.action === 'offer') { n = { role: 'offerer', mayAccept: false }; return { offered: true }; } if (a.action === 'cancel') { n = null; return { cancelled: true }; } return {}; };
   const nr = await deliverTo(ncall, 'hk2', 'Kermit', [{ id: 1 }], { pollMs: 10, timeoutMs: 80 });
   ok('a person who never counters leaves no open trade behind', !nr.delivered && n === null, JSON.stringify(nr));
+}
+
+// ------------------------------------------------------------------ 3c. protocol 2: the MANAGE tab's pickers
+{
+  const now = Date.now();
+  const req2 = `M59PLANREQ\t2\t${now}\t4243\t${enc('127.0.0.1:5959')}\t${enc('t1')}\t${enc('Kermit')}\t99\t1\nEND\n`;
+  ok('a protocol-2 request parses and says so', parsePlanRequest(req2, now)?.version === 2 && parsePlanRequest(req2.replace('\t2\t', '\t1\t'), now)?.version === 1);
+  ok('a protocol-3 request is refused, not guessed at', parsePlanRequest(req2.replace('\t2\t', '\t3\t'), now) === null);
+  const entry = { id: 'fs.buy', title: 'buy', args: [
+    { id: 'agents', type: 'agents', title: 'agents', help: 'who buys', options: [{ value: 'hk2', label: 'hk2 · Zheng He' }] },
+    { id: 'seller', type: 'choice', title: 'seller', options: [{ value: 'A' }, { value: 'B' }] },
+    { id: 'item', type: 'choice', title: 'item', options: [{ value: 'x', when: 'seller=A' }, { value: 'y', when: 'seller=B' }] },
+    { id: 'withdraw', type: 'number', title: 'withdraw', default: '0', bounds: [{ min: 0, max: 5000, when: 'bank=376' }, { min: 0, max: 0, when: 'bank=0' }] },
+    { id: 'bank', type: 'choice', title: 'bank', default: '0', options: [{ value: '0' }, { value: '376' }] },
+    { id: 'back', type: 'combo', title: 'back', optional: true, options: [{ value: '38', label: '38 — Tos' }] },
+    { id: 'task', type: 'task', title: 'task', optional: true, options: [{ value: '' }, { value: 'fs.come-home' }] },
+    ...['h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q'].map(id => ({ id, type: 'text', optional: true })) ] };
+  const v2 = renderPlanView({ version: 2, pid: 1, ack: 0, entries: [entry] }, 7).split('\n');
+  ok('a protocol-2 view says protocol 2', v2[0].startsWith('M59PLAN\t2\t'));
+  ok('its A rows carry the help text', v2.some(l => l === 'A\tfs.buy\tagents\tagents\tagents\t\twho%20buys'));
+  ok('its O rows carry the condition', v2.some(l => l === 'O\tfs.buy\titem\tx\tx\tseller%3DA'));
+  ok('a number carries its ranges, one per condition', v2.filter(l => l.startsWith('N\tfs.buy\twithdraw\t')).length === 2 &&
+     v2.includes('N\tfs.buy\twithdraw\t0\t5000\tbank%3D376'));
+  ok('sixteen arguments, not six', v2.filter(l => l.startsWith('A\t')).length === 16);
+  const v1 = renderPlanView({ version: 1, pid: 1, ack: 0, entries: [entry] }, 7).split('\n');
+  ok('a protocol-1 view has only rows an old client knows', v1[0].startsWith('M59PLAN\t1\t') && !v1.some(l => /^N\t/.test(l)) &&
+     v1.filter(l => l.startsWith('O\t')).every(l => l.split('\t').length === 5) && v1.filter(l => l.startsWith('A\t')).every(l => l.split('\t').length === 6));
+  ok('and six arguments, the new types as text', v1.filter(l => l.startsWith('A\t')).length === 6 &&
+     v1.some(l => l.startsWith('A\tfs.buy\tagents\ttext\t')) && v1.some(l => l.startsWith('A\tfs.buy\twithdraw\ttext\t')));
+  ok('a choice that depends on another argument goes to an old client as text', downgradeArg(entry.args[2]).type === 'text' && downgradeArg(entry.args[1]).type === 'choice');
+  ok('a condition holds on a value, or on a member of a list', whenHolds('seller=A', { seller: 'A' }) && !whenHolds('seller=A', { seller: 'B' }) &&
+     whenHolds('agents=hk2', { agents: 't3,hk2' }) && whenHolds('', {}));
+  const g = { entries: [entry], owner: new Map([['fs.buy', { run: async (id, args) => ({ ok: true, message: JSON.stringify(args) }) }]]) };
+  const run = async args => runRequest({ entry: 'fs.buy', args: { ...args } }, g, {});
+  let r = await run({ agents: 'hk2', seller: 'A', item: 'x', withdraw: '4000', bank: '376' });
+  ok('a full protocol-2 request runs, an empty optional argument let through', r.ok && JSON.parse(r.message).back === '', r.message);
+  r = await run({ agents: 'hk2', seller: 'A', item: 'y', bank: '0' });
+  ok('an option offered only under another seller is refused', !r.ok && /not one of the offered/.test(r.message));
+  r = await run({ agents: 'hk2', seller: 'A', item: 'x', withdraw: '6000', bank: '376' });
+  ok('a number outside the range its condition selects is refused', !r.ok && /outside 0–5000/.test(r.message), r.message);
+  r = await run({ agents: 'hk2', seller: 'A', item: 'x', withdraw: '100', bank: '0' });
+  ok('the range follows the other argument (no bank, no withdrawal)', !r.ok && /outside 0–0/.test(r.message));
+  r = await run({ agents: 'hk2, t9', seller: 'A', item: 'x' });
+  ok('an agent not on the offered list is refused by name', !r.ok && /t9 is not on the list/.test(r.message));
+  r = await run({ agents: 'hk2', seller: 'A', item: 'x', task: 'fs.come-home?home=52' });
+  ok('a nested script is checked by its row id, its own args riding along', r.ok && JSON.parse(r.message).task === 'fs.come-home?home=52');
+  ok('a nested script nobody offered is refused', !(await run({ agents: 'hk2', seller: 'A', item: 'x', task: 'fs.nope' })).ok);
+}
+
+// ------------------------------------------------------------------ 3d. FleetScripts as pickers, and the line they become
+{
+  mkdirSync(join(substrate, 'banks'), { recursive: true });
+  writeFileSync(join(substrate, 'banks', 'ZhengHe.json'), JSON.stringify({ accounts: { 'jasper-tos-barloque': { balance: 7000, at: 1 } } }));
+  writeFileSync(join(dir, 'plan', 'in', '4244.tsv'), [`M59PLANREQ\t2\t${Date.now()}\t4244\t${enc('127.0.0.1:5959')}\t${enc('t1')}\t${enc('Kermit')}\t99\t1`, 'END', ''].join('\n'));
+  await desk.tick();
+  const out = readFileSync(join(dir, 'plan', 'out', '4244.tsv'), 'utf8').split('\n');
+  const rowsOf = id => out.filter(l => l.split('\t')[1] === id);
+  const buy = rowsOf('fs.buy');
+  ok('a protocol-2 client is answered in protocol 2', out[0].startsWith('M59PLAN\t2\t'));
+  ok('agents are a multi-select of the fleet, without the piloted character', buy.some(l => l.startsWith('A\tfs.buy\tagents\tagents\t')) &&
+     buy.some(l => /^O\tfs\.buy\tagents\thk2\t/.test(l)) && !buy.some(l => /^O\tfs\.buy\tagents\tt1\t/.test(l)));
+  ok('the bank balance is on the agent\'s label', buy.some(l => /^O\tfs\.buy\tagents\thk2\t[^\t]*7%2C000%20banked/.test(l)));
+  ok('the seller is a dropdown of the catalogue', buy.some(l => /^O\tfs\.buy\tseller\tZhieu%20B%27hob\t/.test(l)));
+  ok('the item list is that seller\'s shelf, by display name, conditioned on him',
+     buy.some(l => l.startsWith('O\tfs.buy\titem\tpurple%20mushroom\t') && l.endsWith('\tseller%3DZhieu%20B%27hob')));
+  ok('a wanderer\'s abilities are offered as learn: rows', buy.some(l => /^O\tfs\.buy\titem\tlearn%3Acurse%20weapon\t[^\t]*\tseller%3DMaleval$/.test(l)));
+  ok('withdraw is capped at the most anyone has banked, per bank', buy.includes('N\tfs.buy\twithdraw\t0\t7000\tbank%3D376') &&
+     buy.includes('N\tfs.buy\twithdraw\t0\t0\tbank%3D0') && !buy.some(l => /^N\tfs\.buy\twithdraw\t[^\n]*bank%3D2005/.test(l)));
+  ok('a room param is a combo of every room', buy.some(l => l.startsWith('A\tfs.buy\tback\tcombo\t')) && buy.some(l => /^O\tfs\.buy\tback\t376\t376%20%E2%80%94%20The%20Royal%20Bank/.test(l)));
+  ok('a fixed list is a choice', buy.some(l => l.startsWith('A\tfs.buy\tsearch\tchoice\t')));
+  const trip = rowsOf('fs.island-trip');
+  ok('island-trip\'s task is a nested-script picker and taskParams is not shown',
+     trip.some(l => l.startsWith('A\tfs.island-trip\ttask\ttask\t')) && trip.some(l => /^O\tfs\.island-trip\ttask\tfs\.buy\t/.test(l)) &&
+     !trip.some(l => /^A\tfs\.island-trip\ttaskparams\t/.test(l)) && !trip.some(l => /^O\tfs\.island-trip\ttask\tfs\.island-home\t/.test(l)));
+  ok('required arguments come first', /^A\tfs\.buy\tagents\t/.test(buy.find(l => l.startsWith('A\t'))));
+
+  const { loadFleetScripts } = await import('./m59-fleetlib.mjs');
+  const { scripts } = await loadFleetScripts({ dirs: [['public', join(HERE, 'fleetscripts')]] });
+  const t = taskValue("fs.buy?agents=t9&seller=Zhieu%20B'hob&item=purple%20mushroom&amount=30&back=", scripts);
+  ok('a nested script\'s args become its name and typed JSON, its agents dropped', t.name === 'buy' && t.params.amount === 30 &&
+     t.params.seller === "Zhieu B'hob" && !('agents' in t.params) && !('back' in t.params), JSON.stringify(t));
+  const values = valuesFor(scripts.get('island-trip'), { agents: 'hk2', task: 'fs.buy?item=herbs&amount=5', departspacingms: '60000', outbound: 'walk' }, scripts);
+  ok('the nested script lands in task + taskParams; a value equal to its default is left to the default',
+     values.task === 'buy' && values.taskParams === '{"item":"herbs","amount":5}' && !('departSpacingMs' in values) && values.outbound === 'walk', JSON.stringify(values));
+  const line = replLine('island-trip', values);
+  ok('a value with a space travels as one %20 token', replValue("Zhieu B'hob") === "Zhieu%20B'hob" && replValue('50%') === '50%25' && replValue('38') === '38' &&
+     line.split(' ').length === 5, line);
 }
 
 // ONE DESK PER CLIENT FOLDER (the broker's, or the terminal's, never both).

@@ -217,8 +217,40 @@ export function checkParams(script, params = {}) {
       bad.push(`${key} must be a number, got ${JSON.stringify(v)}`);
     else if (v !== undefined && spec?.type === 'agents' && !String(v).trim())
       bad.push(`${key} must name at least one agent`);
+    // The picker types of m59-plan-kinds.mjs: a room or a bank is a map number, and a fixed list
+    // is a fixed list -- typed at the REPL, they get the same refusal the MANAGE tab gives.
+    else if (v !== undefined && v !== '' && ['room', 'bank'].includes(spec?.type) && !Number.isFinite(Number(v)))
+      bad.push(`${key} must be a room number, got ${JSON.stringify(v)}`);
+    else if (v !== undefined && v !== '' && Array.isArray(spec?.options) &&
+             !spec.options.some(o => String(typeof o === 'object' ? o.value : o) === String(v)))
+      bad.push(`${key} must be one of ${spec.options.map(o => typeof o === 'object' ? o.value : o).join(' | ')}, got ${JSON.stringify(v)}`);
   }
   return bad;
+}
+
+/**
+ * ONE SCRIPT'S STEPS, RUN INSIDE ANOTHER'S: a stage of island-trip, or of chain.
+ *
+ * Composed within the outer run's driver and lease -- no nested runner. The outer run owns the
+ * bodies and keeps its health floors: `agents`, `agent`, `minHealth` and `fragileBelow` always come
+ * from `parent`, whatever the JSON says. A script that waives a guarantee may not be composed: the
+ * waiver was argued for that script's own errand, not for whatever it is nested in.
+ */
+export async function composeTask(name, paramsJson, parent, { scripts = null, exclude = [], what = 'task' } = {}) {
+  if (!name) return [];
+  scripts ??= (await loadFleetScripts()).scripts;
+  const task = scripts.get(name);
+  if (!task || exclude.includes(name)) throw Error(`invalid ${what}`);
+  if (task.unsafe) throw Error(`${what} may not waive expedition guarantees`);
+  let supplied;
+  try { supplied = typeof paramsJson === 'object' && paramsJson ? paramsJson : JSON.parse(paramsJson || '{}'); }
+  catch { throw Error(`${what} params must be a JSON object`); }
+  if (!supplied || Array.isArray(supplied) || typeof supplied !== 'object') throw Error(`${what} params must be a JSON object`);
+  const args = applyDefaults(task, { ...supplied, agents: parent.agents, agent: parent.agent,
+    minHealth: parent.minHealth, fragileBelow: parent.fragileBelow });
+  const bad = checkParams(task, args);
+  if (bad.length) throw Error(bad.join('; '));
+  return task.steps(args);
 }
 
 /** Agents as an array, however they were typed: "a,b", ["a","b"], "a b". */

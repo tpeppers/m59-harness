@@ -305,7 +305,8 @@ if (process.argv[1]?.endsWith('m59-devclient.mjs')) {
       // vcvars64, not 32: the objects already in clientd3d\release are x64, and one x86
       // logoff.obj among them fails the link with LNK1112 rather than a wrong binary.
       console.log('  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools' +
-                  '\\VC\\Auxiliary\\Build\\vcvars64.bat" && nmake /nologo RELEASE=1 Bclient');
+                  '\\VC\\Auxiliary\\Build\\vcvars64.bat" && nmake /nologo RELEASE=1 Bclient Bmodules');
+      // Bmodules too: the DUM and MANAGE tabs are in merintr.dll, which Bclient does not build.
       process.exit(2);
     }
     if (has('check')) process.exit(0);

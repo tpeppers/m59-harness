@@ -44,7 +44,7 @@ export const script = {
   params: {
     agents: { type: 'agents', required: true, describe: 'the bodies to pick from' },
     npc: { required: true, describe: 'wanderer(s), comma-separated: maleval, parrin (perrin), miriana, tendrath, izzio' },
-    mode: { default: 'find', describe: 'find (stop at the first sighting) | post (keep every room watched for `hours`)' },
+    mode: { default: 'find', options: ['find', 'post'], describe: 'find (stop at the first sighting) | post (keep every room watched for `hours`)' },
     count: { type: 'number', default: 0, describe: 'use only the N closest bodies (0 = all of them)' },
     hours: { type: 'number', default: 24, describe: 'post mode: how long to keep the posts. find mode: give up after this' },
     holdMin: { type: 'number', default: 30, describe: 'find mode: how long the finder stays to hold him once seen' },

@@ -1,16 +1,22 @@
-# The PLAN tab: the fleet as a spellbook, and who holds the controls
+# The MANAGE tab (once PLAN): the fleet as a spellbook, and who holds the controls
+
+**Renamed 2026-10-21** (client `70a2b8dc`). Only what a person reads changed: the button says
+MANAGE, the chat command is `manage` (`plan` still works). The files, ids, desk and this doc's name
+keep PLAN, so a desk and a client of either age still find each other. The whole client is described
+in [`m59-debugclient.md`](m59-debugclient.md); managing FleetScripts from the tab is
+[below](#managing-fleetscripts).
 
 The dev client (`shortcuts/dev.bat`, built from `C:\code\Meridian59` with the
-`module/merintr/planpane.c` patch) has a **PLAN** tab next to Inventory / Spells /
+`module/merintr/planpane.c` patch) has a **MANAGE** tab next to Inventory / Spells /
 Skills / Stats / DUM. It is a list that works like Spells. Each row is something the
 fleet can be asked to do: double-click it (or press Enter) to run it, and right-click it
 to read what it does. A row that needs arguments opens them first, with the choices
 supplied by the fleet itself. The rows also run from the chat box:
 
 ```
-plan                                  list every row
-plan courier item=orc%20tooth count=40   run a row by unique prefix; %20 is a space
-plan control                          opens the row's arguments if none were typed
+manage                                list every row (plan: the old name)
+manage courier item=orc%20tooth count=40   run a row by unique prefix; %20 is a space
+manage control                        opens the row's form if no arguments were typed
 fs zheng-he-lap agents=hk2            a FleetScript REPL line, exactly as if typed there
 ```
 
@@ -161,6 +167,45 @@ How Full Auto works:
   own the stream to inject. Only the harness-local copy of `zheng-he-lap.mjs` has this so far. **The
 prod-deploy copy has not been changed.**
 
+## Managing FleetScripts
+
+Every FleetScript is a row, and since protocol 2 (2026-10-21) **every argument is a picker**: the form
+offers the finite list the fleet already holds instead of a text box. `tools/m59-plan-kinds.mjs` decides
+what each param becomes:
+
+| the param | becomes | from |
+|---|---|---|
+| `type: 'agents'` | multi-select of the fleet, bank total on each label; the character you pilot is left out (and refused by name if typed) | the roster, `substrate/banks/*.json` |
+| `type: 'boolean'` | checkbox | |
+| `type: 'number'` | number box; a slider when it has `min`/`max`, or `bounds: 'balance', bank: '<param>'` (tops out at the most anyone has banked at the chosen bank; 0-0 with no bank) | the bank books |
+| `type: 'room'` | every room, number and name; free text accepted | `compendium/data/zones.json` |
+| `type: 'merchant'` | every merchant, with his room (or "wanders: ...") | `m59-merchants.json` |
+| `type: 'item', of: '<param>'` | **what the merchant picked in <param> sells**: goods by display name, plus `learn:<ability>` for each spell or skill he teaches, with price | catalogue + `koddb.json` names |
+| `type: 'bank'` | the three counters (Jasper 376, Tos 54, Ko'catan 2005), "none" when optional | the broker's bank tool |
+| `type: 'wanderer'` | Maleval, Parrin, Miriana, Tendrath, Izzio, with their rooms | `m59-worldbook.mjs` |
+| `type: 'script', paramsIn: '<param>'` | another FleetScript: pick it, press **Configure...**, fill its own form stacked on top; its params land in `<param>` as JSON | the loaded scripts |
+| `options: [...]` | a fixed choice | the script |
+| untyped, guessed | `home`, `room`, `bankRoom`, `...Room` → rooms; `seller`/`teacher`/`vaultman`/`smith`/`apothecary` → merchants; `npc` → wanderers. Always as an editable combo, so a wrong guess never blocks a value | |
+
+So an old script gets most of this with no edit, and a script that declares its types gets all of it.
+A value left at the script's default is not sent, so the script receives its default typed (60000, not
+"60000"). A value with a space goes to the REPL as `%20`, which `m59-fleet-repl.mjs` decodes.
+
+**Two public scripts make most one-off errands a form, not a new script:**
+
+- `buy` -- agents, seller (any merchant), item (from **his** shelf, or `learn:` an ability), amount,
+  optional withdrawal (bank picker, slider capped by what is banked), optional room to walk on to. A
+  wandering seller is found first; `search` picks how: `sweep` (one body walks his rooms, last sighting
+  first), `camp` (stand in one of his rooms and wait; cheap in walking, slow), `fleet` (the agents fan out
+  one per room and the rest walk to whoever sees him), `auto` (fleet with two or more agents). Nobody buys
+  from a rumour: the buyer looks and sees him first. It replaces local one-item pads like `buy-purple`.
+- `chain` -- up to four FleetScripts back to back as one errand, each configured in its own nested form.
+  Every stage compiles before anyone moves; a failed step stops the chain there. `island-trip`'s task
+  uses the same composition (`composeTask` in `m59-fleetlib.mjs`).
+
+A **protocol-1 client** (built before `70a2b8dc`) is still answered in protocol 1: six arguments, the new
+types as text boxes, typed values still checked against the real type by the desk. The other way round, a new client facing a desk from before 2026-10-21 (prod until the next deploy) gets no answer to protocol 2 and drops to protocol 1 within about three seconds, so the tab works there, without the pickers.
+
 ## The lock
 
 "Relinquish control to Keeper" takes the proxy's **control gate** (`tools/m59-proxy-gate.mjs`)
@@ -276,10 +321,12 @@ when the window isn't focused or is minimized.
 
 | file | side | what |
 |---|---|---|
-| `Meridian59/module/merintr/planpane.c` | client | the tab, the typed commands, the local veto |
-| `Meridian59/module/merintr/planpane_test.cpp` | client | offline: protocol, rows, args, ack, lock and its expiry |
+| `Meridian59/module/merintr/planpane.c` | client | the tab, its forms (pickers, nested scripts), the typed commands, the local veto |
+| `Meridian59/module/merintr/planpane_test.cpp` | client | offline: protocol 1 and 2, rows, forms, ack, lock and its expiry |
 | `tools/m59-plan-desk.mjs` | harness | the desk: file protocol, provider registry, at-most-once execution |
 | `tools/plans/{control,courier,fleetscripts}.mjs` | harness | the providers |
+| `tools/m59-plan-kinds.mjs` | harness | what each FleetScript param becomes as a picker |
+| `tools/fleetscripts/buy.mjs`, `chain.mjs` | harness | the general buy errand and script chaining |
 | `tools/m59-proxy-gate.mjs` | harness | the gate rules (allowlist, lease) |
 | `tools/m59-proxy.mjs` | harness | `setGate`/`clearGate`, `--gate`, `--gate-control` |
 | `tools/m59-human-handoff.mjs` | harness | the courier's half of a trade with a person |

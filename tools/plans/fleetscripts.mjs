@@ -5,6 +5,11 @@
 // same description as a PLAN row whose arguments ARE those params, so a script added to
 // tools/fleetscripts/ or substrate/fleetscripts/ appears in the client with no edit here.
 //
+// EACH PARAM IS A PICKER, not a text box, wherever its answer is a finite list the fleet holds:
+// agents from the roster, rooms, merchants and what each sells, banks and what is banked in them,
+// wanderers, and other FleetScripts (nested, configured in their own form). The vocabulary a
+// script declares, and the guesses made for one that declares nothing, are in m59-plan-kinds.mjs.
+//
 // A script may also export `plans`: [{ id, title, icon, describe, args, run(args, ctx) }]
 // for intents that are not "run me with these params" — e.g. editing a loop's standing
 // config. Those register under `fs.<script>.<id>` next to the script's own row.
@@ -22,6 +27,8 @@ import { readFileSync, readdirSync, existsSync, mkdirSync, openSync } from 'node
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { loadFleetScripts, asAgents } from '../m59-fleetlib.mjs';
+import { argsFor as kindArgs, argId } from '../m59-plan-kinds.mjs';
+import { parseArgs } from '../m59-plan-desk.mjs';
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const readJson = f => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
@@ -48,27 +55,67 @@ export function runningScripts(substrate, fleet) {
   return out;
 }
 
-export function argsFor(script, ctx) {
-  return Object.entries(script.params ?? {}).slice(0, 8).map(([key, spec]) => {
-    const id = key.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40);
-    const title = `${key}${spec?.required ? '' : ' (optional)'}`;
-    if (spec?.type === 'number') return { id, key, title, type: 'text', default: spec.default != null ? String(spec.default) : '' };
-    if (spec?.type === 'agents')
-      return { id, key, title: `${title} — comma-separated`, type: 'text', default: spec.default != null ? String(spec.default) : '' };
-    return { id, key, title, type: 'text', default: spec?.default != null ? String(spec.default) : '' };
-  });
+// The arguments a row offers: m59-plan-kinds.mjs turns each param into its picker (agents, rooms,
+// merchants, what a merchant sells, banks, nested scripts). `taskId` maps a script to its row id
+// for a nested-script picker.
+export function argsFor(script, ctx = {}, scripts = null) {
+  return kindArgs(script, ctx, { scripts, taskId: fsId });
 }
 
-// The REPL line a row stands for. Values are quoted the way the REPL tokenises them.
-export function replLine(name, script, args) {
+// A value the REPL can take as one token. The REPL splits on whitespace and has no quoting, so a
+// space (a merchant's name, a nested script's JSON) travels as %20 and m59-fleet-repl.mjs decodes
+// it. A value with no space or % is passed exactly as before, for a REPL older than that decoding.
+export const replValue = v => /[\s%]/.test(v) ? v.replace(/%/g, '%25').replace(/\s/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase()) : v;
+
+// The REPL line a row stands for, from values keyed by PARAM NAME. Empty values are left out, so
+// the script's own default applies.
+export function replLine(name, values) {
   const parts = [name];
-  for (const a of argsFor(script)) {
-    const v = String(args[a.id] ?? '').trim();
-    if (!v) continue;
-    if (/[\s"]/.test(v)) return null;   // the REPL splits on whitespace; refuse rather than mangle
-    parts.push(`${a.key}=${v}`);
+  for (const [key, raw] of Object.entries(values)) {
+    const v = String(raw ?? '').trim();
+    if (v) parts.push(`${key}=${replValue(v)}`);
   }
   return parts.join(' ');
+}
+
+const coerce = (spec, v) => ['number', 'room', 'bank'].includes(spec?.type) && v !== '' && Number.isFinite(Number(v)) ? Number(v)
+  : spec?.type === 'boolean' ? v === 'true' : v;
+
+// A NESTED SCRIPT'S VALUE IS "<row id>?<its own args>" (protocol 2's task type). It becomes the
+// script's name in the param itself and its params, as JSON, in the param `paramsIn` names --
+// the shape island-trip's task/taskParams already had. The nested form's agents are dropped: the
+// outer run owns the bodies (composeTask in m59-fleetlib.mjs overrides them anyway).
+export function taskValue(value, scripts) {
+  const [entry, query = ''] = String(value ?? '').split('?');
+  if (!entry) return { name: '', params: {} };
+  const name = [...scripts.keys()].find(n => fsId(n) === entry || n === entry);
+  if (!name) throw new Error(`no script for "${entry}"`);
+  const child = scripts.get(name), given = parseArgs(query), params = {};
+  for (const [key, spec] of Object.entries(child.params ?? {})) {
+    if (spec?.type === 'agents' || key === 'agents') continue;
+    const v = String(given[argId(key)] ?? '').trim();
+    if (v !== '') params[key] = coerce(spec, v);
+  }
+  return { name, params };
+}
+
+// Row args -> values keyed by param name, nested scripts expanded.
+export function valuesFor(script, args, scripts) {
+  const values = {};
+  for (const [key, spec] of Object.entries(script.params ?? {})) {
+    const v = args[argId(key)];
+    // A value equal to the declared default is left out, so the script gets its default as a
+    // typed value (60000, not "60000") -- several scripts check Number.isSafeInteger on theirs.
+    if (v == null || (spec?.default != null && String(spec.default) === String(v).trim())) continue;
+    if (spec?.type === 'script' && spec.paramsIn) {
+      const t = taskValue(v, scripts);
+      values[key] = t.name;
+      if (t.name) values[spec.paramsIn] = JSON.stringify(t.params);
+      continue;
+    }
+    values[key] = v;
+  }
+  return values;
 }
 
 export function launch(root, fleet, line, substrate, tag) {
@@ -115,7 +162,7 @@ export const provider = {
       rows.push({ id: fsId(name), group: r ? 'FleetScript: running' : `FleetScript: ${s.source}`, icon: 'scroll',
         title: name, running: !!r,
         describe: `${r ? r.join('; ') + '\n\n' : ''}${s.describe ?? ''}${s.unsafe ? `\n\nWAIVES: ${(s.unsafe.waives ?? []).join(', ')} — ${s.unsafe.reason ?? ''}` : ''}`,
-        args: argsFor(s, ctx), _script: name });
+        args: argsFor(s, ctx, scripts), _script: name });
       for (const p of Array.isArray(s.plans) ? s.plans : []) {
         if (!p?.id || typeof p.run !== 'function') continue;
         rows.push({ id: `${fsId(name)}.${String(p.id).toLowerCase()}`.slice(0, 100), group: `FleetScript: ${name}`, icon: p.icon ?? 'scroll',
@@ -136,11 +183,14 @@ export const provider = {
     const scripts = await scriptsOf(ctx.substrate, ctx.harness);
     const s = scripts.get(e._script);
     if (!s) return { ok: false, message: `${e._script} is not loadable any more` };
-    const line = replLine(e._script, s, args);
-    if (!line) return { ok: false, message: 'a value contains a space or quote; use "Run a FleetScript line…" instead' };
-    const agentsArg = argsFor(s).find(a => s.params[a.key]?.type === 'agents');
-    if (agentsArg && asAgents(args[agentsArg.id]).includes(ctx.client.agent))
+    let values;
+    try { values = valuesFor(s, args, scripts); }
+    catch (err) { return { ok: false, message: `${e._script}: ${err.message}` }; }
+    const piloted = Object.entries(s.params ?? {}).filter(([, spec]) => spec?.type === 'agents')
+      .some(([key]) => asAgents(values[key]).includes(ctx.client.agent));
+    if (piloted)
       return { ok: false, message: `${ctx.client.agent} is the character you are piloting — a FleetScript drives keepers, and yours is offline while you play` };
+    const line = replLine(e._script, values);
     const r = launch(root, ctx.fleet, line, ctx.substrate, e._script);
     return { ok: true, message: `started: ${line} (pid ${r.pid}; log ${r.log})` };
   },

@@ -24,6 +24,8 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | send any guild command, or found or fund a hall | [`docs/m59-guilds.md`](docs/m59-guilds.md) |
 | parse a packet, read a stat, trust a reply, or hit a player | [`docs/m59-protocol-traps.md`](docs/m59-protocol-traps.md) |
 | touch a board, the compendium or the planner | [`docs/m59-boards.md`](docs/m59-boards.md) |
+| launch or change the DebugClient (the patched client L starts), or its DUM / MANAGE tabs | [`docs/m59-debugclient.md`](docs/m59-debugclient.md), then [`docs/m59-plan-tab.md`](docs/m59-plan-tab.md) for MANAGE |
+| give a FleetScript param a picker in the MANAGE tab (`type: 'merchant'`, `'item'`, `'room'`, `'script'`...) | [`docs/m59-plan-tab.md`](docs/m59-plan-tab.md#managing-fleetscripts) |
 | run, back up, restore, lend out or shut down the fleet | [`docs/m59-operations.md`](docs/m59-operations.md) |
 | keep a character OUT of the world on purpose, or log off to escape a fight (`m59-dormant.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#keeping-a-character-out-on-purpose-dormancy) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |

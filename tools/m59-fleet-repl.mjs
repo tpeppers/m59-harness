@@ -44,12 +44,17 @@ const listScripts = () => {
 
 // key=value, with everything after the name. Quoting is deliberately not supported: a value
 // that needs quotes wants a script, not a prompt.
+//
+// BUT A SPACE CAN BE TYPED %20. The client's MANAGE tab sends a merchant's name, an item, or a
+// nested script's JSON as one token that way (tools/plans/fleetscripts.mjs replValue). Only a
+// value holding a %XX escape is decoded, and one that does not decode is kept as typed.
+const unescape = v => { if (!/%[0-9a-f]{2}/i.test(v)) return v; try { return decodeURIComponent(v); } catch { return v; } };
 function parseArgs(rest) {
   const out = {};
   for (const tok of rest) {
     const at = tok.indexOf('=');
     if (at < 0) { out._ = [...(out._ ?? []), tok]; continue; }
-    out[tok.slice(0, at)] = tok.slice(at + 1);
+    out[tok.slice(0, at)] = unescape(tok.slice(at + 1));
   }
   return out;
 }
