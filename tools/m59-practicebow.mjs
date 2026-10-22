@@ -94,6 +94,25 @@ export function arrowCount(items = []) {
     .reduce((n, i) => n + (Number(i.amount) || 1), 0);
 }
 
+/**
+ * WHAT TO TAKE FROM ONE GIVER: its arrow stacks, largest first, leaving `keep` with it, until the
+ * archer would hold `want`. Pure; `items` is the giver's inventory reply. Returns {id, amount, name}
+ * rows in the shape the broker's `supply` tool takes.
+ */
+export function planArrowPull(items = [], have = 0, { keep = 5, want = 150 } = {}) {
+  const stacks = (items ?? []).filter(i => Number(i?.id) > 0 && /\barrows?\b/.test(nameOf(i)) && !/bolt/.test(nameOf(i)))
+    .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
+  let spare = stacks.reduce((n, i) => n + (Number(i.amount) || 1), 0) - Math.max(0, Number(keep) || 0);
+  let need = Math.max(0, Number(want) - Number(have));
+  const out = [];
+  for (const st of stacks) {
+    if (spare <= 0 || need <= 0) break;
+    const amount = Math.min(Number(st.amount) || 1, spare, need);
+    if (amount > 0) { out.push({ id: Number(st.id), amount, name: String(st.name) }); spare -= amount; need -= amount; }
+  }
+  return out;
+}
+
 // A melee weapon to fight for arrows with. Bows and anything ranged are not one.
 const MELEE = /\b(sword|axe|mace|hammer|scimitar|dagger|blade)\b/;
 export function findMelee(items = []) {

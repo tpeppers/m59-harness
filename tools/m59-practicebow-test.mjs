@@ -67,6 +67,18 @@ section('reading the bow');
   ok('retire a bow that wore out in 50 shots', pb.shouldRetire(50, 80) && !pb.shouldRetire(500, 80) && !pb.shouldRetire(50, 0));
 }
 
+section('taking arrows from a giver');
+{
+  const giver = [{ id: 1, name: 'nerudite arrows', amount: 30 }, { id: 2, name: 'arrows', amount: 8 },
+                 { id: 3, name: 'sapphire', amount: 4 }, { id: 4, name: 'crossbow bolts', amount: 50 }];
+  const all = pb.planArrowPull(giver, 0, { keep: 5, want: 150 });
+  ok('largest arrow stack first, keep 5 back, nothing that is not an arrow',
+     JSON.stringify(all) === JSON.stringify([{ id: 1, amount: 30, name: 'nerudite arrows' }, { id: 2, amount: 3, name: 'arrows' }]), JSON.stringify(all));
+  ok('stops at want', pb.planArrowPull(giver, 140, { keep: 5, want: 150 }).reduce((n, w) => n + w.amount, 0) === 10);
+  ok('a giver at or under keep gives nothing', pb.planArrowPull([{ id: 1, name: 'nerudite arrows', amount: 5 }], 0, { keep: 5 }).length === 0);
+  ok('an archer already at want takes nothing', pb.planArrowPull(giver, 150, { want: 150 }).length === 0);
+}
+
 section('what to shoot');
 {
   const best = pb.loadBestiary();
@@ -144,6 +156,13 @@ section('the compiled plan');
   const noDesk = await script.steps({ ...p, desk_room: null });
   ok('no desk known: train steps only (the mend band then stops the run with the reason)',
      noDesk.filter(s => s.do === 'walk').length === 1 && noDesk.filter(s => s.label?.startsWith('mend')).length === 0);
+}
+
+section('the mend desk script');
+{
+  const { script } = await import('./fleetscripts/mend-desk.mjs');
+  const steps = await script.steps({ agent: 'a2', agents: ['a2'], room: 38, hours: 1, keep_sapphire: 0, keep_tooth: 0, max_items: 3 });
+  ok('mend-desk walks to its room, then serves', steps.length === 2 && steps[0].do === 'walk' && steps[0].to === 38 && steps[1].do === 'verify');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

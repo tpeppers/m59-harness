@@ -5,6 +5,7 @@
 //   practice-bow agents=t4 skills=fire             # fire only, even if it holds archery
 //   practice-bow agents=t4 desk=Loial              # mend only at this desk
 //   practice-bow agents=t4 arrows_min=0            # never fight for arrows; stop when out
+//   practice-bow agents=t1 room=38 supply_from=t10,t11,t16   # take arrows from farmers in the room
 //
 // Operator, 2026-10-20: "train the bow skills fire and/or archery, stopping when whichever 1-2 of
 // skills possessed reach 99 (i.e., won't continue because doesn't have 99 in archery if the
@@ -36,7 +37,7 @@ import { chaliceStoreFor } from '../m59-chalice.mjs';
 import { describeItem } from '../m59-magicsort.mjs';
 import {
   bowSkillState, gainsInWindow, bowBand, bandAtOrBelow, findBow, arrowCount, findMelee,
-  shouldRetire, loadBestiary, arrowTreasures, monstersIn, pickTarget, arrowDroppersIn, pickMendDesk,
+  shouldRetire, loadBestiary, arrowTreasures, monstersIn, pickTarget, arrowDroppersIn, pickMendDesk, planArrowPull,
 } from '../m59-practicebow.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -77,6 +78,11 @@ export const script = {
     mend_at:       { type: 'string', default: 'poor', describe: 'mend at this band or worse: good, med, poor' },
     arrows_min:    { type: 'number', default: 15, describe: 'fight for arrows below this many; 0 = never' },
     arrows_to:     { type: 'number', default: 80, describe: 'stop fighting for arrows at this many' },
+    supply_from:   { type: 'string', default: null, describe: 'fleetmates to take arrows from, comma separated; only those in the practice room' },
+    supply_below:  { type: 'number', default: 40, describe: 'take arrows from supply_from below this many' },
+    supply_to:     { type: 'number', default: 150, describe: '...up to this many' },
+    supply_keep:   { type: 'number', default: 5, describe: 'arrows each giver keeps' },
+    supply_wait_s: { type: 'number', default: 900, describe: 'out of arrows with supply_from: wait this long for a giver to have some' },
     burst:         { type: 'number', default: 20, describe: 'shots between condition reads' },
     reach:         { type: 'number', default: 10, describe: 'close to this many squares before shooting' },
     abort_below:   { type: 'number', default: 0.5, describe: 'stop a burst below this health fraction' },
@@ -159,6 +165,39 @@ export const script = {
       return { ok: arrowCount(items) > 0, why: `${arrowCount(items)} arrows after the arrow fight` };
     };
 
+    // ARROWS FROM FLEETMATES IN THE ROOM. Operator, 2026-10-22: the castle farmers collect nerudite
+    // arrows for the archer ("More farmers on arrows"); prod-deploy-ac's fire-loop.mjs ferried them
+    // from outside the run. Doing it here fixes three things that failed from outside:
+    //   - only givers ALREADY IN THE ROOM, with no travel (`stationary`, `who_travels: neither`): a
+    //     giver on a farm strategy left "the keeper never picked up the journey";
+    //   - the call is the run's own, so the receiver's lease is ours: a supply sent by another
+    //     process to a character this run held came back "no count rose";
+    //   - `what` names the stacks by id: `items:` matches reagents only.
+    const givers = list(p.supply_from);
+    const pullArrows = async (call) => {
+      if (!givers.length) return 0;
+      const fleet = (await call('fleet', {}, 30_000).catch(() => null))?.fleet ?? [];
+      const roomOf = a => Number(fleet.find(r => String(r.agent).toLowerCase() === a)?.room_num);
+      const mine = roomOf(String(agent).toLowerCase());
+      let got = 0;
+      for (const g of givers) {
+        if (g === String(agent).toLowerCase() || roomOf(g) !== mine) continue;
+        const have = arrowCount(await readPack(call));
+        if (have >= Number(p.supply_to)) break;
+        const inv = await call('inventory', { agent: g }, 60_000).catch(() => null);
+        const what = planArrowPull(inv?.items ?? [], have, { keep: Number(p.supply_keep), want: Number(p.supply_to) });
+        if (!what.length) continue;
+        const r = await call('supply', { from: g, to: agent, what, stationary: true, who_travels: 'neither',
+                                         ...(Number.isFinite(inv?.ids_as_of) ? { ids_as_of: inv.ids_as_of } : {}) }, 180_000)
+          .catch(e => ({ error: e.message }));
+        const now = arrowCount(await readPack(call));
+        log(`arrows from ${g}: asked ${what.reduce((n, w) => n + w.amount, 0)}, now ${now}` +
+            (now > have ? '' : ` — ${r?.reason_code ?? r?.reason ?? r?.error ?? 'nothing moved'}`));
+        got += Math.max(0, now - have);
+      }
+      return got;
+    };
+
     // ------------------------------------------------------------------ the training step
     const train = (k) => verify(async ({ call, keeper, state }) => {
       const st = S(state);
@@ -198,6 +237,20 @@ export const script = {
           return { ok: true, why: `bow ${band}; mending (cycle ${k + 1})` };
         }
 
+        if (givers.length && arrowCount(items) < Number(p.supply_below)) {
+          await pullArrows(call);
+          items = await readPack(call);
+          if (arrowCount(items) === 0 && Number(p.arrows_min) <= 0) {
+            // Out, and told not to fight: wait for a giver to collect some rather than end the run.
+            const giveUp = Math.min(Date.now() + Number(p.supply_wait_s) * 1000, until);
+            while (arrowCount(items) === 0 && Date.now() < giveUp) {
+              log(`no arrows; waiting for ${givers.join('/')} to collect some`);
+              await sleep(60_000);
+              await pullArrows(call);
+              items = await readPack(call);
+            }
+          }
+        }
         if (arrowCount(items) < Math.max(1, Number(p.arrows_min))) {
           if (Number(p.arrows_min) <= 0 && arrowCount(items) === 0) return { ok: false, why: 'out of arrows (arrows_min=0: not fighting for more)' };
           if (Number(p.arrows_min) > 0) {
