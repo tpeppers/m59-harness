@@ -410,7 +410,7 @@ body's fine-geometry component. A complete bounded search can downgrade a
 coarse-only portal so the ordinary exit executor tries a connected sibling
 first. It does not remove declared portals, infer failure from a timed-out
 search, or freeze operable door geometry. This repairs the bar's adjacent
-exit-square mismatch without a room-specific route or longer town timeout.
+exit-square mismatch without a room-specific route or relaxed collision checks.
 When that proof reveals a partition mismatch, connected siblings use the
 planned `approachFine` waypoints before a coarse approach or a rail to the old
 anchor. The local steering fan alone cannot backtrack around this partition.
