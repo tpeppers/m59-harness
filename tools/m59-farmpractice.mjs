@@ -89,23 +89,7 @@ export function planFarmPractice({ school, known = [], policy = {}, maxMana = nu
   chosen.sort((a, b) => (a.ability - b.ability) || (a.mana - b.mana));
 
   // SPARE MANA: what the character's other casting needs to remain affordable after a drill.
-  const needs = [];
-  const buff = policy.buffAllies;
-  if (buff && buff.enabled !== false) {
-    const knownNames = new Set(known.map(s => String(s.name).toLowerCase()));
-    for (const b of (buff.spells ?? [])) {
-      const n = String(b).toLowerCase();
-      if (!knownNames.has(n)) continue;
-      const cost = spellCost(n, catalogue)?.mana;
-      const f = Number.isFinite(Number(buff.mana_floor)) ? Number(buff.mana_floor) : Number.isFinite(cost) ? cost + 4 : null;
-      if (Number.isFinite(f)) needs.push([`buff ${n}`, f]);
-    }
-  }
-  if (policy.touchSpell) {
-    const cost = spellCost(policy.touchSpell, catalogue)?.mana;
-    if (Number.isFinite(cost)) needs.push([`touch spell ${policy.touchSpell}`, cost + 4]);
-  }
-  const derived = needs.reduce((m, [, f]) => Math.max(m, f), 0);
+  const { floor: derived, needs } = otherCastingFloor({ policy, known, catalogue });
   const manaFloor = Math.max(derived, Number.isFinite(Number(floor)) ? Number(floor) : 0);
   const cheapest = Math.min(...chosen.map(c => c.mana));
   if (Number.isFinite(Number(maxMana)) && Number(maxMana) - manaFloor < cheapest)
@@ -145,6 +129,32 @@ export function planFarmPractice({ school, known = [], policy = {}, maxMana = nu
     order: chosen.map(c => c.name),
     report,
   };
+}
+
+/**
+ * THE MANA A CHARACTER'S OTHER CASTING NEEDS LEFT AFTER A PRACTICE CAST: each buff it is posted
+ * to cast (buffAllies refuses below cost + 4, or its own mana_floor) and its touch spell. Shared
+ * with m59-practice-plan.mjs, so the two planners cannot disagree about what "spare" means.
+ * @returns { floor, needs: [[what, floor], ...] }
+ */
+export function otherCastingFloor({ policy = {}, known = [], catalogue = loadCatalogue() } = {}) {
+  const needs = [];
+  const buff = policy?.buffAllies;
+  if (buff && buff.enabled !== false) {
+    const knownNames = new Set(known.map(s => String(s.name).toLowerCase()));
+    for (const b of (buff.spells ?? [])) {
+      const n = String(b).toLowerCase();
+      if (!knownNames.has(n)) continue;
+      const cost = spellCost(n, catalogue)?.mana;
+      const f = Number.isFinite(Number(buff.mana_floor)) ? Number(buff.mana_floor) : Number.isFinite(cost) ? cost + 4 : null;
+      if (Number.isFinite(f)) needs.push([`buff ${n}`, f]);
+    }
+  }
+  if (policy?.touchSpell) {
+    const cost = spellCost(policy.touchSpell, catalogue)?.mana;
+    if (Number.isFinite(cost)) needs.push([`touch spell ${policy.touchSpell}`, cost + 4]);
+  }
+  return { floor: needs.reduce((m, [, f]) => Math.max(m, f), 0), needs };
 }
 
 /** Is `live` (the keeper's practiceSpells) the plan we applied? Names in order, floor, rooms, gap. */

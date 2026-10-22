@@ -113,3 +113,42 @@ door in part 1 covers every site, wrapped or not.
 
 **Status:** `autopilot action=status` carries `cast_rite`: the role tag, the costume being worn now with
 its stash, or the last rite that was popped.
+
+## 3. Practice toward the next school level (`practice-plan`)
+
+```bash
+node tools/m59-fleet-repl.mjs --fleet prod
+> practice-plan agents=t2,t3,t5                      # DRY: the plan per character, nothing changed
+> practice-plan agents=t2,t3,t5 schools=kraanan,shalille apply=true
+> practice-plan agents=t2 restore=true apply=true    # put back the list the first apply stashed
+node tools/m59-practice-plan-test.mjs                # the guard (offline)
+```
+
+Practice casts the **first** listed spell it can afford (`choosePractice`), so the order of
+`practice_spells` is the whole lever. `tools/m59-practice-plan.mjs` decides it, purely, from the
+spellbook (`abilities`), the planner (the fleet row's `learning`), the pack and the policy:
+
+- **The gate.** Level L+1 of a school opens when the best three abilities at level L are good enough
+  (`PlayerCanLearn`, `compendium/tools/learn.mjs`). Those three, if drillable, go first, weakest first.
+  A school the planner has queued spells in leads; among equals the gate closest to opening
+  (`remaining_required`) leads, and a gate already open goes last, since only a purchase moves it. A
+  best-three member that cannot be drilled (enchant weapon, identify) is overtaken by the nearest
+  drillable spell at that level once nothing else in the three is left to drill.
+- **The categories.** `self`, `none`, `creature` (needs `on: [quarry]`; default the current list's,
+  else the hunt), `fleetmate` (relay, with `min_vigor`), and `never`: teleports, summons, area spells
+  that touch our own characters, invisibility, enchant weapon (its knowers keep a **17** floor), create
+  food, hospice, identify, mend. A hard never is dropped even when listed; a soft one somebody listed by
+  hand is kept.
+- **The blockers that read as idle**: `reserve_leaves_no_room`, `never_affordable`, `karma` (the
+  server refuses a Qor spell above its ceiling with no mana spent: L2 -20, L3 -30, L4 -40),
+  `min_vigor_above_rest_cap` (resting stops at 80, relay's 110 must be eaten), `vigor_short_now`,
+  `reagent_is_food` (relay's Snack is the edible mushroom), `reagent_short`, `not_known`.
+- **Reagents.** Per reagent: per cast, on hand, kept, the stock N casts want (`stock_casts` for gate
+  spells, `rest_casts` for the rest) and the shortfall. With `apply=true` a shortfall becomes a
+  standing top-up in `substrate/courier-requests.json` (`{ agent: { item: count } }`, the file the
+  courier lap reads and the PLAN tab writes, `tools/plans/courier.mjs`), never lowering a request
+  already there; a reagent the lap has no shopping line for goes to `substrate/courier-wishlist.json`,
+  which nothing buys from, and the run says so.
+
+It writes one setting and walks nobody, so it waives only `keeperLease`. Piloted characters and
+`exclude=` are skipped. `practice-while-farming` is the older one-school version and still works.
