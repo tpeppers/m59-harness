@@ -40,20 +40,22 @@ const ARCH = 'scratch/archive-2026-10-21/substrate';
 
 // --- the parser -----------------------------------------------------------------------------
 {
+  // Fixture lines spell the quote as @ so m59-imports-test, which scans this file's TEXT, does not
+  // read them as real imports of tools/multi.mjs and friends.
   const specs = parseImports([
-    "import { a } from '../guard.mjs?v=8';",
-    "import def, {\n  b,\n  c as d } from './multi.mjs';",
-    "import './side.mjs';",
-    "export { x } from './re.mjs';",
-    "export * from './star.mjs';",
-    "const m = await import('./dyn.mjs');",
-    "const n = await import(new URL('../dyn2.mjs?v=1', import.meta.url).href);",
-    "const u = new URL('urlref.mjs', import.meta.url);",
-    "// import { gone } from './commented.mjs';",
-    " * import { gone } from './jsdoc.mjs';",
-    "import fs from 'node:fs';",
+    "import { a } from @../guard.mjs?v=8@;",
+    "import def, {\n  b,\n  c as d } from @./multi.mjs@;",
+    "import @./side.mjs@;",
+    "export { x } from @./re.mjs@;",
+    "export * from @./star.mjs@;",
+    "const m = await import(@./dyn.mjs@);",
+    "const n = await import(new URL(@../dyn2.mjs?v=1@, import.meta.url).href);",
+    "const u = new URL(@urlref.mjs@, import.meta.url);",
+    "// import { gone } from @./commented.mjs@;",
+    " * import { gone } from @./jsdoc.mjs@;",
+    "import fs from @node:fs@;",
     "const t = import(`./tpl-${name}.mjs`);",
-  ].join('\n')).map(i => i.spec);
+  ].join('\n').replace(/@/g, "'")).map(i => i.spec);
   ok('a ?v= query import is an edge', specs.includes('../guard.mjs?v=8'));
   ok('a multi-line static import is an edge', specs.includes('./multi.mjs'));
   ok('a side-effect import is an edge', specs.includes('./side.mjs'));
