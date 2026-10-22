@@ -848,6 +848,24 @@ function taughtAbility(name, kind = null) {
   return seen.size === 1 ? [...seen.values()][0] : null;
 }
 
+// THE FLEET ROW'S LEARNING VIEW, AT MOST A MINUTE OLD. learningView recomputes the whole
+// PlayerCanLearn arithmetic for every character on every `fleet` call: 0.9-2.3s per call on
+// 2026-10-22, enough to push /health past the 3s keeper-liveness deadline so writes to healthy
+// keepers were refused ("keeper identity could not be verified"). A planner queue moves on a
+// purchase, not by the second. Only the fleet row uses this; buy_next_planned_skills still
+// asks learningView directly so a purchase is never decided on a stale view.
+const LEARNING_VIEW_TTL_MS = 60_000;
+const learningViewCache = new Map();
+function learningViewCached(c) {
+  const name = c?.me?.name;
+  if (!name) return learningView(c);
+  const hit = learningViewCache.get(name);
+  if (hit && Date.now() - hit.at < LEARNING_VIEW_TTL_MS) return hit.view;
+  const view = learningView(c);
+  learningViewCache.set(name, { at: Date.now(), view });
+  return view;
+}
+
 function learningView(c) {
   if (!learningCatalogue || !c?.me?.name) return null;
   const known = cachedLearningRows(c);
@@ -18098,7 +18116,9 @@ const TOOLS = [
       // Once for the whole fleet, not once per row, and from the ledger rather than from
       // each keeper — see killsIn(). A keeper's own kills_30m is wiped every time the
       // supervisor restarts it, which is about once a minute.
-      const recentKills = killsIn();
+      // A minute-old count, not the default five seconds: on a miss this parses the whole
+      // day's ledger (tens of MB by afternoon), and `fleet` is polled by many callers.
+      const recentKills = killsIn(undefined, 60_000);
       // Keeper tallies reset whenever a keeper process is rolled.  Post-mortems are written
       // at the death boundary and survive that restart, so they are the board's durable
       // 24-hour death count and latest-death fallback.
@@ -18484,7 +18504,7 @@ const TOOLS = [
           })(),
           // The same target and PlayerCanLearn arithmetic the planner uses. Cache-only:
           // a fleet-page refresh must not turn into 21 game-server reads.
-          learning: learningView(c),
+          learning: learningViewCached(c),
           // THE ABILITY BEHIND EACH SKILL, because a fleet-scope decision cannot ask for it.
           //
           // `progress` is fetched per-agent and only for CHARACTER rules, so anything
