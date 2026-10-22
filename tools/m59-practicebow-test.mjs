@@ -67,6 +67,18 @@ section('reading the bow');
   ok('retire a bow that wore out in 50 shots', pb.shouldRetire(50, 80) && !pb.shouldRetire(500, 80) && !pb.shouldRetire(50, 0));
 }
 
+section('taking arrows from a giver');
+{
+  const giver = [{ id: 1, name: 'nerudite arrows', amount: 30 }, { id: 2, name: 'arrows', amount: 8 },
+                 { id: 3, name: 'sapphire', amount: 4 }, { id: 4, name: 'crossbow bolts', amount: 50 }];
+  const all = pb.planArrowPull(giver, 0, { keep: 5, want: 150 });
+  ok('largest arrow stack first, keep 5 back, nothing that is not an arrow',
+     JSON.stringify(all) === JSON.stringify([{ id: 1, amount: 30, name: 'nerudite arrows' }, { id: 2, amount: 3, name: 'arrows' }]), JSON.stringify(all));
+  ok('stops at want', pb.planArrowPull(giver, 140, { keep: 5, want: 150 }).reduce((n, w) => n + w.amount, 0) === 10);
+  ok('a giver at or under keep gives nothing', pb.planArrowPull([{ id: 1, name: 'nerudite arrows', amount: 5 }], 0, { keep: 5 }).length === 0);
+  ok('an archer already at want takes nothing', pb.planArrowPull(giver, 150, { want: 150 }).length === 0);
+}
+
 section('what to shoot');
 {
   const best = pb.loadBestiary();
@@ -144,6 +156,32 @@ section('the compiled plan');
   const noDesk = await script.steps({ ...p, desk_room: null });
   ok('no desk known: train steps only (the mend band then stops the run with the reason)',
      noDesk.filter(s => s.do === 'walk').length === 1 && noDesk.filter(s => s.label?.startsWith('mend')).length === 0);
+}
+
+section('arrow trips to a supply room');
+{
+  const { script } = await import('./fleetscripts/practice-bow.mjs');
+  const base = { agent: 'a1', agents: ['a1'], room: 38, desk_room: null, skills: 'fire', bow: 'practice bow', mend_at: 'poor',
+                 arrows_min: 0, arrows_to: 80, burst: 20, reach: 10, abort_below: 0.5, retire_swings: 80, mend_wait_s: 600,
+                 hours: 24, cycles: 2, supply_from: 't10,t11', supply_below: 40, supply_to: 150, supply_keep: 5, supply_wait_s: 900,
+                 supply_rooms: '39' };
+  const steps = await script.steps(base);
+  const kinds = steps.map(s => s.do === 'verify' ? (s.label ?? 'verify') : `walk:${typeof s.to === 'function' ? 'fn' : s.to}`);
+  ok('no desk, supply room 39: train, walk, arrows, walk back',
+     kinds.join(' ') === 'plan walk:38 train 1 walk:fn arrows 1 walk:38 train 2 walk:fn arrows 2 walk:38', kinds.join(' '));
+  const dyn = steps.find(s => s.do === 'walk' && typeof s.to === 'function');
+  ok('the supply room is a walk candidate', dyn.candidates.join() === '38,39');
+  ok('an arrow trip walks to the supply room', dyn.to({ pb: { needArrows: true, supplyRoom: 39 } }) === 39);
+  ok('a mend comes before an arrow trip', (await script.steps({ ...base, desk_room: 2 })).find(s => s.do === 'walk' && typeof s.to === 'function')
+       .to({ pb: { needMend: true, needArrows: true, supplyRoom: 39 } }) === 2);
+  ok('nothing due: stays in the practice room', dyn.to({ pb: {} }) === 38);
+}
+
+section('the mend desk script');
+{
+  const { script } = await import('./fleetscripts/mend-desk.mjs');
+  const steps = await script.steps({ agent: 'a2', agents: ['a2'], room: 38, hours: 1, keep_sapphire: 0, keep_tooth: 0, max_items: 3 });
+  ok('mend-desk walks to its room, then serves', steps.length === 2 && steps[0].do === 'walk' && steps[0].to === 38 && steps[1].do === 'verify');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
