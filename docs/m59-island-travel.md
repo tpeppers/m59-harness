@@ -380,6 +380,15 @@ returns to Ko'catan town. `taskParams` is a JSON object; a task's
 parameters compile before departure. The parent keeps its driver and health
 floors, and a task that waives expedition guarantees is refused.
 
+Refill leases can have many waiters in one FleetScript process. Its own start
+time is now read from that process's stable identity without launching an OS
+query. Previously every waiter synchronously started PowerShell on Windows;
+enough waiters blocked the lease holder's network callbacks and caused a cascade
+of position timeouts and abandoned cargo. Foreign process identities still use
+the normal batched OS proof. The twenty-waiter regression exercises real stash
+leases and asserts that self checks launch no process; cargo abandonment and
+same-owner recovery retain their existing guards.
+
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten
 seconds, the same owner's next routing attempt may use the normal Blink escape

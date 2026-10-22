@@ -30,6 +30,10 @@
 // not-node. Anything we cannot determine returns `null` and the caller keeps refusing, so
 // every uncertain case fails closed exactly as it did before.
 import { execFileSync } from 'node:child_process';
+// Our own PID cannot have been recycled while this code is executing. Repeated
+// lease checks must not start synchronous OS queries from the same event loop
+// that owns the live lease's network work.
+const SELF_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000);
 
 /** Windows' own clock skew is not the point; these readers are second-granular. */
 export const START_TIME_TOLERANCE_MS = 2000;
@@ -82,9 +86,14 @@ export function processStartTimes(pids, { exec = execFileSync } = {}) {
     .filter(p => Number.isSafeInteger(p) && p > 0))];
   const out = new Map(wanted.map(p => [p, null]));
   if (!wanted.length) return out;
+  // Explicit query injection remains authoritative for identity fixtures.
+  const selfKnown = exec === execFileSync && wanted.includes(process.pid);
+  if (selfKnown) out.set(process.pid, SELF_STARTED_AT);
+  const queried = selfKnown ? wanted.filter(p => p !== process.pid) : wanted;
+  if (!queried.length) return out;
   try {
     if (process.platform === 'win32') {
-      const filter = wanted.map(p => `ProcessId=${p}`).join(' or ');
+      const filter = queried.map(p => `ProcessId=${p}`).join(' or ');
       const text = exec('powershell', ['-NoProfile', '-NonInteractive', '-Command',
         `Get-CimInstance Win32_Process -Filter '${filter}' | ` +
         'ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.CreationDate.ToUniversalTime().Ticks }'],
@@ -98,7 +107,7 @@ export function processStartTimes(pids, { exec = execFileSync } = {}) {
       }
       return out;
     }
-    const text = exec('ps', ['-o', 'pid=,lstart=', '-p', wanted.join(',')],
+    const text = exec('ps', ['-o', 'pid=,lstart=', '-p', queried.join(',')],
       { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of String(text).split(/\r?\n/)) {
       const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
