@@ -1008,3 +1008,6 @@ substrate/rescue-travel/
 /substrate/courier-holds.json
 /substrate/courier-settings.json
 /substrate/courier-ready.json
+# The keeper heap ceiling in MB, read at every keeper spawn (m59-keeper-heap.mjs). One machine's
+# answer to how much memory it has, and an env var cannot reach a broker started by live handover.
+/substrate/keeper-heap-mb
