@@ -227,8 +227,22 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
   if (script.overrides)
     onLog(`note: this machine's ${script.file} overrides the committed ${script.overrides}`);
 
-  const agents = asAgents(withDefaults.agents);
+  let agents = asAgents(withDefaults.agents);
   if (!agents.length) return { ok: false, why: 'no agents' };
+  // A SCRIPT MAY NARROW (OR EXPAND) ITS OWN AGENT LIST BEFORE THE RUNNER TOUCHES ANYBODY.
+  // `fleetScript` takes the run lock and marks `busy` on every agent it is handed, before any
+  // step runs -- so a step that skips a piloted character has already locked it and marked it
+  // busy by then. practice-plan (2026-10-22) is the first user: `agents=all`, and piloted,
+  // excluded and not-in-roster characters dropped here, never handed over at all.
+  // `resolveAgents(params)` -> { agents: [...], skipped: [{ agent, why }] }.
+  if (typeof script.resolveAgents === 'function') {
+    let r;
+    try { r = await script.resolveAgents({ ...withDefaults, agents }); }
+    catch (e) { return { ok: false, why: `could not resolve the agents: ${e.message}` }; }
+    for (const s of r?.skipped ?? []) onLog(`${s.agent}: skipped -- ${s.why}`);
+    agents = asAgents(r?.agents ?? []);
+    if (!agents.length) return { ok: false, why: 'no agents left after resolving' + (r?.skipped?.length ? ` (${r.skipped.length} skipped)` : '') };
+  }
 
   return fleetScript({
     name: `${name} (${script.source})`,

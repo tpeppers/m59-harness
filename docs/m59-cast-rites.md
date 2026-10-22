@@ -121,6 +121,7 @@ node tools/m59-fleet-repl.mjs --fleet prod
 > practice-plan agents=t2,t3,t5                      # DRY: the plan per character, nothing changed
 > practice-plan agents=t2,t3,t5 schools=kraanan,shalille apply=true
 > practice-plan agents=t2 restore=true apply=true    # put back the list the first apply stashed
+> practice-plan agents=all exclude=hk1,hk3            # every in-roster, non-piloted character
 node tools/m59-practice-plan-test.mjs                # the guard (offline)
 ```
 
@@ -150,5 +151,6 @@ spellbook (`abilities`), the planner (the fleet row's `learning`), the pack and 
   already there; a reagent the lap has no shopping line for goes to `substrate/courier-wishlist.json`,
   which nothing buys from, and the run says so.
 
-It writes one setting and walks nobody, so it waives only `keeperLease`. Piloted characters and
-`exclude=` are skipped. `practice-while-farming` is the older one-school version and still works.
+It writes one setting and walks nobody, so it waives only `keeperLease`. Piloted, excluded and
+not-in-roster characters are dropped by the script's `resolveAgents` before the runner takes its run lock
+or `busy` mark (`runNamed` in `m59-fleetlib.mjs` calls it), so they are never touched at all. `practice-while-farming` is the older one-school version and still works.

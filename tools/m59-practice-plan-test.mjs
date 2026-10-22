@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { planPractice, categorise, courierRequestPlan, mergeCourierRequests, karmaAllows, schoolKey, itemKey,
          NEVER_DRILL, nameKey, REST_VIGOR_CAP, ENCHANT_FLOOR } from './m59-practice-plan.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
-import { script, yes } from './fleetscripts/practice-plan.mjs';
+import { script, yes, pickAgents } from './fleetscripts/practice-plan.mjs';
 
 let n = 0;
 const ok = (name, fn) => { fn(); n++; console.log(`ok ${name}`); };
@@ -212,5 +212,21 @@ ok('the fleetscript: dry by default, waives only the keeper lease with a reason,
   const steps = script.steps({ agents: ['t1'] });
   assert.equal(steps.length, 2); assert.ok(steps.every(s => s.do === 'verify'));
 });
+
+ok('agents are resolved before the runner: piloted, excluded and not-in-roster never reach it; all = the roster', () => {
+  const rows = [{ agent: 't1' }, { agent: 't2', piloted: { since: 1, pid: 9 } }, { agent: 't3', in_roster: false }, { agent: 't4' }];
+  assert.deepEqual(pickAgents({ rows, requested: ['all'], exclude: ['t4'] }), { agents: ['t1'], skipped: [
+    { agent: 't2', why: 'piloted by a person' }, { agent: 't3', why: 'not in the roster' }, { agent: 't4', why: 'excluded' }] });
+  assert.deepEqual(pickAgents({ rows, requested: ['t2', 't1', 't9'] }).agents, ['t1']);
+  assert.deepEqual(pickAgents({ rows, requested: ['t9'] }).skipped, [{ agent: 't9', why: 'not on the fleet list' }]);
+});
+
+{
+  const r = await script.resolveAgents({ agents: ['all'], exclude: 't1' },
+    { call: async () => ({ fleet: [{ agent: 't1' }, { agent: 't2', piloted: { pid: 1 } }, { agent: 't3' }] }) });
+  assert.deepEqual(r.agents, ['t3']);
+  await assert.rejects(script.resolveAgents({ agents: ['t1'] }, { call: async () => ({ error: 'down' }) }), /unreadable/);
+  n++; console.log('ok resolveAgents reads the fleet list, and an unreadable one refuses rather than guessing');
+}
 
 console.log(`\n${n} passed`);

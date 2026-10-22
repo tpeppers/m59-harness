@@ -2,6 +2,7 @@
 // WHILE IT FARMS; AND ASK THE COURIER FOR THE REAGENTS THE DRILL WILL BURN.
 //
 //   practice-plan agents=t2,t3,t5                           # DRY: plan and print, change nothing
+//   practice-plan agents=all exclude=hk1,hk3                # every in-roster, non-piloted character
 //   practice-plan agents=t2,t3,t5 apply=true                # push practice_spells + file courier requests
 //   practice-plan agents=t2,t3 schools=kraanan,shalille apply=true
 //   practice-plan agents=t5,t6 quarry=troll,orc rooms=599,579,350 apply=true
@@ -32,15 +33,16 @@
 // substrate/courier-wishlist.json, which nothing buys from: it is printed as such. A request is never
 // LOWERED -- an operator's standing herb 140 stays 140. No second courier is invented here.
 //
-// WHO IT WILL NOT TOUCH. A character a person is piloting (the fleet row's `piloted`) and anything in
-// `exclude` are skipped with the reason said. It takes no faculty lease (`keeperLease` waived, as in
+// WHO IT WILL NOT TOUCH. A character a person is piloting (the fleet row's `piloted`), anything in
+// `exclude` and anything not in the roster are dropped by `resolveAgents` BEFORE the runner takes its
+// run lock and `busy` mark -- never locked, never marked -- and the step re-checks as a second net. It takes no faculty lease (`keeperLease` waived, as in
 // practice-while-farming): a lease would cancel a farmer's journey for a policy write, and it never
 // claims or releases anybody else's. The work faculty's owner is printed so a bot that will
 // overwrite the list is visible.
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verify, FOOD_KEEP } from '../m59-fleetscript.mjs';
+import { verify, call as brokerCall, FOOD_KEEP } from '../m59-fleetscript.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { planPractice, courierRequestPlan, mergeCourierRequests, itemKey } from '../m59-practice-plan.mjs';
 import { lapState } from '../plans/courier.mjs';
@@ -70,6 +72,28 @@ const fleetRow = async (call, agent) => {
   return (await fleetRows).find(r => r.agent === agent) ?? null;
 };
 
+/**
+ * WHO THIS RUN MAY TOUCH, decided BEFORE the runner locks or marks anybody busy (the runner does
+ * both to every agent it is handed, before any step can skip one). Pure. `requested` may be
+ * ['all']: every in-roster character on the fleet list. Piloted, excluded and not-in-roster
+ * characters are dropped with the reason; so is a name the fleet list does not carry at all.
+ * @returns { agents: [...], skipped: [{ agent, why }] }
+ */
+export function pickAgents({ rows = [], requested = [], exclude = [] } = {}) {
+  const byAgent = new Map(rows.filter(r => r?.agent).map(r => [r.agent, r]));
+  const out = [], skipped = [], ex = new Set(exclude);
+  const want = requested.some(a => String(a).toLowerCase() === 'all') ? [...byAgent.keys()] : requested;
+  for (const agent of [...new Set(want)]) {
+    const r = byAgent.get(agent);
+    if (ex.has(agent)) skipped.push({ agent, why: 'excluded' });
+    else if (!r) skipped.push({ agent, why: 'not on the fleet list' });
+    else if (r.in_roster === false) skipped.push({ agent, why: 'not in the roster' });
+    else if (r.piloted) skipped.push({ agent, why: 'piloted by a person' });
+    else out.push(agent);
+  }
+  return { agents: out, skipped };
+}
+
 export const script = {
   name: 'practice-plan',
   describe: "Practise the spells that gate each character's next school level first, weakest first, on spare mana while farming; request the reagents from the courier. Dry unless apply=true.",
@@ -97,7 +121,7 @@ export const script = {
   ],
 
   params: {
-    agents:  { type: 'agents', required: true, describe: 'who practises' },
+    agents:  { type: 'agents', required: true, describe: 'who practises; `all` = every in-roster, non-piloted character' },
     apply:   { type: 'boolean', default: false, describe: 'push the plan; without it nothing is changed' },
     request: { type: 'boolean', default: true, describe: 'with apply, file reagent shortfalls as courier requests' },
     restore: { type: 'boolean', default: false, describe: 'put back the practice_spells stashed by the first apply' },
@@ -110,6 +134,14 @@ export const script = {
     stock_casts: { type: 'number', default: 20, describe: 'reagent stock to request per gate spell, in casts' },
     rest_casts:  { type: 'number', default: 5, describe: 'reagent stock to request per other spell, in casts' },
     relay_min_vigor: { type: 'number', default: 110, describe: 'min_vigor for a newly listed relay' },
+  },
+
+  // Run by m59-fleetlib's runNamed before fleetScript sees the list. An unreadable fleet list
+  // refuses the run: an unchecked list is exactly how a piloted character gets locked.
+  resolveAgents: async (p, { call = brokerCall } = {}) => {
+    const reply = await call('fleet', {});
+    if (!Array.isArray(reply?.fleet)) throw new Error('the fleet list is unreadable, so piloted characters cannot be told apart');
+    return pickAgents({ rows: reply.fleet, requested: [].concat(p.agents ?? []), exclude: list(p.exclude) });
   },
 
   steps: (p) => [

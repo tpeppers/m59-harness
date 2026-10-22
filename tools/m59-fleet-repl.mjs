@@ -124,7 +124,8 @@ rl.on('line', (line) => queue(async () => {
         if (bad.length) say('bad parameters:\n  ' + bad.join('\n  '));
         else {
           const agents = asAgents(params.agents);
-          say(`${name}: ${agents.length} agent(s) — ${agents.join(', ')}`);
+          say(`${name}: ${agents.length} agent(s) — ${agents.join(', ')}` +
+              (typeof s.resolveAgents === 'function' ? ' (as typed: the script resolves the final list at run time)' : ''));
           // One agent's steps are enough to show the shape; they differ only in the numbers
           // each computes for itself, and rendering twenty-one copies helps nobody.
           const steps = await s.steps({ ...params, agent: agents[0], agents });

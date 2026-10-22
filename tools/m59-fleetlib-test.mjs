@@ -18,7 +18,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadFleetScripts } from './m59-fleetlib.mjs';
+import { loadFleetScripts, runNamed } from './m59-fleetlib.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -160,6 +160,29 @@ console.log('\na -test.mjs beside a script is not a script');
   ok('the test file is not loaded as a script', !scripts.has('errand-test'));
   ok('and it is not reported as a problem either',
      !problems.some(p => /errand-test/.test(p.file)));
+}
+
+console.log('\nresolveAgents narrows the list BEFORE fleetScript locks or marks anybody');
+{
+  // practice-plan, 2026-10-22: a step that skips a piloted character runs after the runner has
+  // already taken its lock and `busy` mark on it, so the list is resolved up front.
+  const handed = [];
+  const fakeFleetScript = async ({ agents }) => { handed.push(...agents); return { ok: true }; };
+  const mk = resolveAgents => new Map([['resolving', { name: 'resolving', source: 'public', file: 'x.mjs',
+    params: { agents: { type: 'agents', required: true } }, steps: () => [], resolveAgents }]]);
+  const logs = [];
+  const r = await runNamed('resolving', { agents: 'all' }, { scripts: mk(async p => ({
+      agents: p.agents[0] === 'all' ? ['t1', 't3'] : p.agents,
+      skipped: [{ agent: 't2', why: 'piloted by a person' }] })), fleetScript: fakeFleetScript, onLog: l => logs.push(l) });
+  ok('fleetScript is handed only the resolved agents', r.ok && handed.join(',') === 't1,t3', handed.join(','));
+  ok('the skipped one is said, with its reason', logs.some(l => /t2: skipped -- piloted/.test(l)));
+  handed.length = 0;
+  const none = await runNamed('resolving', { agents: 't2' }, { scripts: mk(async () => ({ agents: [], skipped: [{ agent: 't2', why: 'piloted' }] })),
+    fleetScript: fakeFleetScript, onLog: () => {} });
+  ok('nobody left means no run at all', !none.ok && handed.length === 0 && /no agents left/.test(none.why));
+  const broken = await runNamed('resolving', { agents: 't1' }, { scripts: mk(async () => { throw new Error('fleet unreadable'); }),
+    fleetScript: fakeFleetScript, onLog: () => {} });
+  ok('a resolver that cannot answer refuses the run', !broken.ok && handed.length === 0 && /fleet unreadable/.test(broken.why));
 }
 
 rmSync(root, { recursive: true, force: true });
