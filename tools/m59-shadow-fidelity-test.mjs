@@ -197,6 +197,16 @@ ok(plan.surplus.length === 1 && plan.surplus[0].id === 701, 'the leather armour 
 ok(!F.holdingCmds(plan, { holder: 4310, wearer: 4310, created: [1, 2, 3] }).some(c => /Delete/.test(c)), 'and is not deleted by default');
 ok(F.holdingCmds(plan, { holder: 4310, wearer: 4310, created: [1, 2, 3], trim: true }).at(-1) === 'send object 701 Delete',
    'only --trim-items deletes it');
+// holder.kod:392 unlinks the inventory node; Item.Delete does not. A later
+// clone must not see the deleted shield as still carried and duplicate it.
+const held=new Set([701]),deleted=new Set();
+for(const command of F.holdingCmds(plan,{holder:4310,wearer:4310,created:[9001,9002,9003],trim:true})){
+ let m;if((m=/^send object 4310 LeaveHold what OBJECT (\d+)$/.exec(command)))held.delete(Number(m[1]));
+ else if((m=/^send object (\d+) Delete$/.exec(command)))deleted.add(Number(m[1]));
+}
+ok(deleted.has(701)&&!held.has(701),'trimming detaches the surplus object before deleting it');
+same(F.deleteHeldCmds(4310,701),['send object 4310 LeaveHold what OBJECT 701','send object 701 Delete'],'held removal preserves native holder bookkeeping order');
+same(F.deleteCmd(701),'send object 701 Delete','unheld failed creations still use bare deletion');
 let threw = false; try { F.holdingCmds(plan, { holder: 1, created: [1] }); } catch { threw = true; }
 ok(threw, 'a create count that does not match hands NOTHING over — the ids would not line up');
 

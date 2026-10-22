@@ -1,5 +1,12 @@
 # Cave and Ko'catan travel
 
+An independent native lab can retain artificial Dispel with an explicit named
+roster and `retainShadowIslandDispel({fleet,stateFile,gamePort,adminPort})`.
+Nondefault ports require the exact roster identity, a matching loopback game
+endpoint in broker health, and matching configured game/maintenance ports.
+Production fleets and the default production game port are refused. This lets
+two local test worlds stay separate without weakening ordinary travel checks.
+
 Konima's normal outbound crossings are r27c60 to r27c65 and r46c80 to r46c84.
 The preferred return walks one square west on the right-hand shelf, then drops
 from r27c64 directly onto the r23c60 refuge. Independent native fine reads
