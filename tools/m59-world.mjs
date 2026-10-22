@@ -1200,6 +1200,19 @@ export class World {
 
     for (const g of room.goExits) {
       const rr = (geo && me && !g.locked) ? this.reach(g.col, g.row) : { reachable: null };
+      // A locked internal partition can leave neighbouring portal squares on
+      // different sides of the BSP although the coarse grid joins them. Prefer
+      // the siblings the real body can reach before spending a walk on a wall.
+      // A bounded, incomplete search proves nothing; retain the usual doorway
+      // fallback and never remove a declared exit on this model evidence.
+      if(!g.locked&&room.goExits.some(e=>e.locked)&&!isMutableGeometry(room.num)&&
+         Number.isFinite(me?.x)&&Number.isFinite(me?.y)){
+        const fine=fineOriginReach??=fineReachableSquares(geo,{
+          x:protocolToClient(me.x),y:protocolToClient(me.y)},this.fineConnectivityBudget);
+        if(fine.complete&&!fine.squares.has(`${g.row},${g.col}`)){
+          rr.verified=false;rr.fine_disconnected=true;
+        }
+      }
       out.push({
         kind: g.locked ? 'locked_door' : 'go',
         to: g.locked ? null : g.to,
@@ -1211,6 +1224,7 @@ export class World {
         // the case `path`'s goal exemption exists for — so this is very often `false` here
         // and that is correct. It must never be read as "do not offer this door".
         verified: rr.verified ?? null,
+        ...(rr.fine_disconnected?{fine_disconnected:true}:{}),
         how: g.locked
           ? `locked door at r${g.row}c${g.col} (row=${g.row}, col=${g.col})`
           : `walk_to EXACTLY {"col":${g.col},"row":${g.row}} (r${g.row}c${g.col}), then act go — the match is on that one square`,

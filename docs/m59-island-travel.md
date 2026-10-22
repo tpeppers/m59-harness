@@ -402,6 +402,13 @@ refill permits the bounded Guest House–Barking Monster–settlement detour,
 and a two-sip receipt stranded in the bar resumes refill without another sip.
 Directional cave legs retain the one-crossing default.
 
+Rooms with locked internal doors also check sibling `go` portals against the
+body's fine-geometry component. A complete bounded search can downgrade a
+coarse-only portal so the ordinary exit executor tries a connected sibling
+first. It does not remove declared portals, infer failure from a timed-out
+search, or freeze operable door geometry. This repairs the bar's adjacent
+exit-square mismatch without a room-specific route or longer town timeout.
+
 Repeated ordinary travel failures whose exit approaches all refused on unsent
 body collisions now retain their age across short driver-owned jobs. After ten
 seconds, the same owner's next routing attempt may use the normal Blink escape
