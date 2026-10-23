@@ -19032,6 +19032,7 @@ export class Autopilot {
       // The ordinary farm sweep is below this stage and cannot run while it is
       // blocked here. Keep the same drop policy and sweep rate when rearming.
       await this.sweepBroken().catch(() => null);
+      await this.sweepCursed().catch(() => null);
       const ok = await this.armSelf().catch(() => false);
       if (ok && skills.isArmed(this.s.client)) { this.progress('armed itself'); return HANDLED; }
       // makeWeapon refreshes the spell list before reporting failure when mana is
@@ -22840,6 +22841,7 @@ export class Autopilot {
       // every pack size, so this runs on its own clock. `inspectForBroken` is the cheap
       // half and is asked only about SPARES, never the weapon in hand.
       await this.sweepBroken().catch(() => {});
+      await this.sweepCursed().catch(() => {});
       this.sweepGearCondition().catch(() => {});
       // Read which weapons are magic, and keep a magic one in hand when the policy asks.
       this.sweepWeaponMagic().catch(() => {});
@@ -32309,14 +32311,55 @@ export class Autopilot {
   }
 
   noteUncursed(item, said = null) {
-    const c = this.s.client;
-    if (item && c?._cursedItemIds) c._cursedItemIds.delete(`name:${item}`);
-    // The remove curse unused whatever it freed (player.kod RemoveCurseAllItems); the next equip is
-    // free to choose, and the suspect is answered.
+    // THE CURSED MARK STAYS (operator, 2026-10-23: "fix the curse with uncurse & dropping it"). A remove
+    // curse UNUSES what it frees (player.kod RemoveCurseAllItems) but leaves the attribute on the item
+    // (player.kod:10076-10091), so clearing the mark here made the freed weapon a candidate again and the
+    // next equip could put the same curse straight back on. The mark is what sweepCursed drops by, and it
+    // forgets the mark itself once the item has left the pack.
     this.clearCurseSuspect(item ? `remove curse released the ${item}` : 'a remove curse took');
     this.note(item ? 'CURSE LIFTED' : 'remove curse took', { item: item ?? null, said,
-      why: item ? `remove curse released the ${item}` : 'a remove curse found a cursed item on this body' });
+      why: item ? `remove curse released the ${item}; dropping it` : 'a remove curse found a cursed item on this body' });
     this.ledgerEvent('uncursed', { item: item ?? null, said, room: this.s.world?.room?.num ?? null });
+    this._lastCursedSweep = 0;
+    this.sweepCursed().catch(() => {});
+  }
+
+  // DROP A CURSED WEAPON ONCE IT IS OUT OF THE HAND (operator, 2026-10-23). An unread weapon is wielded
+  // like any other now (skills.weaponRanking), so the only proof of a curse is the server's own refusal
+  // to let go of it -- "seems to cling to your hand" on unuse or drop (wacursed.kod:35), which marks the
+  // item by id (markCursedItem). Once a remove curse (or a break) has freed the hand, the item is still
+  // cursed and is worth nothing to us, so it goes on the floor rather than back into the ranking.
+  // Only an id the server refused to release, on an item that still grades non-normal (a curse grades
+  // 100 or 200, GetRarity item.kod:714-730), so an id recycled onto an ordinary item after a save is not
+  // dropped. Protected names are never dropped.
+  async sweepCursed() {
+    if (Date.now() - (this._lastCursedSweep ?? 0) < 20_000) return null;
+    this._lastCursedSweep = Date.now();
+    const s = this.s, c = s.client;
+    const marks = c?._cursedItemIds;
+    if (!c || !marks?.size) return null;
+    const worn = skills.equippedNow(c);
+    if (!worn) return null;
+    const dead = (c.inventory || [])
+      .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '' }))
+      .filter(({ o, name }) => marks.has(o.id) && !worn.has(o.id) && Number(o.rarity) !== 0 &&
+        skills.weaponScore(name) > 0 && !skills.itemIsProtected(name, this.protectedItemNames()));
+    if (!dead.length) return null;
+    const dropped = [];
+    for (const { o, name } of dead.slice(0, 3)) {
+      await s.pacer.submit('drop', () => c.drop([this.dropSpec(o)])).catch(() => {});
+      await new Promise(r => setTimeout(r, 700));
+      dropped.push({ id: o.id, name });
+    }
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+    const still = new Set((c.inventory || []).map(o => o.id));
+    const gone = dropped.filter(d => !still.has(d.id));
+    for (const d of gone) { marks.delete(d.id); marks.delete(`name:${String(d.name).trim().toLowerCase()}`); }
+    this.note('dropped cursed weapon', { dropped: gone.map(d => d.name), refused: dropped.length - gone.length,
+      why: 'the hand refused to release it, so it is cursed; a curse stays on the item after a remove curse' });
+    try { this.ledgerEvent('cursed_dropped', { items: gone.map(d => d.name), room: this.s.world?.room?.num ?? null }); } catch {}
+    return { dropped: gone };
   }
 
   // THE LAPSE, at the packet boundary. The sentence names a weapon and no id, so every reading

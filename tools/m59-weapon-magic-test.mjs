@@ -238,15 +238,22 @@ console.log('magic loot is kept, not wielded or worn');
   const ids = weaponRanking(c, { priority: ['short sword', 'scimitar'] }).map(r => r.o.id);
   ok('an identified magic short sword (grade 2) is never ranked', !ids.includes(1));
   ok('the normal-grade twin is', ids.includes(2));
-  ok('an unidentified scimitar (100) is not either', !ids.includes(3));
+  // Operator, 2026-10-23: an UNREAD weapon is a candidate. A curse proves itself by clinging to the hand
+  // (wacursed.kod:35), and the keeper then files for a remove curse and drops it (sweepCursed).
+  ok('an unidentified scimitar (100) is ranked: a curse proves itself by clinging', ids.includes(3));
   const arm = armourOf(c);
   ok('magic armour (grade 1) is not worn', !arm.armour.some(x => x.o.id === 4));
   ok('a normal shield is', arm.shield.some(x => x.o.id === 5));
   const summoned = { ...c, _summoned: new Set([3]) };
   ok('a remembered summon may be wielded unread', weaponRanking(summoned).some(r => r.o.id === 3));
   const renumbered = { ...c, _summoned: new Set([3]), _notMadeIds: new Set([3]) };
-  ok('but not once a look has read it as NOT conjured (ids renumber on a save)',
-     !weaponRanking(renumbered).some(r => r.o.id === 3));
+  ok('and so may a foreign one, once a look has read it as NOT conjured',
+     weaponRanking(renumbered).some(r => r.o.id === 3));
+  // But unread only loses a TIE: two short swords, the read one first whatever the ids.
+  const twins = { inventory: [{ id: 7, rarity: 100, nameRsc: 1000, flags: 0 }, { id: 8, rarity: 0, nameRsc: 1001, flags: 0 }],
+                  rsc: { get: r => ['short sword', 'short sword'][r - 1000] ?? '' }, using: new Set() };
+  ok('an unread weapon loses a tie to its read twin', weaponRanking(twins)[0]?.o.id === 8);
+  ok('with a priority list too', weaponRanking(twins, { priority: ['short sword'] })[0]?.o.id === 8);
 }
 
 console.log('inventorySalePlan: a conjured weapon is never offered');

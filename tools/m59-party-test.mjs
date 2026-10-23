@@ -255,8 +255,9 @@ party.resetParties();
     using: new Set(),
   };
 
-  ok('an unread WEAPON is not a candidate, however good its name',
-     !weaponRanking(c).some(x => /mace/.test(x.name)));
+  // Operator, 2026-10-23: an unread WEAPON is a candidate -- a curse proves itself by clinging to the
+  // hand, and the keeper uncurses and drops it (Autopilot.sweepCursed). Armour keeps the guard below.
+  ok('an unread WEAPON is a candidate', weaponRanking(c).some(x => /mace/.test(x.name)));
   ok('and a read one still is', weaponRanking(c).some(x => /long sword/.test(x.name)));
 
   // The armour path filtered only `broken` — no curse check at all — so an unread piece was
@@ -285,8 +286,8 @@ party.resetParties();
     inventory: [{ id: 9, nameRsc: 1, rarity: 100 }, { id: 10, nameRsc: 2, rarity: 100 }],
     rsc: { get: r => ({ 1: 'a mace', 2: 'plate armor' }[r]) }, using: new Set(),
   };
-  ok('with nothing read, there are no weapon candidates at all',
-     weaponRanking(onlyUnread).length === 0);
+  ok('with nothing read, the unread weapon is still a candidate (and the armour never is)',
+     weaponRanking(onlyUnread).map(x => x.name).join() === 'a mace');
   const back = unrevealedHeldBack(onlyUnread, (n) => weaponScore(n) > 0);
   ok('but the holdback names the weapon being withheld',
      back.length === 1 && /mace/.test(back[0].name), JSON.stringify(back));

@@ -95,19 +95,20 @@ function rig({ pack = [], ability = 13, style = 'short_sword', weapon = 'hammer'
   ok(ranked[0]?.name === 'hammer', `our summon ranks first in an ordinary equip (got ${ranked[0]?.name})`);
 }
 {
-  // ...and a foreign unread hammer still does not.
+  // ...and so does a foreign unread hammer now (operator, 2026-10-23): a curse proves itself by
+  // clinging to the hand, and the keeper then uncurses and drops it (sweepCursed).
   const r = rig({ pack: [{ name: 'hammer', rarity: 100 }, { name: 'long sword' }] });
   const { weaponRanking } = await import('./m59-skills.mjs');
   const ranked = weaponRanking(r.c, { priority: ['hammer', 'long sword'] });
-  ok(ranked[0]?.name === 'long sword', 'a foreign unread hammer is still ranked out');
+  ok(ranked[0]?.name === 'hammer', `a foreign unread hammer ranks by the priority list (got ${ranked[0]?.name})`);
 }
 
 // ------------------------------------------------------------------ not ours
 {
   const r = rig({ pack: [{ name: 'hammer', rarity: 100 }, { name: 'long sword' }] });
   const out = await r.ap.trainingWeaponRoulette();
-  ok(!r.c.using.has(1), 'an unidentified hammer we did not make is never wielded');
-  ok(r.casts.length === 0 && out === null, 'and no second one is conjured beside it');
+  ok(r.casts.length === 0, 'an unidentified hammer we did not make is a hammer: nothing is conjured beside it');
+  ok(r.drops.length === 0, 'and nothing is dropped');
 }
 
 // ------------------------------------------------------------------ overfarm must not evict it

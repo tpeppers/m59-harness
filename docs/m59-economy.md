@@ -333,6 +333,17 @@ the protocol's bounded batches, and inventory gains confirm delivery. Offline re
   ordinary sell rules shed it. Scoring it zero would make it invisible to the very code
   that should be getting rid of it. **Unwieldable, not invisible.**
 
+  **AN UNREAD WEAPON IS WIELDED, AND A CURSE PROVES ITSELF (operator, 2026-10-23).** The guard
+  used to refuse every weapon graded 100 (unidentified) as well, on the argument above. The cost
+  was a fleet that fought trolls with conjured short swords while carrying Kraanan-dedicated
+  hammers that happened to read 100 (Statler, Ukgoth, 2026-10-23). Now `weaponRanking` ranks an
+  unread weapon like any other and only lets it lose a tie to a read twin. A curse is then known
+  the only way that matters: the hand will not release it, and the server SAYS so
+  ("seems to cling to your hand" on unuse and on drop). The keeper marks it, publishes
+  `weapon_magic.curse_suspect` for the uncurse desk, and after the remove curse
+  `Autopilot.sweepCursed` drops it, because a remove curse unuses the item but leaves the
+  attribute on it. Armour keeps the unread guard.
+
   **The other culprit is a TOKEN**, which takes both hand slots and is already on the
   fleet row as `holding_token` — see the note in `m59-broker.mjs` about why it is a flag
   rather than a reading. Check that first; it is free.

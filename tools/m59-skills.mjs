@@ -281,12 +281,15 @@ export function isCursedItem(c, o = null, name = null) {
 // ATCK_WEAP_MAGIC itself (mystswrd.kod:57), so every mystic sword passes a troll's non-magic
 // resistance with no dedication. Against trolls neither a ban list nor a curse takes one out of the
 // ranking. The ONE thing that still does is the magic-loot gate (isMagicGrade: an identified,
-// non-cursed magic mystic sword is saved for PvP), and with it the unread gate — grade 100 may be
-// that same valuable item, so it waits for reveal unless it is our own summon.
+// non-cursed magic mystic sword is saved for PvP). An unread one is a candidate like any unread weapon
+// (operator, 2026-10-23): a curse proves itself by clinging, and sweepCursed drops it after the remove curse.
 export const isMysticSword = (name) => /\bmystic sword\b/i.test(String(name || ''));
 
 
-// DO NOT PUT ON WHAT NOBODY HAS READ. The operator's rule, 2026-09-17: avoid USING magic items.
+// DO NOT PUT ON WHAT NOBODY HAS READ -- ARMOUR ONLY, SINCE 2026-10-23. The operator's rule, 2026-09-17:
+// avoid USING magic items. WEAPONS ARE EXEMPT (operator, 2026-10-23): a weapon the hand will not release is
+// cursed by the server's own sentence, which the keeper hears, files for a remove curse and then drops
+// (weaponRanking, Autopilot.sweepCursed). The argument below still holds for armour.
 //
 // `GetRarity` (item.kod:714-730) checks identification FIRST, so anything carrying a hidden
 // attribute comes back as ITEM_RARITY_GRADE_UNIDENTIFIED (100) whatever else is true of it. That
@@ -628,20 +631,23 @@ export function weaponRanking(c, { priority = null, banned = null,
     !isJunk(x.name) && (trollMystic(x.name) || !isCursedItem(c, x.o, x.name)) &&
                  // A PvP-only weapon is never a farming weapon (m59-pvp-gear.mjs).
                  (c.pvpGearActive || !isPvpOnly(x.name)) &&
-                 // AND NOT ONE NOBODY HAS READ. isCursedItem learns from the server's refusal to
-                 // UNWIELD, which is one move too late for the only irreversible mistake in this
-                 // game; the grade is knowable before the draw. See isUnrevealed.
-                 // A SUMMON THIS CLIENT WATCHED APPEAR FROM ITS OWN create weapon IS NOT UNREAD
-                 // IN ANY WAY THAT MATTERS: it reads rarity 100 like loot, but it cannot be
-                 // cursed. Without this, every equip after the training-weapon roulette
-                 // wielded one ranked it out and swapped straight back to a long sword.
-                 !(allowUnrevealed !== true && isUnrevealed(x.o) && !isOwnSummon(c, x.o)) &&
+                 // AN UNREAD WEAPON IS A CANDIDATE (operator, 2026-10-23). This used to refuse
+                 // grade 100 outright, because a cursed weapon can never be put down. But a weapon
+                 // the hand will not release is cursed by definition -- the server says so in as
+                 // many words ("seems to cling to your hand", wacursed.kod:35, on unuse AND drop),
+                 // markCursedItem records it, the keeper files a curse suspect, a remove curse
+                 // frees the hand and sweepCursed drops the thing. Identifying weapons first bought
+                 // nothing and cost real fights: Statler swung a conjured short sword at trolls for
+                 // an hour carrying a flawless Kraanan-dedicated hammer that read 100. Unread now
+                 // only loses a TIE to a read twin (see `unread` in the sorts below).
+                 // `allowUnrevealed` is still accepted and no longer narrows anything.
                  !isMagicGrade(x.o) &&
                  (trollMystic(x.name) || !isBannedWeapon(x.name, banned)) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
       const skill = proficiencyFor(x.name);
-      return { ...x, skill, ability: abilityOf(c, skill), base: weaponScore(x.name) };
+      const unread = isUnrevealed(x.o) && !isOwnSummon(c, x.o) ? 1 : 0;
+      return { ...x, skill, ability: abilityOf(c, skill), base: weaponScore(x.name), unread };
     });
   // A MAGIC WEAPON BREAKS A TIE, AND NEVER MORE THAN A TIE. `c._magicWeaponIds` is the set the
   // keeper has READ as bypassing ATCK_WEAP_NONMAGIC (m59-weapon-magic.mjs), set only while the
@@ -676,13 +682,13 @@ export function weaponRanking(c, { priority = null, banned = null,
     // sword in an axe trainee's hand beats its conjured axe outright. It was a tie-break inside the
     // family, and a hunter stood in the stage room holding an enchanted long sword he would not wield.
     return rows.sort((a, b) => (magic && !preferMundane ? mundane(a) - mundane(b) : 0) || preferRank(a) - preferRank(b) || rank(a.name) - rank(b.name) ||
-      mundane(a) - mundane(b) || b.base - a.base);
+      mundane(a) - mundane(b) || a.unread - b.unread || b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
   // bigger one you are not. Unread abilities fall back to the crude name score rather
   // than sorting as zero, which would put the greatsword last on a fresh login.
   return rows.sort((a, b) => preferRank(a) - preferRank(b) || (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
-    b.base - a.base);
+    a.unread - b.unread || b.base - a.base);
 }
 
 // THE SERVER'S OWN LIST OF WHAT IS EQUIPPED, or null if this client does not keep one.
@@ -775,7 +781,7 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
     // holding three unrevealed maces and nothing else would otherwise report an empty pack and
     // punch things, with no line anywhere saying why — the absence-read-as-a-fact mistake this
     // repository keeps paying for. The holdback is a REVEAL QUEUE, not a shortage.
-    const heldBack = allowUnrevealed ? [] : unrevealedHeldBack(c, (n) => weaponScore(n) > 0);
+    const heldBack = [];   // unread weapons are candidates now (weaponRanking), so none is held back for reveal
     return { wielding: null, verified: false,
              ...(broken.size ? { known_broken: broken.size } : {}),
              ...(heldBack.length ? { unrevealed_held_back: heldBack } : {}),

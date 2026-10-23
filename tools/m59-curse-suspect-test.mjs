@@ -11,7 +11,8 @@
 //   - a swap that goes through, or a remove curse, clears it; `since` is stable for one incident;
 //   - a name-level curse mark does not poison a same-named twin the server grades rarity 0;
 //   - against trolls every mystic sword is a candidate, banned or cursed, EXCEPT an identified magic
-//     one (saved for PvP) and an unread one (which may be that same valuable item).
+//     one (saved for PvP);
+//   - a remove curse keeps the cursed mark and sweepCursed drops the freed weapon (operator, 2026-10-23).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Autopilot } from './m59-autopilot.mjs';
@@ -99,9 +100,10 @@ await ok('against trolls a CURSED mystic sword is a candidate (named, graded 200
   assert.deepEqual(names(weaponRanking(c, {})), [], 'without trolls both stay out');
 });
 
-await ok('the ONE exception: an identified magic (non-cursed) mystic sword is saved for PvP, and an unread one waits', () => {
+await ok('the ONE exception: an identified magic (non-cursed) mystic sword is saved for PvP; an unread one is a candidate', () => {
+  // Operator, 2026-10-23: unread weapons are wielded; a curse proves itself by clinging (sweepCursed drops it).
   const { c } = session([{ name: 'mystic sword', rarity: 2 }, { name: 'mystic sword', rarity: 100 }, { name: 'long sword' }]);
-  assert.deepEqual(names(weaponRanking(c, { banned: ['mystic sword'], trollQuarry: true })), ['long sword']);
+  assert.deepEqual(names(weaponRanking(c, { banned: ['mystic sword'], trollQuarry: true })).sort(), ['long sword', 'mystic sword']);
 });
 
 await ok('the troll exemption reaches equipBest through the session hook, and only through it', async () => {
@@ -162,6 +164,31 @@ await ok('a swap that goes through clears it; a remove curse clears it', () => {
   ap.noteUncursed('long sword', 'Your long sword loses its ominous luster.');
   assert.equal(ap._curseSuspect, null);
   assert.ok(ap.events.some(e => e.kind === 'curse_suspect_cleared'));
+});
+
+// Operator, 2026-10-23: "fix the curse with uncurse & dropping it". The remove curse leaves the attribute on
+// the item, so the mark stays and sweepCursed drops the freed weapon -- only an id the hand refused to
+// release, only once it is out of the hand, never a normal-grade item an id was recycled onto.
+await ok('a remove curse keeps the mark, and sweepCursed drops the freed weapon and nothing else', async () => {
+  const { s, c } = session([{ name: 'hammer', id: 5, rarity: 100 }, { name: 'long sword', id: 6, rarity: 0 },
+                            { name: 'mace', id: 7, rarity: 100 }], { held: 7 });
+  const dropped = [];
+  c.drop = specs => { for (const sp of specs) { const id = sp?.id ?? sp; dropped.push(id); c.inventory = c.inventory.filter(o => o.id !== id); } };
+  c.requestInventory = () => {};
+  const ap = keeper({}, c);
+  ap.s = { ...s, world: { room: { num: 350 } } };
+  ap.protectedItemNames = () => [];
+  markCursedItem(c, { id: 5 });                       // refused to release, now freed by a remove curse
+  markCursedItem(c, { id: 6 });                       // an id recycled onto an ordinary long sword
+  markCursedItem(c, { id: 7 });                       // still in the hand: not droppable yet
+  ap.noteUncursed('hammer', 'Your hammer loses its ominous luster.');
+  assert.ok(c._cursedItemIds.has(5), 'the mark outlives the remove curse');
+  await new Promise(r => setTimeout(r, 1500));        // noteUncursed starts the sweep itself
+  assert.deepEqual(dropped, [5], 'only the freed, non-normal, cursed weapon: ' + JSON.stringify(dropped));
+  assert.equal(await ap.sweepCursed(), null, 'and a second sweep inside the gap does nothing');
+  assert.ok(!c._cursedItemIds.has(5), 'the mark goes with the item');
+  assert.ok(c._cursedItemIds.has(7), 'the one still in hand keeps its mark');
+  assert.ok(ap.events.some(e => e.kind === 'cursed_dropped'));
 });
 
 await ok('since is stable for one incident, and a suspicion is upgraded to certain without restarting it', () => {
