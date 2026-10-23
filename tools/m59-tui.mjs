@@ -21,6 +21,10 @@
 // two different clients. The Steam client is what you get when nothing is built, and
 // M59_TUI_STOCK_CLIENT=1 asks for it on purpose.
 //
+// ON LINUX THE PATCHED CLIENT IS THE DECK INSTALL, ~/Games/Meridian59/meridian.exe (see
+// install/steamdeck in the Meridian59 tree), started under Proton by m59-proton.mjs. Same
+// arguments, same rule: the Steam client only when that is absent or asked for.
+//
 // Zero dependencies and no framework. It draws with ANSI, reads raw keys, and repaints
 // the whole screen on a timer — twenty-five rows is far too little to need anything
 // cleverer, and a dependency here would be a dependency in the one tool you reach for
@@ -28,7 +32,7 @@
 import { stdin, stdout, env, exit, argv } from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
-import { readFileSync, openSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, openSync, existsSync, mkdirSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +40,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
   from './m59-shortcuts.mjs';
 import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs, proxyFor } from './m59-devclient.mjs';
+import { DECK_CLIENT, launchUnderProton } from './m59-proton.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
 import * as webui from './m59-webui.mjs';
 // The geometry debug maps -- every room by number, plus an index. Imported rather than
@@ -649,6 +654,24 @@ const GATE_LOGIN_PORT = String(env.M59_PROXY_PORT || 5961);
 const gateCreds = (row) => ({ creds: { account: row.agent, password: 'm59-gate',
                                         host: '127.0.0.1', port: GATE_LOGIN_PORT }, why: null });
 
+// THE SERVER'S ADDRESS AS THIS MACHINE MUST DIAL IT. The roster records the address the
+// world uses, which for a server behind the same NAT as this machine is our own public IP --
+// and a home router asked to loop that back inside (hairpin NAT) may half-do it: the Deck's
+// client got the server's first 243 bytes from 76.214.42.186 and then nothing, sitting at
+// "connecting" for ever. So a machine on the server's LAN says where the server really is:
+//
+//   M59_HOST_ALIAS=76.214.42.186=192.168.1.242     (comma-separate several)
+//
+// Only the launch is rewritten. The roster keeps the public address, which is the right
+// one for the broker and keepers on every machine outside that LAN.
+function hostAlias(host) {
+  for (const pair of String(env.M59_HOST_ALIAS || '').split(',')) {
+    const [from, to] = pair.split('=').map(s => s.trim());
+    if (from && to && from.toLowerCase() === String(host).toLowerCase()) return to;
+  }
+  return host;
+}
+
 async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   const { creds, why } = GATE ? gateCreds(row) : rosterFor(row.agent);
   if (GATE) viaProxy = false;
@@ -657,11 +680,12 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   // isSteamInstall says no and `/S` stays off, which is right: it is a build, not a
   // Steam install that would try to patch itself.
   const devExe = WIN && !env.M59_TUI_STOCK_CLIENT && existsSync(DEV_CLIENT()) ? DEV_CLIENT() : null;
+  const deckExe = !WIN && !env.M59_TUI_STOCK_CLIENT && existsSync(DECK_CLIENT()) ? DECK_CLIENT() : null;
   // Otherwise FIND THE CLIENT THE WAY doctor AND THE SHORTCUTS FIND IT. This was a
   // hardcoded `C:\Program Files (x86)\...`, which on Linux is not a path at all — and on
   // a Windows box with Steam installed anywhere else was simply wrong.
-  const clientDir = devExe ? dirname(devExe) : findClient();
-  const exe = devExe || findClientExe(clientDir);
+  const clientDir = devExe ? dirname(devExe) : deckExe ? dirname(deckExe) : findClient();
+  const exe = devExe || deckExe || findClientExe(clientDir);
   if (!exe) {
     S.status = c.red('no Meridian 59 client found') + ' ' +
       c.dim('· set M59_CLIENT to its folder · store.steampowered.com/app/' + STEAM_APPID);
@@ -678,7 +702,7 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   //
   // The environment stays as the fallback for a roster written before host and port
   // were recorded.
-  const realHost = creds.host || env.M59_HOST || '127.0.0.1';
+  const realHost = hostAlias(creds.host || env.M59_HOST || '127.0.0.1');
   const realPort = String(creds.port || env.M59_PORT || '5959');
   // A swarm launch points the client at the proxy instead of the game server. Same
   // credentials, same everything else — the only difference is who is in the middle.
@@ -726,7 +750,9 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   // standing down by the time the client bumps the keeper off the character.
   if (REMOTE) holdRemotely(row, creds, stdio);
 
-  if (!WIN) return launchViaSteam({ row, creds, clientDir, steam, args, stdio, viaProxy });
+  if (!WIN) return deckExe
+    ? launchViaProton({ row, creds, exe, args, stdio })
+    : launchViaSteam({ row, creds, clientDir, steam, args, stdio, viaProxy });
 
   const inject = join(REPO, 'tools', 'm59-inject.ps1');
   // LAUNCH IT FROM ITS OWN DIRECTORY. The client resolves `resource\` relative to the
@@ -924,6 +950,37 @@ function launchViaSteam({ row, clientDir, steam, args, stdio }) {
              c.yellow('· claim within ~8s') +
              c.dim(' — the broker reads /U: off /proc; `pilot claim` for it now. No DLL' +
                    ' injection on Linux, so this character is playable BY HAND only');
+  noteCommitment(row);
+  draw();
+}
+
+// THE DECK BUILD, UNDER PROTON DIRECTLY. Everything launchViaSteam says about injection
+// and the claim holds here too -- the broker's /proc scan finds this client by the same
+// /U:, because the argv element it looks for still ends in meridian.exe. What differs is
+// that this is the patched client and the Proton is one that works on this Mesa; see
+// m59-proton.mjs for why Steam cannot be asked to start it.
+//
+// Nothing is returned: the child is the runtime wrapper, which lives as long as the game,
+// and --launch would otherwise sit waiting for the player to quit.
+function launchViaProton({ row, creds, exe, args, stdio }) {
+  if (Array.isArray(stdio)) try {
+    writeSync(stdio[1], `=== ${new Date().toISOString()} launching ${row.character ?? row.agent} ` +
+                        `(${creds.account}) from ${exe} ===\n`);
+  } catch { /* the log is a convenience */ }
+  let started;
+  try { started = launchUnderProton(exe, args, { stdio }); }
+  catch (e) {
+    S.status = c.red('could not start the Deck client: ' + e.message) + ' ' +
+      c.dim('· M59_TUI_STOCK_CLIENT=1 for the Steam one');
+    draw();
+    return;
+  }
+  started.child.on('error', e => { S.status = c.red('Proton did not start: ' + e.message); draw(); });
+  const what = `~20s via ${started.proton} · Deck client`;
+  S.status = c.green(`launching ${row.character ?? row.agent}…`) + ' ' + (REMOTE
+    ? c.dim(`${what} · held on ${BROKER_HOST} by lease while the client runs · log: substrate/m59-launch.log`)
+    : c.dim(`${what} · log: substrate/m59-launch.log`) + ' ' + c.yellow('· claim within ~8s') +
+      c.dim(' — the broker reads /U: off /proc; `pilot claim` for it now. No DLL injection on Linux'));
   noteCommitment(row);
   draw();
 }
