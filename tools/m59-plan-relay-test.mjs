@@ -95,5 +95,15 @@ try {
     const w = decodeURIComponent(readFileSync(join(deck, 'plan', 'out', '123.tsv'), 'utf8'));
     ok('a broker without the route says to deploy and restart it', /older than this relay; deploy and restart it/.test(w));
   } finally { old.close(); }
+  // What a broker without the route actually sends (measured on Vecna, 2026-10-23): its MCP
+  // handler's JSON-RPC parse error. It once reached the tab as "the broker refused: [object Object]".
+  const mcp = http.createServer((q, s) => { s.writeHead(400, { 'content-type': 'application/json' });
+    s.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'parse error' } })); });
+  await new Promise(r => mcp.listen(0, '127.0.0.1', r));
+  try {
+    await createRelay({ dir: deck, url: `http://127.0.0.1:${mcp.address().port}${PLAN_RELAY_PATH}`, slot }).tick();
+    const m = decodeURIComponent(readFileSync(join(deck, 'plan', 'out', '123.tsv'), 'utf8'));
+    ok('a broker that answers as MCP is called too old, not [object Object]', /older than this relay; deploy and restart it/.test(m) && !/object Object/.test(m));
+  } finally { mcp.close(); }
 }
 console.log(`plan relay: ${passed} passed`);

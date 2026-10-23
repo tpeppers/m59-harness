@@ -64,6 +64,7 @@ export function restamp(text, { at, pid }) {
   if (pid != null) h[3] = String(pid);
   return h.join('\t') + text.slice(nl);
 }
+const errorText = e => e == null ? null : typeof e === 'string' ? e : (e.message ?? JSON.stringify(e));
 const headerOf = text => String(text ?? '').split('\n', 1)[0].split('\t');
 
 function writeAtomic(path, text) {
@@ -139,9 +140,10 @@ export function createRelay({ dir, url, slot = slotFor(), fetchImpl = fetch, log
         const r = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'text/plain' },
           body: restamp(text, { pid: rpid }), signal: AbortSignal.timeout(4000) });
         const j = await r.json().catch(() => null);
-        if (r.status === 404 || (r.status === 405 && !j))
+        // A broker without the route answers this path as MCP: a JSON-RPC parse error, not a 404.
+        if (r.status === 404 || j?.jsonrpc || (r.status === 405 && !j))
           why = `the broker at ${url} has no plan relay route -- it is older than this relay; deploy and restart it`;
-        else if (!j?.ok) why = `the broker refused: ${j?.error ?? `HTTP ${r.status}`}`;
+        else if (!j?.ok) why = `the broker refused: ${errorText(j?.error) ?? `HTTP ${r.status}`}`;
         else if (!j.desk) why = 'the broker answered, but no plan desk is running beside it';
         else if (j.out && j.age_ms <= FRESH_MS) {
           const local = restamp(j.out, { at: Date.now() - j.age_ms, pid });
