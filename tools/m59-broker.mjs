@@ -150,7 +150,7 @@ import {
   AccountLeaseRegistry,
   assertCanonicalAccountLeaseNamespace,
 } from './runtime/account-leases.mjs';
-import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
+import { KeeperLiveness, validateKeeperSample, keeperCooperativeWait } from './runtime/keeper-liveness.mjs';
 import { startLoopStallMonitor } from './runtime/loop-stalls.mjs';
 import { pilotLeaseMs, newPilotLease, pilotHeld, renewPilotLease, describePilotLease,
          createLeaseGraveyard, claimLeaseRefusal }
@@ -5427,6 +5427,10 @@ async function reconcileFleet() {
       // than making a recovery decision without a proof tied to this exact proxy.
       if (!observed || observed.proxy !== existing) continue;
       const { proof } = observed;
+      // A deliberate cooperative absence is owned by its pending continuation.
+      // Only fresh identity-checked evidence from a positively live keeper can
+      // defer the sweep; a dead or unknown process still needs recovery.
+      if(keeperCooperativeWait(proof))continue;
       if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
           sessions.get(agent) !== existing || existing._liveness.disposed)
         continue;
@@ -5476,6 +5480,7 @@ async function reconcileFleet() {
                       'a fresh guarded keeper will use another port');
       }
     }
+    if(existing&&!(existing instanceof KeeperProxy)&&existing.cooperativeLogoffWaiting)continue;
     if (existing?.live) {
       // Healthy. Clear the backoff, remember WHEN it came back so a drop shortly after
       // a rejoin can be told apart from a drop out of the blue, and — the important

@@ -103,10 +103,11 @@ await ok('no_engage refuses the pull before walking out; go_to_safe_spot only wh
 
 await ok('the call sites, and the session can stay offline', () => {
   const flee = AUTOPILOT.slice(AUTOPILOT.indexOf('  async passFleeAndRest(ctx) {'));
-  assert.ok(flee.slice(0, 200).includes('if (await this.farmBuffPass().catch(() => false)) return HANDLED;'));
+  const buffCall=flee.indexOf('if (await this.farmBuffPass().catch(() => false)) return HANDLED;');
+  assert.ok(buffCall>=0&&buffCall<flee.indexOf('// 2. In danger.'),'buff hook still precedes ordinary danger decisions, after protected recovery');
   assert.ok(AUTOPILOT.includes("await this.farmBuffAsk('before_swing', { target: engageName }).catch(() => null);"));
   assert.ok(AUTOPILOT.includes('const r = await this.s.rejoin(why, { offlineMs }).then('));
-  assert.ok(GAME.includes("async rejoin(why = 'unspecified', { offlineMs = 0 } = {}) {"));
+  assert.ok(GAME.includes("async rejoinConnection(why = 'unspecified', { offlineMs = 0 } = {}) {"));
   assert.ok(GAME.includes('Math.max(800, Math.min(60_000, Number(offlineMs) || 0))'));
   assert.ok(!/castEngageBuff|engageBuff/.test(AUTOPILOT), 'the public engage-buff tactic is gone');
 });

@@ -1,3 +1,4 @@
+import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
 import{executeDeliveryCacheDrop}from'./m59-delivery-cache.mjs';
 import{receiveDeliveryNotice,deliveryNoticesOf}from'./m59-delivery-notices.mjs';
 import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
@@ -376,6 +377,7 @@ const attrHealReported = new WeakSet(), attrHealGuardLogged = new WeakSet();   /
 const COMBAT_READY_GRACE_MS = 20_000;   // see the heal tick: a login buffer, never a state to stay in
 let handoff = null;                              // { since, deadline } while being replaced
 const handoffActive = () => !!handoff && Date.now() < handoff.deadline;
+session.cooperativeLoginAllowed = () => joinWanted && !dormancy && !handoffActive() && !autopilot?.stopping;
 // Session.rejoin is the autopilot's own reconnect (Autopilot.reconnect), and it goes around
 // join() and joinWanted entirely. Refuse it during a handoff or it logs the old keeper back in
 // and kicks the replacement straight back out.
@@ -1144,6 +1146,10 @@ async function joinGenerationOnce(generation) {
       // pass reads them. The file's keys never enter `policy` above: only the assignment is an order.
       await autopilot.applyFarmStrategy?.('join');
       assertJoinIntent(generation);
+      // A restarted offline waiter has a fresh body now. Spend its distraction
+      // on reaching cover before the first discretionary farming pass.
+      await autopilot.resumeCooperativeReturn?.();
+      assertJoinIntent(generation);
       autopilot.start();
       console.error(`[keeper] ${agent} autopilot started (mode=${mode}, hunt=${policy.hunt ?? 'none'})`);
     }
@@ -1586,6 +1592,7 @@ function state() {
     // `goap` above stays as the compact movement/render shape; this is the operational
     // status shape.  Keeping both named prevents a reader from mistaking one for the other.
     autopilot_status: autopilotStatus,
+    cooperative_wait: !!session.cooperativeLogoffWaiting,
     delivery_cache: 1,
     delivery_notices: deliveryNoticesOf(session),
     // CAN THIS CHARACTER HEAR. The broker's `fleet` reported `listening: false` for every
@@ -1811,6 +1818,7 @@ const server = createServer(async (req, res) => {
       // dominant idle hot loop. Legacy `/health` remains rich for rolling compatibility.
       json({
         schema: 'm59-keeper-live/v1',
+        cooperative_wait: !!session.cooperativeLogoffWaiting,
         tactical_orders: 1,
         inventory_drop: 1,
         delivery_cache: 1,
@@ -4350,6 +4358,8 @@ const server = createServer(async (req, res) => {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
       if (refuseWhileDormant()) return;
+      const cooperative=cooperativeReconnectRefusal(session,{host:credHost,port:credPort});
+      if(cooperative){json(cooperative,423);return;}
       if (!joinWanted) changeJoinIntent(true);
       await join();
       json({ ok: true });
@@ -4383,6 +4393,8 @@ const server = createServer(async (req, res) => {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
       if (refuseWhileDormant()) return;
+      const cooperative=cooperativeReconnectRefusal(session,{host:credHost,port:credPort});
+      if(cooperative){json(cooperative,423);return;}
       changeJoinIntent(true);
       if (autopilot) autopilot.stop('rejoin');
       if (session.client) {

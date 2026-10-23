@@ -36,6 +36,10 @@ export function validateKeeperSample(sample, expected = {}) {
   return { ok: true };
 }
 
+export function keeperCooperativeWait(proof) {
+  return proof?.accepted===true&&proof.status?.cooperativeWait===true&&proof.status.unknown===false;
+}
+
 export class KeeperLiveness {
   constructor({ agent, character = null, phantomAfterMs = 20_000,
                 probeEveryMs = 10_000, now = () => Date.now() } = {}) {
@@ -92,6 +96,7 @@ export class KeeperLiveness {
       pid: Number(sample.pid),
       in_game: sample.in_game,
       connected: sample.connected,
+      ...(sample.cooperative_wait===true?{cooperative_wait:true}:{}),
       connection_revision: revision,
     };
     this.sampleAt = at;
@@ -160,6 +165,7 @@ export class KeeperLiveness {
       pid: this.sample.pid,
       revision: this.revision,
       lastError: this.lastError,
+      ...(processProven&&!unknown&&this.sample.cooperative_wait===true?{cooperativeWait:true}:{}),
     };
   }
 

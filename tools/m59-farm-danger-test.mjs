@@ -15,6 +15,15 @@ health.value=74;ap.passFarm=async()=>{bodyAuthority(s).guard();return 17;};asser
 ap.passFleeAndRest=async()=>31;health.value=3;assert.equal(await Autopilot.prototype.runStageBounded.call(ap,'passFleeAndRest',{}),31);assert.equal(cancels,1);
 console.log('PASS actual farm rung yields below flee line within100ms; late queued authority fenced; recovery/healthy work preserved');
 
+health.value=74;let finishHelp;
+ap.passCooperative=async()=>{await new Promise(r=>finishHelp=r);bodyAuthority(s).guard();packets++;return true;};
+const helping=Autopilot.prototype.runStageBounded.call(ap,'passCooperative',{});
+setTimeout(()=>{health.value=46;},20);
+assert.equal(await helping,STAGE_OVERRAN);assert.equal(cancels,2);
+assert(ap.stageInFlight.has('passCooperative'));
+finishHelp();await new Promise(r=>setTimeout(r,0));assert.equal(packets,0);assert(!ap.stageInFlight.has('passCooperative'));
+console.log('PASS cooperative distraction yields on the same100ms danger clock and cannot reclaim the body after survival takes over');
+
 const deadToken={cancelled:true};
 assert.throws(()=>withBodyStage(s,'passFarm',()=>withRecoveryCommand(s,()=>bodyAuthority(s).guard()),deadToken),/preempted by survival/);
 assert.throws(()=>withBodyStage(s,'passFarm',()=>withBodyStage(s,'nested-helper',()=>bodyAuthority(s).guard()),deadToken),/preempted by survival/);

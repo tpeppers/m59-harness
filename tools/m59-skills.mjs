@@ -2625,6 +2625,9 @@ async function fightWithIntent(s, {
   // to say when — but it is no longer the mechanism that makes a fight abandonable.
   rounds = 3,
   swingsPerRound = 1,
+  // Read-only observer of affirmative server hit messages for this exact quarry.
+  // Called before post-round stats/cleanup, so a cooperative waiter can return promptly.
+  onLandedHit = null,
   disengageAt = DEFAULT_DISENGAGE_AT,
   loot = true,
   equip = true,
@@ -2904,6 +2907,11 @@ async function fightWithIntent(s, {
       { abortBelow: disengageAt, shouldCancel: fightCancelled });
     roundsFought++;
     combatLines.push(...res.messages);
+    const roundHits=landedHitSummary(res.messages,foeName);
+    if(roundHits.hits>0&&typeof onLandedHit==='function'){
+      try { await onLandedHit({target_id:foe.id,target:foeName,landed_hits:roundHits.hits,at:Date.now()}); }
+      catch(e) { say('hit observer failed',{why:e.message}); }
+    }
 
     // REFUSED FOR WHO THEY ARE, IN THIS ROOM. "Only those in guilds may attack each other here."
     // Every further round is the same refusal; the session has already remembered it, so the

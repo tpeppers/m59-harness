@@ -43,7 +43,7 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //
 //   export default {
 //     name: 'blink-escape',           // required, unique; how it appears in the ledger
-//     kind: 'travel',                 // required; 'travel', 'town' or 'convoy'
+//     kind: 'travel',                 // required; see KINDS below
 //     enabled: false,                 // required, and FALSE is the honest default
 //     // TRAVEL hooks --------------------------------------------------------------
 //     // Asked when a walk has run out of ordinary answers. Return null to decline —
@@ -144,9 +144,11 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
+// cooperativeLogoff(ctx): explicit private opt-in for shared offline distraction
+// requests. Policy and settings stay private; see docs/m59-cooperative-logoff.md.
 // rescueTravel(ctx): {enabled, double, guildName, guildHall, blocked?, confine?, fallbackMs?}.
 // Selection only; the executor validates resources, guild, landings and movement ownership.
-export const HOOKS = ['rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
+export const HOOKS = ['cooperativeLogoff', 'rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
@@ -157,7 +159,7 @@ export const HOOKS = ['rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop
 // 'combat' (2026-10-05) is asked inside a fight, by CombatMode, about the wand volley.
 // 'casting' (2026-10-16) is asked around a cast and about idle gear, by m59-castrite.mjs.
 // 'loot' (2026-10-19) is asked by the keeper about which loot it may take and keep (curseCycle).
-export const KINDS = ['travel', 'town', 'convoy', 'combat', 'casting', 'loot'];
+export const KINDS = ['cooperative', 'travel', 'town', 'convoy', 'combat', 'casting', 'loot'];
 const KNOWN = new Set([...REQUIRED, ...HOOKS, 'describe', 'settings']);
 
 /**

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
+import {configureCooperativeLogoff,requestCooperativeLogoff,abortPreparingCooperativeLogoff,cooperativeAssist,publishCooperativePresence,cooperativeReturnRefuge} from './m59-cooperative-logoff.mjs';
 import {withBodyStage,bodyAuthority} from './m59-body-command.mjs';
 import{affordablePoisonCure,castRecoveryCure}from'./m59-recovery-cure.mjs';
 import{scriptedTrafficResumeReady,scriptedDeviationResumeCandidate}from'./m59-traffic-resume.mjs';
@@ -1126,6 +1127,7 @@ export const PASS_STAGES = [
   // so fleeing still outranks it; what it outranks is every wall, pull and walk below.
   'passFightBack',
   'passFleeAndRest',
+  'passCooperative',
   // FOLLOWING A PERSON SITS HERE ON PURPOSE. Below survival, because being led somewhere is
   // never worth dying on the way to; above everything directional, because the entire point
   // is that a person walking in front knows something the router does not.
@@ -4983,6 +4985,7 @@ export class Autopilot {
   // tracks when we last moved and last swung. Damage arriving after a swing is
   // retaliation and says nothing at all about the square.
   observe() {
+    try { publishCooperativePresence(this); } catch(e) { this.note('cooperative presence unavailable',{why:e.message}); }
     publishFleetHealth(this.s);
     void Promise.resolve(this.s.activeSelfHealTick?.('keeper_observe')).catch(error=>this.note?.('active self heal failed',{why:error.message}));
     const s = this.s, c = s.client, me = c?.self;
@@ -6257,7 +6260,7 @@ export class Autopilot {
 
   // Healing chooses the shortest clear approach to an exclusive local wall. Combat
   // later binds a quarry to its own wall through the ordinary target-first selector.
-  async takeRecoverySpot(why, { source = 'recovery', route=false, decisionId=null } = {}) {
+  async takeRecoverySpot(why, { source = 'recovery', route=false, decisionId=null, preparedRefuge=null } = {}) {
     // Cancel the old script's paced packets before this keeper starts its approach.
     // Replacing the visible move order alone leaves both walkers on one generation.
     const order=liveMoveOrder(this.s);
@@ -6271,7 +6274,7 @@ export class Autopilot {
       return {took:!!did || !!this.hold,spot:this.hold,via:'logoff_at_safe_wall'};
     }
     const generation=this.s.movementGeneration;
-    const result=await this.takeSafeSpot(why,null,{source,recovery:true,nearestOnly:!route,recoveryRoute:route,decisionId});
+    const result=await this.takeSafeSpot(why,null,{source,recovery:true,nearestOnly:!route,recoveryRoute:route,decisionId,preparedRefuge});
     if(result?.cancelled || this.s.movementWasCancelled?.(generation))
       return {...result,took:false,cancelled:true};
     if (result?.took && this.adoptRecoveryWall()) await this.playDead(why);
@@ -6352,7 +6355,7 @@ export class Autopilot {
                                            nearestOnly = false, afterExit = false, recovery = false,
                                            recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null,
-                                           candidateFilter = null, doorCrossings = 0 } = {}) {
+                                           candidateFilter = null, doorCrossings = 0, preparedRefuge = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
@@ -6499,8 +6502,19 @@ export class Autopilot {
     rememberSpotClaimPartner(this.s.name, this.policy.partner ?? null);
     let spot = null, shareCap = configuredShareCap == null ? Infinity : 1;
     let claimCollisions = 0;
+    // A peer planned this wall while we were offline. It is only a search hint:
+    // the normal selector rechecks our actual body, geometry, occupancy, failed
+    // approaches and exclusive claims. Failure falls through in this same call.
+    if(recovery&&preparedRefuge){
+      spot=this.searchSafeSpot(geo,me,room,{within,quarryReach,strictQuarryReach,los,quarry,
+        stats:spotStats,shareCap:1,exclusiveClaim:true,recovery:true,onward:null,
+        candidateFilter:(col,row)=>col===preparedRefuge.col&&row===preparedRefuge.row&&(!candidateFilter||candidateFilter(col,row))});
+      if(spot&&claimExclusiveSpot(s.name,room.num,spot.col,spot.row))claimedHere=true;
+      else spot=null;
+      this.note('cooperative prepared refuge checked',{accepted:!!spot,to:{row:preparedRefuge.row,col:preparedRefuge.col}});
+    }
     spotSearch:
-    for (; configuredShareCap == null || shareCap <= configuredShareCap; shareCap++) {
+    for (; !claimedHere&&(configuredShareCap == null || shareCap <= configuredShareCap); shareCap++) {
       // Selection and walking are separated by an await. A second process may reserve
       // our choice in that gap between the read and this process's atomic claim, so retry
       // from a fresh snapshot a few times before raising the share cap. The claim itself
@@ -13206,6 +13220,7 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      cooperative_logoff: this.s.cooperativeLogoffWaiting??this.s.cooperativeLogoffReturn??null,
       healing_wand_support: this.farmWandSupport?.snapshot() ?? null,
       loadout_retention: { present: !!this.loadout(), carry_floors: this.carryFloors() },
       // WHICH OF THIS CHARACTER'S WEAPONS BYPASS NONMAGIC, as READ (look text, a lapse), never
@@ -15096,6 +15111,7 @@ export class Autopilot {
   }
 
   watchdogTick() {
+    try { publishCooperativePresence(this); } catch(e) { this.watch.lastError=e.message; }
     const s = this.s, c = s?.client;
     if (!c || s.live !== true || c.state !== 'game') return;
     if (s.combat?.active) { void s.combat.tick(); return; }
@@ -17191,7 +17207,7 @@ export class Autopilot {
     const danger = new Promise(resolve => {
       stopDanger = watchFarmDanger(this, stage, stageToken, detail => {
         this.tally.survival_stage_interrupts = (this.tally.survival_stage_interrupts || 0) + 1;
-        this.note('farm action yielded immediately to falling health', {stage, ...detail});
+        this.note(stage==='passCooperative'?'cooperative distraction yielded immediately to falling health':'farm action yielded immediately to falling health', {stage, ...detail});
         resolve(STAGE_OVERRAN);
       });
     });
@@ -31484,6 +31500,61 @@ export class Autopilot {
                           && !party.isFleetmate(c.rsc?.get(o.nameRsc)));
   }
 
+  async passCooperative() {
+    try { return await cooperativeAssist(this) ? HANDLED : CONTINUE; }
+    catch(e) { this.note('cooperative assistance unavailable',{why:e.message}); return CONTINUE; }
+  }
+
+  recordCooperativeKill(f,request) {
+    if(!f?.killed)return;
+    this.tally.kills=(this.tally.kills??0)+1;
+    this.killTimes?.push(Date.now());
+    if(this.killTimes?.length>500)this.killTimes.shift();
+    this.ledgerEvent('killed',{creature:f.target,room_num:request.room,rounds:f.rounds,
+      cooperative_distraction:true,request_id:request.id,from_safe_spot:!!this.currentRecoveryWall()});
+    this.farmStrategyHook('onKill',{creature:f.target,room:request.room,looted:[]});
+  }
+
+  async fleetLogoff(why) {
+    const s=this.s,offered=await configureCooperativeLogoff(this,'request');
+    const request=offered&&requestCooperativeLogoff(this,offered);
+    if(!request)return false;
+    const decision=chooseSurvivalDecision(s,{strategy:'logoff_open',reason:why,
+      reason_code:'cooperative_logoff',status:'active',mitigation:'wait offline for confirmed fleetmate distraction hits'},
+      {because:'private cooperative strategy and a controlled fleetmate in this room'});
+    this.note('cooperative logoff requested',{request_id:request.id,helpers:request.helpers,targets:request.targets});
+    this.tally.logoffs=(this.tally.logoffs??0)+1;
+    this.survivalInterruptedPass=this.passes;
+    s.cancelMovement?.(null,'cooperative logoff',{preserveId:decision.id,origin:keeperOrigin('cooperative_logoff',{run_id:request.id})});
+    const result=await this.reconnect('cooperative logoff: wait for distraction');
+    if(result.ok){
+      this.frozenUntil=null;this.freezeSample=null;
+      this.note('cooperative logoff returned',{request_id:request.id,receipt:s.cooperativeLogoffReturn});
+      await this.resumeCooperativeReturn({decisionId:decision.id});
+    }else {
+      this.note('cooperative logoff remains unresolved',{request_id:request.id,why:result.why});
+      if(abortPreparingCooperativeLogoff(s,request.id,result.why))return false;
+    }
+    return true;
+  }
+
+  async resumeCooperativeReturn({decisionId=null}={}) {
+    const s=this.s,r=s.cooperativeLogoffReturn,current=currentSurvivalDecision(s);
+    if(!r||r.cover_attempted_at||!s.live||s.client?.combatReady!==true||this.stopping||
+      this.operatorSurvivalStandDown()||s.combat?.active?.pvp||
+      ['movement','survival','recovery','combat'].some(k=>this.facultyHeld(k))||
+      (decisionId?current?.id!==decisionId:current&&current.reason_code!=='cooperative_logoff'))return false;
+    r.cover_attempted_at=Date.now();this.frozenUntil=null;this.freezeSample=null;
+    const decision=chooseSurvivalDecision(s,{strategy:'nearest_refuge',
+      reason:'fleetmate landed the distraction hits; return to cover',reason_code:'cooperative_return'},
+      {because:'confirmed cooperative distraction',outcome:'arrived'});
+    const preparedRefuge=cooperativeReturnRefuge(s);
+    this.note('cooperative immediate return to cover',{request_id:r.request_id,prepared:!!preparedRefuge,
+      login_ready_at:s.client.loginReadyAt??null,released_at:r.released_at});
+    r.cover_result=await this.takeRecoverySpot(decision.reason,{decisionId:decision.id,preparedRefuge});
+    return true;
+  }
+
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     if(this.operatorSurvivalStandDown())return false;
@@ -31513,7 +31584,12 @@ export class Autopilot {
     //
     // A WALL IS STILL FINE, because there the freeze is half of a real sequence: reconnect,
     // TURN to set PFLAG_MOVED_SINCE_ENTRY, and heal. Off a wall there is no second half.
+    if(!atWall){
+      try { if(typeof this.fleetLogoff==='function'&&await this.fleetLogoff(why))return true; }
+      catch(e) { this.note('cooperative logoff unavailable',{why:e.message}); }
+    }
     if (!atWall && !this.playerThreatPresent()) {
+
       this.note('refusing to play dead in the open — it does not work on monsters', {
         why, health: s.client?.vitals?.()?.health?.value ?? null,
         at_wall: false, players_here: false,

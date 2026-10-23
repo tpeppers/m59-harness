@@ -1,5 +1,10 @@
 # The keeper: what it can see, and what it cannot
 
+Private cooperative logoff can replace an off-wall play-dead refusal with an
+identity-bound wait for a fleetmate's actual distraction hit. See
+[the executor and failure conditions](m59-cooperative-logoff.md). Without that
+private opt-in, the existing wall and solo logoff rules remain in force.
+
 Long farm actions check falling health every 100ms against the existing flee
 line. They yield immediately to protected recovery, invalidate that invocation's
 body-command authority and cancel its old movement. The promise remains in

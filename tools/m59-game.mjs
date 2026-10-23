@@ -1,3 +1,4 @@
+import {cooperativeBeforeLogin,cooperativeAfterLogin,markCooperativeOffline} from './m59-cooperative-logoff.mjs';
 import {observeStationaryMutation} from './m59-stationary-trade.mjs';
 import {guardRegionPacket} from './m59-movement-region.mjs';
 import{healReadiness}from'./m59-recovery-heal.mjs';
@@ -1507,6 +1508,7 @@ export function lootIgnored(name, rules = [], worn = []) {
 class Session {
   constructor(name, { communicationStateFile = null } = {}) {
     this.name = name;
+    this.fleetStateFile = communicationStateFile;
     this.communications = communicationStateFile ? new CommunicationsArchive({ stateFile: communicationStateFile, agent: name }) : null;
     this.pacer = new Pacer();
     this.combatEpoch = 0;
@@ -2497,7 +2499,12 @@ class Session {
   }
 
   async join(args) {
-    return joinSessionOnce(this, args, value => this.joinOnce(value));
+    return joinSessionOnce(this, args, async value => {
+      await cooperativeBeforeLogin(this,{...value,host:value.host??HOST,port:value.port??PORT});
+      const result=await this.joinOnce(value);
+      cooperativeAfterLogin(this);
+      return result;
+    });
   }
 
   async joinOnce({ account, password, character, host = HOST, port = PORT }) {
@@ -2992,6 +2999,7 @@ class Session {
     if (this.client?.attach) await this.client.attachedLogoff?.().catch(() => false);
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
+    markCooperativeOffline(this);
     // `offlineMs`: stay out that long before logging back in (a private farmBuff strategy waiting out a hold).
     await new Promise(r => setTimeout(r, Math.max(800, Math.min(60_000, Number(offlineMs) || 0))));
     return this.join(this.credentials);

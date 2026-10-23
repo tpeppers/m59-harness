@@ -22,6 +22,16 @@ function fixture({captured=true}={}){
   return {...f,swings};
 }
 
+test('an exact landed-hit observer runs before post-round reads; incoming hits and misses do not notify',async()=>{
+  for(const [message,expected]of [['You hit the troll.',1],['The troll hits you.',0],['Your attack misses the troll.',0]]){
+    const f=fixture({captured:false}),receipts=[];let afterRound=false;
+    f.c.stats=()=>{if(afterRound&&expected)assert.equal(receipts.length,1,'notify before post-round stats');};
+    f.s.attackRounds=async()=>{afterRound=true;return{messages:[message],vitals:f.c.vitals()};};
+    await fight(f.s,{target:'troll',exactTargetId:10,rounds:1,reach:2,equip:false,loot:false,onLandedHit:hit=>receipts.push(hit)});
+    assert.equal(receipts.length,expected);if(expected){assert.equal(receipts[0].target_id,10);assert.equal(receipts[0].landed_hits,1);}
+  }
+});
+
 test('Cragged blocked coarse approach returns confirmed position and bodies without grinding or swinging',async()=>{
   const f=fixture(),coarse=f.s.world.approachSquare(33,35);
   assert.deepEqual({row:coarse.row,col:coarse.col},{row:34,col:34});

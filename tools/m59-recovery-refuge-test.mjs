@@ -7,6 +7,7 @@ import {roomGeometry} from './m59-ground.mjs';
 import { geometryFor } from './m59-safespots.mjs';
 import { OF, MOVEON } from './m59-parse.mjs';
 import { recoveryRefugeReach, planDoorEscape } from './m59-recovery-refuge.mjs';
+import {prepareCooperativeRefuge} from './m59-cooperative-logoff.mjs';
 import { attachSurvivalTrace, survivalTraceSnapshot } from './m59-survival-trace.mjs';
 
 let passed = 0;
@@ -65,6 +66,30 @@ await test('healing ignores quarry across a partition and records only the chose
   assert.equal(selection.detail.quarry,null);
   assert.equal(selection.detail.share_cap,1, 'recovery cannot share even with configured cap 5');
   assert.equal(trace.events.filter(e=>e.kind==='refuge_selected').length,1);
+});
+
+await test('a peer-prepared wall is checked by the native selector and an occupied hint falls back in the same escape', async () => {
+  const k=keeper(),hint={row:7,col:16};
+  const r=await k.takeSafeSpot('prepared escape',null,{recovery:true,nearestOnly:true,preparedRefuge:hint});
+  assert.equal(r.took,true);assert.equal(k.journal.find(n=>n.what==='cooperative prepared refuge checked').accepted,true);
+  releaseSpot(k.s.name);
+  const blocked=keeper();blocked.s.client.room.objects.set(8,{id:8,...hint,flags:OF.PLAYER|MOVEON.NO});
+  const out=await blocked.takeSafeSpot('prepared escape changed',null,{recovery:true,nearestOnly:true,preparedRefuge:hint});
+  assert.equal(out.took,true);assert.equal(blocked.journal.find(n=>n.what==='cooperative prepared refuge checked').accepted,false);
+  assert.notDeepEqual({row:blocked.hold.row,col:blocked.hold.col},hint);
+  releaseSpot(blocked.s.name);
+});
+
+await test('peer preparation runs the real refuge search from the offline ghost rather than its helper', () => {
+  const helper=keeper(39,{row:8,col:20}),c=helper.s.client;
+  helper.s.name='cooperative-planning-helper';c.selfId=2;c.room.id=3900;c.rsc={get:r=>r};c.idsAsOf=()=>({last_save_at:7});
+  const ghost={id:1,nameRsc:'Victim',flags:OF.PLAYER|MOVEON.NO,row:8,col:16,x:1056,y:544};
+  c.room.objects.set(1,ghost);c.room.objects.set(2,{id:2,flags:OF.PLAYER|MOVEON.NO,row:8,col:20,x:1312,y:544});
+  const r=prepareCooperativeRefuge(helper,{agent:'cooperative-planning-victim',body:1,character:'Victim',room:39,room_object:3900,
+    last_save_at:7,position:{row:8,col:16,x:1056,y:544},spot_rule:'wall'});
+  assert(r);assert.deepEqual(r.from,{row:8,col:16,x:1056,y:544});
+  assert.deepEqual({row:r.spot.row,col:r.spot.col},{row:7,col:16});
+  assert.equal(c.selfId,2,'projection never replaces the helper session');assert.equal(c.self.col,20);
 });
 
 await test('occupied closest wall loses; adjacent body alone does not veto a clear approach', () => {

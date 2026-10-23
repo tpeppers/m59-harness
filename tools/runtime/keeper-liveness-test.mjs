@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { KeeperLiveness, normalizeKeeperCharacter, validateKeeperSample }
+import { KeeperLiveness, normalizeKeeperCharacter, validateKeeperSample, keeperCooperativeWait }
   from './keeper-liveness.mjs';
 
 let now = 1_000;
@@ -68,3 +68,17 @@ assert.equal(live.generation, generation + 1);
 assert.equal(live.status({ processAlive: true }).disposed, true);
 
 console.log('keeper liveness: PASS');
+
+{
+ const cooperation=new KeeperLiveness({agent:'t1',character:'Kérmit',now:()=>now});
+ cooperation.observe(sample({in_game:false,connected:false,cooperative_wait:true}),{pid:123});
+ const proof=()=>({accepted:true,status:cooperation.status({processAlive:true})});
+ assert.equal(keeperCooperativeWait(proof()),true,'a live, identity-checked deliberate absence skips rejoin without stopping its continuation');
+ assert.equal(keeperCooperativeWait({...proof(),accepted:false}),false);
+ assert.equal(keeperCooperativeWait({accepted:true,status:cooperation.status({processAlive:false})}),false,'a dead waiting keeper still needs respawn');
+ cooperation.unavailable(new Error('no current process evidence'));
+ assert.equal(keeperCooperativeWait(proof()),false,'unknown evidence cannot suppress recovery');
+ cooperation.observe(sample({in_game:false,connected:false,cooperative_wait:'true'}),{pid:123});
+ assert.equal(keeperCooperativeWait(proof()),false,'only a typed native flag qualifies');
+}
+console.log('cooperative keeper liveness: PASS');

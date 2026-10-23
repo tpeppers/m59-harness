@@ -2,7 +2,7 @@ import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 // A long farm pull must yield before its ordinary deadline when the body is hurt.
 // Invalidating this invocation also fences callbacks already waiting in the pacer.
 export function watchFarmDanger(ap,stage,token,onDanger,{intervalMs=100}={}) {
- if(stage!=='passFarm')return()=>{};
+ if(!['passFarm','passCooperative'].includes(stage))return()=>{};
  const s=ap.s,c=s?.client,room=c?.room?.id,self=c?.selfId;
  let previous=c?.vitals?.()?.health?.value;
  const timer=setInterval(()=>{
@@ -16,7 +16,7 @@ export function watchFarmDanger(ap,stage,token,onDanger,{intervalMs=100}={}) {
   if(!(h?.value>0&&h.max>0&&h.value/h.max<ap.safety().fleeAt&&(lost||ap.mortalDanger?.())))return;
   token.cancelled=true;clearInterval(timer);
   if(ap.farmCombat?.pending)ap.farmCombat={...ap.farmCombat,pending:false,interrupted_at:Date.now(),reason:"survival preemption"};
-  const cancelled=s.cancelMovement?.(null,'farm action yielded to survival');
+  const cancelled=s.cancelMovement?.(null,stage==='passCooperative'?'cooperative distraction yielded to survival':'farm action yielded to survival');
   onDanger({health:{...h},fleeAt:ap.safety().fleeAt,cancelled});
  },intervalMs);
  return()=>clearInterval(timer);
