@@ -361,12 +361,16 @@ export const isTransportFailure = (e) =>
 // drives through this `call` — a standalone tool, a helper module — is an operator's script and
 // is named after it. Explicit `args.origin` always wins.
 const MOVE_TOOLS = new Set(['travel', 'walk_to', 'crawl_to', 'jump', 'cancel_movement']);
+import {AsyncLocalStorage} from 'node:async_hooks';
+const callOriginScope=new AsyncLocalStorage();
 let callOrigin = null;
 const scriptOrigin = () => moveOrigin({ source: 'operator',
   name: String(process.argv[1] ?? 'a script').replace(/\\/g, '/').split('/').pop() || 'a script' });
 /** Set the issuer stamped on moves this process sends; returns the previous one, for restoring. */
-export function setCallOrigin(origin) { const prev = callOrigin; callOrigin = origin ? moveOrigin(origin) : null; return prev; }
-export const currentCallOrigin = () => callOrigin ?? scriptOrigin();
+export function setCallOrigin(origin) { const scope=callOriginScope.getStore(),prev=scope?scope.origin:callOrigin;
+  if(scope)scope.origin=origin?moveOrigin(origin):null;else callOrigin=origin?moveOrigin(origin):null;return prev; }
+export const currentCallOrigin = () => callOriginScope.getStore()?.origin ?? callOrigin ?? scriptOrigin();
+export const withCallOrigin = (origin,run) => callOriginScope.run({origin:moveOrigin(origin)},run);
 
 /**
  * A BROKER REFUSAL IS AN ERROR, NOT A STRING. The incident, 2026-10-11 ~09:12Z: Robin (t8)
@@ -5623,12 +5627,12 @@ They are driven by tools/m59-menagerie.mjs and ` +
 
   ctx.log(`${name}: ${agents.length} agent(s), ${parallel ? 'in parallel' : 'one at a time'}` +
           ` — moves ordered as ${originLabel(origin)}`);
-  const previousOrigin = setCallOrigin(origin);
   try {
-    if (parallel) await Promise.all(agents.map(runOne));
-    else for (const a of agents) await runOne(a);
+    await withCallOrigin(origin,async()=>{
+      if (parallel) await Promise.all(agents.map(runOne));
+      else for (const a of agents) await runOne(a);
+    });
   } finally {
-    setCallOrigin(previousOrigin);
     await freeAll();
     dropSignalHandlers();
     claim.release();

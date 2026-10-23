@@ -292,7 +292,7 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     if (!agents.length) return { ok: false, why: 'no agents left after resolving' + (r?.skipped?.length ? ` (${r.skipped.length} skipped)` : '') };
   }
 
-  return fleetScript({
+  const result = await fleetScript({
     name: `${name} (${script.source})`,
     mode: script.mode ?? 'errand',
     agents,
@@ -319,4 +319,14 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     // possible failure: declared, greppable, and doing nothing at all.
     provenance: script.provenance ?? null,
   });
+  // Initialization scripts may hand standing work to a managed service only
+  // AFTER the runner has cancelled its journeys and released every body/lock.
+  // The callback sees partial failures too; result.ok alone means ANY success.
+  if(typeof script.afterRun==='function'){
+    try {
+      const finished=await script.afterRun({params:withDefaults,agents,result,onLog});
+      return {...result,...finished,results:result.results};
+    }catch(e){return {...result,ok:false,why:'post-run initialization failed: '+e.message};}
+  }
+  return result;
 }
