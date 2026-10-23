@@ -93,6 +93,16 @@ export function watchTick(t, obs, fleet) {
   if (room === Number(t.to)) return { act: 'arrived', room };
   // A survival rung (rest, a fight) suspends a journey and the order reads null meanwhile, so "stalled" is a null
   // order held for STALL_MS, never one reading: re-sending into a rest is how a journey is re-issued into itself.
+  // A LIVE ORDER IS NOT PROGRESS. The keeper's resume_journey re-arms a failed journey every couple of minutes on
+  // the same square, so the order never reads null and the body never moves: Waldorf, 22 minutes at the south edge
+  // of Kardde's Canyon (49) on 2026-10-23 while `route_progressing_exits_exhausted` repeated. Under two squares in
+  // WEDGE_MS, in one room, is wedged.
+  const row = Number(obs?.you?.row), col = Number(obs?.you?.col), now = Date.now();
+  if (Number.isFinite(row) && Number.isFinite(col)) {
+    const a = t.anchor;
+    if (!a || a.room !== room || Math.hypot(a.row - row, a.col - col) >= 2) t.anchor = { room, row, col, at: now };
+    else if (now - a.at >= (t.wedgeMs ?? 240_000) && now - (t.sentAt ?? 0) >= (t.wedgeMs ?? 240_000)) { t.anchor = null; return { act: 'wedged', room }; }
+  }
   const idle = obs?.movement && obs.movement.order == null;
   if (!idle) { t.idleSince = null; return { act: 'continue', room }; }
   t.idleSince ??= Date.now();
@@ -287,6 +297,14 @@ async function main() {
         log('arrived', { agent, room: to, hp: s.hp, locked: l?.keeper_push?.ok ?? l?.error ?? null }); return;
       }
       if (v.act === 'died') { log('died', { agent, room: v.room, last_room: lastRoom }); return; }
+      if (v.act === 'wedged') {
+        await call('cancel_movement', { agent, why: `secret travel: no progress in ${v.room} for 4 min` }, 30_000).catch(() => null);
+        log('wedged: cancelled, re-sending', { agent, room: v.room, position: { row: s.you?.row ?? null, col: s.you?.col ?? null } });
+        if (tries >= 6) { await lock(agent, v.room, 'secret travel: gave up'); log('gave up: wedged', { agent, room: v.room }); return; }
+        await sleep(5000);
+        await send();
+        continue;
+      }
       if (v.act === 'stalled') {
         if (tries >= 4) { await lock(agent, v.room, 'secret travel: gave up'); log('gave up: journey keeps stopping', { agent, room: v.room, last: s.movement?.last_cancel?.summary ?? null }); return; }
         log('journey stopped, re-sending', { agent, room: v.room, last: s.movement?.last_cancel?.summary ?? s.job?.last_action ?? null });
