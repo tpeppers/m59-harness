@@ -47,11 +47,11 @@ export function jungleItemClassifier(){
     return categories.every(c=>c===categories[0])?categories[0]:'unknown';
   };
 }
-const signature=o=>JSON.stringify([norm(o.name),o.amount??0,o.rarity??o.appearance?.rarity??0,o.translation??o.appearance?.translation??0,o.icon_rsc??o.appearance?.icon_rsc??0]);
-const identity=o=>JSON.stringify([norm(o.name),o.rarity??o.appearance?.rarity??0,o.translation??o.appearance?.translation??0,o.icon_rsc??o.appearance?.icon_rsc??0]);
+export const signature=o=>JSON.stringify([norm(o.name),o.amount??0,o.rarity??o.appearance?.rarity??0,o.translation??o.appearance?.translation??0,o.icon_rsc??o.appearance?.icon_rsc??0]);
+export const identity=o=>JSON.stringify([norm(o.name),o.rarity??o.appearance?.rarity??0,o.translation??o.appearance?.translation??0,o.icon_rsc??o.appearance?.icon_rsc??0]);
 export const inventoryUnits=(items,item)=>items.filter(i=>identity(i)===identity(item)).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
-async function pack(ctx){const p=await ctx.call('inventory',{agent:ctx.agent});if(!Array.isArray(p.items))throw Error('inventory_unavailable');return p.items;}
-async function freshPackItem(ctx,item){
+export async function pack(ctx){const p=await ctx.call('inventory',{agent:ctx.agent});if(!Array.isArray(p.items))throw Error('inventory_unavailable');return p.items;}
+export async function freshPackItem(ctx,item){
   const items=await pack(ctx),matches=items.filter(i=>signature(i)===signature(item));
   let current=matches.find(i=>i.id===item.id);
   if(!current&&matches.length===1)current=matches[0];
@@ -165,13 +165,13 @@ async function awaitPack(ctx,test,label){
   const until=Date.now()+12000;
   for(;;){const items=await pack(ctx);if(test(items))return items;if(Date.now()>until)throw Error(label);await pause(400);}
 }
-async function dropItem(ctx,item){
+export async function dropItem(ctx,item){
   const current=await freshPackItem(ctx,item),before=inventoryUnits(await pack(ctx),item),units=item.amount>0?item.amount:1;
   await ctx.call('act',{agent:ctx.agent,verb:'drop',target:current.id,...(item.amount>0?{amount:item.amount}:{})});
   await awaitPack(ctx,p=>inventoryUnits(p,item)<=before-units,'drop_not_confirmed_'+item.name);
   item.dropped_at=Date.now();
 }
-async function retrieve(ctx,item,group=[]){
+export async function retrieve(ctx,item,group=[]){
   const seen=await ctx.call('look',{agent:ctx.agent});
   const floor=(seen.objects??[]).filter(o=>signature(o)===signature(item)&&o.can?.includes('get'));
   // Save renumbering is handled by fresh floor identity, and ambiguity is a refusal.
@@ -193,7 +193,7 @@ async function retrieve(ctx,item,group=[]){
   await ctx.call('act',{agent:ctx.agent,verb:'get',target:exact[0].id});
   await awaitPack(ctx,p=>inventoryUnits(p,item)>=before+units,'pickup_not_confirmed_'+item.name);
 }
-async function restoreEquipment(ctx,item,save){
+export async function restoreEquipment(ctx,item,save){
   if(!item.was_equipped||item.reequipped)return;
   const eq=await ctx.call('equipment',{agent:ctx.agent});
   if(!eq.known)throw Error('equipment_unknown');
@@ -208,13 +208,17 @@ async function restoreEquipment(ctx,item,save){
   item.reequipped=true;save();
 }
 const activeStashTokens=new Set();
-export async function withStashLease(ctx,record,fn,{budgetMs=ISLAND_CONVOY_WAIT_MS,now=Date.now,wait=pause}={}){
+const stashLockFile=record=>resolve(dirname(record.receipt),'refill.lock');
+const removeStashLock=(file,nonce)=>{try{const current=JSON.parse(readFileSync(file,'utf8'));if(current.token===nonce)unlinkSync(file);}catch(e){if(e.code!=='ENOENT')throw e;}};
+// The lease can span several FleetScript steps (stash, jungle errand, retrieval):
+// acquire returns a token that stays active in this process until released.
+export async function acquireStashLease(ctx,record,{budgetMs=ISLAND_CONVOY_WAIT_MS,now=Date.now,wait=pause}={}){
   if(!record.receipt)throw Error('refill_requires_durable_receipt');
   if(!Number.isSafeInteger(budgetMs)||budgetMs<=0)throw Error('invalid_refill_queue_budget');
-  const file=resolve(dirname(record.receipt),'refill.lock'),token=randomUUID(),deadline=now()+budgetMs;
+  const file=stashLockFile(record),token=randomUUID(),deadline=now()+budgetMs;
   const alive=prior=>{try{process.kill(prior.pid,0);}catch(e){if(e.code==='ESRCH')return false;}
     const started=processStartedAt(prior.pid);return !started||!prior.started_at||Math.abs(started-prior.started_at)<=START_TIME_TOLERANCE_MS;};
-  const remove=nonce=>{try{const current=JSON.parse(readFileSync(file,'utf8'));if(current.token===nonce)unlinkSync(file);}catch(e){if(e.code!=='ENOENT')throw e;}};
+  const remove=nonce=>removeStashLock(file,nonce);
   for(;;){
     if(now()>=deadline)throw Error('refill_queue_budget');
     try{const fd=openSync(file,'wx');try{writeFileSync(fd,JSON.stringify({token,pid:process.pid,started_at:Date.now()-process.uptime()*1000,agent:ctx.agent,receipt:record.receipt}));}finally{closeSync(fd);}activeStashTokens.add(token);break;}
@@ -229,11 +233,16 @@ export async function withStashLease(ctx,record,fn,{budgetMs=ISLAND_CONVOY_WAIT_
       await wait(Math.min(1000,Math.max(1,deadline-now())));
     }
   }
-  try{return await fn();}finally{
-    activeStashTokens.delete(token);
-    // Retain ownership of abandoned cargo; a later traveler cannot claim it.
-    if(record.refill?.complete||!record.stash?.items.some(i=>i.dropped&&!i.recovered))remove(token);
-  }
+  return token;
+}
+export function releaseStashLease(record,token){
+  activeStashTokens.delete(token);
+  // Retain ownership of abandoned cargo; a later traveler cannot claim it.
+  if(record.complete||record.refill?.complete||!record.stash?.items.some(i=>i.dropped&&!i.recovered))removeStashLock(stashLockFile(record),token);
+}
+export async function withStashLease(ctx,record,fn,options={}){
+  const token=await acquireStashLease(ctx,record,options);
+  try{return await fn();}finally{releaseStashLease(record,token);}
 }
 export function islandRideRecovery(record,room){
   if(!record.sips?.length&&!record.stash)return 'not_started';
