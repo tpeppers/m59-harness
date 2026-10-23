@@ -5,6 +5,7 @@ import {observeCourierJourney} from './m59-courier-journey.mjs';
 import {randomUUID} from 'node:crypto';
 import {foodValue,weighItem,itemNameKey} from './m59-items.mjs';
 import {buyCourierGoods} from './m59-courier-purchases.mjs';
+import {arrowCount} from './m59-practicebow.mjs';
 const inventorySignature=items=>JSON.stringify(items.map(x=>[x.name,x.amount>0?x.amount:1]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
 const count=(items,name)=>items.filter(i=>i.name?.toLowerCase()===name).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
 // Imported training kit and monster-dropped ammunition stay aboard through every
@@ -14,7 +15,8 @@ export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10,protected
  const knows=re=>(actor.abilities?.spells??[]).some(s=>s.ability>0&&re.test(s.name));
  const protectedFood=new Set(protectedNames.map(itemNameKey));
  const haveFood=items.filter(i=>!protectedFood.has(itemNameKey(i.name))).reduce((n,i)=>n+(foodValue(i.name)?.nutrition??0)/20*(i.amount>0?i.amount:1),0);
- return{hammer:count(items,'hammer')?0:1,'loaf of bread':Math.max(0,Math.ceil(food-haveFood)),herb:knows(/minor heal|major heal|hospice|create food/i)?Math.max(0,(knows(/minor heal|major heal|hospice/i)?herbs:6)-count(items,'herb')-count(items,'herbs')):0,elderberry:knows(/create food/i)?Math.max(0,elderberries-count(items,'elderberry')):0};
+ return{hammer:count(items,'hammer')?0:1,'loaf of bread':Math.max(0,Math.ceil(food-haveFood)),herb:knows(/minor heal|major heal|hospice|create food/i)?Math.max(0,(knows(/minor heal|major heal|hospice/i)?herbs:6)-count(items,'herb')-count(items,'herbs')):0,elderberry:knows(/create food/i)?Math.max(0,elderberries-count(items,'elderberry')):0,
+  ...(actor.archery?{arrows:Math.max(0,actor.archery.arrows-arrowCount(items)),[actor.archery.bow]:count(items,actor.archery.bow)?0:1}:{})};
 }
 export function braxProvisionReserve(actor,name,{carryFloors={}}={}){
  const spells=actor?.abilities?.spells??[],knows=re=>spells.some(s=>s.ability>0&&re.test(s.name));
@@ -103,7 +105,7 @@ export class BraxSupplyService{
  }
  async deliverLocal(){
   if(this.stopped)return;const upper=await this.read(this.runner),locals=await this.localFarmers(upper.room.num);locals.sort((a,b)=>{const healer=x=>(x.actor.abilities?.spells??[]).some(s=>/minor heal|major heal|hospice/i.test(s.name));return Number(healer(b))-Number(healer(a))||a.state.hp.max-b.state.hp.max;});
-  for(const {actor,state}of locals){if(this.stopped)return;const a=actor.shadow_account;if(a===this.runner||state.hp.value/state.hp.max<.9)continue;
+  for(const {actor,state}of locals){if(this.stopped)return;const a=actor.shadow_account;if(actor.archery||a===this.runner||state.hp.value/state.hp.max<.9)continue;
    const need=braxNeeds(actor,(await this.pack(a)).items,{protectedNames:[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])]});
    for(const [name,want]of Object.entries(need)){if(want<=0)continue;await this.makeDeliveryRoom(actor,name);const p=await this.pack(this.runner),wear=new Set(((await this.read(this.runner)).equipment_items??[]).map(i=>i.id)),items=p.items.filter(i=>i.name===name||name==='herb'&&i.name==='herbs');const reserve=await this.reserve(this.runner,name);
     let left=Math.min(want,Math.max(0,items.reduce((n,i)=>n+(i.amount>0?i.amount:1),0)-reserve));
@@ -114,7 +116,7 @@ export class BraxSupplyService{
  }
  async cacheLocalRemainder(){
   if(this.stopped||!this.cacheDelivery)return;const state=await this.read(this.runner);if(state.room?.num!==827||state.in_game===false||state.connected===false)return;
-  const demand=await this.needs(),recipients=demand.filter(r=>r.agent!==this.runner&&Object.values(r.needs).some(n=>n>0));if(!recipients.length)return;
+  const demand=await this.needs(),recipients=demand.filter(r=>r.agent!==this.runner&&!this.actors.find(a=>a.shadow_account===r.agent)?.archery&&Object.values(r.needs).some(n=>n>0));if(!recipients.length)return;
   const p=await this.pack(this.runner),worn=new Set((state.equipment_items??[]).map(i=>i.id)),protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])].map(itemNameKey),budgets=new Map(),items=[];
   for(const i of p.items){const name=/^herbs?$/.test(i.name)?'herb':i.name;if(!/^(hammer|herb|elderberry|loaf of bread)$/.test(name)||worn.has(i.id)||protectedNames.some(n=>n&&itemNameKey(i.name).includes(n)))continue;
    const wanted=recipients.reduce((n,r)=>n+(r.needs[name]??0),0);if(!wanted)continue;
@@ -125,7 +127,7 @@ export class BraxSupplyService{
   if(result?.uncertain)await this.event('delivery-cache-reconciliation-required',{agent:this.runner,reason:result.reason});
  }
  async collectLocal({cargo=true}={}){
-  if(this.stopped)return;const here=await this.read(this.runner);const locals=(await this.localFarmers(here.room.num)).filter(x=>x.actor.shadow_account!==this.runner&&x.state.hp.value/x.state.hp.max>=.9).sort((a,b)=>(b.actor.purse??0)-(a.actor.purse??0));
+  if(this.stopped)return;const here=await this.read(this.runner);const locals=(await this.localFarmers(here.room.num)).filter(x=>!x.actor.archery&&x.actor.shadow_account!==this.runner&&x.state.hp.value/x.state.hp.max>=.9).sort((a,b)=>(b.actor.purse??0)-(a.actor.purse??0));
   let donors=0;for(const {actor,state}of locals){if(donors>=3)break;const a=actor.shadow_account,p=await this.pack(a),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
    const cash=p.items.find(i=>/^shillings?$/.test(i.name));if(cash?.amount>1500&&count((await this.pack(this.runner)).items,'shilling')<10000){await this.transfer(a,this.runner,cash,Math.min(5000,cash.amount-1000),p.ids_as_of);donors++;}
@@ -211,12 +213,12 @@ export class BraxSupplyService{
   // Each bounded pass takes fresh inventory; an ambiguous transfer still throws.
   const upperCap=(await this.read(this.runner)).carry?.room_for,lowerCap=(await this.read(agent)).carry?.room_for;const free=p=>Math.min(p?.weight??0,p?.bulk??0);
   const demand={};for(const row of await this.needs())for(const [name,n]of Object.entries(row.needs))demand[name]=(demand[name]??0)+n;
-  const provisionName=name=>/^herbs?$/.test(name)?'herb':name;
+  const provisionName=name=>/^herbs?$/.test(name)?'herb':/\barrows?\b/.test(name)?'arrows':name;
   const stock=(items,name)=>items.filter(i=>provisionName(i.name)===name).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
   const handoff=async from=>{
    const to=from===this.runner?agent:this.runner,p=await this.pack(from),state=await this.read(from),worn=new Set((state.equipment_items??[]).map(i=>i.id));
    const rank=name=>name==='hammer'&&demand.hammer>0?-1:/^herbs?$/.test(name)?0:name==='loaf of bread'?1:name==='elderberry'?2:3;
-   const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)).sort((a,b)=>rank(a.name)-rank(b.name)):p.items.filter(i=>!worn.has(i.id)&&(braxSaleCargo(i.name)||/^shillings?$/.test(i.name)));
+   const chosen=from===agent?p.items.filter(i=>/^(hammer|herbs?|elderberry|loaf of bread)$/.test(i.name)||BRAX_ARCHERY_CARGO.includes(i.name)).sort((a,b)=>rank(a.name)-rank(b.name)):p.items.filter(i=>!worn.has(i.id)&&(braxSaleCargo(i.name)||/^shillings?$/.test(i.name)));
    const budgets=new Map(),protectedNames=[...(state.autopilot_status?.policy?.protectedItems??[]),...(state.autopilot_status?.policy?.vaultItems??[])];
    for(const item of chosen){if(this.stopped)break;if(worn.has(item.id)||from===this.runner&&protectedNames.some(n=>String(item.name).toLowerCase().includes(String(n).toLowerCase())))continue;const reserve=from===agent?await this.reserve(agent,/^herbs?$/.test(item.name)?'herb':item.name,state):/^shillings?$/.test(item.name)?500:0;if(!budgets.has(item.name)){
      let available=Math.max(0,count(p.items,item.name)-reserve);

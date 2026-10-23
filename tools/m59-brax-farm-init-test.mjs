@@ -6,7 +6,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {EventEmitter} from 'node:events';
-import {braxFarmPlan,braxTaskOrders,braxTaskLoadout,braxPolicyMismatches,qorCaster,requireAutomatedBraxActors,completeBraxInitialization} from './m59-brax-farm.mjs';
+import {braxFarmPlan,braxTaskOrders,braxTaskLoadout,braxPolicyMismatches,qorCaster,requireAutomatedBraxActors,completeBraxInitialization,requireBraxArcherScript} from './m59-brax-farm.mjs';
 import {reserveBraxService,releaseBraxReservation,startBraxService,stopBraxService,braxServiceStatus,runBraxSupplyWorker,localBraxBroker} from './m59-brax-service.mjs';
 import {script} from './fleetscripts/brax-farm.mjs';
 import {script as migration} from './fleetscripts/walk-to-brax.mjs';
@@ -25,6 +25,15 @@ await test('explicit farmer/runner/mainland roles, cohort bounds, duplicate and 
 await test('a human-piloted or unobservable role is refused before the runner can claim anyone',()=>{
  requireAutomatedBraxActors([{agent:'f',piloted:null}],['f']);
  for(const rows of [null,[],[{agent:'f'}],[{agent:'f',piloted:{holder:'person'}}]])assert.throws(()=>requireAutomatedBraxActors(rows,['f']));
+});
+await test('mixed roles retain the upper hammer runner and require an installed confinement/supply/stop capable archer script',()=>{
+ const mixed={...params,agents:['farmer','archer'],archers:'archer'},plan=braxFarmPlan(mixed);assert.deepEqual(plan.archers,['archer']);
+ assert.throws(()=>braxFarmPlan({...mixed,runner:'archer'}));assert.throws(()=>requireBraxArcherScript(new Map([['archerplus',{name:'archerplus'}]])));
+ assert(requireBraxArcherScript(new Map([['archerplus',{integration:{version:1,stationarySupply:true,allowedRooms:true,cooperativeStop:true}}]])));
+ const archery={bow:'practice bow',arrows:160},orders=braxTaskOrders('farmer',{archery});assert.equal(orders.training_weapon,'practice bow');assert.equal(orders.training_weapon_only,false);assert.equal(orders.assigned_room,827);
+ const load=braxTaskLoadout(null,{character:'Archer',agent:'archer',role:'farmer',abilities:{spells:[]},archery,arrived:true});
+ assert.deepEqual(load.gear.weapon,['practice bow','hammer']);assert(load.carry.some(r=>r.item==='practice bow'&&r.min===1));
+ assert(load.carry.some(r=>r.item==='arrows'&&r.min===160));assert.equal(plan.archerMode,'snipe');
 });
 await test('whole raw source loadout survives except documented weapon, stock and task-policy overlays',()=>{
  const source={character:'Farmer',plan:{school:false,custom:0},gear:{weapon:['mace'],slots:{body:['robe']},why:'keep this long operator note'},
@@ -96,6 +105,10 @@ await test('partial arrivals never start farming or supply; an unconfirmed mode 
  assert.equal(out.ok,true);assert.equal(launches,1);assert.deepEqual(orders,[{agent:'farmer',action:'start',mode:'farm'}]);releaseBraxReservation(good);
  const uncertain=reserve('uncertain-complete');await assert.rejects(completeBraxInitialization(uncertain,plan,{results},{...deps,start:async r=>{markStarting(r);throw Error('unknown launch');}}),/unknown launch/);
  assert(fs.existsSync(uncertain.paths.lock));
+ const mixed=reserve('mixed-complete');mixed.actors.push({agent:'archer',role:'farmer',archery:{bow:'practice bow'}});orders=[];
+ const mixedPlan=braxFarmPlan({...params,agents:['farmer','archer'],archers:'archer'});
+ await completeBraxInitialization(mixed,mixedPlan,{results:{...results,archer:{ok:true}}},deps);
+ assert.deepEqual(orders,[{agent:'farmer',action:'start',mode:'farm'}],'archer remains idle until its task acquires the receiver lease');releaseBraxReservation(mixed);
 });
 await test('uncertain child startup is persisted before spawn and cannot be retried or released as an unused reservation',async()=>{
  const r=reserve('unknown');let spawns=0;
@@ -128,6 +141,20 @@ await test('the managed worker reports deliveries/cycles, rejects undeclared or 
  const stop=reserve('stop');markStarting(stop);stopBraxService('stop',{directory:dir,stateFile:stop.stateFile});
  const ended=await runBraxSupplyWorker(stop,{readActor:async a=>native(stop.actors.find(x=>x.agent===a)),rpc:async()=>({}),serviceFactory:()=>({stopped:false,cycles:{},stop(){this.stopped=true;},async run(){assert(this.stopped);return[];}})});
  assert.equal(ended.phase,'stopped');
+});
+await test('the managed worker runs the archer separately and waits for its cooperative stop before releasing the controller',async()=>{
+ const r=reserve('mixed-worker');r.actors[0].archery={bow:'practice bow',arrows:160,hours:4};markStarting(r);let launched=0;
+ const out=await runBraxSupplyWorker(r,{readActor:async a=>{const actor=r.actors.find(x=>x.agent===a),s=native(actor);if(actor.archery)s.equipment_items=[{name:'practice bow'}];return s;},rpc:async()=>({}),
+  runTask:async actor=>{launched++;assert.equal(actor.agent,'farmer');assert(!fs.existsSync(r.paths.stop));await new Promise(ok=>setTimeout(ok,5));assert.equal(JSON.parse(fs.readFileSync(r.paths.stop)).token,r.token);return{ok:true};},
+  serviceFactory:()=>({cycles:{},stopped:false,stop(){this.stopped=true;},async run(){return[];}})});
+ assert.equal(launched,1);assert.equal(out.tasks.farmer.phase,'completed');assert(!fs.existsSync(r.paths.lock));
+});
+await test('an unexpected courier exception settles its archer before controller unlock',async()=>{
+ const r=reserve('mixed-exception');r.actors[0].archery={bow:'practice bow'};markStarting(r);let ended=false;
+ const out=await runBraxSupplyWorker(r,{readActor:async a=>{const actor=r.actors.find(x=>x.agent===a),s=native(actor);if(actor.archery)s.equipment_items=[{name:'practice bow'}];return s;},
+  runTask:async()=>{await new Promise(ok=>setTimeout(ok,5));assert(fs.existsSync(r.paths.lock));assert.equal(JSON.parse(fs.readFileSync(r.paths.stop)).token,r.token);ended=true;return{ok:true};},
+  serviceFactory:()=>({cycles:{},stop(){},async run(){throw Error('unexpected service failure');}})});
+ assert(ended);assert.equal(out.phase,'needs-attention');assert.match(out.error,/unexpected/);assert(!fs.existsSync(r.paths.lock));
 });
 console.log(`${passed} Brax initialization scenarios passed`);
 }finally{rmSync(dir,{recursive:true,force:true});}

@@ -9,15 +9,18 @@ function migrationSteps(plan){
 }
 export const script={
  name:'brax-farm',mode:'errand',
- describe:'Initialize standing Brax hammer farming: provision, migrate farmers, confine the upper party and start two mainland ledge couriers.',
+ describe:'Initialize Brax farming and optional ArcherPlus training: provision, migrate, confine the upper party and start two mainland ledge couriers.',
  recipe:{run:'brax-farm agents=<farmers> couriers=<two mainland agents> runner=<one farmer>',
-  effect:'Farmers remain in 827; Qor casters prioritize worms, others daemon skeletons. Hammers and ledge-only courier resupply.',
+  effect:'Farmers remain upstairs; hammer farmers target worms or daemon skeletons, bow trainees run private ArcherPlus. Ledge-only courier resupply.',
   needs:['same deployed checkout and local broker','1..25 automated farmers plus2 explicit mainland couriers','ordinary shopping funds and carrying room'],
   cost:{time:'ordinary provisioning plus the complete walk-to-brax route',risk:'normal road, lift, cavern and farming encounters'},
   notes:['This is a finite initialization. Keepers farm afterward; the managed courier worker survives the REPL.',
    'No actor is chosen implicitly. Runner is one of the farmers; the two couriers never take the lift.',
    'A partial migration is a failure, with individual receipts; it never starts duplicate supply workers.']},
  params:{agents:{type:'agents',required:true},couriers:{type:'agents',required:true},runner:{type:'string',required:true},
+  archers:{type:'string',default:'auto',describe:'auto detects existing bow training intent; or an explicit comma-separated subset of farmers'},
+  archer_arrows:{type:'number',default:160},archer_hours:{type:'number',default:4},
+  archer_mode:{type:'string',default:'snipe',options:['snipe','both','assist']},
   minHealth:{type:'number',default:.9},fragileBelow:{type:'number',default:1}},
  async resolveAgents(p){
   const resolved=await resolveBraxFarmAgents(p),plan=braxFarmPlan(p);
