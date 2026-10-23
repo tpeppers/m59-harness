@@ -1012,3 +1012,4 @@ substrate/rescue-travel/
 # answer to how much memory it has, and an env var cannot reach a broker started by live handover.
 /substrate/keeper-heap-mb
 /substrate/cooperative-logoff/
+/substrate/brax-farm/

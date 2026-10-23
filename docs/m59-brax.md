@@ -4,6 +4,10 @@
 characters. Its destination and success condition are **alive in room 827,
 Ancient Graveyard of Brax**. The castle interior is a later errand.
 
+To migrate and initialize persistent hammer farming with confinement and mainland
+couriers, use [`brax-farm`](m59-brax-farm.md). `walk-to-brax` remains the travel-only
+script.
+
 Start the fleet REPL in the checkout holding the fleet, with an explicit
 `M59_CONTROL_URL` and `--fleet`. The public script is
 `tools/fleetscripts/walk-to-brax.mjs`; its route and coordination are in
