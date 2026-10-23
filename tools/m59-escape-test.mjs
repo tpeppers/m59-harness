@@ -582,6 +582,16 @@ console.log('\nthe Temple of Qor has its code-defined south exit');
      edgeExitsOf({ num: 801, edgeExits: [] }).length === 0);
 }
 
+// OutdoorsK5 (615) declares no edge exits; its StandardLeaveDir sends LEAVE_WEST to 45 r3c80
+// (k5.kod). Kermit died to trolls there on 2026-10-23 with the map calling it a dead end.
+console.log('\nthe eastern Badlands has its code-defined west exit');
+{
+  const raw = edgeExitsOf({ num: 615, edgeExits: [], goExits: [] });
+  ok('615 walks west to 45, arriving r3c80',
+     raw.length === 1 && raw[0].leave === LEAVE.WEST && raw[0].to === 45 && raw[0].arriveRow === 3 && raw[0].arriveCol === 80);
+  ok('it is fixed, not timer-driven', raw[0].synthetic === true && !raw[0].dynamic);
+}
+
 // A preferred portal is unlit and the matching rip window fails. Other fixed
 // portals must still be tried in the SAME escape, rather than restarting forever.
 {

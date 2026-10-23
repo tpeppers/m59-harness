@@ -97,7 +97,17 @@ export function roomResourceDirs({ explicit = process.env.M59_ROO_DIR,
 // action, not two physical doors: walk south from the boundary and accept whichever
 // outside room is currently open. A travel that expected the other destination simply
 // replans from the room actually entered.
+//
+// OutdoorsK5 (615, the eastern Badlands: groundworm queens, trolls, the bramble shrine) is the
+// same shape with one fixed destination. Its plEdge_Exits is empty and its StandardLeaveDir
+// override catches LEAVE_WEST and puts the player in Badland1 (45) at r3c80 (k5.kod). Without
+// this the map calls 615 a room with no way out: the router could walk in and never plan out,
+// and Kermit died to trolls there at 2/91 on 2026-10-23 with nowhere to flee to.
 const SYNTHETIC_EDGE_EXITS = Object.freeze({
+  615: Object.freeze([
+    Object.freeze({ leave: LEAVE.WEST, leaveName: 'west', to: 45,
+      arriveRow: 3, arriveCol: 80, synthetic: true }),
+  ]),
   802: Object.freeze([
     Object.freeze({ leave: LEAVE.SOUTH, leaveName: 'south', to: 589,
       arriveRow: null, arriveCol: null, synthetic: true, dynamic: true }),
