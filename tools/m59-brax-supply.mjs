@@ -7,6 +7,9 @@ import {foodValue,weighItem,itemNameKey} from './m59-items.mjs';
 import {buyCourierGoods} from './m59-courier-purchases.mjs';
 const inventorySignature=items=>JSON.stringify(items.map(x=>[x.name,x.amount>0?x.amount:1]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
 const count=(items,name)=>items.filter(i=>i.name?.toLowerCase()===name).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
+// Imported training kit and monster-dropped ammunition stay aboard through every
+// mainland sale. There is no Jasper source of practice bows or plain arrows.
+export const BRAX_ARCHERY_CARGO=['bow','practice bow','long bow','battle bow','nerudite bow','magic bow','arrows','silver arrows','nerudite arrows','fire arrows'];
 export function braxNeeds(actor,items,{food=6,herbs=20,elderberries=10,protectedNames=[]}={}){
  const knows=re=>(actor.abilities?.spells??[]).some(s=>s.ability>0&&re.test(s.name));
  const protectedFood=new Set(protectedNames.map(itemNameKey));
@@ -136,7 +139,7 @@ export class BraxSupplyService{
   await observeCourierJourney({agent,to,before,result:r,read:this.read,deadline,wait:this.wait,emit:e=>this.event(e.kind,e)});
   await this.event('town-travel',{agent,to,result:r,arrivedAt:Date.now(),startedAt});
  }
- async sell(agent,room,merchant){await this.townTravel(agent,room);const before=await this.pack(agent);const r=await this.atMerchant(merchant,()=>this.call('sell_all',{agent,merchant,keep:['hammer','herb','elderberry','bread','mushroom','meat pie','stew','cheese','wand','quest','signet'],max_weapons:1,max_offers:12,skip_names:['hammer','herb','herbs','elderberry','elderberries','loaf of bread','loaves of bread']},180000));const after=await this.pack(agent);await this.event('sale',{agent,merchant,beforeCash:count(before.items,'shilling'),afterCash:count(after.items,'shilling'),result:r});return r;}
+ async sell(agent,room,merchant){await this.townTravel(agent,room);const before=await this.pack(agent);const r=await this.atMerchant(merchant,()=>this.call('sell_all',{agent,merchant,keep:['hammer','herb','elderberry','bread','mushroom','meat pie','stew','cheese','wand','quest','signet',...BRAX_ARCHERY_CARGO],max_weapons:1,max_offers:12,skip_names:['hammer','herb','herbs','elderberry','elderberries','loaf of bread','loaves of bread',...BRAX_ARCHERY_CARGO]},180000));const after=await this.pack(agent);await this.event('sale',{agent,merchant,beforeCash:count(before.items,'shilling'),afterCash:count(after.items,'shilling'),result:r});return r;}
  async procure(agent){
   await this.phase(agent,'Jasper procurement');const rows=await this.needs(),need={};for(const r of rows)for(const[k,n]of Object.entries(r.needs))need[k]=(need[k]??0)+n;
   await this.sell(agent,374,'Quintor');

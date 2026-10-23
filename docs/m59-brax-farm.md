@@ -111,6 +111,33 @@ Task changes intentionally persist. To leave Brax farming, stop its supply worke
 inspect the saved source files and issue a separate desired assignment. Restoring
 an old policy is not an instruction to walk down from Brax.
 
+## Archery kit and pending training integration
+
+The current initializer still assigns hammer farming to every farmer. Do not use
+it to preserve a running archery trainee's assignment: the ArcherPlus adapter
+requires the actual private strategy's interface and is not included yet.
+Couriers retain carried bows and all arrow types through mainland sales, including
+spare bows beyond the normal one-weapon allowance. Retention alone does not start
+training, collect arrows from other farmers, or deliver them to trainees.
+
+The server's `skel4t.kod` treasure table includes silver arrows, whose class starts
+with a ten-arrow stack (`slvarrow.kod`). Narthyl worms have no ammunition in their
+treasure table. Both monsters are above level 99, so their level permits Fire and
+Archery training through 99; actual learning also depends on the normal skill
+checks and learning budget. Both resist piercing damage by 70%, so a bow trainee
+cannot be assumed to replace a hammer farmer's kill rate.
+
+Practice bows are sold by Kochtal ko'Tulca and plain arrows by Hanla zax'Ta on
+Ko'catan. The confined Jasper couriers cannot purchase them on their current road
+loop. Initial bows/ammunition must arrive through ordinary imports or available
+stock; skeleton drops can supplement ammunition without guaranteeing continuous
+training. Any Mend desk used by an upstairs trainee must be reachable within the
+upper confinement; a mainland desk must not send the trainee down the ledge.
+
+`node tools/m59-brax-archery-test.mjs` executes the real native sale dispatcher
+offline, proving that ordinary loot still sells while carried bows and arrows
+remain. It is not a live ArcherPlus qualification.
+
 ## Validation and limits
 
 `node tools/m59-brax-farm-init-test.mjs` is offline. It tests source retention,
