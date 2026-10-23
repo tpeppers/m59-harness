@@ -186,7 +186,10 @@ async function retrieve(ctx,item,group=[]){
   const owned=group.filter(i=>i.dropped&&!i.recovered&&signature(i)===signature(item));
   if(exact.length>1&&owned.length===exact.length)exact=[exact[0]];
   if(exact.length!==1)throw Error('stash_missing_or_ambiguous_'+item.name);
-  const before=inventoryUnits(await pack(ctx),item),units=exact[0].amount>0?exact[0].amount:1;
+  // A NON-STACK ITEM IS ONE UNIT WHATEVER ITS FLOOR ROW SAYS. A Chalice of the Rain on the floor carries a non-zero
+  // amount (its sips) while the pack counts it as 1 (inventoryUnits), so expecting +amount never confirmed a refill
+  // pickup that had happened (Animal, Ko'catan 2115, 2026-10-23). Only a stack -- amount > 0 in the pack -- counts its amount.
+  const before=inventoryUnits(await pack(ctx),item),units=item.amount>0&&exact[0].amount>0?exact[0].amount:1;
   await ctx.call('act',{agent:ctx.agent,verb:'get',target:exact[0].id});
   await awaitPack(ctx,p=>inventoryUnits(p,item)>=before+units,'pickup_not_confirmed_'+item.name);
 }
