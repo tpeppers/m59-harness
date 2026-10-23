@@ -41,6 +41,7 @@ import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
   from './m59-shortcuts.mjs';
 import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs, proxyFor } from './m59-devclient.mjs';
 import { DECK_CLIENT, launchUnderProton } from './m59-proton.mjs';
+import { localClients } from './m59-localclient.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
 import * as webui from './m59-webui.mjs';
 // The geometry debug maps -- every room by number, plus an index. Imported rather than
@@ -672,10 +673,43 @@ function hostAlias(host) {
   return host;
 }
 
-async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
+// ONE LAUNCH PER CHARACTER AT A TIME. A Proton client takes ~20s to show a window, and L
+// pressed again in that gap started a second client and a second remote hold for the same
+// account -- measured 2026-10-03, Rizzo twice 112ms apart: the second hold superseded the
+// first, the two Proton wrappers fought over the runtime's lock, and one client bumped the
+// other off the character. So a launch still starting, or a client already running here under
+// that account, is reported rather than repeated. Linux only for the second half: the /proc scan
+// is free, and the Windows one is a PowerShell start on a keypress.
+const LAUNCH_SETTLE_MS = 30_000;
+const launchedAt = new Map();
+
+async function alreadyPlaying(account) {
+  if (WIN || !account) return null;
+  const want = String(account).toLowerCase();
+  return (await localClients({ ttlMs: 0 })).find(cl => String(cl.account ?? '').toLowerCase() === want) ?? null;
+}
+
+async function launch(row, opts = {}) {
+  const t = launchedAt.get(row.agent);
+  if (t && Date.now() - t < LAUNCH_SETTLE_MS) {
+    S.status = c.yellow(`${row.character ?? row.agent} is already launching — ` +
+                        `L again after ${Math.ceil((LAUNCH_SETTLE_MS - (Date.now() - t)) / 1000)}s if no window appears`);
+    return;
+  }
+  launchedAt.set(row.agent, Date.now());
+  const refused = (msg) => { launchedAt.delete(row.agent); S.status = msg; };
+  return launchOnce(row, opts, refused);
+}
+
+async function launchOnce(row, { viaProxy = false, extraEnv = null } = {}, refused = (m) => { S.status = m; }) {
   const { creds, why } = GATE ? gateCreds(row) : rosterFor(row.agent);
   if (GATE) viaProxy = false;
-  if (!creds) { S.status = c.red(why ?? ('no credentials on file for ' + row.agent)); return; }
+  if (!creds) return refused(c.red(why ?? ('no credentials on file for ' + row.agent)));
+  const running = await alreadyPlaying(creds.account);
+  if (running) {
+    return refused(c.yellow(`a client for ${row.character ?? row.agent} is already running here (pid ${running.pid}) — ` +
+                            'close it first, or play that one'));
+  }
   // THE PATCHED CLIENT FIRST — see the header. Its directory has no `steamapps` in it, so
   // isSteamInstall says no and `/S` stays off, which is right: it is a build, not a
   // Steam install that would try to patch itself.
@@ -687,9 +721,8 @@ async function launch(row, { viaProxy = false, extraEnv = null } = {}) {
   const clientDir = devExe ? dirname(devExe) : deckExe ? dirname(deckExe) : findClient();
   const exe = devExe || deckExe || findClientExe(clientDir);
   if (!exe) {
-    S.status = c.red('no Meridian 59 client found') + ' ' +
-      c.dim('· set M59_CLIENT to its folder · store.steampowered.com/app/' + STEAM_APPID);
-    return;
+    return refused(c.red('no Meridian 59 client found') + ' ' +
+      c.dim('· set M59_CLIENT to its folder · store.steampowered.com/app/' + STEAM_APPID));
   }
   // THE CHARACTER'S OWN SERVER, not this machine's.
   //
