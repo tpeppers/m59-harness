@@ -27,8 +27,17 @@ export function braxFarmPlan(p){
  if(new Set(archers).size!==archers.length||archers.some(a=>!farmers.includes(a)||a===runner))throw Error('archers must be distinct selected farmers; the upper runner must remain a hammer farmer');
  const arrows=Number(p.archer_arrows??160),hours=Number(p.archer_hours??4);if(!Number.isInteger(arrows)||arrows<5||arrows>1000||!Number.isFinite(hours)||hours<=0||hours>168)throw Error('invalid archer_arrows or archer_hours');
  const archerMode=String(p.archer_mode??'snipe');if(!['snipe','both','assist'].includes(archerMode))throw Error('invalid archer_mode');
- return{farmers,couriers,runner,agents:[...farmers,...couriers],archers,autoArchers,archerArrows:arrows,archerHours:hours,archerMode};
+ const farmRoom=p.farm_room==null||p.farm_room===''?827:Number(p.farm_room);if(!BRAX_FARM_ROOMS.includes(farmRoom))throw Error('farm_room must be 827 (Ancient Graveyard) or 828 (Decaying City)');
+ return{farmers,couriers,runner,agents:[...farmers,...couriers],archers,autoArchers,archerArrows:arrows,archerHours:hours,archerMode,farmRoom};
 }
+// Operator, 2026-10-23: farm the Decaying City of Brax (828), directly east of
+// the graveyard, instead of only 827. walk-to-brax still ends in 827 and the
+// runner's ledge path is 827-826-upper578, so 827 stays in every farmer region.
+export const BRAX_FARM_ROOMS=[827,828];
+export const braxFarmerRooms=(farmRoom=827)=>farmRoom===827?[578,826,827]:[578,826,827,farmRoom];
+// m59-spawns.json: 827 generates daemon skeletons and worms; 828 generates worms
+// and tusked skeletons, and no daemon skeleton. Qor casters keep worms first.
+function braxHunt(farmRoom,qor){const skeleton=farmRoom===828?'tusked skeleton':'daemon skeleton';return{hunt:[skeleton,'narthyl worm'],priority:qor?['narthyl worm',skeleton]:[skeleton,'narthyl worm']};}
 export function requireBraxArcherScript(scripts){const s=scripts.get('archerplus');if(!s||s.integration?.version!==1||!s.integration.stationarySupply||!s.integration.allowedRooms||!s.integration.cooperativeStop)throw Error('Install the updated private archerplus FleetScript with stationary supply, allowed_rooms and managed stop support before migrating archers');return s;}
 export function requireAutomatedBraxActors(rows,agents){
  if(!Array.isArray(rows))throw Error('fleet visibility is unavailable; cannot distinguish human-piloted actors');
@@ -37,14 +46,15 @@ export function requireAutomatedBraxActors(rows,agents){
 export function qorCaster(abilities){
  return (abilities?.spells??[]).some(s=>Number(s.ability??s.proficiency??0)>0&&String(s.school??spellbook().get(String(s.name).toLowerCase())?.school??'').toLowerCase()==='qor');
 }
-export function braxTaskOrders(role,{qor=false,protectedItems=null,archery=null}={}){
+export function braxTaskOrders(role,{qor=false,protectedItems=null,archery=null,farmRoom=827}={}){
  if(!['farmer','courier'].includes(role))throw Error('unknown Brax role');
- const farmer=role==='farmer';
+ if(!BRAX_FARM_ROOMS.includes(farmRoom))throw Error('unknown Brax farm room '+farmRoom);
+ const farmer=role==='farmer',rooms=braxFarmerRooms(farmRoom),prey=braxHunt(farmRoom,qor);
  return{farm_strategy:null,buddy:null,practice_spells:null,room_enchant:null,guard_zone:null,
-  assigned_room:farmer?827:null,confine_rooms:farmer?[578,826,827]:[350,371,373,374,568,578],
-  movement_region:{version:1,id:farmer?'brax-farmer':'brax-mainland-courier',rooms:farmer?[578,826,827]:[350,371,373,374,568,578],
+  assigned_room:farmer?farmRoom:null,confine_rooms:farmer?rooms:[350,371,373,374,568,578],
+  movement_region:{version:1,id:farmer?'brax-farmer':'brax-mainland-courier',rooms:farmer?[...rooms]:[350,371,373,374,568,578],
    anchors:{578:farmer?{x:2352,y:2208}:{x:2256,y:2208}}},
-  ...(farmer?{hunt:['daemon skeleton','narthyl worm']}:{}),hunt_priority:farmer?(qor?['narthyl worm','daemon skeleton']:['daemon skeleton','narthyl worm']):null,
+  ...(farmer?{hunt:prey.hunt}:{}),hunt_priority:farmer?prey.priority:null,
   training_style:archery?'normal':'short_sword',training_weapon:archery?archery.bow:'hammer',training_weapon_only:!archery,
   roam:false,town_trips:false,buy_food:false,buy_weapons:false,buy_reagents:false,farm_delivery:null,
   ...(Array.isArray(protectedItems)?{protect_items:protectedItems.filter(n=>!String('loaf of bread').includes(String(n).toLowerCase()))}:{} )};
@@ -54,10 +64,10 @@ const POLICY_KEYS={farm_strategy:'farmStrategy',buddy:'buddy',practice_spells:'p
  roam:'roam',town_trips:'townTrips',buy_food:'buyFood',buy_weapons:'buyWeapons',buy_reagents:'buyReagents',farm_delivery:'farmDelivery',protect_items:'protectedItems'};
 export function braxPolicyMismatches(actual,orders){return Object.entries(orders).filter(([arg,value])=>POLICY_KEYS[arg]&&!isDeepStrictEqual(actual?.[POLICY_KEYS[arg]]??null,value)).map(([arg])=>arg);}
 // Keep every source section and unknown note. Do not normalize the source as an editor.
-export function braxTaskLoadout(raw,{character,agent,role,abilities,archery=null,arrived=false}){
+export function braxTaskLoadout(raw,{character,agent,role,abilities,archery=null,arrived=false,farmRoom=827}){
  const out=structuredClone(raw??blank(character,agent));
  if(out.character&&out.character.toLowerCase()!==character.toLowerCase())throw Error('loadout belongs to another character');
- out.character=character;out.agent=agent;out.policy={...out.policy,assigned_room:arrived&&role==='farmer'?827:null,buy_reagents:false};
+ out.character=character;out.agent=agent;out.policy={...out.policy,assigned_room:arrived&&role==='farmer'?farmRoom:null,buy_reagents:false};
  out.gear={...out.gear,weapon:archery&&arrived?[archery.bow,'hammer']:['hammer']};out.carry??=[];
  for(const name of ['hammer','loaf of bread','herb','elderberry',...(archery?[archery.bow,'arrows']:[])]){
   const min=archery&&name===archery.bow?1:archery&&name==='arrows'?archery.arrows:braxProvisionReserve({abilities},name);if(!min)continue;
@@ -93,7 +103,7 @@ async function stockActor(ctx,actor,read,runDir){
   const need=Math.max(0,min-count(p.items,name));if(!need)continue;
   // A farmer already upstairs may only use ordinary Brax supplies, never go back
   // to Jasper or repeat the lift for a missing kit. Resume requires its carried kit.
-  if([826,827].includes((await read()).room.num))throw Error('upstairs farmer lacks '+name+'; supply it before resuming initialization');
+  if([826,827,828].includes((await read()).room.num))throw Error('upstairs farmer lacks '+name+'; supply it before resuming initialization');
   await travel(ctx,read,room);
   const bought=await buyCourierGoods({agent:ctx.agent,state:{},call:checkedCall},{seller,item:name,aliases:name==='herb'?['herbs']:[],amount:need,evidenceDir:path});
   if(bought.status!=='confirmed'||bought.quantity<need)throw Error('ordinary '+name+' purchase not fully confirmed; inspect '+bought.status);
@@ -118,7 +128,7 @@ export async function prepareBraxInitialization(ctx,plan){
   // Every participant is checked before any policy, file or game command changes.
   const actors=await Promise.all(plan.agents.map(async agent=>{
    const s=await readers.get(agent)();if(s.in_game!==true||s.connected!==true||!(s.hp?.value>0)||s.room.num===1||!s.autopilot_status?.policy||s.autopilot_status?.mode==='tick')throw Error('Brax actor is not a living native farming keeper: '+agent);
-   const role=plan.couriers.includes(agent)?'courier':'farmer';if(role==='courier'&&[579,826,827].includes(s.room.num))throw Error('mainland courier is upstairs: '+agent);
+   const role=plan.couriers.includes(agent)?'courier':'farmer';if(role==='courier'&&[579,826,827,828].includes(s.room.num))throw Error('mainland courier is upstairs: '+agent);
    const abilities=await checkedCall('abilities',{agent,kind:'spells'});if(!Array.isArray(abilities.spells))throw Error('spell list unconfirmed '+agent);
    const remote=await checkedCall('loadout',{agent}),path=loadoutPath(s.character),sourceLoadout=fs.existsSync(path)?JSON.parse(fs.readFileSync(path,'utf8')):null;
    if(!isDeepStrictEqual(sourceLoadout?normalise(sourceLoadout).loadout:null,remote.loadout))throw Error('local/source keeper loadout differs '+agent);
@@ -147,7 +157,7 @@ export async function prepareBraxInitialization(ctx,plan){
    // Stock imported before departure is shared normally; nothing on the Jasper
    // loop can manufacture a practice bow or purchase ordinary arrows.
    const missing=await Promise.all(archers.map(async a=>{const p=await checkedCall('inventory',{agent:a.agent,fresh:true});return !findBow(p.items,a.archery.bow)||arrowCount(p.items)<a.archery.arrows;}));
-   if(missing.some(Boolean))await Promise.all(actors.map(async a=>{const read=g.readers.get(a.agent),s=await read();if(![579,826,827].includes(s.room.num))await travel(g.contexts.get(a.agent),read,350);}));
+   if(missing.some(Boolean))await Promise.all(actors.map(async a=>{const read=g.readers.get(a.agent),s=await read();if(![579,826,827,828].includes(s.room.num))await travel(g.contexts.get(a.agent),read,350);}));
    for(const a of archers){const c=g.contexts.get(a.agent);await g.readers.get(a.agent)();await pullBowArrows(c,{donors:plan.agents,target:a.archery.arrows,stock:{[a.archery.bow]:1}});
     const p=await checkedCall('inventory',{agent:a.agent,fresh:true});if(p.ids_stale||!findBow(p.items,a.archery.bow)||arrowCount(p.items)<5)throw Error('Import a bow and at least5 arrows for '+a.agent+' before migration; Jasper cannot supply this kit');}
   }
@@ -161,8 +171,10 @@ export async function assignBraxFarm(ctx,plan){
  const read=createRailObserver({fleet:ctx.fleet,agent:ctx.agent}),s=await read(),wanted=actor.role==='farmer'?827:350;
  checkIslandCancellation(ctx,s);if(!islandReadOwner(ctx,s)||s.room.num!==wanted||!(s.hp?.value>0))throw Error('Brax arrival/ownership not confirmed');
  const file=loadoutPath(actor.character),current=JSON.parse(fs.readFileSync(file,'utf8'));
- save(file,braxTaskLoadout(current,{...actor,arrived:true}));
- const orders=braxTaskOrders(actor.role,{qor:actor.qor,protectedItems:actor.sourcePolicy.protectedItems,archery:actor.archery});await push(ctx.agent,orders);
+ // walk-to-brax ends in 827 whatever the farm room; the standing assignment
+ // below is what sends a keeper on to 828.
+ save(file,braxTaskLoadout(current,{...actor,arrived:true,farmRoom:plan.farmRoom}));
+ const orders=braxTaskOrders(actor.role,{qor:actor.qor,protectedItems:actor.sourcePolicy.protectedItems,archery:actor.archery,farmRoom:plan.farmRoom});await push(ctx.agent,orders);
  if(actor.archery){const p=await checkedCall('inventory',{agent:ctx.agent,fresh:true}),bow=findBow(p.items,actor.archery.bow);if(!bow||p.ids_stale||arrowCount(p.items)<5)throw Error('arrival bow and ammunition not confirmed');await checkedCall('act',{agent:ctx.agent,verb:'use',target:bow.id});}
  else await equipBraxHammer(ctx,read);
  const actual=await read();
@@ -198,10 +210,10 @@ export async function finishBraxInitialization({params,result}, deps={}){
 export async function resolveBraxFarmAgents(p){const plan=braxFarmPlan(p),fleet=fleetName();await localBraxBroker(fleet);requireAutomatedBraxActors((await checkedCall('fleet',{refresh:true})).fleet,plan.agents);const service=braxServiceStatus(fleet);if(service.reserved||service.status?.phase==='needs-attention')throw Error('Brax service reserved/running or needs reconciliation; inspect its status before another order');return{agents:plan.agents};}
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const args=process.argv.slice(2),value=key=>{const i=args.indexOf('--'+key);return i<0?'':args[i+1];};
- try{if(args[0]!=='plan')throw Error('Use: node tools/m59-brax-farm.mjs plan --agents a,b --couriers c,d --runner a');
-  const plan=braxFarmPlan({agents:value('agents'),couriers:value('couriers'),runner:value('runner'),archers:value('archers')||'auto',archer_mode:value('archer-mode')||'snipe',archer_arrows:value('archer-arrows')||160,archer_hours:value('archer-hours')||4});
-  console.log(JSON.stringify({...plan,farmerOrders:braxTaskOrders('farmer'),qorPriority:braxTaskOrders('farmer',{qor:true}).hunt_priority,
+ try{if(args[0]!=='plan')throw Error('Use: node tools/m59-brax-farm.mjs plan --agents a,b --couriers c,d --runner a [--farm-room 828]');
+  const plan=braxFarmPlan({agents:value('agents'),couriers:value('couriers'),runner:value('runner'),archers:value('archers')||'auto',archer_mode:value('archer-mode')||'snipe',archer_arrows:value('archer-arrows')||160,archer_hours:value('archer-hours')||4,farm_room:value('farm-room')});
+  console.log(JSON.stringify({...plan,farmerOrders:braxTaskOrders('farmer',{farmRoom:plan.farmRoom}),qorPriority:braxTaskOrders('farmer',{qor:true,farmRoom:plan.farmRoom}).hunt_priority,
    courierOrders:braxTaskOrders('courier'),provisioning:'ordinary purchases for each carried hammer/food/heal reagent minimum; source survival settings retained',
-   execution:'Fleet REPL: brax-farm agents='+plan.farmers.join(',')+' couriers='+plan.couriers.join(',')+' runner='+plan.runner+' archers='+(plan.autoArchers?'auto':plan.archers.join(',')||'none')+' archer_mode='+plan.archerMode+' archer_arrows='+plan.archerArrows+' archer_hours='+plan.archerHours},null,2));
+   execution:'Fleet REPL: brax-farm agents='+plan.farmers.join(',')+' couriers='+plan.couriers.join(',')+' runner='+plan.runner+' archers='+(plan.autoArchers?'auto':plan.archers.join(',')||'none')+' archer_mode='+plan.archerMode+' archer_arrows='+plan.archerArrows+' archer_hours='+plan.archerHours+' farm_room='+plan.farmRoom},null,2));
  }catch(e){console.error(e.message);process.exitCode=1;}
 }

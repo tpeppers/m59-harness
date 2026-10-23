@@ -204,3 +204,20 @@ packs.r=[];packs.a=[{id:920,name:'silver arrows',amount:60}];reload.needs=async(
 await reload.exchange('a');assert(accepted.some(i=>i.from==='a'&&i.item==='silver arrows'&&i.n===60));
 assert.equal(packs.r.find(i=>i.name==='silver arrows').amount,60);
 console.log('PASS imported silver arrows cross the ordinary ledge exchange; leased archers request their own stock instead of being commandeered');
+
+// Operator, 2026-10-23: farm_room=828 farms the Decaying City east of 827.
+assert.throws(()=>new BraxSupplyService({actors,runner:'r',couriers:['a','b'],call(){},read(){},runLeg(){},farmRoom:829}),/827 or 828/);
+{const farmers=[{shadow_account:'r',role:'farmer'},{shadow_account:'f828',role:'farmer'},{shadow_account:'f829',role:'farmer'}],where={r:827,f828:828,f829:829};
+ const make=farmRoom=>{const svc=new BraxSupplyService({actors:farmers,runner:'r',couriers:['a','b'],call(){},read:async a=>({room:{num:where[a]},hp:{value:10,max:10},in_game:true,connected:true}),runLeg(){},farmRoom});svc.pack=async()=>({items:[]});return svc;};
+ assert.deepEqual((await make(828).needs()).map(r=>r.agent),['r','f828'],'a farmer in 828 is supplied; 827 still counts; 829 does not');
+ assert.deepEqual((await make(827).needs()).map(r=>r.agent),['r'],'default farm room ignores 828');
+ // The runner walks to the receiver within the farm room; 827->828 is never a local walk.
+ const posts=[];const local=farmRoom=>new BraxSupplyService({actors:farmers,runner:'r',couriers:['a','b'],call:async(name,args)=>{if(name==='inventory')return{items:[hammer],ids_as_of:1};posts.push(args);return{supplied:true,amounts:[{asked:1,giver_lost:1}]};},read:async a=>({room:{num:a==='r'?where.rRoom:828},carry:{known:true,load:{exact:true},room_for:{weight:900,bulk:900}}}),runLeg(){},farmRoom});
+ where.rRoom=828;await local(828).transfer('r','f828',hammer,1);assert.equal(posts.at(-1).who_travels,'from');assert.equal(posts.at(-1).stationary,false);
+ await local(827).transfer('r','f828',hammer,1);assert.equal(posts.at(-1).stationary,true,'828 is not a farm room by default');
+ where.rRoom=827;await local(828).transfer('r','f828',hammer,1);assert.equal(posts.at(-1).stationary,true,'different rooms are never a local walk');
+ // An ended service returns the runner to the farm room, through 827 if need be.
+ const legs=[];const back=new BraxSupplyService({actors:farmers,runner:'r',couriers:['a','b'],call(){},read:async()=>({room:{num:legs.length?828:827},hp:{value:10},in_game:true,connected:true,autopilot_status:{faculties:{work:'keeper'}}}),runLeg:async(...a)=>{legs.push(a);},emit(){},farmRoom:828});
+ assert.equal(await back.returnEndedService('r','farmer'),true);assert.deepEqual(legs,[['r','farmer','back']]);
+}
+console.log('PASS farm_room=828: farmers there are supplied, local runner walks stay inside one farm room, and an ended runner returns to 828');

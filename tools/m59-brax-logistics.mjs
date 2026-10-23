@@ -44,9 +44,10 @@ export async function clearBraxLanding(ctx,observe,{maxSteps=4}={}){
  }
  throw Error('farm landing clearance step budget exhausted');
 }
-export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObserver({fleet:ctx.fleet,agent:ctx.agent}),timeoutMs=480000}={}){
+export async function runBraxLedgeLeg(ctx,{role,direction,farm_room=827,observe=createRailObserver({fleet:ctx.fleet,agent:ctx.agent}),timeoutMs=480000}={}){
  ctx={...ctx,origin:ctx.origin??currentCallOrigin()};
  if(!['farmer','courier'].includes(role)||!['out','back'].includes(direction))throw Error('invalid Brax service leg');
+ const farmRoom=Number(farm_room);if(![827,828].includes(farmRoom))throw Error('invalid Brax farm room');
  const end=Date.now()+timeoutMs,events=[],event=e=>{events.push({at:Date.now(),...e});ctx.log?.(ctx.agent,JSON.stringify(e));};
  const read=async()=>{if(Date.now()>end)throw Error('Brax service leg deadline');const s=await observe();if(!(s.hp?.value>0)||s.room.num===1)throw Error('service actor died');return s;};
  const cross=async to=>{const r=await queuedRoomExit(ctx,to,{observe,characters:[(await read()).character],timeoutMs:Math.min(180000,end-Date.now())});event({kind:'service-exit',to,reply:r});if(!r.arrived)throw Error('service exit failed');};
@@ -68,12 +69,14 @@ export async function runBraxLedgeLeg(ctx,{role,direction,observe=createRailObse
  };
  let s=await read();
  if(role==='farmer'){
-  if(direction==='out'){if(s.room.num===827)await cross(826);s=await read();if(s.room.num===826)await cross(578);await fine(BRAX_LEDGE.farmer);}
-  else{if(s.room.num===578){await fine(BRAX_LEDGE.cavern);await cross(826);}if((await read()).room.num===826)await cross(827);if((await read()).room.num!==827)throw Error('upper runner did not return827');}
+  // A runner farming 828 (operator, 2026-10-23) reaches the ledge through 827 and
+  // ends its return there: one ordinary east exit beyond the graveyard landing.
+  if(direction==='out'){if(farmRoom!==827&&s.room.num===farmRoom){await cross(827);s=await read();}if(s.room.num===827)await cross(826);s=await read();if(s.room.num===826)await cross(578);await fine(BRAX_LEDGE.farmer);}
+  else if(farmRoom===827||s.room.num!==farmRoom){if(s.room.num===578){await fine(BRAX_LEDGE.cavern);await cross(826);}if((await read()).room.num===826)await cross(827);if((await read()).room.num!==827)throw Error('upper runner did not return827');
+   if(farmRoom===827)event({kind:'farm-landing-clearance',reply:await clearBraxLanding(ctx,observe)});else await cross(farmRoom);}
  }else{
   if(direction==='out'){if(![350,568,578].includes(s.room.num))await road(350);if((await read()).room.num===350)await road(568);if((await read()).room.num===568)await road(578);await fine(BRAX_LEDGE.courier);}
   else{if(s.room.num===578){await fine(BRAX_LEDGE.road);await road(568);}if((await read()).room.num===568)await road(350);if((await read()).room.num!==350)throw Error('lower courier did not return Jasper');}
  }
- if(role==='farmer'&&direction==='back')event({kind:'farm-landing-clearance',reply:await clearBraxLanding(ctx,observe)});
  const final=await read();return{ok:true,role,direction,room:final.room.num,position:final.you,hp:final.hp,events};
 }

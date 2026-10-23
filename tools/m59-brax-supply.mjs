@@ -27,8 +27,11 @@ export function braxProvisionReserve(actor,name,{carryFloors={}}={}){
 export function braxCourierTarget(name,demand,cap,reserve=name==='hammer'?1:name==='herb'||name==='elderberry'?5:name==='loaf of bread'?4:0){return Math.min(cap,Math.max(0,demand??0)+reserve);}
 export function braxSaleCargo(name){return /sapphire|emerald|diamond|ruby|armor|armour|shield|sword|scimitar|mace|axe|gauntlet|helm/i.test(name)&&!/hammer|wand|quest|signet|shield of|soldier.s shield|guild|princess|duke|rebel militia/i.test(name);}
 export class BraxSupplyService{
- constructor({actors,runner,couriers,call,read,runLeg,recover=null,cacheDelivery=null,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true}){
+ constructor({actors,runner,couriers,call,read,runLeg,recover=null,cacheDelivery=null,emit=()=>{},phase=()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),evidenceDir='substrate/courier-purchases',farmRunner=true,farmRoom=827}){
   if(!actors.some(c=>c.shadow_account===runner&&c.role==='farmer')||couriers.length!==2||new Set(couriers).size!==2)throw Error('Brax service needs one selected farmer runner and2 distinct couriers');
+  // Operator, 2026-10-23: farmers may hold the Decaying City (828) east of the
+  // graveyard. 827 stays a farm room too: arrivals and the runner's ledge leg end there.
+  if(![827,828].includes(farmRoom))throw Error('Brax farm room must be 827 or 828');this.farmRoom=farmRoom;this.farmRooms=[...new Set([827,farmRoom])];
   Object.assign(this,{actors,runner,couriers,call,read,runLeg,recover,cacheDelivery,emit,phase,wait,evidenceDir});this.farmRunner=farmRunner;this.farmers=actors.filter(c=>c.role==='farmer');this.stopped=false;this.upperGate=Promise.resolve();this.cycles={};this.pending=new Set();this.shopGates=new Map();this.lastLaneCourier=null;this.capacityBlocks=new Map();this.notReadyUntil=new Map();this.lastNeeds=new Map();this.cachedStock=[];
  }
  async reserve(agent,name,state=null){const s=state??await this.read(agent);return braxProvisionReserve(this.actors.find(c=>c.shadow_account===agent),name,{carryFloors:s.autopilot_status?.loadout_retention?.carry_floors??{}});}
@@ -37,10 +40,12 @@ export class BraxSupplyService{
  async event(kind,detail={}){await this.emit({at:Date.now(),kind,...detail});}
  async pack(agent){for(let attempt=0;attempt<4;attempt++){const p=await this.call('inventory',{agent,fresh:true});if(Array.isArray(p?.items)&&p.ids_stale!==true)return p;if(attempt<3)await this.wait(500);}throw Error('inventory unconfirmed '+agent);}
  async localFarmers(room){const out=[];for(const c of this.farmers){const s=await this.read(c.shadow_account);if(s.hp?.value>0&&s.room?.num===room&&s.in_game!==false&&s.connected!==false)out.push({actor:c,state:s});}return out;}
- async needs(){const rows=[];for(const c of this.farmers){const agent=c.shadow_account,s=await this.read(agent);if(![578,826,827].includes(s.room?.num)||!(s.hp?.value>0))continue;if(s.in_game===false||s.connected===false){if(this.lastNeeds.has(agent))rows.push({agent,needs:this.lastNeeds.get(agent),deferred:true});continue;}const p=await this.pack(agent),needs=braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]});this.lastNeeds.set(agent,needs);rows.push({agent,needs});}
+ async needs(){const rows=[];for(const c of this.farmers){const agent=c.shadow_account,s=await this.read(agent);if(![578,826,...this.farmRooms].includes(s.room?.num)||!(s.hp?.value>0))continue;if(s.in_game===false||s.connected===false){if(this.lastNeeds.has(agent))rows.push({agent,needs:this.lastNeeds.get(agent),deferred:true});continue;}const p=await this.pack(agent),needs=braxNeeds(c,p.items,{protectedNames:[...(s.autopilot_status?.policy?.protectedItems??[]),...(s.autopilot_status?.policy?.vaultItems??[])]});this.lastNeeds.set(agent,needs);rows.push({agent,needs});}
   // Available floor stock is supply in transit, not a reason to buy it again.
   // A fresh connected farm view can retire a cache immediately; otherwise its
   // bounded notice lifetime prevents indefinite suppression during an outage.
+  // Floor caches exist only in 827: the keeper's delivery-cache drop refuses any
+  // other room, so a runner farming 828 makes direct deliveries and no caches.
   if(this.cachedStock.length){const seen=await this.read(this.runner),groundKnown=seen.in_game===true&&seen.connected===true&&seen.room?.num===827&&Array.isArray(seen.objects),key=n=>/^herbs?$/.test(n)?'herb':n;
    this.cachedStock=this.cachedStock.filter(c=>c.expiresAt>Date.now()&&(!groundKnown||seen.objects.some(o=>o.id===c.ground_id&&o.name===c.item&&(o.flags&16))));const pool=new Map(),remainingGround=new Map();
    for(const c of this.cachedStock){const observed=groundKnown?seen.objects.find(o=>o.id===c.ground_id):null;if(observed&&!remainingGround.has(c.ground_id))remainingGround.set(c.ground_id,observed.amount>0?observed.amount:1);const amount=observed?Math.min(c.quantity,remainingGround.get(c.ground_id)):c.quantity;if(observed)remainingGround.set(c.ground_id,remainingGround.get(c.ground_id)-amount);pool.set(key(c.item),(pool.get(key(c.item))??0)+amount);}
@@ -62,7 +67,7 @@ export class BraxSupplyService{
   amount=Math.max(0,Math.min(amount,unit.weight>0?Math.floor(Math.max(0,cap.room_for.weight-margin)/unit.weight):amount,unit.bulk>0?Math.floor(Math.max(0,cap.room_for.bulk-margin)/unit.bulk):amount));
   if(!amount){await this.event('trade-deferred',{id,from,to,item:i.name,reason:'receiver capacity'});return{quantity:0,deferred:true};}
   await this.event('trade-intent',{id,from,to,item:i.name,amount});
-  const giver=await this.read(from),sameFarm=giver.room?.num===827&&receiver.room?.num===827;
+  const giver=await this.read(from),sameFarm=giver.room?.num===receiver.room?.num&&this.farmRooms.includes(giver.room?.num);
   // Internal distribution follows the farmer to its safe trading range. The
   // runner moves on both collection and delivery; the patient keeps its post.
   const local=sameFarm&&(from===this.runner||to===this.runner);
@@ -206,7 +211,7 @@ export class BraxSupplyService{
   }
  }
  async exchange(agent,{lowerOut,startLowerOut}={}){
-  await this.runnerMode('idle');await this.phase(this.runner,'collecting');const s=await this.read(this.runner);if(s.room.num===827){await this.deliverLocal();const awaiting=(await this.needs()).some(r=>Object.values(r.needs).some(n=>n>0));if(awaiting)await this.event('loot-collection-deferred-for-provisions',{agent:this.runner});await this.collectLocal({cargo:!awaiting});}
+  await this.runnerMode('idle');await this.phase(this.runner,'collecting');const s=await this.read(this.runner);if(this.farmRooms.includes(s.room.num)){await this.deliverLocal();const awaiting=(await this.needs()).some(r=>Object.values(r.needs).some(n=>n>0));if(awaiting)await this.event('loot-collection-deferred-for-provisions',{agent:this.runner});await this.collectLocal({cargo:!awaiting});}
   if(this.stopped){if(lowerOut)await Promise.allSettled([lowerOut]);throw Error('service stopped before new exchange approaches');}
   await this.phase(this.runner,'outbound');if(!lowerOut&&startLowerOut)lowerOut=startLowerOut();const approaches=await Promise.allSettled([this.runLeg(this.runner,'farmer','out'),lowerOut??Promise.resolve()]);const failed=approaches.find(r=>r.status==='rejected');if(failed)throw failed.reason;await this.waitExchangeReady(agent);await this.collectLocal();await this.phase(this.runner,'exchange');await this.phase(agent,'exchange');
   // Free the tighter pack first, then load again after verified exports make room.
@@ -246,9 +251,9 @@ export class BraxSupplyService{
   if(s.in_game!==true||s.connected!==true||!(s.hp?.value>0)||s.job?.busy||s.movement?.order||s.autopilot_status?.faculties?.work!=='keeper'){
    await this.event('service-return-deferred',{agent,role,reason:'native body or released control not proved'});return false;
   }
-  const home=role==='farmer'?827:350;
+  const home=role==='farmer'?this.farmRoom:350;
   if(s.room?.num!==home){
-   if(!(role==='farmer'?[578,826]:[578,568]).includes(s.room?.num))return false;
+   if(!(role==='farmer'?[578,826,...this.farmRooms.filter(r=>r!==home)]:[578,568]).includes(s.room?.num))return false;
    await this.phase(agent,'returning after ended service');await this.runLeg(agent,role,'back');
   }
   const after=await this.read(agent);

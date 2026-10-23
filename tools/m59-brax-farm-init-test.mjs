@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {EventEmitter} from 'node:events';
 import {braxFarmPlan,braxTaskOrders,braxTaskLoadout,braxPolicyMismatches,qorCaster,requireAutomatedBraxActors,completeBraxInitialization,requireBraxArcherScript} from './m59-brax-farm.mjs';
-import {reserveBraxService,releaseBraxReservation,startBraxService,stopBraxService,braxServiceStatus,runBraxSupplyWorker,localBraxBroker} from './m59-brax-service.mjs';
+import {reserveBraxService,releaseBraxReservation,startBraxService,stopBraxService,braxServiceStatus,runBraxSupplyWorker,localBraxBroker,braxArcherTaskArgs} from './m59-brax-service.mjs';
 import {script} from './fleetscripts/brax-farm.mjs';
 import {script as migration} from './fleetscripts/walk-to-brax.mjs';
 import {runNamed} from './m59-fleetlib.mjs';
@@ -155,6 +155,33 @@ await test('an unexpected courier exception settles its archer before controller
   runTask:async()=>{await new Promise(ok=>setTimeout(ok,5));assert(fs.existsSync(r.paths.lock));assert.equal(JSON.parse(fs.readFileSync(r.paths.stop)).token,r.token);ended=true;return{ok:true};},
   serviceFactory:()=>({cycles:{},stop(){},async run(){throw Error('unexpected service failure');}})});
  assert(ended);assert.equal(out.phase,'needs-attention');assert.match(out.error,/unexpected/);assert(!fs.existsSync(r.paths.lock));
+});
+await test('farm_room=828 farms the Decaying City: validated plan, standing orders, arrival loadout, worker qualification and archer launch',async()=>{
+ assert.equal(braxFarmPlan(params).farmRoom,827);assert.equal(braxFarmPlan({...params,farm_room:'828'}).farmRoom,828);
+ for(const farm_room of [829,826,'x',0])assert.throws(()=>braxFarmPlan({...params,farm_room}),/farm_room/);
+ assert.equal(script.params.farm_room.default,827);
+ const f=braxTaskOrders('farmer',{farmRoom:828}),q=braxTaskOrders('farmer',{qor:true,farmRoom:828}),d=braxTaskOrders('farmer');
+ assert.equal(f.assigned_room,828);assert.deepEqual(f.confine_rooms,[578,826,827,828]);assert.deepEqual(f.movement_region.rooms,[578,826,827,828]);
+ assert.deepEqual(f.hunt,['tusked skeleton','narthyl worm'],'828 spawns worms and tusked skeletons, no daemon skeleton');
+ assert.deepEqual(f.hunt_priority,['tusked skeleton','narthyl worm']);assert.deepEqual(q.hunt_priority,['narthyl worm','tusked skeleton']);
+ assert.equal(d.assigned_room,827);assert.deepEqual(d.confine_rooms,[578,826,827]);assert.deepEqual(d.hunt,['daemon skeleton','narthyl worm']);
+ assert.deepEqual(braxTaskOrders('courier',{farmRoom:828}).confine_rooms,braxTaskOrders('courier').confine_rooms);
+ assert.throws(()=>braxTaskOrders('farmer',{farmRoom:829}));
+ assert.equal(braxTaskLoadout(null,{character:'F',agent:'f',role:'farmer',abilities:{spells:[]},arrived:true,farmRoom:828}).policy.assigned_room,828);
+ assert.equal(braxTaskLoadout(null,{character:'F',agent:'f',role:'farmer',abilities:{spells:[]},arrived:false,farmRoom:828}).policy.assigned_room,null);
+ const r=reserveBraxService({fleet:'city',stateFile:join(dir,'city.json'),root:dir,url:'http://127.0.0.1:9999/',...braxFarmPlan({...params,farm_room:828}),
+  actors:[{agent:'farmer',role:'farmer',character:'Farmer',archery:{bow:'practice bow',arrows:160,hours:4}},{agent:'courierA',role:'courier',character:'Courier A'},{agent:'courierB',role:'courier',character:'Courier B'}]},{directory:dir});
+ assert.equal(JSON.parse(fs.readFileSync(join(r.runDir,'manifest.json'))).farmRoom,828,'the worker reads its farm room from the manifest');
+ const args=braxArcherTaskArgs(r,r.actors[0],()=>1);assert.equal(args.room,828);assert.equal(args.allowed_rooms,'578,826,827,828');
+ const legacy=braxArcherTaskArgs({...r,farmRoom:undefined},r.actors[0],()=>1);assert.equal(legacy.room,827);assert.equal(legacy.allowed_rooms,'578,826,827');
+ releaseBraxReservation(r);
+ for(const [room,ok] of [[828,true],[827,true],[829,false]]){
+  const w=reserveBraxService({fleet:'city-'+room,stateFile:join(dir,'city-'+room+'.json'),root:dir,url:'http://127.0.0.1:9999/',...braxFarmPlan({...params,farm_room:828}),
+   actors:[{agent:'farmer',role:'farmer',character:'Farmer'},{agent:'courierA',role:'courier',character:'Courier A'},{agent:'courierB',role:'courier',character:'Courier B'}]},{directory:dir});markStarting(w);let opts=null;
+  const out=await runBraxSupplyWorker(w,{readActor:async a=>{const actor=w.actors.find(x=>x.agent===a),s=native(actor);if(actor.role==='farmer')s.room.num=room;return s;},rpc:async()=>({}),
+   serviceFactory:o=>{opts=o;return{cycles:{},stopped:false,stop(){this.stopped=true;},async run(){return[];}};}});
+  assert.equal(out.phase,ok?'stopped':'needs-attention',String(room));assert.equal(opts?.farmRoom,ok?828:undefined);
+ }
 });
 console.log(`${passed} Brax initialization scenarios passed`);
 }finally{rmSync(dir,{recursive:true,force:true});}

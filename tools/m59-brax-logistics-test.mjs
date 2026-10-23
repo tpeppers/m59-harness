@@ -27,3 +27,11 @@ await assert.rejects(observeCourierJourney({agent:'a',to:568,before:jb,result:{o
 console.log('PASS courier road observer follows only its accepted recovery objective, never inventing a second trip');
 
 assert.equal((await script.steps({role:'courier',direction:'back',minHealth:.9})).length,1);assert.equal((await script.steps({role:'courier',direction:'back',minHealth:.9}))[0].do,'verify');console.log('PASS captured hurt return cannot be diverted by a generic leading rest; owned rail recovery remains in the return leg');
+
+// Operator, 2026-10-23: a runner farming 828 is already home there; only 827/828 are farm rooms.
+{const at828=async()=>({...state(),room:{num:828}});at828.action=async()=>{throw Error('no movement expected');};
+ const home=await runBraxLedgeLeg(ctx,{role:'farmer',direction:'back',farm_room:828,observe:at828});assert.equal(home.room,828);assert.deepEqual(home.events,[]);
+ await assert.rejects(runBraxLedgeLeg(ctx,{role:'farmer',direction:'back',farm_room:829,observe:at828}),/farm room/);
+ await assert.rejects(runBraxLedgeLeg(ctx,{role:'farmer',direction:'back',observe:at828}),/did not return827/,'default farm room still requires 827');
+ assert.equal(script.params.farm_room.default,827);}
+console.log('PASS farm_room=828 runner already home needs no leg; 829 refused; default return still ends in 827');

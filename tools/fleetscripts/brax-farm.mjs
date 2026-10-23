@@ -10,7 +10,7 @@ function migrationSteps(plan){
 export const script={
  name:'brax-farm',mode:'errand',
  describe:'Initialize Brax farming and optional ArcherPlus training: provision, migrate, confine the upper party and start two mainland ledge couriers.',
- recipe:{run:'brax-farm agents=<farmers> couriers=<two mainland agents> runner=<one farmer>',
+ recipe:{run:'brax-farm agents=<farmers> couriers=<two mainland agents> runner=<one farmer> [farm_room=828]',
   effect:'Farmers remain upstairs; hammer farmers target worms or daemon skeletons, bow trainees run private ArcherPlus. Ledge-only courier resupply.',
   needs:['same deployed checkout and local broker','1..25 automated farmers plus2 explicit mainland couriers','ordinary shopping funds and carrying room'],
   cost:{time:'ordinary provisioning plus the complete walk-to-brax route',risk:'normal road, lift, cavern and farming encounters'},
@@ -21,6 +21,7 @@ export const script={
   archers:{type:'string',default:'auto',describe:'auto detects existing bow training intent; or an explicit comma-separated subset of farmers'},
   archer_arrows:{type:'number',default:160},archer_hours:{type:'number',default:4},
   archer_mode:{type:'string',default:'snipe',options:['snipe','both','assist']},
+  farm_room:{type:'number',default:827,options:[827,828],describe:'827 Ancient Graveyard (daemon skeletons, worms) or 828 Decaying City of Brax (worms, tusked skeletons), one room east; walk-to-brax still lands in 827'},
   minHealth:{type:'number',default:.9},fragileBelow:{type:'number',default:1}},
  async resolveAgents(p){
   const resolved=await resolveBraxFarmAgents(p),plan=braxFarmPlan(p);

@@ -75,6 +75,20 @@ Farmers remain confined to **578, 826 and 827**, with the hard upper-component
 anchor in 578. Couriers have the Jasper/568/lower578 road allowance and the separate
 lower anchor. Confinement also applies to ordinary recovery. The upper farmer runner
 uses 827–826–upper578 and back; the couriers never take the Ancient Place lift.
+
+**`farm_room=828` farms the Decaying City of Brax** (operator, 2026-10-23), the
+room directly east of the graveyard. The default stays 827. `substrate/m59-spawns.json`
+gives 828 narthyl worms (60%) and tusked skeletons (40%) and **no daemon skeletons**
+(those generate in 827, 829 and 830), so an 828 farmer hunts tusked skeletons and
+worms, Qor casters worms first. `walk-to-brax` still ends in 827 and arrival is still
+checked there; the standing `assigned_room=828` is what walks each keeper on. 827 stays
+in the farmer confinement and movement region (578, 826, 827, 828), because the runner's
+ledge leg is 827–826–upper578: it leaves 828 through 827 and its return crosses on into
+828 instead of clearing the graveyard landing. Local deliveries walk only within one
+farm room. Floor caches remain 827-only — the keeper's delivery-cache drop refuses any
+other room — so an 828 runner delivers directly and drops no caches. ArcherPlus gets
+`room=828` and `allowed_rooms=578,826,827,828`. Anything else (829 and beyond) is refused.
+
 The [ledge supply service](m59-brax-logistics.md) handles ordinary purchases, sales,
 stationary ledge exchanges, deliveries, bounded relay/floor-cache fallback and both
 return paths. A courier handoff is not counted as a final farmer delivery.
@@ -129,8 +143,8 @@ into the public repository, install credentials over a live roster, or replace a
 private policy to install this one script.
 
 After all arrivals succeed, the manager runs one real `archerplus` FleetScript per
-archer concurrently with the two couriers. It passes room827, allowed rooms
-578/826/827, and only the selected hammer farmers as assist targets and supply
+archer concurrently with the two couriers. It passes the farm room (827 by
+default) and allowed rooms 578/826/827 (plus 828 when farming it), and only the selected hammer farmers as assist targets and supply
 donors. Brax defaults to `archer_mode=snipe`, spending arrows on near-death targets;
 `archer_mode=both` also tags and holds farmed targets while waiting, as the private
 script does by default when run independently. The default session is four hours;
