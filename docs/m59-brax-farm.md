@@ -7,7 +7,7 @@ process. It does not run a one-hour experiment, clone characters or change the s
 First preview explicit roles without connecting to a broker or changing anything:
 
 ```powershell
-node tools/m59-brax-farm.mjs plan --agents t1,t2,t3 --couriers c1,c2 --runner t3
+node tools/m59-brax-farm.mjs plan --agents t1,t2,t3 --couriers c1,c2 --runner t3 --archers t2
 ```
 
 Replace those example IDs with the intended automated actors. `agents` names
@@ -16,6 +16,10 @@ Replace those example IDs with the intended automated actors. `agents` names
 caverns. No actor is inferred from a wildcard, wealth, religion or max HP. The
 initializer refuses missing or human-piloted roles before taking their run locks.
 An already active or unresolved supply-worker reservation also refuses a new run.
+`archers=auto` (the default) detects an existing bow weapon preference or explicit
+Fire/Archery learning target. Use an explicit subset to override that detection,
+or `archers=none` for only hammer farmers. The upper runner cannot be an archer.
+Finish any previous training FleetScript normally before acquiring its body here.
 
 For production, after deploying the committed implementation and verifying the fleet:
 
@@ -29,8 +33,8 @@ Then in that REPL:
 
 ```text
 describe brax-farm
-dry brax-farm agents=t1,t2,t3 couriers=c1,c2 runner=t3
-brax-farm agents=t1,t2,t3 couriers=c1,c2 runner=t3
+dry brax-farm agents=t1,t2,t3 couriers=c1,c2 runner=t3 archers=t2
+brax-farm agents=t1,t2,t3 couriers=c1,c2 runner=t3 archers=t2
 ```
 
 The initializer requires a loopback broker whose reported fleet, absolute roster
@@ -59,9 +63,11 @@ worktree pointed at production. It refuses unobservable roles and existing worke
    task, verify native policy and carry floors, and hand the farmers back to their
    keepers in farm mode. Both daemon skeletons and narthyl worms are acceptable;
    known Qor casters prioritize worms, everyone else skeletons. Weapon training is
-   hammer-only. Food is a carrying minimum, not a protected item that cannot be eaten.
+   hammer-only for ordinary farmers. Archers retain a bow plus a backup hammer and
+   stay idle until the managed ArcherPlus task claims them. Food is a carrying
+   minimum, not a protected item that cannot be eaten.
 6. After every selected actor succeeds and the outer run releases its locks and
-   leases, launch the managed supply worker once. A partial result is explicitly a
+   leases, launch the managed supply worker and selected ArcherPlus tasks once. A partial result is explicitly a
    failed initialization, not "somebody arrived, so the group succeeded". It does
    not start another worker or silently send missing actors through repeated lifts.
 
@@ -89,7 +95,7 @@ node tools/m59-brax-service.mjs stop --fleet prod
 ```
 
 Status includes PID/start metadata, phase, per-actor service phases, completed
-cycles, confirmed recipient-delivery event count, and errors. Stop ends new work
+cycles, confirmed recipient-delivery event count, ArcherPlus task receipts, and errors. Stop ends new work
 and lets accepted transactions/returns settle. Farmers retain their standing
 farming assignment; stopping logistics does not order another migration.
 An operator taking a body or changing its Brax assignment invalidates the worker's
@@ -111,14 +117,44 @@ Task changes intentionally persist. To leave Brax farming, stop its supply worke
 inspect the saved source files and issue a separate desired assignment. Restoring
 an old policy is not an instruction to walk down from Brax.
 
-## Archery kit and pending training integration
+## ArcherPlus roles
 
-The current initializer still assigns hammer farming to every farmer. Do not use
-it to preserve a running archery trainee's assignment: the ArcherPlus adapter
-requires the actual private strategy's interface and is not included yet.
-Couriers retain carried bows and all arrow types through mainland sales, including
-spare bows beyond the normal one-weapon allowance. Retention alone does not start
-training, collect arrows from other farmers, or deliver them to trainees.
+Install the updated private `strategy/fleetscripts/archerplus.mjs` into the deployed
+`substrate/fleetscripts/` using the normal private-file deployment process. It must
+declare integration version1 with stationary supply, allowed rooms and cooperative
+stop support. The initial upstream `4930bc7` alone lacks those additions. The
+private source requires this harness's `tools/m59-bow-supply.mjs`; deploy the public
+helper before installing the new private file. Never copy private strategy source
+into the public repository, install credentials over a live roster, or replace all
+private policy to install this one script.
+
+After all arrivals succeed, the manager runs one real `archerplus` FleetScript per
+archer concurrently with the two couriers. It passes room827, allowed rooms
+578/826/827, and only the selected hammer farmers as assist targets and supply
+donors. Brax defaults to `archer_mode=snipe`, spending arrows on near-death targets;
+`archer_mode=both` also tags and holds farmed targets while waiting, as the private
+script does by default when run independently. The default session is four hours;
+`archer_hours=` changes it. Completion/stalls remain visible in the worker's
+`tasks` receipts; they are not automatically restarted. `archer_arrows=160` is the
+top-up target, and five arrows plus the actual bow are required to leave preparation.
+
+Available imported bows/arrows are shared by ordinary stationary gifts before
+departure. If necessary, mainland participants gather in Jasper for those gifts;
+upstairs members are never sent down. A missing imported kit fails initialization.
+Archers use their source bow preference, falling back to a practice bow for an
+explicit archer with no preference. Couriers retain all carried bows/arrows across
+sales and can hand imported cargo to the upper runner. Skeleton drops remain with
+hammer farmers until an archer requests them. The archer initiates stationary gifts
+of arrows, food and healing/food reagents from those same-room donors, respecting
+native carrying floors and protected/worn kit. The courier skips direct service
+of a leased archer. This avoids competing with the trainee's own FleetScript.
+
+No arrows waits up to fifteen minutes for ordinary resupply, then stops visibly.
+Unknown or partial accepted gifts stop and leave a durable reconciliation record
+under ignored `substrate/bow-supply/`; they are never resent automatically. Those
+archer-initiated gifts have their own journals and are separate from the courier's
+confirmed-delivery count. A worker stop request prevents new shots and trades;
+accepted gifts and Mend work settle before leases are released.
 
 The server's `skel4t.kod` treasure table includes silver arrows, whose class starts
 with a ten-arrow stack (`slvarrow.kod`). Narthyl worms have no ammunition in their
@@ -137,6 +173,15 @@ upper confinement; a mainland desk must not send the trainee down the ledge.
 `node tools/m59-brax-archery-test.mjs` executes the real native sale dispatcher
 offline, proving that ordinary loot still sells while carried bows and arrows
 remain. It is not a live ArcherPlus qualification.
+`node tools/m59-bow-supply-test.mjs` checks native receipt handling, source-floor
+retention, stationary gifts, other-room deferral and no replay after uncertainty.
+The private `_archerplus-brax-test.mjs --harness <owned harness checkout>` runs
+against the actual private module to check upper-only Mend, stop and target/cover
+selection. These are source/offline compatibility checks, not a new live farming
+or health-gain measurement. A working safe spot and sufficiently close farmers
+are still required in the actual room; no safe spot means no shot. An assist
+health roll requires a landed hit, the same kill target at death, and monster
+level above the archer's max health. A late arrow can miss the opportunity entirely.
 
 ## Validation and limits
 

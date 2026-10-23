@@ -56,7 +56,7 @@ export function stopBraxService(fleet,options={}){
  const current=braxServiceStatus(fleet,options);if(!current.lock)return{ok:true,stopped:true,status:current.status};
  save(current.paths.stop,{token:current.lock.token,requestedAt:Date.now()});return{ok:true,requested:true,pid:current.lock.pid,note:'No new cycles; accepted trades and return legs finish normally.'};
 }
-export async function runBraxSupplyWorker(rec,{rpc,readActor,runLeg,recover,cacheDelivery,serviceFactory,verifyActors=async()=>{},verify=async()=>{}}){
+export async function runBraxSupplyWorker(rec,{rpc,readActor,runLeg,recover,cacheDelivery,runTask,serviceFactory,verifyActors=async()=>{},verify=async()=>{}}){
  const state={token:rec.token,pid:process.pid,startedAt:Math.round(Date.now()-process.uptime()*1000),phase:'starting',runDir:rec.runDir,cycles:{},deliveries:0,actorPhases:{}};
  const persist=()=>save(rec.paths.status,{...state,updatedAt:Date.now()});
  const event=e=>{fs.appendFileSync(join(rec.runDir,'events.jsonl'),JSON.stringify({at:Date.now(),...e})+'\n');if(e.kind==='farmer-delivery-confirmed')state.deliveries++;
@@ -64,7 +64,7 @@ export async function runBraxSupplyWorker(rec,{rpc,readActor,runLeg,recover,cach
   if(e.kind==='service-failure')(state.failures??=[]).push({agent:e.agent,error:e.error,at:Date.now()});persist();};
  const lock=read(rec.paths.lock);if(lock?.token!==rec.token||lock.phase!=='starting'||lock.pid!==rec.pid)throw Error('Brax worker cannot adopt changed startup reservation');
  save(rec.paths.lock,{...lock,pid:process.pid,startedAt:state.startedAt,phase:'running'});persist();
- let service,stopTimer;
+ let service,stopTimer,tasks=[];
  try{
   await verify();
   const allowed=new Map(rec.actors.map(a=>[a.agent,a]));
@@ -73,9 +73,10 @@ export async function runBraxSupplyWorker(rec,{rpc,readActor,runLeg,recover,cach
    if(s.character!==actor.character||s.autopilot_status?.policy?.movementRegion?.id!==region)throw Error('Brax actor identity or assignment changed '+agent);return s;};
   for(const actor of rec.actors){const s=await checkedRead(actor.agent),farmer=actor.role==='farmer';
    if(s.room?.num!==(farmer?827:350)||!(s.hp?.value>0)||s.in_game!==true||s.connected!==true||
-    !s.equipment_items?.some(i=>i.name?.toLowerCase()==='hammer')||s.autopilot_status?.faculties?.work!=='keeper'||
+    !s.equipment_items?.some(i=>i.name?.toLowerCase()===(actor.archery?.bow??'hammer').toLowerCase())||s.autopilot_status?.faculties?.work!=='keeper'||
     s.autopilot_status?.policy?.movementRegion?.id!==(farmer?'brax-farmer':'brax-mainland-courier'))throw Error('Brax worker qualification no longer valid '+actor.agent);
   }
+  if(rec.actors.some(a=>a.archery)&&!runTask)throw Error('archer task launcher unavailable');
   const call=async(name,args,ms)=>{
    if(!['inventory','autopilot','travel','supply','shop','sell_all','equipment','abilities','delivery_notice'].includes(name))throw Error('non-logistics command refused');
    for(const key of name==='supply'?['from','to']:['agent'])if(args[key]&&!allowed.has(args[key]))throw Error('outside Brax assignment');
@@ -94,22 +95,36 @@ export async function runBraxSupplyWorker(rec,{rpc,readActor,runLeg,recover,cach
    evidenceDir:join(rec.runDir,'purchases'),farmRunner:true});
   const stop=()=>{if(read(rec.paths.stop)?.token===rec.token){state.phase='stopping';service.stop();persist();}};
   stopTimer=setInterval(stop,1000);stop();state.phase=service.stopped?'stopping':'running';persist();
-  const results=await service.run();state.cycles=service.cycles;state.results=results.map(r=>r.status==='rejected'?{status:r.status,error:r.reason?.message}:r);
-  state.phase=results.some(r=>r.status==='rejected')?'needs-attention':'stopped';
+  state.tasks={};tasks=(service.stopped?[]:rec.actors.filter(a=>a.archery)).map(async actor=>{state.tasks[actor.agent]={phase:'running',startedAt:Date.now()};persist();
+   try{await verifyActors([actor.agent]);const result=await runTask(actor);state.tasks[actor.agent]={phase:result.ok?'completed':'needs-attention',result,endedAt:Date.now()};}
+   catch(e){state.tasks[actor.agent]={phase:'needs-attention',error:e.message,endedAt:Date.now()};}persist();});
+  const results=await service.run();if(tasks.length)save(rec.paths.stop,{token:rec.token,requestedAt:Date.now(),reason:'courier service ended'});await Promise.all(tasks);
+  state.cycles=service.cycles;state.results=results.map(r=>r.status==='rejected'?{status:r.status,error:r.reason?.message}:r);
+  state.phase=results.some(r=>r.status==='rejected')||Object.values(state.tasks).some(t=>t.phase==='needs-attention')?'needs-attention':'stopped';
  }catch(e){state.phase='needs-attention';state.error=e.message;service?.stop();}
- finally{clearInterval(stopTimer);state.endedAt=Date.now();persist();if(read(rec.paths.lock)?.token===rec.token&&read(rec.paths.lock)?.pid===process.pid)fs.unlinkSync(rec.paths.lock);}
+ finally{clearInterval(stopTimer);
+  // Even an unexpected service failure must stop and settle managed tasks
+  // before releasing the fleet controller reservation.
+  if(tasks.length){save(rec.paths.stop,{token:rec.token,requestedAt:Date.now(),reason:'controller ending'});await Promise.allSettled(tasks);}
+  state.endedAt=Date.now();persist();if(read(rec.paths.lock)?.token===rec.token&&read(rec.paths.lock)?.pid===process.pid)fs.unlinkSync(rec.paths.lock);}
  return state;
 }
 async function worker(manifest){
  const rec=read(resolve(manifest)),within=rec&&relative(rec.paths.dir,resolve(manifest));if(rec?.format!=='m59-brax-service/1'||!within||within.startsWith('..')||isAbsolute(within))throw Error('invalid Brax worker manifest');
  if(resolve(rec.root)!==ROOT||resolve(rec.stateFile)!==resolve(stateFileFor(rec.fleet)))throw Error('worker checkout/roster mismatch');
- const [{call,fleetScript,withCallOrigin},{runNamed},{script:leg},{script:rest},{BraxSupplyService},{publicBraxDeliveryCache},{createRailObserver}]=await Promise.all([
+ const [{call,fleetScript,withCallOrigin},{runNamed,loadFleetScripts},{script:leg},{script:rest},{BraxSupplyService,braxProvisionReserve},{publicBraxDeliveryCache},{createRailObserver}]=await Promise.all([
   import('./m59-fleetscript.mjs'),import('./m59-fleetlib.mjs'),import('./fleetscripts/brax-ledge-leg.mjs'),import('./fleetscripts/brax-service-rest.mjs'),
   import('./m59-brax-supply.mjs'),import('./m59-delivery-cache.mjs'),import('./m59-rail-observer.mjs')]);
  const readers=new Map(rec.agents.map(agent=>[agent,createRailObserver({fleet:rec.fleet,agent})])),scripts=new Map([leg,rest].map(s=>[s.name,{...s,source:'public'}]));
+ if(rec.actors.some(a=>a.archery)){const loaded=(await loadFleetScripts()).scripts.get('archerplus');if(loaded?.integration?.version!==1||!loaded.integration.cooperativeStop||!loaded.integration.stationarySupply||!loaded.integration.allowedRooms)throw Error('updated private archerplus is not installed');scripts.set('archerplus',loaded);}
  const run=async(name,args)=>{const r=await runNamed(name,args,{scripts,fleetScript});if(!r.results?.[args.agents[0]]?.ok)throw Error('Brax service leg failed '+JSON.stringify(r));return r;};
  return withCallOrigin({source:'bot',name:'brax-supply',run_id:rec.token},()=>runBraxSupplyWorker(rec,{rpc:call,readActor:a=>readers.get(a)(),runLeg:(agent,role,direction)=>run(leg.name,{agents:[agent],role,direction,minHealth:.9,fragileBelow:1}),
   recover:(agent,{health})=>run(rest.name,{agents:[agent],health}),cacheDelivery:publicBraxDeliveryCache,
+  runTask:actor=>runNamed('archerplus',{agents:[actor.agent],room:827,allowed_rooms:'578,826,827',mode:actor.archery.mode??'snipe',
+   farmers:rec.actors.filter(a=>a.role==='farmer'&&!a.archery).map(a=>a.agent).join(','),
+   supply_from:rec.actors.filter(a=>a.role==='farmer'&&!a.archery).map(a=>a.agent).join(','),bow:actor.archery.bow,
+   supply_to:actor.archery.arrows,supply_stock:JSON.stringify(Object.fromEntries(['loaf of bread','herb','elderberry'].map(n=>[n,braxProvisionReserve(actor,n,{carryFloors:Object.fromEntries((actor.sourceLoadout?.carry??[]).filter(r=>r?.item).map(r=>[r.item,r.min]))})]))),
+   hours:actor.archery.hours,minHealth:.9,fragileBelow:1,stop_file:rec.paths.stop,stop_token:rec.token},{scripts,fleetScript}),
   serviceFactory:opts=>new BraxSupplyService(opts),verify:()=>localBraxBroker(rec.fleet),
   verifyActors:async agents=>{const rows=(await call('fleet',{refresh:true})).fleet;
    for(const agent of agents){const row=rows?.find(r=>r.agent===agent);if(!row||!Object.hasOwn(row,'piloted')||row.piloted)throw Error('Brax actor missing, unknown or human-piloted: '+agent);}

@@ -188,3 +188,19 @@ let healthGoalCalls=0;const deadband=new BraxSupplyService({actors,runner:'r',co
 await deadband.waitExchangeReady('a');assert.equal(healthGoalCalls,1);
 const {script:restScript}=await import('./fleetscripts/brax-service-rest.mjs'),{script:legScript}=await import('./fleetscripts/brax-ledge-leg.mjs');const recoverSteps=await restScript.steps({health:1});assert.equal(recoverSteps[0].do,'rest');assert.equal(recoverSteps[0].health,1);assert.equal(recoverSteps[0].unsafe,undefined);assert.equal((await legScript.steps({role:'courier',direction:'out',minHealth:.9}))[0].health,.9);
 console.log('PASS explicit guarded service health goal closes the90%-trade/60%-idle deadband; public ledge minHealth is actually enforced');
+
+// A running ArcherPlus owns its receiver: the upper runner cannot collect from,
+// deliver to, or floor-cache on behalf of that actor. Its task pulls supplies.
+const leasedActors=[...actors,{shadow_account:'bowman',role:'farmer',archery:{bow:'practice bow',arrows:160}}];
+const leased=new BraxSupplyService({actors:leasedActors,runner:'r',couriers:['a','b'],call(){},runLeg(){},
+ read:async()=>({in_game:true,connected:true,room:{num:827},hp:{value:70,max:70},equipment_items:[],autopilot_status:{policy:{},loadout_retention:{carry_floors:{}}}}),
+ cacheDelivery:async()=>{throw Error('leased archer cannot receive runner cache');}});
+leased.pack=async agent=>({items:agent==='r'?[{id:910,name:'herb',amount:100}]:[{id:911,name:'shilling',amount:5000}]});
+leased.makeDeliveryRoom=leased.transfer=async()=>{throw Error('leased archer cannot be commandeered');};
+await leased.deliverLocal();await leased.collectLocal();assert.equal((await leased.needs()).find(r=>r.agent==='bowman').needs.arrows,160);
+// Import silver arrows across the actual exchange in the existing capacity fixture.
+accepted.length=0;loads.r={weight:1000,bulk:1000};loads.a={weight:1000,bulk:1000};rooms.r=827;rooms.a=578;
+packs.r=[];packs.a=[{id:920,name:'silver arrows',amount:60}];reload.needs=async()=>[{needs:{arrows:160}}];
+await reload.exchange('a');assert(accepted.some(i=>i.from==='a'&&i.item==='silver arrows'&&i.n===60));
+assert.equal(packs.r.find(i=>i.name==='silver arrows').amount,60);
+console.log('PASS imported silver arrows cross the ordinary ledge exchange; leased archers request their own stock instead of being commandeered');
