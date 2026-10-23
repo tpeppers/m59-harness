@@ -333,7 +333,15 @@ export async function runBrax(ctx,{expectedAgents=null,gatherMs=60000,timeoutMs=
   };
   const follow=async(file,label)=>{
     const invokedAt=Date.now();
-    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',controlURL.port,'--agent',agent,'--rail','brax','--rail-file',file,'--origin-json',JSON.stringify(ctx.origin??currentCallOrigin()),'--convoy-json',JSON.stringify({key:originLabel(ctx.origin??currentCallOrigin()),characters:state.braxConvoyCharacters??[keeper.character]}),'--no-hop','--native-rail','--coalesce-rail','--serialize-jumps','--wait-bodies','--keeper-position','--precise-waypoints','--steps','32','--stride','8',...(label==='cliffs'?['--queue-end']:[]),'--receipt',join(out,id+'-'+label+'-commands.jsonl')];
+    // A REMOTE GAME SERVER NEEDS ITS EXACT ENDPOINT NAMED (railIdentityProblem: remote_requires_exact_expected_game).
+    // Without it every cliff climb on prod (76.214.42.186:5959) refused before moving -- 2026-10-23 party 1, eleven of
+    // twelve farmers stopped at the Ancient Place with "Brax cliffs rail follower stopped". The broker's own /health
+    // names the endpoint the session is on, so the check still refuses a wrong-fleet or wrong-server run.
+    // Best effort: an unreadable /health leaves the flag off, which is exactly the old behaviour (and still refuses remote).
+    let expectedGame=null;
+    try{const health=await(await fetch(new URL('health',controlURL),{signal:AbortSignal.timeout(5000)})).json(),game=health?.session_game_servers?.[agent]??health?.game_server;
+      if(game?.host&&game?.port)expectedGame=`${String(game.host).toLowerCase()}:${game.port}`;}catch{}
+    const args=['tools/m59-fineclimb.mjs','--fleet',fleet,'--port',controlURL.port,'--agent',agent,...(expectedGame?['--expected-game',expectedGame]:[]),'--rail','brax','--rail-file',file,'--origin-json',JSON.stringify(ctx.origin??currentCallOrigin()),'--convoy-json',JSON.stringify({key:originLabel(ctx.origin??currentCallOrigin()),characters:state.braxConvoyCharacters??[keeper.character]}),'--no-hop','--native-rail','--coalesce-rail','--serialize-jumps','--wait-bodies','--keeper-position','--precise-waypoints','--steps','32','--stride','8',...(label==='cliffs'?['--queue-end']:[]),'--receipt',join(out,id+'-'+label+'-commands.jsonl')];
     const commandsFile=join(out,id+'-'+label+'-commands.jsonl');
     const result=await new Promise(done=>execFile(process.execPath,args,{cwd:root,timeout:Math.max(1,end-Date.now()),maxBuffer:8e6,windowsHide:true},(error,stdout,stderr)=>done({error,stdout,stderr})));
     writeFileSync(join(out,id+'-'+label+'.txt'),result.stdout+'\n'+result.stderr);
