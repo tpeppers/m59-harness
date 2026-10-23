@@ -21,8 +21,10 @@ the fleet cannot deliberately put every participating body offline at once.
 
 The victim cancels its old movement and disconnects normally. Its reconnect waits
 for observed outgoing hits against each captured nearby monster. A timer, an attack
-submission, an incoming hit or a miss is not proof. The native fight callback reports
-affirmative target-bound server messages before post-round stats and cleanup.
+submission, an incoming hit or a miss is not proof. A scoped native exchange
+observer reports affirmative target-bound server messages as they arrive, before
+even the attack exchange's internal health read. It accepts no chat and detaches
+on both success and failure. The fight's final result does not repeat that receipt.
 
 Helpers inspect pending requests after their own survival rung and before directional
 work or farming. Active combat, a recent injury, low health/vigor, an active recovery,

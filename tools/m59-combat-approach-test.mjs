@@ -32,6 +32,17 @@ test('an exact landed-hit observer runs before post-round reads; incoming hits a
   }
 });
 
+test('a streamed distracting hit is not held for attackRounds internal cleanup or counted twice',async()=>{
+  const f=fixture({captured:false}),receipts=[];
+  f.s.attackRounds=async(_id,_swings,options)=>{
+    await options.onMessages(['The troll hits you.']);assert.equal(receipts.length,0);
+    await options.onMessages(['You hit the troll.']);assert.equal(receipts.length,1,'callback already released before native exchange returns');
+    return{messages:['You hit the troll.'],vitals:f.c.vitals()};
+  };
+  await fight(f.s,{target:'troll',exactTargetId:10,rounds:1,reach:2,equip:false,loot:false,onLandedHit:hit=>receipts.push(hit)});
+  assert.equal(receipts.length,1);
+});
+
 test('Cragged blocked coarse approach returns confirmed position and bodies without grinding or swinging',async()=>{
   const f=fixture(),coarse=f.s.world.approachSquare(33,35);
   assert.deepEqual({row:coarse.row,col:coarse.col},{row:34,col:34});

@@ -2358,8 +2358,11 @@ the frozen farming hour or constitute another native one-hour trial.
 admission, miss versus confirmed hit, multiple threats, stage/faculty preemption,
 paced approach ownership, post-hit cleanup, immediate return before another
 farming pass, ghost-position projection, stale-hint refusal and credited kills.
-`m59-combat-approach-test.mjs` exercises the real fight hit callback before
-post-round reads and rejects incoming damage and misses as distraction proof.
+The cooperative suite also calls the actual native attack exchange to prove its
+streamed notification precedes internal health reads and excludes chat.
+`m59-combat-approach-test.mjs` exercises the real fight hit callback, verifies
+streamed receipts are not repeated at cleanup, and rejects incoming damage and
+misses as distraction proof.
 The cooperative suite is also registered in the movement gate. Private policy
 tests remain in the private repository; see `docs/m59-cooperative-logoff.md`.
 `m59-recovery-refuge-test.mjs` also exercises the real peer-projected refuge

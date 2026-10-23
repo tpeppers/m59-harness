@@ -2559,6 +2559,7 @@ class Session {
     c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id) || !!this.buddyVeto?.(id);
     c.onEvent = ev => {
       c.observeSessionEvidence?.(ev);
+      this.observeAttackMessage(ev,c);
       if(ev.kind==='message')recordDeathNotice({host,port},ev,{observer:c.me?.name??character,sessionId:evidence?.active?.id,isFleetmate});
       // FIRST, so every consumer below -- the combat override included -- already knows.
       try { observeRefusal(this, c, ev); } catch { /* bookkeeping never costs an event */ }
@@ -4773,8 +4774,22 @@ class Session {
   // `shouldCancel` is asked between swings, where the health abort already is. A swing is
   // ~2.9s on the wire, so this is the finest grain a cancel can land at without abandoning
   // an attack the server has already accepted.
-  async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null } = {}) {
+  observeAttackMessage(ev,c) {
+    if(ev.kind!=='message'||!ev.text||!Number.isFinite(ev.seq)||this.client!==c)return;
+    for(const observer of this.attackMessageObservers??[]){
+      if(observer.client!==c||!observer.armed||ev.seq<=observer.after)continue;
+      try { Promise.resolve(observer.report(ev.text)).catch(e=>this.recorder?.line('note',{what:'combat observer failed',why:e.message})); }
+      catch(e) { this.recorder?.line('note',{what:'combat observer failed',why:e.message}); }
+    }
+  }
+
+  async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null, onMessages = null } = {}) {
     const c = this.need();
+    const observers=(this.attackMessageObservers??=new Set());
+    const authority=bodyAuthority(this),observer=typeof onMessages==='function'?{client:c,armed:false,after:c.evSeq,
+      report:text=>{authority.guard();if(!shouldCancel?.())return onMessages([text]);}}:null;
+    if(observer)observers.add(observer);
+    try {
     // THE RESISTANCE SENTENCE ARRIVES AFTER THE HIT SENTENCE, AND THIS USED TO DROP IT.
     //
     // Each round waited from a `since` taken just before its own swing, and pushed only what
@@ -4827,7 +4842,10 @@ class Session {
       if (vetoAttack(this, c, targetId)) break;
       await this.faceToward(o);
       const before = c.evSeq;
-      await this.pacer.submit('attack', () => c.attack(targetId), ATTACK_INTERVAL_MS);
+      await this.pacer.submit('attack', () => {
+        if(observer){observer.after=c.evSeq;observer.armed=true;}
+        return c.attack(targetId);
+      }, ATTACK_INTERVAL_MS);
       // Combat results and disappearance are server messages.  Do not admit chat
       // (`said`) into the evidence window: another player can quote hit prose while
       // this swing is outstanding, and that must not turn a miss into progress.
@@ -4880,6 +4898,7 @@ class Session {
                                          'with stand:true and swing again. Hold, Dazzle, Blind and a ' +
                                          'DM freeze say the same thing and standing will not help those.' }
                                 : {}) };
+    } finally { if(observer)observers.delete(observer); }
   }
 
   /**

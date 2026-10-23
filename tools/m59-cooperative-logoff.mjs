@@ -194,7 +194,7 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
     }catch(e){pilot.note?.('cooperative refuge preparation unavailable',{request_id:request.id,why:e.message});}
     let active=true,result=null;const previousDoing=pilot.doing;
     const acknowledge=hit=>{
-      if(hit?.target_id!==target.id||!(hit.landed_hits>0)||s.client!==c||!s.live||s.world.room.num!==room||c.room.id!==request.room_object||c.idsAsOf?.()?.last_save_at!==save||!(c.vitals()?.health?.value>0))return;
+      if(hit?.target_id!==target.id||!(hit.landed_hits>0)||s.client!==c||!s.live||s.movementWasCancelled?.(generation)||s.world.room.num!==room||c.room.id!==request.room_object||c.idsAsOf?.()?.last_save_at!==save||!(c.vitals()?.health?.value>0))return;
       s._cooperativePublishedAt=0;publishCooperativePresence(pilot,{now:now()});
       store.lock(room,()=>{const r=store.read('request',request.agent);if(r?.id!==request.id||r.state!=='offline'||r.claim?.token!==lock.token)return;
         r.receipts[target.id]={request_id:r.id,target_id:target.id,name:target.name,helper:s.name,helper_body:c.selfId,hit_at:now(),landed_hits:hit.landed_hits};store.write('request',r.agent,r);});

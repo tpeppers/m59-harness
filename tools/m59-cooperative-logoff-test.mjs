@@ -126,6 +126,22 @@ try{
   console.log('PASS an observed hit releases the victim before helper cleanup; final reads and kill credit survive, another attack is fenced');
  }
  {
+  const s=Object.create(Session.prototype),c={state:'game',evSeq:0,selfId:1,self:{id:1,row:10,col:10},
+    room:{id:8270,objects:new Map([[1,{id:1}],[40,{id:40,row:10,col:11}]])},vitals:()=>({health:{value:100,max:100}})};
+  let receipt=false,stats=false;
+  Object.assign(s,{client:c,faceToward:async()=>{},pacer:{submit:async(kind,fn)=>fn()}});
+  c.attack=()=>{s.observeAttackMessage({kind:'said',seq:++c.evSeq,text:'You hit the daemon skeleton.'},c);assert.equal(receipt,false);
+    s.observeAttackMessage({kind:'message',seq:++c.evSeq,text:'You hit the daemon skeleton.'},c);assert.equal(receipt,true);};
+  c.stats=()=>{stats=true;assert(receipt,'the streamed receipt must precede even attackRounds internal stats');};
+  c.waitFor=async()=>({events:[]});
+  await s.attackRounds(40,1,{onMessages:messages=>{assert.deepEqual(messages,['You hit the daemon skeleton.']);receipt=true;}});
+  assert(stats);assert.equal(s.attackMessageObservers.size,0,'completed native exchange removes its callback');
+  c.attack=()=>{throw Error('socket failed');};
+  await assert.rejects(s.attackRounds(40,1,{onMessages:()=>{}}),/socket failed/);
+  assert.equal(s.attackMessageObservers.size,0,'failed native exchange removes its callback too');
+  console.log('PASS actual native attack exchange streams server prose before its internal health wait, excludes chat and cleans up after failure');
+ }
+ {
   const f=fixture('native-play-dead');await configureCooperativeLogoff(f.b.pilot,'helper');
   const p=f.a.pilot;
   Object.assign(p,{operatorSurvivalStandDown:()=>false,suspendJourney(){},adoptRecoveryWall:()=>false,playerThreatPresent:()=>false,

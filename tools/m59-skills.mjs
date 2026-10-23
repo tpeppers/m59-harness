@@ -2903,15 +2903,19 @@ async function fightWithIntent(s, {
       const deg = (Math.atan2(itNow.row - meRound.row, itNow.col - meRound.col) * 180 / Math.PI + 360) % 360;
       await c.face(deg);
     }
+    let streamedHits=0;
+    const notifyHits=async(messages,{fallback=false}={})=>{
+      const hits=landedHitSummary(messages,foeName).hits;
+      if(!(hits>0)||typeof onLandedHit!=='function'||fallback&&streamedHits>0)return;
+      if(!fallback)streamedHits+=hits;
+      try { await onLandedHit({target_id:foe.id,target:foeName,landed_hits:hits,at:Date.now()}); }
+      catch(e) { say('hit observer failed',{why:e.message}); }
+    };
     const res = await s.attackRounds(foe.id, swingsPerRound,
-      { abortBelow: disengageAt, shouldCancel: fightCancelled });
+      { abortBelow: disengageAt, shouldCancel: fightCancelled, onMessages:typeof onLandedHit==='function'?notifyHits:null });
     roundsFought++;
     combatLines.push(...res.messages);
-    const roundHits=landedHitSummary(res.messages,foeName);
-    if(roundHits.hits>0&&typeof onLandedHit==='function'){
-      try { await onLandedHit({target_id:foe.id,target:foeName,landed_hits:roundHits.hits,at:Date.now()}); }
-      catch(e) { say('hit observer failed',{why:e.message}); }
-    }
+    await notifyHits(res.messages,{fallback:true});
 
     // REFUSED FOR WHO THEY ARE, IN THIS ROOM. "Only those in guilds may attack each other here."
     // Every further round is the same refusal; the session has already remembered it, so the
