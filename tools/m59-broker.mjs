@@ -130,6 +130,7 @@ import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monster
 import {normalizeSafeLegPolicy} from './m59-safelegs.mjs';
 import { resolveFleet, rosterGameEndpoint, ledgerDirFor } from './m59-fleetpath.mjs';
 import { liveDesk } from './m59-plan-desk.mjs';
+import { PLAN_RELAY_PATH, servePlanRelay } from './m59-plan-relay.mjs';
 import { readBook, observeShop, npcInfo, whoSells, roomInfo, recent as recentNpcs, WANDERERS } from './m59-worldbook.mjs';
 import {
   BROKER_FLEET_LOCK_KIND,
@@ -20008,6 +20009,10 @@ function serveHttp(port, dashboardPort = null, { handle = null } = {}) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(brokerHealth()));
     }
+    // A MANAGE TAB ON ANOTHER MACHINE (m59-plan-relay.mjs): its request file into this broker's
+    // desk folder, the desk's reply back. Loopback-only, so remote means the operator gateway.
+    if (req.method === 'POST' && req.url === PLAN_RELAY_PATH)
+      return servePlanRelay(req, res, { dir: PLAN_DESK_DIR, local: brokerLoopbackRequest(req) });
     if(req.method==='GET'&&(req.url==='/rts/v1/intent'||req.url.startsWith('/rts/v1/intent?'))){
       const reply=(status,value)=>{const body=JSON.stringify(value);res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','content-length':Buffer.byteLength(body)});res.end(body);};
       if(!brokerRtsReadAuthorized(req))return reply(403,{error:'authorized loopback intent read required'});

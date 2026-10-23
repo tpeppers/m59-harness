@@ -40,7 +40,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
   from './m59-shortcuts.mjs';
 import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs, proxyFor } from './m59-devclient.mjs';
-import { DECK_CLIENT, launchUnderProton } from './m59-proton.mjs';
+import { DECK_CLIENT, launchUnderProton, winePath } from './m59-proton.mjs';
 import { localClients } from './m59-localclient.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
 import * as webui from './m59-webui.mjs';
@@ -646,6 +646,23 @@ function ensurePlanDesk() {
   return { started: true };
 }
 
+// ON A MACHINE WHOSE BROKER IS ELSEWHERE the desk is the broker's (on that machine), and the tab is
+// served by relaying its two files there (tools/m59-plan-relay.mjs). One relay per client folder,
+// outliving the terminal like the desk; a relay or desk already beating on the folder is reused.
+const PLAN_CONTEXT_DIR = () => env.M59_CLIENT_CONTEXT_DIR || join(REPO, 'substrate', 'client-context');
+function ensurePlanRelay() {
+  const dir = PLAN_CONTEXT_DIR();
+  const held = liveDesk({ dir });
+  if (held) return { started: false, relay: held.relay ?? null };
+  let out = 'ignore';
+  try { out = openSync(join(REPO, 'substrate', 'plan-relay.log'), 'a'); } catch { /* a relay without a log still relays */ }
+  const child = spawn(process.execPath,
+    [join(REPO, 'tools', 'm59-plan-relay.mjs'), 'run', '--broker', BROKER_HOST, '--port', String(PORT), '--dir', dir],
+    { stdio: ['ignore', out, out], detached: true, windowsHide: true, cwd: REPO });
+  child.unref();
+  return { started: true };
+}
+
 // THROUGH A GATE (tools/m59-gate.mjs connect --tui). This machine holds no roster, so the
 // client logs in as the character's roster key with a placeholder password, at the gate's
 // local login port; the gate on the home machine swaps in the real account and password,
@@ -756,6 +773,21 @@ async function launchOnce(row, { viaProxy = false, extraEnv = null } = {}, refus
     if (pp.ok && proxyFor(realHost, realPort)?.listen === PLAN_PROXY_PORT) { host = '127.0.0.1'; port = String(PLAN_PROXY_PORT); }
     draw();
   }
+  // THE MANAGE TAB ON THE DECK BUILD. Under Proton there is no gate proxy (Full Auto and the
+  // keeper lock stay Windows-only); the tab's two files go to a desk instead -- the broker's, by the
+  // relay, when the broker is on another machine, or a local desk when it is on this one. The client
+  // only shows the DUM and MANAGE tabs when M59_CLIENT_CONTEXT_DIR is set, so a client built before
+  // them is unaffected.
+  let protonEnv = null;
+  if (deckExe && !viaProxy && !GATE && env.M59_TUI_NO_PLAN !== '1') {
+    const pr = REMOTE ? ensurePlanRelay() : ensurePlanDesk();
+    protonEnv = { M59_CLIENT_CONTEXT_DIR: winePath(PLAN_CONTEXT_DIR()),
+                  M59_INVENTORY_SERVER: `${creds.host || env.M59_HOST || '127.0.0.1'}:${realPort}`,
+                  M59_DEBUG_TITLE: env.M59_DEBUG_TITLE ?? '1' };
+    S.status = c.dim(REMOTE ? `MANAGE: relay to ${BROKER_HOST} ${pr.started ? 'started' : 'up'}… `
+                            : `MANAGE: desk ${pr.started ? 'started' : pr.elsewhere ? 'elsewhere' : 'up'}… `);
+    draw();
+  }
   if (viaProxy) {
     const p = await ensureProxy(realHost, realPort);
     if (!p.ok) {
@@ -784,7 +816,7 @@ async function launchOnce(row, { viaProxy = false, extraEnv = null } = {}, refus
   if (REMOTE) holdRemotely(row, creds, stdio);
 
   if (!WIN) return deckExe
-    ? launchViaProton({ row, creds, exe, args, stdio })
+    ? launchViaProton({ row, creds, exe, args, stdio, env: protonEnv ?? {} })
     : launchViaSteam({ row, creds, clientDir, steam, args, stdio, viaProxy });
 
   const inject = join(REPO, 'tools', 'm59-inject.ps1');
@@ -995,13 +1027,13 @@ function launchViaSteam({ row, clientDir, steam, args, stdio }) {
 //
 // Nothing is returned: the child is the runtime wrapper, which lives as long as the game,
 // and --launch would otherwise sit waiting for the player to quit.
-function launchViaProton({ row, creds, exe, args, stdio }) {
+function launchViaProton({ row, creds, exe, args, stdio, env: extra = {} }) {
   if (Array.isArray(stdio)) try {
     writeSync(stdio[1], `=== ${new Date().toISOString()} launching ${row.character ?? row.agent} ` +
                         `(${creds.account}) from ${exe} ===\n`);
   } catch { /* the log is a convenience */ }
   let started;
-  try { started = launchUnderProton(exe, args, { stdio }); }
+  try { started = launchUnderProton(exe, args, { stdio, env: extra }); }
   catch (e) {
     S.status = c.red('could not start the Deck client: ' + e.message) + ' ' +
       c.dim('· M59_TUI_STOCK_CLIENT=1 for the Steam one');

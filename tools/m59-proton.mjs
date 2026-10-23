@@ -21,9 +21,12 @@
 // pointed at -- sharing it would have the two launchers fighting over its version.
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const HOME = process.env.HOME || '';
+
+// A Linux path as the client inside the prefix sees it: Proton's prefix maps Z: to / (dosdevices/z:).
+export const winePath = p => 'Z:' + resolve(p).replace(/\//g, '\\');
 
 export const DECK_CLIENT = () =>
   process.env.M59_DECK_CLIENT || join(HOME, 'Games', 'Meridian59', 'meridian.exe');

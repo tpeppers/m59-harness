@@ -73,6 +73,29 @@ Server-side commits in the same fork (`2c6d8091`, `e8a6b53f`) and CI commits do 
 8. **Rearm:** the terminal calls `pilot {action:'rearm'}` so the broker scans for the new client. This is skipped for a remote broker or gate (`:816-820`).
 9. The status line says to **keep the client focused or it drops movement** (`:801`).
 
+### L on Linux (the Deck, under Proton)
+
+The Deck build (`~/Games/Meridian59/meridian.exe`, or `M59_DECK_CLIENT`) is started by `m59-proton.mjs`.
+There is no gate proxy and no injection here, so Full Auto and the KEEPER lock stay Windows-only. The
+MANAGE tab still works. L sets `M59_CLIENT_CONTEXT_DIR` to this checkout's `substrate/client-context`,
+written as `Z:\…` because the prefix maps `Z:` to `/`. It also sets `M59_INVENTORY_SERVER` and starts
+something to answer the tab:
+
+- **Broker on this machine:** the local desk (`ensurePlanDesk`), as on Windows.
+- **Broker elsewhere (`M59_BROKER_HOST`, e.g. Vecna through the operator gateway):** `m59-plan-relay.mjs run`.
+  It carries `plan/in/<pid>.tsv` to the broker's `POST /plan/v1/exchange` and the desk's
+  `plan/out/<pid>.tsv` back, so rows run **on the broker's machine**, under its run locks and roster.
+  - It renames the pid (`8e12 + slot*1e9 + pid`, slot = hash of the hostname), so two machines' pids
+    cannot collide.
+  - Both clocks are restamped, so skew between the machines cannot age a request or a reply past 6 s.
+  - The route is loopback-only, which through the gateway means a listed operator machine.
+  - When the broker cannot be asked (down, or older than the route), the tab itself says why.
+  - It beats `plan/desk.json`, so L reuses it.
+  - Log: `substrate/plan-relay.log`. `node tools/m59-plan-relay.mjs status` says what is serving the folder.
+
+The tabs exist only in a client built from `14f193e6` onward. The DUM tab's server (`m59-client-context.mjs`) is
+not relayed, so on the Deck the DUM tab reads stale.
+
 ### S (swarm, `H/tools/m59-tui.mjs:948-969`)
 
 - It calls `launch(row, {viaProxy:true})`. This **skips the PLAN plumbing** and goes through the **5961 observe-only shim**
