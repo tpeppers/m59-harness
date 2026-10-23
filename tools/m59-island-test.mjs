@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,existsSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip,rideIslandCup} from './m59-island-chalice.mjs';
+import {cupIsFull,guardCategory,jungleStashPlan,islandRideRecovery,withStashLease,inventoryUnits,prepareIslandSip,rideIslandCup,drinkPoolOfVigor,inPool} from './m59-island-chalice.mjs';
 import {ordinaryHop,readIslandJourney,withIslandSafeLegs,ISLAND_SAFE_LEGS,foreignIslandDestination,prepareIslandDeparture,reportIslandOutbound,waitIslandOutbound,releaseIslandWave} from './m59-island-route.mjs';
 import {shelteredIslandAim,eatIslandAtWall,recoverIslandFineWalk,activeOwnedFineRecovery,checkIslandCancellation,islandFineStepBudget,bindIslandFinePosition,confirmIslandFineArrival,islandTrafficRefusal,cutIslandRail} from './m59-island-finewalk.mjs';
 import {roomGeometry,floorAt} from './m59-ground.mjs';
@@ -472,4 +472,26 @@ const unconfirmed=await confirmIslandFineArrival(async()=>{confirmationReads++;r
 assert.equal(confirmationReads,3);assert.equal(unconfirmed.error,512);
 const shelter=shelteredIslandAim(waypoints,body,{aim,squares,edge:()=>true});assert.equal(shelter.i,1);assert(shelter.sheltered);
 assert.deepEqual(shelteredIslandAim(waypoints,body,{aim,squares,edge:()=>false}),aim);
+// THE POOL OF VIGOR (operator, 2026-10-23): drink on the first landing until 200 or a full stomach; never fail the ride.
+{
+  const pool=({room=2510,at={row:29,col:9},reach=true,vigor=60,full=999,fail=null}={})=>{
+    let you={...at},v=vigor,drinks=0;const sent=[];
+    return {sent,ctx:{agent:'fixture',call:async(name,args)=>{
+      sent.push(name);if(fail&&name===fail)throw Error('boom');
+      if(name==='look')return {room:{num:room},vigor:{value:v},hp:{value:90,max:90},you};
+      if(name==='walk_to'){if(reach)you={row:args.row,col:args.col};return {arrived:reach};}
+      if(name==='act'&&args.verb==='go'){if(drinks>=full)return {messages:[]};drinks++;v=Math.min(200,v+40);
+        return {messages:['You drink from the life-giving waters, and feel refreshed!']};}
+      throw Error('unexpected '+name);}}};};
+  const rec=()=>({});
+  let f=pool(),r=rec();let e=await drinkPoolOfVigor(f.ctx,r,()=>{});
+  assert.equal(e.drinks,4);assert.equal(e.after,200);assert.equal(r.pool,e);
+  f=pool({full:2});e=await drinkPoolOfVigor(f.ctx,rec(),()=>{});
+  assert.equal(e.drinks,2);assert.match(e.stopped,/stomach full/);assert.equal(e.after,140);
+  f=pool({room:2001});assert.equal(await drinkPoolOfVigor(f.ctx,rec(),()=>{}),null);assert(!f.sent.includes('act'));
+  f=pool({reach:false});e=await drinkPoolOfVigor(f.ctx,rec(),()=>{});assert.equal(e.skipped,'could_not_stand_in_the_pool');assert(!f.sent.includes('act'));
+  f=pool({fail:'walk_to'});e=await drinkPoolOfVigor(f.ctx,rec(),()=>{});assert.equal(e.failure,'boom');
+  f=pool({vigor:200,at:{row:44,col:22}});e=await drinkPoolOfVigor(f.ctx,rec(),()=>{});assert.equal(e.drinks,0);assert(!f.sent.includes('walk_to'));
+  assert(inPool({row:42,col:19})&&inPool({row:46,col:25})&&!inPool({row:41,col:22})&&!inPool({row:44,col:26}));
+}
 console.log('Island checks passed: full-cup gate, guard cargo, teleport recovery, serialized stash ownership, and death/max-HP guards.');

@@ -130,6 +130,37 @@ async function sipTo(ctx,to,record,save){
     await pause(750);
   }
 }
+// THE POOL OF VIGOR (operator, 2026-10-23: "make sure it uses the pool of vigor to get 200 vigor by drinking it
+// ... it's free max vigor on the way because it takes a while to rescue anyway"). The first sip lands in 2510, "A
+// spring of vitality" (orccav5x.kod). Standing in the pool (rows 42-46, cols 19-25) and pressing GO is a drink:
+// SomethingTryGo -> UserDrink -> EatSomething(nutrition 40, filling 20), said as "You drink from the life-giving
+// waters". ReqEatSomething refuses silently once the stomach is full, so a GO with no drink line ends it. A drink is a
+// bonus, never a reason to abandon a paid ride: any failure is recorded and the second sip goes ahead.
+export const POOL_OF_VIGOR=Object.freeze({room:2510,rows:[42,46],cols:[19,25],aim:{row:44,col:22}});
+export const POOL_DRINK_SAID=/drink from the life-giving waters/i;
+export const inPool=(you)=>Number.isFinite(you?.row)&&Number.isFinite(you?.col)&&
+  you.row>=POOL_OF_VIGOR.rows[0]&&you.row<=POOL_OF_VIGOR.rows[1]&&you.col>=POOL_OF_VIGOR.cols[0]&&you.col<=POOL_OF_VIGOR.cols[1];
+export async function drinkPoolOfVigor(ctx,record,save,{target=200,maxDrinks=12}={}){
+  const agent=ctx.agent,vigorOf=l=>Number(l?.vigor?.value??l?.vigor);
+  const first=await ctx.call('look',{agent});
+  if(first.room?.num!==POOL_OF_VIGOR.room)return null;
+  const entry={at:new Date().toISOString(),before:vigorOf(first),drinks:0};record.pool=entry;save();
+  try{
+    if(!inPool(first.you))
+      await ctx.call('walk_to',{agent,row:POOL_OF_VIGOR.aim.row,col:POOL_OF_VIGOR.aim.col,max_steps:60,arrive_within:1},60000);
+    let l=await ctx.call('look',{agent});
+    if(l.room?.num!==POOL_OF_VIGOR.room)throw Error('left_the_pool_room_'+l.room?.num);
+    if(!inPool(l.you)){entry.skipped='could_not_stand_in_the_pool';entry.at_square=location(l);return entry;}
+    while(entry.drinks<maxDrinks&&!(vigorOf(l)>=target)){
+      const r=await ctx.call('act',{agent,verb:'go'});
+      if(!(r?.messages??[]).some(m=>POOL_DRINK_SAID.test(String(m)))){entry.stopped='no_drink_said (stomach full)';break;}
+      entry.drinks++;await pause(400);l=await ctx.call('look',{agent});
+    }
+    entry.after=vigorOf(l);
+  }catch(e){entry.failure=e.message;}
+  finally{save();}
+  return entry;
+}
 async function awaitPack(ctx,test,label){
   const until=Date.now()+12000;
   for(;;){const items=await pack(ctx);if(test(items))return items;if(Date.now()>until)throw Error(label);await pause(400);}
@@ -299,6 +330,7 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
       const recovery=islandRideRecovery(previous,room);
       if(recovery==='second_sip'){
         previous.sips[0].landed??=location(await call('look',{agent}));save();
+        if(!previous.pool)await drinkPoolOfVigor(ctx,previous,save);
         await sipTo(ctx,2001,previous,save);
       }
       // Island arrival proves both completed teleports without consuming more water.
@@ -323,6 +355,8 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
     if(room===27)await hop(ctx,2500,record);
     await prepareIslandSip(ctx,record,save);
     await sipTo(ctx,2510,record,save);
+    // Free vigor while we are standing at the spring anyway (operator, 2026-10-23).
+    await drinkPoolOfVigor(ctx,record,save);
     // A second sip starts only after the first Rescue has landed.
     await sipTo(ctx,2001,record,save);
     await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
