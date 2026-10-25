@@ -920,6 +920,10 @@ export function foodSurplusOf({ items = [], capacity = null, fraction = 0.2 } = 
 // that was not there.
 export const FLEET_KEEP = Object.freeze([
   'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
+  // THE ARCHERS' KIT. Arrows are sold only on Ko'catan (Hanla zax'Ta 2100, Wulfgang zax'Ak 2101) and a practice bow only
+  // by Kochtal ko'Tulca (2014), so neither is bought back on the mainland: operator 2026-10-25, "never sell or drop
+  // practice bows (unless the bow is broken) or sell or drop arrows by default".
+  'practice bow', 'arrows', 'nerudite arrows', 'silver arrows',
   'rose', 'ring of invisibility', 'mystic sword', 'true lute',
   'blue dragon scale', 'dark angel feather', 'shrunken head',
   'emerald', 'sapphire', 'diamond', 'ruby',
