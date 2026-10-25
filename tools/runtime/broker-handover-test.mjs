@@ -404,6 +404,70 @@ try {
     ok('a successor never binds a port or touches a keeper before it owns the fleet');
   }
 
+  // ------------------------------------------------------------- the job board across a handover
+
+  {
+    // LATE STATE reaches the successor before the commit, on the success path only.
+    const { child, self } = pair();
+    const p = [], s = [];
+    const [pre, suc] = await Promise.all([
+      handOver(predecessorDeps(child, p, { lateState: () => { p.push('lateState'); return { format: 'm59-jobs/1', revision: 7, jobs: [] }; } }), fast),
+      takeOver(self, successorDeps(s, { applyLateState: st => s.push(`late:${st.revision}`) }), fast),
+    ]);
+    assert.ok(pre.ok && suc.ok && suc.committed);
+    assert.deepEqual(p, ['freeze', 'transfer:1002', 'snapshot', 'lateState', 'commit', 'release:forward']);
+    assert.ok(s.includes('late:7'), JSON.stringify(s));
+    assert.ok(s.indexOf('late:7') > s.indexOf('adopt'), 'late state lands after adoption, before the commit returns');
+    ok('late state is sent just before the commit and applied by the successor');
+  }
+
+  {
+    // A ROLLBACK SENDS NO LATE STATE: the predecessor stays the broker with its own board.
+    const { child, self } = pair();
+    const p = [], s = [];
+    const [pre] = await Promise.all([
+      handOver(predecessorDeps(child, p, { lateState: () => { p.push('lateState'); return { format: 'm59-jobs/1', jobs: [] }; } }), fast),
+      takeOver(self, successorDeps(s, { applyLateState: () => s.push('late'),
+        adopt: async () => ({ expected: 2, adopted: 1, unadopted_live: ['t2'] }) }), fast),
+    ]);
+    assert.equal(pre.ok, false);
+    assert.ok(!p.includes('lateState') && !s.includes('late'));
+    ok('an aborted handover never asks for or sends late state');
+  }
+
+  {
+    // THE CUTOVER ITSELF, on two real boards: snapshot round trip, a job registered mid-window survives through late
+    // state, a dead owner found at verify reads orphaned (not running), and the predecessor's board is untouched.
+    const { JobBoard } = await import('../m59-jobboard.mjs');
+    const alive = new Set([501, 502]);
+    const mk = () => new JobBoard({ fleet: 'prod', pidAlive: p => alive.has(p), pidStarts: () => new Map() });
+    const old = mk();
+    const a = old.register({ name: 'archerplus', kind: 'fleetscript', agents: ['t6'], owner_pid: 501, restart: 'x' });
+    const dead = old.register({ name: 'fire-queue', agents: ['t17'], owner_pid: 502 });
+    const snap = old.exportSnapshot();
+    const snapRevision = old.revision;
+    // A job_register admitted before the freeze, finishing after the snapshot.
+    const mid = old.register({ name: 'wave', agents: ['t4'], owner_pid: 501, finish_on_alert: true });
+    const next = mk(); next.persist = false;
+    assert.ok(next.importSnapshot(snap).ok);
+    assert.deepEqual([...next.jobs.keys()].sort(), [a.id, dead.id].sort(), 'the snapshot round-trips');
+    snap.jobs[0].state = 'tampered';
+    assert.equal(old.get(a.id).state, 'running', 'the export is a copy: the predecessor board is untouched');
+    alive.delete(502);                                  // the fire queue's owner died during the window
+    const v = next.verifyAfterHandover();
+    assert.deepEqual(v.orphaned.map(j => j.id), [dead.id]);
+    assert.equal(next.get(dead.id).state, 'orphaned', 'a dead owner at verify is orphaned, not running');
+    assert.equal(next.get(a.id).state, 'running');
+    assert.notEqual(old.revision, snapRevision, 'the board moved after the snapshot, so late state is due');
+    next.importSnapshot(old.exportSnapshot());
+    next.verifyAfterHandover();
+    assert.equal(next.get(mid.id)?.state, 'running', 'the job registered mid-window survives the cutover');
+    assert.equal(next.get(mid.id).finish_on_alert, true);
+    assert.equal(next.get(dead.id).state, 'orphaned');
+    assert.equal(old.get(dead.id).state, 'running', 'rollback would find the predecessor board exactly as it was');
+    ok('job board cutover: snapshot, mid-window registration, orphan at verify, untouched predecessor');
+  }
+
   {
     assert.equal(judgeAdoption({ expected: 3, adopted: 3, unadopted_live: [] }).ok, true);
     assert.equal(judgeAdoption({ expected: 3, adopted: 2, unadopted_live: [] }).ok, true,

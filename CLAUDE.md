@@ -27,6 +27,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | launch or change the DebugClient (the patched client L starts), or its DUM / MANAGE tabs | [`docs/m59-debugclient.md`](docs/m59-debugclient.md), then [`docs/m59-plan-tab.md`](docs/m59-plan-tab.md) for MANAGE |
 | give a FleetScript param a picker in the MANAGE tab (`type: 'merchant'`, `'item'`, `'room'`, `'script'`...) | [`docs/m59-plan-tab.md`](docs/m59-plan-tab.md#managing-fleetscripts) |
 | run, back up, restore, lend out or shut down the fleet | [`docs/m59-operations.md`](docs/m59-operations.md) |
+| see what is driving characters, or pause/resume runs for an alert (the job board, `m59-jobs.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#the-job-board) |
 | keep a character OUT of the world on purpose, or log off to escape a fight (`m59-dormant.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#keeping-a-character-out-on-purpose-dormancy) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |

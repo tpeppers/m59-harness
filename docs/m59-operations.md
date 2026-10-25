@@ -271,6 +271,41 @@ noticed. Nothing sets it by default. Timeouts: `M59_HANDOFF_WARM_MS` (240 s),
 `M59_HANDOFF_ADOPT_MS` (90 s), `M59_HANDOFF_DRAIN_MS` (120 s, how long a retired broker waits
 for its in-flight requests), `M59_HANDOFF_ADOPT_CONCURRENCY` (24).
 
+## The job board
+
+```bash
+node tools/m59-jobs.mjs                       # running / paused / orphaned / resumed / recent, and who is held
+node tools/m59-jobs.mjs list --state paused   # one line per job (--agent t6, --kind fleetscript, --json)
+node tools/m59-jobs.mjs pause --agents t5,t6  # stop every job holding them; --all; --force for finish-on-alert jobs
+node tools/m59-jobs.mjs resume --all          # spawn each paused job's restart
+```
+
+Every run that holds characters is a **job the broker holds** (`tools/m59-jobboard.mjs`, persisted to
+`substrate/jobs-<fleet>.json`). Operator, 2026-10-25: *"any scripts can register themselves to be cancelled and/or
+restarted by alerts ... a universal job board that's held open by the broker"* — the day a hostile login found
+archers, a fire queue and a dozen one-off movers holding leases, and the retreat could not move a body until each was
+found and killed by hand.
+
+- **Fleetscripts are on it without doing anything.** The REPL hands the runner the line it ran (`setJobContext`),
+  the runner registers after it takes the lock and ends the job with done/failed; the restart is that line, replayed
+  from `substrate/scratch/repl-inputs/job-<run>.txt`. A script that must not be interrupted — the island ride —
+  declares `finishOnAlert: true` on itself (or `finishOnAlert=true` on the line).
+- **Any other script joins in one call**: `registerJob({ name, agents, restart, stopFile })` from
+  `tools/m59-jobclient.mjs`, `addPid(child.pid)` for a REPL child holding the leases, `end()` when done. An
+  unreachable broker makes it a no-op, said once: registration is bookkeeping, never a precondition.
+- **An alert calls `job_pause`** (by agents, or all): each job's stop file is touched and its pids killed, so the
+  retreat can move the bodies; finish-on-alert jobs are left running. After the quiet period, **`job_resume`** spawns
+  each restart with `M59_JOB_RESUMES=<id>`, and the new run's job names the one it resumes. A paused job with no
+  restart is cancelled rather than left paused for ever.
+- **Orphans are found, not assumed**: a running job whose owner pid is gone, whose pid now belongs to a different
+  process (start time), or whose promised heartbeat stopped reads `orphaned`, on every read and every minute.
+- **It survives a live broker restart.** The handover snapshot carries the board (and flushes it); requests held
+  during the freeze are forwarded, so job calls in the window are not lost; a job call admitted just before the
+  freeze that finished after the snapshot reaches the successor as `late-state` before the commit; the successor
+  re-verifies every running job before it commits and reports what it orphaned in the receipt (`report.jobs`). A
+  warm successor never writes the file, a retired predecessor stops writing it, and a rollback leaves the
+  predecessor's board exactly as it was. Pinned in `tools/runtime/broker-handover-test.mjs` and `m59-jobs-test.mjs`.
+
 ## The two front ends, and the one command that starts everything
 
 ```bash

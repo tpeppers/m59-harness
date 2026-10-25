@@ -318,6 +318,9 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     // `provenance` block that sat on a script and was never forwarded would be the quietest
     // possible failure: declared, greppable, and doing nothing at all.
     provenance: script.provenance ?? null,
+    // THE JOB BOARD: a script that must not be interrupted by an alert says so on itself (`finishOnAlert: true`, the
+    // island ride), and an invocation may say it too (`finishOnAlert=true`). The REPL supplies the replay line.
+    finishOnAlert: script.finishOnAlert === true || withDefaults.finishOnAlert === true || withDefaults.finishOnAlert === 'true',
   });
   // Initialization scripts may hand standing work to a managed service only
   // AFTER the runner has cancelled its journeys and released every body/lock.

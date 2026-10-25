@@ -62,7 +62,16 @@ This is an offline scheduling regression, not a native survival measurement.
   room comes from the freshest keeper that sees him; every follower in a room computes the same slot
   from the same view; the wedge trails behind his walking direction, never on his square; the door
   he took is inferred from his last square, and nowhere near a door means no guess.
-- `node tools/runtime/broker-handover-test.mjs` (26): the live broker handover. A lock
+- `node tools/m59-jobs-test.mjs` (26): the broker's job board. Register, heartbeat, orphan by a
+  dead owner, by a recycled pid (start time) and by a stale heartbeat; pause touches the stop file
+  and kills every pid but leaves a finish-on-alert job running; an owner ending a paused job keeps
+  the pause; resume spawns the restart and cancels a job with none; persistence round-trip, bounded
+  history; the handover export/import never shares objects, a warm successor never writes the file;
+  the client registers, ends once, and is a no-op with no broker.
+- `node tools/runtime/broker-handover-test.mjs` (30): the live broker handover. The job board
+  crosses it: late state is sent just before the commit and never on an abort, a job registered
+  mid-window survives, a dead owner found at verify reads orphaned, and the predecessor's board is
+  untouched. A lock
   TRANSFER keeps every keeper guard (a running keeper verifies against its new broker without
   being touched), only the current owner can make one, and it rolls back with the successor's
   token alone — successor alive, wedged or dead; a successor that dies after the transfer is

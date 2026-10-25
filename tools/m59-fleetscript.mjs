@@ -158,8 +158,9 @@ import { routePreflight, roomsNamedBy, formatRoutePreflight,
          warningMode } from './m59-routecheck.mjs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readFileSync, existsSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { registerJob, getJobContext } from './m59-jobclient.mjs';
 import { takeAgentLocks } from './m59-runlock.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
@@ -273,6 +274,16 @@ const git = (args, cwd) => {
 // "unknown" and I nearly read it as "this script has no pin". A guarantee that quietly
 // downgrades when you move is not a guarantee.
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+// THE RESTART OF A REPL RUN IS THE SAME LINE, REPLAYED. Written to substrate/scratch/repl-inputs/ (the convention: an
+// input file in substrate/ root blocks `m59-deploy --verify`), and the command the job board spawns after a pause.
+function replRestart(line, fleet, runId) {
+  const rel = `substrate/scratch/repl-inputs/job-${runId}.txt`;
+  try {
+    mkdirSync(join(REPO_ROOT, 'substrate/scratch/repl-inputs'), { recursive: true });
+    writeFileSync(join(REPO_ROOT, rel), `${line}\nquit\n`);
+  } catch { return null; }
+  return { cmd: `node tools/m59-fleet-repl.mjs --fleet ${fleet || '-'} < ${rel} >> substrate/scratch/job-${runId}.out 2>&1`, cwd: REPO_ROOT };
+}
 
 export function checkProvenance(provenance, { cwd = REPO_ROOT } = {}) {
   if (!provenance?.pinned)
@@ -4904,6 +4915,11 @@ export async function fleetScript({
   // GUARANTEE 9. `{ pinned, verified, touches, refuseOnDrift }` — the generation this task
   // was last seen green against. See checkProvenance above for why it exists.
   provenance = null,
+  // THE JOB BOARD (m59-jobboard.mjs). `job: { line, restart?, finishOnAlert? }` puts this run on the broker's board so
+  // an alert can pause it and replay `line` through the REPL afterwards; the REPL passes it for every script it runs
+  // (setJobContext), so nothing here needs a caller to remember. Absent (tests, direct imports): no registration.
+  // `finishOnAlert` is the script's own declaration that an alert must let it finish (the island ride).
+  job = null, finishOnAlert = false,
   // Widen which devnotes this errand is shown. The rooms it walks to are matched
   // automatically, so most tasks need nothing here; `{ tags, touches }` adds topics and
   // files on top of that.
@@ -5627,19 +5643,34 @@ They are driven by tools/m59-menagerie.mjs and ` +
 
   ctx.log(`${name}: ${agents.length} agent(s), ${parallel ? 'in parallel' : 'one at a time'}` +
           ` — moves ordered as ${originLabel(origin)}`);
+  // ON THE BOARD, AFTER THE LOCK: a job is a run that holds characters, and until the claim succeeded this one held
+  // nobody. Never a precondition -- registerJob resolves to a no-op handle when the board is unreachable.
+  const jobSpec = job ?? getJobContext();
+  const jobHandle = jobSpec ? await registerJob({
+    name, kind: 'fleetscript', agents: control.names, onLog,
+    finishOnAlert: finishOnAlert === true || jobSpec.finishOnAlert === true,
+    restart: jobSpec.restart ?? (jobSpec.line ? replRestart(jobSpec.line, fleet, runId) : null),
+    note: jobSpec.line ?? null,
+  }).catch(() => null) : null;
+  if (jobHandle?.registered) ctx.log(`job ${jobHandle.id} on the board${jobHandle.job?.finish_on_alert ? ' (finish on alert)' : ''}`);
+  let threw = true;
   try {
     await withCallOrigin(origin,async()=>{
       if (parallel) await Promise.all(agents.map(runOne));
       else for (const a of agents) await runOne(a);
     });
+    threw = false;
   } finally {
     await freeAll();
     dropSignalHandlers();
     claim.release();
+    // A run that unwound with an error is a failed job, not a running one left for the orphan sweep to find.
+    if (threw) await jobHandle?.end?.({ ok: false, result: 'unwound with an error' });
   }
 
   const ok = agents.filter(a => results[a]?.ok).length;
   ctx.log(`${name}: ${ok}/${agents.length} completed`);
+  await jobHandle?.end?.({ ok: ok > 0, result: `${ok}/${agents.length} completed` });
   return { ok: ok > 0, results };
 }
 export {estimatePlayer as estimatePlayerCombat} from './m59-player-evidence.mjs';

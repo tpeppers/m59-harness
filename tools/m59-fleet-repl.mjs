@@ -30,6 +30,7 @@ import { loadFleetScripts, runNamed, applyDefaults, checkParams, asAgents,
          auditUnsafe, formatUnsafeAudit,
          PUBLIC_DIR, LOCAL_DIR } from './m59-fleetlib.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
+import { setJobContext } from './m59-jobclient.mjs';
 
 const FLEET = fleetName();
 let { scripts, problems, restored } = await loadFleetScripts();
@@ -150,8 +151,13 @@ rl.on('line', (line) => queue(async () => {
       }
     }
     else if (scripts.has(verb)) {
-      const r = await runNamed(verb, parseArgs(rest), { scripts, fleetScript, onLog: say });
-      if (!r.ok && r.why) say(r.why);
+      // ON THE JOB BOARD: the runner registers this run with the line that would run it again, so an alert can
+      // pause it and the board can replay it afterwards (m59-jobboard.mjs). Cleared after, so nothing leaks.
+      setJobContext({ line: line.trim() });
+      try {
+        const r = await runNamed(verb, parseArgs(rest), { scripts, fleetScript, onLog: say });
+        if (!r.ok && r.why) say(r.why);
+      } finally { setJobContext(null); }
     }
     else say(`unknown command "${verb}" — try: list`);
   } catch (e) {

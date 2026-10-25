@@ -166,6 +166,7 @@ export function nextMessage(channel, type, timeoutMs, what = type) {
  *   snapshot()                 -> structured-cloneable object
  *   listeners()                -> [{name, server}]
  *   commit()                   -> stop accepting, forward held requests, retire
+ *   lateState()                -> object|null   optional: state changed since snapshot() (the job board)
  *   releaseHeld(verdict)
  *   log(line)
  */
@@ -246,6 +247,14 @@ export async function handOver(deps, opts = {}) {
     await serving;
   } catch (e) { return await abortAfterTransfer('listen', e.message); }
 
+  // 7½. LATE STATE. Requests that arrived after the freeze are held and forwarded, so the snapshot plus the forwarded
+  // requests are complete -- except for a request ADMITTED before the freeze that finished after the snapshot was taken.
+  // The job board (m59-jobboard.mjs) is the state that needs this: `lateState()` returns its current export when it
+  // changed since the snapshot, and the successor replaces its import with it. Optional and one-way; an older
+  // successor ignores the message type. Sent only on the success path, so a rollback sends nothing.
+  const late = deps.lateState?.();
+  if (late) { try { child.send({ type: 'late-state', state: late }); } catch { /* the successor serves already */ } }
+
   // 8. COMMIT. Past this line there is no rollback: the successor is the broker.
   deps.commit();
   deps.releaseHeld('forward');
@@ -275,6 +284,7 @@ export async function handOver(deps, opts = {}) {
  *   listen(name, handle)       -> Promise
  *   listenFresh()              -> Promise   bind the ports normally (predecessor is gone)
  *   started()                  -> void      start the timers a normal broker starts
+ *   applyLateState(state)      -> void      optional: the predecessor's late state, before commit
  *   log(line)
  */
 export async function takeOver(channel, deps, opts = {}) {
@@ -290,6 +300,10 @@ export async function takeOver(channel, deps, opts = {}) {
 
   const installed = deps.install(handover);
   if (!installed?.ok) return { ...fail(`install: ${installed?.why ?? 'refused'}`), owns: false };
+  // The predecessor's state as it stood just before its commit (see LATE STATE in handOver); messages on one channel
+  // arrive in order, so this lands before `committed`.
+  const onLate = message => { if (message?.type === 'late-state') { try { deps.applyLateState?.(message.state); } catch (e) { log(`[handover] late state not applied: ${e.message}`); } } };
+  channel.on('message', onLate);
 
   // FROM HERE THIS PROCESS OWNS THE FLEET'S CLAIMS. If the predecessor disappears now, the
   // claims are ours and its listeners died with it: bind the ports and carry on as the
@@ -356,6 +370,7 @@ export async function takeOver(channel, deps, opts = {}) {
   // `serving`, and if it died in between, this process already serves on the shared sockets.
   const sawCommit = await committed;
   channel.off('disconnect', onGone);
+  channel.off('message', onLate);
   return { ok: true, committed: sawCommit, report };
 }
 

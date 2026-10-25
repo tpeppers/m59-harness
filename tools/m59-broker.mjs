@@ -153,6 +153,8 @@ import {
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample, keeperCooperativeWait } from './runtime/keeper-liveness.mjs';
 import { startLoopStallMonitor } from './runtime/loop-stalls.mjs';
+import { JobBoard } from './m59-jobboard.mjs';
+import { processStartTimes } from './runtime/process-identity.mjs';
 import { pilotLeaseMs, newPilotLease, pilotHeld, renewPilotLease, describePilotLease,
          createLeaseGraveyard, claimLeaseRefusal }
   from './runtime/pilot-lease.mjs';
@@ -5752,6 +5754,32 @@ let humanDeskStore = null;
 const PILOT_POLL_MS = Number(process.env.M59_PILOT_POLL_MS || 4000);
 
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+// THE JOB BOARD (m59-jobboard.mjs; docs/m59-operations.md "The job board"). Every fleetscript run and every opted-in
+// script is a job this broker holds, persisted beside the roster so a restart or a live handover keeps it. An alert
+// pauses jobs (stop file + kill), and resumes them by spawning the restart each registered -- operator 2026-10-25:
+// "any scripts can register themselves to be cancelled and/or restarted by alerts ... a universal job board that's
+// held open by the broker". Only effects are wired here; the state machine is the module's, and is tested offline.
+// substrate/jobs-<fleet>.json, beside the roster's checkout -- NOT inside substrate/fleets/, where every .json is
+// enumerated as a roster (m59-fleets.mjs).
+const JOBS_DIR = /^fleets$/i.test(STATE_FILE.split(/[\\/]/).at(-2) ?? '') ? dirname(dirname(STATE_FILE)) : dirname(STATE_FILE);
+const JOBS_FILE = join(JOBS_DIR, `jobs-${FLEET || 'default'}.json`);
+const jobPath = (f, cwd) => !f ? null : /^([a-zA-Z]:)?[\\/]/.test(f) ? f : join(cwd || BROKER_ROOT, f);
+const jobBoard = new JobBoard({
+  file: JOBS_FILE, fleet: FLEET || null, pidAlive,
+  pidStarts: pids => processStartTimes(pids),
+  kill: pid => { try { process.kill(pid); } catch { /* already gone */ } },
+  touch: (f, o) => { const p = jobPath(f); if (o?.remove) { try { unlinkSync(p); } catch {} } else writeFileSync(p, `paused by the broker job board ${new Date().toISOString()}\n`); },
+  spawnDetached: (cmd, cwd, o) => {
+    const child = spawn('bash', ['-c', cmd], { cwd: cwd || BROKER_ROOT, detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, M59_FLEET: FLEET || process.env.M59_FLEET || '', M59_JOB_RESUMES: o?.resumes ?? '' } });
+    child.unref();
+    return child.pid ?? null;
+  },
+}).load();
+// A warm successor reads the board but never writes it until it owns the fleet (started(), after the handover).
+if (successorOf()) jobBoard.persist = false;
+{ const t = setInterval(() => { try { jobBoard.sweep(); } catch { /* never fatal */ } }, 60_000); t.unref?.(); }
 // A claim is held by ONE of two things: a local client pid, or a heartbeat lease from a client on
 // another machine (tools/runtime/pilot-lease.mjs). Every liveness check on a pilot goes through
 // here, because a lease claim has pid null and `pidAlive(null)` would release it on the spot.
@@ -7229,6 +7257,62 @@ const combatDispatch = new CombatDispatch({
 
 const TOOLS = [
   createDeliveryNoticeTool({scope:()=>{const e=brokerGameEndpoints().game_server;if(!e)throw Error('delivery notices require one verified live fleet game endpoint');return JSON.stringify([COMMANDER_FLEET,e.host.toLowerCase(),e.port]);},lookup:agent=>session(agent),ground:async agent=>{const s=session(agent);if(s instanceof KeeperProxy)return s.roomContents();const c=s.need();await s.refresh();return{answered:true,room:s.world?.room?.num,objects:[...c.room.objects.values()].map(o=>({...o,name:c.rsc.get(o.nameRsc)}))};},notify:async(agent,notice)=>{const s=session(agent);return s instanceof KeeperProxy?keeperAction(agent,s._index,'delivery_notice',{notice},{timeoutMs:2000}):receiveDeliveryNotice(s,notice);}}),
+  // ---------------------------------------------------------------- the job board (m59-jobboard.mjs)
+  {
+    name: 'jobs',
+    description: 'THE JOB BOARD: every fleetscript run and opted-in script that holds characters. action=list (default; filters state, agent, kind) or report (grouped: running, paused, orphaned, resumed, recent ended, and every agent still held). A running job whose owner died, or whose pid now belongs to another process, reads orphaned. See docs/m59-operations.md "The job board".',
+    schema: { type: 'object', properties: {
+      action: { enum: ['list', 'report'] }, state: { type: 'string', description: 'comma list: running,paused,resumed,orphaned,done,failed,cancelled' },
+      agent: { type: 'string' }, kind: { enum: ['fleetscript', 'script'] }, recent: { type: 'integer', minimum: 0, maximum: 100 },
+    } },
+    run: async a => a.action === 'report' ? jobBoard.report({ recent: a.recent ?? 10 })
+      : { jobs: jobBoard.list({ state: a.state, agent: a.agent, kind: a.kind }) },
+  },
+  {
+    name: 'job_register',
+    description: 'Put a run on the job board (m59-jobclient.mjs registerJob does this; fleetscript runs register themselves). restart is what job_resume spawns after a pause; stop.stopFile is touched and stop.pids killed by job_pause; finish_on_alert jobs are left running by an alert pause (the island ride). resumes names the paused job this run restarts.',
+    schema: { type: 'object', properties: {
+      name: { type: 'string' }, kind: { enum: ['fleetscript', 'script'] }, agents: { type: 'array', items: { type: 'string' } },
+      owner_pid: { type: 'integer' }, owner_start: { type: 'number' }, heartbeat_ms: { type: 'integer' },
+      restart: { type: 'object', properties: { cmd: { type: 'string' }, cwd: { type: 'string' } } },
+      stop: { type: 'object', properties: { stopFile: { type: ['string', 'null'] }, pids: { type: 'array', items: { type: 'integer' } } } },
+      finish_on_alert: { type: 'boolean' }, resumes: { type: 'string' }, note: { type: 'string' },
+    }, required: ['name'] },
+    run: async a => jobBoard.register(a),
+  },
+  {
+    name: 'job_heartbeat',
+    description: 'A job owner says it is alive (and may add a pid that holds its characters, or change its agent list).',
+    schema: { type: 'object', properties: { id: { type: 'string' }, add_pid: { type: 'integer' },
+      agents: { type: 'array', items: { type: 'string' } }, note: { type: 'string' } }, required: ['id'] },
+    run: async a => { if (a.add_pid) jobBoard.addPid(a.id, a.add_pid); return jobBoard.heartbeat(a.id, { agents: a.agents, note: a.note }); },
+  },
+  {
+    name: 'job_end',
+    description: 'A job owner says it finished: ok true -> done, false -> failed (or state cancelled). A job already paused by an alert stays paused, so its restart survives the owner exiting.',
+    schema: { type: 'object', properties: { id: { type: 'string' }, ok: { type: 'boolean' }, result: { type: 'string' },
+      state: { enum: ['done', 'failed', 'cancelled'] } }, required: ['id'] },
+    run: async a => jobBoard.end(a.id, { ok: a.ok !== false, result: a.result ?? null, state: a.state ?? null }),
+  },
+  {
+    name: 'job_pause',
+    description: 'Pause running jobs -- by ids, by agents (any job holding one of them), or all: touch each stop file and kill each pid, keep the restart. Jobs registered finish_on_alert are left to finish unless force. What an alert calls before it retreats the characters.',
+    schema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, agents: { type: 'array', items: { type: 'string' } },
+      all: { type: 'boolean' }, by: { type: 'string' }, why: { type: 'string' }, force: { type: 'boolean' } } },
+    run: async a => {
+      if (!a.all && !a.ids?.length && !a.agents?.length) throw new Error('job_pause needs ids, agents, or all: true');
+      return jobBoard.pause({ ids: a.ids, agents: a.agents, all: a.all === true, by: a.by ?? null, why: a.why ?? null, force: a.force === true });
+    },
+  },
+  {
+    name: 'job_resume',
+    description: 'Resume paused jobs (ids, or all): each restart command is spawned detached with M59_JOB_RESUMES set, so the new run registers itself as resuming the old one. A paused job with no restart is cancelled.',
+    schema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, by: { type: 'string' } } },
+    run: async a => {
+      if (!a.all && !a.ids?.length) throw new Error('job_resume needs ids or all: true');
+      return jobBoard.resume({ ids: a.ids, all: a.all === true, by: a.by ?? null });
+    },
+  },
   {
     name: 'war_restart',
     description: 'Restart keepers onto the code on disk WITHOUT logging characters out: each old keeper is told to hand off, a hidden replacement logs in (the server drops the old connection), and the broker swaps to it. Nobody leaves the world, nobody comes back one at a time. `agents` limits it; default is every keeper this broker holds. A replacement that does not reach the world in timeout_ms is stopped and the old keeper carries on.',
@@ -19104,6 +19188,8 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // `/live` proof before writing.
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
   'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
+  // The job board's `agent` is a filter over bookkeeping, never a body to read.
+  'jobs', 'job_register', 'job_heartbeat', 'job_end', 'job_pause', 'job_resume',
   // Its whole reason to exist is a slot whose keeper the broker refuses to read (an identity conflict).
   'rename_character',
   // Its subject is a keeper deliberately OUT of the world, which has no live world to project.
@@ -21333,8 +21419,15 @@ function buildHandoverSnapshot() {
   put('saves', saveClock.saves);
   put('ids', idRegistry.byAgent);
   put('menagerieToken', menagerieToken);
+  // THE JOB BOARD, as a cutover snapshot with its revision, and flushed to disk as part of the same step. The copy is
+  // taken AFTER the freeze, so requests held from here on are forwarded to the successor; what changed between this
+  // and the commit goes as `late-state` (lateState below). Our own board is not touched: a rollback finds it as it was.
+  try { jobBoard.save(); } catch {}
+  put('jobs', jobBoard.exportSnapshot());
+  handoverJobsRevision = jobBoard.revision;
   return out;
 }
+let handoverJobsRevision = null;
 
 function restoreHandoverSnapshot(s) {
   const refill = (target, source) => {
@@ -21365,6 +21458,12 @@ function restoreHandoverSnapshot(s) {
   if (Array.isArray(s.saves)) saveClock.saves = s.saves;
   if (s.ids instanceof Map) idRegistry.byAgent = s.ids;
   carriedMenagerieToken = typeof s.menagerieToken === 'string' ? s.menagerieToken : null;
+  // The predecessor's board replaces what this process read from disk while warm: it is the same file plus anything
+  // in memory the flush raced. Verified against the live processes in adopt(), before this broker commits.
+  if (s.jobs) {
+    const r = jobBoard.importSnapshot(s.jobs);
+    console.error(`[handover] job board: ${r.ok ? `${r.jobs} job(s) at revision ${r.revision}` : `NOT imported (${r.why})`}`);
+  }
 }
 
 async function settled(predicate, ms) {
@@ -21450,12 +21549,16 @@ function runBrokerHandover() {
                      accounts.ok ? null : 'account leases'].filter(Boolean).join('; ') || null };
     },
     snapshot: buildHandoverSnapshot,
+    // A job call admitted before the freeze that finished after the snapshot: send the board as it stands now.
+    lateState: () => (handoverJobsRevision != null && jobBoard.revision !== handoverJobsRevision) ? jobBoard.exportSnapshot() : null,
     listeners: () => [
       rpcServer && { name: 'rpc', server: rpcServer },
       dashboardServer && { name: 'dashboard', server: dashboardServer },
     ].filter(Boolean),
     commit() {
       brokerRetired = true;
+      // The board's file is the successor's from here; a retiring broker's sweep must not write it.
+      jobBoard.persist = false;
       stopPlanDesk();   // the successor's desk takes the client folder on its next poll
       listenerIdentity?.close();
       pendingFleetTransfer = null;
@@ -21568,8 +21671,23 @@ async function runAsSuccessor() {
         } else unadopted_live.push(agent);
       }
       if (fault === 'adopt') unadopted_live.push('(M59_HANDOFF_FAULT=adopt rehearsal)');
+      // EVERY RUNNING JOB RE-VERIFIED BEFORE THE COMMIT: owner alive, same start time, heartbeat fresh. A mismatch is
+      // reported in the receipt (and the job reads orphaned), not a reason to refuse the fleet -- the predecessor's
+      // board would have found the same dead owner on its next sweep.
+      let jobs = null;
+      try { jobs = jobBoard.verifyAfterHandover(); } catch (e) { jobs = { error: e.message }; }
+      if (jobs?.orphaned?.length)
+        console.error(`[handover] job board: ${jobs.orphaned.length} running job(s) found orphaned at verify: ` +
+                      jobs.orphaned.map(j => `${j.id} ${j.name} (${j.why})`).join('; '));
       return { expected: expected.size, adopted, unadopted_live, replaced, gone, identity_mismatch, piloted_preserved,
-               sessions: sessions.size };
+               sessions: sessions.size, jobs };
+    },
+    applyLateState(state) {
+      if (state?.format !== 'm59-jobs/1') return;
+      const r = jobBoard.importSnapshot(state);
+      const v = jobBoard.verifyAfterHandover();
+      console.error(`[handover] job board late state: revision ${r.revision}, ${r.jobs} job(s)` +
+                    (v.orphaned.length ? `, ${v.orphaned.length} orphaned at verify` : ''));
     },
     adoptionAcceptable: judgeAdoption,
     listen(name, handle) {
@@ -21583,6 +21701,9 @@ async function runAsSuccessor() {
       if (dashboardPort != null) await serveDashboard(dashboardPort);
     },
     started() {
+      // The board's file is this broker's now: persist from here (a warm successor never wrote it).
+      jobBoard.persist = true;
+      try { jobBoard.save(); } catch {}
       startLedger();
       startReconciling();
       startPilotWatch();
