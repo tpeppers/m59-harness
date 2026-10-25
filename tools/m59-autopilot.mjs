@@ -23866,7 +23866,11 @@ export class Autopilot {
       // A karma-strict character does not hit back at what it may not kill — and does not leave
       // the room over it either (the refusal branch below would): it keeps on its quarry, and
       // the flee line is what protects it. See karmaForbids.
+      // A SPARED attacker is skipped for the same reason: fight() refuses it, so picking it here broke
+      // off every pass and the quarry beside it was never chosen (Scooter in Icky Cave, 2026-10-25: a
+      // spared spider biting him, five orcs in reach, "broke off" once a second for minutes).
       const bystander = adjacent.find(o => { if(this.combatApproachCooling(room?.num,o))return false;
+                                             if (this.sparedHere(o)) return false;
                                              const n = c.rsc.get(o.nameRsc) || '';
                                              return !isOurs(n) && !this.karmaForbids(n); });
       if (!bystander && this.policy?.karmaStrict) {
