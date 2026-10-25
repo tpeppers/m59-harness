@@ -56,7 +56,7 @@ import { DormancyStore, DORMANCY_ENV, encodeDormancy, normalizeDormancy, dormanc
 import { normalizePractice } from './m59-deskpractice.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME } from './m59-client.mjs';
@@ -5765,13 +5765,25 @@ const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { r
 const JOBS_DIR = /^fleets$/i.test(STATE_FILE.split(/[\\/]/).at(-2) ?? '') ? dirname(dirname(STATE_FILE)) : dirname(STATE_FILE);
 const JOBS_FILE = join(JOBS_DIR, `jobs-${FLEET || 'default'}.json`);
 const jobPath = (f, cwd) => !f ? null : /^([a-zA-Z]:)?[\\/]/.test(f) ? f : join(cwd || BROKER_ROOT, f);
+// The shell job_resume runs a restart line in: M59_BASH, else Git for Windows' bash, else `bash` (see spawnDetached).
+const jobBash = () => {
+  if (process.env.M59_BASH) return process.env.M59_BASH;
+  if (process.platform === 'win32') {
+    for (const p of ['C:\\Program Files\\Git\\usr\\bin\\bash.exe', 'C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files (x86)\\Git\\bin\\bash.exe'])
+      if (existsSync(p)) return p;
+  }
+  return 'bash';
+};
 const jobBoard = new JobBoard({
   file: JOBS_FILE, fleet: FLEET || null, pidAlive,
   pidStarts: pids => processStartTimes(pids),
   kill: pid => { try { process.kill(pid); } catch { /* already gone */ } },
   touch: (f, o) => { const p = jobPath(f); if (o?.remove) { try { unlinkSync(p); } catch {} } else writeFileSync(p, `paused by the broker job board ${new Date().toISOString()}\n`); },
+  // GIT BASH, NOT WHATEVER `bash` IS ON THE BROKER'S PATH. On prod the broker's PATH resolves `bash` to
+  // C:\Windows\System32\bash.exe (WSL), which cannot run a Windows-path restart line: the first live job_resume
+  // (2026-10-25 18:19Z) marked five jobs resumed and started none. M59_BASH overrides; else Git for Windows' bash.
   spawnDetached: (cmd, cwd, o) => {
-    const child = spawn('bash', ['-c', cmd], { cwd: cwd || BROKER_ROOT, detached: true, stdio: 'ignore', windowsHide: true,
+    const child = spawn(jobBash(), ['-c', cmd], { cwd: cwd || BROKER_ROOT, detached: true, stdio: 'ignore', windowsHide: true,
       env: { ...process.env, M59_FLEET: FLEET || process.env.M59_FLEET || '', M59_JOB_RESUMES: o?.resumes ?? '' } });
     child.unref();
     return child.pid ?? null;
