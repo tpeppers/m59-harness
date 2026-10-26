@@ -7,9 +7,10 @@ records. Then the RPG vocabulary from the kod: a curse is never a debuff, three 
 "laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
 derived from the map, the service board, the posture save and read-back, and an operation's expectations.
 
-`m59-hazards-test.mjs` (19) pins the named hazards (docs/m59-joints.md "Named hazards"). Survival off is a lease that
+`m59-hazards-test.mjs` (24) pins the named hazards (docs/m59-joints.md "Named hazards"). Survival off is a lease that
 runs out by itself, a flag with no lease stays off, and the keeper's pass runs again after the lease without anyone
-restoring it. A journey for a survival-off body is refused unless it goes to an inn or accepts `survival_off_move`;
+restoring it. A journey for a survival-off body is refused unless it goes to a NO_COMBAT room or accepts
+`survival_off_move`. The safe rooms come from the map: every inn either old hand list named is one, Ukgoth is not;
 in-room walks and combat orders are not this guard's.
 
 `m59-hearing-test.mjs` (13) pins what a death records about whether the keeper was looking and could hear (prod

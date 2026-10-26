@@ -193,7 +193,7 @@ call, `--accept <id>` on a CLI. The refusal says nothing was done and names the 
 | id | refused where | when |
 |---|---|---|
 | `survival_off`, `no_flee`, `travel_unguarded` | `m59-posture.mjs apply` | a posture would set it |
-| `survival_off_move` | the broker's tool door | `travel` for a character whose survival is off, to anywhere but an inn |
+| `survival_off_move` | the broker's tool door | `travel` for a character whose survival is off, to a room that is not NO_COMBAT. The safe rooms come from the map's own room flag (`noCombatRooms`, 73 rooms: every inn, shop, bank and hall), not a hand list |
 | `go_red` | combat mode (`needsSafetyOff`) | a `kill` would lower safety against an innocent, and this character is not already a murderer |
 | `reroll` | the broker's `reroll` tool | already wanted `confirm: true` |
 

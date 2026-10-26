@@ -186,7 +186,6 @@ import { hourFromSunAngle, phaseFromSun, isFresh } from './m59-skyclock.mjs';
 import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
 import { survivalOffConflict, survivalOffLeaseMs } from './m59-hazards.mjs';
-import { CITY_INNS } from './m59-underworld.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
@@ -11782,7 +11781,7 @@ const TOOLS = [
           'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
       heal_wand_below: { type: 'number', minimum: 0, maximum: 1,
         description: 'Farmers apply healing wands to self below this health fraction; 0 disables (default). Confirmed empty healing wands are dropped. Vampiric wands are preserved.' },
-      survival_enabled: { type: 'boolean', description: 'Explicit operator switch for autonomous noncombat behavior. Default true. False stands down recovery, freezing, shelter, watchdog interventions and ordinary keeper work; explicit commands, player combat and death/Underworld handling remain active. False is a LEASE: it lapses after survival_off_ms (default 30 min, max 12 h), and while it holds, `travel` refuses any destination but an inn unless accept:["survival_off_move"].' },
+      survival_enabled: { type: 'boolean', description: 'Explicit operator switch for autonomous noncombat behavior. Default true. False stands down recovery, freezing, shelter, watchdog interventions and ordinary keeper work; explicit commands, player combat and death/Underworld handling remain active. False is a LEASE: it lapses after survival_off_ms (default 30 min, max 12 h), and while it holds, `travel` refuses any destination that is not a NO_COMBAT room (inns, shops, banks) unless accept:["survival_off_move"].' },
       survival_off_ms: { type: 'number', description: 'How long survival_enabled:false holds before survival is on again by itself. Default 1800000 (30 min), at most 43200000 (12 h).' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
       flee_below: { type: 'number', description: 'under this fraction, reach for the logoff ' +
@@ -19249,19 +19248,17 @@ async function callTool(name, args, caller) {
     const verdict = guardToolCall({ tool: name, args, caller, index: menagerieIndex });
     if (verdict.action === 'refuse') throw new Error(verdict.error);
   }
-  // A JOURNEY FOR A BODY WITH SURVIVAL OFF IS REFUSED unless it goes to an inn or says so (m59-hazards.mjs). Seven deaths
+  // A JOURNEY FOR A BODY WITH SURVIVAL OFF IS REFUSED unless it goes to a NO_COMBAT room or says so (m59-hazards.mjs). Seven deaths
   // in Ukgoth, 2026-10-26: keepers left with survival off by a drill were travelled into the troll floor by scripts and
   // a bot, and stood there. `accept` is this door's, so it is taken off the arguments before the tool sees them.
   if (args && typeof args === 'object' && Object.hasOwn(args, 'accept') && !(byName.get(name)?.schema?.properties?.accept)) {
     const { accept, ...rest } = args;
-    const conflict = survivalOffConflict({ tool: name, args, policyOf: a => autopilotIfAny(a)?.policy ?? null,
-      inns: Object.values(CITY_INNS) });
+    const conflict = survivalOffConflict({ tool: name, args, policyOf: a => autopilotIfAny(a)?.policy ?? null });
     if (conflict) throw new Error(conflict.error);
     if (accept != null) console.warn(`[${name}] accepted hazard(s): ${[].concat(accept).join(', ')} | ${args.agent ?? ''}`);
     args = rest;
   } else {
-    const conflict = survivalOffConflict({ tool: name, args: args ?? {}, policyOf: a => autopilotIfAny(a)?.policy ?? null,
-      inns: Object.values(CITY_INNS) });
+    const conflict = survivalOffConflict({ tool: name, args: args ?? {}, policyOf: a => autopilotIfAny(a)?.policy ?? null });
     if (conflict) throw new Error(conflict.error);
   }
   // Rich keeper state is now demand-driven. Resolve the target before the tool reads any

@@ -8,7 +8,8 @@
 //
 // Where each is enforced:
 //   survival_off, no_flee, travel_unguarded   m59-posture.mjs apply (a posture that sets them)
-//   survival_off_move                          the broker's tool door (callTool): a journey for a survival-off body
+//   survival_off_move                          the broker's tool door (callTool): a journey for a survival-off body to a
+//                                              room that is not NO_COMBAT
 //   go_red                                     m59-combat-mode.mjs needsSafetyOff: striking an innocent with safety off
 //   reroll                                     the broker's reroll tool, which already wants confirm:true
 //
@@ -16,11 +17,13 @@
 // `survival_off_ms` to choose); after it the keeper treats survival as ON whatever the stored flag says. The night of
 // 2026-10-25 a drill's restore left six troll-crew keepers with survival off until morning, and seven deaths in Ukgoth
 // followed: no flee, no frames, every hit heard and ignored.
+import { readFileSync } from 'node:fs';
+
 export const HAZARDS = {
   survival_off: 'survival_enabled:false stops ALL ordinary keeper work, practice included, and the flee ladder; it logs no decline (six keepers for a day, prod 2026-10-26)',
   no_flee: 'a flee or rest line under 10% means the character fights to death; the keeper will not run',
   travel_unguarded: 'a journey with its guard off walks on at any health: Cccc was walked out of a sanctuary at 27% and eaten (2026-08-21)',
-  survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but an inn is how Rowlf, Clifford and Fozzie died seven times in Ukgoth (2026-10-26)',
+  survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but a no-combat room (an inn, a shop, a bank) is how Rowlf, Clifford and Fozzie died seven times in Ukgoth (2026-10-26)',
   go_red: 'striking an innocent (not a murderer, outlaw, morph or war enemy) with safety off makes this character an outlaw, and killing one makes it a murderer: merchants refuse it and the karma does not come back',
   reroll: 'reroll deletes the character and cannot be undone',
 };
@@ -49,24 +52,49 @@ export function survivalOffOf(policy, now = Date.now()) {
   return !(Number.isFinite(until) && now >= until);
 }
 
+// ------------------------------------------------------------------------------------- where nothing can hit you
+// THE ROOMS WHERE THE SERVER LETS NOBODY SWING: the room's own NO_COMBAT flag (blakston.khd, checked first in room.kod
+// ReqSomethingAttack), as baked into substrate/m59-map.json. 73 rooms: every inn, the shops, banks and halls, Marion.
+// One table from the game's own data, not a hand list: the harness had 52/106/153/202/370/2001 and prod's lockdown
+// tooling 103/106/153/202/370/1001/1011, and each was missing inns the other had (2026-10-26).
+export const ROOM_NO_COMBAT = 0x0002;
+let noCombat = null;
+export function noCombatRooms(file = new URL('../substrate/m59-map.json', import.meta.url)) {
+  if (noCombat) return noCombat;
+  noCombat = new Map();
+  try {
+    const m = JSON.parse(readFileSync(file, 'utf8'));
+    for (const r of Array.isArray(m.rooms) ? m.rooms : Object.values(m.rooms ?? m))
+      if (r && Number.isFinite(r.num) && (r.flags & ROOM_NO_COMBAT)) noCombat.set(r.num, r.name ?? null);
+  } catch { /* no map: nothing is known safe, so the guard allows nothing but an explicit accept */ }
+  return noCombat;
+}
+/** Is this destination (a room number or name) a room where nothing can attack? */
+export function isNoCombatRoom(to, rooms = noCombatRooms()) {
+  if (to == null || to === '') return false;
+  if (rooms.has(Number(to))) return true;
+  const want = String(to).trim().toLowerCase();
+  for (const name of rooms.values()) if (String(name ?? '').trim().toLowerCase() === want) return true;
+  return false;
+}
+
 // ------------------------------------------------------------------------------------- the broker's door
 // Tools that put a body somewhere else. `walk_to`/`crawl_to` stay in the room, so they are left alone; a combat order
 // is left alone too, because combat mode keeps its own stop_below whatever survival says, and an operator's kill order
 // is the one thing that must not wait.
 const MOVES = new Set(['travel']);
-const fold = s => String(s ?? '').trim().toLowerCase();
 /**
- * Refuse a tool call that moves or fights a survival-off character, unless it accepts `survival_off_move`. A journey to
- * an inn is allowed: that is where a character with survival off belongs. Pure: `policyOf(agent)` reads the stored
- * policy, `inns` is [{ inn, innName }].
+ * Refuse a journey for a survival-off character, unless it accepts `survival_off_move`. A journey to a NO_COMBAT room
+ * (an inn, a shop, a bank) is allowed: that is where a character with survival off belongs. `policyOf(agent)` reads
+ * the stored policy; `safe(to)` says whether a destination is a no-combat room (default: the baked map).
  */
-export function survivalOffConflict({ tool, args = {}, policyOf, inns = [], now = Date.now() }) {
+export function survivalOffConflict({ tool, args = {}, policyOf, safe = isNoCombatRoom, now = Date.now() }) {
   if (!MOVES.has(tool)) return null;
   if (accepts(args.accept, 'survival_off_move')) return null;
   const agents = [args.agent, ...(Array.isArray(args.agents) ? args.agents : [])].filter(Boolean);
   const off = agents.filter(a => survivalOffOf(policyOf(a), now));
   if (!off.length) return null;
   const to = args.to;
-  if (inns.some(i => String(i.inn) === String(to) || fold(i.innName) === fold(to))) return null;
+  if (safe(to)) return null;
   return { id: 'survival_off_move', agents: off, error: refusal('survival_off_move', `${off.join(', ')} -> ${to}`) };
 }
