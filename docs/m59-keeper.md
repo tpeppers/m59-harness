@@ -269,6 +269,13 @@ health is normal, and a flat trail fits three different failures:
 | the socket went quiet | `rx_age_ms` large |
 | bytes arrived and nothing parsed: a framing desync empties the buffer and can repeat, or STAT messages fail the end-of-payload check and are dropped | `rx_age_ms` small, `msg_age_ms` large, or `framing_drops` / `stat_parse_errors` climbing |
 
+**The answer for the two deaths with readings (Rowlf, Clifford) was the first row, for a reason the table did not
+have yet: survival was OFF.** Both keepers were among the six a drill's save/restore had left with
+`survival_enabled:false`. With it off, every pass returns at once (`operatorSurvivalStandDown`), the travel guard reads
+`off`, and the watchdog used to return before writing a frame. Health pushes for every hit kept arriving, and nothing
+looked at them. The watchdog now writes frames under survival off, and `hearing.survival_enabled` records it. Nothing
+stops a survival-off character from being walked into a killing room by another driver; that is the gap to close.
+
 Frames carry `rx_age_ms` and `msg_age_ms` too. `m59-hearing-test.mjs` (10) pins that these are written. Nothing here
 changes behaviour: which failure it was decides the fix, and the next such death answers it.
 

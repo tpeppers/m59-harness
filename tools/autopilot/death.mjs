@@ -123,6 +123,9 @@ export class DeathPart {
             .map(e => ({ what: e.what, why: e.why, age_ms: age(e.at) })),
           watchdog: w ? { last_tick_age_ms: age(w.lastTickAt), last_skip: w.lastSkip ? { why: w.lastSkip.why, age_ms: age(w.lastSkip.at) } : null } : null,
           combat_mode: !!this.s.combat?.active,
+          // The likeliest answer of all: survival_enabled:false makes every pass return at once and turns the travel
+          // guard off, so a body walked into a fight by anybody else stands there and dies.
+          survival_enabled: this.policy?.survivalEnabled !== false,
         };
       })(),
       threats: {

@@ -400,13 +400,25 @@ export class WatchdogPart {
     try { publishCooperativePresence(this); } catch(e) { this.watch.lastError=e.message; }
     const s = this.s, c = s?.client;
     if (!c || s.live !== true || c.state !== 'game') return;
-    if (s.combat?.active) { void s.combat.tick(); return; }
-    if(this.policy?.survivalEnabled===false)return;
+    if (s.combat?.active) { if (this.watch) this.watch.lastSkip = { at: Date.now(), why: 'combat mode owns the body' }; void s.combat.tick(); return; }
     const w = this.watch;
-    w.ticks++;
     const now = Date.now();
     const v = c.vitals?.();
     const hp = v?.health;
+    // SURVIVAL OFF STILL WRITES FRAMES. It used to return before the frame, so a character stood down by the operator
+    // died with a trail that had stopped minutes earlier and read as a keeper that could not hear its own health
+    // (Rowlf and Clifford, prod 2026-10-26: health pushes for every hit, no frame, no flee). Observing is not
+    // intervening: the frame is written, and nothing else here runs.
+    if (this.policy?.survivalEnabled === false) {
+      if (!w) return;
+      const moved = hp?.value != null && hp.value !== w.lastHealth;
+      if (moved || now - (this.lastFrameAt ?? 0) >= WATCHDOG_FRAME_MS) this.recordFrame(moved ? 'watchdog: health moved (survival OFF)' : 'watchdog (survival OFF)');
+      w.lastHealth = hp?.value ?? null;
+      w.lastSkip = { at: now, why: 'survival disabled by operator' };
+      return;
+    }
+    w.ticks++;
+    w.lastTickAt = now;
 
     // 1. A FRAME WHEN SOMETHING MOVED, OR WHEN NOTHING HAS FOR A WHILE.
     //

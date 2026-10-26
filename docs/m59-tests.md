@@ -7,11 +7,11 @@ records. Then the RPG vocabulary from the kod: a curse is never a debuff, three 
 "laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
 derived from the map, the service board, the posture save and read-back, and an operation's expectations.
 
-`m59-hearing-test.mjs` (10) pins what a death records about whether the keeper was looking and could hear (prod
+`m59-hearing-test.mjs` (13) pins what a death records about whether the keeper was looking and could hear (prod
 2026-10-26: nine deaths "stalled" with a flat health trail). A desynced frame header is counted, not only logged,
 while the socket still reads as alive. The postmortem's `hearing` block carries the age of the last frame, the last
 received bytes, the last parsed message, framing drops, STAT parse errors, and when the watchdog last ran and why it
-last stepped aside.
+last stepped aside, and whether survival was on. With survival off, a hit still writes a frame.
 
 `m59-posture-test.mjs` (18) pins a posture's live half against a fake broker. A hazardous order (survival off, no
 flee line) is refused unless accepted by name, and nothing is pushed or saved. `tend` finds a handoff's reset by key

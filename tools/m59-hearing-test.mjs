@@ -34,6 +34,7 @@ section: {
   ok('how long before the death the last frame was written', h?.last_frame_age_ms >= 40_000);
   ok('bytes fresh, last parsed message old: alive and deaf', h?.rx_age_ms < 5_000 && h?.msg_age_ms >= 30_000);
   ok('framing drops and the STAT parse errors are named', h?.framing_drops === 7 && h?.stat_parse_errors.length === 1 && h.stat_parse_errors[0].why === 'cursor off by 4 bytes');
+  ok('whether survival was on', h?.survival_enabled === true);
   ok('and when the watchdog last ran, and why it last stepped aside', h?.watchdog?.last_tick_age_ms >= 40_000 && h.watchdog.last_skip.why === 'combat mode owns the body');
 }
 
@@ -43,6 +44,18 @@ section: {
   ok('a watchdog that steps aside for combat mode says so', host.watch.lastSkip?.why === 'combat mode owns the body');
   host.s.live = false; tick(host);
   ok('and for a session that is not live', host.watch.lastSkip?.why === 'session not live');
+}
+
+section: {
+  // THE KEEPER'S OWN WATCHDOG, survival off: it used to return before writing a frame.
+  const frames = [];
+  const keeper = Object.create(Autopilot.prototype);
+  let hp = 80;
+  Object.assign(keeper, { s: { live: true, combat: null, client: { state: 'game', vitals: () => ({ health: { value: hp, max: 87 } }) } },
+    policy: { survivalEnabled: false }, watch: { ticks: 0 }, lastFrameAt: Date.now(), recordFrame(why) { frames.push(why); this.lastFrameAt = Date.now(); } });
+  keeper.watchdogTick(); hp = 62; keeper.watchdogTick();
+  ok('survival off: a hit still writes a frame', frames.some(f => /health moved \(survival OFF\)/.test(f)));
+  ok('and the watchdog says why it did nothing else', keeper.watch.lastSkip?.why === 'survival disabled by operator');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
