@@ -22,8 +22,8 @@ import { readFileSync } from 'node:fs';
 export const HAZARDS = {
   survival_off: 'survival_enabled:false stops ALL ordinary keeper work, practice included, and the flee ladder; it logs no decline (six keepers for a day, prod 2026-10-26)',
   no_flee: 'a flee or rest line under 10% means the character fights to death; the keeper will not run',
-  travel_unguarded: 'a journey with its guard off walks on at any health: Cccc was walked out of a sanctuary at 27% and eaten (2026-08-21)',
-  survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but a no-combat room (an inn, a shop, a bank) is how Rowlf, Clifford and Fozzie died seven times in Ukgoth (2026-10-26)',
+  travel_unguarded: 'a journey with its guard off walks on at any health: a character was walked out of a sanctuary at 27% and eaten (2026-08-21)',
+  survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but a no-combat room (an inn, a shop, a bank) is how three troll-crew characters died seven times in Ukgoth (2026-10-26)',
   go_red: 'striking an innocent (not a murderer, outlaw, morph or war enemy) with safety off makes this character an outlaw, and killing one makes it a murderer: merchants refuse it and the karma does not come back',
   reroll: 'reroll deletes the character and cannot be undone',
 };

@@ -408,7 +408,7 @@ export class WatchdogPart {
     const hp = v?.health;
     // SURVIVAL OFF STILL WRITES FRAMES. It used to return before the frame, so a character stood down by the operator
     // died with a trail that had stopped minutes earlier and read as a keeper that could not hear its own health
-    // (Rowlf and Clifford, prod 2026-10-26: health pushes for every hit, no frame, no flee). Observing is not
+    // (two troll-crew characters, prod 2026-10-26: health pushes for every hit, no frame, no flee). Observing is not
     // intervening: the frame is written, and nothing else here runs.
     if (survivalOffOf(this.policy)) {
       if (!w) return;

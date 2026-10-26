@@ -269,7 +269,7 @@ health is normal, and a flat trail fits three different failures:
 | the socket went quiet | `rx_age_ms` large |
 | bytes arrived and nothing parsed: a framing desync empties the buffer and can repeat, or STAT messages fail the end-of-payload check and are dropped | `rx_age_ms` small, `msg_age_ms` large, or `framing_drops` / `stat_parse_errors` climbing |
 
-**The answer for the two deaths with readings (Rowlf, Clifford) was the first row, for a reason the table did not
+**The answer for the two deaths with readings was the first row, for a reason the table did not
 have yet: survival was OFF.** Both keepers were among the six a drill's save/restore had left with
 `survival_enabled:false`. With it off, every pass returns at once (`operatorSurvivalStandDown`), the travel guard reads
 `off`, and the watchdog used to return before writing a frame. Health pushes for every hit kept arriving, and nothing

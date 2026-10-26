@@ -46,8 +46,8 @@
 //   export default {
 //     name: 'red-alert', about: 'a named enemy online locks the fleet into Castle Victoria',
 //     when: [                                            // any one of these trips it
-//       { who_online: ['Morpheus', 'Wenbo'] },           // exact name (case/space folded) in a fresh `who`
-//       { war_alarm: { enemies: ['Morpheus'], rooms: [38, 39], within_ms: 60_000 } },   // a keeper's alarm
+//       { who_online: ['An Enemy', 'Another Enemy'] },   // exact name (case/space folded) in a fresh `who`
+//       { war_alarm: { enemies: ['An Enemy'], rooms: [38, 39], within_ms: 60_000 } },   // a keeper's alarm
 //       { pvp_death: { count: 2, within_ms: 600_000 } }, // fleet PvP deaths (the pvp-hold records)
 //       obs => obs.who?.players?.length > 40 ? 'crowded' : null,                         // or a function
 //     ],
