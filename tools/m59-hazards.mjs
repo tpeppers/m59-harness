@@ -78,6 +78,14 @@ export function isNoCombatRoom(to, rooms = noCombatRooms()) {
   return false;
 }
 
+/** Is the room this session stands in NO_COMBAT? The live room's flags first, the baked map's second. */
+export function roomIsNoCombat(s) {
+  const num = s?.world?.room?.num;
+  const f = s?.world?.map?.rooms?.[String(num)]?.flags ?? s?.world?.room?.flags;
+  if (Number.isFinite(Number(f))) return (Number(f) & ROOM_NO_COMBAT) !== 0;
+  return num != null && noCombatRooms().has(Number(num));
+}
+
 // ------------------------------------------------------------------------------------- the broker's door
 // Tools that put a body somewhere else. `walk_to`/`crawl_to` stay in the room, so they are left alone; a combat order
 // is left alone too, because combat mode keeps its own stop_below whatever survival says, and an operator's kill order

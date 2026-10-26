@@ -14,6 +14,7 @@ import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import * as skills from '../m59-skills.mjs';
 import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { roomIsNoCombat } from '../m59-hazards.mjs';
 
 export class PassSurvivalPart {
   // @part 1
@@ -372,7 +373,9 @@ export class PassSurvivalPart {
     const spent = Number.isFinite(rawVigor)
       && rawVigor < (this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR);
     const hurt = (hp !== null && hp < restAt) || ((vig !== null && vig < vigorRestAt) || spent)&&!scriptedWalkDefersVigorRest(this,v)&&!farmVigorWorkReady(this,v);
-    if(hurt && this.currentRecoveryWall()) {
+    // In a NO_COMBAT room nothing can swing, so recovery needs no wall: rest where we stand (see continueSurvivalDecision).
+    const noCombatHere = roomIsNoCombat(s);
+    if(hurt && !noCombatHere && this.currentRecoveryWall()) {
       await this.takeRecoverySpot('recovery needed while already at a safe wall');
       // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
       // branch below already carries, in its own words: "returned as soon as takeSafeSpot()
@@ -556,7 +559,7 @@ export class PassSurvivalPart {
     }
 
     const spawnsHere = !this.sanctuary();
-    if (hurt && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
+    if (hurt && !noCombatHere && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
       const got = await this.takeRecoverySpot(

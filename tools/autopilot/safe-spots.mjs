@@ -26,7 +26,7 @@ import { traceBody, traceRefuge, traceSurvival, traceSurvivalOperation } from '.
 import { recordTactic } from '../m59-tactics.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
 import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
-import { survivalOffOf } from '../m59-hazards.mjs';
+import { roomIsNoCombat, survivalOffOf } from '../m59-hazards.mjs';
 
 export class SafeSpotsPart {
   // @part 1
@@ -338,6 +338,16 @@ export class SafeSpotsPart {
       return true;
     }
     if(this.operatorSurvivalStandDown())return false;
+    // NOTHING CAN ATTACK IN A NO_COMBAT ROOM, so there is nothing to recover FROM: no wall, no refuge, no logoff. Prod
+    // 2026-10-26: after a keeper handoff in the Jasper inn, seven keepers under the resting cap asked for a recovery wall,
+    // found every wall square under a fleet-mate (none eligible), and re-planned that refuge every pass instead of
+    // practising. A decision found here is ended, and the pass rests where it stands.
+    if(roomIsNoCombat(this.s)) {
+      const d=currentSurvivalDecision(this.s);
+      if(d && d.strategy!=='yield_to_controller' && d.ended_at==null)
+        finishSurvivalDecision(this.s,d.id,'no_combat_room','nothing can attack in a NO_COMBAT room; resting in place');
+      return false;
+    }
     // A replacement is executable intent, not work to defer to the heartbeat.
     // Drain distinct alternatives serially, with fresh ownership/health checks in
     // each step. Stop when an action is stable or the same failed state recurs;

@@ -53,6 +53,24 @@ console.log('\nthe keeper honours the lease');
   ok('after it, the pass runs again: survival is back without anybody restoring it', k.operatorSurvivalStandDown() === false);
 }
 
+console.log('\na NO_COMBAT room ends a refuge search (prod 2026-10-26, the Jasper inn after a handoff)');
+{
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  const { chooseSurvivalDecision, currentSurvivalDecision } = await import('./m59-survival-decision.mjs');
+  const { roomIsNoCombat } = await import('./m59-hazards.mjs');
+  const inn = { world: { room: { num: 370, flags: 0x30a2 } } }, field = { world: { room: { num: 599, flags: 0 } } };
+  ok('the inn reads NO_COMBAT from its live flags; Ukgoth does not', roomIsNoCombat(inn) && !roomIsNoCombat(field));
+  ok('with no live flags, the baked map answers', roomIsNoCombat({ world: { room: { num: 1011 } } }) && !roomIsNoCombat({ world: { room: { num: 38 } } }));
+  const k = Object.create(Autopilot.prototype);
+  const s = { ...inn, name: 't3', client: { self: { row: 4, col: 10 }, vitals: () => ({ health: { value: 20, max: 20 } }), room: { objects: new Map() } } };
+  Object.assign(k, { s, policy: { survivalEnabled: true } });
+  chooseSurvivalDecision(s, { strategy: 'nearest_refuge', reason: 'recovery needed while already at a safe wall', reason_code: 'approach_interrupted', source: 'recovery' });
+  ok('a stuck refuge decision exists', currentSurvivalDecision(s)?.strategy === 'nearest_refuge');
+  const r = await k.continueSurvivalDecision();
+  const d = currentSurvivalDecision(s);
+  ok('in the inn it is ended and the pass carries on', r === false && (d == null || d.ended_at != null));
+}
+
 console.log('\nthe refusal');
 ok('every hazard has a reason', Object.values(HAZARDS).every(w => typeof w === 'string' && w.length > 20));
 ok('a refusal says nothing was done and how to mean it', /Nothing was done/.test(refusal('go_red')) && /--accept go_red/.test(refusal('go_red')));
