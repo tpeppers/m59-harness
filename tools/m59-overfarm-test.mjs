@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // OFFLINE. Pins the overfarm policy: the mixture arithmetic the operator predicted, the
 // four refusals in m59-overfarm.mjs's header, and the phase boundaries.
 //
@@ -237,7 +238,7 @@ section('value lookups resolve the name the table actually uses');
 // each one link of the chain that carries `overfarm` from a DUM slider to a pickup.
 section('the policy survives the wiring');
 {
-  const src = (f) => readFileSync(new URL(f, import.meta.url), 'utf8');
+  const src = (f) => readToolSource(new URL(f, import.meta.url), 'utf8');
 
   // Read as text rather than imported: importing m59-broker.mjs RUNS it — it takes the
   // fleet lock and starts rejoin timers. CLAUDE.md says so in as many words.
@@ -281,7 +282,7 @@ section('the policy survives the wiring');
 // ---------------------------------------------------------------------------------------
 section('overfarm usurps the full-pack town trip, which is the whole strategy');
 {
-  const autopilot = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const autopilot = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
   // THE DEFINITIONAL PROPERTY, in the operator's own words: overfarm "must usurp the ability
   // for pack is full to trigger a town trip until the overfarm% is reached". The first
@@ -326,7 +327,7 @@ section('overfarm usurps the full-pack town trip, which is the whole strategy');
 // ---------------------------------------------------------------------------------------
 section('a longer lap is stocked for, and ends where the goods do');
 {
-  const autopilot = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const autopilot = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
   // FARMING 150% AS LONG BURNS 150% OF THE CONSUMABLES. Without this the supply trigger —
   // which is deliberately NOT deferred — fires mid-lap and drags them to town anyway, moving

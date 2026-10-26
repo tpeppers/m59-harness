@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for THE HUNT AREA (policy.huntArea, a strategy's `huntArea`, Autopilot.huntAreaHere and the
 // quarry filter / walk-back in Autopilot.passFarm). Opens no socket.
 //
@@ -16,7 +17,7 @@ import { STRATEGY_FIELDS, validateStrategy, normHuntArea, normGuardZone } from '
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 await ok('the schema names huntArea as a work field a strategy may set', () => {
   const f = STRATEGY_FIELDS.find(x => x.path === 'huntArea');
@@ -94,7 +95,7 @@ await ok('guard zone wins over the strategy area in its room, and the strategy a
   assert.ok(ap.huntAreaHere(38).has('7,14') && ap.huntAreaHere(41) === null);
 });
 await ok('the broker takes guard_zone on autopilot and refuses a bad one before anything changes', () => {
-  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(/guard_zone: \{ type: \['object', 'null'\]/.test(BROKER));
   assert.ok(BROKER.includes('p.policy.guardZone = normGuardZone(a.guard_zone)'));
   assert.ok(BROKER.indexOf('guard_zone refused') < BROKER.indexOf('const keeper_push = await pushPolicyToKeeper(a.agent, p)'));

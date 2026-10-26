@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline integration: actual watchdog pulse, handoff, pending dispatcher and
 // retreat ladder. Only wire movement/attacks and geometry observations are fixtures.
 import assert from 'node:assert/strict';
@@ -316,7 +317,7 @@ test('a namesake arriving during a larger fight stops provocation and keeps refu
 
 test('real Flatlands geometry and real lure selector support exact retaliation, refuge and chase',async()=>{
   const f=fixture();await handoff(f);const {k,s,self,target,events}=f;target.name='troll';
-  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
+  const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
   s.world.geometry=geometryFor(map.rooms['584']);assert.ok(s.world.geometry);
   const origin={row:self.row,col:self.col},blocked={row:target.row,col:target.col};
   const plan=k.planBlockerLure(target,origin);assert.ok(plan,'real planner must find an eligible refuge');

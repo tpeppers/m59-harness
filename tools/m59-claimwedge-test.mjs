@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-claimwedge-test.mjs — A CLAIMED BODY THAT BOUNCES IS STILL A WEDGED BODY.
 //
 //   node tools/m59-claimwedge-test.mjs
@@ -40,7 +41,7 @@ import { readFileSync } from 'node:fs';
 
 const MODULE = process.env.M59_AUTOPILOT_MODULE || './m59-autopilot.mjs';
 const { Autopilot } = await import(new URL(MODULE, import.meta.url).href);
-const SOURCE = readFileSync(new URL(MODULE, import.meta.url), 'utf8');
+const SOURCE = readToolSource(new URL(MODULE, import.meta.url), 'utf8');
 
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => {

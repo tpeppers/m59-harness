@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // PER-CREATURE LOOT FILTER — offline, no socket, no roster.
 //
 //   node tools/m59-loot-filter-test.mjs
@@ -217,12 +218,12 @@ console.log('through Session.lootFloor');
 // ------------------------------------------------------------------ the hooks
 console.log('the hooks');
 {
-  const skillsSrc = readFileSync(join(HERE, 'm59-skills.mjs'), 'utf8');
+  const skillsSrc = readToolSource(join(HERE, 'm59-skills.mjs'), 'utf8');
   ok('fight() snapshots the floor when it chooses its foe',
      /const floorBefore = floorSnapshot\(c\.room\?\.objects\?\.values\?\.\(\), o => o\.flags & OF\.GETTABLE\)/.test(skillsSrc));
   ok('...and hands the kill to lootFloor',
      /s\.lootFloor\(\{ stayPut: holdPosition, kill: \{ name: foeName, before: floorBefore \} \}\)/.test(skillsSrc));
-  const apSrc = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const apSrc = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('the autopilot installs the policy on the session every pass',
      /s\.setLootOnly\?\.\(this\.policy\.lootOnly \?\? null, \{ matcherFor: k => this\.huntMatch\(k\) \}\)/.test(apSrc));
 }

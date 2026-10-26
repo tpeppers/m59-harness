@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {mkdtempSync,readFileSync} from 'node:fs';
@@ -54,7 +55,7 @@ test('traffic Blink protects its trance at the packet gate and releases only its
 });
 
 test('Flatlands: traffic behind the body and a bad goal are not a sealed pocket',()=>{
-  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+  const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url)));
   const room=map.rooms[584],geo=sharedRoomGeometry(room);
   // 2026-09-28 14:18:41.984Z decision, monster positions only.
   const bodies=[{row:27,col:30},{row:26,col:4},{row:31,col:23},{row:35,col:28},

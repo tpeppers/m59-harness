@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // ONE CHARACTER, ONE BRAIN.
 //
 //   node tools/m59-ghostkeeper-test.mjs
@@ -44,9 +45,9 @@ const ok = (what, cond, extra = '') => {
   else { fail++; console.log('  FAIL ' + what + (extra ? '  ' + extra : '')); }
 };
 
-const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-const FLEET_LOCK = readFileSync(new URL('./runtime/fleet-lock.mjs', import.meta.url), 'utf8');
+const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const FLEET_LOCK = readToolSource(new URL('./runtime/fleet-lock.mjs', import.meta.url), 'utf8');
 
 console.log('\nA KEEPER-BACKED CHARACTER GETS NO SECOND BRAIN IN THE BROKER');
 {

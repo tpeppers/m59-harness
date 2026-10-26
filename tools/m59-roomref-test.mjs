@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A ROOM REFERENCE CARRIES ITS SPACE — offline, no broker, no server, no roster.
 //
 //   node tools/m59-roomref-test.mjs
@@ -146,7 +147,7 @@ console.log('AND NO NEW SITE MAY PUT AN OBJECT ID IN A FIELD CALLED `room`');
   for (const f of readdirSync(dir).filter(f => /^m59-.*\.mjs$/.test(f) &&
                                                 !/-test\.mjs$/.test(f) &&
                                                 f !== 'm59-roomref.mjs')) {
-    const src = readFileSync(join(dir, f), 'utf8').split('\n');
+    const src = readToolSource(join(dir, f), 'utf8').split('\n');
     src.forEach((line, i) => {
       if (/^\s*(\/\/|\*)/.test(line)) return;               // never match the prose
       if (/\broom(_num)?:\s*[A-Za-z_$][\w$.]*\.room\.id\b/.test(line) ||
@@ -157,7 +158,7 @@ console.log('AND NO NEW SITE MAY PUT AN OBJECT ID IN A FIELD CALLED `room`');
   ok(`no NEW site reports an object id as a room (${hits.length} known: ${hits.join(', ')})`,
      hits.length <= KNOWN.length, hits.join(', '));
   // And the three that were fixed must stay fixed: the escape's replies go through roomFields.
-  const skills = readFileSync(join(dir, 'm59-skills.mjs'), 'utf8');
+  const skills = readToolSource(join(dir, 'm59-skills.mjs'), 'utf8');
   const escapes = (skills.match(/roomFields\(now\.id\)/g) ?? []).length;
   ok('all three escapeUnderworld replies name both numbers', escapes === 3, String(escapes));
   ok('and none of them still returns a bare `room: now.id`',

@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -47,10 +48,10 @@ try{
  {
   const f=fixture('owned-admission-lock'),store=f.store(),path=join(store.dir,'room-827.lock');
   store.lock(827,()=>{
-    const owner=JSON.parse(readFileSync(path,'utf8'));assert.equal(owner.pid,process.pid);assert(owner.process_started_at>0&&owner.token);
+    const owner=JSON.parse(readToolSource(path,'utf8'));assert.equal(owner.pid,process.pid);assert(owner.process_started_at>0&&owner.token);
     writeFileSync(path,JSON.stringify({...owner,token:'replacement-owner'}));
   });
-  assert.equal(JSON.parse(readFileSync(path,'utf8')).token,'replacement-owner','release cannot delete another owner\'s replacement lock');
+  assert.equal(JSON.parse(readToolSource(path,'utf8')).token,'replacement-owner','release cannot delete another owner\'s replacement lock');
   assert.equal(store.lock(827,()=>assert.fail('a held lock was bypassed')),null);
   console.log('PASS admission locks preserve PID/start/token evidence and never unlink a replacement or bypass a held owner');
  }
@@ -189,7 +190,7 @@ try{
   const other=fixture('boot-owned'),q=other.a.pilot;other.a.s.cooperativeLogoffReturn={request_id:'held'};
   Object.assign(q,{operatorSurvivalStandDown:()=>false,facultyHeld:()=>true,takeRecoverySpot:()=>assert.fail('foreign owner must not move')});
   assert.equal(await Autopilot.prototype.resumeCooperativeReturn.call(q),false);
-  const source=readFileSync(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
+  const source=readToolSource(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
   assert(source.indexOf('await autopilot.resumeCooperativeReturn?.()')<source.indexOf('autopilot.start();'));
   console.log('PASS restarted waiters establish refuge recovery before farming starts, while operator faculty ownership still refuses');
  }
@@ -201,7 +202,7 @@ try{
  }
  {
   const f=fixture('native-control-rejoin');await f.setup();f.offline();let sideEffects=0,reply;
-  const source=readFileSync(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
+  const source=readToolSource(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
   const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
   for(const path of ['/join','/rejoin']){
     const start=source.indexOf("    if (req.method === 'POST' && path === '"+path+"')");

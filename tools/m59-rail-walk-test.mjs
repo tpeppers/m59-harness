@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {bastionHarness} from './fixtures/bastion-fallback-client.mjs';
@@ -6,7 +7,7 @@ import {clientToProtocol} from './m59-finepos.mjs';
 import {ensureBraxApproach} from './m59-brax.mjs';
 import {applyAncientFloors} from './m59-moving-platform.mjs';
 const h=await bastionHarness(),{withBodyCommand}=await h.imp('m59-body-command.mjs');
-const route=JSON.parse(readFileSync(ensureBraxApproach())).stones[0].routes[0];
+const route=JSON.parse(readToolSource(ensureBraxApproach())).stones[0].routes[0];
 const source=route.legs[0],leg={...source,sourceWaypoints:source.waypoints,waypoints:source.aims};
 const f=h.fixture({from:{room:579,...clientToProtocol(leg.waypoints[0])}},{maxPackets:4096,maxMs:60000});
 const next=route.legs[1],nextJump={room:579,from:next.from,to:next.to,from_fine:next.declared_from??next.fromFine,to_fine:next.declared_to??next.toFine};
@@ -29,7 +30,7 @@ for(const [index,source]of route.legs.entries()){
 }
 
 {
- const sample=JSON.parse(readFileSync(new URL('./fixtures/brax-south-queue.json',import.meta.url))),body=sample.actors[0];
+ const sample=JSON.parse(readToolSource(new URL('./fixtures/brax-south-queue.json',import.meta.url))),body=sample.actors[0];
  const make=()=>{
   const f=h.fixture({from:{room:579,...body},bodies:sample.actors.slice(1)},{bodies:true,maxPackets:100});
   applyAncientFloors({rooms:{579:{}}},579,new Map(Object.entries(sample.floors).map(([id,height])=>[Number(id),{height,type:4}])),null,{geometryOf:()=>f.s.world.geometry});return f;
@@ -73,7 +74,7 @@ for(const [index,source]of route.legs.entries()){
 
 {
  const {Autopilot,scriptedWalkDefersVigorRest}=await h.imp('m59-autopilot.mjs'),{chooseSurvivalDecision,currentSurvivalDecision}=await h.imp('m59-survival-decision.mjs');
- const captured=JSON.parse(readFileSync(new URL('./fixtures/brax-corner-vigor-rest.json',import.meta.url))),v={health:captured.hp,vigor:captured.vigor};
+ const captured=JSON.parse(readToolSource(new URL('./fixtures/brax-corner-vigor-rest.json',import.meta.url))),v={health:captured.hp,vigor:captured.vigor};
  const s={client:{self:captured.you,selfId:captured.you.id,room:{objects:new Map()},vitals:()=>v,ailments:()=>[]},world:{room:captured.room},movementGeneration:5};
  const pilot={s,mode:'idle',policy:{},stopping:false,facultyOwner:()=> 'fleetscript:walk-to-brax (public)',facultyHeld:()=>false,travelGuard:()=>({rest:false}),operatorSurvivalStandDown:()=>false};
  assert(scriptedWalkDefersVigorRest(pilot,v));

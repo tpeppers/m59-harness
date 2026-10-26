@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // The safe-wall verdict and the ledger that tests it. Offline: no broker, no socket, no fleet.
 //
 //   node tools/m59-restwatch-test.mjs
@@ -283,7 +284,7 @@ console.log('\nTHE LEDGER MAY NOT BE READ BY ANYTHING THAT CHOOSES A SQUARE');
   const pickers = ['m59-safespots.mjs', 'm59-safewall.mjs', 'm59-autopilot.mjs',
                    'm59-broker.mjs', 'm59-fleetscript.mjs', 'm59-friendly-reboot.mjs'];
   for (const f of pickers) {
-    const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+    const src = readToolSource(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
     const reads = /\b(summarise|readRows)\s*\(/.test(src)
       || /import\s*\{[^}]*\b(summarise|readRows)\b[^}]*\}\s*from\s*['"]\.\/m59-restwatch/.test(src);
     ok(`${f} does not READ the ledger`, !reads, 'it calls readRows/summarise');
@@ -291,14 +292,14 @@ console.log('\nTHE LEDGER MAY NOT BE READ BY ANYTHING THAT CHOOSES A SQUARE');
   // And the geometry itself may not even write: a predicate that records its own outcomes is
   // one refactor away from consulting them.
   for (const f of ['m59-safespots.mjs', 'm59-safewall.mjs']) {
-    const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+    const src = readToolSource(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
     // An IMPORT, not a mention: both files name the ledger in their comments on purpose, so
     // the next reader finds the experiment. Prose is not coupling.
     ok(`${f} does not import the ledger at all`,
        !/^\s*import[^;]*from\s*['"]\.\/m59-restwatch\.mjs['"]/m.test(src));
   }
   // And the reverse: the ledger may not import a chooser, so it cannot grow an opinion.
-  const led = readFileSync(fileURLToPath(new URL('m59-restwatch.mjs', import.meta.url)), 'utf8');
+  const led = readToolSource(fileURLToPath(new URL('m59-restwatch.mjs', import.meta.url)), 'utf8');
   ok('and the ledger imports no chooser of its own',
      !/from\s+['"]\.\/m59-(autopilot|broker|game)\.mjs['"]/.test(led));
 }

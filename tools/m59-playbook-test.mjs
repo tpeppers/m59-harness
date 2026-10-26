@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE PLAYBOOK -- what the keeper does at the moments it has no opinion about. Offline,
 // no server, no broker, safe any time:
 //
@@ -369,7 +370,7 @@ console.log('a broadcast is heard by the whole server, so it rotates its line an
   // decided, journalled and silently dropped -- the exact shape of failure this repository
   // keeps paying for, and it was the state of `broadcast` for the first ten minutes of its
   // life. Checked as SOURCE because the executor needs a live client to run.
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the executor dispatches broadcast', /case 'broadcast':/.test(AP));
   ok('and enforces the cooldown rather than trusting it', /broadcast cooldown/.test(AP));
   ok('and reports a suppressed one instead of reporting success',

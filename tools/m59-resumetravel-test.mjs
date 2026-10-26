@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // AN INTERRUPTED JOURNEY IS SUSPENDED, NOT FORGOTTEN.
 //
 //   node tools/m59-resumetravel-test.mjs
@@ -60,7 +61,7 @@ const ok = (name, cond, extra = '') => {
 // lives in m59-game.mjs and the watchdog rescue in m59-watchdog.mjs; reading only the two
 // original files leaves these assertions searching haystacks that no longer contain their
 // subject — which fails the positive ones loudly and passes the negative ones silently.
-const readSrc = f => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
+const readSrc = f => { try { return readToolSource(f, 'utf8'); } catch { return ''; } };
 const BROKER_SRC = readSrc('tools/m59-game.mjs') + '\n' + readSrc('tools/m59-broker.mjs');
 const KEEPER_SRC = readSrc('tools/m59-autopilot.mjs') + '\n' + readSrc('tools/m59-watchdog.mjs');
 
@@ -822,7 +823,7 @@ console.log('AND THEY ARE NOT ABOLISHED — THEY ARE MOVED IN FRONT OF THE ROAD'
   ok('and reads it off the arguments defaulting to on',
      /runErrands: a\.run_errands !== false/.test(broker));
   // The measurement is the case that must not include a shopping trip.
-  const solo = readFileSync(join(HERE, 'm59-solo-run.mjs'), 'utf8');
+  const solo = readToolSource(join(HERE, 'm59-solo-run.mjs'), 'utf8');
   ok('and a timed leg asks for none of it', /run_errands: false/.test(solo));
 }
 

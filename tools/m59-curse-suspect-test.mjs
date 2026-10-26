@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline contract for the CURSE SUSPECT and the TROLL MYSTIC SWORD. Opens no socket.
 //
 // Operator, 2026-10-16: "an un-curse DUM-bot request that gets triggered if a bot finds itself cursed
@@ -203,7 +204,7 @@ await ok('since is stable for one incident, and a suspicion is upgraded to certa
 });
 
 await ok('the keeper wires both hooks and publishes the suspect on weapon_magic', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   assert.ok(src.includes('session.equipTrollQuarry = () => this.huntsTrolls();'));
   assert.ok(src.includes('session.onCursedInHand = (items, said) => this.noteCurseSuspect('));
   assert.ok(src.includes('curse_suspect: this._curseSuspect ?? null'));

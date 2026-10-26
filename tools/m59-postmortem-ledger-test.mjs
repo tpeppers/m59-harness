@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -8,8 +9,8 @@ const {Autopilot}=await import('./m59-autopilot.mjs');
 const pilot={note(){throw Error('durable evidence write failed');}};
 const record={agent:'offline',character:'Offline',at:1700000000000,where:{num:827,room:'Ancient Graveyard of Brax',row:5,col:2},vitals:{last_health:1},reason:'died'};
 const file=Autopilot.prototype.writePostMortem.call(pilot,record);
-assert.equal(JSON.parse(readFileSync(file)).where.num,827);
+assert.equal(JSON.parse(readToolSource(file)).where.num,827);
 Autopilot.prototype.writePostMortem.call(pilot,{...record,at:record.at+1000});
-const rows=readFileSync(join(scratch,'deaths.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+const rows=readToolSource(join(scratch,'deaths.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
 assert.equal(rows.length,2);assert.equal(rows[0].room_num,827);assert.equal(rows[0].agent,'offline');assert.notEqual(rows[0].at,rows[1].at);
 console.log('postmortem ESM writer preserves each detailed death and appends both durable ledger rows');

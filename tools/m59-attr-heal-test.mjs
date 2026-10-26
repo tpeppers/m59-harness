@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for tools/m59-attr-heal.mjs: a keeper re-asks for stat group 2 only when its
 // attribute block is genuinely incomplete, never on a healthy one. Opens no socket.
 //
@@ -32,7 +33,7 @@ ok('the snapshot carries observed_at, so the log can tell "never arrived" from "
 });
 ok('no client yet: nothing to judge', () => assert.equal(attributesIncomplete(null), null));
 ok('the keeper heals only in game, never during a handoff, once a minute, and reports once per LOGIN', () => {
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/if \(!inGame \|\| !session\.live \|\| handoffActive\(\)\) \{[\s\S]{0,700}?return;\s*\}[\s\S]{0,2500}?const bad = attributesIncomplete/.test(src));
   assert.ok(/if \(!bad\) return;[\s\S]{0,400}?if \(!attrHealReported\.has\(cl\)\) \{\s*attrHealReported\.add\(cl\);/.test(src),
     'keyed on the client, so a second relog inside one drop reports again');
@@ -46,29 +47,29 @@ ok('A LOGIN IN PROGRESS IS NOT A DROP: the heal leaves it alone inside the grace
   assert.equal(loginSettling({ loginPhase: 'reads' }, { ...g, now: login + 25_000 }), false, 'past the grace it is judged');
   assert.equal(loginSettling({ loginPhase: 'ready' }, { ...g, now: login + 300 }), false);
   assert.equal(loginSettling({}, { ...g, now: login + 300 }), false, 'a client with no phase is judged as before');
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/if \(loginSettling\(cl, [^)]*\)\) return;\s*const bad = attributesIncomplete/.test(src), 'checked before the block is judged');
   assert.ok(src.includes('const since = cl?.loginStartedAt ?? session.loggedInAt'),
     "timed from THIS client's login, so an in-process relog restarts the clock");
-  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const game = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   assert.ok(/this\.client = c;[\s\S]{0,400}?c\.loginStartedAt = Date\.now\(\);\s*c\.loginPhase = 'installed';/.test(game), 'stamped as it is installed');
 });
 ok('a deaf client the guard hides is reported, and every rejoin names its reason', () => {
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/if \(overdue && !attrHealGuardLogged\.has\(cl\)\)[\s\S]{0,400}heal is held/.test(src));
-  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const game = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const connection=game.slice(game.indexOf('  async rejoinConnection('),game.indexOf('  async ',game.indexOf('  async rejoinConnection(')+10));
   assert.ok(connection.includes('this.lastRejoin = {'), 'the actual connection attempt records its reason');
   assert.ok(game.includes('this.rejoinConnection(why,options)'), 'deduplicated rejoin forwards the reason and options');
   assert.ok(game.includes('login complete in'), 'each login says how long its reads took');
-  const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const ap = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   assert.ok(/this\.s\.rejoin\(why(?:,|\))/.test(ap), 'the autopilot passes its reason');
   assert.equal(statTraceOf({ createdAt: 1, statTrace: {}, loginPhase: 'reads', loginStartedAt: 5 }).login_phase, 'reads');
 });
 ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login reads', () => {
   // c.login() resolves on AP_GAME, before the character is chosen; ToCliStats drops a request
   // until UserLogon sets pbLogged_on (user.kod:2663). BP_PLAYER is sent from inside UserLogon.
-  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('));
   const wait = body.indexOf('!c.selfId && Date.now() < until');
   const firstRead = body.indexOf("await observe('room', () => c.roomContents())");
@@ -78,7 +79,7 @@ ok('THE CAUSE: Session.joinOnce waits for our own BP_PLAYER before the login rea
 ok('THE CAUSE (t17, 2026-10-01): a preempted login read no longer aborts the login', () => {
   // "join failed: body command preempted by combat override" left a live client with no group 2
   // and combatReady false -- and the retry returned it as "already in game".
-  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
   assert.ok(!/\n\s*await loginRead\(/.test(body), 'no login read is awaited bare: each goes through observe()');
   assert.ok(/catch \(e\) \{\s*loginReadFailures\.push[\s\S]{0,120}this\.pacer\.submit\('read', fn\)/.test(body),
@@ -88,7 +89,7 @@ ok('THE CAUSE (t17, 2026-10-01): a preempted login read no longer aborts the log
 ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent directly after a bound', () => {
   // trace: login_read_failures [], nothing asked, combat_ready false -- joinOnce parked on its first
   // read behind a pacer job that never settled.
-  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
   assert.ok(/const r = await delivered\(loginRead\(fn\)\);\s*if \(r\?\.held === true\)[^\n]*\n\s*return r === STALL \? sendDirect\(what, stalled, fn\) : r;/.test(body),
     'the first attempt is bounded and falls back to a direct send');
@@ -96,7 +97,7 @@ ok('THE HANG (t4, 2026-10-02): a login read the pacer never delivers is sent dir
   assert.match(src, /export const LOGIN_READ_STALL_MS = /);
 });
 ok('a keeper never stays combat-deaf: readiness is declared 20s after a login that did not set it', () => {
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   assert.ok(/const overdue = combatReadyOverdue\(cl, [\s\S]{0,1800}?if \(overdue\) \{\s*cl\.combatReady = true;/.test(src));
   const login = 1_000_000, g = { since: login, graceMs: 20_000 };
   assert.equal(combatReadyOverdue({ combatReady: false }, { ...g, now: login + 21_000 }), true);
@@ -119,7 +120,7 @@ ok('THE CAUSE (t9, 2026-10-03): a cast hold drops a read as {held:true} without 
   assert.equal(p.holdStatus().active, false);
 });
 ok('so joinOnce releases an inherited hold, and a held login read is sent directly and recorded', () => {
-  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async joinOnce('), src.indexOf('this.firstAbilityRead = readAbilitiesOnce'));
   const install = body.indexOf("c.loginPhase = 'installed';");
   const release = body.indexOf('this.pacer.releaseCastHold();');
@@ -144,7 +145,7 @@ ok('the trace tells "never asked", "asked and unanswered" and "the login wait ti
   assert.ok(t.group1_got, 'while group 1 was');
   assert.equal(t.login_wait.timed_out, true);
   assert.equal(statTraceOf(null), null);
-  const src = readFileSync(new URL('./m59-client.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-client.mjs', import.meta.url), 'utf8');
   assert.ok(src.includes('this.statTrace.got[res.group] = Date.now();'), 'the client records each group reply');
   assert.ok(/stats\(group = 1\)\s*\{[\s\S]{0,200}asked\.push\(Date\.now\(\)\)/.test(src), 'and each request');
 });

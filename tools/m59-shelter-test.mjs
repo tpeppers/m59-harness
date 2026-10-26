@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // RUNNING FOR COVER, AND THE THREE THINGS A POSTMORTEM COULD NOT SAY.
 //
 //   node tools/m59-shelter-test.mjs
@@ -38,9 +39,9 @@ process.env.M59_SHELTER_DIR = DIR;
 const { recordShelterRun, shelterRuns, pairRuns, shelterFile } =
   await import('./m59-shelter.mjs');
 
-const AUTOPILOT_SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT_SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 const { Autopilot } = await import('./m59-autopilot.mjs');
-const GAME_SRC = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+const GAME_SRC = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 
 console.log('\n(A) THE DECISION IS RECORDED WHEN THE WALL IS CHOSEN, NOT WHEN IT IS REACHED');
 {
@@ -291,7 +292,7 @@ console.log('\n(H) THE EPOCH FILTER HAS TO ACTUALLY FILTER');
   // still averaged into every summary after it, which is the one thing the epoch tag exists
   // to stop. Caught by eye, reading a post-rebake summary that still showed the pre-rebake
   // rows; this is the test that should have caught it instead.
-  const src = readFileSync(new URL('./m59-shelter.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-shelter.mjs', import.meta.url), 'utf8');
   ok('the row goes in first and the domain second, as sameEpoch declares them',
      /sameEpoch\(r\.epoch \?\? null, 'movement'\)/.test(src));
   ok('and never the other way round in the filter itself',
@@ -312,7 +313,7 @@ console.log('\n(H) THE EPOCH FILTER HAS TO ACTUALLY FILTER');
   // you can forge) and means a foreign row has to be planted rather than recorded.
   const now = shelterRuns().length;
   const f = shelterFile();
-  const book = JSON.parse(readFileSync(f, 'utf8'));
+  const book = JSON.parse(readToolSource(f, 'utf8'));
   book.runs.push({ run: 'Epoch-2', kind: 'chose', character: 'Eeee', room: 902,
                    room_name: 'Theirs', health: 20, health_pct: 0.5, squares: 3,
                    at: Date.now(), epoch: '0000000000aa' });

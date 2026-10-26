@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for m59-towntrip-ledger.mjs and its wiring into the keeper's town trips.
 //
 //   node tools/m59-towntrip-ledger-test.mjs
@@ -47,7 +48,7 @@ ok('a trip can be filtered by the item it moved, sold or not', () => {
   assert.ok(!tripTouches(row, 'emerald'));
 });
 ok('the keeper wires it: pack in at open, every trade fact, pack out at close', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   assert.match(src, /packIn, trade: newTripTrade\(\)/);
   assert.match(src, /pack_in: packIn,/);
   assert.match(src, /addTradeFact\(this\.townTrip\.trade, fact\)/);
@@ -57,7 +58,7 @@ ok('the keeper wires it: pack in at open, every trade fact, pack out at close', 
   assert.ok(src.includes("tradeFact({ guild_deposited: [{ name: give.item, amount: moved }] })"), 'guild-wants contributions report');
   assert.ok(src.includes("tradeFact({ bank_withdrawn: drewFromBank })"), 'bank withdrawals report');
   assert.ok(src.includes("tradeFact({ earned: sold.total_received, sold: sold.sold })"), 'the room-making sale reports');
-  const coop = readFileSync(new URL('./m59-reagent-coop-runtime.mjs', import.meta.url), 'utf8');
+  const coop = readToolSource(new URL('./m59-reagent-coop-runtime.mjs', import.meta.url), 'utf8');
   assert.ok(coop.includes("k.tradeFact?.({ [direction === 'deposit' ? 'guild_deposited' : 'withdrawn']"), 'co-op transfers report');
 });
 ok('trips pair by agent and start, filter by item, and total by book', () => {

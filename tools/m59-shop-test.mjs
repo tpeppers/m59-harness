@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // CAN A KEEPER-BACKED CHARACTER OPEN A SHOP?
 //
 //   node tools/m59-shop-test.mjs
@@ -29,8 +30,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
-const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
+const keeper = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -94,7 +95,7 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
   })();
   // The chunk loop and its arrival judgement moved into a pure module on 2026-10-03 so a
   // fake keeper can drive it (m59-shop-arrival-test.mjs); the pins below read both halves.
-  const arrival = readFileSync(join(HERE, 'm59-shop-arrival.mjs'), 'utf8');
+  const arrival = readToolSource(join(HERE, 'm59-shop-arrival.mjs'), 'utf8');
   ok('the shop tool was found', tool.length > 0);
   ok('it detects a keeper-backed session', /const proxied = s instanceof KeeperProxy \? s : null;/.test(tool));
   ok('and uses the forwarded list', /await proxied\.shopList\(t\.id\)/.test(tool));
@@ -152,7 +153,7 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
   // own buying and never imported it — went on sending one bare id at a time.
   ok('the cap is a named, overridable constant',
      /export const SHOP_MAX_PER_BUY = Number\(process\.env\.M59_SHOP_MAX_PER_BUY \|\| 50\);/
-       .test(readFileSync(join(HERE, 'm59-parse.mjs'), 'utf8')));
+       .test(readToolSource(join(HERE, 'm59-parse.mjs'), 'utf8')));
   ok('and the broker imports it rather than declaring a second one',
      /SHOP_MAX_PER_BUY \} from '\.\/m59-parse\.mjs'/.test(broker) &&
      !/const SHOP_MAX_PER_BUY = Number/.test(broker));
@@ -201,7 +202,7 @@ console.log('\nA STACKABLE BOUGHT AS A BARE ID BUYS NOTHING, SILENTLY');
 
   // THE KEEPER DOES ITS OWN BUYING, AND IT WAS THE HALF THAT COULD NOT WORK. Both of
   // m59-autopilot's counters sent `[entry.id]` — bare — once per unit in a sleep loop.
-  const autopilot = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const autopilot = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('the keeper no longer sends a bare id to a merchant',
      !/buyItems\([^)]*\[\s*(entry|it)\.id\s*\]/.test(autopilot),
      'a bare id is still going to a counter — stackables will buy nothing');

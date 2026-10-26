@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE TRAVEL A/B — the randomisation and the arithmetic. Offline, safe any time:
 //
 //   node tools/m59-travel-ab-test.mjs
@@ -25,7 +26,7 @@ import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
 import * as party from './m59-party.mjs';
 
-const AUTOPILOT_SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT_SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 // A NAME THE PARTY ROSTER ACTUALLY KNOWS. `party.isFleetmate` reads the live roster, and a
 // keeper that has not had a pass yet is absent from it — so the fixture registers one
 // rather than asserting against whatever happens to be in memory.
@@ -402,7 +403,7 @@ console.log('a wall is nearer than the next room -- the mid-hop rung');
   // Seven of eleven deaths in one clean window were inside the Cragged Mountains -- 2,450
   // squares -- with no refuge taken there at all, because the refuge question was only ever
   // asked at a hop BOUNDARY and a body never reached one.
-  const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const rung = SRC.indexOf('A WALL IS NEARER THAN THE NEXT ROOM');
   const flee = SRC.indexOf('BELOW THE LINE THIS KEEPER FLEES AT');
   const dying = SRC.indexOf('LOSING HEALTH FAST ENOUGH THAT THE ROAD WILL NOT END FIRST');
@@ -459,7 +460,7 @@ console.log('the fuel-stop policy is actually handed to the mover');
   // A MECHANISM NOBODY SETS IS A MECHANISM THAT DOES NOTHING. `walkTo` reads
   // `shelterPolicy` off the session; if the keeper never writes it, every crossing plans no
   // shelters and the whole thing is dead code that tests green.
-  const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const go = SRC.indexOf('goTravelling(why = null');
   const body = SRC.slice(go, go + 2600);
   ok('goTravelling sets it', /this\.s\.shelterPolicy = \{/.test(body));
@@ -481,7 +482,7 @@ console.log('playing dead can actually fire');
   // five of seven happened in the open and two on UNPROVEN walls, never once on a proven
   // one. The gate was false at the moment of every death, so the verb could not run.
   // Kermit sat at 5 of 36, fourteen per cent, for three consecutive pulses and died there.
-  const PD = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const PD = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = PD.indexOf('if (doomed && this.policy.panicLogoff !== false)');
   const body = PD.slice(at, at + 2400);
   ok('the doomed branch exists', at > 0);

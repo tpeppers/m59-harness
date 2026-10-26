@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A THOROUGHFARE IS NOT A SEAT — offline, no socket, no roster, no broker.
 //
 // Pins m59-thoroughfare.mjs against a synthetic grid and against East Jasper's real stair
@@ -104,7 +105,7 @@ else {
 
 console.log('\nwiring');
 {
-  const ap = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'latin1');
+  const ap = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'latin1');
   ok('restingSquare asks nearestSafeSpot to avoid chokes', /unreachable: this\.unreachableSpots \?\? null,[\s\S]{0,200}avoidChokes: true/.test(ap));
   const idle = ap.indexOf("if (await this.makeWay().catch(() => false)) return HANDLED;");
   const sit = ap.indexOf("if (await this.hibernate('idle: no job to do')");

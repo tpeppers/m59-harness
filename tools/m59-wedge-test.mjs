@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-wedge-test.mjs — A WEDGE BROKEN BY A CANCEL IS A WEDGE RE-ISSUED.
 //
 //   node tools/m59-wedge-test.mjs
@@ -48,8 +49,8 @@ const ok = (what, cond, extra = '') => {
   else { failed++; console.log('  FAIL ' + what + (extra ? '  ' + extra : '')); }
 };
 
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-const WATCHDOG = readFileSync(new URL('./m59-watchdog.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const WATCHDOG = readToolSource(new URL('./m59-watchdog.mjs', import.meta.url), 'utf8');
 const CAP = wd.WEDGE_REPEAT_CAP;
 const R = wd.WATCHDOG_PINNED_SQUARES;
 
@@ -427,7 +428,7 @@ console.log('\ntradeInPlaceIfWedged — hurt, wedged, something in reach: swing,
 // blocking the route, never once the NEXT SQUARE, which was the only square this looked at.
 console.log('\nkill_and_continue — the blocker rung, and whether its ledger row can be believed');
 {
-  const GAME = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const GAME = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   const at = GAME.indexOf('// A BLOCKER IS ANYTHING ON THE NEXT FEW SQUARES');
   ok('the rung is present in the walk loop', at > 0);
   const rung = GAME.slice(at);
@@ -771,7 +772,7 @@ console.log('\nescapeIfWedgedAndHurt — the rung itself');
 // documented as a per-character switch for as long as the rung existed and was never wired
 // to anything — the exact shape of `purpose` missing from a schema for a year.
 {
-  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   for (const k of ['back_up_when_wedged', 'trade_in_place_when_wedged', 'escape_ladder']) {
     ok(`${k} is declared in the autopilot tool's schema`, BROKER.includes(`${k}: { type: 'boolean'`));
     ok(`...and actually applied`, BROKER.includes(`a.${k} !== undefined`));

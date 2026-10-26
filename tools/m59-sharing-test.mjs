@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline contract for DEFAULT REAGENT SHARING. Opens no socket; writes only to a temp directory.
 //
 // Operator, 2026-10-16: spare reagents go to allies — service desks first — as a default action,
@@ -236,12 +237,12 @@ await ok('a SERVICE post is a desk, not every farmer that takes donations', () =
 });
 
 await ok('the keeper wires all three halves into every pass, the game hook and the shared store', () => {
-  const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
+  const ap = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   assert.ok(ap.includes('await this.acceptNeededGift()'));
   assert.ok(ap.includes('if (await this.shareSpareReagents()'));
-  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'latin1');
+  const game = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'latin1');
   assert.ok(game.includes('this.noteReagentRefusal(ev);'));
-  const kp = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');
+  const kp = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');
   assert.ok(kp.includes('configureInterestStore({'));
 });
 } finally {

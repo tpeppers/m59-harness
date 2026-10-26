@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE RULES A PRIVATE HOOK RUNS UNDER, PINNED.
 //
 //   node tools/m59-hooks-test.mjs
@@ -58,7 +59,7 @@ console.log('\na rejected promise is caught, because an unhandled one kills the 
 
 console.log('\nthe ledger writes the row BEFORE any handler sees it');
 {
-  const SRC = readFileSync(new URL('./m59-ledger.mjs', import.meta.url), 'utf8');
+  const SRC = readToolSource(new URL('./m59-ledger.mjs', import.meta.url), 'utf8');
   const appendAt = SRC.indexOf("append({ t: Date.now(), iso: new Date().toISOString(), ...detail,");
   const fireAt = SRC.indexOf('_fireEvent(kind,');
   ok('append comes first in recordEvent', appendAt > 0 && fireAt > appendAt);
@@ -82,7 +83,7 @@ console.log('\nhandlers are observers — there is no veto');
 
 console.log('\nthe protected list must not drift from the keeper\'s');
 {
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const m = AP.match(/static PROTECTED_FACULTIES = \[([^\]]+)\]/);
   const theirs = (m?.[1] ?? '').split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean);
   ok('m59-hooks lists exactly what Autopilot protects',
@@ -96,7 +97,7 @@ console.log('\nthe protected list must not drift from the keeper\'s');
 
 console.log('\nlarder_empty is edge-triggered, or it would drown the ledger');
 {
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('it fires only on the transition into empty, and only when a pack was actually read',
      AP.includes('if (canSeePack && !this._larderWasEmpty) {'));
   ok('an empty READ is distinguished from an empty larder — a broker stub has no client, '

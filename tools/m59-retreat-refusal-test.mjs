@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A RETREAT THAT WAS REFUSED IS NOT A RETREAT, AND MUST NOT END THE PASS.
 //
 //   node tools/m59-retreat-refusal-test.mjs
@@ -40,9 +41,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
-const BT_FLEE = readFileSync(join(HERE, 'm59-bt-flee.mjs'), 'utf8');
-const BT_FARM = readFileSync(join(HERE, 'm59-bt-farm.mjs'), 'utf8');
+const SRC = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const BT_FLEE = readToolSource(join(HERE, 'm59-bt-flee.mjs'), 'utf8');
+const BT_FARM = readToolSource(join(HERE, 'm59-bt-farm.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {

@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // OFFLINE. The curse cycle (m59-curse-cycle.mjs): a curse-breaker may pick up unidentified rings,
 // and a ring that curses it is uncursed and dropped. Pins the gate (never the last emeralds, never
 // without the spell or the karma), the one-ring-per-sweep rule, the refusal of amulets, that the
@@ -78,8 +79,8 @@ section('the hall plan, narrowed');
 
 section('the wiring');
 {
-  const game = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
-  const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const game = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const ap = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const lf = game.slice(game.indexOf('const takenCursed = new Set();'), game.indexOf('const emptyWandsSkipped'));
   ok(lf.indexOf('CURSED_ITEMS.test(n)') >= 0 && lf.indexOf('CURSED_ITEMS.test(n)') < lf.indexOf('cycleMayLoot('),
      'the name ban runs first, so a revealed ring of lethargy on the floor is never cycled');

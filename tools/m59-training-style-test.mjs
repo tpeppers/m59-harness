@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline contract for the short-sword / bare-hand farm regimen.
 // Opens no socket and joins nobody.
 
@@ -122,7 +123,7 @@ console.log('\nknown-broken short swords are replaced');
 
 console.log('\nbroker preserves incremental keeper policy updates');
 {
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   // MATCH THE INTENT, NOT THE SPELLING. This pinned the exact expression
   // `fleetState.get(a.agent)?.autopilot` and went red the day that lookup was renamed to
   // `rosterEntry(a.agent)` -- a test about WHO gets seeded, failing over HOW the roster is
@@ -152,7 +153,7 @@ console.log('unarmed practice puts the weapon down, it does not merely decline t
   // improvement counter (player.kod:4753-4757), which needs 75 swings to pay anything at
   // all (player.kod:4536-4537, 4759). Measured 2026-09-08: 17 characters on `unarmed`, 16
   // of them still holding a weapon, and brawling pinned at 4-5 across all twenty-one.
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = src.indexOf("if (practice === 'unarmed' && this.mode === 'farm' &&");
   const branch = src.slice(at, at + 3200);
   ok('the on-station unarmed branch exists', at > 0);

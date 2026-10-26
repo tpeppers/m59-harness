@@ -305,6 +305,9 @@ export function checkProvenance(provenance, { cwd = REPO_ROOT } = {}) {
   // WHAT MOVED, NOT HOW FAR. A count of commits is a number nobody can act on; the list of
   // dependencies that actually changed is a reading list.
   const touches = [].concat(provenance.touches ?? []).filter(Boolean);
+  // The keeper is one class in many files (tools/autopilot/parts.mjs): depending on it is
+  // depending on every part, so a pin that names it sees a change to any of them.
+  if (touches.some(t => /(^|\/)m59-autopilot\.mjs$/.test(t)) && !touches.includes('tools/autopilot')) touches.push('tools/autopilot');
   const range = `${pinned}..HEAD`;
   const changed = (git(touches.length ? ['diff', '--name-only', range, '--', ...touches]
                                       : ['diff', '--name-only', range], cwd) || '')

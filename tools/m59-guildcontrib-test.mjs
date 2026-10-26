@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // OFFLINE. Pins the one thing that made `guild_wants` a no-op on prod for seven hours: the
 // `reagentCoop` guard in `contributeGuildWants` could not tell its two callers apart, and one
 // of them was the town scheduler that the guard exists to defer to.
@@ -16,7 +17,7 @@ const ok = (c, what) => { if (c) pass++; else { fail++; console.log(`  FAIL: ${w
 const eq = (a, b, what) => ok(Object.is(a, b), `${what} (got ${JSON.stringify(a)}, wanted ${JSON.stringify(b)})`);
 const section = s => console.log(`\n${s}`);
 
-const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 section('the guard takes a caller-supplied flag');
 {

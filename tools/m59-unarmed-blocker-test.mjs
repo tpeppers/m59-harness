@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A REFUSAL MUST NEVER NAME A PRECONDITION THAT IS ALREADY SATISFIED.
 // Offline: no broker, no socket, no roster, no fleet.
 //
@@ -125,7 +126,7 @@ console.log('\nTHE INVARIANT, STATED AS ITSELF');
 // Clifford and Rowlf sat unarmed at 99% bulk for hours. The branch must try bankRun first.
 {
   const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = src.indexOf("if (blocker === 'room') {");
   const branch = src.slice(at, src.indexOf("this.note('unarmed and cannot hold what the spell would make'", at));
   ok("the 'room' branch opens the pack-full town trip before it refuses",

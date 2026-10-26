@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
@@ -42,7 +43,7 @@ test('successful fine routes use exactly their existing waypoints and no fallbac
 });
 
 test('a long real-geometry detour keeps its full planned route despite a short default budget',async()=>{
- const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+ const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url)));
  const room=map.rooms[597],geo=geometryFor(room),target={row:4,col:23};
  const from={row:7,col:25,...geo.standPointWire(7,25)},goal=geo.standPointWire(target.row,target.col);
  const path=geo.finePathProtocol(from.x,from.y,goal.x,goal.y,{step:8,margin:256,maxNodes:4000});

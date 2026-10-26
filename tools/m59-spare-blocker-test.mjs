@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for A SPARED CREATURE IN THE WAY (policy.spareBlockers, `lureSparedBlocker`,
 // m59-spare.mjs grantProvoke/provokeExempt). Opens no socket.
 //
@@ -22,7 +23,7 @@ import { validateStrategy, STRATEGY_FIELDS } from './m59-strategy-schema.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 const RAT = 2, LUPOGG = 3;
 // A one-square pipe in the Barloque sewers (108 row 27): us at r27c38, a rat at r27c39 ahead.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A JOURNEY STEERS A CHARACTER. IT DOES NOT SWITCH OFF ITS WILL TO LIVE.
 //
 //   node tools/m59-travelling-test.mjs
@@ -62,7 +63,7 @@ const ok = (name, cond, extra = '') => {
 // which is how this was found, but `travelJob does not reach for goInert` sliced from
 // an indexOf of -1 and passed on an empty haystack. Concatenate rather than re-point,
 // so an assertion keeps working whichever side of the split its subject ends up on.
-const read = f => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
+const read = f => { try { return readToolSource(f, 'utf8'); } catch { return ''; } };
 const AUTOPILOT_SRC = read('tools/m59-autopilot.mjs') + '\n' + read('tools/m59-watchdog.mjs');
 // THE WALKING HALF IS A THIRD FILE. It moved out of m59-game.mjs on 2026-09-16, taking
 // the shelter, divert and refuge-rest contracts with it; without this line eleven of these
@@ -207,7 +208,7 @@ console.log('\nthe guard: what a journey leaves switched on');
   // AND THE NEW ONE PROVES IT RATHER THAN BEING TRUSTED. `abandon` is the only thing in the
   // file that gives a destination up, and the rung must never reach one.
   {
-    const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+    const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
     const rung = src.slice(src.indexOf('clearPathCheck(w, hp, now) {'),
                            src.indexOf('refuseEngagement(name) {'));
     ok('clear_path never abandons — no takeBack and no abandon in the whole rung',

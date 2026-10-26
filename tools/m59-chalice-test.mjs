@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // OFFLINE. Pins chalice farming's pure half: the configuration's refusals, the roles, when a
 // town trip rides, the tip, what gets dropped to make room for the cup, and the store that
 // the separate keeper processes coordinate through.
@@ -275,7 +276,7 @@ section('every trip home brings at least a quarter of the holder\'s target (oper
   const big = cargoWants({ shortfall: { 'orc tooth': 49 }, target, cfg: CHALICE_DEFAULTS });
   eq(big['orc tooth'], 49, 'the standard cap of 60 already exceeds a quarter');
   eq(Object.keys(cargoWants({ shortfall: {}, target, cfg: CHALICE_DEFAULTS })).length, 0, 'not short: nothing');
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const draw = src.indexOf(`["draw the holder's restock"`), buy = src.indexOf(`["buy the holder's restock"`);
   ok(draw > 0 && buy > draw, 'the town trip draws from the chest BEFORE it buys');
   ok(/async chaliceTownCargo\(\)[\s\S]{0,900}chest_detour_hops/.test(src), 'and only within chest_detour_hops of the hall');
@@ -459,7 +460,7 @@ console.log('forces of light in several rooms');
     eq(store.folFor(38).until, 100_000, 'without overwriting the other');
   } finally { rmSync(dir3, { recursive: true, force: true }); }
 
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok(AP.includes('st.folRoom = folRoomsOf(cfg).includes(Number(st.room)) ? Number(st.room) : cfg.fol_room;'),
      "the visit walks to the ticket's room only when it is one the holder lights");
   ok(AP.includes('store.litFol({ room: st.folRoom ?? cfg.fol_room'), 'and records the lit clock for that room');

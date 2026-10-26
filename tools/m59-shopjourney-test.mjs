@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A SHOPPING TRIP IS TRAVEL-SHOP-TRAVEL-SHOP, SO EVERY LEG IS A JOURNEY.
 //
 //   node tools/m59-shopjourney-test.mjs      # offline, opens no socket, touches no roster
@@ -24,7 +25,7 @@
 import { Autopilot } from './m59-autopilot.mjs';
 import { readFileSync } from 'node:fs';
 
-const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => {
   if (cond) { passed++; console.log('  ok   ' + what); }

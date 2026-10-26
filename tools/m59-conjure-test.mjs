@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // CAN AN UNARMED CHARACTER GET A WEAPON, OR DOES IT WAIT FOR THE WRONG THING FOREVER?
 //
 //   node tools/m59-conjure-test.mjs
@@ -41,7 +42,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const auto = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const auto = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {

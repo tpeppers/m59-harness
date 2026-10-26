@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // WHO ORDERED A MOVE AND WHO CANCELLED IT — and the movement incident log those failures leave.
 // Offline: no socket, no broker, no roster. Every ledger write is redirected to a scratch dir.
 //
@@ -307,7 +308,7 @@ const statementAt = (lines, i) => lines.slice(i, i + 4).join(' ');
 await test('no .travel( or cancelMovement( call in the keeper or broker is unattributed', () => {
   const missing = [];
   for (const f of SWEPT) {
-    const lines = readFileSync(join(HERE, f), 'utf8').split(/\r?\n/);
+    const lines = readToolSource(join(HERE, f), 'utf8').split(/\r?\n/);
     lines.forEach((l, i) => {
       const code = l.replace(/\/\/.*$/, '');
       if (/^\s*\*/.test(l) || !/(\.travel\(|cancelMovement\??\.?\()/.test(code)) return;

@@ -1,10 +1,11 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Autopilot, HANDLED } from './m59-autopilot.mjs';
 
 // Execute the keeper's actual dispatch cases with an offline Autopilot. This catches
 // authority being written to the dormant broker shell, or a mismatched wire field.
-const source = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+const source = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
 const start = source.indexOf("case 'autopilot_claim':");
 const end = source.indexOf('// WHO IS ACTUALLY STANDING HERE', start);
 assert.ok(start > 0 && end > start);
@@ -42,7 +43,7 @@ assert.equal(call('autopilot_free', { by: 'director' }).busy, null);
 assert.deepEqual(call('autopilot_yield', { by: 'director' }).released, ['work']);
 call('commander_claim', { by: 'rts', faculties: ['work'], leaseMs: 120000 });
 assert.ok(keeper.claims.get('work').until - Date.now() <= 30000, 'RTS keeps its shorter lease');
-const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
 assert.match(broker, /s instanceof KeeperProxy && \['claim', 'heartbeat', 'yield', 'busy', 'free'\][\s\S]{0,200}keeperAction/);
 assert.match(broker, /committed: s instanceof KeeperProxy \? st\?\.committed/,
   'the fleet board reports the actual socket owner commitment');

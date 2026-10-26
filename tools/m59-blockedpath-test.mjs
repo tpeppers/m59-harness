@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A WEAK CREATURE MUST NEVER INDEFINITELY BLOCK A FULLY BUILT CHARACTER.
 //
 //   node tools/m59-blockedpath-test.mjs
@@ -53,10 +54,10 @@ const ok = (what, cond, extra = '') => {
 };
 
 const ROOM = 584, ROW = 35;
-const map = JSON.parse(readFileSync('substrate/m59-map.json', 'utf8'));
+const map = JSON.parse(readToolSource('substrate/m59-map.json', 'utf8'));
 attachStepMasks(map);
 const geo = sharedRoomGeometry(map.rooms[String(ROOM)]);
-const fx = JSON.parse(readFileSync(new URL('./fixtures/flatlands-584-row35.json', import.meta.url), 'utf8'));
+const fx = JSON.parse(readToolSource(new URL('./fixtures/flatlands-584-row35.json', import.meta.url), 'utf8'));
 const spawns = loadSpawns('substrate/m59-spawns.json');
 const CENTRE_Y = ROW * KOD_FINENESS + 32;
 

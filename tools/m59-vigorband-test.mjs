@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE VIGOR BAND: A FLOOR TO START A FIGHT, A CEILING TO EAT TO, AND THEY ARE NOT THE SAME.
 //
 //   node tools/m59-vigorband-test.mjs      # offline, opens no socket, touches no roster
@@ -20,7 +21,7 @@
 import { applyFightAboveVigor, reachableFightFloor } from './m59-autopilot.mjs';
 import { readFileSync } from 'node:fs';
 
-const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => {
   if (cond) { passed++; console.log('  ok   ' + what); }

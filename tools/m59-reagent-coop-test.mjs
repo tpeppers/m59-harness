@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline reagent coop capacity, quantity protocol, funding and keeper-resume tests.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,7 +30,7 @@ const { readGuildInviteList, guildInviteOutsiders } = await import('./m59-guild-
 const { setRosterSource } = await import('./m59-party.mjs');
 const cfg = coopConfig({ enabled: true });
 test('all spell reagent classes have an equal, weighable reservation', () => {
-  const db = JSON.parse(readFileSync(new URL('../compendium/data/koddb.json', import.meta.url)));
+  const db = JSON.parse(readToolSource(new URL('../compendium/data/koddb.json', import.meta.url)));
   const classes = Object.values(db.classes), byName = new Map(classes.map(c => [c.name.toLowerCase(), c]));
   const names = new Set();
   for (const c of classes) for (const m of c.messages ?? []) if (m.name === 'ResetReagents') {
@@ -517,7 +518,7 @@ test('THE TRIGGERS STAY COUNTABLE APART — the reason this ledger is worth keep
 const ledgerRows = agent => {
   const file = join(process.env.M59_COOP_DIR, 'coop-test.coop.ndjson');
   let text = '';
-  try { text = readFileSync(file, 'utf8'); } catch { return []; }
+  try { text = readToolSource(file, 'utf8'); } catch { return []; }
   return text.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.agent === agent);
 };
 

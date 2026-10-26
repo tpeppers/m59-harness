@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
 const scratch=mkdtempSync(join(tmpdir(),'m59-pocket-'));
@@ -9,7 +10,7 @@ const {pocketRailBook,planRailDeparture,validateEscape,traceWireLeg,rememberedDe
 const {narrowPassages,claimPassageMove,releaseConfirmedPassage}=await import('./m59-passage-admission.mjs');
 const {configureSpotClaimStore}=await import('./m59-spotclaims.mjs');configureSpotClaimStore({enabled:false});
 const {Autopilot}=await import('./m59-autopilot.mjs');
-const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url))),table=routesFor(map.geometryManifestSha256);
+const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url))),table=routesFor(map.geometryManifestSha256);
 function fixture(room,x,y){
  const geo=geometryFor(map.rooms[room]),packets=[];
  const self={id:1,flags:4,x,y,row:Math.floor(y/64),col:Math.floor(x/64),predicted:false};

@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline regressions for the September 24ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“25 poison/rest and shelter deaths.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -215,7 +216,7 @@ for(const change of ['human','pvp','generation','decision','client','room','life
 for(const busy of [false,true]) test('real recovery cancels a stuck await and selects another wall, busy='+busy,async t=>{
   t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:100000});
   const {s,c,k}=approachFixture();
-  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url)));
+  const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url)));
   const geo=geometryFor(map.rooms[39]);
   s.world={room:map.rooms[39],map,geometry:geo,reach:(col,row)=>{
     const p=geo.path(c.self.row,c.self.col,row,col,{clearance:0});

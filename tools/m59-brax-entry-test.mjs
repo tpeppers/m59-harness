@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {bastionHarness} from './fixtures/bastion-fallback-client.mjs';
@@ -6,9 +7,9 @@ import {railBoarding} from './m59-railfollow.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {walkCheckedRail} from './m59-rail-walk.mjs';
 const h=await bastionHarness(),{withBodyCommand}=await h.imp('m59-body-command.mjs');
-const route=JSON.parse(readFileSync(ensureBraxApproach())).stones[0].routes[0],legs=route.legs;
+const route=JSON.parse(readToolSource(ensureBraxApproach())).stones[0].routes[0],legs=route.legs;
 for(const agent of ['braxshadow01','braxshadow18']){
- const capture=JSON.parse(readFileSync(new URL('./fixtures/brax-crowded-rail-entry-'+agent+'.json',import.meta.url))),f=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}},{maxPackets:400,maxMs:30000}),geo=f.s.world.geometry;
+ const capture=JSON.parse(readToolSource(new URL('./fixtures/brax-crowded-rail-entry-'+agent+'.json',import.meta.url))),f=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}},{maxPackets:400,maxMs:30000}),geo=f.s.world.geometry;
  const point=protocolToClient(f.c.self),floor=geo.floorBaseAtClient(point.x,point.y);
  const old=railBoarding(legs,point,{floor,within:1024,strictFloor:true});assert(old,'the captured FINAL failure position already joins the rail; approach must stop once that happens');
  const board=railBoarding(legs,point,{floor,within:1024,strictFloor:true,geo});assert(board,JSON.stringify({agent,floor}));assert.equal(board.leg,0);
@@ -19,17 +20,17 @@ for(const agent of ['braxshadow01','braxshadow18']){
  const wall={...geo,floorBaseAtClient:geo.floorBaseAtClient.bind(geo),traceFineMoveClient:()=>({arrived:false,blocked:true})};
  assert(!railBoarding(legs,point,{floor,within:1024,strictFloor:true,geo:wall}),'even a nearby same-height rail needs a wall-clear connection');
 }
-const capture=JSON.parse(readFileSync(new URL('./fixtures/brax-temple-entry-579.json',import.meta.url))),f=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}},{maxPackets:512,maxMs:30000});
+const capture=JSON.parse(readToolSource(new URL('./fixtures/brax-temple-entry-579.json',import.meta.url))),f=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}},{maxPackets:512,maxMs:30000});
 for(const to of[589,579]){const r=await withBodyCommand(f.s,()=>f.s.leaveViaAny(f.s.world.exits().filter(e=>e.to===to)),'offline-temple-entry-road');assert(r.left,JSON.stringify(r));}
 assert.equal(f.s.world.room.num,579);assert(f.c.self.col>70);assert.equal(f.crossings.length,2);console.log('Temple western arrival completes ordinary road to589 and reenters the eastern cliff approach:',f.packets.length,'packets');
-const src=readFileSync(new URL('./m59-brax.mjs',import.meta.url),'utf8');assert(!src.includes('to:589,alsoStopAt:[579]'));assert(src.includes('s.room.num!==579||s.you.col<=2'));
+const src=readToolSource(new URL('./m59-brax.mjs',import.meta.url),'utf8');assert(!src.includes('to:589,alsoStopAt:[579]'));assert(src.includes('s.room.num!==579||s.you.col<=2'));
 
 // The approach must stop when a fresh confirmed body already joins the rail,
 // even though its old exact head is occupied by another traveler.
 {
  const {createServer}=await import('node:http'),{mkdtempSync}=await import('node:fs'),{join}=await import('node:path'),{tmpdir}=await import('node:os');
  const {checkedIslandWalk}=await import('./m59-island-finewalk.mjs');
- const capture=JSON.parse(readFileSync(new URL('./fixtures/brax-crowded-rail-entry-braxshadow01.json',import.meta.url))),geo=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}}).s.world.geometry;
+ const capture=JSON.parse(readToolSource(new URL('./fixtures/brax-crowded-rail-entry-braxshadow01.json',import.meta.url))),geo=h.fixture({from:{room:579,x:capture.from.x,y:capture.from.y}}).s.world.geometry;
  const agent='entry-fixture',pose={...capture.from,row:Math.floor(capture.from.y/64),col:Math.floor(capture.from.x/64)},room={num:579,object_id:77};let actions=0;
  const server=createServer((_request,response)=>{response.setHeader('content-type','application/json');response.end(JSON.stringify({agent,in_game:true,connected:true,room,you:pose,hp:{value:77,max:77},vigor:{value:150},objects:capture.objects,
   autopilot_status:{faculties:{movement:{owner:'fleetscript:entry-fixture',expires_in_ms:120000}}},position_read:{...pose,room_object_id:77,at:Date.now()}}));});

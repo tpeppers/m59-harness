@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A WEAPON IT MAY NEVER HOLD GOES OVERBOARD FIRST.
 // Offline: no broker, no socket, no roster, no fleet.
 //
@@ -85,7 +86,7 @@ console.log('\nTHE RANK ITSELF, READ OUT OF THE RANKING FUNCTION');
   // NOT CONSTANTS I DECLARED HERE. The first draft of this section asserted -0.75 < 0 against
   // numbers written at the top of the file, which is arithmetic rather than a test — it would
   // have passed with the production ranking deleted. These are read out of `makeRoom`.
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const fn = src.slice(src.indexOf('async makeRoom()'), src.indexOf('async makeRoom()') + 14000);
   // NaN when a pattern does not match, so a slice that is too short FAILS rather than
   // quietly comparing nothing — the first cut was 9000 chars and the sell-fodder line

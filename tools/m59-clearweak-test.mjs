@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // IS CLEARING THE SPAWN CAP A REASON TO STOP GOING SOMEWHERE?
 //
 //   node tools/m59-clearweak-test.mjs
@@ -34,8 +35,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const pilot = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
-const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+const pilot = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail) => {

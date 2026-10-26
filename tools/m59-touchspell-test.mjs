@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // TOUCH SPELL TRAINING — offline, no socket, no roster.
 //
 //   node tools/m59-touchspell-test.mjs
@@ -208,7 +209,7 @@ console.log('nothing re-equips on the assigned room');
   ok('armSelf stays bare on purpose', await ap.armSelf() === true && !log.use.length && !skills.isArmed(c));
   await ap.makeWeapon('test');
   ok('makeWeapon declines to conjure', !log.cast.length);
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('fightNow (fight-back, blockers, levers) fights with equip:false here',
      /fightNow\(opts\) \{\s*const o = \(this\.touchTrainingHere\(\) && opts\?\.equip === undefined\) \? \{ \.\.\.opts, equip: false \}/.test(src));
   ok('the player-target fight does too', /\.\.\.\(this\.touchTrainingHere\(\) \? \{ equip: false \} : \{\}\)/.test(src));
@@ -249,10 +250,10 @@ console.log('the policy surfaces');
   fresh.s.world.room = { num: 536 };
   ok('a pushed touchSpell round-trips and takes effect on the next decision',
      fresh.policy.touchSpell === 'acid touch' && fresh.touchTrainingHere() === true);
-  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  const keeper = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
   ok('the keeper merges pushed fields into autopilot.policy', /Object\.assign\(autopilot\.policy, fields\)/.test(keeper));
 
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the autopilot schema declares touch_spell', /touch_spell: \{ type: \['string', 'null'\],\s*enum: \[\.\.\.TOUCH_SPELL_NAMES, null\]/.test(broker));
   ok('the setter validates and writes p.policy.touchSpell',
      /p\.policy\.touchSpell = touchSpellName\(a\.touch_spell\)/.test(broker));
@@ -343,10 +344,10 @@ console.log('cast timing: at the target, not only at the swing');
   ok('off the assigned room: no cast at the target', log.cast.length === 0);
 }
 {
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('the farm pass casts at the target right after it claims the quarry',
      /claimQuarry\(this\.s\.name, room\?\.num, found\[0\]\?\.id\);[\s\S]{0,400}await this\.touchOnTarget\(found\[0\]/.test(src));
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the autopilot schema declares touch_spell_timing', /touch_spell_timing: \{ type: \['string', 'null'\], enum: \[\.\.\.TOUCH_CAST_TIMINGS, null\]/.test(broker));
   ok('the setter validates and writes p.policy.touchSpellTiming',
      /p\.policy\.touchSpellTiming = a\.touch_spell_timing == null \? null : touchCastTiming\(a\.touch_spell_timing\)/.test(broker));

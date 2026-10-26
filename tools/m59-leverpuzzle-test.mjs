@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE LEVER PUZZLE IN ROOM 2600, WORKED BY THE KEEPER. Offline, no server, safe any time:
 //
 //   node tools/m59-leverpuzzle-test.mjs
@@ -51,7 +52,7 @@ try {
   ok('each stand square is within GUESTLEVER_RANGE (1) of its lever and outside the final area',
      P.levers.every((l, ix) => L.chebyshev(l.stand, l.lever) <= 1 && L.atLever(l.stand, P, ix)));
   ok('the window is SLAM_TIME (2000) and FightTimer is 10 s', P.windowMs === 2000 && P.fightTimerMs === 10000);
-  const baked = JSON.parse(readFileSync(join(here, '..', 'substrate', 'm59-ceiling-doors.json'), 'utf8')).rooms['2600'];
+  const baked = JSON.parse(readToolSource(join(here, '..', 'substrate', 'm59-ceiling-doors.json'), 'utf8')).rooms['2600'];
   const bakedDoor = id => baked?.doors?.find(d => d.id === id);
   ok('SECTOR_DOOR matches the committed ceiling-door bake (3: shut 84, open 172)',
      bakedDoor(3)?.closed === P.door.shut && bakedDoor(3)?.open === P.door.open);
@@ -59,7 +60,7 @@ try {
      P.well.sectors.every(s => bakedDoor(s.sector)?.closed === s.shut && bakedDoor(s.sector)?.open === s.open));
   ok('the bake has a mask for every state the puzzle passes through (door open; well open)',
      '172,200,88' in (baked.states ?? {}) && '84,273,161' in (baked.states ?? {}));
-  const map = JSON.parse(readFileSync(join(here, '..', 'substrate', 'm59-map.json'), 'utf8')).rooms['2600'];
+  const map = JSON.parse(readToolSource(join(here, '..', 'substrate', 'm59-map.json'), 'utf8')).rooms['2600'];
   const wellExits = (map?.goExits ?? []).filter(e => e.to === 2601).map(e => `r${e.row}c${e.col}`).sort();
   ok('the well exits are the map\'s go-exits to 2601 (r38c6, r38c7)',
      JSON.stringify(wellExits) === JSON.stringify(P.well.exits.map(e => `r${e.row}c${e.col}`).sort()), wellExits.join(','));
@@ -133,7 +134,7 @@ try {
     try { L.updateClaims(b => L.claimLever(b, { puzzle: P, agent: 'C', now: T0 }), { file: FILE }); }
     catch { threw = true; }
     ok('a book that will not parse is refused by a writer, not overwritten',
-       threw && readFileSync(FILE, 'utf8').endsWith('"rooms": {'));
+       threw && readToolSource(FILE, 'utf8').endsWith('"rooms": {'));
     ok('...and a plain reader sees an empty book rather than throwing',
        JSON.stringify(L.readClaims({ file: FILE }).rooms) === '{}');
     writeFileSync(FILE, JSON.stringify(L.emptyBook()));
@@ -361,7 +362,7 @@ try {
     heldOrdered.leverPuzzleHandoff(2600, 2601);
     ok('...while an explicit journey to 2601 still is', await heldOrdered.passLeverPuzzle({}) === HANDLED);
     heldOrdered.leaveLeverPuzzle(2601, 'test over');
-    const ap0 = readFileSync(join(here, 'm59-autopilot.mjs'), 'utf8');
+    const ap0 = readToolSource(join(here, 'm59-autopilot.mjs'), 'utf8');
     const tr0 = ap0.slice(ap0.indexOf('  async travel(room, opts) {'));
     ok('travel() asks the PvP gate before it hands off, so a held keeper journey is refused first',
        tr0.indexOf('this.pvpReturnGate(room') > 0 && tr0.indexOf('this.pvpReturnGate(room') < tr0.indexOf('this.leverPuzzleHandoff?.('));
@@ -419,8 +420,8 @@ try {
   // ------------------------------------------------------------------ the wiring
   console.log('\nthe wiring');
   {
-    const ap = readFileSync(join(here, 'm59-autopilot.mjs'), 'utf8');
-    const game = readFileSync(join(here, 'm59-game.mjs'), 'utf8');
+    const ap = readToolSource(join(here, 'm59-autopilot.mjs'), 'utf8');
+    const game = readToolSource(join(here, 'm59-game.mjs'), 'utf8');
     const errand = ap.slice(ap.indexOf('  async passErrand(ctx) {'));
     ok('passErrand gives the puzzle its turn before the errands and the journey stand-down',
        errand.indexOf('this.passLeverPuzzle(ctx)') > 0
@@ -435,7 +436,7 @@ try {
        && st.indexOf('handOffAt(Number(here.num), Number(toRoomNum))') < st.indexOf('const route = this.world.route(toRoomNum'));
     ok('a relocation that was handed off is not counted as a miss',
        /if \(r0\.handed_off\) \{[\s\S]{0,200}return HANDLED;/.test(ap));
-    ok('the lever claims book is gitignored', readFileSync(join(here, '..', '.gitignore'), 'utf8').includes('/substrate/lever-claims*.json'));
+    ok('the lever claims book is gitignored', readToolSource(join(here, '..', '.gitignore'), 'utf8').includes('/substrate/lever-claims*.json'));
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

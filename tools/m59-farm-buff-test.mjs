@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for THE farmBuff SEAM (Autopilot.farmBuffContext / farmBuffAsk / farmBuffPass / castSelfSpell,
 // the 'farmBuff' strategy hook, Session.rejoin's offline wait). Opens no socket.
 //
@@ -15,8 +16,8 @@ import { HOOKS } from './m59-strategies.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-const GAME = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const GAME = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 
 function keeper({ answer = null, self = { col: 20, row: 20 }, hold = { room: 112, col: 20, row: 20 }, mana = 40 } = {}) {
   const asked = [], casts = [], reconnects = [], walks = [];
