@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Arrival telemetry's handoff contract. Offline: no socket, broker or fleet state.
 
 import { strict as assert } from 'node:assert';
@@ -75,7 +76,7 @@ await test('a failed journey row names each refused crossing step (Camilla, room
   assert.equal(many.length, 7);
   assert.deepEqual(many.at(-1), { more: 3 });
   assert.deepEqual(compactRefusals(null), []);
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   assert.ok(/refusals: compactRefusals\(outcome\.refusals\)/.test(src), 'the journey row carries them');
   assert.ok(src.includes('!(outcome?.arrived) && Array.isArray(outcome?.refusals)'), 'failed journeys only');
 });

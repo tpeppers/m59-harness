@@ -126,6 +126,7 @@ export const DOMAINS = Object.freeze({
       'tools/m59-ground.mjs',
       'tools/m59-world.mjs',      // exits(), the candidate ranking, wrongExitSquares
       'tools/m59-autopilot.mjs',  // survival movement ownership and replacement choices
+      'tools/autopilot',          // ...and the keeper's parts, which are the same class (autopilot/parts.mjs)
       'tools/m59-skills.mjs',     // shelter arrival and cancellation propagation
       'tools/m59-recovery-refuge.mjs',
       'tools/m59-survival-decision.mjs',

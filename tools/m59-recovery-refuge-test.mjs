@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline: real geometry, selectors and movement handoffs; no fleet or socket.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { attachSurvivalTrace, survivalTraceSnapshot } from './m59-survival-trace
 
 let passed = 0;
 async function test(name, run) { await run(); passed++; console.log('PASS ' + name); }
-const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
+const map = JSON.parse(readToolSource(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
 function keeper(room = 39, from = { row: 8, col: 16 }) {
   const geo = geometryFor(map.rooms[room]);
   const c = { selfId: 1, self: { id: 1, ...from }, room: { objects: new Map() },

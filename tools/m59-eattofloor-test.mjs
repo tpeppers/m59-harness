@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A FLOOR ABOVE THE REST CAP IS EATEN TO IN EVERY MODE, NOT ONLY FARM.
 //
 //   node tools/m59-eattofloor-test.mjs
@@ -41,7 +42,7 @@ const rig = (floor) => {
   ok('and so does the fleet default of 40', await r.eatToFloor({}) === null && !calls.length);
 }
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'm59-autopilot.mjs'), 'utf8');
+const src = readToolSource(join(dirname(fileURLToPath(import.meta.url)), 'm59-autopilot.mjs'), 'utf8');
 const idleAt = src.indexOf("if (await this.hibernate('idle: no job to do')");
 ok('the idle branch eats before it hibernates',
    idleAt > 0 && src.slice(Math.max(0, idleAt - 300), idleAt).includes('this.eatToFloor(ctx)'));

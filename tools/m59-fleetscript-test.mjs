@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 import { readFileSync } from 'node:fs';
 // THE GUARANTEES THE COMPILER MAKES, PINNED. Offline: no broker, no server, no network —
 // every call is answered by a fake, so this is safe to run while a live fleet is playing.
@@ -1545,7 +1546,7 @@ console.log('a walk to a non-room is refused before anything moves');
   // code from a comment about code. A read is `TRAP_WAY_OUT[...]`; prose is not.
   ok('and nothing in the walker READS it, so it cannot pre-empt the router',
      !/TRAP_WAY_OUT\s*\[/.test(
-       readFileSync(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8')
+       readToolSource(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8')
          .split('async function compiledWalk')[1] ?? ''));
   ok('but only when the plan would actually walk it somewhere',
      trapCheck([], { standingIn: 599 }) === null);
@@ -2166,7 +2167,7 @@ console.log('\nbusy ownership is established before the first errand walk');
     s: { cancelMovement: () => { if (walking) interrupted++; return { cancelled: true }; } },
     note() {}, progress() {},
   });
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   const begin = src.indexOf("case 'autopilot_claim':");
   const end = src.indexOf('// WHO IS ACTUALLY STANDING HERE', begin);
   const dispatch = new Function('name', 'args', 'autopilot', 'json', `switch(name){${src.slice(begin,end)}}`);

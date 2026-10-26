@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-pvp-rooms-test.mjs — WHERE A CHARACTER MAY FIGHT A PLAYER AT ALL (`pvp_rooms`).
 //
 //   node tools/m59-pvp-rooms-test.mjs
@@ -77,7 +78,7 @@ ok('zero and negatives are refused', throwsLike(() => rooms.validatePvpRooms([0]
 ok('a bare number is refused (not an array)', throwsLike(() => rooms.validatePvpRooms(599), /pvp_rooms/));
 ok('a boolean is refused', throwsLike(() => rooms.validatePvpRooms([true]), /pvp_rooms/));
 
-const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
 ok('the broker schema declares pvp_rooms (an undeclared key is only reported)', /\n\s+pvp_rooms: \{ type: \['array', 'null'\]/.test(broker));
 ok('the broker validates through validatePvpRooms and stores policy.pvpRooms',
   /if \(a\.pvp_rooms !== undefined\) p\.policy\.pvpRooms = validatePvpRooms\(a\.pvp_rooms\);/.test(broker));
@@ -221,7 +222,7 @@ console.log('the keeper');
   ok('defendAgainstPlayers outside the list does not swing', out?.engaged === null && out.why === 'outside pvp_rooms', JSON.stringify(out));
   ok('...and says so in the journal', notes.some(n => /outside pvp_rooms/.test(n.what)));
 }
-const auto = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const auto = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 const body = name => {
   const i = auto.indexOf(`  async ${name}(`);
   return i < 0 ? '' : auto.slice(i, auto.indexOf('\n  }\n', i));

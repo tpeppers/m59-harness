@@ -913,6 +913,9 @@ export class M59Client {
       const crc  = this.buf.readUInt16LE(2);
       const len2 = this.buf.readUInt16LE(4);
       if (len !== len2) {
+        // Counted, because a stream that keeps desyncing is a socket that is ALIVE (lastRxAt moves) and DEAF (nothing
+        // parses): the shape of the flat-health deaths of 2026-10-26. The postmortem reads framingDrops.
+        this.framingDrops = (this.framingDrops ?? 0) + 1; this.lastFramingDropAt = Date.now();
         this.log(`length mismatch ${len}/${len2} — dropping buffer`);
         this.buf = Buffer.alloc(0);
         return;
@@ -942,6 +945,7 @@ export class M59Client {
     // will cheerfully re-send its password mid-game.
     if (this.state === 'game') {
       this.gameMsgs++;
+      this.lastGameMsgAt = Date.now();
       this.opcodeCounts.set(op, (this.opcodeCounts.get(op) || 0) + 1);
       // A parser that reads off the end of a payload throws, and this runs inside the
       // socket's data handler — so an uncaught throw here does not just lose one

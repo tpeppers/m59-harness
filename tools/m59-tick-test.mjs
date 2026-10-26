@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE REAL-TIME CONTRACT — offline tests for m59-tick.mjs.
 //
 //   node tools/m59-tick-test.mjs
@@ -178,7 +179,7 @@ console.log('\na throwing decide does not kill the loop');
 console.log('\nthe legacy driver is untouched');
 {
   const src = await import('node:fs').then(fs =>
-    fs.readFileSync(new URL('./m59-tick.mjs', import.meta.url), 'utf8'));
+    readToolSource(new URL('./m59-tick.mjs', import.meta.url), 'utf8'));
   // The prose discusses the old model at length; what matters is that nothing IMPORTS
   // it. Testing for the string alone would forbid explaining what this replaced.
   ok('nothing here imports the autopilot',

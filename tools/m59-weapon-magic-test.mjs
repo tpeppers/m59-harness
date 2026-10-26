@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline contract for m59-weapon-magic.mjs. Opens no socket and joins nobody.
 //
 // Pins the cases that fail quietly:
@@ -276,7 +277,7 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
 // weapon `unknown`, no mundane spare to dedicate, and no swap to an enchanted one either.
 {
   const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const idleAt = src.indexOf("if (this.mode === 'idle') {\n      // A SUSPENDED JOURNEY IS A JOB");
   const idle = src.slice(idleAt, src.indexOf("hibernate('idle: no job to do')", idleAt));
   ok('the idle branch sweeps weapon magic before it hibernates',
@@ -287,7 +288,7 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
      farmStart >= 0 && /this\.sweepWeaponMagic\(\)/.test(src.slice(farmStart, farmBlock)));
   // The fleet row's `provides` is how DUM finds a dedicator. Without enchant weapon in it,
   // nobody on the board ever knew the spell (2026-09-26).
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   const prov = broker.slice(broker.indexOf('provides: (c.spells || [])'), broker.indexOf('mana_now:', broker.indexOf('provides: (c.spells || [])')));
   ok("the fleet row's provides carries enchant weapon for the troll dedication",
      /n === 'enchant weapon'/.test(prov));

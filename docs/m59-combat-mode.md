@@ -10,6 +10,15 @@ there is no substring targeting or automatic selection of a player. Combat
 leaves the character's game safety setting alone for attack/ambush. An explicit
 `kill` temporarily turns safety off while engaging, restores its original on
 setting while waiting or stopping, and retains restoration across a reconnect.
+
+**Safety comes off for an innocent only when the order accepts `go_red`** (operator,
+2026-10-26: going red cannot be taken back, so it has to be overridden explicitly).
+Safety ON still lets a character hit a murderer, an outlaw, a morph, an anonymous
+player or a mutual-war enemy (`CheckStatusAndSafety`, `player.kod:3767`), so against
+those it now stays on and nothing is lost. Against an innocent, a `kill` without
+`accept: ["go_red"]` (CLI `--accept go_red`) keeps safety on: the server refuses the
+blow, the order ends on that refusal, and status carries `safety_kept` saying why. A
+character that is already a murderer needs no acceptance.
 The server can still refuse
 an attack because of safety, sanctuary, PvP rules, range or line of sight. A
 safety refusal ends the order and appears in its status. Counts measure packets

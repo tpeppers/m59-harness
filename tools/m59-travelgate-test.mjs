@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // ONE HEALTH FLOOR, FOR EVERY DRIVER — offline, no socket, no roster, no broker.
 //
 //   node tools/m59-travelgate-test.mjs
@@ -156,8 +157,8 @@ console.log('THE FLOOR IS THE FLEE LINE, because that number already means somet
 console.log('');
 console.log('ONE DECISION, TWO CALLERS — and neither keeps a copy');
 {
-  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
-  const FS = readFileSync(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8');
+  const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const FS = readToolSource(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8');
 
   ok('the broker imports it', /from '\.\/m59-travelgate\.mjs'/.test(BROKER));
   ok('fleetScript imports it', /from '\.\/m59-travelgate\.mjs'/.test(FS));
@@ -233,7 +234,7 @@ console.log('AND THE UNDERWORLD IS NOT A DESTINATION — Zoot, 767 journeys in t
   // hours with the gate already in the tree. The guard is repeated at the top of
   // `Autopilot.travel`, and it drops the suspended journey as well as refusing — refusing
   // alone leaves the thing that keeps handing the destination back.
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('Autopilot.travel refuses room 1 too', /Number\(room\) === UNDERWORLD/.test(AP));
   ok('and clears the suspended journey rather than only refusing',
      /Number\(room\) === UNDERWORLD[\s\S]{0,600}?this\.suspendedJourney = null/.test(AP));

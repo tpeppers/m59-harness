@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE DESK'S PRACTICE RESERVE — offline, no socket, no roster.
 //
 //   node tools/m59-deskpractice-test.mjs
@@ -288,11 +289,11 @@ console.log('\nthe keeper casts at the post and reads the mana back');
 console.log('\nthe desk is served before it is practised at');
 {
   const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('  async passErrand(ctx) {'));
   const duty = body.indexOf('this.chaliceDuty()'), practice = body.indexOf('this.practiceAtDesk()');
   ok('passErrand calls chaliceDuty BEFORE practiceAtDesk', duty >= 0 && practice > duty);
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   ok('the broker accepts practice_spells and stores it AS SENT, so a doctrine diff can settle',
      /a\.practice_spells !== undefined/.test(broker) && /p\.policy\.practiceSpells = JSON\.parse\(JSON\.stringify\(value\)\)/.test(broker));
   // 2026-10-11: `{ enabled: false }` was refused and took the whole autopilot start down with it.
@@ -334,7 +335,7 @@ console.log('\na one-target spell practised on a creature');
   ok('nothing matching is null, not a guess', pickCreatureTarget({ objects, on: ['orc'], me }) === null);
 
   const { readFileSync } = await import('node:fs');
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = AP.indexOf("if (choice.cast.target === 'creature') {");
   ok('the keeper casts a creature target only from a safe spot, by the regular safe-spot code',
      at > 0 && AP.slice(at, at + 300).includes('if (!(await this.practiceSafeSpot()))'));
@@ -400,7 +401,7 @@ console.log('\npractice sessions in another room');
      target: 'creature', on: ['skeleton'], room: 38, session_ms: 5 }] }).problems.some(p => /session_ms/.test(p)));
 
   const { readFileSync } = await import('node:fs');
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const next = AP.slice(AP.indexOf('  chaliceNextJob(cfg, role, cup, store, me, now) {'));
   const practiceAt = next.indexOf("return job('practice', 'go'");
   ok('the session is the LAST job: after rides, forces of light and desk tickets',
@@ -442,7 +443,7 @@ console.log('\nmana-full sessions, and the skeleton somebody is fighting');
   ok('the player itself is never the target', pickCreatureTarget({ objects, on: ['kermit'], me }) === null);
 
   const { readFileSync } = await import('node:fs');
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('a mana_full session starts only at full mana',
      AP.includes("if (entry.when === 'mana_full') {") && AP.includes('v.mana.value < v.mana.max - 1) return null;'));
   ok('the desk holds its mana for it, holder only, while it could cast',

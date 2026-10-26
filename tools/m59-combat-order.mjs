@@ -23,6 +23,8 @@ export function parseCombatCLI(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--check') { options.action = 'ready'; continue; }
     if (argv[i] === '--quiet') { options.quiet = true; continue; }   // no loud-PvP callouts (m59-pvp-callout.mjs)
+    // --accept go_red: the target may be an innocent, and striking one with safety off is meant (m59-hazards.mjs).
+    if (argv[i] === '--accept') { const v = argv[++i]; if (v !== 'go_red') throw Error('combat: --accept takes go_red'); options.accept = ['go_red']; continue; }
     if (argv[i].startsWith('--')) {
       const key = argv[i].slice(2);
       if (!['fleet', 'room', 'maps', 'when-absent', 'agents', 'command-id', 'ttl'].includes(key) ||
@@ -34,7 +36,7 @@ export function parseCombatCLI(argv) {
   const phrase = words.join(' ').trim(), match = /^(kill|attack) +(.+)$/i.exec(phrase);
   const action = options.action ?? match?.[1].toLowerCase() ?? phrase.toLowerCase();
   if (!['kill', 'attack', 'ready', 'status', 'stop'].includes(action) ||
-      (options.action && phrase)) throw Error('usage: m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name" [--quiet] | --check | status|stop [--command-id ID]');
+      (options.action && phrase)) throw Error('usage: m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name" [--quiet] [--accept go_red] | --check | status|stop [--command-id ID]');
   return { action, ...(match ? { target: match[2] } : {}),
     ...(options.room ? { room: options.room } : {}),
     ...(options.maps ? { rooms: options.maps.split(',').map(Number) } : {}),
@@ -42,7 +44,8 @@ export function parseCombatCLI(argv) {
     ...(options.agents ? { agents: options.agents.split(',') } : {}),
     ...(options['command-id'] ? { command_id: options['command-id'] } : {}),
     ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}),
-    ...(options.quiet ? { loud: false } : {}) };
+    ...(options.quiet ? { loud: false } : {}),
+    ...(options.accept ? { accept: options.accept } : {}) };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

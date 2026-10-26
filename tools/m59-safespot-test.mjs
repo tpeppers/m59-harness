@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Does the keeper actually KNOW whether it is in a working safe spot?
 //
 //   node tools/m59-safespot-test.mjs
@@ -660,7 +661,7 @@ console.log('\n--- "not required" is a third setting, not the absence of the sec
   // A WALL TAKEN AS A RESPONSE HAS TO BE GIVEN BACK. Without the release, the first crowd
   // of the session takes a corner and the character stays in it for ever — REQUIRED
   // arrived at by accident, and it would look exactly like the setting working.
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the release exists and is gated on the same flag',
      /!opensFightFromWall\(this\.policy\) && this\.hold && !worth\.hold/.test(src));
   ok('and it will not step off a wall with something still in contact',
@@ -1327,8 +1328,8 @@ console.log('THE SAFE WALLS ARE THE RED SQUARES IN THE CLIENT, AND NOTHING ELSE 
   // Corrected 2026-08-27 by the operator against the debug client's minimap: the red squares
   // are right, so the keeper chooses from exactly that set and nothing narrows it. One
   // function, safeWalls(), is both the picture and the choice.
-  const src = readFileSync(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
-  const ovl = readFileSync(new URL('./m59-overlay.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
+  const ovl = readToolSource(new URL('./m59-overlay.mjs', import.meta.url), 'utf8');
   const fn = src.slice(src.indexOf('export function safeSpots'),
                        src.indexOf('export function safeSpots') + 8000);
   ok('safeSpots iterates safeWalls and nothing else',
@@ -1370,7 +1371,7 @@ console.log('THE SAFE WALLS ARE THE RED SQUARES IN THE CLIENT, AND NOTHING ELSE 
 console.log('');
 console.log('LEAVING A REAL WALL MEANS WALKING BACK OUT OF THE POCKET IT PUT YOU IN');
 {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = src.indexOf('async stepOutOfThePocket');
   const fn = src.slice(at, at + 2500);
   ok('leaving a hold steps out of the pocket first',
@@ -1405,7 +1406,7 @@ console.log('LEAVING A REAL WALL MEANS WALKING BACK OUT OF THE POCKET IT PUT YOU
 console.log('');
 console.log('A SHELTER YOU CANNOT LEAVE IS A TRAP, NOT A SHELTER');
 {
-  const src = readFileSync(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
   ok('there is an escape test at all', /export function escapeRoom/.test(src));
   // Corrected 2026-08-27: escape is MEASURED on every wall, reported as `escapes`, and it
   // sinks the score; it no longer removes a square. A trap is a fact about a wall, not
@@ -1442,7 +1443,7 @@ console.log('A SHELTER YOU CANNOT LEAVE IS A TRAP, NOT A SHELTER');
 console.log('');
 console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 {
-  const src = readFileSync(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
   ok('reachability is computed inside the search, not asked of the caller',
      /export function reachableFrom/.test(src));
   ok('and every candidate is checked against it',
@@ -1464,7 +1465,7 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 // arrived were picking walls 17 to 24 squares away while the room that worked picked one
 // at 3.4. These pin the replacement so it cannot come back.
 {
-  const src = readFileSync(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-safespots.mjs', import.meta.url), 'utf8');
 
   ok('no square is graded any more — the composite score is gone from safeSpots',
      !/^\s*score:\s*\(MAX_ATTACKERS/m.test(src));
@@ -1559,7 +1560,7 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 // came back reachable from a normal standing position, in the room the fleet dies in most.
 console.log('\n--- an island is never offered as shelter ---');
 {
-  const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
+  const map = JSON.parse(readToolSource(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
   const roomOf = n => Object.values(map.rooms ?? map).find(r => Number(r?.num) === n);
   const islands = [[41, 2, 2], [47, 18, 50], [599, 18, 50], [802, 24, 1]];
   let flooded = 0;

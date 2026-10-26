@@ -945,6 +945,24 @@ substrate/island-admin/
 /substrate/pvp-strategy.json
 /substrate/pvp-strategy-*.json
 /substrate/pvp-strategy-dirs.json
+# Paks (tools/m59-joints.mjs), postures (tools/m59-posture.mjs), tripwires (tools/m59-tripwire.mjs) and operations (tools/m59-operation.mjs) are
+# ORDERS, and the request board, the posture saves and the decision log are this fleet's live state. The
+# shapes are committed BESIDE their directories: substrate/paks.example/, substrate/postures.example/, substrate/tripwires.example/,
+# substrate/operations.example/.
+/substrate/paks/
+/substrate/paks.json
+/substrate/paks-*.json
+/substrate/pak-dirs.json
+/substrate/postures/
+/substrate/posture-dirs.json
+/substrate/posture-saves/
+/substrate/tripwires/
+/substrate/tripwires-*.json
+/substrate/tripwire-dirs.json
+/substrate/tripwire-state/
+/substrate/operations/
+/substrate/requests.jsonl
+/substrate/requests-*.jsonl
 
 # Faction intel (tools/m59-faction-intel.mjs): what the fleet overheard on this server.
 /substrate/faction-intel.jsonl

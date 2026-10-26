@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 //
 // Guild wants: a demand the whole fleet answers into a store no character owns.
 //
@@ -180,7 +181,7 @@ eq(guildShortfall({ plan: PLAN, chests: chestsWith(), rent: IN_GUILD })
 // characters the co-op was on for. Source check: the pass-level method is inline in the keeper.
 {
   const { readFileSync } = await import('node:fs');
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = AP.indexOf('  guildWantedNames() {');
   const body = AP.slice(at, AP.indexOf('\n  }', at));
   ok(at > 0, 'guildWantedNames exists');
@@ -205,7 +206,7 @@ eq(guildShortfall({ plan: PLAN, chests: chestsWith(), rent: IN_GUILD })
   const items = (give.chests ?? []).flatMap(c => (c.give ?? []).map(g => g.item));
   ok(items.includes('dragonfly eye') && items.includes('vial of solagh'), 'everyone items are deposited');
   ok(!items.includes('diamond'), 'a diamond the plan also wants is NOT carried by a character without guild_wants');
-  const src = readEveryoneSrc(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const wanted = src.slice(src.indexOf('  guildWantedNames() {'), src.indexOf('  guildWantedNames() {') + 700);
   ok(/full\?\.everyone/.test(wanted) && /restrictPlan\(full, everyone\)/.test(wanted), 'guildWantedNames holds back everyone items without guild_wants');
   const contrib = src.slice(src.indexOf('async contributeGuildWants'), src.indexOf('const store = new StorageCache();', src.indexOf('async contributeGuildWants')));

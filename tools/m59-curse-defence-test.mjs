@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THREE LAYERS AGAINST A RING THAT CAN NEVER COME OFF. Offline: no broker, no socket, no fleet.
 //
 // A cursed ring is not an ordinary bad pickup. `item.kod:514` POSTS `TryUseItem` on the picker
@@ -84,7 +85,7 @@ console.log('\n--- layer 3: the bar is what THIS character can reach ---');
 
 console.log('\n--- the wiring, so a silent no-op cannot come back ---');
 {
-  const src = (f) => readFileSync(new URL(f, import.meta.url), 'utf8');
+  const src = (f) => readToolSource(new URL(f, import.meta.url), 'utf8');
   const ap = src('./m59-autopilot.mjs');
   ok('the release is asked for a FARMER, not only a traveller',
      /if \(this\.hold\) await this\.releaseRestedHold\(\);/.test(ap),

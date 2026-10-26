@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Offline: the actual packet callback and death recorder, with movement held pending.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -26,7 +27,7 @@ const k = Object.assign(Object.create(Autopilot.prototype), {
 });
 
 // Run the actual joinOnce event wiring, not a hand-written stand-in for the hook.
-const source = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+const source = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 const start = source.indexOf('    c.onEvent = ev => {', source.indexOf('  async joinOnce('));
 const end = source.indexOf('    if (character)', start);
 assert.ok(start >= 0 && end > start, 'the production event callback must be found');
@@ -214,7 +215,7 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
 // dispatcher sets it after the await: it would then always name the stage that had already
 // finished, which is precisely the stage that did NOT block.
 {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   // MATCHED AGAINST THE CURRENT DISPATCHER. This asserted `await this[stage](ctx)`, the
   // shape before the ladder gained a per-stage deadline; the call is
   // `runStageBounded(stage, ctx)` now, so the assertion had been silently red rather

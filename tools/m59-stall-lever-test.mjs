@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A STALL HAS TO NAME ITS LEVER, AND "NONE" IS AN ANSWER RATHER THAN A SILENCE.
 //
 //   node tools/m59-stall-lever-test.mjs
@@ -40,8 +41,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const AUTOPILOT = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
-const KEEPER_PROC = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+const AUTOPILOT = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const KEEPER_PROC = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // HUNT PRIORITY — offline, no socket, no roster.
 //
 //   node tools/m59-hunt-priority-test.mjs
@@ -99,7 +100,7 @@ console.log('the safety gates');
   // Where the hook sits in the farm pass: after every filter that decides engageability,
   // before the claim, and before every engage gate. If somebody moves it above a filter, a
   // priority could pick a creature the keeper had already ruled out.
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   const at = s => src.indexOf(s);
   const hook = at('if (this.policy.huntPriority) found = this.huntPriorityOrder(found, preferId);');
   ok('the farm pass calls the hook', hook > 0);
@@ -174,10 +175,10 @@ console.log('the policy surfaces');
   Object.assign(fresh.policy, JSON.parse(JSON.stringify({ huntPriority: null, lootOnly: null })));
   ok('and null switches both off again', fresh.policy.huntPriority === null && fresh.policy.lootOnly === null);
 
-  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  const keeper = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
   ok('the keeper merges pushed fields into autopilot.policy', /Object\.assign\(autopilot\.policy, fields\)/.test(keeper));
 
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the autopilot schema declares hunt_priority', /hunt_priority: \{ type: \['array', 'null'\]/.test(broker));
   ok('the autopilot schema declares loot_only', /loot_only: \{ type: \['object', 'null'\]/.test(broker));
   ok('the setter validates and writes p.policy.huntPriority',

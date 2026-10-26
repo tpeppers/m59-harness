@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for PULLING THROUGH A CROWD (policy.pullThroughCrowd, a strategy's `pull.throughCrowd`,
 // Autopilot.closestPullable and the crowd gate in Autopilot.pull). Opens no socket.
 //
@@ -16,7 +17,7 @@ import { STRATEGY_FIELDS, validateStrategy } from './m59-strategy-schema.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 const NAMES = { 1: 'lupogg', 2: 'giant rat', 3: 'Morpheus' };
 // Us at r10c10 on the wall. `steps` is what approachSquare answers for each body: the walking distance,
@@ -110,7 +111,7 @@ await ok('the field, the argument, and qor-lupogg-sewers declares it', async () 
   assert.equal(mod.default.pull?.throughCrowd, true);
   const v = validateStrategy(mod.default, { file: 'qor-lupogg-sewers.mjs' });
   assert.ok(v.ok !== false && !(v.problems?.length), JSON.stringify(v).slice(0, 300));
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(broker.includes('p.policy.pullThroughCrowd = a.pull_through_crowd === true;'));
 });
 

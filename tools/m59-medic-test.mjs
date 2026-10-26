@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE MEDIC CASTS ITS BEST HEAL, NOT ITS FIRST — offline, no socket, no roster.
 //
 //   node tools/m59-medic-test.mjs
@@ -30,7 +31,7 @@ const ok = (what, cond) => {
   else { fail++; console.log(`  FAIL ${what}`); }
 };
 
-const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 // SLICE THE FUNCTION, NOT A FIXED NUMBER OF CHARACTERS. The first version took
 // `SRC.slice(i, i + 5200)` and two assertions silently fell outside the window the moment

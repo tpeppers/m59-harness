@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // NOTHING MAKES A CHARACTER RUN ANY MORE. THERE IS NO FLEE RUNG AT ALL.
 //
 //   node tools/m59-fleeline-test.mjs
@@ -104,7 +105,7 @@ console.log('a stranger is a PERSON who is not one of ours');
 console.log('');
 console.log('THERE IS NO FLEE RUNG AT ALL — NOT FOR A MONSTER, NOT FOR A PERSON');
 {
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   const stage = src.slice(src.indexOf('async passFleeAndRest'),
                           src.indexOf('async passFollow'));
   // It went in two steps. First for monsters, because running does not work on one — vision
@@ -144,7 +145,7 @@ console.log('THERE IS NO FLEE RUNG AT ALL — NOT FOR A MONSTER, NOT FOR A PERSO
 console.log('');
 console.log('what the threshold is still allowed to do');
 {
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   // DELIBERATELY KEPT. None of these is flight, and removing the number outright would take
   // them with it: when to stop swinging, when a wall outranks a journey, and when the
   // watchdog interrupts a long blind walk so the ladder gets to decide with fresh numbers.
@@ -165,7 +166,7 @@ console.log('the ladder still has an answer for a monster');
   // The rung declining must not leave a hole. Flee and rest are the SAME stage, so a hurt
   // character with creatures on it falls through to the wall-and-rest half — which is the
   // behaviour the operator asked for: never run from the road, take a wall and carry on.
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   const stage = src.slice(src.indexOf('async passFleeAndRest'),
                           src.indexOf('async passFollow'));
   ok('resting lives in the same stage as fleeing, so declining is not a dead end',
@@ -195,7 +196,7 @@ console.log('the ladder still has an answer for a monster');
 console.log('');
 console.log('A WITHDRAWAL IS A WALL, OR IT IS FORWARD — NEVER AWAY');
 {
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   const w = src.slice(src.indexOf('async withdraw(threats)'),
                       src.indexOf('async withdraw(threats)') + 7000);
   // The old last resort picked any square six from the nearest threat with no regard for

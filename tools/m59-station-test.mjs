@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A STATION IS AN ORDER, AND A KEEPER THAT IS NOT AT ITS STATION HAS TO WALK THERE.
 //
 //   node tools/m59-station-test.mjs        # offline, opens no socket, touches no roster
@@ -25,7 +26,7 @@
 import { Autopilot } from './m59-autopilot.mjs';
 import { readFileSync } from 'node:fs';
 
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 let passed = 0, failed = 0;
 const ok = (what, cond, extra = '') => {
   if (cond) { passed++; console.log('  ok   ' + what); }
@@ -116,7 +117,7 @@ console.log('\nthe pass consults it, and keeps the two older reasons');
 // of an argument — there is no value to assert on, only a call site that must pass it.
 console.log('\na foreground travel waits for the journey, not for an acknowledgement');
 {
-  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   ok('the keeper-backed job still reads `foreground` to decide',
      BROKER.includes('background: opts.foreground !== true'));
   ok('and the travel tool now passes it, inverted from `background`',
@@ -190,7 +191,7 @@ console.log('\na foreground travel waits for the journey, not for an acknowledge
 // their reach and they have already noticed.
 console.log('\nthe pull refuses a crowd and refuses to run below the flee line');
 {
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = AP.indexOf('  async pull(want) {');
   const body = AP.slice(at, AP.indexOf("this.doing = 'fighting'", at));
   // `forFighting: true` since 2026-09-21: a crowd of things that cannot advance this body is
@@ -230,7 +231,7 @@ console.log('\nthe pull refuses a crowd and refuses to run below the flee line')
 // an unguarded pull in a crowd — sat two lines further down the same trail.
 console.log('\nthe safe-spot report asks the verdict, not the tally');
 {
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the verdict is computed from the book, with the live geometry',
      AP.includes('const condemned = this.book.discredited(known, { reachable: spot.can_reach_you ?? null })'));
   ok('the headline branches on the verdict', AP.includes('proven_before: condemned ?'));

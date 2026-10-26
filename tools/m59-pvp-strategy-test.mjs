@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-pvp-strategy-test.mjs — MODULAR PVP STRATEGIES (tools/m59-pvp-strategy.mjs), and the keeper's half
 // of them in CombatMode.
 //
@@ -476,7 +477,7 @@ console.log('groans: health bands off the pain sound');
   const b = Buffer.alloc(25); b.writeUInt32LE(901, 0); b.writeUInt32LE(2, 4); b[8] = 0;
   const a = parseAudio(170, b, new Map([[901, 'ouchm3.wav']]));
   ok('a BP_PLAY_WAVE of ouchm3 names its source object and reads band 3', a?.source === 2 && ph.groanBand(a.stem)?.band === 3, JSON.stringify(a));
-  const src = readFileSync(new URL('./m59-client.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-client.mjs', import.meta.url), 'utf8');
   ok('the client emits it as a groan event with the source', /this\.emit\('groan', \{ source: a\.source, band: g\.band/.test(src));
   ph.resetHealthCache();
   const t0 = Date.now();
@@ -527,7 +528,7 @@ console.log('combat mode: hold_fire');
 
 console.log('the keeper');
 {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   const i = src.indexOf('  async travel(room, opts) {');
   const body = src.slice(i, src.indexOf('\n  }\n', i));
   ok('Autopilot.travel refuses a keeper journey out of a strategy hold, and an explicit order only under hold_orders',
@@ -554,7 +555,7 @@ console.log('the keeper');
     const expired = await tryTravel({ room: 38, until: Date.now() - 1, orders: true }, { explicitOrder: true });
     ok('an expired hold is cleared and refuses nothing', expired?.held !== true && fake.pvpStrategyHold === null, JSON.stringify(expired));
   }
-  const kp = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');
+  const kp = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'latin1');
   ok('the keeper process gives every character a host, refreshed off the event path, hosts marked',
     /new PvpStrategyHost\(\{[^}]*isHost: isHostCharacter/.test(kp) && /pvpStrategy\.refresh\(\)/.test(kp));
 }

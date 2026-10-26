@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // EVERY WIRE VERB THE CLIENT CAN SPEAK, THE BROKER'S PROXY CAN FORWARD.
 //
 //   node tools/m59-keeperproxy-test.mjs
@@ -34,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
-const read = (f) => readFileSync(join(TOOLS, f), 'utf8');
+const read = (f) => readToolSource(join(TOOLS, f), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {

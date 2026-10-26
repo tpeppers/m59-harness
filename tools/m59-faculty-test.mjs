@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // WITH NO BOT ATTACHED, THE KEEPER STILL OWNS EVERYTHING THAT KEEPS A CHARACTER ALIVE.
 //
 //   node tools/m59-faculty-test.mjs
@@ -32,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const src = (f) => readFileSync(join(HERE, f), 'utf8');
+const src = (f) => readToolSource(join(HERE, f), 'utf8');
 
 let passed = 0, failed = 0;
 const ok = (what, cond, detail = '') => {

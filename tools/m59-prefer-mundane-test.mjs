@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for PREFER MUNDANE (policy.preferMundaneWeapon, c._preferMundane, weaponRanking's inverted tie-break,
 // Autopilot.syncMagicSet / applyMagicPreference). Opens no socket.
 //
@@ -30,12 +31,12 @@ await ok('...and never across the family: a magic axe does not jump the hammers 
 await ok('silence: no magic set, the old order', () => assert.ok(order(null, true).startsWith('1,2')));
 
 await ok('the keeper: the setting, the magic set kept while preferring mundane, and the swap', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   assert.ok(src.includes('preferMundaneWeapon: false,'));
   assert.ok(src.includes("const mundane = !on && this.policy?.preferMundaneWeapon === true;"));
   assert.ok(src.includes('c._preferMundane = mundane;'));
   assert.ok(src.includes("this.note('MUNDANE SWAP'"));
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(broker.includes('p.policy.preferMundaneWeapon = a.prefer_mundane_weapon === true;'));
 });
 

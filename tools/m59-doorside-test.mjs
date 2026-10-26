@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // WHEN A ROOM HAS TWO SIDES, WHICH DOOR DO YOU TAKE?
 //
 //   node tools/m59-doorside-test.mjs
@@ -156,7 +157,7 @@ console.log('\nso a target on one side selects a strict subset of the doors');
 
 console.log('\nand the mover asks the question');
 {
-  const src = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-game.mjs'), 'utf8');
   ok('doorsLandingNear exists', /function doorsLandingNear\(/.test(src));
   ok('it reads the landing coordinates the map carries',
      /g\.arriveRow == null \|\| g\.arriveCol == null/.test(src));
@@ -168,7 +169,7 @@ console.log('\nand the mover asks the question');
      /if \(right\.length\) \{[\s\S]{0,400}?candidates = right;/.test(src) &&
      /no door lands on the wanted side/.test(src));
   ok('the side is remembered across an interrupted bridge',
-     /this\.wantSide = \{ room: plan\.fromRoom/.test(readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8')));
+     /this\.wantSide = \{ room: plan\.fromRoom/.test(readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8')));
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +296,7 @@ console.log('\nand a through-route picks the door that can still continue');
 
   // The only thing left that a behavioural call cannot reach: that `travel` actually WIRES
   // this in for the hop after the current one. Everything above tests the function itself.
-  const src = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-game.mjs'), 'utf8');
   ok('and the mover asks it for the hop after this one',
      /route\.hops\[1\]\?\.to/.test(src) && /doorsLandingOnward\(this\.world\?\.map/.test(src));
 }

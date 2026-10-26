@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE LOADOUT FORMAT AND THE RECONCILER, AGAINST SCRATCH DIRECTORIES. Offline, safe any
 // time — it never reads the real loadout directory, never starts a broker, and never
 // touches the network:
@@ -218,10 +219,10 @@ console.log('\nthe same protection, flattened for a door that only takes names')
 // and 61 mushrooms his own keep list named on 2026-09-12.
 console.log('\nthe keeper-backed branch carries the loadout too');
 {
-  const src = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   const at = src.indexOf("keeperAction(a.agent, s._index, 'sell_all'");
   ok('the keeper-backed sell_all call site is still findable', at > 0);
-  const keeperSrc = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const keeperSrc = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   ok('sell_all evaluates the live loadout in the keeper, retaining quantities',
      keeperSrc.includes('loadout: args.ignore_loadout ? null : autopilot?.loadout?.()'));
   ok('and it is still possible to opt out, which is what ignore_loadout is for',
@@ -537,7 +538,7 @@ console.log('\nthe cache the keeper leans on');
 {
   const p = join(process.env.M59_LOADOUT_DIR, 'kermit.json');
   ok('the first read finds it', L.loadoutFor('Kermit')?.carry[0].min === 5);
-  const raw = JSON.parse(readFileSync(p, 'utf8'));
+  const raw = JSON.parse(readToolSource(p, 'utf8'));
   raw.carry[0].min = 99;
   writeFileSync(p, JSON.stringify(raw));
   // mtime resolution is coarse enough on some filesystems that a write inside the same
@@ -729,7 +730,7 @@ console.log('\none plan\'s gear, given to every character');
   const broken = L.applyGearToAll(gear, [{ character: 'Scooter' }], { apply: true });
   ok('an unreadable loadout is reported and left where it is',
      broken.counts.failed === 1 && /could not be read/.test(broken.rows[0].error) &&
-     readFileSync(join(root, 'loadouts', 'scooter.json'), 'utf8') === '{ this is not json');
+     readToolSource(join(root, 'loadouts', 'scooter.json'), 'utf8') === '{ this is not json');
   ok('a name that cannot be a filename is refused rather than flattened',
      L.applyGearToAll(gear, [{ character: '../..' }], { apply: true }).rows[0].error !== null);
 
@@ -1133,7 +1134,7 @@ console.log('\ngear the roster forbids');
   writeFileSync(p, JSON.stringify(before));
   const out = L.writeLoadoutPlan('Statler', { schools: { Kraanan: 4 }, weapon_level: 5,
     learning_queue: [{ track: 'Kraanan', level: 1 }, { track: 'weapons', level: 5 }, { track: 'Kraanan', level: 9 }] });
-  const after = JSON.parse(readFileSync(p, 'utf8'));
+  const after = JSON.parse(readToolSource(p, 'utf8'));
   ok('the new plan is on disk', after.plan.schools.Kraanan === 4 && after.plan.schools.Faren === undefined &&
      after.plan.weapon_level === 5);
   ok('and it went through the same normalising as any plan',
@@ -1144,13 +1145,13 @@ console.log('\ngear the roster forbids');
      strip(after) === strip(before) && after.carry[0].why.length === 400 && after.sell_why === before.sell_why);
   ok('a file that does not exist is created from a blank', (() => {
     const r = L.writeLoadoutPlan('Newcomer', { schools: { Qor: 3 } }, { agent: 't40' });
-    const j = JSON.parse(readFileSync(r.path, 'utf8'));
+    const j = JSON.parse(readToolSource(r.path, 'utf8'));
     return j.character === 'Newcomer' && j.agent === 't40' && j.plan.schools.Qor === 3 && Array.isArray(j.carry);
   })());
   writeFileSync(join(process.env.M59_LOADOUT_DIR, 'waldorf.json'), '{ not json');
   ok('an unreadable file is refused, not replaced',
      (() => { try { L.writeLoadoutPlan('Waldorf', { schools: {} }); return false; } catch { return true; } })() &&
-     readFileSync(join(process.env.M59_LOADOUT_DIR, 'waldorf.json'), 'utf8') === '{ not json');
+     readToolSource(join(process.env.M59_LOADOUT_DIR, 'waldorf.json'), 'utf8') === '{ not json');
   ok('a punctuation collision is refused', (() => {
     try { L.writeLoadoutPlan('Statler!', { schools: {} }); return false; } catch (e) { return /already holds/.test(e.message); }
   })());

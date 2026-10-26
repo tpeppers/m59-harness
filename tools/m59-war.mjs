@@ -432,7 +432,7 @@ export function holdLeash({ at = Date.now(), why = 'hold', by = null } = {}) {
 export const isGoOrder = t => /^\s*(?:go[\s!.]*)+$/i.test(String(t ?? ''));
 export const isHoldOrder = t => /^\s*(?:hold|stand down)[\s!.]*$/i.test(String(t ?? ''));
 
-export function raiseAlarm({ room, reporter, enemy, basis = 'attacked', at = Date.now() }) {
+export function raiseAlarm({ room, reporter, enemy, basis = 'attacked', at = Date.now(), suspect = null }) {
   if (!(Number(room) > 1) || !enemy) return false;
   const file = ALARM_FILE();
   try {
@@ -440,7 +440,8 @@ export function raiseAlarm({ room, reporter, enemy, basis = 'attacked', at = Dat
     // Keep the file small. A reader that finds it shorter than its offset starts over, and
     // everything it re-reads is filtered by age, so truncation loses nothing that matters.
     try { if (statSync(file).size > 256 * 1024) writeFileSync(file, ''); } catch {}
-    appendFileSync(file, JSON.stringify({ at, room: Number(room), reporter, enemy, basis }) + '\n');
+    // `suspect` (a threat.classify joint's disguised player: { id, name, label }) only when a pak raised it.
+    appendFileSync(file, JSON.stringify({ at, room: Number(room), reporter, enemy, basis, ...(suspect ? { suspect } : {}) }) + '\n');
     return true;
   } catch { return false; }
 }

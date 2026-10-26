@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // CAN AN OPERATOR ACTUALLY SET THE VIGOR FLOOR?
 //
 //   node tools/m59-vigorfloor-test.mjs
@@ -33,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { MIN_FIGHT_VIGOR as LOCAL_MIN } from './m59-localpolicy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const pilot = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const pilot = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail) => {
@@ -92,7 +93,7 @@ console.log('\nthe standing orders on disk are settable, not silently raised');
     console.log('  (no local policy on this checkout — nothing to check)');
   } else {
     let j = null;
-    try { j = JSON.parse(readFileSync(f, 'utf8')); } catch { j = null; }
+    try { j = JSON.parse(readToolSource(f, 'utf8')); } catch { j = null; }
     ok('the local policy parses', !!j, 'a file that will not parse is not an empty file');
     const floors = Object.entries(j?.blocks || {})
       .map(([name, b]) => [name, b?.fight_above_vigor])

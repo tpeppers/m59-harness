@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE DOOMED CHARACTER THAT STOOD STILL: run to the nearest wall, THEN freeze.
 //
 //   node tools/m59-doomedrush-test.mjs
@@ -42,7 +43,7 @@ const ok = (what, cond, extra) => {
   else { fail++; console.log(`  FAIL ${what}${extra ? '  ' + extra : ''}`); }
 };
 
-const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 console.log('');
 console.log('the throttle: one wall-rush per room per window');

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE FOUR LEASE GUARDS ARE STILL IN THE SOURCE. Offline, reads files, touches nothing:
 //
 //   node tools/m59-lease-guards-test.mjs
@@ -40,7 +41,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {

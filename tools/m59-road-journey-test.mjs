@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {followRoadJourney,roadTrafficGap} from './m59-road-journey.mjs';
@@ -10,7 +11,7 @@ for(const result of [{...raw,arrived:true},{...raw,refusals:[]},{...raw,refusals
 const report=rtsJobReport({kind:'travel',label:'road',origin:{source:'fleetscript',name:'test',run_id:'run'},startedAt:1,finishedAt:5000,done:true,result:raw},5000);
 assert.deepEqual(report.traffic_wait,{...traffic,finished_at:5000});
 assert.equal(rtsJobReport({kind:'travel',label:'road',startedAt:1,finishedAt:5000,done:true,cancelled:true,result:raw},5000).traffic_wait,undefined,'cancellation never authorizes a traffic retry');
-const fixture=JSON.parse(readFileSync(new URL('./fixtures/road-crowd-choke.json',import.meta.url))),geo=roomGeometry(39),you={...fixture.actors[13],predicted:false};
+const fixture=JSON.parse(readToolSource(new URL('./fixtures/road-crowd-choke.json',import.meta.url))),geo=roomGeometry(39),you={...fixture.actors[13],predicted:false};
 const blocked={room:{num:39},you,objects:[8,9].flatMap(row=>[8,24,40,56].flatMap(x=>[8,24,40,56].map(y=>({id:row*10000+x*100+y,flags:5,x:27*64+x,y:row*64+y}))))};
 assert.equal(roadTrafficGap(geo,blocked,traffic),false,'occupied exit goals cannot authorize another walk');
 const clear={...blocked,objects:[]};assert(roadTrafficGap(geo,clear,traffic),'the real castle geometry proves a cleared exit');
@@ -44,7 +45,7 @@ assert.deepEqual(departures,[1500],'the public road waits for the actual protect
 {
  const {planBodyDetour}=await import('./m59-body-detour.mjs');
  const {clientToProtocol,squareCentreClient}=await import('./m59-finepos.mjs');
- const f=JSON.parse(readFileSync(new URL('./fixtures/road-distant-traffic.json',import.meta.url))),g=roomGeometry(f.room),e=f.traffic.exits[0],goal=clientToProtocol(squareCentreClient(e.row,e.col));
+ const f=JSON.parse(readToolSource(new URL('./fixtures/road-distant-traffic.json',import.meta.url))),g=roomGeometry(f.room),e=f.traffic.exits[0],goal=clientToProtocol(squareCentreClient(e.row,e.col));
  assert.equal(planBodyDetour(g,f.you,goal,{objects:new Map(),maxRangeSquares:64}).reason,'body detour exceeds local bounds','ordinary local planner retains its default scope');
  assert(roadTrafficGap(g,{room:{num:f.room},you:f.you,objects:f.objects},f.traffic),'a distant exit cannot make a physically clear road wait forever behind the local planner limit');
  const blockers=f.traffic.exits.flatMap((e,i)=>[8,24,40,56].flatMap(x=>[8,24,40,56].map(y=>({id:100000+i*10000+x*100+y,flags:5,x:e.col*64+x,y:e.row*64+y}))));
@@ -55,7 +56,7 @@ assert.deepEqual(departures,[1500],'the public road waits for the actual protect
 {
  const {planBodyDetour}=await import('./m59-body-detour.mjs'),{clientToProtocol,squareCentreClient,protocolToClient}=await import('./m59-finepos.mjs');
  const {blockingBodySnapshot}=await import('./m59-body-detour.mjs');
- const f=JSON.parse(readFileSync(new URL('./fixtures/road-narrow-body-gap.json',import.meta.url))),g=roomGeometry(f.room),e=f.traffic.exits[1],goal=clientToProtocol(squareCentreClient(e.row,e.col)),objects=new Map(f.objects.map(o=>[o.id,o]));
+ const f=JSON.parse(readToolSource(new URL('./fixtures/road-narrow-body-gap.json',import.meta.url))),g=roomGeometry(f.room),e=f.traffic.exits[1],goal=clientToProtocol(squareCentreClient(e.row,e.col)),objects=new Map(f.objects.map(o=>[o.id,o]));
  const options={goalSquare:e,objects,selfId:f.you.id,maxRangeSquares:12,marginSquares:4,maxNodes:6000,maxMs:300};
  assert.equal(planBodyDetour(g,f.you,goal,options).found,false,'ordinary default retains the captured eight-unit lattice and refusal contract');
  const plan=planBodyDetour(g,f.you,goal,{...options,refine:true});assert(plan.found);assert.equal(plan.refinedSpacingUnits,4);assert(plan.nodes<=6000);
@@ -66,7 +67,7 @@ assert.deepEqual(departures,[1500],'the public road waits for the actual protect
 
 
 {
- const f=JSON.parse(readFileSync(new URL('./fixtures/road-switchback-traffic.json',import.meta.url))),g=roomGeometry(f.room);
+ const f=JSON.parse(readToolSource(new URL('./fixtures/road-switchback-traffic.json',import.meta.url))),g=roomGeometry(f.room);
  const {planBodyDetour,blockingBodySnapshot}=await import('./m59-body-detour.mjs'),{protocolToClient}=await import('./m59-finepos.mjs');
  const e=f.traffic.exits[0],goal={x:e.col*64+32,y:e.row*64+32};
  assert(!planBodyDetour(g,f.you,goal,{goalSquare:e,objects:new Map(),maxRangeSquares:8,marginSquares:3,maxNodes:6000,maxMs:300}).found,'captured short-distance search box excludes the legal switchback');

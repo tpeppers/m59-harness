@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // TWO CHARACTERS DIED WEDGED IN UKGOTH WITH THE KEEPER AWAKE — offline, no socket, no roster.
 //
 //   node tools/m59-wedgedeath-test.mjs
@@ -27,7 +28,7 @@ const ok = (what, cond, extra) => {
   else { fail++; console.log(`  FAIL ${what}${extra ? '  — ' + extra : ''}`); }
 };
 
-const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 // CODE, NOT PROSE. Twice in this session an assertion matched a phrase that appeared in the
 // comment explaining the fix, and reported a false failure against itself. So every check below
@@ -120,7 +121,7 @@ console.log('THE WEDGE COMES FIRST, AND THE BODY IS HEALTHY IN IT');
   // in this file that keys on health can only fire once the runway is gone. Displacement fires
   // while the body is still whole: it would have caught Sweetums nine minutes before she died
   // (ms_since_moved 546611) and Camilla thirty-four (2029414).
-  const WD = readFileSync(new URL('./m59-watchdog.mjs', import.meta.url), 'utf8');
+  const WD = readToolSource(new URL('./m59-watchdog.mjs', import.meta.url), 'utf8');
   const wcode = WD.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
   // THIRD VARIANT OF ONE BUG, AND THE TWO GATES POINTED OPPOSITE WAYS. The healthy-wedge pin
@@ -155,7 +156,7 @@ console.log('WHAT IS STILL NOT FIXED, asserted so it cannot be quietly forgotten
   // The gutters themselves are not a bug and must not be "fixed" by banning the room: the only
   // road to Castle Victoria runs through 599. See m59-stuck.mjs `ukgoth-gutters`.
   ok('and the stuck guide carries the entry for this room',
-     /ukgoth-gutters/.test(readFileSync(new URL('./m59-stuck.mjs', import.meta.url), 'utf8')));
+     /ukgoth-gutters/.test(readToolSource(new URL('./m59-stuck.mjs', import.meta.url), 'utf8')));
 }
 
 console.log('');

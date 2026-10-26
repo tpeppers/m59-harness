@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for THE STATION'S APPROACH (policy.approachRooms, a strategy's `confine.approach`,
 // Autopilot.approachLegs and the leg loop at the top of Autopilot.travel). Opens no socket.
 //
@@ -48,7 +49,7 @@ await ok('a confined room as destination also takes the road (a relocation to 11
 });
 
 await ok('travel walks the legs first, each flagged, and only the legs are exempt from the confinement', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const t = src.slice(src.indexOf('  async travel(room, opts) {'));
   assert.ok(/approachLeg = false, \.\.\.sessionOpts \} = opts \?\? \{\};/.test(t.slice(0, 600)), 'approachLeg is not passed to the session');
   assert.ok(t.indexOf('const legs = this.approachLegs?.(room);') < t.indexOf('refused to leave the confinement'));
@@ -58,7 +59,7 @@ await ok('travel walks the legs first, each flagged, and only the legs are exemp
 });
 
 await ok('the road is real: 544 north -> 552, 552 east -> 562, 562 east -> 108 (m59-map.json edgeExits)', () => {
-  const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
+  const map = JSON.parse(readToolSource(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
   const rooms = map.rooms ?? map;
   const edge = (a, b) => (rooms[a]?.edgeExits ?? []).some(e => Number(e.to) === b);
   for (let i = 0; i + 1 < ROAD.length; i++) assert.ok(edge(ROAD[i], ROAD[i + 1]), `${ROAD[i]} -> ${ROAD[i + 1]}`);
@@ -74,7 +75,7 @@ await ok('strategy field, broker argument, and qor-lupogg-sewers declares the ro
   assert.deepEqual(mod.default.confine.approach, ROAD);
   const v = validateStrategy(mod.default, { file: 'qor-lupogg-sewers.mjs' });
   assert.ok(v.ok !== false && !(v.problems?.length), JSON.stringify(v).slice(0, 300));
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(broker.includes("p.policy.approachRooms = farmStrategyField('confine.approach').normalize(a.approach_rooms ?? null);"));
 });
 

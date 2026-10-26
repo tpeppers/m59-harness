@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline: real route policy and room geometry at the arrival/recovery handoff.
 import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync} from 'node:fs';
@@ -10,7 +11,7 @@ const {Autopilot}=await import('./m59-autopilot.mjs');
 const {geometryFor}=await import('./m59-safespots.mjs');
 const {attachSurvivalDecisions,currentSurvivalDecision,chooseSurvivalDecision}=await import('./m59-survival-decision.mjs');
 const {withMoveOrder,keeperOrigin,liveMoveOrder}=await import('./m59-move-origin.mjs');
-const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
+const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
 let passed=0;
 async function test(name,run){await run();console.log('PASS '+name);passed++;}
 function fixture({predicted=true,row=7,col=16,whole=false}={}){

@@ -86,6 +86,10 @@ import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
+import { JointHost } from './m59-joints.mjs';
+import { postRequest } from './rpg/requests.mjs';
+import { appendDecision } from './m59-pvp.mjs';
+import { locStamp as jointLocStamp } from './m59-pvp-telemetry.mjs';
 
 // EVERYTHING THAT REACHES THIS PROCESS OVER HTTP IS SOMEBODY ELSE'S ORDER. The broker forwards
 // the MCP caller's origin; a caller that names none is recorded as such (m59-move-origin.mjs).
@@ -425,6 +429,23 @@ session.combat.pvpStrategy = new PvpStrategyHost({ fleet: fleetName, agent, char
   log: line => log(line) });
 void session.combat.pvpStrategy.refresh();
 setInterval(() => { void session.combat.pvpStrategy.refresh(); }, 2000).unref?.();
+// THE JOINTS (tools/m59-joints.mjs): this machine's paks, per character, from gitignored files. No
+// assignment file -- every fresh clone -- is no pak, and every joint answers default. Same 2 s refresh,
+// so an assignment or a pak edit needs no restart. Every answer is recorded twice: a `joint_decision`
+// line in this keeper's combat log, and a row in the PvP decisions stream the fight pages read.
+session.joints = new JointHost({ fleet: fleetName, agent, character, isHost: isHostCharacter, log: line => log(line),
+  effects: {
+    request: r => postRequest({ ...r, fleet: fleetName, room: session.world?.room?.num ?? null }),
+    note: text => { try { autopilot?.note?.(text); } catch {} },
+    record: row => {
+      const room = session.world?.room?.num ?? null;
+      let loc = null; try { loc = jointLocStamp(room, session.client?.self ?? null); } catch {}
+      session.recorder?.line?.('combat', { event: 'joint_decision', ...row });
+      appendDecision({ ...row, room, loc, fight: session.combat?.active?.pvp?.decision_id ?? null });
+    },
+  } });
+void session.joints.refresh();
+setInterval(() => { void session.joints.refresh(); }, 2000).unref?.();
 session.combat.sentinelEligibility = () => joinWanted &&
   process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
 // WARBAND COMBAT (CombatMode.warbandTick): on while a swarm holds this character -- the terminal's S

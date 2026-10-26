@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // Socketless real movement/collision, plus explicit range-only attack replies.
 // No broker, keeper process, server, combat damage or claim of native survival.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {bastionHarness} from './fixtures/bastion-fallback-client.mjs';
-const entry=JSON.parse(fs.readFileSync(new URL('./fixtures/cragged-combat-approach.json',import.meta.url)));
+const entry=JSON.parse(readToolSource(new URL('./fixtures/cragged-combat-approach.json',import.meta.url)));
 const h=await bastionHarness(),{fight}=await h.imp('m59-skills.mjs'),{Autopilot}=await h.imp('m59-autopilot.mjs');
 const {planBodyDetour}=await h.imp('m59-body-detour.mjs');
 

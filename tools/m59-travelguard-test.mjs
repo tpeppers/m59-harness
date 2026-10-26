@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // ONE CHARACTER HAS ONE BODY — the contract test for travel's mutual exclusion.
 //
 //   node tools/m59-travelguard-test.mjs
@@ -51,8 +52,8 @@ const ok = (what, cond) => { if (cond) pass++; else { fail++; console.log(`  FAI
 // it, and nothing noticed because it is not in `npm test`. Read both and search the
 // concatenation: every pattern below occurs in exactly one of the two files.
 const src = [
-  readFileSync(process.env.M59_GAME_SRC || 'tools/m59-game.mjs', 'utf8'),
-  readFileSync(process.env.M59_BROKER_SRC || 'tools/m59-broker.mjs', 'utf8'),
+  readToolSource(process.env.M59_GAME_SRC || 'tools/m59-game.mjs', 'utf8'),
+  readToolSource(process.env.M59_BROKER_SRC || 'tools/m59-broker.mjs', 'utf8'),
 ].join('\n');
 
 // ---------------------------------------------------------------------------

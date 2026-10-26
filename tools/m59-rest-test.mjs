@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // RESTING MUST NOTICE IT IS BEING HIT. Offline, no server, safe to run any time:
 //
 //   node tools/m59-rest-test.mjs
@@ -356,7 +357,7 @@ console.log('poison is not something hitting us');
   // BP_ADD_ENCHANTMENT (147) and BP_REMOVE_ENCHANTMENT (148) were declared in the BP table
   // and never handled, which is why this could not be told apart before: a sickness reached
   // the client and was dropped on the floor.
-  const SRC = readFileSync(new URL('./m59-skills.mjs', import.meta.url), 'utf8');
+  const SRC = readToolSource(new URL('./m59-skills.mjs', import.meta.url), 'utf8');
   // lastIndexOf: the phrase appears in the comment that explains the guard as well as in
   // the message it guards, and the first hit is the comment.
   const at = SRC.lastIndexOf('something is hitting us');
@@ -368,7 +369,7 @@ console.log('poison is not something hitting us');
   ok('and the drain is reported rather than silently swallowed',
      /poison_drain/.test(SRC));
 
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const fail = AP.indexOf('THIS IS NOT A SAFE SPOT');
   const observed = Autopilot.prototype.observe.toString();
   const before = observed.slice(0, observed.indexOf('THIS IS NOT A SAFE SPOT'));
@@ -436,7 +437,7 @@ console.log('\nresting before a blink out of a stalled crossing');
   // The mechanic that sets the target, asserted against the source so a future edit that
   // asks for full vigor is caught: resting stops at 80 of 200 and the rest has to be eaten.
   {
-    const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+    const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
     const at = AP.indexOf('async restBeforeBlink(');
     const body = AP.slice(at, at + 1400);
     ok('restBeforeBlink asks for REST_VIGOR_CAP, not for full vigor',

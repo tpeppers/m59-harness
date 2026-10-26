@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline, real movement cancellation and keeper recovery entry points.
 import assert from 'node:assert/strict';
 import {readFileSync,mkdtempSync,writeFileSync} from 'node:fs';
@@ -15,7 +16,7 @@ import {attachSurvivalDecisions,chooseSurvivalDecision,currentSurvivalDecision,
   cancelSurvivalDecision,updateSurvivalDecision,finishSurvivalDecision,survivalDecisionSnapshot} from './m59-survival-decision.mjs';
 import {summarizeSurvivalDecisions,postmortemSurvivalDecisions,loadSurvivalDecisionRows} from './m59-survival-decisions.mjs';
 import {createSurvivalDecisionRecorder} from './m59-survival-decision-log.mjs';
-const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
+const map=JSON.parse(readToolSource(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
 let passed=0;
 async function test(name,run){await run();passed++;console.log('PASS '+name);}
 function fixture({row=8,col=16}={}) {

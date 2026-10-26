@@ -1,5 +1,34 @@
 # The offline test suites, and what each one pins
 
+`m59-joints-test.mjs` (143) pins the joints (docs/m59-joints.md). FIRST: with no pak, every joint answers
+default, every call site is guarded by `handles`, and a firewall step through the real Session is refused
+exactly as before. Then the closed answer sets, the condition language, strikes, follow-ups and decision
+records. Then the RPG vocabulary from the kod: a curse is never a debuff, three wands have no timer,
+"laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
+derived from the map, the service board, the posture save and read-back, and an operation's expectations.
+
+`m59-hazards-test.mjs` (24) pins the named hazards (docs/m59-joints.md "Named hazards"). Survival off is a lease that
+runs out by itself, a flag with no lease stays off, and the keeper's pass runs again after the lease without anyone
+restoring it. A journey for a survival-off body is refused unless it goes to a NO_COMBAT room or accepts
+`survival_off_move`. The safe rooms come from the map: every inn either old hand list named is one, Ukgoth is not;
+in-room walks and combat orders are not this guard's.
+
+`m59-hearing-test.mjs` (13) pins what a death records about whether the keeper was looking and could hear (prod
+2026-10-26: nine deaths "stalled" with a flat health trail). A desynced frame header is counted, not only logged,
+while the socket still reads as alive. The postmortem's `hearing` block carries the age of the last frame, the last
+received bytes, the last parsed message, framing drops, STAT parse errors, and when the watchdog last ran and why it
+last stepped aside, and whether survival was on. With survival off, a hit still writes a frame.
+
+`m59-posture-test.mjs` (18) pins a posture's live half against a fake broker. A hazardous order (survival off, no
+flee line) is refused unless accepted by name, and nothing is pushed or saved. `tend` finds a handoff's reset by key
+and re-pushes it, says out loud when the re-push is refused, and pushes nothing in a dry run. A lease releases itself
+through `tend` and puts the character back.
+
+`m59-tripwire-test.mjs` (39) pins tripwires (docs/m59-joints.md "Tripwires"). Nothing is armed without a fleet
+file, and a file that does not parse arms nothing. A stale or missing `who` resets the quiet clock. A tripwire
+never releases a posture it did not put on, and two on one posture release on the last. Unknown triggers are
+refused at load. A dry watch reads only `fleet` and `who`, and never asks a piloted or host character.
+
 `m59-farm-danger-test.mjs` exercises the real bounded farm stage, survival token
 handoff, late queued-command refusal, preserved completed kill receipts and a
 changed-generation pull that returns through real Session movement to its wall.

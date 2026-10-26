@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A CALL FOR HELP IS AN ORDER TO MOVE BODIES, SO IT MUST COME FROM OUR OWN PEOPLE.
 //
 //   node tools/m59-conflict-test.mjs
@@ -45,7 +46,7 @@ const ok = (what, cond, extra = '') => {
   else { fail++; console.log('  FAIL ' + what + (extra ? '  ' + extra : '')); }
 };
 
-const AUTOPILOT_SRC = (() => { try { return readFileSync('tools/m59-autopilot.mjs', 'utf8'); }
+const AUTOPILOT_SRC = (() => { try { return readToolSource('tools/m59-autopilot.mjs', 'utf8'); }
                                catch { return ''; } })();
 
 // A throwaway fleet name so this never touches the real prod or shadow books.
@@ -71,7 +72,7 @@ console.log('\nA CALL CARRIES THE FLEET THAT MADE IT');
 {
   process.env.M59_FLEET = FLEET_A;
   intel.declareConflict('OurOwn', 'SomeTarget', 544);
-  const raw = JSON.parse(readFileSync(intel.conflictsPath(), 'utf8'));
+  const raw = JSON.parse(readToolSource(intel.conflictsPath(), 'utf8'));
   ok('a declared conflict records which fleet declared it',
      raw.SomeTarget?.fleet === FLEET_A, JSON.stringify(raw.SomeTarget));
   ok('and it is live to the fleet that made it',
@@ -84,7 +85,7 @@ console.log('\nAND A CALL FROM ANOTHER FLEET IS NOT A CALL');
   // reads. Before the split that was the SAME file; this reproduces the effect directly.
   process.env.M59_FLEET = FLEET_A;
   const path = intel.conflictsPath();
-  const raw = JSON.parse(readFileSync(path, 'utf8'));
+  const raw = JSON.parse(readToolSource(path, 'utf8'));
   raw.Morpheus = { target: 'Morpheus', room: 544, room_name: 'Valley of Ileria',
                    reporter: 'Animal', fleet: 'prod',
                    started_at: Date.now(), updated_at: Date.now(),
@@ -96,7 +97,7 @@ console.log('\nAND A CALL FROM ANOTHER FLEET IS NOT A CALL');
   ok('and our own call beside it still is', !!live.SomeTarget);
   // DROPPED, NOT ADOPTED. Rewriting it under this fleet's name would launder a foreign order
   // into a local one — the bug, with an extra step.
-  const after = JSON.parse(readFileSync(path, 'utf8'));
+  const after = JSON.parse(readToolSource(path, 'utf8'));
   ok('the foreign call is dropped rather than rewritten as ours',
      !after.Morpheus || after.Morpheus.fleet === 'prod', JSON.stringify(after.Morpheus));
 }

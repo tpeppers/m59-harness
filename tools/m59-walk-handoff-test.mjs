@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for SMOOTH HANDOFFS between a fleetscript's walks (Session.startJob's same-issuer supersede,
 // Autopilot.travelRestAtSanctuary). Opens no socket.
 //
@@ -15,7 +16,7 @@ import { Session } from './m59-game.mjs';
 
 let n = 0;
 const ok = async (name, fn) => { await fn(); n++; console.log(`ok ${name}`); };
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 function session(job) {
   const s = Object.create(Session.prototype);

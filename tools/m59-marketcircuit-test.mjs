@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // A FULL PACK GETS THE CIRCUIT, WHATEVER SENT IT TO TOWN.
 // Offline: no broker, no socket, no roster, no fleet.
 //
@@ -139,7 +140,7 @@ console.log('\nAND THE TRIP ACTUALLY CONSULTS IT');
   //
   // So this asserts the SEAM instead: the predicate exists, and the code that attaches
   // MARKET_STOPS asks it. Narrow, and it fails the day somebody deletes the call.
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the predicate is defined', /packWantsMarket\s*\(\)\s*{/.test(src));
   const at = src.indexOf('marketStops:');
   const attach = src.slice(Math.max(0, at - 900), at + 200);

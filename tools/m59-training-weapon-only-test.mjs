@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for TRAINING WEAPON ONLY (policy.trainingWeaponOnly, Autopilot.trainingWeaponOnlyNow,
 // equipBest's `s.equipOnly`). Opens no socket.
 //
@@ -42,7 +43,7 @@ await ok('off unless asked: no flag, a non-armed style, or no weapon named -> no
 });
 
 await ok('the keeper installs the hook on its session, beside the touch veto', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   assert.ok(src.includes('if (session) session.equipOnly = () => this.trainingWeaponOnlyNow();'));
 });
 
@@ -88,7 +89,7 @@ await ok('the strategy field and the broker argument exist, and a strategy may s
   const v = validateStrategy({ name: 'axe-only', weapons: { style: 'short_sword', trainingWeapon: 'axe', trainingWeaponOnly: true } },
     { file: 'axe-only.mjs' });
   assert.ok(v.ok !== false && !(v.problems?.length), JSON.stringify(v).slice(0, 300));
-  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   assert.ok(broker.includes('p.policy.trainingWeaponOnly = a.training_weapon_only === true;'));
 });
 

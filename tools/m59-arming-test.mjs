@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // WHY A BARE CHARACTER IS BARE. Offline: no socket, no roster, no fleet.
 //
 // Two incidents are pinned here and they cost differently. 2026-09-11: Statler was handed
@@ -216,7 +217,7 @@ console.log('\nlooted armour is worn by an armed character too');
   await ap.wearIntoEmptySlots();
   ok('...only once, not every minute', notes.filter(n => /keeps coming off/.test(n)).length === 2,
      JSON.stringify(notes));
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
   ok('every farm-mode pass dresses from the pack on a one-minute clock, before the ladder',
      /this\.mode === 'farm' && Date\.now\(\) - \(this\.dressedAt \?\? 0\) > 60_000[\s\S]{0,300}wearIntoEmptySlots[\s\S]{0,120}return this\.runPassLadder/.test(AP));

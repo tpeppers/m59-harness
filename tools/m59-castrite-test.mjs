@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // CAST RITES AND THE TRANCE DOOR: what must NOT change, and what is new.
 //
 //   node tools/m59-castrite-test.mjs
@@ -109,7 +110,7 @@ await t('rite:false skips the question entirely', async () => {
   assert.equal(s.asked.length, 0);
 });
 await t('every wrapped cast site still sends its own cast (source check)', async () => {
-  const ap = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
+  const ap = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'latin1');
   const wrapped = [...ap.matchAll(/withCastRite\(s, \{ spell, targets: (.+?), why: '\w+' \}, \(\) => s\.pacer\.submit\('cast', \(\) => c\.cast\(spell\.id, (.+?)\), 1050\)\)/g)];
   assert.ok(wrapped.length >= 12, 'twelve autopilot sites');
   for (const m of wrapped) assert.equal(m[1], m[2], 'the targets shown to the strategy are the ones sent');
@@ -222,7 +223,7 @@ await t('the hold ends on "concentration is broken", on a refusal, on a hit, and
   s.pacer.releaseCastHold();
 });
 await t('the session ends the automatic hold on a hit and on a room change (source check)', async () => {
-  const g = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const g = readToolSource(new URL('./m59-game.mjs', import.meta.url), 'utf8');
   assert.match(g, /this\.damagedAt = now;\s*\n(\s*\/\/.*\n)*\s*this\.pacer\?\.endAutoTrance\?\.\('hit'\)/);
   assert.match(g, /ev\.kind === 'room-entered'\) \{\s*\n\s*this\.pacer\?\.endAutoTrance\?\.\('changed room'\)/);
   assert.match(g, /c\.onCastSent = info => this\.noteCastSent\(info\)/);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // FARMING STRATEGY FILES — offline, no socket, no roster.
 //
 //   node tools/m59-strategy-engine-test.mjs
@@ -92,7 +93,7 @@ console.log('the committed examples');
   ok('...and the farm directory is not the travel strategies directory (two systems, two loaders)',
      resolve(travel.STRATEGY_DIR) !== farmDir && !farmDir.startsWith(resolve(travel.STRATEGY_DIR) + '\\')
      && !farmDir.startsWith(resolve(travel.STRATEGY_DIR) + '/'));
-  const gi = readFileSync(join(HERE, '..', '.gitignore'), 'utf8');
+  const gi = readToolSource(join(HERE, '..', '.gitignore'), 'utf8');
   ok('substrate/farm-strategies/ is gitignored; the examples directory is not',
      /^\/substrate\/farm-strategies\/$/m.test(gi) && !/^\/substrate\/farm-strategies\.example/m.test(gi));
 }
@@ -406,7 +407,7 @@ console.log('in the keeper: the policy key, the push, status, survival');
   await ap.applyFarmStrategy('policy push');
   ok('unassigned through a push: the orders come back', ap.policy.assignedRoom === 536 && ap.status().farm_strategy === null);
 
-  const src = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  const src = readToolSource(join(HERE, 'm59-autopilot.mjs'), 'utf8');
   ok('passOnce converges the strategy before anything else decides',
      /async passOnce\(\) \{\s*const s = this\.s;[\s\S]{0,400}await this\.applyFarmStrategy\('pass'\);/.test(src));
   ok('the swing and the kill dispatch the hooks', /this\.farmStrategyHook\('beforeSwing'/.test(src)
@@ -414,7 +415,7 @@ console.log('in the keeper: the policy key, the push, status, survival');
   ok('the keeper binds the engine and names no spell, creature or room for it',
      !/farmStrategy[^\n]*(acid|spider|living tree|skeleton|536|537)/i.test(src));
 
-  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  const keeper = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
   ok('the keeper /policy merge credits changed keys and re-converges the strategy',
      /Object\.assign\(autopilot\.policy, fields\);[\s\S]{0,1200}markChanged[\s\S]{0,800}applyFarmStrategy\?\.\('policy push'\)/.test(keeper));
   ok('a rejoin credits roster/carry and converges before start()',
@@ -427,7 +428,7 @@ console.log('in the keeper: the policy key, the push, status, survival');
   ok('the CARRY moves the assignment by name and nothing of the file', adopt.fields.farmStrategy === 'wf2'
      && !('huntPriority' in adopt.fields) && Object.keys(adopt.fields).length === 1, JSON.stringify(adopt.fields));
 
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the broker schema declares farm_strategy', /farm_strategy: \{ type: \['string', 'null'\],/.test(broker));
   ok('the setter loads and validates the file, refusing with the reason',
      /const r = await loadFarmStrategy\(String\(a\.farm_strategy\)\.trim\(\)\);\s*if \(!r\.ok\) return \{ started: false, reason: `farm_strategy refused: \$\{r\.why\}`/.test(broker)
@@ -575,7 +576,7 @@ console.log('the leak: a strategy\'s keys must not become orders');
   Object.assign(ap2.policy, { spareCreatures: spare.normalize([]) });
   ok('a pushed [] clears it', s2.sparePatterns() === null);
 
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the broker seeds a keeper-backed order from the ORDERS, never the effective policy',
      /p\.policy = ordersFromStatus\(live\.autopilot_status\)/.test(broker)
      && !/p\.policy = \{ \.\.\.live\.autopilot_status\.policy \};/.test(broker));
@@ -589,7 +590,7 @@ console.log('the leak: a strategy\'s keys must not become orders');
                  run: () => 'p.policy.spareCreatures = x' };
   ok('policy_control reflects spare_creatures onto policy.spareCreatures',
      reflectPolicy(tool, [ap2.policy]).find(sp => sp.id === 'spare_creatures')?.policy === 'spareCreatures');
-  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  const keeper = readToolSource(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
   ok('the keeper /policy keeps an echo out of its order copy and a restatement off the overlay',
      /farmStrategyPushEcho\?\.\(pushed\)/.test(keeper) && /Object\.assign\(policy, orderFields\);/.test(keeper)
      && /for \(const k of strategyEcho\.restated\) delete fields\[k\];/.test(keeper));

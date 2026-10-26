@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // OFFLINE. Pins the guild-hall deposit run: leaving the foyer before speaking, waiting for
 // the slow door, and recording the run either side.
 //
@@ -25,7 +26,7 @@ const ok = (c, what) => { if (c) pass++; else { fail++; console.log(`  FAIL: ${w
 const eq = (a, b, what) => ok(Object.is(a, b), `${what} (got ${JSON.stringify(a)}, wanted ${JSON.stringify(b)})`);
 const section = s => console.log(`\n${s}`);
 
-const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 section('the foyer is a real place and the chests are not in it');
 {
@@ -91,7 +92,7 @@ section('the run is recorded either side, always');
   // A trip that never arrived is the case the operator could not see. It must record too.
   ok(/recordHallRun\(\{ before, after: before, want, contributed: 0/.test(src),
      'a run that could not reach the hall is still recorded');
-  const stats = readFileSync(new URL('./m59-strategy-stats.mjs', import.meta.url), 'utf8');
+  const stats = readToolSource(new URL('./m59-strategy-stats.mjs', import.meta.url), 'utf8');
   ok(/category === 'guild_chest' \? policy\?\.guildWants\?\.enabled/.test(stats),
      'and the category records whenever guild_wants is on, not only under the broad switch');
 }
@@ -113,7 +114,7 @@ section('the snapshot cannot break the deposit it describes');
 {
   // A REFUSED hallWithdraw is short of everything it was asked for, never `short: {}` -- which is the
   // shape of a full draw, and is what a mushroom courier logged on 2026-10-04 beside a 0 -> 0 pack.
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const hw = src.slice(src.indexOf('async hallWithdraw('), src.indexOf('async hallWithdraw(') + 3000);
   ok(/not in the hall[^\n]*short: allShort\(\)/.test(hw), 'the not-in-the-hall refusal reports every want as short');
   ok(/if \(!hall\.ok\) return \{[^\n]*short: allShort\(\)/.test(hw), 'the hall-passage refusal reports every want as short');

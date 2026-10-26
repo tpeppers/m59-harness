@@ -1,3 +1,4 @@
+import { readToolSource } from './autopilot/source.mjs';
 // Offline guard for Autopilot.saleProtectedNames: a co-op reagent the hall chests are short of
 // (versus the guild plan) is kept from every MERCHANT, and only from merchants.
 //
@@ -57,7 +58,7 @@ ok('no co-op: exactly the ordinary keep list', () => {
   assert.deepEqual(call({ reagentCoop: null }), ['entroot berry']);
 });
 ok('the deposit filter is untouched: protectedItemNames does not call it', () => {
-  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = src.indexOf('  protectedItemNames() {');
   assert.ok(at > 0 && !src.slice(at, src.indexOf('\n  }\n', at)).includes('saleProtectedNames'));
   assert.equal((src.match(/skills\.sellAll\(s, \{[^}]*?protect: this\.saleProtectedNames\(\)/gs) ?? []).length, 3,

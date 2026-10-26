@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // THE PVP RETURN DELAY — offline, no socket, no roster.
 //
 //   node tools/m59-pvp-return-test.mjs
@@ -232,12 +233,12 @@ const monsterAttribution = { killer: 'frogman', kind: 'named_kill', was_killed_b
 console.log('the policy surfaces');
 {
   const HERE = dirname(fileURLToPath(import.meta.url));
-  const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
+  const broker = readToolSource(join(HERE, 'm59-broker.mjs'), 'utf8');
   ok('the autopilot schema declares pvp_return_delay_ms', /pvp_return_delay_ms: \{ type: 'number', minimum: 0/.test(broker));
   ok('the setter writes p.policy.pvpReturnDelayMs (so policy_control reflects it)',
      /p\.policy\.pvpReturnDelayMs = Math\.floor\(ms\)/.test(broker));
   ok('the fleet row carries pvp_return_hold', /pvp_return_hold: st\?\.pvp_return_hold \?\? null/.test(broker));
-  const game = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+  const game = readToolSource(join(HERE, 'm59-game.mjs'), 'utf8');
   ok('travelJob marks explicit orders', /keeper\.travel\(dest, \{ \.\.\.opts, movementGeneration, explicitOrder: true \}\)/.test(game));
 
   const { reflectPolicy } = await import('./m59-policy-controls.mjs');

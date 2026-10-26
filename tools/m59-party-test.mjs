@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // TWO CHARACTERS, ONE MONSTER, ONE WALL. Offline, no server, safe any time:
 //
 //   node tools/m59-party-test.mjs
@@ -555,7 +556,7 @@ console.log('\nwho is us, in a process with no broker in it');
 
   // THE KEEPER PROCESS INSTALLS IT. It cannot be imported — importing runs it — so this
   // reads its source. The day this fails, every keeper is blind to its own fleet again.
-  const src = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const src = readToolSource(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
   ok('m59-keeper-process.mjs installs a file-backed roster source at startup',
      /party\.setRosterSource\(party\.rosterFileSource\(fleetPath/.test(src));
 

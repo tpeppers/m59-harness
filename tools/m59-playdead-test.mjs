@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // PLAYING DEAD ON A SAFE SPOT, PINNED — AND THE TURN THAT MAKES IT WORTH ANYTHING.
 //
 // Offline: no socket, no roster, no broker. The session is a fake and the only thing that
@@ -287,7 +288,7 @@ console.log('and OFF a wall against MONSTERS it now refuses — the rule reverse
 console.log('');
 console.log('the rule is enforced where it cannot be routed around');
 {
-  const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const SRC = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   // The REFUSAL is what is gone, and an absence has to be pinned by source.
   ok('playDead no longer gates on a book-proven hold',
      !/if \(!this\.holdWorks\(\)\)[\s\S]{0,400}refusing to play dead/.test(SRC));

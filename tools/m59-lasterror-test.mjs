@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-lasterror-test.mjs — `last_error` MEANS NOW, OR IT MEANS NOTHING.
 //
 //   node tools/m59-lasterror-test.mjs
@@ -52,7 +53,7 @@ const ok = (what, cond, extra = '') => {
   else { failed++; console.log('  FAIL ' + what + (extra ? '  ' + extra : '')); }
 };
 
-const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const AUTOPILOT = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
 // A keeper stripped to exactly what the two bookkeeping methods touch. `s.live` is the
 // session's own answer and is the only input that decides whether a completed pass counts
@@ -140,7 +141,7 @@ console.log('\nstamped and attributed, so one poll is enough');
      /this\.loop\(\)\.catch\(e => \{ this\.lastError = e\.message; this\.lastErrorAt = Date\.now\(\);/.test(AUTOPILOT));
   ok('and m59-trace carries the new fields, or the tool that samples keepers cannot see them',
      /'last_error_age_s', 'last_error_live'/.test(
-       readFileSync(new URL('./m59-trace.mjs', import.meta.url), 'utf8')));
+       readToolSource(new URL('./m59-trace.mjs', import.meta.url), 'utf8')));
 }
 
 // ------------------------------------------------------------------ 3. the real fault

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // PREY YOU CANNOT WALK TO, AND WHY FORGETTING IT IS A TOTAL FAILURE RATHER THAN A SLOW ONE.
 //
 // `closeOnQuarry` has always DETECTED unreachable prey -- a null `approachSquare` returns
@@ -182,7 +183,7 @@ console.log('--- EVERY ban announces itself, because a silent one cannot be inve
 console.log('--- quarry selection skips proved-unreachable prey, as fight() does ---');
 {
   const { readFileSync } = await import('node:fs');
-  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const AP = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const sel = AP.indexOf('const avoidPrey = this.preyAvoid(room?.num ?? null);');
   const rank = AP.indexOf('found = rankQuarries(this.s.name, room?.num, found, { preferId });');
   const pick = AP.indexOf('const selectedQuarry = found[0] ?? null;');

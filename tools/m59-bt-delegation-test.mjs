@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readToolSource } from './autopilot/source.mjs';
 // m59-bt-delegation-test.mjs -- THE TEST THAT TELLS A DECOMPOSITION FROM A WRAPPER.
 //
 // A behavior-tree node that calls back into m59-autopilot.mjs has not replaced
@@ -148,7 +149,7 @@ const files   = btModules(HERE);
 const report  = new Map();          // file -> { count, methods: Map<name, n> }
 
 for (const f of files) {
-  const calls   = delegations(readFileSync(join(HERE, f), 'utf8'));
+  const calls   = delegations(readToolSource(join(HERE, f), 'utf8'));
   const methods = new Map();
   for (const c of calls) methods.set(c, (methods.get(c) ?? 0) + 1);
   report.set(f, { count: calls.length, methods });
@@ -229,7 +230,7 @@ const isEntryPoint = (src) => /import\.meta\.url|process\.argv\[1\]/.test(src);
 function orphans(dir, files) {
   const importedBy = new Map(files.map(f => [f, []]));
   for (const f of readdirSync(dir).filter(x => x.endsWith('.mjs'))) {
-    const src = stripComments(readFileSync(join(dir, f), 'utf8'));
+    const src = stripComments(readToolSource(join(dir, f), 'utf8'));
     for (const target of files) {
       if (f === target) continue;
       if (f === target.replace(/\.mjs$/, '-test.mjs')) continue;   // its own test
@@ -237,7 +238,7 @@ function orphans(dir, files) {
     }
   }
   return files.filter(f =>
-    !isEntryPoint(readFileSync(join(dir, f), 'utf8')) &&
+    !isEntryPoint(readToolSource(join(dir, f), 'utf8')) &&
     importedBy.get(f).every(x => x.includes('-test')));
 }
 
@@ -246,7 +247,7 @@ if (!existsSync(BASELINE)) {
   console.error(`no baseline at ${basename(BASELINE)} -- run with --bless to create one`);
   process.exit(1);
 }
-const base = JSON.parse(readFileSync(BASELINE, 'utf8'));
+const base = JSON.parse(readToolSource(BASELINE, 'utf8'));
 
 let failed = 0, improved = 0, total = 0;
 console.log('\ndelegation ratchet -- calls from BT modules into the legacy keeper\n');

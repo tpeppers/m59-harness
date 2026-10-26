@@ -25,6 +25,7 @@ import {verticalMotionRange,nextVerticalMotion} from './m59-vertical-motion.mjs'
 import { CombatMode } from './m59-combat-mode.mjs';
 import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
+import { hazardFacts } from './m59-joint-facts.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
 import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
   finishSurvivalDecision } from './m59-survival-decision.mjs';
@@ -2018,12 +2019,33 @@ class Session {
   runCommand(fn) { return withBodyCommand(this, fn); }
 
   groundEffectBlock(from, to) {
-    const effect = groundEffectOnSegment(this.client, from, to);
+    const effect = groundEffectOnSegment(this.client, from, to, this.hazardOptions?.('step', from, to) ?? {});
     return effect ? { available: true, moved: false, blocked: true,
       reason: 'ground_effect_blocked', ground_effect: effect } : null;
   }
 
-  hazardSquares() { return groundEffectSquares(this.client); }
+  hazardSquares() { return groundEffectSquares(this.client, this.hazardOptions?.('combat') ?? {}); }
+
+  // THE movement.hazard JOINT (tools/m59-joints.mjs). With no pak answering it -- every fresh clone --
+  // `crossable` is absent and every ground effect is avoided exactly as before. A pak that answers
+  // `cross` lets this body step through THAT effect, for THAT purpose; every other check on the step
+  // (collision, the floor, bodies) still applies. Answers are kept for a second per effect, so a walk
+  // does not re-ask on every packet.
+  hazardOptions(purpose, from = null, to = null) {
+    if (!this.joints?.handles?.('movement.hazard')) return {};
+    return { crossable: effect => this.hazardCrossable(effect, purpose, from, to) };
+  }
+
+  hazardCrossable(effect, purpose, from = null, to = null) {
+    const key = `${purpose}|${effect.id}|${effect.row},${effect.col}`, now = Date.now();
+    const memo = (this._hazardAnswers ??= new Map()).get(key);
+    if (memo && now - memo.at < 1000) return memo.cross;
+    let cross = false;
+    try { cross = this.joints.ask('movement.hazard', hazardFacts(this, effect, purpose, from, to))?.do === 'cross'; } catch {}
+    this._hazardAnswers.set(key, { at: now, cross });
+    if (this._hazardAnswers.size > 64) this._hazardAnswers.delete(this._hazardAnswers.keys().next().value);
+    return cross;
+  }
 
   startJob(kind, label, fn, { controlToken = null, leaseToken = null, origin = null, to = null, resume = null } = {}) {
     if (this.combat?.active) throw new Error(`${this.name}: combat override owns the body`);
