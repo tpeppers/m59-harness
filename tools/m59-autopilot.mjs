@@ -3322,6 +3322,7 @@ export class Autopilot {
     if (fromLoadout && Object.keys(fromLoadout).length) await this.applyFarmStrategy('loadout');
     await this.useHealingWand();
     await this.sweepSpoiledPotions();
+    this.jointCurseUpkeep();
     // ------------------------------------------------------------------
     // GOAP KEEPER (opt-in via policy.useGOAP)
     //

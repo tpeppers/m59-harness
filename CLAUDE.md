@@ -33,6 +33,9 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
 | cast a spell from code, keep a TRANCE unbroken, change gear around a cast (`castRite` / `idleGear` hooks; the policy is private), or tag a character's cast role | [`docs/m59-cast-rites.md`](docs/m59-cast-rites.md) |
 | write, assign or debug a PVP STRATEGY (what a character does when a player hits it or is seen: flee to a room, engage, default) | [`docs/m59-pvp-strategies.md`](docs/m59-pvp-strategies.md) |
+| replace a behaviour at a keeper JOINT (a firewall, a morph, a wand that is not landing, a curse), write or dry-run a PAK, or ask "my buffs / debuffs / resistances / am I cursed" in the game's own terms (`tools/rpg/`) | [`docs/m59-joints.md`](docs/m59-joints.md) |
+| lock the fleet down and UNDO it (a posture: saved, pushed, read back), or write a battle plan as data (roles, zones, phases, expectations) | [`docs/m59-joints.md`](docs/m59-joints.md#postures-the-lockdown-and-the-undo-that-used-to-fail) |
+| edit the keeper (`m59-autopilot.mjs`): its methods live in `tools/autopilot/<faculty>.mjs`; tests read it whole through `readToolSource` | [`docs/m59-joints.md`](docs/m59-joints.md#the-keeper-is-in-parts-now) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | buy a spell of LEVEL 3 or higher, or find out why a priestess will not sell one | `m59-research/reports/disciple-quests.md`, and `tools/fleetscripts/disciple-quest.mjs` |

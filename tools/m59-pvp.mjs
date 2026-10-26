@@ -116,6 +116,13 @@ export function appendAction(row, { dir = pvpDirFor() } = {}) { return appendSid
 /** One loud-PvP callout (m59-pvp-callout.mjs): who said what to whom. Also the fleet-wide chorus count. Never throws. */
 export function appendCallout(row, { dir = pvpDirFor() } = {}) { return appendSide('callouts', row, dir); }
 
+/**
+ * One DECISION a pak made at a keeper joint (tools/m59-joints.mjs): which joint, which pak and rule, the
+ * answer, the facts it was given and any branches the pak recorded. The fight pages read these beside the
+ * shots and actions, so a replay can show why a body did what it did, not only where it was. Never throws.
+ */
+export function appendDecision(row, { dir = pvpDirFor() } = {}) { return appendSide('decisions', row, dir); }
+
 /** Shot rows between two times, oldest first. */
 export function readShots({ dir = pvpDirFor(), since = 0, until = Date.now() } = {}) {
   const out = [];

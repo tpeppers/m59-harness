@@ -76,9 +76,11 @@ export function groundEffects(client) {
     .map(o => groundEffect(o, lookup, { roomFile: lookup(client?.roomRsc) })).filter(Boolean);
 }
 
-export function groundEffectSquares(client) {
+// `crossable(effect)` is the movement.hazard joint's answer (tools/m59-joints.mjs): an effect a pak has
+// said this body may pass through is not avoided. Absent -- every fresh clone -- nothing changes.
+export function groundEffectSquares(client, { crossable = null } = {}) {
   const squares = new Set();
-  for (const effect of groundEffects(client)) if (effect.avoid)
+  for (const effect of groundEffects(client)) if (effect.avoid && !crossable?.(effect))
     for (let dr = -effect.avoid_radius; dr <= effect.avoid_radius; dr++)
       for (let dc = -effect.avoid_radius; dc <= effect.avoid_radius; dc++)
         if (Math.hypot(dr, dc) <= effect.avoid_radius) squares.add(`${effect.row + dr},${effect.col + dc}`);
@@ -93,13 +95,14 @@ export function effectsAt(client, point) {
 // Segment/square intersection in protocol fine coordinates. Checking only the
 // endpoint lets a coalesced move jump across a firewall. A body already in an
 // effect may leave it; it may not enter a different effect on the way out.
-export function groundEffectOnSegment(client, from, to) {
+export function groundEffectOnSegment(client, from, to, { crossable = null } = {}) {
   if (!from || !to) return null;
   const a = { x: from.x ?? from.col * 64 + 32, y: from.y ?? from.row * 64 + 32 };
   const b = { x: to.x ?? to.col * 64 + 32, y: to.y ?? to.row * 64 + 32 };
   if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return null;
   for (const effect of groundEffects(client)) {
     if (!effect.avoid) continue;
+    if (crossable?.(effect)) continue;
     if (effect.avoid_radius > 0) {
       const fromDistance = Math.hypot(Math.floor(a.y / 64) - effect.row, Math.floor(a.x / 64) - effect.col);
       const toDistance = Math.hypot(Math.floor(b.y / 64) - effect.row, Math.floor(b.x / 64) - effect.col);

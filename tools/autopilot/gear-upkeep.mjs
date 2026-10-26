@@ -20,6 +20,7 @@ import { shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
+import { selfFacts, roomFacts } from '../m59-joint-facts.mjs';
 
 export class GearUpkeepPart {
   // @part 1
@@ -158,6 +159,26 @@ export class GearUpkeepPart {
   // with no reason given -- operator, 2026-09-27: "any suspected curse should just get a remove
   // curse", because a remove curse on a clean target is refused before any mana or emerald is spent.
   // `since` is stable for one incident (same weapon in hand), so a bot can count its own attempts.
+  // upkeep.curse (tools/m59-joints.mjs): once a minute, show a pak what this body knows about its own curse
+  // -- rpg/sheet.mjs `curse`, which is the server's evidence and never a debuff -- and let it ask the fleet's
+  // service board for a remove curse. Added with the joints, not moved; with no pak it returns at once.
+  jointCurseUpkeep() {
+    const joints = this.s?.joints;
+    if (!joints?.handles?.('upkeep.curse')) return null;
+    const now = Date.now();
+    if (now - (this._curseUpkeepAt ?? 0) < 60_000) return null;
+    this._curseUpkeepAt = now;
+    try {
+      const c = this.s.client;
+      const self = selfFacts(this.s, { keeper: this });
+      const d = joints.ask('upkeep.curse', { ...roomFacts(this.s), self,
+        can_cast: (c?.spells ?? []).map(sp => String(c.rsc?.get?.(sp.nameRsc) ?? sp.name ?? '').toLowerCase()).filter(Boolean) });
+      if (d?.do === 'request') joints.effects.request?.({ service: d.service, target: self.name, why: d.why, pak: d.pak,
+        joint: 'upkeep.curse', from: self.name, ttl_ms: 10 * 60_000 });
+      return d;
+    } catch { return null; }
+  }
+
   noteCurseSuspect({ items = [], said = null, certain = false, why = null } = {}) {
     const held = (items ?? [])[0] ?? null;
     const prev = this._curseSuspect;

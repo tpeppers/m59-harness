@@ -2,7 +2,7 @@
 // No script compiler, snapshot fetch, external planner or keeper pass is on the
 // arrival -> first attack path. All packets still use the ordinary server pacer.
 import { randomUUID } from 'node:crypto';
-import { OF, blocksMovement } from './m59-parse.mjs';
+import { OF, blocksMovement, playerClass } from './m59-parse.mjs';
 import { withBodyCommand } from './m59-body-command.mjs';
 import { withCastRite } from './m59-castrite.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
@@ -64,6 +64,15 @@ export function joustRetreat(geo, me, attacker, gap) {
 // A strategy flight that did not land waits this long before another may start.
 const FLIGHT_BACKOFF_MS = 15_000;
 import { protocolToClient, clientToProtocol } from './m59-roo.mjs';
+// THE JOINTS (tools/m59-joints.mjs): combat.blocked, combat.channel, combat.outcome, threat.classify and the
+// combat half of movement.hazard are asked from this file. Each is asked only when a pak answers it.
+import { fightFacts, selfFacts, roomFacts } from './m59-joint-facts.mjs';
+import { readOurBlow, elementOf } from './rpg/damage.mjs';
+import { assessCreature, isAnonymous } from './rpg/suspicion.mjs';
+import { loadSpawns } from './m59-spawns.mjs';
+import { loadMap, exitsOf } from './m59-map.mjs';
+import { fileURLToPath as joint_fileURLToPath } from 'node:url';
+const SPAWN_INDEX = process.env.M59_SPAWN_FILE || joint_fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 
 // A FIGHT'S JOURNEY WALKS. Session.travel may take a Rescue chain (m59-rescue-travel.mjs) whenever the private
 // rescueTravel policy enables it, and since 2026-10-21 that policy covers the whole fleet. A Rescue lands in the
@@ -212,10 +221,24 @@ export function combatTarget(client, target, { anyAttackable = false } = {}) {
     const o = client.room.objects.get(target);
     return o && o.id !== client.selfId && (o.flags & OF.ATTACKABLE) ? o : null;
   }
-  const players = [...client.room.objects.values()].filter(o => o.id !== client.selfId && (o.flags & OF.PLAYER));
-  const matches = players.filter(o => typeof target === 'number' ? o.id === target : exactName(client, o) === target.toLowerCase());
+  // A SUSPECTED PLAYER (threat.classify, below) is a player for targeting: a creature this keeper's pak
+  // judged to be a morphed player. Only that object id -- the other creatures of its kind are not.
+  const suspect = o => suspectedPlayer(client, o.id);
+  const players = [...client.room.objects.values()].filter(o => o.id !== client.selfId && ((o.flags & OF.PLAYER) || suspect(o)));
+  // `#<id>` names one object by id: how a suspected player (a morph, an anonymous body) is targeted, since
+  // its name is a monster's or blank.
+  const byId = typeof target === 'string' && /^#\d+$/.test(target) ? Number(target.slice(1)) : null;
+  const matches = players.filter(o => typeof target === 'number' ? o.id === target : byId != null ? o.id === byId : exactName(client, o) === target.toLowerCase());
   demand(matches.length <= 1, 'player identity is ambiguous');
   return matches[0] ?? null;
+}
+
+/** Is this object one the threat.classify joint marked as a disguised player, still in force? */
+export function suspectedPlayer(client, id) {
+  const e = client?.suspectedPlayers?.get?.(id);
+  if (!e) return null;
+  if (Date.now() > e.until) { client.suspectedPlayers.delete(id); return null; }
+  return e;
 }
 
 // One short ordinary move, then re-evaluate the live hazard and target. Never
@@ -223,7 +246,10 @@ export function combatTarget(client, target, { anyAttackable = false } = {}) {
 export function safeCombatStep(session, destination, { avoidSquares = new Set(), fineBody = false } = {}) {
   const c = session.client, geo = session.world?.geometry, me = c?.self;
   if (!me || !geo) return null;
-  const avoid = groundEffectSquares(c);
+  const hazard = session.hazardOptions?.('combat') ?? {};
+  const avoid = groundEffectSquares(c, hazard);
+  // A pak may let the PATH cross an effect (movement.hazard `cross`); it never makes one a place to STAND.
+  const standAvoid = hazard.crossable ? groundEffectSquares(c) : avoid;
   for (const key of avoidSquares) avoid.add(key);
   for (const object of c.room?.objects?.values?.() ?? []) {
     if (object.id === c.selfId || !blocksMovement(object.flags)) continue;
@@ -235,7 +261,7 @@ export function safeCombatStep(session, destination, { avoidSquares = new Set(),
     const row = destination.row + dr, col = destination.col + dc;
     if (destination.exact && (dr || dc)) continue;
     if (!destination.exact && Math.hypot(dr, dc) > 2) continue;
-    if (row < 1 || col < 1 || row > geo.rows || col > geo.cols || avoid.has(`${row},${col}`)) continue;
+    if (row < 1 || col < 1 || row > geo.rows || col > geo.cols || avoid.has(`${row},${col}`) || standAvoid.has(`${row},${col}`)) continue;
     if (!geo.standable(row, col)) continue;
     if (destination.sight && geo.canMove && !lineOfSight(geo, row, col, destination.row, destination.col)) continue;
     if (!destination.exact && !dr && !dc) continue; // never walk onto the target
@@ -274,7 +300,7 @@ export function safeCombatStep(session, destination, { avoidSquares = new Set(),
       if (p) {
         const x = clientToProtocol(p.x), y = clientToProtocol(p.y);
         const next = { row: Math.floor(y / 64), col: Math.floor(x / 64), x, y, fine: true };
-        if (!groundEffectOnSegment(c, me, next)) return next;
+        if (!groundEffectOnSegment(c, me, next, hazard)) return next;
       }
       continue; // a disproved fine leg must not borrow a coarse shortcut
     }
@@ -746,7 +772,7 @@ export class CombatMode {
       try { war.unleash({ at, why: `${leader} died: ${text}`, by: me }); } catch {}
   }
 
-  raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num) {
+  raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num, extra = {}) {
     if (!this.sentinelEnabled() || !(room > 1) || !enemy) return;
     const key = `${room}|${String(enemy).toLowerCase()}`, now = this.now();
     // A sighting repeats for as long as the enemy stands there; say it again only every
@@ -755,7 +781,7 @@ export class CombatMode {
     if (now - (this.warAlarmed.get(key) ?? 0) < every) return;
     this.warAlarmed.set(key, now);
     if (this.warAlarmed.size > 256) this.warAlarmed.clear();
-    war.raiseAlarm({ room, reporter: this.character?.() ?? characterName(this.s, this.s.client), enemy, basis, at: now });
+    war.raiseAlarm({ room, reporter: this.character?.() ?? characterName(this.s, this.s.client), enemy, basis, at: now, ...extra });
   }
 
   /** Another keeper's alarm. Joins the fight only when it names the map this character is in. */
@@ -763,6 +789,11 @@ export class CombatMode {
     if (!this.sentinelEnabled() || !a?.enemy) return false;
     const me = this.character?.() ?? characterName(this.s, this.s.client);
     if (this.isOurs(a.enemy)) return false;                  // never an alarm about one of ours
+    // A SUSPECTED PLAYER'S ALARM (threat.classify) names an object id. A keeper takes it up only when its
+    // own paks answer threat.classify -- the same consent the reporter had -- and only in the same map.
+    if (a.suspect?.id != null && Number(a.room) === this.s.world?.room?.num && this.s.joints?.handles?.('threat.classify'))
+      this.markSuspect(this.s.client, a.suspect.id, { name: a.suspect.name, label: a.suspect.label, ttl_ms: a.suspect.ttl_ms ?? 300_000,
+        why: `${a.reporter ?? 'a fleetmate'} reported it`, pak: a.suspect.pak ?? null });
     // THE FLEET-WIDE WARNING. Every alarm, from any map, is the fleet's latest knowledge of
     // where an enemy is -- a sentinel's sighting in map 2 is what tells a guard in 39 to get
     // ready before anybody is hit. Kept here and reported in `combat status` (war.threat).
@@ -791,6 +822,156 @@ export class CombatMode {
     if (a.basis === 'sighted') return false;
     return this.beginWar(a.enemy, { basis: a.basis ?? 'alarm', why: `${a.reporter} reported ${a.enemy}`,
       room: a.room, reporter: a.reporter ?? 'a fleetmate' });
+  }
+
+  // ------------------------------------------------------------------ the joints (tools/m59-joints.mjs)
+  //
+  // Every method here is reached only when a pak answers the joint; with none loaded each returns at its
+  // first line and the fight is exactly what it was.
+
+  /** combat.blocked: no square to approach from. True when a pak's answer was carried out. */
+  answerBlocked(o, target, reason) {
+    const joints = this.s.joints;
+    if (!joints?.handles?.('combat.blocked')) return false;
+    const c = o.client;
+    const hazards = (() => { try { return [...groundEffectSquares(c)].length; } catch { return 0; } })();
+    const d = joints.ask('combat.blocked', fightFacts(this.s, o, target, { reason, hazard_squares: hazards,
+      exits_here: this.exitRooms() }));
+    if (!d) return false;
+    this.s.recorder?.line?.('combat', { event: 'joint_combat_blocked', pak: d.pak, decision: d.do, why: d.why ?? null,
+      target: o.targetName ?? null, room: this.s.world?.room?.num ?? null });
+    if (d.do === 'ranged' || d.do === 'hold') {
+      o.holdApproachUntil = this.now() + (d.do === 'hold' ? d.ms : 2500);
+      o.blockedAnswer = { ...d, at: this.now() };
+      return true;
+    }
+    if (d.do === 'withdraw') {
+      const room = d.room ?? this.exitRooms()[0] ?? null;
+      if (!room) return false;
+      return !!this.beginFlight({ do: 'flee_to', room, hold_ms: 0, hold_orders: false, max_ms: 5 * 60_000,
+        why: d.why ?? 'combat.blocked: withdraw', strategy: `pak:${d.pak}` }, o.targetName ?? 'blocked', 'blocked');
+    }
+    return false;
+  }
+
+  /** The rooms one exit away from here, nearest exit first. */
+  exitRooms() {
+    try {
+      const num = this.s.world?.room?.num, me = this.s.client?.self;
+      const room = loadMap().rooms[String(num)];
+      const rows = exitsOf(room).filter(e => Number(e.to) > 1 && Number(e.to) !== num)
+        .map(e => ({ to: Number(e.to), d: me && e.row != null ? Math.hypot(e.row - me.row, e.col - me.col) : 999 }))
+        .sort((a, b) => a.d - b.d);
+      return [...new Set(rows.map(r => r.to))];
+    } catch { return []; }
+  }
+
+  /** combat.channel: which channels this beat may use. */
+  askChannel(o, wands) {
+    const joints = this.s.joints;
+    if (!joints?.handles?.('combat.channel')) return null;
+    const live = o.client.room?.objects?.get?.(o.targetId);
+    const now = this.now();
+    const weights = Object.fromEntries([...(this.channelWeights ?? new Map())].filter(([, w]) => w.until > now)
+      .map(([k, w]) => [k, w.weight]));
+    return joints.ask('combat.channel', fightFacts(this.s, o, live, { volley: wands.map(w => `wand:${String(w.name).toLowerCase()}`),
+      weights, timer: { attack_ready_in_ms: Math.max(0, (this.attackReadyAt ?? 0) - now) } }));
+  }
+
+  /** combat.outcome: our own blow, read back. */
+  observeOutcome(ev, c) {
+    const joints = this.s.joints;
+    if (ev.kind !== 'message' || !ev.text || !joints?.handles?.('combat.outcome')) return;
+    const o = this.active;
+    if (!o?.pvp && !o?.targetName) return;
+    const blow = readOurBlow(ev.text);
+    if (!blow) return;
+    if (blow.target && o.targetName && !blow.target.toLowerCase().includes(o.targetName.toLowerCase())) return;
+    const now = this.now(), last = this.lastOutChannel;
+    const channel = last && now - last.at < 4000 ? last.channel : blow.with ? (elementOf(blow.with) ? `spell:${blow.with}` : 'melee') : 'unknown';
+    const element = blow.element ?? elementOf(channel.replace(/^\w+:/, '')) ?? null;
+    const live = c.room?.objects?.get?.(o.targetId);
+    const d = joints.ask('combat.outcome', { ...roomFacts(this.s), channel, outcome: { ...blow, element }, text: ev.text,
+      target: { name: o.targetName, id: o.targetId, player: !!(live && (live.flags & OF.PLAYER)) }, self: selfFacts(this.s) });
+    if (d?.do === 'adjust') {
+      (this.channelWeights ??= new Map()).set(d.channel, { weight: d.weight, until: now + d.for_ms, pak: d.pak, why: d.why });
+    }
+  }
+
+  markSuspect(c, id, { name = null, label = 'suspected_morph', ttl_ms = 300_000, why = null, pak = null } = {}) {
+    if (id == null || !c) return null;
+    const e = { id, name, label, why, pak, since: this.now(), until: this.now() + ttl_ms };
+    (c.suspectedPlayers ??= new Map()).set(id, e);
+    this.s.recorder?.line?.('combat', { event: 'suspect_marked', id, name, label, why, pak, room: this.s.world?.room?.num ?? null });
+    return e;
+  }
+
+  /** threat.classify: a creature doing what a creature cannot. */
+  observeCreature(ev, c) {
+    const joints = this.s.joints;
+    if (!joints?.handles?.('threat.classify')) return;
+    const room = this.s.world?.room?.num ?? null, now = this.now();
+    let subject = null, kind = null, detail = null;
+    const creature = o => o && o.id !== c.selfId && !(o.flags & OF.PLAYER) && (o.flags & OF.ATTACKABLE);
+    if (ev.kind === 'said' && ev.speaker != null) {
+      const o = c.room?.objects?.get?.(ev.speaker);
+      if (creature(o)) { subject = o; kind = 'spoke'; detail = { kind: 'spoke', text: ev.text }; }
+    } else if (ev.kind === 'message' && ev.text) {
+      // Prefix first, as observeMonsterCombat does: a crowded room must not parse every creature's name on
+      // every line. Among same-named creatures the NEAREST is the one whose blow this was -- reach is 2-3 squares.
+      const line = ev.text.toLowerCase(), me = c.self;
+      let best = null;
+      for (const o of c.room?.objects?.values?.() ?? []) {
+        if (!creature(o)) continue;
+        const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
+        if (!name) continue;
+        const forms = [name, `The ${name}`, `A ${name}`, `An ${name}`];
+        if (!forms.some(n => line.startsWith(n.toLowerCase() + ' '))) continue;
+        const hit = parsePlayerCombat(ev.text, forms);
+        if (hit?.direction !== 'incoming' || hit.outcome !== 'hit') continue;
+        const d = me ? Math.hypot(o.row - me.row, o.col - me.col) : 0;
+        if (!best || d < best.d) best = { o, d };
+      }
+      if (best) { subject = best.o; kind = 'hit'; detail = { kind: 'hit' }; }
+      // AN ANONYMOUS BLOW. Anonymity blanks the name on the wire and keeps OF_PLAYER (anon.kod; user.kod:405-410),
+      // so the name-based PvP path cannot match the line and nothing answers it. A blow from a nameless player,
+      // with exactly one nameless player within reach, is that player.
+      if (!subject && /^\s*(someone|somebody)\b/i.test(ev.text) && parsePlayerCombat(ev.text, ['Someone', 'Somebody'])?.direction === 'incoming') {
+        const me = c.self;
+        const anon = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId && isAnonymous(o, id => c.rsc?.get?.(id))
+          && (!me || Math.hypot(o.row - me.row, o.col - me.col) <= 4));
+        if (anon.length === 1) { subject = anon[0]; kind = 'anonymous_hit'; detail = { kind: 'hit' }; }
+      }
+    } else if ((ev.kind === 'appeared' || ev.kind === 'changed') && ev.id != null) {
+      const o = c.room?.objects?.get?.(ev.id);
+      if (creature(o) && (playerClass(o.flags ?? 0) !== 0)) { subject = o; kind = 'appeared'; }
+    }
+    if (!subject || suspectedPlayer(c, subject.id)) return;
+    const book = (this.creatureEvents ??= new Map());
+    const evs = book.get(subject.id) ?? [];
+    if (detail) evs.push({ ...detail, at: now });
+    book.set(subject.id, evs.filter(e => now - e.at < 120_000).slice(-10));
+    if (book.size > 64) book.delete(book.keys().next().value);
+    const asked = (this.creatureAskedAt ??= new Map());
+    if (now - (asked.get(subject.id) ?? 0) < 1500) return;
+    asked.set(subject.id, now);
+    const name = String(c.rsc?.get?.(subject.nameRsc) ?? subject.name ?? '').trim();
+    let spawns = null;
+    try { spawns = loadSpawns(SPAWN_INDEX); } catch {}
+    const a = kind === 'anonymous_hit'
+      ? { evidence: [{ signal: 'anonymous', weight: 1, detail: 'a nameless player (anonymity) hit us' }], score: 1, spawnable_here: null }
+      : assessCreature(subject, { name, room, spawns, events: book.get(subject.id) });
+    const d = joints.ask('threat.classify', { ...roomFacts(this.s), event: kind,
+      object: { id: subject.id, name, flags: subject.flags, row: subject.row, col: subject.col },
+      evidence: a.evidence, score: a.score, spawnable_here: a.spawnable_here, self: selfFacts(this.s) });
+    if (d?.do !== 'treat_as_player') return;
+    this.markSuspect(c, subject.id, { name, label: d.label, ttl_ms: d.ttl_ms, why: d.why, pak: d.pak });
+    // Targeted as `#<id>`: a morph wears a monster's name and an anonymous player wears none.
+    const handle = `#${subject.id}`, hit = kind === 'hit' || kind === 'anonymous_hit';
+    if (d.alarm) this.raiseWarAlarm(handle, hit ? 'attacked' : 'engaged', room,
+      { suspect: { id: subject.id, name, label: d.label, ttl_ms: d.ttl_ms, pak: d.pak } });
+    if (hit) this.beginPvP({ character: handle, direction: 'incoming', outcome: 'hit', text: ev.text,
+      reason: `${d.label}: ${d.why ?? 'a creature doing what a creature cannot'}`, reason_code: 'suspected_disguised_player' }, ev.at);
   }
 
   // ------------------------------------------------------------------ PvP gear and the volley
@@ -834,7 +1015,14 @@ export class CombatMode {
     // no-combat room every beat is refused and the volley would keep firing into it. Checked
     // before any strategy is asked: no strategy may fire into a room that refuses it.
     if (this.pvpForbiddenHere()) return null;
-    const wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
+    let wands = gear.volleyWandsIn(c, { spent: this.spentWands, cfg });
+    // combat.channel: a pak may take wands out of this beat, or reserve the beat for one channel.
+    const steer = this.askChannel(o, wands);
+    if (steer?.do === 'skip') wands = wands.filter(w => !steer.channels.includes(`wand:${String(w.name).toLowerCase()}`));
+    if (steer?.do === 'prefer') {
+      if (!steer.channel.startsWith('wand:')) return null;      // the beat is melee's or a spell's: no volley
+      wands = wands.filter(w => `wand:${String(w.name).toLowerCase()}` === steer.channel);
+    }
     // Bare "wand" rows are offered to a private strategy (ctx.unidentified); the built-in never
     // fires them, so a fleet with no pvpWand strategy behaves exactly as before.
     const unidentified = gear.unidentifiedWandsIn(c, { spent: this.spentWands })
@@ -891,6 +1079,7 @@ export class CombatMode {
       // taken the instant before the packet goes, so a refusal can be named afterwards.
       const shot = this.buildWandShot(o, { live, pick, decision: { ...decision, face }, ctx: sentCtx, faceDeg, queuedAt });
       c.apply(pick.o.id, live.id);
+      this.lastOutChannel = { channel: `wand:${String(pick.name ?? 'wand').toLowerCase()}`, at: this.now() };
       this.lastVolleyBeat = sentCtx.beat;
       this.lastWandFireAt = this.now();
       if (needsTimer) this.attackReadyAt = this.now() + wandShot.ATTACK_TIMER_MS;
@@ -965,6 +1154,7 @@ export class CombatMode {
 
   async approachCombat(o, target, { sight = false } = {}) {
     if (!target || !o.client.self) return;
+    if (o.holdApproachUntil > this.now()) return;   // a combat.blocked `ranged` or `hold` is standing here on purpose
     o.fallbackReason = 'pursuit';
     this.fallback.offer(o, o.fallbackReason);
     o.lastReadiness = this.attackReadiness(o, target, { sight, range: sight ? null : 2 });
@@ -972,6 +1162,7 @@ export class CombatMode {
     // same-room planner carries Castle Victoria's exact trigger/landing fixes.
     if (await this.crossDoorToward(o, target)) return;
     const next = safeCombatStep(this.s, { ...target, sight }, { fineBody: true });
+    if (!next && this.answerBlocked(o, target, 'no_safe_approach')) return;
     demand(next, 'no safe approach to player');
     await this.stand(o);
     const before = { row: o.client.self.row, col: o.client.self.col, x: o.client.self.x, y: o.client.self.y };
@@ -1066,7 +1257,10 @@ export class CombatMode {
       pvp: !!o.pvp, warband: !!o.order?.warband, room: this.s.world?.room?.num ?? null,
       readiness: this.attackReadiness(o, target, { sight: true }),
       personal_threat: this.personalThreatStatus(),
-      heard: this.heardHere() };
+      heard: this.heardHere(),
+      karma: (() => { const k = c.stat?.('karma'); return k == null || k === '' ? null : Number(k); })(),
+      fight: o.pvp?.decision_id ?? o.id ?? null, fight_started_at: o.acceptedAt ?? null,
+      karma_refused: [...(o.karmaRefused?.keys?.() ?? [])] };
     for (const st of asked) {
       let answer;
       try { answer = await st.pvpOpener(ctx); }
@@ -1081,6 +1275,10 @@ export class CombatMode {
         return true;
       }
       const name = typeof answer.cast === 'string' ? answer.cast.trim().toLowerCase() : null;
+      if (name && o.karmaRefused?.has(name)) {
+        this.noteOpenerFault(o, st.name, `the server refused ${name} for karma in this fight; passed over`);
+        continue;
+      }
       const spell = name && (c.spells ?? []).find(sp => exactName(c, sp) === name);
       if (!spell) { this.noteOpenerFault(o, st.name, name ? `named a spell it does not know: ${name}` : 'answered neither cast nor wait'); continue; }
       const aim = answer.target ?? 'target';
@@ -1116,6 +1314,16 @@ export class CombatMode {
   /** What this keeper heard, kept briefly for the opener: a room enchantment says so out loud. */
   hear(ev) {
     if (!ev.text) return;
+    // KARMA REFUSALS (spell.kod:32-33, KarmaCheck :465-481): "You are not vile enough to cast hold!" -- or "not
+    // worthy" for Shal'ille. Karma does not move in a fight (short of a vampiric wand), so the spell is refused
+    // for the rest of THIS fight: an opener that names it again is passed over and the fight falls through to
+    // what the character can do. Before this, a Qor caster without the karma stood re-casting hold every two
+    // seconds while it was cut down.
+    const kr = /You are not (vile enough|worthy) to cast (.+?)!/i.exec(String(ev.text));
+    if (kr && this.active) {
+      (this.active.karmaRefused ??= new Map()).set(kr[2].trim().toLowerCase(), { at: this.now(), kind: kr[1].toLowerCase().startsWith('vile') ? 'vile' : 'worthy' });
+      this.record('opener_karma_refused', this.active);
+    }
     this.heard ??= [];
     this.heard.push({ at: this.now(), room: this.s.world?.room?.num ?? null, kind: ev.kind,
                       text: String(ev.text).replace(/~[A-Za-z]/g, '').trim() });
@@ -2738,6 +2946,10 @@ export class CombatMode {
     if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);
     this.observePlayerCombat(ev, client);
     this.observeMonsterCombat(ev, client);
+    if (this.s.joints?.paks?.length) {
+      try { this.observeOutcome(ev, client); } catch { /* a joint never stops the event loop */ }
+      try { this.observeCreature(ev, client); } catch { /* likewise */ }
+    }
     const requested = this.safetyRequest;
     if (requested && ev.kind === 'changed' && ev.id === requested.playerId &&
         requested.client === this.s.client && !!(requested.client.self?.flags & OF.SAFETY) === requested.on)
@@ -3155,6 +3367,7 @@ export class CombatMode {
         o.lastReadiness = { action: 'attack', ...ready };
         if (!ready.ready) return;
         if (c.attack(live.id) === false) return;
+        this.lastOutChannel = { channel: 'melee', at: this.now() };
         this.attackReadyAt = this.now() + 1000;
         o.nextAt = this.attackReadyAt;
         if (o.firstAttackAt == null) {
@@ -3176,6 +3389,7 @@ export class CombatMode {
         const live = c.room.objects.get(o.targetId);
         if (!this.attackReadiness(o, live, { sight: step.target === 'target', facing: step.target === 'target' }).ready) return;
         c.cast(spell.id, step.target === 'none' ? [] : [step.target === 'self' ? c.selfId : live.id]);
+        this.lastOutChannel = { channel: `spell:${String(step.spell).toLowerCase()}`, at: this.now() };
         this.attackReadyAt = this.now() + this.spellTimerMs(step.spell);
         o.casts++; o.pendingAdvance = true;
         o.nextAt = this.now() + step.hold_ms;

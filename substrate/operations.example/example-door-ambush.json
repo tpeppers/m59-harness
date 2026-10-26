@@ -1,0 +1,31 @@
+{
+  "format": "m59-operation/1",
+  "name": "example-door-ambush",
+  "about": "EXAMPLE (rooms 1001/1002 are placeholders): ring the doors between two rooms; when the quarry is seen, expect him to run for a door and head him off -- unless he stops to fight, then help whoever he is fighting.",
+  "state": "proposed",
+  "roles": {
+    "archers": { "fill": { "has_channel": "bow" }, "max": 3 },
+    "melee":   { "fill": {}, "min": 2 }
+  },
+  "zones": {
+    "doors":  { "doors_between": [1001, 1002], "radius": 2 },
+    "middle": { "room": 1002, "rect": { "row": [10, 12], "col": [10, 12] } }
+  },
+  "phases": [
+    { "name": "waiting", "when": ["enemy.seen", "==", false],
+      "posts": { "archers": { "zone": "middle" }, "melee": { "zone": "doors", "keep_clear": 1 } } },
+    { "name": "fight", "when": ["enemy.seen", "==", true],
+      "posts": { "archers": { "zone": "middle" } },
+      "expect": [
+        { "name": "he runs for a door",
+          "anticipate": { "melee": { "go": "doors" } },
+          "invalidate_when": { "any": [["enemy.engaged_with", ">=", 1], ["enemy.standing_ms", ">=", 4000]] },
+          "then": { "melee": { "assist": "whoever he is fighting" } } }
+      ] }
+  ],
+  "timeline": [
+    { "label": "quiet", "facts": { "enemy": { "seen": false } } },
+    { "label": "he arrives", "facts": { "enemy": { "seen": true, "engaged_with": 0, "standing_ms": 0 } } },
+    { "label": "he stops and slugs it out", "facts": { "enemy": { "seen": true, "engaged_with": 1, "standing_ms": 5000 } } }
+  ]
+}

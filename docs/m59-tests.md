@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+`m59-joints-test.mjs` (143) pins the joints (docs/m59-joints.md). FIRST: with no pak, every joint answers
+default, every call site is guarded by `handles`, and a firewall step through the real Session is refused
+exactly as before. Then the closed answer sets, the condition language, strikes, follow-ups and decision
+records. Then the RPG vocabulary from the kod: a curse is never a debuff, three wands have no timer,
+"laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
+derived from the map, the service board, the posture save and read-back, and an operation's expectations.
+
 `m59-farm-danger-test.mjs` exercises the real bounded farm stage, survival token
 handoff, late queued-command refusal, preserved completed kill receipts and a
 changed-generation pull that returns through real Session movement to its wall.
