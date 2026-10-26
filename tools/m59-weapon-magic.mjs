@@ -197,7 +197,10 @@ export class WeaponMagicBook {
   // outcome ('ok' | 'no_reply' | 'other_id' | 'error') is kept per id and shown in summary() as look_attempts/last_look.
   noteLook(id, outcome) {
     const m = (this.lookAttempts ??= new Map()), k = Number(id), e = m.get(k) ?? { attempts: 0 };
-    e.attempts++; e.last = outcome; e.at = this.now(); m.set(k, e); return e;
+    // 'pending' marks a look sent and not yet answered; the outcome that follows replaces it without counting twice.
+    if (outcome !== 'pending' && e.last !== 'pending') e.attempts++;
+    if (outcome === 'pending') e.attempts++;
+    e.last = outcome; e.at = this.now(); m.set(k, e); return e;
   }
 
   needsLook(items = [], isWeapon = defaultIsWeapon) {
