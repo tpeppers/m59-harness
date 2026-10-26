@@ -422,6 +422,16 @@ const CROWD_RADIUS = 4;
 // out of 200, so 0.4 is the ceiling of what sitting down can ever buy — asking for
 // more is asking to sit until the timeout expires. The rest comes from food.
 const REST_VIGOR_CAP = 0.4;
+// THE CHARACTER'S OWN RESTING CEILING, AS THE SERVER SENDS IT. 80 is only the base: Second Wind raises the threshold to
+// 80 + (ability + 1) / 5 (secwind.kod:158, bounded 10..100 at player.kod:1238) and the server sends it as the vigor stat's
+// current_max (user.kod SendStatVigor), which the client reports as vitals().vigor.rest_threshold. Operator, 2026-10-26:
+// "be willing to rest to its actual maximum vigor". A threshold under 80 is the Second Wind cooldown (player.kod:1235 sets
+// 10 while the enchantment runs): resting cannot award anything then, so it reads as the base rather than as permission
+// to fight at 10. A fraction of the 200 bar, like REST_VIGOR_CAP.
+export function restVigorCapOf(vitals) {
+  const t = Number(vitals?.vigor?.rest_threshold);
+  return (Number.isFinite(t) && t > 80 ? Math.min(t, 100) : 80) / 200;
+}
 // THE VIGOR A TRAVELLER MUST NOT DROP BELOW ON AN ORDINARY ROAD.
 //
 // Raw vigor, not a fraction, because that is the unit everything else here reports and the
@@ -1857,8 +1867,8 @@ export function applyFightAboveVigor(policy, value) {
 // Returns what is actually reachable, never raising a floor that was already low enough.
 // The cap scales with the bar rather than assuming 200, because the same arithmetic has to
 // hold for a character whose maximum is not 200.
-export function reachableFightFloor(floor, maxVigor = 200, foodVigor = 0) {
-  const restCeiling = REST_VIGOR_CAP * maxVigor;
+export function reachableFightFloor(floor, maxVigor = 200, foodVigor = 0, restCap = REST_VIGOR_CAP) {
+  const restCeiling = (Number(restCap) || REST_VIGOR_CAP) * maxVigor;
   return Math.min(floor, restCeiling + Math.max(0, Number(foodVigor) || 0));
 }
 
@@ -2839,6 +2849,9 @@ export class Autopilot {
       p.vigorFloor ?? plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
   }
 
+  // This character's resting ceiling (Second Wind included), as a fraction of the bar. See restVigorCapOf.
+  restVigorCap() { return restVigorCapOf(this.s?.client?.vitals?.()); }
+
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     if (this.poorFarmingActive()) return this.poorVigorFloor();
     const want = this.wantedFightFloor(plan);
@@ -2895,7 +2908,7 @@ export class Autopilot {
     const carried = larder.reduce((n, item) =>
       n + (Number(item?.food?.nutrition ?? item?.nutrition) || 0) *
           (Number(item?.o?.amount ?? item?.amount ?? 1) || 1), 0);
-    const reachable = reachableFightFloor(want, VIGOR_CAP, carried);
+    const reachable = reachableFightFloor(want, VIGOR_CAP, carried, this.restVigorCap());
     if (reachable < want) this.vigor.starved_passes++;
     return reachable;
   }
@@ -5872,7 +5885,7 @@ export class Autopilot {
     // fifteen-mana blink — the strategy asked, the predicate said yes, and the cast could
     // not happen. Waiting for mana is a wait that ends; waiting for vigor above the resting
     // cap is not, which is why the two are asked for differently.
-    if ((before ?? 1) >= REST_VIGOR_CAP && (manaBefore ?? 1) >= mana)
+    if ((before ?? 1) >= this.restVigorCap() && (manaBefore ?? 1) >= mana)
       return { rested: false, note: 'already at the resting cap', vigor_pct: before, mana_pct: manaBefore };
     this.doing = 'recovering';
     const r = await skills.restUntil(this.s, {
@@ -5880,7 +5893,7 @@ export class Autopilot {
       // usually at full health — being hurt is what the survival ladder is for, and it runs
       // on its own clock. Asking for health too would sit a healthy character down for
       // nothing and a hurt one down for the wrong reason.
-      health: 0, vigor: REST_VIGOR_CAP, mana, maxSeconds, abortOnDamage: true,
+      health: 0, vigor: this.restVigorCap(), mana, maxSeconds, abortOnDamage: true,
     }).catch(e => ({ error: e.message }));
     const after = vigorPct(this.s.client?.vitals?.());
     const manaAfter = pct(this.s.client?.vitals?.()?.mana);
@@ -6217,7 +6230,7 @@ export class Autopilot {
         if(cancelled())return true;
         if(pct(client.vitals()?.health)>=1)return true;
       }
-      const r=await skills.restUntil(s,{health:1,vigor:REST_VIGOR_CAP,maxSeconds:8,
+      const r=await skills.restUntil(s,{health:1,vigor:this.restVigorCap(),maxSeconds:8,
         shouldCancel:cancelled,
         beforeMutation:()=>{if(cancelled())throw Error('survival recovery interrupted');},
         beforeCleanup:()=>{if(currentSurvivalDecision(s)?.id!==d.id || s.movementWasCancelled?.(generation))throw Error('survival ownership changed');}});
@@ -7353,7 +7366,7 @@ export class Autopilot {
     // retirement this is careful about everywhere else. Health is the exception and
     // defaults to 0: with nowhere else to be, waiting for a real number is right, and
     // the rung above is what keeps that from becoming permanent.
-    const whole = (hp ?? 0) >= 0.95 && (mp ?? 1) >= 0.95 && (vig ?? 1) >= REST_VIGOR_CAP;
+    const whole = (hp ?? 0) >= 0.95 && (mp ?? 1) >= 0.95 && (vig ?? 1) >= this.restVigorCap();
     if (armed && whole) {
       this.sanctuaryHoldSince = null;
       this.sanctuaryHoldNoted = false;
@@ -7907,14 +7920,14 @@ export class Autopilot {
     const v = s.client?.vitals?.();
     const vig = vigorPct(v), hp = pct(v?.health), mp = pct(v?.mana);
     // A missing mana reading means no bar to fill, not a shortfall to wait on.
-    if ((vig ?? 1) >= REST_VIGOR_CAP && (hp ?? 1) >= 0.95 && (mp ?? 1) >= mana) return false;
+    if ((vig ?? 1) >= this.restVigorCap() && (hp ?? 1) >= 0.95 && (mp ?? 1) >= mana) return false;
     this.doing = 'recovering';
     const r = await skills.restUntil(s, {
       health: 0.98,
       // Resting stops at 80 of 200 — RestTimer will not take vigor past its threshold,
       // so asking for more is asking to sit until the timeout. Everything above this
       // has to be eaten, which is a supply problem and not something to wait out.
-      vigor: REST_VIGOR_CAP, mana,
+      vigor: this.restVigorCap(), mana,
       // Longer than the old 120s because mana is the slowest of the three and this is now
       // waiting on it. Still bounded, and the caller's own deadline bounds the repeats.
       maxSeconds: 180 });
@@ -12919,7 +12932,7 @@ export class Autopilot {
       on_floor: geo && me ? geo.walkable(me.row, me.col) : null,
       doing: this.doing ?? null, mode: this.mode, hunting: this.policy.hunt ?? null,
       health: v.health?.value ?? null, health_max: v.health?.max ?? null,
-      vigor: vigorOf(v), rest_ceiling: REST_VIGOR_CAP * skills.VIGOR_MAX,
+      vigor: vigorOf(v), rest_ceiling: this.restVigorCap() * skills.VIGOR_MAX,
       holding: this.hold ? { col: this.hold.col, row: this.hold.row, proven: this.hold.proven } : null,
       monsters: c?.room ? [...c.room.objects.values()].filter(o =>
         o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)).length : null,
@@ -13910,7 +13923,7 @@ export class Autopilot {
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           const vig = vigorPct(v);
-          const whole = (hp === null || hp >= 1) && (vig === null || vig >= REST_VIGOR_CAP);
+          const whole = (hp === null || hp >= 1) && (vig === null || vig >= this.restVigorCap());
           // THE OUTCOME ROW, WRITTEN WHETHER OR NOT WE REST. A run that reached its wall and
           // did not need it is the good case and has to be distinguishable from one that never
           // arrived — without this row both are "a `chose` with no `settled`".
