@@ -35,6 +35,10 @@
 //      `exclusive_pids` is alive -- the private red-alert supervisor is the case: two of them would fight
 //      over the same bodies.
 //   5. Every trip, quiet, stand-down and refusal is a line in substrate/tripwire-state/<fleet>/events.jsonl.
+//   6. THE WATCHER TENDS every posture that is on, once a minute (m59-posture.mjs tend): a keeper handoff resets a
+//      character to its roster orders, so a lockdown read back at its trip is re-read, and re-pushed where it drifted.
+//   7. A posture with a hazardous order (survival off, no flee line) trips only if the tripwire accepts it by name:
+//      `then: { posture: 'bastion-38', accept: ['survival_off', 'no_flee', 'travel_unguarded'] }`.
 //
 // A TRIPWIRE IS AN ORDER, SO IT IS THIS MACHINE'S: substrate/tripwires/<name>.mjs (gitignored), or a private
 // repository's directory (substrate/tripwire-dirs.json). The shape is substrate/tripwires.example/.
@@ -272,14 +276,14 @@ async function armed(fleet, log) {
   return { assignment: a, tripwires: out };
 }
 
-async function trip(name, t, st, { fleet, dry, why, log }) {
+async function trip(name, t, st, { fleet, dry, why, log, call: injectedCall = null }) {
   const P = await posture();
   const before = P.readSave(fleet, t.then.posture);
   const owned = !before?.active;
   if (dry) { log('would_fire', { tripwire: name, posture: t.then.posture, owned, why }); return { ...st, active: true, owned, fired_at: Date.now(), dry: true }; }
   log('tripped', { tripwire: name, posture: t.then.posture, owned, why });
   try {
-    const r = await P.apply(t.then.posture, { fleet, why: `tripwire ${name}: ${why}`, log: line => log('posture', { tripwire: name, line }) });
+    const r = await P.apply(t.then.posture, { fleet, why: `tripwire ${name}: ${why}`, accept: t.then.accept ?? [], call: injectedCall, log: line => log('posture', { tripwire: name, line }) });
     if (r.failed?.length) log('posture_partial', { tripwire: name, failed: r.failed.map(f => f.agent) });
     return { ...st, active: true, owned, fired_at: Date.now(), last_hit_at: Date.now(), quiet_since: null, retry_at: null };
   } catch (e) {
@@ -291,7 +295,7 @@ async function trip(name, t, st, { fleet, dry, why, log }) {
   }
 }
 
-async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires }) {
+async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires, call: injectedCall = null }) {
   const may = mayRelease(name, { ...states, [name]: st }, tripwires);
   if (!may.ok) { log('stand_down_without_release', { tripwire: name, why: may.why }); return { ...st, active: false, released_at: Date.now(), quiet_since: null }; }
   if (dry) { log('would_release', { tripwire: name, posture: t.then.posture, why }); return { ...st, active: false, released_at: Date.now(), quiet_since: null }; }
@@ -302,7 +306,7 @@ async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires 
   }
   log('standing_down', { tripwire: name, posture: t.then.posture, why });
   try {
-    const r = await P.release(t.then.posture, { fleet, log: line => log('posture', { tripwire: name, line }) });
+    const r = await P.release(t.then.posture, { fleet, call: injectedCall, log: line => log('posture', { tripwire: name, line }) });
     if (r.failed?.length) { log('release_partial', { tripwire: name, failed: r.failed.map(f => f.agent) }); return st; }   // stays active: posture's own rule
     return { ...st, active: false, released_at: Date.now(), quiet_since: null };
   } catch (e) { log('release_failed', { tripwire: name, error: e.message }); return st; }
@@ -311,7 +315,7 @@ async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const pidIn = f => { try { return Number(String(readFileSync(f, 'utf8')).match(/\d+/)?.[0]) || null; } catch { return null; } };
 
-export async function watch({ fleet, dry = false, everyMs = 15_000, once = false, call: injected = null } = {}) {
+export async function watch({ fleet, dry = false, everyMs = 15_000, tendMs = 60_000, once = false, call: injected = null } = {}) {
   const log = eventLog(fleet, { dry });
   const { assignment, tripwires } = await armed(fleet, log);
   if (!Object.keys(tripwires).length) {
@@ -332,7 +336,7 @@ export async function watch({ fleet, dry = false, everyMs = 15_000, once = false
   const call = injected ?? (await broker()).call;
   const needs = new Set(Object.values(tripwires).flatMap(t => [...needsOf(t)]));
   let states = dry ? structuredClone(readState(fleet)) : readState(fleet);
-  let lastObs = Date.now() - 10 * 60_000;
+  let lastObs = Date.now() - 10 * 60_000, lastTend = 0;
   log('watch_start', { pid: process.pid, armed: Object.keys(tripwires), needs: [...needs], every_ms: everyMs });
   const tick = async () => {
     const now = Date.now();
@@ -342,13 +346,21 @@ export async function watch({ fleet, dry = false, everyMs = 15_000, once = false
       const wasQuiet = states[name]?.quiet_since;
       const r = step(t, states[name] ?? {}, obs, now);
       states[name] = r.state;
-      if (r.action === 'fire') states[name] = await trip(name, t, r.state, { fleet, dry, why: r.why, log });
-      else if (r.action === 'release') states[name] = await standDown(name, t, r.state, { fleet, dry, why: r.why, log, states, tripwires });
+      if (r.action === 'fire') states[name] = await trip(name, t, r.state, { fleet, dry, why: r.why, log, call });
+      else if (r.action === 'release') states[name] = await standDown(name, t, r.state, { fleet, dry, why: r.why, log, states, tripwires, call });
       else if (states[name].active && !wasQuiet && states[name].quiet_since) log('quiet_started', { tripwire: name });
       else if (states[name].active && wasQuiet && !states[name].quiet_since) log('quiet_reset', { tripwire: name, why: r.why, hits: describe(r.hits) });
       states[name].last_observation = { at: now, fresh: freshFor(t, obs), hits: r.hits.length, by: obs.who?.by ?? null };
     }
     if (!dry) writeState(fleet, states);
+    // Tend every posture that is on: a keeper handoff resets orders to the roster, so a lockdown verified at its
+    // trip can be gone an hour later. Re-push drift, release an expired lease (m59-posture.mjs tend).
+    if (now - lastTend >= tendMs) {
+      lastTend = now;
+      const P = await posture();
+      for (const r of await P.tend({ fleet, dry, call, log: line => log('tend', { line }) }).catch(e => { log('tend_failed', { error: e.message }); return []; }))
+        if (r.drift?.length || r.expired) log('tended', r);
+    }
   };
   await tick();
   if (once) return states;

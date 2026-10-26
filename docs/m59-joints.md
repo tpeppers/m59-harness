@@ -150,6 +150,8 @@ Each module answers in the game's own terms and cites the kod it rests on.
 node tools/m59-posture.mjs apply   lockdown-cv --fleet prod --why "enemy online"
 node tools/m59-posture.mjs release lockdown-cv --fleet prod
 node tools/m59-posture.mjs status  --fleet prod
+node tools/m59-posture.mjs apply   lockdown-cv --fleet prod --for 2h     # a lease: comes off by itself
+node tools/m59-posture.mjs tend    --fleet prod [--watch]            # re-read, re-push drift, expire leases
 ```
 
 The commonest reactive order of October 2026 was a lockdown: about ten incidents and four different hand-rolled
@@ -169,6 +171,15 @@ So a posture is a set of orders with these rules:
 - **A release that half-worked keeps the save active.**
 - **`pause_jobs: true` pauses the job board** before the orders go, and release resumes only what it paused.
 - **Never touched:** menagerie hosts and piloted characters.
+- **An active posture is tended, not trusted.** A keeper handoff resets a character to its roster orders, and a key
+  pushed to a keeper is lost with it (prod, 2026-10-26). `tend` re-reads every unit of every posture that is on,
+  re-pushes drift and records it by key on the save. The tripwire watcher tends once a minute; `tend --watch` runs it
+  alone.
+- **A temporary stand-down is a lease.** `apply --for 2h` writes `expires_at`, and `tend` releases it when it runs out.
+  A forgotten release cannot leave survival off for ever, which is what happened to `second-wind-drill`'s restore.
+- **A hazardous order has to be accepted by name** (`ORDER_HAZARDS`): `survival_off` (stops all ordinary keeper work,
+  practice included, silently), `no_flee`, `travel_unguarded`. Without `--accept <id>` nothing is pushed and the error
+  names the flag. A tripwire accepts in its `then: { posture, accept: [...] }`.
 
 A posture is the "posture" piece of the [fleet plans](m59-fleet-plans.md) design proposal. The conductor that
 switches plans, and the loops and supply lines, are still to come.

@@ -6,6 +6,10 @@
 //   node tools/m59-posture.mjs apply  <posture> --fleet prod [--dry] [--agents t1,t2] [--why "..."]
 //   node tools/m59-posture.mjs release <posture> --fleet prod [--dry]
 //   node tools/m59-posture.mjs status --fleet prod                    which postures are on, since when, over whom
+//   node tools/m59-posture.mjs tend   --fleet prod [--watch] [--dry]  re-read every unit of every posture that is on;
+//                                                                     re-push drift, release an expired lease
+//   apply ... --for 2h        a LEASE: the posture comes off by itself (via tend) after two hours
+//   apply ... --accept survival_off,no_flee   say out loud that a hazardous order is meant (ORDER_HAZARDS)
 //
 // WHY THIS EXISTS. "Lock the fleet down" is the commonest reactive order this fleet is given -- about ten
 // incidents in a month, four different hand-rolled scripts -- and its undo is the commonest silent
@@ -22,7 +26,12 @@
 //      thing to go back to. `--fresh` is how to say otherwise, and it refuses while the save is unreleased.
 //   3. EVERY KEY IS READ BACK, on apply and on release, and a key that does not read back is a FAILURE
 //      named per character, with exit code 1. "The call returned" is not evidence.
-//   4. THE JOB BOARD IS PART OF A LOCKDOWN. `pause_jobs: true` pauses every leased run (m59-jobs.mjs)
+//   4. AN ACTIVE POSTURE IS TENDED, NOT TRUSTED. A keeper handoff resets a character to its roster orders, so `tend`
+//      re-reads every unit, re-pushes drift and logs it by key; a lease (`--for`) is released when it runs out.
+//      A temporary stand-down is a lease, so a forgotten release cannot leave it on for ever.
+//   5. A HAZARDOUS ORDER HAS TO BE ACCEPTED BY NAME (`--accept`), or nothing is pushed. survival_enabled:false is one:
+//      it stops all ordinary keeper work, practice included, and says nothing.
+//   6. THE JOB BOARD IS PART OF A LOCKDOWN. `pause_jobs: true` pauses every leased run (m59-jobs.mjs)
 //      before the orders go, so a script holding a character cannot walk it back out; release resumes
 //      what this posture paused, and nothing else.
 //
@@ -114,6 +123,35 @@ export function readBack(posture, orders, policy) {
 export const restoreOrders = before => Object.fromEntries(Object.entries(before).filter(([, v]) => !(v && typeof v === 'object' && v.absent)));
 export const unrestorable = before => Object.entries(before).filter(([, v]) => v && typeof v === 'object' && v.absent).map(([k]) => k);
 
+// ORDERS THAT ARE ALLOWED BUT HAVE TO BE SAID OUT LOUD. Each one has cost the fleet before. `apply` refuses a posture
+// that sets one unless the caller names it in `accept` (`--accept survival_off`), so a lockdown copied from an old
+// one cannot carry it in by accident, and the save records who accepted what.
+export const ORDER_HAZARDS = [
+  { id: 'survival_off', test: o => o.survival_enabled === false,
+    why: 'survival_enabled:false stops ALL ordinary keeper work, spell practice included, and logs no decline: six keepers cast nothing for a day (prod, 2026-10-26)' },
+  { id: 'no_flee', test: o => (Number.isFinite(o.flee_below) && o.flee_below < 0.1) || (Number.isFinite(o.rest_below) && o.rest_below < 0.05),
+    why: 'a flee or rest line under 10% means the character fights to death; the keeper will not run' },
+  { id: 'travel_unguarded', test: o => o.travel_guard === 'off' || o.travel_start_health === 0,
+    why: 'a journey with its guard off walks on at any health: Cccc was walked out of a sanctuary at 27% and eaten (2026-08-21)' },
+];
+/** Hazards the plan would set, as [{ id, why, agents }]. Pure. */
+export function hazardsOf(plan) {
+  const out = new Map();
+  for (const p of plan) for (const h of ORDER_HAZARDS) if (h.test(p.orders)) {
+    if (!out.has(h.id)) out.set(h.id, { id: h.id, why: h.why, agents: [] });
+    out.get(h.id).agents.push(p.agent);
+  }
+  return [...out.values()];
+}
+/** A save whose lease has run out. */
+export const expired = (save, now = Date.now()) => !!save?.active && Number.isFinite(save.expires_at) && now >= save.expires_at;
+export function parseDuration(s) {
+  if (s == null) return null;
+  const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i.exec(String(s).trim());
+  if (!m) throw new Error(`not a duration: ${s} (try 90m, 2h, 1d)`);
+  return Math.round(Number(m[1]) * { ms: 1, s: 1e3, m: 6e4, h: 3.6e6, d: 8.64e7 }[(m[2] ?? 'm').toLowerCase()]);
+}
+
 function saveFile(fleet, name) { return join(saveDir(fleet), `${name}.json`); }
 export function readSave(fleet, name) { try { return JSON.parse(readFileSync(saveFile(fleet, name), 'utf8')); } catch { return null; } }
 function writeSave(fleet, name, save) {
@@ -139,11 +177,11 @@ async function policyOf(call, agent) {
   return st?.policy ?? {};
 }
 
-export async function apply(name, { fleet, dry = false, only = null, why = null, fresh = false, log = console.log } = {}) {
+export async function apply(name, { fleet, dry = false, only = null, why = null, fresh = false, forMs = null, accept = [], log = console.log, call = null } = {}) {
   const file = findPosture(name);
   if (!file) throw new Error(`no posture "${name}" in ${[...postureDirs(), EXAMPLE_DIR].join(', ')}`);
   const posture = (await import(pathToFileURL(file).href)).default;
-  const { call } = await broker();
+  call ??= (await broker()).call;
   const units = await fleetUnits(call);
   const policies = {};
   for (const u of selectUnits(posture, units, { only })) policies[u.agent] = await policyOf(call, u.agent);
@@ -153,11 +191,17 @@ export async function apply(name, { fleet, dry = false, only = null, why = null,
   if (prior?.active && fresh) throw new Error(`${name} is on since ${prior.applied_at}; release it before --fresh`);
   log(`${name}: ${plan.length} character(s)${reapply ? ' -- ALREADY ON; re-pushing, keeping the original save' : ''}`);
   for (const p of plan) log(`  ${p.agent.padEnd(5)} ${String(p.character ?? '').padEnd(14)} ${p.changes.length ? 'changes ' + p.changes.join(', ') : 'already so'}`);
-  if (dry) return { dry: true, plan };
+  const hazards = hazardsOf(plan), unaccepted = hazards.filter(h => !accept.includes(h.id));
+  for (const h of hazards) log(`  ${accept.includes(h.id) ? 'accepted' : 'HAZARD'} ${h.id} (${h.agents.length} character(s)): ${h.why}`);
+  if (forMs) log(`  lease: comes off by itself at ${new Date(Date.now() + forMs).toISOString()} (tend releases it)`);
+  if (dry) return { dry: true, plan, hazards };
+  if (unaccepted.length) throw new Error(`${name} sets ${unaccepted.map(h => h.id).join(', ')}; nothing was pushed. Say so on purpose: --accept ${unaccepted.map(h => h.id).join(',')}`);
   // 1. THE SAVE FIRST (and never over an active one's "before").
   const save = reapply ? prior : { name, fleet, active: true, applied_at: new Date().toISOString(), why, file, units: {}, paused_jobs: [] };
   for (const p of plan) save.units[p.agent] ??= { character: p.character, before: p.before };
   save.active = true; save.last_applied_at = new Date().toISOString();
+  if (forMs) save.expires_at = Date.now() + forMs;
+  if (hazards.length) save.accepted = hazards.map(h => h.id);
   writeSave(fleet, name, save);
   // 2. THE JOB BOARD.
   if (posture.pause_jobs) {
@@ -179,7 +223,7 @@ export async function apply(name, { fleet, dry = false, only = null, why = null,
   return { plan, failed };
 }
 
-export async function release(name, { fleet, dry = false, log = console.log } = {}) {
+export async function release(name, { fleet, dry = false, log = console.log, call = null } = {}) {
   const save = readSave(fleet, name);
   if (!save?.active) throw new Error(`${name} is not on for ${fleet ?? 'the unnamed fleet'} (no active save in ${saveDir(fleet)})`);
   const file = findPosture(name);
@@ -191,7 +235,7 @@ export async function release(name, { fleet, dry = false, log = console.log } = 
     if (r.unknown.length) log(`        ! NOT RESTORED (the keeper reported no value before the posture): ${r.unknown.join(', ')}`);
   }
   if (dry) return { dry: true, rows };
-  const { call } = await broker();
+  call ??= (await broker()).call;
   const failed = [];
   for (const r of rows) {
     const res = await call('autopilot', { agent: r.agent, action: 'start', ...r.orders, why: `release posture ${name}` }).catch(e => ({ error: e.message }));
@@ -213,12 +257,60 @@ export async function release(name, { fleet, dry = false, log = console.log } = 
   return { rows, failed };
 }
 
+// A POSTURE THAT WAS TRUE AT APPLY IS NOT TRUE AN HOUR LATER. A keeper handoff resets a character to its roster
+// orders, a key pushed to a keeper dies with it, and another driver can push over it (prod, 2026-10-26: "handoff
+// resets posture to the roster", "a key pushed to keeper /policy is lost on the next handoff"). So an active posture
+// is TENDED: every unit is read back, a drifted unit is re-pushed and the drift is logged by key, and a posture whose
+// lease has run out is released. The tripwire watcher tends every minute; `tend --watch` does it on its own.
+export async function tend({ fleet, dry = false, log = console.log, call = null, now = Date.now() } = {}) {
+  const out = [];
+  let files = [];
+  try { files = readdirSync(saveDir(fleet)).filter(f => f.endsWith('.json')); } catch {}
+  for (const f of files) {
+    const save = readSave(fleet, f.slice(0, -5));
+    if (!save?.active) continue;
+    if (expired(save, now)) {
+      log(`${save.name}: lease ran out at ${new Date(save.expires_at).toISOString()}; releasing`);
+      const r = dry ? { dry: true } : await release(save.name, { fleet, log, call });
+      out.push({ name: save.name, expired: true, released: !r.failed?.length, failed: r.failed ?? [] });
+      continue;
+    }
+    const file = findPosture(save.name);
+    if (!file) { log(`${save.name}: ON but its file is gone; cannot tend it (release it by name to restore the save)`); out.push({ name: save.name, missing_file: true }); continue; }
+    const posture = (await import(pathToFileURL(file).href)).default;
+    call ??= (await broker()).call;
+    const units = await fleetUnits(call);
+    const drift = [];
+    for (const [agent, u] of Object.entries(save.units ?? {})) {
+      const unit = units.find(x => x.agent === agent);
+      if (!unit || !unit.in_game) continue;                    // out of the world: nothing to read, nothing to push
+      if (unit.piloted || unit.host) continue;                 // a person at the controls is not re-ordered
+      const orders = ordersFor(posture, unit);
+      const miss = readBack(posture, orders, await policyOf(call, agent).catch(() => ({})));
+      if (!miss.length) continue;
+      drift.push({ agent, keys: miss.map(m => m.key) });
+      log(`  ${save.name}: ${agent} drifted on ${miss.map(m => `${m.key} (wanted ${JSON.stringify(m.wanted)}, has ${JSON.stringify(m.got)})`).join(', ')}${dry ? '' : '; re-pushing'}`);
+      if (dry) continue;
+      const r = await call('autopilot', { agent, action: 'start', ...orders, why: `tend posture ${save.name}: drifted on ${miss.map(m => m.key).join(',')}` }).catch(e => ({ error: e.message }));
+      const still = r?.error ? miss : readBack(posture, orders, await policyOf(call, agent).catch(() => ({})));
+      if (still.length) log(`  ${save.name}: ${agent} STILL does not hold ${still.map(m => m.key).join(', ')}${r?.error ? ` (${r.error})` : ''}`);
+    }
+    if (!dry && drift.length) {
+      save.drift = [...(save.drift ?? []), { at: new Date(now).toISOString(), units: drift }].slice(-50);
+      writeSave(fleet, save.name, save);
+    }
+    out.push({ name: save.name, drift });
+  }
+  return out;
+}
+
 export function status({ fleet } = {}) {
   let files = [];
   try { files = readdirSync(saveDir(fleet)).filter(f => f.endsWith('.json')); } catch {}
   return files.map(f => JSON.parse(readFileSync(join(saveDir(fleet), f), 'utf8')))
     .map(s => ({ name: s.name, active: !!s.active, applied_at: s.applied_at, released_at: s.released_at ?? null,
-      units: Object.keys(s.units ?? {}).length, failures: (s.apply_failures ?? []).length + (s.release_failures ?? []).length }));
+      units: Object.keys(s.units ?? {}).length, failures: (s.apply_failures ?? []).length + (s.release_failures ?? []).length,
+      expires_at: s.expires_at ?? null, drifted: (s.drift ?? []).length }));
 }
 
 async function main(argv) {
@@ -236,13 +328,20 @@ async function main(argv) {
     }
     return;
   }
-  if (cmd === 'status') { needFleet(); for (const s of status({ fleet })) console.log(`  ${s.name.padEnd(24)} ${s.active ? 'ON ' : 'off'} ${s.units} unit(s) since ${s.applied_at}${s.released_at ? ', released ' + s.released_at : ''}${s.failures ? `, ${s.failures} failure(s)` : ''}`); return; }
+  if (cmd === 'status') { needFleet(); for (const s of status({ fleet })) console.log(`  ${s.name.padEnd(24)} ${s.active ? 'ON ' : 'off'} ${s.units} unit(s) since ${s.applied_at}${s.released_at ? ', released ' + s.released_at : ''}${s.expires_at && s.active ? `, lease to ${new Date(s.expires_at).toISOString()}` : ''}${s.drifted ? `, re-pushed after drift ${s.drifted} time(s)` : ''}${s.failures ? `, ${s.failures} failure(s)` : ''}`); return; }
   needFleet();
   const only = flag('--agents')?.split(',').map(s => s.trim()).filter(Boolean) ?? null;
   if (cmd === 'show') return void await apply(name, { fleet, dry: true, only });
-  if (cmd === 'apply') { const r = await apply(name, { fleet, dry: argv.includes('--dry'), only, why: flag('--why'), fresh: argv.includes('--fresh') }); process.exitCode = r.failed?.length ? 1 : 0; return; }
+  const accept = (flag('--accept') ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (cmd === 'apply') { const r = await apply(name, { fleet, dry: argv.includes('--dry'), only, why: flag('--why'), fresh: argv.includes('--fresh'), forMs: parseDuration(flag('--for')), accept }); process.exitCode = r.failed?.length ? 1 : 0; return; }
+  if (cmd === 'tend') {
+    const once = async () => { const r = await tend({ fleet, dry: argv.includes('--dry') }); if (!argv.includes('--watch')) console.log(r.length ? r.map(x => `${x.name}: ${x.expired ? 'expired, released' : x.drift?.length ? `${x.drift.length} re-pushed` : 'holding'}`).join('; ') : 'no posture is on'); };
+    await once();
+    if (argv.includes('--watch')) setInterval(() => once().catch(e => console.error(e.message)), Number(flag('--every-ms')) || 60_000);
+    return;
+  }
   if (cmd === 'release') { const r = await release(name, { fleet, dry: argv.includes('--dry') }); process.exitCode = r.failed?.length ? 1 : 0; return; }
-  throw new Error('usage: m59-posture.mjs list | show|apply|release <posture> --fleet <name> | status --fleet <name>');
+  throw new Error('usage: m59-posture.mjs list | show|apply|release <posture> --fleet <name> [--for 2h] [--accept id,...] | tend [--watch] --fleet <name> | status --fleet <name>');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(e => { console.error(e.message); process.exitCode = 1; });

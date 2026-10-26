@@ -7,6 +7,11 @@ records. Then the RPG vocabulary from the kod: a curse is never a debuff, three 
 "laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
 derived from the map, the service board, the posture save and read-back, and an operation's expectations.
 
+`m59-posture-test.mjs` (18) pins a posture's live half against a fake broker. A hazardous order (survival off, no
+flee line) is refused unless accepted by name, and nothing is pushed or saved. `tend` finds a handoff's reset by key
+and re-pushes it, says out loud when the re-push is refused, and pushes nothing in a dry run. A lease releases itself
+through `tend` and puts the character back.
+
 `m59-tripwire-test.mjs` (39) pins tripwires (docs/m59-joints.md "Tripwires"). Nothing is armed without a fleet
 file, and a file that does not parse arms nothing. A stale or missing `who` resets the quiet clock. A tripwire
 never releases a posture it did not put on, and two on one posture release on the last. Unknown triggers are
