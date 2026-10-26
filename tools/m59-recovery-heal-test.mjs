@@ -44,3 +44,20 @@ test('unpaid coincident health regeneration is not reported as a confirmed own h
 
 
 test('an explicit failed spell cannot be confirmed by coincident paid-mana regeneration',async()=>{const f=fixture();f.c.cast=()=>{f.vitals.mana.value-=2;f.vitals.health.value+=2;};f.c.eventsSince=()=>[{seq:5,kind:'message',text:'You were unsuccessful in casting minor heal.'}];const r=await castRecoveryHeal(f.s);assert(r.paid);assert.equal(r.health_gain,2);assert.equal(r.server_outcome,'failed');assert.equal(r.confirmed,false);});
+
+test('heal_spells: only the allowed heals are ever chosen, by every recovery path',async()=>{
+ // Pepe, 2026-10-26: practising hospice on himself, his keeper healed him with minor heal a dozen times an hour.
+ const f=fixture();
+ assert.equal(affordableHeal(f.c,{allow:['major heal']}).name,'major heal','an allowed dearer heal is chosen over a cheaper forbidden one');
+ assert.equal(affordableHeal(f.c,{allow:['Minor Heal']}).name,'minor heal','names match without case');
+ assert.equal(affordableHeal(f.c,{allow:['hospice']}),null,'an allowed heal the character does not know is no heal at all');
+ assert.equal(affordableHeal(f.c,{allow:[]}),null,'an empty list allows nothing');
+ assert.equal(affordableHeal(f.c,{allow:null}).name,'minor heal','null keeps the old behaviour');
+ const r=await castRecoveryHeal(f.s,{allow:['hospice']});assert.equal(r.cast,false);assert.equal(f.casts(),0);
+ const {Autopilot}=await import('./m59-autopilot.mjs');const {attachSurvivalDecisions,chooseSurvivalDecision}=await import('./m59-survival-decision.mjs');
+ const g=fixture();g.vitals.health.value=67;g.s.movementGeneration=0;g.s.movementWasCancelled=()=>false;attachSurvivalDecisions(g.s);
+ chooseSurvivalDecision(g.s,{strategy:'nearest_refuge',status:'recovering',phase:'reconnected',reason:'test'});
+ const a=Object.assign(Object.create(Autopilot.prototype),{s:g.s,policy:{healSpells:['hospice']},currentRecoveryWall:()=>true,checkFreeze:()=>false,facultyHeld:()=>false,rememberSurvivalJam:()=>{},note:()=>{},recordCast:()=>{}});
+ await a.continueSurvivalDecisionStep().catch(()=>null);
+ assert.equal(g.casts(),0,'the recovery rung casts no minor heal when only hospice is allowed');
+});

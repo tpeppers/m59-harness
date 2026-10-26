@@ -28,7 +28,10 @@ import{deathLocationFromSessions}from'./m59-death-location.mjs';
 
 import {findDeathNotice} from './m59-death-notices.mjs';
 import {noteTrafficJam,trafficBlinkAdvice,waitForBlinkCast} from './m59-traffic-blink.mjs';
-import {affordableHeal,castRecoveryHeal,healReadiness} from './m59-recovery-heal.mjs';
+import {affordableHeal,castRecoveryHeal,healReadiness,healAllowed} from './m59-recovery-heal.mjs';
+// policy.healSpells as a list, or null: every heal this character knows. A function of the policy rather than a method,
+// because the heal paths are also called on bare objects that borrow Autopilot.prototype methods.
+const healAllowOf = a => Array.isArray(a?.policy?.healSpells) ? a.policy.healSpells : null;
 import {publishFleetHealth,readFleetHealth} from './m59-fleet-health.mjs';
 import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
 import { castRole } from './m59-spellgear.mjs';
@@ -2156,6 +2159,9 @@ export class Autopilot {
       // Practise spells at a post while nothing needs us, keeping back two casts of the desk's
       // dearest service. null is inert. See m59-deskpractice.mjs and practiceAtDesk().
       practiceSpells: null,
+      // WHICH HEALS THE KEEPER MAY CAST, on itself or an ally: a list of spell names, or null for every heal it knows.
+      // One drill can own a heal spell: Pepe's hospice practice wants hospice and nothing else (2026-10-26).
+      healSpells: null,
       // THE BUDDY SYSTEM (m59-buddy.mjs, passBuddy): { pairs: { tagger: killer }, wait_s, tries,
       // reach, quarry }. A tagger lands one blow on an untouched monster and waits at its wall for
       // its fixed partner to kill it, which credits the tagger's max-health roll without its karma
@@ -6226,9 +6232,9 @@ export class Autopilot {
         || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
       // The active recovery path used to bypass healUp and wait on vigor alone.
       // Keep the same wall, movement generation and decision while casting one heal.
-      if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client)){
+      if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client,{allow:healAllowOf(this)})){
         this._recoveryHealAt=Date.now();
-        const healing=await castRecoveryHeal(s,{shouldCancel:cancelled});
+        const healing=await castRecoveryHeal(s,{shouldCancel:cancelled,allow:healAllowOf(this)});
         this.note('recovery heal',healing);
         if(healing.cast)this.recordCast(healing.spell,{ok:healing.confirmed,...healing});
         if(cancelled())return true;
@@ -20720,7 +20726,7 @@ export class Autopilot {
         } else if (n.moved) {
           this.note('stepped to arm health regeneration', n);
         }
-        const h = await skills.healUp(s, { target: 0.9 }).catch(e => ({ healed: false, reason: e.message }));
+        const h = await skills.healUp(s, { target: 0.9, allow: healAllowOf(this) }).catch(e => ({ healed: false, reason: e.message }));
         this.recordHealUse(h, 'hurt, and resting behind a wall');
         if (h.healed) {
           this.tally.heals = (this.tally.heals || 0) + 1;
@@ -23408,7 +23414,7 @@ export class Autopilot {
       // first — that is a real action now, not a euphemism for resting.
       const safe = this.safety();
       if (hp !== null && hp < safe.engageAt) {
-        const h = await skills.healUp(s, { target: 0.95 }).catch(() => ({ healed: false }));
+        const h = await skills.healUp(s, { target: 0.95, allow: healAllowOf(this) }).catch(() => ({ healed: false }));
         this.recordHealUse(h, 'too hurt to start the fight in front of us');
         if (h.healed) this.note('healed before engaging', { used: h.used, health: h.health });
         else {
@@ -24079,7 +24085,7 @@ export class Autopilot {
           { health: hp, floor: this.policy.partyHealBelow ?? 0.5 });
         if (role === 'heal') {
           this.doing = 'recovering';
-          const h = await skills.healUp(this.s, { target: 0.95 }).catch(() => ({ healed: false }));
+          const h = await skills.healUp(this.s, { target: 0.95, allow: healAllowOf(this) }).catch(() => ({ healed: false }));
           this.recordHealUse(h, 'partner is carrying the fight while I heal');
           this.note('stepping out of the fight to heal', {
             health: hp == null ? null : Math.round(hp * 100) + '%',
@@ -24650,13 +24656,13 @@ export class Autopilot {
     const s=this.s,c=s?.client,v=c?.vitals?.(),hp=pct(v?.health),now=Date.now(),cure=affordablePoisonCure(c);
     if(this.stopping||!c?.combatReady||c.state!=='game'||!(hp>0&&(hp<0.9||cure))||s.live===false||this._activeSelfHealPending||s._rite||s.combat?.active||this.checkFreeze()||
       this.inert&&!this.inert.travelling||['survival','recovery','combat'].some(k=>this.facultyHeld(k))||now-(this._recoveryHealAt??0)<3000)return false;
-    const readiness=healReadiness(c),{inventory_at,spells_at,...resources}=readiness,key=JSON.stringify([c.loginStartedAt,hp,inventory_at!=null,spells_at!=null,resources]);
+    const readiness=healReadiness(c,{allow:healAllowOf(this)}),{inventory_at,spells_at,...resources}=readiness,key=JSON.stringify([c.loginStartedAt,hp,inventory_at!=null,spells_at!=null,resources]);
     if(this._healReadinessKey!==key){this._healReadinessKey=key;c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_CHECK',reason:JSON.stringify({trigger,...readiness})});}
     if(!readiness.affordable&&!cure)return false;
     const generation=s.movementGeneration,self=c.selfId,room=c.room?.id;
     const cancelled=()=>this.stopping||s.client!==c||!c.combatReady||c.state!=='game'||s.live===false||this.inert&&!this.inert.travelling||c.selfId!==self||c.room?.id!==room||s.movementWasCancelled?.(generation)||s.combat?.active||this.checkFreeze()||['survival','recovery','combat'].some(k=>this.facultyHeld(k));
     this._activeSelfHealPending=true;this._recoveryHealAt=now;
-    try{const result=await (cure?castRecoveryCure:castRecoveryHeal)(s,{shouldCancel:cancelled});this.note('active self heal',{trigger,...readiness,...result});
+    try{const result=await (cure?castRecoveryCure:castRecoveryHeal)(s,{shouldCancel:cancelled,allow:healAllowOf(this)});this.note('active self heal',{trigger,...readiness,...result});
       c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_RESULT',reason:JSON.stringify({trigger,...result})});
       if(result.cast)this.recordCast(result.spell,{ok:result.confirmed,...result});else if(this._recoveryHealAt===now)this._recoveryHealAt=0;return result.cast;
     }finally{this._activeSelfHealPending=false;}
@@ -24667,7 +24673,7 @@ export class Autopilot {
   async healObservedFleetmate() {
     const s=this.s,c=s.client,now=Date.now(),credentials=s.credentials;
     if(!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||!c?.combatReady||!credentials||this.checkFreeze()||s._rite
-       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c)||now-(this._observedAllyHealAt??0)<3000)return false;
+       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c,{allow:healAllowOf(this)})||now-(this._observedAllyHealAt??0)<3000)return false;
     const candidates=[...c.room.objects.values()].filter(o=>o.id!==c.selfId&&(o.flags&OF.PLAYER)&&
       allyVerdict({name:c.rsc.get(o.nameRsc)??'',flags:o.flags},{friends:this.policy?.buffAllies?.friends??[]}).ally)
       .map(o=>({o,report:readFleetHealth({...credentials,character:c.rsc.get(o.nameRsc)},{room:s.world?.room?.num,bodyId:o.id,now})}))
@@ -24680,7 +24686,7 @@ export class Autopilot {
       String(c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'').trim().toLowerCase()!==target.report.character.trim().toLowerCase()||
       !allyVerdict({name:c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'',flags:c.room.objects.get(target.o.id)?.flags??0},{friends:this.policy?.buffAllies?.friends??[]}).ally;
     this._observedAllyHealAt=now;
-    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled});
+    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled,allow:healAllowOf(this)});
     const afterReport=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});
     result.target_report_before_at=target.report.at;
     if(afterReport&&afterReport.at>=target.report.at){result.target_health_after=afterReport.health;result.target_report_after_at=afterReport.at;}
@@ -24703,6 +24709,7 @@ export class Autopilot {
     let spell = null, rung = null;
     const tried = [];
     for (const h of Autopilot.HEALS) {
+      if (!healAllowed(h.name, healAllowOf(this))) continue;
       const found = (c.spells || [])
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === h.name);
       if (!found) continue;
