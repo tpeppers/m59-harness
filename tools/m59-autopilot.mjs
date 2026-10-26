@@ -428,6 +428,10 @@ const REST_VIGOR_CAP = 0.4;
 // "be willing to rest to its actual maximum vigor". A threshold under 80 is the Second Wind cooldown (player.kod:1235 sets
 // 10 while the enchantment runs): resting cannot award anything then, so it reads as the base rather than as permission
 // to fight at 10. A fraction of the 200 bar, like REST_VIGOR_CAP.
+//
+// ONLY WHERE A REST ENDS. Operator, 2026-10-26: "the actual max vigor should be used for each character just for when it
+// finishes being resting between fights". So the rest TARGETS take it; deciding whether to rest at all, and the reachable
+// fight floor, stay on the base 80.
 export function restVigorCapOf(vitals) {
   const t = Number(vitals?.vigor?.rest_threshold);
   return (Number.isFinite(t) && t > 80 ? Math.min(t, 100) : 80) / 200;
@@ -2908,7 +2912,7 @@ export class Autopilot {
     const carried = larder.reduce((n, item) =>
       n + (Number(item?.food?.nutrition ?? item?.nutrition) || 0) *
           (Number(item?.o?.amount ?? item?.amount ?? 1) || 1), 0);
-    const reachable = reachableFightFloor(want, VIGOR_CAP, carried, this.restVigorCap());
+    const reachable = reachableFightFloor(want, VIGOR_CAP, carried);
     if (reachable < want) this.vigor.starved_passes++;
     return reachable;
   }
@@ -5885,7 +5889,7 @@ export class Autopilot {
     // fifteen-mana blink — the strategy asked, the predicate said yes, and the cast could
     // not happen. Waiting for mana is a wait that ends; waiting for vigor above the resting
     // cap is not, which is why the two are asked for differently.
-    if ((before ?? 1) >= this.restVigorCap() && (manaBefore ?? 1) >= mana)
+    if ((before ?? 1) >= REST_VIGOR_CAP && (manaBefore ?? 1) >= mana)
       return { rested: false, note: 'already at the resting cap', vigor_pct: before, mana_pct: manaBefore };
     this.doing = 'recovering';
     const r = await skills.restUntil(this.s, {
@@ -7366,7 +7370,7 @@ export class Autopilot {
     // retirement this is careful about everywhere else. Health is the exception and
     // defaults to 0: with nowhere else to be, waiting for a real number is right, and
     // the rung above is what keeps that from becoming permanent.
-    const whole = (hp ?? 0) >= 0.95 && (mp ?? 1) >= 0.95 && (vig ?? 1) >= this.restVigorCap();
+    const whole = (hp ?? 0) >= 0.95 && (mp ?? 1) >= 0.95 && (vig ?? 1) >= REST_VIGOR_CAP;
     if (armed && whole) {
       this.sanctuaryHoldSince = null;
       this.sanctuaryHoldNoted = false;
@@ -7920,7 +7924,7 @@ export class Autopilot {
     const v = s.client?.vitals?.();
     const vig = vigorPct(v), hp = pct(v?.health), mp = pct(v?.mana);
     // A missing mana reading means no bar to fill, not a shortfall to wait on.
-    if ((vig ?? 1) >= this.restVigorCap() && (hp ?? 1) >= 0.95 && (mp ?? 1) >= mana) return false;
+    if ((vig ?? 1) >= REST_VIGOR_CAP && (hp ?? 1) >= 0.95 && (mp ?? 1) >= mana) return false;
     this.doing = 'recovering';
     const r = await skills.restUntil(s, {
       health: 0.98,
@@ -13923,7 +13927,7 @@ export class Autopilot {
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           const vig = vigorPct(v);
-          const whole = (hp === null || hp >= 1) && (vig === null || vig >= this.restVigorCap());
+          const whole = (hp === null || hp >= 1) && (vig === null || vig >= REST_VIGOR_CAP);
           // THE OUTCOME ROW, WRITTEN WHETHER OR NOT WE REST. A run that reached its wall and
           // did not need it is the good case and has to be distinguishable from one that never
           // arrived — without this row both are "a `chose` with no `settled`".
