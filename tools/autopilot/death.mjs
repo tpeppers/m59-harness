@@ -23,6 +23,7 @@ import * as uptime from '../m59-uptime.mjs';
 import * as watchdog from '../m59-watchdog.mjs';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { CONTINUE, HANDLED, ITEM_VALUE, POSTMORTEM_DIR, UNDERWORLD_ROOM_OBJECT_ID, pct, vigorOf } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class DeathPart {
   // @part 1
@@ -125,7 +126,8 @@ export class DeathPart {
           combat_mode: !!this.s.combat?.active,
           // The likeliest answer of all: survival_enabled:false makes every pass return at once and turns the travel
           // guard off, so a body walked into a fight by anybody else stands there and dies.
-          survival_enabled: this.policy?.survivalEnabled !== false,
+          survival_enabled: !survivalOffOf(this.policy),
+          survival_off_until: this.policy?.survivalOffUntil ?? null,
         };
       })(),
       threats: {

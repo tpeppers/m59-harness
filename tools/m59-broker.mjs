@@ -185,6 +185,8 @@ import { readAnchor, phaseAt } from './m59-dayclock.mjs';
 import { hourFromSunAngle, phaseFromSun, isFresh } from './m59-skyclock.mjs';
 import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
+import { survivalOffConflict, survivalOffLeaseMs } from './m59-hazards.mjs';
+import { CITY_INNS } from './m59-underworld.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
@@ -7342,7 +7344,7 @@ const TOOLS = [
   },
   {
     name: 'combat_order',
-    description: 'URGENT group player combat: dispatch first, without fleet/look inspection. Kill or attack an exact player, selecting all automated units currently in room (name or map number), or explicit agents. Selection uses live keeper state. Stay in the assigned map and wait indefinitely for visibility when absent or lost. Kill temporarily disables game PvP safety while engaging and restores it while waiting or on stop. Status/stop can name command_id; ready checks deployed support. Receipts distinguish pending, waiting, engaging and skipped. Never infer a kill from attack counts.',
+    description: 'URGENT group player combat: dispatch first, without fleet/look inspection. Kill or attack an exact player, selecting all automated units currently in room (name or map number), or explicit agents. Selection uses live keeper state. Stay in the assigned map and wait indefinitely for visibility when absent or lost. Kill temporarily disables game PvP safety while engaging an innocent ONLY with accept:["go_red"] (safety on still allows murderers and outlaws), and restores it while waiting or on stop. Status/stop can name command_id; ready checks deployed support. Receipts distinguish pending, waiting, engaging and skipped. Never infer a kill from attack counts.',
     schema: { type: 'object', properties: {
       fleet_state: { type: 'string', description: 'Required absolute roster path, verified before dispatch' },
       action: { enum: ['kill', 'attack', 'ambush', 'status', 'stop', 'ready'] },
@@ -7350,6 +7352,7 @@ const TOOLS = [
       rooms: { type: 'array', items: { type: ['string', 'integer'] }, description: 'Standing farm watch maps; all automated recipients watch while farming normally, including later arrivals' },
       when_absent: { enum: ['wait', 'farm'], description: 'farm installs a durable passive watch; normal behavior until same-map visibility, and recovery automatically rearms it' },
       loud: { type: 'boolean', description: 'LOUD PVP (default true): each unit says a callout line when a hostile player enters its map. false keeps the order quiet' },
+      accept: { type: 'array', items: { enum: ['go_red'] }, description: 'kill only: ["go_red"] lets safety come off against an INNOCENT target (not a murderer, outlaw or war enemy), which makes each striking unit an outlaw. Without it safety stays on, and the server still allows hitting murderers and outlaws.' },
       agents: { type: 'array', items: { type: 'string' } }, command_id: { type: 'string' },
       map: { type: 'integer' }, position: { type: 'object' }, door: { type: 'object' },
       ttl_ms: { type: 'integer' }, stop_below: { type: 'number' },
@@ -7370,6 +7373,7 @@ const TOOLS = [
       target: { type: ['string', 'number'], description: 'Exact player name; visible object id for attack only' },
       when_absent: { enum: ['wait', 'farm'] },
       loud: { type: 'boolean', description: 'LOUD PVP (default true): say a callout line when a hostile player enters the map' },
+      accept: { type: 'array', items: { enum: ['go_red'] }, description: 'kill only: ["go_red"] lets safety come off against an INNOCENT target (not a murderer, outlaw or war enemy), which makes each striking unit an outlaw. Without it safety stays on, and the server still allows hitting murderers and outlaws.' },
       watch_maps: { type: 'array', items: { type: 'integer' }, description: 'Assigned maps for a standing farm watch' },
       map: { type: 'integer', description: 'Stable map number, e.g. 38' },
       position: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' } }, required: ['row', 'col'] },
@@ -11778,7 +11782,8 @@ const TOOLS = [
           'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
       heal_wand_below: { type: 'number', minimum: 0, maximum: 1,
         description: 'Farmers apply healing wands to self below this health fraction; 0 disables (default). Confirmed empty healing wands are dropped. Vampiric wands are preserved.' },
-      survival_enabled: { type: 'boolean', description: 'Explicit operator switch for autonomous noncombat behavior. Default true. False stands down recovery, freezing, shelter, watchdog interventions and ordinary keeper work; explicit commands, player combat and death/Underworld handling remain active.' },
+      survival_enabled: { type: 'boolean', description: 'Explicit operator switch for autonomous noncombat behavior. Default true. False stands down recovery, freezing, shelter, watchdog interventions and ordinary keeper work; explicit commands, player combat and death/Underworld handling remain active. False is a LEASE: it lapses after survival_off_ms (default 30 min, max 12 h), and while it holds, `travel` refuses any destination but an inn unless accept:["survival_off_move"].' },
+      survival_off_ms: { type: 'number', description: 'How long survival_enabled:false holds before survival is on again by itself. Default 1800000 (30 min), at most 43200000 (12 h).' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
       flee_below: { type: 'number', description: 'under this fraction, reach for the logoff ' +
           'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
@@ -12790,6 +12795,10 @@ const TOOLS = [
       if (a.survival_enabled !== undefined) {
         if(typeof a.survival_enabled!=='boolean')throw new Error('survival_enabled must be true or false');
         p.policy.survivalEnabled=a.survival_enabled;
+        // SURVIVAL OFF IS A LEASE (m59-hazards.mjs): it runs out on its own, default 30 min, at most 12 h. A drill that
+        // forgets its restore leaves a character unprotected for half an hour, not for a night.
+        if (a.survival_enabled === false) p.policy.survivalOffUntil = Date.now() + survivalOffLeaseMs(a.survival_off_ms);
+        else delete p.policy.survivalOffUntil;
       }
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);
@@ -19239,6 +19248,21 @@ async function callTool(name, args, caller) {
   if (menagerieIndex.size) {
     const verdict = guardToolCall({ tool: name, args, caller, index: menagerieIndex });
     if (verdict.action === 'refuse') throw new Error(verdict.error);
+  }
+  // A JOURNEY FOR A BODY WITH SURVIVAL OFF IS REFUSED unless it goes to an inn or says so (m59-hazards.mjs). Seven deaths
+  // in Ukgoth, 2026-10-26: keepers left with survival off by a drill were travelled into the troll floor by scripts and
+  // a bot, and stood there. `accept` is this door's, so it is taken off the arguments before the tool sees them.
+  if (args && typeof args === 'object' && Object.hasOwn(args, 'accept') && !(byName.get(name)?.schema?.properties?.accept)) {
+    const { accept, ...rest } = args;
+    const conflict = survivalOffConflict({ tool: name, args, policyOf: a => autopilotIfAny(a)?.policy ?? null,
+      inns: Object.values(CITY_INNS) });
+    if (conflict) throw new Error(conflict.error);
+    if (accept != null) console.warn(`[${name}] accepted hazard(s): ${[].concat(accept).join(', ')} | ${args.agent ?? ''}`);
+    args = rest;
+  } else {
+    const conflict = survivalOffConflict({ tool: name, args: args ?? {}, policyOf: a => autopilotIfAny(a)?.policy ?? null,
+      inns: Object.values(CITY_INNS) });
+    if (conflict) throw new Error(conflict.error);
   }
   // Rich keeper state is now demand-driven. Resolve the target before the tool reads any
   // object id, position, inventory or vital, and coalesce bursts through the proxy's 2s

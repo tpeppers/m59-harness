@@ -184,6 +184,25 @@ So a posture is a set of orders with these rules:
 A posture is the "posture" piece of the [fleet plans](m59-fleet-plans.md) design proposal. The conductor that
 switches plans, and the loops and supply lines, are still to come.
 
+## Named hazards: say it, or it is refused
+
+`tools/m59-hazards.mjs` is one list of acts that are sometimes exactly what the operator wants and otherwise cost a
+character. An order carrying one is refused unless it names it: `accept: ["<id>"]` on an MCP call or in a FleetScript
+call, `--accept <id>` on a CLI. The refusal says nothing was done and names the flag.
+
+| id | refused where | when |
+|---|---|---|
+| `survival_off`, `no_flee`, `travel_unguarded` | `m59-posture.mjs apply` | a posture would set it |
+| `survival_off_move` | the broker's tool door | `travel` for a character whose survival is off, to anywhere but an inn |
+| `go_red` | combat mode (`needsSafetyOff`) | a `kill` would lower safety against an innocent, and this character is not already a murderer |
+| `reroll` | the broker's `reroll` tool | already wanted `confirm: true` |
+
+**Survival off is a lease.** `survival_enabled: false` stores `survivalOffUntil`: 30 minutes by default,
+`survival_off_ms` to choose, at most 12 hours. After it the keeper treats survival as ON whatever the stored flag says
+(`survivalOffOf`). A flag with no lease (pushed straight to a keeper, or set before leases existed) stays off as before.
+The night of 2026-10-25 a drill's restore left six keepers with survival off until morning. Scripts and a bot then
+travelled them into Ukgoth, and seven deaths followed with every hit heard and none acted on.
+
 ## Tripwires: a posture that goes on by itself (off by default)
 
 ```bash

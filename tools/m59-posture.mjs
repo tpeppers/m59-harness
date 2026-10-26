@@ -48,6 +48,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { HAZARDS } from './m59-hazards.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
@@ -123,16 +124,16 @@ export function readBack(posture, orders, policy) {
 export const restoreOrders = before => Object.fromEntries(Object.entries(before).filter(([, v]) => !(v && typeof v === 'object' && v.absent)));
 export const unrestorable = before => Object.entries(before).filter(([, v]) => v && typeof v === 'object' && v.absent).map(([k]) => k);
 
-// ORDERS THAT ARE ALLOWED BUT HAVE TO BE SAID OUT LOUD. Each one has cost the fleet before. `apply` refuses a posture
+// ORDERS THAT ARE ALLOWED BUT HAVE TO BE SAID OUT LOUD (the list and its wording: m59-hazards.mjs). Each one has cost the fleet before. `apply` refuses a posture
 // that sets one unless the caller names it in `accept` (`--accept survival_off`), so a lockdown copied from an old
 // one cannot carry it in by accident, and the save records who accepted what.
 export const ORDER_HAZARDS = [
   { id: 'survival_off', test: o => o.survival_enabled === false,
-    why: 'survival_enabled:false stops ALL ordinary keeper work, spell practice included, and logs no decline: six keepers cast nothing for a day (prod, 2026-10-26)' },
+    why: HAZARDS.survival_off },
   { id: 'no_flee', test: o => (Number.isFinite(o.flee_below) && o.flee_below < 0.1) || (Number.isFinite(o.rest_below) && o.rest_below < 0.05),
-    why: 'a flee or rest line under 10% means the character fights to death; the keeper will not run' },
+    why: HAZARDS.no_flee },
   { id: 'travel_unguarded', test: o => o.travel_guard === 'off' || o.travel_start_health === 0,
-    why: 'a journey with its guard off walks on at any health: Cccc was walked out of a sanctuary at 27% and eaten (2026-08-21)' },
+    why: HAZARDS.travel_unguarded },
 ];
 /** Hazards the plan would set, as [{ id, why, agents }]. Pure. */
 export function hazardsOf(plan) {

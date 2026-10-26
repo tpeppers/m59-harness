@@ -16,6 +16,7 @@ import { keeperOrigin, keeperRecoveryRescueReady } from '../m59-move-origin.mjs'
 import { traceSurvival } from '../m59-survival-trace.mjs';
 import * as watchdog from '../m59-watchdog.mjs';
 import { GRIND_ALWAYS_MS, GRIND_ROWS_PER_HOUR, INERT_RESCUE_MS, PULSE_MOVEMENT_SAMPLES, PULSE_MS, PULSE_SAMPLES, WATCHDOG_BLOCKED_MS, WATCHDOG_FRAME_MS, WATCHDOG_HEALTHY_CANCEL_MS, WATCHDOG_MS, WATCHDOG_PINNED_SQUARES, WEDGE_LADDER_MS, pct } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class WatchdogPart {
   // @part 1
@@ -409,7 +410,7 @@ export class WatchdogPart {
     // died with a trail that had stopped minutes earlier and read as a keeper that could not hear its own health
     // (Rowlf and Clifford, prod 2026-10-26: health pushes for every hit, no frame, no flee). Observing is not
     // intervening: the frame is written, and nothing else here runs.
-    if (this.policy?.survivalEnabled === false) {
+    if (survivalOffOf(this.policy)) {
       if (!w) return;
       const moved = hp?.value != null && hp.value !== w.lastHealth;
       if (moved || now - (this.lastFrameAt ?? 0) >= WATCHDOG_FRAME_MS) this.recordFrame(moved ? 'watchdog: health moved (survival OFF)' : 'watchdog (survival OFF)');

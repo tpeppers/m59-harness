@@ -31,6 +31,7 @@ import { routeTravelKind } from '../m59-travel-kind.mjs';
 import { UNDERWORLD } from '../m59-travelgate.mjs';
 import { compactRefusals, travelJourneyMetrics, withTravelJourneyMetrics } from '../m59-trip-telemetry.mjs';
 import { REST_VIGOR_CAP, REST_VIGOR_WORTH_WAITING, TRAVEL_FORWARD_BIAS, TRAVEL_HOLD_ARM, TRAVEL_HOLD_MODE, journeyIncident, vigorPct } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class TravelPart {
   // @part 1
@@ -209,7 +210,7 @@ export class TravelPart {
   // same shape as the bug the block above `travel()` describes, where one of them honoured
   // the enum and the other left the coin in charge.
   travelHoldMode() {
-    if(this.policy?.survivalEnabled===false)return 'off';
+    if(survivalOffOf(this.policy))return 'off';
     const m = this.policy.travelHold ?? TRAVEL_HOLD_MODE;
     if (m !== 'ab' && m !== 'half') return m;
     if (!this._saidAbRetired) {

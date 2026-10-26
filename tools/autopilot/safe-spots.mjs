@@ -26,6 +26,7 @@ import { traceBody, traceRefuge, traceSurvival, traceSurvivalOperation } from '.
 import { recordTactic } from '../m59-tactics.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
 import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class SafeSpotsPart {
   // @part 1
@@ -251,7 +252,7 @@ export class SafeSpotsPart {
 
   async recoverFromTravelFallback({movementGeneration=this.s.movementGeneration,controlToken=null,
     why='pivot route did not reach its destination'}={}) {
-    if(this.policy?.survivalEnabled===false)return false;
+    if(survivalOffOf(this.policy))return false;
     const s=this.s;
     if(s.movementWasCancelled(movementGeneration,controlToken) || !this.inert?.travelling
         || !this.inert.guard?.safe_spot) return false;

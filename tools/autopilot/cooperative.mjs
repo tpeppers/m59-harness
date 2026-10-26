@@ -20,6 +20,7 @@ import { purchaseKey } from '../m59-purchase-plan.mjs';
 import * as skills from '../m59-skills.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CONTINUE, DEBUG_STATES, HANDLED, LOGOFF_REFRESH_MS, LOGOFF_UNDER_ATTACK_MS, REST_VIGOR_CAP, bearingIn, pct, purchaseEnabled, vigorOf } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class CooperativePart {
   // @part 1
@@ -55,7 +56,7 @@ export class CooperativePart {
   // middle of a monster room, and it is the difference between a fight we lost and a
   // fight we get to have again.
   checkFreeze() {
-    if(this.policy?.survivalEnabled===false){this.frozenUntil=null;this.freezeSample=null;return false;}
+    if(survivalOffOf(this.policy)){this.frozenUntil=null;this.freezeSample=null;return false;}
     if (!this.frozenUntil) return false;
     const c = this.s.client, me = c?.self;
     const sample = { health: c?.vitals?.()?.health?.value ?? null,

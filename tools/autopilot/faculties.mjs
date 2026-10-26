@@ -21,6 +21,7 @@ import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision
 import { traceSurvival } from '../m59-survival-trace.mjs';
 import * as uptime from '../m59-uptime.mjs';
 import { Autopilot, BUSY_MAX_MS, INERT_MAX_MS, REST_VIGOR_CAP, TRAVEL_GUARD_CLOCK, TRAVEL_GUARD_DEFAULTS, TRAVEL_GUARD_KEYS, vigorPct } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class FacultiesPart {
   // @part 1
@@ -454,7 +455,7 @@ export class FacultiesPart {
   // by the tool that sets it and ignored here rather than being merged into a shape the
   // rest of the file would then read as a real faculty.
   travelGuard(override = null) {
-    if(this.policy?.survivalEnabled===false)return Object.fromEntries(TRAVEL_GUARD_KEYS.map(k=>[k,false]));
+    if(survivalOffOf(this.policy))return Object.fromEntries(TRAVEL_GUARD_KEYS.map(k=>[k,false]));
     const from = source => {
       if (!source || typeof source !== 'object') return {};
       const out = {};

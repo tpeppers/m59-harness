@@ -2,7 +2,8 @@
 // No script compiler, snapshot fetch, external planner or keeper pass is on the
 // arrival -> first attack path. All packets still use the ordinary server pacer.
 import { randomUUID } from 'node:crypto';
-import { OF, blocksMovement, playerClass } from './m59-parse.mjs';
+import { OF, blocksMovement, playerClass, isKiller, isOutlaw } from './m59-parse.mjs';
+import { accepts } from './m59-hazards.mjs';
 import { withBodyCommand } from './m59-body-command.mjs';
 import { withCastRite } from './m59-castrite.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
@@ -137,7 +138,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff', 'loud', 'rescue']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps', 'warband', 'keepoff', 'loud', 'rescue', 'accept']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -186,8 +187,13 @@ export function normalizeCombatOrder(input) {
   // LOUD by default (operator, 2026-10-18: "we want all actual engaging PVP targets to be loud for now"):
   // a callout when a hostile enters the map (m59-pvp-callout.mjs). `loud: false` keeps an order quiet.
   demand(input.loud == null || typeof input.loud === 'boolean', 'loud must be boolean');
+  // NAMED HAZARDS THIS ORDER ACCEPTS (m59-hazards.mjs). The only one a combat order can carry is go_red: striking an
+  // innocent with safety off, which makes an outlaw of this character. Anything else is a typo, and refused.
+  demand(input.accept == null || (Array.isArray(input.accept) && input.accept.every(x => x === 'go_red')),
+    'accept takes ["go_red"] or nothing');
   const order = { action: input.action, target: typeof input.target === 'string' ? input.target.trim() : input.target,
     ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true, loud: input.loud ?? true,
+    ...(input.accept?.length ? { accept: ['go_red'] } : {}),
     // A WARBAND ORDER follows the swarm leader's target, which may be a monster: it names an
     // object id and is the one kind of order allowed to target something that is not a player.
     ...(input.warband === true && Number.isSafeInteger(input.target) ? { warband: true } : {}),
@@ -388,6 +394,7 @@ export class CombatMode {
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
       attack_readiness: o.lastReadiness ?? null, last_approach: o.lastApproach ?? null,
       pvp_survival: this.pvpStatus(), keep_safety: !!o.keepSafety, war: this.warStatus(),
+      ...(o.safetyKept ? { safety_kept: o.safetyKept } : {}),
       ...(o.flight ? { flight: o.flight } : {}), ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
       ...(watch ? { watch } : {}) };
@@ -1978,8 +1985,25 @@ export class CombatMode {
 
   // Safety comes off only for a kill that needs it: never for a war engagement, and never for a
   // target the server marks as a mutual-war enemy (CheckStatusAndSafety, player.kod:3803).
+  //
+  // AND SAFETY COMES OFF FOR AN INNOCENT ONLY WHEN THE ORDER SAYS SO (operator, 2026-10-26: going red is a change to the
+  // character that cannot be taken back, so it must be overridden explicitly). CheckStatusAndSafety (player.kod:3767):
+  // "You can always successfully hit a murderer or outlaw" with safety ON, and morphs, anonymous players and mutual-war
+  // enemies too. So safety ON loses nothing against those; it only stops a strike on an innocent, and that strike is
+  // what makes us an outlaw. A character already a murderer has nothing left to lose. Otherwise the order has to carry
+  // accept: ["go_red"]; without it safety stays on, the server refuses the blow, and `safety_kept` says why.
   needsSafetyOff(o) {
-    return !!(o && o.order.action === 'kill' && !o.keepSafety && !this.targetAtWar(o));
+    if (!(o && o.order.action === 'kill' && !o.keepSafety && !this.targetAtWar(o))) return false;
+    const t = o.targetId != null ? o.client?.room?.objects?.get?.(o.targetId) : null;
+    if (t && (isKiller(t.flags) || isOutlaw(t.flags))) { o.safetyKept = null; return false; }
+    if (isKiller(o.client?.self?.flags ?? 0)) return true;
+    if (accepts(o.order.accept, 'go_red')) return true;
+    if (!o.safetyKept) {
+      o.safetyKept = t ? `${t.name ?? 'the target'} is not a murderer or outlaw: safety stays ON (accept go_red to strike an innocent)`
+        : 'target not visible yet: safety stays ON until it is, and for an innocent unless the order accepts go_red';
+      this.s.recorder?.line?.('combat', { event: 'safety_kept', order_id: o.id, target: o.order.target, why: o.safetyKept });
+    }
+    return false;
   }
 
   pvpStatus() {

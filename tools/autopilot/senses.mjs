@@ -23,6 +23,7 @@ import * as skills from '../m59-skills.mjs';
 import { loadSpawns } from '../m59-spawns.mjs';
 import { currentSurvivalDecision, finishSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CROWD_RADIUS, PROOF_MS, REACH, RECOVER_MAX_MS, SETTLE_GRACE_MS, SPAWN_FILE, pct, releaseSpot, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class SensesPart {
   // @part 1
@@ -631,7 +632,7 @@ export class SensesPart {
   }
 
   operatorSurvivalStandDown() {
-    if(this.policy?.survivalEnabled!==false)return false;
+    if(!survivalOffOf(this.policy))return false;
     const d=currentSurvivalDecision(this.s);
     if(d)finishSurvivalDecision(this.s,d.id,'operator_disabled','autonomous survival disabled by operator');
     this.frozenUntil=null;this.freezeSample=null;this.suspendedJourney=null;

@@ -4,7 +4,7 @@ import { CombatMode, normalizeCombatOrder, combatTarget, escapeGroundEffect } fr
 import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { parseCombatCommand, dispatchCombatOrders } from './m59-combat-orders.mjs';
-import { OF } from './m59-parse.mjs';
+import { OF, PF } from './m59-parse.mjs';
 import { CombatDispatch, resolveCombatMap } from './m59-combat-dispatch.mjs';
 import { parseCombatCLI } from './m59-combat-order.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
@@ -270,7 +270,7 @@ await test('map selection does not preempt outsiders and late commands cannot un
 await test('kill lowers game safety only while engaging and restores it on waiting and stop', async () => {
   const f = fixture(); f.c.self.flags = OF.SAFETY;
   const player = f.c.room.objects.get(2); f.c.room.objects.delete(2);
-  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  f.mode.issue({ ...attack, action: 'kill', accept: ['go_red'] }); await f.mode.tick();
   assert.deepEqual(f.sent, []);
   f.c.room.objects.set(2, player); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
   assert.deepEqual(f.sent.slice(0, 4), ['safety:false', 'stand', 'face', 'attack:2']);
@@ -282,8 +282,8 @@ await test('kill lowers game safety only while engaging and restores it on waiti
 });
 await test('kill replacements keep the safety lease through stale cleanup', async () => {
   const f = fixture(); f.c.self.flags = OF.SAFETY;
-  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
-  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  f.mode.issue({ ...attack, action: 'kill', accept: ['go_red'] }); await f.mode.tick();
+  f.mode.issue({ ...attack, action: 'kill', accept: ['go_red'] }); await f.mode.tick();
   assert.equal(f.sent.filter(p => p === 'safety:true').length, 0);
   f.mode.issue({ ...attack, target: 'Absent' }); await f.mode.tick();
   assert.equal(f.sent.at(-1), 'safety:true');
@@ -292,7 +292,7 @@ await test('kill replacements keep the safety lease through stale cleanup', asyn
 await test('rapid reacquisition respects a safety restore whose server echo is still pending', async () => {
   const f = fixture(); f.c.self.flags = OF.SAFETY;
   f.c.safety = on => f.sent.push('safety:' + on); // Like the real client: no optimistic flags.
-  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  f.mode.issue({ ...attack, action: 'kill', accept: ['go_red'] }); await f.mode.tick();
   f.c.self.flags = 0; f.mode.event({ kind: 'changed', id: 1 });
   const target = f.c.room.objects.get(2); f.c.room.objects.delete(2);
   f.mode.event({ kind: 'vanished', id: 2 }); await f.mode.tick();
@@ -300,6 +300,36 @@ await test('rapid reacquisition respects a safety restore whose server echo is s
   f.c.room.objects.set(2, target); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
   assert.deepEqual(f.sent.filter(x => x.startsWith('safety:')), ['safety:false', 'safety:true', 'safety:false']);
   f.mode.stop('test'); await new Promise(r => setImmediate(r));
+});
+await test('going red has to be accepted: safety stays on against an innocent without accept go_red', async () => {
+  const f = fixture(); f.c.self.flags = OF.SAFETY;
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  assert.equal(f.sent.filter(x => x.startsWith('safety:false')).length, 0);
+  assert.ok(f.sent.includes('attack:2'), 'it still swings: the server refuses an innocent, and allows a murderer');
+  assert.match(f.mode.status().safety_kept ?? '', /accept go_red/);
+  f.mode.stop('test');
+});
+await test('safety stays on against a murderer or outlaw: the server already allows the blow', async () => {
+  for (const cls of [PF.KILLER, PF.OUTLAW]) {
+    const f = fixture(); f.c.self.flags = OF.SAFETY;
+    const t = f.c.room.objects.get(2); t.flags = (t.flags & ~OF.PLAYER_MASK) | cls;
+    f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+    assert.equal(f.sent.filter(x => x.startsWith('safety:false')).length, 0);
+    assert.ok(f.sent.includes('attack:2'));
+    assert.equal(f.mode.status().safety_kept ?? null, null);
+    f.mode.stop('test');
+  }
+});
+await test('a character already a murderer needs no acceptance to lower safety', async () => {
+  const f = fixture(); f.c.self.flags = (OF.SAFETY | PF.KILLER) >>> 0;
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  assert.equal(f.sent[0], 'safety:false');
+  f.mode.stop('test');
+});
+await test('accept is checked: only go_red, and only as a list', () => {
+  assert.throws(() => normalizeCombatOrder({ action: 'kill', target: 'X', accept: ['survival_off'] }), /go_red/);
+  assert.deepEqual(normalizeCombatOrder({ action: 'kill', target: 'X', accept: ['go_red'] }).accept, ['go_red']);
+  assert.equal(normalizeCombatOrder({ action: 'kill', target: 'X' }).accept, undefined);
 });
 await test('group dispatch has bounded receipts and no dependency on stalled keepers', async () => {
   const good = fixture(), other = fixture(), sent = [];
@@ -348,7 +378,7 @@ await test('CLI and assigned room aliases preserve literal kill intent', () => {
   assert.equal(scratch.room, 'Upstairs Castle Victoria'); assert.equal(scratch.order.action, 'kill');
 });
 
-const watchOrder = { ...attack, action: 'kill', when_absent: 'farm', watch_maps: [38, 39] };
+const watchOrder = { ...attack, action: 'kill', when_absent: 'farm', watch_maps: [38, 39], accept: ['go_red'] };
 const farmer = () => {
   const f = fixture(); f.keeper.mode = 'farm'; f.keeper.running = true; return f;
 };

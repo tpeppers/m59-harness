@@ -246,6 +246,7 @@ import { TownShopsPart } from './autopilot/town-shops.mjs';
 import { CooperativePart } from './autopilot/cooperative.mjs';
 import { GearUpkeepPart } from './autopilot/gear-upkeep.mjs';
 import { RetreatPart } from './autopilot/retreat.mjs';
+import { survivalOffOf } from './m59-hazards.mjs';
 
 
 // THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
@@ -3268,7 +3269,7 @@ export class Autopilot {
   }
 
   async useHealingWand(cancelled = () => false) {
-    if(this.policy?.survivalEnabled===false)return null;
+    if(survivalOffOf(this.policy))return null;
     const free = () => this.running && !this.stopping && !this.inert
       && !this.parking && !this.busyStatus?.() && !this.checkFreeze()
       && !this.s.combat?.active;
