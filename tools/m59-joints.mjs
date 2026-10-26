@@ -51,7 +51,7 @@
 //      directory; the committed shape is substrate/paks.example/. A fresh clone loads nothing.
 //
 // FOLLOW-UPS. Any decision may carry `also: [...]`, things the pak wants done besides its answer --
-// `{ do: 'request', service: 'purge', target: 'Morpheus', ttl_ms }` posts to the fleet's service board
+// `{ do: 'request', service: 'purge', target: 'Foeman', ttl_ms }` posts to the fleet's service board
 // (tools/rpg/requests.mjs) for whoever runs that desk; `{ do: 'note', text }` writes one keeper journal
 // line. The host performs them, so a pak never touches a file or the wire itself.
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
@@ -358,7 +358,7 @@ export function checkPak(mod, file = '') {
 // substrate/paks-<fleet>.json:
 //   { "enabled": ["firewall-doctrine", { "pak": "wand-feedback", "options": { "floor": -40 } }],
 //     "agents":     { "t9":    { "disable": ["firewall-doctrine"] } },
-//     "characters": { "Loial": { "disable": "*" }, "Kermit": { "enable": ["door-watch"] } } }
+//     "characters": { "Bravo": { "disable": "*" }, "Alpha": { "enable": ["door-watch"] } } }
 //
 // Order is precedence: the first enabled pak with an answer wins a joint. A character's own entry can add
 // paks (`enable`, after the fleet's) or remove them (`disable`, a list or "*"). A menagerie host loads none.
@@ -544,7 +544,7 @@ function summarize(facts) {
 //
 // A pak may carry `scenarios`: { name: { joint, facts, options?, memory?, expect? } }. `dry` runs each one
 // through the same `runHandler` and validator the keeper uses, and prints every rule considered. With
-// --facts it runs your facts instead, so "what would the fleet do if Morpheus walked through the firewall
+// --facts it runs your facts instead, so "what would the fleet do if Foeman walked through the firewall
 // right now" is a file you write and a command you run, not a live experiment.
 export function dryRun(pak, { scenarios = null, options = {} } = {}) {
   const rows = [];

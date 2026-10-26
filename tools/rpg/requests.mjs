@@ -1,4 +1,4 @@
-// THE FLEET'S SERVICE BOARD: "somebody purge Morpheus", "somebody take my curse off".
+// THE FLEET'S SERVICE BOARD: "somebody purge Foeman", "somebody take my curse off".
 //
 // The chalice desk and the mend desk already work this way for one service each: a character that needs
 // something says so, a character that can provide it serves it. This is the same shape as a file every

@@ -97,7 +97,7 @@ export default {
 - **Scenarios are the pak's own tests.** `dry` runs them through the keeper's exact validator.
 - **Where paks live.** `substrate/paks/<name>.mjs`, then `M59_PAK_PATH`, then `substrate/pak-dirs.json`.
 - **Assignment.** `substrate/paks-<fleet>.json`:
-  `{ "enabled": [...], "agents": { "t9": { "disable": [...] } }, "characters": { "Kermit": { "enable": [...] } } }`.
+  `{ "enabled": [...], "agents": { "t9": { "disable": [...] } }, "characters": { "Alpha": { "enable": [...] } } }`.
   Order is precedence. A menagerie host loads none.
 - **Rules carried over from the PvP strategy host.** Hot reload every 2 s. A pak that throws, returns a promise, or
   takes over 25 ms gets a strike; three strikes stand it down until its file changes.
@@ -147,7 +147,7 @@ Each module answers in the game's own terms and cites the kod it rests on.
 ## Postures: the lockdown, and the undo that used to fail
 
 ```bash
-node tools/m59-posture.mjs apply   lockdown-cv --fleet prod --why "Morpheus online"
+node tools/m59-posture.mjs apply   lockdown-cv --fleet prod --why "enemy online"
 node tools/m59-posture.mjs release lockdown-cv --fleet prod
 node tools/m59-posture.mjs status  --fleet prod
 ```
@@ -172,6 +172,38 @@ So a posture is a set of orders with these rules:
 
 A posture is the "posture" piece of the [fleet plans](m59-fleet-plans.md) design proposal. The conductor that
 switches plans, and the loops and supply lines, are still to come.
+
+## Tripwires: a posture that goes on by itself (off by default)
+
+```bash
+node tools/m59-tripwire.mjs try   red-alert --who "Somebody,An Enemy"   # offline: would this trip it?
+node tools/m59-tripwire.mjs look  --fleet prod                         # one live observation, read-only
+node tools/m59-tripwire.mjs watch --fleet prod --dry                   # the watcher, pushing nothing
+node tools/m59-tripwire.mjs watch --fleet prod                         # the watcher
+node tools/m59-tripwire.mjs fire | stand-down red-alert --fleet prod   # by hand
+node tools/m59-tripwire.mjs status --fleet prod
+```
+
+A tripwire says only WHEN; the orders and the undo are a posture. It follows the red-alert supervisor of
+2026-10-17, which locked the fleet down on a `who` sighting and stood it down after 15 minutes of fresh
+absence. The operator ruled (2026-10-25) that this behaviour is allowed, off by default.
+
+- **Triggers** (a closed set; an unknown one is refused at load): `who_online` (an exact name in a fresh
+  `who`), `war_alarm` (a keeper's alarm, by enemy / room / basis / age), `pvp_death` (a count of fleet PvP
+  deaths in a window, optionally by killer), or a function of the observation.
+- **Armed only twice over.** `substrate/tripwires-<fleet>.json` must name it in `enabled`, and a `watch` must be
+  running for that fleet. A fresh clone has neither.
+- **A stale `who` is not quiet.** It resets the quiet clock. Only fresh absence counts toward a stand-down.
+- **It only takes off what it put on.** If the posture was already on when it tripped, it is `owned: false` and
+  never released by the tripwire.
+- **Two tripwires on one posture:** it comes off when the last of them is quiet.
+- **One watcher per fleet**, and it refuses to run while a pid in the fleet file's `exclusive_pids` is alive
+  (the private red-alert supervisor, which would fight it for the same bodies).
+- Every trip, quiet, stand-down and refusal goes to `substrate/tripwire-state/<fleet>/events.jsonl`.
+
+Not carried over from the private supervisor: benching characters that die during the alert at an inn, dropping
+them from DUM's scope, and the per-unit drill record. DUM can still re-decide a locked-down character; the job
+board pause covers leased runs only.
 
 ## Operations: a battle plan as data
 

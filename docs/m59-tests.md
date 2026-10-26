@@ -7,6 +7,11 @@ records. Then the RPG vocabulary from the kod: a curse is never a debuff, three 
 "laughs off" is resisted over 60%, a firewall costs one hit per square. Then the doors between 38 and 39
 derived from the map, the service board, the posture save and read-back, and an operation's expectations.
 
+`m59-tripwire-test.mjs` (39) pins tripwires (docs/m59-joints.md "Tripwires"). Nothing is armed without a fleet
+file, and a file that does not parse arms nothing. A stale or missing `who` resets the quiet clock. A tripwire
+never releases a posture it did not put on, and two on one posture release on the last. Unknown triggers are
+refused at load. A dry watch reads only `fleet` and `who`, and never asks a piloted or host character.
+
 `m59-farm-danger-test.mjs` exercises the real bounded farm stage, survival token
 handoff, late queued-command refusal, preserved completed kill receipts and a
 changed-generation pull that returns through real Session movement to its wall.

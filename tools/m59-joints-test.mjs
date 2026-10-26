@@ -141,11 +141,11 @@ section('the host: strikes, follow-ups, records, branches');
 
 section('assignment: precedence, enable, disable');
 {
-  const book = { enabled: ['a', { pak: 'b', options: { x: 1 } }], agents: { t9: { disable: ['a'] } }, characters: { Loial: { disable: '*' }, Kermit: { enable: ['c'] } } };
+  const book = { enabled: ['a', { pak: 'b', options: { x: 1 } }], agents: { t9: { disable: ['a'] } }, characters: { Bravo: { disable: '*' }, Alpha: { enable: ['c'] } } };
   ok('fleet list in order', resolvePaks(book).map(p => p.pak).join() === 'a,b');
   ok('an agent can disable one', resolvePaks(book, { agent: 't9' }).map(p => p.pak).join() === 'b');
-  ok('"*" disables all', resolvePaks(book, { character: 'loial' }).length === 0);
-  ok('a character can add one after the fleet\'s', resolvePaks(book, { character: 'Kermit' }).map(p => p.pak).join() === 'a,b,c');
+  ok('"*" disables all', resolvePaks(book, { character: 'bravo' }).length === 0);
+  ok('a character can add one after the fleet\'s', resolvePaks(book, { character: 'Alpha' }).map(p => p.pak).join() === 'a,b,c');
   ok('options travel', resolvePaks(book)[1].options.x === 1);
   ok('no book is no paks', resolvePaks(null).length === 0);
 }
@@ -203,14 +203,14 @@ section('rpg/timers: one shared timer, and three wands outside it');
 
 section('rpg/damage: reading our own blow back');
 {
-  const j = readOurBlow('Your lightning bolt jolts Morpheus.');
-  ok('jolts is a shock nick (band 1)', j.band === 1 && j.element === 'shock' && j.target === 'Morpheus' && j.with === 'lightning bolt');
-  ok('fries is band 3', readOurBlow('Your lightning bolt fries Morpheus.').band === 3);
+  const j = readOurBlow('Your lightning bolt jolts Foeman.');
+  ok('jolts is a shock nick (band 1)', j.band === 1 && j.element === 'shock' && j.target === 'Foeman' && j.with === 'lightning bolt');
+  ok('fries is band 3', readOurBlow('Your lightning bolt fries Foeman.').band === 3);
   ok('"runs through" (two words) is thrust band 4', readOurBlow('Your spear runs through the orc.').band === 4);
   ok('color codes are stripped', readOurBlow('~bYour fireball chars the orc.').element === 'fire');
-  const l = readOurBlow('Morpheus laughs off your pitiful blow.');
-  ok('laughs off: resisted over 60%', l.kind === 'resisted' && l.resisted === 'laughs' && l.min_resist === 61 && l.target === 'Morpheus');
-  ok('shrugs off: over 20%', readOurBlow('Morpheus shrugs off your attack.').resisted === 'shrugs');
+  const l = readOurBlow('Foeman laughs off your pitiful blow.');
+  ok('laughs off: resisted over 60%', l.kind === 'resisted' && l.resisted === 'laughs' && l.min_resist === 61 && l.target === 'Foeman');
+  ok('shrugs off: over 20%', readOurBlow('Foeman shrugs off your attack.').resisted === 'shrugs');
   ok('somebody else\'s line is not ours', readOurBlow('The orc hits you with its claws.') === null);
   ok('elementOf a wand', elementOf('lightning wand') === 'shock');
 }
@@ -235,7 +235,7 @@ section('rpg/suspicion: morph and anonymity');
   ok('a creature the room cannot spawn is evidence, alone not proof', imp.spawnable_here === false && imp.score === 0.5);
   ok('a local monster is nothing', assessCreature({ flags: OF.ATTACKABLE }, { name: 'skeleton', room: 38, spawns }).score === 0);
   ok('a player is never a suspect', assessCreature({ flags: OF.PLAYER }, {}).suspect === false);
-  ok('anonymous: a player with no name', isAnonymous({ flags: OF.PLAYER, name: '' }) && !isAnonymous({ flags: OF.PLAYER, name: 'Kermit' }));
+  ok('anonymous: a player with no name', isAnonymous({ flags: OF.PLAYER, name: '' }) && !isAnonymous({ flags: OF.PLAYER, name: 'Alpha' }));
 }
 
 section('combat targeting: a suspect is a player for its own id only');
@@ -285,19 +285,19 @@ section('rpg/doors: the doors between 38 and 39, from the map');
 section('rpg/requests: the service board');
 {
   const file = join(mkdtempSync(join(tmpdir(), 'm59-req-')), 'requests.jsonl');
-  const a = postRequest({ service: 'purge', target: 'Morpheus', from: 'Kermit', file, now: 1000, ttl_ms: 60_000 });
-  const b = postRequest({ service: 'purge', target: 'morpheus', from: 'Piggy', file, now: 2000, ttl_ms: 60_000 });
+  const a = postRequest({ service: 'purge', target: 'Foeman', from: 'Alpha', file, now: 1000, ttl_ms: 60_000 });
+  const b = postRequest({ service: 'purge', target: 'foeman', from: 'Charlie', file, now: 2000, ttl_ms: 60_000 });
   ok('asking again refreshes, never duplicates', b.refreshed && b.id === a.id && openRequests({ service: 'purge', file, now: 3000 }).length === 1);
   claimRequest({ id: a.id, by: 't8', file, now: 3000 });
   ok('a claim hides it from unclaimed', openRequests({ service: 'purge', file, now: 4000, unclaimed: true }).length === 0);
-  const c = postRequest({ service: 'mend', target: 'Rizzo', file, now: 1000, ttl_ms: 600_000 });
+  const c = postRequest({ service: 'mend', target: 'Delta', file, now: 1000, ttl_ms: 600_000 });
   claimRequest({ id: c.id, by: 't9', file, now: 2000 });
   ok('a claim lapses after CLAIM_MS and the request is takeable again',
     openRequests({ service: 'mend', file, now: 30_000, unclaimed: true }).length === 0 &&
     openRequests({ service: 'mend', file, now: 2000 + 61_000, unclaimed: true }).length === 1);
   finishRequest({ id: a.id, by: 't8', file, now: 5000, outcome: 'cast' });
   ok('done is done', board({ file, now: 6000 })[0].state === 'done');
-  postRequest({ service: 'remove curse', target: 'Gonzo', file, now: 1000, ttl_ms: 5000 });
+  postRequest({ service: 'remove curse', target: 'Echo', file, now: 1000, ttl_ms: 5000 });
   ok('an old request expires', openRequests({ service: 'remove curse', file, now: 10_000 }).length === 0);
 }
 
