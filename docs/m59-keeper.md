@@ -256,6 +256,22 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield c
   in, which is precisely why leaving was the mistake. The refusal cannot deadlock (the rest
   gate above rests to full on the wall) and is capped at three minutes anyway.
 
+## A flat health trail is three failures that look the same
+
+Prod, 2026-10-26: nine of eleven non-PvP deaths read `was.doing: "stalled"` with health flat at max to the end, and
+the first two with `health_age_ms` showed the last health reading 35 s and 359 s old. That was read as "the keeper
+could not hear its own health". It may be, but **health is sent only when it changes**, so an old reading at full
+health is normal, and a flat trail fits three different failures:
+
+| | what the postmortem's `hearing` block shows |
+|---|---|
+| nobody was looking: frames stopped (the watchdog returns early while `s.combat.active` or the session is not live) | `last_frame_age_ms` large; `watchdog.last_skip` says why |
+| the socket went quiet | `rx_age_ms` large |
+| bytes arrived and nothing parsed: a framing desync empties the buffer and can repeat, or STAT messages fail the end-of-payload check and are dropped | `rx_age_ms` small, `msg_age_ms` large, or `framing_drops` / `stat_parse_errors` climbing |
+
+Frames carry `rx_age_ms` and `msg_age_ms` too. `m59-hearing-test.mjs` (10) pins that these are written. Nothing here
+changes behaviour: which failure it was decides the fix, and the next such death answers it.
+
 ## The watchdog, and the counters that are not rates
 
 - **THE KEEPER IS A LONG-AWAIT MACHINE, AND THE WATCHDOG IS THE ONLY THING WATCHING

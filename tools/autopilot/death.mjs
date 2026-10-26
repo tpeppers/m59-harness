@@ -109,6 +109,22 @@ export class DeathPart {
         health_age_ms: frames.map(f => f.health_age_ms ?? null),
         flee_threshold: this.safety?.().fleeAt ?? null,
       },
+      // WAS THE KEEPER LOOKING, AND COULD IT HEAR? (prod 2026-10-26: nine deaths "stalled" with a flat health trail.)
+      // last_frame_age_ms large: frames stopped, so the trail is old and the keeper was not looking (see watchdog).
+      // rx fresh but msg old, or framing_drops/stat_parse_errors climbing: the socket was alive and nothing parsed.
+      // both fresh and the trail flat: the server sent no damage the keeper could read; look at the STAT drops.
+      hearing: (() => {
+        const c = this.s.client, w = this.watch, age = t => (t ? capturedAt - t : null);
+        return {
+          last_frame_age_ms: last?.at ? capturedAt - last.at : null,
+          rx_age_ms: age(c?.lastRxAt), msg_age_ms: age(c?.lastGameMsgAt), game_msgs: c?.gameMsgs ?? null,
+          framing_drops: c?.framingDrops ?? 0, last_framing_drop_age_ms: age(c?.lastFramingDropAt),
+          stat_parse_errors: (c?.parseErrors ?? []).filter(e => /^STAT/.test(String(e?.what ?? ''))).slice(-3)
+            .map(e => ({ what: e.what, why: e.why, age_ms: age(e.at) })),
+          watchdog: w ? { last_tick_age_ms: age(w.lastTickAt), last_skip: w.lastSkip ? { why: w.lastSkip.why, age_ms: age(w.lastSkip.at) } : null } : null,
+          combat_mode: !!this.s.combat?.active,
+        };
+      })(),
       threats: {
         present_at_the_end: last?.threats ?? [],
         // Prefer the real count; fall back to the capped list length for frames written

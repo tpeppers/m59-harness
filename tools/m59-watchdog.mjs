@@ -492,9 +492,13 @@ export function pulse(host, now, hp) {
 
 export function tick(host) {
   const s = host.s, c = s?.client;
-  if (!c || s.live !== true || c.state !== 'game') return;
-  if (s.combat?.active) { void s.combat.tick(); return; }
+  // WHEN THIS LAST LOOKED, AND WHY IT LAST DID NOT. A death with a flat health trail is either a stream that stopped
+  // or a watchdog that stopped writing frames; these two fields, read by the postmortem, tell them apart.
+  const skip = why => { if (host.watch) host.watch.lastSkip = { at: Date.now(), why }; };
+  if (!c || s.live !== true || c.state !== 'game') return skip(!c ? 'no client' : s.live !== true ? 'session not live' : `client ${c.state}`);
+  if (s.combat?.active) { skip('combat mode owns the body'); void s.combat.tick(); return; }
   const w = host.watch;
+  if (w) w.lastTickAt = Date.now();
   w.ticks++;
   const now = Date.now();
   const v = c.vitals?.();

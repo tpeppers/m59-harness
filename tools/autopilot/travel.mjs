@@ -51,6 +51,10 @@ export class TravelPart {
       // keeper that stopped hearing its own stat packets (2026-10-26: Fozzie, Clifford, Rowlf, all `stalled`, all flat).
       // The age of the last health packet at each frame tells the two apart.
       health_age_ms: (() => { const t = c.statsById?.get?.('health')?.observed_at; return Number.isFinite(t) ? nowT - t : null; })(),
+      // Health is sent only when it CHANGES, so an old health reading at full health is normal. These two say whether
+      // the link was alive: bytes off the socket, and the last message that actually parsed.
+      rx_age_ms: c.lastRxAt ? nowT - c.lastRxAt : null,
+      msg_age_ms: c.lastGameMsgAt ? nowT - c.lastGameMsgAt : null,
       vigor: v.vigor?.value ?? null,
       doing: this.doing ?? this.lastDoing ?? null,
       ...(why ? { why } : {}),
