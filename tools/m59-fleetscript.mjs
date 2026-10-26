@@ -4376,9 +4376,17 @@ async function runStep(ctx, agent, rawStep, state) {
       const square = () => statusWithPosition(agent);
       const posOf = s => ({ row: s?.you?.row ?? null, col: s?.you?.col ?? null,
                             room: Number(s?.where?.num ?? s?.room?.num ?? s?.room_num ?? NaN) });
+      // THE LAST REFUSAL, KEPT FOR THE RECEIPT (2026-10-26: "did not reach r23c16 within the budget; last seen r56c48 in
+      // 27" twice in a night, and nothing said whether a body, a wall or a deviation refused it). The reply is still not the
+      // outcome -- the world is read back below -- but its reason is the only account of WHY it stopped.
+      let lastWalk = null;
+      const walkWhy = () => lastWalk == null ? null
+        : lastWalk.error ? `last walk_to reply: ${lastWalk.error}`
+        : [lastWalk.reason, lastWalk.fine_reason, lastWalk.note].filter(Boolean).join('; ') || null;
       const issue = () => call('walk_to', { agent, col: step.col, row: step.row,
                                             arrive_within: step.arriveWithin ?? 6 },
-                               step.timeoutMs ?? 120_000).catch(() => {});
+                               step.timeoutMs ?? 120_000)
+        .then(r => { lastWalk = r ?? null; }).catch(e => { lastWalk = { error: e?.message ?? String(e) }; });
       const start = posOf(await square());
       // `leaveRoom: true` says the destination is a TRIGGER SQUARE — somewhere that moves the
       // body somewhere else — so arriving on it is the failure and leaving is the success.
@@ -4407,9 +4415,10 @@ async function runStep(ctx, agent, rawStep, state) {
           // the body and start measuring the ground; proving the same refusal a third time is
           // the failure mode the node-runner skill exists to stop.
           if (reissued >= 1)
-            return { ok: false, outcome: 'stalled', at, reissued,
+            return { ok: false, outcome: 'stalled', at, reissued, last_walk: walkWhy(),
                      why: `no movement at ${at} across two attempts — measure the ground ` +
-                          `(node tools/m59-exitreport.mjs ${p.room}) rather than asking again` };
+                          `(node tools/m59-exitreport.mjs ${p.room}) rather than asking again` +
+                          (walkWhy() ? ` (${walkWhy()})` : '') };
           reissued++; lastMoved = Date.now();
           ctx.log(agent, `walk_to r${step.row}c${step.col}: still at ${at} — cancelling, standing up, re-issuing once`);
           // CANCEL THE ONE THAT IS STILL WALKING BEFORE ISSUING ANOTHER. A `walk_to` whose
@@ -4428,8 +4437,9 @@ async function runStep(ctx, agent, rawStep, state) {
           issue();
         }
         if (Date.now() > deadline)
-          return { ok: false, outcome: 'out_of_time', at, reissued,
-                   why: `did not reach r${step.row}c${step.col} within the budget; last seen ${at}` };
+          return { ok: false, outcome: 'out_of_time', at, reissued, last_walk: walkWhy(),
+                   why: `did not reach r${step.row}c${step.col} within the budget; last seen ${at}` +
+                        (walkWhy() ? ` (${walkWhy()})` : '') };
       }
     }
 

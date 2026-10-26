@@ -360,5 +360,15 @@ console.log('the look decides what is a summon');
   ok('and the summary row carries it to the fleet board', row.condition === 'worn');
 }
 
+{
+  // WHY IS IT STILL UNKNOWN: each look's outcome is kept and shown (2026-10-26, six hours of 'unknown' with no reason).
+  const book = new WeaponMagicBook();
+  book.noteLook(77, 'no_reply'); book.noteLook(77, 'other_id');
+  const row = book.summary([{ id: 77, name: 'long sword' }]).weapons[0];
+  ok('an unread weapon says how many looks were tried', row.class === 'unknown' && row.look_attempts === 2);
+  ok('and how the last one ended', row.last_look === 'other_id');
+  ok('a weapon never looked at carries no look fields', !('look_attempts' in book.summary([{ id: 78, name: 'axe' }]).weapons[0]));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

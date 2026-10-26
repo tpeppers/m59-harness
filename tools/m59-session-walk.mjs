@@ -7643,7 +7643,8 @@ export function sessionWalkPrototype(deps) {
       // BOUNDED WORK PER TICK. The floods a plan builds are cached per geometry, so a plan cut
       // off by its deadline leaves the next attempt less to do; between attempts the event loop
       // runs. Four attempts is the whole allowance, then the direct walk.
-      let plan = {found:false,reason:'fine_geometry_requested'};
+      // A skipped coarse plan still carries a time, so the log line below never prints `undefinedms`.
+      let plan = {found:false,reason:'fine_geometry_requested',ms:0};
       for (let attempt = 0; attempt < (opts.fineLegs===true&&typeof geo.toJSON==='function'?0:4); attempt++) {
         plan = planSafeLegs(geo, { row: me.row, col: me.col }, { row: goal.row, col: goal.col },
                             { ...opts, threats, occupied, unreachable, corridor });
@@ -7657,8 +7658,9 @@ export function sessionWalkPrototype(deps) {
       // afterwards from there and the ledger row only says how it ended.
       console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} room ${room.num} at r${me.row}c${me.col} -> ` +
         `r${goal.row}c${goal.col}: ${plan?.found ? `${plan.legs.length} leg(s), next ${plan.legs[0].kind} ` +
-        `r${plan.legs[0].row}c${plan.legs[0].col}/${plan.legs[0].steps}` : `no plan (${plan?.reason})`} ` +
-        `in ${plan?.ms}ms, ${threats.length} threat(s)`);
+        `r${plan.legs[0].row}c${plan.legs[0].col}/${plan.legs[0].steps}` :
+        plan?.reason === 'fine_geometry_requested' ? 'coarse plan skipped, fine legs next' : `no plan (${plan?.reason})`} ` +
+        `in ${plan?.ms ?? 0}ms, ${threats.length} threat(s)`);
       let boot=null;
       if(opts.fineLegs===true){
         // Price the route to the actual exit, not a coarse target on another

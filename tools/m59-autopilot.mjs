@@ -9388,6 +9388,10 @@ export class Autopilot {
       at: nowT, room: room?.name ?? null, num: room?.num ?? null,
       col: c.self?.col ?? null, row: c.self?.row ?? null,
       health: v.health?.value ?? null, max: v.health?.max ?? null,
+      // HOW OLD THAT HEALTH READING IS. A flat trail at full health right up to a death is either one-pass kills or a
+      // keeper that stopped hearing its own stat packets (2026-10-26: Fozzie, Clifford, Rowlf, all `stalled`, all flat).
+      // The age of the last health packet at each frame tells the two apart.
+      health_age_ms: (() => { const t = c.statsById?.get?.('health')?.observed_at; return Number.isFinite(t) ? nowT - t : null; })(),
       vigor: v.vigor?.value ?? null,
       doing: this.doing ?? this.lastDoing ?? null,
       ...(why ? { why } : {}),
@@ -12128,6 +12132,9 @@ export class Autopilot {
         last_vigor: last?.vigor ?? null,
         health_per_second: this.healthRate(frames),
         trail: frames.map(f => f.health).filter(h => h != null),
+        // Age of the health reading at each frame (ms; null on frames written before this field existed). Large ages
+        // under a flat trail mean the keeper was not hearing health; small ones mean it was, and the death was fast.
+        health_age_ms: frames.map(f => f.health_age_ms ?? null),
         flee_threshold: this.safety?.().fleeAt ?? null,
       },
       threats: {
@@ -32566,10 +32573,12 @@ export class Autopilot {
       for (const item of book.needsLook(items).slice(0, 2)) {
         const since = c.evSeq;
         await s.pacer.submit('look', () => c.look(item.id)).catch(() => {});
-        const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 3000 })
+        const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 5000 })
           .catch(() => ({ events: [] }));
         const desc = events.find(e => e.id === item.id)?.description ?? null;
         if (desc != null) book.record(item.id, item.name, desc);
+        // Say why it is still unknown (see WeaponMagicBook.noteLook): no reply at all, or a reply about another id.
+        book.noteLook(item.id, desc != null ? 'ok' : events.length ? 'other_id' : 'no_reply');
       }
       await this.applyMagicPreference(c, items);
     } finally { this._weaponMagicBusy = false; }
