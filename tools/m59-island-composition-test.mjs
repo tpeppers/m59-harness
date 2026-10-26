@@ -24,7 +24,8 @@ assert.equal(trip.params.destination.default,2001);
 const walking=await trip.steps({...p,outbound:'walk'});
 assert.equal(walking[0].to,27);assert(!walking[0].avoid.includes(587));
 assert(walking.some(s=>s.do==='walk'&&s.to===2001));
-assert.equal((await home.steps({...p}))[0].to,2000);
+// The pool-of-vigor drink (a no-op outside 2510) comes before the first walk, which is still to the island (2000).
+{const hs=await home.steps({...p});assert.equal(hs[0].do,'verify');assert.equal(hs[0].optional,true);assert.equal(hs.find(s=>s.do==='walk').to,2000);}
 const convoy=await trip.steps({...p,outbound:'walk',agents:['a','b']});
 assert.equal(convoy[0].do,'verify');assert.equal(convoy.at(-1).always,true);
 assert.equal(trip.params.departSpacingMs.default,60000);

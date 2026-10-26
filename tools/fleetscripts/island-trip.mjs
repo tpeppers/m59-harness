@@ -14,7 +14,7 @@ export const script={name:'island-trip',describe:'Go to the Island, refill after
     task:{type:'script',paramsIn:'taskParams',default:'',exclude:['island-trip','island-home','island-walk','island-chalice'],describe:'a FleetScript to run on the Island before coming home'},taskParams:{type:'string',default:'{}'},
     home:{type:'room',default:52},destination:{type:'room',default:2001},budgetMs:{type:'number',default:800000},requireSafeLegs:{type:'boolean',default:true},
     departSpacingMs:{type:'number',default:60000},waveBudgetMs:{type:'number',default:ISLAND_CONVOY_WAIT_MS},queueBudgetMs:{type:'number',default:ISLAND_CONVOY_WAIT_MS},
-    keepItems:{type:'boolean',default:true},minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20},minVigor:{type:'number',default:120}},
+    keepItems:{type:'boolean',default:true},minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20},minVigor:{type:'number',default:80}},
   async steps(p){
     if(!['chalice','walk'].includes(p.outbound))throw Error('outbound must be chalice or walk');
     if(!Number.isSafeInteger(p.departSpacingMs)||p.departSpacingMs<0||

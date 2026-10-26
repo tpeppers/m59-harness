@@ -22,7 +22,7 @@ import * as skills from '../m59-skills.mjs';
 import { huntLabel, huntMatcher, loadSpawns } from '../m59-spawns.mjs';
 import * as tougher from '../m59-tougher.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
-import { HANDLED, MIN_FIGHT_VIGOR, REST_VIGOR_CAP, SPAWN_FILE, STRATEGIES, WANT_FIGHT_VIGOR, claimQuarry, farmRoomDenials, openFightReadiness, partialFightMadeProgress, pct, quarryPermittedByConfinement, rankQuarries, reachableOpenFightVigorBar, releaseQuarry, shouldRelocateToAssignedRoom, vigorBarFor, vigorOf } from '../m59-autopilot.mjs';
+import { claimQuarry, farmRoomDenials, HANDLED, healAllowOf, MIN_FIGHT_VIGOR, openFightReadiness, partialFightMadeProgress, pct, quarryPermittedByConfinement, rankQuarries, reachableOpenFightVigorBar, releaseQuarry, REST_VIGOR_CAP, shouldRelocateToAssignedRoom, SPAWN_FILE, STRATEGIES, vigorBarFor, vigorOf, WANT_FIGHT_VIGOR } from '../m59-autopilot.mjs';
 
 export class PassFarmPart {
   // @part 1
@@ -829,7 +829,7 @@ export class PassFarmPart {
       // first — that is a real action now, not a euphemism for resting.
       const safe = this.safety();
       if (hp !== null && hp < safe.engageAt) {
-        const h = await skills.healUp(s, { target: 0.95 }).catch(() => ({ healed: false }));
+        const h = await skills.healUp(s, { target: 0.95, allow: healAllowOf(this) }).catch(() => ({ healed: false }));
         this.recordHealUse(h, 'too hurt to start the fight in front of us');
         if (h.healed) this.note('healed before engaging', { used: h.used, health: h.health });
         else {
@@ -1500,7 +1500,7 @@ export class PassFarmPart {
           { health: hp, floor: this.policy.partyHealBelow ?? 0.5 });
         if (role === 'heal') {
           this.doing = 'recovering';
-          const h = await skills.healUp(this.s, { target: 0.95 }).catch(() => ({ healed: false }));
+          const h = await skills.healUp(this.s, { target: 0.95, allow: healAllowOf(this) }).catch(() => ({ healed: false }));
           this.recordHealUse(h, 'partner is carrying the fight while I heal');
           this.note('stepping out of the fight to heal', {
             health: hp == null ? null : Math.round(hp * 100) + '%',

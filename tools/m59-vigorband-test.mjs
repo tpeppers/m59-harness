@@ -18,7 +18,7 @@ import { readToolSource } from './autopilot/source.mjs';
 // is the degenerate case: they must be at exactly full to swing, and drop out of the fight
 // on the first tick of vigor burn.
 
-import { applyFightAboveVigor, reachableFightFloor } from './m59-autopilot.mjs';
+import { applyFightAboveVigor, reachableFightFloor, restVigorCapOf } from './m59-autopilot.mjs';
 import { readFileSync } from 'node:fs';
 
 const BROKER = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
@@ -89,6 +89,17 @@ console.log('\nand the safety net is still under all of it');
      reachableFightFloor(160, 200, 50) === 130);
   ok('a floor already low enough is never raised',
      reachableFightFloor(60, 200, 500) === 60);
+}
+
+{
+  // SECOND WIND RAISES THE RESTING CEILING (secwind.kod:158: 80 + (ability + 1) / 5), and the server sends the result as
+  // vitals().vigor.rest_threshold. Operator, 2026-10-26: rest to the actual maximum, not to a flat 80.
+  ok('no threshold read: the base 80 of 200', restVigorCapOf({}) === 0.4);
+  ok('Second Wind 49 -> threshold 90 -> rests to 90', restVigorCapOf({ vigor: { rest_threshold: 90 } }) === 0.45);
+  ok('the server bound of 100 holds', restVigorCapOf({ vigor: { rest_threshold: 140 } }) === 0.5);
+  ok('a cooldown threshold of 10 reads as the base, never as 10', restVigorCapOf({ vigor: { rest_threshold: 10 } }) === 0.4);
+  ok('the reachable floor uses the character own ceiling', reachableFightFloor(160, 200, 0, 0.45) === 90);
+  ok('and food on top of it', reachableFightFloor(160, 200, 30, 0.45) === 120);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

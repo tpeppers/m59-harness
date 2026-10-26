@@ -28,7 +28,10 @@ import{deathLocationFromSessions}from'./m59-death-location.mjs';
 
 import {findDeathNotice} from './m59-death-notices.mjs';
 import {noteTrafficJam,trafficBlinkAdvice,waitForBlinkCast} from './m59-traffic-blink.mjs';
-import {affordableHeal,castRecoveryHeal,healReadiness} from './m59-recovery-heal.mjs';
+import {affordableHeal,castRecoveryHeal,healReadiness,healAllowed} from './m59-recovery-heal.mjs';
+// policy.healSpells as a list, or null: every heal this character knows. A function of the policy rather than a method,
+// because the heal paths are also called on bare objects that borrow Autopilot.prototype methods.
+export const healAllowOf = a => Array.isArray(a?.policy?.healSpells) ? a.policy.healSpells : null;
 import {publishFleetHealth,readFleetHealth} from './m59-fleet-health.mjs';
 import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
 import { castRole } from './m59-spellgear.mjs';
@@ -471,6 +474,20 @@ export const CROWD_RADIUS = 4;
 // out of 200, so 0.4 is the ceiling of what sitting down can ever buy — asking for
 // more is asking to sit until the timeout expires. The rest comes from food.
 export const REST_VIGOR_CAP = 0.4;
+// THE CHARACTER'S OWN RESTING CEILING, AS THE SERVER SENDS IT. 80 is only the base: Second Wind raises the threshold to
+// 80 + (ability + 1) / 5 (secwind.kod:158, bounded 10..100 at player.kod:1238) and the server sends it as the vigor stat's
+// current_max (user.kod SendStatVigor), which the client reports as vitals().vigor.rest_threshold. Operator, 2026-10-26:
+// "be willing to rest to its actual maximum vigor". A threshold under 80 is the Second Wind cooldown (player.kod:1235 sets
+// 10 while the enchantment runs): resting cannot award anything then, so it reads as the base rather than as permission
+// to fight at 10. A fraction of the 200 bar, like REST_VIGOR_CAP.
+//
+// ONLY WHERE A REST ENDS. Operator, 2026-10-26: "the actual max vigor should be used for each character just for when it
+// finishes being resting between fights". So the rest TARGETS take it; deciding whether to rest at all, and the reachable
+// fight floor, stay on the base 80.
+export function restVigorCapOf(vitals) {
+  const t = Number(vitals?.vigor?.rest_threshold);
+  return (Number.isFinite(t) && t > 80 ? Math.min(t, 100) : 80) / 200;
+}
 // THE VIGOR A TRAVELLER MUST NOT DROP BELOW ON AN ORDINARY ROAD.
 //
 // Raw vigor, not a fraction, because that is the unit everything else here reports and the
@@ -1906,8 +1923,8 @@ export function applyFightAboveVigor(policy, value) {
 // Returns what is actually reachable, never raising a floor that was already low enough.
 // The cap scales with the bar rather than assuming 200, because the same arithmetic has to
 // hold for a character whose maximum is not 200.
-export function reachableFightFloor(floor, maxVigor = 200, foodVigor = 0) {
-  const restCeiling = REST_VIGOR_CAP * maxVigor;
+export function reachableFightFloor(floor, maxVigor = 200, foodVigor = 0, restCap = REST_VIGOR_CAP) {
+  const restCeiling = (Number(restCap) || REST_VIGOR_CAP) * maxVigor;
   return Math.min(floor, restCeiling + Math.max(0, Number(foodVigor) || 0));
 }
 
@@ -2191,6 +2208,9 @@ export class Autopilot {
       // Practise spells at a post while nothing needs us, keeping back two casts of the desk's
       // dearest service. null is inert. See m59-deskpractice.mjs and practiceAtDesk().
       practiceSpells: null,
+      // WHICH HEALS THE KEEPER MAY CAST, on itself or an ally: a list of spell names, or null for every heal it knows.
+      // One drill can own a heal spell: Pepe's hospice practice wants hospice and nothing else (2026-10-26).
+      healSpells: null,
       // THE BUDDY SYSTEM (m59-buddy.mjs, passBuddy): { pairs: { tagger: killer }, wait_s, tries,
       // reach, quarry }. A tagger lands one blow on an untouched monster and waits at its wall for
       // its fixed partner to kill it, which credits the tagger's max-health roll without its karma

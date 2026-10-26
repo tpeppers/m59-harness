@@ -25,7 +25,7 @@ import { JAM_MEASURE_MS, JAM_TTL_MS, REPLAN_MS, jamObservation, recoveryObservat
 import { traceBody, traceRefuge, traceSurvival, traceSurvivalOperation } from '../m59-survival-trace.mjs';
 import { recordTactic } from '../m59-tactics.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
-import { REST_VIGOR_CAP, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, claimExclusiveSpot, claimSpot, farmVigorWorkReady, pct, releaseSpot, rememberSpotClaimPartner, scriptedWalkDefersVigorRest, spotOccupancy, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 
 export class SafeSpotsPart {
   // @part 1
@@ -113,7 +113,7 @@ export class SafeSpotsPart {
       // usually at full health — being hurt is what the survival ladder is for, and it runs
       // on its own clock. Asking for health too would sit a healthy character down for
       // nothing and a hurt one down for the wrong reason.
-      health: 0, vigor: REST_VIGOR_CAP, mana, maxSeconds, abortOnDamage: true,
+      health: 0, vigor: this.restVigorCap(), mana, maxSeconds, abortOnDamage: true,
     }).catch(e => ({ error: e.message }));
     const after = vigorPct(this.s.client?.vitals?.());
     const manaAfter = pct(this.s.client?.vitals?.()?.mana);
@@ -442,15 +442,15 @@ export class SafeSpotsPart {
         || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
       // The active recovery path used to bypass healUp and wait on vigor alone.
       // Keep the same wall, movement generation and decision while casting one heal.
-      if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client)){
+      if(hp!=null&&hp<0.99&&Date.now()-(this._recoveryHealAt??0)>=3000&&affordableHeal(client,{allow:healAllowOf(this)})){
         this._recoveryHealAt=Date.now();
-        const healing=await castRecoveryHeal(s,{shouldCancel:cancelled});
+        const healing=await castRecoveryHeal(s,{shouldCancel:cancelled,allow:healAllowOf(this)});
         this.note('recovery heal',healing);
         if(healing.cast)this.recordCast(healing.spell,{ok:healing.confirmed,...healing});
         if(cancelled())return true;
         if(pct(client.vitals()?.health)>=1)return true;
       }
-      const r=await skills.restUntil(s,{health:1,vigor:REST_VIGOR_CAP,maxSeconds:8,
+      const r=await skills.restUntil(s,{health:1,vigor:this.restVigorCap(),maxSeconds:8,
         shouldCancel:cancelled,
         beforeMutation:()=>{if(cancelled())throw Error('survival recovery interrupted');},
         beforeCleanup:()=>{if(currentSurvivalDecision(s)?.id!==d.id || s.movementWasCancelled?.(generation))throw Error('survival ownership changed');}});

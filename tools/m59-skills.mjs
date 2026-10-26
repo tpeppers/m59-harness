@@ -1539,7 +1539,7 @@ export function isHealingFlaskDescription(description) {
     && !/poison|arsenic|pungent|strange matter/i.test(text);
 }
 
-export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
+export async function healUp(s, { target = 0.9, maxItems = 8, allow = null } = {}) {
   const c = s.need();
   const frac = () => { const h = c.vitals()?.health; return h && h.max ? h.value / h.max : null; };
   const before = frac();
@@ -1591,7 +1591,9 @@ export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
   // A heal spell is free but costs mana, and a Shal'ille character has one.
   if (s.client !== undefined && s.client !== c)
     return { healed: false, used, skipped, cancelled: true, reason: 'healing client changed' };
-  const spell = (c.spells || []).find(sp => HEAL_SPELL.test(c.rsc.get(sp.nameRsc) || ''));
+  // `allow` (policy.healSpells): only these heals, or every heal when null.
+  const spell = (c.spells || []).find(sp => HEAL_SPELL.test(c.rsc.get(sp.nameRsc) || '')
+    && (!Array.isArray(allow) || allow.some(a => String(a).toLowerCase() === String(c.rsc.get(sp.nameRsc) || '').toLowerCase())));
   if (spell && (frac() ?? 1) < target) {
     for (let i = 0; i < 3 && (frac() ?? 1) < target; i++) {
       const before2 = frac();

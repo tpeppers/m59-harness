@@ -192,6 +192,17 @@ export class WeaponMagicBook {
    * An enchanted reading goes stale after maxAgeMs, because enchantments end and the lapse
    * sentence goes only to whoever holds the weapon at that moment.
    */
+  // WHY A WEAPON IS STILL UNKNOWN. 2026-10-26: a troll crew sat for six hours with every weapon `unknown` while the
+  // sweep ran -- each look either got no reply or a reply naming another id -- and nothing said so. Each attempt's
+  // outcome ('ok' | 'no_reply' | 'other_id' | 'error') is kept per id and shown in summary() as look_attempts/last_look.
+  noteLook(id, outcome) {
+    const m = (this.lookAttempts ??= new Map()), k = Number(id), e = m.get(k) ?? { attempts: 0 };
+    // 'pending' marks a look sent and not yet answered; the outcome that follows replaces it without counting twice.
+    if (outcome !== 'pending' && e.last !== 'pending') e.attempts++;
+    if (outcome === 'pending') e.attempts++;
+    e.last = outcome; e.at = this.now(); m.set(k, e); return e;
+  }
+
   needsLook(items = [], isWeapon = defaultIsWeapon) {
     const t = this.now();
     return items.filter(i => i?.id != null && isWeapon(i.name)).filter(i => {
@@ -223,6 +234,8 @@ export class WeaponMagicBook {
                made: v.made ?? null, wielded: wieldedId != null && Number(i.id) === Number(wieldedId),
                at: v.at ?? null, source: v.source ?? (v.class === 'unknown' ? null : 'class'),
                condition: v.condition ?? null,
+               ...(this.lookAttempts?.get(Number(i.id)) ? { look_attempts: this.lookAttempts.get(Number(i.id)).attempts,
+                   last_look: this.lookAttempts.get(Number(i.id)).last } : {}),
                ...(broken?.has?.(Number(i.id)) || v.broken ? { broken: true } : {}) };
     });
     const wielded = rows.find(r => r.wielded) ?? null;

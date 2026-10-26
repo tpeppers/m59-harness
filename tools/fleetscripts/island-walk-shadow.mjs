@@ -31,7 +31,7 @@ export const script={name:'island-walk-shadow',describe:'Isolated cave/island re
   params:{agents:{type:'agents',required:true},direction:{type:'string',default:'out'},roundtrip:{type:'boolean',default:false},
     quiet:{type:'boolean',default:false},budgetMs:{type:'number',default:180000},stageRow:{type:'number'},stageCol:{type:'number'},
     departSpacingMs:{type:'number',default:30000},
-    fragileBelow:{type:'number',default:20},minHealth:{type:'number',default:1},minVigor:{type:'number',default:120}},
+    fragileBelow:{type:'number',default:20},minHealth:{type:'number',default:1},minVigor:{type:'number',default:80}},
   async steps(p){
     const safe=(fn,why,always=false)=>({...verify(async ctx=>{try{return await fn(ctx);}catch(e){console.log('ISLAND ERROR '+e.stack);return {ok:false,why:e.message};}},why),always});
     return [act('cancel_movement',{}),act('autopilot',{action:'busy',kind:'fleetscript',label:'island-walk-shadow',lease_ms:120000}),

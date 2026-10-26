@@ -682,7 +682,7 @@ export class SanctuaryPart {
       // Resting stops at 80 of 200 — RestTimer will not take vigor past its threshold,
       // so asking for more is asking to sit until the timeout. Everything above this
       // has to be eaten, which is a supply problem and not something to wait out.
-      vigor: REST_VIGOR_CAP, mana,
+      vigor: this.restVigorCap(), mana,
       // Longer than the old 120s because mana is the slowest of the three and this is now
       // waiting on it. Still bounded, and the caller's own deadline bounds the repeats.
       maxSeconds: 180 });

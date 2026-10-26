@@ -194,7 +194,9 @@ assert.deepEqual(bindIslandFinePosition(look(2502),fine).you,{row:41,col:34,x:22
 assert.throws(()=>bindIslandFinePosition(look(2502),{...fine,fresh:false}),/unconfirmed/);
 assert.throws(()=>bindIslandFinePosition(look(2501),fine),/unconfirmed/);
 let departureCalls=0;
-await assert.rejects(prepareIslandDeparture({agent:'fixture',call:async()=>{departureCalls++;}}, {...look(27),vigor:{value:80}}),/requires_food_and_vigor/);
+// 80 TO EMBARK (operator 2026-10-26): 79 is refused, 80 sets out -- resting alone reaches 80.
+await assert.rejects(prepareIslandDeparture({agent:'fixture',call:async()=>{departureCalls++;}}, {...look(27),vigor:{value:79}}),/requires_food_and_vigor_80/);
+assert.equal((await prepareIslandDeparture({agent:'fixture',call:async()=>{departureCalls++;}}, {...look(27),vigor:{value:80}})).vigor.value,80);
 assert.equal(departureCalls,0);
 await assert.rejects(prepareIslandDeparture({agent:'fixture',call:async()=>{departureCalls++;}}, {...look(2000,19,19),vigor:{value:80}}),/max_health_floor/);
 assert.equal(departureCalls,0);

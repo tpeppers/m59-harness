@@ -11872,6 +11872,8 @@ const TOOLS = [
         friends: { type: 'array', items: { type: 'string' },
           description: 'Player names that are not ours but may be buffed (and healed by medic). Never overrides hostility: a name in the war book, the grudge book or a PvP-death record is refused regardless.' },
       }, description: 'cast the Kraanan personal enchantments on ALLIES standing in the same room: fleet characters (menagerie hosts included) and names in `friends`, NEVER a stranger and never anybody in the war book, the grudge book or a PvP-death record (m59-ally.mjs). super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
+      heal_spells: { type: ['array', 'null'], items: { type: 'string' },
+        description: 'which heals the keeper may cast, on itself or an ally (recovery, active self-heal, medic, healUp): spell names such as ["hospice"]. null (the default) is every heal it knows. For a character whose drill owns a heal spell: Pepe practising hospice must not have his keeper heal him with minor heal.' },
       practice_spells: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean', description: 'true to drill; false (or practice_spells: null) turns practice off.' },
         spells: { type: 'array', items: { type: ['string', 'object'] },
@@ -12956,6 +12958,12 @@ const TOOLS = [
       // Ukgoth was dropped while the fleetscript step read "ok", and his keeper walked him back to
       // the frogmen. Saying "off" in the shape every other caller writes is not a mistake to refuse.
       // An object that does not say `enabled` at all is still refused below.
+      if (a.heal_spells !== undefined) {
+        if (a.heal_spells == null) p.policy.healSpells = null;
+        else if (Array.isArray(a.heal_spells) && a.heal_spells.every(x => typeof x === 'string' && x.trim()))
+          p.policy.healSpells = a.heal_spells.map(x => x.trim().toLowerCase());
+        else throw new Error('heal_spells must be null or a list of spell names');
+      }
       if (a.practice_spells !== undefined) {
         if (a.practice_spells == null ||
             (typeof a.practice_spells === 'object' && !Array.isArray(a.practice_spells) &&

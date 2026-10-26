@@ -20,7 +20,7 @@ import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
 import { touchSpellSpec } from '../m59-touchspell.mjs';
-import { MIN_FIGHT_VIGOR, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP, reachableFightFloor, reagentTargetFor } from '../m59-autopilot.mjs';
+import { MIN_FIGHT_VIGOR, reachableFightFloor, reagentTargetFor, restVigorCapOf, STARVED_FIGHT_VIGOR, STRATEGIES, VIGOR_CAP } from '../m59-autopilot.mjs';
 
 export class HuntSetupPart {
   // @part 1
@@ -77,6 +77,9 @@ export class HuntSetupPart {
     return Math.max(MIN_FIGHT_VIGOR,
       p.vigorFloor ?? plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
   }
+
+  // This character's resting ceiling (Second Wind included), as a fraction of the bar. See restVigorCapOf.
+  restVigorCap() { return restVigorCapOf(this.s?.client?.vitals?.()); }
 
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     if (this.poorFarmingActive()) return this.poorVigorFloor();

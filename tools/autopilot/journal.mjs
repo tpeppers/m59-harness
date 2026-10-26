@@ -292,7 +292,7 @@ export class JournalPart {
       on_floor: geo && me ? geo.walkable(me.row, me.col) : null,
       doing: this.doing ?? null, mode: this.mode, hunting: this.policy.hunt ?? null,
       health: v.health?.value ?? null, health_max: v.health?.max ?? null,
-      vigor: vigorOf(v), rest_ceiling: REST_VIGOR_CAP * skills.VIGOR_MAX,
+      vigor: vigorOf(v), rest_ceiling: this.restVigorCap() * skills.VIGOR_MAX,
       holding: this.hold ? { col: this.hold.col, row: this.hold.row, proven: this.hold.proven } : null,
       monsters: c?.room ? [...c.room.objects.values()].filter(o =>
         o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)).length : null,

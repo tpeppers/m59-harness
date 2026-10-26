@@ -13,7 +13,7 @@ import { recordEvent } from '../m59-ledger.mjs';
 import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
 import * as skills from '../m59-skills.mjs';
-import { AILING_SHELTER_BELOW, CONTINUE, HANDLED, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, STRATEGIES, TRAVEL_VIGOR_FLOOR, belowRoomRetreatHealth, farmVigorWorkReady, scriptedWalkDefersVigorRest, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { AILING_SHELTER_BELOW, belowRoomRetreatHealth, CONTINUE, farmVigorWorkReady, HANDLED, healAllowOf, ORDINARY_VIGOR_FLOOR, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, STRATEGIES, TRAVEL_VIGOR_FLOOR, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 
 export class PassSurvivalPart {
   // @part 1
@@ -960,7 +960,7 @@ export class PassSurvivalPart {
         } else if (n.moved) {
           this.note('stepped to arm health regeneration', n);
         }
-        const h = await skills.healUp(s, { target: 0.9 }).catch(e => ({ healed: false, reason: e.message }));
+        const h = await skills.healUp(s, { target: 0.9, allow: healAllowOf(this) }).catch(e => ({ healed: false, reason: e.message }));
         this.recordHealUse(h, 'hurt, and resting behind a wall');
         if (h.healed) {
           this.tally.heals = (this.tally.heals || 0) + 1;

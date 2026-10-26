@@ -16,6 +16,12 @@ ok('leather armor is left by an armoured character', lootIgnored('leather armor'
 ok('and taken by an unarmoured one', !lootIgnored('leather armor', RULES, ['short sword']));
 ok('a mace is always left', lootIgnored('mace', RULES, []));
 ok('exact names only: "mushroom" rules do not touch purple mushroom', !lootIgnored('purple mushroom', [{ name: 'mushroom' }], []));
+const CAPS = [{ name: 'relic of qor', max_held: 1 }, { name: 'meat pie', max_held: 4 }];
+ok('max_held: the first relic of Qor is taken', !lootIgnored('relic of Qor', CAPS, [], 0));
+ok('max_held: the second is left', lootIgnored('relic of qor', CAPS, [], 1));
+ok('max_held: meat pies are taken up to four', !lootIgnored('meat pie', CAPS, [], 3) && lootIgnored('meat pie', CAPS, [], 4));
+ok('max_held: an item with no rule is untouched by a cap on another', !lootIgnored('emerald', CAPS, [], 99));
+ok('max_held 0 is a plain refusal', lootIgnored('relic of qor', [{ name: 'relic of qor', max_held: 0 }], [], 0));
 ok('long swords are not on the list', !lootIgnored('long sword', RULES, []));
 ok('no rules, nothing ignored', !lootIgnored('mace', [], []));
 ok('a bare string rule works too', lootIgnored('mace', ['mace'], []));

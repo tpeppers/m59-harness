@@ -47,6 +47,10 @@ export class TravelPart {
       at: nowT, room: room?.name ?? null, num: room?.num ?? null,
       col: c.self?.col ?? null, row: c.self?.row ?? null,
       health: v.health?.value ?? null, max: v.health?.max ?? null,
+      // HOW OLD THAT HEALTH READING IS. A flat trail at full health right up to a death is either one-pass kills or a
+      // keeper that stopped hearing its own stat packets (2026-10-26: Fozzie, Clifford, Rowlf, all `stalled`, all flat).
+      // The age of the last health packet at each frame tells the two apart.
+      health_age_ms: (() => { const t = c.statsById?.get?.('health')?.observed_at; return Number.isFinite(t) ? nowT - t : null; })(),
       vigor: v.vigor?.value ?? null,
       doing: this.doing ?? this.lastDoing ?? null,
       ...(why ? { why } : {}),

@@ -104,6 +104,9 @@ export class DeathPart {
         last_vigor: last?.vigor ?? null,
         health_per_second: this.healthRate(frames),
         trail: frames.map(f => f.health).filter(h => h != null),
+        // Age of the health reading at each frame (ms; null on frames written before this field existed). Large ages
+        // under a flat trail mean the keeper was not hearing health; small ones mean it was, and the death was fast.
+        health_age_ms: frames.map(f => f.health_age_ms ?? null),
         flee_threshold: this.safety?.().fleeAt ?? null,
       },
       threats: {

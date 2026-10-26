@@ -113,7 +113,9 @@ export async function recoverIslandMainland(ctx,{maxSeconds=90}={}){
   await ctx.call('rest',{agent:ctx.agent,stand:true});
   return {ok:true};
 }
-export async function prepareIslandDeparture(ctx,first,{minVigor=120}={}){
+// 80 TO EMBARK (operator 2026-10-26: "only require 80 vigor to embark, don't buy anything on them. Use the pool of
+// vigor"): resting alone reaches 80, so the gate can always be met without food; walkIsland tops up at the pool.
+export async function prepareIslandDeparture(ctx,first,{minVigor=80}={}){
   if(!Number.isFinite(minVigor)||minVigor<12||minVigor>200)throw Error('invalid_island_departure_vigor');
   const health=l=>{
     if(!Number.isFinite(l.hp?.value)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
@@ -368,7 +370,30 @@ async function admittedIslandTransitWithinBudget(ctx,{from,to,room=2505,budgetMs
   return {enter,leave};
  }});
 }
-export async function walkIsland(ctx,{direction='out',budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,minVigor=120,requireSafeLegs=false,evidenceDir='substrate/island-trials'}={}){
+// THE POOL OF VIGOR, BOTH WAYS (operator 2026-10-26: "make sure trips through the caves both ways top up at the pool of
+// vigor"). 2510 "A spring of vitality" is a side room off 2504 (2504 west -> 2510, 2510 east -> 2504), so the walk
+// passes its door in both directions. Below `target` vigor the walk steps in, drinks (drinkPoolOfVigor: GO in the pool,
+// +40 a drink), and steps back to 2504. Free vigor, and the cure for the departure deadlock: a rider at 82 vigor with no
+// food can never rest up to the 120 the departure gate wants (Waldorf, 2026-10-26 08:10Z). A failed side trip is
+// recorded and the walk goes on from 2504; failing to get BACK to 2504 is the one thing that stops it.
+export const POOL_ROOM=2510,POOL_SIDE_ROOM=2504;
+export async function topUpAtPool(ctx,record,save,{target=200,budgetMs=180000}={}){
+  const {agent,call}=ctx,vigorOf=l=>Number(l?.vigor?.value??l?.vigor);
+  const here=await call('look',{agent});
+  const trip={at:new Date().toISOString(),before:vigorOf(here)};(record.pool_trips??=[]).push(trip);save?.();
+  if(here.room?.num!==POOL_SIDE_ROOM){trip.skipped='not_at_'+POOL_SIDE_ROOM;return trip;}
+  if(vigorOf(here)>=target){trip.skipped='already_'+vigorOf(here);return trip;}
+  const into=await ordinaryHop(ctx,POOL_ROOM,{budgetMs,recoverAtEntry:true});
+  if(!into.ok){trip.skipped='hop_into_pool_failed: '+(into.reason??'');save?.();return trip;}
+  const {drinkPoolOfVigor}=await import('./m59-island-chalice.mjs');
+  trip.drink=await drinkPoolOfVigor(ctx,{},()=>{}, {target});
+  const back=await ordinaryHop(ctx,POOL_SIDE_ROOM,{budgetMs,recoverAtEntry:true});
+  trip.after=vigorOf(await call('look',{agent}));save?.();
+  if(!back.ok)throw Error('pool_side_trip_could_not_return_to_'+POOL_SIDE_ROOM);
+  console.log('ISLAND POOL '+JSON.stringify({agent,before:trip.before,after:trip.after,drinks:trip.drink?.drinks??0}));
+  return trip;
+}
+export async function walkIsland(ctx,{direction='out',budgetMs=180000,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,minVigor=80,requireSafeLegs=false,evidenceDir='substrate/island-trials'}={}){
   if(!['out','back'].includes(direction))throw Error('direction must be out or back');
   const {agent,call,state}=ctx,chain=MAIN_CAVES;
   state.islandCancelFence??=Date.now();
@@ -394,12 +419,16 @@ export async function walkIsland(ctx,{direction='out',budgetMs=180000,queueBudge
           record.legs.push(leg);save();
         }});
         record.admission={...state.traversalAdmission};save();
-        i++;continue;
+        i++;
+        // Coming back, 2504 is the far side of the 2505 transit, not an ordinary hop: top up here too.
+        if(route[i]===POOL_SIDE_ROOM)await topUpAtPool(ctx,record,save,{budgetMs});
+        continue;
       }
       const leg=await ordinaryHop(ctx,to,{budgetMs,recoverAtEntry:true,onSample:live=>{record.current=live;save();}});
       record.legs.push(leg);delete record.current;save();
       console.log('ISLAND HOP '+JSON.stringify({agent,to,ok:leg.ok,ms:leg.ms,damage:leg.damage,end:leg.end,reason:leg.reason}));
       if(!leg.ok)return {ok:false,why:'hop_failed_'+to,evidence:file};
+      if(to===POOL_SIDE_ROOM)await topUpAtPool(ctx,record,save,{budgetMs});
     }
     record.end=location(await call('look',{agent}));record.complete=record.end.room===route.at(-1);save();
     return {ok:record.complete,evidence:file};

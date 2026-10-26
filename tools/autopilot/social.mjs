@@ -24,12 +24,12 @@ import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
-import { affordableHeal, castRecoveryHeal, healReadiness } from '../m59-recovery-heal.mjs';
+import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
 import { normalizeShare, planGift } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel } from '../m59-spawns.mjs';
 import * as wandDuty from '../m59-wand-duty.mjs';
-import { Autopilot, pct } from '../m59-autopilot.mjs';
+import { Autopilot, healAllowOf, pct } from '../m59-autopilot.mjs';
 
 export class SocialPart {
   // @part 1
@@ -181,13 +181,13 @@ export class SocialPart {
     const s=this.s,c=s?.client,v=c?.vitals?.(),hp=pct(v?.health),now=Date.now(),cure=affordablePoisonCure(c);
     if(this.stopping||!c?.combatReady||c.state!=='game'||!(hp>0&&(hp<0.9||cure))||s.live===false||this._activeSelfHealPending||s._rite||s.combat?.active||this.checkFreeze()||
       this.inert&&!this.inert.travelling||['survival','recovery','combat'].some(k=>this.facultyHeld(k))||now-(this._recoveryHealAt??0)<3000)return false;
-    const readiness=healReadiness(c),{inventory_at,spells_at,...resources}=readiness,key=JSON.stringify([c.loginStartedAt,hp,inventory_at!=null,spells_at!=null,resources]);
+    const readiness=healReadiness(c,{allow:healAllowOf(this)}),{inventory_at,spells_at,...resources}=readiness,key=JSON.stringify([c.loginStartedAt,hp,inventory_at!=null,spells_at!=null,resources]);
     if(this._healReadinessKey!==key){this._healReadinessKey=key;c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_CHECK',reason:JSON.stringify({trigger,...readiness})});}
     if(!readiness.affordable&&!cure)return false;
     const generation=s.movementGeneration,self=c.selfId,room=c.room?.id;
     const cancelled=()=>this.stopping||s.client!==c||!c.combatReady||c.state!=='game'||s.live===false||this.inert&&!this.inert.travelling||c.selfId!==self||c.room?.id!==room||s.movementWasCancelled?.(generation)||s.combat?.active||this.checkFreeze()||['survival','recovery','combat'].some(k=>this.facultyHeld(k));
     this._activeSelfHealPending=true;this._recoveryHealAt=now;
-    try{const result=await (cure?castRecoveryCure:castRecoveryHeal)(s,{shouldCancel:cancelled});this.note('active self heal',{trigger,...readiness,...result});
+    try{const result=await (cure?castRecoveryCure:castRecoveryHeal)(s,{shouldCancel:cancelled,allow:healAllowOf(this)});this.note('active self heal',{trigger,...readiness,...result});
       c.observeSessionEvidence?.({kind:'action',opcode:'HEAL_RESULT',reason:JSON.stringify({trigger,...result})});
       if(result.cast)this.recordCast(result.spell,{ok:result.confirmed,...result});else if(this._recoveryHealAt===now)this._recoveryHealAt=0;return result.cast;
     }finally{this._activeSelfHealPending=false;}
@@ -198,7 +198,7 @@ export class SocialPart {
   async healObservedFleetmate() {
     const s=this.s,c=s.client,now=Date.now(),credentials=s.credentials;
     if(!['farm','idle'].includes(this.mode)||this.facultyHeld('work')||s.combat?.active||!c?.combatReady||!credentials||this.checkFreeze()||s._rite
-       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c)||now-(this._observedAllyHealAt??0)<3000)return false;
+       ||!(pct(c.vitals()?.health)>=0.9)||!affordableHeal(c,{allow:healAllowOf(this)})||now-(this._observedAllyHealAt??0)<3000)return false;
     const candidates=[...c.room.objects.values()].filter(o=>o.id!==c.selfId&&(o.flags&OF.PLAYER)&&
       allyVerdict({name:c.rsc.get(o.nameRsc)??'',flags:o.flags},{friends:this.policy?.buffAllies?.friends??[]}).ally)
       .map(o=>({o,report:readFleetHealth({...credentials,character:c.rsc.get(o.nameRsc)},{room:s.world?.room?.num,bodyId:o.id,now})}))
@@ -211,7 +211,7 @@ export class SocialPart {
       String(c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'').trim().toLowerCase()!==target.report.character.trim().toLowerCase()||
       !allyVerdict({name:c.rsc.get(c.room.objects.get(target.o.id)?.nameRsc)??'',flags:c.room.objects.get(target.o.id)?.flags??0},{friends:this.policy?.buffAllies?.friends??[]}).ally;
     this._observedAllyHealAt=now;
-    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled});
+    const result=await castRecoveryHeal(s,{targetId:target.o.id,targetHealth:target.report.health,shouldCancel:cancelled,allow:healAllowOf(this)});
     const afterReport=readFleetHealth({...credentials,character:target.report.character},{room:s.world?.room?.num,bodyId:target.o.id});
     result.target_report_before_at=target.report.at;
     if(afterReport&&afterReport.at>=target.report.at){result.target_health_after=afterReport.health;result.target_report_after_at=afterReport.at;}
@@ -234,6 +234,7 @@ export class SocialPart {
     let spell = null, rung = null;
     const tried = [];
     for (const h of Autopilot.HEALS) {
+      if (!healAllowed(h.name, healAllowOf(this))) continue;
       const found = (c.spells || [])
         .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === h.name);
       if (!found) continue;

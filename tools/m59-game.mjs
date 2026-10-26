@@ -1494,12 +1494,17 @@ function atEdgeOpening(position, opening, direction) {
 /**
  * Is `name` on the loot-ignore list for a character wearing `worn` (names)? Pure. Exact names,
  * case-insensitive, never substrings. A rule with `unless_unworn: 'shield' | 'armor'` lets a
- * character with nothing of that kind on pick one up: that is how an unarmoured farmer gets armour.
+ * character with nothing of that kind on pick one up: that is how an unarmoured farmer gets armour. A rule with
+ * `max_held: N` is a CAP rather than a refusal: ignored only once `held` (what the character already carries of
+ * that name) reaches N.
  */
-export function lootIgnored(name, rules = [], worn = []) {
+export function lootIgnored(name, rules = [], worn = [], held = 0) {
   const n = String(name ?? '').toLowerCase().trim();
   const r = (rules ?? []).find(x => String(x?.name ?? x).toLowerCase().trim() === n);
   if (!r) return false;
+  // `max_held: N`: taken until the character holds N (whole items, stacks summed), left after that. Operator, 2026-10-26:
+  // "nobody needs more than 1x relic of Qor or 4x meat pies if they're not being sold" -- the 16th relic is pack space.
+  if (Number.isFinite(Number(r.max_held))) return Number(held) >= Number(r.max_held);
   if (!r.unless_unworn) return true;
   const w = (worn ?? []).map(x => String(x).toLowerCase());
   const wears = r.unless_unworn === 'shield' ? w.some(x => /shield/.test(x)) : w.some(x => /armor|armour|mail|plate/.test(x));
@@ -5187,9 +5192,14 @@ class Session {
     const ignoredSkipped = [];
     if (!ids?.length && this._lootIgnore?.length) {
       const worn = (c.equipment?.()?.equipped ?? []).map(e => e.name ?? '');
+      // What is already carried, by lower-case name, for `max_held` caps; each candidate taken in this sweep counts too,
+      // so a floor of five relics fills a cap of one with one.
+      const held = new Map();
+      for (const o of c.inventory ?? []) { const k = String(c.rsc.get(o.nameRsc) || '').toLowerCase().trim(); held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); }
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
-        if (!lootIgnored(name, this._lootIgnore, worn)) return true;
+        const k = name.toLowerCase().trim();
+        if (!lootIgnored(name, this._lootIgnore, worn, held.get(k) ?? 0)) { held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); return true; }
         ignoredSkipped.push(name);
         return false;
       });

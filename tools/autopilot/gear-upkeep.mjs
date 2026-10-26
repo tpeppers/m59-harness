@@ -473,8 +473,11 @@ export class GearUpkeepPart {
   async sweepWeaponMagic() {
     const gapMs = this._magicSwapDue ? 0 : 60_000;
     if (Date.now() - (this._weaponMagicAt ?? 0) < gapMs) return;
-    if (this._weaponMagicBusy) return;
-    this._weaponMagicBusy = true;
+    // A SWEEP THAT NEVER RETURNS MUST NOT HOLD THE FLAG FOR EVER (2026-10-26: every crew weapon stayed `unknown` for hours
+    // and not one look was ever recorded -- consistent with a sweep stuck inside its first look, busy flag set). A flag
+    // older than two minutes is a hung sweep, not a running one.
+    if (this._weaponMagicBusy && Date.now() - (this._weaponMagicBusyAt ?? 0) < 120_000) return;
+    this._weaponMagicBusy = true; this._weaponMagicBusyAt = Date.now();
     this._weaponMagicAt = Date.now();
     try {
       const s = this.s, c = s.need();
@@ -483,11 +486,18 @@ export class GearUpkeepPart {
       book.reconcile(items);
       for (const item of book.needsLook(items).slice(0, 2)) {
         const since = c.evSeq;
-        await s.pacer.submit('look', () => c.look(item.id)).catch(() => {});
-        const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 3000 })
+        book.noteLook(item.id, 'pending');
+        // BOUNDED: a paced look that never resolves used to hang the whole sweep (see the busy flag above).
+        const sent = await Promise.race([
+          s.pacer.submit('look', () => c.look(item.id)).then(() => true, () => true),
+          new Promise(r => setTimeout(() => r(false), 8000))]);
+        if (!sent) { book.noteLook(item.id, 'pacer_timeout'); continue; }
+        const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 5000 })
           .catch(() => ({ events: [] }));
         const desc = events.find(e => e.id === item.id)?.description ?? null;
         if (desc != null) book.record(item.id, item.name, desc);
+        // Say why it is still unknown (see WeaponMagicBook.noteLook): no reply at all, or a reply about another id.
+        book.noteLook(item.id, desc != null ? 'ok' : events.length ? 'other_id' : 'no_reply');
       }
       await this.applyMagicPreference(c, items);
     } finally { this._weaponMagicBusy = false; }
