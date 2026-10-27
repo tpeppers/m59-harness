@@ -1126,3 +1126,25 @@ Operator: *"Do we not wanna consider this all a bug for allowing this back-and-f
   errand's money. The test fails if any keeper part reads `policy.walkingMoney` on its own again.
 - It lapses by itself to the standard float, like `survival_off_ms`. Status reports it under `money.purse_lease`.
 - Explicit orders (the bank tool's own deposit, a FleetScript's buy) are not standing rules and are not held back.
+
+
+## A desk that follows its server
+
+Operator, 2026-10-27: *"Have Loial's chalice desk be self-centered, wherever he goes it goes (add that if it doesn't
+exist, we're gonna want that for other things)"*. `tools/m59-desk-follow.mjs` is the general half: a desk configured
+with `'holder'` (or `'server'`, `'follow'`) in place of a room is wherever its server stands. The server reads its own
+room; everyone else reads the server's published desk record, and a record older than two minutes means "no desk
+known", never the room it was last seen in. `m59-desk-follow-test.mjs` (30).
+
+The chalice desk is the first user: `station_room: 'holder'` in the chalice strategy's answer.
+
+- **The holder never walks to a station.** Rides, desk services and the return all happen where it stands. The desk
+  record is republished the moment it changes room, and a following desk is never reported "away".
+- **The cup is rationed, because it has to be.** A Chalice of the Rain holds 3 to 5 sips, refills when it is DROPPED in
+  a Shal'ille room (`REFILL_ROOMS`), and the last sip deletes it (chalice.kod). A fixed station is always a refill
+  room; a following desk may stand anywhere. So the store keeps the cup's count: a refill sets it to 3 (the least a
+  cup holds), each ride outside a refill room takes one, and a ride is claimed only while it leaves `cup_reserve` (1)
+  behind. **An unknown count outside a refill room is a no.** Rides wait on the board (`rides_paused`) and the menu
+  reads "cup needs a refill".
+- **It refills on the way.** A holder standing in a Shal'ille room with its count short or unknown drops the cup and
+  picks it straight back up (`chaliceTopUp`), never with a stranger in the room, at most every two minutes.

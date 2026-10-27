@@ -100,7 +100,8 @@ export function rideNowPreflight({ cfg, role, stationHops = null, maxHops = RIDE
   const desk = servingDesk(duty, cfg, now, humans);
   const at = Number(duty?.room);
   const home = new Set([cfg.station_room, cfg.post_room, ...folRoomsOf(cfg)].filter(n => n != null).map(Number));
-  if (desk && !desk.human && Number.isFinite(at) && sameName(duty?.room_by, desk.server)
+  // A FOLLOWING DESK IS NEVER AWAY: wherever its holder is, the desk is (m59-desk-follow.mjs).
+  if (!cfg.follows_holder && desk && !desk.human && Number.isFinite(at) && sameName(duty?.room_by, desk.server)
       && now - (Number(duty?.seen_at) || 0) < DESK_ROOM_FRESH_MS && !home.has(at))
     return { ok: false, code: 'holder_away', why: `${desk.server} is in room ${at}, not at the station (${cfg.station_room})` };
   const use = cupInUse(state, me, now, { servers: [cfg.holder, cfg.alternate].filter(Boolean) });

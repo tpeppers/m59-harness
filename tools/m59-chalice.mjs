@@ -38,6 +38,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unitCost, scoreItem } from './m59-overfarm.mjs';
+import { isFollowing } from './m59-desk-follow.mjs';
 
 // ------------------------------------------------------------------------------ the item
 export const CHALICE = Object.freeze({
@@ -98,7 +99,14 @@ const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'substra
 // ------------------------------------------------------------------------------ config
 export const CHALICE_DEFAULTS = Object.freeze({
   enabled: false,
+  // A ROOM NUMBER, or 'holder': THE DESK FOLLOWS THE HOLDER (m59-desk-follow.mjs). Operator, 2026-10-27: "Have Loial's
+  // chalice desk be self-centered, wherever he goes it goes". Then `follows_holder` is set and the station is wherever
+  // the holder stands; outside a Shal'ille room every ride costs the cup a sip, so rides are budgeted (rideBudget).
   station_room: 2,
+  follows_holder: false,
+  // SIPS NEVER SPENT outside a refill room: the LAST sip deletes the cup (chalice.kod), so a following desk keeps this
+  // many back and stops offering rides until a drop in a Shal'ille room refills it.
+  cup_reserve: 1,
   // Named, never derived: a character name on a shared server is an instruction, and the
   // private strategy file is where this machine keeps its instructions.
   holder: null,
@@ -273,7 +281,7 @@ export const CARRIER_FRESH_MS = 10 * 60_000;
 export const carriesCup = (carriers, name) => !!name && (carriers ?? []).some(n => sameName(n, name));
 
 const NUMBERS = {
-  station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
+  station_room: [1, 100_000], cup_reserve: [1, 4], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   floor_grace_ms: [0, 600_000], handoff_ttl_ms: [1_000, 120_000], duty_max_health: [0, 10_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
@@ -297,6 +305,8 @@ export function normalizeChalice(cfg = null) {
   const problems = [];
   for (const [k, v] of Object.entries(cfg)) {
     if (k === 'enabled') continue;
+    if (k === 'follows_holder') { if (v === true) { out.follows_holder = true; out.station_room = null; } continue; }
+    if (k === 'station_room' && isFollowing(v)) { out.follows_holder = true; out.station_room = null; continue; }
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
     if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
     if (k === 'uncurse' || k === 'reveal' || k === 'mend' || k === 'human_desk') { out[k] = v !== false; continue; }
@@ -373,7 +383,8 @@ export function normalizeChalice(cfg = null) {
     if (!Number.isFinite(n) || n < lo || n > hi) { problems.push(`${k} must be between ${lo} and ${hi} (kept ${CHALICE_DEFAULTS[k]})`); continue; }
     out[k] = n;
   }
-  if (!REFILL_ROOMS.has(out.station_room)) {
+  if (out.follows_holder) out.station_room = null;
+  else if (!REFILL_ROOMS.has(out.station_room)) {
     problems.push(`station_room ${out.station_room} does not refill the chalice, so every sip ` +
                   'would drain it toward the last one, which deletes it — chalice farming is OFF');
     out.enabled = false;
@@ -385,6 +396,27 @@ export function normalizeChalice(cfg = null) {
   if (out.tip_min > out.tip_amount) out.tip_min = out.tip_amount;
   if (out.human_max_wait_ms < out.human_wait_ms) out.human_max_wait_ms = out.human_wait_ms;
   return { ...out, problems };
+}
+
+// ------------------------------------------------------------------------------ the cup's sips
+// A cup holds 3 to 5 sips (chalice.kod viHits_init_min/max), refills to its maximum when DROPPED in a room whose Shal'ille
+// bonus is over 20 (ReqNewOwner, REFILL_ROOMS), and the last sip deletes it. A fixed station is always a refill room, so
+// every ride starts full. A FOLLOWING desk may stand anywhere, so it counts: a refill sets the count to the least a cup
+// can hold, each ride outside a refill room takes one, and a ride is offered only while it leaves `reserve` behind.
+export const CUP_MIN_SIPS = 3;
+/** May a ride be served from this room with this many sips? Unknown sips outside a refill room is a no. */
+export function rideBudget({ room = null, sips = null, reserve = 1 } = {}) {
+  if (REFILL_ROOMS.has(Number(room))) return { ok: true, why: 'a Shal\'ille room: the drop after the sip refills the cup' };
+  if (!Number.isFinite(Number(sips)) || sips == null)
+    return { ok: false, why: 'the cup\'s sips are not known outside a Shal\'ille room: one drop in a refill room first' };
+  if (Number(sips) - 1 < reserve)
+    return { ok: false, why: `the cup has ${sips} sip(s) left and keeps ${reserve} back (the last sip deletes it): it needs a drop in a refill room` };
+  return { ok: true, why: `${sips} sip(s) left; this ride leaves ${sips - 1}` };
+}
+/** The cup's count after a ride: refilled in a refill room, one less elsewhere, unknown stays unknown. */
+export function sipsAfterRide(sips, room) {
+  if (REFILL_ROOMS.has(Number(room))) return CUP_MIN_SIPS;
+  return Number.isFinite(Number(sips)) && sips != null ? Math.max(0, Number(sips) - 1) : null;
 }
 
 export const sameName = (a, b) => a != null && b != null &&
@@ -1249,6 +1281,12 @@ export class ChaliceStore {
 
   /** The server's own menu, so whoever answers "services?" answers from its facts. */
   desk() { return this.read().desk ?? {}; }
+
+  /** The cup's known sips (rideBudget). { sips, at } or {}. */
+  cup() { return this.read().cup ?? {}; }
+  setCup(sips, why = null, now = Date.now()) {
+    return this.update(s => { s.cup = { sips: sips == null ? null : Number(sips), at: now, ...(why ? { why } : {}) }; return { ...s.cup }; }, now);
+  }
 
   // `limits`: the server's own hold and wait numbers, so the broker honours the strategy's
   // configuration without having to load the strategy itself.

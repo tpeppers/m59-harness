@@ -229,6 +229,10 @@ through a nested shelter order.
   swings again only at an unlanded tag that followed it in (up to `tries`, default 12), and gives up past `wait_s`. At FULL health a tagger is exempt from the pull's crowd guard; hurt, or not a tagger, it is not. The killer walks
   to the wall, kills only a landed tag, clears anything else at the wall, and farms as usual when its
   tagger is elsewhere. A local strategy file of the same name overrides a private one.
+- `m59-desk-follow-test.mjs` (30): a desk that follows its server (`m59-desk-follow.mjs`) and the chalice desk with
+  `station_room: 'holder'`. Stale or missing records are no desk; the cup is rationed outside a refill room (unknown is
+  a no, the reserve is kept, a ride takes a sip, a refill resets to 3); the keeper's live station, ride gate, count and
+  top-up; three list-literal reagents (resist poison, umbrella, detect invisible) read from the kod.
 - `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value

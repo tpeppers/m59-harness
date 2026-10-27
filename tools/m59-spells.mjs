@@ -120,7 +120,10 @@ function methodBody(text, name) {
 function reagentsOf(text) {
   const body = methodBody(text, 'ResetReagents');
   if (body == null) return [];
-  return [...body.matchAll(/Cons\(\s*\[\s*&(\w+)\s*,\s*(\d+)\s*\]/gi)]
+  // BOTH SPELLINGS: `Cons([&Herbs,2], plReagents)` and the list literal `plReagents = [ [&Herbs, 2], [&RedMushroom,1] ];`.
+  // The second came out as NO reagents for resist poison, umbrella and detect invisible (prod patched its copy by hand,
+  // 2026-10-27), so a cast was planned without counting them. Every `[&Item, n]` pair in the body is a reagent.
+  return [...body.matchAll(/\[\s*&(\w+)\s*,\s*(\d+)\s*\]/gi)]
     .map(m => ({ item: m[1], count: Number(m[2]) }));
 }
 

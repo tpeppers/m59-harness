@@ -674,7 +674,16 @@
    "level": 5,
    "mana": 15,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "Emerald",
+     "count": 2
+    },
+    {
+     "item": "PolishedSeraphym",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 50,
    "extra_cost_rule": "   CanPayCosts(who = $, lTargets = $)\r\n   {\r\n      if Send(who,@IsEnchanted,#what=self)\r\n      {\r\n         Send(who,@MsgSendUser,#message_rsc=Umbrella_already_enchanted);\r\n\r\n         return FALSE;\r\n      }\r\n\r\n      propagate;\r\n   }",
@@ -1800,7 +1809,16 @@
    "level": 2,
    "mana": 10,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "Herbs",
+     "count": 2
+    },
+    {
+     "item": "RedMushroom",
+     "count": 1
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,
@@ -1911,7 +1929,12 @@
    "level": 3,
    "mana": 15,
    "min_hit_points": 0,
-   "reagents": [],
+   "reagents": [
+    {
+     "item": "Solagh",
+     "count": 2
+    }
+   ],
    "prerequisites": [],
    "required_karma": 0,
    "extra_cost_rule": null,

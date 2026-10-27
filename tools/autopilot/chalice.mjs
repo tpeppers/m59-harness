@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 56 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceRole, chaliceDutyEligible,
+// 57 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceTopUp, chaliceRole, chaliceDutyEligible,
 //   chalicePoolCheckIn, chaliceInPack, chalicesInPack, chaliceCarryCheckIn, chaliceCarriers,
 //   offerWouldDoubleChalice, chaliceOnFloor, chaliceGuard, lootIgnoreList, hallShillings,
 //   chaliceHandInMoney, chaliceDepositMoney, playerHere, hereRoom, hopsTo, activeChaliceRide,
@@ -21,12 +21,13 @@
 //   chaliceNextJob, chaliceParked, chaliceStep, chaliceMakeRoom
 import { withCastRite } from '../m59-castrite.mjs';
 import { rideChaliceNow } from '../m59-chalice-ride.mjs';
-import { CHALICE, GUILD_HALL_ROOM, REFILL_ROOMS, SIP_REFUSED_PVP, SIP_TOOK, actingDesk, cargoWants, carriesCup, castsAbove, chaliceStoreFor, depositPlan, deskMenu, donationPlan, draftAlternate, dutyEligible, folRoomsOf, folWanted, holderShortfall, humanMark, moneyExcess, normalizeChalice, passTo, planRoom, reagentFloor, restockBuyPlan, roleOf, sameName, serviceReplyText, serviceTellText, servingDesk, servingOrHolder, shouldRide, sipVerdict, sweepVerdict, tipPlan } from '../m59-chalice.mjs';
+import { CHALICE, GUILD_HALL_ROOM, REFILL_ROOMS, SIP_REFUSED_PVP, SIP_TOOK, actingDesk, cargoWants, carriesCup, castsAbove, chaliceStoreFor, depositPlan, deskMenu, donationPlan, draftAlternate, dutyEligible, folRoomsOf, folWanted, holderShortfall, humanMark, moneyExcess, normalizeChalice, passTo, rideBudget, sipsAfterRide, CUP_MIN_SIPS, planRoom, reagentFloor, restockBuyPlan, roleOf, sameName, serviceReplyText, serviceTellText, servingDesk, servingOrHolder, shouldRide, sipVerdict, sweepVerdict, tipPlan } from '../m59-chalice.mjs';
 import { isWeaponName } from '../m59-items.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, buyLines, dropSpec as dropSpecFor } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
+import { deskRoom } from '../m59-desk-follow.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderPrice, orderSkills, pendingOrderFor, writeState as writeOrderState } from '../m59-standing-orders.mjs';
 import { BOOKMAKERS_HALL_ROOM, StorageCache } from '../m59-storage.mjs';
@@ -49,7 +50,22 @@ export class ChalicePart {
   // a minute and a character that could not flee for a minute is how this fleet dies.
 
   /** The configuration, refreshed from the strategies at most every 30s. Sync to read. */
-  get chaliceCfg() { return this._chaliceCfg?.enabled ? this._chaliceCfg : null; }
+  get chaliceCfg() {
+    const cfg = this._chaliceCfg?.enabled ? this._chaliceCfg : null;
+    if (!cfg?.follows_holder) return cfg;
+    // A DESK THAT FOLLOWS ITS HOLDER (m59-desk-follow.mjs): the station is wherever the holder stands. The holder reads
+    // its own room; everyone else reads the holder's published desk record, and a stale one is "no station known".
+    const now = Date.now(), here = this.hereRoom?.() ?? null;
+    if (this._chaliceFollow && now - this._chaliceFollow.at < 3_000 && this._chaliceFollow.here === here
+        && this._chaliceFollow.base === cfg) return this._chaliceFollow.cfg;
+    const isServer = roleOf(this.who(), cfg) === 'holder';
+    let record = null;
+    if (!isServer) { try { record = this.chaliceStore().desk()?.[String(cfg.holder ?? '').trim().toLowerCase()] ?? null; } catch {} }
+    const station = deskRoom({ follows: true, isServer, here, record, now });
+    const out = { ...cfg, station_room: station };
+    this._chaliceFollow = { at: now, here, base: cfg, cfg: out };
+    return out;
+  }
 
   async refreshChaliceConfig(now = Date.now()) {
     if (this._chaliceCfgAt && now - this._chaliceCfgAt < 30_000) return this.chaliceCfg;
@@ -70,6 +86,38 @@ export class ChalicePart {
   }
 
   chaliceStore() { return (this._chaliceStoreObj ??= chaliceStoreFor({ fleet: TITHE_FLEET })); }
+
+  // A FOLLOWING DESK REFILLS ITS CUP ON THE WAY: a holder standing in a Shal'ille room with the cup short (or its sips
+  // unknown) drops it and picks it straight back up, which refills it (chalice.kod ReqNewOwner). Never with a stranger in
+  // the room: a cup on the floor is anybody's. At most once every two minutes.
+  async chaliceTopUp(cfg, role, cup, store, now = Date.now()) {
+    if (!cfg?.follows_holder || role !== 'holder' || !cup) return false;
+    const here = this.hereRoom();
+    if (!REFILL_ROOMS.has(here)) return false;
+    let sips = null;
+    try { sips = store.cup()?.sips ?? null; } catch {}
+    if (Number(sips) >= CUP_MIN_SIPS) return false;
+    if (now - (this._chaliceTopUpAt ?? 0) < 120_000) return false;
+    const c = this.s?.client;
+    if (!c?.room?.objects) return false;
+    const players = [...c.room.objects.values()].filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
+    if (players.some(o => !party.isFleetmate(c.rsc?.get(o.nameRsc) || ''))) return false;
+    this._chaliceTopUpAt = now;
+    await this.s.pacer.submit('act', () => c.drop([cup.id])).catch(() => {});
+    await new Promise(r => setTimeout(r, 800));
+    const floor = this.chaliceOnFloor();
+    if (floor) {
+      await this.s.lootFloor({ ids: [floor.id], maxItems: 1, overfarm: null }).catch(() => {});
+      await this.s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
+    }
+    const back = !!this.chaliceInPack();
+    if (back) try { store.setCup(CUP_MIN_SIPS, `refilled by a drop in room ${here}`); } catch {}
+    this.chaliceEvent(back ? 'cup_refilled' : 'cup_refill_not_back', { room: here, sips_before: sips,
+      why: back ? 'a following desk tops its cup up whenever it passes a Shal\'ille room'
+                : 'dropped to refill and not yet picked back up: the floor sweep takes it next' });
+    return true;
+  }
 
   // A CHARACTER RUNNING THE DESK IN THE HOLDER'S ABSENCE IS THE ALTERNATE, for as long as the duty
   // record says so (actingDesk). Read at most every five seconds: every keeper asks this.
@@ -924,13 +972,20 @@ export class ChalicePart {
    * reagents, the rescue floor, whether it holds the cup — and not from a copy of them.
    */
   chalicePublishDesk(cfg, store, me, cup, now = Date.now()) {
-    if (this._chaliceDeskSaidAt && now - this._chaliceDeskSaidAt < 60_000) return;
+    // A FOLLOWING DESK PUBLISHES AT ONCE WHEN ITS HOLDER CHANGES ROOM: travellers find it by this record.
+    const moved = cfg.follows_holder && this._chaliceDeskSaidRoom !== this.hereRoom();
+    if (!moved && this._chaliceDeskSaidAt && now - this._chaliceDeskSaidAt < (cfg.follows_holder ? 30_000 : 60_000)) return;
     this._chaliceDeskSaidAt = now;
+    this._chaliceDeskSaidRoom = this.hereRoom();
     const floor = this.chaliceReagentFloor();
     const have = Object.fromEntries(['emerald', 'orc tooth', 'elderberry', 'sapphire'].map(k => [k, this.reagentOnHand(k)]));
     const c = this.s?.client;
     const knows = { mend: (c?.spells ?? []).some(sp => String(c?.rsc?.get?.(sp.nameRsc) ?? '').toLowerCase() === 'mend') };
-    const menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup, knows });
+    let menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup, knows });
+    if (cfg.follows_holder && cup) {
+      const b = rideBudget({ room: this.hereRoom(), sips: store.cup?.()?.sips, reserve: cfg.cup_reserve });
+      if (!b.ok) menu = menu.map(m => (m.kind === 'ride' ? { ...m, ok: false, why: 'cup needs a refill' } : m));
+    }
     const limits = Object.fromEntries(['human_hold_ms', 'human_max_wait_ms', 'ticket_ttl_ms']
       .map(k => [k, cfg[k]]));
     try { store.setDesk(me, { menu, room: cfg.post_room ?? cfg.station_room, fol_room: folRoomsOf(cfg)[0] ?? null, limits }, now); } catch {}
@@ -1527,6 +1582,7 @@ export class ChalicePart {
     }
     if (!st) {
       if (now < (this._chaliceCooldownUntil ?? 0)) return this.chaliceParked(cfg, role, cup);
+      if (await this.chaliceTopUp(cfg, role, cup, store, now)) return true;
       st = this.chaliceNextJob(cfg, role, cup, store, me, now);
       if (!st) return this.chaliceParked(cfg, role, cup);
       this._chaliceServe = st;
@@ -1586,7 +1642,14 @@ export class ChalicePart {
         const back = store.claimNext(me, { kind: 'return', ...ttl });
         if (back) return job('return', 'go', back);
       }
-      const t = this.chaliceFleetOnly(store.claimNext(me, { kind: 'ride', ...ttl }), store);
+      // A FOLLOWING DESK RATIONS THE CUP: outside a Shal'ille room every ride costs a sip and the last one deletes it.
+      // A ride it cannot afford is left waiting on the board (another server, or this one after a refill), never served.
+      const budget = cfg.follows_holder ? rideBudget({ room: this.hereRoom(), sips: store.cup?.()?.sips, reserve: cfg.cup_reserve }) : { ok: true };
+      if (!budget.ok && this._chaliceBudgetSaid !== budget.why) {
+        this._chaliceBudgetSaid = budget.why;
+        this.chaliceEvent('rides_paused', { room: this.hereRoom(), why: budget.why });
+      } else if (budget.ok) this._chaliceBudgetSaid = null;
+      const t = budget.ok ? this.chaliceFleetOnly(store.claimNext(me, { kind: 'ride', ...ttl }), store) : null;
       if (t) return job('ride', 'go', t);
     }
     // FORCES OF LIGHT, AFTER ANY RIDE: a traveller at the station is waiting on us now; an
@@ -1850,6 +1913,8 @@ export class ChalicePart {
             try { store.setDuty({ with: me, lost: false }); } catch {}
             this.tally.chalice_served = (this.tally.chalice_served || 0) + 1;
             this.chaliceEvent('picked_up', { ticket: st.ticket, for: st.traveller, refilled: REFILL_ROOMS.has(this.hereRoom()) });
+            // THE CUP'S SIPS: refilled by the drop in a Shal'ille room, one fewer anywhere else (rideBudget).
+            try { store.setCup(sipsAfterRide(store.cup()?.sips, this.hereRoom()), `ride for ${st.traveller}`); } catch {}
             if (st.ticket) try { store.mark(st.ticket, 'done'); } catch {}
             st.ticket = null;
             st.stage = 'back';
