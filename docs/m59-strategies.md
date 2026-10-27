@@ -322,6 +322,38 @@ cast of dispel illusion reagents for the caster from the guild chests or the Bar
 pack lacks them, waits for the hold, casts, and takes the chalice inside cave2's 30-second window.
 The kod it rests on is in its header; `m59-icky-chalice-test.mjs` pins it.
 
+## What the body needs, and the kill-rate floor
+
+Operator, 2026-10-26, of a troll crew that ground Ukgoth for six hours with weapons that could not hurt a troll: that
+*"should be at-worst a bounce-back of 'cannot be assigned without a way to get weapons dedicated'"*.
+`tools/m59-strategy-gate.mjs`; `m59-strategy-gate-test.mjs` (48) pins it.
+
+```js
+requires: { magicWeapon: true },        // and/or items: ['purple mushroom']; request: { service: 'dedicate' } | null
+floor:    { kills: 4, minutes: 30 },    // at least 4 kills in every 30 minutes of farming
+```
+
+| | when | what happens |
+|---|---|---|
+| `requires` unmet | at assignment | the broker refuses `farm_strategy`, naming the weapons it found, unless `accept: ["requires_unmet"]`. Then it is assigned and waits, stood down |
+| `requires` unknown | at assignment | allowed (the weapons have not been read since the keeper started); the reply says so as `farm_strategy_requires` |
+| `requires` unmet | every pass | the farm stands down; the keeper posts the request (`dedicate` by default for `magicWeapon`) to the service board, at most once per `ttl_min` (15) |
+| `floor` tripped | a window of `minutes` FARMING minutes with fewer than `kills` kills | the farm stands down and says why, until the strategy is re-assigned or its file is edited |
+
+**Standing down** means passFarm chooses no quarry. It returns below the meal, so the body still eats, and everything
+above it (fleeing, resting, fighting back, the Underworld) is untouched. The board line reads the reason; status has
+`farm_strategy.gate: { blocked: { by, why }, requires, floor, request }`.
+
+**The floor's clock** advances only on passes that reached the hunt. A gap of more than two minutes between two such
+passes (resting, travelling, a lockdown in an inn, a held body) is not counted. A kill is any counted kill (the same
+moment `onKill` fires, with or without a hook). The floor is saved per character in `substrate/.strategy-floor/`,
+keyed by the strategy and its file's mtime, so a keeper restart or handoff neither forgives a trip nor restarts the
+clock. An explicit assignment (the broker) clears it, which is how an operator says "try again".
+
+**Both are silent unless declared**, and both are off while a bot or lease holds `work` (the file is not in force).
+Set a floor the quarry can honestly meet: a mundane-armed troll crew may still land the odd kill, so one per 30
+minutes would not catch it.
+
 ## Private strategy directories
 
 A strategy file is an order, so it is this machine's — and some orders belong in a PRIVATE repository

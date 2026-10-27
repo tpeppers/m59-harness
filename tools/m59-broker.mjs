@@ -185,7 +185,8 @@ import { readAnchor, phaseAt } from './m59-dayclock.mjs';
 import { hourFromSunAngle, phaseFromSun, isFresh } from './m59-skyclock.mjs';
 import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
-import { survivalOffConflict, survivalOffLeaseMs } from './m59-hazards.mjs';
+import { survivalOffConflict, survivalOffLeaseMs, accepts, refusal } from './m59-hazards.mjs';
+import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-strategy-gate.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
@@ -12327,6 +12328,9 @@ const TOOLS = [
           'farm_strategy (per key: file, effective, applied, yielded_to, shadowing) and ' +
           'policy_sources (who set every key). Pass mode:"farm" with it. NOT `strategy`, which picks ' +
           'a STRATEGIES pattern. See docs/m59-strategies.md' },
+      accept: { type: 'array', items: { type: 'string' }, description: 'NAMED HAZARDS this call means (m59-hazards.mjs). ' +
+        '"requires_unmet": assign a farm_strategy whose `requires` this character does not meet (it is assigned and stands ' +
+        'down until the requirement is met, instead of being refused)' },
       hunt_priority: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
         description: 'AN ORDER OVER hunt, not a second hunt list: e.g. ["spider", "living tree"]. ' +
           'When set, the keeper takes the first-listed creature that is already an acceptable ' +
@@ -12646,12 +12650,14 @@ const TOOLS = [
       // Do not do this to an in-process autopilot: loadout overlays may have legitimately
       // changed its live policy since the roster was written.
       const savedAutopilot = rosterEntry(a.agent)?.autopilot;
+      let liveStatus = null;
       if (s instanceof KeeperProxy) {
         if (a.action === 'start') {
           // Incremental human/DUM orders inherit the actual running policy. Seeding
           // from disk here would silently revert unrelated live overrides on Save.
           const live = await keeperState(a.agent, s._index, { fresh: true });
           if (!live?.autopilot_status?.policy) throw new Error('running keeper policy is unavailable; no order was changed');
+          liveStatus = live.autopilot_status;
           // THE ORDERS, NOT THE EFFECTIVE POLICY. Seeding from `policy` copied a farm strategy's
           // overlay into this order, which was then persisted to the roster and pushed into the
           // keeper's order copy as if somebody had ordered it -- and outlived the file's
@@ -13507,7 +13513,7 @@ const TOOLS = [
       // THE FARMING STRATEGY ASSIGNMENT. Loaded and validated HERE so a missing or broken file is
       // refused at the door with its reason rather than stored as an order that does nothing.
       // Only the name is stored; the keeper applies the file (m59-strategy-engine.mjs).
-      let farmStrategy = null, farmStrategyReleased = null;
+      let farmStrategy = null, farmStrategyReleased = null, farmStrategyRequires = null;
       if (a.farm_strategy !== undefined) {
         if (a.farm_strategy == null || String(a.farm_strategy).trim() === '') {
           // UNASSIGNING ALSO CLEARS WHAT AN EARLIER LEAK LEFT IN THE ORDERS. Before the fix above
@@ -13539,6 +13545,24 @@ const TOOLS = [
           if (!r.ok) return { started: false, reason: `farm_strategy refused: ${r.why}`,
                               ...(r.problems?.length ? { problems: r.problems } : {}),
                               note: 'nothing was changed: the character keeps the posture it has' };
+          // WHAT THE BODY NEEDS (m59-strategy-gate.mjs). Operator, 2026-10-26: a troll crew grinding six hours with
+          // weapons that could not hurt a troll "should be at-worst a bounce-back". Refused here, naming what is
+          // missing, unless the call accepts requires_unmet; then it is assigned and stands down until met. Unknown
+          // (weapons not read since the keeper started) is not a refusal: the keeper's own gate checks every pass.
+          if (r.strategy.requires) {
+            let pack = null;
+            try { const c = s.client; if (Array.isArray(c?.inventory)) pack = c.inventory.map(o => c.rsc?.get?.(o.nameRsc) || o.name || ''); } catch {}
+            const verdict = requiresVerdict(r.strategy.requires,
+              liveStatus ? factsFromStatus(liveStatus, pack) : { weapons: p.weaponMagicStatus?.()?.weapons ?? null, pack });
+            if (verdict.met === false && !accepts(a.accept, 'requires_unmet'))
+              return { started: false, reason: refusal('requires_unmet', `${r.name}: ${verdict.unmet.map(u => u.why).join('; ')}`),
+                       requires: verdict, ...(requestFor(r.strategy.requires, verdict) ? { fix: `a "${requestFor(r.strategy.requires, verdict).service}" ` +
+                         'from a desk would meet it; once assigned (with accept) the keeper asks the service board itself' } : {}),
+                       note: 'nothing was changed: the character keeps the posture it has' };
+            if (verdict.met !== true) farmStrategyRequires = verdict;
+          }
+          // An explicit assignment is how an operator says "try again": a tripped kill-rate floor is forgotten.
+          try { resetFloor(a.agent); } catch {}
           p.policy.farmStrategy = r.name;
           farmStrategy = r;
         }
@@ -13656,6 +13680,9 @@ const TOOLS = [
         keys: Object.keys(farmStrategy.strategy.desired), hooks: Object.keys(farmStrategy.strategy.hooks),
         ...(farmStrategy.unrecognised?.length ? { unrecognised_not_applied: farmStrategy.unrecognised } : {}) };
       if (farmStrategyReleased) out.farm_strategy_released = farmStrategyReleased;
+      if (farmStrategyRequires) out.farm_strategy_requires = { ...farmStrategyRequires,
+        why: farmStrategyRequires.met === false ? 'assigned with accept requires_unmet: the farm stands down until this is met'
+          : 'not yet known (the keeper has not read its weapons); the keeper checks it every pass and stands down if unmet' };
       if (farmStrategyShadows.length) out.farm_strategy_shadows = { args: farmStrategyShadows,
         why: `farm strategy "${farmStrategy.name}" declares these, so while the keeper owns their faculty ` +
              'the value in the file is the one in force; yours is kept underneath and returns if the strategy ' +

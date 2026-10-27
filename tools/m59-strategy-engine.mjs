@@ -74,6 +74,7 @@ import { classifyCombatLine } from './m59-combatlog.mjs';
 import { OF } from './m59-parse.mjs';
 import { isSpared } from './m59-spare.mjs';
 import * as party from './m59-party.mjs';
+import { KillFloor, requiresVerdict, requestFor, fileStore } from './m59-strategy-gate.mjs';
 
 /**
  * A hook's view of the room: every object but ourselves, as data. kind is 'player', 'monster'
@@ -212,8 +213,13 @@ export async function listFarmStrategies({ dir = null, resolveItem } = {}) {
  *   s.client (eventsSince, evSeq, vitals), s.world.room.num, s.name, touchState()
  */
 export class FarmStrategyEngine {
-  constructor(host, { dir = null, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now() } = {}) {
+  constructor(host, { dir = null, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now(), floorStore = null } = {}) {
     this.host = host;
+    this.floorStore = floorStore;
+    this.floor = null;        // the kill-rate floor (m59-strategy-gate.mjs), when the file declares one
+    this.gateCache = null;
+    this.requestedAt = 0;
+    this.gateNoted = null;
     this.dir = dir;
     this.resolveItem = resolveItem;
     this.budgetMs = budgetMs;
@@ -264,6 +270,7 @@ export class FarmStrategyEngine {
       if (this.assigned) this.release(want ? `reassigned to ${want}` : 'unassigned');
       this.assigned = want;
       this.loaded = null; this.refused = null; this.triedMtime = undefined;
+      this.floor = null; this.gateCache = null; this.gateNoted = null;
     }
     if (!want) return this.status();
 
@@ -284,6 +291,12 @@ export class FarmStrategyEngine {
         const reload = !!this.loaded;
         this.loaded = r; this.refused = null;
         this.overrides = {}; this.memory = {}; this.hooks = {};
+        // A new or edited file is a new plan, so its floor starts clean; a keeper restart on the same file
+        // reads the saved floor back (version = the file's mtime), so a handoff neither forgives nor resets it.
+        this.floor = r.strategy.floor ? new KillFloor({ floor: r.strategy.floor, agent: this.host.s?.name ?? 'unknown',
+          strategy: r.strategy.name, version: r.mtime, now: this.now(),
+          ...(this.floorStore ? { store: this.floorStore } : {}) }) : null;
+        this.gateCache = null; this.gateNoted = null;
         if (reload) this.reloads++;
         this.noteOnce(`loaded:${r.mtime}`, reload ? 'farm strategy reloaded' : 'farm strategy loaded', {
           strategy: want, file: r.file, keys: Object.keys(r.strategy.desired),
@@ -505,6 +518,8 @@ export class FarmStrategyEngine {
 
   /** Run one hook. Never throws, never awaits, never blocks longer than the hook itself. */
   dispatch(name, payload = {}) {
+    // Every counted kill feeds the floor, whoever holds `work` and whether or not the file has an onKill hook.
+    if (name === 'onKill' && this.floor) { try { this.floor.kill(this.now()); this.gateCache = null; } catch {} }
     const fn = this.loaded?.ok ? this.loaded.strategy.hooks[name] : null;
     if (!fn) return undefined;
     const st = this.hookState(name);
@@ -552,6 +567,74 @@ export class FarmStrategyEngine {
     return n;
   }
 
+  // ------------------------------------------------------------------------------ the gate
+  //
+  // SHOULD THIS FARM BE RUNNING AT ALL? Two answers can say no (m59-strategy-gate.mjs): the body does not
+  // have what the file `requires`, or the kill-rate `floor` has tripped. Either one STANDS THE FARM DOWN
+  // (the keeper chooses no quarry; survival, resting and fighting back are decided above and untouched)
+  // and says why on status and the board. An unmet requirement also asks the service board, when the file
+  // names a service, at most once per its ttl.
+  /** A farming pass reached the hunt: advance the floor's clock. */
+  farming() {
+    if (!this.floor || this.heldBy('work')) return null;
+    const st = this.floor.farming(this.now());
+    this.gateCache = null;
+    return st;
+  }
+
+  requiresFacts() {
+    const h = this.host, c = h.s?.client;
+    let weapons = null;
+    try { const w = h.weaponMagicStatus?.(); if (Array.isArray(w?.weapons)) weapons = w.weapons; } catch {}
+    let pack = null;
+    try { if (Array.isArray(c?.inventory)) pack = c.inventory.map(o => c?.rsc?.get?.(o.nameRsc) || o.name || ''); } catch {}
+    return { weapons, pack };
+  }
+
+  gate() {
+    const strat = this.loaded?.ok ? this.loaded.strategy : null;
+    if (!strat || (!strat.requires && !strat.floor)) return null;
+    // While a bot or lease holds `work` the file is not in force, so neither is its gate.
+    const holder = this.heldBy('work');
+    if (holder) return { blocked: null, yielded_to: holder };
+    const now = this.now();
+    if (this.gateCache && now - this.gateCache.at < 5_000) return this.gateCache.value;
+    const requires = strat.requires ? requiresVerdict(strat.requires, this.requiresFacts()) : null;
+    const floor = this.floor ? this.floor.state(now) : null;
+    let blocked = null;
+    if (requires?.met === false)
+      blocked = { by: 'requires', why: `cannot farm ${strat.name}: ${requires.unmet.map(u => u.why).join('; ')}` };
+    else if (floor?.tripped)
+      blocked = { by: 'floor', why: `stood down: ${floor.tripped.why}. Re-assign the strategy (or edit its file) to try again` };
+    let request = null;
+    const want = requestFor(strat.requires, requires);
+    if (want) {
+      request = { service: want.service };
+      if (now - this.requestedAt >= want.ttl_min * 60_000) {
+        const req = this.host.s?.joints?.effects?.request;
+        if (typeof req === 'function') {
+          try {
+            req({ service: want.service, target: this.host.s?.name ?? null, from: this.host.s?.name ?? null,
+              room: this.host.s?.world?.room?.num ?? null, why: blocked?.why ?? null, pak: `strategy:${strat.name}`,
+              joint: 'farm.requires', ttl_ms: want.ttl_min * 60_000 });
+            this.requestedAt = now; request.posted_at = now;
+          } catch (e) { request.error = e.message; }
+        } else request.error = 'no service board in this process';
+      } else request.posted_at = this.requestedAt;
+    }
+    const key = blocked ? `${blocked.by}:${blocked.why}` : null;
+    if (key !== this.gateNoted) {
+      this.gateNoted = key;
+      if (blocked) this.noteOnce(`gate:${key}`, 'farm strategy stood down', { strategy: strat.name, ...blocked,
+        ...(request ? { asked_for: request.service } : {}),
+        note: 'no quarry is chosen while this holds; fleeing, resting and fighting back are unchanged' }, { every: 0 });
+      else this.noteOnce('gate:clear', 'farm strategy may farm again', { strategy: strat.name }, { every: 0 });
+    }
+    const value = { blocked, ...(requires ? { requires } : {}), ...(floor ? { floor } : {}), ...(request ? { request } : {}) };
+    this.gateCache = { at: now, value };
+    return value;
+  }
+
   // ------------------------------------------------------------------------------ status
   status() {
     if (!this.assigned) return null;
@@ -585,6 +668,7 @@ export class FarmStrategyEngine {
       unrecognised: this.loaded?.unrecognised?.length ? this.loaded.unrecognised : [],
       keys,
       hooks: strat ? Object.fromEntries(Object.keys(strat.hooks).map(h => [h, { ...this.hookState(h) }])) : {},
+      ...(strat && (strat.requires || strat.floor) ? { gate: this.gate() } : {}),
       carry: 'only the assignment (policy.farmStrategy) is pushed and carried; the file\'s keys are ' +
              're-derived from the file by each keeper process and never written to the roster',
     };

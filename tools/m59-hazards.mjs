@@ -12,6 +12,8 @@
 //                                              room that is not NO_COMBAT
 //   go_red                                     m59-combat-mode.mjs needsSafetyOff: striking an innocent with safety off
 //   reroll                                     the broker's reroll tool, which already wants confirm:true
+//   requires_unmet                             the broker's autopilot tool: assigning a farm strategy whose `requires`
+//                                              this body does not meet (m59-strategy-gate.mjs)
 //
 // AND SURVIVAL OFF IS A LEASE. `survival_enabled:false` carries `survivalOffUntil` (default 30 min, at most 12 h,
 // `survival_off_ms` to choose); after it the keeper treats survival as ON whatever the stored flag says. The night of
@@ -26,6 +28,7 @@ export const HAZARDS = {
   survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but a no-combat room (an inn, a shop, a bank) is how three troll-crew characters died seven times in Ukgoth (2026-10-26)',
   go_red: 'striking an innocent (not a murderer, outlaw, morph or war enemy) with safety off makes this character an outlaw, and killing one makes it a murderer: merchants refuse it and the karma does not come back',
   reroll: 'reroll deletes the character and cannot be undone',
+  requires_unmet: 'this farm strategy requires something this character does not have, so it would stand at its post killing nothing (a troll crew ground six hours with weapons that could not hurt a troll, 2026-10-26). Accepted, the strategy is assigned and waits, stood down, until the requirement is met',
 };
 
 export const accepts = (accept, id) => Array.isArray(accept) ? accept.includes(id) : accept === id;

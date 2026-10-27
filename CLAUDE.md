@@ -31,6 +31,8 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | keep a character OUT of the world on purpose, or log off to escape a fight (`m59-dormant.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#keeping-a-character-out-on-purpose-dormancy) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
+| make a farm refuse a body that cannot do it (`requires: { magicWeapon: true }`) or stand down when it kills nothing (`floor: { kills, minutes }`) | [`docs/m59-strategies.md`](docs/m59-strategies.md#what-the-body-needs-and-the-kill-rate-floor) |
+| design anything that sets, saves, restores or leases a character's orders (the stack, leases, stocks and flows) | [`docs/m59-orders.md`](docs/m59-orders.md) |
 | cast a spell from code, keep a TRANCE unbroken, change gear around a cast (`castRite` / `idleGear` hooks; the policy is private), or tag a character's cast role | [`docs/m59-cast-rites.md`](docs/m59-cast-rites.md) |
 | write, assign or debug a PVP STRATEGY (what a character does when a player hits it or is seen: flee to a room, engage, default) | [`docs/m59-pvp-strategies.md`](docs/m59-pvp-strategies.md) |
 | replace a behaviour at a keeper JOINT (a firewall, a morph, a wand that is not landing, a curse), write or dry-run a PAK, or ask "my buffs / debuffs / resistances / am I cursed" in the game's own terms (`tools/rpg/`) | [`docs/m59-joints.md`](docs/m59-joints.md) |

@@ -229,6 +229,11 @@ through a nested shelter order.
   swings again only at an unlanded tag that followed it in (up to `tries`, default 12), and gives up past `wait_s`. At FULL health a tagger is exempt from the pull's crowd guard; hurt, or not a tagger, it is not. The killer walks
   to the wall, kills only a landed tag, clears anything else at the wall, and farms as usual when its
   tagger is elsewhere. A local strategy file of the same name overrides a private one.
+- `m59-strategy-gate-test.mjs` (48): a farm strategy's `requires` and kill-rate `floor`
+  (`m59-strategy-gate.mjs`). An unmet requirement stands the farm down and asks the service board once per
+  ttl; unread weapons are unknown, never a refusal; the floor's clock runs only on farming passes, trips on a
+  window with too few kills, survives a new process on the same file and resets on an edited one; the gate
+  yields while a bot holds `work`; passFarm checks it below the meal.
 - `m59-strategy-engine-test.mjs` (116): farming strategy files (`farm_strategy`,
   `docs/m59-strategies.md`). The three committed examples load and mean today's orders; a file that
   will not parse, names a survival/war key at any depth, carries a bad value, a non-function hook,
