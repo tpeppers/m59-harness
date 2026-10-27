@@ -245,6 +245,9 @@ through a nested shelter order.
   what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is
   out of reach stays in the pack; the four Ko'catan counters are trusted buyers (bankers are not); a circuit stop with no
   trusted buyer ends as "sold nothing" and the circuit moves on, and a failed sale is retried once.
+- `m59-stash-abandon-test.mjs` (6): abandoned island stash cargo releases the refill queue. A dead owner's fresh drop
+  still holds it; once the newest drop is `STASH_ABANDON_MS` (20 min) old the cargo is written off in its receipt and the
+  next rider takes the lease; a live owner is waited for whatever the age.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.

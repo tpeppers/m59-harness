@@ -1,6 +1,6 @@
 // Two completed Rescue landings, followed by a compulsory guarded jungle refill.
 // This module uses ordinary broker tools only; there are no lab or DM imports.
-import {readFileSync,mkdirSync,writeFileSync,existsSync,openSync,closeSync,unlinkSync} from 'node:fs';
+import {readFileSync,mkdirSync,writeFileSync,existsSync,openSync,closeSync,unlinkSync,statSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {resolve,dirname} from 'node:path';
 import {itemClassIndex,KODDB} from './m59-itemclass.mjs';
@@ -344,13 +344,34 @@ export async function acquireStashLease(ctx,record,{budgetMs=ISLAND_CONVOY_WAIT_
       const receipt=existsSync(prior.receipt)?JSON.parse(readFileSync(prior.receipt,'utf8')):null;
       const live=alive(prior),ownFinished=prior.pid===process.pid&&!activeStashTokens.has(prior.token);
       if(receipt?.complete||prior.agent===ctx.agent&&(!live||ownFinished)){remove(prior.token);continue;}
-      if(!live||ownFinished)throw Error('refill_waits_for_unrecovered_stash_'+prior.agent);
+      // ABANDONED CARGO RELEASES THE QUEUE. Prod 2026-10-27: Kermit dropped a spare chain armor at the East Tower to pass the
+      // guard, rode on and farmed 2125; his finished ride kept refill.lock for ever, and Waldorf's ride at 07:02 failed
+      // here, as would every rider after him. A floor item despawns within minutes, so "the owner comes back for it" stops
+      // being true long before anybody notices. Once the owner's process is gone and the newest drop is STASH_ABANDON_MS
+      // old, the cargo is written off in its receipt (stash.abandoned_at, each item abandoned:true) and the lock released.
+      if(!live||ownFinished){
+        const drops=(receipt?.stash?.items??[]).filter(i=>i.dropped&&!i.recovered);
+        // A drop with no time of its own (an older receipt) is dated by the receipt's last write, never by 0.
+        let written=now();try{written=statSync(prior.receipt).mtimeMs;}catch{}
+        const newest=Math.max(...drops.map(i=>Number(i.dropped_at)||written));
+        if(receipt&&drops.length&&now()-newest>=STASH_ABANDON_MS){
+          receipt.stash.abandoned_at=now();
+          receipt.stash.abandoned_by=ctx.agent;
+          for(const i of drops)i.abandoned=true;
+          writeFileSync(prior.receipt,JSON.stringify(receipt,null,2));
+          ctx.onAbandon?.({owner:prior.agent,items:drops.map(i=>i.name),age_ms:now()-newest});
+          remove(prior.token);continue;
+        }
+        throw Error('refill_waits_for_unrecovered_stash_'+prior.agent);
+      }
       if(now()>=deadline)throw Error('refill_queue_budget');
       await wait(Math.min(1000,Math.max(1,deadline-now())));
     }
   }
   return token;
 }
+// How long a finished rider's dropped cargo holds the refill queue before it is written off (floor items despawn).
+export const STASH_ABANDON_MS=Number(process.env.M59_STASH_ABANDON_MS||20*60_000);
 export function releaseStashLease(record,token){
   activeStashTokens.delete(token);
   // Retain ownership of abandoned cargo; a later traveler cannot claim it.
