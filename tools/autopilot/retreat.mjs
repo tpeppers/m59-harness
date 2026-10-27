@@ -57,7 +57,7 @@ export class RetreatPart {
       // THE LOADOUT DECIDES WHAT LEAVES THE PACK, WHERE IT HAS AN OPINION. sellAll's own
       // guards — money, worn gear, anything a crewmate is short of — still apply; this adds
       // this character's floors and its sell list on top.
-      const sold = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(),
+      const sold = await skills.sellAll(s, { merchant: buyer.id, loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
                                             protect: this.saleProtectedNames(),
                                             maxWeapons: this.policy.maxWeapons,
                                             weaponPriority: this.weaponPriorityNow() })

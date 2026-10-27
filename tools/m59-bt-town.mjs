@@ -161,13 +161,13 @@ export function shouldTripNode(keeper) {
         const stacks = inv.length;
         const p = k.policy ?? {};
 
-        // Load-based: pack fullness >= sellAtLoad (default 0.85).
+        // Load-based: pack fullness (the fuller of weight and bulk) >= sellAtLoad (default 0.9, SELL_AT_LOAD in m59-autopilot.mjs).
         const { skills } = k.constructor._combatSkills || {};
         const cap = skills?.carryCapacity?.(c);
         const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
         const fullness = cap?.known && cap.load
           ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
-        const at = p.sellAtLoad ?? 0.85;
+        const at = p.sellAtLoad ?? 0.9;
         if (fullness >= at) {
           sellTrigger = 'load';
         } else if (stacks >= (p.maxCarry ?? 14)) {

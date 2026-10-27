@@ -54,7 +54,21 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what
     ix'Zonak (tailor, 2006: gems and sundries) and Zala ix'Mecya (apothecary, 2002: non-gem reagents). All four are
     `MOB_BUYER`, which counter-offers cash at item value less markup (`monster.kod`). Before this every island sell trip
     stood at the smithy for ever. A circuit stop with no trusted buyer now ends as "sold nothing" and the circuit moves
-    on; a failed sale is retried once.
+    on; a failed sale is retried once. The circuit is smithy (2003), Zala (2002), tailor (2006) and **the store last**
+    (2004): Pacal pays what the specialists pay (60% of value) but holds a finite shelf, so he is the catch-all.
+  - **On the island a sell trip sells the island reagents** (2026-10-27, `m59-island-sale.mjs`). Dragonfly eye, rainbow
+    fern, web moss, kriipa claw, yrxl sap, uncut and polished seraphym and shaman blood are what the island's farms drop
+    (`avart.kod`, `dflyt.kod`, `avarsht.kod`), and every one is a non-gem reagent Zala buys: a NumberItem is
+    `ITEMTYPE_REAGENT` (`numbitem.kod:40`), so seraphym is a reagent, not a gem. Packs filled with them because three
+    things held them back: **rainbow fern scored as a weapon** (`/bow/` in "rain-bow"; `weaponScore` now asks the item
+    index first, `isKnownNonWeapon`), the guild plan's **`everyone` dispel reagents** were held whole for a mainland hall
+    chest a few short, and a mainland dispeller's **shortfall** held them as "wanted by the fleet". On Ko'catan a hold
+    for a delivery the island cannot make no longer holds an island reagent (`islandSaleRelease`; the hall run is not a
+    stop on an island trip), and each island reagent the loadout has no row for gets a carry ceiling of ten casts of
+    what the character can cast with it, usually zero (`saleLoadout`). The character's own `protect_items`,
+    `vault_items`, loadout keep list and carry rows still win. Off the island nothing changed.
+  - **A sell trip goes at 90% of either weight or bulk** (`SELL_AT_LOAD`, operator 2026-10-27; it was 85%), the fuller of
+    the two against `1700 + might*20`. Island reagents bind on bulk.
   - **The East Tower gate is a loot cap on the island** (2026-10-27). The guard lets 2 weapons and one each of armour,
     helmet, gauntlets and shield into the jungle, worn pieces included (`GATE_LIMITS`). So on the island the looter
     leaves a capped wearable on the floor once the character holds the limit, and nerudite ore or alcohol always

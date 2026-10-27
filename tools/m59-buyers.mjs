@@ -137,6 +137,12 @@ export const KNOWN_BUYERS = {
   izzio: 'Izzio',
   roq: null,                         // the assassin. Not in the merchant index at all.
   rook: null,                        // CorNothSergeant — declares no ObjectDesired
+  // KO'CATAN (towns/kocatwn/), on SELL_TO since 2026-10-27. Named here so an island sale resolves its counter without
+  // the merchant index. Keyed short of the apostrophe, which the wire may curl.
+  'ixla cha': 'KocatanBlacksmith',   // Ixla cha'Totlak, smithy 2003 (kcsmith.kod:73)
+  'pacal ix': 'KocatanShopkeeper',   // Pacal ix'Anoak, store 2004 (kcshopk.kod:209)
+  'tepal ix': 'KocatanTailor',       // Tepal ix'Zonak, tailor 2006 (kctailor.kod:250)
+  'zala ix': 'KocatanApothecary',    // Zala ix'Mecya, apothecary 2002 (kcapoth.kod:49)
 };
 
 // ---------------------------------------------------------------- the item index

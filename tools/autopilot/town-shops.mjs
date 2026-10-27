@@ -25,7 +25,7 @@ import { StockpileBook } from '../m59-stockpile.mjs';
 import { BOOKMAKERS_HALL_ROOM, StorageCache, chestFullness, chestKey } from '../m59-storage.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-tithe.mjs';
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
-import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
+import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -348,7 +348,8 @@ export class TownShopsPart {
       .find(o => affordances(o.flags).includes('buy') && skills.trustedBuyer(c.rsc.get(o.nameRsc)));
     if (!buyer) return null;
     this.doing = 'trading';
-    const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(), keep: MARKET_KEEP,
+    // saleLoadout: the character's own loadout, plus on Ko'catan the island-reagent ceilings (m59-island-sale.mjs).
+    const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(), keep: MARKET_KEEP,
                                        protect: this.saleProtectedNames(),
                                        maxWeapons: this.policy.maxWeapons,
                                        weaponPriority: this.weaponPriorityNow(), maxStack })
@@ -428,6 +429,11 @@ export class TownShopsPart {
     if (this.policy.reagentCoop?.enabled && !duringTownTrip)
       return { skipped: true, why: 'the town scheduler owns donation opportunities; ' +
                                    'this is a standalone pass' };
+    // NOT FROM KO'CATAN. The hall (714) and the vault desk are on the mainland and a trip from the island never leaves it
+    // (m59-autopilot.mjs townTable). With the dispel reagents on the plan's `everyone` list, every island sell trip began
+    // by planning a walk to the hall; on the island those reagents are sold instead (islandSaleRelease).
+    if (onIsland(this.s?.world?.room?.num))
+      return { skipped: true, why: "the guild hall is on the mainland; a trip from Ko'catan never leaves the island" };
     const cfg = this.policy.guildWants;
     // THE CURSE CYCLE'S HALL RUN rides this path with guild_wants OFF, narrowed to its own names
     // (`hall`), so carrying rings to the hall does not also switch on every other line of the plan.

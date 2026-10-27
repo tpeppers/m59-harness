@@ -13,7 +13,7 @@ import { closeIfHealed, mayLogoff, noteLogoff, staysPut } from '../m59-healing-s
 import { OF } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderSkills } from '../m59-standing-orders.mjs';
-import { ITEM_VALUE, MARKET_ALONG_AT, MARKET_ALONG_MIN_RELIEF, MARKET_ALONG_RELIEF, SELL_REGARDLESS_AT } from '../m59-autopilot.mjs';
+import { ITEM_VALUE, MARKET_ALONG_AT, MARKET_ALONG_MIN_RELIEF, MARKET_ALONG_RELIEF, SELL_AT_LOAD, SELL_REGARDLESS_AT } from '../m59-autopilot.mjs';
 
 export class MarketPart {
   // @part 1
@@ -196,7 +196,7 @@ export class MarketPart {
     const fullness = cap?.known && cap.load
       ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
     const stacks = (c.inventory || []).length;
-    const at = this.policy.sellAtLoad ?? 0.85;
+    const at = this.policy.sellAtLoad ?? SELL_AT_LOAD;
     const configured = Number(this.policy.marketAlongAt);
     const along = Number.isFinite(configured) && configured > 0 ? configured : Math.min(at, MARKET_ALONG_AT);
     const relief = typeof this.saleRelief === 'function' ? this.saleRelief(cap) : null;
@@ -270,7 +270,7 @@ export class MarketPart {
     // still leave, because those are the character saying it cannot work.
     const courierHold = this.policy.holdForCourier ? { courier: true } : null;
     const hold = this.overfarmHoldsTrip() ?? courierHold;
-    const at = this.policy.sellAtLoad ?? 0.85;
+    const at = this.policy.sellAtLoad ?? SELL_AT_LOAD;
     if (hold?.courier && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)) &&
         Date.now() - (this._courierHoldNotedAt ?? 0) > 300_000) {
       this._courierHoldNotedAt = Date.now();

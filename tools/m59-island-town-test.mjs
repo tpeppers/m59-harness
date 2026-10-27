@@ -6,7 +6,7 @@
 // Operator, 2026-10-27: island farmers sell at a full pack, and "the guard house provides unique restrictions around
 // travel, and there are different shop NPCs on the island". What this pins:
 //   * on the island (2000-2699) every town destination is a Ko'catan counter, never a mainland one: market (the smithy,
-//     then the store, tailor, apothecary), bank (2005, a separate account), food (the inn, the tavern), reagents;
+//     then the apothecary, the tailor, and the store last), bank (2005, a separate account), food (the inn, the tavern), reagents;
 //   * on the mainland nothing changes;
 //   * a journey from town into the jungle across the East Tower (2013 -> 2115) is refused when the guard would refuse
 //     the pack (three weapons, two armours...), naming what; a legal pack, or a route that does not cross, goes;
@@ -24,7 +24,8 @@ const isl = A.townTable(2115), main = A.townTable(599);
 ok('2115 is the island; 599 is not', isl.region === 'island' && main.region === 'mainland' && A.onIsland(2001) && !A.onIsland(1999));
 const rooms = list => list.map(x => x.room);
 ok('a full pack on the island goes to the Ko\'catan smithy first', rooms(A.townDestinations({ packFull: true, table: isl })).join() === '2003');
-ok('the island sell circuit: smithy, store, tailor, apothecary', rooms(isl.MARKET_STOPS).join() === '2003,2004,2006,2002');
+// The store (Pacal, finite shelf) is the catch-all, last: until 2026-10-27 it stood second and took the reagents Zala buys.
+ok('the island sell circuit: smithy, apothecary, tailor, and the store last', rooms(isl.MARKET_STOPS).join() === '2003,2002,2006,2004');
 ok('money on the island goes to Huital (2005)', rooms(A.townDestinations({ richEnoughToBank: true, table: isl })).join() === '2005');
 ok('food on the island: the inn, then the tavern', rooms(A.townDestinations({ starving: true, table: isl })).join() === '2001,2008');
 ok('reagents on the island: Zala (2002)', rooms(A.townDestinations({ supplyTrip: true, table: isl })).join() === '2002');

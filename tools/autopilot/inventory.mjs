@@ -8,16 +8,19 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 11 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
-//   chestSourcedNames, saleProtectedNames, guildWantedNames, notOursToEat, larder, giveableLarder,
-//   uneatableReserve
+// 13 methods: carryFloors, protectedItemNames, inheritedProtectedNames, stockpileKeptNames,
+//   chestSourcedNames, saleProtectedNames, islandSaleRelease, saleLoadout, guildWantedNames, notOursToEat, larder,
+//   giveableLarder, uneatableReserve
 import { CHALICE } from '../m59-chalice.mjs';
 import { restrictPlan } from '../m59-curse-cycle.mjs';
+import { spellCost } from '../m59-deskpractice.mjs';
 import { guildKeepTest, guildPlan, reagentSource } from '../m59-guildwants.mjs';
+import { islandCastReserve, islandSaleLoadout, releaseIslandHolds } from '../m59-island-sale.mjs';
 import { listLoadouts, norm } from '../m59-loadout.mjs';
 import * as skills from '../m59-skills.mjs';
 import { stockpileKeepTest } from '../m59-stockpile.mjs';
 import { StorageCache } from '../m59-storage.mjs';
+import { onIsland } from '../m59-autopilot.mjs';
 
 export class InventoryPart {
   // @part 1
@@ -160,17 +163,53 @@ export class InventoryPart {
   // 2026-09-17 deadlock (unsellable and undepositable). Over the plan, they sell as before.
   saleProtectedNames() {
     const base = this.protectedItemNames();
-    if (!this.policy.reagentCoop?.enabled) return base;
+    // On Ko'catan, less the holds the island cannot deliver (islandSaleRelease). Off the island, the identity.
+    const release = names => (typeof this.islandSaleRelease === 'function' ? this.islandSaleRelease(names) : names);
+    if (!this.policy.reagentCoop?.enabled) return release(base);
     try {
       const plan = guildPlan();
-      if (!plan) return base;
+      if (!plan) return release(base);
       const coop = new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r)));
       const store = new StorageCache();
       const test = guildKeepTest({ plan, chests: store.allChests(), rent: store.readRent() });
       const short = [...(test.shortfall ?? new Map())].filter(([item, n]) => n > 0 && coop.has(norm(item)))
         .map(([item]) => item);
-      return [...new Set([...base, ...short])];
-    } catch { return base; }
+      return release([...new Set([...base, ...short])]);
+    } catch { return release(base); }
+  }
+
+  // ON KO'CATAN, A HOLD FOR A DELIVERY THE ISLAND CANNOT MAKE DOES NOT HOLD AN ISLAND REAGENT (m59-island-sale.mjs).
+  // The guild's wants -- the plan's `everyone` dispel reagents, guild_wants, the stockpile, the co-op's shortfall -- are
+  // deposited in the mainland hall (714), and a trip from the island never leaves it. Prod 2026-10-27: 4 dragonfly eyes
+  // short in a hall chest held 579 in Sweetums' pack, by name, and his sell trips walked home with them. This
+  // character's OWN orders still protect: protect_items, vault_items, its loadout's keep list, the guild-chest
+  // direction (chestSourcedNames), the chalice, a holder's cargo, the roulette's weapon. Off the island: unchanged.
+  islandSaleRelease(names) {
+    if (!onIsland(this.s?.world?.room?.num)) return names;
+    const own = [
+      ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems : []),
+      ...(Array.isArray(this.policy.protectedItems) ? this.policy.protectedItems : []),
+      ...(this.loadout?.()?.keep ?? []),
+      ...this.chestSourcedNames(),
+      ...(this.chaliceCfg ? [CHALICE.name] : []),
+      ...(this._curseCycleCfg?.keep ?? []),
+      ...(this._holderCargo ? Object.keys(this._holderCargo.items) : []),
+      ...(this.rouletteTarget?.()?.want ? [this.rouletteTarget().want] : []),
+    ];
+    return releaseIslandHolds(names, own);
+  }
+
+  // THE LOADOUT A SALE PLAN READS. Off the island, the character's own (this.loadout()) -- unchanged. On Ko'catan, the
+  // same plus a carry CEILING for each island reagent it has no row for: the casts it can make with it kept
+  // (islandCastReserve, from the spells the server says it knows), the rest "surplus above the loadout ceiling", which the
+  // sale plan sells to the counter that buys it even while a mainland character's want names it -- nobody there can be
+  // handed it from here. Every path that SELLS reads this; what the character carries and asks the fleet for does not.
+  saleLoadout() {
+    const own = this.loadout?.() ?? null;
+    if (!onIsland(this.s?.world?.room?.num)) return own;
+    const c = this.s?.client;
+    const spells = (c?.spells ?? []).map(sp => c?.rsc?.get?.(sp.nameRsc) ?? sp?.name).filter(Boolean);
+    return islandSaleLoadout(own, islandCastReserve(spells, { cost: spellCost }));
   }
 
   guildWantedNames() {

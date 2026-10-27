@@ -258,6 +258,16 @@ through a nested shelter order.
 - `m59-island-arrive-test.mjs` (15): arriving on the Island to stay. Both vaultmen are recognised (Itzal cha'Nosak,
   2005, as well as Obert); `vaultForJungle` deposits what the jungle guard refuses with keep counts, worn protection
   first, and reads the pack back; postures select by room; `island-arrive` vaults before it assigns the farm.
+- `m59-island-sale-test.mjs` (49): a sell trip on Ko'catan sells the island reagents (prod 2026-10-27: packs full of
+  dragonfly eyes, ferns and seraphym, worth 15-17k at Zala, carried home by every trip). Rainbow fern and five other
+  real items with a weapon word in their name are not weapons, real weapons still are; on the island the sale plan
+  sells dragonfly eye / rainbow fern / web moss / kriipa claw / yrxl sap / uncut seraphym surplus despite the guild
+  plan's `everyone` hold and a mainland dispeller's want, and each is first bought at Zala (2002), the finite-shelf store
+  last; a caster keeps ten casts of what it casts with; protect_items, vault_items, the loadout's keep list and its own
+  carry rows always win; on the mainland the terms and the plan are identical to before; a pack 90% full by bulk with
+  light weight opens a sell trip, so does 90% by weight, 89.6% does not, and on the island the prod pack is no longer
+  dropped as "full of kept stock"; at Zala's counter they are sold, at the smithy never offered; no hall run from the
+  island.
 - `m59-island-town-test.mjs` (50): on the island every town destination is a Ko'catan counter and nothing routes off it;
   the mainland is unchanged; a journey across the East Tower gate is refused when the guard would refuse the pack, naming
   what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is

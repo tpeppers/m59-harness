@@ -12102,7 +12102,7 @@ const TOOLS = [
       walking_money: { type: 'number',
         description: 'shillings retained in hand when banking surplus, default 400' },
       sell_at_load: { type: 'number',
-        description: 'go sell when weight or bulk reaches this fraction, default 0.85' },
+        description: 'go sell when weight or bulk (whichever is fuller) reaches this fraction, default 0.9' },
       min_sell_trip_value: { type: 'number',
         description: 'a sell trip opened by pack load or stack count waits until the pack is estimated ' +
           'to fetch at least this many shillings (unless 97% full). Default 10000; 0 sells at the ' +

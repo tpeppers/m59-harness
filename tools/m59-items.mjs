@@ -746,6 +746,19 @@ export function isWeaponName(name, file = ITEMS_FILE) {
   return !!t.weapons[String(name || '').trim().toLowerCase()];
 }
 
+// The other half of the membership test: a name the item index KNOWS, whose class is not on the Weapon chain. weaponScore's
+// word list matches substrings, and six real item names contain a weapon word without being one -- "rain-BOW fern",
+// "BOWl of soup", "BOWl of stew", "notice of delinquent tAXEs", "shard of a SWORD", "gnarled STAFF" (a StaffOfJolting, a
+// special wand). Prod 2026-10-27: rainbow fern scored 3 as a bow, so every island sale plan kept it as "best spare weapon
+// within max_weapons" and island packs filled with ferns. A name the index does not know (an attribute-prefixed
+// "cursed long sword") is not answered here and stays the word list's to judge.
+export function isKnownNonWeapon(name, file = ITEMS_FILE) {
+  const t = loadItems(file);
+  if (!t?.items || !t?.weapons) return false;
+  const n = String(name || '').trim().toLowerCase();
+  return !!t.items[n] && !t.weapons[n];
+}
+
 export const STOMACH_MAX = 100;
 export function servingsAtOnce(name, file = ITEMS_FILE) {
   const f = foodValue(name, file);

@@ -184,7 +184,7 @@ export class DeliveryPart {
 
     let sold = null;
     if (buyer) {
-      sold = await skills.sellAll(s, { merchant: buyer, loadout: this.loadout(),
+      sold = await skills.sellAll(s, { merchant: buyer, loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
         protect: this.saleProtectedNames(), maxWeapons: this.policy.maxWeapons,
         weaponPriority: this.weaponPriorityNow() }).catch(e => ({ error: e.message }));
       // A SALE TO MAKE ROOM IS STILL A SALE, and was the one path that told no ledger.

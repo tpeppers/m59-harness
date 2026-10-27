@@ -1768,6 +1768,10 @@ export const TRIP_PURPOSE = Object.freeze({
 // Operator, 2026-09-27: "town trips should aim to be $10k+ if their purpose is for selling".
 // Overridable per character as policy.minSellTripValue.
 export const MIN_SELL_TRIP_VALUE = 10_000;
+// WHEN A FULL PACK GOES TO SELL, absent policy.sellAtLoad: the fuller of WEIGHT and BULK against `1700 + might*20`
+// (checkIfShouldSell). Operator, 2026-10-27: "make our sales trips go at hitting 90% full *of either* bulk/weight". It was
+// 0.85. Island reagents bind on bulk (a dragonfly eye is weight 2, bulk 3), so a weight-only reading would never go.
+export const SELL_AT_LOAD = 0.9;
 // A pack this full goes to market whatever it is worth: there is no room left to make it worth more.
 export const SELL_REGARDLESS_AT = 0.97;
 
@@ -1868,18 +1872,21 @@ export const BARLOQUE_VAULT = { room: 114, name: "Obert Cair'bre's vault, North 
 // pack, and "the guard house provides unique restrictions around travel, and there are different shop NPCs on the island".
 // Every table above is mainland, so a full pack at 2115 planned a walk to Barloque -- through the caves, or no route at
 // all. Ko'catan's counters, from the kod and the merchant index: the smithy (Ixla cha'Totlak, 2003: weapons and wearables,
-// kcsmith.kod), the store (Pacal ix'Anoak, 2004: anything, finite stock, kcshopk.kod), the tailor (Tepal ix'Zonak, 2006:
-// gems and sundries, kctailor.kod) and the apothecary (Zala ix'Mecya, 2002: reagents, kcapoth.kod), visited in that order;
-// food at the inn (Moxal ix'Hanak, 2001: meat pie, bread, cheese) and the tavern (2008: bread); the bank is Huital ko'Nosak
+// kcsmith.kod), the apothecary (Zala ix'Mecya, 2002: every reagent that is not a gem, kcapoth.kod), the tailor (Tepal
+// ix'Zonak, 2006: gems and sundries, kctailor.kod) and LAST the store (Pacal ix'Anoak, 2004: anything, finite shelf,
+// kcshopk.kod), visited in that order. The store pays what the specialists pay (MERCHANT_EXPENSIVE, 60% of value) but holds
+// 25 distinct items and 5500 of a stack, so it is the catch-all for what nobody else took, not the first offer: until
+// 2026-10-27 it stood second and took the island reagents Zala buys without limit. Zala is second because island loot is
+// mostly reagents, and the relief they bring should not wait behind two more walks. Food at the inn (Moxal ix'Hanak, 2001: meat pie, bread, cheese) and the tavern (2008: bread); the bank is Huital ko'Nosak
 // (2005), A SEPARATE ACCOUNT from Tos/Jasper -- money banked there is spendable on the island and nowhere else. Wulfgang's
 // trading post (2101) is in the jungle and left out: a sell trip should not cross the guard gate it is selling to pass.
 export const ISLAND_ROOMS = Object.freeze([2000, 2699]);
 export const onIsland = room => Number(room) >= ISLAND_ROOMS[0] && Number(room) <= ISLAND_ROOMS[1];
 const ISLAND_MARKET_STOPS = Object.freeze([
   { room: 2003, name: "Ixla cha'Totlak, Ko'catan smithy" },
-  { room: 2004, name: "Pacal ix'Anoak, Ko'catan store" },
-  { room: 2006, name: "Tepal ix'Zonak, Ko'catan tailor" },
   { room: 2002, name: "Zala ix'Mecya, Ko'catan apothecary" },
+  { room: 2006, name: "Tepal ix'Zonak, Ko'catan tailor" },
+  { room: 2004, name: "Pacal ix'Anoak, Ko'catan store" },
 ]);
 export const ISLAND_TOWN = Object.freeze({
   region: 'island',

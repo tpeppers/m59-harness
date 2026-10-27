@@ -151,8 +151,13 @@ export class ShoppingPart {
       if (!cap?.known || !cap.load) return null;
       // Unknown equipment blocks every line of the plan, which would read as "nothing to sell".
       if (!skills.equippedNow(this.s.client)) return null;
-      const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
-        loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+      // THE SAME TERMS THE COUNTER WILL SELL ON, or the trip judgement and the sale disagree. On Ko'catan that is the island
+      // release and reserve (islandSaleRelease, saleLoadout); prod 2026-10-27 dropped every islander's sell trip as "pack
+      // full of kept stock" while the stock it was keeping was the island reagents Zala buys. Off the island: unchanged.
+      const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP,
+        protect: this.islandSaleRelease ? this.islandSaleRelease(this.protectedItemNames()) : this.protectedItemNames(),
+        loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
+        maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
       if (plan?.error) return null;
       const heldBack = this.heldBackIds?.() ?? new Set();
       const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0 && !heldBack.has(Number(i.id)));

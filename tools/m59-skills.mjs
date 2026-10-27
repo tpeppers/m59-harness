@@ -34,7 +34,7 @@ import { refusedHere } from './m59-refused-targets.mjs';
 // The Underworld's exits, and which city is nearest to any room. As a namespace,
 // because escapeUnderworld re-exports most of it and a bare import would shadow.
 import * as UW from './m59-underworld.mjs';
-import { FLEET_KEEP, weighPack, isWeaponName, itemNameKey, foodValue } from './m59-items.mjs';
+import { FLEET_KEEP, weighPack, isWeaponName, isKnownNonWeapon, itemNameKey, foodValue } from './m59-items.mjs';
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
@@ -365,6 +365,11 @@ export function unrevealedHeldBack(c, predicate = () => true) {
 
 export const weaponScore = name => {
   if (isJunk(name)) return 0;
+  // A WEAPON WORD IN A NAME IS NOT A WEAPON. /bow/ matched "rainbow fern", so every island sale plan kept the ferns as
+  // "best spare weapon within max_weapons" (prod 2026-10-27), the banned-weapon list 'bow' called them banned weapons,
+  // and the field loot cap counted them as spare weapons. A name the item index knows as a non-weapon class scores 0;
+  // one it does not know (an attribute-prefixed "cursed long sword") falls through to the word list as before.
+  if (isKnownNonWeapon(name)) return 0;
   for (const [re, n] of WEAPON_WORDS) if (re.test(name)) return n;
   // A REAL WEAPON MUST NEVER SCORE ZERO, because zero is what a helmet scores and it
   // means "punch things instead". The list above wanted "war hammer" and the server says
