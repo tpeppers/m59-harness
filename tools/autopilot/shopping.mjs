@@ -153,7 +153,8 @@ export class ShoppingPart {
       const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
         loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
       if (plan?.error) return null;
-      const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0);
+      const heldBack = this.heldBackIds?.() ?? new Set();
+      const sold = (plan?.items ?? []).filter(i => i.state === 'sell' && i.sale_amount > 0 && !heldBack.has(Number(i.id)));
       const w = weighPack(sold.map(i => ({ name: i.name, amount: i.sale_amount })));
       const freedStacks = sold.filter(i => i.sale_amount >= (i.amount || 1)).length;
       const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);

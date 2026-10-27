@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 25 methods: noteReceivedGoods, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
+// 26 methods: noteReceivedGoods, heldBackIds, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
 //   overfarmKeepIds, packWeapons, wieldedWeaponId, weaponMagicStatus, noteCurseSuspect,
 //   clearCurseSuspect, noteSwapOutcome, noteReagentRefusal, noteUncursed, sweepCursed,
 //   noteEnchantLapse, noteWeaponArrived, noteDedication, shedUnusedConjures, fieldSpareWeapons,
@@ -447,25 +447,39 @@ export class GearUpkeepPart {
     } catch { /* bookkeeping only */ }
   }
 
+  // WHAT THIS KEEPER HOLDS BACK FROM EVERY RULE THAT GIVES, SELLS, EJECTS OR DROPS: a weapon the reading book knows is
+  // enchanted (a dedication is not stock), and what arrived by trade within the protection window (m59-received.mjs). One
+  // answer for every such path. Prod 2026-10-27: the field cap dropped a desk's six delivered maces after a handoff, and
+  // the sharing rule gave Piggy's only dedicated mace to a fleet-mate's weapon demand -- twice in 32 seconds.
+  /** Set of item ids this keeper holds back. */
+  heldBackIds(c = this.s?.client) {
+    const out = new Set();
+    try { for (const id of this.weaponMagicBook().keepIds()) out.add(Number(id)); } catch {}
+    try {
+      const left = new Map(protectedReceived(this.s?.name ?? ''));
+      for (const o of c?.inventory ?? []) {
+        const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+        if ((left.get(n) ?? 0) > 0) { out.add(Number(o.id)); left.set(n, left.get(n) - (o.amount > 0 ? o.amount : 1)); }
+      }
+    } catch {}
+    return out;
+  }
+
   /** Spare weapons counted against maxWeapons: not in hand, not protected, past one training spare. */
   fieldSpareWeapons(c = this.s.client) {
     const nameOf = o => String(c?.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
     const eq = c?.equipment?.();
     const worn = new Set((eq?.known ? eq.equipped : []).map(e => e.id));
     const spareOf = String(this.policy.trainingWeapon ?? '').trim().toLowerCase();
-    // NOT A SPARE: what was just DELIVERED (m59-received.mjs, remembered across a handoff -- the desk's six maces,
-    // 2026-10-27), and a weapon the reading book knows is enchanted (a dedication is not loot).
-    const delivered = new Map(protectedReceived(this.s?.name ?? ''));
-    let magic = new Set();
-    try { magic = this.weaponMagicBook().keepIds(); } catch {}
+    // NOT A SPARE: what this keeper holds back (heldBackIds: enchanted, or just delivered).
+    const held = this.heldBackIds(c);
     let spareSeen = false;
     const spares = [];
     for (const o of c?.inventory ?? []) {
       const n = nameOf(o);
       if (worn.has(o.id) || skills.weaponScore(n) <= 0) continue;
       if (skills.itemIsProtected(n, this.protectedItemNames())) continue;
-      if (magic.has(Number(o.id))) continue;
-      if ((delivered.get(n) ?? 0) > 0) { delivered.set(n, delivered.get(n) - (o.amount > 0 ? o.amount : 1)); continue; }
+      if (held.has(Number(o.id))) continue;
       if (spareOf && n === spareOf && !spareSeen) { spareSeen = true; continue; }
       spares.push(o);
     }

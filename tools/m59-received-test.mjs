@@ -68,5 +68,26 @@ console.log('the pass records a trade we received');
   ok('a trade we were not the receiver of records nothing', !R.protectedReceived('desk1').has('hammer'));
 }
 
+console.log('one rule for every path that gives, sells, ejects or drops');
+{
+  // Prod 2026-10-27: Piggy's only dedicated mace, in the pack while he wielded a hammer, was given to a fleet-mate's
+  // weapon demand by the sharing rule -- twice in 32 seconds.
+  R.noteReceived('t14', [{ name: 'axe', amount: 1 }], { now: Date.now() });
+  const c = { inventory: [{ id: 12365, nameRsc: 'mace', amount: 0 }, { id: 2, nameRsc: 'mace', amount: 0 }, { id: 3, nameRsc: 'axe', amount: 0 }],
+              rsc: { get: k => k }, room: { objects: new Map([[9, { id: 9, nameRsc: 'Bunsen', flags: 0x80 }]]) } };
+  const k = Object.assign(Object.create(Autopilot.prototype), { s: { name: 't14', client: c, need: () => c },
+    weaponMagicBook: () => ({ keepIds: () => new Set([12365]) }) });
+  const held = k.heldBackIds(c);
+  ok('the enchanted mace and the delivered axe are held back; the plain mace is not', held.has(12365) && held.has(3) && !held.has(2), [...held].join(','));
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('a gift never takes a held-back item', /filter\(o => !held\.has\(Number\(o\.id\)\) && this\.matchesKind/.test(src));
+  ok('loot ejection never offers one', /const items = \(plan\?\.items \?\? \[\]\)\.filter\(i => !heldBack\.has/.test(src));
+  ok('a market visit never counts one as sellable', /i\.sale_amount > 0 && !heldBack\.has\(Number\(i\.id\)\)/.test(src));
+  const { readFileSync } = await import('node:fs');
+  const kp = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  ok('and the counter\'s sell_all never offers one', /\.items\.filter\(i => !\(autopilot\?\.heldBackIds\?\.\(\) \?\? new Set\(\)\)\.has/.test(kp));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1188,3 +1188,9 @@ delivery died with it. The desk then reported "no spare and no desk sword" with 
   delivery is somebody's decision; a standing rule is not entitled to undo it within the hour.
 - **And an enchanted weapon is never a spare**: the cap now skips anything the weapon-magic reading book keeps (a
   dedication is not loot), as the overfarm swap already did.
+
+- **One rule for every path that gives, sells, ejects or drops** (`heldBackIds`): a weapon the reading book knows is
+  enchanted, and whatever arrived by trade within the window, stays. The field cap, the sharing gift
+  (`giveFarmReagents`), loot ejection, the market-visit sale estimate and the counter's `sell_all` all ask it. Prod,
+  2026-10-27: the sharing rule gave Piggy's only dedicated mace, sitting in the pack while he wielded a hammer, to a
+  fleet-mate's weapon demand, twice in 32 seconds.

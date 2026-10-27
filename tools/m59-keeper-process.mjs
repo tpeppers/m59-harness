@@ -5084,7 +5084,7 @@ const server = createServer(async (req, res) => {
               keep: args.keep ?? FLEET_KEEP, protect: autopilot?.saleProtectedNames?.() ?? autopilot?.protectedItemNames?.() ?? [],
               loadout: args.ignore_loadout ? null : autopilot?.loadout?.(),
               maxWeapons: args.max_weapons, weaponPriority: args.weapon_priority ?? autopilot?.policy?.weaponPriority,
-            }).items;
+            }).items.filter(i => !(autopilot?.heldBackIds?.() ?? new Set()).has(Number(i.id)));   // enchanted or just delivered
             const minPrice = Number(args.min_price ?? 1);
             const maxStack = args.max_stack == null ? null : Number(args.max_stack);
             const maxOffers = args.max_offers == null ? Infinity : Math.max(1, Math.min(200, Number(args.max_offers) || 1));

@@ -314,7 +314,9 @@ export class DeliveryPart {
     const offers = [], planned = {};
     for (const kind of kinds) {
       let left = Math.max(0, Number(wanted[kind]) || 0);
-      for (const item of (c.inventory || []).filter(o => this.matchesKind(c.rsc.get(o.nameRsc) || '', kind))) {
+      // NEVER WHAT THIS KEEPER HOLDS BACK (heldBackIds): a dedicated weapon is not stock to share.
+      const held = this.heldBackIds?.(c) ?? new Set();
+      for (const item of (c.inventory || []).filter(o => !held.has(Number(o.id)) && this.matchesKind(c.rsc.get(o.nameRsc) || '', kind))) {
         if (!left) break;
         const amount = Math.min(left, item.amount || 1);
         offers.push(amount < (item.amount || 1) ? { id: item.id, amount } : item.id);
@@ -474,7 +476,8 @@ export class DeliveryPart {
     const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
       loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
     if (plan?.error) return false;
-    const items = plan?.items ?? [];
+    const heldBack = this.heldBackIds?.(c) ?? new Set();
+    const items = (plan?.items ?? []).filter(i => !heldBack.has(Number(i.id)));
     const me = String(this.s.name ?? '');
     const received = cfg.only_received ? readReceived(me) : null;
     const present = [...(c.room?.objects?.values?.() ?? [])]
