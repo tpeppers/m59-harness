@@ -15,3 +15,17 @@ export const isVaultmanName = name => VAULTMAN_RE.test(String(name ?? ''));
 export const vaultIn = room => VAULTS.find(v => v.room === Number(room)) ?? null;
 /** "Obert Cair'bre (114, North Barloque) or Itzal cha'Nosak (2005, the Ko'catan bank)": for a refusal. */
 export const vaultsSaid = () => VAULTS.map(v => `${v.npc} (room ${v.room}, ${v.where})`).join(' or ');
+
+// WHAT A BANKER SAYS, from the kod (monster.kod Lm_bnkr_*), and nothing else. A bank reply used to be "the first message
+// after the request", and on prod 2026-10-27 that was "Hail your guildmate Fozzie!" -- a guild login notice -- reported as
+// the banker's answer to a withdrawal of 8984 while no money moved.
+export const BANKER_SAID = new RegExp([
+  'You have [\\d,]+ shillings in your account',                     // balance
+  'Thank you for your deposit',                                     // did_deposit
+  'You have no money to withdraw',                                  // no_account
+  'But you only have [\\d,]+ shillings in your (account|possession)', // not_enough_withdraw / _deposit
+  'Here are your [\\d,]+ shillings',                                // did_withdraw
+  'if I gave you a shilling more than',                             // player_full
+  "You can't hold even a single shilling more",                     // player_all_full
+].join('|'), 'i');
+export const isBankerLine = text => BANKER_SAID.test(String(text ?? ''));

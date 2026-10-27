@@ -1,7 +1,7 @@
 import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
 import{executeDeliveryCacheDrop}from'./m59-delivery-cache.mjs';
 import{receiveDeliveryNotice,deliveryNoticesOf}from'./m59-delivery-notices.mjs';
-import { isVaultmanName, vaultsSaid } from './m59-vaults.mjs';
+import { isVaultmanName, vaultsSaid, isBankerLine } from './m59-vaults.mjs';
 import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
 // m59-keeper-process.mjs — One process per character. Runs the GOAP loop
 // and a small HTTP API.
@@ -3562,8 +3562,10 @@ const server = createServer(async (req, res) => {
             await session.pacer.submit('bank', fn);
             // Inventory packets often arrive before the banker's receipt. They
             // confirm neither a withdrawal nor a deposit and must not end this wait.
+            // WAIT FOR THE BANKER'S OWN SENTENCE (m59-vaults.mjs BANKER_SAID), not the first line of any kind: a guild
+            // login hail arriving first was reported as the answer to a withdrawal (prod 2026-10-27).
             const after = await c.waitFor({ since: before, kinds: ['message', 'said'],
-              timeoutMs: Number(args.timeout_ms) || 4000 });
+              timeoutMs: Number(args.timeout_ms) || 4000, match: e => isBankerLine(e.text) });
             // A BALANCE IS PROSE, SENT ONCE, and a withdrawal states the amount HANDED OVER
             // rather than the new balance. So the sentences are the answer and the broker
             // parses them; this hands them over untouched rather than guessing here.
@@ -3586,7 +3588,8 @@ const server = createServer(async (req, res) => {
             json({ op, amount: op === 'balance' ? undefined : amount, seq: c.evSeq,
                    ...(args.keep != null ? { keep: Math.max(0, Math.floor(Number(args.keep) || 0)) } : {}),
                    ...(purseLease ? { purse_lease: purseLease } : {}),
-                   said: (after?.events ?? []).map(e => e.text).filter(Boolean) });
+                   said: (after?.events ?? []).map(e => e.text).filter(isBankerLine),
+                   ...(after?.timedOut ? { banker_silent: true } : {}) });
             return;
           }
           // THE VAULT COUNTER, and the same seam as `bank` and `shop` for the same reason:

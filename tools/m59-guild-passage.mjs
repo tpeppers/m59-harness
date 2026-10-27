@@ -177,13 +177,29 @@ export async function guildPassage(k, destination, isInterrupted) {
     // stopped short with no reason and no canceller, while the same draw worked for Animal half an hour earlier -- the
     // shape of a body briefly in a one-square hall passage during a trek's staging. A short pause and another walk costs
     // seconds; the refusal costs the whole stash.
-    let approach = null;
+    let approach = null, restWaits = 0;
     for (let tryNo = 0; tryNo < 3; tryNo++) {
       if (tryNo) { await sleep(1500); guard(); }
       await standUp(s, isInterrupted);
       approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
       await s.confirmPosition?.();
       if (c.self.row === trigger[0] && c.self.col === trigger[1]) break;
+      // OUR OWN KEEPER SAT US DOWN. Prod 2026-10-27, Waldorf: "cancelled by keeper:play_dead (rest at the safe wall instead
+      // of logging off)" -- he arrived at the hall under his rest line, and the survival ladder rested him mid-passage.
+      // That is right, and a reason to WAIT, not to spend the retries in four seconds: let the rest finish (health back
+      // over the rest line, or two and a half minutes), then walk again, without counting it as a failed approach.
+      if (/^keeper:/.test(String(approach?.cancelled_by_label ?? '')) && restWaits < 2) {
+        restWaits++; tryNo--;
+        k.note?.('guild passage waiting for the keeper\'s rest', { by: approach.cancelled_by_label, why: approach.cancelled_by ?? null });
+        const restLine = Number(k.policy?.restBelow ?? 0.7);
+        const until = Date.now() + 150_000;
+        while (Date.now() < until) {
+          if (isInterrupted()) throw new Error('guild passage paused for survival');
+          const h = c.vitals?.()?.health;
+          if (h?.max > 0 && h.value / h.max >= Math.min(0.95, restLine + 0.05) && k.doing !== 'recovering') break;
+          await sleep(3000);
+        }
+      }
     }
     if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
       // WHO STANDS NEAR THE TRIGGER, by name: the likeliest reason a walk in this hall stops short.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { isVaultmanName, vaultsSaid } from './m59-vaults.mjs';
+import { isVaultmanName, vaultsSaid, isBankerLine } from './m59-vaults.mjs';
 import {renderArrivals} from './m59-arrivals-page.mjs';
 import {movementRegionSpec} from './m59-movement-region.mjs';
 // The MCP broker supervisor/API: one broker plus N keeper child processes, with
@@ -15289,7 +15289,7 @@ const TOOLS = [
                    note: `the purse holds ${r.purse ?? '?'} and the walking float is ${float}, so ` +
                          'there is nothing above it to bank. Not an error: a character that sold ' +
                          'nothing has nothing to deposit.' };
-        said = (r.said ?? []).map(String);
+        said = (r.said ?? []).map(String).filter(isBankerLine);   // the banker's own sentences only (m59-vaults.mjs)
         if (r?.purse_lease) leaseOut = r.purse_lease;
         // The keeper reads the same event stream Session.noteBanker writes from, so the
         // stored record still has to see these sentences to keep its arithmetic honest.
@@ -15301,8 +15301,8 @@ const TOOLS = [
                      deposit: () => c.deposit(amount),
                      withdraw: () => c.withdraw(amount) }[a.action];
         await s.pacer.submit('bank', fn);
-        const { events } = await c.waitFor({ since: before, kinds: ['message', 'said'], timeoutMs: 4000 });
-        said = events.filter(e => e.text).map(e => String(e.text));
+        const { events } = await c.waitFor({ since: before, kinds: ['message', 'said'], timeoutMs: 4000, match: e => isBankerLine(e.text) });
+        said = events.filter(e => isBankerLine(e.text)).map(e => String(e.text));
       }
       // WHAT THE BANKER SAID IS ALREADY BEING WRITTEN DOWN by Session.noteBanker, off
       // the same event stream, so this does not parse it a second time — it reads back
