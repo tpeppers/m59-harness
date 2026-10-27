@@ -1511,6 +1511,26 @@ export function lootIgnored(name, rules = [], worn = [], held = 0) {
   return wears;
 }
 
+/**
+ * The Ko'catan gate as a loot cap. Pure. `cap` is { classify(name) -> guard category | null, limits }. Counts what the
+ * pack already holds (worn pieces are in the inventory too) and keeps a floor item only while its category is under its
+ * limit; 'forbidden' is never kept and weapons are left to the field weapon cap. -> { keep, skipped: [names] }
+ */
+export function gateCapFilter(cands = [], inventory = [], nameOf = o => o?.name ?? '', cap = null) {
+  if (!cap) return { keep: cands, skipped: [] };
+  const { classify, limits } = cap, held = {}, skipped = [];
+  for (const o of inventory) { const cat = classify(nameOf(o)); if (cat) held[cat] = (held[cat] ?? 0) + 1; }
+  const keep = cands.filter(o => {
+    const name = nameOf(o), cat = classify(name);
+    if (cat === 'forbidden' || (cat && cat !== 'weapon' && Number.isFinite(limits[cat]) && (held[cat] ?? 0) >= limits[cat])) {
+      skipped.push(name); return false;
+    }
+    if (cat) held[cat] = (held[cat] ?? 0) + 1;
+    return true;
+  });
+  return { keep, skipped };
+}
+
 class Session {
   constructor(name, { communicationStateFile = null } = {}) {
     this.name = name;
@@ -4940,6 +4960,8 @@ class Session {
   // "mushroom" is a bless reagent while "gold round shield" is 225 weight for 350 shillings.
   // `unless_unworn: 'shield' | 'armor'`: still taken by a character wearing none of that kind.
   setLootIgnore(list = []) { this._lootIgnore = Array.isArray(list) ? list : []; }
+  // THE KO'CATAN GATE AS A LOOT CAP: { classify(name) -> guard category | null, limits } while on the island, else null.
+  setGateCap(cap = null) { this._gateCap = cap && typeof cap.classify === 'function' && cap.limits ? cap : null; }
 
   // PER-CREATURE LOOT ALLOW LIST (policy.lootOnly, m59-loot-filter.mjs). Installed every pass
   // by the autopilot like the two above; `matcherFor` is the keeper's hunt matcher, so a key
@@ -5205,6 +5227,18 @@ class Session {
       });
     }
 
+    // THE KO'CATAN GATE, AS A LOOT CAP. Prod 2026-10-27: island farmers picked up a second body armour, helmet or shield
+    // off avar kills and then the East Tower guard refused them the walk back into the jungle (2 weapons and one of each
+    // wearable, worn pieces included; m59-island-chalice GATE_LIMITS). Body armour is sold at Ixla's smithy (kcsmith.kod),
+    // so a spare is never worth a stranding: on the island a capped wearable is left on the floor once the character holds
+    // the limit, and a forbidden one (nerudite ore, alcohol) always. Weapons stay with the field weapon cap. Never applied
+    // to an explicit id request.
+    let gateSkipped = [];
+    if (!ids?.length && this._gateCap && cands.length) {
+      const nameOf = o => c.rsc.get(o.nameRsc) || '';
+      ({ keep: cands, skipped: gateSkipped } = gateCapFilter(cands, c.inventory ?? [], nameOf, this._gateCap));
+    }
+
     // LOOT_ONLY: after a kill of a listed creature, only its listed items (m59-loot-filter.mjs).
     // Same placement rule as the ignore list: never against an explicit id request.
     const lootOnlyLeft = [];
@@ -5221,6 +5255,8 @@ class Session {
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
+    for (const n of gateSkipped)
+      refused.push({ item: n, why: "GATE — the Ko'catan East Tower guard would refuse it (one of each wearable, worn included); armour is sold at Ixla's smithy. Left on the floor." });
 
     // OVERFARMING: DECIDE WHICH OF THIS FLOOR IS WORTH THE PACK IT WOULD COST.
     //

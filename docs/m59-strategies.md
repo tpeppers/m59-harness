@@ -104,7 +104,7 @@ export default {
 | `weapons.banned` | `bannedWeapons` | work | list of names, lower-cased |
 | `weapons.style` | `trainingStyle` | work | the five training styles |
 | `weapons.preferMagic` | `preferMagicWeapon` | work | boolean |
-| `confine.rooms` | `confineRooms` | movement | room numbers |
+| `confine.rooms` | `confineRooms` | movement | room numbers -- the destination AND the road: a journey plans only through these (`confinementAvoid`; from outside them, the confined road home when one exists) |
 | `confine.station` | `assignedRoom` | movement | a room number |
 | `confine.roam` | `roam` | movement | boolean |
 | `vigor.fightAbove` | `fightAboveVigor`, `vigorFloor` | work | 0..200, as `applyFightAboveVigor` |

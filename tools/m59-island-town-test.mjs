@@ -42,7 +42,7 @@ console.log('every town-trip site reads the table for where it stands');
   ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num\);\s*const shops = town\.FOOD_SHOPS/.test(src));
   ok('the travel gate asks the guard before walking', /const gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
   ok('and a refusal opens a sell trip at the island counters (at most every ten minutes) so the next walk passes',
-     /this\.operatorTripRequest = \{ town: 'market', why: `the Ko'catan gate refuses the pack/.test(src) && /_gateSellAskedAt \?\? 0\) > 600_000/.test(src));
+     /this\.operatorTripRequest = \{ town: 'market', why: `the Ko'catan gate refuses the pack/.test(src) && /!this\.operatorTripRequest && Date\.now\(\) - askedAt > 600_000/.test(src));
 }
 
 console.log('the guard gate');
@@ -119,6 +119,71 @@ console.log('the island counters buy, and a stop that cannot sell does not hold 
   const second = await b.k.sellMarketCircuit(t2);
   ok('a buyer here but a failed sale: retried once, then the stop ends', first.pending === true && !second.pending && t2.marketIndex === 1,
      JSON.stringify({ first, second }));
+}
+
+console.log('the gate as a loot cap, and the vault when selling did not clear it');
+{
+  // Operator 2026-10-27: "Handle the armors too". Island farmers looted a second armour off avar kills and the East Tower
+  // guard refused them the jungle. Ixla's smithy sells chain and nerudite armour, so a spare is not worth a stranding.
+  const k = Object.create(A.Autopilot.prototype);
+  const cap = k.gateLootCap();
+  ok('the guard\'s own classes: chain armor is armour, a long sword a weapon, an apple nothing',
+     cap.classify('chain armor') === 'armor' && cap.classify('long sword') === 'weapon' && cap.classify('apple') === null);
+  const { gateCapFilter } = await import('./m59-game.mjs');
+  const inv = [{ name: 'leather armor' }, { name: 'long sword' }];
+  const floor = [{ name: 'chain armor' }, { name: 'scale armor' }, { name: 'gold round shield' }, { name: 'long sword' }, { name: 'apple' }];
+  const r = gateCapFilter(floor, inv, o => o.name, cap);
+  ok('wearing leather: no armour from the floor; the first shield yes; weapons and food are not this rule\'s',
+     r.keep.map(o => o.name).join() === 'gold round shield,long sword,apple' && r.skipped.join() === 'chain armor,scale armor', JSON.stringify(r));
+  const bare = gateCapFilter([{ name: 'chain armor' }, { name: 'scale armor' }], [], o => o.name, cap);
+  ok('an unarmoured farmer takes ONE armour, not two', bare.keep.length === 1 && bare.skipped.length === 1);
+  ok('off the island, no cap', gateCapFilter(floor, inv, o => o.name, null).keep.length === floor.length);
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the keeper hands the looter the cap on the island only', /s\.setGateCap\?\.\(onIsland\(s\.world\?\.room\?\.num\) \? this\.gateLootCap\(\) : null\)/.test(src));
+  ok('a refusal within the hour after the sell trip vaults the excess', /askedAt && Date\.now\(\) - askedAt > 180_000 && Date\.now\(\) - askedAt < 3_600_000[\s\S]{0,200}this\.kocatanGateVault/.test(src));
+
+  // The vault deposit: exact ids, the worn piece never.
+  const calls = [];
+  const objects = new Map([[7, { id: 7, nameRsc: "Itzal cha'Nosak", flags: 0 }]]);
+  const v = Object.assign(Object.create(A.Autopilot.prototype), {
+    s: { world: { room: { num: 2005 } }, client: { room: { objects }, rsc: { get: x => x } } }, note: () => {} });
+  const S = await import('./m59-skills.mjs');
+  const real = S.depositInVault;
+  const gate = { over: [{ id: 41, name: 'chain armor', category: 'armor', was_equipped: false },
+                        { id: 40, name: 'chain armor', category: 'armor', was_equipped: true }] };
+  // depositInVault is called through the skills namespace; record its arguments with a fake session underneath.
+  v.s.need = () => ({ inventory: [{ id: 40, nameRsc: 'chain armor' }, { id: 41, nameRsc: 'chain armor' }], rsc: { get: x => x },
+    requestInventory: () => {}, waitFor: async () => ({}), evSeq: 0, depositItems: (who, specs) => calls.push({ who, specs }) });
+  v.s.pacer = { submit: async (_k, f) => f() };
+  await v.kocatanGateVault(gate).catch(() => {});
+  ok('the vault gets the spare by id (41), never the worn chain armor (40)', calls.length === 1 && JSON.stringify(calls[0].specs) === '[41]' && calls[0].who === 7,
+     JSON.stringify(calls));
+}
+
+console.log('a confined journey keeps to the confinement on the way, not only at the end');
+{
+  // Prod 2026-10-27: Lew, confined to the town, 2013, 2115 and 2125, sent from 2124 to the smithy -- his keeper planned
+  // through 2133 (eight avars) and he played dead at 52/90.
+  const M = await import('./m59-map.mjs');
+  const map = M.loadMap();
+  const confine = [2125, 2115, 2013, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2009];
+  const k = (here, extra = {}) => Object.assign(Object.create(A.Autopilot.prototype),
+    { s: { world: { map, room: { num: here } } }, policy: { confineRooms: confine, ...extra } });
+  const inside = k(2013).confinementAvoid(2003);
+  ok('from inside: every room outside the confinement is avoided (2133 and 2124 among them), none inside',
+     inside?.includes(2133) && inside.includes(2124) && !inside.includes(2000) && !inside.includes(2003));
+  const outside = k(2124).confinementAvoid(2003);
+  ok('from OUTSIDE (Lew in 2124): the confined road home is used when the graph has one',
+     outside?.includes(2133) && !outside.includes(2124));
+  ok('and that road goes back through 2115, not deeper into the jungle',
+     M.findPath(map, 2124, 2003, { avoid: new Set(outside) })?.hops?.map(h => h.to).join() === '2115,2013,2000,2009,2003');
+  ok('a destination outside the confinement is the gate\'s business, not this', k(2013).confinementAvoid(2133) === null);
+  ok('no confinement, no avoid', Object.assign(k(2013), { policy: {} }).confinementAvoid(2003) === null);
+  ok('chalice duty keeps its exemption', k(2013).confinementAvoid(2003, { chalice: true }) === null);
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the keeper passes it to the session travel', /const confinedAvoid = this\.confinementAvoid\?\.\(room[\s\S]{0,300}avoid: \[\.\.\.new Set\(\[\.\.\.\(sessionOpts\.avoid/.test(src));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

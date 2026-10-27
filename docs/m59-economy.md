@@ -55,6 +55,13 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what
     `MOB_BUYER`, which counter-offers cash at item value less markup (`monster.kod`). Before this every island sell trip
     stood at the smithy for ever. A circuit stop with no trusted buyer now ends as "sold nothing" and the circuit moves
     on; a failed sale is retried once.
+  - **The East Tower gate is a loot cap on the island** (2026-10-27). The guard lets 2 weapons and one each of armour,
+    helmet, gauntlets and shield into the jungle, worn pieces included (`GATE_LIMITS`). So on the island the looter
+    leaves a capped wearable on the floor once the character holds the limit, and nerudite ore or alcohol always
+    (`gateCapFilter`, `gateLootCap`); body armour is bought at Ixla's smithy (chain, nerudite -- there is no leather on
+    the island). If the gate still refuses, the first refusal sends the pack to the island counters, and a refusal three
+    minutes to an hour after that walks to the Ko'catan vault (2005, inside town) and deposits the excess by exact id,
+    never the worn piece (`kocatanGateVault`, `depositInVault({ids})`).
   - **The two vaults**, one mainland (Barloque) and one on the island. They "buy"
     anything and sell it back for about a shilling. They are **storage, not a market** —
     and storage that SURVIVES DEATH, which is the only thing in the game that does. That

@@ -3944,13 +3944,17 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
 // `keep` is { name: count }: that many matching objects STAY in the pack. Operator, 2026-10-07: a
 // wand top-up must not vault the 2 lightning wands a fleet character carries as personal gear.
 // Matched with the same itemIsProtected test as `items`, kept singletons first-come.
-export async function depositInVault(s, { vaultman, items = [], keep = null } = {}) {
+// `ids`: deposit exactly these objects (re-read from the pack, so an id that no longer exists deposits nothing). A name
+// cannot tell a spare chain armor from the worn one, and `keep` holds back whichever copy it meets first; the Ko'catan
+// gate vault (autopilot kocatanGateVault) names the spares by id for that reason.
+export async function depositInVault(s, { vaultman, items = [], keep = null, ids = null } = {}) {
   const c = s.need();
+  const byId = Array.isArray(ids) && ids.length ? new Set(ids.map(Number)) : null;
   const wanted = [...new Set([].concat(items || []).map(String).map(x => x.trim()).filter(Boolean))];
-  if (!wanted.length) return { deposited: [], protected: [], reason: 'no protected items configured' };
+  if (!wanted.length && !byId) return { deposited: [], protected: [], reason: 'no protected items configured' };
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
-  let before = (c.inventory || []).filter(o => itemIsProtected(c.rsc.get(o.nameRsc) || '', wanted));
+  let before = (c.inventory || []).filter(o => byId ? byId.has(Number(o.id)) : itemIsProtected(c.rsc.get(o.nameRsc) || '', wanted));
   const kept = [];
   for (const [name, n] of Object.entries(keep ?? {})) {
     let left = Math.max(0, Math.floor(Number(n) || 0));

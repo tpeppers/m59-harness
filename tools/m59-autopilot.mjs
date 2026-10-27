@@ -3334,6 +3334,8 @@ export class Autopilot {
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
     s.setLootIgnore?.(this.lootIgnoreList());
+    // On the island the East Tower guard is a loot cap (m59-game setGateCap): no second armour, helmet, gauntlet or shield.
+    s.setGateCap?.(onIsland(s.world?.room?.num) ? this.gateLootCap() : null);
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
                           this.carryFloors(), () => this.overfarmKeepIds());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);

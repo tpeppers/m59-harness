@@ -11,6 +11,7 @@
 // 11 methods: recordFrame, travelArmFor, travelHoldMode, recordTravelShelterStop,
 //   travelHoldCandidate, travelHold, travelRestAtSanctuary, restBeforeSettingOut,
 //   travelInterrupted, recoveryTravel, travel
+import { findPath } from '../m59-map.mjs';
 import { folRoomsOf } from '../m59-chalice.mjs';
 import * as grudge from '../m59-grudge.mjs';
 import { recordSightings } from '../m59-intel.mjs';
@@ -755,6 +756,28 @@ export class TravelPart {
     finally{if(this.s.keeperRecoveryTravel===trip)this.s.keeperRecoveryTravel=null;}
   }
 
+  // A CONFINEMENT IS ABOUT THE ROAD TOO, NOT ONLY THE DESTINATION. The gate below refuses a destination outside
+  // `confineRooms`, and a journey to a room INSIDE it was still planned through whatever lay between. Prod 2026-10-27:
+  // Lew (confined to the Ko'catan town and 2013/2115/2125) was sent from 2124 to the smithy and his keeper planned
+  // 2124 -> 2133 -> ... -- eight avars, a play-dead at 52/90, held dormant to live. So a confined journey avoids every room
+  // outside the confinement. Starting inside, that is absolute (no route in the confinement is no journey). Starting
+  // OUTSIDE it, the confined route is used when the room graph has one, and the unrestricted one only when nothing else
+  // gets the body back -- a confinement must never trap a character outside it. Chalice and approach legs keep their
+  // exemptions. -> a list of room numbers to avoid, or null.
+  confinementAvoid(room, { chalice = false, approach = false } = {}) {
+    const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms.map(Number) : null;
+    if (!confine?.length || chalice || approach || !confine.includes(Number(room))) return null;
+    const map = this.s.world?.map;
+    const all = map?.rooms ? Object.keys(map.rooms).map(Number).filter(Number.isFinite) : null;
+    if (!all?.length) return null;
+    const here = Number(this.s.world?.room?.num);
+    const keep = new Set([...confine, here, Number(room)]);
+    const avoid = all.filter(n => !keep.has(n));
+    if (confine.includes(here)) return avoid;
+    try { if (findPath(map, here, Number(room), { avoid: new Set(avoid) })?.found) return avoid; } catch {}
+    return null;
+  }
+
   async travel(room, opts) {
     // Explicit orders enter through travelJob/goTravelling and retire the old
     // objective there. Keeper rungs (including provisioning) are subordinate to
@@ -797,7 +820,16 @@ export class TravelPart {
         // sale plan keeps one spare per EMPTY armour slot), so the next attempt passes. Prod 2026-10-27: Scooter picked up
         // a scale armour and a chain from avar kills, and every walk back to 2115 -- a food trip, a recovery detour, the
         // hunt relocation -- was refused for ever. At most once every ten minutes; the operator's own trip comes first.
-        if (!this.townTrip && !this.operatorTripRequest && Date.now() - (this._gateSellAskedAt ?? 0) > 600_000) {
+        // AND WHEN THE SALE HAS ALREADY BEEN TRIED, THE VAULT: a refusal three minutes or more after the sell trip was asked
+        // means the counter did not take it (kocatanGateVault). At most once every ten minutes, and only within the hour after
+        // that sell trip: a refusal much later is new loot, and a sale comes first again.
+        const askedAt = this._gateSellAskedAt ?? 0;
+        if (!this.townTrip && askedAt && Date.now() - askedAt > 180_000 && Date.now() - askedAt < 3_600_000
+            && Date.now() - (this._gateVaultAt ?? 0) > 600_000) {
+          this._gateVaultAt = Date.now();
+          const v = await this.kocatanGateVault?.(gate).catch(e => ({ vaulted: false, why: e.message }));
+          if (!v?.vaulted) this.note('could not vault what the Ko\'catan gate refuses', { why: v?.why ?? null });
+        } else if (!this.townTrip && !this.operatorTripRequest && Date.now() - askedAt > 600_000) {
           this._gateSellAskedAt = Date.now();
           this.operatorTripRequest = { town: 'market', why: `the Ko'catan gate refuses the pack (${gate.why})`, by: 'keeper:kocatan_gate', at: Date.now() };
         }
@@ -1185,8 +1217,10 @@ export class TravelPart {
         why: 'this room has disconnected halves served by different doors, so which door ' +
              'we take decides whether the prey is reachable when we arrive',
       });
+      const confinedAvoid = this.confinementAvoid?.(room, { chalice: chaliceRooms.length > 0, approach: !!approachRoom });
       outcome = await this.s.travel(room, {
         ...sessionOpts,
+        ...(confinedAvoid ? { avoid: [...new Set([...(sessionOpts.avoid ?? []).map(Number), ...confinedAvoid])] } : {}),
         // The same order one layer down: same issuer, same room, so it is inherited, not re-issued.
         origin: journeyOrigin,
         movementGeneration,

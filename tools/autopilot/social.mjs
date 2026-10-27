@@ -11,7 +11,8 @@
 // 21 methods: social, static HEALS, activeSelfHealing, tryActiveSelfHeal, healObservedFleetmate,
 //   medic, static DONATION_TAKES, static DONATION_SHEDS, bulkFree, shedForDonation,
 //   acceptDonations, acceptNeededGift, isServicePost, shareSpareReagents, static BUFFS, static
-//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop, drinkAtPoolOfVigor, kocatanGateRefusal
+//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop, drinkAtPoolOfVigor, kocatanGateRefusal,
+//   gateLootCap, kocatanGateVault
 import { allyVerdict } from '../m59-ally.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { sameName } from '../m59-chalice.mjs';
@@ -20,9 +21,10 @@ import { readFleetHealth } from '../m59-fleet-health.mjs';
 import { unwrapSpeech } from '../m59-inbox.mjs';
 import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
+import { isVaultmanName } from '../m59-vaults.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
-import { POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
+import { GATE_LIMITS, KOCATAN_VAULT, POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
 import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
@@ -843,8 +845,42 @@ export class SocialPart {
       const over = plan.drop.filter(i => i.category && i.category !== 'unknown');
       if (!over.length) return null;
       return { why: `the guard at the East Tower refuses ${over.map(i => `${i.name} (${i.category})`).join(', ')}; sell or vault them at Ko'catan (2005) first`,
-               over: over.map(i => ({ name: i.name, category: i.category })) };
+               over: over.map(i => ({ id: i.id, name: i.name, category: i.category, was_equipped: !!i.was_equipped })) };
     } catch { return null; }
+  }
+
+  // THE GATE AS A LOOT CAP, handed to the session's looter while on the island (m59-game setGateCap). The classifier is the
+  // guard's own (jungleItemClassifier, from the kod class tree); a name it cannot place is not capped.
+  gateLootCap() {
+    if (!this._gateClassify) {
+      const byItem = jungleItemClassifier(), memo = new Map();
+      this._gateClassify = name => {
+        const k = String(name ?? '').toLowerCase().trim();
+        if (!memo.has(k)) { let cat = null; try { cat = byItem({ name: k }); } catch {} memo.set(k, cat === 'unknown' ? null : cat); }
+        return memo.get(k);
+      };
+    }
+    return { classify: this._gateClassify, limits: GATE_LIMITS };
+  }
+
+  // WHEN SELLING DID NOT CLEAR THE GATE, VAULT WHAT IT STILL REFUSES. The first refusal opens a sell trip at Ixla's smithy
+  // (travel.mjs); a smith refuses what he cannot use (an unidentified piece, ore), so a pack can come back from the counter
+  // still refused, and the farmer stood in town for ever (operator, 2026-10-27: "handle the armors"). The Ko'catan vault
+  // (2005) is inside the town, so the walk never meets the gate; the excess goes in by exact id -- a name cannot tell the
+  // spare chain armor from the worn one -- and is kept there, never dropped (unread magic is worth revealing).
+  async kocatanGateVault(gate) {
+    const ids = (gate?.over ?? []).filter(i => !i.was_equipped && i.id != null).map(i => Number(i.id));
+    if (!ids.length) return { vaulted: false, why: 'nothing over the limit that is not worn' };
+    if (Number(this.s.world?.room?.num) !== KOCATAN_VAULT) {
+      const walked = await this.travel(KOCATAN_VAULT, { origin: keeperOrigin('gate_vault'), maxHops: 12 }).catch(e => ({ arrived: false, reason: e.message }));
+      if (!walked?.arrived) return { vaulted: false, why: `could not reach the Ko'catan vault: ${walked?.reason ?? 'unknown'}` };
+    }
+    const c = this.s.client;
+    const vaultman = [...(c?.room?.objects?.values?.() ?? [])].find(o => isVaultmanName(c.rsc.get(o.nameRsc)));
+    if (!vaultman) return { vaulted: false, why: "the Ko'catan vaultman is not at his counter" };
+    const r = await skills.depositInVault(this.s, { vaultman: vaultman.id, ids }).catch(e => ({ deposited: [], error: e.message }));
+    this.note("vaulted what the Ko'catan gate refuses", { ids, deposited: r.deposited ?? [], refused: r.refused ?? [], error: r.error ?? null });
+    return { vaulted: !!r.deposited?.length, result: r };
   }
   // @end 1
 }

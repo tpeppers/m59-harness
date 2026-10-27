@@ -9,7 +9,9 @@ import {processStartedAt,START_TIME_TOLERANCE_MS} from './runtime/process-identi
 export const FULL_CUP=/filled to the brim with pure water/i;
 export function cupIsFull(description){return FULL_CUP.test(String(description??''));}
 const norm=s=>String(s??'').trim().toLowerCase();
-const LIMITS={weapon:2,armor:1,helmet:1,gauntlet:1,shield:1};
+// What the East Tower guard lets through into the jungle, worn pieces included.
+export const GATE_LIMITS=Object.freeze({weapon:2,armor:1,helmet:1,gauntlet:1,shield:1});
+const LIMITS=GATE_LIMITS;
 export function guardCategory(chain,alcohol=false){
   const c=new Set(chain.map(norm)),has=n=>c.has(norm(n));
   if(has('NeruditeOreChunk')||alcohol)return 'forbidden';
