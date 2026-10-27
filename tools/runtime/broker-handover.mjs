@@ -230,12 +230,21 @@ export async function handOver(deps, opts = {}) {
   };
 
   // 4-5. HANDOVER and ADOPTION.
-  let adopted;
+  let adopted, lastAdopt = null;
+  const onAdoptProgress = m => {
+    if (m?.type !== 'adopt-progress') return;
+    lastAdopt = m;
+    log(`[handover] successor adopting: ${m.adopted}/${m.expected} keeper(s) after ${Math.round(m.ms / 1000)}s`);
+  };
   try {
     child.send({ type: 'handover', protocol: HANDOVER_PROTOCOL,
                  ownership: moved.ownership, snapshot: deps.snapshot() });
+    // THE SUCCESSOR SAYS HOW FAR IT HAS GOT every ten seconds; logged here, and the last count goes into an abort.
+    child.on?.('message', onAdoptProgress);
     adopted = await nextMessage(child, 'adopted', t.adoptMs, 'keeper adoption');
-  } catch (e) { return await abortAfterTransfer('adopt', e.message); }
+  } catch (e) {
+    return await abortAfterTransfer('adopt', e.message + (lastAdopt ? ` (${lastAdopt.adopted}/${lastAdopt.expected} adopted after ${Math.round(lastAdopt.ms / 1000)}s)` : ' (no progress reported)'));
+  } finally { child.off?.('message', onAdoptProgress); }
   if (!adopted.ok) return await abortAfterTransfer('adopt', adopted.why ?? 'successor refused the fleet');
 
   // 6-7. THE SOCKETS. One handle per message; the successor answers once it serves on all.

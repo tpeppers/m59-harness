@@ -293,6 +293,24 @@ try {
   }
 
   {
+    // AN ADOPT DEADLINE NAMES HOW FAR IT GOT (prod 2026-10-27, deploy-12: "no keeper adoption within 90s" said nothing about
+    // whether 0 or 23 of 24 had been adopted, on a loaded host where a plain retry adopted all 24).
+    const { child, self } = pair();
+    const p = [], s = [], logged = [];
+    const [pre] = await Promise.all([
+      handOver({ ...predecessorDeps(child, p), log: m => logged.push(m) }, fast),
+      takeOver(self, successorDeps(s, { adopt: async () => {
+        self.send({ type: 'adopt-progress', adopted: 3, expected: 24, ms: 10_000 });
+        await new Promise(r => setTimeout(r, 700));          // past the predecessor's 300 ms deadline
+        return { expected: 24, adopted: 24, unadopted_live: [] }; } }), fast).catch(() => null),
+    ]);
+    assert.equal(pre.ok, false);
+    assert.equal(pre.stage, 'adopt');
+    assert.match(pre.why, /3\/24 adopted after 10s/, pre.why);
+    ok('an adopt deadline says how many keepers had been adopted when it gave up');
+  }
+
+  {
     const { child } = pair();          // a successor that never says ready
     const p = [];
     const pre = await handOver(predecessorDeps(child, p), fast);

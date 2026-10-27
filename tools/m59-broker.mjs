@@ -21787,7 +21787,18 @@ async function runAsSuccessor() {
       return { ok: true };
     },
     async adopt() {
-      await resumeFleet({ adopting: true });
+      // PROGRESS, EVERY TEN SECONDS. A 90-second adopt deadline that says nothing until it gives up cannot tell a slow machine
+      // from a stuck keeper (prod 2026-10-27, deploy-12: "no keeper adoption within 90s" on a loaded host; a plain retry
+      // adopted 24/24). The predecessor logs these and names the last count in an abort.
+      const adoptedSoFar = () => [...expected].filter(([a, w]) => keeperProcesses.get(a)?.pid === w.pid && sessions.has(a)).length;
+      const startedAt = Date.now();
+      const progress = setInterval(() => {
+        const n = adoptedSoFar();
+        console.error(`[handover] adopting: ${n}/${expected.size} keeper(s) after ${Math.round((Date.now() - startedAt) / 1000)}s`);
+        try { process.send?.({ type: 'adopt-progress', adopted: n, expected: expected.size, ms: Date.now() - startedAt }); } catch {}
+      }, 10_000);
+      progress.unref?.();
+      try { await resumeFleet({ adopting: true }); } finally { clearInterval(progress); }
       let adopted = 0;
       const unadopted_live = [], replaced = [], gone = [], identity_mismatch = [], piloted_preserved = [];
       for (const [agent, was] of expected) {
