@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isVaultmanName, vaultsSaid } from './m59-vaults.mjs';
 import {renderArrivals} from './m59-arrivals-page.mjs';
 import {movementRegionSpec} from './m59-movement-region.mjs';
 // The MCP broker supervisor/API: one broker plus N keeper child processes, with
@@ -15478,7 +15479,8 @@ const TOOLS = [
       'STORE THINGS AT A VAULTMAN, or read back what is already there. This is the other half of ' +
       'what makes progress survive dying: a bank holds money and a vault holds OBJECTS, and ' +
       'everything not in one of the two is lying on the floor of wherever you died.\n' +
-      'THERE IS ONE ON THE MAINLAND: Obert Cair\'bre, room 114, North Barloque. You must be ' +
+      'THERE ARE TWO: Obert Cair\'bre, room 114, North Barloque, and Itzal cha\'Nosak, room 2005, the Ko\'catan bank on ' +
+      'the Island (m59-vaults.mjs). You must be ' +
       'standing in the room with him - the deposit is relayed to what is in the room with you, so ' +
       'anywhere else this answers "no vaultman in this room" rather than failing quietly.\n' +
       'DEPOSITING IS VERIFIED BY WHAT LEFT THE PACK, never by the absence of an error. A vaultman ' +
@@ -15532,10 +15534,9 @@ const TOOLS = [
         if (r?.error) return { ok: false, action, reason: r.error, room: r.room ?? null };
       } else {
         const vaultman = [...c.room.objects.values()].find(o =>
-          /obert cair|vaultman/i.test(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
+          isVaultmanName(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
         if (!vaultman) return { ok: false, action, room: c.room?.id ?? null,
-          reason: 'no vaultman in this room. The mainland vault is Obert Cair\'bre, room 114, ' +
-                  'North Barloque; a deposit packet is never aimed at an inferred NPC.' };
+          reason: `no vaultman in this room. The vaults are ${vaultsSaid()}; a deposit packet is never aimed at an inferred NPC.` };
         if (action === 'list') {
           const since = c.evSeq;
           await s.pacer.submit('buy', () => c.buy(vaultman.id));

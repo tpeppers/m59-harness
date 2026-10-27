@@ -500,3 +500,22 @@ bring 5 emeralds and cast rescue when the chalice would be drank during the trip
   `rescueTries` (6), resting for mana when the cast tool says it is short. A karma refusal or a PvP lockout ("You've
   attacked a player too recently.") stops the ride at once. The pool of vigor is drunk between the casts as between the
   sips, and a rescuer skips the jungle refill: it has no cup. `m59-island-rescue-test.mjs` (14).
+
+## Arriving to stay: vault, then farm carefully
+
+Operator, 2026-10-27: *"People who arrive at the island should vault anything they can't bring into the jungle and
+prepare to start carefully farming Avar warriors"*. `tools/fleetscripts/island-arrive.mjs`;
+`m59-island-arrive-test.mjs` (15).
+
+- **The vault is Ko'catan's**: Itzal cha'Nosak, The Hungry Vaults, room 2005 (`kcvaultm.kod`, `kocbank.kod`). The
+  vault readers matched only Obert Cair'bre and would have answered "no vaultman in this room" there; both are now one
+  table, `tools/m59-vaults.mjs`. Unproven on prod until the first arrival uses it.
+- **`vaultForJungle`** walks to 2005, plans with the same `jungleStashPlan` the refill uses (worn protection first, the
+  guard's per-category limits), takes worn spares off, deposits by name with a `keep` count for the copies that may go
+  through, and reads the pack back: anything still refusable is an error. The refill's drop-and-retrieve is for a rider
+  coming straight back; a rider who stays would leave it on a shared server's floor.
+- **Then the farm**, if `strategy` is given: `mode: farm`, the strategy, `rest_below` 0.8, `flee_below` 0.45 (the
+  moment to log off on a proven wall, not a withdrawal), `town_trips: false`. The thresholds are survival keys, so they
+  belong to the assignment, never to a strategy file.
+- **Postures can select by room** now (`who.rooms`, `who.room_range: [2000, 2699]`), for anything that should hold
+  "everyone on the Island". An unknown room is not a match.

@@ -130,6 +130,37 @@ async function sipTo(ctx,to,record,save){
     await pause(750);
   }
 }
+// ARRIVING TO STAY: VAULT WHAT THE JUNGLE GUARD WILL NOT LET THROUGH. Operator, 2026-10-27: "People who arrive at the
+// island should vault anything they can't bring into the jungle and prepare to start carefully farming Avar warriors".
+// The refill above DROPS contraband at the guard post for a few minutes and picks it back up; a rider who stays would
+// leave it on the floor of a shared server. So: Ko'catan's vault (Itzal cha'Nosak, The Hungry Vaults, 2005; m59-vaults.mjs),
+// the same plan (jungleStashPlan: worn protection first, the guard's per-category limits), deposited by NAME with a
+// `keep` count per name so the kept copies of a name stay, worn ones taken off first, and read back: nothing the guard
+// refuses may remain. Unproven on prod as of 2026-10-27 (no record of the fleet ever using this vault).
+export const KOCATAN_VAULT=2005;
+export async function vaultForJungle(ctx,{record={},save=()=>{}}={}){
+  const agent=ctx.agent;
+  const here=(await ctx.call('look',{agent})).room?.num;
+  if(!(here>=2000&&here<=2699))throw Error('vault_for_jungle_requires_island');
+  if(here!==KOCATAN_VAULT){record.travel??=[];if(here!==2000)await hop(ctx,2000,record);await hop(ctx,KOCATAN_VAULT,record);}
+  const inv=await pack(ctx),eq=await ctx.call('equipment',{agent});
+  if(!eq.known)throw Error('equipment_unknown');
+  const plan=jungleStashPlan(inv,{equipped:eq.equipped??[],classify:jungleItemClassifier()});
+  record.vault={room:KOCATAN_VAULT,planned:plan.drop.map(i=>({name:i.name,category:i.category??null,was_equipped:!!i.was_equipped}))};save();
+  if(!plan.drop.length){record.vault.nothing=true;save();return {ok:true,vaulted:[]};}
+  for(const item of plan.drop.filter(i=>i.was_equipped)){
+    await freshPackItem(ctx,item);await ctx.call('act',{agent,verb:'unuse',target:item.id});}
+  const names=[...new Set(plan.drop.map(i=>i.name))];
+  const keep={};for(const n of names){const k=plan.keep.filter(i=>norm(i.name)===norm(n)).reduce((t,i)=>t+(i.amount>0?i.amount:1),0);if(k)keep[n]=k;}
+  const r=await ctx.call('vault',{agent,action:'deposit',items:names,...(Object.keys(keep).length?{keep}:{})},120000);
+  record.vault.reply={ok:r?.ok??null,deposited:r?.deposited??null,refused:r?.refused??null,reason:r?.reason??null};save();
+  if(r?.ok===false)throw Error('vault_refused: '+(r.reason??'unknown'));
+  const left=jungleStashPlan(await pack(ctx),{equipped:(await ctx.call('equipment',{agent})).equipped??[],classify:jungleItemClassifier()}).drop;
+  if(left.length){record.vault.left=left.map(i=>i.name);save();throw Error('contraband_remains_after_vault: '+left.map(i=>i.name).join(', '));}
+  record.vault.done=true;save();
+  return {ok:true,vaulted:names,deposited:r?.deposited??null};
+}
+
 // RESCUE INSTEAD OF A SIP. Operator, 2026-10-27: "anyone who knows rescue doesn't need to grab a chalice they can just go
 // in the first lap and bring 5 emeralds and cast rescue when the chalice would be drank during the trip". It lands
 // where the sip lands, because a sip IS a Rescue: chalice.kod NewApplied casts SID_RESCUE at spell power 1, and the

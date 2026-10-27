@@ -1,6 +1,7 @@
 import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
 import{executeDeliveryCacheDrop}from'./m59-delivery-cache.mjs';
 import{receiveDeliveryNotice,deliveryNoticesOf}from'./m59-delivery-notices.mjs';
+import { isVaultmanName, vaultsSaid } from './m59-vaults.mjs';
 import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from './m59-stationary-trade.mjs';
 // m59-keeper-process.mjs — One process per character. Runs the GOAP loop
 // and a small HTTP API.
@@ -3606,7 +3607,7 @@ const server = createServer(async (req, res) => {
             if (!c) { json({ error: 'no client' }, 409); return; }
             const op = String(args.op ?? 'deposit');
             const vaultman = [...(c.room?.objects?.values?.() ?? [])].find(o =>
-              /obert cair|vaultman/i.test(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
+              isVaultmanName(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
             if (!vaultman) {
               // 409, not 400: the request is well formed and the room is wrong. A banker's
               // absence reads as "the banker said nothing"; this says which room it looked in.

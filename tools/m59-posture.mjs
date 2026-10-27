@@ -92,6 +92,10 @@ export function selectUnits(posture, units, { only = null } = {}) {
     if (Array.isArray(who.agents) && !who.agents.includes(u.agent)) return false;
     if ((who.exclude ?? []).some(x => x === u.agent || String(x).toLowerCase() === String(u.character ?? '').toLowerCase())) return false;
     if (Number.isFinite(who.min_max_health) && !(u.max_health >= who.min_max_health)) return false;
+    // WHERE THEY STAND: `rooms` (a list) or `room_range` ([from, to]). An island-arrival posture is "everyone in 2000-2699",
+    // and `tend` picks each rider up as it lands. A unit whose room is unknown is not selected (unreadable is not a match).
+    if (Array.isArray(who.rooms) && !who.rooms.map(Number).includes(u.room)) return false;
+    if (Array.isArray(who.room_range) && !(u.room != null && u.room >= Number(who.room_range[0]) && u.room <= Number(who.room_range[1]))) return false;
     return true;
   });
 }

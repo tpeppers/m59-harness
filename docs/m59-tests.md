@@ -237,6 +237,9 @@ through a nested shelter order.
   a no, the reserve is kept, a ride takes a sip, a refill resets to 3); the keeper's live station, ride gate, count and
   top-up; refill trips inside the default risk profile (overridable), refill-before-serve ordering, and a disabled
   desk that travellers decline; three list-literal reagents (resist poison, umbrella, detect invisible) read from the kod.
+- `m59-island-arrive-test.mjs` (15): arriving on the Island to stay. Both vaultmen are recognised (Itzal cha'Nosak,
+  2005, as well as Obert); `vaultForJungle` deposits what the jungle guard refuses with keep counts, worn protection
+  first, and reads the pack back; postures select by room; `island-arrive` vaults before it assigns the farm.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.

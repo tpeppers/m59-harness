@@ -11,6 +11,7 @@
 // 11 methods: hallPostTo, reachHallChests, recordHallRun, sayHallPassword, refreshChestCache,
 //   refreshVaultCache, vaultRunIfPassing, withdrawFromStockpile, takeFromChest, hallWithdraw,
 //   hallMove
+import { isVaultmanName, vaultsSaid } from '../m59-vaults.mjs';
 import { guildPassage, hallPost } from '../m59-guild-passage.mjs';
 import { SAID_NOTE, hallPassword, inFoyer } from '../m59-hallsecret.mjs';
 import { norm } from '../m59-loadout.mjs';
@@ -252,7 +253,7 @@ export class HallPart {
       }
     }
     const vaultman = [...c.room.objects.values()].find(o =>
-      /obert cair|vaultman/i.test(c.rsc.get(o.nameRsc) || '') &&
+      isVaultmanName(c.rsc.get(o.nameRsc) || '') &&
       affordances(o.flags).includes('buy'));
     if (!vaultman) {
       this.note('the Barloque vaultman was not at his counter', { room: BARLOQUE_VAULT.room,
