@@ -13,6 +13,7 @@
 //   combatApproachCooling, deferBlockedCombatApproach, finishFailedCombatApproach, pendingPullWait,
 //   switchFromStalledPull, pullDidNotConvert, pullAttemptFailed, pullConverted, huntRoomCheck,
 //   yieldCheck, equipCheck, equippedNames
+import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { equipYield, reconcile } from '../m59-loadout.mjs';
@@ -434,10 +435,15 @@ export class PullPart {
     const t = this.threat();
     if (!this.policy.breakOutViaLogoff) return { did: false, crowd: t.near.length };
     if (t.near.length < (this.policy.breakOutAbove ?? 2)) return { did: false, crowd: t.near.length };
+    // One logoff per healing session, whatever it is for (m59-healing-session.mjs).
+    const me = String(this.s?.name ?? '');
+    { const h = this.s.client?.vitals?.()?.health; closeIfHealed(me, { hp: h?.value, max: h?.max }); }
+    if (!mayLogoff(me)) return { did: false, crowd: t.near.length, why: 'this healing session already logged off once' };
     this.note('reconnecting before stepping out', {
       why, crowd: t.near.length, camped_on_us: t.engaged, what: t.names,
       how: 'a reconnect hands back the entry grace period, so we walk out past a crowd that ' +
            'has to notice us one at a time rather than one that is already mid-swing' });
+    noteLogoff(me, { why: 'breaking out of a crowded safe spot', room: this.s.world?.room?.num ?? null });
     const r = await this.reconnect('breaking out of a crowded safe spot');
     if (!r.ok) return { did: false, crowd: t.near.length };
     this.tally.breakouts = (this.tally.breakouts || 0) + 1;

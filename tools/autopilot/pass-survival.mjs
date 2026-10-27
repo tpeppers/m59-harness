@@ -9,7 +9,8 @@
 // the `@part` markers are what it splices on.
 //
 // 1 methods: passFleeAndRest
-import { poisonedNow, POISON_RELOG_OFFLINE_MS } from '../m59-poison.mjs';
+import { poisonedNow } from '../m59-poison.mjs';
+import { closeIfHealed, staysPut } from '../m59-healing-session.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
@@ -520,24 +521,15 @@ export class PassSurvivalPart {
     // to flee through it and risk low-health travel. Shelter in place." Poison cannot kill (player.kod PoisonTimer clamps
     // health at 1); the danger is a hit at low health, so the answer is a wall nothing can reach, now, wherever this is --
     // on a road or on a farm -- held until the poison ends (releaseRestedHold), then healed at before going on.
-    // JUST BACK FROM A POISONED RELOG WITH SOMETHING STILL BESIDE US: OFF AGAIN, AT ONCE. Operator, 2026-10-27: keep the
-    // relog short, on a safe spot, to lose aggro -- and take the new spot only if no hostile is adjacent. A monster drops its
-    // target at logoff and an aggressive one re-acquires on return, so a short logoff is safe only if we do not stand up
-    // next to it. Poison holds health at 1 and cannot kill (Fozzie, 2026-10-27, died to the troll beside him, not to the
-    // poison). Each logoff is the 12 s floor (shorter doubles the poison timer); at most six in a row.
-    if (poisonedNow(this.s?.client) && !sheltered && !this.hold) {
-      const justBack = this.rejoinedAt && Date.now() - this.rejoinedAt < 20_000;
-      if (!near.length) this._poisonRelogs = 0;
-      else if (justBack && (this._poisonRelogs ?? 0) < 6) {
-        this._poisonRelogs = (this._poisonRelogs ?? 0) + 1;
-        this.note('poisoned and a hostile is still adjacent after the relog: logging off again', {
-          adjacent: near.length, attempt: this._poisonRelogs,
-          why: 'a short logoff loses the aggro only if we do not stand up next to the monster; poison cannot kill, a hit can' });
-        await this.reconnect('poisoned, a hostile adjacent after the relog', { offlineMs: POISON_RELOG_OFFLINE_MS }).catch(() => null);
-        return HANDLED;
-      }
-    }
-    if (poisonedNow(this.s?.client) && !sheltered && !this.hold
+    // A HEALING SESSION ENDS AT FULL HEALTH, read every pass, so a session that healed between two bad moments is closed
+    // before the second one asks for its logoff (m59-healing-session.mjs).
+    const sessionHealth = this.s.client?.vitals?.()?.health;
+    const healingSession = closeIfHealed(String(this.s?.name ?? ''), { hp: sessionHealth?.value, max: sessionHealth?.max });
+    // And inside a session that has already logged off once, the body is on its ONE spot: a hold lost after the relog
+    // (came back elsewhere, the wall gave up) is not a reason to walk to another one poisoned. It stays still and heals.
+    // A body with no spot is never told to stand still: it flees to the nearest reachable one (staysPut).
+    const oneSpotAlready = !!healingSession && staysPut(String(this.s?.name ?? ''), { holding: !!this.hold });
+    if (poisonedNow(this.s?.client) && !sheltered && !this.hold && !oneSpotAlready
         && (!this._poisonWallTriedAt || Date.now() - this._poisonWallTriedAt > 20_000)) {
       this._poisonWallTriedAt = Date.now();
       const got = await this.takeRecoverySpot('poisoned: sheltering in place at the nearest safe spot until the poison ends')

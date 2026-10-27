@@ -921,7 +921,7 @@ owner or changed body releases that exception through the shared refuge proof.
 
 Operator, 2026-10-27: *"the correct solution to poison is to lock down in the nearest safe spot until the poison ends
 and healing occurs afterwards, not to flee through it and risk low-health travel. Shelter in place."*
-`tools/m59-poison.mjs`; `m59-poison-test.mjs` (10).
+`tools/m59-poison.mjs`; `m59-poison-test.mjs` (11).
 
 - **What poison does** (player.kod): every 10 s it takes strength/1000 health and **clamps at 1**, so it cannot kill; it
   leaves the body one hit from death. A black spider poisons one bite in ten (`dethspid.kod`: 0.5 HP/s for 180 s,
@@ -934,8 +934,18 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
 - **A poisoned relog stays out 12 s** (`reconnect`). PoisonTimer re-arms only while the player is in the world and
   UserLogonHook starts a new one whenever poison remains, so a relog inside 10 s runs two timers: Fozzie's four relogs
   showed two interleaved 5-HP cadences, about -1 HP/s instead of -0.5.
-- **Back from a poisoned relog with a hostile still adjacent: off again at once.** Operator: keep the relog short, on a safe
-  spot, to lose aggro; take the new spot only if nothing hostile is adjacent. A monster drops its target at logoff and an
-  aggressive one re-acquires on return, so standing up beside it undoes the logoff. Each logoff is the 12 s floor, at
-  most six in a row. Logging off never shortens the poison: FreezeAllEnchantments pauses it offline and adds 3 s to a
-  harmful enchantment on every logoff.
+- **ONE logoff per healing session, then sit still on one spot until full.** Operator, 2026-10-27: *"Only one logoff:
+  After, It just sits still and safe after rotating so it can heal."* A healing session opens at the first play-dead (or
+  hit-while-resting, or breakout) logoff and closes only at FULL health; inside it no path logs off again and the body
+  takes no other spot, whatever is adjacent. **That is when it is ON a safe spot.** A body that comes back anywhere
+  else -- the cooperative logoff (a fleet-mate's distraction hits), a relog that lands off its square, the open freeze
+  against a player -- never stands still: it flees to the nearest reachable safe spot, still with no second logoff, and
+  then stays. Operator: *"if it logs in and it's not in a safe spot it basically should never stay still: the log-off
+  for protection behaviors best conditions is on a safe spot to rest, anything else should flee to the safe spot to try
+  to the nearest reachable heal spot there"* (`staysPut`; the old post-relog open freeze is gone).
+  `tools/m59-healing-session.mjs`, on disk under `substrate/.healing/` so a keeper handoff is held to the
+  logoff the old keeper spent; `m59-healing-session-test.mjs` (29).
+  **Why it was needed:** `playDead` refused a second logoff only while no damage had arrived since the turn at the wall,
+  and a poison tick IS damage, so every tick re-armed it. Logging off never shortens poison: FreezeAllEnchantments pauses
+  it offline and adds 3 s to a harmful enchantment on every logoff. A short-lived rule (27995930) that logged off again,
+  up to six times, when a hostile was adjacent after the relog was withdrawn by the operator the same morning.

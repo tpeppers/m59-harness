@@ -20,8 +20,13 @@ import { readToolSource } from './autopilot/source.mjs';
 // character is unreachable and healing at zero. That looks identical to working. It reads
 // as a wall that holds — because the wall does hold — while the health sits at four.
 
-import { Autopilot } from './m59-autopilot.mjs';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+// Each fake is its own character with its own healing session (m59-healing-session.mjs): one logoff a session.
+process.env.M59_HEALING_DIR = mkdtempSync(join(tmpdir(), 'm59-playdead-'));
+const { Autopilot } = await import('./m59-autopilot.mjs');
+let fakeNo = 0;
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -60,6 +65,7 @@ function fakeSession({ health = 12, max = 40, backAt = SPOT } = {}) {
 // An Autopilot with everything the freeze path touches stubbed, and nothing else.
 function keeper(s, over = {}) {
   const a = Object.create(Autopilot.prototype);
+  s.name ??= `fake${++fakeNo}`;
   a.s = s;
   a.policy = {};
   a.tally = {};
@@ -162,15 +168,21 @@ console.log('coming back somewhere else is not a safe spot');
   // A reconnect normally puts you back exactly where you were, but the branch above trusts
   // `hold` completely — so believing in a square we are not standing on is worse than
   // freezing. Turning there would be spending the grace period for nothing.
+  // CHANGED 2026-10-27: this used to freeze, completely still. Operator: "if it logs in and it's not in a safe spot it
+  // basically should never stay still ... anything else should flee to the safe spot to try to the nearest reachable
+  // heal spot there". So it flees, and does not log off again (one logoff a healing session).
   const s = fakeSession({ backAt: { col: 40, row: 40 } });
-  const a = keeper(s);
+  const fled = [];
+  const a = keeper(s, { takeRecoverySpot: async why => { fled.push(why); return { took: true }; } });
   const held = await a.playDead('at 12 health');
 
   ok('the hold is given up', a.hold === null);
   ok('and no turn is sent, because there is no wall to turn behind',
      !s.sent.some(x => x.kind === 'face'), JSON.stringify(s.sent));
-  ok('we freeze instead, completely still', held === true && a.frozenUntil > Date.now());
+  ok('it FLEES to the nearest reachable safe spot rather than standing still',
+     held === true && fled.length === 1 && !(a.frozenUntil > Date.now()), JSON.stringify(fled));
   ok('and say so rather than carrying on', noted(a, /did not come back on the safe spot/));
+  ok('and a second playDead in this healing session logs off nothing', (await a.playDead('hit again')) === false);
 }
 
 console.log('');
@@ -268,8 +280,11 @@ console.log('and OFF a wall against MONSTERS it now refuses — the rule reverse
   p.holdWorks = () => false;
   p.hold = null;
   p.playerThreatPresent = () => true;
-  ok('...but in the open WITH A PLAYER here it still freezes',
+  const pFled = [];
+  p.takeRecoverySpot = async why => { pFled.push(why); return { took: true }; };
+  ok('...but in the open WITH A PLAYER here it still logs off',
      (await p.playDead('a stranger is on us')) !== false);
+  ok('and comes back fleeing to a safe spot, not frozen in the open (2026-10-27)', pFled.length === 1 && !(p.frozenUntil > Date.now()));
 
   // An unproven wall is still not a special case -- proof is not the question, geometry is,
   // and `adoptRecoveryWall` answers it. The operator: "do *not* consult the safe spot ledger

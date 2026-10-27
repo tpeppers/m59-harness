@@ -11,6 +11,7 @@
 // 11 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
 //   fleetLogoff, resumeCooperativeReturn, playDead, logoffDeclined, playDeadObserved, askForHelp,
 //   restockReagents
+import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs';
 import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
 import { isFood } from '../m59-items.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -127,6 +128,7 @@ export class CooperativePart {
     this.tally.logoffs=(this.tally.logoffs??0)+1;
     this.survivalInterruptedPass=this.passes;
     s.cancelMovement?.(null,'cooperative logoff',{preserveId:decision.id,origin:keeperOrigin('cooperative_logoff',{run_id:request.id})});
+    noteLogoff(String(this.s?.name??''),{why,room:this.s.world?.room?.num??null,cooperative:true});   // this session's one logoff; it then flees to cover (staysPut)
     const result=await this.reconnect('cooperative logoff: wait for distraction');
     if(result.ok){
       this.frozenUntil=null;this.freezeSample=null;
@@ -159,6 +161,25 @@ export class CooperativePart {
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     if(this.operatorSurvivalStandDown())return false;
+    // ONE LOGOFF PER HEALING SESSION (m59-healing-session.mjs). Operator, 2026-10-27: "it should only ever do the play-dead
+    // log-to-lose-aggro code once per healing session on a single safe spot until healed full". Any cause. After the one
+    // logoff, the body keeps its spot and heals: a second logoff here (a poison tick re-armed it on every tick) only adds
+    // 3 s to a harmful enchantment. The session is persisted, so a replacement keeper is held to it too.
+    {
+      const me=String(this.s?.name??''),h=this.s.client?.vitals?.()?.health;
+      closeIfHealed(me,{hp:h?.value,max:h?.max});
+      if(!mayLogoff(me)){
+        if(!this._oneLogoffSaid){this._oneLogoffSaid=true;
+          this.note('not logging off again this healing session',{why,
+            rule:'one play-dead logoff per healing session, until healed to full; keep the spot and heal'});}
+        const active=currentSurvivalDecision(this.s);
+        if(active?.strategy!=='rest_safe'&&this.hold)chooseSurvivalDecision(this.s,{strategy:'rest_safe',reason:why,
+          reason_code:'one_logoff_per_session',status:'recovering',chosen_refuge:this.hold,
+          mitigation:'already logged off once this healing session; heal here to full'},{because:'one logoff per healing session'});
+        return false;
+      }
+      this._oneLogoffSaid=false;
+    }
     this.suspendJourney(why);
     const s=this.s,atWall=this.adoptRecoveryWall();
     // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze
@@ -443,6 +464,7 @@ export class CooperativePart {
     this.survivalInterruptedPass = this.passes;
     s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId,origin:keeperOrigin('play_dead')});
 
+    noteLogoff(String(this.s?.name ?? ''), { why, room: this.s.world?.room?.num ?? null });   // the one this session
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
       this.note('reconnect after logoff failed', { why: came.why });
@@ -509,10 +531,28 @@ export class CooperativePart {
       this.note('did not come back on the safe spot', {
         expected: { col: spot.col, row: spot.row },
         actually: me ? { col: me.col, row: me.row } : null,
-        why: 'falling back to staying completely still, which needs no geometry to work' });
+        why: 'fleeing to the nearest reachable safe spot rather than standing still' });
     }
 
-    // Frozen. Rest only — no movement, no turning, no looking around, and in
+    // BACK IN THE WORLD AND NOT ON A SAFE SPOT: FLEE TO ONE, NEVER STAND STILL. Operator, 2026-10-27: "if it logs in and
+    // it's not in a safe spot it basically should never stay still: the log-off for protection behaviors best conditions
+    // is on a safe spot to rest, anything else should flee to the safe spot to try to the nearest reachable heal spot
+    // there". This replaces the open freeze that used to follow (rest only, no movement for freezeMs), which recovers
+    // vigor and never health. The arrival does not log off again: this healing session's one logoff is spent
+    // (m59-healing-session.mjs), so playDead at the spot declines and the body rests there.
+    if (!this.operatorSurvivalStandDown()) {
+      this.frozenUntil = null; this.freezeSample = null;
+      this.note('relogged off a safe spot: fleeing to the nearest reachable one', {
+        room: s.world?.room?.num ?? null, health: s.client?.vitals?.()?.health?.value ?? null });
+      const fled = await this.takeRecoverySpot('relogged off a safe spot: the nearest reachable heal spot')
+        .catch(e => ({ took: false, why: e.message }));
+      if (fled?.took || fled?.cancelled) return true;
+      this.note('no safe spot reached after the relog', { why: fled?.why ?? null,
+        then: 'the survival ladder runs next pass and keeps looking; no second logoff this healing session' });
+      return true;
+    }
+
+    // Frozen (only when the operator has stood survival down, which forbids the walk above). Rest only — no movement, no turning, no looking around, and in
     // particular no room-contents request, because anything that reads as an action
     // hands the grace period back.
     this.frozenUntil = Date.now() + (this.policy.freezeMs ?? 90_000);

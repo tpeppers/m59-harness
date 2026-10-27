@@ -247,9 +247,14 @@ through a nested shelter order.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.
-- `m59-poison-test.mjs` (12): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
+- `m59-poison-test.mjs` (11): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
   forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
   for the old poison timer to stop.
+- `m59-healing-session-test.mjs` (29): one play-dead logoff per healing session. Forty doomed triggers give one
+  logoff; the session closes only at full health and then allows one more; a new keeper process reads the spent logoff
+  from disk; `playDead`, a broken rest and a breakout all decline inside a spent session, keep the hold and take no new
+  spot; the poisoned-relog loop is gone; a
+  body back OFF a spot (cooperative or not) flees to the nearest reachable one (no second logoff) and then stays.
 - `m59-received-test.mjs` (19): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,

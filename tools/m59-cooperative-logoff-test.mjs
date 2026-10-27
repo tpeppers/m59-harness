@@ -14,6 +14,8 @@ import {cooperativeStore,configureCooperativeLogoff,publishCooperativePresence,r
   cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,
   prepareCooperativeRefuge,cooperativeReturnRefuge} from './m59-cooperative-logoff.mjs';
 import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
+// Healing sessions (one logoff each) go to a temp dir, never the checkout's substrate/.healing.
+process.env.M59_HEALING_DIR=(await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(),'m59-coop-healing-'));
 const dir=mkdtempSync(join(tmpdir(),'m59-cooperative-logoff-'));
 party.setRosterSource(()=>new Set(['Victim','Helper','Second']));
 const policy={enabled:true,helper_health:.95,danger_quiet_ms:3000,cooldown_ms:60000,attempt_ms:6000};

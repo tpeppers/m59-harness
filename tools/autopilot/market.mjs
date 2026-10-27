@@ -9,6 +9,7 @@
 // the `@part` markers are what it splices on.
 //
 // 5 methods: restBroken, packWantsMarket, checkIfShouldSell, itemValue, farmCleanupBeforeSale
+import { closeIfHealed, mayLogoff, noteLogoff, staysPut } from '../m59-healing-session.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderSkills } from '../m59-standing-orders.mjs';
@@ -36,6 +37,18 @@ export class MarketPart {
   // Only after both is resting allowed again, and by then it is a different square.
   async restBroken(room, near) {
     this.tally.rests_broken = (this.tally.rests_broken || 0) + 1;
+    // ONE LOGOFF PER HEALING SESSION, AND ONE SPOT (m59-healing-session.mjs). Operator, 2026-10-27: "Only one logoff:
+    // After, It just sits still and safe after rotating so it can heal." Once this session's logoff is spent, a broken
+    // rest neither logs off again, gives up the spot, nor walks to another wall: the body stays where it is and heals.
+    const me = String(this.s?.name ?? '');
+    { const h = this.s.client?.vitals?.()?.health; closeIfHealed(me, { hp: h?.value, max: h?.max }); }
+    const spent = !mayLogoff(me);
+    if (spent && staysPut(me, { holding: !!this.hold })) {
+      this.note('hit while resting, staying put: this healing session already logged off once', {
+        rule: 'one logoff per healing session, one spot, sit still until full' });
+      return;
+    }
+    // A spent session with no spot: no second logoff, but it still flees to the nearest reachable one (below).
     // A BROKEN REST WITH NOTHING NEXT TO US IS NOT EVIDENCE ABOUT THE SQUARE.
     //
     // observe() has always refused this reading — `nothing was in swing range, a quiet
@@ -88,7 +101,8 @@ export class MarketPart {
 
     // Shed the aggro before walking anywhere.
     let dropped = false;
-    if (this.policy.breakOutViaLogoff !== false) {
+    if (!spent && this.policy.breakOutViaLogoff !== false) {
+      noteLogoff(me, { why: 'hit while resting', room: room?.num ?? null });
       const rc = await this.reconnect('hit while resting — shedding aggro before moving')
                            .catch(e => ({ ok: false, why: e.message }));
       dropped = !!rc?.ok;

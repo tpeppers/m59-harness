@@ -9,7 +9,8 @@
 //   * a poisoned keeper takes the NEAREST safe spot (takeRecoverySpot), not a wall forward on the route, in any mode;
 //   * the hold is NOT released while the poison lasts, however full health reads between ticks; once it ends, the
 //     ordinary floor makes it heal before it leaves;
-//   * a poisoned relog stays out long enough for the old poison timer to stop (player.kod: a relog inside 10 s runs two).
+//   * a poisoned relog stays out long enough for the old poison timer to stop (player.kod: a relog inside 10 s runs two),
+//     and there is only one of it a healing session (m59-healing-session-test.mjs).
 import { readFileSync } from 'node:fs';
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -62,9 +63,8 @@ console.log('the shelter is the nearest safe spot');
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('a poisoned keeper takes the nearest recovery spot', /if \(poisonedNow\(this\.s\?\.client\) && !sheltered && !this\.hold[\s\S]{0,300}takeRecoverySpot\('poisoned: sheltering in place/.test(src));
-  ok('just back from a poisoned relog with a hostile adjacent: off again at once, at the 12 s floor, at most six times',
-     /else if \(justBack && \(this\._poisonRelogs \?\? 0\) < 6\)[\s\S]{0,500}reconnect\('poisoned, a hostile adjacent after the relog', \{ offlineMs: POISON_RELOG_OFFLINE_MS \}\)/.test(src));
-  ok('and only then the new spot, with nothing beside us', src.indexOf("poisoned, a hostile adjacent after the relog") < src.indexOf("takeRecoverySpot('poisoned: sheltering in place"));
+  ok('no second logoff after a poisoned relog, whatever is adjacent (one per healing session: m59-healing-session-test)',
+     !/poisoned, a hostile adjacent after the relog/.test(src));
   ok('and the forward-on-the-route shelter no longer fires for poison', /const poisonedAndFading = ailingNow && !poisonedNow\(this\.s\?\.client\)/.test(src));
 }
 
