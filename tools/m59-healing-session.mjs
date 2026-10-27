@@ -10,8 +10,10 @@
 // while poisoned, then a troll's one blow at 1 HP.
 //
 // THE SESSION: opened by the first play-dead logoff (a body under its line, taking a recovery spot), closed when health is
-// back to FULL. Inside one session the logoff fires at most once, whatever the cause; after it the body keeps ONE safe
-// spot until healed; a body that comes back OFF a spot flees to the nearest reachable one first (staysPut). Persisted per character (substrate/.healing/), so a keeper handoff cannot hand out a second logoff.
+// back to FULL and at least SESSION_MIN_MS has passed since the logoff (a logoff taken at full health is not "healed").
+// Inside one session the logoff fires at most once, whatever the cause; after it the body keeps ONE safe spot until
+// healed; a body that comes back OFF a spot flees to the nearest reachable one first (staysPut). Persisted per character
+// (substrate/.healing/), so a keeper handoff cannot hand out a second logoff.
 // Pure apart from the small file.
 import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -22,6 +24,12 @@ export const HEALING_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '
 const healingDir = () => process.env.M59_HEALING_DIR || HEALING_DIR;
 // A session older than this is stale (a body that never reached full, a keeper that died): it is closed, not trusted.
 export const SESSION_MAX_MS = 2 * 3_600_000;
+// AND NOT BEFORE THIS LONG AFTER ITS LAST LOGOFF, however full health reads. Prod 2026-10-27, Robin (t8), room 599: a
+// "logging off rather than dying" at 79/79 opened a session that the very next pass closed -- he was at full health --
+// then a crowded-spot breakout did the same, then a hit-while-resting: three logoffs in two minutes. A logoff taken at
+// full health is still the session's one logoff; "healed to full" has to mean healed AFTER it, and no healing session is
+// shorter than this.
+export const SESSION_MIN_MS = Number(process.env.M59_HEALING_MIN_MS || 5 * 60_000);
 const fileOf = (agent, dir) => join(dir, `${String(agent ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
 
 // A keeper always has a name; a nameless one is a test fake or a body not yet logged in, and gets no session -- one
@@ -48,7 +56,8 @@ function writeSession(agent, s, dir) {
 export function closeIfHealed(agent, { hp = null, max = null, dir = healingDir(), now = Date.now() } = {}) {
   const s = readSession(agent, { dir, now });
   if (!s) return null;
-  if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp >= max) { writeSession(agent, null, dir); return null; }
+  const settled = now - Number(s.last_logoff_at ?? s.started_at) >= SESSION_MIN_MS;
+  if (settled && Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp >= max) { writeSession(agent, null, dir); return null; }
   return s;
 }
 /** May this body play dead (log off) now? Only if no logoff has happened in the open session. */

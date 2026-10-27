@@ -251,11 +251,12 @@ through a nested shelter order.
 - `m59-poison-test.mjs` (11): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
   forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
   for the old poison timer to stop.
-- `m59-healing-session-test.mjs` (29): one play-dead logoff per healing session. Forty doomed triggers give one
+- `m59-healing-session-test.mjs` (34): one play-dead logoff per healing session. Forty doomed triggers give one
   logoff; the session closes only at full health and then allows one more; a new keeper process reads the spent logoff
   from disk; `playDead`, a broken rest and a breakout all decline inside a spent session, keep the hold and take no new
   spot; the poisoned-relog loop is gone; a
-  body back OFF a spot (cooperative or not) flees to the nearest reachable one (no second logoff) and then stays.
+  body back OFF a spot (cooperative or not) flees to the nearest reachable one (no second logoff) and then stays; a logoff at FULL health still spends the session (no close inside
+  five minutes), and Robin's three causes in a row (play-dead, breakout, hit-while-resting) give one logoff.
 - `m59-received-test.mjs` (24): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,

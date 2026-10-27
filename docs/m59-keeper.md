@@ -944,7 +944,9 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   for protection behaviors best conditions is on a safe spot to rest, anything else should flee to the safe spot to try
   to the nearest reachable heal spot there"* (`staysPut`; the old post-relog open freeze is gone).
   `tools/m59-healing-session.mjs`, on disk under `substrate/.healing/` so a keeper handoff is held to the
-  logoff the old keeper spent; `m59-healing-session-test.mjs` (29).
+  logoff the old keeper spent; `m59-healing-session-test.mjs` (34). **A session closes at full health only five
+  minutes or more after its logoff** (`SESSION_MIN_MS`): Robin, 2026-10-27, logged off at 79/79 and the next pass's
+  full-health reading closed the session, so a breakout and a hit-while-resting each took another -- three in two minutes.
   **Why it was needed:** `playDead` refused a second logoff only while no damage had arrived since the turn at the wall,
   and a poison tick IS damage, so every tick re-armed it. Logging off never shortens poison: FreezeAllEnchantments pauses
   it offline and adds 3 s to a harmful enchantment on every logoff. A short-lived rule (27995930) that logged off again,

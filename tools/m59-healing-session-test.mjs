@@ -46,6 +46,21 @@ console.log('one logoff a session, any number of triggers');
   ok('a session older than the cap is stale, not trusted for ever', H.mayLogoff('fozzie', { now: now0 + 400_000 + H.SESSION_MAX_MS + 1 }));
 }
 
+console.log('a logoff at FULL health is still the session\'s one logoff');
+{
+  // Prod 2026-10-27, Robin (t8), room 599, 79/79: "logging off rather than dying" at 06:56:27, a crowded-spot breakout at
+  // 06:57:35, hit-while-resting at 06:58:31 -- three logoffs in two minutes. Each session was closed by the next pass's
+  // full-health reading.
+  const t0 = 50_000_000;
+  H.noteLogoff('robin', { why: 'logging off rather than dying', now: t0 });
+  H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + 3000 });
+  ok('full health three seconds after the logoff does not close the session', !H.mayLogoff('robin', { now: t0 + 3000 }));
+  H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + 68_000 });
+  ok('nor a minute later (the breakout came at +68 s)', !H.mayLogoff('robin', { now: t0 + 68_000 }));
+  H.closeIfHealed('robin', { hp: 79, max: 79, now: t0 + H.SESSION_MIN_MS + 1 });
+  ok(`full health ${H.SESSION_MIN_MS / 60000} minutes after the logoff closes it`, H.mayLogoff('robin', { now: t0 + H.SESSION_MIN_MS + 1 }));
+}
+
 console.log('a handoff keeps it');
 {
   H.noteLogoff('piggy', { why: 'doomed', room: 599 });
@@ -56,7 +71,7 @@ console.log('a handoff keeps it');
 console.log('the keeper refuses the second logoff');
 const { Autopilot } = await import('./m59-autopilot.mjs');
 {
-  H.noteLogoff('animal', { why: 'doomed' });
+  H.noteLogoff('animal', { why: 'doomed', now: Date.now() - H.SESSION_MIN_MS - 1000 });
   const notes = []; let reconnects = 0;
   const k = Object.assign(Object.create(Autopilot.prototype), {
     s: { name: 'animal', client: { vitals: () => ({ health: { value: 9, max: 60 } }) }, combat: null },
@@ -83,6 +98,29 @@ console.log('every logoff records itself, and the loop is gone');
   ok('and the poison shelter takes no second spot inside a spent session', /!this\.hold && !oneSpotAlready/.test(src));
   ok('the breakout logoff records itself and is refused inside a spent session',
      /if \(!mayLogoff\(me\)\) return \{ did: false[\s\S]{0,800}noteLogoff\(me[^\n]*\n\s*const r = await this\.reconnect\('breaking out of a crowded safe spot'\)/.test(src));
+}
+
+console.log('every named cause, in Robin\'s order, at full health: one logoff');
+{
+  const reconnects = [];
+  const vit = { health: { value: 79, max: 79 } };
+  const c = { vitals: () => vit, self: { col: 3, row: 4 }, room: { objects: new Map() }, rsc: { get: x => x } };
+  const k = Object.assign(Object.create(Autopilot.prototype), {
+    s: { name: 't8', client: c, world: { room: { num: 599 } }, combat: null }, tally: {}, policy: { breakOutViaLogoff: true },
+    hold: { col: 3, row: 4, room: 599, takenAt: Date.now() - 5000 }, note: () => {}, progress: () => {}, noProgress: () => {},
+    operatorSurvivalStandDown: () => false, playerThreatPresent: () => false, tellPilot: async () => {},
+    adoptRecoveryWall: () => true, holdWorks: () => true, logoffDeclined: () => null, suspendJourney: () => {},
+    currentRecoveryWall: () => true, releaseHold: () => {}, noteFailedRestSpot: () => {},
+    takeRecoverySpot: async () => ({ took: true }),
+    reconnect: async why => { reconnects.push(why); return { ok: true }; },
+    threat: () => ({ near: [1, 2, 3], engaged: 2, names: ['troll'] }) });
+  await k.playDead('logging off rather than dying, at 79/79').catch(e => reconnects.push('ERR ' + e.message));
+  const afterFirst = reconnects.length;
+  await k.breakOut('leaving a crowded safe spot').catch(e => reconnects.push('ERR ' + e.message));
+  vit.health.value = 73;
+  await k.restBroken({ num: 599 }, [{ id: 1 }]).catch(e => reconnects.push('ERR ' + e.message));
+  ok('play-dead logs off once', afterFirst === 1, JSON.stringify(reconnects));
+  ok('then the crowded-spot breakout and the hit-while-resting do not', reconnects.length === 1, JSON.stringify(reconnects));
 }
 
 console.log('a broken rest inside a spent session keeps the spot');
