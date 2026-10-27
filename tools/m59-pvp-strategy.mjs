@@ -50,6 +50,8 @@
 //        `via`: walk to that room first, planning around `room`, then step in -- for a room whose
 //        entrances land on islands that cannot reach each other (if the way in fails, it goes straight in).
 //        row/col: on arrival, walk to that square (best effort; the room, not the square, ends the flight)
+//        cup: true -- sip the Chalice of the Rain the body carries first, once, and keep going from wherever it lands
+//        (operator, 2026-10-27: islanders who see a known enemy "can simply sip the chalice and run away")
 //   { do: 'engage', why? }
 //        fight here even where the character's pvp_rooms would refuse: return fire on a hit, the war
 //        response on a hostile sighting. The server's own rules, the safety flag and every refused-target
@@ -238,7 +240,7 @@ export function validateDecision(d) {
   const hasSquare = d.row != null || d.col != null, row = Number(d.row), col = Number(d.col);
   if (hasSquare && !(Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0)) return { decision: null, error: 'flee_to row and col are whole squares, given together' };
   return { decision: { do: 'flee_to', room, hold_ms, hold_orders: d.hold_orders === true, max_ms, why,
-    ...(via != null ? { via } : {}), ...(hasSquare ? { row, col } : {}) } };
+    ...(via != null ? { via } : {}), ...(hasSquare ? { row, col } : {}), ...(d.cup === true ? { cup: true } : {}) } };
 }
 
 /**

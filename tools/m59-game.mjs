@@ -2049,11 +2049,13 @@ class Session {
   // its east edge into 2135, dragonfly queens, level 145). The server moves a body the instant a step lands past the room's
   // boundary, whichever faculty chose the step -- shelter, fight-back, clear-path, a chase, a walk -- so the guard sits
   // under all of them, on the step. No confinement, no guard: an unconfined keeper goes where its journey says.
+  // And only a step that LEAVES the confinement: a body already outside it is on its way home (a farmer sent to an inn
+  // crosses rooms it is not confined to), and travel's confinementAvoid keeps that walk on the confined road.
   edgeCrossingBlock(target) {
     const confine = autopilotIfAny(this.name)?.policy?.confineRooms;
     if (!Array.isArray(confine) || !confine.length || !target) return null;
     const room = this.world?.room;   // the map's own record for the room we stand in (World, memoised)
-    if (!room) return null;
+    if (!room || !confine.map(Number).includes(Number(room.num))) return null;
     const row = Math.floor(target.y / KOD_FINENESS), col = Math.floor(target.x / KOD_FINENESS);
     const to = edgeCrossedAt(room, row, col)?.edge?.to;
     if (to == null || confine.map(Number).includes(Number(to))) return null;

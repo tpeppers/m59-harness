@@ -37,6 +37,7 @@ const src = fs.readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 ok(/c\.beforeMove = target => \{[\s\S]{0,600}this\.edgeCrossingBlock\(target\)/.test(src), 'beforeMove consults edgeCrossingBlock');
 ok(/code: 'EDGE_OUT_OF_CONFINEMENT'/.test(src), 'the refusal carries EDGE_OUT_OF_CONFINEMENT');
 ok(/edgeCrossingBlock\(target\) \{[\s\S]{0,300}confineRooms[\s\S]{0,120}!confine\.length/.test(src), 'no confinement, no guard');
+ok(/!room \|\| !confine\.map\(Number\)\.includes\(Number\(room\.num\)\)/.test(src), 'only a step that LEAVES the confinement: a body outside it walks home');
 
 console.log(`m59-edge-confinement-test: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

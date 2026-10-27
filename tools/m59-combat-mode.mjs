@@ -2315,6 +2315,7 @@ export class CombatMode {
         hold_ms: d.hold_ms ?? 0, hold_orders: d.hold_orders === true, decision_id: decision.id, started_at: now, arrived_at: null,
         ...(Number.isInteger(d.via) && d.via !== d.room ? { via: d.via } : {}),
         ...(Number.isInteger(d.row) && Number.isInteger(d.col) ? { post: { row: d.row, col: d.col } } : {}),
+        ...(d.cup === true && !sortie ? { cup: true } : {}),
         ...(sortie ? { sortie } : {}) } };
     updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'pvp_strategy_flight' });
     this.record('pvp_strategy_flight', this.active);
@@ -2323,8 +2324,34 @@ export class CombatMode {
     return true;
   }
 
+  // ONE SIP, THEN KEEP RUNNING. The chalice casts Rescue at power 1 (chalice.kod:206-208), which lands 15-25 s later --
+  // on Ko'catan at the inn (2001), from the orc caves at the pool (2510) -- so this sends the sip and returns at once,
+  // and the flight's walk carries the body away from the player meanwhile; the next pass finds the room changed.
+  async sipCupForFlight(o) {
+    const s = this.s, c = s.client;
+    const nameOf = i => String(c.rsc?.get?.(i.nameRsc) ?? i.name ?? '');
+    const cup = (c.inventory ?? []).find(i => /^chalice of the rain$/i.test(nameOf(i)));
+    if (!cup) return { sipped: false, reason: 'no chalice in the pack' };
+    if (this.now() - Number(s.lastPlayerAttackAt ?? 0) < 600_000)
+      return { sipped: false, reason: 'attacked a player in the last ten minutes: the chalice refuses (chalice.kod:168)' };
+    await s.pacer.submit('use', () => { c.use(cup.id); });
+    return { sipped: true, cup: cup.id, from: s.world.room.num, at: this.now() };
+  }
+
   async advanceFlight(o) {
     const s = this.s, f = o.flight;
+    // THE CUP FIRST. Operator, 2026-10-27: islanders who see a known enemy enter their map "can simply sip the chalice
+    // and run away, and as long as they don't get attacked (running helps avoid getting attacked), they'll chalice to
+    // the inn and be safe". A flight decided with `cup: true` sips the Chalice of the Rain the body carries, once, then
+    // goes on from wherever the water lands it: in the flight's room the walk below is skipped and the hold begins.
+    // No cup, a refused sip or a landing elsewhere: the ordinary walk, as before. A player attacked in the last ten
+    // minutes cannot sip (chalice.kod:168) -- a flight never attacks, so a fleeing islander never earns that ban.
+    if (f.cup && !f.cup_result && s.world.room.num !== f.room) {
+      f.cup_result = await this.sipCupForFlight(o)
+        .catch(e => { if (/superseded|stale|generation/i.test(String(e?.message))) throw e; return { sipped: false, reason: e?.message ?? 'sip failed' }; });
+      this.guard(o);
+      s.recorder?.line?.('combat', { event: 'pvp_strategy_flight_cup', order_id: o.id, room: f.room, ...f.cup_result });
+    }
     if (s.world.room.num !== f.room) {
       await this.stand(o);
       this.armTimer();

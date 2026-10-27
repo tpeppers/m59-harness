@@ -232,6 +232,8 @@ const SUITES = [
    'a confined keeper never steps over an edge into a room outside its confinement (Lew 2115 -> 2124, Kermit 2125 -> 2135)'],
   ['m59-heal-before-trip-test.mjs',
    'no town trip opens while a healing session is open: the body heals on its spot first (Beaker, 2115, 2026-10-27)'],
+  ['m59-cup-flight-test.mjs',
+   'a PvP flight with cup: true sips the Chalice of the Rain before it walks, never inside the ten-minute attack ban'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.
