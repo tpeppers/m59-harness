@@ -604,7 +604,12 @@ export class FarmStrategyEngine {
   //   fallback       no desk remedy, or none answered: the file's `otherwise` strategy (else this machine's default,
   //                  substrate/farm-strategy-otherwise.json) is served in its place. The assignment is unchanged, and
   //                  it comes back by itself when a requirement that caused it is met
-  //   stood_down     only when there is no fallback, or the fallback itself failed: no quarry is chosen
+  //   stood_down     only when a REQUIREMENT is unmet and there is no fallback, or the fallback cannot meet it either: no
+  //                  quarry is chosen
+  //   warning        a KILL FLOOR with no desk remedy and no fallback: the farm is flagged and KEEPS RUNNING, on a fresh
+  //                  window, and the flag clears itself at the next kill. Operator, 2026-10-27: "0 kills from cancel is
+  //                  worse than 0 kills from slower than expected town trip ... the cancellation is a strategy/plan level
+  //                  solution to a temporary problem" -- Lew was stood down after half an hour held in town
   //
   // Survival is never on this ladder: fleeing, resting, eating and fighting back are decided above passFarm. The
   // escalation is saved per character, so a keeper restart or handoff picks it up where it was. An explicit
@@ -636,6 +641,15 @@ export class FarmStrategyEngine {
     if (this.escalation?.stage === 'stood_down' && this.escalation.why === why) return;
     this.setEscalation({ stage: 'stood_down', since: this.now(), why, ...extra });
   }
+  // A FLAG, NOT A CANCEL: the farm keeps running on a fresh floor window, and the first kill clears the flag. It says what
+  // usually explains a quiet half hour, so whoever reads it knows where to look before deciding anything bigger.
+  warnFloor(why, extra = {}) {
+    if (this.escalation?.stage === 'warning' && this.escalation.why === why) return;
+    this.floor?.restart(this.now());
+    this.setEscalation({ stage: 'warning', since: this.now(), why, kills_at: Number(this.floor?.st?.total_kills ?? 0),
+      unblock: 'clears itself at the next kill; look for a town trip or errand that held the body, a hold, or a room with no quarry',
+      ...extra });
+  }
 
   /** The catch-all for this assignment: the file's `otherwise`, else this machine's default; never itself. */
   fallbackName(strat = this.loaded?.strategy) {
@@ -652,9 +666,11 @@ export class FarmStrategyEngine {
   /** No desk can fix it (or none did): serve the catch-all, or stand down when there is none. */
   fallBack(why, { requires = null } = {}) {
     const extra = requires ? { requires } : {};
-    if (this.serving !== this.assigned) { this.standDown(`the fallback ${this.serving} is not working either: ${why}`, extra); return; }
+    // An unmet REQUIREMENT is a fact about the plan and stands down; a quiet floor is usually temporary and only warns.
+    const settle = requires ? (w => this.standDown(w, extra)) : (w => this.warnFloor(w, extra));
+    if (this.serving !== this.assigned) { settle(`the fallback ${this.serving} is not working either: ${why}`); return; }
     const to = this.fallbackName();
-    if (!to) { this.standDown(`${why}; no desk remedy and no fallback (otherwise) is declared`, extra); return; }
+    if (!to) { settle(`${why}; no desk remedy and no fallback (otherwise) is declared`); return; }
     this.setEscalation({ stage: 'fallback', to, since: this.now(), why, ...(requires ? { requires } : {}) });
   }
 
@@ -739,7 +755,7 @@ export class FarmStrategyEngine {
           // Read every weapon afresh: a lapsed dedication is the likeliest cause, and an old reading hides it.
           try { this.host.rereadWeapons?.(); } catch {}
           this.setEscalation({ stage: 'diagnosing', since: now, until: now + DIAGNOSE_MS, why: floor.tripped.why });
-        } else this.standDown(`the fallback ${this.serving} tripped its own floor: ${floor.tripped.why}`);
+        } else this.warnFloor(`the fallback ${this.serving} tripped its own floor: ${floor.tripped.why}`);
       }
     } else if (esc.stage === 'diagnosing') {
       const read = facts.weapons && !facts.weapons.some(w => !w.broken && w.bypasses_nonmagic == null);
@@ -761,6 +777,11 @@ export class FarmStrategyEngine {
       else request = this.ask(esc.service, Math.max(1, Math.round((esc.until - esc.since) / 60_000)), esc.why);
     } else if (esc.stage === 'stood_down') {
       if (esc.requires && requiresVerdict(esc.requires, facts).met === true) this.clearEscalation('the requirement is met again');
+      // A floor stand-down saved before warnings existed carries no requirement: it becomes the warning it would be now.
+      else if (!esc.requires) this.warnFloor(esc.why);
+    } else if (esc.stage === 'warning') {
+      // THE FLAG CLEARS ITSELF at the first kill after it was raised: whatever held the farm has let go.
+      if (Number(this.floor?.st?.total_kills ?? 0) > Number(esc.kills_at ?? 0)) this.clearEscalation('kills are back');
     } else if (esc.stage === 'fallback') {
       // BACK BY ITSELF when the requirement that caused it is met (the desk came late, a weapon arrived).
       if (esc.requires && requiresVerdict(esc.requires, facts).met === true) this.clearEscalation('the requirement is met again');

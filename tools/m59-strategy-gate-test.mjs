@@ -228,8 +228,14 @@ async function tick(e, now, step = 6_000) { now.t += step; await e.converge('pas
   for (let i = 0; i < 31; i++) { now.t += 60_000; e.farming(); }
   e.gateCache = null; e.gate(); h.weapons = MAGIC;
   let g = await tick(e, now);
-  ok('no remedy, no otherwise, no machine default: stood down, and it says so', g?.blocked?.by === 'stood_down'
-     && /no fallback/.test(g.blocked.why), JSON.stringify(g));
+  // A FLAG, NOT A CANCEL (operator, 2026-10-27): a quiet floor with nothing to escalate to warns and keeps farming.
+  ok('no remedy, no otherwise, no machine default: a warning, the farm keeps running, and it says how it unblocks',
+     g?.blocked === null && g?.escalation?.stage === 'warning' && /no fallback/.test(g.escalation.why)
+     && /clears itself at the next kill/.test(g.escalation.unblock), JSON.stringify(g));
+  // ...and the first kill clears the flag.
+  e.floor.st.total_kills = Number(g.escalation.kills_at) + 1; e.gateCache = null;
+  g = await tick(e, now);
+  ok('the first kill after the warning clears it', !g?.escalation, JSON.stringify(g?.escalation ?? null));
   writeFileSync(process.env.M59_FARM_OTHERWISE_FILE, JSON.stringify({ strategy: 'spiders' }));
   const h2 = host({ weapons: MAGIC, assigned: 'nofallback' });
   const e2 = new FarmStrategyEngine(h2, { now: () => now.t, floorStore: memStore() });
