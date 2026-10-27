@@ -236,6 +236,12 @@ const SUITES = [
    'no town trip opens while a healing session is open: the body heals on its spot first (Beaker, 2115, 2026-10-27)'],
   ['m59-cup-flight-test.mjs',
    'a PvP flight with cup: true sips the Chalice of the Rain before it walks, never inside the ten-minute attack ban'],
+  ['m59-in-flight-hold-test.mjs',
+   'no directional rung starts while another rung is still walking the body; survival still runs every pass (Ko\'catan East Tower, 2026-10-27)'],
+  ['m59-kocatan-door-test.mjs',
+   'one walker crosses 2013 -> 2115 past the guard with every go on a doorway square; a second walker reproduces the live refusals'],
+  ['m59-confined-relocation-test.mjs',
+   'a confined farmer relocates only inside its confinement and falls back to its station (Zoot, 2005 -> 2115)'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

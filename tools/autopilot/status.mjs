@@ -120,6 +120,8 @@ export class StatusPart {
         })),
         overruns: this.tally.stage_overran ?? 0,
         skipped_in_flight: this.tally.stage_skipped_in_flight ?? 0,
+        // Passes whose directional rungs waited for a rung still in flight (DIRECTIONAL_STAGES).
+        held_by_in_flight: this.tally.stage_held_by_in_flight ?? 0,
       },
       watchdog: this.watchTimer ? {
         ticks: this.watch.ticks, frames_written: this.watch.frames,

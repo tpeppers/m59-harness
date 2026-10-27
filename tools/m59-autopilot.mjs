@@ -341,6 +341,35 @@ export function preferAssignedRoom(rooms, assignedRoom, limit = 8) {
   return ranked.slice(0, limit);
 }
 
+// A CONFINED KEEPER'S PREY ROOMS ARE THE ONES ITS CONFINEMENT LETS IT WALK TO -- AND ITS STATION.
+//
+// `travel()` refuses every keeper journey out of `confineRooms` (the one gate), but the choosers
+// that feed it ranked the whole world. Prod 2026-10-27: Zoot (t17, kocatan-avar-warriors,
+// confined to 2115/2013 and the Ko'catan town, station 2115) finished a town trip in 2005 and
+// stood there for ten minutes, `stranded in 2005`, while the hunt relocation asked for 2131, 2143,
+// 2142, 2144, 2134 and 2152 -- jungle rooms outside the confinement -- three refusals each. Lew,
+// Scooter, Kermit, Piggy and Pepe did the same the same day. 2115 itself was gone from the list
+// because three failed departures at the East Tower door had put it on the keeper's session
+// `unreachable` set (see DIRECTIONAL_STAGES for why that door failed).
+//
+// So: inside a confinement only confined rooms are offered, and when none of them qualifies the
+// STATION is, because the station is the order and the reason the confinement exists. The
+// station fallback ignores this session's unreachable/denied bookkeeping on purpose -- the
+// confinement leaves nowhere else to go, and the station-return branch walks there anyway --
+// but never an operator's ban, never a station outside the confinement, and never the room the
+// body is already standing in. No confinement: `rooms`, unchanged.
+export function confinedPreyRooms(rooms, { confine = null, station = null, here = null,
+                                           banned = () => false, nameOf = () => null } = {}) {
+  const inside = Array.isArray(confine) && confine.length ? new Set(confine.map(Number)) : null;
+  if (!inside) return rooms;
+  const kept = rooms.filter(r => inside.has(Number(r.room)));
+  if (kept.length) return kept;
+  const st = station == null ? NaN : Number(station);
+  if (!Number.isFinite(st) || !inside.has(st) || st === Number(here) || banned(st)) return kept;
+  return [{ room: st, room_name: nameOf(st) ?? `room ${st}`, station_fallback: true,
+            why: 'no confined room generates the prey, so the station' }];
+}
+
 // Enter an open fight conservatively, then do not reverse that decision after one
 // ordinary hit.  The previous test always required 90% health and divided MAX health by
 // damage per blow. Floyd entered room 38 at 56/57, took five points while killing one
@@ -1268,6 +1297,52 @@ export function stageDeadlineMs(stage, env = process.env) {
     if (Number.isFinite(n) && n >= 0) return n;
   }
   return STAGE_DEADLINE_MS[stage] ?? 30_000;
+}
+
+// ---------------------------------------------- A RUNG STILL IN FLIGHT HOLDS EVERY DIRECTIONAL RUNG
+//
+// THE DEADLINE ABANDONS THE WAIT, AND THE LADDER THEN WALKED ON INTO THE NEXT DIRECTIONAL RUNG.
+//
+// The skip in `runPassLadder` stops a rung being invoked TWICE. It never stopped a DIFFERENT rung
+// starting a second journey on the same body: `passErrand` overran its 30s while a town trip
+// walked, the next pass skipped it as in flight and carried on down to `passFarm`, and
+// `passFarm`'s hunt relocation or station return set off for somewhere else. Two `leaveVia`
+// walkers, one movement generation, one body -- each pulling it to its own door.
+//
+// Prod 2026-10-27, the Ko'catan East Tower (2013): of 100 departures that ended
+// `route_progressing_exits_exhausted` by 15:30Z, 94 overlapped another keeper journey on the same
+// character -- 69 of the 74 bound for 2115/2125 overlapped a town trip (`keeper:sell_circuit` /
+// `keeper:food_shopping`) leaving by the SW door to 2000, and the town trips failed the same way
+// the other way round. The movement-incident rows show the two walkers interleaved: a `step` onto
+// the r2c41 doorway, then 400ms later a `fine` move from a stale position heading 136 degrees --
+// straight at the 2000 door -- dragging the body back off it. So
+// the doorway correction was undone before its confirm (`doorway_position_not_confirmed`), or
+// between the confirm and the `go` ("You are unable to go anywhere."), and the guard's "You may
+// pass." in the refusal was the captain waving a fleet-mate through. Three failed relocations then
+// put 2115 on the keeper's unreachable list, which is how the farmers ended up stranded in town
+// (see `confinedPreyRooms`).
+//
+// So while any rung is still in flight, no directional rung starts -- above it or below it: a
+// farm walk still running holds a town trip exactly as a town trip holds the farm. The survival
+// rungs (everything down to `passFleeAndRest`) are untouched: they still run every pass, which is
+// the whole reason the deadline exists. What waits is the directional half -- work, movement,
+// errands -- because CLAUDE.md's boundary is one directional decision per body.
+//
+// A rung in flight longer than `inFlightHoldMs` is presumed hung rather than walking, and the old
+// skip-and-continue resumes (said out loud). `M59_IN_FLIGHT_HOLD_MS=0` restores the old behaviour
+// exactly, for a bisect.
+export const DIRECTIONAL_STAGES = Object.freeze(PASS_STAGES.slice(PASS_STAGES.indexOf('passFleeAndRest') + 1));
+const IN_FLIGHT_HOLD_MS = 30 * 60_000;
+
+/** How long an in-flight rung holds the directional rungs. 0 means never (the old ladder). */
+export function inFlightHoldMs(env = process.env) {
+  const override = env.M59_IN_FLIGHT_HOLD_MS;
+  if (override !== undefined && override !== '') {
+    const n = Number(override);
+    // An unusable value keeps the committed one, as for the stage deadline.
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return IN_FLIGHT_HOLD_MS;
 }
 
 // ------------------------------------------------------- debugging from inside the game
@@ -3865,6 +3940,28 @@ export class Autopilot {
     for (const stage of PASS_STAGES) {
       // Already given its turn above, and a rung must never be invoked twice in one pass.
       if (survivalRanEarly && stage === 'passFleeAndRest') continue;
+      // NO DIRECTIONAL RUNG STARTS WHILE ANOTHER RUNG STILL HAS THE BODY. Every rung above this
+      // point has had its turn; a town trip still walking must not acquire a hunt relocation
+      // walking the other way. See DIRECTIONAL_STAGES.
+      if (DIRECTIONAL_STAGES.includes(stage)) {
+        const holder = this.inFlightHolder();
+        if (holder) {
+          // The in-flight rung is skipped this pass as surely as by the check below.
+          this.tally.stage_skipped_in_flight = (this.tally.stage_skipped_in_flight || 0) + 1;
+          this.tally.stage_held_by_in_flight = (this.tally.stage_held_by_in_flight || 0) + 1;
+          const episode = `${holder.stage}@${holder.started_at ?? '?'}`;
+          if (this.notedInFlightHold !== episode) {
+            this.notedInFlightHold = episode;
+            this.note('a rung is still walking this body — the directional rungs wait for it', {
+              in_flight: holder.stage, age_ms: holder.age_ms, waiting: stage,
+              why: 'the ladder stopped waiting for that rung, not the rung itself; starting ' +
+                   'another directional rung now would put a second journey on the same body',
+            });
+          }
+          this.traceThisPass(ctx, ran, holder.stage);
+          return holder.stage;
+        }
+      }
       ran.push(stage);
       // WHICH RUNG THE PASS IS SITTING IN, FOR THE POSTMORTEM TO READ.
       //
@@ -3951,6 +4048,36 @@ export class Autopilot {
         since_full: this.sinceFullHealth?.() ?? null,
       });
     } catch { /* never break the keeper */ }
+  }
+
+  /**
+   * The rung whose abandoned invocation is still running, and so still holds the body, or null.
+   * See DIRECTIONAL_STAGES. A rung older than `inFlightHoldMs` is presumed hung and no longer
+   * holds anything (said once); an unknown age holds, because a missing clock is not evidence
+   * that the walk has ended.
+   */
+  inFlightHolder(now = Date.now()) {
+    const holdMs = inFlightHoldMs();
+    if (!(holdMs > 0) || !this.stageInFlight?.size) return null;
+    for (const stage of PASS_STAGES) {
+      if (!this.stageInFlight.has(stage)) continue;
+      const startedAt = this.stageFlightStartedAt?.get?.(stage);
+      const age = Number.isFinite(startedAt) ? now - startedAt : null;
+      if (age != null && age > holdMs) {
+        const episode = `${stage}@${startedAt}`;
+        if (this.notedHungInFlight !== episode) {
+          this.notedHungInFlight = episode;
+          this.note('a rung has been in flight too long to be walking — no longer holding the ladder', {
+            stage, age_ms: age, hold_ms: holdMs,
+            why: 'a rung this old is presumed hung, and a hung promise is not moving the body, ' +
+                 'so the directional rungs may run again',
+          });
+        }
+        continue;
+      }
+      return { stage, age_ms: age, started_at: startedAt ?? null };
+    }
+    return null;
   }
   // @autopilot-part ./autopilot/death.mjs#2
   // @autopilot-part ./autopilot/pass-travelling.mjs#1

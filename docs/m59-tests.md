@@ -29,6 +29,24 @@ file, and a file that does not parse arms nothing. A stale or missing `who` rese
 never releases a posture it did not put on, and two on one posture release on the last. Unknown triggers are
 refused at load. A dry watch reads only `fleet` and `who`, and never asks a piloted or host character.
 
+`m59-in-flight-hold-test.mjs` (26) pins one directional decision per body on the real ladder. A rung the
+deadline abandoned is still walking, so while it is in flight no directional rung (`passCooperative` down to
+`passFarm`) starts, above it or below it; every survival rung still runs every pass. A rung in flight past
+`M59_IN_FLIGHT_HOLD_MS` (30 min) is presumed hung and no longer holds; `0` restores the old ladder. Prod
+2026-10-27: a town trip and a hunt relocation on one body at the Ko'catan East Tower.
+
+`m59-kocatan-door-test.mjs` (12) pins the 2013 -> 2115 door on the real Session walk and committed geometry,
+against a model of koctower.kod / kocatwn.kod / user.kod: three GO squares, a captain who says "You may pass."
+as a room broadcast, "You are unable to go anywhere." judged on the SERVER's square. One walker crosses and
+every go is judged on a doorway square. A second walker on the same body reproduces the live refusals square
+for square (`doorway_position_not_confirmed`, `geometry_blocked`, and the cant-go with a fleet-mate's
+"You may pass." in it).
+
+`m59-confined-relocation-test.mjs` (24) pins `preyRooms` under a confinement on the real spawn table: only
+confined rooms are offered, and when none qualifies the station is (Zoot, 2005 -> 2115, with 2115 on the
+session's unreachable list), never past an operator's ban, never outside the confinement, never the room the
+body stands in. Unconfined keepers are unchanged.
+
 `m59-farm-danger-test.mjs` exercises the real bounded farm stage, survival token
 handoff, late queued-command refusal, preserved completed kill receipts and a
 changed-generation pull that returns through real Session movement to its wall.

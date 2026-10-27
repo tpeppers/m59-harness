@@ -18,7 +18,7 @@ import { affordances } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { huntLabel, huntingGrounds, loadSpawns, roomThreats } from '../m59-spawns.mjs';
 import { CITY_INNS } from '../m59-underworld.mjs';
-import { ITEM_VALUE, PREFERRED_QUIET_RETREATS, REAGENT_TARGET, SPAWN_FILE, farmRoomDenials, preferAssignedRoom, preferredQuietRetreat } from '../m59-autopilot.mjs';
+import { ITEM_VALUE, PREFERRED_QUIET_RETREATS, REAGENT_TARGET, SPAWN_FILE, confinedPreyRooms, farmRoomDenials, preferAssignedRoom, preferredQuietRetreat } from '../m59-autopilot.mjs';
 
 export class RetreatPart {
   // @part 1
@@ -329,7 +329,16 @@ export class RetreatPart {
     // it stays subject to the other filters above, so an assignment to somewhere that
     // cannot generate the prey, or that we have proven unreachable, is ignored rather
     // than obeyed into a corner.
-    return preferAssignedRoom(rooms, mine === room?.num ? null : mine, 8);
+    //
+    // EXCEPT INSIDE A CONFINEMENT, where the corner IS the order: only confined rooms are
+    // offered, and when none qualifies the station is (see confinedPreyRooms). Without this a
+    // farmer back from town asked `travel()` for one jungle room after another, was refused by
+    // the confinement each time, and stood in the bank instead of walking to its station.
+    const confined = confinedPreyRooms(rooms, {
+      confine: this.policy.confineRooms, station: mine, here: room?.num,
+      banned: r => this.bansDestination(r),
+      nameOf: r => this.s?.world?.map?.rooms?.[r]?.name ?? null });
+    return preferAssignedRoom(confined, mine === room?.num ? null : mine, 8);
   }
 
   /**
