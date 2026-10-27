@@ -1077,3 +1077,25 @@ once inspected; they still consume capacity. This matters for Lew's three looted
 long swords, which the old name-only guard counted as failed summons. Beaker's
 two short swords and axe were confirmed summons. The all-outcomes-banned and
 deliberate-unarmed guards still prevent pointless casts.
+
+
+## Loot ejection: farmers empty their sale pile into a station or courier they pass
+
+Operator, 2026-10-26: *"a strong downward pressure on our farmer packs: when passing couriers, they should attempt to
+offload all sell-planned loot to be sold by that courier. Any service stations with cache-usable space can have a
+default (and first eject) of using spare space for sell-gear 'trade goods'"*. `tools/m59-loot-eject.mjs`;
+`m59-loot-eject-test.mjs` (30) pins it.
+
+| policy | on | shape | does |
+|---|---|---|---|
+| `loot_eject` (`lootEject`, also a farm-strategy field) | the giver | `{ to: [station, courier], every_s: 90, batch: 6 }` | when one of `to` (in order) is in the same room, offers it the heaviest rows of this keeper's own **sale plan** (`inventorySalePlan`, state `sell`), at most `batch` per `every_s`. A refusal backs that receiver off for 5 minutes |
+| `accept_donations.trade_goods` | the receiver | `true` or `{ keep_free: 0.25, from: [characters] }` | takes a fleetmate's offer of anything, as long as its pack is still `keep_free` empty afterwards; an unweighed pack or offer is a no |
+
+- **Only what a market visit would sell leaves.** The rows come from the same plan the counter uses, so equipped,
+  protected, conjured and magic items, food, fleet reagents and loadout keeps stay.
+- **A station passes it on the same way.** It carries `loot_eject: { to: [courier] }`; the courier carries
+  `trade_goods` and no `loot_eject`, or goods circulate.
+- **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a
+  delivery. Each one is a `loot_ejected` ledger row and `tally.loot_ejected`.
+- Economy faculty: a bot holding economy turns it off. It runs in the sharing pass, so it needs the body quiet (health
+  at least 80%, nothing landing, no trade open) and never walks anywhere.

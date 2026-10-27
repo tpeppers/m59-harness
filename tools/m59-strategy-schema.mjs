@@ -38,6 +38,7 @@ import { normalizePractice } from './m59-deskpractice.mjs';
 import { normalizeBuddy } from './m59-buddy.mjs';
 import { spareBlockerMode } from './m59-spare.mjs';
 import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
+import { normalizeLootEject } from './m59-loot-eject.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -131,6 +132,8 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'protect', keys: ['protectedItems'], faculty: 'economy', arg: 'protect_items',
     normalize: normItems('protect'), merge: 'union' },
   { path: 'overfarm', keys: ['overfarm'], faculty: 'economy', arg: 'overfarm', normalize: normOverfarm },
+  // LOOT EJECTION (m59-loot-eject.mjs): hand the sale pile to a station or courier of ours in the same room.
+  { path: 'lootEject', keys: ['lootEject'], faculty: 'economy', arg: 'loot_eject', normalize: v => normalizeLootEject(v) },
   { path: 'weapons.touchSpell', keys: ['touchSpell'], faculty: 'work', arg: 'touch_spell',
     normalize: v => touchSpellName(v) },
   { path: 'weapons.touchSpellTiming', keys: ['touchSpellTiming'], faculty: 'work', arg: 'touch_spell_timing',

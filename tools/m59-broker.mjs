@@ -187,6 +187,7 @@ import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
 import { survivalOffConflict, survivalOffLeaseMs, accepts, refusal } from './m59-hazards.mjs';
 import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-strategy-gate.mjs';
+import { normalizeLootEject, normalizeTradeGoods } from './m59-loot-eject.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
@@ -11841,6 +11842,14 @@ const TOOLS = [
           description: 'how much better a floor item must be than the worst carried one before the swap is worth the packets. Default 1.25.' },
         merchant: { type: 'string', description: 'merchant tier the value estimate assumes. Scales everything equally; changes shillings, never the ranking.' },
       }, description: 'SIFT MORE THAN THE PACK HOLDS AND CARRY THE BEST OF IT. Three phases by pack fullness: take everything below `selective_at`, then take only what outranks what is carried, then — once full — keep killing and trade the worst carried item for a better one on the floor, until `overfarm_percent` of capacity has passed through the hands. Ranking is shillings per unit of BINDING cost (the worse of weight and bulk) times the operator preference. An item that cannot be priced is UNRANKABLE, never worthless: it may be taken and is never dropped, which matters because 160 of the 249 weighable items have no price. null disables it and the character loots exactly as it did before' },
+      loot_eject: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        to: { type: 'array', items: { type: 'string' }, description: 'characters of ours to hand the sale pile to, in order of preference: a station first, then a courier' },
+        every_s: { type: 'number', description: 'at most one offer per this many seconds. Default 90' },
+        batch: { type: 'number', description: 'items per offer, heaviest first. Default 6, at most 12' },
+      }, description: 'LOOT EJECTION (m59-loot-eject.mjs): when one of `to` stands in the same room, hand it the heaviest rows ' +
+        'of this character\'s own SALE PLAN (only what a market visit would sell: never equipped, protected, magic, food or a ' +
+        'fleet reagent). The receiver needs accept_donations.trade_goods. null turns it off' },
       accept_donations: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         reagents: { type: 'array', items: { type: 'string' },
@@ -11848,6 +11857,9 @@ const TOOLS = [
         drop_for_space: { type: 'array', items: { type: 'string' },
           description: 'Cheapest kinds it may put on the floor to make room. Default mushroom.' },
         min_bulk_free: { type: 'number', description: 'Shed below this much free bulk. Default 40.' },
+        trade_goods: { type: ['boolean', 'object', 'null'], description: 'A STATION OR COURIER takes a fleetmate\'s SALE PILE ' +
+          '(loot ejection, m59-loot-eject.mjs): any items, as long as the pack is still keep_free empty afterwards. true, or ' +
+          '{ keep_free: 0.25, from: [characters] }. The giver side is loot_eject' },
       }, description: 'accept reagents a FLEETMATE offers, without negotiating: reply with an empty counteroffer and accept. Turns a two-sided handover into a one-sided one -- the donor walks over, pushes the goods across and leaves, and nobody agrees a moment. Refuses a stranger, refuses a pile containing anything not on the list, and cancels rather than leaving the window open. null disables it' },
       rescue_shopping: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
@@ -12888,6 +12900,10 @@ const TOOLS = [
           p.policy.overfarm = policy;
         }
       }
+      if (a.loot_eject !== undefined) {
+        try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
+        catch (e) { return { started: false, reason: `loot_eject refused: ${e.message}`, note: 'nothing was changed' }; }
+      }
       if (a.accept_donations !== undefined) {
         if (a.accept_donations == null) p.policy.acceptDonations = null;
         else {
@@ -12897,7 +12913,11 @@ const TOOLS = [
           const list = (k) => Array.isArray(value[k])
             ? value[k].map(x => String(x).trim().toLowerCase()).filter(Boolean) : undefined;
           const reagents = list('reagents'), sheds = list('drop_for_space');
+          let tradeGoods = null;
+          try { tradeGoods = normalizeTradeGoods(value.trade_goods); }
+          catch (e) { return { started: false, reason: `accept_donations refused: ${e.message}`, note: 'nothing was changed' }; }
           p.policy.acceptDonations = { enabled: true,
+            ...(tradeGoods ? { trade_goods: tradeGoods } : {}),
             ...(reagents && reagents.length ? { reagents } : {}),
             ...(sheds ? { drop_for_space: sheds } : {}),
             min_bulk_free: Math.max(0, Math.min(1000,

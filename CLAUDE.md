@@ -32,6 +32,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
 | make a farm refuse a body that cannot do it (`requires: { magicWeapon: true }`), or escalate when it kills nothing (`floor`: ask a desk, then its `otherwise` catch-all, stop only when there is none) | [`docs/m59-strategies.md`](docs/m59-strategies.md#what-the-body-needs-the-kill-rate-floor-and-the-escalation) |
+| make farmers hand their SALE PILE to a station or courier they pass (`loot_eject`, `accept_donations.trade_goods`) | [`docs/m59-economy.md`](docs/m59-economy.md#loot-ejection-farmers-empty-their-sale-pile-into-a-station-or-courier-they-pass) |
 | design anything that sets, saves, restores or leases a character's orders (the stack, leases, stocks and flows) | [`docs/m59-orders.md`](docs/m59-orders.md) |
 | cast a spell from code, keep a TRANCE unbroken, change gear around a cast (`castRite` / `idleGear` hooks; the policy is private), or tag a character's cast role | [`docs/m59-cast-rites.md`](docs/m59-cast-rites.md) |
 | write, assign or debug a PVP STRATEGY (what a character does when a player hits it or is seen: flee to a room, engage, default) | [`docs/m59-pvp-strategies.md`](docs/m59-pvp-strategies.md) |
