@@ -314,7 +314,19 @@ export class GearPart {
     this.sittingFor = null;
     // And shed anything already known dead, because the mana is spent whether or not the
     // weapon survives ReqNewHold (creaweap.kod:116-129).
-    await skills.freeRoomFor(s).catch(() => null);
+    //
+    // BUT NOT WHAT THIS KEEPER HOLDS BACK, ON A CONDEMNATION ALONE. An enchanted or dedicated
+    // weapon (heldBackIds: the weapon-magic book, deliveries) or a protected name is dropped only
+    // when a fresh look at that id says it is broken (skills.confirmBroken). This was a bare
+    // freeRoomFor(s), and on 2026-10-27 it put Fozzie's sound Kraanan-dedicated mace on the floor
+    // of Ukgoth because a wand's last charge had been misread as the mace shattering; sweepBroken
+    // already refused protected names, this path did not ask.
+    let held = new Set(), keepNames = [];
+    try { held = this.heldBackIds?.(c) ?? new Set(); } catch { held = new Set(); }
+    try { keepNames = this.protectedItemNames?.() ?? []; } catch { keepNames = []; }
+    await skills.freeRoomFor(s, {
+      precious: d => held.has(Number(d.id)) || skills.itemIsProtected(d.name, keepNames),
+    }).catch(() => null);
     const had = new Set((c.inventory || []).map(o => o.id));
     await withCastRite(s, { spell, targets: [], why: 'makeWeapon' }, () => s.pacer.submit('cast', () => c.cast(spell.id, []), 1050));
     await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});

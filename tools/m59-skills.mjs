@@ -439,6 +439,32 @@ export const brokenWeaponText = (t) => WEAPON_SHATTERED.test(t || '') || WEAPON_
                                     || WEAPON_USE_BROKEN.test(t || '') || WEAPON_CONDITION.test(t || '')
                                     || ARMOUR_CONDITION.test(t || '');
 
+// A BREAK SENTENCE IS ABOUT ONE ITEM, AND IT SAYS WHICH. `brokenWeaponText` only answers
+// "does this line sound like something broke". It does not say WHAT broke, and the same
+// words come from things that are not weapons at all:
+//
+//   weapon.kod:85        "%s%s shatters into pieces."      the weapon, mid-fight
+//   specwand.kod:22,71   "%s%s shatters into pieces!"      a wand spending its LAST charge
+//   wand.kod:23, spelwand.kod:23                           (same, for the other wand classes)
+//   gauntlet.kod:33      "Your gauntlets are a tangled mess of metal."
+//
+// Every one of them names its item (GetCapDef + the item's name), so a line counts as
+// evidence against an item only when it names THAT item, as whole words. Prod 2026-10-27,
+// Fozzie in Ukgoth: the healing-wand tick inside attackRounds spent the last charge of a wand
+// of healing mid-exchange, fight() read "Your wand of healing shatters into pieces!" as the
+// wielded weapon breaking, condemned a sound Kraanan-dedicated mace by id, and makeWeapon's
+// freeRoomFor dropped it on the floor a minute later.
+const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function textNamesItem(text, name) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  const rx = new RegExp(`(^|[^a-z0-9])${escapeRx(n).replace(/\s+/g, '\\s+')}(?=$|[^a-z0-9])`, 'i');
+  return rx.test(String(text || ''));
+}
+export const WAND_TEXT = /\bwand\b/i;
+/** True when `text` is a break sentence and it names `name` (whole words, any case). */
+export const brokenTextFor = (text, name) => brokenWeaponText(text) && textNamesItem(text, name);
+
 // CONDITION LEVELS FROM LOOK_AT DESCRIPTIONS.
 //
 // The server appends one condition sentence to the item description when vbShow_condition
@@ -827,7 +853,14 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
     // Wait for whichever comes first: the use-list moving, or the server saying why not.
     const ev = await c.waitFor({ since: before, kinds: ['equipment', 'message'], timeoutMs: 3000 });
     const texts = ev.events.filter(e => e.text).map(e => e.text);
-    if (texts.some(brokenWeaponText)) {
+    // ONLY A REFUSAL THAT NAMES THIS CANDIDATE, AND ONLY IF THE SERVER DID NOT WIELD IT.
+    // This took ANY break sentence in a three-second window as the refusal, so a wand spending
+    // its last charge ("...shatters into pieces!") or a gauntlet breaking in the same window
+    // condemned whichever weapon was being tried. The server refuses a broken item before it
+    // ever reaches the use list (player.kod TryUseItem, ITEM_BROKEN), so a weapon the use list
+    // now holds is not broken whatever else was said meanwhile. See brokenTextFor.
+    const inHandNow = equippedNow(c)?.has(cand.o.id) === true;
+    if (!inHandNow && texts.some(t => brokenTextFor(t, cand.name))) {
       broken.add(cand.o.id);
       rejected.push({ name: cand.name, id: cand.o.id, why: 'the server says it is broken' });
       continue;
@@ -1220,9 +1253,12 @@ export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
       // slot, and reported by every audit as a character with no armour rather than a
       // character carrying armour it cannot wear. Beaker had a dead leather AND a dead
       // gold shield and read as unarmoured for three passes.
-      if (texts.some(brokenWeaponText)) broken.add(best.o.id);
+      // Only a break sentence that NAMES this piece (brokenTextFor): a wand's last charge or a
+      // weapon breaking in the same window is not evidence against the shield being tried.
+      const saidBroken = texts.some(t => brokenTextFor(t, best.name));
+      if (saidBroken) broken.add(best.o.id);
       rejected.push({ slot, name: best.name, id: best.o.id,
-                      ...(texts.some(brokenWeaponText) ? { broken: true } : {}),
+                      ...(saidBroken ? { broken: true } : {}),
                       why: texts.find(handsFullText)
                         ? 'refused: that slot is already full, and not by this item — we checked'
                         : texts[0] || 'the server never added it to the use list, and said nothing' });
@@ -1403,11 +1439,30 @@ export function wouldFit(c, weight, bulk = weight) {
 //
 // Returns what it dropped. Dropping nothing is a perfectly good outcome — it means
 // there was nothing dead to shed, not that there is room.
-export async function freeRoomFor(s, { max = 4 } = {}) {
+//
+// A CONDEMNATION IS A BELIEF; A PRECIOUS ITEM IS DROPPED ONLY ON THE SERVER'S WORD. brokenSet is
+// written from what the server SAID, and a sentence can be misattributed (brokenTextFor has the
+// incident: a sound dedicated mace dropped here on a wand's last charge). So `precious(d)` -- the
+// caller's say, e.g. the keeper's dedicated/enchanted ids and protected names -- marks the broken
+// entries that must first be confirmed by a FRESH look at that id (confirmBroken): dropped only
+// when the description says it is broken, un-condemned when it reads sound, kept when no reply
+// came. Junk and ordinary broken gear are shed exactly as before.
+export async function freeRoomFor(s, { max = 4, precious = null } = {}) {
   const c = s.need();
-  const dead = junkAndBroken(c).slice(0, max);
-  const dropped = [];
+  const dead = junkAndBroken(c);
+  const dropped = [], kept = [];
+  let looked = 0;
   for (const d of dead) {
+    if (dropped.length >= max) break;
+    let guard = false;
+    try { guard = d.why !== 'junk' && typeof precious === 'function' && !!precious(d); } catch { guard = true; }
+    if (guard) {
+      // Bounded: each confirmation is a round trip, and this runs while unarmed.
+      if (looked >= max) { kept.push({ ...d, verdict: 'not checked' }); continue; }
+      looked++;
+      const verdict = await confirmBroken(s, d.id).catch(() => 'unknown');
+      if (verdict !== 'broken') { kept.push({ ...d, verdict }); continue; }
+    }
     // Same spec shape the keeper's pack-clearer uses: a bare id, or {id, amount} for a
     // stack. Passing {id} for a single item is refused as a partial-stack drop.
     await s.pacer.submit('drop', () => c.drop([dropSpec(d)]));
@@ -1417,7 +1472,32 @@ export async function freeRoomFor(s, { max = 4 } = {}) {
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
-  return { dropped, note: dropped.length ? undefined : 'nothing known-dead to shed' };
+  return { dropped, ...(kept.length ? { kept } : {}),
+           note: dropped.length ? undefined : 'nothing known-dead to shed' };
+}
+
+// IS THIS ONE ITEM BROKEN — ASKED OF A FRESH LOOK AT ITS OWN ID, NOT OF WHAT WAS HEARD.
+//
+// 'broken' only when the description carries a broken condition (parseConditionLevel 0), and then
+// it is (re)condemned; 'sound' only when it carries a readable non-broken condition, and then the
+// condemnation is lifted; 'unknown' otherwise (no reply, a reply about another id, or no condition
+// phrase), which changes nothing. The reply's id is checked because a look can come back carrying
+// the previous call's object (CLAUDE.md, object ids), and `since` keeps an older look of the same
+// id from answering. Same one retry as inspectForBroken: the first look after a look can be empty.
+export async function confirmBroken(s, id, { retries = 1, timeoutMs = 3000 } = {}) {
+  const c = s.need();
+  let desc = null;
+  for (let i = 0; i <= retries && desc == null; i++) {
+    const since = c.evSeq;
+    await s.pacer.submit('look', () => c.look(id));
+    const got = await c.waitFor({ since, kinds: ['look'], timeoutMs, match: e => e.id === id })
+      .catch(() => ({ events: [] }));
+    desc = (got?.events || []).find(e => e.kind === 'look' && e.id === id)?.description ?? null;
+  }
+  const level = parseConditionLevel(desc);
+  if (level === 0) { brokenSet(c).add(id); return 'broken'; }
+  if (level != null) { brokenSet(c).delete(id); return 'sound'; }
+  return 'unknown';
 }
 
 // GIVE THE STREET EVERYTHING THAT IS NOT NAILED DOWN.
@@ -2973,11 +3053,33 @@ async function fightWithIntent(s, {
     // Record a shatter immediately, but do not mutate equipment until the exchange's
     // terminal results are known: a dead player cannot re-arm, and a killing shatter
     // does not need to. ReqWeaponAttack has already removed the broken item from use.
-    const weaponBroke = res.messages.some(brokenWeaponText);
+    //
+    // THE SENTENCE HAS TO BE ABOUT THE WEAPON. This read any break sentence in the exchange as
+    // the wielded weapon breaking, and the exchange is not only the weapon's: attackRounds runs
+    // the healing-wand tick between swings, so a wand spending its last charge ("Your wand of
+    // healing shatters into pieces!", specwand.kod:71) lands in these same messages. Prod
+    // 2026-10-27: that condemned Fozzie's sound, Kraanan-dedicated mace 11023 by id, and the
+    // next makeWeapon's freeRoomFor dropped it in Ukgoth. So it counts only when the line names
+    // the weapon in hand (brokenTextFor), or, when the sentence does not spell the inventory
+    // name, when a weapon-shaped break line (never a wand's) comes with the server taking that
+    // weapon out of the hand, which WeaponBroke always does (weapon.kod: TryUnuseItem after the
+    // message).
+    const breakLines = res.messages.filter(brokenWeaponText);
+    const weaponShaped = t => (WEAPON_SHATTERED.test(t) || WEAPON_IS_BROKEN.test(t)) && !WAND_TEXT.test(t);
+    const heldName = wielded != null
+      ? (c.rsc?.get?.((c.inventory || []).find(o => o.id === wielded)?.nameRsc) || '') : '';
+    const handNow = equippedNow(c);
+    const weaponBroke = breakLines.length > 0 && (wielded == null
+      ? breakLines.some(weaponShaped)
+      : breakLines.some(t => textNamesItem(t, heldName)) ||
+        (handNow != null && !handNow.has(wielded) && breakLines.some(weaponShaped)));
     const brokenId = weaponBroke ? wielded : null;
     if (weaponBroke) {
       if (brokenId != null) brokenSet(c).add(brokenId);
       say('weapon broke', { was: brokenId, round: roundsFought });
+    } else if (breakLines.length) {
+      say('a break was heard, and it was not the weapon', { weapon: wielded, weapon_name: heldName || null,
+        lines: breakLines.slice(0, 3), round: roundsFought });
     }
 
     // Are we dead? "Our own object is missing from the room list" is NOT the test,

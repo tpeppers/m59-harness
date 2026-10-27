@@ -1670,8 +1670,14 @@ export class PassFarmPart {
       // With equip:false fight() cannot know which prepared weapon shattered. Remember
       // the exact short-sword id here so the next pass makes a replacement instead of
       // repeatedly offering the same server-refused item.
-      if (training.weapon_id != null && (f.combat || []).some(skills.brokenWeaponText))
-        skills.brokenSet(c).add(training.weapon_id);
+      // Only a break line that NAMES that weapon (skills.brokenTextFor): a healing wand's last
+      // charge ("...shatters into pieces!") lands in the same combat lines (2026-10-27, Fozzie).
+      if (training.weapon_id != null) {
+        const tw = (c.inventory || []).find(o => o.id === training.weapon_id);
+        const twName = tw ? (c.rsc?.get?.(tw.nameRsc) || '') : '';
+        if ((f.combat || []).some(t => skills.brokenTextFor(t, twName)))
+          skills.brokenSet(c).add(training.weapon_id);
+      }
       if (trainingPrey && (f.killed || f.died)) this.finishTrainingBout(claimedSwing);
 
       if (trainingPrey && (f.killed || f.died)) this.finishTrainingBout(claimedSwing);

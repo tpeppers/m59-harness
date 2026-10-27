@@ -2470,3 +2470,19 @@ The cooperative suite is also registered in the movement gate. Private policy
 tests remain in the private repository; see `docs/m59-cooperative-logoff.md`.
 `m59-recovery-refuge-test.mjs` also exercises the real peer-projected refuge
 search and the native selector's same-call fallback when a prepared wall fills.
+
+## m59-false-broken-test.mjs (30) — a break sentence condemns only the item it names
+
+Prod 2026-10-27, Fozzie in Ukgoth: the healing-wand tick that `attackRounds` runs between swings
+spent a wand's last charge, the server said "Your wand of healing shatters into pieces!"
+(specwand.kod:71), and `fight()` read any break sentence in the exchange as the wielded weapon
+breaking. It condemned a sound Kraanan-dedicated mace by id, and the next `makeWeapon`'s
+`freeRoomFor` dropped it. The suite pins `brokenTextFor` (a break line counts against an item
+only when it names it, whole words), `fight()` (a wand line or a gauntlet break never condemns
+the weapon in hand; the weapon's own shatter line still does and still stops before a punch;
+a weapon-shaped line plus the server taking the weapon out of the hand covers a name the
+sentence does not spell), `equipBest` (a refusal must name the candidate, and a wield the use
+list confirms is never condemned), and `freeRoomFor`'s `precious` guard: a held-back item is
+dropped only when a fresh look at its own id says it is broken, un-condemned when it reads
+sound, kept when no reply (or a reply under another id) came. The last case checks that
+`makeWeapon` passes the keeper's `heldBackIds` and protected names.
