@@ -967,3 +967,17 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   and a poison tick IS damage, so every tick re-armed it. Logging off never shortens poison: FreezeAllEnchantments pauses
   it offline and adds 3 s to a harmful enchantment on every logoff. A short-lived rule (27995930) that logged off again,
   up to six times, when a hostile was adjacent after the relog was withdrawn by the operator the same morning.
+- **A refused logoff must leave something that moves the body, and is never "handled".** Scooter (t21), Ko'catan 2115,
+  2026-10-27: on the pass he took wall r17c11 inside a spent session, the rest gate was asked with `sheltered` read
+  before the wall was taken, so `passFleeAndRest` returned CONTINUE and `passFarm` pulled from the new wall at 74/94;
+  the pull could not get back and released the hold. The refuge search then found nothing reachable, the replacement
+  was `logoff_open`, and `playDead` refused it but installed nothing (its only replacement, `rest_safe`, needed a
+  hold). `continueSurvivalDecisionStep` reported that refusal as handled, the unchanged decision made
+  `continueSurvivalDecision` return true, and every pass for 133 s ended at the top of `passOnce` -- before
+  `passFightBack` (due five times), `passFleeAndRest` and `passFarm`. The watchdog saw nothing: each pass took
+  milliseconds, so no await was blocked. Now: the rest gate re-reads the wall it took; off its spot a refused logoff
+  becomes `nearest_refuge`, and once the refuge search has failed `leave_room` (`spentLogoffReplacement`, one hop by
+  the nearest reachable exit into the confinement, at most once per 30 s per room -- `spentSessionExit`); a refused
+  logoff that nothing replaced is ended and the pass goes to the ladder. Still one logoff per session.
+  `pass()` names its stage from its first line (`passOnce`, `continueSurvivalDecision`), so a postmortem's
+  `blocked_in` cannot blame a rung that already returned. `m59-scooter-stranded-test.mjs` (38).

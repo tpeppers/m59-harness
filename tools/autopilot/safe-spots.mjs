@@ -8,11 +8,12 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 18 methods: onwardExit, restBeforeBlink, takeSafeSpot, replacementSurvivalChoice,
+// 19 methods: onwardExit, restBeforeBlink, takeSafeSpot, replacementSurvivalChoice,
 //   clearSurvivalJam, survivalJam, rememberSurvivalJam, cancelForSurvival,
 //   recoverFromTravelFallback, recordSurvivalPath, currentRecoveryWall, adoptRecoveryWall,
-//   continueSurvivalDecision, continueSurvivalDecisionStep, blinkPastSurvivalJam, takeRecoverySpot,
-//   watchRecoveryApproach, takeSafeSpotObserved
+//   continueSurvivalDecision, continueSurvivalDecisionStep, leaveRoomForRecovery, blinkPastSurvivalJam,
+//   takeRecoverySpot, watchRecoveryApproach, takeSafeSpotObserved
+import { spentSessionExit } from '../m59-healing-session.mjs';
 import { keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import { affordableHeal, castRecoveryHeal } from '../m59-recovery-heal.mjs';
@@ -475,12 +476,69 @@ export class SafeSpotsPart {
       return true;
     }
     if (d.status!=='pending') return false;
+    // A spent healing session with no reachable spot leaves by a permitted exit (spentLogoffReplacement). A recovery
+    // wall underfoot outranks it: playDead below keeps that spot and heals there.
+    if (d.strategy==='leave_room' && !this.currentRecoveryWall()) return await this.leaveRoomForRecovery(d);
     if (this.currentRecoveryWall() || d.strategy==='logoff_safe' || d.strategy==='logoff_open') {
-      await this.playDead(d.reason);return true;
+      const did=await this.playDead(d.reason);
+      // A REFUSED LOGOFF THAT NOTHING REPLACED IS NOT HANDLED. This returned true whatever playDead said, and an
+      // unchanged decision then made continueSurvivalDecision return true, which ends the pass at the top of passOnce,
+      // before the ladder: Scooter (t21), Ko'catan 2115, 2026-10-27, 133 passes in a row ended here on a logoff the
+      // one-logoff rule had refused. passFightBack (due five times), passFleeAndRest and passFarm never ran, and the
+      // 500 ms watchdog saw nothing blocked (every pass took milliseconds). The decision is ended and the pass goes to
+      // the ladder, which still holds every answer that does not need a logoff.
+      const now=currentSurvivalDecision(s);
+      if(!did && now?.id===d.id && now.status==='pending' && now.ended_at==null) {
+        finishSurvivalDecision(s,d.id,'refused','the logoff was refused and nothing replaced it; the ordinary ladder takes the pass');
+        this.note('a refused logoff is not handled: the ordinary ladder takes this pass',{decision_id:d.id,
+          strategy:d.strategy,reason:d.reason});
+        return false;
+      }
+      return true;
     }
     await this.takeRecoverySpot(d.reason,{source:d.strategy==='route_refuge'?'travel':d.source,
       route:d.strategy==='route_refuge',decisionId:d.id});
     return true;
+  }
+
+  // NO REACHABLE SPOT, NO LOGOFF LEFT: LEAVE THE ROOM. The decision spentLogoffReplacement installs when the healing
+  // session's one logoff is spent and the refuge search has already failed here. One hop, by the nearest reachable exit
+  // into a room the confinement allows (a farm strategy's own fall-back: kocatan-avar-warriors 2115 -> 2013). Moving
+  // reports progress; failing ends the decision and returns false, so the ordinary ladder (fight back, trade in place)
+  // has this same pass. Tried at most once per SPENT_EXIT_RETRY_MS from one room (playDead reads _spentExitTried).
+  async leaveRoomForRecovery(d) {
+    const s=this.s,room=s.world?.room?.num??null;
+    this._spentExitTried={room,at:Date.now()};
+    let exits=[];try{exits=s.world?.exits?.()??[];}catch{exits=[];}
+    const confine=Array.isArray(this.policy?.confineRooms)&&this.policy.confineRooms.length?this.policy.confineRooms:null;
+    const exit=spentSessionExit(exits,{here:room,confine});
+    const hp=s.client?.vitals?.()?.health;
+    if(!exit) {
+      const why=confine?'no reachable exit into the confinement':'no reachable exit';
+      finishSurvivalDecision(s,d.id,'blocked',why);
+      this.note('no safe spot and no way out: the ordinary ladder takes the pass',{room,why,
+        confined_to:confine?.map(Number)??null,health:hp?`${hp.value}/${hp.max}`:null});
+      return false;
+    }
+    const at=exit.stand_on??exit;   // world.exits() names the square to stand on; a bare {row,col} is accepted too
+    updateSurvivalDecision(s,d.id,{status:'approaching',activated_at:Date.now(),selected_at:Date.now(),
+      chosen_refuge:{row:at.row,col:at.col,room,kind:'exit',destination:Number(exit.to)}});
+    this.note('no reachable safe spot and no logoff left this session: leaving the room',{room,to:Number(exit.to),
+      to_name:exit.to_name??null,health:hp?`${hp.value}/${hp.max}`:null,
+      why:'standing still off a safe spot is how a rest becomes a death; the one logoff is spent and nothing here can be '+
+          'reached, so the exit is the move that is left'});
+    const r=await this.travel(Number(exit.to),{origin:keeperOrigin('survival_exit'),recoveryDetour:true,maxHops:1})
+      .catch(e=>({arrived:false,reason:e.message}));
+    if(currentSurvivalDecision(s)?.id!==d.id)return true;   // replaced while walking: the replacement decides
+    if(r?.arrived) {
+      finishSurvivalDecision(s,d.id,'left_room',`left ${room} for ${exit.to}`);
+      this.progress('left a room with no reachable safe spot');
+      return true;
+    }
+    finishSurvivalDecision(s,d.id,'blocked',`could not leave by ${exit.to}: ${r?.reason??r?.why??'no reason given'}`);
+    this.note('could not leave the room: the ordinary ladder takes the pass',{room,to:Number(exit.to),
+      why:r?.reason??r?.why??null});
+    return false;
   }
 
   async blinkPastSurvivalJam() {

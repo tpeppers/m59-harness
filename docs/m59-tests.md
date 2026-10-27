@@ -268,6 +268,13 @@ through a nested shelter order.
   spot; the poisoned-relog loop is gone; a
   body back OFF a spot (cooperative or not) flees to the nearest reachable one (no second logoff) and then stays; a logoff at FULL health still spends the session (no close inside
   five minutes), and Robin's three causes in a row (play-dead, breakout, hit-while-resting) give one logoff.
+- `m59-scooter-stranded-test.mjs` (38): Scooter, Ko'catan 2115, 2026-10-27. A wall `passFleeAndRest` takes as a side
+  effect is rested at on the same pass (the rest gate is asked with the wall it now holds, not the `sheltered` read
+  before it), so `passFarm` cannot pull from it; inside a spent healing session a refused logoff off a spot becomes
+  `nearest_refuge`, then `leave_room` by a permitted exit (2013 on the real 2115 geometry from r11c18), never a second
+  logoff; the survival dispatcher does not claim a pass for a decision it did not carry out (133 of 133 passes on
+  80ee703b), and a refused logoff that nothing replaced is ended so the ladder runs; a pass names its stage from its
+  first line, so `blocked_in` cannot name a rung that already returned.
 - `m59-received-test.mjs` (24): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,

@@ -96,7 +96,9 @@ export class PassSurvivalPart {
     // prevent, and an unproven square gets us the logoff, which is also how we
     // survive long enough to prove it.
     const worstHit = Math.min(30, Math.floor(((v.health?.max ?? 0) + 2) / 3));
-    const sheltered = this.holdWorks();
+    // `let`, NOT `const`: two rungs below take a wall as a side effect and let the pass carry on to the rest gate, and a
+    // value read before the wall was taken sends that gate the wrong answer. See the "a wall before a rest" rung.
+    let sheltered = this.holdWorks();
     // THE TRIGGER IS DIFFERENT BEHIND A WALL, and it has to be, because the cost of a
     // false alarm is not zero. Two of the biggest hit the game can land works out at
     // about 70% of health for these characters — sensible in the open, absurd in a
@@ -405,6 +407,7 @@ export class PassSurvivalPart {
       // always the real requirement — so nothing that could not rest before can rest now.
       // It just gets asked.
       if (!this.hold) return HANDLED;
+      sheltered = this.holdWorks();   // asked with the wall it now holds, not the one it held at the top of the pass
     }
 
     // RUN THE EXPERIMENT ON PURPOSE. A spot is only proved by standing in it without
@@ -416,7 +419,7 @@ export class PassSurvivalPart {
     // beyond the pause. Bounded twice, because being wrong here means sitting still
     // while something eats us: only while we still have flee margin in hand, and for
     // one pass at a time, so observe() gets to adjudicate quickly either way.
-    const testing = !sheltered && !!this.hold && !this.hold.failures &&
+    let testing = !sheltered && !!this.hold && !this.hold.failures &&
                     hp !== null && hp >= this.policy.fleeBelow;
     // RESTING IN A COMBAT ZONE IS SOMETHING YOU DO BEHIND A WALL OR NOT AT ALL.
     // Sheltered means the square is proven; testing means we are deliberately proving
@@ -593,7 +596,17 @@ export class PassSurvivalPart {
         'hurt in a room that spawns monsters — a wall before a rest')
         .catch(() => false);
       if (this.travelInterrupted() || got?.cancelled) return HANDLED;
-      this.note('will not rest in the open here', {
+      // A WALL TAKEN HERE IS A WALL TO REST AT ON THIS PASS. `sheltered` and `testing` were read before it was taken, so
+      // the rest gate below answered "the open, in a combat zone" for a body standing on its new wall, the stage
+      // returned CONTINUE, and passFarm got the pass. Scooter (t21), Ko'catan 2115, 2026-10-27 13:10:36Z: wall r17c11
+      // taken at 74/94 inside an open one-logoff healing session (rest_safe, "heal here to full"), then pulled from by
+      // passFarm in the same pass -- out to r11c18 among nine avar warriors, "could not get back after a failed pull",
+      // the hold released, and the body never reached a spot again. Read again, the gate rests here instead.
+      if (got?.took) {
+        sheltered = this.holdWorks();
+        testing = !sheltered && !!this.hold && !this.hold.failures && hp !== null && hp >= this.policy.fleeBelow;
+      }
+      this.note(got?.took ? 'took a wall before resting' : 'will not rest in the open here', {
         health: hp === null ? null : Math.round(hp * 100) + '%',
         monsters_in_room: hostiles.length, adjacent: near.length, got_a_wall: !!got?.took,
         room_spawns: spawnsHere, nothing_visible_yet: hostiles.length === 0 || undefined,

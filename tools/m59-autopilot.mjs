@@ -3286,13 +3286,20 @@ export class Autopilot {
   // being hurt, then whatever the mode is for.
   async pass() {
     this._survivalDrainedDecisionId=null;
+    // WHERE THIS PASS IS, FROM ITS FIRST LINE. `passStage` was written only by runPassLadder, so a pass that ended before
+    // the ladder left the PREVIOUS pass's rung standing. Scooter (t21), 2026-10-27: 133 passes in a row ended in the
+    // survival dispatcher, and his postmortem read `blocked_in: passFarm, in_stage_ms: 139621` -- a rung that had
+    // returned two minutes earlier, for a keeper that was never blocked. The preamble and the dispatcher name themselves.
+    this.passStage='passOnce';this.passStageAt=Date.now();
     await this.passOnce();
     const d=currentSurvivalDecision(this.s);
     // A later stage can select a replacement after the early survival dispatcher
     // has already run. Execute it before returning to loop() and its decideMs sleep.
     if(this.s.live && !this.stopping && d?.status==='pending' && d.strategy!=='yield_to_controller'
-        && d.id!==this._survivalDrainedDecisionId)
+        && d.id!==this._survivalDrainedDecisionId) {
+      this.passStage='continueSurvivalDecision';this.passStageAt=Date.now();
       await this.continueSurvivalDecision();
+    }
   }
 
   // SPOILED POTIONS OUT OF THE PACK (m59-potion-freshness.mjs): one LOOK at most per pass, each potion every 15 min,
@@ -3373,6 +3380,7 @@ export class Autopilot {
         }
       }
     }
+    this.passStage='continueSurvivalDecision';this.passStageAt=Date.now();
     if (await this.continueSurvivalDecision()) return;
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.

@@ -8,10 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 11 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
-//   fleetLogoff, resumeCooperativeReturn, playDead, logoffDeclined, playDeadObserved, askForHelp,
-//   restockReagents
-import { closeIfHealed, mayLogoff, noteLogoff } from '../m59-healing-session.mjs';
+// 12 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
+//   fleetLogoff, resumeCooperativeReturn, playDead, sessionSpotHere, logoffDeclined, playDeadObserved,
+//   askForHelp, restockReagents
+import { closeIfHealed, mayLogoff, noteLogoff, SPENT_EXIT_RETRY_MS, spentLogoffReplacement } from '../m59-healing-session.mjs';
 import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
 import { isFood } from '../m59-items.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -19,7 +19,7 @@ import { OF, buyLines } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { purchaseKey } from '../m59-purchase-plan.mjs';
 import * as skills from '../m59-skills.mjs';
-import { chooseSurvivalDecision, currentSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
+import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision, updateSurvivalDecision } from '../m59-survival-decision.mjs';
 import { CONTINUE, DEBUG_STATES, HANDLED, LOGOFF_REFRESH_MS, LOGOFF_UNDER_ATTACK_MS, REST_VIGOR_CAP, bearingIn, pct, purchaseEnabled, vigorOf } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
 
@@ -173,9 +173,28 @@ export class CooperativePart {
           this.note('not logging off again this healing session',{why,
             rule:'one play-dead logoff per healing session, until healed to full; keep the spot and heal'});}
         const active=currentSurvivalDecision(this.s);
-        if(active?.strategy!=='rest_safe'&&this.hold)chooseSurvivalDecision(this.s,{strategy:'rest_safe',reason:why,
-          reason_code:'one_logoff_per_session',status:'recovering',chosen_refuge:this.hold,
-          mitigation:'already logged off once this healing session; heal here to full'},{because:'one logoff per healing session'});
+        if(this.sessionSpotHere()){
+          if(active?.strategy!=='rest_safe')chooseSurvivalDecision(this.s,{strategy:'rest_safe',reason:why,
+            reason_code:'one_logoff_per_session',status:'recovering',chosen_refuge:this.hold,
+            mitigation:'already logged off once this healing session; heal here to full'},{because:'one logoff per healing session'});
+          return false;
+        }
+        // OFF ITS SPOT, THE REFUSAL MUST LEAVE SOMETHING THAT MOVES THE BODY. Scooter (t21), Ko'catan 2115, 2026-10-27:
+        // the only replacement here was rest_safe, gated on a hold; a failed pull had released his, so the caller's
+        // logoff_open stayed pending and un-executable, and the dispatcher "handled" it every pass for 133 s while he was
+        // eaten standing still. No second logoff either way -- see spentLogoffReplacement for what it becomes instead.
+        const room=this.s.world?.room?.num??null,tried=this._spentExitTried;
+        const next=spentLogoffReplacement({active,onSpot:false,hadHold:!!this.hold,
+          exitTriedRecently:!!tried&&tried.room===room&&Date.now()-tried.at<SPENT_EXIT_RETRY_MS});
+        if(next?.finish){
+          if(active)finishSurvivalDecision(this.s,active.id,next.outcome,next.reason);
+          this.note('logoff refused and no way to a safe spot or out: the ordinary ladder decides',{why,reason:next.reason});
+        } else if(next) {
+          const d=chooseSurvivalDecision(this.s,{...next,reason:why,source:'recovery'},
+            {because:'one logoff per healing session, and the body is not on a safe spot',outcome:'refused'});
+          this.note('not logging off again, and not on a safe spot: moving instead',{why,strategy:d.strategy,
+            replaces:active?.strategy??null,mitigation:next.mitigation});
+        }
         return false;
       }
       this._oneLogoffSaid=false;
@@ -287,6 +306,21 @@ export class CooperativePart {
       }
     }
     return did;
+  }
+
+  // IS THE BODY ON ITS ONE SPOT? Asked inside a spent healing session (playDead), where the answer decides between "keep
+  // the spot and heal" and "flee". On the held square, or standing on a recovery wall (adopted as the hold, as playDead's
+  // own logoff path adopts it). A hold the body has been pushed or pulled off is NOT its spot: pinning that body to
+  // "rest here" is what left Scooter standing in the open. An unknown position with a hold keeps the old answer -- not
+  // knowing where we are is not evidence of having left. A PREDICTED square is compared like a confirmed one: it is the
+  // client's own estimate and was what Scooter's trace carried throughout; the coarse square is what is asked.
+  sessionSpotHere() {
+    const me=this.s?.client?.self,h=this.hold,room=this.s?.world?.room?.num;
+    if(h&&(!me||!Number.isFinite(me.row)||!Number.isFinite(me.col)))return true;
+    if(h&&(h.room==null||room==null||Number(h.room)===Number(room))&&h.row===me.row&&h.col===me.col)return true;
+    let wall=null;try{wall=this.currentRecoveryWall?.();}catch{wall=null;}
+    if(!wall)return false;
+    try{return !!this.adoptRecoveryWall?.();}catch{return false;}
   }
 
   // WHETHER A LOGOFF AT THIS WALL WOULD BUY ANYTHING. See LOGOFF_UNDER_ATTACK_MS for the

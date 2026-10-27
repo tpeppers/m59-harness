@@ -12,8 +12,9 @@
 // THE SESSION: opened by the first play-dead logoff (a body under its line, taking a recovery spot), closed when health is
 // back to FULL and at least SESSION_MIN_MS has passed since the logoff (a logoff taken at full health is not "healed").
 // Inside one session the logoff fires at most once, whatever the cause; after it the body keeps ONE safe spot until
-// healed; a body that comes back OFF a spot flees to the nearest reachable one first (staysPut). Persisted per character
-// (substrate/.healing/), so a keeper handoff cannot hand out a second logoff.
+// healed; a body that comes back OFF a spot flees to the nearest reachable one first (staysPut), and a refused logoff is
+// replaced by something that moves it (spentLogoffReplacement). Persisted per character (substrate/.healing/), so a keeper
+// handoff cannot hand out a second logoff.
 // Pure apart from the small file.
 import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -84,4 +85,55 @@ export function noteLogoff(agent, { why = null, room = null, cooperative = false
 export function staysPut(agent, { holding = false, dir = healingDir(), now = Date.now() } = {}) {
   const s = readSession(agent, { dir, now });
   return !!s && s.logoffs >= 1 && !!holding;
+}
+
+// A REFUSED LOGOFF MUST LEAVE SOMETHING THAT MOVES THE BODY. Scooter (t21), Ko'catan 2115, prod 2026-10-27 13:10:44Z:
+// the session's one logoff was spent at 13:08:12; a failed pull left him at r11c18 with no hold; the refuge search found
+// nothing reachable ("nothing in this room is more defensible than open floor") and the survival ladder's replacement
+// was `logoff_open`. playDead refused it (correctly: one logoff per session) and installed nothing, because its only
+// replacement was `rest_safe` and that needed a hold. The un-executable logoff stayed pending; the dispatcher "handled" it
+// every pass for 133 s while 8-9 avar warriors took him from 82/94 to 0, never moving and never swinging.
+//
+// This answers what the refused logoff becomes, and it never answers a logoff:
+//   on its spot                                  -> null: the caller keeps the spot and heals (rest_safe), as before
+//   off its spot, a refuge not yet tried         -> nearest_refuge: flee to the nearest reachable spot (staysPut's rule)
+//   off its spot, the refuge search failed       -> leave_room: out by a permitted exit (the strategy's fall-back room)
+//   ...and the exit was just tried from here     -> finish: end the logoff decision, so the ordinary ladder (fight back,
+//                                                   trade in place, leave-to-recover) gets the pass instead of nothing
+// `active` is the current survival decision. Only a PENDING logoff decision is replaced -- that is the one a caller has
+// already chosen and is waiting to see carried out; anything else is not stranded by the refusal and is left alone.
+// `hadHold`: a hold the body is no longer standing on. It used to be pinned with `rest_safe`; now it flees like any
+// other body off its spot (unless an approach is already under way).
+export const SPENT_EXIT_RETRY_MS = 30_000;
+export function spentLogoffReplacement({ active = null, onSpot = false, hadHold = false, exitTriedRecently = false } = {}) {
+  if (onSpot) return null;
+  const logoffPending = !!active && active.status === 'pending'
+    && (active.strategy === 'logoff_open' || active.strategy === 'logoff_safe');
+  if (!logoffPending) {
+    const approaching = !!active && ['pending', 'approaching'].includes(active.status)
+      && ['nearest_refuge', 'route_refuge', 'leave_room'].includes(active.strategy);
+    if (!hadHold || approaching) return null;
+  }
+  // A logoff_open in a pending state only follows a FAILED refuge approach: replacementSurvivalChoice picks it when the
+  // previous decision was already logoff_open or had been re-planned at least once (safe-spots.mjs).
+  const refugeFailed = logoffPending && active.strategy === 'logoff_open' && (active.replan_count ?? 0) >= 1;
+  if (!refugeFailed) return { strategy: 'nearest_refuge', reason_code: 'one_logoff_spent',
+    replan_count: Math.max(1, active?.replan_count ?? 0),
+    mitigation: 'already logged off once this healing session and not on a safe spot: flee to the nearest reachable one' };
+  if (!exitTriedRecently) return { strategy: 'leave_room', reason_code: 'one_logoff_spent_no_refuge',
+    replan_count: (active.replan_count ?? 0) + 1,
+    mitigation: 'no reachable safe spot here and the session logoff is spent: leave by the nearest permitted exit' };
+  return { finish: true, outcome: 'refused',
+    reason: 'one logoff per healing session, no reachable safe spot, and the way out was just tried: the ordinary ladder decides' };
+}
+
+// WHICH WAY OUT. The nearest reachable exit into a room the confinement allows -- for a farm strategy that is its own
+// fall-back (kocatan-avar-warriors: 2115 -> 2013, the guard tower). A confinement is the operator's and is not waived here
+// (the leave-to-recover rung in passFleeAndRest refuses the same exits): with no permitted exit the answer is null.
+export function spentSessionExit(exits = [], { here = null, confine = null } = {}) {
+  const allowed = Array.isArray(confine) && confine.length ? new Set(confine.map(Number)) : null;
+  const usable = (Array.isArray(exits) ? exits : []).filter(e => e && e.to != null && e.reachable !== false
+    && Number(e.to) !== Number(here) && Number(e.to) !== 1 && (!allowed || allowed.has(Number(e.to))));
+  usable.sort((a, b) => (a.steps_away ?? 999) - (b.steps_away ?? 999));
+  return usable[0] ?? null;
 }
