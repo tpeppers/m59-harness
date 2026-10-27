@@ -9,21 +9,20 @@
 // not catch everything:
 //
 //   REQUIRES is checked when the strategy is ASSIGNED (the broker refuses it, naming what is missing, unless
-//   the call says accept: ["requires_unmet"]) and on every pass after (a weapon breaks, an enchantment
-//   lapses). While it is unmet the farm STANDS DOWN: no quarry is chosen, survival is untouched, and if the
-//   file names a `request` the fleet's service board is asked for it (tools/rpg/requests.mjs), so the desk
-//   that can fix it hears about it without anybody reading a status line.
+//   the call says accept: ["requires_unmet"]) and on every pass after (a weapon breaks, an enchantment lapses).
 //
-//   THE FLOOR is the catch-all. Every `minutes` of FARMING time (passes that reached the hunt; resting in an
-//   inn under a lockdown is not farming) must contain at least `kills` kills, or the farm stands down and
-//   says why. It catches the weapon case and every case nobody has thought of yet: a room that stopped
-//   spawning, a quarry that is out of reach, a pull that never lands. It is per file and off by default
-//   (silence is the old behaviour). It is persisted per character (substrate/.strategy-floor/), so a keeper
-//   restart or handoff neither forgives a tripped floor nor restarts the clock. Re-assigning the strategy,
-//   or editing its file, is how an operator says "try again".
+//   THE FLOOR is the catch-all. Every `minutes` of FARMING time (passes that reached the hunt; resting in an inn
+//   under a lockdown is not farming) must contain at least `kills` kills. It catches the weapon case and every case
+//   nobody has thought of yet: a room that stopped spawning, a quarry out of reach, a pull that never lands.
+//
+//   NEITHER JUST STOPS THE FARM. Operator: "I don't want stoppage as a reaction except if there's no desk-solution
+//   available, and for those cases we'd want a gutter/catchall orders". The engine's gate (m59-strategy-engine.mjs)
+//   diagnoses, asks a desk and keeps farming, then serves the file's `otherwise` strategy, and stands down only when
+//   there is no fallback at all. Everything here is per file and off by default (silence is the old behaviour), and
+//   saved per character (substrate/.strategy-floor/), so a keeper restart or handoff picks it up where it was.
 //
 // Pure apart from the floor's small store. No client, no keeper.
-import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -126,23 +125,29 @@ export function factsFromStatus(st, pack = null) {
 }
 
 // ------------------------------------------------------------------------------------ the floor's store
+// One small file per (character, key): `<agent>~<strategy>.json` for a floor, `<agent>~escalation.json` for what the
+// escalation is doing. `clearAll(agent)` forgets every one of a character's, which is what an explicit assignment does.
 const safe = a => String(a ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
 export function fileStore(dir = FLOOR_DIR) {
-  const path = agent => join(dir, `${safe(agent)}.json`);
+  const path = key => join(dir, `${String(key).split('~').map(safe).join('~')}.json`);
   return {
-    read(agent) { try { return JSON.parse(readFileSync(path(agent), 'utf8')); } catch { return null; } },
-    write(agent, obj) {
+    read(key) { try { return JSON.parse(readFileSync(path(key), 'utf8')); } catch { return null; } },
+    write(key, obj) {
       try {
         mkdirSync(dir, { recursive: true });
-        const p = path(agent), tmp = `${p}.${process.pid}.tmp`;
+        const p = path(key), tmp = `${p}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify(obj) + '\n'); renameSync(tmp, p);
       } catch { /* a floor that cannot persist still works for this process */ }
     },
-    clear(agent) { try { unlinkSync(path(agent)); } catch {} },
+    clear(key) { try { unlinkSync(path(key)); } catch {} },
+    clearAll(agent) {
+      const pre = `${safe(agent)}~`;
+      try { for (const f of readdirSync(dir)) if (f.startsWith(pre)) try { unlinkSync(join(dir, f)); } catch {} } catch {}
+    },
   };
 }
-/** Forget a character's floor (the broker calls this when a strategy is assigned: "try again"). */
-export function resetFloor(agent, store = fileStore()) { store.clear(agent); }
+/** Forget a character's floors and escalation (the broker calls this when a strategy is assigned: "try again"). */
+export function resetFloor(agent, store = fileStore()) { store.clearAll(agent); }
 
 /**
  * The kill-rate floor for one character running one strategy. The clock advances only on farming passes
@@ -152,7 +157,8 @@ export function resetFloor(agent, store = fileStore()) { store.clear(agent); }
 export class KillFloor {
   constructor({ floor, agent, strategy, version = null, store = fileStore(), now = Date.now() }) {
     this.floor = floor; this.agent = agent; this.strategy = strategy; this.version = version; this.store = store;
-    const saved = store.read(agent);
+    this.key = `${agent}~${strategy}`;
+    const saved = store.read(this.key);
     const same = saved && saved.strategy === strategy && saved.version === version
       && saved.kills_per === floor.kills && saved.minutes === floor.minutes;
     this.st = same ? saved : { strategy, version, kills_per: floor.kills, minutes: floor.minutes,
@@ -165,7 +171,7 @@ export class KillFloor {
   save(now, force = false) {
     if (!force && now - this.savedAt < 30_000) return;
     this.savedAt = now;
-    this.store.write(this.agent, this.st);
+    this.store.write(this.key, this.st);
   }
 
   farming(now = Date.now()) {
@@ -187,6 +193,12 @@ export class KillFloor {
     }
     this.save(now);
     return this.state(now);
+  }
+
+  /** Start a fresh window and forget a trip: the escalation found a cause and is acting on it. */
+  restart(now = Date.now()) {
+    Object.assign(this.st, { window_ms: 0, window_kills: 0, tripped: null, last_farm_at: null });
+    this.save(now, true);
   }
 
   kill(now = Date.now()) {

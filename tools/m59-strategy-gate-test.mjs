@@ -10,8 +10,10 @@
 //   * the floor's clock advances only on farming passes, a gap over two minutes is not farming, a window
 //     with too few kills TRIPS it, enough kills roll it over, and the saved floor survives a new process on
 //     the same file but not an edited file;
-//   * the engine stands the farm down on an unmet requirement or a tripped floor, asks the service board once
-//     per ttl, counts kills with or without an onKill hook, and yields its gate while a bot holds `work`;
+//   * THE ESCALATION LADDER: an unmet requirement or a tripped floor never just stops. It diagnoses (weapons re-read),
+//     asks a desk and KEEPS FARMING, falls back to the file's `otherwise` (or this machine's default) when no desk
+//     can or does fix it, comes back by itself when the requirement is met, survives a handoff, and stands down
+//     ONLY when there is no fallback at all; it yields while a bot holds `work`;
 //   * the hazard is named, so the broker's refusal says how to accept it.
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,7 +38,8 @@ const { HAZARDS, refusal } = await import('./m59-hazards.mjs');
 const { normalizeRequires, normalizeFloor, requiresVerdict, requestFor, KillFloor, FARMING_GAP_MS } = gate;
 
 const memStore = () => { const m = new Map(); return { m, read: a => m.has(a) ? JSON.parse(m.get(a)) : null,
-  write: (a, o) => m.set(a, JSON.stringify(o)), clear: a => m.delete(a) }; };
+  write: (a, o) => m.set(a, JSON.stringify(o)), clear: a => m.delete(a),
+  clearAll: agent => { for (const k of [...m.keys()]) if (k.startsWith(`${agent}~`)) m.delete(k); } }; };
 
 console.log('validation');
 ok('requires { magicWeapon: true } normalises', JSON.stringify(normalizeRequires({ magicWeapon: true })) === '{"magicWeapon":true}');
@@ -94,80 +97,176 @@ console.log('the kill-rate floor');
   ok('FARMING_GAP_MS is two minutes', FARMING_GAP_MS === 120_000);
 }
 
-console.log('the engine');
+console.log('the engine: the escalation ladder');
+process.env.M59_FARM_OTHERWISE_FILE = join(tmp, 'otherwise.json');
 let mtick = Date.parse('2026-10-26T12:00:00Z') / 1000;
 function writeStrategy(name, body) {
   const f = join(DIR, `${name}.mjs`); writeFileSync(f, body); mtick += 10; utimesSync(f, mtick, mtick); return f;
 }
 writeStrategy('trolls', `export default { name: 'trolls', hunt: 'troll', confine: { station: 599, roam: false },
-  requires: { magicWeapon: true }, floor: { kills: 1, minutes: 30 } };\n`);
+  requires: { magicWeapon: true }, floor: { kills: 1, minutes: 30 }, otherwise: 'spiders' };\n`);
+writeStrategy('spiders', `export default { name: 'spiders', hunt: 'baby spider', confine: { station: 534, roam: true } };\n`);
+writeStrategy('nofallback', `export default { name: 'nofallback', hunt: 'troll', floor: { kills: 1, minutes: 30 } };\n`);
 {
   const r = await loadFarmStrategy('trolls');
-  ok('a file with requires and floor loads', r.ok && r.strategy.requires?.magicWeapon && r.strategy.floor?.minutes === 30, r.why ?? '');
+  ok('a file with requires, floor and otherwise loads', r.ok && r.strategy.requires?.magicWeapon && r.strategy.floor?.minutes === 30
+     && r.strategy.otherwise === 'spiders', r.why ?? '');
   writeStrategy('bad-floor', `export default { name: 'bad-floor', hunt: 'troll', floor: { minutes: 1 } };\n`);
   const b = await loadFarmStrategy('bad-floor');
   ok('a bad floor refuses the whole file', !b.ok && /floor/.test(b.why), b.why);
+  writeStrategy('selfish', `export default { name: 'selfish', hunt: 'troll', otherwise: 'selfish' };\n`);
+  ok('otherwise cannot name itself', !(await loadFarmStrategy('selfish')).ok);
 }
-function host({ weapons, claims = new Map() } = {}) {
+function host({ weapons, claims = new Map(), assigned = 'trolls' } = {}) {
   const notes = [], requests = [];
-  return { notes, requests, claims,
-    policy: { hunt: null, assignedRoom: null, roam: true, farmStrategy: 'trolls', fleeBelow: 0.4 },
+  const h = { notes, requests, claims, rereads: 0,
+    policy: { hunt: null, assignedRoom: null, roam: true, farmStrategy: assigned, fleeBelow: 0.4 },
     facultyOwner(f) { return claims.get(f) ?? 'keeper'; },
     note(what, data) { notes.push({ what, data }); },
-    weaponMagicStatus: () => ({ weapons }),
+    weaponMagicStatus: () => ({ weapons: h.weapons }),
+    rereadWeapons() { h.rereads++; h.weapons = h.weapons.map(w => ({ ...w, bypasses_nonmagic: null })); },
+    huntRoomCheck: () => null,
+    weapons,
     s: { name: 't7', client: { inventory: [], rsc: { get: () => '' } }, world: { room: { num: 599 } },
          joints: { effects: { request: q => requests.push(q) } } } };
+  return h;
+}
+const MAGIC = [{ name: 'long sword', bypasses_nonmagic: true }];
+const MUNDANE = [{ name: 'long sword', bypasses_nonmagic: false }];
+async function tick(e, now, step = 6_000) { now.t += step; await e.converge('pass'); return e.gate(); }
+{
+  // 1. An unmet requirement with a desk remedy: ask, KEEP FARMING; the desk answers; the escalation clears.
+  const now = { t: 5_000_000 };
+  const h = host({ weapons: MUNDANE });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
+  let g = e.gate();
+  ok('mundane weapons: awaiting a desk, NOT stood down', g?.escalation?.stage === 'awaiting_desk' && g.blocked === null, JSON.stringify(g));
+  ok('the board is asked for a dedication', h.requests.length === 1 && h.requests[0].service === 'dedicate' && h.requests[0].target === 't7',
+     JSON.stringify(h.requests));
+  ok('h.policy still serves the assignment while waiting', e.serving === 'trolls');
+  h.weapons = MAGIC;
+  g = await tick(e, now);
+  ok('the dedication arrives: the escalation clears', !g.escalation && g.blocked === null, JSON.stringify(g));
+  ok('and that is noted', h.notes.some(n => n.what === 'farm strategy escalation cleared'));
 }
 {
-  let now = 5_000_000;
-  const h = host({ weapons: [{ name: 'long sword', bypasses_nonmagic: false }] });
-  const e = new FarmStrategyEngine(h, { now: () => now, floorStore: memStore() });
+  // 2. The desk does not answer in time: the fallback strategy is served, and the assignment comes back by itself.
+  const now = { t: 6_000_000 };
+  const h = host({ weapons: MUNDANE });
+  const store = memStore();
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: store });
+  await e.converge('pass'); e.gate();
+  now.t += 16 * 60_000; e.gateCache = null;
+  let g = e.gate();
+  ok('an unanswered request falls back', g?.escalation?.stage === 'fallback' && g.escalation.to === 'spiders', JSON.stringify(g?.escalation));
   await e.converge('pass');
-  const g = e.gate();
-  ok('mundane weapons: the farm is STOOD DOWN by requires', g?.blocked?.by === 'requires' && /long sword/.test(g.blocked.why), JSON.stringify(g));
-  ok('and the service board is asked for a dedication, once', h.requests.length === 1 && h.requests[0].service === 'dedicate'
-     && h.requests[0].target === 't7', JSON.stringify(h.requests));
-  now += 6_000; e.gate(); now += 6_000; e.gate();
-  ok('not asked again inside its ttl', h.requests.length === 1);
-  now += 16 * 60_000; e.gate();
-  ok('asked again after the ttl', h.requests.length === 2);
-  ok('status carries the gate', e.status()?.gate?.blocked?.by === 'requires');
-  ok('the stand-down is noted once', h.notes.filter(n => n.what === 'farm strategy stood down').length === 1);
-
-  h.weaponMagicStatus = () => ({ weapons: [{ name: 'long sword', bypasses_nonmagic: true }] });
-  now += 6_000;
-  ok('a dedicated weapon clears it', e.gate()?.blocked === null);
-  ok('and the clearing is noted', h.notes.some(n => n.what === 'farm strategy may farm again'));
-
-  // The floor, through the engine: farming passes, then a kill through dispatch with no onKill hook.
-  for (let i = 0; i < 20; i++) { now += 60_000; e.farming(); }
-  e.dispatch('onKill', { creature: 'troll', room: 599 });
-  ok('a kill is counted with no onKill hook', e.floor.state(now).total_kills === 1);
-  for (let i = 0; i < 61; i++) { now += 60_000; e.farming(); }
-  const g2 = e.gate();
-  ok('a window with its kill rolls over; the next 30 farming minutes with no kill: STOOD DOWN by the floor', g2?.blocked?.by === 'floor' && /Re-assign/.test(g2.blocked.why), JSON.stringify(g2));
-
+  ok('the fallback file is served; the assignment is unchanged', e.serving === 'spiders' && h.policy.farmStrategy === 'trolls'
+     && h.policy.hunt === 'baby spider', `${e.serving} ${h.policy.hunt}`);
+  ok('status says it is serving the fallback', e.status()?.serving === 'spiders');
+  // A new keeper process (handoff) picks the fallback up from the store.
+  const h2 = host({ weapons: MUNDANE }); const e2 = new FarmStrategyEngine(h2, { now: () => now.t, floorStore: store });
+  await e2.converge('pass');
+  ok('a handoff keeps serving the fallback', e2.serving === 'spiders' && h2.policy.hunt === 'baby spider');
+  h.weapons = MAGIC;
+  g = await tick(e, now);
+  await e.converge('pass');
+  ok('a magic weapon arrives later: back to the assignment by itself', !e.escalation && e.serving === 'trolls' && h.policy.hunt === 'troll',
+     `${e.serving} ${h.policy.hunt} ${JSON.stringify(e.escalation)}`);
+}
+{
+  // 3. The floor trips with magic weapons: weapons re-read, no cause found, no desk: the fallback.
+  const now = { t: 7_000_000 };
+  const h = host({ weapons: MAGIC });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
+  for (let i = 0; i < 31; i++) { now.t += 60_000; e.farming(); }
+  e.gateCache = null;
+  let g = e.gate();
+  ok('a tripped floor DIAGNOSES first, it does not stop', g?.escalation?.stage === 'diagnosing' && g.blocked === null, JSON.stringify(g));
+  ok('and forces every weapon to be read again', h.rereads === 1);
+  h.weapons = MAGIC;                                        // the sweep reads them: still magic
+  g = await tick(e, now);
+  ok('weapons still magic, no curse, room spawns: no desk remedy, so the fallback', g?.escalation?.stage === 'fallback'
+     && /weapons are magic/.test(g.escalation.why), JSON.stringify(g?.escalation));
+}
+{
+  // 4. The floor trips because the dedication LAPSED: re-read finds it, the desk is asked, the farm keeps going.
+  const now = { t: 8_000_000 };
+  const h = host({ weapons: MAGIC });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
+  for (let i = 0; i < 31; i++) { now.t += 60_000; e.farming(); }
+  e.gateCache = null; e.gate();
+  h.weapons = MUNDANE;                                      // the fresh read says the enchantment is gone
+  const g = await tick(e, now);
+  ok('a lapsed dedication found by the re-read: awaiting a desk', g?.escalation?.stage === 'awaiting_desk'
+     && g.escalation.service === 'dedicate', JSON.stringify(g?.escalation));
+  const before = e.floor.state(now.t).window_farming_min;
+  for (let i = 0; i < 5; i++) { now.t += 60_000; e.farming(); }
+  ok('the floor clock is paused while the desk is pending', e.floor.state(now.t).window_farming_min === before);
+  ok('and the farm is not blocked', e.gate()?.blocked == null);
+}
+{
+  // 5. A cursed weapon: the remedy is an uncurse.
+  const now = { t: 9_000_000 };
+  const h = host({ weapons: MAGIC });
+  h.weaponMagicStatus = () => ({ weapons: h.weapons, curse_suspect: { name: 'cursed mace' } });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
+  for (let i = 0; i < 31; i++) { now.t += 60_000; e.farming(); }
+  e.gateCache = null; e.gate(); h.weapons = MAGIC;
+  const g = await tick(e, now);
+  ok('a cursed weapon asks for an uncurse', g?.escalation?.service === 'uncurse', JSON.stringify(g?.escalation));
+}
+{
+  // 6. STOPPING ONLY WHEN NOTHING ELSE IS LEFT: no desk remedy and no fallback.
+  const now = { t: 10_000_000 };
+  const h = host({ weapons: MAGIC, assigned: 'nofallback' });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
+  for (let i = 0; i < 31; i++) { now.t += 60_000; e.farming(); }
+  e.gateCache = null; e.gate(); h.weapons = MAGIC;
+  let g = await tick(e, now);
+  ok('no remedy, no otherwise, no machine default: stood down, and it says so', g?.blocked?.by === 'stood_down'
+     && /no fallback/.test(g.blocked.why), JSON.stringify(g));
+  writeFileSync(process.env.M59_FARM_OTHERWISE_FILE, JSON.stringify({ strategy: 'spiders' }));
+  const h2 = host({ weapons: MAGIC, assigned: 'nofallback' });
+  const e2 = new FarmStrategyEngine(h2, { now: () => now.t, floorStore: memStore() });
+  await e2.converge('pass');
+  for (let i = 0; i < 31; i++) { now.t += 60_000; e2.farming(); }
+  e2.gateCache = null; e2.gate(); h2.weapons = MAGIC;
+  g = await tick(e2, now);
+  ok("with this machine's default catch-all, it falls back there instead", g?.escalation?.stage === 'fallback' && g.escalation.to === 'spiders',
+     JSON.stringify(g?.escalation));
+}
+{
+  // 7. A bot holding work: the gate yields, the clock does not run.
+  const now = { t: 11_000_000 };
+  const h = host({ weapons: MAGIC });
+  const e = new FarmStrategyEngine(h, { now: () => now.t, floorStore: memStore() });
+  await e.converge('pass');
   h.claims.set('work', 'bot:dum');
-  now += 6_000;
-  const g3 = e.gate();
-  ok('while a bot holds work the gate yields (the file is not in force)', g3?.blocked === null && g3.yielded_to === 'bot:dum', JSON.stringify(g3));
-  const before = e.floor.state(now).window_farming_min;
-  now += 60_000; e.farming();
-  ok('and the floor clock does not advance under the bot', e.floor.state(now).window_farming_min === before);
+  const g = e.gate();
+  ok('while a bot holds work the gate yields', g?.blocked === null && g.yielded_to === 'bot:dum', JSON.stringify(g));
+  const before = e.floor.state(now.t).window_farming_min;
+  now.t += 60_000; e.farming(); now.t += 60_000; e.farming();
+  ok('and the floor clock does not advance under the bot', e.floor.state(now.t).window_farming_min === before);
+  e.dispatch('onKill', { creature: 'troll', room: 599 });
+  ok('a kill is still counted, with no onKill hook', e.floor.state(now.t).total_kills === 1);
 }
 {
   const h = host({ weapons: [{ name: 'long sword', bypasses_nonmagic: null }] });
   const e = new FarmStrategyEngine(h, { floorStore: memStore() });
   await e.converge('pass');
-  ok('unread weapons do not stand the farm down', e.gate()?.blocked === null && e.gate()?.requires?.met === null);
-  ok('and ask for nothing', h.requests.length === 0);
+  ok('unread weapons start no escalation', !e.gate()?.escalation && h.requests.length === 0);
 }
 {
   writeStrategy('plain', `export default { name: 'plain', hunt: 'troll' };\n`);
-  const h = host({ weapons: [] }); h.policy.farmStrategy = 'plain';
+  const h = host({ weapons: [], assigned: 'plain' });
   const e = new FarmStrategyEngine(h, { floorStore: memStore() });
   await e.converge('pass');
-  ok('a file with neither has no gate (silence is the old behaviour)', e.gate() === null && !('gate' in (e.status() ?? {})));
+  ok('a file with none of it has no gate (silence is the old behaviour)', e.gate() === null && !('gate' in (e.status() ?? {})));
 }
 
 console.log('the hazard');

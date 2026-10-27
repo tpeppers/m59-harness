@@ -12329,8 +12329,8 @@ const TOOLS = [
           'policy_sources (who set every key). Pass mode:"farm" with it. NOT `strategy`, which picks ' +
           'a STRATEGIES pattern. See docs/m59-strategies.md' },
       accept: { type: 'array', items: { type: 'string' }, description: 'NAMED HAZARDS this call means (m59-hazards.mjs). ' +
-        '"requires_unmet": assign a farm_strategy whose `requires` this character does not meet (it is assigned and stands ' +
-        'down until the requirement is met, instead of being refused)' },
+        '"requires_unmet": assign a farm_strategy whose `requires` this character does not meet (it is assigned and escalates: ' +
+        'it asks the service board for the fix and keeps farming, then serves its `otherwise` fallback if no desk answers)' },
       hunt_priority: { type: ['array', 'null'], items: { type: 'string' }, maxItems: 20,
         description: 'AN ORDER OVER hunt, not a second hunt list: e.g. ["spider", "living tree"]. ' +
           'When set, the keeper takes the first-listed creature that is already an acceptable ' +
@@ -13547,7 +13547,7 @@ const TOOLS = [
                               note: 'nothing was changed: the character keeps the posture it has' };
           // WHAT THE BODY NEEDS (m59-strategy-gate.mjs). Operator, 2026-10-26: a troll crew grinding six hours with
           // weapons that could not hurt a troll "should be at-worst a bounce-back". Refused here, naming what is
-          // missing, unless the call accepts requires_unmet; then it is assigned and stands down until met. Unknown
+          // missing, unless the call accepts requires_unmet; then it is assigned and escalates (desk, then fallback). Unknown
           // (weapons not read since the keeper started) is not a refusal: the keeper's own gate checks every pass.
           if (r.strategy.requires) {
             let pack = null;
@@ -13557,7 +13557,7 @@ const TOOLS = [
             if (verdict.met === false && !accepts(a.accept, 'requires_unmet'))
               return { started: false, reason: refusal('requires_unmet', `${r.name}: ${verdict.unmet.map(u => u.why).join('; ')}`),
                        requires: verdict, ...(requestFor(r.strategy.requires, verdict) ? { fix: `a "${requestFor(r.strategy.requires, verdict).service}" ` +
-                         'from a desk would meet it; once assigned (with accept) the keeper asks the service board itself' } : {}),
+                         'from a desk would meet it; once assigned (with accept) the keeper asks the service board itself, then falls back' } : {}),
                        note: 'nothing was changed: the character keeps the posture it has' };
             if (verdict.met !== true) farmStrategyRequires = verdict;
           }
@@ -13681,8 +13681,8 @@ const TOOLS = [
         ...(farmStrategy.unrecognised?.length ? { unrecognised_not_applied: farmStrategy.unrecognised } : {}) };
       if (farmStrategyReleased) out.farm_strategy_released = farmStrategyReleased;
       if (farmStrategyRequires) out.farm_strategy_requires = { ...farmStrategyRequires,
-        why: farmStrategyRequires.met === false ? 'assigned with accept requires_unmet: the farm stands down until this is met'
-          : 'not yet known (the keeper has not read its weapons); the keeper checks it every pass and stands down if unmet' };
+        why: farmStrategyRequires.met === false ? 'assigned with accept requires_unmet: the keeper asks a desk for the fix and keeps farming, then serves its otherwise fallback if no desk answers'
+          : 'not yet known (the keeper has not read its weapons); the keeper checks it every pass and escalates if unmet' };
       if (farmStrategyShadows.length) out.farm_strategy_shadows = { args: farmStrategyShadows,
         why: `farm strategy "${farmStrategy.name}" declares these, so while the keeper owns their faculty ` +
              'the value in the file is the one in force; yours is kept underneath and returns if the strategy ' +

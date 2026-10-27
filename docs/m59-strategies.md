@@ -322,37 +322,50 @@ cast of dispel illusion reagents for the caster from the guild chests or the Bar
 pack lacks them, waits for the hold, casts, and takes the chalice inside cave2's 30-second window.
 The kod it rests on is in its header; `m59-icky-chalice-test.mjs` pins it.
 
-## What the body needs, and the kill-rate floor
+## What the body needs, the kill-rate floor, and the escalation
 
 Operator, 2026-10-26, of a troll crew that ground Ukgoth for six hours with weapons that could not hurt a troll: that
-*"should be at-worst a bounce-back of 'cannot be assigned without a way to get weapons dedicated'"*.
-`tools/m59-strategy-gate.mjs`; `m59-strategy-gate-test.mjs` (48) pins it.
+*"should be at-worst a bounce-back of 'cannot be assigned without a way to get weapons dedicated'"*; and then *"I don't
+want stoppage as a reaction except if there's no desk-solution available, and for those cases we'd want a
+gutter/catchall orders"*. `tools/m59-strategy-gate.mjs` and the gate in `m59-strategy-engine.mjs`;
+`m59-strategy-gate-test.mjs` (58) pins it.
 
 ```js
-requires: { magicWeapon: true },        // and/or items: ['purple mushroom']; request: { service: 'dedicate' } | null
-floor:    { kills: 4, minutes: 30 },    // at least 4 kills in every 30 minutes of farming
+requires:  { magicWeapon: true },       // and/or items: ['purple mushroom']; request: { service: 'dedicate' } | null
+floor:     { kills: 4, minutes: 30 },   // at least 4 kills in every 30 minutes of farming
+otherwise: 'cragged-spiders',           // the catch-all: another farm strategy, served when no desk can fix it
 ```
 
-| | when | what happens |
-|---|---|---|
-| `requires` unmet | at assignment | the broker refuses `farm_strategy`, naming the weapons it found, unless `accept: ["requires_unmet"]`. Then it is assigned and waits, stood down |
-| `requires` unknown | at assignment | allowed (the weapons have not been read since the keeper started); the reply says so as `farm_strategy_requires` |
-| `requires` unmet | every pass | the farm stands down; the keeper posts the request (`dedicate` by default for `magicWeapon`) to the service board, at most once per `ttl_min` (15) |
-| `floor` tripped | a window of `minutes` FARMING minutes with fewer than `kills` kills | the farm stands down and says why, until the strategy is re-assigned or its file is edited |
+**At assignment** the broker refuses a strategy whose `requires` this body does not meet, naming the weapons it found,
+unless the call says `accept: ["requires_unmet"]`. Unknown (weapons not read since the keeper started) is allowed, and
+the reply says so as `farm_strategy_requires`.
 
-**Standing down** means passFarm chooses no quarry. It returns below the meal, so the body still eats, and everything
-above it (fleeing, resting, fighting back, the Underworld) is untouched. The board line reads the reason; status has
-`farm_strategy.gate: { blocked: { by, why }, requires, floor, request }`.
+**After that, a farm that is not working escalates. It does not just stop:**
+
+| stage | entered when | what the character does |
+|---|---|---|
+| `diagnosing` | the floor trips | keeps farming; every weapon is read afresh (a lapsed dedication is the likeliest cause, and an old reading hides it), for up to 3 minutes |
+| `awaiting_desk` | the cause has a desk remedy: a missing magic weapon (`dedicate`, or the file's `requires.request`), a weapon that will not come off (`uncurse`) | posts the request to the service board and **keeps farming**, the floor clock paused, until the cause clears (escalation over) or the request's ttl (15 min) runs out |
+| `fallback` | no desk remedy (the room, or no cause found), or the desk did not answer | serves the file's `otherwise` strategy, else this machine's `substrate/farm-strategy-otherwise.json` (`{ "strategy": "<name>" }`, gitignored). The assignment is unchanged; it comes back by itself when a requirement that caused this is met |
+| `stood_down` | there is no fallback, the fallback will not load, or the fallback trips its own floor | chooses no quarry. The only stop, and it says which of those it was |
+
+Survival is never on the ladder: passFarm checks the gate below the meal, so a body that stands down still eats, and
+fleeing, resting, fighting back and the Underworld are decided above it. The board line names a fallback or a stand
+down; status has `farm_strategy.gate: { blocked, serving, escalation, requires, floor, request }` and
+`farm_strategy.serving` while a fallback is in force.
 
 **The floor's clock** advances only on passes that reached the hunt. A gap of more than two minutes between two such
 passes (resting, travelling, a lockdown in an inn, a held body) is not counted. A kill is any counted kill (the same
-moment `onKill` fires, with or without a hook). The floor is saved per character in `substrate/.strategy-floor/`,
-keyed by the strategy and its file's mtime, so a keeper restart or handoff neither forgives a trip nor restarts the
-clock. An explicit assignment (the broker) clears it, which is how an operator says "try again".
+moment `onKill` fires, with or without a hook).
 
-**Both are silent unless declared**, and both are off while a bot or lease holds `work` (the file is not in force).
-Set a floor the quarry can honestly meet: a mundane-armed troll crew may still land the odd kill, so one per 30
-minutes would not catch it.
+**It survives a handoff, and "try again" is explicit.** The floor and the escalation are saved per character in
+`substrate/.strategy-floor/`, keyed by the strategy and its file's mtime, so a keeper restart neither forgives a trip
+nor restarts the clock, and a fallback stays in force. An explicit assignment (the broker) clears them; so does editing
+the assigned file.
+
+**All of it is silent unless declared**, and off while a bot or lease holds `work` (the file is not in force). A
+fallback names no fallback of its own: it either works or stands down. Set a floor the quarry can honestly meet: a
+mundane-armed troll crew may still land the odd kill, so one per 30 minutes would not catch it.
 
 ## Private strategy directories
 

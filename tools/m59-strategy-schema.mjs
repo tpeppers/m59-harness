@@ -280,7 +280,7 @@ export const PROTECTED_NAMES = Object.freeze({
   farmStrategy: 'is the assignment itself and cannot be set from inside a strategy',
 });
 // `requires` and `floor` are not policy keys: they gate the farm (m59-strategy-gate.mjs) rather than set it.
-const KNOWN_TOP = new Set(['name', 'describe', 'hooks', 'requires', 'floor',
+const KNOWN_TOP = new Set(['name', 'describe', 'hooks', 'requires', 'floor', 'otherwise',
   ...STRATEGY_FIELDS.filter(f => !f.path.includes('.')).map(f => f.path), ...GROUPS]);
 
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -353,6 +353,14 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
   let requires = null, floor = null;
   try { requires = normalizeRequires(s.requires); } catch (e) { problems.push({ path: 'requires', why: e.message }); }
   try { floor = normalizeFloor(s.floor); } catch (e) { problems.push({ path: 'floor', why: e.message }); }
+  // AND WHAT TO DO INSTEAD when no desk can fix it: another farm strategy, by name (the catch-all orders).
+  let otherwise = null;
+  if (s.otherwise != null) {
+    if (typeof s.otherwise !== 'string' || !STRATEGY_NAME.test(s.otherwise))
+      problems.push({ path: 'otherwise', why: 'otherwise must name another farm strategy file' });
+    else if (s.otherwise === s.name) problems.push({ path: 'otherwise', why: 'otherwise cannot name the strategy itself' });
+    else otherwise = s.otherwise;
+  }
 
   const hooks = {};
   if (s.hooks !== undefined) {
@@ -368,5 +376,5 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     return refuse('the file declares no field and no hook, so assigning it would change nothing — ' +
                   'which reads exactly like a strategy that works');
   return { ok: true, why: null, problems, unrecognised,
-           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks, requires, floor } };
+           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks, requires, floor, otherwise } };
 }

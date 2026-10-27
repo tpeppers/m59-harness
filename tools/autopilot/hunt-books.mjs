@@ -76,7 +76,8 @@ export class HuntBooksPart {
     if (this.doing === 'waiting') return 'waiting for quarry contact';
     if (this.mode === 'farm') {
       const g = this.farmStrategyGate?.();
-      if (g?.blocked) return g.blocked.by === 'requires' ? g.blocked.why : `farm ${g.blocked.why}`;
+      if (g?.blocked) return `farm stood down: ${g.blocked.why}`;
+      if (g?.escalation?.stage === 'fallback') return `fallback ${g.escalation.to} for ${this.policy.farmStrategy}: ${g.escalation.why}`;
     }
     if (this.mode === 'farm' && this.policy.hunt) {
       // A ROOM THAT CANNOT PRODUCE THE QUARRY OUTRANKS EVERY OTHER THING THIS LINE CAN SAY,

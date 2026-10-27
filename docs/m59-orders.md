@@ -148,38 +148,37 @@ as tabs, one per module. The DebugClient's MANAGE tab and the field page are the
 | tripwires (`m59-tripwire.mjs`) | event triggers on a selector |
 | named hazards (`m59-hazards.mjs`) | the override vocabulary for leases and admission |
 | survival as a lease | the first expiring lease on a protected key |
-| `requires` and `floor` (`m59-strategy-gate.mjs`) | admission and `blocked_by` for the `Farm` resource (below) |
+| `requires`, `floor` and `otherwise` (`m59-strategy-gate.mjs`) | admission, `blocked_by` and the remedy loop for the `Farm` resource (below) |
 | the service board (`tools/rpg/requests.mjs`) | the request half of a `Desk` |
 | FleetScript guarantees and `unsafe.waives` | admission checks for missions, already in force |
 | joints and paks | per-moment rules inside a keeper: below this layer, unchanged |
 
-## The first piece, built: what a farm needs, and a kill-rate floor
+## The first piece, built: what a farm needs, a kill-rate floor, and the escalation
 
 A farm strategy file may now say:
 
 ```js
-requires: { magicWeapon: true },          // and/or items: ['...']; request: { service: 'dedicate' } (the default for magicWeapon)
-floor:    { kills: 1, minutes: 30 },      // at least 1 kill per 30 minutes of farming, or stand down
+requires:  { magicWeapon: true },        // and/or items; request: { service } (dedicate by default for magicWeapon)
+floor:     { kills: 4, minutes: 30 },    // at least 4 kills per 30 minutes of farming
+otherwise: 'some-safer-strategy',        // the catch-all orders when no desk can fix it
 ```
 
-- **At assignment** the broker checks `requires` against the keeper's own weapon readings. Unmet is refused, naming
-  the weapons it found, unless the call says `accept: ["requires_unmet"]`. In that case the strategy is assigned and
-  waits, stood down, until the requirement is met. Unknown (weapons not read yet) is not a refusal.
-- **Every pass** the keeper re-checks it. A weapon breaks, an enchantment lapses: the farm stands down. No quarry is
-  chosen; eating, resting, fleeing and fighting back are unchanged. The keeper posts a `dedicate` request to the
-  service board, at most once per 15 minutes.
-- **The floor is the catch-all.** Its clock runs only on passes that reached the hunt, so a lockdown in an inn or a
-  long rest does not count. A window with too few kills stands the farm down and says so. The floor is saved per
-  character, so a keeper restart or handoff neither forgives a tripped floor nor restarts its clock. Re-assigning the
-  strategy, or editing its file, is how you say "try again".
-- Both are off unless the file declares them, and both are off while a bot or lease holds `work`.
+- **At assignment** an unmet `requires` is refused, naming the weapons found, unless `accept: ["requires_unmet"]`.
+- **After that, nothing just stops.** The operator: *"I don't want stoppage as a reaction except if there's no
+  desk-solution available, and for those cases we'd want a gutter/catchall orders"*. A tripped floor first re-reads
+  every weapon. A cause with a desk remedy (a lapsed dedication, a curse) posts the request and keeps farming with the
+  clock paused. No remedy, or no answer within the ttl, serves the `otherwise` strategy, or this machine's default,
+  while the assignment stays as it was. It returns by itself when the requirement is met. Only with no fallback at all
+  does it stand down, and it says so.
+- It is saved per character, so a handoff carries it. An explicit assignment, or an edit of the file, means "try again".
 
-Kill counts come from the keeper's counted kills, the same moment `onKill` fires. Ledger totals stay the authority for
-reporting. The floor needs only "has this body killed anything lately".
+This is the `Farm` resource's admission check, `blocked_by`, and remedy loop, in miniature. A desk is "available" when
+the file or the cause names its service, bounded by the ttl: the service board does not yet know who staffs which desk.
+That registry is step 5 below.
 
 ## Build order
 
-1. **Requirements and the floor.** Done (above).
+1. **Requirements, the floor and the escalation.** Done (above).
 2. **The handoff converges to the live stack.** A replacement keeper takes the outgoing keeper's live orders, the wall
    it holds, and its current holds, and never resumes a stale suspended journey. This is the smallest piece of layer
    (1), and it removes the snapshot/diff/re-push routine run by hand after every deploy.
@@ -199,7 +198,5 @@ Each step is useful alone, and none boxes in the next.
 - **Floor defaults.** One kill per 30 minutes is the floor as proposed. A troll crew with mundane weapons may still
   land an occasional kill, so a troll file probably wants something closer to four per 30 minutes. Should there be a
   fleet-wide default floor for files that declare none, or keep silence as the old behaviour?
-- **What a stood-down farm does.** Today it stands where it is, survival intact, and asks the board. Should it walk
-  to a named room instead, such as the stage room or the nearest inn?
 - **The scheduler's authority.** Should it only *refuse* a collision (step 3), or also *pick* the body for a job from
   the ones that match?
