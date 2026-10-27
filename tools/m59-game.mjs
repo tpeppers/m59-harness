@@ -5731,11 +5731,18 @@ class Session {
                  note: 'escaping before re-planning' });
       const out = await this.escapeUnderworld?.({ movementGeneration, controlToken })
         .catch(() => null);
-      if (out?.left) return true;
+      if (out?.left) { escapedAfterDeath = true; return true; }
       const skills = await import('./m59-skills.mjs').catch(() => null);
       const r = await skills?.escapeUnderworld?.(this, {}).catch(() => null);
+      if (r?.left) escapedAfterDeath = true;
       return !!r?.left;
     };
+    // A DEATH ENDS THE JOURNEY. The escape above used to hand straight back to the loop, which re-planned to the old
+    // destination and walked there at post-death health: Scooter (t21) died in Ko'catan 2125 on a survival_exit journey
+    // to 2115 (2026-10-27 16:20), and an escape that lands him in the Aerie Guest House would have walked him back into
+    // the jungle at ~7/93. Arriving dead-tired is the Cccc pattern (CLAUDE.md, "A JOURNEY IS NOT AN ERRAND"). So once the
+    // body is out of the Underworld the journey reports `died_on_the_way` and the keeper's own recovery decides what next.
+    let escapedAfterDeath = false;
 
     // BLEED SLOWLY ENOUGH AND ANY ROAD KILLS YOU. STOP AT A WALL AND HEAL.
     //
@@ -5972,6 +5979,10 @@ class Session {
     while (hops < maxHops) {
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return this.cancelledMovement({ log });
+      if (escapedAfterDeath)
+        return { arrived: false, log, reason: 'died_on_the_way: out of the Underworld at ' + (this.world.room?.name ?? '?') +
+                 '; the keeper recovers before anything travels on', died_on_the_way: true,
+                 room: this.world.room ? { num: this.world.room.num, name: this.world.room.name } : null, stumbles: totalStumbles };
       const here = this.world.room;
       // NOT A DEAD END — the coordinates have not settled yet. This is the same instant
       // that produces "start is outside the room grid", and it clears on its own.
