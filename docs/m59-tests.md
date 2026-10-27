@@ -293,6 +293,15 @@ through a nested shelter order.
   logoff; the survival dispatcher does not claim a pass for a decision it did not carry out (133 of 133 passes on
   80ee703b), and a refused logoff that nothing replaced is ended so the ladder runs; a pass names its stage from its
   first line, so `blocked_in` cannot name a rung that already returned.
+- `m59-leaking-spot-test.mjs` (43): Scooter, Ko'catan 2125, 2026-10-27 16:20, on the real 2125 geometry and exits.
+  `restSpotRefused` is the one answer to "will this keeper rest on this square" (a rest there attacked within the TTL,
+  or a monster on it), read alike by `currentRecoveryWall` and the healing session's `sessionSpotHere`; replaying
+  16:19:38 (spent session, hold r17c1 failed, rest_safe pinned) now goes rest_safe -> nearest_refuge -> logoff_open ->
+  `leave_room` to 2115 on the first cycle and gives the failed hold up (on 38e38164 it re-pinned rest_safe and claimed
+  ten passes of ten); a working spot is still kept (rest_safe, nothing walks); a refused logoff turned into a rest the
+  dispatcher will not take hands the pass to the ladder; cornered below the flee line (logoff spent, exit just tried
+  from this room, no recovery wall) `passFightBack` swings one exchange in place instead of stepping aside, and does not
+  in any of six other states; 40 square-by-decision combinations, zero reconnects.
 - `m59-received-test.mjs` (24): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,

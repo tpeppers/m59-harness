@@ -8,11 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 31 methods: threatCeiling, namedPlayersHere, namedThreatsHere, roomOutranksUs,
+// 32 methods: threatCeiling, namedPlayersHere, namedThreatsHere, roomOutranksUs,
 //   travelShelterBelow, travelStopMaxThreats, threatCountHere, advancingThreatCountHere, crowded,
 //   noteCrowdRefusal, travelDivertAt, shelterForwardAndMend, exitTest, reachTest,
 //   noteUnreachableSpot, noteUnreachablePrey, unreachablePreyIn, preyAvoid, noteFailedRestSpot,
-//   spotExclusions, bansDestination, unreachableIn, strangersInReach, fightBackAfterMs,
+//   restSpotRefused, spotExclusions, bansDestination, unreachableIn, strangersInReach, fightBackAfterMs,
 //   fightBackCheck, clearPathCheck, karmaForbids, refuseEngagement, recentText, mortalDanger,
 //   healthRate
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -503,6 +503,27 @@ export class ThreatPart {
     const forRoom = per.get(room) ?? per.set(room, new Map()).get(room);
     if (forRoom.size > 256) forRoom.clear();
     forRoom.set(`${col},${row}`, Date.now());
+  }
+
+  // WHY THIS KEEPER WILL NOT REST ON A SQUARE IT IS STANDING ON, OR NULL. One answer, asked by two readers that used to
+  // answer it apart: `currentRecoveryWall` (the dispatcher rests only where it says yes) and `sessionSpotHere` (a spent
+  // healing session pins the body to "its one spot"). They disagreed about Scooter's hold r17c1 in Ko'catan 2125,
+  // 2026-10-27 16:19 -- a dragonfly hit him while he rested there, the rest recorded it as failed, the dispatcher
+  // refused to rest on it and sent him for a wall 27 steps away through the swarm, and the session gate answered every
+  // failed approach with "rest here" on the same square: 80 s, never a swing, never the exit one square away.
+  //   'rest_failed'  a rest on this square failed (noteFailedRestSpot) within the TTL -- for restUntil, cut short by an
+  //                  attack; it never counts poison as one.
+  //   'occupied'     a monster stands ON the square: geometry cannot shelter a body from something already on it.
+  restSpotRefused({ room = this.s?.world?.room?.num, row, col } = {}, now = Date.now()) {
+    if (row == null || col == null) return null;
+    const failed = this.failedRestSpots?.get(room)?.get(`${col},${row}`);
+    if (failed != null && now - failed <= (this.policy?.unreachableSpotMs ?? UNREACHABLE_SPOT_MS)) return 'rest_failed';
+    const c = this.s?.client;
+    for (const body of c?.room?.objects?.values?.() ?? []) {
+      if (body.id !== c.selfId && (body.flags & OF.ATTACKABLE) && !(body.flags & OF.PLAYER)
+          && body.row === row && body.col === col) return 'occupied';
+    }
+    return null;
   }
 
   /**

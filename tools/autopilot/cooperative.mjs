@@ -8,8 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 12 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
-//   fleetLogoff, resumeCooperativeReturn, playDead, sessionSpotHere, logoffDeclined, playDeadObserved,
+// 13 methods: checkFreeze, playerThreatPresent, passCooperative, recordCooperativeKill,
+//   fleetLogoff, resumeCooperativeReturn, playDead, spentAndCornered, sessionSpotHere, logoffDeclined, playDeadObserved,
 //   askForHelp, restockReagents
 import { closeIfHealed, mayLogoff, noteLogoff, SPENT_EXIT_RETRY_MS, spentLogoffReplacement } from '../m59-healing-session.mjs';
 import { abortPreparingCooperativeLogoff, configureCooperativeLogoff, cooperativeAssist, cooperativeReturnRefuge, requestCooperativeLogoff } from '../m59-cooperative-logoff.mjs';
@@ -183,8 +183,12 @@ export class CooperativePart {
         // the only replacement here was rest_safe, gated on a hold; a failed pull had released his, so the caller's
         // logoff_open stayed pending and un-executable, and the dispatcher "handled" it every pass for 133 s while he was
         // eaten standing still. No second logoff either way -- see spentLogoffReplacement for what it becomes instead.
-        const room=this.s.world?.room?.num??null,tried=this._spentExitTried;
-        const next=spentLogoffReplacement({active,onSpot:false,hadHold:!!this.hold,
+        const room=this.s.world?.room?.num??null,tried=this._spentExitTried,hadHold=!!this.hold;
+        // A hold the keeper itself has seen fail is given up here, so nothing downstream reads it as a working wall: the
+        // ladder's trade/escape rungs refuse any body holding one, and holdWorks() is just "holding one".
+        const refused=this.hold&&this.restSpotRefused?.({room:this.hold.room??room,row:this.hold.row,col:this.hold.col});
+        if(refused)this.releaseHold?.(`not this healing session's spot any more (${refused}): a rest here was attacked`);
+        const next=spentLogoffReplacement({active,onSpot:false,hadHold,
           exitTriedRecently:!!tried&&tried.room===room&&Date.now()-tried.at<SPENT_EXIT_RETRY_MS});
         if(next?.finish){
           if(active)finishSurvivalDecision(this.s,active.id,next.outcome,next.reason);
@@ -308,14 +312,40 @@ export class CooperativePart {
     return did;
   }
 
+  // NOTHING LEFT TO FLEE WITH. The healing session's one logoff is spent, the refuge search has already failed here and
+  // the exit was just tried from this room (leaveRoomForRecovery stamps _spentExitTried before it walks) -- and the body
+  // is still here, off any recovery wall. Every flee this keeper owns has been asked and answered no; passFightBack reads
+  // this to stop stepping aside "because fleeing outranks it" when there is no flee. Scooter's exit to 2115 stood on the
+  // very square a dragonfly was standing on.
+  spentAndCornered(now=Date.now()) {
+    const room=this.s?.world?.room?.num??null,tried=this._spentExitTried;
+    if(!tried||tried.room!==room||now-tried.at>=SPENT_EXIT_RETRY_MS)return false;
+    if(mayLogoff(String(this.s?.name??'')))return false;
+    let wall=null;try{wall=this.currentRecoveryWall?.();}catch{wall=null;}
+    return !wall;
+  }
+
   // IS THE BODY ON ITS ONE SPOT? Asked inside a spent healing session (playDead), where the answer decides between "keep
   // the spot and heal" and "flee". On the held square, or standing on a recovery wall (adopted as the hold, as playDead's
   // own logoff path adopts it). A hold the body has been pushed or pulled off is NOT its spot: pinning that body to
   // "rest here" is what left Scooter standing in the open. An unknown position with a hold keeps the old answer -- not
   // knowing where we are is not evidence of having left. A PREDICTED square is compared like a confirmed one: it is the
   // client's own estimate and was what Scooter's trace carried throughout; the coarse square is what is asked.
+  //
+  // AND A SPOT THAT HAS FAILED IS NOT THE SPOT, whoever is standing on it. Scooter (t21), Ko'catan 2125, 2026-10-27
+  // 16:18-16:20: his hold r17c1 leaked -- a dragonfly at r16c1 hit him while he rested there, so the rest was recorded
+  // as failed (noteFailedRestSpot) and the dispatcher would no longer rest on it ("recovery is no longer at a safe
+  // wall"). It sent him for a wall 27 steps away through the swarm (object_blocked), the replacement logoff was refused
+  // (spent session), and this answered "on the held square" -- so rest_safe again, on the square that had just failed.
+  // That cycle ran once a second for 80 s and ended every pass inside the dispatcher: never a swing, and the exit to
+  // 2115 one square away was taken only at 7/94, after a blow knocked him off the hold. The keeper's own evidence
+  // against the square (restSpotRefused: a failed rest, or a monster on it) now outranks standing on it, so the refusal
+  // moves the body (nearest refuge, then out by the exit). Poison does not condemn a square here: restUntil never records
+  // poison as an attack, and the one path that can (a freeze broken by health loss, checkFreeze) already gives the hold
+  // up itself -- so "shelter in place while poisoned" is unchanged.
   sessionSpotHere() {
     const me=this.s?.client?.self,h=this.hold,room=this.s?.world?.room?.num;
+    if(h&&this.restSpotRefused?.({room:h.room??room,row:h.row,col:h.col}))return false;
     if(h&&(!me||!Number.isFinite(me.row)||!Number.isFinite(me.col)))return true;
     if(h&&(h.room==null||room==null||Number(h.room)===Number(room))&&h.row===me.row&&h.col===me.col)return true;
     let wall=null;try{wall=this.currentRecoveryWall?.();}catch{wall=null;}

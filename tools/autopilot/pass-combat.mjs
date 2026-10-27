@@ -845,18 +845,26 @@ export class PassCombatPart {
     if (!edict && this.fightBackDue?.reason !== 'blocked') return CONTINUE;
     const w = this.watch, a = w?.attack ?? null;
     const now = Date.now();
+    // FLEEING OUTRANKS THIS -- WHEN THERE IS A FLEE LEFT. Below the line the survival ladder is the next stage and it is
+    // the right one, unless every flee it owns has already been asked here and said no (spentAndCornered: the healing
+    // session's one logoff spent, no reachable refuge, the exit just tried from this room). Then this is the only rung
+    // that changes anything, and stepping aside is standing still being hit: Scooter (t21), Ko'catan 2125, 2026-10-27,
+    // 79 s at r17c1 without a swing while a dragonfly on the exit square took him from 49 to 0. Cornered, it swings one
+    // exchange per pass (rounds 1, no disengage line -- there is nowhere to disengage to), so the exit and the refuge are
+    // asked again between swings, and it does not wait for the edict's window to re-arm after each one.
+    const fleeAt = this.safety().fleeAt;
+    const belowFlee = hp != null && hp < fleeAt;
+    const cornered = belowFlee && !!this.spentAndCornered?.();
     // Either the watchdog asked, or the episode is old enough that it would have on its next
     // tick — a pass that arrives first should not wait half a second to be told.
     const due = this.fightBackDue
-      ?? (a && now - a.since >= edict ? { since: a.since, hits: a.hits, lost: a.lost, at: now } : null);
+      ?? (a && (now - a.since >= edict || cornered) ? { since: a.since, hits: a.hits, lost: a.lost, at: now } : null);
     if (!due) return CONTINUE;
     this.fightBackDue = null;
     if (now - due.at > FIGHT_BACK_STALE_MS) return CONTINUE;
     // An errand owns the body; the inert rescue in the watchdog covers bleeding under one.
     if (this.inert) return CONTINUE;
-    // FLEEING OUTRANKS THIS. The survival ladder is the next stage and it is the right one.
-    const fleeAt = this.safety().fleeAt;
-    if (hp != null && hp < fleeAt) return CONTINUE;
+    if (belowFlee && !cornered) return CONTINUE;
     if (!skills.isArmed(c)) return CONTINUE;          // passArm's problem, and it ran already
     const me = c?.self;
     if (!me) return CONTINUE;
@@ -892,21 +900,26 @@ export class PassCombatPart {
     this.note('FIGHT BACK — under attack for ' + underFor + 's and getting nowhere', {
       target: pick.name, distance: +pick.d.toFixed(1), hits_taken: due.hits, lost: due.lost,
       was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
-      why: 'the fight-back edict: something inside our band has been hitting us for longer ' +
-           'than ' + Math.round(edict / 1000) + 's while we were not swinging',
+      why: cornered
+        ? 'below the flee line with nothing left to flee with: the session logoff is spent, no refuge is reachable ' +
+          'and the exit was just tried -- one exchange at what is hitting us, then the exit is asked again'
+        : 'the fight-back edict: something inside our band has been hitting us for longer ' +
+          'than ' + Math.round(edict / 1000) + 's while we were not swinging',
+      ...(cornered ? { cornered: true } : {}),
     });
     this.tally.fight_backs = (this.tally.fight_backs || 0) + 1;
     this.ledgerEvent('fought_back', {
       creature: pick.name, room: room?.name ?? null, room_num: room?.num ?? null,
       under_attack_s: underFor, hits_taken: due.hits, lost: due.lost,
       was_doing: this.doing ?? null, from_safe_spot: !!this.hold,
+      ...(cornered ? { cornered: true } : {}),
     });
     const holding = !!this.hold;
     this.doing = 'fighting';
     const f = await this.fightNow({
       target: pick.name, preferId: pick.o.id, exactTargetId: pick.o.id,
-      rounds: this.policy.fightRounds ?? 10, disengageAt: fleeAt, loot: true,
-      holdPosition: holding, reach: REACH, weaponPriority: this.weaponPriorityNow(),
+      rounds: cornered ? 1 : (this.policy.fightRounds ?? 10), disengageAt: cornered ? 0 : fleeAt, loot: true,
+      holdPosition: holding || cornered, reach: REACH, weaponPriority: this.weaponPriorityNow(),
       bannedWeapons: this.bannedWeaponsNow(),
     }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }));
     // The clock restarts either way: ten more seconds of being hit re-arms it.
