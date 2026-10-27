@@ -6,6 +6,15 @@ evidence limits, whole-route simulation and the matching travel selector.
 
 Split out of [`CLAUDE.md`](../CLAUDE.md). What each page can honestly answer, and which of them can write.
 
+`/maximums` asks what the fleet can cast **between all of its characters**: every teachable
+spell, every potion Distill can make, and every prism (multicast) spell with at least three
+casters. Known comes from `substrate/abilities/`, planned from the loadouts expanded by
+`plannedAbilities()`, and **a plan is only ever half a box**. A potion needs ONE character
+holding both Distill and the spell, because Distill reads the caster's own ability in it.
+Which spells bottle and which need a prism are `potion` / `multicast` in
+`substrate/m59-spells.json`, compiled from kod by `m59-spells.mjs build`.
+`m59-maximums-test.mjs` (21) pins it.
+
 - **THERE ARE SIX BOARDS AND ONE TAB BAR, AND A PURSE HAS NO RECORD BUT THE SAMPLE.**
   `/` (fleet), `/deaths`, `/tougher`, `/economy`, `/skills` and `/stats`, all on the
   dashboard port (8902 — the MCP port serves only the fleet page). The nav, the stylesheet

@@ -8,7 +8,7 @@
 const EXACT = new Set([
   '/budget', '/deaths', '/deaths/report', '/dum', '/economy', '/economy/trips', '/harness', '/inventory',
   '/communications', '/faction', '/players', '/pvp', '/skills', '/stats', '/tougher', '/travel',
-  '/hometowns', '/arrivals',
+  '/hometowns', '/arrivals', '/maximums',
 ]);
 
 export function isDashboardOnlyPath(pathname) {

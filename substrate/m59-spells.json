@@ -18,7 +18,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "touchattackspell",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 2,
@@ -42,7 +44,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 600,
    "name": "minor heal",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 125,
@@ -66,7 +70,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "detect evil",
-   "harmful": false
+   "harmful": false,
+   "potion": "DetectEvilPotion",
+   "multicast": false
   },
   {
    "num": 132,
@@ -90,7 +96,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "holy symbol",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 148,
@@ -114,7 +122,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "breath of life",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 154,
@@ -138,7 +148,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "seance",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 21,
@@ -162,7 +174,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "holy touch",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 31,
@@ -186,7 +200,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "remove curse",
-   "harmful": false
+   "harmful": false,
+   "potion": "RemoveCursePotion",
+   "multicast": false
   },
   {
    "num": 37,
@@ -214,7 +230,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "cure poison",
-   "harmful": false
+   "harmful": false,
+   "potion": "CurePoisonPotion",
+   "multicast": false
   },
   {
    "num": 60,
@@ -242,7 +260,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "holy weapon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 149,
@@ -270,7 +290,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "resist acid",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistAcidPotion",
+   "multicast": false
   },
   {
    "num": 7,
@@ -294,7 +316,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "rescue",
-   "harmful": false
+   "harmful": false,
+   "potion": "RescuePotion",
+   "multicast": false
   },
   {
    "num": 40,
@@ -322,7 +346,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "cure disease",
-   "harmful": false
+   "harmful": false,
+   "potion": "CureDiseasePotion",
+   "multicast": false
   },
   {
    "num": 41,
@@ -346,7 +372,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 600,
    "name": "hospice",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 62,
@@ -374,7 +402,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "holy resolve",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 80,
@@ -398,7 +428,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 15000,
    "name": "identify",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 100,
@@ -426,7 +458,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "spiritual hammer",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 26,
@@ -454,7 +488,9 @@
    "post_cast_ms": 3000,
    "cast_time_ms": 0,
    "name": "truce",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 27,
@@ -482,7 +518,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "forces of light",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 44,
@@ -506,7 +544,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mark of dishonor",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 72,
@@ -534,7 +574,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "purify",
-   "harmful": false
+   "harmful": false,
+   "potion": "PurifyPotion",
+   "multicast": false
   },
   {
    "num": 119,
@@ -562,7 +604,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "qorbane",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 161,
@@ -590,7 +634,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "dazzle",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 42,
@@ -614,7 +660,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "major heal",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 50,
@@ -633,7 +681,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "umbrella",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 81,
@@ -657,7 +707,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "reveal",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 133,
@@ -685,7 +737,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "final rites",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 168,
@@ -713,7 +767,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "purge",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 110,
@@ -741,7 +797,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "portal of life",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 145,
@@ -773,7 +831,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "bond",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 35,
@@ -801,7 +861,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "unholy resolve",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 38,
@@ -829,7 +891,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "darkness",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 124,
@@ -853,7 +917,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "detect good",
-   "harmful": false
+   "harmful": false,
+   "potion": "DetectGoodPotion",
+   "multicast": false
   },
   {
    "num": 152,
@@ -877,7 +943,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "cloak",
-   "harmful": false
+   "harmful": false,
+   "potion": "CloakPotion",
+   "multicast": false
   },
   {
    "num": 45,
@@ -901,7 +969,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "acid touch",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 59,
@@ -929,7 +999,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "unholy weapon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 65,
@@ -953,7 +1025,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "fade",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 66,
@@ -977,7 +1051,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "karahols curse",
-   "harmful": false
+   "harmful": false,
+   "potion": "KaraholsCursePotion",
+   "multicast": false
   },
   {
    "num": 22,
@@ -1001,7 +1077,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "vampiric drain",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 49,
@@ -1025,7 +1103,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "defile",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 53,
@@ -1049,7 +1129,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "enfeeble",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 144,
@@ -1073,7 +1155,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "poison fog",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 163,
@@ -1101,7 +1185,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "silence",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 47,
@@ -1125,7 +1211,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "hold",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 85,
@@ -1153,7 +1241,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "curse weapon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 114,
@@ -1177,7 +1267,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "animate",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 118,
@@ -1205,7 +1297,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "shalillebane",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 147,
@@ -1229,7 +1323,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "shadow rift",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 167,
@@ -1253,7 +1349,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "splash of acid",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 46,
@@ -1281,7 +1379,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "blind",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 51,
@@ -1305,7 +1405,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "invisibility",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 55,
@@ -1337,7 +1439,9 @@
    "post_cast_ms": 5000,
    "cast_time_ms": 3000,
    "name": "swap",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 73,
@@ -1365,7 +1469,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "nodeburst",
-   "harmful": false
+   "harmful": false,
+   "potion": "NodeburstPotion",
+   "multicast": false
   },
   {
    "num": 111,
@@ -1393,7 +1499,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "death link",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 146,
@@ -1425,7 +1533,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "blood inheritance",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 127,
@@ -1453,7 +1563,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "gaze of the basilisk",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 56,
@@ -1472,7 +1584,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 500,
    "name": "create weapon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 63,
@@ -1500,7 +1614,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 500,
    "name": "create food",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 153,
@@ -1528,7 +1644,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "glow",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 158,
@@ -1552,7 +1670,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "relay",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 11,
@@ -1580,7 +1700,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "bless",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 17,
@@ -1608,7 +1730,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "super strength",
-   "harmful": false
+   "harmful": false,
+   "potion": "StrengthPotion",
+   "multicast": false
   },
   {
    "num": 61,
@@ -1636,7 +1760,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "enchant weapon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 116,
@@ -1660,7 +1786,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "haste",
-   "harmful": false
+   "harmful": false,
+   "potion": "HastePotion",
+   "multicast": false
   },
   {
    "num": 130,
@@ -1679,7 +1807,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "resist poison",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistPoisonPotion",
+   "multicast": false
   },
   {
    "num": 4,
@@ -1703,7 +1833,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "night vision",
-   "harmful": false
+   "harmful": false,
+   "potion": "NightVisionPotion",
+   "multicast": false
   },
   {
    "num": 12,
@@ -1731,7 +1863,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "magic shield",
-   "harmful": false
+   "harmful": false,
+   "potion": "MagicShieldPotion",
+   "multicast": false
   },
   {
    "num": 82,
@@ -1763,7 +1897,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "shroud",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 123,
@@ -1782,7 +1918,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "detect invisible",
-   "harmful": false
+   "harmful": false,
+   "potion": "DetectInvisibilityPotion",
+   "multicast": false
   },
   {
    "num": 126,
@@ -1810,7 +1948,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "martyrs battleground",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 151,
@@ -1838,7 +1978,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "free action",
-   "harmful": false
+   "harmful": false,
+   "potion": "FreeActionPotion",
+   "multicast": false
   },
   {
    "num": 13,
@@ -1866,7 +2008,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mend",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 43,
@@ -1890,7 +2034,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "discordance",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 68,
@@ -1914,7 +2060,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mana bomb",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 89,
@@ -1946,7 +2094,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "dispel illusion",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 138,
@@ -1974,7 +2124,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "deflect",
-   "harmful": false
+   "harmful": false,
+   "potion": "DeflectPotion",
+   "multicast": false
   },
   {
    "num": 162,
@@ -2002,7 +2154,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "eagle eyes",
-   "harmful": false
+   "harmful": false,
+   "potion": "EagleEyesPotion",
+   "multicast": false
   },
   {
    "num": 39,
@@ -2030,7 +2184,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "killing fields",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 54,
@@ -2054,7 +2210,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "resist magic",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistMagicPotion",
+   "multicast": false
   },
   {
    "num": 74,
@@ -2078,7 +2236,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "armor of gort",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 134,
@@ -2102,7 +2262,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "hunt",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 52,
@@ -2130,7 +2292,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 600,
    "name": "antimagic aura",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 139,
@@ -2154,7 +2318,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "shatterlock",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 23,
@@ -2178,7 +2344,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "zap",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 30,
@@ -2202,7 +2370,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "light",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 150,
@@ -2226,7 +2396,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "fog",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 156,
@@ -2250,7 +2422,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "sweep",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 157,
@@ -2274,7 +2448,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mystic touch",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 20,
@@ -2298,7 +2474,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "touch of flame",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 24,
@@ -2322,7 +2500,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "icy fingers",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 29,
@@ -2350,7 +2530,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "resist fire",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistFirePotion",
+   "multicast": false
   },
   {
    "num": 36,
@@ -2378,7 +2560,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "resist cold",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistColdPotion",
+   "multicast": false
   },
   {
    "num": 141,
@@ -2406,7 +2590,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 4000,
    "name": "bramble wall",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 25,
@@ -2434,7 +2620,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "winds",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 28,
@@ -2462,7 +2650,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "resist shock",
-   "harmful": false
+   "harmful": false,
+   "potion": "ResistShockPotion",
+   "multicast": false
   },
   {
    "num": 33,
@@ -2490,7 +2680,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "heat",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 67,
@@ -2514,7 +2706,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 7000,
    "name": "mana focus",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 136,
@@ -2538,7 +2732,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "spider web",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 164,
@@ -2566,7 +2762,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "shocking fury",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 5,
@@ -2594,7 +2792,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "fireball",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 58,
@@ -2622,7 +2822,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "brittle",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 128,
@@ -2650,7 +2852,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "firewall",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 165,
@@ -2678,7 +2882,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "blast of fire",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 166,
@@ -2706,7 +2912,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "explosive frost",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 1,
@@ -2734,7 +2942,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "lightning bolt",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 14,
@@ -2762,7 +2972,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "earthquake",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 57,
@@ -2790,7 +3002,9 @@
    "post_cast_ms": 5000,
    "cast_time_ms": 6000,
    "name": "shatter",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 75,
@@ -2814,7 +3028,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "sandstorm",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 160,
@@ -2842,7 +3058,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "ring of flames",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 87,
@@ -2870,7 +3088,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "spore burst",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 140,
@@ -2898,7 +3118,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "lightning wall",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 32,
@@ -2917,7 +3139,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "blink",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 76,
@@ -2941,7 +3165,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 3000,
    "name": "shadow form",
-   "harmful": false
+   "harmful": false,
+   "potion": "ShadowFormPotion",
+   "multicast": false
   },
   {
    "num": 86,
@@ -2969,7 +3195,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 5000,
    "name": "anonymity",
-   "harmful": false
+   "harmful": false,
+   "potion": "AnonymityPotion",
+   "multicast": false
   },
   {
    "num": 113,
@@ -2993,7 +3221,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "flash",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 142,
@@ -3021,7 +3251,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "feign death",
-   "harmful": false
+   "harmful": false,
+   "potion": "FeignDeathPotion",
+   "multicast": false
   },
   {
    "num": 102,
@@ -3049,7 +3281,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "forget",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 112,
@@ -3073,7 +3307,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "foresight",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 115,
@@ -3101,7 +3337,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 2000,
    "name": "bait",
-   "harmful": false
+   "harmful": false,
+   "potion": "BaitPotion",
+   "multicast": false
   },
   {
    "num": 155,
@@ -3125,7 +3363,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "eavesdrop",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 77,
@@ -3153,7 +3393,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 6000,
    "name": "illusionary form",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 99,
@@ -3185,7 +3427,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "reflection",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 106,
@@ -3213,7 +3457,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "illusionary wounds",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 107,
@@ -3241,7 +3487,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "vertigo",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 129,
@@ -3269,7 +3517,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "illusionary firewall",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 64,
@@ -3297,7 +3547,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "dement",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 101,
@@ -3325,7 +3577,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 4000,
    "name": "apparition",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 105,
@@ -3353,7 +3607,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 1000,
    "name": "denial",
-   "harmful": false
+   "harmful": false,
+   "potion": "DenialPotion",
+   "multicast": false
   },
   {
    "num": 84,
@@ -3381,7 +3637,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 10000,
    "name": "artifice",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 104,
@@ -3409,7 +3667,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "morph",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 143,
@@ -3437,7 +3697,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 500,
    "name": "evil twin",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 103,
@@ -3465,7 +3727,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "seduce",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 135,
@@ -3489,7 +3753,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 20000,
    "name": "summon cow",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": true
   },
   {
    "num": 169,
@@ -3513,7 +3779,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "elusion",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 88,
@@ -3541,7 +3809,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "truth",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 175,
@@ -3569,7 +3839,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "invigorate",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 179,
@@ -3593,7 +3865,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mirth",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 180,
@@ -3617,7 +3891,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "melancholy",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 122,
@@ -3636,7 +3912,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "warp time",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 170,
@@ -3664,7 +3942,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "civility",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 171,
@@ -3692,7 +3972,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "conciliation",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 120,
@@ -3716,7 +3998,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "spellbane",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 159,
@@ -3740,7 +4024,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "distill",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 172,
@@ -3768,7 +4054,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "sacred resonance",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 173,
@@ -3796,7 +4084,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "profane resonance",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 176,
@@ -3824,7 +4114,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "restorate",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 137,
@@ -3848,7 +4140,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "jig",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 174,
@@ -3872,7 +4166,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "disharmony",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 131,
@@ -3896,7 +4192,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mana convergence",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 177,
@@ -3924,7 +4222,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "rejuvenate",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 181,
@@ -3952,7 +4252,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "crystalize mana",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 117,
@@ -3980,7 +4282,9 @@
    "post_cast_ms": 5000,
    "cast_time_ms": 0,
    "name": "slitherbolt",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 8,
@@ -3999,7 +4303,9 @@
    "post_cast_ms": 2000,
    "cast_time_ms": 0,
    "name": "smite",
-   "harmful": true
+   "harmful": true,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 10,
@@ -4018,7 +4324,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "pardon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 34,
@@ -4037,7 +4345,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "page",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 79,
@@ -4056,7 +4366,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "villify",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 121,
@@ -4075,7 +4387,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "dmhold",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 83,
@@ -4094,7 +4408,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 30000,
    "name": "engrave",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 6,
@@ -4113,7 +4429,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "deliverance",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 9,
@@ -4132,7 +4450,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "damn",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 70,
@@ -4151,7 +4471,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "bonk",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 71,
@@ -4170,7 +4492,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "scry",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 78,
@@ -4189,7 +4513,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "armageddon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 108,
@@ -4208,7 +4534,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "insight",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 109,
@@ -4227,7 +4555,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "evaluate",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 178,
@@ -4246,7 +4576,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "squelch",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 190,
@@ -4265,7 +4597,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "agility boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 191,
@@ -4284,7 +4618,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "aim boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 192,
@@ -4303,7 +4639,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "stamina boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 193,
@@ -4322,7 +4660,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "strength boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 194,
@@ -4341,7 +4681,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mysticism boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 195,
@@ -4360,7 +4702,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "intellect boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 196,
@@ -4379,7 +4723,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "mana boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 197,
@@ -4398,7 +4744,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "hp boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   },
   {
    "num": 198,
@@ -4417,7 +4765,9 @@
    "post_cast_ms": 1000,
    "cast_time_ms": 0,
    "name": "vigor boon",
-   "harmful": false
+   "harmful": false,
+   "potion": null,
+   "multicast": false
   }
  ]
 }

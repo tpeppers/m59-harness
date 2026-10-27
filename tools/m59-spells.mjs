@@ -142,6 +142,15 @@ function canPayCosts(text) {
   return (end ? rest.slice(0, end.index + end[0].length) : rest.slice(0, 1500)).trimEnd();
 }
 
+// GetPotionClass's answer: a class name, '' for an explicit `$`, undefined when the class does not
+// override it (so the caller keeps walking up to the parent).
+function potionOf(text) {
+  const body = methodBody(text, 'GetPotionClass');
+  if (body == null) return undefined;
+  const m = /return\s+(?:&(\w+)|\$)/i.exec(body);
+  return m ? (m[1] ?? '') : undefined;
+}
+
 export function compile(root = M59_ROOT) {
   const consts = constantTable(root);
   const spells = [];
@@ -159,7 +168,8 @@ export function compile(root = M59_ROOT) {
       classes.set(head[1].toLowerCase(), { parent: head[2].toLowerCase(),
         harmful: classVar(text, 'viHarmful', consts),
         postCast: classVar(text, 'viPostCast_time', consts),
-        castTime: classVar(text, 'viCast_time', consts) });
+        castTime: classVar(text, 'viCast_time', consts),
+        potion: potionOf(text) });
       const num = classVar(text, 'viSpell_num', consts);
       if (num === null || typeof num !== 'number') continue;
 
@@ -191,8 +201,31 @@ export function compile(root = M59_ROOT) {
     const base = fs.readFileSync(path.join(root, 'kod/object/passive/spell.kod'), 'utf8');
     classes.set('spell', { parent: null, postCast: classVar(base, 'viPostCast_time', consts),
                            harmful: classVar(base, 'viHarmful', consts),
-                           castTime: classVar(base, 'viCast_time', consts) });
+                           castTime: classVar(base, 'viCast_time', consts),
+                           potion: potionOf(base) });
   } catch {}
+  // WHAT DISTILL CAN BOTTLE, AND WHAT NEEDS A PRISM. Both inherited, so both walk the chain.
+  //
+  // Distill asks the TARGET spell for GetPotionClass and refuses `$` ("You cannot make a potion
+  // with those powers", distill.kod). Spell's own answer is `$` (spell.kod GetPotionClass), so
+  // only a spell, or a parent, that returns a class can be bottled. `potion` is that class name,
+  // or null. A multicast spell is one descended from MultiCastSpell (multicst.kod): every caster
+  // focuses on a prism in the room and the prism fires it once enough spellpower has arrived.
+  for (const sp of spells) {
+    let cls = sp.cls.toLowerCase();
+    const seen = new Set();
+    sp.potion = null;
+    sp.multicast = false;
+    while (cls && !seen.has(cls)) {
+      seen.add(cls);
+      if (cls === 'multicastspell') sp.multicast = true;
+      const entry = classes.get(cls);
+      if (!entry) break;
+      if (sp.potion === null && entry.potion !== undefined) sp.potion = entry.potion || false;
+      cls = entry.parent;
+    }
+    if (sp.potion === false) sp.potion = null;
+  }
   for (const sp of spells) {
     let harmfulClass = sp.cls.toLowerCase();
     const harmfulSeen = new Set();
@@ -286,6 +319,8 @@ if (import.meta.filename === process.argv[1]) {
     console.log(`${spells.filter(s => s.reagents.length).length} need physical reagents`);
     console.log(`${spells.filter(s => s.required_karma !== 0).length} have a karma requirement`);
     console.log(`${spells.filter(s => s.extra_cost_rule).length} override CanPayCosts with a rule of their own`);
+    console.log(`${spells.filter(s => s.potion).length} can be distilled into a potion`);
+    console.log(`${spells.filter(s => s.multicast).length} are multicast (cast through a prism)`);
     const noSchool = spells.filter(s => s.school == null);
     if (noSchool.length) console.log(`${noSchool.length} without a readable school: ${noSchool.slice(0, 6).map(s => s.cls).join(', ')}`);
     process.exit(0);

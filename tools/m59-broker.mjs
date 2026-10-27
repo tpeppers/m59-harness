@@ -238,6 +238,7 @@ import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayersOffThread } from './m59-players-worker.mjs';
 import { renderPvp } from './m59-pvp-page.mjs';
 import { renderFaction, factionReport } from './m59-faction-page.mjs';
+import { renderMaximums, maximumsReport } from './m59-maximums-page.mjs';
 import { pvpReport } from './m59-pvp.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
 import { renderHometownsBoard } from './m59-hometowns-page.mjs';
@@ -21353,6 +21354,26 @@ function serveDashboard(port, { handle = null } = {}) {
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('/faction failed: ' + e.message);
+      }
+    }
+    // /maximums — what the fleet can cast between all of it: every spell, every distillable
+    // potion, every prism spell. Files only (ability books and loadouts), like /faction, and
+    // the fleet alone: a menagerie host is not anybody's caster.
+    if (url.pathname === '/maximums') {
+      try {
+        const characters = [];
+        for (const [agent, e] of fleetState) if (e?.credentials?.character)
+          characters.push({ agent, character: e.credentials.character });
+        characters.sort((a, b) => a.character.localeCompare(b.character));
+        if (url.searchParams.get('format') === 'json') {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(JSON.stringify(maximumsReport({ characters })));
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(renderMaximums({ characters }));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        return res.end('/maximums failed: ' + e.message);
       }
     }
     if (url.pathname !== '/' && !url.pathname.startsWith('/fleet')) {
