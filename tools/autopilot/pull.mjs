@@ -328,10 +328,17 @@ export class PullPart {
     let match;
     try { match = huntMatcher(loadSpawns(SPAWN_FILE), this.policy?.hunt); } catch { return null; }
     const rows = [];
+    const players = this.policy?.gangUp ? this.gangUpPlayersHere() : null;
     for (const o of c.room.objects.values()) {
       if (o.id === c.selfId || (o.flags & OF.PLAYER) || !(o.flags & OF.ATTACKABLE)) continue;
       const name = o.name ?? c.rsc?.get?.(o.nameRsc) ?? '';
-      if (!match(name) || this.sparedHere(o) || this.refuseEngagement(name)) continue;
+      if (!match(name) || this.sparedHere(o)) continue;
+      // GANG UP (m59-gang-up.mjs): short of its quorum it is never pulled. WITH it, it is quarry the orders chose to fight
+      // above the band -- the prey list never measures hunted prey against the ceiling -- so only the karma half of the
+      // refusal applies here, or this re-pick would swap the guardian the selection chose for the nearest troll.
+      const gang = players ? this.gangUpVerdict(o, players) : null;
+      if (gang && !gang.met) continue;
+      if (gang ? this.karmaForbids(name) : this.refuseEngagement(name)) continue;
       rows.push({ o, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) });
     }
     rows.sort((a, b) => a.d - b.d);

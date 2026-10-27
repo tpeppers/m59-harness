@@ -563,6 +563,12 @@ export class PassFarmPart {
         found = inside;
       }
 
+      // GANG UP (policy.gangUp, m59-gang-up.mjs): a creature the orders fight only two-on-one or more is not quarry
+      // while fewer than min-1 OTHER fleet-mates stand within its radius in this room view. Here, before the ranking,
+      // so the wall chosen for the quarry, the fight, the pull and the close never see one short of its quorum, and
+      // the rest of the hunt (trolls, beside the Guardians of Zjiria) goes on as it would have. Operator 2026-10-27.
+      if (found.length && this.policy.gangUp) found = this.gangUpFilter(found);
+
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
       // prefer the least-claimed creature while retaining findCreature's distance order
@@ -1325,7 +1331,10 @@ export class PassFarmPart {
       const bystander = adjacent.find(o => { if(this.combatApproachCooling(room?.num,o))return false;
                                              if (this.sparedHere(o)) return false;
                                              const n = c.rsc.get(o.nameRsc) || '';
-                                             return !isOurs(n) && !this.karmaForbids(n); });
+                                             // GANG UP: without its quorum a gang-up creature is not ours, so one that
+                                             // walks up to us is answered exactly as orders that never named it would
+                                             // answer it -- the ceiling's refusal, or hitting back inside the band.
+                                             return (!isOurs(n) || !!this.gangUpBars(o)) && !this.karmaForbids(n); });
       if (!bystander && this.policy?.karmaStrict) {
         const spared = adjacent.map(o => c.rsc.get(o.nameRsc) || '').filter(n => n && !isOurs(n) && this.karmaForbids(n));
         if (spared.length) this.note('sparing an attacker (karma_strict)', {
@@ -1564,7 +1573,7 @@ export class PassFarmPart {
             actual: pulledName, why: stale,
             note: 'a vanished quarry says nothing about the wall, so the square is not charged' });
           this.pendingPull = null;
-        }
+        } else if (this.gangUpLapsedPull(pulled)) this.pendingPull = null;   // the quorum left it (gang up)
       }
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
       const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);

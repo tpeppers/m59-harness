@@ -39,6 +39,7 @@ import { normalizeBuddy } from './m59-buddy.mjs';
 import { spareBlockerMode } from './m59-spare.mjs';
 import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
+import { normalizeGangUp } from './m59-gang-up.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -203,6 +204,11 @@ export const STRATEGY_FIELDS = Object.freeze([
   // only quarry standing on a listed square is selected, and an idle farmer walks back onto the area. Elsewhere
   // nothing changes. Operator 2026-10-16: farm Castle Victoria's undead but stay in sight of the bastion door.
   { path: 'huntArea', keys: ['huntArea'], faculty: 'work', arg: 'hunt_area', normalize: normHuntArea },
+  // A CREATURE FOUGHT ONLY TWO-ON-ONE, OR MORE (m59-gang-up.mjs): { creature: { min, radius } }. A listed creature is
+  // quarry only while min-1 OTHER fleet-mates stand within radius coarse squares (Chebyshev) of it in this keeper's own
+  // room view (Autopilot.gangUpFilter); otherwise it is handled as if `hunt` did not name it. It never widens the hunt.
+  // Operator 2026-10-27, the Guardians of Zjiria in Ukgoth: "fight it 2-on-1 ... the only change from regular trolls".
+  { path: 'gangUp', keys: ['gangUp'], faculty: 'work', arg: 'gang_up', normalize: v => normalizeGangUp(v) },
 ]);
 
 /** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */

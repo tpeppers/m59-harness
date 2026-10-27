@@ -241,6 +241,16 @@ entry (then the unlisted remainder, in the usual order) wins. The foe already wo
 pulled stays first, because a kill pays only its damager. A name `hunt` never produces is
 reported as `hunt_priority.ignored`, never acted on.
 
+## Only two-on-one — `gangUp`
+
+A strategy key (`m59-gang-up.mjs`, [the argument](m59-strategies.md#gang-up-gangup-a-creature-fought-only-two-on-one)):
+`gangUp: { 'guardian of zjiria': { min: 2, radius: 4 } }` makes a creature quarry only while `min - 1` OTHER
+fleet-mates stand within `radius` squares (Chebyshev) of THAT creature in this keeper's own room view. Short of that it
+is handled as if `hunt` did not name it: not chosen, approached or pulled, and a bystander if it comes to us — so the
+engagement ceiling still refuses it for a body it outclasses. With the quorum it is prey, and prey is never measured
+against the ceiling. Self-defence (the fight-back edict, fleeing, resting) never asks it. Operator, 2026-10-27, after
+Janice fought the Guardians of Zjiria alone because two of the crew were in the same ROOM.
+
 ## Automatic healing wands
 
 Farmers can opt into `heal_wand_below` (0–1 health fraction; 0 disables,

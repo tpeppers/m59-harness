@@ -69,6 +69,9 @@ export class StatusPart {
       touch_spell: this.touchSpellStatus(),
       // Null when unset, like touch_spell. `ignored` names priority entries hunt never produces.
       hunt_priority: this.huntPriorityStatus(),
+      // Null when unset. The creatures fought only two-on-one or more, any `hunt` never produces, and the last
+      // decision: which were left alone for want of fleet-mates at them, and which had enough (m59-gang-up.mjs).
+      gang_up: this.gangUpStatus(),
       loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
       // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
       // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.

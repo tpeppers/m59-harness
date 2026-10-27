@@ -2203,7 +2203,8 @@ export function farmVigorWorkReady(pilot,v){
     (c.ailments?.()??[]).length||pilot.checkFreeze?.()||typeof pilot.facultyHeld!=='function'||['work','movement','survival','recovery','combat'].some(k=>pilot.facultyHeld(k))||
     pilot.armedForSure?.()!==true||pilot.policy.assignedRoom!=null&&Number(pilot.policy.assignedRoom)!==Number(s.world?.room?.num))return false;
  const d=currentSurvivalDecision(s);if(['turn_required','frozen_without_action'].includes(d?.phase))return false;
- const quarry=skills.findCreature(s,pilot.policy.hunt,{match:pilot.huntMatch()}).some(o=>Math.hypot(o.col-c.self.col,o.row-c.self.row)<=8);if(!quarry)return false;
+ // A gang-up creature without its quorum is not quarry (m59-gang-up.mjs), so it is no reason to stop resting either.
+ const quarry=skills.findCreature(s,pilot.policy.hunt,{match:pilot.huntMatch()}).some(o=>!pilot.gangUpBars?.(o)&&Math.hypot(o.col-c.self.col,o.row-c.self.row)<=8);if(!quarry)return false;
  const floor=Number(pilot.fightFloor()),cap=Number(pilot.restVigorCeiling())*200;
  return Number.isFinite(floor)&&Number.isFinite(cap)&&raw>=Math.max(pilot.policy.ordinaryVigorFloor??ORDINARY_VIGOR_FLOOR,Math.min(floor,cap));
 }
@@ -2616,6 +2617,9 @@ export class Autopilot {
       pullWithin: null,
       // { room, squares } -- where in a room prey may be chosen (m59-strategy-schema.mjs huntArea). null = anywhere.
       huntArea: null,
+      // { creature: { min, radius } } -- a creature fought only two-on-one or more (m59-gang-up.mjs): quarry only
+      // while min-1 other fleet-mates stand within radius squares of it here. null = no such creature.
+      gangUp: null,
       // { room, squares, rect? } -- ONE character's operator-drawn hunt area (normGuardZone). Wins over huntArea
       // in its own room, so a strategy file's area is the fallback, never the override. null = none.
       guardZone: null,

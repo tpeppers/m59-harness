@@ -220,6 +220,16 @@ through a nested shelter order.
   `fleetscript:<name>#<run>` origin, and a keeper posture that will fight the walk is warned about
   once.
 
+- `m59-gang-up-test.mjs` (33): `gangUp`, a creature fought only two-on-one or more. Through the keeper's own
+  chooser (findCreature, `gangUpFilter`, the ranking, `hunt_priority`) over a fake room: a lone keeper beside a
+  Guardian of Zjiria takes a troll; one fleet-mate within the radius OF THE GUARDIAN makes it quarry; a stranger, a
+  fleet-mate far from it and a fleet-mate beside us but not at it do not count; a menagerie host does; the radius is
+  Chebyshev; min 3 needs two; an unlisted creature and an unset key are the old behaviour; a listed creature `hunt` does
+  not name stays out and is reported. `closestPullable` skips one short of its quorum and exempts one with it from the
+  ceiling, and only then. Source pins: the gate sits after confinement/avoid/hunt area and before the ranking, the
+  bystander rule and the pending pull ask it, and passFightBack, passFleeAndRest and the ceiling never do. The field
+  normalises, refuses every bad shape, and a bad one refuses the whole file at load; assigned, it yields under a held
+  `work`. **It should fail the day a keeper takes on a guardian alone because another of ours is merely in the room.**
 - `m59-hunt-priority-test.mjs` (42): `hunt_priority`, an order over the `hunt` set. A spider is
   chosen over a nearer tree; with no engageable spider the tree is; the ordering never adds a
   creature, keeps the wounded/pulled foe first, matches like `hunt` (spider is not black

@@ -8,15 +8,19 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 21 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
+// 27 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
 //   bannedWeaponsNow, huntsTrolls, bareHandedByTraining, touchSpellNow, huntAreaHere,
-//   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, applyFarmStrategy,
+//   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, gangUpPlayersHere, gangUpVerdict,
+//   gangUpBars, gangUpLapsedPull, gangUpFilter, gangUpStatus, applyFarmStrategy,
 //   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho,
 //   farmStrategyGate, farmStrategyFarming, rereadWeapons
 import { spellCost } from '../m59-deskpractice.mjs';
+import { gangUpQuorum, gangUpRuleFor } from '../m59-gang-up.mjs';
 import { huntPriorityProblems, orderByHuntPriority, priorityRankOf } from '../m59-hunt-priority.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { loadoutFor, wantsOf } from '../m59-loadout.mjs';
+import { OF } from '../m59-parse.mjs';
+import * as party from '../m59-party.mjs';
 import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
 import { FarmStrategyEngine } from '../m59-strategy-engine.mjs';
@@ -355,6 +359,120 @@ export class HuntSetupPart {
     if (!Array.isArray(order) || !order.length) return null;
     return { order, ignored: huntPriorityProblems(order, this.policy.hunt, { matcherFor: n => this.huntMatch(n) }),
              last_choice: this._huntPriorityLast ?? null };
+  }
+
+  // GANG UP (policy.gangUp, m59-gang-up.mjs): A CREATURE FOUGHT ONLY TWO-ON-ONE, OR MORE.
+  //
+  // Operator, 2026-10-27, of the Guardians of Zjiria in Ukgoth: "fight it 2-on-1 (or more than 2 against it), that's
+  // the only change it should have from regular trolls". The quorum is fleet-mates AT THE MONSTER, read here, from this
+  // keeper's own room view, each time it chooses -- because the incident that preceded the order was a script counting
+  // crew in the ROOM: Janice (t7) was the only one at the cluster, Bunsen forty rows away, and she fought it alone.
+  // Without its quorum a listed creature is handled exactly as if `hunt` did not name it; see m59-gang-up.mjs for
+  // every place that asks, and why self-defence is not one of them.
+
+  /** The other players this keeper sees, as { name, row, col } -- the input to every quorum this pass. */
+  gangUpPlayersHere() {
+    const c = this.s?.client;
+    const out = [];
+    for (const o of c?.room?.objects?.values?.() ?? []) {
+      if (!o || o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
+      if (!Number.isFinite(o.row) || !Number.isFinite(o.col)) continue;
+      const name = c.rsc?.get?.(o.nameRsc) || o.name || '';
+      // An unresolved resource id (`<dynamic …>`) is nobody we can vouch for.
+      if (!name || /^<.*>$/.test(name)) continue;
+      out.push({ name, row: o.row, col: o.col });
+    }
+    return out;
+  }
+
+  /** Null when policy.gangUp does not list this creature; otherwise its quorum (gangUpQuorum), met or not. */
+  gangUpVerdict(o, players = null) {
+    const spec = this.policy?.gangUp;
+    if (!spec || !o) return null;
+    const c = this.s?.client;
+    const name = (typeof o.name === 'string' && o.name) || (o.nameRsc != null ? c?.rsc?.get?.(o.nameRsc) : '') || '';
+    // One hunt matcher per listed name, kept while the spec object is the same one (a write replaces it).
+    if (this._gangUpSpecFor !== spec) { this._gangUpSpecFor = spec; this._gangUpMatchers = new Map(); }
+    const matcherFor = k => {
+      let m = this._gangUpMatchers.get(k);
+      if (!m) { m = this.huntMatch(k); this._gangUpMatchers.set(k, m); }
+      return m;
+    };
+    const rule = gangUpRuleFor(spec, name, { matcherFor });
+    if (!rule) return null;
+    const v = gangUpQuorum(rule, o, players ?? this.gangUpPlayersHere(), { isFleetmate: n => party.isFleetmate(n) });
+    return { ...v, name, id: o.id ?? null, at: Number.isFinite(o.row) && Number.isFinite(o.col) ? `r${o.row}c${o.col}` : null };
+  }
+
+  /** The verdict when this creature is listed AND its quorum is not met -- it may not be chosen -- else null. */
+  gangUpBars(o, players = null) {
+    const v = this.gangUpVerdict(o, players);
+    return v && !v.met ? v : null;
+  }
+
+  /**
+   * A PULL OUT FOR A GANG-UP CREATURE IS RE-ASKED EVERY PASS (passFarm, beside the vanished-quarry check). The quorum
+   * chose it; when the fleet-mates are no longer at it, it is no longer ours to wait for -- the selection has already
+   * chosen without it, and if it comes to us it is a bystander like any creature these orders do not name. True when
+   * the caller should drop the pull; says so. The wall is not charged: the quarry did not fail to follow.
+   */
+  gangUpLapsedPull(pulled) {
+    const gang = pulled ? this.gangUpBars(pulled) : null;
+    if (!gang) return false;
+    this.note('gang-up: dropping the pull -- not enough of us at it any more', {
+      target: this.pendingPull?.target ?? gang.name, target_id: this.pendingPull?.target_id ?? gang.id, at: gang.at,
+      need: gang.need, mates: gang.mates, radius: gang.radius,
+      note: 'the wall is not charged: the quarry did not fail to follow, the quorum lapsed' });
+    return true;
+  }
+
+  /**
+   * THE PREY LIST WITHOUT WHAT MAY NOT BE TAKEN ON ALONE. Called by passFarm after the confinement, avoid and hunt
+   * area filters and before ranking, so nothing downstream -- the wall chosen for the quarry, the fight, the pull, the
+   * close -- ever sees a creature short of its quorum. A NEW array; silence (no gangUp) returns the list untouched.
+   */
+  gangUpFilter(found) {
+    const list = Array.isArray(found) ? found : [];
+    if (!this.policy?.gangUp || !list.length) return list.slice();
+    const players = this.gangUpPlayersHere();
+    const kept = [], skipped = [], taken = [];
+    for (const o of list) {
+      const v = this.gangUpVerdict(o, players);
+      if (!v) { kept.push(o); continue; }
+      if (v.met) { kept.push(o); taken.push(v); } else skipped.push(v);
+    }
+    const now = Date.now();
+    const brief = v => ({ creature: v.name, id: v.id, at: v.at, need: v.need, radius: v.radius,
+                          mates: v.mates, strangers_near: v.strangers_near });
+    if (skipped.length || taken.length)
+      this._gangUpLast = { at: now, room: this.s?.world?.room?.num ?? null,
+                           skipped: skipped.map(brief), taken: taken.map(brief) };
+    // SAID ONCE A MINUTE PER CREATURE AND OUTCOME, not every pass: a guardian standing in the room is a state.
+    this._gangUpNoted ??= new Map();
+    const say = (key, what, v) => {
+      if (now - (this._gangUpNoted.get(key) ?? 0) < 60_000) return;
+      this._gangUpNoted.set(key, now);
+      this.note(what, { ...brief(v), have: v.mates.length,
+        why: `gang_up: a ${v.creature} is fought only ${v.min}-on-1 or more -- at least ${v.need} other fleet-mate(s) ` +
+             `within ${v.radius} squares of it, in this room view` });
+    };
+    for (const v of skipped) say(`skip:${v.creature}`, 'gang-up: leaving it alone -- not enough of us at it', v);
+    for (const v of taken) say(`take:${v.creature}`, 'gang-up: enough of us at it -- it is quarry', v);
+    return kept;
+  }
+
+  /** Status: the rules in force, any that `hunt` never produces, and the last decision. Null when unset. */
+  gangUpStatus() {
+    const spec = this.policy?.gangUp;
+    if (!spec || typeof spec !== 'object') return null;
+    const hunt = this.policy?.hunt;
+    const names = (Array.isArray(hunt) ? hunt : hunt == null ? [] : [hunt]).filter(Boolean);
+    let accepts = () => false;
+    try { if (names.length) accepts = this.huntMatch(names); } catch { accepts = () => false; }
+    const ignored = Object.keys(spec).filter(k => !accepts(k)).map(name => ({ name,
+      why: names.length ? `not in hunt (${names.join(', ')}): gang_up only restricts what hunt allows, so this rule never applies`
+                        : 'nothing is being hunted' }));
+    return { rules: spec, ignored, last: this._gangUpLast ?? null };
   }
 
   // FARMING STRATEGY FILES (m59-strategy-engine.mjs). Binding only: the engine loads, validates,

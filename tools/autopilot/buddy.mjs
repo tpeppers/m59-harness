@@ -198,7 +198,10 @@ export class BuddyPart {
     }
     const seen = this.buddyRoomObjects();
     const hunt = Array.isArray(this.policy.hunt) ? this.policy.hunt : this.policy.hunt ? [this.policy.hunt] : null;
-    const want = buddySys.pickFreshTarget({ monsters: seen.monsters, players: seen.players, me: this.hold,
+    // A gang-up creature short of its quorum is not a tag either (m59-gang-up.mjs): the tag is the start of a fight.
+    const gangPlayers = this.policy?.gangUp ? this.gangUpPlayersHere() : null;
+    const monsters = gangPlayers ? seen.monsters.filter(m => !this.gangUpBars(m, gangPlayers)) : seen.monsters;
+    const want = buddySys.pickFreshTarget({ monsters, players: seen.players, me: this.hold,
       quarry: cfg.quarry ?? hunt, tagged: this.buddyTagged ?? new Map() });
     if (!want) { this.doing = 'buddy: nothing untouched to tag'; publish(); return HANDLED; }
     this.buddyTagged.set(want.id, Date.now());

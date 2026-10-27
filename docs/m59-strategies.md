@@ -110,6 +110,7 @@ export default {
 | `vigor.fightAbove` | `fightAboveVigor`, `vigorFloor` | work | 0..200, as `applyFightAboveVigor` |
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
 | `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
+| `gangUp` | `gangUp` | work | `normalizeGangUp`: `{ '<creature>': { min, radius } }` (defaults `min: 2`, `radius: 4`) — a listed creature is quarry only while `min - 1` other fleet-mates stand within `radius` squares of IT; see [Gang up](#gang-up-gangup-a-creature-fought-only-two-on-one) (`m59-gang-up-test.mjs`) |
 
 **A GUARD ZONE OVERRIDES IT FOR ONE CHARACTER.** `autopilot action=start guard_zone={ room, from: {row, col}, to: {row, col} }` (or `{ room, squares }`) is an operator order to one character, stored as `policy.guardZone` (`normGuardZone`, which keeps the drawn `rect`). In its own room it is the area `huntAreaHere` uses, in place of the strategy file's `huntArea`; `guard_zone: null` hands the room back to the file. The field command's room map draws one by dragging a rectangle (operator 2026-10-16).
 
@@ -312,6 +313,51 @@ answers, by `spareBlockers` (strategy) / `spare_blockers` (tool), movement facul
 At most six lures per room per ten minutes, then it is the movement ladder's again. A provoking swing that
 kills is noted loudly (`SPARED BLOCKER DIED`, `tally.spared_killed`). `qor-lupogg-sewers` (example) is the
 first user; `m59-spare-blocker-test.mjs` (14, offline) pins it.
+
+### Gang up (`gangUp`): a creature fought only two-on-one
+
+Operator, 2026-10-27, of the Guardians of Zjiria in Ukgoth (599; kod StoneTroll, level 120, attack rating 840;
+`i9.kod` makes three at game hour 0 whenever none is alive and never removes them): *"If a guardian is seen, they
+should try to fight it 2-on-1 (or more than 2 against it), that's the only change it should have from regular
+trolls."*
+
+```js
+hunt: ['troll', 'guardian of zjiria'],
+huntPriority: ['guardian of zjiria', 'troll'],
+gangUp: { 'guardian of zjiria': { min: 2, radius: 4 } },
+```
+
+**The quorum is at the MONSTER, and the keeper reads it itself.** Minutes before the order a coordinator script had
+switched the whole 599 crew to the guardian strategy because two of them were in the ROOM; Janice (t7) was the only one
+at the cluster, Bunsen forty rows away, and she fought it alone (`substrate/postmortems/Janice-2026-10-27T19-41-42-645Z.json`).
+So a listed creature is a legal target only while at least `min - 1` OTHER fleet-mates stand within `radius` coarse
+squares of THAT creature — Chebyshev, `max(|d row|, |d col|)` — in this keeper's own room view, at the moment it
+chooses. A fleet-mate is `party.isFleetmate` (the roster and the menagerie's hosts); a stranger beside it never counts.
+Where somebody stands is all a keeper can see of who is fighting what, so position is the whole test.
+
+**Without its quorum it is handled exactly as if `hunt` did not name it** — the operator's "only change from regular
+trolls", read literally:
+
+- `Autopilot.gangUpFilter` takes it off passFarm's prey list after confinement, the avoid set and the hunt area and
+  before the ranking, so the wall chosen for the quarry, the fight, the pull and the close never see it; the farmer
+  takes its trolls. `closestPullable` (`pull.throughCrowd`) and the buddy tagger skip it too, and a pull already out for
+  one is dropped when its quorum lapses (re-asked every pass, like everything else).
+- One that walks up to us is a BYSTANDER, so the regular rules answer it unchanged: the engagement ceiling's *"will not
+  trade blows with this"* for a body it outclasses (under 80 max health against a level-120 guardian), hitting back at
+  one inside the band. **Self-defence never consults it**: the fight-back edict, the flee and rest ladder and
+  `refuseEngagement` are untouched, so a guardian that attacks first is answered as it always was.
+
+**With its quorum it is prey like any other `hunt` entry, and prey is never measured against the engagement ceiling**
+(`huntingGrounds`: "the threat ceiling is about bystanders, not about the prey") — which is what lets a 79-health
+character take a level-120 guardian with a fleet-mate at it and not without one. The one chooser that did measure prey
+against the ceiling, `closestPullable`, applies only the karma half of the refusal to a quorum-met gang-up creature, or
+its re-pick would swap the guardian the selection chose for the nearest troll.
+
+It never widens the hunt: a listed creature `hunt` does not name is not prey with or without a quorum, and
+`autopilot status` reports such a rule under `gang_up.ignored`. `gang_up.last` names what was left alone, and what was
+taken, with the fleet-mates at it. A strategy key only: the `autopilot` tool takes no `gang_up` argument (like
+`huntArea`), so it reaches a keeper through a file, needs no broker restart, and is hot-reloaded with the file. The keeper
+code that asks it (`gangUpFilter` and the rest) needs a `restart-keepers` handoff. `m59-gang-up-test.mjs` (33) pins it.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 
