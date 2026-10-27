@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 58 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceTopUp, chaliceRefillTrip, chaliceRole, chaliceDutyEligible,
+// 59 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceStationOutOfReach, chaliceTopUp, chaliceRefillTrip, chaliceRole, chaliceDutyEligible,
 //   chalicePoolCheckIn, chaliceInPack, chalicesInPack, chaliceCarryCheckIn, chaliceCarriers,
 //   offerWouldDoubleChalice, chaliceOnFloor, chaliceGuard, lootIgnoreList, hallShillings,
 //   chaliceHandInMoney, chaliceDepositMoney, playerHere, hereRoom, hopsTo, activeChaliceRide,
@@ -35,7 +35,7 @@ import { orderPrice, orderSkills, pendingOrderFor, writeState as writeOrderState
 import { BOOKMAKERS_HALL_ROOM, StorageCache } from '../m59-storage.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Autopilot, REAGENT_TARGET_BY_KIND, TITHE_FLEET, purchaseEnabled, reagentTargetFor } from '../m59-autopilot.mjs';
+import { Autopilot, REAGENT_TARGET_BY_KIND, TITHE_FLEET, purchaseEnabled, reagentTargetFor, onIsland } from '../m59-autopilot.mjs';
 
 export class ChalicePart {
   // @part 1
@@ -90,6 +90,16 @@ export class ChalicePart {
   }
 
   chaliceStore() { return (this._chaliceStoreObj ??= chaliceStoreFor({ fleet: TITHE_FLEET })); }
+
+  /** Is the cup's station out of reach for this body: on the island with a mainland station, or outside its confinement? */
+  chaliceStationOutOfReach(cfg = this.chaliceCfg) {
+    const station = cfg?.station_room;
+    if (station == null) return false;
+    const here = this.hereRoom();
+    if (onIsland(here) && !onIsland(station)) return true;
+    const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms.map(Number) : [];
+    return confine.length > 0 && !confine.includes(Number(station)) && !confine.includes(Number(cfg.post_room));
+  }
 
   // A FOLLOWING DESK GOES AND REFILLS BETWEEN USES. Operator, 2026-10-27: "seek out the nearest/safest refresh room between
   // uses capped at the safe maximum so it never gets emptied, and mark itself 'disabled' if it can't refresh until it
@@ -1272,6 +1282,17 @@ export class ChalicePart {
             ...(d.wait_ms ? { wait_ms: Math.round(d.wait_ms) } : {}) });
           return { skip: true, why: d.why, code: d.code ?? null };
         }
+        // A CUP THAT CANNOT GO HOME STAYS IN THE PACK, AND THE TRIP GOES ON. Prod 2026-10-27: island farmers carrying a cup were
+        // told to take it back to the station (370, 17 hops), the confinement refused the walk, and to_station waited for
+        // ever while the errand held the body: zero kills. On the island, or under a confinement the station is outside,
+        // the return is declined -- the town trip completes at the counters it can reach (m59-autopilot.mjs townTable).
+        if (d.returning && this.chaliceStationOutOfReach(cfg)) {
+          st.stage = 'off'; st.why = 'carrying the cup, but its station is out of reach for this body; it stays in the pack';
+          st.code = 'station_out_of_reach';
+          this.chaliceEvent('return_declined', { why: st.why, station: cfg.station_room, here: this.hereRoom(),
+            confined_to: this.policy?.confineRooms ?? null });
+          return { skip: true, why: st.why, code: st.code };
+        }
         if (d.returning) {
           st.returning = true;
           st.stage = 'to_station';
@@ -1298,6 +1319,9 @@ export class ChalicePart {
           .catch(e => ({ arrived: false, reason: e.message }));
         if (r.arrived) { st.stage = next; return pending(0); }
         if (r.paused || r.cancelled || this.travelInterrupted()) return pending(5000);
+        // A CONFINEMENT THAT REFUSES THE WALK IS AN ANSWER, NOT A DELAY: waiting 30 s at a time held the body for ever.
+        if (st.returning && (r.confined || this.chaliceStationOutOfReach(cfg)))
+          return skip('the station is outside this body\'s confinement or region; the cup stays in the pack', { reason: r.reason ?? null });
         if (st.returning) return pending(30_000);
         return skip('could not reach the station', { reason: r.reason ?? r.why ?? null });
       }

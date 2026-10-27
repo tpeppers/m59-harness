@@ -388,6 +388,15 @@ export function buildSpawnIndex({ spawnsFile, mapFile, monstersFile, treasureFil
 // runtime-named creature turns up.
 export const DISPLAY_ALIASES = Object.freeze({
   StoneTroll: Object.freeze(['Guardian of Zjiria', 'stone troll']),
+  // THE AVARS TAKE THEIR CLAN'S NAME (avar.kod, avshaman.kod, avchief.kod SetClan): ka5.kod rolls pro-magic and anti-magic
+  // 50/50, and the anti-magic half is "kyip-kyip-kreeet ..."; the bone faction's are "chyup-tewee ..."/"bone faction ...".
+  // Same class, level, difficulty and drops. Prod 2026-10-27: only "peet-seeeep avar warrior" was in the table, so half of
+  // 2115's warriors were "nothing is known about it" -- refused for pulls, fight-back and bystanding (98 and 75 refused
+  // retaliations on two characters) -- and accumulated until the room's cap stopped it generating at all.
+  Avar: Object.freeze(['peet-seeeep avar warrior', 'kyip-kyip-kreeet avar warrior', 'chyup-tewee faction warrior']),
+  AvarShaman: Object.freeze(['peet-seeeep avar shaman', 'kyip-kyip-kreeet avar shaman', 'bone faction shaman', 'avar shaman']),
+  AvarChieftain: Object.freeze(['peet-seeeep avar chieftain', 'kyip-kyip-kreeet avar chieftain',
+                                'avar leader of the bone faction', 'avar chieftain']),
 });
 
 export function withDisplayAliases(spawns) {

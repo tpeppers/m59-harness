@@ -554,3 +554,15 @@ and *"the guard house provides unique restrictions around travel, and there are 
 - **Selling at a full pack** is a strategy field now (`sellAtLoad: 1.0`), and `overfarm: null` keeps it from carrying more.
 - **Eating:** the keeper eats whenever vigor is under its fight floor (`fightAbove`, 150 for the island) and food is in
   the pack, up to the floor; set `vigor_ceiling` (e.g. 195) to eat on toward full.
+
+## Every avar by every clan's name; a cup that cannot go home
+
+- **The avars wear their clan's name** (`avar.kod`, `avshaman.kod`, `avchief.kod` SetClan; `ka5.kod` rolls pro- and
+  anti-magic 50/50): "peet-seeeep", "kyip-kyip-kreeet", and the bone faction's "chyup-tewee"/"bone faction". The spawn
+  index knew only peet-seeeep, so half of 2115's warriors were "nothing is known about it", refused for pulls,
+  fight-back and bystanding, and accumulated until the room's cap stopped it generating. They are `DISPLAY_ALIASES`
+  rows now (m59-spawns.mjs), so a hunt for the warrior takes both clans. Keepers cache the spawn index: restart them.
+- **A cup that cannot go home stays in the pack.** A character carrying a Chalice of the Rain was sent back to its
+  station before any town trip, and on the island (or under a confinement the station is outside) that walk was refused
+  and retried every 30 s for ever, holding the body: zero kills. `chaliceStationOutOfReach` declines the return there,
+  and a refused return is an answer, not a delay; the town trip completes at the counters it can reach.

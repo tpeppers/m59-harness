@@ -70,5 +70,22 @@ console.log('the strategy and the arrival');
   ok('island-arrive carries one spare weapon at most (the guard passes two in all)', /max_weapons: 1,/.test(arrive));
 }
 
+console.log('the avars by every clan name, and a cup that cannot go home');
+{
+  const { loadSpawns, creatureByName, huntMatcher } = await import('./m59-spawns.mjs');
+  const sp = loadSpawns(A.SPAWN_FILE);
+  ok('"kyip-kyip-kreeet avar warrior" is the Avar, level 120 (half of 2115 was "nothing is known about it")',
+     creatureByName(sp, 'kyip-kyip-kreeet avar warrior')?.cls === 'Avar' && creatureByName(sp, 'kyip-kyip-kreeet avar warrior')?.level === 120);
+  ok('so is the bone faction\'s "chyup-tewee faction warrior"', creatureByName(sp, 'chyup-tewee faction warrior')?.cls === 'Avar');
+  ok('a hunt for the warrior takes both clans, and not their shamans',
+     huntMatcher(sp, 'peet-seeeep avar warrior')('kyip-kyip-kreeet avar warrior') && !huntMatcher(sp, 'peet-seeeep avar warrior')('kyip-kyip-kreeet avar shaman'));
+  const keeper = (here, confine = null) => Object.assign(Object.create(A.Autopilot.prototype),
+    { s: { world: { room: { num: here } } }, policy: { confineRooms: confine }, hereRoom: () => here });
+  ok('on the island, a mainland station is out of reach: the cup is not walked back (zero kills, 2026-10-27)',
+     keeper(2115).chaliceStationOutOfReach({ station_room: 370 }) === true);
+  ok('confined away from the station: out of reach', keeper(599, [599]).chaliceStationOutOfReach({ station_room: 370 }) === true);
+  ok('on the mainland, unconfined: the cup goes home as before', keeper(599).chaliceStationOutOfReach({ station_room: 370 }) === false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

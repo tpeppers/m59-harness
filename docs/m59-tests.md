@@ -240,9 +240,10 @@ through a nested shelter order.
 - `m59-island-arrive-test.mjs` (15): arriving on the Island to stay. Both vaultmen are recognised (Itzal cha'Nosak,
   2005, as well as Obert); `vaultForJungle` deposits what the jungle guard refuses with keep counts, worn protection
   first, and reads the pack back; postures select by room; `island-arrive` vaults before it assigns the farm.
-- `m59-island-town-test.mjs` (22): on the island every town destination is a Ko'catan counter and nothing routes off it;
+- `m59-island-town-test.mjs` (28): on the island every town destination is a Ko'catan counter and nothing routes off it;
   the mainland is unchanged; a journey across the East Tower gate is refused when the guard would refuse the pack, naming
-  what; a strategy can say sellAtLoad; arrivals carry one spare weapon.
+  what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is
+  out of reach stays in the pack.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.
