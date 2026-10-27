@@ -384,7 +384,23 @@ export class TownShopsPart {
         if (!result.arrived || this.travelInterrupted()) return { pending: true };
       }
       const sale = await this.sellInTown({ maxStack: stop.maxStack });
-      if (!sale || sale.error || this.travelInterrupted()) return { pending: true };
+      if (this.travelInterrupted()) return { pending: true };
+      // A STOP THAT CANNOT SELL COMPLETES AS "SOLD NOTHING" AND THE CIRCUIT MOVES ON. Prod, 2026-10-27: every island sell
+      // trip hung for ever at the Ko'catan smithy -- no counter there was on SELL_TO, so sellInTown answered null and this
+      // returned pending every five seconds, holding the body off the farm. A trip that cannot fix the thing that opened
+      // it must not run for ever: no trusted buyer here ends the stop at once; a failed sale is retried once, then ends it.
+      if (!sale || sale.error) {
+        const c = this.s.client;
+        const buyerHere = c?.room?.objects && [...c.room.objects.values()]
+          .some(o => affordances(o.flags).includes('buy') && skills.trustedBuyer(c.rsc.get(o.nameRsc)));
+        trip.marketStopTries ??= {};
+        const tries = trip.marketStopTries[trip.marketIndex] = (trip.marketStopTries[trip.marketIndex] ?? 0) + 1;
+        if (buyerHere && tries < 2) return { pending: true };
+        this.note('sold nothing at this stop, moving on', { room: stop.room, stop: stop.name ?? null, tries,
+          why: buyerHere ? 'the sale failed twice' : 'no trusted buyer here (SELL_TO)' });
+        trip.marketIndex++;
+        continue;
+      }
       trip.marketSale.sold.push(...(sale.sold ?? []));
       trip.marketSale.total_received += sale.total_received ?? 0;
       trip.marketIndex++;

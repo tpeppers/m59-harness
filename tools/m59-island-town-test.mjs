@@ -89,5 +89,37 @@ console.log('the avars by every clan name, and a cup that cannot go home');
   ok('on the mainland, unconfined: the cup goes home as before', keeper(599).chaliceStationOutOfReach({ station_room: 370 }) === false);
 }
 
+console.log('the island counters buy, and a stop that cannot sell does not hold the trip');
+{
+  // Prod, 2026-10-27: every island sell trip stood at Ixla's smithy for ever -- no Ko'catan counter was on SELL_TO, so
+  // sellInTown answered null and the circuit returned pending every five seconds.
+  const S = await import('./m59-skills.mjs');
+  ok("the four Ko'catan counters are trusted buyers",
+     ["Ixla cha'Totlak", "Pacal ix'Anoak", "Tepal ix'Zonak", "Zala ix'Mecya"].every(n => S.trustedBuyer(n)));
+  ok("and the island's banker and vaultman are not", !S.trustedBuyer("Huital ko'Nosak") && !S.trustedBuyer("Itzal cha'Nosak vaultman"));
+  function circuit(sales, { buyerHere = false } = {}) {
+    const notes = [], visited = [];
+    const objects = new Map(buyerHere ? [[5, { id: 5, nameRsc: "Ixla cha'Totlak", flags: 0xffffffff }]] : []);
+    const k = Object.assign(Object.create(A.Autopilot.prototype), {
+      s: { world: { room: { num: 2003 } }, client: { room: { objects }, rsc: { get: x => x } } },
+      note: (w, d) => notes.push({ w, d }), travelInterrupted: () => false, suspendedJourney: null,
+      travel: async room => { k.s.world.room.num = room; visited.push(room); return { arrived: true }; },
+      sellInTown: async () => sales.shift() ?? null });
+    return { k, notes, visited };
+  }
+  const trip = { marketStops: [{ room: 2003 }, { room: 2004 }] };
+  const a = circuit([null, { sold: [{ name: 'mace' }], total_received: 40 }]);
+  const r = await a.k.sellMarketCircuit(trip);
+  ok('no trusted buyer at a stop: "sold nothing", and the circuit goes on to the next', !r.pending && trip.marketIndex === 2
+     && a.visited.join() === '2004' && r.total_received === 40 && a.notes.some(n => n.w === 'sold nothing at this stop, moving on'),
+     JSON.stringify({ r, visited: a.visited }));
+  const t2 = { marketStops: [{ room: 2003 }] };
+  const b = circuit([{ error: 'timeout' }, { error: 'timeout' }], { buyerHere: true });
+  const first = await b.k.sellMarketCircuit(t2);
+  const second = await b.k.sellMarketCircuit(t2);
+  ok('a buyer here but a failed sale: retried once, then the stop ends', first.pending === true && !second.pending && t2.marketIndex === 1,
+     JSON.stringify({ first, second }));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

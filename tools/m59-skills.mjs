@@ -3695,6 +3695,12 @@ export const SELL_TO = [
   /quintor/i,          // Quintor's Smithy, Jasper — weapons and armour
   /fehr['’]loi qan/i,  // Royal Blacksmith of Barloque — the established equipment circuit
   /paddock|solomon|pietro/i,   // inns and grocers we have traded with
+  // KO'CATAN, the island counters (towns/kocatwn/*.kod; every one MOB_BUYER). Prod 2026-10-27: none was here, so every
+  // island sell trip stood at the smithy for ever. Each takes only what its ObjectDesired says:
+  /ixla cha['’]totlak/i,  // smithy (2003, kcsmith.kod): anything wearable or a weapon
+  /pacal ix['’]anoak/i,   // store (2004, kcshopk.kod): anything bar money, bonded/special, tokens; finite shelf (MAX_FORSALE)
+  /tepal ix['’]zonak/i,   // tailor (2006, kctailor.kod): gems and sundries, stacks of 100 or fewer
+  /zala ix['’]mecya/i,    // apothecary (2002, kcapoth.kod): reagents that are not gems
 ];
 // NEVER. Named separately from "not on the allowlist" because these actively take goods.
 export const NEVER_SELL_TO = [

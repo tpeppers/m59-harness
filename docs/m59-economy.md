@@ -49,6 +49,12 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what
     not an avoidance: a route that merely passes through one is not rerouted; a trip whose every
     destination is struck is dropped and noted once, never re-routed. It is an ORDER, so it
     lives in the roster, not here.
+  - **The Ko'catan counters** are on `SELL_TO` since 2026-10-27, each for what its kod `ObjectDesired` takes: Ixla
+    cha'Totlak (smithy, 2003: wearables and weapons), Pacal ix'Anoak (store, 2004: almost anything, finite shelf), Tepal
+    ix'Zonak (tailor, 2006: gems and sundries) and Zala ix'Mecya (apothecary, 2002: non-gem reagents). All four are
+    `MOB_BUYER`, which counter-offers cash at item value less markup (`monster.kod`). Before this every island sell trip
+    stood at the smithy for ever. A circuit stop with no trusted buyer now ends as "sold nothing" and the circuit moves
+    on; a failed sale is retried once.
   - **The two vaults**, one mainland (Barloque) and one on the island. They "buy"
     anything and sell it back for about a shilling. They are **storage, not a market** —
     and storage that SURVIVES DEATH, which is the only thing in the game that does. That
