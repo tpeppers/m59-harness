@@ -1,5 +1,10 @@
 # The offline test suites, and what each one pins
 
+`m59-riija-sword-test.mjs` exercises the prepared good-karma Riija quest plan against fake
+game replies: all shipment quantities, missing raid loot, resupply and resume, expired
+assignments, exact offers, the room-by-room queen escort plan, missing rewards, owned-sword
+verification and completed reruns. It does not measure live movement or production survival.
+
 `m59-joints-test.mjs` (143) pins the joints (docs/m59-joints.md). FIRST: with no pak, every joint answers
 default, every call site is guarded by `handles`, and a firewall step through the real Session is refused
 exactly as before. Then the closed answer sets, the condition language, strikes, follow-ups and decision
