@@ -177,8 +177,11 @@ await ok('the veto and findCreature honour the pass, and only for that id', () =
 });
 
 await ok('the target-picking rungs skip spared bodies (source pins)', () => {
-  const fb = AUTOPILOT.slice(AUTOPILOT.indexOf('  async passFightBack(ctx) {'));
-  assert.ok(/this\.sparedHere\(o\) \? \{ why: 'spared \(spare_creatures\)' \}/.test(fb.slice(0, 4000)), 'passFightBack');
+  // The rows passFightBack (and the watchdog's fightBackCheck) pick from live in fightBackRows.
+  const fb = AUTOPILOT.slice(AUTOPILOT.indexOf('  fightBackRows(c, onUs, roomNum) {'));
+  assert.ok(/this\.sparedHere\(o\) \? \{ why: 'spared \(spare_creatures\)' \}/.test(fb.slice(0, 4000)), 'fightBackRows');
+  const pf = AUTOPILOT.slice(AUTOPILOT.indexOf('  async passFightBack(ctx) {'));
+  assert.ok(/this\.fightBackRows\(c, onUs,/.test(pf.slice(0, 6000)), 'passFightBack picks from fightBackRows');
   const cp = AUTOPILOT.slice(AUTOPILOT.indexOf('  clearPathCheck(w, hp, now) {'));
   assert.ok(/inReachOfUs\?\.\(\) \?\? \[\]\)\.filter\(o => !this\.sparedHere\(o\)\)/.test(cp.slice(0, 7000)), 'clearPathCheck');
   const tr = AUTOPILOT.slice(AUTOPILOT.indexOf('  async tradeInPlaceIfWedged('));

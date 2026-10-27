@@ -224,14 +224,15 @@ console.log('the keeper');
 }
 const auto = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 const body = name => {
-  const i = auto.indexOf(`  async ${name}(`);
+  const i = [`  async ${name}(`, `  ${name}(`].map(h => auto.indexOf(h)).find(n => n >= 0) ?? -1;
   return i < 0 ? '' : auto.slice(i, auto.indexOf('\n  }\n', i));
 };
 ok('defendAgainstPlayers asks pvpRoomsRefusal', /pvpRoomsRefusal\(this\.policy/.test(body('defendAgainstPlayers')));
 ok('engagePlayerTarget asks pvpAllowedHere', /pvpAllowedHere\(this\.policy/.test(body('engagePlayerTarget')));
 ok('respondToConflict will not converge on a room outside the list', /pvpAllowedHere\(this\.policy, cf\.room\)/.test(body('respondToConflict')));
 ok('passFightBack refuses PLAYER rows outside the list (monsters untouched)',
-  /\(o\.flags & OF\.PLAYER\) && !pvpAllowedHere\(this\.policy/.test(body('passFightBack')));
+  /\(o\.flags & OF\.PLAYER\) && !pvpAllowedHere\(this\.policy/.test(body('fightBackRows'))
+  && /this\.fightBackRows\(c, onUs,/.test(body('passFightBack')));
 ok('the policy default names pvpRooms (a pushed order lands on a named key)', /\n\s+pvpRooms: null,/.test(auto));
 ok('status reports pvp_rooms with allowed_here', /pvp_rooms: \{ rooms: pvpRoomsOf\(this\.policy\)/.test(auto)
   && /allowed_here: pvpAllowedHere\(/.test(auto));

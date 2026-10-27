@@ -247,9 +247,9 @@ await test('closestPullable, the buddy tagger and the rest-to-work check ask it'
   assert(SRC.includes('.some(o=>!pilot.gangUpBars?.(o)&&Math.hypot('));
 });
 await test('SELF-DEFENCE IS UNTOUCHED: the fight-back edict, the flee/rest ladder and the ceiling never consult it', () => {
-  for (const m of ['passFightBack', 'passFleeAndRest', 'refuseEngagement', 'threatCeiling', 'roomOutranksUs', 'karmaForbids'])
+  for (const m of ['passFightBack', 'fightBackRows', 'passFleeAndRest', 'refuseEngagement', 'threatCeiling', 'roomOutranksUs', 'karmaForbids'])
     assert(!/gangUp/.test(method(m)), `${m} mentions gangUp`);
-  assert(method('passFightBack').includes(': this.refuseEngagement(name) };'), 'fight-back still asks the band alone');
+  assert(method('fightBackRows').includes(': this.refuseEngagement(name) };'), 'fight-back still asks the band alone');
 });
 await test('status reports gang_up beside hunt_priority', () => {
   assert(/hunt_priority: this\.huntPriorityStatus\(\),[\s\S]{0,400}gang_up: this\.gangUpStatus\(\),/.test(SRC));

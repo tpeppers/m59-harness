@@ -835,6 +835,28 @@ export class PassCombatPart {
     return skills.fight(this.s, o);
   }
 
+  // THE NEAREST THING IN REACH THAT WE WOULD FIGHT ANYWAY, and why each of the others is refused. "Smaller than you"
+  // is the fleet's engagement band — see the note above fightBackAfterMs for why not the level. Shared with the
+  // watchdog's `fightBackCheck`, which must not cancel a walk for a fight this list will refuse.
+  fightBackRows(c, onUs, roomNum) {
+    const me = c?.self;
+    if (!me) return [];
+    return onUs.map(o => {
+      const name = c.rsc.get(o.nameRsc) || '';
+      return { o, name, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row),
+               refused: !name ? { why: 'it has no name' }
+                 : (o.flags & OF.PLAYER) && refusedHere(this.s, name)
+                   ? { why: 'the server refused us this player in this room (guild-only)' }
+                 // pvp_rooms: a PLAYER is never fought back outside the listed rooms; monsters are.
+                 : (o.flags & OF.PLAYER) && !pvpAllowedHere(this.policy, roomNum)
+                   ? { why: 'outside pvp_rooms: players are not fought back in this room' }
+                 // A SPARED MONSTER IS NEVER THE PICK: the swing would be refused at the packet, the
+                 // pass spent on nothing, and a fightable body behind it never chosen.
+                 : this.sparedHere(o) ? { why: 'spared (spare_creatures)' }
+                   : this.refuseEngagement(name) };
+    }).sort((x, y) => x.d - y.d);
+  }
+
   async passFightBack(ctx) {
     const { s, c, room, v, hp } = ctx;
     const edict = this.fightBackAfterMs();
@@ -871,22 +893,7 @@ export class PassCombatPart {
     const onUs = this.inReachOfUs();
     if (!onUs.length) { if (w) w.attack = null; return CONTINUE; }
 
-    // THE NEAREST THING IN REACH THAT WE WOULD FIGHT ANYWAY. "Smaller than you" is the
-    // fleet's engagement band — see the note above fightBackAfterMs for why not the level.
-    const rows = onUs.map(o => {
-      const name = c.rsc.get(o.nameRsc) || '';
-      return { o, name, d: Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row),
-               refused: !name ? { why: 'it has no name' }
-                 : (o.flags & OF.PLAYER) && refusedHere(this.s, name)
-                   ? { why: 'the server refused us this player in this room (guild-only)' }
-                 // pvp_rooms: a PLAYER is never fought back outside the listed rooms; monsters are.
-                 : (o.flags & OF.PLAYER) && !pvpAllowedHere(this.policy, room?.num ?? this.s.world?.room?.num)
-                   ? { why: 'outside pvp_rooms: players are not fought back in this room' }
-                 // A SPARED MONSTER IS NEVER THE PICK: the swing would be refused at the packet, the
-                 // pass spent on nothing, and a fightable body behind it never chosen.
-                 : this.sparedHere(o) ? { why: 'spared (spare_creatures)' }
-                   : this.refuseEngagement(name) };
-    }).sort((x, y) => x.d - y.d);
+    const rows = this.fightBackRows(c, onUs, room?.num ?? this.s.world?.room?.num);
     const pick = rows.find(r => r.name && !r.refused);
     const underFor = Math.round((now - due.since) / 1000);
     if (!pick) {

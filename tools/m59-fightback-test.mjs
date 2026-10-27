@@ -145,6 +145,33 @@ console.log('\nthe watchdog half: counting, and deciding nothing');
   ok('with no pass in flight there is nothing to cancel, and it does not', !!quick.fightBackDue && quick.cancels.length === 0);
 }
 
+console.log('\nthe watchdog half: no cancel for a fight the pass would refuse');
+{
+  // Beaker, Bunsen and Robin (Qor, karma_strict), orc caves 2501, 2026-10-27: orc wizards (karma -60) hit them mid-walk,
+  // the edict cancelled the walk "so the next pass can fight back", the pass refused every one, and the ladder sheltered
+  // them in 2508. Five lost crossings of 2501 -> 2502 for fights that were never going to happen.
+  const wizard = creature(2, 'orc wizard', 11, 10);
+  const karma = () => ({ why: 'karma_strict: killing a orc wizard moves a evil character\'s karma the wrong way' });
+  const k = keeper({ policy: { fightBackAfterMs: 10_000 }, inReach: [wizard], refused: karma, passStartedAt: T0 - 5000 });
+  chewOn(k, T0, 10);
+  ok('every attacker refused: nothing is asked for', tick(k, 29, T0 + 11_000, 1) === null && !k.fightBackDue);
+  ok('and the walk is NOT cancelled', k.cancels.length === 0, JSON.stringify(k.cancels));
+  ok('said once, with what is hitting us and why',
+     k.notes.filter(n => /nothing we would fight: the walk goes on/.test(n.what)).length === 1 &&
+     k.notes.some(n => n.in_reach?.includes('orc wizard') && /karma_strict/.test(n.why)));
+  tick(k, 28, T0 + 12_000, 1);
+  ok('not repeated every tick of the same episode',
+     k.notes.filter(n => /nothing we would fight/.test(n.what)).length === 1);
+
+  // ONE FIGHTABLE ATTACKER IS ENOUGH: then the edict is what it always was.
+  const larva = creature(3, 'groundworm larva', 12, 10);
+  const mixed = keeper({ policy: { fightBackAfterMs: 10_000 }, inReach: [wizard, larva], passStartedAt: T0 - 5000,
+                         refused: name => (name === 'orc wizard' ? karma() : null) });
+  chewOn(mixed, T0, 10);
+  ok('a refused wizard beside a fightable larva still asks for the fight', !!tick(mixed, 29, T0 + 11_000, 1));
+  ok('and still pulls the handbrake', mixed.cancels.length === 1);
+}
+
 console.log('\nthe pass half: the answer');
 {
   const larva = creature(1, 'groundworm larva', 11, 10);

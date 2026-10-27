@@ -642,6 +642,25 @@ export class ThreatPart {
     const frac = pct(hp);
     // Below the flee line the other arms and the ladder own this — running, not swinging.
     if (frac === null || frac < this.safety().fleeAt) return null;
+    // NOTHING IN REACH IS ONE WE WOULD FIGHT: THE WALK IS THE ANSWER. The pass that this cancel makes room for picks
+    // from `fightBackRows` and, finding every attacker refused, takes "the ordinary ladder -- which walks away from
+    // what it will not fight". Cancelling a walk for that is stopping in the fire to decide to leave it: Beaker,
+    // Bunsen and Robin (Qor, karma_strict) lost the 2501 -> 2502 orc-cave hop five times on 2026-10-27, each walk
+    // cancelled by orc wizards (karma -60) they were never going to swing at, then sheltering in 2508.
+    const c = this.s?.client;
+    let rows = null;
+    try { rows = c?.self && this.fightBackRows ? this.fightBackRows(c, this.inReachOfUs?.() ?? [], this.s?.world?.room?.num) : null; }
+    catch { rows = null; }
+    if (rows?.length && !rows.some(r => r.name && !r.refused)) {
+      if (!w.attack.refusedNoted) {
+        w.attack.refusedNoted = true;
+        this.note('under attack by nothing we would fight: the walk goes on', {
+          in_reach: rows.map(r => r.name || '?').slice(0, 4), why: rows[0]?.refused?.why ?? null,
+          health: hp ? `${hp.value}/${hp.max}` : null,
+        });
+      }
+      return null;
+    }
     w.fightBackPass = this.passes;
     this.tally.fight_back_interrupts = (this.tally.fight_back_interrupts || 0) + 1;
     this.fightBackDue = { since: w.attack.since, hits: w.attack.hits, lost: w.attack.lost, at: now };
