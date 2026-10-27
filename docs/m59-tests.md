@@ -293,6 +293,14 @@ through a nested shelter order.
   logoff; the survival dispatcher does not claim a pass for a decision it did not carry out (133 of 133 passes on
   80ee703b), and a refused logoff that nothing replaced is ended so the ladder runs; a pass names its stage from its
   first line, so `blocked_in` cannot name a rung that already returned.
+- `m59-kocatan-rip-test.mjs` (91): an island death takes the rip home (operator, 2026-10-27). Which deaths count is the
+  server's GetRegion rule (2000..2499 and halls 705/713, not the orc cave 2500+); the death room comes from the caller,
+  else the session's own record of this Underworld visit (fatal socket evidence, then the room before); a Ko'catan death
+  LOOKs at the HellPortal (r10c6, never a same-named CorpsePortal) before anything else, walks to it and lands in 2001,
+  through `escapeUnderworld` and through `Autopilot.passUnderworld`, and a journey's bare escape does too; a mainland
+  death keeps exactly the old choice and never reads the rip; a rip naming a mainland inn (flag gone) falls back at once
+  without a minute of polling; one that reads the island but cannot be reached is held out for three keeper attempts,
+  then any portal; `M59_KOCATAN_DEATH_RIP=0`, an explicit city and `allowRip:false` turn it off.
 - `m59-received-test.mjs` (24): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,

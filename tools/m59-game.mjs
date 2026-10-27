@@ -127,6 +127,7 @@ import { loadSpawns } from './m59-spawns.mjs';
 // answers null when there is no door table, so a checkout without one is unaffected.
 import { operableDoorsBlocking } from './m59-doorplan.mjs';
 import * as skills from './m59-skills.mjs';
+import { deathRoomOnEntry } from './m59-underworld.mjs';
 import { isEmptyHealingWandObject } from './m59-healing-wands.mjs';
 import { observeRefusal, vetoAttack, isGuildOnlyRefusal } from './m59-refused-targets.mjs';
 
@@ -2703,6 +2704,15 @@ class Session {
           const room = this.world?.room;
           const previous = this.travelObservedRoom;
           if (Number.isFinite(room?.num) && previous?.num !== room.num) {
+            // WHERE THIS LIFE ENDED, kept for whichever escape runs. A journey that dies on the
+            // road escapes on its own (`leaveTheUnderworld` below) before the keeper has written
+            // a post-mortem, and an island death must still find the rip home rather than the
+            // nearest side portal — see `diedInKocatan` in m59-underworld.mjs. Every entry
+            // overwrites the last, so it always describes THIS visit.
+            if (room.num === 1) {
+              try { this.lastDeathRoom = deathRoomOnEntry({ evidence: this.sessionEvidence, previous }); }
+              catch { this.lastDeathRoom = null; }
+            }
             recordEvent(c.me?.name ?? this.name, 'travel_map_entered', {
               room: room.num, room_name: room.name, from: previous?.num ?? null,
             });

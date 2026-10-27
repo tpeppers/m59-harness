@@ -3506,8 +3506,45 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
            why: `stepped onto the rip ${attempts} time(s) over ${maxSeconds}s and stayed put` };
 }
 
-export async function escapeUnderworld(s, { city = null, nearestTo = null,
-                                            maxSeconds = 180, allowRip = true } = {}) {
+// AN ISLAND DEATH TAKES THE RIP HOME, AND ASKS THE RIP FIRST. See m59-underworld.mjs
+// (`diedInKocatan`) for the order and the server's rule. The death room got us here; the
+// rip's own description decides, because it is the server reading PFLAG2_KOCATAN_DEATH back:
+// "the sturdy, island fortress of Ko'catan" to a flagged viewer, and only to one.
+//
+// A flagged player's teleport does not depend on where the rip currently points
+// (hellport.kod TeleportSomething), so there is no window to wait for: read it once, walk next
+// to it, step on. Three looks before calling the sign unreadable, because a look reply can be
+// lost and one silence is not an answer.
+//
+// Verdicts: `took_it` (out, wherever that was), `not_flagged` (the rip names a mainland inn —
+// the flag is gone and the caller's old choice stands), `unread` (no description came back —
+// also the old choice, which keeps polling the rip for Ko'catan), `failed` (it read Ko'catan
+// and we did not get through; `terminal` when the mover said no step can fix it).
+async function kocatanRipOut(s, rip, { maxSeconds = 45, looks = 3 } = {}) {
+  const c = s.need();
+  let desc = '', sign = null;
+  for (let i = 0; i < looks && !sign?.city; i++) {
+    const b = c.evSeq;
+    await s.pacer.submit('look', () => c.look(rip.id));
+    const ev = await c.waitFor({ since: b, kinds: ['look'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+    desc = (ev.events ?? []).find(e => e.id === rip.id)?.description || '';
+    sign = UW.readPortalSign(desc, c.rsc.get(rip.nameRsc) || '');
+  }
+  if (!sign?.city)
+    return { left: false, verdict: 'unread', looks, desc: desc || null,
+             why: `no readable description from the rip in ${looks} look(s)` };
+  if (!UW.isKocatanCity(sign.city))
+    return { left: false, verdict: 'not_flagged', saw: sign.city, desc,
+             why: `the rip shows ${sign.city}, not the island — PFLAG2_KOCATAN_DEATH is no longer ` +
+                  'set (used, or its corpse is gone), so it cannot take us back' };
+  const out = await ripOut(s, rip, { maxSeconds });
+  return { ...out, verdict: out.left ? 'took_it' : 'failed', saw: sign.city, desc };
+}
+
+export async function escapeUnderworld(s, { city = null, nearestTo = null, diedIn = null,
+                                            maxSeconds = 180, allowRip = true,
+                                            kocatanRip = UW.kocatanDeathRipEnabled(),
+                                            kocatanHoldOut = true } = {}) {
   const c = s.need();
   const portals = () => [...c.room.objects.values()].filter(o => isTeleporter(o.flags));
   // Which room we are in, read from the client rather than from an event: c.room.id and
@@ -3538,11 +3575,65 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     if (near.city) { wanted = near.city; chosenBecause = `nearest to where it died (${near.hops} rooms)`; }
   }
 
-  // The shifting one describes a destination; the fixed ones do not.
-  const rip = found.find(o => UW.RIP_NAME.test(c.rsc.get(o.nameRsc) || ''));
+  // The shifting one describes a destination; the fixed ones do not. Picked by the
+  // HellPortal's own square when there is more than one "rip in space" — a Portal of Life's
+  // CorpsePortal shares the name and leads back to the corpse (see `pickRip`).
+  const rip = UW.pickRip(found, o => c.rsc.get(o.nameRsc));
+
+  const cityAttempts = [];
+
+  // ---- died on the island: the rip, before anything else is looked at ----
+  //
+  // BEFORE the pentagram is identified and before any city is weighed, because every second
+  // spent on a door that goes to the mainland is a second toward the trip the operator called
+  // devastating. Only an explicit order for another city outranks it. The death room comes
+  // from the caller, else from the session's record of this Underworld visit, so a journey
+  // that died on the road and escapes on its own gets the same answer as the keeper.
+  const death = UW.underworldDeathRoom(s, { diedIn, nearestTo });
+  let kocatan = null, skipRipPoll = false;
+  if (kocatanRip && allowRip && rip && UW.diedInKocatan(death.num)
+      && (city == null || UW.isKocatanCity(city))) {
+    kocatan = await kocatanRipOut(s, rip, { maxSeconds: Math.max(10, Math.min(45, maxSeconds)) });
+    const record = { died_in_room: death.num, death_room_from: death.source,
+                     verdict: kocatan.verdict, ...(kocatan.saw ? { saw: kocatan.saw } : {}),
+                     ...(kocatan.why ? { why: kocatan.why } : {}) };
+    if (kocatan.left) {
+      const num = s.world?.room?.num ?? null;
+      const landed = Object.entries(UW.CITY_INNS)
+        .find(([, v]) => v.inn === num || (kocatan.arrived_in && v.innName === kocatan.arrived_in))?.[0] ?? null;
+      return { left: true, stood_up: true, arrived_in: kocatan.arrived_in, room: kocatan.room,
+               via: 'the rip in space', attempts: kocatan.attempts,
+               ...(landed ? { city: landed } : {}),
+               wanted: "Ko'catan", got_what_was_wanted: UW.isKocatanCity(landed),
+               chosen_because: `died in Ko'catan (room ${death.num}) and the rip shows the island`,
+               died_in_room: death.num, kocatan: record,
+               ...(near ? { hops_from_death: near.hops } : {}),
+               note: UW.isKocatanCity(landed)
+                 ? 'an island death taken straight back to the Aerie Guest House — no mainland inn, ' +
+                   'no trip back across the water'
+                 : `the rip read Ko'catan but this came out in ${landed ?? kocatan.arrived_in ?? 'an unnamed room'}` };
+    }
+    if (kocatan.terminal)
+      return { left: false, stood_up: true, reason: kocatan.reason, note: kocatan.note, kocatan: record };
+    cityAttempts.push({ portal: "rip in space (Ko'catan death)", ...record });
+    // IT READ THE ISLAND AND WE DID NOT GET THROUGH: HOLD OUT FOR IT, A FEW TIMES. A side
+    // portal from here is the mainland trip this branch exists to prevent, and nothing in the
+    // Underworld can hurt a body that waits one more pass. The keeper's rung bounds it
+    // (`kocatanHoldOut` is true for its first attempts only), so it cannot become a character
+    // parked here for ever — after that, out is out.
+    if (kocatan.verdict === 'failed' && kocatanHoldOut)
+      return { left: false, stood_up: true, reason: "kocatan_rip_not_reached",
+               kocatan: record, died_in_room: death.num,
+               note: 'the rip shows the island but this attempt did not get through it; holding ' +
+                     'out for it rather than taking a mainland portal — the next attempt tries again' };
+    // A RIP THAT HAS JUST NAMED A MAINLAND INN WILL NOT NAME THE ISLAND IN A MINUTE. The flag
+    // is set only by a new death, so polling it for Ko'catan below would be a minute in the
+    // Underworld bought for nothing. The same for one we just failed to get through: the
+    // pentagram is what is left. Only an unread sign keeps the old poll, which reads it again.
+    skipRipPoll = kocatan.verdict !== 'unread';
+  }
 
   // ---- a named city: walk to its own portal, which goes there every time ----
-  const cityAttempts = [];
   if (wanted && found.length > (rip ? 1 : 0)) {
     const { rows } = await identifyPortals(s, found, { want: wanted });
     const match = rows.find(r => !r.rip && r.city
@@ -3574,7 +3665,7 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     cityAttempts.push({ portal: "fixed Ko'catan", why: UW.KOCATAN_IS_DEATH_ONLY });
 
   let ripUnreachable = false;
-  if (wanted && rip && allowRip) {
+  if (wanted && rip && allowRip && !(skipRipPoll && UW.isKocatanCity(wanted))) {
     // Stand next to it FIRST. The window is 5-10 seconds and walking is a second a
     // square, so polling from across the room means reading a destination you can no
     // longer reach in time.

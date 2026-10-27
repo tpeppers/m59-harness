@@ -11504,7 +11504,9 @@ const TOOLS = [
       'and only says where it leads if you LOOK at it. It is the FALLBACK here, not the plan: a named ' +
       'city walks to its own portal and arrives, with no waiting and no luck.\n' +
       'KO\'CATAN IS NOT A CHOICE. It has no portal in the pentagram, and the rip offers it only to a ' +
-      'character that died in Ko\'catan — for whom the rip then goes there and nowhere else.\n' +
+      'character that died in Ko\'catan — for whom the rip then goes there and nowhere else. Such a ' +
+      'death TAKES THE RIP FIRST by default, landing in the Aerie Guest House (2001); `anywhere` or ' +
+      'another `city` overrides it.\n' +
       'IT ALWAYS GETS YOU OUT IF IT CAN. If the city you wanted is unreachable it takes the nearest ' +
       'working portal instead and says so, with `got_what_was_wanted:false` — being out in the wrong ' +
       'city beats another spell in the Underworld.\n' +
@@ -11555,6 +11557,9 @@ const TOOLS = [
         city: a.anywhere ? null : (a.city ?? null),
         nearestTo: a.anywhere ? null : diedIn,
         maxSeconds: num(a.max_seconds, 180),
+        // `anywhere` is an explicit "first portal that works", so it also skips the island
+        // death's rip-first rule (m59-underworld.mjs `diedInKocatan`).
+        ...(a.anywhere ? { kocatanRip: false } : {}),
       });
       return {
         ...r,

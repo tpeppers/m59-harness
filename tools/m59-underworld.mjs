@@ -31,6 +31,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { deathLocationFromSessions } from './m59-death-location.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const MAP_FILE   = process.env.M59_MAP_FILE   || here('../substrate/m59-map.json');
@@ -119,6 +120,19 @@ export const PORTAL_SIGNS = [
 export const RIP_NAME = /rip in space/i;
 export const RIP_DESC = /through the anomaly/i;
 
+// TWO THINGS IN THE UNDERWORLD ARE CALLED "rip in space". The HellPortal (hellport.kod) is
+// the one this file means, placed at r10c6 (uworld.kod:631). The other is a CorpsePortal
+// (corpport.kod), which a Portal of Life puts here for ten to sixty seconds and which ZAPS
+// ITS OWNER BACK TO THE CORPSE — back among whatever killed it. Same name, same icon. Its
+// description says "leads back to someone's body" and never "through the anomaly", so a
+// reading tells them apart; before any reading, the HellPortal's own square does.
+export const HELLPORTAL_SQUARE = Object.freeze({ row: 10, col: 6 });
+export function pickRip(objects, nameOf = o => o?.name ?? '') {
+  const rips = (objects ?? []).filter(o => RIP_NAME.test(nameOf(o) || ''));
+  return rips.find(o => o.row === HELLPORTAL_SQUARE.row && o.col === HELLPORTAL_SQUARE.col)
+      ?? rips[0] ?? null;
+}
+
 export function readPortalSign(desc, name = '') {
   const text = desc || '';
   const city = PORTAL_SIGNS.find(d => d.match.test(text))?.city ?? null;
@@ -152,6 +166,97 @@ export const KOCATAN_IS_DEATH_ONLY =
   "who died in Ko'catan (PFLAG2_KOCATAN_DEATH, uworld.kod:598). For such a character " +
   "the rip goes to Ko'catan and nowhere else. For anyone else it is unreachable from " +
   'the Underworld — leave the city unset and take the nearest working portal.';
+
+// ------------------------------------------------------------ an island death
+//
+// A KO'CATAN DEATH GOES BACK THROUGH THE RIP, FIRST AND AT ONCE. Operator, 2026-10-27:
+// "have deaths on the island by default immediately use the rip-in-space portal that returns
+// them to the 'aerie guest house' because going slower or taking a side portal guarantees
+// getting stuck at the mainland and having to travel back to the island as a special trip,
+// which is devastating to their farming". The same day all three island deaths came out at
+// mainland inns — Beaker to Familiars, Scooter to the Limping Toad and then to Cibilo Creek —
+// one through the keeper's escape (which polled the rip for a minute and then took the
+// nearest fixed portal) and one through a journey's own escape, which knew nothing about
+// where it died and took the nearest portal in four seconds.
+//
+// WHICH DEATHS COUNT is the server's rule, mirrored rather than guessed. CreateCorpse
+// (player.kod:8343) sets inKocatan when the dying player's room reports
+// GetRegion() = RID_KOCATAN; Room.GetRegion (room.kod:928) gives that to RID_KOCATAN..
+// RID_KOCATAN_END = 2000..2499, and two guild halls override it to say the same
+// (guildh12.kod, room 705; guildh13.kod, room 713). The orc cave under the island
+// (2500..2599) is its own region and does NOT count. The corpse then calls
+// Underworld.NewDeath(inKocatan) (body.kod:95), which sets PFLAG2_KOCATAN_DEATH.
+//
+// THE DEATH ROOM ONLY DECIDES WHETHER TO GO AND LOOK. Whether stepping on the rip lands on the
+// island is the FLAG's answer, and the rip reads the flag back to us: HellPortal.ShowDesc
+// shows a flagged viewer "the sturdy, island fortress of Ko'catan" and nothing else, and
+// TeleportSomething sends a flagged player to RID_KOC_INN (2001) whatever the rip currently
+// points at, clearing the flag. So the description is the authority, and a rip that names a
+// mainland inn to an island death means the flag is gone — the old behaviour stands.
+//
+// AND THE FLAG MAY OUTLIVE THE CORPSE. CorpseDecomposed clears it, but by body.kod as written
+// a corpse that decays on its own timer never calls it — DeleteTimerMessage nils ptDelete
+// before Delete, and Delete only reports the decay when ptDelete is set. So a character that
+// died on the island and left by a fixed portal can still read "Ko'catan" on the rip after a
+// later MAINLAND death. That is why the death room gates the look: a mainland death never
+// asks the rip, whatever it would say.
+export const KOCATAN_REGION = Object.freeze({ from: 2000, to: 2499, halls: Object.freeze([705, 713]) });
+export const KOCATAN_RIP_LANDING = CITY_INNS["Ko'catan"].inn;   // 2001, The Aerie Guest House
+
+/** Would the server have flagged a death in this room as a Ko'catan death? */
+export function diedInKocatan(roomNum) {
+  const n = Number(roomNum);
+  if (roomNum == null || !Number.isSafeInteger(n)) return false;
+  return (n >= KOCATAN_REGION.from && n <= KOCATAN_REGION.to) || KOCATAN_REGION.halls.includes(n);
+}
+
+export const isKocatanCity = (city) => /^ko.?catan$/i.test(String(city ?? '').trim());
+
+// WHERE THIS LIFE ENDED, read the moment the Underworld is entered. Called from the session's
+// own room observer (m59-game.mjs), so it is there for whichever escape runs — the keeper's
+// mortality rung or a journey that died on the road and escapes on its own before the keeper's
+// post-mortem is even written.
+//
+// The fatal socket evidence is the same source the post-mortem's `where` uses
+// (m59-death-location.mjs): a health-0 push or the personal death line, in a real room, in the
+// window before this entry. Read from the in-memory records, never a snapshot — this runs on
+// the event path and must not touch the disk. The room observed before the Underworld is the
+// fallback, labelled as such: it is right when the keeper was watching and stale when a
+// relogin went unobserved, which is why it is second.
+export function deathRoomOnEntry({ evidence = null, previous = null, at = Date.now(),
+                                   windowMs = 60_000 } = {}) {
+  let hit = null;
+  try {
+    const sessions = evidence?.records ?? evidence?.sessions ?? [];
+    hit = deathLocationFromSessions({ sessions }, { at, windowMs });
+  } catch { hit = null; }
+  if (Number.isSafeInteger(hit?.num) && hit.num > 1)
+    return { num: hit.num, source: hit.source, at };
+  const p = Number(previous?.num);
+  if (previous?.num != null && Number.isSafeInteger(p) && p > 1)
+    return { num: p, source: 'room observed before the Underworld', at };
+  return { num: null, source: null, at };
+}
+
+// The death room an escape should judge by, most explicit first: the caller's (the keeper
+// passes its post-mortem's `where`), then the session's own record of this Underworld visit.
+// `nearestTo` is accepted as the death room because that is what every caller passes in it.
+export function underworldDeathRoom(s, { diedIn = null, nearestTo = null } = {}) {
+  for (const [n, source] of [[diedIn, 'caller'], [nearestTo, 'caller (nearest_to)']]) {
+    if (n != null && Number.isSafeInteger(Number(n)) && Number(n) > 1)
+      return { num: Number(n), source };
+  }
+  const rec = s?.lastDeathRoom;
+  if (rec?.num != null && Number.isSafeInteger(Number(rec.num)))
+    return { num: Number(rec.num), source: `session: ${rec.source ?? 'recorded'}` };
+  return { num: null, source: null };
+}
+
+// The off switch, for a bisect: M59_KOCATAN_DEATH_RIP=0. On unless said otherwise — the
+// operator asked for it "by default".
+export function kocatanDeathRipEnabled(env = process.env) {
+  return !/^(0|false|off|no)$/i.test(String(env.M59_KOCATAN_DEATH_RIP ?? '').trim());
+}
 
 // -------------------------------------------------------------- nearest city
 //
@@ -301,6 +406,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
                   `   (object r${p.objectRow}c${p.objectCol})  -> room ${p.inn} ${p.innName}`);
     console.log('\nThe rip in space — re-rolls every 5-10s among those same five inns.');
     console.log(`\nKo'catan: ${KOCATAN_IS_DEATH_ONLY}`);
+    console.log(`An island death (rooms ${KOCATAN_REGION.from}-${KOCATAN_REGION.to}, halls ` +
+                `${KOCATAN_REGION.halls.join('/')}) takes the rip first, to ${KOCATAN_RIP_LANDING}, ` +
+                'while the rip still shows the island (M59_KOCATAN_DEATH_RIP=0 turns it off).');
     const t = cityTable();
     const byCity = {};
     for (const v of t.values()) byCity[v.city] = (byCity[v.city] || 0) + 1;

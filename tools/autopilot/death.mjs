@@ -25,6 +25,11 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { CONTINUE, HANDLED, ITEM_VALUE, POSTMORTEM_DIR, UNDERWORLD_ROOM_OBJECT_ID, pct, vigorOf } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
 
+// How many escape attempts an island death spends on the rip before it will take any portal.
+// The rip is never unlit, so a miss is a walk that did not land; three passes is a minute or
+// two in a room nothing can hurt us in, against a mainland exit that costs the farm an hour.
+export const KOCATAN_RIP_HOLD_ATTEMPTS = 3;
+
 export class DeathPart {
   // @part 1
 
@@ -819,7 +824,13 @@ export class DeathPart {
       // unrecoverable one. The room is in the post-mortem we just wrote, which is
       // deliberately taken before the Underworld overwrites the frames.
       const diedIn = this.lastPostMortem?.where?.num ?? null;
-      let e = await skills.escapeUnderworld(s, { maxSeconds: 60, nearestTo: diedIn });
+      // AN ISLAND DEATH GOES BACK THROUGH THE RIP (operator, 2026-10-27), and the skill does
+      // that first whenever the death room is Ko'catan's and the rip still shows the island —
+      // see `diedInKocatan` in m59-underworld.mjs. If it reads the island and this attempt
+      // cannot get through it, the first few attempts HOLD OUT rather than take a side portal
+      // to the mainland; after KOCATAN_RIP_HOLD_ATTEMPTS, out is out.
+      let e = await skills.escapeUnderworld(s, { maxSeconds: 60, nearestTo: diedIn,
+        kocatanHoldOut: this.underworldTries <= KOCATAN_RIP_HOLD_ATTEMPTS });
       console.error(`[autopilot] ${this.policy?.agent ?? '?'} escapeUnderworld result: left=${e.left} reason=${e.reason ?? 'none'} tried=${JSON.stringify(e.tried ?? [])}`);
       // If the legacy escape failed with a pathfinding error, try a
       // direct walk to the nearest portal, bypassing the pathfinder.
@@ -866,10 +877,12 @@ export class DeathPart {
           to: e.arrived_in, via: e.via, city: e.city ?? null,
           ...(e.wanted ? { wanted: e.wanted, got_it: e.got_what_was_wanted !== false } : {}),
           ...(diedIn != null ? { died_in_room: diedIn, hops_from_death: e.hops_from_death ?? null } : {}),
+          ...(e.kocatan ? { kocatan: e.kocatan } : {}),
         });
       } else {
         this.noProgress('stuck in the Underworld: ' + (e.reason || 'no portal took us'));
-        this.note('could not escape — will keep trying', { why: e.reason, tried: e.tried });
+        this.note('could not escape — will keep trying', { why: e.reason, tried: e.tried,
+          ...(e.kocatan ? { kocatan: e.kocatan } : {}) });
       }
       return HANDLED;
     }
