@@ -596,6 +596,17 @@ export function selectedEdgeAt(room, direction, candidate) {
   return selected;
 }
 
+// WHICH EDGE A STEP TO (row, col) CROSSES, AND WHERE IT GOES. room.kod SomethingMoved, in its own order:
+// past piRows leaves SOUTH, below row 1 NORTH, past piCols EAST, below col 1 WEST, and StandardLeaveDir then
+// picks among the room's plEdge_Exits for that side -- selectedEdgeAt above. Inside the room: null. A side
+// with no exit answers { direction, edge: null }: the server bumps the body and nothing moves.
+export function edgeCrossedAt(room, row, col) {
+  if (!room?.rows || !room?.cols || !Number.isFinite(row) || !Number.isFinite(col)) return null;
+  const direction = row > room.rows ? 'south' : row < 1 ? 'north' : col > room.cols ? 'east' : col < 1 ? 'west' : null;
+  if (!direction) return null;
+  return { direction, edge: selectedEdgeAt(room, direction, { row, col }) };
+}
+
 /** Declared edge exits an in-room walk must avoid, using legacy row,col keys. */
 export function roomExitSquares(room,{rows=room?.rows,cols=room?.cols,to=null,includeInland=false,from=null}={}) {
   const out=new Set(),boundary=new Set();

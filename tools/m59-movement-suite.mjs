@@ -228,6 +228,10 @@ const SUITES = [
    'a monster standing on the next square\'s stand point is walked round into that square, not re-aimed at for ever (Rowlf, Ukgoth r19c35)'],
   ['m59-track-midroom-test.mjs',
    'a journey that starts inside a room rides the track out by the same door, not the bare plan (Kardde\'s Canyon 49 -> 45)'],
+  ['m59-edge-confinement-test.mjs',
+   'a confined keeper never steps over an edge into a room outside its confinement (Lew 2115 -> 2124, Kermit 2125 -> 2135)'],
+  ['m59-heal-before-trip-test.mjs',
+   'no town trip opens while a healing session is open: the body heals on its spot first (Beaker, 2115, 2026-10-27)'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

@@ -12,6 +12,7 @@
 //   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
+import { readSession } from '../m59-healing-session.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
 import { MARKET_KEEP, isFood, weighPack } from '../m59-items.mjs';
 import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
@@ -290,6 +291,12 @@ export class ShoppingPart {
     if (this.townTrip) return this.continueTownTrip();
     // DROPPED MEANS DROPPED (m59-town-favors.mjs): no resumed trip and no new one while the hold lasts.
     if (this.townTripHeld()) return false;
+    // NOT WHILE HEALING. 2026-10-27 09:03Z: Beaker logged off once to avoid dying (08:58), came back at 68/80 -- above
+    // his rest line -- and a bank trip took the body across 2115 at its cap of twelve avars, unarmed; the session had
+    // spent its one logoff, so nothing was left to save him. Operator, 2026-10-27: the play-dead logoff happens "once
+    // per healing session on a single safe spot until healed full". A trip of any kind, asked-for ones included, waits
+    // for the session to close at full health (m59-healing-session.mjs).
+    if (readSession(String(this.s?.name ?? ''))) return false;
     // ASKED FOR, by the operator or a `townTrip` strategy: open it now, past the thresholds below.
     await this.askTownStrategy().catch(() => null);
     if (this.operatorTripRequest) return this.openRequestedTownTrip();

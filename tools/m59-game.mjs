@@ -41,7 +41,7 @@ import { describeObject, affordances, OF, blocksMovement, prepareActTarget, read
 import { planPickup, normalizeOverfarm, unitCost } from './m59-overfarm.mjs';
 import { World, spreadEdges, distinctStagesFirst, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle , sameRoomDoorPlan} from './m59-world.mjs';
-import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges }
+import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges, edgeCrossedAt }
          from './m59-map.mjs';
 import { CLIENT_FINENESS, elideLoops, protocolToClient, loadRoo, buildAllRoomGeometry, sharedRoomGeometry,
          MAX_STEP_HEIGHT, MIN_NOMOVEON, PLAYER_HEIGHT,
@@ -2044,6 +2044,22 @@ class Session {
       reason: 'ground_effect_blocked', ground_effect: effect } : null;
   }
 
+  // A STEP OVER AN EDGE INTO A ROOM OUTSIDE THE CONFINEMENT IS REFUSED (2026-10-27: Lew left 2115 over its east edge into
+  // 2124, kriipa, and was walked on into 2133, eight avars, 90 -> 43 health; Kermit, walking out of 2125 to sell, crossed
+  // its east edge into 2135, dragonfly queens, level 145). The server moves a body the instant a step lands past the room's
+  // boundary, whichever faculty chose the step -- shelter, fight-back, clear-path, a chase, a walk -- so the guard sits
+  // under all of them, on the step. No confinement, no guard: an unconfined keeper goes where its journey says.
+  edgeCrossingBlock(target) {
+    const confine = autopilotIfAny(this.name)?.policy?.confineRooms;
+    if (!Array.isArray(confine) || !confine.length || !target) return null;
+    const room = this.world?.room;   // the map's own record for the room we stand in (World, memoised)
+    if (!room) return null;
+    const row = Math.floor(target.y / KOD_FINENESS), col = Math.floor(target.x / KOD_FINENESS);
+    const to = edgeCrossedAt(room, row, col)?.edge?.to;
+    if (to == null || confine.map(Number).includes(Number(to))) return null;
+    return { blocked: true, reason: 'edge_out_of_confinement', from: room.num, to, square: { row, col } };
+  }
+
   hazardSquares() { return groundEffectSquares(this.client, this.hazardOptions?.('combat') ?? {}); }
 
   // THE movement.hazard JOINT (tools/m59-joints.mjs). With no pak answering it -- every fresh clone --
@@ -2734,6 +2750,14 @@ class Session {
       const hazard = this.groundEffectBlock(c.self, target);
       if (hazard) throw Object.assign(new Error('ground_effect_blocked'), {
         code: 'GROUND_EFFECT_BLOCKED', ground_effect: hazard.ground_effect });
+      const edge = this.edgeCrossingBlock(target);
+      if (edge) {
+        if (Date.now() - (this._edgeRefusedLogAt ?? 0) > 10_000) {
+          this._edgeRefusedLogAt = Date.now();
+          console.log(`[edge] ${this.name} refused a step from ${edge.from} r${edge.square.row}c${edge.square.col} into ${edge.to}: outside the confinement`);
+        }
+        throw Object.assign(new Error('edge_out_of_confinement'), { code: 'EDGE_OUT_OF_CONFINEMENT', ...edge });
+      }
     };
     this.world = new World(c, worldMap);
     this.observeDoorGeometry(c);
