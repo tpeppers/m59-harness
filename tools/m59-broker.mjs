@@ -2376,14 +2376,17 @@ async function keeperLeaveAndStop(agent, index) {
 // `mode` is NOT a policy field. It lives on the Autopilot object and is re-read on every
 // pass; assigning it into `policy` would leave a `policy.mode` that looks authoritative and
 // is read by nothing.
-async function keeperPolicy(agent, index, { policy, mode } = {}) {
+async function keeperPolicy(agent, index, { policy, mode, via = null } = {}) {
   const body = { ...(policy || {}) };
   if (mode) body.mode = mode;
   // WHO WROTE IT. The keeper's `policy updated` line was the only observability a spot
   // policy change had, and it named no writer — so twenty-one of them in one process could
   // not answer "which broker reverted my push", which is the whole question. A third
   // reserved key beside `agent` and `mode`; the keeper strips it rather than applying it.
-  body.by = `broker pid ${process.pid} fleet ${FLEET ?? 'default'}`;
+  // AND WHO ASKED THE BROKER: the tool and its caller's origin. The pid alone could not say which of a dozen
+  // `autopilot action=start` callers pushed a whole policy over a fresh keeper (prod 2026-10-27, practiceSpells -> null
+  // on six keepers right after a handoff).
+  body.by = `broker pid ${process.pid} fleet ${FLEET ?? 'default'}${via ? ` via ${String(via).slice(0, 160)}` : ''}`;
   try {
     const target = await verifiedKeeperWriteTarget(agent, index);
     const res = await fetch(`http://127.0.0.1:${target.port}/policy`, {
@@ -2405,10 +2408,10 @@ async function keeperPolicy(agent, index, { policy, mode } = {}) {
 // The one place that decides whether an order needs pushing at all. A directly-held
 // session IS the thing the tools mutate, so there is nothing to forward; a KeeperProxy is
 // a window onto another process and everything has to go over the wire.
-async function pushPolicyToKeeper(agent, p) {
+async function pushPolicyToKeeper(agent, p, via = null) {
   const s = sessions.get(agent);
   if (!(s instanceof KeeperProxy)) return null;
-  return keeperPolicy(agent, s._index, { policy: p.policy, mode: p.mode });
+  return keeperPolicy(agent, s._index, { policy: p.policy, mode: p.mode, via });
 }
 
 // ---------------------------------------------------------------- keeper proxy
@@ -11773,6 +11776,7 @@ const TOOLS = [
       lease_ms: { type: 'number', description: 'claim/heartbeat: taken back by the keeper ' +
                                                'this long after the last heartbeat. Leases fail ' +
                                                'BACK to the keeper, never open — default 120000' },
+      origin: MOVE_ORIGIN_SCHEMA,
       why: { type: 'string', description: 'on stop/inert: why, for the uptime ledger — a deliberate ' +
                                           'hold must be distinguishable from a keeper that dropped' },
       hard: { type: 'boolean', description: 'on stop: END the keeper rather than making it inert. ' +
@@ -13704,7 +13708,8 @@ const TOOLS = [
       // is the character, and without this the order takes effect only at the keeper's
       // next restart. `keeper_push` rides back in the reply on purpose — the caller that
       // needs to know whether an order landed is the one reading this.
-      const keeper_push = await pushPolicyToKeeper(a.agent, p);
+      const keeper_push = await pushPolicyToKeeper(a.agent, p,
+        `autopilot ${a.action}${a.origin ? ` <- ${originLabel(mcpOrigin(a))}` : ' <- caller unnamed'}${typeof a.why === 'string' && a.why.trim() ? ` (${a.why.trim().slice(0, 60)})` : ''}`);
       const out = retired ? { ...started, retired } : { ...started };
       // REPORTED, NEVER SILENT. An argument that was accepted and then changed is the shape
       // of the bug this block exists to close; a caller that asked for `require_safe_wall`
@@ -18010,7 +18015,7 @@ const TOOLS = [
           // whole promise is "make the assignment STICK", and on a keeper-backed broker
           // an assignment written only to the shell and the roster sticks to nobody until
           // that keeper next restarts. Reported per character below.
-          o.keeper_push = await pushPolicyToKeeper(o.agent, p);
+          o.keeper_push = await pushPolicyToKeeper(o.agent, p, 'spread');
           if (a.travel && o.moves) {
             const s = session(o.agent);
             // `travelJob` rather than a hand-rolled `startJob`: this one did claim the

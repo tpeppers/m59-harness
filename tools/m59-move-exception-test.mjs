@@ -50,6 +50,10 @@ console.log('the bindings');
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   ok('cancel_movement takes accept and forwards it to the keeper', /'"cancel_exception": cancel even a journey tagged/.test(broker)
      && /\.\.\.\(opts\?\.accept \? \{ accept: opts\.accept \} : \{\}\)/.test(broker));
+  ok('a policy push names the tool and its caller on the keeper\'s log line (practiceSpells -> null, 2026-10-27)',
+     /via \$\{String\(via\)\.slice\(0, 160\)\}/.test(broker) && /`autopilot \$\{a\.action\}\$\{a\.origin \? ` <- \$\{originLabel\(mcpOrigin\(a\)\)\}`/.test(broker));
+  const fs2 = readFileSync(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8');
+  ok('a FleetScript\'s autopilot call carries its origin', /'cancel_movement',[\s\S]{0,300}'autopilot'\]\);/.test(fs2));
   const pm = readFileSync(new URL('./m59-postmortems.mjs', import.meta.url), 'utf8');
   ok('the postmortem reader shows it', /pm\.was\?\.exception \? \{ exception: pm\.was\.exception \}/.test(pm));
 }
