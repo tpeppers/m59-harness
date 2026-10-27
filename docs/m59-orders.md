@@ -176,6 +176,14 @@ This is the `Farm` resource's admission check, `blocked_by`, and remedy loop, in
 the file or the cause names its service, bounded by the ttl: the service board does not yet know who staffs which desk.
 That registry is step 5 below.
 
+## Unreadable is never empty
+
+Prod, 2026-10-27: an inn-practice tick read six keepers fresh from a handoff, got an empty abilities list (the server had
+not sent it yet), planned "nothing to drill", and pushed practice off on all six. Every controller in this design
+(supply orders, desks, the scheduler, the gate) has to keep three answers apart: **known and empty, known and
+something, and not known yet**. The last one means "skip this tick", never "plan for nothing". The `abilities` tool now
+answers an unread list with `null` and a `*_unreadable` reason when the keeper's record names entries the live list lacks.
+
 ## Build order
 
 1. **Requirements, the floor and the escalation.** Done (above).

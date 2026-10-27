@@ -14887,6 +14887,12 @@ const TOOLS = [
       if (wantSkills) {
         const b = build(c.skills || [], 4, 'skills');
         out.skills = filt(b.rows);
+        // UNREADABLE IS NOT EMPTY (prod 2026-10-27): a keeper fresh from a handoff has not been sent its lists yet, and
+        // an empty answer read as "knows nothing" turned practice off on six characters. When the record on disk names
+        // entries this live list lacks, say so with null rather than [].
+        const keptSkills = Object.keys(kbook.skills || {}).length;
+        if (!b.entries && keptSkills) { out.skills = null; out.skills_unreadable = `no skill list from the server yet (this ` +
+          `keeper's record names ${keptSkills}); unreadable is not empty, so ask again shortly`; }
         out.skills_hidden_at_zero = a.known_only === false ? 0 : b.rows.length - b.rows.filter(r => r.ability == null || r.ability > 0).length;
         if (b.slots !== b.entries)
           out.skills_warning = `the server sent ${b.slots} ability slot(s) for ${b.entries} skill(s) — numbers may be mislabelled`;
@@ -14900,6 +14906,9 @@ const TOOLS = [
           if (info) { r.school = info.school_name; r.level = info.level; r.mana = info.mana; }
         }
         out.spells = filt(b.rows);
+        const keptSpells = Object.keys(kbook.spells || {}).length;
+        if (!b.entries && keptSpells) { out.spells = null; out.spells_unreadable = `no spell list from the server yet (this ` +
+          `keeper's record names ${keptSpells}); unreadable is not empty, so ask again shortly`; }
         out.spells_hidden_at_zero = a.known_only === false ? 0 : b.rows.length - b.rows.filter(r => r.ability == null || r.ability > 0).length;
         if (b.slots !== b.entries)
           out.spells_warning = `the server sent ${b.slots} ability slot(s) for ${b.entries} spell(s) — numbers may be mislabelled`;

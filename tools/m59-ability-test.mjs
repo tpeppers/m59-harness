@@ -248,5 +248,15 @@ console.log('\nfreshness');
                                                     { kinds: 'skills' }));
 }
 
+{
+  // UNREADABLE IS NOT EMPTY (prod 2026-10-27): a fresh keeper's empty spell list, with a record on disk that names
+  // spells, is answered null with a reason -- an empty list turned practice off on six characters.
+  const { readFileSync } = await import('node:fs');
+  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  ok('the abilities tool answers an unread spell list with null and a reason, not []',
+     /if \(!b\.entries && keptSpells\) \{ out\.spells = null; out\.spells_unreadable =/.test(broker)
+     && /if \(!b\.entries && keptSkills\) \{ out\.skills = null; out\.skills_unreadable =/.test(broker));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
