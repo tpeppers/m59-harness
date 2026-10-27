@@ -177,6 +177,11 @@ let attachedTable = null;
 // the live question needs the geometry — see `anchorReach`.
 let attachedMap = null;
 export const activeRoutes = () => attachedTable;
+// The map room the active table was attached with, or null. A table anchor carries `dir` and
+// `to` but not the edge CONDITION that decides which of a split boundary's exits fires, and
+// that lives only in the map's `edgeExits` (see planRailDeparture in m59-pocket-rails.mjs).
+export const attachedMapRoom = roomNum =>
+  attachedMap?.rooms?.[roomNum] ?? attachedMap?.rooms?.[String(roomNum)] ?? null;
 
 export function attachStepMasks(map, { geometryOf, lazy = false } = {}) {
   const table = routesFor(map?.geometryManifestSha256 ?? null);

@@ -510,6 +510,18 @@ rather than about arriving**, because arriving was never the symptom. And
 turned up in: **25 recorded crossings, 25 agreements, 0 disagreements**. Ranking in
 `exits()` is observation first, baked anchor second, derivation last, for that reason.
 
+**A correct bake can still be BORROWED by direction, and that is the same mistake one layer
+later.** `planRailDeparture` (`m59-pocket-rails.mjs`) recovers a refused walk by riding a baked
+rail toward the goal's exit anchor, and when the goal is not itself an anchor it borrowed the
+anchor of whatever exit sat on the same boundary row or column. Ko'catan's 2115 declares
+`east -> 2125 row>20` and `east -> 2124 row<20`; 2125's anchor is `r26c62` (one column in) and
+2124's is `r3c63` (on the edge), so every 2125 stage on column 63 found only `r3c63`, and a
+walk toward the dragonfly farm departed along the rail to the kriipa doorway — the confinement
+edge guard logged `refused a step from 2115 r3c64 into 2124` (2026-10-27). A borrowed anchor
+must now be the exit `selectedEdgeAt` fires for the goal projected onto that side; with no map
+room to read the condition from, only a side whose edge anchors all lead to one room lends one.
+`m59-edge-condition-anchor-test.mjs` pins every layer of 2115 -> 2125.
+
 **AND THE BAKE IS NOT ABOUT PLANNING COST — MEASURE BEFORE BUILDING A TABLE TO AVOID ONE.**
 The natural reading of "why should getting from one exit to another take any real-time
 planning" is that planning is expensive. It is not: measured on this map with masks

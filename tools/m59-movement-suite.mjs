@@ -230,6 +230,8 @@ const SUITES = [
    'a journey that starts inside a room rides the track out by the same door, not the bare plan (Kardde\'s Canyon 49 -> 45)'],
   ['m59-edge-confinement-test.mjs',
    'a confined keeper never steps over an edge into a room outside its confinement (Lew 2115 -> 2124, Kermit 2125 -> 2135)'],
+  ['m59-edge-condition-anchor-test.mjs',
+   'a departure toward one exit of a row-split boundary borrows only the anchor that exit fires (2115 -> 2125 never rides to 2124\'s r3c63)'],
   ['m59-heal-before-trip-test.mjs',
    'no town trip opens while a healing session is open: the body heals on its spot first (Beaker, 2115, 2026-10-27)'],
   ['m59-cup-flight-test.mjs',

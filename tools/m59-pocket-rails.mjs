@@ -2,7 +2,8 @@
 import {readFileSync} from 'node:fs';
 import {protocolToClient, STEP_MASK_VERSION} from './m59-roo.mjs';
 import {blockingBodySnapshot, planBodyDetour} from './m59-body-detour.mjs';
-import {bakedPath} from './m59-routes.mjs';
+import {bakedPath, attachedMapRoom} from './m59-routes.mjs';
+import {selectedEdgeAt} from './m59-map.mjs';
 import {blocksMovement} from './m59-parse.mjs';
 
 let book;
@@ -79,7 +80,7 @@ const searchProgress=new WeakMap();
 const IN_ROOM_REACH=3;
 export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,selfId,
   roomFlags=0,overrideDepths=null,sectorHeights=null,avoidSquares=null,seedOnly=false,maxNodes=16000,maxMs=500,
-  threats=[],threatWeight=0,threatRadius=4}={}) {
+  threats=[],threatWeight=0,threatRadius=4,mapRoom}={}) {
   if(!geo?.collisionReady||typeof geo.traceFineMoveClient!=='function'||![from?.x,from?.y,to?.row,to?.col].every(Number.isFinite))
     return {found:false,reason:'departure geometry or position unavailable'};
   if(manifest&&table?.geometryManifestSha256!==manifest)return {found:false,reason:'departure table geometry mismatch'};
@@ -87,13 +88,35 @@ export function planRailDeparture(geo,from,to,{room,table,manifest=null,objects,
   const options={objects,selfId,roomFlags,overrideDepths,avoidSquares,threats,threatWeight,threatRadius},r=table?.rooms?.[room];
   const started=performance.now(),budget=seedOnly?Math.min(35,maxMs):maxMs;
   let searchIncomplete=false;
+  // A BORROWED ANCHOR MUST BE THE EXIT THE GOAL WOULD FIRE, NOT THE ONE ON THE SAME WALL.
+  //
+  // The two fallbacks below lend a boundary goal the anchor of an exit on the same side. A side
+  // can carry several exits split by a row/col condition, and the anchor nearest along the wall
+  // is not necessarily the one whose condition the goal satisfies. Ko'catan, 2026-10-27: 2115's
+  // east edge is `row>20` -> 2125 (anchor r26c62, one column in from the edge) and `row<20` ->
+  // 2124, kriipa (anchor r3c63, ON the edge). Every 2125 stage on column 63 (r25c63, r26c63,
+  // r33c63 ...) found r3c63 as the only anchor in its column, so a departure toward 2125 rode the
+  // baked rail to the 2124 doorway and the edge guard logged `refused a step from 2115 r3c64
+  // into 2124` (Lew, before the guard, crossed). The condition is the map's, not the table's,
+  // so it is asked of the map room with the server's own ordered scan (selectedEdgeAt, room.kod
+  // StandardLeaveDir) at the goal projected onto the anchor's side. Without a map room, only an
+  // unambiguous side -- every edge anchor on it leading to one room -- may lend its anchor.
+  const edgeRoom=mapRoom!==undefined?mapRoom:attachedMapRoom(room);
+  const onSide=dir=>dir==='east'?{row:to.row,col:geo.cols}:dir==='west'?{row:to.row,col:1}
+    :dir==='north'?{row:1,col:to.col}:dir==='south'?{row:geo.rows,col:to.col}:null;
+  const servesGoal=a=>{
+    if(a.kind!=='edge'||!a.dir)return true;
+    const at=onSide(a.dir),fired=edgeRoom&&at?selectedEdgeAt(edgeRoom,a.dir,at):null;
+    if(fired)return Number(fired.to)===Number(a.to);
+    return new Set((r?.anchors??[]).filter(b=>b.kind==='edge'&&b.dir===a.dir).map(b=>Number(b.to))).size<=1;
+  };
   const anchor=r?.anchors?.find(a=>a.row===to.row&&a.col===to.col)
-    ??r?.anchors?.filter(a=>(a.row===to.row&&(a.row===1||a.row===geo.rows))
-      ||(a.col===to.col&&(a.col===1||a.col===geo.cols)))
+    ??r?.anchors?.filter(a=>((a.row===to.row&&(a.row===1||a.row===geo.rows))
+      ||(a.col===to.col&&(a.col===1||a.col===geo.cols)))&&servesGoal(a))
       .sort((a,b)=>Math.hypot(a.row-to.row,a.col-to.col)-Math.hypot(b.row-to.row,b.col-to.col))[0]
     ??r?.anchors?.filter(a=>a.kind==='edge'&&Math.max(Math.abs(a.row-to.row),Math.abs(a.col-to.col))<=2
       &&(a.dir==='west'&&to.col<=3||a.dir==='east'&&to.col>=geo.cols-2
-        ||a.dir==='north'&&to.row<=3||a.dir==='south'&&to.row>=geo.rows-2))
+        ||a.dir==='north'&&to.row<=3||a.dir==='south'&&to.row>=geo.rows-2)&&servesGoal(a))
       .sort((a,b)=>Math.hypot(a.row-to.row,a.col-to.col)-Math.hypot(b.row-to.row,b.col-to.col))[0];
   let obstruction=null;
   const rb=railBookRoom(geo,room,manifest);
