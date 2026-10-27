@@ -42,6 +42,8 @@ export const script = {
         const r = await ctx.call('autopilot', { agent: ctx.agent, action: 'start', mode: 'farm', farm_strategy: p.strategy,
           rest_below: p.restBelow, flee_below: p.fleeBelow, town_trips: false, ...(p.station ? { assigned_room: p.station } : {}),
           ...(weapons.length ? { weapon_priority: weapons, prefer_magic_weapon: false, banned_weapons: ['bow', 'crossbow'] } : {}),
+          // ONE SPARE: the guard at the East Tower passes two weapons in all (kocatwn.kod CanPass), the one in hand included.
+          max_weapons: 1,
           why: 'island arrival: careful farming after the vault' });
         // JUDGED BY READING IT BACK, not by the reply: a keeper-backed `start` answers started:false with keeper_backed:true
         // when the order went to the keeper, which read as a refusal on prod (2026-10-27, t21 and t2) while it had applied.

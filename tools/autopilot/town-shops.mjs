@@ -25,7 +25,7 @@ import { StockpileBook } from '../m59-stockpile.mjs';
 import { BOOKMAKERS_HALL_ROOM, StorageCache, chestFullness, chestKey } from '../m59-storage.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-tithe.mjs';
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
-import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, purchaseEnabled, reagentTargetFor, sleep } from '../m59-autopilot.mjs';
+import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -279,10 +279,12 @@ export class TownShopsPart {
     // and after three are different facts about the world.
     // THE NEAREST ROUTABLE SHOP, then the next. Three attempts across them, as before.
     const hops = shop => { try { const r = s.world?.route?.(shop.room); return r?.found ? (r.hops?.length ?? 99) : Infinity; } catch { return Infinity; } };
-    const shops = FOOD_SHOPS.map(sh => ({ ...sh, hops: hops(sh) })).filter(sh => Number.isFinite(sh.hops))
+    // THE FOOD SHOPS FOR WHERE WE STAND (the island has its own: m59-autopilot.mjs townTable).
+    const town = townTable(s.world?.room?.num);
+    const shops = town.FOOD_SHOPS.map(sh => ({ ...sh, hops: hops(sh) })).filter(sh => Number.isFinite(sh.hops))
       .sort((a, b) => a.hops - b.hops);
-    const atShop = () => FOOD_SHOPS.some(sh => sh.room === s.world?.room?.num);
-    const shopHere = () => FOOD_SHOPS.find(sh => sh.room === s.world?.room?.num) ?? FOOD_SHOP;
+    const atShop = () => town.FOOD_SHOPS.some(sh => sh.room === s.world?.room?.num);
+    const shopHere = () => town.FOOD_SHOPS.find(sh => sh.room === s.world?.room?.num) ?? town.FOOD_SHOP;
     if (!atShop()) {
       let got = null;
       for (let i = 0; i < 3 && !atShop() && shops.length; i++) {

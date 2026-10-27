@@ -785,6 +785,17 @@ export class TravelPart {
              'this destination can only ever be refused, and retrying it is the whole defect' });
       return { arrived: false, reason: 'the Underworld is not a travel destination' };
     }
+    // THE KO'CATAN GUARD GATE. The East Tower (2013) lets nobody out to the jungle (2115) carrying more than two weapons,
+    // or more than one armour, shield, helmet or gauntlets, or alcohol, or nerudite (kocatwn.kod CanPass; the evil captain
+    // can be bribed, the good one cannot). A route through it with such a pack walks into a refusal the router reads as
+    // "no ground gained" and retries. So it is refused HERE, naming what the guard will object to.
+    {
+      const gate = this.kocatanGateRefusal?.(room);
+      if (gate) {
+        this.note('refused a journey the Ko\'catan guard will stop', { to: Number(room), ...gate });
+        return { arrived: false, refused: true, reason: `kocatan_gate: ${gate.why}`, gate };
+      }
+    }
     // THE PVP RETURN DELAY, at the same single gate as the Underworld and the confinement:
     // every keeper-initiated journey passes through here. `recoveryDetour` is read from the
     // CALLER's options, never the default — a recovery detour is survival, while the default

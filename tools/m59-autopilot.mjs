@@ -1789,15 +1789,48 @@ export const BARLOQUE_VAULT = { room: 114, name: "Obert Cair'bre's vault, North 
 // `richEnoughToBank` outranks the three shopping doors because a purse over the banking
 // threshold is money that is dropped on death; the shops it was going to visit are all
 // hung off the end of that same trip anyway.
+// THE ISLAND HAS ITS OWN COUNTERS, AND A TRIP FROM IT NEVER LEAVES IT. Operator, 2026-10-27: island farmers sell at a full
+// pack, and "the guard house provides unique restrictions around travel, and there are different shop NPCs on the island".
+// Every table above is mainland, so a full pack at 2115 planned a walk to Barloque -- through the caves, or no route at
+// all. Ko'catan's counters, from the kod and the merchant index: the smithy (Ixla cha'Totlak, 2003: weapons and wearables,
+// kcsmith.kod), the store (Pacal ix'Anoak, 2004: anything, finite stock, kcshopk.kod), the tailor (Tepal ix'Zonak, 2006:
+// gems and sundries, kctailor.kod) and the apothecary (Zala ix'Mecya, 2002: reagents, kcapoth.kod), visited in that order;
+// food at the inn (Moxal ix'Hanak, 2001: meat pie, bread, cheese) and the tavern (2008: bread); the bank is Huital ko'Nosak
+// (2005), A SEPARATE ACCOUNT from Tos/Jasper -- money banked there is spendable on the island and nowhere else. Wulfgang's
+// trading post (2101) is in the jungle and left out: a sell trip should not cross the guard gate it is selling to pass.
+export const ISLAND_ROOMS = Object.freeze([2000, 2699]);
+export const onIsland = room => Number(room) >= ISLAND_ROOMS[0] && Number(room) <= ISLAND_ROOMS[1];
+const ISLAND_MARKET_STOPS = Object.freeze([
+  { room: 2003, name: "Ixla cha'Totlak, Ko'catan smithy" },
+  { room: 2004, name: "Pacal ix'Anoak, Ko'catan store" },
+  { room: 2006, name: "Tepal ix'Zonak, Ko'catan tailor" },
+  { room: 2002, name: "Zala ix'Mecya, Ko'catan apothecary" },
+]);
+export const ISLAND_TOWN = Object.freeze({
+  region: 'island',
+  BANKS: Object.freeze([{ room: 2005, name: "Huital ko'Nosak, Ko'catan bank (a separate account)" }]),
+  MARKET_STOPS: ISLAND_MARKET_STOPS,
+  MARKETS: Object.freeze([ISLAND_MARKET_STOPS[0]]),
+  FOOD_SHOPS: Object.freeze([{ room: 2001, name: "Moxal ix'Hanak, Ko'catan inn" }, { room: 2008, name: "Oxal ix'Tokak, Ko'catan tavern" }]),
+  FOOD_SHOP: Object.freeze({ room: 2001, name: "Moxal ix'Hanak, Ko'catan inn" }),
+  REAGENT_SHOP: Object.freeze({ room: 2002, name: "Zala ix'Mecya, Ko'catan apothecary" }),
+});
+/** The counters for wherever this room is: the island's on the island, the mainland's everywhere else. */
+export function townTable(room) {
+  if (onIsland(room)) return ISLAND_TOWN;
+  return { region: 'mainland', BANKS, MARKET_STOPS, MARKETS, FOOD_SHOPS, FOOD_SHOP, REAGENT_SHOP };
+}
+
 export function townDestinations({ needsCashFirst = false, supplyTrip = false, starving = false,
                                    packFull = false, brokeWithGoods = false,
-                                   richEnoughToBank = false } = {}) {
-  if (needsCashFirst) return BANKS;
-  if (packFull || brokeWithGoods) return MARKETS;
-  if (richEnoughToBank) return BANKS;
-  if (supplyTrip) return [REAGENT_SHOP];
-  if (starving && !packFull) return [...FOOD_SHOPS];   // 103 alone is fenced (2026-09-28)
-  return BANKS;
+                                   richEnoughToBank = false, table = null } = {}) {
+  const t = table ?? townTable(null);
+  if (needsCashFirst) return t.BANKS;
+  if (packFull || brokeWithGoods) return t.MARKETS;
+  if (richEnoughToBank) return t.BANKS;
+  if (supplyTrip) return [t.REAGENT_SHOP];
+  if (starving && !packFull) return [...t.FOOD_SHOPS];   // 103 alone is fenced (2026-09-28)
+  return t.BANKS;
 }
 
 // IS AN EMPTY LARDER A REASON TO WALK TO TOWN? Only when the character's own fight floor is

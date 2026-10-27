@@ -20,7 +20,7 @@ import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
 import { runReagentCoop } from '../m59-reagent-coop-runtime.mjs';
 import * as skills from '../m59-skills.mjs';
-import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET, VIGOR_CAP, hungerNeedsTown, purchaseEnabled, reagentTargetFor, splitBySourcing, townDestinations } from '../m59-autopilot.mjs';
+import { BANKS, FOOD_SHOP, ITEM_VALUE, MARKET_STOPS, REST_VIGOR_CAP, TITHE_FLEET, VIGOR_CAP, hungerNeedsTown, purchaseEnabled, reagentTargetFor, splitBySourcing, townDestinations , townTable } from '../m59-autopilot.mjs';
 
 export class ShoppingPart {
   // @part 1
@@ -313,7 +313,7 @@ export class ShoppingPart {
     if (!above) return false;                       // 0 or null turns the trips off
     const s = this.s, c = s.need();
     const room = s.world?.room;
-    if (!room || BANKS.some(b => b.room === room.num)) return false;   // already there
+    if (!room || townTable(room.num).BANKS.some(b => b.room === room.num)) return false;   // already there
     // Wait for the reply, not just the request. Reading c.inventory straight after
     // submitting reads the PREVIOUS snapshot, which is the whole family of bugs this
     // file keeps re-learning.
@@ -495,8 +495,9 @@ export class ShoppingPart {
     // the bread shop — but only when hunger is the ONLY reason. A character that is also
     // rich or also full has business at the counter that pays, and buyFoodInTown runs at
     // the end of that trip anyway, so it gets both out of one walk.
+    // THE COUNTERS FOR WHERE WE STAND: the island's on the island, so a trip from it never plans a route off it.
     const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull,
-                                            richEnoughToBank: carried > above })
+                                            richEnoughToBank: carried > above, table: townTable(s.world?.room?.num) })
       .filter(b => !this.bansDestination(b.room));
     if (!destinations.length) {
       if (!this.warnedBannedTrip) {
@@ -573,7 +574,7 @@ export class ShoppingPart {
       needsCashFirst });
     if (wantsMarket && !packFull)
       this.note('carrying enough to be worth the circuit while we are here', {
-        trigger: sellCall.trigger, stops: MARKET_STOPS.map(m => m.name),
+        trigger: sellCall.trigger, stops: townTable(this.s.world?.room?.num).MARKET_STOPS.map(m => m.name),
         why: 'the trip was opened by something other than the pack, and the pack is at its ' +
              'ceiling anyway — the equipment and gem counters are on the way' });
     this.postShoppingPlan(this.shoppingPlan());

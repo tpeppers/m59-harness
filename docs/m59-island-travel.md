@@ -531,3 +531,26 @@ prepare to start carefully farming Avar warriors"*. `tools/fleetscripts/island-a
 - **Anyone standing in 2510 drinks from the pool of vigor** (operator: *"It should also drink from the pool of vigor if
   in that room"*): the keeper's `drinkAtPoolOfVigor`, once a minute, below full vigor, only when the body is quiet
   (health over half, nothing landing, nobody holding its movement). `m59-island-pool-test` pins it.
+
+## Farming the island: its own counters, and the guard gate
+
+Operator, 2026-10-27: island farmers keep vigor high, eat what drops, collect loot normally and sell at a FULL pack,
+and *"the guard house provides unique restrictions around travel, and there are different shop NPCs on the island"*.
+`m59-island-town-test.mjs` (22).
+
+- **On the island a town trip never leaves it.** `townTable(room)` (m59-autopilot.mjs) answers the counters for where the
+  character stands, and every town-trip site reads it. On the island (2000-2699): the sell circuit is the smithy (Ixla
+  cha'Totlak, 2003: weapons, wearables), the store (Pacal ix'Anoak, 2004: anything, finite stock), the tailor (Tepal
+  ix'Zonak, 2006: gems, sundries) and the apothecary (Zala ix'Mecya, 2002: reagents); food at the inn (2001) and the
+  tavern (2008); the bank is Huital ko'Nosak (2005), **a separate account** from Tos and Jasper. Wulfgang's trading post
+  (2101) is in the jungle and left out. The mainland is unchanged.
+- **The guard gate is checked before the walk.** The East Tower (2013) lets nobody out to the jungle (2115) with more than
+  two weapons, or more than one armour, shield, helmet or gauntlets, or alcohol, or nerudite (`kocatwn.kod` CanPass; the
+  evil captain can be bribed, the good one cannot; they change at 8 and 20). Walking in anyway is a refusal the router
+  reads as "no ground gained". So a keeper journey whose route crosses 2013 -> 2115 asks first
+  (`kocatanGateRefusal`) and is refused with a `kocatan_gate` reason naming what the guard will object to. Coming back is
+  not checked, by the kod or here.
+- **One spare weapon.** `island-arrive` sets `max_weapons: 1`: the one in hand plus one spare is what the guard passes.
+- **Selling at a full pack** is a strategy field now (`sellAtLoad: 1.0`), and `overfarm: null` keeps it from carrying more.
+- **Eating:** the keeper eats whenever vigor is under its fight floor (`fightAbove`, 150 for the island) and food is in
+  the pack, up to the floor; set `vigor_ceiling` (e.g. 195) to eat on toward full.

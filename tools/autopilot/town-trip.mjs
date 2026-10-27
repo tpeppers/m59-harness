@@ -23,7 +23,7 @@ import { detailSettings, recordStrategyStat } from '../m59-strategy-stats.mjs';
 import * as townFavors from '../m59-town-favors.mjs';
 import { completeTownIncome, recordTownTrade } from '../m59-town-income.mjs';
 import { addTradeFact, newTripTrade, packCounts, tripLedgerFields } from '../m59-towntrip-ledger.mjs';
-import { BANKS, FOOD_SHOPS, MARKETS, MARKET_STOPS, MIN_SELL_TRIP_VALUE, REAGENT_SHOP, TITHE_FLEET, TRIP_PURPOSE, VIGOR_CAP, hungerNeedsTown, townDestinations } from '../m59-autopilot.mjs';
+import { BANKS, FOOD_SHOPS, MARKETS, MARKET_STOPS, MIN_SELL_TRIP_VALUE, REAGENT_SHOP, TITHE_FLEET, TRIP_PURPOSE, VIGOR_CAP, hungerNeedsTown, townDestinations , townTable } from '../m59-autopilot.mjs';
 
 export class TownTripPart {
   // @part 1
@@ -51,7 +51,7 @@ export class TownTripPart {
       client: this.s.client ?? null,
       packIn, trade: newTripTrade(),
       estimatedValue: value.value,
-      marketStops: wantsMarket ? MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
+      marketStops: wantsMarket ? townTable(this.s.world?.room?.num).MARKET_STOPS.filter(m => !this.bansDestination(m.room)) : null };
     try {
       this.ledgerEvent('town_trip_opened', { trip_started_at: startedAt, trigger, purpose,
         errand, why: sellCall.why ?? null, to: target?.room ?? null, to_name: target?.name ?? null,
@@ -259,7 +259,8 @@ export class TownTripPart {
     this.operatorTripRequest = null;
     const town = req.town ?? 'market';
     const destinations = townDestinations({ packFull: town === 'market', richEnoughToBank: town === 'bank',
-                                            starving: town === 'food', supplyTrip: town === 'supply' })
+                                            starving: town === 'food', supplyTrip: town === 'supply',
+                                            table: townTable(this.s.world?.room?.num) })
       .filter(b => !this.bansDestination(b.room));
     const options = destinations
       .map(b => { const r = this.s.world?.route?.(b.room); return { ...b, hops: r?.found ? r.hops.length : Infinity }; })
@@ -424,14 +425,14 @@ export class TownTripPart {
       // its posted bill before walking to a merchant.
       const plan = trip.purchasePlan ?? this.shoppingPlan();
       this.postShoppingPlan(plan);
-      if (plan.required_purse > 0 && !MARKETS.some(m => m.room === Number(trip.target.room))) {
+      if (plan.required_purse > 0 && !townTable(trip.target.room).MARKETS.some(m => m.room === Number(trip.target.room))) {
         const funded = await this.ensurePurchaseFunds(plan);
         if (funded.unaffordable) return false;
         if (!funded.ready) return true;
       }
       if ((await this.leaveHold('continuing the shopping trip')).refused) return true;
       if (this.policy.reagentCoop?.enabled && !trip.coopInitial &&
-          !BANKS.some(b => b.room === Number(trip.target.room))) {
+          !townTable(trip.target.room).BANKS.some(b => b.room === Number(trip.target.room))) {
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':initial', nextRoom: trip.target.room,
           bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
@@ -517,7 +518,7 @@ export class TownTripPart {
         // this service; only another service creates another chance.
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':' + trip.nextService,
-          nextRoom: name === 'buy food' ? FOOD_SHOPS[0].room : name === 'buy reagents' ? REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
+          nextRoom: name === 'buy food' ? townTable(this.s.world?.room?.num).FOOD_SHOPS[0].room : name === 'buy reagents' ? townTable(this.s.world?.room?.num).REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
           bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
             this.shoppingPlan().required_purse ?? 0)),
         }, TITHE_FLEET);

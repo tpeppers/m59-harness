@@ -8,10 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 20 methods: social, static HEALS, activeSelfHealing, tryActiveSelfHeal, healObservedFleetmate,
+// 21 methods: social, static HEALS, activeSelfHealing, tryActiveSelfHeal, healObservedFleetmate,
 //   medic, static DONATION_TAKES, static DONATION_SHEDS, bulkFree, shedForDonation,
 //   acceptDonations, acceptNeededGift, isServicePost, shareSpareReagents, static BUFFS, static
-//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop, drinkAtPoolOfVigor
+//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop, drinkAtPoolOfVigor, kocatanGateRefusal
 import { allyVerdict } from '../m59-ally.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { sameName } from '../m59-chalice.mjs';
@@ -22,7 +22,7 @@ import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
-import { POOL_OF_VIGOR, POOL_DRINK_SAID, inPool } from '../m59-island-chalice.mjs';
+import { POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
 import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
@@ -823,6 +823,28 @@ export class SocialPart {
       why: 'free vigor while standing at the spring (operator: "drink from the pool of vigor if in that room")' });
     if (drinks) this.progress(`drank ${drinks} time(s) from the pool of vigor`);
     return drinks > 0;
+  }
+
+  // WOULD THE KO'CATAN GUARD STOP THIS JOURNEY? Null when the route does not cross the East Tower into the jungle (2013 ->
+  // 2115), or the pack passes the guard's own rule (kocatwn.kod CanPass, the same rule jungleStashPlan plans with: at most
+  // two weapons, one armour, shield, helmet and gauntlets, no alcohol, no nerudite). Otherwise { why, over }.
+  kocatanGateRefusal(room) {
+    try {
+      const s = this.s, c = s?.client;
+      const here = Number(s?.world?.room?.num);
+      if (!(here >= 2000 && here <= 2099) || !(Number(room) >= 2100 && Number(room) <= 2699)) return null;
+      const r = s.world?.route?.(Number(room));
+      const crosses = (r?.hops ?? []).some(h => Number(h?.from) === 2013 && Number(h?.to) === 2115);
+      if (!crosses) return null;
+      const eq = c?.equipment?.();
+      if (eq?.known !== true) return null;                        // unreadable is not a refusal: the guard will say
+      const items = (c.inventory ?? []).map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || '', amount: o.amount }));
+      const plan = jungleStashPlan(items, { equipped: eq.equipped ?? [], classify: jungleItemClassifier() });
+      const over = plan.drop.filter(i => i.category && i.category !== 'unknown');
+      if (!over.length) return null;
+      return { why: `the guard at the East Tower refuses ${over.map(i => `${i.name} (${i.category})`).join(', ')}; sell or vault them at Ko'catan (2005) first`,
+               over: over.map(i => ({ name: i.name, category: i.category })) };
+    } catch { return null; }
   }
   // @end 1
 }

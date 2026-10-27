@@ -132,6 +132,11 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'protect', keys: ['protectedItems'], faculty: 'economy', arg: 'protect_items',
     normalize: normItems('protect'), merge: 'union' },
   { path: 'overfarm', keys: ['overfarm'], faculty: 'economy', arg: 'overfarm', normalize: normOverfarm },
+  // WHEN A FULL PACK GOES TO TOWN (sellAtLoad, 0..1): 1.0 is "sell only when the pack is full". Where it goes is the town
+  // table for where the character stands (m59-autopilot.mjs townTable: the island sells at Ko'catan, never the mainland).
+  { path: 'sellAtLoad', keys: ['sellAtLoad'], faculty: 'economy', arg: 'sell_at_load',
+    normalize: v => { const n = Number(v); if (typeof v === 'boolean' || !Number.isFinite(n) || n < 0 || n > 1)
+      throw new Error('sellAtLoad must be a pack fullness from 0 to 1'); return n; } },
   // LOOT EJECTION (m59-loot-eject.mjs): hand the sale pile to a station or courier of ours in the same room.
   { path: 'lootEject', keys: ['lootEject'], faculty: 'economy', arg: 'loot_eject', normalize: v => normalizeLootEject(v) },
   { path: 'weapons.touchSpell', keys: ['touchSpell'], faculty: 'work', arg: 'touch_spell',
