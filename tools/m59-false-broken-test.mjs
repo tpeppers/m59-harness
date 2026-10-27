@@ -278,5 +278,16 @@ console.log('\nmakeWeapon passes the keeper\'s protection to freeRoomFor');
        /protectedItemNames\?\.\(\)/.test(src) && !/skills\.freeRoomFor\(s\)/.test(src));
 }
 
+// ---------------------------------------------------------------- the faction shields are shields
+// Unlisted, a worn faction shield left the shield slot reading empty, wearIntoEmptySlots offered a gold round shield every
+// minute and the server unwielded the weapon to free a hand (Fozzie, Rowlf, prod 2026-10-27).
+console.log('\na faction shield fills the shield slot');
+{
+  const { armourKind } = await import('./m59-skills.mjs');
+  for (const n of ["shield of the rebel militia", "shield of the Princess' army", "shield of the Duke's army"])
+    ok(`${n} reads as a shield`, armourKind(n)?.slot === 'shield', JSON.stringify(armourKind(n)));
+  ok('a gold round shield still reads as itself', armourKind('gold round shield')?.defense === 10);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

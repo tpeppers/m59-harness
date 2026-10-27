@@ -1001,6 +1001,11 @@ export const ARMOUR = [
   { re: /herald shield/i,                slot: 'shield', defense: 20,   absorb: 2, spell: 0 },   // shield/guilshld.kod:21,115
   { re: /orc shield/i,                   slot: 'shield', defense: 20,   absorb: 2, spell: 0 },   // shield/orcshld.kod
   { re: /soldier'?s? shield/i,           slot: 'shield', defense: 20,   absorb: 2, spell: 0 },   // shield/soldshld.kod
+  // THE THREE FACTION SHIELDS ARE SOLDIER'S SHIELDS UNDER THEIR OWN NAMES (shield/soldshld/{dukeshld,prinshld,reblshld}.kod:22-30),
+  // and they cannot be taken off (soldshld.kod:385, DMs only). Unlisted, the shield slot read as EMPTY, so wearIntoEmptySlots
+  // offered a gold round shield every minute; the server freed a hand by unwielding the WEAPON and then refused the second
+  // shield (shield.kod:93). Prod 2026-10-27: every faction-shield holder in Ukgoth disarmed for 1-4 s a minute (Fozzie, Rowlf).
+  { re: /shield of the (duke'?s army|princess'? army|rebel militia)/i, slot: 'shield', defense: 20, absorb: 2, spell: 0 },
   { re: /knight'?s? shield/i,            slot: 'shield', defense: 15,   absorb: 2, spell: 0 },   // shield/knhtshld.kod
   { re: /gold round shield/i,            slot: 'shield', defense: 10,   absorb: 1, spell: 0 },   // shield/goldshld.kod:19
   { re: /small round shield/i,           slot: 'shield', defense: 5,    absorb: 1, spell: 0 },   // shield/metlshld.kod:19,47
