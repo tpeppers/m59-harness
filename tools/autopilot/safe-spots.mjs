@@ -308,17 +308,9 @@ export class SafeSpotsPart {
     // 0.067/s standing idle in the open — tools/m59-wallproof.mjs, 2026-09-20).
     if(this.s.client?.self?.predicted)return null;
     const wall=this.wallHere(),geo=this.s.world?.geometry;
-    if(wall?.ok) {
-      const room=this.s.world?.room?.num;
-      const failed=this.failedRestSpots?.get(room)?.get(`${wall.col},${wall.row}`);
-      if(failed!=null && Date.now()-failed<=(this.policy.unreachableSpotMs??UNREACHABLE_SPOT_MS))return null;
-      // The exposure disc excludes its origin. A monster already on our square
-      // needs no approach through the wall, so geometry alone cannot shelter us.
-      for(const body of this.s.client?.room?.objects?.values?.()??[]) {
-        if(body.id!==this.s.client.selfId && (body.flags&OF.ATTACKABLE) && !(body.flags&OF.PLAYER)
-            && body.row===wall.row && body.col===wall.col)return null;
-      }
-    }
+    // A failed rest here, or a monster already ON the square (the exposure disc excludes its origin, so geometry alone
+    // cannot shelter us from it): restSpotRefused, the same answer the healing session's "is this the spot" reads.
+    if(wall?.ok && this.restSpotRefused({room:this.s.world?.room?.num,row:wall.row,col:wall.col}))return null;
     return wall?.ok && geo?.walkable?.(wall.row,wall.col) ? wall : null;
   }
 
@@ -492,6 +484,17 @@ export class SafeSpotsPart {
         finishSurvivalDecision(s,d.id,'refused','the logoff was refused and nothing replaced it; the ordinary ladder takes the pass');
         this.note('a refused logoff is not handled: the ordinary ladder takes this pass',{decision_id:d.id,
           strategy:d.strategy,reason:d.reason});
+        return false;
+      }
+      // NOR IS ONE REPLACED BY A REST THIS DISPATCHER WILL NOT CARRY OUT. The recovering branch above rests only at a
+      // current recovery wall and bounces every other rest_safe straight back to a refuge walk; when that walk fails the
+      // replacement logoff is refused and the one-logoff rule hands back rest_safe -- a cycle in which no step is ever
+      // carried out and every pass ends here, before the ladder. Scooter (t21), Ko'catan 2125, 2026-10-27 16:19, at a
+      // failed hold: 80 s, a dragonfly adjacent, zero swings. The rest stays the decision (the next pass re-plans from
+      // it); the ladder -- fight back, the defensive answer, the doomed rush -- gets this pass.
+      if(!did && now && now.id!==d.id && now.strategy==='rest_safe' && now.status==='recovering' && !this.currentRecoveryWall()) {
+        this.note('the refused logoff became a rest that cannot be taken here: the ordinary ladder takes this pass',
+          {decision_id:now.id,replaces:d.strategy,reason:d.reason});
         return false;
       }
       return true;

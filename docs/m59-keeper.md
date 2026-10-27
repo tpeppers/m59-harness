@@ -981,3 +981,19 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
   logoff that nothing replaced is ended and the pass goes to the ladder. Still one logoff per session.
   `pass()` names its stage from its first line (`passOnce`, `continueSurvivalDecision`), so a postmortem's
   `blocked_in` cannot blame a rung that already returned. `m59-scooter-stranded-test.mjs` (38).
+- **A spot that has failed is not the spot, and a cornered body swings.** Scooter (t21), Ko'catan 2125, 2026-10-27
+  16:20. His hold r17c1 was also the stand square of the west exit to 2115, and the coarse formula called it a wall;
+  a dragonfly at r16c1 hit him while he rested there, so the rest was recorded as failed and `currentRecoveryWall`
+  stopped naming it. The healing session's one logoff had been spent at 16:14 (he healed to full in the tower a minute
+  later, but a session closes only at full health five minutes after its logoff). From 16:19:12 the dispatcher cycled
+  once a second: `rest_safe` -> "recovery is no longer at a safe wall" -> `nearest_refuge` to a wall 27 steps away
+  through the swarm -> `object_blocked` -> `logoff_open` -> refused -> `sessionSpotHere` "on the held square" ->
+  `rest_safe` again. Every pass ended in the dispatcher (all 48 frames `stage: continueSurvivalDecision`): 79 s without
+  a swing, 11 hits for 100, and `leave_room` only at 7/94 after a blow knocked him off the hold. The deploy-23 fallback
+  did not pull him off a working spot -- it never ran until then. Now: `restSpotRefused` (a rest attacked within the
+  TTL, or a monster on the square) is read by both `currentRecoveryWall` and `sessionSpotHere`, so a failed hold is
+  given up and the refusal leaves by the exit on the first cycle; a refused logoff turned into a rest the dispatcher
+  will not take is not "handled" either (the ladder gets the pass); and `passFightBack` stops stepping aside below the
+  flee line when `spentAndCornered` (logoff spent, exit just tried from this room, no recovery wall): one exchange in
+  place per pass, with the exit asked again between. A working spot is still kept, and still one logoff per session.
+  `m59-leaking-spot-test.mjs` (43).
