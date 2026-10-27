@@ -165,12 +165,27 @@ function writeSave(fleet, name, save) {
 // ----------------------------------------------------------------------------------------------- live
 async function broker() { return import('./m59-fleetscript.mjs'); }
 
-async function fleetUnits(call) {
-  const f = await call('fleet', {});
-  const rows = Array.isArray(f) ? f : f?.agents ?? f?.fleet ?? [];
+// THE FLEET REPLY, AS PROD SENDS IT. Prod 2026-10-27 (deploy-2026-10-27-1): `fleet` carries a NON-array `agents` beside the
+// `fleet` rows, so `f.agents ?? f.fleet` picked the wrong one and `show` died "rows.map is not a function"; the rows give
+// health as the string "86/86", so a `min_max_health` posture selected nobody; and `room` is the room's NAME with the
+// number in `room_num`, so every unit's room was null. Pure, so the test can hold it to the real row shape.
+const healthMax = (r) => {
+  for (const v of [r.max_health, r.hp?.max, r.vitals?.health?.max, r.health?.max]) if (Number.isFinite(Number(v)) && v != null && v !== '') return Number(v);
+  const m = typeof r.health === 'string' ? /^\s*\d+\s*\/\s*(\d+)\s*$/.exec(r.health) : null;
+  return m ? Number(m[1]) : null;
+};
+const roomNum = (r) => {
+  for (const v of [r.room_num, r.room?.num, r.room]) { const n = Number(v); if (v != null && v !== '' && Number.isInteger(n) && n > 0) return n; }
+  return null;
+};
+export function unitsFromFleet(f) {
+  const rows = [f, f?.fleet, f?.agents, f?.rows].find(Array.isArray) ?? [];
   return rows.map(r => ({ agent: r.agent ?? r.name, character: r.character ?? r.me ?? null,
-    max_health: r.max_health ?? r.hp?.max ?? r.vitals?.health?.max ?? null, host: !!r.host, piloted: !!r.piloted,
-    room: Number(r.room?.num ?? r.room ?? NaN) || null, in_game: r.activity !== 'NOT IN GAME' && r.in_roster !== false }));
+    max_health: healthMax(r), host: !!r.host, piloted: !!r.piloted,
+    room: roomNum(r), in_game: r.activity !== 'NOT IN GAME' && r.in_roster !== false }));
+}
+async function fleetUnits(call) {
+  return unitsFromFleet(await call('fleet', {}));
 }
 async function policyOf(call, agent) {
   const st = await call('autopilot', { agent, action: 'status' });

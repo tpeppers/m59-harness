@@ -235,9 +235,10 @@ function eventLog(fleet, { dry = false, quiet = false } = {}) {
 async function broker() { return import('./m59-fleetscript.mjs'); }
 async function posture() { return import('./m59-posture.mjs'); }
 
+// The first ARRAY: prod's fleet reply carries a non-array `agents` beside its `fleet` rows (m59-posture.mjs unitsFromFleet).
+export function rowsOfFleet(f) { return [f, f?.fleet, f?.agents, f?.rows].find(Array.isArray) ?? []; }
 async function fleetRows(call) {
-  const f = await call('fleet', {});
-  return Array.isArray(f) ? f : f?.agents ?? f?.fleet ?? [];
+  return rowsOfFleet(await call('fleet', {}));
 }
 
 /** One observation, reading only what the armed tripwires need. `who` is asked of up to three in-game, unpiloted

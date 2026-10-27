@@ -111,5 +111,11 @@ section('a dry watch: observes through the broker, pushes nothing');
   for (const k of ['M59_TRIPWIRE_ASSIGN', 'M59_TRIPWIRE_STATE', 'M59_POSTURE_SAVES', 'M59_WAR_ALARM_FILE']) delete process.env[k];
 }
 
+{
+  const { rowsOfFleet } = await import('./m59-tripwire.mjs');
+  ok('prod\'s fleet reply: a non-array `agents` beside the rows does not hide them (deploy-2026-10-27-1)',
+     rowsOfFleet({ agents: 24, fleet: [{ agent: 't1' }, { agent: 't2' }] }).length === 2 && rowsOfFleet([{ agent: 't1' }]).length === 1);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

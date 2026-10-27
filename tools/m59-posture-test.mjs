@@ -93,5 +93,21 @@ section('a lease comes off by itself');
   ok('and the character is back where it was', b.policy.t1.assignedRoom === 70 && b.policy.t1.townTrips === true);
 }
 
+console.log('the fleet reply as prod sends it (deploy-2026-10-27-1)');
+{
+  const prod = { agents: 24, fleet: [
+    { agent: 't12', character: 'Fozzie', health: '86/86', room: 'The Jasper Inn', room_num: 370, activity: 'resting' },
+    { agent: 'hk1', character: 'Loial', health: '20/20', room: 'The Jasper Inn', room_num: 370 },
+    { agent: 't3', character: 'X', health: { value: 40, max: 50 }, room: { num: 39 } },
+  ] };
+  const u = P.unitsFromFleet(prod);
+  ok('a non-array `agents` beside the rows does not hide them', u.length === 3, JSON.stringify(u.map(x => x.agent)));
+  ok('max health from the "86/86" string', u[0].max_health === 86 && u[1].max_health === 20 && u[2].max_health === 50, JSON.stringify(u.map(x => x.max_health)));
+  ok('room from room_num, not the room name', u[0].room === 370 && u[2].room === 39, JSON.stringify(u.map(x => x.room)));
+  const picked = P.selectUnits({ who: { min_max_health: 31 } }, u).map(x => x.agent);
+  ok('min_max_health 31 selects the 86 and the 50, not the 20', picked.join() === 't12,t3', picked.join());
+  ok('a bare array still works', P.unitsFromFleet([{ agent: 't1', max_health: 60, room: 70 }])[0].room === 70);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;
