@@ -278,6 +278,21 @@ export class DeskPracticePart {
     // it casts anything, even at full health; practice must not be the one cast that happens in
     // the open — the desk this was written for is a 20-max-health body.
     if (this.isRoomEnchantPost?.() && !this.holdWorks()) return false;
+    // THE PRACTICE SPOT: in its room, walk to within 2 squares of it first (one try per 30 s), and practise from the
+    // next pass on, standing still as before. Not during a session elsewhere, and never at less than the 90% above.
+    const spot = cfg.spot;
+    if (spot && !session && spot.room === Number(here) && c.self) {
+      const off = Math.max(Math.abs(c.self.row - spot.row), Math.abs(c.self.col - spot.col));
+      if (off > 2) {
+        if (this._practiceSpotWalkAt && Date.now() - this._practiceSpotWalkAt < 30_000) return false;
+        this._practiceSpotWalkAt = Date.now();
+        this.doing = 'walking to the practice spot';
+        const r = await s.walkTo(spot.col, spot.row, { maxSteps: 40 }).catch(e => ({ arrived: false, reason: e.message }));
+        this.movedAt = Date.now();
+        if (!r?.arrived) this.note('could not reach the practice spot', { spot, why: r?.reason ?? 'no answer' });
+        return true;
+      }
+    }
 
     // The pushed ability rides along so choosePractice can skip a spell already at 99.
     const spells = (c.spells || []).map(sp => ({

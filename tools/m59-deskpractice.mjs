@@ -134,6 +134,10 @@ export const PRACTICE_DEFAULTS = Object.freeze({
   // berries for darkness". Honoured by the touch-spell trainer too (Autopilot.touchSpellKeep),
   // because acid touch spends the same berry from the same pack.
   keep: Object.freeze({}),
+  // WHERE TO STAND (operator, 2026-10-27: "There's a big area just south of the chalice spawn with no monster spawns
+  // that's usually quiet enough for practice" ... "no reason not to add it as a feature"). `{ room, row, col }`: in that room
+  // the drill first walks to within 2 squares of the spot, then practises standing still as before. null: where it stands.
+  spot: null,
 });
 
 /** The `keep` map: pack name -> count, lower-case. Bad entries are reported and dropped. */
@@ -249,6 +253,13 @@ export function normalizePractice(cfg) {
       continue;
     }
     if (k === 'keep') { out.keep = normalizeKeep(v, out.problems); continue; }
+    if (k === 'spot') {
+      if (v == null) { out.spot = null; continue; }
+      const room = Number(v?.room), row = Number(v?.row), col = Number(v?.col);
+      if (![room, row, col].every(n => Number.isInteger(n) && n > 0)) { out.problems.push('spot is { room, row, col }: whole positive numbers'); continue; }
+      out.spot = { room, row, col };
+      continue;
+    }
     if (k === 'rooms') {
       const rooms = [].concat(v ?? []).map(Number).filter(n => Number.isInteger(n) && n > 0);
       if (rooms.length !== [].concat(v ?? []).length) out.problems.push('rooms must be room numbers');

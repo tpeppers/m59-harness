@@ -11925,6 +11925,8 @@ const TOOLS = [
         rooms: { type: 'array', items: { type: 'number' },
           description: 'Where practice is allowed. Default: the assigned room, the chalice post and the station.' },
         rest_seconds: { type: 'number', description: 'Short mana rest on a held wall while blocked by the reserve. Default 5; 0 never sits.' },
+        spot: { type: ['object', 'null'], properties: { room: { type: 'number' }, row: { type: 'number' }, col: { type: 'number' } },
+          description: 'Where to stand: in that room the drill walks to within 2 squares of {row, col} first, then practises standing still. null: wherever it stands.' },
       }, description: 'PRACTISE SPELLS AT THE DESK. While nothing needs it — no ticket, no errand, no journey, nothing swinging — a posted character casts one practice spell per gap_ms, never moving and never spending the mana or reagents its services need: the reserve is reserve_casts (2) x one cast of the dearest service it both offers (the chalice menu) and knows, from the kod spell catalogue — 60 mana on a desk that offers reveal. A cast that spends no mana was refused in silence and that spell is set aside. See tools/m59-deskpractice.mjs. null disables it' },
       farm_delivery: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, herbs_per_farmer: { type: 'number' },
