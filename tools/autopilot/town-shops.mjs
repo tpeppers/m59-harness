@@ -738,12 +738,18 @@ export class TownShopsPart {
     const FLOAT = this.walkingFloat();
     const room = s.world?.room;
     if (!room) return;
+    // A BANK IS A ROOM THE TOWN TABLE SAYS IS ONE, OR A BANKER BY NAME -- not only a name containing "bank". Prod
+    // 2026-10-27: Ko'catan's bank is "The Hungry Vaults" and its banker Huital ko'Nosak, neither says "bank" (and no
+    // object ever carries a 'bank' affordance), so every island bank trip returned here silently and Scooter opened one
+    // every two minutes with 25,113 in his purse.
+    const BANKER_NAME = /bank|skivlat|yevitan|setag|huital/i;
     const teller = [...c.room.objects.values()]
-      .find(o => /bank/i.test(c.rsc.get(o.nameRsc) || '') ||
+      .find(o => BANKER_NAME.test(c.rsc.get(o.nameRsc) || '') ||
                  affordances(o.flags).includes('bank'));
+    const bankRoom = townTable(room.num).BANKS.some(b => Number(b.room) === Number(room.num));
     // Only when we happen to be standing in a bank — a special trip is not worth the
     // walk, and the trader/wellfed loops already pass through town.
-    if (!teller && !/bank/i.test(room.name || '')) return;
+    if (!teller && !bankRoom && !/bank/i.test(room.name || '')) return;
 
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
@@ -784,10 +790,18 @@ export class TownShopsPart {
     if (!put) return;
     this.doing = 'trading';
     // The client speaks to the teller directly; there is no skills wrapper for this.
+    const purseBefore = this.purseNow();
     const r = await s.pacer.submit('bank', () => c.deposit(put))
                     .then(() => c.waitFor({ kinds: ['message'], timeoutMs: 3000 }))
                     .then(ev => ({ said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2) }))
                     .catch(e => ({ error: e.message }));
+    // READ IT BACK: a deposit is a sentence from the banker, and only the purse says it happened.
+    if (!r.error) {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+      if (!(this.purseNow() < purseBefore)) r.error = `the purse did not go down (${purseBefore} before and after)`;
+    }
+    if (r.error) this._bankedNothingAt = Date.now();
     this.note(r.error ? 'could not bank' : 'banked the surplus', {
       deposited: r.error ? undefined : put, kept: keep, float: FLOAT, for_food: foodMoney,
       for_farm_delivery: deliveryMoney, why: r.error, said: r.said,

@@ -498,7 +498,10 @@ export class ShoppingPart {
     // the end of that trip anyway, so it gets both out of one walk.
     // THE COUNTERS FOR WHERE WE STAND: the island's on the island, so a trip from it never plans a route off it.
     const destinations = townDestinations({ needsCashFirst, supplyTrip, starving, packFull,
-                                            richEnoughToBank: carried > above, table: townTable(s.world?.room?.num) })
+                                            // A bank visit that banked nothing does not reopen for half an hour (the sell
+                                            // circuit's rule): it cannot fix what opened it until something changes.
+                                            richEnoughToBank: carried > above && !(Date.now() - (this._bankedNothingAt ?? 0) < 1_800_000),
+                                            table: townTable(s.world?.room?.num) })
       .filter(b => !this.bansDestination(b.room));
     if (!destinations.length) {
       if (!this.warnedBannedTrip) {

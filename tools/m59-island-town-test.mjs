@@ -36,7 +36,7 @@ console.log('every town-trip site reads the table for where it stands');
 {
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  ok('the keeper-opened trip passes the table', /richEnoughToBank: carried > above, table: townTable\(s\.world\?\.room\?\.num\)/.test(src));
+  ok('the keeper-opened trip passes the table', /richEnoughToBank: carried > above[^\n]*\n\s*table: townTable\(s\.world\?\.room\?\.num\)/.test(src));
   ok('a requested trip passes it too', /supplyTrip: town === 'supply',\s*table: townTable\(this\.s\.world\?\.room\?\.num\)/.test(src));
   ok('the sell circuit is the table\'s', /marketStops: wantsMarket \? townTable\(this\.s\.world\?\.room\?\.num\)\.MARKET_STOPS/.test(src));
   ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num\);\s*const shops = town\.FOOD_SHOPS/.test(src));
@@ -184,6 +184,35 @@ console.log('a confined journey keeps to the confinement on the way, not only at
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the keeper passes it to the session travel', /const confinedAvoid = this\.confinementAvoid\?\.\(room[\s\S]{0,300}avoid: \[\.\.\.new Set\(\[\.\.\.\(sessionOpts\.avoid/.test(src));
+}
+
+console.log('the Ko\'catan bank banks, reads it back, and a visit that banked nothing does not reopen');
+{
+  // Prod 2026-10-27: Scooter (25,113 in his purse, bank_above 25,000) opened a bank trip to 2005 every two minutes. Neither
+  // "The Hungry Vaults" nor "Huital ko'Nosak" says "bank", so bankSurplus returned before depositing, silently.
+  function banker({ pays = true, purse = 25113 } = {}) {
+    const deposits = [], notes = [];
+    const inv = [{ id: 1, nameRsc: 'shillings', amount: purse }];
+    const c = { room: { objects: new Map([[9, { id: 9, nameRsc: "Huital ko'Nosak", flags: 0 }]]) }, rsc: { get: x => x },
+      inventory: inv, requestInventory: () => {}, waitFor: async () => ({ events: [] }), vitals: () => ({ vigor: { value: 150 } }),
+      deposit: n => { deposits.push(n); if (pays) inv[0].amount -= n; } };
+    const k = Object.assign(Object.create(A.Autopilot.prototype), {
+      s: { need: () => c, client: c, world: { room: { num: 2005, name: 'The Hungry Vaults' } }, pacer: { submit: async (_k, f) => f() } },
+      policy: {}, tally: {}, note: (w, d) => notes.push({ w, d }), progress: () => {}, tradeFact: () => {},
+      walkingFloat: () => 400, larder: () => [], deliveryCashReserve: () => 0, standingOrderReserve: () => 0,
+      purseNow: () => inv[0].amount });
+    return { k, deposits, notes, inv };
+  }
+  const a = banker();
+  await a.k.bankSurplus();
+  ok("in Ko'catan's bank, Huital takes the surplus", a.deposits.length === 1 && a.inv[0].amount === 400 && a.notes.some(n => n.w === 'banked the surplus'),
+     JSON.stringify({ d: a.deposits, notes: a.notes.map(n => n.w) }));
+  const b = banker({ pays: false });
+  await b.k.bankSurplus();
+  ok('a deposit that moves nothing is read back as a failure', b.notes.some(n => n.w === 'could not bank') && b.k._bankedNothingAt > 0);
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('and the next bank trip waits half an hour', /richEnoughToBank: carried > above && !\(Date\.now\(\) - \(this\._bankedNothingAt \?\? 0\) < 1_800_000\)/.test(src));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

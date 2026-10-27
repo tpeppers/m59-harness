@@ -240,14 +240,15 @@ through a nested shelter order.
 - `m59-island-arrive-test.mjs` (15): arriving on the Island to stay. Both vaultmen are recognised (Itzal cha'Nosak,
   2005, as well as Obert); `vaultForJungle` deposits what the jungle guard refuses with keep counts, worn protection
   first, and reads the pack back; postures select by room; `island-arrive` vaults before it assigns the farm.
-- `m59-island-town-test.mjs` (47): on the island every town destination is a Ko'catan counter and nothing routes off it;
+- `m59-island-town-test.mjs` (50): on the island every town destination is a Ko'catan counter and nothing routes off it;
   the mainland is unchanged; a journey across the East Tower gate is refused when the guard would refuse the pack, naming
   what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is
   out of reach stays in the pack; the four Ko'catan counters are trusted buyers (bankers are not); a circuit stop with no
   trusted buyer ends as "sold nothing" and the circuit moves on, and a failed sale is retried once; the gate is a loot cap
   (no second armour, one shield, forbidden never) and a refusal after the sell trip vaults the spare by id, never the worn
   piece; a confined journey avoids every room outside the confinement on the way (Lew, 2124 -> 2133), and from outside it
-  takes the confined road home when the graph has one.
+  takes the confined road home when the graph has one; Ko'catan's bank (Huital, "The Hungry Vaults") is recognised and a
+  deposit is read back from the purse, and a bank visit that banked nothing does not reopen for half an hour.
 - `m59-stash-abandon-test.mjs` (6): abandoned island stash cargo releases the refill queue. A dead owner's fresh drop
   still holds it; once the newest drop is `STASH_ABANDON_MS` (20 min) old the cargo is written off in its receipt and the
   next rider takes the lease; a live owner is waited for whatever the age.
