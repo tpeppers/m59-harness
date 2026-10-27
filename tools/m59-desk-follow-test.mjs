@@ -74,6 +74,40 @@ console.log('the keeper');
   ok('a following desk is never "holder_away"', /if \(!cfg\.follows_holder && desk && !desk\.human/.test(ride));
 }
 
+console.log('refilling between uses: the default risk profile, overridable');
+{
+  const spawns = { rooms: { 568: [{ creature: 'centipede', level: 30 }, { creature: 'baby spider', level: 25 }],
+                            547: [{ creature: 'living tree', level: 50 }], 535: [{ creature: 'giant rat', level: 30 }] } };
+  const hops = { 2: 9, 568: 3, 547: 1, 535: 5 };
+  const cands = C.refillCandidates({ refill: { rooms: [2, 568, 547, 535] }, spawns, hopsTo: r => hops[r] ?? null });
+  ok('the default profile: nothing spawning over level 30 (the Lake of Jala\'s Song qualifies)', cands.some(c => c.room === 568) && !cands.some(c => c.room === 547),
+     JSON.stringify(cands.map(c => c.room)));
+  ok('nearest first: 568 (3 hops), 535 (5), room 2 outside Castle Victoria (9)', cands.map(c => c.room).join() === '568,535,2');
+  const bolder = C.refillCandidates({ refill: { rooms: [2, 568, 547], max_spawn_level: 50 }, spawns, hopsTo: r => hops[r] ?? null });
+  ok('a bolder desk overrides it, and the 1-hop room 547 comes first', bolder[0]?.room === 547, JSON.stringify(bolder.map(c => c.room)));
+  ok('max_hops bounds the search', C.refillCandidates({ refill: { rooms: [2, 568], max_hops: 4 }, spawns, hopsTo: r => hops[r] ?? null }).map(c => c.room).join() === '568');
+  ok('avoid takes a room out', !C.refillCandidates({ refill: { rooms: [2, 568], avoid: [568] }, spawns, hopsTo: r => hops[r] ?? null }).some(c => c.room === 568));
+  ok('a room that is not a refill room is never a candidate', C.refillCandidates({ refill: { rooms: [370] }, spawns, hopsTo: () => 1 }).length === 0);
+  ok('due when short and nothing it can serve is waiting', C.refillDue({ sips: 2 }).due === true && C.refillDue({ sips: null }).due === true);
+  ok('not due when full', C.refillDue({ sips: 3 }).due === false);
+  ok('a waiting ride it can serve goes first', C.refillDue({ sips: 2, pendingRides: 1, budgetOk: true }).due === false);
+  ok('a waiting ride it cannot serve does not stop the refill', C.refillDue({ sips: 1, pendingRides: 1, budgetOk: false }).due === true);
+  const f = C.normalizeChalice({ holder: 'L', station_room: 'holder' });
+  ok('a following desk refills by default (level 30, 12 hops, returns to its post)', f.refill?.roam === true && f.refill.max_spawn_level === 30
+     && f.refill.max_hops === 12 && f.refill.return === true);
+  const g = C.normalizeChalice({ holder: 'L', station_room: 'holder', refill: { max_spawn_level: 50, rooms: [2, 568] } });
+  ok('and takes the desk\'s own risk profile', g.refill.max_spawn_level === 50 && g.refill.rooms.join() === '2,568' && !g.problems.length, JSON.stringify(g.problems));
+  ok('refill: false keeps it home', C.normalizeChalice({ holder: 'L', station_room: 'holder', refill: false }).refill.roam === false);
+  ok('a disabled desk is declined by travellers instead of waited on',
+     C.shouldRide({ cfg: { ...f, enabled: true, desk_disabled: 'no refill room' }, role: 'traveller', stationHops: 0 }).code === 'desk_disabled');
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the refill trip runs between uses, after the in-room top-up', src.indexOf('if (await this.chaliceRefillTrip(cfg, role, cup, store, now)) return true;')
+     > src.indexOf('if (await this.chaliceTopUp(cfg, role, cup, store, now)) return true;'));
+  ok('a confinement disables the desk at once rather than being walked through', /if \(went\?\.confined\) \{[\s\S]{0,300}disable\(/.test(src));
+  ok('no safe room in reach disables it until the retry', /if \(!cands\.length\) \{ disable\(/.test(src));
+}
+
 console.log('reagents written as a list literal');
 {
   const d = JSON.parse(readFileSync(new URL('../substrate/m59-spells.json', import.meta.url), 'utf8'));

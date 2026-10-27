@@ -1146,5 +1146,18 @@ The chalice desk is the first user: `station_room: 'holder'` in the chalice stra
   cup holds), each ride outside a refill room takes one, and a ride is claimed only while it leaves `cup_reserve` (1)
   behind. **An unknown count outside a refill room is a no.** Rides wait on the board (`rides_paused`) and the menu
   reads "cup needs a refill".
+- **It goes and refills between uses** (`chaliceRefillTrip`). Operator: *"seek out the nearest/safest refresh room
+  between uses capped at the safe maximum so it never gets emptied, and mark itself 'disabled' if it can't refresh
+  until it can"*. When the count is short or unknown and no ride it can still serve is waiting, the holder walks to
+  the nearest refill room inside its **risk profile**, tops the cup up there and walks back to `post_room`. The
+  profile is the desk's `refill` block, and these are DEFAULTS, not limits: `max_spawn_level: 30` (nothing spawning
+  there over level 30; the operator's example is the Lake of Jala's Song, and *"each city has 1-2 exits that fit
+  that LVL30/refreshable definition, plus room 2 outside CV"*), `max_hops: 12`, `return: true`, and optional
+  `rooms` (pin the list) and `avoid`. `refill: false` keeps the holder home.
+- **"Disabled" is on the desk record.** No refill room in the profile within reach, the walk failing `fail_limit`
+  (2) times, or a confinement in the way (a confinement is the operator's and is never walked through: lift
+  `confine_rooms`; `post_room` is where it returns) marks the desk disabled. Travellers then decline it
+  (`desk_disabled`) instead of waiting, the menu says so, and the trip is retried after `retry_ms` (10 min). A full
+  cup clears it.
 - **It refills on the way.** A holder standing in a Shal'ille room with its count short or unknown drops the cup and
   picks it straight back up (`chaliceTopUp`), never with a stranger in the room, at most every two minutes.

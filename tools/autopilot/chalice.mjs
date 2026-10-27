@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 57 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceTopUp, chaliceRole, chaliceDutyEligible,
+// 58 methods: get chaliceCfg, refreshChaliceConfig, chaliceStore, chaliceTopUp, chaliceRefillTrip, chaliceRole, chaliceDutyEligible,
 //   chalicePoolCheckIn, chaliceInPack, chalicesInPack, chaliceCarryCheckIn, chaliceCarriers,
 //   offerWouldDoubleChalice, chaliceOnFloor, chaliceGuard, lootIgnoreList, hallShillings,
 //   chaliceHandInMoney, chaliceDepositMoney, playerHere, hereRoom, hopsTo, activeChaliceRide,
@@ -21,13 +21,15 @@
 //   chaliceNextJob, chaliceParked, chaliceStep, chaliceMakeRoom
 import { withCastRite } from '../m59-castrite.mjs';
 import { rideChaliceNow } from '../m59-chalice-ride.mjs';
-import { CHALICE, GUILD_HALL_ROOM, REFILL_ROOMS, SIP_REFUSED_PVP, SIP_TOOK, actingDesk, cargoWants, carriesCup, castsAbove, chaliceStoreFor, depositPlan, deskMenu, donationPlan, draftAlternate, dutyEligible, folRoomsOf, folWanted, holderShortfall, humanMark, moneyExcess, normalizeChalice, passTo, rideBudget, sipsAfterRide, CUP_MIN_SIPS, planRoom, reagentFloor, restockBuyPlan, roleOf, sameName, serviceReplyText, serviceTellText, servingDesk, servingOrHolder, shouldRide, sipVerdict, sweepVerdict, tipPlan } from '../m59-chalice.mjs';
+import { CHALICE, GUILD_HALL_ROOM, REFILL_ROOMS, SIP_REFUSED_PVP, SIP_TOOK, actingDesk, cargoWants, carriesCup, castsAbove, chaliceStoreFor, depositPlan, deskMenu, donationPlan, draftAlternate, dutyEligible, folRoomsOf, folWanted, holderShortfall, humanMark, moneyExcess, normalizeChalice, passTo, rideBudget, sipsAfterRide, CUP_MIN_SIPS, refillCandidates, refillDue, planRoom, reagentFloor, restockBuyPlan, roleOf, sameName, serviceReplyText, serviceTellText, servingDesk, servingOrHolder, shouldRide, sipVerdict, sweepVerdict, tipPlan } from '../m59-chalice.mjs';
 import { isWeaponName } from '../m59-items.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, buyLines, dropSpec as dropSpecFor } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
 import { deskRoom } from '../m59-desk-follow.mjs';
+import { loadSpawns } from '../m59-spawns.mjs';
+import { SPAWN_FILE } from '../m59-autopilot.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderPrice, orderSkills, pendingOrderFor, writeState as writeOrderState } from '../m59-standing-orders.mjs';
 import { BOOKMAKERS_HALL_ROOM, StorageCache } from '../m59-storage.mjs';
@@ -62,7 +64,9 @@ export class ChalicePart {
     let record = null;
     if (!isServer) { try { record = this.chaliceStore().desk()?.[String(cfg.holder ?? '').trim().toLowerCase()] ?? null; } catch {} }
     const station = deskRoom({ follows: true, isServer, here, record, now });
-    const out = { ...cfg, station_room: station };
+    let disabled = null;
+    try { disabled = this.chaliceStore().cup()?.disabled?.why ?? null; } catch {}
+    const out = { ...cfg, station_room: station, ...(disabled ? { desk_disabled: disabled } : {}) };
     this._chaliceFollow = { at: now, here, base: cfg, cfg: out };
     return out;
   }
@@ -86,6 +90,76 @@ export class ChalicePart {
   }
 
   chaliceStore() { return (this._chaliceStoreObj ??= chaliceStoreFor({ fleet: TITHE_FLEET })); }
+
+  // A FOLLOWING DESK GOES AND REFILLS BETWEEN USES. Operator, 2026-10-27: "seek out the nearest/safest refresh room between
+  // uses capped at the safe maximum so it never gets emptied, and mark itself 'disabled' if it can't refresh until it
+  // can". When the count is short or unknown and no ride it can still serve is waiting, the holder walks to the nearest
+  // refill room that is safe enough (refillCandidates: nothing spawning there over refill.max_spawn_level, the Lake of
+  // Jala's Song being the operator's example), tops the cup up there, and walks back to its post. No safe room in reach,
+  // or the walk failing `fail_limit` times, marks the desk DISABLED (on the desk record, so travellers decline it) and
+  // retries after `retry_ms`. The journey is an ordinary keeper travel: the survival ladder and travel_guard stay armed.
+  async chaliceRefillTrip(cfg, role, cup, store, now = Date.now()) {
+    const rf = cfg?.refill;
+    if (!cfg?.follows_holder || role !== 'holder' || !cup || !rf?.roam) return false;
+    const here = this.hereRoom();
+    if (REFILL_ROOMS.has(here)) return false;                     // chaliceTopUp's job
+    let cupState = {};
+    try { cupState = store.cup() ?? {}; } catch {}
+    if (Number(cupState.sips) >= CUP_MIN_SIPS) {
+      if (cupState.disabled) try { store.setCupDisabled(null); } catch {}
+      return false;
+    }
+    let pending = 0;
+    try { pending = (store.read().tickets ?? []).filter(t => t.kind === 'ride' && !['done', 'abandoned'].includes(t.status)).length; } catch {}
+    const budget = rideBudget({ room: here, sips: cupState.sips, reserve: cfg.cup_reserve });
+    const due = refillDue({ sips: cupState.sips, pendingRides: pending, budgetOk: budget.ok });
+    if (!due.due) return false;
+    if (now < (this._chaliceRefillRetryAt ?? 0)) return false;
+    if (this.facultyHeld?.('movement')) return false;             // somebody else holds the legs
+    const disable = (why) => {
+      this._chaliceRefillRetryAt = Date.now() + rf.retry_ms;
+      try { store.setCupDisabled(why); } catch {}
+      this.chaliceEvent('desk_disabled', { why, retry_in_ms: rf.retry_ms });
+    };
+    const cands = refillCandidates({ refill: rf, spawns: loadSpawns(SPAWN_FILE), hopsTo: r => this.hopsTo(r), here });
+    if (!cands.length) { disable(`no refill room within ${rf.max_hops} hops spawns nothing over level ${rf.max_spawn_level}`); return false; }
+    const target = cands[0];
+    this.doing = 'travelling';
+    this.chaliceEvent('refill_trip', { from: here, to: target.room, hops: target.hops, max_level: target.max_level,
+      creatures: target.creatures, why: due.why });
+    const went = await this.travel(target.room, { origin: keeperOrigin('chalice_refill'), maxHops: target.hops + 4 })
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (went?.confined) {
+      // THE CONFINEMENT IS THE OPERATOR'S AND OUTRANKS THE ERRAND (travel.mjs). Said at once, not retried twice.
+      disable(`confined to ${JSON.stringify(this.policy?.confineRooms ?? [])}: a refill trip cannot leave it (lift confine_rooms; assigned_room/post_room is where it returns)`);
+      return true;
+    }
+    if (!went?.arrived) {
+      this._chaliceRefillFails = (this._chaliceRefillFails ?? 0) + 1;
+      this.chaliceEvent('refill_trip_failed', { to: target.room, why: went?.reason ?? 'did not arrive', fails: this._chaliceRefillFails });
+      if (this._chaliceRefillFails >= rf.fail_limit) { this._chaliceRefillFails = 0; disable(`could not reach a refill room (${went?.reason ?? 'did not arrive'})`); }
+      else this._chaliceRefillRetryAt = Date.now() + 60_000;
+      return true;
+    }
+    this._chaliceRefillFails = 0;
+    this._chaliceTopUpAt = 0;                                      // the trip IS the reason: no rate limit here
+    const inPack = this.chaliceInPack();
+    if (inPack) await this.chaliceTopUp(cfg, role, inPack, store, Date.now());
+    let after = null;
+    try { after = store.cup()?.sips ?? null; } catch {}
+    if (Number(after) < CUP_MIN_SIPS || after == null) {
+      this._chaliceRefillRetryAt = Date.now() + 2 * 60_000;       // a stranger in the room, or the cup not back yet
+      this.chaliceEvent('refill_trip_no_refill', { room: target.room, why: 'arrived but the top-up did not complete; trying again shortly' });
+      return true;
+    }
+    try { store.setCupDisabled(null); } catch {}
+    const home = rf.return !== false ? cfg.post_room : null;
+    if (home != null && this.hereRoom() !== Number(home))
+      await this.travel(Number(home), { origin: keeperOrigin('chalice_refill_return'), maxHops: rf.max_hops + 4 })
+        .catch(() => null);
+    this.chaliceEvent('refill_trip_done', { refilled_at: target.room, back_at: this.hereRoom(), sips: after });
+    return true;
+  }
 
   // A FOLLOWING DESK REFILLS ITS CUP ON THE WAY: a holder standing in a Shal'ille room with the cup short (or its sips
   // unknown) drops it and picks it straight back up, which refills it (chalice.kod ReqNewOwner). Never with a stranger in
@@ -984,7 +1058,9 @@ export class ChalicePart {
     let menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup, knows });
     if (cfg.follows_holder && cup) {
       const b = rideBudget({ room: this.hereRoom(), sips: store.cup?.()?.sips, reserve: cfg.cup_reserve });
-      if (!b.ok) menu = menu.map(m => (m.kind === 'ride' ? { ...m, ok: false, why: 'cup needs a refill' } : m));
+      const off = store.cup?.()?.disabled?.why;
+      if (off) menu = menu.map(m => (m.kind === 'ride' ? { ...m, ok: false, why: 'desk disabled: cannot refill' } : m));
+      else if (!b.ok) menu = menu.map(m => (m.kind === 'ride' ? { ...m, ok: false, why: 'cup needs a refill' } : m));
     }
     const limits = Object.fromEntries(['human_hold_ms', 'human_max_wait_ms', 'ticket_ttl_ms']
       .map(k => [k, cfg[k]]));
@@ -1583,6 +1659,7 @@ export class ChalicePart {
     if (!st) {
       if (now < (this._chaliceCooldownUntil ?? 0)) return this.chaliceParked(cfg, role, cup);
       if (await this.chaliceTopUp(cfg, role, cup, store, now)) return true;
+      if (await this.chaliceRefillTrip(cfg, role, cup, store, now)) return true;
       st = this.chaliceNextJob(cfg, role, cup, store, me, now);
       if (!st) return this.chaliceParked(cfg, role, cup);
       this._chaliceServe = st;

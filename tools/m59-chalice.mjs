@@ -107,6 +107,12 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // SIPS NEVER SPENT outside a refill room: the LAST sip deletes the cup (chalice.kod), so a following desk keeps this
   // many back and stops offering rides until a drop in a Shal'ille room refills it.
   cup_reserve: 1,
+  // A FOLLOWING DESK GOES AND REFILLS ITS CUP BETWEEN USES (chaliceRefillTrip). Operator, 2026-10-27: "seek out the
+  // nearest/safest refresh room between uses capped at the safe maximum so it never gets emptied, and mark itself
+  // 'disabled' if it can't refresh until it can". A refill room is SAFE ENOUGH when nothing spawning there is over
+  // `max_spawn_level` -- the operator's line, "the lake of Jala song should be considered safe enough ... there are no
+  // aggressive monsters over LVL 30". `rooms` pins the list; `avoid` takes rooms out; `return` walks back to post_room.
+  refill: null,
   // Named, never derived: a character name on a shared server is an instruction, and the
   // private strategy file is where this machine keeps its instructions.
   holder: null,
@@ -305,6 +311,27 @@ export function normalizeChalice(cfg = null) {
   const problems = [];
   for (const [k, v] of Object.entries(cfg)) {
     if (k === 'enabled') continue;
+    if (k === 'refill') {
+      if (v == null || v === false) { out.refill = v === false ? { roam: false } : null; continue; }
+      if (typeof v !== 'object' || Array.isArray(v)) { problems.push('refill must be an object or false'); continue; }
+      const r = { ...REFILL_DEFAULTS };
+      for (const [rk, rv] of Object.entries(v)) {
+        if (rk === 'roam' || rk === 'return') { r[rk] = rv !== false; continue; }
+        if (rk === 'rooms' || rk === 'avoid') {
+          const list = [].concat(rv ?? []).map(Number).filter(n => Number.isInteger(n) && n > 0);
+          r[rk] = rk === 'rooms' ? (list.length ? list : null) : list;
+          continue;
+        }
+        if (Object.hasOwn(REFILL_LIMITS, rk)) {
+          const n = Number(rv), [lo, hi] = REFILL_LIMITS[rk];
+          if (Number.isFinite(n) && n >= lo && n <= hi) r[rk] = n; else problems.push(`refill.${rk} must be ${lo}..${hi}`);
+          continue;
+        }
+        problems.push(`refill.${rk} not known, not applied`);
+      }
+      out.refill = r;
+      continue;
+    }
     if (k === 'follows_holder') { if (v === true) { out.follows_holder = true; out.station_room = null; } continue; }
     if (k === 'station_room' && isFollowing(v)) { out.follows_holder = true; out.station_room = null; continue; }
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
@@ -383,7 +410,7 @@ export function normalizeChalice(cfg = null) {
     if (!Number.isFinite(n) || n < lo || n > hi) { problems.push(`${k} must be between ${lo} and ${hi} (kept ${CHALICE_DEFAULTS[k]})`); continue; }
     out[k] = n;
   }
-  if (out.follows_holder) out.station_room = null;
+  if (out.follows_holder) { out.station_room = null; if (out.refill == null) out.refill = { ...REFILL_DEFAULTS }; }
   else if (!REFILL_ROOMS.has(out.station_room)) {
     problems.push(`station_room ${out.station_room} does not refill the chalice, so every sip ` +
                   'would drain it toward the last one, which deletes it — chalice farming is OFF');
@@ -404,6 +431,35 @@ export function normalizeChalice(cfg = null) {
 // every ride starts full. A FOLLOWING desk may stand anywhere, so it counts: a refill sets the count to the least a cup
 // can hold, each ride outside a refill room takes one, and a ride is offered only while it leaves `reserve` behind.
 export const CUP_MIN_SIPS = 3;
+export const REFILL_DEFAULTS = Object.freeze({ roam: true, return: true, max_hops: 12, max_spawn_level: 30,
+  rooms: null, avoid: [], retry_ms: 10 * 60_000, fail_limit: 2 });
+const REFILL_LIMITS = { max_hops: [1, 40], max_spawn_level: [0, 200], retry_ms: [60_000, 3_600_000], fail_limit: [1, 10] };
+
+/**
+ * The refill rooms a holder may go to, safest-then-nearest. `spawns` is the spawn index (m59-spawns.mjs: rooms -> [{creature,
+ * level}]); `hopsTo(room)` is the router's answer (null: no route). A room is SAFE ENOUGH when nothing spawning there is
+ * over `max_spawn_level`. -> [{ room, hops, max_level, creatures }], nearest first, no-spawn rooms winning a tie.
+ */
+export function refillCandidates({ refill = REFILL_DEFAULTS, spawns = null, hopsTo = () => null, here = null } = {}) {
+  const cfg = { ...REFILL_DEFAULTS, ...(refill ?? {}) };
+  const pool = (cfg.rooms?.length ? cfg.rooms : [...REFILL_ROOMS]).filter(n => REFILL_ROOMS.has(Number(n)) && !cfg.avoid.includes(Number(n)));
+  const out = [];
+  for (const room of pool) {
+    const list = (spawns?.rooms?.[room] ?? []).filter(x => x && x.huntable !== false);
+    const max_level = list.length ? Math.max(...list.map(x => Number(x.level) || 0)) : 0;
+    if (max_level > cfg.max_spawn_level) continue;
+    const hops = Number(room) === Number(here) ? 0 : hopsTo(room);
+    if (!Number.isFinite(hops) || hops > cfg.max_hops) continue;
+    out.push({ room: Number(room), hops, max_level, creatures: [...new Set(list.map(x => x.creature))] });
+  }
+  return out.sort((a, b) => a.hops - b.hops || a.max_level - b.max_level);
+}
+/** Should the holder go and refill now? Short or unknown, and no ride it can still serve is waiting. */
+export function refillDue({ sips = null, pendingRides = 0, budgetOk = false } = {}) {
+  if (Number(sips) >= CUP_MIN_SIPS) return { due: false, why: 'the cup is full' };
+  if (pendingRides > 0 && budgetOk) return { due: false, why: 'a ride is waiting and the cup can serve it: serve first' };
+  return { due: true, why: sips == null ? 'the cup\'s sips are unknown' : `the cup has ${sips} sip(s); refilling toward ${CUP_MIN_SIPS} between uses` };
+}
 /** May a ride be served from this room with this many sips? Unknown sips outside a refill room is a no. */
 export function rideBudget({ room = null, sips = null, reserve = 1 } = {}) {
   if (REFILL_ROOMS.has(Number(room))) return { ok: true, why: 'a Shal\'ille room: the drop after the sip refills the cup' };
@@ -659,6 +715,8 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
                              humans = null, now = Date.now(), carriers = [] } = {}) {
   if (!cfg?.enabled) return { ride: false, code: 'off', why: 'chalice farming is off' };
   if (role === 'holder') return { ride: false, code: 'holder', why: 'the holder serves; its own trips are its own' };
+  // A FOLLOWING DESK THAT CANNOT REFILL SAYS SO, and nobody waits on it (chaliceRefillTrip).
+  if (cfg.desk_disabled && !carrying) return { ride: false, code: 'desk_disabled', why: `the chalice desk is disabled: ${cfg.desk_disabled}` };
   if (role === 'alternate' && carrying)
     return { ride: false, code: 'holder', why: 'the alternate is on duty with the cup' };
   // A TRAVELLER HOLDING THE CUP OUTSIDE A RIDE IS HOLDING THE FLEET'S ONLY CUP. This used to
@@ -1285,7 +1343,14 @@ export class ChaliceStore {
   /** The cup's known sips (rideBudget). { sips, at } or {}. */
   cup() { return this.read().cup ?? {}; }
   setCup(sips, why = null, now = Date.now()) {
-    return this.update(s => { s.cup = { sips: sips == null ? null : Number(sips), at: now, ...(why ? { why } : {}) }; return { ...s.cup }; }, now);
+    return this.update(s => { s.cup = { ...(s.cup ?? {}), sips: sips == null ? null : Number(sips), at: now, why: why ?? null };
+      if (Number(sips) >= CUP_MIN_SIPS) delete s.cup.disabled; return { ...s.cup }; }, now);
+  }
+  /** "Disabled until it can refill": shown on the desk, so travellers do not wait on it. null clears it. */
+  setCupDisabled(why, now = Date.now()) {
+    return this.update(s => { s.cup = { ...(s.cup ?? {}) };
+      if (why) s.cup.disabled = { why, since: s.cup.disabled?.since ?? now }; else delete s.cup.disabled;
+      return { ...s.cup }; }, now);
   }
 
   // `limits`: the server's own hold and wait numbers, so the broker honours the strategy's
