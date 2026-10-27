@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 24 methods: sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
+// 25 methods: noteReceivedGoods, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
 //   overfarmKeepIds, packWeapons, wieldedWeaponId, weaponMagicStatus, noteCurseSuspect,
 //   clearCurseSuspect, noteSwapOutcome, noteReagentRefusal, noteUncursed, sweepCursed,
 //   noteEnchantLapse, noteWeaponArrived, noteDedication, shedUnusedConjures, fieldSpareWeapons,
@@ -21,6 +21,7 @@ import * as skills from '../m59-skills.mjs';
 import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
 import { selfFacts, roomFacts } from '../m59-joint-facts.mjs';
+import { noteReceived, protectedReceived, arrivedFrom } from '../m59-received.mjs';
 
 export class GearUpkeepPart {
   // @part 1
@@ -413,18 +414,58 @@ export class GearUpkeepPart {
   // beyond the weapon in hand, one spare of the training weapon and protected names, at most
   // `maxWeapons` spare weapons are carried; extras go, duplicates of a name first, then the
   // lowest-scored. A dropped worn sword is a few shillings; a pack that never fills is the trips.
+  // WHAT A TRADE GAVE US, WRITTEN DOWN (m59-received.mjs). The server's "trade over" is the same packet for a completed
+  // trade and a cancelled one, so: when a trade in which we were the RECEIVER ends, the offered names whose count in the
+  // pack went up are what arrived. Read on every pass from the event stream; settled within 30s. Never throws.
+  noteReceivedGoods() {
+    try {
+      const c = this.s?.client;
+      if (!c || typeof c.eventsSince !== 'function') return;
+      const counts = () => {
+        const m = new Map();
+        for (const o of c.inventory ?? []) { const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase(); if (n) m.set(n, (m.get(n) ?? 0) + (o.amount > 0 ? o.amount : 1)); }
+        return m;
+      };
+      if (this._recvCursor == null || this._recvClient !== c) { this._recvClient = c; this._recvCursor = c.evSeq ?? 0; this._recvCounts = counts(); return; }
+      for (const e of c.eventsSince(this._recvCursor) ?? []) {
+        if (Number.isFinite(e?.seq)) this._recvCursor = Math.max(this._recvCursor, e.seq);
+        const was = e?.was;
+        if (e?.kind === 'trade-ended' && was?.role === 'recipient' && was.theirs?.length)
+          (this._recvPending ??= []).push({ theirs: was.theirs, from: was.withName ?? null, before: this._recvCounts, at: Date.now() });
+      }
+      if (Number.isFinite(c.evSeq)) this._recvCursor = Math.max(this._recvCursor, c.evSeq);
+      const now = counts();
+      for (const p of [...(this._recvPending ?? [])]) {
+        const got = arrivedFrom(p.theirs, p.before, now);
+        if (got.length) {
+          noteReceived(this.s?.name ?? '', got, { from: p.from });
+          this.note('received by trade', { from: p.from, items: got, why: 'a delivery is protected from the field weapon cap for a while' });
+        }
+        if (got.length || Date.now() - p.at > 30_000) this._recvPending = this._recvPending.filter(x => x !== p);
+      }
+      if (!(this._recvPending ?? []).length) this._recvCounts = now;
+    } catch { /* bookkeeping only */ }
+  }
+
   /** Spare weapons counted against maxWeapons: not in hand, not protected, past one training spare. */
   fieldSpareWeapons(c = this.s.client) {
     const nameOf = o => String(c?.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
     const eq = c?.equipment?.();
     const worn = new Set((eq?.known ? eq.equipped : []).map(e => e.id));
     const spareOf = String(this.policy.trainingWeapon ?? '').trim().toLowerCase();
+    // NOT A SPARE: what was just DELIVERED (m59-received.mjs, remembered across a handoff -- the desk's six maces,
+    // 2026-10-27), and a weapon the reading book knows is enchanted (a dedication is not loot).
+    const delivered = new Map(protectedReceived(this.s?.name ?? ''));
+    let magic = new Set();
+    try { magic = this.weaponMagicBook().keepIds(); } catch {}
     let spareSeen = false;
     const spares = [];
     for (const o of c?.inventory ?? []) {
       const n = nameOf(o);
       if (worn.has(o.id) || skills.weaponScore(n) <= 0) continue;
       if (skills.itemIsProtected(n, this.protectedItemNames())) continue;
+      if (magic.has(Number(o.id))) continue;
+      if ((delivered.get(n) ?? 0) > 0) { delivered.set(n, delivered.get(n) - (o.amount > 0 ? o.amount : 1)); continue; }
       if (spareOf && n === spareOf && !spareSeen) { spareSeen = true; continue; }
       spares.push(o);
     }

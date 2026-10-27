@@ -3476,6 +3476,8 @@ export class Autopilot {
     // IDLE GEAR (m59-castrite.mjs): a casting strategy's say over what is worn when nothing is being
     // cast -- a disciple robe left on outside an inn comes off. A no-op without such a strategy.
     if(!stationaryTradeActive(s))await withBodyStage(s,'passIdleGear',()=>idleGearCheck(s, { why: 'pass' })).catch(error => this.note('idle gear check failed', { why: error.message }));
+    // WHAT A TRADE JUST GAVE US is written down before anything that throws things away can run (m59-received.mjs).
+    this.noteReceivedGoods();
     // THE POOL OF VIGOR (2510): anyone standing beside it below full vigor drinks (social.mjs drinkAtPoolOfVigor).
     if (!stationaryTradeActive(s)&&await withBodyStage(s,'passSharing',()=>this.drinkAtPoolOfVigor()).catch(error => {
       this.note('pool of vigor drink failed', { why: error.message }); return false; })) return;

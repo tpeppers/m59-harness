@@ -243,6 +243,9 @@ through a nested shelter order.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.
+- `m59-received-test.mjs` (9): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
+  record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
+  we received is recorded.
 - `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value

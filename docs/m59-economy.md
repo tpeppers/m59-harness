@@ -1170,3 +1170,21 @@ The chalice desk is the first user: `station_room: 'holder'` in the chalice stra
   cup clears it.
 - **It refills on the way.** A holder standing in a Shal'ille room with its count short or unknown drops the cup and
   picks it straight back up (`chaliceTopUp`), never with a stranger in the room, at most every two minutes.
+
+
+## A delivery is not a spare
+
+Prod, 2026-10-27: Zheng He delivered six maces to the dedication desk (verified). The desk's keeper was handed off four
+minutes later, and within six seconds the new keeper's field weapon cap (`capFieldWeapons`) dropped all six as spares
+over `maxWeapons`, because its protected names held "long sword" but not "mace", and the old keeper's memory of the
+delivery died with it. The desk then reported "no spare and no desk sword" with its stock on its own floor.
+`tools/m59-received.mjs`; `m59-received-test.mjs` (9).
+
+- **What arrives by trade is written down**, by name and count, per character, in `substrate/.received/`, so a
+  replacement keeper reads it. The server's "trade over" is the same packet for a completed trade and a cancelled one,
+  so the keeper (`noteReceivedGoods`, every pass) compares the pack before and after a trade in which it was the
+  receiver: only names whose count went up arrived.
+- **For three hours** (`M59_RECEIVED_PROTECT_MS`) the field weapon cap leaves that many of each delivered name alone. A
+  delivery is somebody's decision; a standing rule is not entitled to undo it within the hour.
+- **And an enchanted weapon is never a spare**: the cap now skips anything the weapon-magic reading book keeps (a
+  dedication is not loot), as the overfarm swap already did.
