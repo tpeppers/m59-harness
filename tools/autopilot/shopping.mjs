@@ -8,12 +8,13 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 11 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
+// 14 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
 //   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, postShoppingPlan,
-//   ensurePurchaseFunds, bankRun
+//   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
 import { MARKET_KEEP, isFood, weighPack } from '../m59-items.mjs';
+import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { PURCHASE_BANKS, accountBalance, purchaseKey, purchasePlan } from '../m59-purchase-plan.mjs';
@@ -136,7 +137,7 @@ export class ShoppingPart {
     });
     return purchasePlan({ requests, menu, foodGap, estimated: items == null,
       reserve: requests.length || foodGap > 0 ? Math.max(0, this.policy.shopFloor ?? 0,
-        ['all', 'delivery'].includes(kind) && this.pendingFarmDelivery ? (this.policy.walkingMoney ?? 400) : 0) : 0 });
+        ['all', 'delivery'].includes(kind) && this.pendingFarmDelivery ? this.walkingFloat() : 0) : 0 });
   }
 
   /**
@@ -308,7 +309,7 @@ export class ShoppingPart {
       this.townTrip.purchasePlan = this.shoppingPlan();
       return this.continueTownTrip();
     }
-    const above = this.policy.bankAbove;
+    const above = this.bankAboveNow();
     if (!above) return false;                       // 0 or null turns the trips off
     const s = this.s, c = s.need();
     const room = s.world?.room;
@@ -551,7 +552,7 @@ export class ShoppingPart {
       : packFull && carried <= above ? 'going to market'
       : 'going to the bank';
     this.note(errand, {
-      carrying: carried, to: target.name, hops: target.hops, keeping: this.policy.walkingMoney ?? 400,
+      carrying: carried, to: target.name, hops: target.hops, keeping: this.walkingFloat(),
       trigger: sellCall.trigger, bill: supplyTrip ? supplyBill : undefined,
       banked: supplyTrip || needsCashFirst ? balance : undefined,
       why: supplyTrip
@@ -577,6 +578,18 @@ export class ShoppingPart {
              'ceiling anyway — the equipment and gem counters are on the way' });
     this.postShoppingPlan(this.shoppingPlan());
     return this.continueTownTrip();
+  }
+  // THE FLOAT EVERY BANKING RULE KEEPS, AND THE PURSE LEASE THAT RAISES IT (m59-purse-lease.mjs). Every deposit path
+  // reads its float here, so an errand's leased carry cannot be banked by a standing rule while the lease holds: the
+  // chalice holder's deposit, the bank trip, the town trip and the coop alike. It lapses back to walkingMoney by itself.
+  walkingFloat() { return walkingFloatOf(this.policy); }
+  bankAboveNow() { return bankAboveOf(this.policy); }
+  purseLeaseStatus(now = Date.now()) {
+    const l = this.policy?.purseLease;
+    if (!l) return null;
+    const live = leaseCarry(this.policy, now) > 0;
+    return { carry: l.carry, owner: l.owner ?? null, until: l.until ?? null, live,
+             ...(live ? { left_min: Math.round((l.until - now) / 6000) / 10 } : { lapsed: 'back to the standard float' }) };
   }
   // @end 1
 }

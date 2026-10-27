@@ -256,7 +256,7 @@ export class DeliveryPart {
     const paid = await this.ensurePurchaseFunds(quote);
     if (!paid.ready || paid.moved) return { pending: true, reason: paid.reason ?? 'return after banking' };
     let purse = this.purseNow();
-    const floor = this.policy.walkingMoney ?? 400;
+    const floor = this.walkingFloat();
     // A KIND THIS COUNTER DOES NOT STOCK IS REPORTED, NOT SILENTLY DROPPED. The reagent run
     // that exposed all of this failed exactly here — one counter had no elderberry, another
     // no herbs — and the trip still reported itself loaded, so the fleet learned nothing

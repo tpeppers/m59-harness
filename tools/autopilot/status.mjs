@@ -330,7 +330,7 @@ export class StatusPart {
       // IS THE MONEY GETTING TO A BANK. banked is the total put away; carried_at_death
       // is what was lost on the floor anyway, and is the number to drive to zero.
       money: (this.money.trips || this.money.carried_at_death || this.tally.banked) ? {
-        bank_above: this.policy.bankAbove, float_kept: this.policy.walkingMoney ?? 400,
+        bank_above: this.bankAboveNow(), float_kept: this.walkingFloat(), purse_lease: this.purseLeaseStatus(),
         carrying: this.lastSeenPurse ?? null,
         banked: this.tally.banked ?? 0,
         trips: this.money.trips, trips_failed: this.money.trips_failed,

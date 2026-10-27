@@ -320,7 +320,7 @@ export class ChalicePart {
     const ride = this.activeChaliceRide();
     if (ride && !['decide', 'off', 'done'].includes(ride.stage)) return false;
     if (now - (this._moneyHandInAt ?? 0) < 3 * 60_000) return false;
-    const keep = Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan?.().required_purse ?? 0);
+    const keep = Math.max(this.walkingFloat(), this.shoppingPlan?.().required_purse ?? 0);
     const amount = moneyExcess({ purse: this.purseNow(), keep, min: cfg.money_min });
     if (!amount) return false;
     const store = this.chaliceStore();
@@ -345,7 +345,7 @@ export class ChalicePart {
    */
   async chaliceDepositMoney(cfg) {
     if (!cfg?.money_flow) return false;
-    const keep = Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan?.().required_purse ?? 0);
+    const keep = Math.max(this.walkingFloat(), this.shoppingPlan?.().required_purse ?? 0);
     const purse = this.purseNow();
     const excess = moneyExcess({ purse, keep, min: cfg.money_min });
     if (!excess) return false;
@@ -431,7 +431,7 @@ export class ChalicePart {
     if (!p) return;
     const { order } = p;
     const price = orderPrice(order);
-    const want = price + (this.policy.walkingMoney ?? 400);
+    const want = price + this.walkingFloat();
     const need = want - this.purseNow();
     if (need > 0) {
       await this.withdrawFromStockpile([{ item: 'shilling', amount: need }]).catch(e =>
@@ -639,7 +639,7 @@ export class ChalicePart {
     // what survives. A fleet that tips itself broke stops farming, and a holder with no
     // farmers has nothing to serve.
     const ownPlan = this.shoppingPlan();
-    const keep = Math.max(Number(this.policy.walkingMoney ?? 400), Number(ownPlan.required_purse) || 0);
+    const keep = Math.max(this.walkingFloat(), Number(ownPlan.required_purse) || 0);
     let budget = Math.min(Number(cfg.restock_budget) || 0, Math.max(0, this.purseNow() - keep));
     if (budget <= 0) {
       this.note('nothing to spare for the holder this trip',
@@ -1324,7 +1324,7 @@ export class ChalicePart {
         }
         const giver = store.ticket(st.ticket)?.by ?? st.server;
         const plan = tipPlan({ purse: this.purseNow(), cfg,
-          keep: Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan().required_purse ?? 0) });
+          keep: Math.max(this.walkingFloat(), this.shoppingPlan().required_purse ?? 0) });
         if (!plan.amount || !this.playerHere(giver)) {
           this.chaliceEvent('tip', { amount: 0, to: giver, why: plan.why });
           return pending(0);
@@ -1784,7 +1784,7 @@ export class ChalicePart {
         const give = [cup.id];
         let passOn = 0;
         if (cfg.money_flow && !st.human) {
-          passOn = moneyExcess({ purse: this.purseNow(), keep: (this.policy.walkingMoney ?? 400) + cfg.money_float, min: cfg.money_min });
+          passOn = moneyExcess({ purse: this.purseNow(), keep: this.walkingFloat() + cfg.money_float, min: cfg.money_min });
           const coins = passOn ? (this.s.client.inventory || []).find(o => /shilling/i.test(this.s.client.rsc.get(o.nameRsc) || '')) : null;
           if (coins) give.push({ id: coins.id, amount: passOn }); else passOn = 0;
         }

@@ -234,6 +234,9 @@ through a nested shelter order.
   id), heaviest first, partial stacks by amount; a station takes trade goods only while its pack stays `keep_free`
   empty; `giveItems` counts what left the pack by id and cancels an uncountered offer; the keeper, acceptor, broker and
   strategy bindings.
+- `m59-purse-lease-test.mjs` (22): an errand's purse lease (`m59-purse-lease.mjs`). A live lease raises every banking
+  float and `bank_above` to its carry and lapses by itself; no keeper part reads `policy.walkingMoney` directly; the
+  broker's `purse_lease` and the bank tool's `lease_ms` set it.
 - `m59-strategy-gate-test.mjs` (58): a farm strategy's `requires`, kill-rate `floor` and `otherwise`
   (`m59-strategy-gate.mjs`, the gate in `m59-strategy-engine.mjs`). Unread weapons are unknown, never a refusal; the
   floor's clock runs only on farming passes and trips on a window with too few kills. The escalation never just

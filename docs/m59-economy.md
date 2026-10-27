@@ -1099,3 +1099,19 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   delivery. Each one is a `loot_ejected` ledger row and `tally.loot_ejected`.
 - Economy faculty: a bot holding economy turns it off. It runs in the sharing pass, so it needs the body quiet (health
   at least 80%, nothing landing, no trade open) and never walks anywhere.
+
+
+## An errand's purse is leased
+
+Prod, 2026-10-26: a courier withdrew 6000 for a reagent run and the chalice holder's banking rule (keep the walking
+float, deposit the rest at any bank) put it straight back, leaving 400. Every buy then read "sold out" for hours.
+Operator: *"Do we not wanna consider this all a bug for allowing this back-and-forth to happen?"*
+`tools/m59-purse-lease.mjs`; `m59-purse-lease-test.mjs` (22).
+
+- `autopilot purse_lease={carry, ms, owner}`, or the bank tool's `withdraw` with `lease_ms` (leases the purse it
+  leaves), stores `policy.purseLease = { carry, until, owner }`. An hour by default, 12 at most; `null` ends it.
+- While it is live, **every** keeper float (`walkingFloat()`: the chalice holder's deposit, town trips, deliveries,
+  coop buys) is at least `carry`, and `bank_above` (`bankAboveNow()`) is never below it, so no bank trip fires on the
+  errand's money. The test fails if any keeper part reads `policy.walkingMoney` on its own again.
+- It lapses by itself to the standard float, like `survival_off_ms`. Status reports it under `money.purse_lease`.
+- Explicit orders (the bank tool's own deposit, a FleetScript's buy) are not standing rules and are not held back.

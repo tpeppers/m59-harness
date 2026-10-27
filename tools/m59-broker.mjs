@@ -188,6 +188,7 @@ import * as uptime from './m59-uptime.mjs';
 import { survivalOffConflict, survivalOffLeaseMs, accepts, refusal } from './m59-hazards.mjs';
 import { requiresVerdict, factsFromStatus, requestFor, resetFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject, normalizeTradeGoods } from './m59-loot-eject.mjs';
+import { normalizePurseLease } from './m59-purse-lease.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
          TRAVEL_GUARD_KEYS,
@@ -11843,6 +11844,14 @@ const TOOLS = [
           description: 'how much better a floor item must be than the worst carried one before the swap is worth the packets. Default 1.25.' },
         merchant: { type: 'string', description: 'merchant tier the value estimate assumes. Scales everything equally; changes shillings, never the ranking.' },
       }, description: 'SIFT MORE THAN THE PACK HOLDS AND CARRY THE BEST OF IT. Three phases by pack fullness: take everything below `selective_at`, then take only what outranks what is carried, then — once full — keep killing and trade the worst carried item for a better one on the floor, until `overfarm_percent` of capacity has passed through the hands. Ranking is shillings per unit of BINDING cost (the worse of weight and bulk) times the operator preference. An item that cannot be priced is UNRANKABLE, never worthless: it may be taken and is never dropped, which matters because 160 of the 249 weighable items have no price. null disables it and the character loots exactly as it did before' },
+      purse_lease: { type: ['object', 'null'], properties: {
+        carry: { type: 'number', description: 'shillings the errand needs on hand' },
+        ms: { type: 'number', description: 'how long the lease holds. Default 3600000 (an hour), at most 12 h' },
+        owner: { type: 'string', description: 'the errand, for the board' },
+      }, description: 'AN ERRAND\'S PURSE LEASE (m59-purse-lease.mjs): while it holds, every banking rule (the chalice ' +
+        'holder\'s deposit, bank_above trips, town trips) keeps at least `carry`, so a courier\'s withdrawal is not ' +
+        'banked straight back. It lapses by itself to the standard walking_money float. null ends it now. The bank tool\'s ' +
+        'withdraw takes lease_ms to lease the purse it leaves' },
       loot_eject: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         to: { type: 'array', items: { type: 'string' }, description: 'characters of ours to hand the sale pile to, in order of preference: a station first, then a courier' },
@@ -12900,6 +12909,10 @@ const TOOLS = [
           const { unknown, rejected, ...policy } = norm;
           p.policy.overfarm = policy;
         }
+      }
+      if (a.purse_lease !== undefined) {
+        try { p.policy.purseLease = normalizePurseLease(a.purse_lease); }
+        catch (e) { return { started: false, reason: `purse_lease refused: ${e.message}`, note: 'nothing was changed' }; }
       }
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
@@ -15197,6 +15210,9 @@ const TOOLS = [
         description: 'deposit only: bank everything ABOVE this walking float instead of a fixed ' +
           'amount. Use it when the purse is not knowable when the request is built — the end of a ' +
           'sell circuit, where what there is to bank is whatever the shops just paid.' },
+      lease_ms: { type: 'number', description: 'withdraw only: LEASE the purse this leaves for this long (m59-purse-lease.mjs), ' +
+        'so no standing banking rule deposits it back while the errand needs it. Lapses to the standard float by itself' },
+      lease_owner: { type: 'string', description: 'withdraw with lease_ms: the errand the money is for' },
     }, required: ['agent', 'action'] },
     run: async (a) => {
       const s = session(a.agent), c = s.need();
@@ -15238,9 +15254,11 @@ const TOOLS = [
       // First Royal Bank of Tos after walking one across the map to reach it. The keeper
       // runs the exchange; the bookkeeping below is unchanged.
       const proxied = proxiedSession;
-      let said;
+      let said, leaseOut = null;
       if (proxied) {
-        const r = await proxied.bankOp(a.action, amount, float != null ? { keep: float } : {});
+        const lease = a.action === 'withdraw' && a.lease_ms != null
+          ? { lease_ms: Number(a.lease_ms), lease_owner: a.lease_owner ?? null } : {};
+        const r = await proxied.bankOp(a.action, amount, { ...(float != null ? { keep: float } : {}), ...lease });
         if (r?.error) throw new Error(`keeper refused: ${r.error}`);
         // The keeper answers with the amount it actually worked out, which for a `keep`
         // deposit is the only place the number exists. Nothing below may re-derive it.
@@ -15252,6 +15270,7 @@ const TOOLS = [
                          'there is nothing above it to bank. Not an error: a character that sold ' +
                          'nothing has nothing to deposit.' };
         said = (r.said ?? []).map(String);
+        if (r?.purse_lease) leaseOut = r.purse_lease;
         // The keeper reads the same event stream Session.noteBanker writes from, so the
         // stored record still has to see these sentences to keep its arithmetic honest.
         // noteBanker reads ev.text and ev.at — a bare string silently records nothing.
@@ -15275,6 +15294,7 @@ const TOOLS = [
       const stored = s.bankKnown();
       return {
         action: a.action, amount: a.action === 'balance' ? undefined : amount,
+        ...(leaseOut ? { purse_lease: leaseOut } : {}),
         banker_said: said,
         balance: stored?.balance ?? null,
         // FALSE MEANS NOBODY SAID THIS NUMBER OUT LOUD — it was derived by subtracting a

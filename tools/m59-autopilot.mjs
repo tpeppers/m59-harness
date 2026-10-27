@@ -2269,6 +2269,8 @@ export class Autopilot {
       acceptDonations: null,
       // LOOT EJECTION (m59-loot-eject.mjs): { enabled, to: [station, courier], every_s, batch }. Off by default.
       lootEject: null,
+      // AN ERRAND'S PURSE LEASE (m59-purse-lease.mjs): { carry, until, owner }. While live, no banking rule takes it.
+      purseLease: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine
       // written before this expects.
       bannedWeapons: null,

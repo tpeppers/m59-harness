@@ -88,6 +88,7 @@ import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVe
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
 import { JointHost } from './m59-joints.mjs';
 import { postRequest } from './rpg/requests.mjs';
+import { normalizePurseLease } from './m59-purse-lease.mjs';
 import { appendDecision } from './m59-pvp.mjs';
 import { locStamp as jointLocStamp } from './m59-pvp-telemetry.mjs';
 
@@ -3565,8 +3566,22 @@ const server = createServer(async (req, res) => {
             // `amount` IS THE ANSWER when the broker sent a float rather than a number —
             // it is the only place that arithmetic happened, and the broker reports it back
             // rather than re-deriving it from a snapshot that would give a different figure.
+            // A WITHDRAWAL FOR AN ERRAND LEASES WHAT IT LEAVES (m59-purse-lease.mjs): without it the keeper's own banking
+            // rules deposit the money straight back (prod 2026-10-26: 6000 withdrawn, re-banked at once, purse 400).
+            let purseLease = null;
+            if (op === 'withdraw' && args.lease_ms != null && autopilot?.policy) {
+              await session.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+              await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+              const purse = (c.inventory || []).filter(i => /shilling/i.test(c.rsc.get(i.nameRsc) || ''))
+                .reduce((sum, i) => sum + (i.amount ?? 1), 0);
+              try {
+                purseLease = normalizePurseLease({ carry: purse, ms: args.lease_ms, owner: args.lease_owner ?? 'withdrawal' });
+                autopilot.policy.purseLease = purseLease;
+              } catch (e) { purseLease = { error: e.message }; }
+            }
             json({ op, amount: op === 'balance' ? undefined : amount, seq: c.evSeq,
                    ...(args.keep != null ? { keep: Math.max(0, Math.floor(Number(args.keep) || 0)) } : {}),
+                   ...(purseLease ? { purse_lease: purseLease } : {}),
                    said: (after?.events ?? []).map(e => e.text).filter(Boolean) });
             return;
           }

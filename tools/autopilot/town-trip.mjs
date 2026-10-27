@@ -154,7 +154,7 @@ export class TownTripPart {
         return { wanted: true };
       }
       case 'bank': {
-        const above = this.policy.bankAbove;
+        const above = this.bankAboveNow();
         return above && this.purseNow() > above ? { wanted: true }
           : { wanted: false, why: `the purse is no longer over the banking threshold (${above})` };
       }
@@ -329,7 +329,7 @@ export class TownTripPart {
     const shop = ev.events?.find(row => row.kind === 'shop');
     const entry = shop?.items?.find(item => re.test(String(item.name ?? '').trim()));
     if (!entry) { f.notes.push(`room ${f.shop_room}'s counter does not list ${f.item}`); return 0; }
-    const unit = entry.cost || 0, floor = this.policy.walkingMoney ?? 400;
+    const unit = entry.cost || 0, floor = this.walkingFloat();
     const take = Math.min(need, unit > 0 ? Math.max(0, Math.floor((this.purseNow() - floor) / unit)) : need);
     if (!take) { f.notes.push(`cannot afford ${f.item} at ${unit} above the ${floor} float`); return 0; }
     const before = this.countNamed(f.item);
@@ -434,7 +434,7 @@ export class TownTripPart {
           !BANKS.some(b => b.room === Number(trip.target.room))) {
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':initial', nextRoom: trip.target.room,
-          bankable: Math.max(0, this.purseNow() - Math.max(this.policy.walkingMoney ?? 400,
+          bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
             this.shoppingPlan().required_purse ?? 0)),
         }, TITHE_FLEET);
         if (donation.pending) return true;
@@ -518,7 +518,7 @@ export class TownTripPart {
         const donation = await runReagentCoop(this, 'town', {
           requestId: 'keeper-town:' + trip.startedAt + ':' + trip.nextService,
           nextRoom: name === 'buy food' ? FOOD_SHOPS[0].room : name === 'buy reagents' ? REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
-          bankable: Math.max(0, this.purseNow() - Math.max(this.policy.walkingMoney ?? 400,
+          bankable: Math.max(0, this.purseNow() - Math.max(this.walkingFloat(),
             this.shoppingPlan().required_purse ?? 0)),
         }, TITHE_FLEET);
         if (donation.pending) return true;

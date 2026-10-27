@@ -643,7 +643,7 @@ export class TownShopsPart {
     const book = new TitheBook({ agent: this.name ?? this.s.name, fleet: TITHE_FLEET });
     const plan = tithePaymentPlan({ dailyAmount: cfg.daily_amount,
       paidToday: book.paidToday(), saleProceeds: proceeds, purse: purseAmount(c),
-      walkingMoney: this.policy.walkingMoney ?? 400 });
+      walkingMoney: this.walkingFloat() });
     if (!plan.amount) {
       this.note(plan.remaining > 0
         ? 'guild tithe retained for a later sale'
@@ -717,7 +717,7 @@ export class TownShopsPart {
       const resumed = await runReagentCoop(this, 'tithe', {}, TITHE_FLEET);
       if (resumed.pending) return resumed;
     }
-    const FLOAT = this.policy.walkingMoney ?? 400;
+    const FLOAT = this.walkingFloat();
     const room = s.world?.room;
     if (!room) return;
     const teller = [...c.room.objects.values()]
