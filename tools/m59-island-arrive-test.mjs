@@ -93,6 +93,23 @@ console.log('island-arrive');
   const steps = await script.steps({ agents: ['t12'], strategy: 'kocatan-avar-warriors', restBelow: 0.8, fleeBelow: 0.45 });
   ok('vault first, then the farm order', steps.length === 3 && /vault/i.test(steps[1].why) && /farm order/.test(steps[2].why), steps.map(s => s.why ?? s.tool).join(' | '));
   ok('vault only, with no strategy', (await script.steps({ agents: ['t12'], restBelow: 0.8, fleeBelow: 0.45 })).length === 2);
+  // THE FARM ORDER IS JUDGED BY READING IT BACK (prod 2026-10-27: a keeper-backed `start` answered started:false,
+  // keeper_backed:true and was reported as refused while it had applied).
+  const farmStep = steps[2];
+  const ctxWith = (status, reply = { started: false, keeper_backed: true }) => {
+    const calls = [];
+    return { calls, ctx: { agent: 't12', state: {}, call: async (n, a) => { calls.push({ n, a });
+      return a.action === 'status' ? status : reply; } } };
+  };
+  let t = ctxWith({ keeper_backed: true, mode: 'farm', farm_strategy: { assigned: 'kocatan-avar-warriors' } });
+  ok('a keeper-backed reply with the order read back is a success', await farmStep.fn(t.ctx).then(() => true, () => false));
+  ok('and the arrival is not picky: any of the common weapons, no magic preference, no bows',
+     JSON.stringify(t.calls[0].a.weapon_priority) === '["long sword","axe","hammer","mace","scimitar","short sword"]'
+     && t.calls[0].a.prefer_magic_weapon === false && t.calls[0].a.banned_weapons.includes('bow'));
+  t = ctxWith({ keeper_backed: true, mode: 'survive', farm_strategy: null });
+  ok('an order that did not take is an error, saying what it read', /did not take: mode survive, strategy none/.test(await farmStep.fn(t.ctx).then(() => '', e => e.message)));
+  t = ctxWith({}, { started: false, reason: 'farm_strategy refused: no such file' });
+  ok('a real refusal is still a refusal', /farm order refused: farm_strategy refused/.test(await farmStep.fn(t.ctx).then(() => '', e => e.message)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
