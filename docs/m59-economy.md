@@ -1097,6 +1097,17 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   `trade_goods` and no `loot_eject`, or goods circulate.
 - **Counted by what left the pack**, by id (`giveItems`), like every gift here: a handshake that moves nothing is not a
   delivery. Each one is a `loot_ejected` ledger row and `tally.loot_ejected`.
+- **Best value first, worst value dropped.** Operator: *"The whole purpose is maximum income, if there's an overflow of
+  loot just drop worst performing bulk/weight to value ratio"*. The offer is ordered by shillings per unit of pack
+  (overfarm's `scoreItem`, at the courier's `merchant` tier), best first, so the courier's room goes to the best goods.
+  With `overflow_at` (a pack fullness), a farmer with nobody to take its pile drops the WORST value per unit of pack
+  where it stands until it is back under the line, at most `drop_max` a pass. Never an unpriced item (unrankable is
+  not worthless), never an `extra` item, never on a station.
+- **`extra`** names items to eject that the plan keeps (gems the fleet holds as reagents, say). It is the operator's
+  explicit choice; nothing ejects gems without it.
+- **A station passes on only what it was given** (`only_received: true`). Received trade goods are counted by name in
+  `substrate/.trade-goods/<agent>.json` (ids are temporary handles), so a dedication desk whose own armoury is long
+  swords passes on the traded long swords and keeps its own.
 - Economy faculty: a bot holding economy turns it off. It runs in the sharing pass, so it needs the body quiet (health
   at least 80%, nothing landing, no trade open) and never walks anywhere.
 

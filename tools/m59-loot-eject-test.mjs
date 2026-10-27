@@ -13,7 +13,12 @@
 //     that does not counter is cancelled;
 //   * the keeper binds it: ejectLoot runs in the sharing pass, acceptDonations honours trade_goods, the policy key
 //     defaults to null, the broker and a farm strategy can set it.
-const { normalizeLootEject, normalizeTradeGoods, ejectTarget, ejectBatch, tradeGoodsFit, BACKOFF_MS } = await import('./m59-loot-eject.mjs');
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+process.env.M59_TRADE_GOODS_DIR = mkdtempSync(join(tmpdir(), 'm59-trade-goods-'));
+const { normalizeLootEject, normalizeTradeGoods, ejectTarget, ejectBatch, overflowDrops, tradeGoodsFit, BACKOFF_MS,
+        noteReceived, noteGone, readReceived } = await import('./m59-loot-eject.mjs');
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -41,8 +46,12 @@ ok('nobody listed here: nothing', ejectTarget({ present: ['Fozzie'], to: cfg.to,
 ok('a backed-off station is skipped for the courier',
    ejectTarget({ present: ['Loial', 'Zheng He'], to: cfg.to, backoff: new Map([['loial', now + BACKOFF_MS]]), now }) === 'Zheng He');
 
-console.log('the offer');
-const weigh = n => ({ 'long sword': { weight: 150, bulk: 100 }, 'small round shield': { weight: 90, bulk: 90 }, ruby: { weight: 1, bulk: 1 } })[n] ?? null;
+console.log('the offer: best value per unit of pack first');
+const weigh = n => ({ 'long sword': { weight: 150, bulk: 100 }, 'small round shield': { weight: 90, bulk: 90 }, ruby: { weight: 1, bulk: 1 },
+                      'knight\'s shield': { weight: 300, bulk: 300 }, diamond: { weight: 1, bulk: 1 } })[n] ?? null;
+// shillings per unit of binding cost, as overfarm's scoreItem reports it
+const PRICE = { 'long sword': 300, 'small round shield': 45, ruby: 40, 'knight\'s shield': 30, diamond: 200 };
+const score = n => { const w = weigh(n), v = PRICE[n]; return w && v != null ? { rankable: true, score: v / Math.max(w.weight, w.bulk) } : { rankable: false }; };
 const plan = [
   { id: 1, name: 'ruby', amount: 5, sale_amount: 5, state: 'sell' },
   { id: 2, name: 'long sword', amount: 1, sale_amount: 1, state: 'sell' },
@@ -51,12 +60,45 @@ const plan = [
   { id: 5, name: 'herbs', amount: 40, sale_amount: 0, state: 'keep' },
   { id: -1, name: 'long sword', amount: 1, sale_amount: 1, state: 'sell' },
   { id: 6, name: 'ruby', amount: 9, sale_amount: 4, state: 'sell' },
+  { id: 7, name: 'diamond', amount: 3, sale_amount: 0, state: 'keep' },
+  { id: 8, name: 'knight\'s shield', amount: 1, sale_amount: 1, state: 'sell' },
 ];
-const b = ejectBatch(plan, { batch: 6, weigh });
-ok('only sell rows, never equipped, never a synthetic id', b.every(r => [1, 2, 4, 6].includes(r.id)) && b.length === 4, JSON.stringify(b));
-ok('heaviest first', b[0].id === 2 && b[1].id === 4, b.map(r => r.id).join());
+const b = ejectBatch(plan, { batch: 6, weigh, score });
+ok('only sell rows, never equipped, never a synthetic id, never a kept row', b.every(r => [1, 2, 4, 6, 8].includes(r.id)) && b.length === 5, JSON.stringify(b));
+ok('rubies (40/unit) before long swords (2/unit) before shields (0.5, 0.1)', b[0].name === 'ruby' && b[2].id === 2 && b.at(-1).id === 8, b.map(r => r.id).join());
 ok('a partial stack is offered by amount', b.find(r => r.id === 6)?.whole === false && b.find(r => r.id === 6)?.amount === 4);
-ok('batch caps it', ejectBatch(plan, { batch: 2, weigh }).length === 2);
+ok('batch caps it', ejectBatch(plan, { batch: 2, weigh, score }).length === 2);
+const withGems = ejectBatch(plan, { batch: 6, weigh, score, extra: ['diamond'] });
+ok('`extra` ejects what the plan keeps (gems), and first: it is worth the most per unit', withGems[0].name === 'diamond' && withGems[0].amount === 3,
+   JSON.stringify(withGems[0]));
+
+console.log('overflow: drop the worst value per unit of pack');
+{
+  const d = overflowDrops(plan, { fullness: 0.99, capMax: 2700, overflowAt: 0.85, max: 4, weigh, score });
+  ok('the knight\'s shield goes first, then the small shield', d[0]?.id === 8 && d[1]?.id === 4, JSON.stringify(d));
+  ok('it stops once the pack is back under the line (0.99 - 0.11 - 0.03 < 0.85)', d.length === 2, `${d.length} drops`);
+  ok('never a gem the operator kept, never a kept row', !d.some(r => [5, 7].includes(r.id)));
+  ok('under the line: nothing dropped', overflowDrops(plan, { fullness: 0.8, capMax: 2700, overflowAt: 0.85, weigh, score }).length === 0);
+  ok('off when overflow_at is not set', overflowDrops(plan, { fullness: 0.99, capMax: 2700, overflowAt: null, weigh, score }).length === 0);
+  const unpriced = overflowDrops([{ id: 9, name: 'mystery', amount: 1, sale_amount: 1, state: 'sell' }],
+    { fullness: 0.99, capMax: 2700, overflowAt: 0.85, weigh: () => ({ weight: 500, bulk: 500 }), score: () => ({ rankable: false }) });
+  ok('an unpriced item is never dropped (unrankable is not worthless)', unpriced.length === 0);
+  ok('overflow_at alone (no `to`) is a valid order', normalizeLootEject({ overflow_at: 0.85 }).overflow_at === 0.85);
+}
+
+console.log('a station passes on only what it was given');
+{
+  noteReceived('t-station', [{ name: 'long sword', amount: 0 }, { name: 'long sword' }, { name: 'ruby', amount: 4 }]);
+  ok('received is counted by name', JSON.stringify(readReceived('t-station')) === '{"long sword":2,"ruby":4}');
+  const pack = [{ id: 11, name: 'long sword', amount: 1, state: 'keep' }, { id: 12, name: 'long sword', amount: 1, state: 'keep' },
+                { id: 13, name: 'long sword', amount: 1, state: 'keep' }, { id: 14, name: 'long sword', amount: 1, state: 'keep' },
+                { id: 15, name: 'ruby', amount: 10, state: 'keep' }];
+  const r = ejectBatch(pack, { batch: 12, weigh, score, received: readReceived('t-station') });
+  ok('only two of its four long swords leave (its own armoury stays), and four of ten rubies',
+     r.filter(x => x.name === 'long sword').length === 2 && r.find(x => x.name === 'ruby')?.amount === 4, JSON.stringify(r));
+  noteGone('t-station', [{ name: 'long sword', amount: 2 }, { name: 'ruby', amount: 1 }]);
+  ok('what left is taken off the count', JSON.stringify(readReceived('t-station')) === '{"ruby":3}');
+}
 
 console.log('a station keeps its spare space');
 const cap = { known: true, weight_max: 2700, bulk_max: 2700, load: { weight: 1500, bulk: 600, exact: true } };
@@ -112,6 +154,8 @@ console.log('the bindings');
   ok('acceptDonations honours trade_goods before the take list', src.indexOf('tradeGoodsApply') > 0
      && src.indexOf('tradeGoodsApply') < src.indexOf("offered something not on the take list"));
   ok('a bot holding economy turns ejection off', /async ejectLoot\(\)[\s\S]{0,900}facultyHeld\('economy'\)/.test(src));
+  ok('a station notes what it received as trade goods', /if \(tradeGoodsApply\) \{ try \{ noteReceived/.test(src));
+  ok('a station never overflow-drops (it refuses instead)', /cfg\.overflow_at == null \|\| cfg\.only_received/.test(src));
   const { fieldFor } = await import('./m59-strategy-schema.mjs');
   ok('a farm strategy may carry lootEject, under economy', fieldFor('lootEject')?.faculty === 'economy');
   const broker = readToolSource(new URL('./m59-broker.mjs', import.meta.url), 'utf8');

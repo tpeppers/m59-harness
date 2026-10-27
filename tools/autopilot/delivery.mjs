@@ -19,7 +19,7 @@ import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { MARKET_KEEP } from '../m59-items.mjs';
 import * as party from '../m59-party.mjs';
-import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject } from '../m59-loot-eject.mjs';
+import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
 import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
 
 export class DeliveryPart {
@@ -470,32 +470,58 @@ export class DeliveryPart {
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.8) return false;
     if ((this.frozenUntil && now < this.frozenUntil) || this.threat?.()?.landing > 0) return false;
     this._ejectAt = now;
-    const me = String(this.s.name ?? '').toLowerCase();
-    const present = [...(c.room?.objects?.values?.() ?? [])]
-      .filter(o => (o.flags & OF.PLAYER) && o.id !== c.selfId)
-      .map(o => c.rsc?.get?.(o.nameRsc) || o.name || '')
-      .filter(n => n && n.toLowerCase() !== me && party.isFleetmate(n));
-    this._ejectBackoff ??= new Map();
-    const target = ejectTarget({ present, to: cfg.to, backoff: this._ejectBackoff, now });
-    if (!target) return false;
     if (!skills.equippedNow(c)) return false;               // unknown equipment blocks every row of the plan
     const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
       loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
     if (plan?.error) return false;
-    const rows = ejectBatch(plan?.items ?? [], { batch: cfg.batch });
-    if (!rows.length) return false;
-    this.doing = 'trading';
-    const r = await this.giveItems(target, rows);
-    if (!r.moved.length) {
-      this._ejectBackoff.set(target.toLowerCase(), Date.now() + BACKOFF_MS);
-      this.note('loot ejection refused', { to: target, offered: rows.map(x => x.name), why: r.why });
-      return false;
+    const items = plan?.items ?? [];
+    const me = String(this.s.name ?? '');
+    const received = cfg.only_received ? readReceived(me) : null;
+    const present = [...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => (o.flags & OF.PLAYER) && o.id !== c.selfId)
+      .map(o => c.rsc?.get?.(o.nameRsc) || o.name || '')
+      .filter(n => n && n.toLowerCase() !== me.toLowerCase() && party.isFleetmate(n));
+    this._ejectBackoff ??= new Map();
+    const target = cfg.to.length ? ejectTarget({ present, to: cfg.to, backoff: this._ejectBackoff, now }) : null;
+    if (target) {
+      const rows = ejectBatch(items, { batch: cfg.batch, extra: cfg.extra, received, merchant: cfg.merchant });
+      if (rows.length) {
+        this.doing = 'trading';
+        const r = await this.giveItems(target, rows);
+        if (r.moved.length) {
+          if (cfg.only_received) noteGone(me, r.moved);
+          this.tally.loot_ejected = (this.tally.loot_ejected || 0) + r.moved.reduce((t, m) => t + m.amount, 0);
+          this.note('ejected loot', { to: target, moved: r.moved, room: this.s.world?.room?.num ?? null,
+            why: 'sale goods ride with a station or courier, best value first, so the farmer keeps farming' });
+          try { this.ledgerEvent?.('loot_ejected', { to: target, items: r.moved, room: this.s.world?.room?.num ?? null }); } catch {}
+          this.progress(`ejected ${r.moved.length} kinds of loot to ${target}`);
+          return true;
+        }
+        this._ejectBackoff.set(target.toLowerCase(), Date.now() + BACKOFF_MS);
+        this.note('loot ejection refused', { to: target, offered: rows.map(x => x.name), why: r.why });
+      }
     }
-    this.tally.loot_ejected = (this.tally.loot_ejected || 0) + r.moved.reduce((t, m) => t + m.amount, 0);
-    this.note('ejected loot', { to: target, moved: r.moved, room: this.s.world?.room?.num ?? null,
-      why: 'sale goods ride with a station or courier, so the farmer keeps farming instead of walking to a counter' });
-    try { this.ledgerEvent?.('loot_ejected', { to: target, items: r.moved, room: this.s.world?.room?.num ?? null }); } catch {}
-    this.progress(`ejected ${r.moved.length} kinds of loot to ${target}`);
+    // OVERFLOW: nobody here took it and the pack is over the line. Drop the worst value per unit of pack where it stands.
+    // Operator: "if there's an overflow of loot just drop worst performing bulk/weight to value ratio for selling".
+    if (cfg.overflow_at == null || cfg.only_received) return false;
+    const cap = skills.carryCapacity(c);
+    if (!cap?.known || !cap.load) return false;
+    const fullness = Math.max(cap.load.weight / cap.weight_max, cap.load.bulk / cap.bulk_max);
+    const drops = overflowDrops(items, { fullness, capMax: cap.weight_max, overflowAt: cfg.overflow_at,
+      max: cfg.drop_max, merchant: cfg.merchant });
+    if (!drops.length) return false;
+    const dropped = [];
+    for (const d of drops) {
+      const o = (c.inventory || []).find(x => x.id === d.id);
+      if (!o) continue;
+      await this.s.pacer.submit('drop', () => c.drop([this.dropSpec(o, d.whole ? null : d.amount)])).catch(() => {});
+      dropped.push({ name: d.name, amount: d.amount });
+    }
+    if (!dropped.length) return false;
+    this.tally.loot_overflow_dropped = (this.tally.loot_overflow_dropped || 0) + dropped.reduce((t, m) => t + m.amount, 0);
+    this.note('dropped overflow loot', { dropped, fullness: Math.round(fullness * 100) / 100, overflow_at: cfg.overflow_at,
+      why: 'no station or courier here to take it; the worst shillings per unit of pack go, so the pack keeps room for better loot' });
+    try { this.ledgerEvent?.('loot_overflow_dropped', { items: dropped, room: this.s.world?.room?.num ?? null }); } catch {}
     return true;
   }
 

@@ -22,7 +22,7 @@ import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
-import { normalizeTradeGoods, tradeGoodsFit } from '../m59-loot-eject.mjs';
+import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
@@ -489,6 +489,8 @@ export class SocialPart {
       .catch(() => ({ events: [] }));
     await this.s.pacer.submit('act', () => c.acceptOffer()).catch(() => {});
     this.tally.donations_taken = (this.tally.donations_taken || 0) + 1;
+    // A STATION REMEMBERS WHAT IT WAS GIVEN AS TRADE GOODS, by name, so it passes on those and never its own kit.
+    if (tradeGoodsApply) { try { noteReceived(String(this.s.name ?? ''), t.theirs || []); } catch {} }
     this.note('accepted a donation', {
       from: t.withName, took: t.theirs,
       why: 'a fleetmate paying for a service in advance: accept now, cast at the next '
