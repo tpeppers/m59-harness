@@ -480,3 +480,23 @@ The completed offline run reported 34 movement suites with zero new
 regressions (existing baseline reds retained), 392 FleetScript checks with
 zero failures, and passing shared-wall, rail, library, acquisition and epoch
 checks.
+
+## Rescue instead of a sip
+
+Operator, 2026-10-27: *"anyone who knows rescue doesn't need to grab a chalice they can just go in the first lap and
+bring 5 emeralds and cast rescue when the chalice would be drank during the trip"*. `rideIslandCup` (and the
+`island-trip` / `island-chalice` scripts, `rideMode: auto | cup | rescue`) rides by casting when there is no cup.
+
+- **It lands where the sip lands, because a sip IS a Rescue.** `chalice.kod` NewApplied casts `SID_RESCUE` at spell
+  power 1, and `rescue.kod` DoRescue picks the destination for both: from the orc caves the Pool of Vigor (2510), from
+  the pool Ko'catan Inn (2001), and a guild hall first if it is in the same region. A cast only differs in its delay,
+  which is shorter at higher power.
+- **What the cup skips, the cast pays:** 16 mana, one emerald, and karma of **+30** (`spell.kod` KarmaCheck; Shal'ille
+  level 3). `rescueReady` requires the spell known, karma read and at least +30, and an emerald per leg (two).
+  An unreadable spell list or karma is a no, never "does not know".
+- **auto:** exactly one full cup rides the cup; no cup and rescue ready rides rescue; neither is refused as
+  `requires_exactly_one_chalice_or_rescue`, naming why. Two cups are still refused.
+- **A failed roll is retried** ("You were unsuccessful in casting rescue.": half the mana, no emerald), up to
+  `rescueTries` (6), resting for mana when the cast tool says it is short. A karma refusal or a PvP lockout ("You've
+  attacked a player too recently.") stops the ride at once. The pool of vigor is drunk between the casts as between the
+  sips, and a rescuer skips the jungle refill: it has no cup. `m59-island-rescue-test.mjs` (14).

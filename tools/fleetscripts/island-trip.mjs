@@ -13,6 +13,8 @@ export const script={name:'island-trip',describe:'Go to the Island, refill after
   params:{agents:{type:'agents',required:true},outbound:{type:'string',default:'chalice',options:['chalice','walk']},
     task:{type:'script',paramsIn:'taskParams',default:'',exclude:['island-trip','island-home','island-walk','island-chalice'],describe:'a FleetScript to run on the Island before coming home'},taskParams:{type:'string',default:'{}'},
     home:{type:'room',default:52},destination:{type:'room',default:2001},budgetMs:{type:'number',default:800000},requireSafeLegs:{type:'boolean',default:true},
+    // Operator 2026-10-27: a rider who knows rescue (karma +30, emeralds) casts it where a sip would be drunk.
+    rideMode:{type:'string',default:'auto',options:['auto','cup','rescue'],describe:'auto: one full chalice, else rescue if known and payable; cup or rescue to insist'},
     departSpacingMs:{type:'number',default:60000},waveBudgetMs:{type:'number',default:ISLAND_CONVOY_WAIT_MS},queueBudgetMs:{type:'number',default:ISLAND_CONVOY_WAIT_MS},
     keepItems:{type:'boolean',default:true},minHealth:{type:'number',default:1},fragileBelow:{type:'number',default:20},minVigor:{type:'number',default:80}},
   async steps(p){

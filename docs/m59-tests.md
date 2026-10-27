@@ -237,6 +237,9 @@ through a nested shelter order.
   a no, the reserve is kept, a ride takes a sip, a refill resets to 3); the keeper's live station, ride gate, count and
   top-up; refill trips inside the default risk profile (overridable), refill-before-serve ordering, and a disabled
   desk that travellers decline; three list-literal reagents (resist poison, umbrella, detect invisible) read from the kod.
+- `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
+  the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
+  in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.
 - `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value

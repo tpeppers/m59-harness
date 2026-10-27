@@ -130,6 +130,86 @@ async function sipTo(ctx,to,record,save){
     await pause(750);
   }
 }
+// RESCUE INSTEAD OF A SIP. Operator, 2026-10-27: "anyone who knows rescue doesn't need to grab a chalice they can just go
+// in the first lap and bring 5 emeralds and cast rescue when the chalice would be drank during the trip". It lands
+// where the sip lands, because a sip IS a Rescue: chalice.kod NewApplied casts SID_RESCUE at spell power 1, and the
+// destination is rescue.kod DoRescue for either (the guild hall if in the same region; Ko'catan Inn from the Pool of
+// Vigor or anywhere in Ko'catan; the Pool of Vigor from the orc caves). A cast differs only in its delay (shorter at
+// higher power: CastSpell) and in its costs, which the cup skips: 16 mana, one emerald, and karma of +30 (spell.kod
+// KarmaCheck; Shal'ille level 3), refused as "not good enough". A failed roll ("You were unsuccessful in casting",
+// SpellFailed) costs half the mana and no emerald, so it is retried while mana and attempts last.
+export const RESCUE_KARMA=30, RESCUE_MANA=16, RESCUE_LEGS=2;
+export const RESCUE_STARTED=/start your rescue preparations|already being rescued/i;
+export const RESCUE_ROLL_FAILED=/unsuccessful in casting/i;
+// spell.kod spell_too_soon_since_attacking; chalice.kod chalice_cant_use_pkill.
+export const RESCUE_LOCKOUT=/attacked a player too recently|walked the path of peace/i;
+const units=(items,re)=>items.filter(i=>re.test(String(i.name??''))).reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
+/** Can this body ride by casting? { ok, why?, ability, karma, emeralds }. Unreadable is never a yes. */
+export async function rescueReady(ctx,{legs=RESCUE_LEGS}={}){
+  const ab=await ctx.call('abilities',{agent:ctx.agent,kind:'spells',name:'rescue',known_only:false}).catch(e=>({error:e.message}));
+  if(ab?.error||ab?.spells==null)return {ok:false,why:'its spell list is not readable yet'+(ab?.spells_unreadable?': '+ab.spells_unreadable:'')};
+  const row=ab.spells.find(x=>/^rescue$/i.test(String(x.name??'')));
+  if(!row)return {ok:false,why:'does not know rescue'};
+  const st=await ctx.call('status',{agent:ctx.agent}).catch(()=>null);
+  const karma=Number(st?.karma?.value??st?.karma);
+  if(!Number.isFinite(karma))return {ok:false,why:'karma is not readable'};
+  if(karma<RESCUE_KARMA)return {ok:false,why:`karma ${karma}, rescue needs +${RESCUE_KARMA}`};
+  const emeralds=units(await pack(ctx),/^emeralds?$/i);
+  if(emeralds<legs)return {ok:false,why:`${emeralds} emerald(s) for ${legs} casts`};
+  return {ok:true,ability:row.ability??null,karma,emeralds};
+}
+/** Which way this body rides: 'cup' (one full chalice), 'rescue' (knows it, can pay), or a refusal naming both. */
+export async function rideMode(ctx,mode='auto'){
+  if(mode==='cup'){await fullCup(ctx);return 'cup';}
+  if(mode==='rescue'){const r=await rescueReady(ctx);if(!r.ok)throw Error('rescue_not_ready: '+r.why);return 'rescue';}
+  const cups=(await pack(ctx)).filter(i=>/chalice of the rain/i.test(i.name));
+  if(cups.length===1){await fullCup(ctx);return 'cup';}
+  if(cups.length>1)throw Error('requires_exactly_one_chalice');
+  const r=await rescueReady(ctx);
+  if(r.ok)return 'rescue';
+  throw Error('requires_exactly_one_chalice_or_rescue: no chalice, and rescue is not available ('+r.why+')');
+}
+async function castTo(ctx,to,record,save,{tries=6}={}){
+  const agent=ctx.agent;
+  await ctx.call('rest',{agent,stand:true});
+  const before=location(await ctx.call('look',{agent}));
+  if(!Number.isFinite(before.hp?.value)||!Number.isFinite(before.hp?.max)||before.hp.max<=0)throw Error('traveller_health_unreadable');
+  if(before.room===1||before.hp.value<=0)throw Error('traveller_died');
+  if(before.hp.max<(ctx.fragileBelow??20))throw Error('traveller_below_max_health_floor');
+  const leg={from:before,to,started_at:new Date().toISOString(),by:'rescue',attempts:[]};record.sips.push(leg);save();
+  let started=false;
+  for(let k=0;k<tries&&!started;k++){
+    const r=await ctx.call('cast',{agent,spell:'rescue'},60000).catch(e=>({cast:false,reason:e.message}));
+    const said=[...(r.messages??[]),r.reason??''].join(' | ');
+    leg.attempts.push({at:new Date().toISOString(),cast:r.cast,reason:r.reason??null,messages:r.messages??[],mana_spent:r.mana_spent??null});save();
+    if(RESCUE_LOCKOUT.test(said))throw Error('pvp_teleport_lockout');
+    if(r.cast===false){
+      if(/karma/i.test(r.reason??''))throw Error('rescue_karma: '+r.reason);
+      if(/mana/i.test(r.reason??'')){                       // rest for mana, stand, try again
+        await ctx.call('rest',{agent}).catch(()=>null);await pause(30000);await ctx.call('rest',{agent,stand:true}).catch(()=>null);continue;}
+      throw Error('rescue_refused: '+(r.reason??'unknown'));
+    }
+    if(RESCUE_STARTED.test(said)){started=true;break;}
+    if(RESCUE_ROLL_FAILED.test(said)){await pause(2500);continue;}
+    started='unconfirmed';                                   // no line heard: watch for the landing anyway
+  }
+  if(!started)throw Error('rescue_failed_its_roll_'+tries+'_times');
+  leg.started=started;save();
+  const until=Date.now()+90000;
+  for(;;){
+    const l=location(await ctx.call('look',{agent}));
+    if(!Number.isFinite(l.hp?.value)||!Number.isFinite(l.hp?.max)||l.hp.max<=0)throw Error('traveller_health_unreadable');
+    if(l.room===1||l.hp?.value<=0)throw Error('traveller_died');
+    if(l.hp.max<before.hp.max)throw Error('traveller_lost_max_health');
+    if(l.room===to){leg.landed=l;save();return;}
+    if(l.room!==before.room)throw Error('unexpected_rescue_landing_'+l.room);
+    if(Date.now()>until)throw Error('rescue_landing_not_observed');
+    await pause(750);
+  }
+}
+/** One leg of the ride: a sip of the cup, or a cast of rescue, landing in the same room either way. */
+const legTo=(ctx,to,record,save)=>record.mode==='rescue'?castTo(ctx,to,record,save,{tries:ctx.rescueTries??6}):sipTo(ctx,to,record,save);
+
 // THE POOL OF VIGOR (operator, 2026-10-23: "make sure it uses the pool of vigor to get 200 vigor by drinking it
 // ... it's free max vigor on the way because it takes a while to rescue anyway"). The first sip lands in 2510, "A
 // spring of vitality" (orccav5x.kod). Standing in the pool (rows 42-46, cols 19-25) and pressing GO is a drink:
@@ -328,7 +408,7 @@ export async function recoverIslandRefill(ctx,{record,save}){
   }
   await hop(ctx,2000,record);record.refill.complete=true;save();
 }
-export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true,queueBudgetMs=ISLAND_CONVOY_WAIT_MS}={}){
+export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,rideMode:asked='auto'}={}){
   if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_refill_queue_budget');
   const {agent,call,state}=ctx;
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
@@ -343,12 +423,12 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
       if(recovery==='second_sip'){
         previous.sips[0].landed??=location(await call('look',{agent}));save();
         if(!previous.pool)await drinkPoolOfVigor(ctx,previous,save);
-        await sipTo(ctx,2001,previous,save);
+        await legTo(ctx,2001,previous,save);
       }
       // Island arrival proves both completed teleports without consuming more water.
       if(recovery==='refill'||recovery==='second_sip'){
         previous.sips[1].landed??=location(await call('look',{agent}));
-        await refillIslandCup(ctx,{record:previous,save,keepItems,queueBudgetMs});
+        if(previous.mode!=='rescue')await refillIslandCup(ctx,{record:previous,save,keepItems,queueBudgetMs});
         previous.end=location(await call('look',{agent}));previous.complete=true;delete previous.failure;save();
         return {ok:true,evidence:file,recovered:true};
       }
@@ -357,21 +437,22 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
       else throw Error('unfinished_island_ride_requires_observed_landing: '+file);
     }
   }
-  // Confirm a full cup BEFORE walking or sipping.
-  await fullCup(ctx);
+  // Confirm a full cup, or that this body can cast rescue twice, BEFORE walking or sipping.
+  const mode=await rideMode(ctx,asked);
   const room=(await call('look',{agent})).room?.num;
   if(room!==27&&!(room>=2500&&room<=2509))throw Error('island_ride_requires_orc_cave_region');
-  const record={format:'m59-island-chalice/1',at:new Date().toISOString(),agent,receipt:file,start:location(await call('look',{agent})),sips:[],travel:[],complete:false};
+  const record={format:'m59-island-chalice/1',at:new Date().toISOString(),agent,mode,receipt:file,start:location(await call('look',{agent})),sips:[],travel:[],complete:false};
   const save=()=>writeFileSync(file,JSON.stringify(record,null,2));state.islandChalice=record;save();
   try{
     if(room===27)await hop(ctx,2500,record);
     await prepareIslandSip(ctx,record,save);
-    await sipTo(ctx,2510,record,save);
+    await legTo(ctx,2510,record,save);
     // Free vigor while we are standing at the spring anyway (operator, 2026-10-23).
     await drinkPoolOfVigor(ctx,record,save);
-    // A second sip starts only after the first Rescue has landed.
-    await sipTo(ctx,2001,record,save);
-    await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
+    // A second sip (or cast) starts only after the first Rescue has landed.
+    await legTo(ctx,2001,record,save);
+    // A rescuer carries no cup, so there is nothing to refill.
+    if(mode!=='rescue')await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
     record.end=location(await call('look',{agent}));record.complete=true;save();
     writeFileSync(file.replace('-pending','-'+Date.now()),JSON.stringify(record,null,2));
     return {ok:true,evidence:file};
