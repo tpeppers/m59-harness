@@ -934,3 +934,8 @@ and healing occurs afterwards, not to flee through it and risk low-health travel
 - **A poisoned relog stays out 12 s** (`reconnect`). PoisonTimer re-arms only while the player is in the world and
   UserLogonHook starts a new one whenever poison remains, so a relog inside 10 s runs two timers: Fozzie's four relogs
   showed two interleaved 5-HP cadences, about -1 HP/s instead of -0.5.
+- **Back from a poisoned relog with a hostile still adjacent: off again at once.** Operator: keep the relog short, on a safe
+  spot, to lose aggro; take the new spot only if nothing hostile is adjacent. A monster drops its target at logoff and an
+  aggressive one re-acquires on return, so standing up beside it undoes the logoff. Each logoff is the 12 s floor, at
+  most six in a row. Logging off never shortens the poison: FreezeAllEnchantments pauses it offline and adds 3 s to a
+  harmful enchantment on every logoff.

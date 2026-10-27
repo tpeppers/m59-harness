@@ -566,3 +566,7 @@ and *"the guard house provides unique restrictions around travel, and there are 
   station before any town trip, and on the island (or under a confinement the station is outside) that walk was refused
   and retried every 30 s for ever, holding the body: zero kills. `chaliceStationOutOfReach` declines the return there,
   and a refused return is an answer, not a delay; the town trip completes at the counters it can reach.
+- **And a refusal at the gate opens a sell trip.** When the guard would refuse the pack on the town side, the keeper asks
+  for a market trip at the island counters (the smithy buys weapons and wearables; the sale plan keeps one spare per
+  empty armour slot), at most once every ten minutes, so the next walk to 2115 passes. Avars drop armour the strategy
+  never asked for (Scooter, 2026-10-27: worn scale plus a spare scale and a chain), and every walk back had been refused.

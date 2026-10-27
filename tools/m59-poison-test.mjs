@@ -62,6 +62,9 @@ console.log('the shelter is the nearest safe spot');
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('a poisoned keeper takes the nearest recovery spot', /if \(poisonedNow\(this\.s\?\.client\) && !sheltered && !this\.hold[\s\S]{0,300}takeRecoverySpot\('poisoned: sheltering in place/.test(src));
+  ok('just back from a poisoned relog with a hostile adjacent: off again at once, at the 12 s floor, at most six times',
+     /else if \(justBack && \(this\._poisonRelogs \?\? 0\) < 6\)[\s\S]{0,500}reconnect\('poisoned, a hostile adjacent after the relog', \{ offlineMs: POISON_RELOG_OFFLINE_MS \}\)/.test(src));
+  ok('and only then the new spot, with nothing beside us', src.indexOf("poisoned, a hostile adjacent after the relog") < src.indexOf("takeRecoverySpot('poisoned: sheltering in place"));
   ok('and the forward-on-the-route shelter no longer fires for poison', /const poisonedAndFading = ailingNow && !poisonedNow\(this\.s\?\.client\)/.test(src));
 }
 

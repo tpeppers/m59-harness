@@ -41,6 +41,8 @@ console.log('every town-trip site reads the table for where it stands');
   ok('the sell circuit is the table\'s', /marketStops: wantsMarket \? townTable\(this\.s\.world\?\.room\?\.num\)\.MARKET_STOPS/.test(src));
   ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num\);\s*const shops = town\.FOOD_SHOPS/.test(src));
   ok('the travel gate asks the guard before walking', /const gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
+  ok('and a refusal opens a sell trip at the island counters (at most every ten minutes) so the next walk passes',
+     /this\.operatorTripRequest = \{ town: 'market', why: `the Ko'catan gate refuses the pack/.test(src) && /_gateSellAskedAt \?\? 0\) > 600_000/.test(src));
 }
 
 console.log('the guard gate');

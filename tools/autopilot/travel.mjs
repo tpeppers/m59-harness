@@ -793,6 +793,14 @@ export class TravelPart {
       const gate = this.kocatanGateRefusal?.(room);
       if (gate) {
         this.note('refused a journey the Ko\'catan guard will stop', { to: Number(room), ...gate });
+        // AND DO SOMETHING ABOUT IT: a sell trip to the island's counters (the smithy, 2003, buys weapons and wearables; the
+        // sale plan keeps one spare per EMPTY armour slot), so the next attempt passes. Prod 2026-10-27: Scooter picked up
+        // a scale armour and a chain from avar kills, and every walk back to 2115 -- a food trip, a recovery detour, the
+        // hunt relocation -- was refused for ever. At most once every ten minutes; the operator's own trip comes first.
+        if (!this.townTrip && !this.operatorTripRequest && Date.now() - (this._gateSellAskedAt ?? 0) > 600_000) {
+          this._gateSellAskedAt = Date.now();
+          this.operatorTripRequest = { town: 'market', why: `the Ko'catan gate refuses the pack (${gate.why})`, by: 'keeper:kocatan_gate', at: Date.now() };
+        }
         return { arrived: false, refused: true, reason: `kocatan_gate: ${gate.why}`, gate };
       }
     }
