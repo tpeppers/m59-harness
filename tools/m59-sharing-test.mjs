@@ -123,6 +123,36 @@ await ok('a pack\'s "orc tooth" pays enchant weapon\'s "orctooth" — no phantom
   assert.equal(ap.countOfKind('emerald'), 0);
 });
 
+await ok('a vial pays its liquid: "vial of solagh" is the catalogue\'s Solagh, "vial of shaman blood" its ShamanBlood', () => {
+  // Camilla, 2026-10-27: 17 vials of solagh carried, 0 counted, "cannot afford another cast" on dispel illusion.
+  const ap = Object.create(Autopilot.prototype);
+  ap.packAsItems = () => [{ name: 'vial of solagh', amount: 17 }, { name: 'vial of shaman blood', amount: 2 },
+    { name: 'dragonfly eye', amount: 12 }];
+  assert.equal(ap.countOfKind('solagh'), 17);
+  assert.equal(ap.countOfKind('shaman blood'), 2);
+  assert.equal(ap.countOfKind('dragonfly eye'), 12);
+  assert.equal(ap.countOfKind('yrxl sap'), 0, 'a vial of one liquid is not another');
+  for (const [, n] of spellCost('dispel illusion').reagents.filter(([k]) => k === 'solagh')) assert.ok(17 >= n);
+});
+
+await ok('a spell short of ONE reagent asks once, not on every pass', () => {
+  // 2026-10-27: 888 reagent_shortfall rows from Camilla and 1106 from Raphael in a few hours. The covered
+  // reagents were dropped from the shortfall each pass and then read as "new" on the next one.
+  const ap = Object.create(Autopilot.prototype);
+  const rows = [];
+  ap.policy = {}; ap.mode = 'survive'; ap.running = true; ap.inert = false;
+  ap.notes = []; ap.note = (w, d) => ap.notes.push({ w, ...d }); ap.ledgerEvent = (k, d) => rows.push({ k, ...d });
+  ap.reagentCount = () => ({ elderberry: 9, herbs: 9 }); ap.larder = () => [{}]; ap.loadout = () => null;
+  ap.countOfKind = k => (k === 'solagh' ? 0 : 50);
+  const c = { inventory: [{ id: 1, nameRsc: 1, amount: 0 }], rsc: { get: () => 'long sword' }, me: { name: 'Caster' },
+    lastCastSent: { at: Date.now(), name: 'dispel illusion' } };
+  ap.s = { client: c, name: 'caster', world: { room: { num: 27 } } };
+  for (let i = 0; i < 4; i++) ap.declareInterest();
+  assert.equal(rows.filter(r => r.k === 'reagent_shortfall').length, 1, JSON.stringify(rows));
+  assert.equal(ap._needsNow.get('solagh'), 2 * SHORTFALL_CASTS, JSON.stringify([...ap._needsNow]));
+  assert.equal(ap._needsNow.get('dragonfly eye') ?? 0, 0, 'a covered reagent is not a need');
+});
+
 // ------------------------------------------------------------------------------ give
 const desk = { agent: 'hk1', character: 'Desk', room: 2, hops: 1, service: true, needs: { emerald: 10 } };
 const mate = { agent: 't4', character: 'Mate', room: 38, hops: 0, service: false, needs: { herb: 30 } };

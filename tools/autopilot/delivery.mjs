@@ -46,8 +46,12 @@ export class DeliveryPart {
   // orc teeth on every pass (2026-10-20).
   matchesKind(name, kind) {
     const n = String(name || ''), key = x => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    // A LIQUID REAGENT IS NAMED BY ITS VIAL. The spell catalogue says Solagh and ShamanBlood; the pack
+    // says "vial of solagh" and "vial of shaman blood" (solagh.kod, shamblod.kod). Without this Camilla
+    // counted 0 solagh carrying 17, and her keeper asked the fleet for it on every pass (2026-10-27).
+    const bare = x => key(String(x || '').replace(/^\s*vials?\s+of\s+/i, ''));
     return skills.shareKind(n) === kind || norm(n) === String(kind || '').toLowerCase()
-      || (!!key(kind) && key(n) === key(kind));
+      || (!!key(kind) && (key(n) === key(kind) || bare(n) === key(kind)));
   }
 
   countOfKind(kind) {

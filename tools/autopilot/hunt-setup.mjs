@@ -198,8 +198,13 @@ export class HuntSetupPart {
       if (Date.now() - at > SHORTFALL_TTL_MS) { this._castSpells.delete(spell); continue; }
       const cost = spellCost(spell);
       if (!cost?.reagents?.length) continue;
-      if (!cost.reagents.some(([item, n]) => this.countOfKind(item) < n)) continue;
-      const fresh = cost.reagents.some(([item]) => !this._reagentShortfall?.has(String(item).toLowerCase()));
+      const short = cost.reagents.filter(([item, n]) => this.countOfKind(item) < n);
+      if (!short.length) continue;
+      // FRESH MEANS A REAGENT THAT IS SHORT AND NOT YET ASKED FOR. Asking about every reagent of the spell
+      // re-raised it on every pass: the loop below drops the ones the pack already covers, so the next pass
+      // found them "new" again -- 888 reagent_shortfall rows from Camilla and 1106 from Raphael in a few
+      // hours (2026-10-27), each one a fresh "asking the fleet" note.
+      const fresh = short.some(([item]) => !this._reagentShortfall?.has(String(item).toLowerCase()));
       this._reagentShortfall = shortfallTargets(cost, this._reagentShortfall ?? new Map());
       if (fresh) {
         this.note('cannot afford another cast: asking the fleet', { spell, reagents: cost.reagents });
