@@ -229,6 +229,17 @@ through a nested shelter order.
   swings again only at an unlanded tag that followed it in (up to `tries`, default 12), and gives up past `wait_s`. At FULL health a tagger is exempt from the pull's crowd guard; hurt, or not a tagger, it is not. The killer walks
   to the wall, kills only a landed tag, clears anything else at the wall, and farms as usual when its
   tagger is elsewhere. A local strategy file of the same name overrides a private one.
+- `m59-loot-eject-test.mjs` (30): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
+  `to` in the room and not backed off; the offer is the sale plan's `sell` rows only (never equipped, never a synthetic
+  id), heaviest first, partial stacks by amount; a station takes trade goods only while its pack stays `keep_free`
+  empty; `giveItems` counts what left the pack by id and cancels an uncountered offer; the keeper, acceptor, broker and
+  strategy bindings.
+- `m59-strategy-gate-test.mjs` (58): a farm strategy's `requires`, kill-rate `floor` and `otherwise`
+  (`m59-strategy-gate.mjs`, the gate in `m59-strategy-engine.mjs`). Unread weapons are unknown, never a refusal; the
+  floor's clock runs only on farming passes and trips on a window with too few kills. The escalation never just
+  stops: a trip re-reads every weapon, a desk remedy (dedicate, uncurse) is asked for while the farm keeps running
+  with its clock paused, an unanswered or remedy-less case serves the `otherwise` strategy (or the machine default)
+  and comes back by itself when the requirement is met, a handoff keeps it, and it stands down only with no fallback.
 - `m59-strategy-engine-test.mjs` (116): farming strategy files (`farm_strategy`,
   `docs/m59-strategies.md`). The three committed examples load and mean today's orders; a file that
   will not parse, names a survival/war key at any depth, carries a bad value, a non-function hook,

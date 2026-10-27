@@ -8,15 +8,18 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 15 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
+// 17 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
 //   deliveryRadius, deliveryNeighbourhood, deliveryRequestOf, prepareFarmDelivery,
 //   deliveryCashReserve, cancelFarmDelivery, makeRoomToBuy, buyFarmDeliveryCargo, giveFarmReagents,
-//   deliverFarmSupplies
+//   deliverFarmSupplies, ejectLoot, giveItems
 import { norm } from '../m59-loadout.mjs';
 import { roomsWithin } from '../m59-map.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
+import { MARKET_KEEP } from '../m59-items.mjs';
+import * as party from '../m59-party.mjs';
+import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject } from '../m59-loot-eject.mjs';
 import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
 
 export class DeliveryPart {
@@ -446,6 +449,82 @@ export class DeliveryPart {
     this.pendingFarmDelivery = null;
     this.progress('resupplied the farmers');
     return true;
+  }
+
+  // LOOT EJECTION (m59-loot-eject.mjs): hand the sale pile to a station or courier of ours standing in this room.
+  // Operator, 2026-10-26: "a strong downward pressure on our farmer packs". The rows are this keeper's own sale plan,
+  // so nothing a market visit would keep can leave. Returns true when goods moved this pass.
+  async ejectLoot() {
+    let cfg = null;
+    try { cfg = normalizeLootEject(this.policy.lootEject); } catch (e) {
+      if (this._ejectBad !== e.message) { this._ejectBad = e.message; this.note('loot ejection misconfigured', { why: e.message }); }
+      return false;
+    }
+    if (!cfg) return false;
+    const now = Date.now();
+    if (now - (this._ejectAt ?? 0) < cfg.every_s * 1000) return false;
+    const c = this.s?.client;
+    if (!c || !this.running || this.inert || c.trade) return false;
+    if (this.facultyHeld('economy')) return false;           // a bot holds trading
+    const v = c.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.8) return false;
+    if ((this.frozenUntil && now < this.frozenUntil) || this.threat?.()?.landing > 0) return false;
+    this._ejectAt = now;
+    const me = String(this.s.name ?? '').toLowerCase();
+    const present = [...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => (o.flags & OF.PLAYER) && o.id !== c.selfId)
+      .map(o => c.rsc?.get?.(o.nameRsc) || o.name || '')
+      .filter(n => n && n.toLowerCase() !== me && party.isFleetmate(n));
+    this._ejectBackoff ??= new Map();
+    const target = ejectTarget({ present, to: cfg.to, backoff: this._ejectBackoff, now });
+    if (!target) return false;
+    if (!skills.equippedNow(c)) return false;               // unknown equipment blocks every row of the plan
+    const plan = skills.inventorySalePlan(this.s, { keep: MARKET_KEEP, protect: this.protectedItemNames(),
+      loadout: this.loadout(), maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+    if (plan?.error) return false;
+    const rows = ejectBatch(plan?.items ?? [], { batch: cfg.batch });
+    if (!rows.length) return false;
+    this.doing = 'trading';
+    const r = await this.giveItems(target, rows);
+    if (!r.moved.length) {
+      this._ejectBackoff.set(target.toLowerCase(), Date.now() + BACKOFF_MS);
+      this.note('loot ejection refused', { to: target, offered: rows.map(x => x.name), why: r.why });
+      return false;
+    }
+    this.tally.loot_ejected = (this.tally.loot_ejected || 0) + r.moved.reduce((t, m) => t + m.amount, 0);
+    this.note('ejected loot', { to: target, moved: r.moved, room: this.s.world?.room?.num ?? null,
+      why: 'sale goods ride with a station or courier, so the farmer keeps farming instead of walking to a counter' });
+    try { this.ledgerEvent?.('loot_ejected', { to: target, items: r.moved, room: this.s.world?.room?.num ?? null }); } catch {}
+    this.progress(`ejected ${r.moved.length} kinds of loot to ${target}`);
+    return true;
+  }
+
+  // A ONE-WAY GIFT OF CHOSEN ITEMS to a fleetmate standing here: offer, wait for its (empty) counter, accept, and count
+  // what actually left the pack by id. The receiver has to counter by itself (acceptDonations with trade_goods).
+  async giveItems(character, rows) {
+    const s = this.s, c = s.need();
+    const them = [...(c.room?.objects?.values?.() ?? [])].find(o => (o.flags & OF.PLAYER) &&
+      (c.rsc.get(o.nameRsc) || '').toLowerCase() === String(character).toLowerCase());
+    if (!them) return { moved: [], why: `${character} is not in the room` };
+    const held = id => { const o = (c.inventory || []).find(x => x.id === id); return o ? (o.amount > 0 ? o.amount : 1) : 0; };
+    const before = new Map(rows.map(r => [r.id, held(r.id)]));
+    const offers = rows.map(r => (r.whole ? r.id : { id: r.id, amount: r.amount }));
+    const at = c.evSeq;
+    await s.pacer.submit('trade', () => c.offer(them.id, offers));
+    const ev = await c.waitFor({ since: at, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 }).catch(() => ({ events: [] }));
+    if (!ev.events?.some(e => e.kind === 'countered')) {
+      await s.pacer.submit('trade', () => c.cancelOffer()).catch(() => {});
+      return { moved: [], why: `${character} did not take the offer (no counter in 8s: not accepting trade goods, or no room)` };
+    }
+    const acceptingAt = c.evSeq;
+    await s.pacer.submit('trade', () => c.acceptOffer());
+    await c.waitFor({ since: acceptingAt, kinds: ['trade-ended'], timeoutMs: 4000 }).catch(() => {});
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+    // WHAT LEFT THE PACK, by id: a handshake that moves nothing must not read as a delivery.
+    const moved = rows.map(r => ({ name: r.name, amount: Math.min(r.amount, Math.max(0, before.get(r.id) - held(r.id))) }))
+      .filter(m => m.amount > 0);
+    return { moved, ...(moved.length ? {} : { why: 'the trade ended but nothing left the pack' }) };
   }
   // @end 1
 }

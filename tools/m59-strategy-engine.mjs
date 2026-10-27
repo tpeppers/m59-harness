@@ -74,6 +74,12 @@ import { classifyCombatLine } from './m59-combatlog.mjs';
 import { OF } from './m59-parse.mjs';
 import { isSpared } from './m59-spare.mjs';
 import * as party from './m59-party.mjs';
+import { KillFloor, requiresVerdict, requestFor, fileStore } from './m59-strategy-gate.mjs';
+
+// THE MACHINE'S CATCH-ALL farm strategy, for a file that names no `otherwise`: { "strategy": "<name>" }. Gitignored.
+export const farmStrategyOtherwiseFile = (env = process.env) => env.M59_FARM_OTHERWISE_FILE
+  || join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', 'farm-strategy-otherwise.json');
+export const DIAGNOSE_MS = 3 * 60_000;
 
 /**
  * A hook's view of the room: every object but ourselves, as data. kind is 'player', 'monster'
@@ -212,8 +218,16 @@ export async function listFarmStrategies({ dir = null, resolveItem } = {}) {
  *   s.client (eventsSince, evSeq, vitals), s.world.room.num, s.name, touchState()
  */
 export class FarmStrategyEngine {
-  constructor(host, { dir = null, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now() } = {}) {
+  constructor(host, { dir = null, resolveItem, budgetMs = HOOK_BUDGET_MS, now = () => Date.now(), floorStore = null } = {}) {
     this.host = host;
+    this.floorStore = floorStore;
+    this.floor = null;        // the kill-rate floor (m59-strategy-gate.mjs), when the file declares one
+    this.gateCache = null;
+    this.requestedAt = 0;
+    this.gateNoted = null;
+    this.serving = null;      // the file actually applied: the assignment's, or its fallback's during an escalation
+    this.escalation = null;   // what a tripped floor or an unmet requirement is doing about it (see gate())
+    this.primaryVersion = null;
     this.dir = dir;
     this.resolveItem = resolveItem;
     this.budgetMs = budgetMs;
@@ -262,38 +276,60 @@ export class FarmStrategyEngine {
       ? policy.farmStrategy.trim() : null;
     if (want !== this.assigned) {
       if (this.assigned) this.release(want ? `reassigned to ${want}` : 'unassigned');
-      this.assigned = want;
+      this.assigned = want; this.serving = want;
       this.loaded = null; this.refused = null; this.triedMtime = undefined;
+      this.floor = null; this.gateCache = null; this.gateNoted = null;
+      this.escalation = want ? this.readEscalation(want) : null;
     }
     if (!want) return this.status();
 
+    // THE CATCH-ALL: while the escalation has fallen back, the file being SERVED is the fallback's, and the
+    // assignment (the order) is unchanged. Lifting the fallback restores the assignment's file.
+    const serve = this.escalation?.stage === 'fallback' && this.escalation.to ? this.escalation.to : want;
+    if (serve !== this.serving) {
+      if (this.loaded) this.release(serve === want ? `back to ${want}` : `falling back to ${serve}`);
+      this.serving = serve;
+      this.loaded = null; this.refused = null; this.triedMtime = undefined;
+      this.floor = null; this.gateCache = null; this.gateNoted = null;
+    }
+
     let file = null;
-    try { file = strategyFile(want, this.dir); } catch (e) {
+    try { file = strategyFile(serve, this.dir); } catch (e) {
       this.refused = { why: e.message, problems: [], at: this.now(), mtime: null };
-      this.noteOnce('refused', 'farm strategy refused', { strategy: want, why: e.message,
+      this.noteOnce('refused', 'farm strategy refused', { strategy: serve, why: e.message,
         keeping: this.loaded ? 'the previous version' : 'the existing posture' });
+      if (serve !== want) this.standDown(`the fallback ${serve} did not load: ${e.message}`);
       return this.status();
     }
     const mtime = mtimeOf(file);
     const stale = !this.loaded || mtime !== this.loaded.mtime;
     if (stale && mtime !== this.triedMtime) {
       this.triedMtime = mtime;
-      const r = await loadFarmStrategy(want, { dir: this.dir, resolveItem: this.resolveItem });
-      if (this.assigned !== want) return this.status();   // reassigned while we awaited
+      const r = await loadFarmStrategy(serve, { dir: this.dir, resolveItem: this.resolveItem });
+      if (this.assigned !== want || this.serving !== serve) return this.status();   // changed while we awaited
       if (r.ok) {
         const reload = !!this.loaded;
         this.loaded = r; this.refused = null;
         this.overrides = {}; this.memory = {}; this.hooks = {};
+        // An EDITED assignment is a new plan: its escalation is forgotten ("try again"). A keeper restart on the
+        // same file reads the saved escalation and floor back, so a handoff neither forgives nor resets them.
+        if (serve === want && this.escalation && this.escalation.version !== r.mtime) this.clearEscalation('the file was edited');
+        if (serve === want) this.primaryVersion = r.mtime;
+        this.floor = r.strategy.floor ? new KillFloor({ floor: r.strategy.floor, agent: this.agentName(),
+          strategy: r.strategy.name, version: r.mtime, now: this.now(),
+          ...(this.floorStore ? { store: this.floorStore } : {}) }) : null;
+        this.gateCache = null; this.gateNoted = null;
         if (reload) this.reloads++;
-        this.noteOnce(`loaded:${r.mtime}`, reload ? 'farm strategy reloaded' : 'farm strategy loaded', {
-          strategy: want, file: r.file, keys: Object.keys(r.strategy.desired),
+        this.noteOnce(`loaded:${serve}:${r.mtime}`, reload ? 'farm strategy reloaded' : 'farm strategy loaded', {
+          strategy: serve, ...(serve !== want ? { fallback_for: want } : {}), file: r.file, keys: Object.keys(r.strategy.desired),
           hooks: Object.keys(r.strategy.hooks), unrecognised: r.unrecognised.length ? r.unrecognised : undefined,
           why: reload ? 'the file changed on disk; no keeper restart' : reason }, { every: 0 });
       } else {
         this.refused = { why: r.why, problems: r.problems, at: this.now(), mtime: r.mtime };
-        this.noteOnce(`refused:${r.mtime}`, 'farm strategy refused', { strategy: want, why: r.why,
+        this.noteOnce(`refused:${r.mtime}`, 'farm strategy refused', { strategy: serve, why: r.why,
           keeping: this.loaded ? `the previous version (loaded ${new Date(this.loaded.mtime).toISOString()})`
                                : 'the existing posture — nothing from the file is applied' }, { every: 0 });
+        if (serve !== want && !this.loaded) this.standDown(`the fallback ${serve} did not load: ${r.why}`);
       }
     }
     if (!this.loaded?.ok) return this.status();
@@ -505,6 +541,8 @@ export class FarmStrategyEngine {
 
   /** Run one hook. Never throws, never awaits, never blocks longer than the hook itself. */
   dispatch(name, payload = {}) {
+    // Every counted kill feeds the floor, whoever holds `work` and whether or not the file has an onKill hook.
+    if (name === 'onKill' && this.floor) { try { this.floor.kill(this.now()); this.gateCache = null; } catch {} }
     const fn = this.loaded?.ok ? this.loaded.strategy.hooks[name] : null;
     if (!fn) return undefined;
     const st = this.hookState(name);
@@ -552,6 +590,200 @@ export class FarmStrategyEngine {
     return n;
   }
 
+  // ------------------------------------------------------------------------------ the gate
+  //
+  // A FARM THAT IS NOT WORKING ESCALATES; IT DOES NOT JUST STOP. Operator, 2026-10-26: "I don't want stoppage as a
+  // reaction except if there's no desk-solution available, and for those cases we'd want a gutter/catchall orders".
+  // So a tripped kill-rate floor, or an unmet `requires`, walks a ladder:
+  //
+  //   diagnosing     the floor tripped: every weapon is read afresh (a lapsed dedication is the likeliest cause and the
+  //                  one an old reading hides) for up to DIAGNOSE_MS, then the cause is named
+  //   awaiting_desk  the cause has a desk remedy (`requires.request`, `dedicate` for a missing magic weapon, `uncurse`
+  //                  for a weapon that will not come off): the service board is asked and the farm KEEPS RUNNING, its
+  //                  floor clock paused, until the cause clears or the request's ttl runs out unanswered
+  //   fallback       no desk remedy, or none answered: the file's `otherwise` strategy (else this machine's default,
+  //                  substrate/farm-strategy-otherwise.json) is served in its place. The assignment is unchanged, and
+  //                  it comes back by itself when a requirement that caused it is met
+  //   stood_down     only when there is no fallback, or the fallback itself failed: no quarry is chosen
+  //
+  // Survival is never on this ladder: fleeing, resting, eating and fighting back are decided above passFarm. The
+  // escalation is saved per character, so a keeper restart or handoff picks it up where it was. An explicit
+  // assignment (the broker) or an edit of the assigned file clears it: "try again".
+  agentName() { return this.host.s?.name ?? 'unknown'; }
+  store() { return this.floorStore ?? (this._store ??= fileStore()); }
+  readEscalation(assigned) {
+    const e = this.store().read(`${this.agentName()}~escalation`);
+    return e && e.assigned === assigned ? e : null;
+  }
+  setEscalation(e) {
+    this.escalation = e ? { assigned: this.assigned, version: this.escalation?.version ?? this.primaryVersion, ...e } : null;
+    if (this.escalation) this.store().write(`${this.agentName()}~escalation`, this.escalation);
+    else this.store().clear(`${this.agentName()}~escalation`);
+    this.gateCache = null;
+    if (e) this.noteOnce(`esc:${e.stage}:${e.why}`, `farm strategy escalation: ${e.stage}`,
+      { strategy: this.assigned, ...e }, { every: 0 });
+  }
+  clearEscalation(why) {
+    if (!this.escalation) return;
+    const was = this.escalation.stage;
+    this.setEscalation(null);
+    // The assignment's floor starts a fresh window: its trip is what the escalation answered.
+    this.store().clear(`${this.agentName()}~${this.assigned}`);
+    if (this.serving === this.assigned) this.floor?.restart(this.now());
+    this.noteOnce(`esc:clear:${why}`, 'farm strategy escalation cleared', { strategy: this.assigned, was, why }, { every: 0 });
+  }
+  standDown(why, extra = {}) {
+    if (this.escalation?.stage === 'stood_down' && this.escalation.why === why) return;
+    this.setEscalation({ stage: 'stood_down', since: this.now(), why, ...extra });
+  }
+
+  /** The catch-all for this assignment: the file's `otherwise`, else this machine's default; never itself. */
+  fallbackName(strat = this.loaded?.strategy) {
+    const own = strat?.otherwise ?? null;
+    if (own) return own;
+    try {
+      const j = JSON.parse(readFileSync(farmStrategyOtherwiseFile(), 'utf8'));
+      const n = typeof j?.strategy === 'string' ? j.strategy.trim() : '';
+      if (n && STRATEGY_NAME.test(n) && n !== this.assigned) return n;
+    } catch { /* none: silence */ }
+    return null;
+  }
+
+  /** No desk can fix it (or none did): serve the catch-all, or stand down when there is none. */
+  fallBack(why, { requires = null } = {}) {
+    const extra = requires ? { requires } : {};
+    if (this.serving !== this.assigned) { this.standDown(`the fallback ${this.serving} is not working either: ${why}`, extra); return; }
+    const to = this.fallbackName();
+    if (!to) { this.standDown(`${why}; no desk remedy and no fallback (otherwise) is declared`, extra); return; }
+    this.setEscalation({ stage: 'fallback', to, since: this.now(), why, ...(requires ? { requires } : {}) });
+  }
+
+  /** Ask the board for a service, at most once per its ttl. */
+  ask(service, ttlMin, why) {
+    const now = this.now();
+    const out = { service };
+    if (now - this.requestedAt < ttlMin * 60_000) return { ...out, posted_at: this.requestedAt };
+    const req = this.host.s?.joints?.effects?.request;
+    if (typeof req !== 'function') return { ...out, error: 'no service board in this process' };
+    try {
+      req({ service, target: this.agentName(), from: this.agentName(), room: this.host.s?.world?.room?.num ?? null,
+        why, pak: `strategy:${this.assigned}`, joint: 'farm.escalation', ttl_ms: ttlMin * 60_000 });
+      this.requestedAt = now;
+      return { ...out, posted_at: now };
+    } catch (e) { return { ...out, error: e.message }; }
+  }
+
+  /** A farming pass reached the hunt: advance the floor's clock (paused while a desk or a diagnosis is pending). */
+  farming() {
+    if (!this.floor || this.heldBy('work')) return null;
+    if (['diagnosing', 'awaiting_desk'].includes(this.escalation?.stage)) return this.floor.state(this.now());
+    const st = this.floor.farming(this.now());
+    this.gateCache = null;
+    return st;
+  }
+
+  requiresFacts() {
+    const h = this.host, c = h.s?.client;
+    let weapons = null, curse = null;
+    try { const w = h.weaponMagicStatus?.(); if (Array.isArray(w?.weapons)) weapons = w.weapons; curse = w?.curse_suspect ?? null; } catch {}
+    let pack = null;
+    try { if (Array.isArray(c?.inventory)) pack = c.inventory.map(o => c?.rsc?.get?.(o.nameRsc) || o.name || ''); } catch {}
+    return { weapons, pack, curse };
+  }
+
+  /** The named cause of a tripped floor, and its desk remedy if one exists. */
+  diagnose(strat, facts) {
+    const req = strat.requires ?? { magicWeapon: true, request: null };
+    const v = requiresVerdict(req, facts);
+    if (facts.curse) return { cause: 'cursed', why: `the weapon in hand will not come off (${facts.curse.name ?? 'unknown'})`,
+      service: 'uncurse', ttl_min: 15 };
+    if (v.met === false) {
+      const want = strat.requires ? requestFor(strat.requires, v) : { service: 'dedicate', ttl_min: 15 };
+      return { cause: 'requires', why: v.unmet.map(u => u.why).join('; '), requires: req,
+        ...(want ? { service: want.service, ttl_min: want.ttl_min } : {}) };
+    }
+    let dry = null;
+    try { dry = this.host.huntRoomCheck?.(); } catch {}
+    if (dry?.dry) return { cause: 'room', why: `${dry.room ?? 'this room'} does not spawn the quarry` };
+    return { cause: 'unknown', why: `weapons ${v.met === true ? 'are magic' : 'could not be read'}, no curse, the room spawns the quarry` };
+  }
+
+  gate() {
+    const strat = this.loaded?.ok ? this.loaded.strategy : null;
+    if (!strat) return null;
+    const esc0 = this.escalation;
+    if (!strat.requires && !strat.floor && !esc0) return null;
+    // While a bot or lease holds `work` the file is not in force, so neither is its gate.
+    const holder = this.heldBy('work');
+    if (holder) return { blocked: null, yielded_to: holder };
+    const now = this.now();
+    if (this.gateCache && now - this.gateCache.at < 5_000) return this.gateCache.value;
+    const facts = this.requiresFacts();
+    const onPrimary = this.serving === this.assigned;
+    const requires = strat.requires ? requiresVerdict(strat.requires, facts) : null;
+    let floor = this.floor ? this.floor.state(now) : null;
+    let request = null;
+    const esc = this.escalation;
+
+    if (!esc) {
+      if (requires?.met === false && onPrimary) {
+        const want = requestFor(strat.requires, requires);
+        const why = requires.unmet.map(u => u.why).join('; ');
+        if (want) {
+          this.setEscalation({ stage: 'awaiting_desk', cause: 'requires', service: want.service, why,
+            requires: strat.requires, since: now, until: now + want.ttl_min * 60_000 });
+          request = this.ask(want.service, want.ttl_min, `cannot farm ${this.assigned}: ${why}`);
+        } else this.fallBack(`cannot farm ${this.assigned}: ${why}`, { requires: strat.requires });
+      } else if (floor?.tripped) {
+        if (onPrimary) {
+          // Read every weapon afresh: a lapsed dedication is the likeliest cause, and an old reading hides it.
+          try { this.host.rereadWeapons?.(); } catch {}
+          this.setEscalation({ stage: 'diagnosing', since: now, until: now + DIAGNOSE_MS, why: floor.tripped.why });
+        } else this.standDown(`the fallback ${this.serving} tripped its own floor: ${floor.tripped.why}`);
+      }
+    } else if (esc.stage === 'diagnosing') {
+      const read = facts.weapons && !facts.weapons.some(w => !w.broken && w.bypasses_nonmagic == null);
+      if (read || now >= esc.until) {
+        const d = this.diagnose(strat, facts);
+        if (d.service) {
+          this.floor?.restart(now);
+          this.setEscalation({ stage: 'awaiting_desk', cause: d.cause, service: d.service, why: `${esc.why}: ${d.why}`,
+            ...(d.requires ? { requires: d.requires } : {}), since: now, until: now + d.ttl_min * 60_000 });
+          request = this.ask(d.service, d.ttl_min, `${this.assigned}: ${d.why}`);
+        } else this.fallBack(`${esc.why}: ${d.why}`, d.requires ? { requires: d.requires } : {});
+      }
+    } else if (esc.stage === 'awaiting_desk') {
+      const cleared = esc.cause === 'cursed' ? !facts.curse
+        : esc.cause === 'requires' ? requiresVerdict(esc.requires, facts).met === true : false;
+      if (cleared) { this.floor?.restart(now); this.clearEscalation(`the ${esc.service} worked: the cause is gone`); }
+      else if (now >= esc.until) this.fallBack(`${esc.why}; the ${esc.service} request was not answered in time`,
+        esc.requires ? { requires: esc.requires } : {});
+      else request = this.ask(esc.service, Math.max(1, Math.round((esc.until - esc.since) / 60_000)), esc.why);
+    } else if (esc.stage === 'stood_down') {
+      if (esc.requires && requiresVerdict(esc.requires, facts).met === true) this.clearEscalation('the requirement is met again');
+    } else if (esc.stage === 'fallback') {
+      // BACK BY ITSELF when the requirement that caused it is met (the desk came late, a weapon arrived).
+      if (esc.requires && requiresVerdict(esc.requires, facts).met === true) this.clearEscalation('the requirement is met again');
+      // And an edit of the assigned file is "try again".
+      else { try { if (esc.version != null && mtimeOf(strategyFile(this.assigned, this.dir)) !== esc.version)
+        this.clearEscalation('the assigned file was edited'); } catch {} }
+    }
+
+    const e = this.escalation;
+    floor = this.floor ? this.floor.state(now) : null;
+    const blocked = e?.stage === 'stood_down' ? { by: 'stood_down', why: e.why } : null;
+    const key = blocked ? blocked.why : null;
+    if (key !== this.gateNoted) {
+      this.gateNoted = key;
+      if (blocked) this.noteOnce(`gate:${key}`, 'farm strategy stood down', { strategy: this.assigned, ...blocked,
+        note: 'no desk remedy and no fallback: no quarry is chosen; fleeing, resting and fighting back are unchanged' }, { every: 0 });
+    }
+    const value = { blocked, serving: this.serving, ...(e ? { escalation: e } : {}),
+      ...(requires ? { requires } : {}), ...(floor ? { floor } : {}), ...(request ? { request } : {}) };
+    this.gateCache = { at: now, value };
+    return value;
+  }
+
   // ------------------------------------------------------------------------------ status
   status() {
     if (!this.assigned) return null;
@@ -577,7 +809,8 @@ export class FarmStrategyEngine {
       : yieldedKeys.length && yieldedKeys.length === Object.keys(keys).length ? 'yielding'
       : yieldedKeys.length ? 'partly yielded' : 'applied';
     return {
-      assigned: this.assigned, state, file: this.loaded?.file ?? this.refused?.file ?? null,
+      assigned: this.assigned, ...(this.serving && this.serving !== this.assigned ? { serving: this.serving } : {}),
+      state, file: this.loaded?.file ?? this.refused?.file ?? null,
       describe: strat?.describe ?? null,
       loaded_mtime: this.loaded?.mtime ?? null, reloads: this.reloads, reasserts: this.reasserts,
       refused: this.refused ? { ...this.refused,
@@ -585,6 +818,7 @@ export class FarmStrategyEngine {
       unrecognised: this.loaded?.unrecognised?.length ? this.loaded.unrecognised : [],
       keys,
       hooks: strat ? Object.fromEntries(Object.keys(strat.hooks).map(h => [h, { ...this.hookState(h) }])) : {},
+      ...(strat && (strat.requires || strat.floor || this.escalation) ? { gate: this.gate() } : {}),
       carry: 'only the assignment (policy.farmStrategy) is pushed and carried; the file\'s keys are ' +
              're-derived from the file by each keeper process and never written to the roster',
     };

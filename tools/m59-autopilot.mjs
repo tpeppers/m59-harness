@@ -2267,6 +2267,8 @@ export class Autopilot {
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
       acceptDonations: null,
+      // LOOT EJECTION (m59-loot-eject.mjs): { enabled, to: [station, courier], every_s, batch }. Off by default.
+      lootEject: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine
       // written before this expects.
       bannedWeapons: null,
@@ -3472,6 +3474,9 @@ export class Autopilot {
     // IDLE GEAR (m59-castrite.mjs): a casting strategy's say over what is worn when nothing is being
     // cast -- a disciple robe left on outside an inn comes off. A no-op without such a strategy.
     if(!stationaryTradeActive(s))await withBodyStage(s,'passIdleGear',()=>idleGearCheck(s, { why: 'pass' })).catch(error => this.note('idle gear check failed', { why: error.message }));
+    // LOOT EJECTION: the sale pile goes to a station or courier of ours standing here (m59-loot-eject.mjs). Off by default.
+    if (!stationaryTradeActive(s)&&await withBodyStage(s,'passSharing',()=>this.ejectLoot()).catch(error => {
+      this.note('loot ejection failed', { why: error.message }); return false; })) return;
     if (!stationaryTradeActive(s)&&await withBodyStage(s,'passSharing',()=>this.shareSpareReagents()).catch(error => {
       this.note('sharing pass failed', { why: error.message }); return false; })) return;
     // POST OUR SITUATION FOR OUR PARTNER, every pass and before any decision that reads

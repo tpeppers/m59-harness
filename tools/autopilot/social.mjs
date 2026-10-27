@@ -22,6 +22,7 @@ import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
+import { normalizeTradeGoods, tradeGoodsFit } from '../m59-loot-eject.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
@@ -460,7 +461,16 @@ export class SocialPart {
     const expected = pvpGear.offerIsExpected(c, t.theirs || []);
     if (!expected && !party.isFleetmate(t.withName))
       return refuse(`${t.withName} is not on the fleet roster — this is a shared server`);
-    const unwanted = expected ? [] : offered.filter(n => !takes.some(w => n.includes(w)));
+    // TRADE GOODS (m59-loot-eject.mjs): a station or courier takes a fleetmate's sale pile, whatever it is, as long as
+    // its pack keeps `keep_free` empty afterwards -- the station's own service comes first. `from` limits the givers.
+    let tradeGoods = null;
+    try { tradeGoods = normalizeTradeGoods(cfg.trade_goods); } catch { tradeGoods = null; }
+    const tradeGoodsApply = !!tradeGoods && !expected && (!tradeGoods.from || tradeGoods.from.includes(String(t.withName).toLowerCase()));
+    if (tradeGoodsApply) {
+      const fit = tradeGoodsFit({ offered: t.theirs || [], cap: skills.carryCapacity(c), keepFree: tradeGoods.keep_free });
+      if (!fit.fits) return refuse(`no room for trade goods: ${fit.why}`);
+    }
+    const unwanted = expected || tradeGoodsApply ? [] : offered.filter(n => !takes.some(w => n.includes(w)));
     if (unwanted.length)
       return refuse(`offered something not on the take list: ${[...new Set(unwanted)].join(', ')}`);
 

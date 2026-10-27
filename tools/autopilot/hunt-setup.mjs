@@ -8,10 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 18 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
+// 21 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
 //   bannedWeaponsNow, huntsTrolls, bareHandedByTraining, touchSpellNow, huntAreaHere,
 //   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, applyFarmStrategy,
-//   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho
+//   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho,
+//   farmStrategyGate, farmStrategyFarming, rereadWeapons
 import { spellCost } from '../m59-deskpractice.mjs';
 import { huntPriorityProblems, orderByHuntPriority, priorityRankOf } from '../m59-hunt-priority.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
@@ -373,5 +374,16 @@ export class HuntSetupPart {
   policyForOrders() { return this._farmStrategy ? this._farmStrategy.ordersView(this.policy) : { ...this.policy }; }
   /** Which keys of an incoming push merely echo the strategy's overlay (m59-strategy-engine.mjs pushEcho). */
   farmStrategyPushEcho(fields = {}) { return this._farmStrategy?.pushEcho(fields) ?? { echo: [], restated: [] }; }
+  /** Should the farm run at all: the file's `requires` and kill-rate `floor` (m59-strategy-gate.mjs). Null: no opinion. */
+  farmStrategyGate() { try { return this._farmStrategy?.gate() ?? null; } catch { return null; } }
+  /** A farming pass reached the hunt: the floor's clock advances. */
+  farmStrategyFarming() { try { return this._farmStrategy?.farming() ?? null; } catch { return null; } }
+  /** Forget every weapon reading so the next sweep looks again: a tripped floor's first suspect is a lapsed dedication. */
+  rereadWeapons() {
+    const ids = this.packWeapons().map(w => w.id);
+    this.weaponMagicBook().forget(ids);
+    this._weaponMagicAt = 0;
+    return ids.length;
+  }
   // @end 1
 }

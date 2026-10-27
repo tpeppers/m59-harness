@@ -135,6 +135,14 @@ export class PassFarmPart {
       const plan = STRATEGIES[this.policy.strategy] || STRATEGIES.baseline;
       if (await this.provision(plan, v) === 'ate') return HANDLED;
 
+      // THE STRATEGY MAY SAY THIS FARM SHOULD NOT RUN (m59-strategy-gate.mjs): the body lacks what the file
+      // `requires` (a troll crew without a magic weapon), or its kill-rate `floor` tripped. Then no quarry is
+      // chosen and the pass ends here; everything above (fleeing, resting, fighting back, eating) already ran.
+      // Operator, 2026-10-26: six hours in Ukgoth with weapons that could not hurt a troll "should be at-worst a
+      // bounce-back". Below the meal on purpose: a stood-down body still eats.
+      if (this.farmStrategyGate()?.blocked) return HANDLED;
+      this.farmStrategyFarming();
+
       // NEVER STAND IN A ROOM THAT CANNOT PRODUCE THE PREY.
       //
       // This does not need to be discovered by waiting. The spawn table says up

@@ -37,6 +37,8 @@ import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { normalizePractice } from './m59-deskpractice.mjs';
 import { normalizeBuddy } from './m59-buddy.mjs';
 import { spareBlockerMode } from './m59-spare.mjs';
+import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
+import { normalizeLootEject } from './m59-loot-eject.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -130,6 +132,8 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'protect', keys: ['protectedItems'], faculty: 'economy', arg: 'protect_items',
     normalize: normItems('protect'), merge: 'union' },
   { path: 'overfarm', keys: ['overfarm'], faculty: 'economy', arg: 'overfarm', normalize: normOverfarm },
+  // LOOT EJECTION (m59-loot-eject.mjs): hand the sale pile to a station or courier of ours in the same room.
+  { path: 'lootEject', keys: ['lootEject'], faculty: 'economy', arg: 'loot_eject', normalize: v => normalizeLootEject(v) },
   { path: 'weapons.touchSpell', keys: ['touchSpell'], faculty: 'work', arg: 'touch_spell',
     normalize: v => touchSpellName(v) },
   { path: 'weapons.touchSpellTiming', keys: ['touchSpellTiming'], faculty: 'work', arg: 'touch_spell_timing',
@@ -278,7 +282,8 @@ export const PROTECTED_NAMES = Object.freeze({
   mode: 'is not a strategy key: pass mode:"farm" with the assignment (autopilot action=start mode=farm farm_strategy=...)',
   farmStrategy: 'is the assignment itself and cannot be set from inside a strategy',
 });
-const KNOWN_TOP = new Set(['name', 'describe', 'hooks',
+// `requires` and `floor` are not policy keys: they gate the farm (m59-strategy-gate.mjs) rather than set it.
+const KNOWN_TOP = new Set(['name', 'describe', 'hooks', 'requires', 'floor', 'otherwise',
   ...STRATEGY_FIELDS.filter(f => !f.path.includes('.')).map(f => f.path), ...GROUPS]);
 
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -346,6 +351,20 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     fields.push({ path: f.path, keys: f.keys, faculty: f.faculty });
   }
 
+  // WHAT THE BODY NEEDS, AND HOW MUCH IT MUST KILL (m59-strategy-gate.mjs). Not policy keys: the engine
+  // stands the farm down while either fails, and the broker refuses an assignment whose requirement is unmet.
+  let requires = null, floor = null;
+  try { requires = normalizeRequires(s.requires); } catch (e) { problems.push({ path: 'requires', why: e.message }); }
+  try { floor = normalizeFloor(s.floor); } catch (e) { problems.push({ path: 'floor', why: e.message }); }
+  // AND WHAT TO DO INSTEAD when no desk can fix it: another farm strategy, by name (the catch-all orders).
+  let otherwise = null;
+  if (s.otherwise != null) {
+    if (typeof s.otherwise !== 'string' || !STRATEGY_NAME.test(s.otherwise))
+      problems.push({ path: 'otherwise', why: 'otherwise must name another farm strategy file' });
+    else if (s.otherwise === s.name) problems.push({ path: 'otherwise', why: 'otherwise cannot name the strategy itself' });
+    else otherwise = s.otherwise;
+  }
+
   const hooks = {};
   if (s.hooks !== undefined) {
     if (!isPlainObject(s.hooks)) problems.push({ path: 'hooks', why: 'hooks must be an object of functions' });
@@ -360,5 +379,5 @@ export function validateStrategy(exported, { file = null, resolveItem = null } =
     return refuse('the file declares no field and no hook, so assigning it would change nothing — ' +
                   'which reads exactly like a strategy that works');
   return { ok: true, why: null, problems, unrecognised,
-           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks } };
+           strategy: { name: s.name, describe: s.describe ?? null, desired, faculties, fields, hooks, requires, floor, otherwise } };
 }

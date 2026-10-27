@@ -74,6 +74,11 @@ export class HuntBooksPart {
     if (this.doing === 'recovering') return this.climbing ? 'eating to raise vigor' : 'resting';
     if (this.doing === 'pulling') return 'pulling quarry into position';
     if (this.doing === 'waiting') return 'waiting for quarry contact';
+    if (this.mode === 'farm') {
+      const g = this.farmStrategyGate?.();
+      if (g?.blocked) return `farm stood down: ${g.blocked.why}`;
+      if (g?.escalation?.stage === 'fallback') return `fallback ${g.escalation.to} for ${this.policy.farmStrategy}: ${g.escalation.why}`;
+    }
     if (this.mode === 'farm' && this.policy.hunt) {
       // A ROOM THAT CANNOT PRODUCE THE QUARRY OUTRANKS EVERY OTHER THING THIS LINE CAN SAY,
       // because it is the only one where no pass can ever succeed. "This prey pays nothing" is

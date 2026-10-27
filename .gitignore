@@ -919,6 +919,8 @@ substrate/item-identification.json
 # Extra directories the farming-strategy engine searches after substrate/farm-strategies/ (a private
 # repository, say). This machine's answer, like the strategies themselves. See m59-strategy-engine.mjs.
 /substrate/farm-strategy-dirs.json
+# The machine's catch-all farm strategy (m59-strategy-engine.mjs FARM_STRATEGY_OTHERWISE_FILE): an order, so this machine's.
+/substrate/farm-strategy-otherwise.json
 
 # The red-alert posture and the ally-tactics checkboxes: this machine's orders and live state (they name
 # this fleet's enemies and characters; the private repository keeps the copies).
