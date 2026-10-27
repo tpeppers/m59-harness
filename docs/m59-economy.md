@@ -1194,3 +1194,7 @@ delivery died with it. The desk then reported "no spare and no desk sword" with 
   (`giveFarmReagents`), loot ejection, the market-visit sale estimate and the counter's `sell_all` all ask it. Prod,
   2026-10-27: the sharing rule gave Piggy's only dedicated mace, sitting in the pack while he wielded a hammer, to a
   fleet-mate's weapon demand, twice in 32 seconds.
+- **And what a keeper had read survives the handoff.** A fresh keeper read a dedicated mace as "unknown" until a look,
+  so the magic-weapon preference could not prefer it and the fighter wielded a plain hammer after every handoff (Piggy,
+  2026-10-27). The weapon-magic readings are saved after every sweep (`substrate/.weapon-magic/<agent>.json`) and a new
+  keeper loads them as `carried`: believed at once, queued for a fresh look, dropped if the id now names another item.

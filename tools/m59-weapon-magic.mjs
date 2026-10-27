@@ -122,6 +122,21 @@ export class WeaponMagicBook {
     return r;
   }
 
+  // CARRIED ACROSS A KEEPER HANDOFF. Prod 2026-10-27: a fresh keeper read Piggy's Kraanan-dedicated mace as "unknown" until
+  // a look, so preferMagicWeapon could not prefer it and he fought on a plain hammer after every handoff. The previous
+  // keeper's readings are saved and loaded as `carried`: believed at once (the weapon in hand is the enchanted one from the
+  // first fight) and queued for a look (needsLook), so a stale carried reading is corrected within a sweep or two. A
+  // reading is still dropped whenever its id now names a different item (reconcile), and an old one is not loaded.
+  toJSON() { return { at: this.now(), readings: [...this.readings].map(([id, r]) => [id, r]) }; }
+  load(saved, { maxAgeMs = this.maxAgeMs } = {}) {
+    const t = this.now();
+    for (const [id, r] of saved?.readings ?? []) {
+      if (!r || r.class === 'unknown' || !(t - Number(r.at) < maxAgeMs) || this.readings.has(Number(id))) continue;
+      this.readings.set(Number(id), { ...r, source: 'carried' });
+    }
+    return this;
+  }
+
   /** A lapse names a weapon by NAME, so every reading of that name is suspect: re-ask them. */
   lapse(name) {
     const n = norm(name);
@@ -210,6 +225,8 @@ export class WeaponMagicBook {
       if (BORN_MAGIC.includes(n) || UNFLAGGED.includes(n)) return false;
       const r = this.readings.get(Number(i.id));
       if (!r || r.name !== n || r.class === 'unknown') return true;
+      // A CARRIED READING (a previous keeper's, loaded at start) is believed at once and checked soon: a look confirms it.
+      if (r.source === 'carried') return true;
       if (r.class === 'mundane') return t - r.at > this.mundaneMaxAgeMs;
       return r.class === 'enchanted' && t - r.at > this.maxAgeMs;
     });

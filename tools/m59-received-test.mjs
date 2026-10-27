@@ -89,5 +89,27 @@ console.log('one rule for every path that gives, sells, ejects or drops');
   ok('and the counter\'s sell_all never offers one', /\.items\.filter\(i => !\(autopilot\?\.heldBackIds\?\.\(\) \?\? new Set\(\)\)\.has/.test(kp));
 }
 
+console.log('a handoff keeps the weapon readings');
+{
+  // Prod 2026-10-27: after a handoff Piggy fought on a plain hammer, his dedicated mace reading "unknown" until a look.
+  const { WeaponMagicBook } = await import('./m59-weapon-magic.mjs');
+  const old = new WeaponMagicBook();
+  old.readings.set(12365, { name: 'mace', class: 'enchanted', bypasses_nonmagic: true, made: false, at: Date.now(), source: 'look' });
+  old.readings.set(500, { name: 'hammer', class: 'mundane', bypasses_nonmagic: false, made: false, at: Date.now(), source: 'look' });
+  const saved = JSON.parse(JSON.stringify(old.toJSON()));
+  const fresh = new WeaponMagicBook().load(saved);
+  const pack = [{ id: 12365, name: 'mace' }, { id: 500, name: 'hammer' }];
+  const sum = fresh.summary(pack);
+  ok('the new keeper believes the old keeper\'s reading from its first fight', sum.weapons.find(w => w.id === 12365)?.bypasses_nonmagic === true);
+  ok('and queues it for a fresh look anyway', fresh.needsLook(pack).some(i => i.id === 12365));
+  fresh.reconcile([{ id: 12365, name: 'hammer' }]);
+  ok('an id that now names another item drops the carried reading', !fresh.readings.has(12365));
+  const stale = new WeaponMagicBook().load({ readings: [[1, { name: 'mace', class: 'enchanted', at: Date.now() - 3 * 3_600_000 }]] });
+  ok('an old saved reading is not loaded', !stale.readings.has(1));
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the keeper loads them at start and saves them after every sweep', /this\._weaponMagic\.load\(JSON\.parse/.test(src) && /this\._weaponMagicBusy = false; this\.saveWeaponMagic\(\);/.test(src));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

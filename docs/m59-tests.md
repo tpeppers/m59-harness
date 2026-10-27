@@ -250,9 +250,10 @@ through a nested shelter order.
 - `m59-poison-test.mjs` (10): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
   forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
   for the old poison timer to stop.
-- `m59-received-test.mjs` (14): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
+- `m59-received-test.mjs` (19): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
-  we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all.
+  we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,
+  believed and re-checked.
 - `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value

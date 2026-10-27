@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 26 methods: noteReceivedGoods, heldBackIds, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
+// 27 methods: noteReceivedGoods, heldBackIds, saveWeaponMagic, sweepBroken, sweepGearCondition, gearConditionStatus, weaponMagicBook,
 //   overfarmKeepIds, packWeapons, wieldedWeaponId, weaponMagicStatus, noteCurseSuspect,
 //   clearCurseSuspect, noteSwapOutcome, noteReagentRefusal, noteUncursed, sweepCursed,
 //   noteEnchantLapse, noteWeaponArrived, noteDedication, shedUnusedConjures, fieldSpareWeapons,
@@ -22,6 +22,11 @@ import { WeaponMagicBook, magicSwap } from '../m59-weapon-magic.mjs';
 import { CONJURABLE_WEAPONS, CURSE_SUSPECT_REFUSALS, swapWhyNot } from '../m59-autopilot.mjs';
 import { selfFacts, roomFacts } from '../m59-joint-facts.mjs';
 import { noteReceived, protectedReceived, arrivedFrom } from '../m59-received.mjs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const WEAPON_MAGIC_DIR = process.env.M59_WEAPON_MAGIC_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'substrate', '.weapon-magic');
+const weaponMagicFile = agent => join(WEAPON_MAGIC_DIR, `${String(agent ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
 
 export class GearUpkeepPart {
   // @part 1
@@ -113,7 +118,23 @@ export class GearUpkeepPart {
   // lives on the autopilot so it survives a pass and is reported by status(); it does NOT survive
   // a keeper restart, which costs one look per weapon to rebuild — cheap, and honest, because an
   // enchantment may have lapsed in the meantime.
-  weaponMagicBook() { return (this._weaponMagic ??= new WeaponMagicBook()); }
+  weaponMagicBook() {
+    if (!this._weaponMagic) {
+      this._weaponMagic = new WeaponMagicBook();
+      // A NEW KEEPER STARTS FROM THE LAST ONE'S READINGS (WeaponMagicBook.load: carried, believed, re-checked).
+      try { this._weaponMagic.load(JSON.parse(readFileSync(weaponMagicFile(this.s?.name), 'utf8'))); } catch {}
+    }
+    return this._weaponMagic;
+  }
+  /** Save the readings for the keeper that replaces this one. Best effort; called after every sweep. */
+  saveWeaponMagic() {
+    try {
+      const f = weaponMagicFile(this.s?.name);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(`${f}.${process.pid}.tmp`, JSON.stringify(this.weaponMagicBook().toJSON()));
+      renameSync(`${f}.${process.pid}.tmp`, f);
+    } catch {}
+  }
 
   /** Ids the overfarm swap may never trade away: magic weapons (the book) and the one in hand. */
   overfarmKeepIds() {
@@ -555,7 +576,7 @@ export class GearUpkeepPart {
         book.noteLook(item.id, desc != null ? 'ok' : events.length ? 'other_id' : 'no_reply');
       }
       await this.applyMagicPreference(c, items);
-    } finally { this._weaponMagicBusy = false; }
+    } finally { this._weaponMagicBusy = false; this.saveWeaponMagic(); }
   }
 
   // THE CLIENT'S MAGIC SET, REBUILT FROM THE BOOK. Synchronous, no wire. `weaponRanking` breaks a
