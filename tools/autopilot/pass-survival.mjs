@@ -80,6 +80,9 @@ export class PassSurvivalPart {
     // Operator's doctrine, 2026-09-06. See `defensiveAnswer`.
     if (await this.defensiveAnswer({ near, v }).catch(() => false)) return HANDLED;
 
+    // A CASTER IN THE ROOM: NO SPOT HERE HOLDS, SO A RESTING OR HURT BODY LEAVES BY THE NEAREST EXIT (leaveForCasters).
+    if (await this.leaveForCasters({ hostiles, v }).catch(() => false)) return HANDLED;
+
     // ABOUT TO DIE. Below two hits of margin with something adjacent, withdrawing is
     // a gamble — the walk takes seconds during which it keeps swinging, and losing
     // that gamble costs a point of maximum health for ever. Logging off costs a

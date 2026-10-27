@@ -909,8 +909,10 @@ export class TravelPart {
     // confined to [38] walking out to a station at 2 where Morpheus camps. A confinement is the operator's
     // and outranks an errand's convenience: wandDutyStep now stands down when the station is outside it.
     const approachRoom = approachLeg && (this.policy?.approachRooms ?? []).map(Number).includes(Number(room));
+    // AND LEAVING A ROOM THAT IS CASTING AT US (leaveForCasters): survival, one exit away, whatever the confinement says.
+    const casterExitLeg = opts?.casterExit === true;
     if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))
-        && !approachRoom) {
+        && !approachRoom && !casterExitLeg) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
         here: this.s.world?.room?.num ?? null, doing: this.doing,

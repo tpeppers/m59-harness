@@ -25,8 +25,10 @@ import { JAM_MEASURE_MS, JAM_TTL_MS, REPLAN_MS, jamObservation, recoveryObservat
 import { traceBody, traceRefuge, traceSurvival, traceSurvivalOperation } from '../m59-survival-trace.mjs';
 import { recordTactic } from '../m59-tactics.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
-import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
+import { claimExclusiveSpot, claimSpot, farmVigorWorkReady, healAllowOf, pct, releaseSpot, rememberSpotClaimPartner, REST_VIGOR_CAP, SPAWN_FILE, scriptedWalkDefersVigorRest, spotOccupancy, TRAVEL_FORWARD_BIAS, UNREACHABLE_SPOT_MS, vigorOf, vigorPct } from '../m59-autopilot.mjs';
 import { roomIsNoCombat, survivalOffOf } from '../m59-hazards.mjs';
+import { castersAmong, casterExit, isCasterClass } from '../m59-casters.mjs';
+import { creatureByName, loadSpawns } from '../m59-spawns.mjs';
 
 export class SafeSpotsPart {
   // @part 1
@@ -504,6 +506,47 @@ export class SafeSpotsPart {
 
   // Healing chooses the shortest clear approach to an exclusive local wall. Combat
   // later binds a quarry to its own wall through the ordinary target-first selector.
+  // A CASTER IN THE ROOM MEANS THE ROOM HAS NO SAFE SPOT: LEAVE IT. Operator, 2026-10-27, choosing for Lew (2133, a shaman
+  // and a chieftain casting at a "proven" spot; m59-casters.mjs has the kod). Asked of a body that is resting or hurt --
+  // on a spot, or about to want one -- never of a farmer at full health swinging at the room. It walks out by the
+  // nearest reachable exit (a room in the confinement first, then one whose spawn list has no caster), with no logoff,
+  // and the ordinary ladder shelters it on the far side. The exit is allowed outside the confinement: this is survival,
+  // and a room that is casting at the body is not a place the confinement can have meant. Tried at most once a minute.
+  castersHere(hostiles = null) {
+    const c = this.s?.client;
+    const list = hostiles ?? [...(c?.room?.objects?.values?.() ?? [])].filter(o =>
+      o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER));
+    let spawns = null; try { spawns = loadSpawns(SPAWN_FILE); } catch {}
+    const classOf = name => (spawns ? creatureByName(spawns, name)?.cls ?? null : null);
+    return castersAmong(list.map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || o.name || '' })), classOf);
+  }
+  async leaveForCasters({ hostiles = null, v = null } = {}) {
+    if (this.operatorSurvivalStandDown?.()) return false;
+    const hp = v?.health ?? this.s.client?.vitals?.()?.health;
+    // On a spot, or hurt enough to want one (restBelow) -- never a farmer mid-fight with a scratch.
+    const resting = !!this.hold || (hp?.max > 0 && hp.value / hp.max < (this.policy?.restBelow ?? 0.6));
+    if (!resting) return false;
+    const casters = this.castersHere(hostiles);
+    if (!casters.length) return false;
+    if (Date.now() - (this._casterExitAt ?? 0) < 60_000) return false;
+    this._casterExitAt = Date.now();
+    const here = Number(this.s.world?.room?.num);
+    let exits = [];
+    try { exits = this.s.world?.exits?.() ?? []; } catch {}
+    let spawns = null; try { spawns = loadSpawns(SPAWN_FILE); } catch {}
+    const roomHasCaster = n => (spawns?.rooms?.[n] ?? []).some(x => isCasterClass(x?.cls ?? creatureByName(spawns, x?.name ?? x)?.cls));
+    const exit = casterExit(exits, { here, from: this.s.client?.self, confine: this.policy?.confineRooms ?? null, roomHasCaster });
+    this.note('a caster is in the room: no spot here holds, leaving', {
+      casters: casters.map(x => x.name), room: here, health: hp?.value ?? null, to: exit?.to ?? null,
+      why: 'monsters cast during the chase with no range or sight check (monster.kod MonsterCanCastSpell)' });
+    if (!exit) { this.note('no reachable exit to leave the casters by', { room: here }); return false; }
+    if (this.hold) this.releaseHold?.('a caster is in the room');
+    const r = await this.travel(Number(exit.to), { origin: keeperOrigin('caster_exit'), casterExit: true, recoveryDetour: true, maxHops: 2 })
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (!r?.arrived) this.note('could not leave the casters', { to: exit.to, why: r?.reason ?? r?.why ?? null });
+    return !!r?.arrived || !!r?.cancelled;
+  }
+
   async takeRecoverySpot(why, { source = 'recovery', route=false, decisionId=null, preparedRefuge=null } = {}) {
     // Cancel the old script's paced packets before this keeper starts its approach.
     // Replacing the visible move order alone leaves both walkers on one generation.

@@ -249,6 +249,10 @@ through a nested shelter order.
   piece; a confined journey avoids every room outside the confinement on the way (Lew, 2124 -> 2133), and from outside it
   takes the confined road home when the graph has one; Ko'catan's bank (Huital, "The Hungry Vaults") is recognised and a
   deposit is read back from the purse, and a bank visit that banked nothing does not reopen for half an hour.
+- `m59-casters-test.mjs` (15): a caster in the room means the room has no safe spot. The caster classes and the island's
+  clan names; the exit order (confinement, then a caster-free room, then nearest; never unreachable); the keeper leaves on
+  a spot or below the rest line with a caster present, not mid-fight and not with none, once a minute, through the
+  confinement gate.
 - `m59-stash-abandon-test.mjs` (6): abandoned island stash cargo releases the refill queue. A dead owner's fresh drop
   still holds it; once the newest drop is `STASH_ABANDON_MS` (20 min) old the cargo is written off in its receipt and the
   next rider takes the lease; a live owner is waited for whatever the age.

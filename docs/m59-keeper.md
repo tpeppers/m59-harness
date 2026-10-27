@@ -917,6 +917,22 @@ rung must not be cancelled by its own health monitor. A blocked, stale, changed
 owner or changed body releases that exception through the shared refuge proof.
 
 
+## Casters: a safe spot does not hold, so leave the room
+
+A safe spot is a square no monster can REACH, scored against melee reach (`m59-safespots.mjs`, radius 3). A caster does
+not need to reach: `monster.kod`'s chase timer calls `MonsterCastSpell` exactly when the monster cannot get to its target,
+and `MonsterCanCastSpell` checks only `AI_NOFIGHT` -- no range, no line of sight. The avar shaman also raises its attack
+range to 5 (`avshaman.kod`) and casts Hold, Mana Bomb, Sandstorm, Shatter and Earthquake. Lew, 2026-10-27, room 2133: a
+"proven" spot, 52/90 to 43/90 in thirty seconds with a shaman and a chieftain in the room, and the one-logoff rule held
+him there.
+
+Operator's call the same day: **a hostile caster in the room means the room has no safe spot -- leave it by the nearest
+exit, no logoff.** `leaveForCasters` (in the survival pass, before the about-to-die rungs) fires for a body on a spot or
+below `restBelow`, never for a farmer mid-fight; it picks a reachable exit into the confinement first, then into a room
+with no caster in its spawn list, then the nearest (`casterExit`), and that one hop is allowed outside the confinement.
+At most once a minute. The casters (`CASTER_CLASSES`, every kod override of `MonsterCastSpell`): avar shaman, avar
+chieftain, dark angel, orc wizard, ent, evil ent, ghost, yeti, mollusk, ice person, xeochicatl. `m59-casters-test.mjs` (15).
+
 ## Poison: shelter in place
 
 Operator, 2026-10-27: *"the correct solution to poison is to lock down in the nearest safe spot until the poison ends
