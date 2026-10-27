@@ -13,7 +13,7 @@
 import { applyDeathAttribution } from '../m59-death-attribution.mjs';
 import { deathLocationFromSessions } from '../m59-death-location.mjs';
 import { findDeathNotice } from '../m59-death-notices.mjs';
-import { keeperOrigin } from '../m59-move-origin.mjs';
+import { keeperOrigin, liveMoveOrder, originLabel } from '../m59-move-origin.mjs';
 import * as skills from '../m59-skills.mjs';
 import { currentSurvivalDecision, finishSurvivalDecision, survivalDecisionSnapshot } from '../m59-survival-decision.mjs';
 import { survivalTraceSnapshot } from '../m59-survival-trace.mjs';
@@ -98,6 +98,15 @@ export class DeathPart {
         // `ms_since_swung: null` used to mean either "never swung" or "no frame to read",
         // and only the first of those is evidence. Null here is the honest "no frame".
         ever_swung: last ? (last.ever_swung ?? null) : null,
+        // THE JOURNEY IT WAS ON, AND WHICH RULE LET IT BE THERE. The live order, else the one a cancel just took
+        // (death cancels the walk). `exception` is the permission a tagged errand carried (a chalice refill out of
+        // its confinement): operator, 2026-10-27, "for traceability in case he dies".
+        ...(() => {
+          const o = liveMoveOrder(this.s) ?? this.s?.lastMovementCancel?.preempted ?? null;
+          if (!o) return {};
+          return { journey: { to: o.to ?? null, ordered_by: o.ordered_by ?? originLabel(o.origin) },
+                   ...(o.origin?.exception || o.exception ? { exception: o.origin?.exception ?? o.exception } : {}) };
+        })(),
       },
       where,
       vitals: {

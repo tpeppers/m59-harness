@@ -436,6 +436,8 @@ export function digest(file) {
     was: {
       doing: pm.was?.doing ?? null, hunting: pm.was?.hunting ?? null,
       strategy: pm.was?.strategy ?? null, in_safe_spot: !!pm.was?.in_safe_spot,
+      ...(pm.was?.journey ? { journey: pm.was.journey } : {}),
+      ...(pm.was?.exception ? { exception: pm.was.exception } : {}),
       vigor: pm.vitals?.last_vigor ?? null,
     },
     // THE ONE NUMBER THAT SAYS WHETHER THE KEEPER HAD A CHANCE. A death from full health

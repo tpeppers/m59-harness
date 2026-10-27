@@ -53,8 +53,36 @@ export function moveOrigin(input, fallback = null) {
   if (!known && raw) out.claimed_source = clip(raw, 40);
   for (const k of ['run_id', 'session', 'agent', 'why', 'resumed_by'])
     if (o[k] != null && String(o[k]).trim()) out[k] = clip(o[k], k === 'why' ? 160 : 80);
+  // AN EXCEPTION THE JOURNEY CARRIES: which rule let it do what it is doing (a chalice refill leaving a confinement).
+  // Operator, 2026-10-27: "the watcher should only cancel trips that don't have exception permissions and the Loial
+  // refresh should be tagged as an intentional exception ... (for traceability in case he dies)". It rides the origin, so
+  // status (movement.order), the journey ledger and the postmortem all carry it, and exceptionCancelRefusal reads it.
+  const ex = normalizeException(o.exception);
+  if (ex) out.exception = ex;
   out.at = Number.isFinite(Number(o.at)) && Number(o.at) > 0 ? Number(o.at) : Date.now();
   return Object.freeze(out);
+}
+
+/** { name, permission, granted_by, why } -> frozen and clipped, or null. */
+export function normalizeException(e) {
+  if (!e || typeof e !== 'object' || typeof e.name !== 'string' || !e.name.trim()) return null;
+  const out = { name: clip(e.name, 60) };
+  for (const k of ['permission', 'granted_by', 'why']) if (e[k] != null && String(e[k]).trim()) out[k] = clip(e[k], k === 'why' ? 160 : 80);
+  return Object.freeze(out);
+}
+
+/**
+ * MAY AN OUTSIDE CANCEL TAKE THIS BODY'S JOURNEY? Not one tagged with an exception, unless the canceller names it
+ * (accept: ['cancel_exception']). The keeper's own survival rungs cancel in-process and never come through here: a
+ * tagged journey still flees. -> null (go ahead) or { refused, exception, why }.
+ */
+export function exceptionCancelRefusal(s, accept = null) {
+  const ex = liveMoveOrder(s)?.origin?.exception;
+  if (!ex) return null;
+  const ok = Array.isArray(accept) ? accept.includes('cancel_exception') : accept === 'cancel_exception';
+  if (ok) return null;
+  return { cancelled: false, refused: 'cancel_exception', exception: ex,
+    why: `this journey is an exception (${ex.name}${ex.permission ? `, by ${ex.permission}` : ''}); cancelling it has to be said: accept: ["cancel_exception"]` };
 }
 
 /** A keeper subsystem's origin: `keeperOrigin('shelter')`. */
@@ -130,6 +158,7 @@ export function keeperMovementPreemption(status,orderedBy,{since=null}={}) {
 
 const orderView = (o, now = Date.now()) => o ? {
   kind: o.kind ?? 'travel', to: o.to ?? null, origin: o.origin, ordered_by: originLabel(o.origin),
+  ...(o.origin?.exception ? { exception: o.origin.exception } : {}),
   since_s: Math.max(0, Math.round((now - (o.at ?? now)) / 1000)),
 } : null;
 

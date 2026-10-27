@@ -136,7 +136,13 @@ export class ChalicePart {
       creatures: target.creatures, why: due.why });
     // ALLOWED OUT OF THE CONFINEMENT FOR THIS ROOM ONLY: travel's chalice exception names it (travel.mjs chaliceRooms).
     const leaves = confine && !confine.includes(target.room);
-    const went = await this.travel(target.room, { origin: keeperOrigin('chalice_refill'), maxHops: target.hops + 4,
+    // TAGGED AS AN EXCEPTION (m59-move-origin.mjs): which rule let it out, so a watcher leaves it alone and a death on the
+    // way says why it was on that road. Operator: "tagged as an intentional exception flagged for the chalice refresh".
+    const exception = { name: 'chalice_refresh',
+      permission: leaves ? 'allow_exit_confinement_for_refresh' : 'chalice refill (inside the confinement)',
+      granted_by: `chalice strategy${this._chaliceStrategy ? ` ${this._chaliceStrategy}` : ''}`,
+      why: `${due.why}; refilling at ${target.room}` };
+    const went = await this.travel(target.room, { origin: keeperOrigin('chalice_refill', { exception }), maxHops: target.hops + 4,
       ...(leaves ? { chalice: true, chaliceRoom: target.room } : {}) })
       .catch(e => ({ arrived: false, reason: e.message }));
     if (went?.confined) {
@@ -165,7 +171,8 @@ export class ChalicePart {
     try { store.setCupDisabled(null); } catch {}
     const home = rf.return !== false ? cfg.post_room : null;
     if (home != null && this.hereRoom() !== Number(home))
-      await this.travel(Number(home), { origin: keeperOrigin('chalice_refill_return'), maxHops: rf.max_hops + 4, chalice: true })
+      await this.travel(Number(home), { origin: keeperOrigin('chalice_refill_return', { exception: { ...exception, why: `back to the post ${home} after refilling` } }),
+        maxHops: rf.max_hops + 4, chalice: true })
         .catch(() => null);
     this.chaliceEvent('refill_trip_done', { refilled_at: target.room, back_at: this.hereRoom(), sips: after });
     return true;

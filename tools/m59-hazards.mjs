@@ -12,6 +12,8 @@
 //                                              room that is not NO_COMBAT
 //   go_red                                     m59-combat-mode.mjs needsSafetyOff: striking an innocent with safety off
 //   reroll                                     the broker's reroll tool, which already wants confirm:true
+//   cancel_exception                           the keeper's /action cancel and the broker's cancel_movement: a journey
+//                                              tagged with an exception (m59-move-origin.mjs exceptionCancelRefusal)
 //   requires_unmet                             the broker's autopilot tool: assigning a farm strategy whose `requires`
 //                                              this body does not meet (m59-strategy-gate.mjs)
 //
@@ -28,6 +30,7 @@ export const HAZARDS = {
   survival_off_move: 'this character has survival OFF: it will not flee, rest or fight back, so sending it anywhere but a no-combat room (an inn, a shop, a bank) is how three troll-crew characters died seven times in Ukgoth (2026-10-26)',
   go_red: 'striking an innocent (not a murderer, outlaw, morph or war enemy) with safety off makes this character an outlaw, and killing one makes it a murderer: merchants refuse it and the karma does not come back',
   reroll: 'reroll deletes the character and cannot be undone',
+  cancel_exception: 'this journey carries an exception (a chalice refill out of its confinement, say): it is on that errand on purpose, and recalling it leaves the errand half done',
   requires_unmet: 'this farm strategy requires something this character does not have, so it would stand at its post killing nothing (a troll crew ground six hours with weapons that could not hurt a troll, 2026-10-26). Accepted, the strategy is assigned and escalates: it asks the service board for the fix and keeps farming, then serves its `otherwise` fallback if no desk answers',
 };
 

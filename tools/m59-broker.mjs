@@ -265,7 +265,7 @@ import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { runWho } from './m59-who.mjs';
-import { moveOrigin, originLabel, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+import { moveOrigin, originLabel, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
 import { validatePvpRooms } from './m59-pvp-rooms.mjs';
 
@@ -3570,7 +3570,8 @@ class KeeperProxy {
   async cancelMovement(token, why = null, opts = {}) {
     return keeperAction(this.name, this._index, 'cancel',
                         { ...(token ? { control_token: token } : {}), ...(why ? { why } : {}),
-                          ...(opts?.origin ? { origin: opts.origin } : {}) });
+                          ...(opts?.origin ? { origin: opts.origin } : {}),
+                          ...(opts?.accept ? { accept: opts.accept } : {}) });
   }
   // THE GUILD VERBS, FORWARDED FOR THE SAME REASON AS SHOPPING.
   //
@@ -7858,6 +7859,9 @@ const TOOLS = [
           'a caller that does not say leaves the fleet unable to explain its own biggest ' +
           'failure mode. "the cancel_movement tool" is what an anonymous one looks like.' },
       origin: MOVE_ORIGIN_SCHEMA,
+      accept: { type: 'array', items: { type: 'string' }, description: '"cancel_exception": cancel even a journey tagged ' +
+        'with an exception (a chalice refill out of its confinement, say). Without it such a journey is left alone and ' +
+        'the reply says which exception it carries' },
     }, required: ['agent'] },
     run: (a) => {
       const s = session(a.agent);
@@ -7865,8 +7869,9 @@ const TOOLS = [
         : 'the cancel_movement tool, caller unnamed';
       const keeper = s instanceof KeeperProxy ? null : autopilotIfAny(a.agent);
       const origin = mcpOrigin(a);
+      if (!(s instanceof KeeperProxy)) { const r = exceptionCancelRefusal(s, a.accept ?? null); if (r) return r; }
       return keeper?.cancelJourney ? keeper.cancelJourney(why, a.control_token, origin)
-        : s.cancelMovement(a.control_token, why, { origin });
+        : s.cancelMovement(a.control_token, why, { origin, ...(a.accept ? { accept: a.accept } : {}) });
     },
   },
   {

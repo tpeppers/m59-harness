@@ -1157,6 +1157,12 @@ The chalice desk is the first user: `station_room: 'holder'` in the chalice stra
 - **`allow_exit_confinement_for_refresh`** (desk setting, off by default): `true` lets a refill trip leave the holder's
   confinement for any refill room in the profile; a room number or a list (`2`, `[2, 568]`) only for those. The
   journey names its one room to travel's chalice exception, and the walk back is to `post_room`.
+- **The trip is a tagged exception.** Its journey order carries `exception: { name: 'chalice_refresh', permission:
+  'allow_exit_confinement_for_refresh', granted_by, why }` (on `movement.order`, the journey ledger and the
+  postmortem's `was.exception`), so a watcher can tell an intentional exception from a stray walk and a death on the way
+  says which rule put him there. An outside cancel of a tagged journey (the keeper's `/action cancel`, `cancel_movement`)
+  is refused unless it says `accept: ["cancel_exception"]`. The keeper's own survival rungs cancel in-process and are
+  not affected: a tagged journey still flees. `m59-move-exception-test.mjs` (16).
 - **"Disabled" is on the desk record.** No refill room in the profile within reach, the walk failing `fail_limit`
   (2) times, or a confinement in the way (a confinement is the operator's and is never walked through: lift
   `confine_rooms`; `post_room` is where it returns) marks the desk disabled. Travellers then decline it

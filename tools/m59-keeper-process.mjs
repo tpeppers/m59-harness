@@ -83,7 +83,7 @@ import { planAccountLeases } from './runtime/account-leases.mjs';
 import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
 import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
-import { moveOrigin, movementReport, withMoveOrder } from './m59-move-origin.mjs';
+import { moveOrigin, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
 import { JointHost } from './m59-joints.mjs';
@@ -2678,6 +2678,9 @@ const server = createServer(async (req, res) => {
               ? args.why.trim().slice(0, 80)
               : 'the keeper /action endpoint, caller unnamed';
             const origin = callerOrigin(args);
+            // AN EXCEPTION-TAGGED JOURNEY IS NOT RECALLED FROM OUTSIDE unless the caller names it (m59-move-origin.mjs).
+            const exRefusal = exceptionCancelRefusal(session, args.accept ?? null);
+            if (exRefusal) { json(exRefusal); return; }
             const r = autopilot?.cancelJourney
               ? autopilot.cancelJourney(askedWhy, args.control_token, origin)
               : session.cancelMovement?.(args.control_token, askedWhy, { origin });
