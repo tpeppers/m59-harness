@@ -139,8 +139,8 @@ ok(WAIT === 21 && UNWAIT === 22,
 
   c.onGameMessage(UNWAIT, Buffer.alloc(0));
   ok(c.idGenerations[0].ended != null, 'BP_UNWAIT closes the generation');
-  eq(sent, [BP.REQ_INVENTORY, BP.SEND_ROOM_CONTENTS],
-     'and immediately re-reads the pack (which brings the use list) and the room');
+  eq(sent, [BP.REQ_INVENTORY, BP.SEND_ROOM_CONTENTS, BP.SEND_SPELLS, BP.SEND_SKILLS],
+     'and immediately re-reads the pack (which brings the use list), the room, and the spell and skill lists (a cast names its spell by id)');
   const asOf = c.idsAsOf();
   ok(asOf.last_save_at != null && asOf.inventory_at < asOf.last_save_at && !asOf.saving,
      'until the reply lands, the pack read is older than the save — and idsAsOf shows it');
@@ -159,6 +159,19 @@ ok(WAIT === 21 && UNWAIT === 22,
   c.onGameMessage(WAIT, Buffer.alloc(0));
   c.onGameMessage(UNWAIT, Buffer.alloc(0));
   ok(true, 'a socketless client survives a save without sending');
+}
+
+{
+  // THE POST-SAVE RE-READ INCLUDES THE SPELL AND SKILL LISTS. A cast names its spell by object id, renumbered by the save;
+  // a stale id is dropped by the server without a word (user.kod UserCast). Prod 2026-10-27: a rescue cast swallowed.
+  const c = new M59Client({ host: '127.0.0.1', port: 1 });
+  c.state = 'game'; c.sock = { destroyed: false }; c.saveRefreshJitterMs = 0;
+  const sent = [];
+  c.requestInventory = () => sent.push('inventory'); c.roomContents = () => sent.push('room');
+  c.requestSpells = () => sent.push('spells'); c.requestSkills = () => sent.push('skills');
+  c.scheduleIdRefresh();
+  ok(['inventory', 'room', 'spells', 'skills'].every(x => sent.includes(x)),
+     `after a save the client re-reads pack, room, spells and skills (sent ${sent.join(',')})`);
 }
 
 console.log(`m59-savewire-test: ${n} assertions passed`);

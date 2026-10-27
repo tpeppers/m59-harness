@@ -42,6 +42,7 @@ function fakeBroker({ knows = true, karma = 40, emeralds = 5, cup = false, rolls
       const r = st.rolls.shift() ?? 'start';
       if (r === 'fail') return { cast: true, messages: ['You were unsuccessful in casting rescue.'], mana_spent: 8 };
       if (r === 'lockout') return { cast: true, messages: ["You've attacked a player too recently."] };
+      if (r === 'swallowed') return { cast: true, messages: [], mana_spent: 0 };
       st.casts++;
       st.pendingTo = st.room === 2500 ? 2510 : st.room === 2510 ? 2001 : null;
       st.landAt = Date.now() + 50;
@@ -93,6 +94,16 @@ console.log('the ride, by rescue');
   const dir = mkdtempSync(join(tmpdir(), 'm59-island-rescue-'));
   const r = await I.rideIslandCup(f.ctx, { evidenceDir: dir }).catch(e => ({ error: e.message }));
   ok('a PvP teleport lockout stops it too', /pvp_teleport_lockout/.test(r?.error ?? ''), r?.error);
+}
+
+{
+  // THE SWALLOWED CAST (prod 2026-10-27, wave 2): sent, no line, no mana. Re-read the spells and try again.
+  const f = fakeBroker({ rolls: ['swallowed', 'start', 'start'] });
+  const dir = mkdtempSync(join(tmpdir(), 'm59-island-rescue-'));
+  const r = await I.rideIslandCup({ ...f.ctx, call: async (n, a) => n === 'abilities' && a.refresh ? (f.st.log.push('refresh'), { spells: [] }) : f.ctx.call(n, a) },
+    { evidenceDir: dir }).catch(e => ({ error: e.message }));
+  ok('a swallowed cast re-reads the spell list and casts again, and the ride lands', r?.ok === true && f.st.room === 2001 && f.st.log.includes('refresh'),
+     JSON.stringify(r).slice(0, 160) + ' ' + f.st.log.join(','));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

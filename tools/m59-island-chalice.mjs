@@ -221,6 +221,11 @@ async function castTo(ctx,to,record,save,{tries=6}={}){
       throw Error('rescue_refused: '+(r.reason??'unknown'));
     }
     if(RESCUE_STARTED.test(said)){started=true;break;}
+    // SWALLOWED: sent, no line at all, no mana spent. The server bails out of UserCast without a word when the spell's
+    // object id is stale (renumbered by a save), so re-read the spell list and try again (prod 2026-10-27, wave 2).
+    if(r.cast===true&&!(r.messages??[]).length&&Number(r.mana_spent)===0){
+      leg.attempts.at(-1).swallowed=true;save();
+      await ctx.call('abilities',{agent,kind:'spells',refresh:true}).catch(()=>null);await pause(1500);continue;}
     if(RESCUE_ROLL_FAILED.test(said)){await pause(2500);continue;}
     started='unconfirmed';                                   // no line heard: watch for the landing anyway
   }

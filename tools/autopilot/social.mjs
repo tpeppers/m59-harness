@@ -8,10 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 19 methods: social, static HEALS, activeSelfHealing, tryActiveSelfHeal, healObservedFleetmate,
+// 20 methods: social, static HEALS, activeSelfHealing, tryActiveSelfHeal, healObservedFleetmate,
 //   medic, static DONATION_TAKES, static DONATION_SHEDS, bulkFree, shedForDonation,
 //   acceptDonations, acceptNeededGift, isServicePost, shareSpareReagents, static BUFFS, static
-//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop
+//   ROOM_ENCHANTS, buffFloorMs, reagentOnHand, rescueToShop, drinkAtPoolOfVigor
 import { allyVerdict } from '../m59-ally.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { sameName } from '../m59-chalice.mjs';
@@ -22,6 +22,7 @@ import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
+import { POOL_OF_VIGOR, POOL_DRINK_SAID, inPool } from '../m59-island-chalice.mjs';
 import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
@@ -783,6 +784,45 @@ export class SocialPart {
     }
     return { ok: false, why: 'rescue did not land within ' + waitMs + 'ms — it is delayed 15-25s, ' +
                              'so this is either a slow land or a refused cast that said nothing' };
+  }
+
+  // THE POOL OF VIGOR, FOR ANYONE STANDING BESIDE IT. Operator, 2026-10-27: "It should also drink from the pool of vigor if
+  // in that room". 2510 "A spring of vitality" (orccav5x.kod): standing in the pool (rows 42-46, cols 19-25) and pressing
+  // GO is a drink -- SomethingTryGo -> UserDrink, said as "You drink from the life-giving waters" -- until the stomach is
+  // full, which refuses SILENTLY, so a GO with no drink line ends it. Free vigor above the resting cap of 80. Only when the
+  // body is quiet (health over half, nothing landing, no trade, nobody else holding the legs), at most every minute.
+  async drinkAtPoolOfVigor() {
+    const s = this.s, c = s?.client;
+    if (!c || !this.running || this.inert || c.trade) return false;
+    if ((s.world?.room?.num ?? c.room?.num) !== POOL_OF_VIGOR.room) return false;
+    const now = Date.now();
+    if (now - (this._poolDrinkAt ?? 0) < 60_000) return false;
+    const v = c.vitals?.();
+    const vigor = Number(v?.vigor?.value), cap = Math.min(200, Number(v?.vigor?.scale_max ?? v?.vigor?.max ?? 200) || 200);
+    if (!Number.isFinite(vigor) || vigor >= cap) return false;
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.5) return false;
+    if ((this.frozenUntil && now < this.frozenUntil) || this.threat?.()?.landing > 0) return false;
+    if (this.facultyHeld?.('movement')) return false;
+    this._poolDrinkAt = now;
+    const me = () => ({ row: c.self?.row, col: c.self?.col });
+    if (!inPool(me())) {
+      await s.walkTo(POOL_OF_VIGOR.aim.col, POOL_OF_VIGOR.aim.row, { maxSteps: 60, hardCap: 80 }).catch(() => {});
+      if (!inPool(me())) { this.note('could not stand in the pool of vigor', { at: me() }); return false; }
+    }
+    let drinks = 0;
+    for (; drinks < 12; drinks++) {
+      const since = c.evSeq;
+      await s.pacer.submit('act', () => c.go()).catch(() => {});
+      const w = await c.waitFor({ since, kinds: ['message'], timeoutMs: 2500,
+        match: e => POOL_DRINK_SAID.test(String(e.text ?? '')) }).catch(() => ({ events: [] }));
+      if (!(w.events ?? []).some(e => POOL_DRINK_SAID.test(String(e.text ?? '')))) break;   // stomach full
+      const now2 = Number(c.vitals?.()?.vigor?.value);
+      if (Number.isFinite(now2) && now2 >= cap) { drinks++; break; }
+    }
+    this.note('drank from the pool of vigor', { drinks, vigor_before: vigor, vigor_after: c.vitals?.()?.vigor?.value ?? null,
+      why: 'free vigor while standing at the spring (operator: "drink from the pool of vigor if in that room")' });
+    if (drinks) this.progress(`drank ${drinks} time(s) from the pool of vigor`);
+    return drinks > 0;
   }
   // @end 1
 }

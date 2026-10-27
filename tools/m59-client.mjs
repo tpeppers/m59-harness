@@ -1501,7 +1501,7 @@ export class M59Client {
   }
 
   // THE POST-SAVE RE-READ. BP_UNWAIT means every id this client holds — pack, worn items, the
-  // room's objects — was renumbered under it. One inventory request brings back the pack and
+  // room's objects, the spells and skills — was renumbered under it. One inventory request brings back the pack and
   // the use list (user.kod:955-957); one room-contents request the room (and its handler
   // re-binds a renumbered selfId by name). Sent directly, like the keepalive, rather than
   // through a pacer: they are reads, and until they land everything served is stale.
@@ -1511,7 +1511,11 @@ export class M59Client {
     const run = () => {
       this._idRefreshTimer = null;
       if (this.state !== 'game' || !this.sock || this.sock.destroyed) return;
-      try { this.requestInventory(); this.roomContents(); }
+      // AND THE SPELL AND SKILL LISTS. A cast names its spell by OBJECT ID (user.kod UserCast(oSpell)), renumbered by the same
+      // save; with a stale id the server finds no such spell in plSpells and bails out SILENTLY -- no line, no mana. Prod
+      // 2026-10-27: an island rider's first rescue after a crossing was swallowed that way, and the ride timed out waiting
+      // for a landing that was never cast.
+      try { this.requestInventory(); this.roomContents(); this.requestSpells(); this.requestSkills(); }
       catch (e) { this.log?.(`post-save re-read failed: ${e.message}`); }
     };
     if (!jitter) { run(); return; }

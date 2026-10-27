@@ -519,3 +519,15 @@ prepare to start carefully farming Avar warriors"*. `tools/fleetscripts/island-a
   belong to the assignment, never to a strategy file.
 - **Postures can select by room** now (`who.rooms`, `who.room_range: [2000, 2699]`), for anything that should hold
   "everyone on the Island". An unknown room is not a match.
+
+## A swallowed cast, and the pool for everyone
+
+- **A rescue cast can be swallowed after a server save.** A cast names its spell by object id (`user.kod` UserCast),
+  and a save renumbers every id. The client's post-save re-read refreshed the pack and the room but not the spell and
+  skill lists, so the next cast sent a stale id, and the server, finding no such spell, bailed out without a word: no
+  line, no mana. Prod, 2026-10-27, wave 2: the first rescue after a crossing never went out and the ride timed out
+  waiting for a landing. The re-read now includes spells and skills (`m59-savewire-test`), and `castTo` treats "sent, no
+  line, no mana" as swallowed: it re-reads the spell list and casts again.
+- **Anyone standing in 2510 drinks from the pool of vigor** (operator: *"It should also drink from the pool of vigor if
+  in that room"*): the keeper's `drinkAtPoolOfVigor`, once a minute, below full vigor, only when the body is quiet
+  (health over half, nothing landing, nobody holding its movement). `m59-island-pool-test` pins it.
