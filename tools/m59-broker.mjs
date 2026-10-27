@@ -21282,7 +21282,8 @@ function serveDashboard(port, { handle = null } = {}) {
         .then(out => out?.fleet ?? null, () => null)
         .then(live => {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-          res.end(renderEconomy({ hours, live, characters: fleetCharacters() }));
+          res.end(renderEconomy({ hours, live, characters: fleetCharacters(),
+                                  view: url.searchParams.get('view') }));
         })
         .catch(e => {
           res.writeHead(500, { 'content-type': 'text/plain' });

@@ -50,7 +50,7 @@ import { fileURLToPath } from 'node:url';
 import { readLedger } from './m59-ledger.mjs';
 import { lastTownIncome } from './m59-town-income.mjs';
 import { foodValue } from './m59-items.mjs';
-import { listCharacters as bankedCharacters, balancesFor } from './m59-bank.mjs';
+import { listCharacters as bankedCharacters, balancesFor, accountRegion } from './m59-bank.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -108,6 +108,101 @@ function fromLive(live) {
                                                 herbs: r.reagents.herbs ?? 0, at, from: 'live' });
   }
   return { purse, reagents };
+}
+
+// ------------------------------------------------------------------ the two banks
+//
+// TWO BANKS, TWO ACCOUNTS, AND A CHARACTER CAN HOLD BOTH. Jasper and Tos pay into one account
+// (`jasper-tos-barloque`); Ko'catan's Hungry Vaults keep another (`kocatan`), and a deposit on
+// one side of the sea cannot be drawn on the other. Summing the two into one "banked" figure is
+// the right answer to "what is the fleet worth" and the wrong one to "what can this character
+// draw where it is standing", so every row carries the two sides apart and the page chooses.
+//
+// TWO RECORDS SAY WHAT IS IN THEM. The bank book (substrate/banks/, m59-bank.mjs) is written the
+// moment a banker speaks; every `town_trip_completed` row in the ledger carries a copy of that
+// book as `cash.accounts`, each account with its own `at` and `observed`. The book is the
+// machine's and unwindowed; the ledger copy is this fleet's and survives the book being absent
+// (another checkout, a restored machine). Per account the newer reading wins, the book on a tie.
+// A legacy row whose cash names no account (`cash.bank`) is skipped: a balance that cannot be
+// attributed to a bank would be added to the wrong one.
+function fromTrips(events) {
+  const out = new Map();                       // character -> Map(account -> reading)
+  for (const e of events) {
+    if (e.kind !== 'town_trip_completed' || !e.character) continue;
+    for (const a of e.cash?.accounts ?? []) {
+      if (!a?.account || typeof a.balance !== 'number' || !Number.isFinite(a.balance)) continue;
+      const reading = { account: a.account, balance: a.balance,
+                        at: Number.isFinite(a.at) ? a.at : null,
+                        observed: a.observed ?? null, from: 'trip' };
+      const mine = out.get(e.character) ?? (out.set(e.character, new Map()), out.get(e.character));
+      const was = mine.get(a.account);
+      if (!was || (reading.at ?? -1) > (was.at ?? -1)) mine.set(a.account, reading);
+    }
+  }
+  return out;
+}
+
+// One character's accounts from both records, newest per account, newest account first.
+function accountsFor(character, trips) {
+  const merged = new Map(balancesFor(character).map(b => [b.account,
+    { account: b.account, balance: b.balance, at: b.at ?? null, observed: b.observed ?? null,
+      from: 'bank' }]));
+  for (const [account, t] of trips.get(character) ?? []) {
+    const was = merged.get(account);
+    if (!was || (t.at ?? -1) > (was.at ?? -1)) merged.set(account, t);
+  }
+  return [...merged.values()].map(a => ({ ...a, region: accountRegion(a.account) }))
+    .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+}
+
+// One side of the sea, as a reading: null when no account on that side has ever been read.
+// Its age is the age of its STALEST account — a sum is only as fresh as its oldest part.
+function side(accounts) {
+  if (!accounts.length) return null;
+  const ats = accounts.map(a => a.at).filter(Number.isFinite);
+  return {
+    balance: accounts.reduce((t, a) => t + (a.balance || 0), 0),
+    at: ats.length ? Math.min(...ats) : null,
+    observed: accounts.every(a => a.observed === true),
+  };
+}
+
+// ------------------------------------------------------------------ which bank the page shows
+//
+// The page's toggle, `?view=`. MAINLAND IS THE DEFAULT because it is the page as it was built:
+// one bank column, the account Jasper and Tos share. ISLAND is the Ko'catan account alone.
+// COMBINED is both, side by side, with their sum — which is what the old single column was
+// quietly showing for anybody who had banked on the island.
+export const BANK_VIEWS = ['mainland', 'island', 'combined'];
+export const normaliseView = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return BANK_VIEWS.includes(s) ? s : 'mainland';
+};
+
+// What one view says about each character and about the fleet. `banked` is null — never 0 —
+// for a character with no reading on the side(s) the view covers, and the totals say how many
+// characters the sum is actually made of.
+export function bankView(e, view) {
+  view = normaliseView(view);
+  const pick = (r) => view === 'mainland'
+    ? { banked: r.mainland_banked, at: r.mainland_at, observed: r.mainland_observed }
+    : view === 'island'
+    ? { banked: r.island_banked, at: r.island_at, observed: r.island_observed }
+    : { banked: r.banked, at: r.banked_at, observed: r.banked_observed };
+  const rows = e.rows.map(r => ({ character: r.character, ...pick(r),
+                                  mainland: r.mainland_banked, island: r.island_banked }));
+  const known = rows.filter(r => r.banked != null);
+  return {
+    view,
+    rows,
+    totals: {
+      banked: known.reduce((t, r) => t + r.banked, 0),
+      known: known.length,
+      characters: rows.length,
+      mainland: e.totals.mainland_banked, mainland_known: e.totals.mainland_known,
+      island: e.totals.island_banked, island_known: e.totals.island_known,
+    },
+  };
 }
 
 // ------------------------------------------------------------------ what there is to eat
@@ -308,12 +403,14 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
   const sampled = fromSamples(samples);
   const cast = fromCasts(events);
   const liveRows = fromLive(live);
+  const trips = fromTrips(events);
 
-  // Every character anybody has heard of, from any of the four records. A character with
+  // Every character anybody has heard of, from any of the five records. A character with
   // a bank balance and no sample this window is still a character with money.
   let names = new Set([
     ...sampled.purse.keys(), ...sampled.reagents.keys(), ...cast.keys(),
     ...liveRows.purse.keys(), ...liveRows.reagents.keys(), ...bankedCharacters(),
+    ...trips.keys(),
   ]);
   if (characters) names = new Set([...names].filter(n => characters.has(n)));
 
@@ -325,9 +422,11 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
     // the thing about to spend it.
     const r = liveRows.reagents.get(character) ?? sampled.reagents.get(character)
               ?? cast.get(character) ?? null;
-    const accounts = balancesFor(character);
+    const accounts = accountsFor(character, trips);
     const bank = accounts[0] ?? null;
     const banked = accounts.reduce((t, a) => t + (a.balance || 0), 0);
+    const mainland = side(accounts.filter(a => a.region === 'mainland'));
+    const island = side(accounts.filter(a => a.region === 'island'));
     const row = {
       character,
       last_town_trip: lastTownIncome(character),
@@ -335,11 +434,19 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
       elderberry: r?.elderberry ?? null, herbs: r?.herbs ?? null,
       reagents_at: r?.at ?? null, reagents_from: r?.from ?? null,
       // Null, not zero: nobody has seen this one at a counter. Summed across accounts
-      // because Ko'catan is a separate bank and a character can hold both.
+      // because Ko'catan is a separate bank and a character can hold both — the combined
+      // figure. The two sides follow, apart, each with its own age.
       banked: accounts.length ? banked : null,
       banked_at: bank?.at ?? null,
       banked_observed: accounts.length ? accounts.every(a => a.observed) : null,
-      accounts: accounts.map(a => ({ account: a.account, balance: a.balance, observed: a.observed })),
+      // The mainland account (Jasper / Tos) and the island one (Ko'catan's Hungry Vaults).
+      // Null on a side means no reading from that side's counter — never a balance of zero.
+      mainland_banked: mainland?.balance ?? null, mainland_at: mainland?.at ?? null,
+      mainland_observed: mainland?.observed ?? null,
+      island_banked: island?.balance ?? null, island_at: island?.at ?? null,
+      island_observed: island?.observed ?? null,
+      accounts: accounts.map(a => ({ account: a.account, region: a.region, balance: a.balance,
+                                     at: a.at, observed: a.observed, from: a.from })),
     };
     // WEALTH IS A SUM AND THE TWO HALVES ARE NOT INTERCHANGEABLE. A purse is what death
     // takes and a balance is what it cannot, so the total is a convenience for sorting
@@ -364,11 +471,13 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
     characters: rows.length,
     totals: {
       purse: sum('purse'), banked: sum('banked'), wealth: sum('wealth'),
+      mainland_banked: sum('mainland_banked'), island_banked: sum('island_banked'),
       elderberry: sum('elderberry'), herbs: sum('herbs'),
       casts_possible: sum('casts_possible'),
       // How much of each total is actually backed by a reading, so a total that is small
       // because nobody has looked cannot be read as a fleet that is broke.
       purse_known: known('purse'), banked_known: known('banked'),
+      mainland_known: known('mainland_banked'), island_known: known('island_banked'),
       reagents_known: rows.filter(r => r.reagents_at != null).length,
       short: rows.filter(r => r.short).length,
     },
@@ -376,13 +485,17 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
     by_wealth: facet(r => r.wealth),
     by_purse: facet(r => r.purse ?? 0),
     by_banked: facet(r => r.banked ?? 0),
+    by_island: facet(r => r.island_banked ?? 0),
     by_reagents: facet(r => (r.elderberry ?? 0) + (r.herbs ?? 0)),
     spend: spending(events),
     series: series(samples),
     read_this_way:
       'banked is prose a banker said out loud and never repeats, so it carries an age and ' +
       'null means nobody has taken this character to a counter — not that the account is ' +
-      'empty. purse and reagents are the inventory: live when the broker rendered the ' +
+      'empty. banked is two accounts: the mainland one Jasper and Tos share, and ' +
+      'Ko\'catan\'s, which is separate — money banked on the island cannot be drawn on the ' +
+      'mainland or the other way round — so each carries its own age, and the page\'s ' +
+      'view toggle picks one or both. purse and reagents are the inventory: live when the broker rendered the ' +
       'page, otherwise the newest ledger sample, otherwise what a caster stated it was ' +
       'holding when it last cast. casts_possible is the number of `create food` this ' +
       'character could cast right now, which is the only thing the reagents are for.',
@@ -410,11 +523,12 @@ if (isMain) {
   console.log();
 
   const age = (t) => (t ? `${Math.round((Date.now() - t) / 60000)}m` : '—');
-  console.log('character     purse    banked  read      elder  herbs  casts  seen');
+  console.log('character     purse  mainland   island  read      elder  herbs  casts  seen');
   for (const r of e.rows)
     console.log(String(r.character).padEnd(13),
                 String(r.purse ?? '—').padStart(6),
-                String(r.banked ?? '—').padStart(9),
+                String(r.mainland_banked ?? '—').padStart(9),
+                String(r.island_banked ?? '—').padStart(8),
                 (r.banked == null ? 'never' : r.banked_observed ? 'observed' : 'derived').padEnd(9),
                 String(r.elderberry ?? '—').padStart(5),
                 String(r.herbs ?? '—').padStart(6),
@@ -422,7 +536,9 @@ if (isMain) {
                 ' ' + age(r.reagents_at) + (r.reagents_from === 'cast' ? ' (cast)' : ''));
   const t = e.totals;
   console.log(`\n${t.wealth} shillings in all — ${t.purse} in purses (lost on death), ` +
-              `${t.banked} banked (not)`);
+              `${t.banked} banked (not): ${t.mainland_banked} on the mainland across ` +
+              `${t.mainland_known} character(s), ${t.island_banked} in Ko'catan's separate account ` +
+              `across ${t.island_known}`);
   console.log(`${t.elderberry} elderberry and ${t.herbs} herbs: ${t.casts_possible} meals' worth, ` +
               `${t.short} character(s) under ${SHORT_BELOW} of something`);
   if (t.purse_known < e.characters)

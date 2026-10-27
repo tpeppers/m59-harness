@@ -34,6 +34,17 @@ Which spells bottle and which need a prism are `potion` / `multicast` in
   the caster's stock — and the row says which of the three it got, because a two-hour-old
   figure and a live one must not render identically.
 
+  **TWO BANKS, AND `/economy` SAYS WHICH.** Ko'catan's Hungry Vaults (room 2005, account
+  `kocatan`) are a separate account from the one Jasper and Tos share
+  (`jasper-tos-barloque`): an island deposit cannot be drawn on the mainland. The bank column
+  used to sum both without saying so. It now has a toggle in the URL — `?view=mainland` (the
+  default, the page as it was built), `?view=island` (Ko'catan only) and `?view=combined`
+  (both, each with its own age, and their sum) — with every view's total in a line under it.
+  A balance is the newer of the bank book and the `cash.accounts` copy on a
+  `town_trip_completed` ledger row; "no island sample" means nobody has heard Huital
+  ko'Nosak speak to that character, never a balance of zero. `worth, all in` stays purse plus
+  every account in every view. `m59-economy-island-test.mjs` (55) pins it.
+
   `/skills` reads `substrate/abilities/`, which exists because the numbers are PUSHED.
   **Read it for the atrophy**, which is the half nothing else would show: over a week the
   fleet gained 1846 points and lost 1558, with `relay` and `blink` losing hundreds and

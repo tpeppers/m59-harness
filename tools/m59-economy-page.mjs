@@ -11,7 +11,7 @@
 // So the page leads with the totals, and then says how each one was measured — see
 // m59-economy.mjs for why the three quantities have three different kinds of evidence
 // behind them and why the page must never flatten that.
-import { economy, SHORT_BELOW , foodHeld} from './m59-economy.mjs';
+import { economy, SHORT_BELOW, foodHeld, bankView, normaliseView, BANK_VIEWS } from './m59-economy.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore } from './m59-dashboard.mjs';
 import { esc, ago, num, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
@@ -81,7 +81,37 @@ const EXTRA_STYLE = `
   .chest { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; }
   .chest.empty { border-style:dashed; opacity:.72; }
   .chest h3 { margin:0 0 .3rem 0; font-size:.85rem; }
+
+  /* WHICH BANK. Links, not buttons: the view lives in the URL (?view=), so it survives the
+     60-second refresh, can be bookmarked, and works with no JavaScript at all. */
+  .views { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; margin:-.5rem 0 .4rem; }
+  .views .k { color:var(--dim); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em;
+              margin-right:.2rem; }
+  .views a { font-size:.82rem; padding:.3rem .8rem; border:1px solid var(--line); border-radius:999px;
+             color:var(--dim); text-decoration:none; }
+  .views a:hover { color:var(--fg); }
+  .views a.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .banktotals b.on { color:var(--accent); }
+  td .age { display:block; font-size:.72rem; }
+  tfoot td { font-weight:600; border-top:1px solid var(--line); }
 `;
+
+const ISLAND_BANK = "Huital ko'Nosak's counter in The Hungry Vaults, Ko'catan (room 2005)";
+const VIEW_LABEL = { mainland: 'Mainland', island: "Island · Ko'catan", combined: 'Combined' };
+
+// One bank reading in a cell: the number, then where it came from and how old it is. `empty` is
+// what a character with NO reading on this side says — never a zero, because "nobody has seen it
+// at that counter" and "the account is empty" are opposite facts.
+function bankCell(balance, observed, at, empty, emptyTitle) {
+  if (balance == null) return `<span class="guess" title="${esc(emptyTitle)}">${esc(empty)}</span>`;
+  return `${num(balance)}<span class="age dim">${observed
+      ? '<span class="pill obs" title="a banker said this out loud">said</span>'
+      : '<span class="pill inf" title="a withdrawal reports the amount handed over, not the new balance, so this figure is arithmetic against the last stated one">derived</span>'}
+    ${at ? esc(ago(at)) : ''}</span>`;
+}
+
+const NO_MAINLAND = 'nobody has taken this character to a counter — this is not a balance of zero';
+const NO_ISLAND = `no reading from ${ISLAND_BANK} — this is not a balance of zero`;
 
 const storage = new StorageCache();
 
@@ -218,9 +248,32 @@ function foodLegend(kinds, showEarned = false) {
     </tr>`).join('');
 }
 
-export function renderEconomy({ hours = 168, live = null, characters = null } = {}) {
+// `view` is the bank toggle, `?view=mainland|island|combined`; anything else is mainland, which
+// is the page as it was built. See bankView in m59-economy.mjs.
+export function renderEconomy({ hours = 168, live = null, characters = null, view = 'mainland' } = {}) {
   const e = economy({ sinceMs: hours * 3600 * 1000, live, characters });
   const t = e.totals;
+  view = normaliseView(view);
+  const bv = bankView(e, view);
+  const bankOf = new Map(bv.rows.map(r => [r.character, r]));
+
+  // WHERE THE MONEY IS, ON THE SIDE OF THE SEA THE VIEW IS ABOUT. The island view leaves purses
+  // out: a purse is carried, not banked, and "Ko'catan accounts only" is what was asked for.
+  const moneyParts = (r) => view === 'island'
+    ? [["Ko'catan bank", r.island_banked]]
+    : view === 'mainland'
+    ? [['purse', r.purse], ['banked', r.mainland_banked]]
+    : [['purse', r.purse], ['mainland bank', r.mainland_banked], ["Ko'catan bank", r.island_banked]];
+  const money = e.rows.map(r => {
+    const children = moneyParts(r).map(([name, value]) => ({ name, value: value ?? 0 }))
+      .filter(c => c.value > 0);
+    return { name: r.character, value: children.reduce((n, c) => n + c.value, 0), children };
+  }).filter(x => x.value > 0).sort((a, b) => b.value - a.value);
+
+  // The island view puts the characters with an island account first, richest first; the other
+  // two keep the page's own order (all-in wealth), so the default view reads as it always has.
+  const tableRows = view !== 'island' ? e.rows : [...e.rows].sort((a, b) =>
+    (b.island_banked ?? -1) - (a.island_banked ?? -1) || b.wealth - a.wealth);
   // Read off the live rows' own `pack_items`, so it costs no packet and is exactly as fresh
   // as the rest of the page. With `live: null` — a standalone read of the record — there is
   // no pack to count and the section says so rather than reporting a starving fleet.
@@ -228,18 +281,22 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
 
   const FACETS = {
     wealth: {
-      children: e.by_wealth.map(x => {
-        const r = e.rows.find(r => r.character === x.name);
-        return { ...x, children: [{ name: 'purse', value: r?.purse ?? 0 },
-                                  { name: 'banked', value: r?.banked ?? 0 }]
-                                 .filter(c => c.value > 0) };
-      }),
-      total: t.wealth, unit: 'shillings', drill: 'purse and bank',
-      note: 'Everything the fleet is worth, by character. Click one to split it into the ' +
-            'half a death takes and the half it cannot. A purse is the risk: the payout ' +
-            'from a signet ring sitting on the fleet\'s most fragile character is exactly ' +
-            'what dying is for.',
-      empty: 'no money on record — nobody has been seen at a counter and no sample carries a purse',
+      children: money,
+      total: money.reduce((n, x) => n + x.value, 0), unit: 'shillings',
+      drill: view === 'island' ? "Ko'catan bank" : 'purse and bank',
+      note: view === 'island'
+        ? 'Ko\'catan\'s bank only, by character: what each has deposited with Huital ' +
+          'ko\'Nosak in The Hungry Vaults. It is a separate account — none of it can be ' +
+          'drawn in Jasper or Tos — and purses are left out, because a purse is carried, ' +
+          'not banked.'
+        : 'Everything the fleet is worth, by character' +
+          (view === 'combined' ? ', in both banks' : ', with the mainland bank') + '. Click ' +
+          'one to split it into the half a death takes and the half it cannot. A purse is ' +
+          'the risk: the payout from a signet ring sitting on the fleet\'s most fragile ' +
+          'character is exactly what dying is for.',
+      empty: view === 'island'
+        ? 'no Ko\'catan balance on record — nobody has been seen at Huital ko\'Nosak\'s counter'
+        : 'no money on record — nobody has been seen at a counter and no sample carries a purse',
     },
     reagents: {
       children: e.by_reagents.map(x => {
@@ -277,22 +334,43 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   // first version of this note shipped twenty-three copies of itself to the browser, about nine
   // kilobytes of prose no reader can see, and tripped the page's own "nothing is truncated" check
   // by containing the phrase it was explaining.
-  const rows = e.rows.map(r => {
+  // THE BANK CELLS, BY VIEW. Mainland and island are one account each and keep the page's two
+  // columns, the figure and where it came from. Combined is three figures — each side with its
+  // own age, because the two counters are visited at different times — and their sum.
+  const bankCells = (r) => {
+    if (view === 'combined') {
+      const only = r.banked == null ? ''
+        : r.mainland_banked == null ? 'island only' : r.island_banked == null ? 'mainland only' : '';
+      return `
+      <td class="num" data-col="mainland">${bankCell(r.mainland_banked, r.mainland_observed, r.mainland_at,
+                                                     'never asked', NO_MAINLAND)}</td>
+      <td class="num" data-col="island">${bankCell(r.island_banked, r.island_observed, r.island_at,
+                                                   'no sample', NO_ISLAND)}</td>
+      <td class="num" data-col="combined">${r.banked == null
+          ? `<span class="guess" title="${esc(NO_MAINLAND)}">never asked</span>`
+          : `<b>${num(r.banked)}</b>${only ? `<span class="age dim">${only}</span>` : ''}`}</td>`;
+    }
+    const b = bankOf.get(r.character);
+    const empty = view === 'island'
+      ? `<span class="guess" title="${esc(NO_ISLAND)}">no island sample</span>`
+      : `<span class="guess" title="${esc(NO_MAINLAND)}">never asked</span>`;
+    return `
+      <td class="num" data-col="${view}">${b.banked == null ? empty : num(b.banked)}</td>
+      <td>${b.banked == null ? '' : b.observed
+          ? '<span class="pill obs" title="a banker said this out loud">said</span>'
+          : '<span class="pill inf" title="a withdrawal reports the amount handed over, not the new balance, so this figure is arithmetic against the last stated one">derived</span>'}
+        ${b.at ? `<span class="dim" style="font-size:.72rem">${esc(ago(b.at))}</span>` : ''}</td>`;
+  };
+
+  const rows = tableRows.map(r => {
     // NO PACK AND NO VAULT READ HERE ANY MORE. Both moved to /inventory on 2026-09-17, and
     // the locals went with them rather than being left assigned-and-unused — a `storage.readVault`
     // per character per render is a file read for a value nothing on this page displays.
     return `
-    <tr${r.short ? ' class="row-short"' : ''}>
+    <tr data-character="${esc(r.character)}"${r.short ? ' class="row-short"' : ''}>
       <td class="name">${esc(r.character)}</td>
       <td class="num">${r.purse == null ? '<span class="dim">—</span>' : num(r.purse)}</td>
-      <td class="num">${townIncomeCell(r.last_town_trip)}</td>
-      <td class="num">${r.banked == null
-          ? '<span class="guess" title="nobody has taken this character to a counter — this is not a balance of zero">never asked</span>'
-          : num(r.banked)}</td>
-      <td>${r.banked == null ? '' : r.banked_observed
-          ? '<span class="pill obs" title="a banker said this out loud">said</span>'
-          : '<span class="pill inf" title="a withdrawal reports the amount handed over, not the new balance, so this figure is arithmetic against the last stated one">derived</span>'}
-        ${r.banked_at ? `<span class="dim" style="font-size:.72rem">${esc(ago(r.banked_at))}</span>` : ''}</td>
+      <td class="num">${townIncomeCell(r.last_town_trip)}</td>${bankCells(r)}
       <td class="num ${(r.elderberry ?? 0) < SHORT_BELOW ? 'bad' : ''}">${r.elderberry == null ? '—' : r.elderberry}</td>
       <td class="num ${(r.herbs ?? 0) < SHORT_BELOW ? 'bad' : ''}">${r.herbs == null ? '—' : r.herbs}</td>
       <td class="num ${r.casts_possible ? '' : 'bad'}">${r.casts_possible}</td>
@@ -344,15 +422,36 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
     one into vigor · last ${hours}h · ${esc(FLEET_LABEL)} fleet</div>
   ${NAV('economy')}
 
+  <nav class="views" aria-label="which bank">
+    <span class="k">bank</span>${BANK_VIEWS.map(v => `
+    <a href="?view=${v}&amp;hours=${esc(String(hours))}"${v === view ? ' class="on" aria-current="page"' : ''}>${esc(VIEW_LABEL[v])}</a>`).join('')}
+  </nav>
+  <div class="sub banktotals">Banked: mainland
+    <b${view === 'mainland' ? ' class="on"' : ''}>${num(t.mainland_banked)}</b>
+    (${t.mainland_known} character(s) read) · Ko'catan
+    <b${view === 'island' ? ' class="on"' : ''}>${num(t.island_banked)}</b>
+    (${t.island_known} read) · combined
+    <b${view === 'combined' ? ' class="on"' : ''}>${num(t.banked)}</b>.
+    Ko'catan's bank — ${esc(ISLAND_BANK)} — is a <b>separate account</b> from the mainland one
+    Jasper and Tos share: money banked on one side of the sea cannot be drawn on the other.
+    A dash or <span class="guess">no sample</span> means no banker has been heard on that side, not
+    a balance of zero.</div>
+
   <div class="cards">
     <div class="card"><div class="k">worth, all in</div><div class="v">${num(t.wealth)}</div>
-      <div class="n">shillings across ${e.characters} character(s)</div></div>
+      <div class="n">shillings across ${e.characters} character(s)${t.island_banked
+        ? ` · ${num(t.island_banked)} of it in Ko'catan's bank` : ''}</div></div>
     <!-- Orange, not red. Money in a purse is money AT RISK, which is worth marking, but it
          is not a fault — red on this page is reserved for a character that cannot cast. -->
     <div class="card"><div class="k">in purses</div><div class="v ${t.purse ? 'warn' : 'dim'}">${num(t.purse)}</div>
       <div class="n">what a death takes${purseUnknown ? ` · ${purseUnknown} not read` : ''}</div></div>
-    <div class="card"><div class="k">banked</div><div class="v good">${num(t.banked)}</div>
-      <div class="n">what it cannot · ${t.banked_known} of ${e.characters} seen at a counter</div></div>
+    <div class="card"><div class="k">banked${view === 'island' ? " · Ko'catan"
+        : view === 'combined' ? ' · both banks' : ' · mainland'}</div>
+      <div class="v good">${num(bv.totals.banked)}</div>
+      <div class="n">${view === 'combined'
+        ? `${num(t.mainland_banked)} mainland + ${num(t.island_banked)} Ko'catan · `
+        : 'what it cannot · '}${bv.totals.known} of ${e.characters} seen at ${view === 'island'
+        ? "Ko'catan's counter" : 'a counter'}</div></div>
     <div class="card"><div class="k">elderberry</div><div class="v">${num(t.elderberry)}</div>
       <div class="n">the scarce half of the recipe</div></div>
     <div class="card"><div class="k">herbs</div><div class="v">${num(t.herbs)}</div>
@@ -545,11 +644,23 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   <table>
     <thead><tr><th>character</th><th class="num">purse</th>
       <th class="num" title="Net cash return per elapsed hour for the cycle ending at the last completed town trip">farming shillings/hr<br><span class="dim">last town trip</span></th>
-      <th class="num">banked</th>
-      <th>balance</th><th class="num">elder</th><th class="num">herbs</th>
+      ${view === 'combined'
+        ? `<th class="num" title="the account Jasper and Tos share">mainland</th>
+      <th class="num" title="${esc(ISLAND_BANK)} — a separate account">Ko'catan</th>
+      <th class="num">combined</th>`
+        : `<th class="num">banked<br><span class="dim">${view === 'island' ? "Ko'catan" : 'mainland'}</span></th>
+      <th>balance</th>`}<th class="num">elder</th><th class="num">herbs</th>
       <th class="num" title="create food castings this character could pay for out of its own pack">meals</th>
       <th title="live is the inventory this second; a time is how old the reading is">reagents read</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="11" class="empty">nothing on record yet</td></tr>'}</tbody>
+    ${rows ? `<tfoot><tr data-total="${view}"><td>total</td><td class="num">${num(t.purse)}</td><td></td>${view === 'combined'
+      ? `<td class="num" data-col="mainland">${num(t.mainland_banked)}</td>
+         <td class="num" data-col="island">${num(t.island_banked)}</td>
+         <td class="num" data-col="combined">${num(t.banked)}</td>`
+      : `<td class="num" data-col="${view}">${num(bv.totals.banked)}</td>
+         <td class="dim">${bv.totals.known} of ${e.characters} read</td>`}
+      <td class="num">${num(t.elderberry)}</td><td class="num">${num(t.herbs)}</td>
+      <td class="num">${num(t.casts_possible)}</td><td></td></tr></tfoot>` : ''}
   </table>
   </div>
 

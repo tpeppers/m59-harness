@@ -101,6 +101,14 @@ export const ACCOUNTS = {
 };
 export const accountOf = (bank) => ACCOUNTS[bank] ?? `bank-${bank}`;
 
+// WHICH SIDE OF THE SEA AN ACCOUNT IS ON. Ko'catan (rooms 2000-2699) keeps its own bank —
+// Huital ko'Nosak in The Hungry Vaults, room 2005, BID_KOCATAN — and money deposited there
+// cannot be drawn in Jasper or Tos, nor the other way round. Every other account is the
+// mainland's. Named by the account key rather than by a room, because the key is what every
+// record carries: the bank book, and the `cash.accounts` copy on each town-trip ledger row.
+export const ISLAND_ACCOUNT = ACCOUNTS[2];
+export const accountRegion = (account) => account === ISLAND_ACCOUNT ? 'island' : 'mainland';
+
 // Which bank a line came from. Falls back to the room, and then to nothing — a balance
 // we cannot attribute is worse than useless, because it would be added to the wrong
 // account, so `null` here means the caller must not record it as a balance.

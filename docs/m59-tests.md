@@ -1366,6 +1366,13 @@ the records it describes.
   tab bar all six boards share, and the pack drill-in: that it names what is in the pack
   rather than only how full it is, and that an EMPTY pack, a character the broker is not
   holding, and a broker too old to report the list are three different sentences) and
+  `node tools/m59-economy-island-test.mjs` (55 — the Economy board's bank toggle,
+  `?view=mainland|island|combined`: that the island account is `kocatan`, the same key
+  Huital's sentences and room 2005 are filed under; that a balance comes from the bank book or
+  the `cash.accounts` copy on a `town_trip_completed` ledger row, newest per account, and a
+  legacy row naming no account is never guessed into a bank; each view's per-character figure
+  and total, with mainland + island = combined; and that a character never heard at Ko'catan's
+  counter is null and "no island sample" on the page, while a stated zero stays 0) and
   `node tools/m59-stats-test.mjs` (60 — the Stats board and the pane it shares with the
   planner: that grouping is the six numbers and not the level, that a sheet with no
   attributes is never folded in as a zero roll, that a roster character with no sheet at all
