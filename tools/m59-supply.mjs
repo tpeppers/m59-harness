@@ -332,19 +332,41 @@ export async function supplyBetween(a, deps) {
       // through the generation it was read in: same id, same thing -> as before; renumbered ->
       // the same stack by name; recycled or ambiguous -> refused, with the sentence, rather
       // than offering whatever now answers to the number.
+      // {name, amount} WITH NO ID IS A NAME, NOT A STALE ID (prod 2026-10-27: it was refused as "stale object id(s)",
+      // which reads like a renumbering). Such entries are matched by name like a string `what`: stacks by amount, worn
+      // gear never, and at most `amount` single entries; the id entries beside them go through checkIds as before.
+      const isNamed = e => e && typeof e === 'object' && e.id == null && typeof e.name === 'string' && e.name.trim();
+      const named = a.what.filter(isNamed), withIds = a.what.filter(e => !isNamed(e));
+      const byName = (entry) => {
+        const wanted = entry.name.trim().toLowerCase().replace(/\s+/g, ' ');
+        const per = num(entry.amount, 1);
+        const hit = o => { const n = nameOf(o).toLowerCase().replace(/\s+/g, ' ');
+          return n === wanted || n === `${wanted}s` || `${n}s` === wanted; };
+        const matched = inventory.filter(hit);
+        const singles = matched.filter(o => !(o.amount > 0));
+        let usable = singles;
+        if (singles.length) {
+          const eq = give.client()?.equipment?.();
+          const ids = eq?.known ? eq.equipped.map(e => Number(e.id)) : null;
+          usable = ids && ids.every(id => id > 0) ? singles.filter(o => !ids.includes(Number(o.id))).slice(0, per) : [];
+        }
+        return [...matched.filter(o => o.amount > 0).map(o => ({ ...o, amount: Math.max(1, Math.min(o.amount, per)) })), ...usable];
+      };
+      const byNames = named.flatMap(byName);
+      if (!withIds.length) return byNames;
       const gc = give.client();
-      idCheck = checkIds(a.what, {
+      idCheck = checkIds(withIds, {
         inventory: inventory.map(o => ({ ...o, name: nameOf(o), _row: o })),
         generations: Array.isArray(gc?.idGenerations) ? gc.idGenerations : [],
         asOf: typeof gc?.idsAsOf === 'function' ? gc.idsAsOf() : null,
         callerAsOf: idsReadAt,
       });
       if (!idCheck.ok) return [];
-      return idCheck.items.map(({ row, amount }) => {
+      return [...idCheck.items.map(({ row, amount }) => {
         const o = row._row;
         if (amount == null || !(o.amount > 0)) return o;
         return { ...o, amount: Math.max(1, Math.min(o.amount, Number(amount))) };
-      });
+      }), ...byNames];
     }
     if (a.what === 'all') return [...inventory];
     if (a.what === 'food') return skills.larderOf(give.client()).map(x => x.o);
@@ -418,7 +440,7 @@ export async function supplyBetween(a, deps) {
     reason: idCheck && !idCheck.ok
       ? `stale object id(s) for ${giverName}: ${refusalText(idCheck)}`
       : `${giverName} is carrying nothing matching ` +
-        `${Array.isArray(a.what) ? 'those ids' : (a.what || 'reagents')}` +
+        `${Array.isArray(a.what) ? 'those items' : (a.what || 'reagents')}` +
         (idCheck?.absent?.length ? ` (${idCheck.absent.join(', ')} ${idCheck.absent.length > 1 ? 'are' : 'is'} ` +
           'not in the pack and no save this character remembers renumbered ' +
           `${idCheck.absent.length > 1 ? 'them' : 'it'} — re-read the inventory)` : ''),

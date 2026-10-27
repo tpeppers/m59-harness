@@ -173,10 +173,23 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (section < 0) throw new Error('guild position is outside the known passage');
     const inward = section < destination, door = doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
-    await standUp(s, isInterrupted);
-    const approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
-    await s.confirmPosition?.();
+    // UP TO THREE APPROACHES. Prod 2026-10-27: Kermit (door 59, stopped at r2c33 after 3 steps) and Lew (door 55, r20c18)
+    // stopped short with no reason and no canceller, while the same draw worked for Animal half an hour earlier -- the
+    // shape of a body briefly in a one-square hall passage during a trek's staging. A short pause and another walk costs
+    // seconds; the refusal costs the whole stash.
+    let approach = null;
+    for (let tryNo = 0; tryNo < 3; tryNo++) {
+      if (tryNo) { await sleep(1500); guard(); }
+      await standUp(s, isInterrupted);
+      approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
+      await s.confirmPosition?.();
+      if (c.self.row === trigger[0] && c.self.col === trigger[1]) break;
+    }
     if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
+      // WHO STANDS NEAR THE TRIGGER, by name: the likeliest reason a walk in this hall stops short.
+      const near = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId && Number.isFinite(o.row)
+        && Math.max(Math.abs(o.row - trigger[0]), Math.abs(o.col - trigger[1])) <= 2).map(o => c.rsc?.get?.(o.nameRsc) || o.name || '?');
+      if (approach) approach.near_trigger = near;
       k.note?.('guild door trigger not reached', { sector: door.sector, reason: approach?.reason,
         at: { row: c.self.row, col: c.self.col }, target: { row: trigger[0], col: trigger[1] } });
       // THE REASON TRAVELS WITH THE REFUSAL. The note above goes to a keeper buffer nobody can read
@@ -190,7 +203,8 @@ export async function guildPassage(k, destination, isInterrupted) {
         // safe wall") resting a body that had arrived hurt -- correct, and a reason to wait, not to retry.
         `${approach?.cancelled_by_label && approach.cancelled_by_label !== 'unattributed'
           ? `; cancelled by ${approach.cancelled_by_label}${approach.cancelled_by ? ` (${approach.cancelled_by})` : ''}`
-          : approach?.cancelled_by ? `; cancelled by ${approach.cancelled_by}` : ''})`);
+          : approach?.cancelled_by ? `; cancelled by ${approach.cancelled_by}` : ''}` +
+        `${approach?.near_trigger?.length ? `; near the trigger: ${approach.near_trigger.join(', ')}` : ''}, after 3 approaches)`);
     }
     let crossed = false, refused = 0;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {

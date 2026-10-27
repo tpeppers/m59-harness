@@ -190,6 +190,11 @@ export const STRATEGY_FIELDS = Object.freeze([
   { path: 'confine.roam', keys: ['roam'], faculty: 'movement', arg: 'roam', normalize: bool('confine.roam') },
   { path: 'vigor.fightAbove', keys: ['fightAboveVigor', 'vigorFloor'], faculty: 'work', arg: 'fight_above_vigor',
     normalize: normFightAbove },
+  // HOW HIGH TO EAT ONCE A CLIMB HAS STARTED (provision.mjs: below the fight floor it eats, up to this). The island band,
+  // 2026-10-27: fight above 100 (rest caps at 80 and nobody had food, so 150 meant no fights), eat on to 195.
+  { path: 'vigor.ceiling', keys: ['vigorCeiling'], faculty: 'work', arg: 'vigor_ceiling',
+    normalize: v => { const n = Number(v); if (typeof v === 'boolean' || v === null || !Number.isFinite(n) || n < 0 || n > 200)
+      throw new Error('vigor.ceiling must be a number from 0 to 200'); return n; } },
   { path: 'practice', keys: ['practiceSpells'], faculty: 'work', arg: 'practice_spells', normalize: normPractice },
   // THE BUDDY SYSTEM (m59-buddy.mjs): { pairs: { tagger: killer }, wait_s, tries, reach, quarry }. One
   // value for every member, each keeper finds its own role in it, so one file can be assigned to all.

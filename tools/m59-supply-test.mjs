@@ -253,6 +253,16 @@ section('A STACK IS OFFERED WITH ITS QUANTITY, BECAUSE A BARE ID MEANS ONE');
      giver._fake.lastOffer.to_id === 99);
 }
 {
+  // {name, amount} WITH NO ID IS A NAME (prod 2026-10-27: refused as "stale object id(s)", which read like a renumbering).
+  const { giver, recv } = twoInOneRoom({ per: 46 });
+  const out = await supplyBetween({ from: 'g', to: 'r', what: [{ name: 'elderberry', amount: 5 }], who_travels: 'neither' },
+                                  deps({ g: giver, r: recv }));
+  const items = giver._fake.lastOffer?.items ?? [];
+  ok('a {name, amount} entry is resolved by name, five of the stack, never "stale object id"',
+     items.length === 1 && items[0].id === 11 && items[0].amount === 5 && !/stale object id/.test(out?.reason ?? ''),
+     JSON.stringify({ items, reason: out?.reason }));
+}
+{
   // The other half of the same rule: asked for the WHOLE stack by id, the amount is the
   // stack, not a slice of it.
   const { giver, recv } = twoInOneRoom({ per: 46 });
