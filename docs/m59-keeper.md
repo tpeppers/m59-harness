@@ -915,3 +915,22 @@ The immediate farm-danger monitor also respects a short, identity-fenced refuge
 leg with recent confirmed forward progress. Returning to cover inside a farm
 rung must not be cancelled by its own health monitor. A blocked, stale, changed
 owner or changed body releases that exception through the shared refuge proof.
+
+
+## Poison: shelter in place
+
+Operator, 2026-10-27: *"the correct solution to poison is to lock down in the nearest safe spot until the poison ends
+and healing occurs afterwards, not to flee through it and risk low-health travel. Shelter in place."*
+`tools/m59-poison.mjs`; `m59-poison-test.mjs` (10).
+
+- **What poison does** (player.kod): every 10 s it takes strength/1000 health and **clamps at 1**, so it cannot kill; it
+  leaves the body one hit from death. A black spider poisons one bite in ten (`dethspid.kod`: 0.5 HP/s for 180 s,
+  stacking). Fozzie, 2026-10-27, Cragged Mountains: poison held him at 1 HP on a wall, and a troll's one landed blow
+  killed him.
+- **A poisoned keeper takes the nearest safe spot** (`takeRecoverySpot`), on a road or on a farm, at any health: not a
+  wall forward on the route (the old `poisonedAndFading` forward shelter, which still covers other ailments).
+- **The wall is kept until the poison ends** (`releaseRestedHold`): health reads full between ticks and would release
+  it; it does not, and once the poison is gone the ordinary resume floor makes it heal before it leaves.
+- **A poisoned relog stays out 12 s** (`reconnect`). PoisonTimer re-arms only while the player is in the world and
+  UserLogonHook starts a new one whenever poison remains, so a relog inside 10 s runs two timers: Fozzie's four relogs
+  showed two interleaved 5-HP cadences, about -1 HP/s instead of -0.5.

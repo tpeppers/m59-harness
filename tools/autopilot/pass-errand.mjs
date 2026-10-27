@@ -10,6 +10,7 @@
 //
 // 6 methods: passErrand, restVigorCeiling, releaseRestedHold, resumeDeclined,
 //   resumeSuspendedJourney, cancelJourney
+import { poisonedNow } from '../m59-poison.mjs';
 import { traceDecision } from '../m59-keeper-trace.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { keeperOrigin, moveOrigin } from '../m59-move-origin.mjs';
@@ -343,6 +344,16 @@ export class PassErrandPart {
     if (!onARoad && (this.pendingPull || this.inReachOfUs()?.length
         || (this.mode === 'farm' && opensFightFromWall(this.policy))
         || (this.mode === 'farm' && this.buddyRole?.()?.role === 'tag'))) return false;
+    // POISONED: THE WALL IS KEPT UNTIL THE POISON ENDS. Operator, 2026-10-27: "lock down in the nearest safe spot until the
+    // poison ends and healing occurs afterwards, not to flee through it and risk low-health travel. Shelter in place."
+    // Health climbs between poison ticks and would release the hold at full; it is not released until the poison is gone,
+    // and then the ordinary floor below makes it heal before it leaves.
+    if (poisonedNow(this.s?.client)) {
+      if (!this._poisonHoldSaid) { this._poisonHoldSaid = true;
+        this.note('keeping the wall while poisoned', { why: 'shelter in place until the poison ends, then heal, then go on' }); }
+      return false;
+    }
+    this._poisonHoldSaid = false;
     const floor = onARoad
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);

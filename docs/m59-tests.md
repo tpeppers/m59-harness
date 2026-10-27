@@ -247,6 +247,9 @@ through a nested shelter order.
 - `m59-island-rescue-test.mjs` (14): riding to the Island by casting rescue where a sip would be drunk. Ready only with
   the spell, karma +30 and an emerald per leg (unreadable is a no); auto picks the cup or rescue; a ride by rescue lands
   in 2510 then 2001, retries a failed roll, skips the refill; a karma refusal or PvP lockout stops it.
+- `m59-poison-test.mjs` (10): poison is sheltered in place. A poisoned keeper takes the nearest safe spot, not one
+  forward on the route; the hold is kept until the poison ends and then healed at; a poisoned relog stays out long enough
+  for the old poison timer to stop.
 - `m59-received-test.mjs` (14): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all.

@@ -9,6 +9,7 @@
 // the `@part` markers are what it splices on.
 //
 // 1 methods: passFleeAndRest
+import { poisonedNow } from '../m59-poison.mjs';
 import { recordEvent } from '../m59-ledger.mjs';
 import { OF } from '../m59-parse.mjs';
 import { continuingProvenRefugeLeg } from '../m59-refuge-leg.mjs';
@@ -514,7 +515,21 @@ export class PassSurvivalPart {
     // Cleared the moment it is taken or there is nothing ahead to take, so this can never
     // become a standing instruction that outlives the trouble that set it.
     const ailingNow = (this.s.client?.ailments?.() ?? []).length > 0;
-    const poisonedAndFading = ailingNow && hp !== null
+    // POISON IS SHELTERED IN PLACE, AT THE NEAREST SAFE SPOT, NOT FORWARD ON THE ROUTE. Operator, 2026-10-27: "the correct
+    // solution to poison is to lock down in the nearest safe spot until the poison ends and healing occurs afterwards, not
+    // to flee through it and risk low-health travel. Shelter in place." Poison cannot kill (player.kod PoisonTimer clamps
+    // health at 1); the danger is a hit at low health, so the answer is a wall nothing can reach, now, wherever this is --
+    // on a road or on a farm -- held until the poison ends (releaseRestedHold), then healed at before going on.
+    if (poisonedNow(this.s?.client) && !sheltered && !this.hold
+        && (!this._poisonWallTriedAt || Date.now() - this._poisonWallTriedAt > 20_000)) {
+      this._poisonWallTriedAt = Date.now();
+      const got = await this.takeRecoverySpot('poisoned: sheltering in place at the nearest safe spot until the poison ends')
+        .catch(() => false);
+      if (got?.took || got?.cancelled || this.travelInterrupted()) return HANDLED;
+      this.note('poisoned and no safe spot taken', { got_a_wall: false,
+        why: 'tried the nearest safe spot; the ordinary ladder below still runs, and this tries again in 20 s' });
+    }
+    const poisonedAndFading = ailingNow && !poisonedNow(this.s?.client) && hp !== null
       && hp < (this.policy.ailingShelterBelow ?? AILING_SHELTER_BELOW);
     // AND A THIRD TRIGGER, BECAUSE AN EXHAUSTED TRAVELLER IS A STRANDED ONE.
     //

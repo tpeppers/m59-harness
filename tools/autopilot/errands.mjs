@@ -11,6 +11,7 @@
 // 13 methods: runProvision, runSignetReturn, runErrand, payFarmer, reconnect, leaveHold,
 //   wallUpBeforeSettingOff, stepOutOfThePocket, maybeTestSpot, park, unpark, parkStatus, static
 //   PARK_GRACE_MS
+import { poisonedNow, POISON_RELOG_OFFLINE_MS } from '../m59-poison.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -448,6 +449,12 @@ export class ErrandsPart {
   // never tested; and the next time it stands there it will do so believing it can
   // rest through anything.
   async reconnect(why, { offlineMs = 0 } = {}) {
+    // A POISONED RELOG MUST OUTLAST THE POISON TIMER, or it doubles the poison. player.kod: PoisonTimer re-arms itself
+    // every 10 s only while the player is in the world, and UserLogonHook starts a NEW one whenever poison strength is
+    // left -- so a relog inside ten seconds leaves the old timer running beside the new one. Prod 2026-10-27, Fozzie: four
+    // relogs while poisoned, two interleaved 5-HP-per-10-s cadences, about -1 HP/s instead of -0.5. Twelve seconds out
+    // lets the old timer's next tick find nobody and stop.
+    if (poisonedNow(this.s?.client)) offlineMs = Math.max(Number(offlineMs) || 0, POISON_RELOG_OFFLINE_MS);
     const r = await this.s.rejoin(why, { offlineMs }).then(() => ({ ok: true }), e => ({ ok: false, why: e.message }));
     // Stamped even on failure: if we do not know whether we came back, we certainly
     // do not know whether the monsters are awake.
