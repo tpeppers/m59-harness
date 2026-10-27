@@ -190,16 +190,34 @@ export class WeaponMagicBook {
   keepIds() {
     const out = new Set();
     for (const [id, r] of this.readings)
-      if (r.bypasses_nonmagic === true || (r.class === 'unknown' && /^(dedication|lapse)$/.test(String(r.source))))
+      if (r.bypasses_nonmagic === true || (r.class === 'unknown' && /^(dedication|lapse|renumbered)$/.test(String(r.source))))
         out.add(Number(id));
     return out;
   }
 
-  /** Drop readings for ids no longer carried, and for ids now wearing a different name. */
+  /**
+   * Drop readings for ids no longer carried, and for ids now wearing a different name -- BUT A READING WORTH KEEPING
+   * FOLLOWS ITS NAME. Prod 2026-10-27: the 05:59:59 server save renumbered every id, the reading of Clifford's dedicated
+   * mace was dropped with its old id, and at 06:16:02 the keeper threw the mace away as a spare and cast create weapon.
+   * An id is a handle (CLAUDE.md); a save renumbers the pack without changing what is in it. So an enchanted reading (or
+   * a dedication/lapse re-open) whose id is gone moves to an item of the SAME NAME that has no reading: kept as it was
+   * when there is exactly one such item, and as `unknown`/'renumbered' -- protected by keepIds, looked at next sweep --
+   * when there are several and the book cannot tell which. A mundane reading is not worth following.
+   */
   reconcile(items = []) {
     const live = new Map(items.filter(i => i?.id != null).map(i => [Number(i.id), norm(i.name)]));
+    const lost = [];
     for (const [id, r] of this.readings)
-      if (!live.has(id) || live.get(id) !== r.name) this.readings.delete(id);
+      if (!live.has(id) || live.get(id) !== r.name) { this.readings.delete(id); lost.push(r); }
+    for (const r of lost) {
+      const worth = r.bypasses_nonmagic === true || (r.class === 'unknown' && /^(dedication|lapse|renumbered)$/.test(String(r.source)));
+      if (!worth) continue;
+      const free = [...live].filter(([id, n]) => n === r.name && !this.readings.has(id)).map(([id]) => id);
+      if (!free.length) continue;
+      if (free.length === 1) this.readings.set(free[0], { ...r, source: 'renumbered' });
+      else for (const id of free)
+        this.readings.set(id, { ...r, class: 'unknown', bypasses_nonmagic: null, source: 'renumbered' });
+    }
   }
 
   /**
@@ -226,7 +244,7 @@ export class WeaponMagicBook {
       const r = this.readings.get(Number(i.id));
       if (!r || r.name !== n || r.class === 'unknown') return true;
       // A CARRIED READING (a previous keeper's, loaded at start) is believed at once and checked soon: a look confirms it.
-      if (r.source === 'carried') return true;
+      if (r.source === 'carried' || r.source === 'renumbered') return true;   // a reading that moved ids is confirmed by a look
       if (r.class === 'mundane') return t - r.at > this.mundaneMaxAgeMs;
       return r.class === 'enchanted' && t - r.at > this.maxAgeMs;
     });

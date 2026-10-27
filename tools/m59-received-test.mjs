@@ -111,5 +111,32 @@ console.log('a handoff keeps the weapon readings');
   ok('the keeper loads them at start and saves them after every sweep', /this\._weaponMagic\.load\(JSON\.parse/.test(src) && /this\._weaponMagicBusy = false; this\.saveWeaponMagic\(\);/.test(src));
 }
 
+console.log('a server save renumbers the pack; the dedicated weapon keeps its protection');
+{
+  // Prod 2026-10-27: the 05:59:59 save renumbered every id; Clifford's keeper dropped his dedicated mace at 06:16:02.
+  const { WeaponMagicBook } = await import('./m59-weapon-magic.mjs');
+  const book = new WeaponMagicBook();
+  book.readings.set(100, { name: 'mace', class: 'enchanted', bypasses_nonmagic: true, made: false, at: Date.now(), source: 'look' });
+  book.readings.set(101, { name: 'hammer', class: 'mundane', bypasses_nonmagic: false, made: false, at: Date.now(), source: 'look' });
+  book.reconcile([{ id: 900, name: 'mace' }, { id: 901, name: 'hammer' }]);           // same pack, new ids
+  ok('the one mace after the save carries the enchanted reading', book.readings.get(900)?.bypasses_nonmagic === true && book.keepIds().has(900));
+  ok('and a look confirms it next sweep', book.needsLook([{ id: 900, name: 'mace' }]).length === 1);
+  ok('a mundane reading does not follow its name', !book.readings.has(901));
+  const two = new WeaponMagicBook();
+  two.readings.set(100, { name: 'mace', class: 'enchanted', bypasses_nonmagic: true, made: false, at: Date.now(), source: 'look' });
+  two.reconcile([{ id: 900, name: 'mace' }, { id: 902, name: 'mace' }]);
+  ok('two maces and one reading: both protected as unknown until a look tells them apart',
+     two.keepIds().has(900) && two.keepIds().has(902) && two.readings.get(900)?.class === 'unknown');
+  const c = { inventory: [{ id: 900, nameRsc: 'mace', amount: 0 }, { id: 901, nameRsc: 'hammer', amount: 0 }, { id: 903, nameRsc: 'hammer', amount: 0 }],
+              rsc: { get: k => k }, equipment: () => ({ known: true, equipped: [] }) };
+  const fresh = new WeaponMagicBook();
+  fresh.readings.set(100, { name: 'mace', class: 'enchanted', bypasses_nonmagic: true, made: false, at: Date.now(), source: 'look' });
+  const k = Object.assign(Object.create(Autopilot.prototype), { s: { name: 'renumbered', client: c }, policy: { maxWeapons: 1 },
+    protectedItemNames: () => [], weaponMagicBook: () => fresh });
+  const spares = k.fieldSpareWeapons();
+  ok('the field cap, asked right after the save and before any sweep, does not drop the mace',
+     !spares.some(o => o.nameRsc === 'mace'), spares.map(o => o.nameRsc).join(','));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

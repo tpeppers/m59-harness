@@ -475,7 +475,9 @@ export class GearUpkeepPart {
   /** Set of item ids this keeper holds back. */
   heldBackIds(c = this.s?.client) {
     const out = new Set();
-    try { for (const id of this.weaponMagicBook().keepIds()) out.add(Number(id)); } catch {}
+    // Reconciled against the pack AS IT IS NOW first: a server save between sweeps renumbers every id, and keepIds over
+    // the old ones protects nothing (Clifford's dedicated mace, dropped 2026-10-27 sixteen minutes after a save).
+    try { const book = this.weaponMagicBook(); book.reconcile?.(this.packWeapons(c)); for (const id of book.keepIds()) out.add(Number(id)); } catch {}
     try {
       const left = new Map(protectedReceived(this.s?.name ?? ''));
       for (const o of c?.inventory ?? []) {

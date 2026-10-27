@@ -256,10 +256,10 @@ through a nested shelter order.
   from disk; `playDead`, a broken rest and a breakout all decline inside a spent session, keep the hold and take no new
   spot; the poisoned-relog loop is gone; a
   body back OFF a spot (cooperative or not) flees to the nearest reachable one (no second logoff) and then stays.
-- `m59-received-test.mjs` (19): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
+- `m59-received-test.mjs` (24): a delivery is not a spare. Arrivals are counted by the pack, not the offer; the
   record is on disk and ages out; the field weapon cap leaves delivered copies and enchanted weapons alone; only a trade
   we received is recorded; one held-back set (enchanted or delivered) is honoured by gifts, ejection, sale and sell_all; weapon readings are carried to a new keeper,
-  believed and re-checked.
+  believed and re-checked; and survive a server save that renumbers the pack (an enchanted reading follows its name).
 - `m59-loot-eject-test.mjs` (43): loot ejection (`m59-loot-eject.mjs`). Off when absent; the target is the first of
   `to` in the room and not backed off; the offer is the sale plan's `sell` rows (plus `extra`) only (never equipped,
   never a synthetic id), best value per unit of pack first, partial stacks by amount; overflow drops the worst value
