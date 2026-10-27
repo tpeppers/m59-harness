@@ -121,13 +121,23 @@ export class ChalicePart {
       try { store.setCupDisabled(why); } catch {}
       this.chaliceEvent('desk_disabled', { why, retry_in_ms: rf.retry_ms });
     };
-    const cands = refillCandidates({ refill: rf, spawns: loadSpawns(SPAWN_FILE), hopsTo: r => this.hopsTo(r), here });
-    if (!cands.length) { disable(`no refill room within ${rf.max_hops} hops spawns nothing over level ${rf.max_spawn_level}`); return false; }
+    const confine = Array.isArray(this.policy?.confineRooms) && this.policy.confineRooms.length ? this.policy.confineRooms.map(Number) : null;
+    const allowExit = cfg.allow_exit_confinement_for_refresh ?? null;
+    const cands = refillCandidates({ refill: rf, spawns: loadSpawns(SPAWN_FILE), hopsTo: r => this.hopsTo(r), here, confine, allowExit });
+    if (!cands.length) {
+      disable(confine && !allowExit
+        ? `confined to ${JSON.stringify(confine)} with no refill room inside it (allow_exit_confinement_for_refresh lets a refill trip out)`
+        : `no refill room within ${rf.max_hops} hops spawns nothing over level ${rf.max_spawn_level}${confine ? ` (confined; may leave for ${JSON.stringify(allowExit)})` : ''}`);
+      return false;
+    }
     const target = cands[0];
     this.doing = 'travelling';
     this.chaliceEvent('refill_trip', { from: here, to: target.room, hops: target.hops, max_level: target.max_level,
       creatures: target.creatures, why: due.why });
-    const went = await this.travel(target.room, { origin: keeperOrigin('chalice_refill'), maxHops: target.hops + 4 })
+    // ALLOWED OUT OF THE CONFINEMENT FOR THIS ROOM ONLY: travel's chalice exception names it (travel.mjs chaliceRooms).
+    const leaves = confine && !confine.includes(target.room);
+    const went = await this.travel(target.room, { origin: keeperOrigin('chalice_refill'), maxHops: target.hops + 4,
+      ...(leaves ? { chalice: true, chaliceRoom: target.room } : {}) })
       .catch(e => ({ arrived: false, reason: e.message }));
     if (went?.confined) {
       // THE CONFINEMENT IS THE OPERATOR'S AND OUTRANKS THE ERRAND (travel.mjs). Said at once, not retried twice.
@@ -155,7 +165,7 @@ export class ChalicePart {
     try { store.setCupDisabled(null); } catch {}
     const home = rf.return !== false ? cfg.post_room : null;
     if (home != null && this.hereRoom() !== Number(home))
-      await this.travel(Number(home), { origin: keeperOrigin('chalice_refill_return'), maxHops: rf.max_hops + 4 })
+      await this.travel(Number(home), { origin: keeperOrigin('chalice_refill_return'), maxHops: rf.max_hops + 4, chalice: true })
         .catch(() => null);
     this.chaliceEvent('refill_trip_done', { refilled_at: target.room, back_at: this.hereRoom(), sips: after });
     return true;

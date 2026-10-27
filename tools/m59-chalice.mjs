@@ -113,6 +113,10 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // `max_spawn_level` -- the operator's line, "the lake of Jala song should be considered safe enough ... there are no
   // aggressive monsters over LVL 30". `rooms` pins the list; `avoid` takes rooms out; `return` walks back to post_room.
   refill: null,
+  // MAY A REFILL TRIP LEAVE THE HOLDER'S CONFINEMENT? Operator, 2026-10-27: "allow_exit_confinement_for_refresh that can be
+  // true (for anywhere) or a number (room #, like 2)". Off by default: a confinement is the operator's and outranks an
+  // errand (travel.mjs). true: any refill room in the risk profile; a room number or a list: only those.
+  allow_exit_confinement_for_refresh: null,
   // Named, never derived: a character name on a shared server is an instruction, and the
   // private strategy file is where this machine keeps its instructions.
   holder: null,
@@ -311,6 +315,13 @@ export function normalizeChalice(cfg = null) {
   const problems = [];
   for (const [k, v] of Object.entries(cfg)) {
     if (k === 'enabled') continue;
+    if (k === 'allow_exit_confinement_for_refresh') {
+      if (v == null || v === false) { out[k] = null; continue; }
+      if (v === true) { out[k] = true; continue; }
+      const list = [].concat(v).map(Number).filter(n => Number.isInteger(n) && n > 0);
+      if (list.length) out[k] = list; else problems.push(`${k} must be true, a room number or a list of them`);
+      continue;
+    }
     if (k === 'refill') {
       if (v == null || v === false) { out.refill = v === false ? { roam: false } : null; continue; }
       if (typeof v !== 'object' || Array.isArray(v)) { problems.push('refill must be an object or false'); continue; }
@@ -440,9 +451,15 @@ const REFILL_LIMITS = { max_hops: [1, 40], max_spawn_level: [0, 200], retry_ms: 
  * level}]); `hopsTo(room)` is the router's answer (null: no route). A room is SAFE ENOUGH when nothing spawning there is
  * over `max_spawn_level`. -> [{ room, hops, max_level, creatures }], nearest first, no-spawn rooms winning a tie.
  */
-export function refillCandidates({ refill = REFILL_DEFAULTS, spawns = null, hopsTo = () => null, here = null } = {}) {
+export function refillCandidates({ refill = REFILL_DEFAULTS, spawns = null, hopsTo = () => null, here = null,
+                                  confine = null, allowExit = null } = {}) {
   const cfg = { ...REFILL_DEFAULTS, ...(refill ?? {}) };
-  const pool = (cfg.rooms?.length ? cfg.rooms : [...REFILL_ROOMS]).filter(n => REFILL_ROOMS.has(Number(n)) && !cfg.avoid.includes(Number(n)));
+  // A CONFINED HOLDER may go only to refill rooms inside its confinement, plus whatever allow_exit_confinement_for_refresh
+  // lets it out to: true is anywhere in the profile, a list is those rooms.
+  const confined = Array.isArray(confine) && confine.length ? new Set(confine.map(Number)) : null;
+  const mayGo = n => !confined || confined.has(n) || allowExit === true || (Array.isArray(allowExit) && allowExit.includes(n));
+  const pool = (cfg.rooms?.length ? cfg.rooms : [...REFILL_ROOMS])
+    .filter(n => REFILL_ROOMS.has(Number(n)) && !cfg.avoid.includes(Number(n)) && mayGo(Number(n)));
   const out = [];
   for (const room of pool) {
     const list = (spawns?.rooms?.[room] ?? []).filter(x => x && x.huntable !== false);

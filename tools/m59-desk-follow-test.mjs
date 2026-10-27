@@ -100,12 +100,22 @@ console.log('refilling between uses: the default risk profile, overridable');
   ok('refill: false keeps it home', C.normalizeChalice({ holder: 'L', station_room: 'holder', refill: false }).refill.roam === false);
   ok('a disabled desk is declined by travellers instead of waited on',
      C.shouldRide({ cfg: { ...f, enabled: true, desk_disabled: 'no refill room' }, role: 'traveller', stationHops: 0 }).code === 'desk_disabled');
+  // allow_exit_confinement_for_refresh (operator: "true (for anywhere) or a number (room #, like 2)")
+  const inn = { refill: { rooms: [2, 568, 535] }, spawns, hopsTo: r => hops[r] ?? null, confine: [370] };
+  ok('confined, not allowed out: no refill room', C.refillCandidates({ ...inn, allowExit: null }).length === 0);
+  ok('allowed out anywhere (true): every room in the profile', C.refillCandidates({ ...inn, allowExit: true }).map(c => c.room).join() === '568,535,2');
+  ok('allowed out to room 2 only', C.refillCandidates({ ...inn, allowExit: [2] }).map(c => c.room).join() === '2');
+  ok('a refill room inside the confinement needs no permission', C.refillCandidates({ ...inn, confine: [370, 568], allowExit: null }).map(c => c.room).join() === '568');
+  ok('the config takes true, a number, or a list', C.normalizeChalice({ holder: 'L', station_room: 'holder', allow_exit_confinement_for_refresh: true }).allow_exit_confinement_for_refresh === true
+     && C.normalizeChalice({ holder: 'L', station_room: 'holder', allow_exit_confinement_for_refresh: 2 }).allow_exit_confinement_for_refresh.join() === '2'
+     && C.normalizeChalice({ holder: 'L', station_room: 'holder' }).allow_exit_confinement_for_refresh === null);
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the trip out names its one room to travel\'s chalice exception', /leaves \? \{ chalice: true, chaliceRoom: target\.room \}/.test(src));
   ok('the refill trip runs between uses, after the in-room top-up', src.indexOf('if (await this.chaliceRefillTrip(cfg, role, cup, store, now)) return true;')
      > src.indexOf('if (await this.chaliceTopUp(cfg, role, cup, store, now)) return true;'));
   ok('a confinement disables the desk at once rather than being walked through', /if \(went\?\.confined\) \{[\s\S]{0,300}disable\(/.test(src));
-  ok('no safe room in reach disables it until the retry', /if \(!cands\.length\) \{ disable\(/.test(src));
+  ok('no safe room in reach disables it until the retry', /if \(!cands\.length\) \{\s*disable\(/.test(src));
 }
 
 console.log('reagents written as a list literal');

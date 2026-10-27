@@ -1154,6 +1154,9 @@ The chalice desk is the first user: `station_room: 'holder'` in the chalice stra
   there over level 30; the operator's example is the Lake of Jala's Song, and *"each city has 1-2 exits that fit
   that LVL30/refreshable definition, plus room 2 outside CV"*), `max_hops: 12`, `return: true`, and optional
   `rooms` (pin the list) and `avoid`. `refill: false` keeps the holder home.
+- **`allow_exit_confinement_for_refresh`** (desk setting, off by default): `true` lets a refill trip leave the holder's
+  confinement for any refill room in the profile; a room number or a list (`2`, `[2, 568]`) only for those. The
+  journey names its one room to travel's chalice exception, and the walk back is to `post_room`.
 - **"Disabled" is on the desk record.** No refill room in the profile within reach, the walk failing `fail_limit`
   (2) times, or a confinement in the way (a confinement is the operator's and is never walked through: lift
   `confine_rooms`; `post_room` is where it returns) marks the desk disabled. Travellers then decline it
