@@ -148,6 +148,7 @@ export const GUILD_CHEST_SECTION = 4;
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
+import {refreshCooperation} from './m59-cooperative-combat.mjs';
 import * as buddySys from './m59-buddy.mjs';
 import { classifyCombatLine as classifyBuddyLine } from './m59-combatlog.mjs';
 import * as pvpGear from './m59-pvp-gear.mjs';
@@ -1236,6 +1237,7 @@ export const PASS_STAGES = [
   // THE BUDDY SYSTEM, directly above the farm it replaces for a paired character, and below
   // everything protected and every errand. Inert (CONTINUE) unless policy.buddy names this slot.
   'passBuddy',
+  'passCooperativeCombat',
   'passFarm',
 ];
 
@@ -3417,6 +3419,7 @@ export class Autopilot {
     // THE FARMING STRATEGY FIRST, so everything below this pass reads the file's posture. One stat
     // when nothing changed; a no-op with none assigned. m59-strategy-engine.mjs.
     await this.applyFarmStrategy('pass');
+    await refreshCooperation(this).catch(e => this.note('cooperative combat unavailable', {why:e.message}));
     // INSTALL THE OVERFARM POLICY ON THE SESSION, EVERY PASS. `lootFloor` defaults to it,
     // so this is what reaches the five call sites that are not in this file — the kill tick
     // in m59-decide.mjs, the keeper's own loot action, the `loot` tool, the loot-runner

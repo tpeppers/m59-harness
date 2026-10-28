@@ -467,3 +467,9 @@ name also converges at once.
 - The **tick driver** (`mode: 'tick'`) is not an Autopilot pass and does not apply a strategy.
 - A strategy does not change `mode`; pass `mode: "farm"` with the assignment.
 - Two characters may share a file; each keeper applies it to itself.
+
+## Fleet-wide cooperative combat
+
+The private strategy loader also has an additional `cooperativeCombat` hook. It
+can coordinate nearby farmers without replacing individual farming assignments.
+See [the hook contract and evidence](m59-cooperative-combat.md).

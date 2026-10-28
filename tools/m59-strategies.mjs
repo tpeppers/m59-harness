@@ -148,7 +148,10 @@ export const REQUIRED = ['name', 'kind', 'enabled'];
 // requests. Policy and settings stay private; see docs/m59-cooperative-logoff.md.
 // rescueTravel(ctx): {enabled, double, guildName, guildHall, blocked?, confine?, fallbackMs?}.
 // Selection only; the executor validates resources, guild, landings and movement ownership.
-export const HOOKS = ['cooperativeLogoff', 'rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
+// cooperativeCombat: configure once with {decide(ctx)}; the synchronous decision
+// receives fresh same-roster observations and returns a checked target/hold choice.
+// It supplements individual farming assignments; protected faculties remain central.
+export const HOOKS = ['cooperativeCombat', 'cooperativeLogoff', 'rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and

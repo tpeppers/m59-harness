@@ -44,7 +44,7 @@ console.log('\nthe order the keeper decides in');
 {
   // Urgency descending. Each line is a claim about what outranks what, and the comment is
   // the reason — change the array and you are changing one of these claims.
-  ok('there are twelve stages', PASS_STAGES.length === 12);
+  ok('there are thirteen stages', PASS_STAGES.length === 13);
   ok('being dead is decided first — the Underworld has no graph exits, so a character ' +
      'left there stays there',
      PASS_STAGES[0] === 'passUnderworld');
@@ -83,7 +83,9 @@ console.log('\nthe order the keeper decides in');
   // -- for anyone whose policy.buddy does not name it, which is every character by default.
   ok('then the buddy system, for a paired character only, directly above the farm',
      PASS_STAGES[10] === 'passBuddy');
-  ok('and the actual job is last', PASS_STAGES[11] === 'passFarm');
+  ok('then passive cooperative tag protection, below survival, errands and fixed buddies',
+     PASS_STAGES[11] === 'passCooperativeCombat');
+  ok('and the actual job is last', PASS_STAGES[12] === 'passFarm');
 
   ok('every stage names a real method on the keeper',
      PASS_STAGES.every(n => typeof Autopilot.prototype[n] === 'function'));

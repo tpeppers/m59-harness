@@ -30,6 +30,7 @@ export class StatusPart {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      cooperative_combat: this.cooperation ? {error:this.cooperation.failed??null,tag:this.cooperation.commitment,decision:this.cooperation.lastDecision} : null,
       cooperative_logoff: this.s.cooperativeLogoffWaiting??this.s.cooperativeLogoffReturn??null,
       healing_wand_support: this.farmWandSupport?.snapshot() ?? null,
       loadout_retention: { present: !!this.loadout(), carry_floors: this.carryFloors() },
