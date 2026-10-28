@@ -1,0 +1,118 @@
+/* reports.css -- the research reports: catalogue cards and the long-form reading page.
+   Colours come from style.css's tokens only, so both themes follow without a second palette. */
+
+/* ---------------------------------------------------------------- catalogue */
+
+.rhero { margin: .5rem 0 1.2rem; }
+.rhero h1 { margin-bottom: .3rem; }
+.rhero .lede { max-width: 62rem; }
+.rstats { display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; color: var(--ink-soft); font-size: .9rem; }
+.rstats b { color: var(--ink); font-size: 1.15rem; font-family: var(--serif); margin-right: .2rem; }
+.rstats .warnstat b { color: var(--bad); }
+
+.rfilter { position: sticky; top: 3.1rem; z-index: 5; background: var(--bg); padding: .5rem 0; }
+.rfilter #rq { flex: 1 1 22rem; font-size: 1rem; padding: .5rem .7rem; }
+.rchk { display: inline-flex; align-items: center; gap: .3rem; font-size: .85rem; color: var(--ink-soft); white-space: nowrap; }
+
+.rtags { display: flex; flex-wrap: wrap; gap: .3rem; margin: .3rem 0 1.1rem; max-height: 5.6rem; overflow: hidden; position: relative; }
+.rtags.open { max-height: none; }
+.rtag { cursor: pointer; font: inherit; font-size: .78rem; }
+.rtag small { color: var(--ink-faint); margin-left: .15rem; }
+.rtag.on { background: var(--accent); border-color: var(--accent); color: var(--bg-raised); }
+.rtag.on small { color: inherit; opacity: .8; }
+.rtags-more { font-size: .8rem; margin: -.8rem 0 1rem; }
+
+.rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr)); gap: .9rem; }
+.rcard {
+  display: flex; flex-direction: column; gap: .45rem;
+  padding: .95rem 1.05rem .8rem; border: 1px solid var(--rule); border-radius: 10px;
+  background: var(--bg-raised); box-shadow: var(--shadow);
+  color: var(--ink); text-decoration: none; min-width: 0;
+  transition: border-color .12s, transform .12s;
+}
+.rcard:hover { border-color: var(--accent-soft); transform: translateY(-1px); color: var(--ink); }
+.rcard[hidden] { display: none; }
+.rcard-head { display: flex; gap: .5rem; align-items: flex-start; }
+.rcard-t { font-family: var(--serif); font-weight: 700; font-size: 1.04rem; line-height: 1.3; flex: 1; }
+.rcard-d { color: var(--ink-soft); font-size: .86rem; line-height: 1.5; flex: 1; }
+.rcard-tags { display: flex; flex-wrap: wrap; gap: .25rem; }
+.rcard-tags .tag { font-size: .7rem; padding: .05rem .4rem; }
+.rcard-foot { display: flex; flex-wrap: wrap; gap: .2rem 1rem; color: var(--ink-faint); font-size: .76rem;
+  border-top: 1px solid var(--rule); padding-top: .45rem; }
+.rq-hit { flex-basis: 100%; color: var(--accent); font-style: italic; }
+.rq-hit:empty { display: none; }
+.rnone { color: var(--ink-soft); margin-top: 2rem; }
+.rsrc { margin-top: 2rem; font-size: .8rem; color: var(--ink-faint); }
+
+.rbadge {
+  display: inline-block; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: .1rem .45rem; border-radius: 999px; border: 1px solid var(--rule-strong); color: var(--ink-soft);
+  white-space: nowrap; line-height: 1.5;
+}
+.rbadge.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.rbadge.stale { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.rbadge.draft { color: var(--accent); border-color: var(--warn-rule); background: var(--warn-bg); }
+.rbadge.unknown { color: var(--ink-faint); }
+
+/* ---------------------------------------------------------------- one report */
+
+.rlayout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+@media (min-width: 1100px) { .rlayout { grid-template-columns: minmax(0, 46rem) 17rem; justify-content: center; } }
+
+.rdoc { min-width: 0; }
+.rhead h1 { margin-bottom: .45rem; line-height: 1.2; }
+.rmeta { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem 1rem; color: var(--ink-soft); font-size: .85rem; margin-bottom: .6rem; }
+.rmeta b { color: var(--ink); font-weight: 600; }
+.rhead .tags { margin-bottom: 1.1rem; }
+
+.bottomline {
+  position: relative; margin: 1.2rem 0 1.4rem; padding: 1rem 1.2rem 1rem 1.25rem;
+  background: var(--bg-raised); border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+  border-radius: 8px; box-shadow: var(--shadow); font-size: 1.04rem; line-height: 1.65;
+}
+.bottomline .bl-label { font-size: .7rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: .3rem; }
+.bottomline p { margin: 0 0 .5rem; }
+.bottomline p:last-child { margin-bottom: 0; }
+
+.rqs, .rsources, .rentities { margin: 0 0 1.2rem; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg-sunk); }
+.rqs summary, .rsources summary, .rentities summary { cursor: pointer; padding: .55rem .9rem; font-size: .88rem; font-weight: 600; color: var(--ink-soft); }
+.rqs ul { margin: 0; padding: .1rem 1rem .8rem 2.2rem; }
+.rqs li { font-size: .9rem; font-style: italic; color: var(--ink-soft); margin: .15rem 0; }
+.rsources .src-list, .rentities .tags { padding: 0 1rem .8rem; margin: 0; }
+.rsources ul { padding-left: 2.2rem; }
+.rsources code.changed { color: var(--bad); text-decoration: underline wavy; }
+
+.rbody { font-size: 1rem; line-height: 1.7; }
+.rbody h2 { margin-top: 2.2rem; padding-top: .4rem; border-top: 1px solid var(--rule); }
+.rbody h2, .rbody h3, .rbody h4 { scroll-margin-top: 4.5rem; position: relative; }
+.rbody .hlink { margin-left: .4rem; color: var(--ink-faint); text-decoration: none; opacity: 0; font-weight: 400; font-size: .8em; }
+.rbody h2:hover .hlink, .rbody h3:hover .hlink, .rbody h4:hover .hlink { opacity: 1; }
+.rbody pre { font-size: .82rem; line-height: 1.5; }
+.rbody pre[data-lang]::before { content: attr(data-lang); float: right; font: .68rem var(--sans); color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+.rbody blockquote { border-left-color: var(--warn-rule); background: var(--warn-bg); padding: .6rem 1rem; border-radius: 0 6px 6px 0; }
+.rbody blockquote > :last-child { margin-bottom: 0; }
+.rbody table.md { font-size: .86rem; }
+.rbody table.md td { vertical-align: top; }
+.rbody li > ul, .rbody li > ol { margin-top: .2rem; }
+.rbody code.cite-code, .bottomline code.cite-code { color: var(--accent); background: transparent; border-bottom: 1px dotted var(--accent-soft); padding: 0; border-radius: 0; }
+.rbody .deadlink { border-bottom: 1px dashed var(--ink-faint); cursor: help; }
+.rfoot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+
+.raside { position: sticky; top: 4rem; max-height: calc(100vh - 5rem); overflow: auto; font-size: .86rem; display: flex; flex-direction: column; gap: 1.3rem; padding-bottom: 1rem; }
+@media (max-width: 1099px) { .raside { position: static; max-height: none; border-top: 1px solid var(--rule); padding-top: 1rem; } .rtoc { display: none; } }
+.raside h4 { font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 .5rem; }
+.raside ul, .raside ol { list-style: none; margin: 0; padding: 0; }
+.raside li { margin: .1rem 0; }
+.rtoc a { display: block; padding: .18rem .6rem; border-left: 2px solid var(--rule); color: var(--ink-soft); text-decoration: none; line-height: 1.35; }
+.rtoc li.l3 a { padding-left: 1.3rem; font-size: .8rem; }
+.rtoc a:hover { color: var(--ink); border-left-color: var(--rule-strong); }
+.rtoc a.on { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+.rside li a { color: var(--link); }
+.rsub { margin: .4rem 0 .2rem; font-size: .72rem; color: var(--ink-faint); font-style: italic; }
+.rpages a { display: flex; align-items: center; gap: .5rem; padding: .2rem .3rem; border-radius: 6px; text-decoration: none; }
+.rpages a:hover { background: var(--bg-sunk); }
+.rpages img { width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; }
+.rpages span { flex: 1; min-width: 0; }
+.rpages small { color: var(--ink-faint); font-size: .7rem; }

@@ -117,6 +117,40 @@ Three pages do real work rather than listing things:
   parsing the room's own predicates, so a half-open clause clipped to the room's
   bounds is included rather than missed.
 
+## Research reports
+
+Both servers also serve **`/reports/`**: the research corpus in `m59-research` — reports on how
+the game works, each read from `kod/` and pinned to the commit it was read against — rendered
+as compendium pages. Nothing is copied or generated into this tree. `tools/reports.mjs` reads
+the markdown **when a page is asked for**, so a report edited there is the page served here on
+the next load, and there is no build step to fall behind.
+
+```bash
+M59_RESEARCH_REPORTS=/path/to/reports      # the reports directory itself, or
+M59_RESEARCH=/path/to/m59-research         # the checkout; reports/ under it
+                                           # default: C:/code/m59-research/reports
+```
+
+- **The catalogue** (`reports/index.html`) is a card per report: its bottom line, its topics, how
+  many questions it answers, when it was verified. The search box matches the **questions each
+  report was written to answer**, not only titles, and quotes the closest one on the card. Tags
+  filter; sorts are A–Z, recently verified, recently edited and most questions.
+- **A report page** lifts the template's **Bottom line** into its own box, lists the questions it
+  answers, keeps a contents column in step with the reading, marks `kod/…:line` citations, links
+  the entities it names to their compendium pages, and lists the reports it cites and the ones
+  that cite it. `<slug>.md` beside it is the markdown as written.
+- **Stale** is computed exactly as `python bin/m59.py stale` computes it — the cited sources that
+  changed between the report's `repo_commit` and the Meridian59 HEAD (`M59_ROOT`) — and the page
+  names the files.
+- **The rest of the site picks it up without being rebuilt.** `assets/site.js` adds a Reports tab
+  and folds the reports into the site search when `/reports/search.json` answers, and puts a
+  *Research reports* box on any entity page a report names. A static copy with no server, or a
+  machine with no research directory, simply has no Reports tab.
+
+The renderer is hand-written (zero dependencies, like everything here) and escapes raw HTML
+except `<br>`. `node ../tools/m59-compendium-reports-test.mjs` pins it, and renders the real
+corpus when it is present.
+
 ## Build it
 
 ```bash

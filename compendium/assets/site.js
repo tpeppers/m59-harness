@@ -1,4 +1,4 @@
-// site.js -- search, table sort, table filter, theme toggle.  No dependencies.
+// site.js -- search, table sort, table filter, theme toggle, research reports.  No dependencies.
 
 (function () {
   var rel = window.M59_REL || '..';
@@ -20,14 +20,22 @@
   // ------------------------------------------------------------- search
   var q = document.getElementById('q');
   var box = document.getElementById('results');
-  var index = null, loading = false, sel = -1;
+  var index = null, loading = false, sel = -1, waiting = null;
 
+  // Keys typed while the index is still loading are not dropped: the LAST one's search
+  // runs when it arrives, or the box shows results for "d" under a query of "disciple".
   function load(cb) {
     if (index) return cb();
+    waiting = cb;
     if (loading) return;
     loading = true;
+    cb = function () { if (waiting) waiting(); };
+    // The research reports are a second, optional index: served only where a compendium
+    // server has a reports directory beside it, so its absence is not a failure.
+    var extra = fetch(rel + '/reports/search.json')
+      .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
     fetch(rel + '/search.json').then(function (r) { return r.json(); })
-      .then(function (j) { index = j; loading = false; cb(); })
+      .then(function (j) { return extra.then(function (x) { index = j.concat(x); loading = false; cb(); }); })
       .catch(function () { loading = false; });
   }
 
@@ -40,6 +48,7 @@
       if (p === 0) s += 100 - Math.min(name.length, 40);
       else if (p > 0) s += 40;
       else if ((item.d || '').toLowerCase().indexOf(t) >= 0) s += 8;
+      else if ((item.q || '').toLowerCase().indexOf(t) >= 0) s += 6;
       else if ((item.k || '').toLowerCase().indexOf(t) >= 0) s += 5;
       else return -1;
     }
@@ -96,6 +105,38 @@
         e.preventDefault(); q.focus();
       }
     });
+  }
+
+  // ------------------------------------------------------------- research reports
+  // A compendium server with m59-research beside it serves /reports/. Where it does, every
+  // page gets a Reports tab, and an entity page that some report names gets a box pointing
+  // at those reports. Where it does not (a static copy), the fetch fails and nothing shows.
+  if (!document.body.classList.contains('reports')) {
+    fetch(rel + '/reports/entities.json').then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (map) {
+        if (!map) return;
+        var nav = document.querySelector('.topbar nav');
+        if (nav && !nav.querySelector('a[href$="reports/index.html"]')) {
+          var a = document.createElement('a');
+          a.href = rel + '/reports/index.html';
+          a.textContent = 'Reports';
+          nav.appendChild(a);
+        }
+        var h1 = document.querySelector('main h1');
+        if (!h1 || rel === '.') return;
+        var hits = map[h1.textContent.trim().toLowerCase()];
+        if (!hits || !hits.length) return;
+        var box = document.createElement('div');
+        box.className = 'rrefs';
+        box.innerHTML = '<b>Research reports</b><ul>' + hits.map(function (h) {
+          return '<li><a href="' + rel + '/reports/' + encodeURIComponent(h.u) + '.html"></a></li>';
+        }).join('') + '</ul>';
+        var as = box.querySelectorAll('a');
+        for (var i = 0; i < hits.length; i++) as[i].textContent = hits[i].t;
+        var after = h1.closest('.hero') || h1;
+        if (after === h1 && h1.nextElementSibling && h1.nextElementSibling.classList.contains('lede')) after = h1.nextElementSibling;
+        after.parentNode.insertBefore(box, after.nextSibling);
+      }).catch(function () {});
   }
 
   // ------------------------------------------------------------- sort
