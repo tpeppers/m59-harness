@@ -35,6 +35,7 @@ import {resolve} from 'node:path';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-cooperative-combat-test.mjs','optional private cooperation preserves one damaging tag per quarry with checked approaches and emergency overrides'],
   ['m59-bow-supply-test.mjs','stationary trainee-owned supply preserves worn kit and donor floors without moving farmers or replaying uncertain accepted gifts'],
   ['m59-brax-farm-init-test.mjs','finite Brax task initialization retains source loadouts, confirms roles and confines ledge supply; managed workers refuse duplicate/ambiguous starts and parallel issuers stay isolated'],
   ['m59-cooperative-logoff-test.mjs', 'private opt-in, last-helper admission, observed distraction hits, persistent reconnect gate and paced body ownership'],

@@ -1182,12 +1182,13 @@ export class M59Client {
     // A PLAYER THE SERVER HAS ALREADY REFUSED US IN THIS ROOM is not swung at again
     // (m59-refused-targets.mjs; installed by the session). Logged, never sent.
     let vetoed = false;
-    try { vetoed = !!this.attackVeto?.(id); } catch { vetoed = false; }
+    try { vetoed = !!this.attackVeto?.(id) || !!this.cooperativeAttackVeto?.(id); } catch { vetoed = false; }
     this.attackLog.push({ at: Date.now(), id, ...(vetoed ? { vetoed: true } : {}) });
     if (this.attackLog.length > 500) this.attackLog.splice(0, this.attackLog.length - 500);
     if (vetoed) { this.attacksVetoed = (this.attacksVetoed ?? 0) + 1; this.tapSent?.('attack', { target: objId(id), vetoed: true }); return false; }
     this.noteAttackTarget(id, 'attack');
     this.send(BP.REQ_ATTACK, u8b(info), u32(objId(id)));
+    try { this.cooperativeAttackSent?.(id); } catch { /* optional telemetry */ }
     this.tapSent?.('attack', { target: objId(id) });
   }
 
@@ -1276,7 +1277,9 @@ export class M59Client {
   // BP_REQ_CAST {4,OBJECT spell} {2,LIST_OBJ_PARM targets}. A spell with no
   // target still sends an empty list.
   cast(spellId, targets = []) {
+    try { if (this.cooperativeCastVeto?.([].concat(targets))) return false; } catch { /* optional policy */ }
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
+    try { this.cooperativeCastSent?.([].concat(targets)); } catch { /* optional telemetry */ }
     // Every cast arms the server's attack timer (spell.kod:760) — read by the wand-shot record.
     try {
       const sp = this.spells?.find(s => objId(s.id) === objId(spellId));
@@ -1296,9 +1299,11 @@ export class M59Client {
 
   // BP_REQ_APPLY {4,OBJECT} {4,OBJECT} — use one item on another.
   apply(what, onWhat) {
+    try { if (this.cooperativeApplyVeto?.(onWhat)) return false; } catch { /* optional policy */ }
     this.send(BP.REQ_APPLY, u32(objId(what)), u32(objId(onWhat)));
     this.lastApplySent = { at: Date.now(), what: objId(what), on: objId(onWhat) };
     this.noteAttackTarget(onWhat, 'apply');
+    try { this.cooperativeAttackSent?.(onWhat); } catch { /* optional telemetry */ }
     this.tapSent?.('apply', { item: objId(what), target: objId(onWhat) });
   }
 

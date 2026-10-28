@@ -8,7 +8,8 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 2 methods: recordInterruptedFarmOutcome, passFarm
+// 4 methods: recordInterruptedFarmOutcome, cooperativeTargetAllowed, passCooperativeCombat, passFarm
+import {cooperativePass} from '../m59-cooperative-combat.mjs';
 import { bodyAuthority } from '../m59-body-command.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
@@ -22,7 +23,7 @@ import * as skills from '../m59-skills.mjs';
 import { huntLabel, huntMatcher, loadSpawns } from '../m59-spawns.mjs';
 import * as tougher from '../m59-tougher.mjs';
 import { sameRoomIslandBridgePlan } from '../m59-world.mjs';
-import { claimQuarry, farmRoomDenials, HANDLED, healAllowOf, MIN_FIGHT_VIGOR, openFightReadiness, partialFightMadeProgress, pct, quarryPermittedByConfinement, rankQuarries, reachableOpenFightVigorBar, releaseQuarry, REST_VIGOR_CAP, shouldRelocateToAssignedRoom, SPAWN_FILE, STRATEGIES, vigorBarFor, vigorOf, WANT_FIGHT_VIGOR } from '../m59-autopilot.mjs';
+import { claimQuarry, CONTINUE, farmRoomDenials, HANDLED, healAllowOf, MIN_FIGHT_VIGOR, openFightReadiness, partialFightMadeProgress, pct, quarryPermittedByConfinement, rankQuarries, reachableOpenFightVigorBar, releaseQuarry, REST_VIGOR_CAP, shouldRelocateToAssignedRoom, SPAWN_FILE, STRATEGIES, vigorBarFor, vigorOf, WANT_FIGHT_VIGOR } from '../m59-autopilot.mjs';
 
 export class PassFarmPart {
   // @part 1
@@ -37,6 +38,20 @@ export class PassFarmPart {
       if(this.killTimes?.length>500)this.killTimes.shift();
       this.ledgerEvent('killed',{...receipt,survival_interrupted:true});
     }
+  }
+
+  cooperativeTargetAllowed(target) {
+    const s=this.s,room=s.world?.room;
+    if(this.karmaForbids(s.client?.rsc?.get(target.nameRsc)??target.name??'')||this.gangUpBars(target))return false;
+    if(this.preyAvoid(room?.num)?.(target))return false;
+    const area=this.huntAreaHere(room?.num);
+    if(area&&!area.has(`${target.row},${target.col}`))return false; // existing row,col hunt-area key
+    return quarryPermittedByConfinement({map:s.world?.map,room,geo:s.world?.geometry,
+      from:s.client?.self,target,confineRooms:this.policy.confineRooms});
+  }
+
+  async passCooperativeCombat() {
+    return await cooperativePass(this,{passiveOnly:true}) ? HANDLED : CONTINUE;
   }
 
   async passFarm(ctx) {
@@ -1535,6 +1550,11 @@ export class PassFarmPart {
       // for a pass before hitting it. This is the only way proof ever arrives on
       // purpose rather than by accident. See maybeTestSpot().
       if (this.maybeTestSpot(adjacent)) return HANDLED;
+
+      // Active sharing follows the ordinary health, vigor, prey and wall gates above.
+      // Defensive contact keeps the normal target and releases cooperative credit.
+      this.cooperativeDefensiveContact=!!bystander;
+      if (!bystander && await cooperativePass(this)) return HANDLED;
 
       this.doing = 'fighting';
       // The measurement the vigor floor exists for: not what we intended to set out
