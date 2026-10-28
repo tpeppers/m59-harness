@@ -61,6 +61,9 @@ import { readLoadout, writeLoadout, writeLoadoutPlan, listLoadouts, loadoutPath,
 import { liveBoard, liveCouriers, readSales, saveSellPlan, addJob, cancelJob, nextDue, updateJob,
          runSaleJob, jobLogFile, normaliseSellPlan, SALES_FILE } from './m59-guild-sale.mjs';
 
+// The m59-research reports, rendered on request from wherever this machine keeps them.
+import { serveReports, reportsDir } from '../compendium/tools/reports.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
 const ROOT = path.join(REPO, 'compendium');
@@ -383,7 +386,7 @@ export function createServer({ access = 'local' } = {}) {
     if (url.pathname === '/_health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, ident: IDENT, pid: process.pid, root: ROOT,
-        host: server.address()?.address, access: mode }));
+        host: server.address()?.address, access: mode, reports: reportsDir() }));
     }
 
     // THE HANDOVER. Fetch the character, set the cookie, and send the reader on to the
@@ -780,6 +783,13 @@ export function createServer({ access = 'local' } = {}) {
           return res.end(JSON.stringify({ error: e.message }));
         }
       });
+    }
+
+    try {
+      if (await serveReports(req, res, url.pathname)) return;
+    } catch (e) {
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      return res.end(`reports: ${e.message}`);
     }
 
     serveStatic(req, res, url.pathname);

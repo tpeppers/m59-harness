@@ -1120,6 +1120,9 @@ the records it describes.
   `node tools/m59-stream-test.mjs` (54) and
   `node tools/m59-ability-test.mjs` (44) and
   `node tools/m59-compendium-test.mjs` (42) and
+  `node tools/m59-compendium-reports-test.mjs` (62 — the `/reports/` pages: the hand-written
+  markdown renderer against the shapes the m59-research corpus uses, the route, and, when
+  the corpus is on this machine, every report rendered and checked for leftover syntax) and
   `node tools/m59-prey-test.mjs` (56) and
   `node tools/m59-spellaudit-test.mjs` (28) and
   `node tools/m59-localclient-test.mjs` (65 — the last ten spawn REAL processes named

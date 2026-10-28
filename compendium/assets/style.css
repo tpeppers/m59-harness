@@ -559,3 +559,10 @@ svg.roomap .rg-3 { color: #7b3f9d; }
 @media (max-width: 1180px) { .refchar.popped { top: 5.6rem; } }
 
 .refsummary .stat.muted { color: var(--ink-faint); font-style: italic; }
+
+/* ---------------------------------------------------------------- research reports */
+
+/* site.js adds this box to an entity page when a report names that entity. */
+.rrefs { margin: 1rem 0 1.4rem; padding: .7rem 1rem; border: 1px solid var(--note-rule); background: var(--note-bg); border-radius: 8px; font-size: .9rem; }
+.rrefs b { display: block; font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: .3rem; }
+.rrefs ul { margin: 0; padding-left: 1.2rem; }

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // serve.mjs -- static file server for reading the compendium.
 //
+// Plus /reports/, the m59-research reports rendered on request (tools/reports.mjs).
+//
 //   node tools/serve.mjs [port]                    default 8099, this computer only
 //   node tools/serve.mjs [port] --access lan-read  ...and readable from the LAN
 //
@@ -13,6 +15,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { networkInterfaces } from 'node:os';
+import { serveReports } from './reports.mjs';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.join(HERE, '..');
@@ -32,8 +35,15 @@ const TYPES = {
   '.png': 'image/png', '.svg': 'image/svg+xml', '.md': 'text/plain; charset=utf-8',
 };
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
+  try {
+    if (await serveReports(req, res, req.url.split('?')[0])) return;
+  } catch (e) {
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(`reports: ${e.message}`);
+    return;
+  }
   let p = decodeURIComponent(req.url.split('?')[0]);
   if (p.endsWith('/')) p += 'index.html';
   const file = path.join(ROOT, p);
