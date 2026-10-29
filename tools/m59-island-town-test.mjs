@@ -41,7 +41,10 @@ console.log('every town-trip site reads the table for where it stands');
   ok('a requested trip passes it too', /supplyTrip: town === 'supply',\s*table: townTable\(this\.s\.world\?\.room\?\.num\)/.test(src));
   ok('the sell circuit is the table\'s', /marketStops: wantsMarket \? townTable\(this\.s\.world\?\.room\?\.num\)\.MARKET_STOPS/.test(src));
   ok('so are the food shops', /const town = townTable\(s\.world\?\.room\?\.num\);\s*const shops = town\.FOOD_SHOPS/.test(src));
-  ok('the travel gate asks the guard before walking', /const gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
+  ok('the travel gate asks the guard before walking', /let gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
+  ok('and clears the pack (sell / vault / drop) before refusing, at most every ten minutes, then asks again',
+     /this\.policy\.kocatanGateClear !== false && !this\.townTrip\s*&& Date\.now\(\) - \(this\._gateClearAt \?\? 0\) > 600_000\)[\s\S]{0,300}await this\.kocatanGateClear\?\.\(\{ trigger: 'gate refusal', room \}\)[\s\S]{0,200}gate = this\.kocatanGateRefusal\?\.\(room\);/.test(src));
+  ok('an island town trip ends by clearing the gate', /\["clear the Ko'catan gate", \(\) => this\.kocatanGateClear\(\{ trigger: 'town trip' \}\)/.test(src));
   ok('and a refusal opens a sell trip at the island counters (at most every ten minutes) so the next walk passes',
      /this\.operatorTripRequest = \{ town: 'market', why: `the Ko'catan gate refuses the pack/.test(src) && /!this\.operatorTripRequest && Date\.now\(\) - askedAt > 600_000/.test(src));
 }
@@ -214,6 +217,70 @@ console.log('the Ko\'catan bank banks, reads it back, and a visit that banked no
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('and the next bank trip waits half an hour', /richEnoughToBank: carried > above && !\(Date\.now\(\) - \(this\._bankedNothingAt \?\? 0\) < 1_800_000\)/.test(src));
+}
+
+console.log('leaving town with a pack the guard passes: sell, vault, drop (operator 2026-10-29)');
+{
+  // Prod 2026-10-29: Robin's conjured long sword was protected (not sold) and conjured (the vaultman refused it), so the
+  // refusal ladder had no last rung and he stood in town six hours.
+  const G = await import('./m59-kocatan-gate.mjs');
+  const plan = G.gateClearPlan([
+    { id: 1, name: 'nerudite sword', rarity: 0 }, { id: 2, name: 'long sword', rarity: 0 },
+    { id: 3, name: 'scimitar', rarity: 2 }, { id: 4, name: 'chain armor', was_equipped: true }], { protect: ['Long Sword'] });
+  ok('plain loot is sold; protected and unidentified/magic go to the vault; worn is left alone',
+     plan.sell.map(i => i.id).join() === '1' && plan.vault.map(i => i.id).join() === '2,3', JSON.stringify(plan));
+  ok('the station is the assigned jungle room, else the first confined one past the gate',
+     G.gateStation({ assignedRoom: 2125 }) === 2125 && G.gateStation({ assignedRoom: 2005, confineRooms: [2005, 2115] }) === 2115
+     && G.gateStation({ assignedRoom: 2005, confineRooms: [2005] }) === null);
+
+  function clearer({ policy = { assignedRoom: 2115 }, vaultTakes = false, smithBuys = true } = {}) {
+    const names = ['long sword', 'axe', 'hammer', 'nerudite sword'];
+    const inv = names.map((n, i) => ({ id: 10 + i, nameRsc: n, amount: 0, rarity: 0 }));
+    const log = { sold: [], vaulted: [], dropped: [], walked: [], notes: [] };
+    const smith = { id: 7, nameRsc: "Ixla cha'Totlak", flags: 0 };
+    const c = { inventory: inv, rsc: { get: k => k }, using: new Set([10]), room: { objects: new Map([[7, smith]]) },
+      equipment: () => ({ known: true, equipped: [{ id: 10, name: 'long sword' }] }),
+      requestInventory: () => {}, waitFor: async () => ({}),
+      drop: specs => { for (const sp of specs) { const id = typeof sp === 'object' ? sp.id : sp; const at = inv.findIndex(o => o.id === id);
+                                                  if (at >= 0) { log.dropped.push(inv[at].nameRsc); inv.splice(at, 1); } } } };
+    const room = { num: 2005 };
+    const k = Object.assign(Object.create(A.Autopilot.prototype), {
+      policy, note: (w, d) => log.notes.push({ w, d }), tradeFact: () => {}, saleProtectedNames: () => ['hammer'],
+      s: { client: c, need: () => c, pacer: { submit: async (_k, f) => f() },
+           world: { room, route: () => ({ found: true, hops: [{ from: room.num, to: 2000 }, { from: 2000, to: 2013 }, { from: 2013, to: 2115 }] }) },
+           sellOne: async (_m, offer, confirm) => {
+             if (!smithBuys) return { offered_price: null };
+             if (confirm) { const at = inv.findIndex(o => o.id === offer.id); log.sold.push(inv[at].nameRsc); inv.splice(at, 1); return { sold: true, offered_price: 40 }; }
+             return { offered_price: 40 };
+           } },
+      travel: async to => { log.walked.push(to); room.num = to; return { arrived: true }; },
+      kocatanGateVault: async gate => {
+        if (!vaultTakes) return { vaulted: false };
+        for (const o of gate.over.filter(o => !o.was_equipped)) { const at = inv.findIndex(x => x.id === o.id); log.vaulted.push(inv[at].nameRsc); inv.splice(at, 1); }
+        return { vaulted: true, result: { deposited: log.vaulted.map(name => ({ name, amount: 1 })) } };
+      } });
+    return { k, inv, log };
+  }
+  const a = clearer();
+  const ra = await a.k.kocatanGateClear();
+  ok('three spare weapons: the plain one sold at the smithy (2003), the protected one the vaultman refused is DROPPED, the worn one kept',
+     ra.cleared && a.log.walked.join() === '2003' && a.log.sold.join() === 'nerudite sword' && a.log.dropped.join() === 'hammer'
+     && a.inv.map(o => o.nameRsc).join() === 'long sword,axe', JSON.stringify({ ra, log: a.log }));
+  const b = clearer({ vaultTakes: true, smithBuys: false });
+  const rb = await b.k.kocatanGateClear();
+  ok('when the smithy will not buy, the vault takes it, and nothing is dropped',
+     rb.cleared && b.log.sold.length === 0 && b.log.vaulted.length === 2 && b.log.dropped.length === 0, JSON.stringify(b.log));
+  const off = clearer({ policy: { assignedRoom: 2115, kocatanGateClear: false } });
+  const ro = await off.k.kocatanGateClear();
+  ok('policy kocatanGateClear:false does nothing', !ro.cleared && off.log.walked.length + off.log.sold.length + off.log.dropped.length === 0);
+  const magic = clearer();
+  magic.inv[2].rarity = 2;   // the hammer is unidentified/magic: vaulted if he takes it, never dropped
+  const rm = await magic.k.kocatanGateClear();
+  ok('unread magic the vaultman refuses is kept and named, not dropped', !rm.cleared && rm.left.includes('hammer')
+     && !magic.log.dropped.includes('hammer') && magic.log.sold.join() === 'nerudite sword', JSON.stringify(rm));
+  const town = clearer({ policy: { assignedRoom: 2005, confineRooms: [2005] } });
+  const rt = await town.k.kocatanGateClear();
+  ok('a farm that is not past the gate: nothing to clear', /no farm past the gate/.test(rt.why ?? '') && town.inv.length === 4);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

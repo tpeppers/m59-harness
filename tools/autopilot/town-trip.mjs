@@ -507,6 +507,11 @@ export class TownTripPart {
       // "WHILE YOU'RE IN TOWN" (m59-town-favors.mjs): last of the buying, out of what is left.
       ['town favors', () => this.gatherTownFavors()],
       ['vault', () => this.vaultRunIfPassing()],
+      // LAST, ON KO'CATAN: leave town with a pack the East Tower guard will let through (sell / vault / drop;
+      // m59-kocatan-gate.mjs). A no-op anywhere else, or when the farm is not past the gate.
+      // A failure is noted and passed, never retried: the refusal path in travel() gets another go at it.
+      ["clear the Ko'catan gate", () => this.kocatanGateClear({ trigger: 'town trip' })
+        .catch(e => { this.note("could not clear the pack for the Ko'catan gate", { why: e.message }); return null; })],
     ];
     const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents',
       "buy the holder's restock", 'buy delivery cargo', 'vault']);

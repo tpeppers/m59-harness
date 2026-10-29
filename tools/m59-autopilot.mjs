@@ -2387,6 +2387,9 @@ export class Autopilot {
       acceptDonations: null,
       // LOOT EJECTION (m59-loot-eject.mjs): { enabled, to: [station, courier], every_s, batch }. Off by default.
       lootEject: null,
+      // CLEAR THE KO'CATAN GATE (m59-kocatan-gate.mjs): an island town trip ends, and a gate refusal begins, by selling /
+      // vaulting / dropping what the East Tower guard would refuse. On by default; false keeps only the old refusal ladder.
+      kocatanGateClear: true,
       // AN ERRAND'S PURSE LEASE (m59-purse-lease.mjs): { carry, until, owner }. While live, no banking rule takes it.
       purseLease: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine
