@@ -10,6 +10,7 @@
 //
 // 9 methods: sanctuary, readyToLeaveSanctuary, restingSquare, settle, leaveForManaWhileUnarmed,
 //   nearestSanctuary, townTripIfCornered, makeWay, hibernate
+import { JUNGLE_SANCTUARIES } from '../m59-kocatan-gate.mjs';
 import { OF, blocksMovement } from '../m59-parse.mjs';
 import { nearestSafeSpot } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -554,7 +555,11 @@ export class SanctuaryPart {
         room: preferred.room, name: preferred.name, confined_to: confine,
         why: 'monster-free is not player-safe, and this is the room the operator named' });
     const spawns = loadSpawns(SPAWN_FILE)?.rooms || {};
-    const inns = Object.values(CITY_INNS).map(x => x.inn)
+    // THE TRADING POST COUNTS AS AN INN (operator 2026-10-29: in the Avar Village it is "the safe room" for PvP escape,
+    // selling and healing). It is a true sanctuary with bread for sale (tpost1.kod, kcmerch.kod), and it is one room past
+    // the quiet clearing (2144) from the village, so it wins over a quiet room up to ONE hop nearer -- for these listed
+    // sanctuaries only, so every city inn keeps the old strictly-closer rule.
+    const inns = [...Object.values(CITY_INNS).map(x => x.inn), ...JUNGLE_SANCTUARIES]
       .filter(n => n !== here && allowed(n));
     const quiet = Object.keys(spawns)
       .filter(n => !(spawns[n] || []).some(x => x.huntable))
@@ -566,9 +571,10 @@ export class SanctuaryPart {
       const hops = r.hops.length;
       if (hops > maxHops) continue;           // further than that is its own expedition
       const isInn = inns.includes(room);
+      const reachOver = JUNGLE_SANCTUARIES.includes(room) && best && !best.isInn && hops <= best.hops + 1;
       // Strictly closer wins; at equal distance the inn wins, because only an inn can
       // actually fix the thing that drove us out — food, and a safe place to eat it.
-      if (!best || hops < best.hops || (hops === best.hops && isInn && !best.isInn))
+      if (!best || reachOver || hops < best.hops || (hops === best.hops && isInn && !best.isInn))
         best = { room, hops, isInn, preferred: false,
                  safety: isInn ? 'true sanctuary' : 'no huntable monsters spawn here',
                  playerSafe: isInn };

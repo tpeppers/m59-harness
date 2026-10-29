@@ -22,6 +22,9 @@
 // Policy `kocatanGateClear` (broker `kocatan_gate_clear`): true by default; false restores the old refusal ladder only.
 
 export const KOCATAN_SMITHY = 2003;
+// The Avar Village's safe room (operator 2026-10-29): Wulfgang zax'Ak's trading post, NO_COMBAT | SANCTUARY | SAFELOGOFF
+// (tpost1.kod). nearestSanctuary treats it as an inn; m59-autopilot.mjs VILLAGE_TOWN makes it the village's town.
+export const JUNGLE_SANCTUARIES = Object.freeze([2101]);
 const norm = s => String(s ?? '').trim().toLowerCase();
 
 /** The jungle room a farmer is going back to: its assigned room, else the first confined room past the gate. */

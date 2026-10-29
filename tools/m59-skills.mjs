@@ -3904,6 +3904,10 @@ export const SELL_TO = [
   /pacal ix['’]anoak/i,   // store (2004, kcshopk.kod): anything bar money, bonded/special, tokens; finite shelf (MAX_FORSALE)
   /tepal ix['’]zonak/i,   // tailor (2006, kctailor.kod): gems and sundries, stacks of 100 or fewer
   /zala ix['’]mecya/i,    // apothecary (2002, kcapoth.kod): reagents that are not gems
+  // THE AVAR VILLAGE'S TOWN (operator 2026-10-29). kcmerch.kod: ObjectDesired is TRUE for everything -- the shape this
+  // list exists to distrust -- but he is MOB_BUYER at MERCHANT_RIPOFF and quotes a price, and sellAll / sellOne refuse a
+  // sale with no quoted price, so a counter that pays nothing costs a refused offer, never the item.
+  /wulfgang zax['’]ak/i,  // jungle trading post (2101, kcmerch.kod): anything, at a ripoff price
 ];
 // NEVER. Named separately from "not on the allowlist" because these actively take goods.
 export const NEVER_SELL_TO = [

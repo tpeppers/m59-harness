@@ -1899,8 +1899,27 @@ export const ISLAND_TOWN = Object.freeze({
   FOOD_SHOP: Object.freeze({ room: 2001, name: "Moxal ix'Hanak, Ko'catan inn" }),
   REAGENT_SHOP: Object.freeze({ room: 2002, name: "Zala ix'Mecya, Ko'catan apothecary" }),
 });
-/** The counters for wherever this room is: the island's on the island, the mainland's everywhere else. */
+// THE AVAR VILLAGE'S TOWN IS THE TRADING POST. Operator, 2026-10-29: "when we do the move to ... 'Avar village': the
+// town trip spot becomes the trading post, which also becomes 'the safe room' for PvP escape / selling / healing". The
+// road back to Ko'catan crosses three avar rooms (2143 > 2133 > 2134), so a farmer in the village (2154), the clearing
+// (2144) or the post itself sells, buys bread and rests at Wulfgang zax'Ak's (2101; tpost1.kod NO_COMBAT | SANCTUARY |
+// SAFELOGOFF; kcmerch.kod MOB_BUYER at MERCHANT_RIPOFF, so a QUOTED sale pays -- the sell path asks the price before it
+// hands anything over, which is what keeps "buys anything" from being the banker's robbery). There is no bank: BANKS is
+// empty, so a bank trip has no destination here and is not opened -- the purse rides until the group comes home.
+export const VILLAGE_ROOMS = Object.freeze([2101, 2143, 2144, 2153, 2154]);
+const TRADING_POST = Object.freeze({ room: 2101, name: "Wulfgang zax'Ak, the jungle trading post" });
+export const VILLAGE_TOWN = Object.freeze({
+  region: 'avar-village',
+  BANKS: Object.freeze([]),
+  MARKET_STOPS: Object.freeze([TRADING_POST]),
+  MARKETS: Object.freeze([TRADING_POST]),
+  FOOD_SHOPS: Object.freeze([TRADING_POST]),     // bread (kcmerch.kod SetForSale)
+  FOOD_SHOP: TRADING_POST,
+  REAGENT_SHOP: TRADING_POST,                    // entroot, fairy wings, mushrooms as conditional sales
+});
+/** The counters for wherever this room is: the trading post in the Avar Village, the island's on the island, the mainland's everywhere else. */
 export function townTable(room) {
+  if (VILLAGE_ROOMS.includes(Number(room))) return VILLAGE_TOWN;
   if (onIsland(room)) return ISLAND_TOWN;
   return { region: 'mainland', BANKS, MARKET_STOPS, MARKETS, FOOD_SHOPS, FOOD_SHOP, REAGENT_SHOP };
 }
