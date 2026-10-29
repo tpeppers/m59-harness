@@ -11867,6 +11867,10 @@ const TOOLS = [
         'holder\'s deposit, bank_above trips, town trips) keeps at least `carry`, so a courier\'s withdrawal is not ' +
         'banked straight back. It lapses by itself to the standard walking_money float. null ends it now. The bank tool\'s ' +
         'withdraw takes lease_ms to lease the purse it leaves' },
+      kocatan_gate_clear: { type: 'boolean', description: 'ON KO\'CATAN, LEAVE TOWN WITH A PACK THE EAST TOWER GUARD ' +
+        'PASSES (m59-kocatan-gate.mjs): the last step of an island town trip, and the first answer to a gate refusal, sells ' +
+        'plain loot at the smithy, vaults the rest, and drops what neither takes (a conjured weapon). Never a worn piece, ' +
+        'never a bribe. Default true; false keeps only the old sell-then-vault refusal ladder' },
       loot_eject: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         to: { type: 'array', items: { type: 'string' }, description: 'characters of ours to hand the sale pile to, in order of preference: a station first, then a courier' },
@@ -12931,6 +12935,7 @@ const TOOLS = [
         try { p.policy.purseLease = normalizePurseLease(a.purse_lease); }
         catch (e) { return { started: false, reason: `purse_lease refused: ${e.message}`, note: 'nothing was changed' }; }
       }
+      if (a.kocatan_gate_clear !== undefined) p.policy.kocatanGateClear = a.kocatan_gate_clear !== false;
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
         catch (e) { return { started: false, reason: `loot_eject refused: ${e.message}`, note: 'nothing was changed' }; }

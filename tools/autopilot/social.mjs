@@ -22,7 +22,8 @@ import { unwrapSpeech } from '../m59-inbox.mjs';
 import { claimGift, releaseGift } from '../m59-interest-store.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { isVaultmanName } from '../m59-vaults.mjs';
-import { OF } from '../m59-parse.mjs';
+import { OF, dropSpec } from '../m59-parse.mjs';
+import { KOCATAN_SMITHY, gateClearPlan, gateStation } from '../m59-kocatan-gate.mjs';
 import * as party from '../m59-party.mjs';
 import { GATE_LIMITS, KOCATAN_VAULT, POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
 import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
@@ -881,6 +882,63 @@ export class SocialPart {
     const r = await skills.depositInVault(this.s, { vaultman: vaultman.id, ids }).catch(e => ({ deposited: [], error: e.message }));
     this.note("vaulted what the Ko'catan gate refuses", { ids, deposited: r.deposited ?? [], refused: r.refused ?? [], error: r.error ?? null });
     return { vaulted: !!r.deposited?.length, result: r };
+  }
+
+  // SELL / VAULT / DROP UNTIL THE GATE PASSES (m59-kocatan-gate.mjs has the argument). Called as the last step of an island
+  // town trip and on a gate refusal. Does nothing unless this character stands in Ko'catan town, its farm lies past the
+  // East Tower, and the guard rule refuses the pack. Never touches a worn piece; never pays the corrupt captain.
+  async kocatanGateClear({ trigger = 'town trip', room = null } = {}) {
+    if (this.policy.kocatanGateClear === false) return { cleared: false, why: 'switched off (policy kocatanGateClear)' };
+    const station = room != null ? Number(room) : gateStation(this.policy);
+    if (station == null) return { cleared: false, why: 'no farm past the gate' };
+    let gate = this.kocatanGateRefusal(station);
+    if (!gate) return { cleared: true, why: 'the pack already passes the gate' };
+    const s = this.s, c = s.need(), done = { sold: [], vaulted: [], dropped: [], left: [] };
+    const live = id => (c.inventory ?? []).find(o => o.id === id);
+    const plan = gateClearPlan(gate.over.map(i => ({ ...i, rarity: live(i.id)?.rarity ?? 0 })),
+                               { protect: this.saleProtectedNames?.() ?? [] });
+    // SELL plain loot at the smithy. One item at a time, price asked first: a refusal is a sentence, not an error.
+    if (plan.sell.length) {
+      const walked = Number(this.s.world?.room?.num) === KOCATAN_SMITHY ? { arrived: true }
+        : await this.travel(KOCATAN_SMITHY, { origin: keeperOrigin('gate_clear'), maxHops: 12 }).catch(e => ({ arrived: false, reason: e.message }));
+      const buyer = walked?.arrived
+        ? [...(c.room?.objects?.values?.() ?? [])].find(o => skills.trustedBuyer(c.rsc.get(o.nameRsc))) : null;
+      for (const item of buyer ? plan.sell : []) {
+        const it = live(item.id);
+        if (!it) continue;
+        const offer = { ...it, amount: it.amount > 0 ? it.amount : 0 };
+        const q = await s.sellOne(buyer.id, offer, false).catch(() => null);
+        if (!(q?.offered_price > 0)) continue;
+        const d = await s.sellOne(buyer.id, offer, true).catch(() => null);
+        if (d?.sold) done.sold.push({ name: item.name, price: d.offered_price });
+        await new Promise(r => setTimeout(r, 900));
+      }
+      if (done.sold.length) this.tradeFact?.({ earned: done.sold.reduce((n, x) => n + (x.price || 0), 0), sold: done.sold });
+    }
+    // VAULT what is worth keeping and whatever the smithy would not buy.
+    gate = this.kocatanGateRefusal(station);
+    if (gate) {
+      const v = await this.kocatanGateVault(gate).catch(e => ({ vaulted: false, why: e.message }));
+      done.vaulted = v?.result?.deposited ?? [];
+    }
+    // DROP what is still over the limit: refused by both (a conjured weapon), and not worn. Plain (rarity 0) only: the
+    // vaultman also refuses a purse that cannot pay his fee, and unread magic is never thrown away for that -- it stays,
+    // named in `left`, and the refusal ladder in travel() gets another go later.
+    gate = this.kocatanGateRefusal(station);
+    if (gate) {
+      const worn = skills.equippedNow(c);
+      for (const item of gate.over) {
+        const it = live(item.id);
+        if (!it || item.was_equipped || !worn || worn.has(it.id) || Number(it.rarity) > 0) { done.left.push(item.name); continue; }
+        await s.pacer.submit('drop', () => c.drop([dropSpec(it)])).catch(() => {});
+        done.dropped.push(item.name);
+      }
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+    }
+    gate = this.kocatanGateRefusal(station);
+    this.note("cleared the pack for the Ko'catan gate", { trigger, station, ...done, still_refused: gate?.why ?? null });
+    return { cleared: !gate, ...done, still_refused: gate?.why ?? null };
   }
   // @end 1
 }

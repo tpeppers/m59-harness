@@ -813,7 +813,19 @@ export class TravelPart {
     // can be bribed, the good one cannot). A route through it with such a pack walks into a refusal the router reads as
     // "no ground gained" and retries. So it is refused HERE, naming what the guard will object to.
     {
-      const gate = this.kocatanGateRefusal?.(room);
+      let gate = this.kocatanGateRefusal?.(room);
+      // FIRST, CLEAR THE PACK AND GO (operator 2026-10-29: "automatically sell/vault/drop loot to be able to return to
+      // farming according to the guard rules"). Sell plain loot at the smithy, vault the rest, drop what neither takes
+      // (kocatanGateClear, m59-kocatan-gate.mjs), then carry on with this journey if the pack now passes. At most once
+      // every ten minutes; policy kocatanGateClear:false leaves only the old ladder below. Robin stood in town 6 h on a
+      // conjured long sword that the ladder could neither sell (protected) nor vault (the vaultman refuses conjured).
+      if (gate && this.policy.kocatanGateClear !== false && !this.townTrip
+          && Date.now() - (this._gateClearAt ?? 0) > 600_000) {
+        this._gateClearAt = Date.now();
+        await this.kocatanGateClear?.({ trigger: 'gate refusal', room })
+          .catch(e => this.note('could not clear the pack for the Ko\'catan gate', { why: e.message }));
+        gate = this.kocatanGateRefusal?.(room);
+      }
       if (gate) {
         this.note('refused a journey the Ko\'catan guard will stop', { to: Number(room), ...gate });
         // AND DO SOMETHING ABOUT IT: a sell trip to the island's counters (the smithy, 2003, buys weapons and wearables; the
