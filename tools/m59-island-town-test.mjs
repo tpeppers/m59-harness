@@ -283,5 +283,33 @@ console.log('leaving town with a pack the guard passes: sell, vault, drop (opera
   ok('a farm that is not past the gate: nothing to clear', /no farm past the gate/.test(rt.why ?? '') && town.inv.length === 4);
 }
 
+console.log('the Avar Village: the trading post is its town and its safe room (operator 2026-10-29)');
+{
+  const v = A.townTable(2154), post = A.townTable(2101), clearing = A.townTable(2144);
+  ok('2154, 2144 and 2101 read the village table; 2133 (the road) and 2115 do not',
+     v.region === 'avar-village' && post.region === 'avar-village' && clearing.region === 'avar-village'
+     && A.townTable(2133).region === 'island' && A.townTable(2115).region === 'island');
+  ok('a full pack in the village sells at Wulfgang (2101); food and supplies are his too',
+     rooms(A.townDestinations({ packFull: true, table: v })).join() === '2101'
+     && rooms(A.townDestinations({ starving: true, table: v })).join() === '2101'
+     && rooms(A.townDestinations({ supplyTrip: true, table: v })).join() === '2101');
+  ok('no bank in the village: a bank trip has nowhere to go (and so is not opened)',
+     A.townDestinations({ richEnoughToBank: true, table: v }).length === 0);
+  const S = await import('./m59-skills.mjs');
+  ok("Wulfgang zax'Ak is a trusted buyer (a quoted sale), the bankers still are not",
+     S.trustedBuyer("Wulfgang zax'Ak") && !S.trustedBuyer("Huital ko'Nosak"));
+  const hops = { 2144: 1, 2101: 2 };
+  const k = Object.assign(Object.create(A.Autopilot.prototype), { note: () => {}, policy: { confineRooms: [2154, 2144, 2101] },
+    s: { world: { room: { num: 2154 }, route: to => hops[to] ? { found: true, hops: Array(hops[to]).fill({}) } : { found: false } } } });
+  const best = k.nearestSanctuary({ maxHops: 3 });
+  ok('from the village the safe room is the trading post (2101), not the nearer quiet clearing (2144)',
+     best?.room === 2101 && best.isInn === true, JSON.stringify(best));
+  const { readToolSource } = await import('./autopilot/source.mjs');
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the long eat-and-wait before a journey happens only in a no-combat room, waiting in one-second slices',
+     /const safeRoom = isNoCombatRoom\(/.test(src) && /if \(od && vigor < reach - 5 && safeRoom\)/.test(src)
+     && /setTimeout\(res, 1000\)/.test(src));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

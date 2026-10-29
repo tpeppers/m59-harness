@@ -10,6 +10,7 @@
 //
 // 5 methods: passFollow, passOutside, settleErrandsBeforeJourney, eatBeforeTravel, eatToFloor
 import { behindBy, dropCrumb, exitTakenFrom, heardOrder, nextStep } from '../m59-follow.mjs';
+import { isNoCombatRoom } from '../m59-hazards.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF } from '../m59-parse.mjs';
 import * as party from '../m59-party.mjs';
@@ -328,17 +329,27 @@ export class PassOutsidePart {
       // between sittings — bounded by maxMinutes and abandoned the moment anything is in reach.
       const od = overdriveSettings(p);
       const reach = od ? overdriveReachable(od.target, larder) : null;
-      if (od && vigor < reach - 5) {
+      // ONLY IN A NO-COMBAT ROOM, AND NEVER ASLEEP FOR LONG. Shadow trial 2026-10-29: a clone about to set out from 2124
+      // (kriipa, level 160) sat to eat up to 200 vigor, slept up to 60 s between sittings with `inReachOfUs` read only
+      // between them, and went from 114 to 4 health in 20 s without a swing. A multi-minute climb is a rest, so it happens
+      // where nothing can start a fight (m59-hazards isNoCombatRoom: inns, towns, sanctuaries); elsewhere one ordinary
+      // sitting below. The wait is in one-second slices that end on anything in reach or any health lost.
+      const safeRoom = isNoCombatRoom(Number(this.s?.world?.room?.num));
+      if (od && vigor < reach - 5 && safeRoom) {
         this.startOverdrive(od, vigor, `setting out for ${dest ?? 'a journey'}`);
         const until = Date.now() + od.maxMinutes * 60_000;
+        const healthNow = () => Number(this.s?.client?.vitals?.()?.health?.value);
+        const startHealth = healthNow();
+        const disturbed = () => !!this.inReachOfUs?.()?.length || (Number.isFinite(startHealth) && healthNow() < startHealth);
         let now = vigor;
-        while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !this.inReachOfUs?.()?.length) {
+        while (Date.now() < until && now < overdriveReachable(od.target, this.larder(c)) - 5 && !this.stopping && !disturbed()) {
           const r = await skills.eat(this.s, { stomach: this.stomach, upToVigor: od.target,
                                                exclude: this.notOursToEat() }).catch(() => null);
           if (r?.ate?.length) { e.ate.push(...r.ate); now = r.vigor?.after ?? now; this.tally.meals = (this.tally.meals || 0) + 1; continue; }
           if (!this.larder(c).length) break;
           const wait = Math.min(60, Math.max(5, this.stomach?.secondsUntilRoomFor?.(smallest) ?? 30));
-          await new Promise(res => setTimeout(res, wait * 1000));
+          for (const end = Date.now() + wait * 1000; Date.now() < end && !this.stopping && !disturbed();)
+            await new Promise(res => setTimeout(res, 1000));
           now = this.s?.client?.vitals?.()?.vigor?.value ?? now;
         }
         e.vigor.after = now;
