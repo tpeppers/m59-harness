@@ -8,13 +8,13 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 8 methods: isRoomEnchantPost, maintainRoomEnchantPost, roomEnchantAllows, roomEnchant,
-//   practiceSafeSpot, practiceSessionDue, practiceAtDesk, buffAllies
+// 10 methods: isRoomEnchantPost, maintainRoomEnchantPost, roomEnchantAllows, roomEnchant,
+//   practiceSafeSpot, practiceSessionDue, practiceAtDesk, buffAllies, practiceBuyHere, reagentExact
 import { allyVerdict } from '../m59-ally.mjs';
 import { withCastRite } from '../m59-castrite.mjs';
 import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
-import { choosePractice, deskReserve, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
-import { OF } from '../m59-parse.mjs';
+import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
+import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { Autopilot, REST_VIGOR_CAP } from '../m59-autopilot.mjs';
 
@@ -303,6 +303,8 @@ export class DeskPracticePart {
     const reserve = deskReserve({ practice: cfg, services, known: spells.map(x => x.name),
                                   keep: this.chaliceReagentFloor() });
     this._practiceRefused ||= new Map();
+    // SHORT OF A REAGENT A COUNTER IN THIS ROOM SELLS: BUY IT HERE (buy_here), then practise from the next pass.
+    if (!session && cfg.buy_here && await this.practiceBuyHere(cfg, spells, reserve, now)) return true;
     const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now, vigor: v?.vigor?.value ?? null,
                                     have: (item) => this.reagentOnHand(item),
                                     refusedUntil: this._practiceRefused });
@@ -508,6 +510,85 @@ export class DeskPracticePart {
       this.progress(`cast ${buff.name} on an ally`);
       return;                       // one cast per pass; the pacer owns the rest
     }
+  }
+  // How many of exactly this reagent the pack holds: "mushroom" counts mushrooms and not blue mushrooms.
+  reagentExact(name) {
+    const c = this.s?.client;
+    let n = 0;
+    for (const o of (c?.inventory || []))
+      if (isReagent(c.rsc.get(o.nameRsc), name)) n += Number(o.amount ?? 1) || 1;
+    return n;
+  }
+
+  // PRACTICE'S OWN SUPPLY LINE: BUY THE SHORT REAGENTS FROM A COUNTER IN THE ROOM THE CHARACTER IS STANDING IN.
+  // Operator, 2026-10-29, of Zoot holding Frisconar's Mysticals (53) for a quest: "train Bless (until it's 99), using the
+  // shillings he has to buy reagents as needed ... a new 'buy reagents in the room you're in while you train' feature".
+  // It never walks: only the merchants already in this room are asked, each short reagent is topped up to buy_here.casts
+  // casts' worth out of the purse above keep_shillings, and what entered the pack is the evidence (buyItems completes the
+  // handshake whatever the counter clamps). A reagent nobody here sells is said once per ten minutes and left alone: a
+  // drill that cannot fix its shortage must not ask every pass. True when it used the pass (asked a counter).
+  async practiceBuyHere(cfg, spells, reserve, now = Date.now()) {
+    const buy = cfg.buy_here;
+    if (!buy) return false;
+    if (this._practiceBuyAt && now - this._practiceBuyAt < buy.every_ms) return false;
+    const { wants, for: forSpell } = buyHereWants({ practice: cfg, spells, exact: item => this.reagentExact(item), reserve,
+      refusedUntil: this._practiceRefused ?? new Map(), now });
+    if (!wants.size) return false;
+    this._practiceBuyAt = now;
+    const s = this.s, c = s.need();
+    const room = this.hereRoom();
+    const sellers = [...(c.room?.objects?.values() ?? [])].filter(o => affordances(o.flags).includes('buy'));
+    if (!sellers.length) {
+      this.practiceBuyState = { at: now, room, wants: Object.fromEntries(wants), why: 'nobody in this room sells anything' };
+      return false;
+    }
+    for (const word of buy.say ?? []) await s.pacer.submit('say', () => c.say(word)).catch(() => {});
+    const bought = {}, notSold = new Set(wants.keys()), prices = {};
+    let budget = Math.max(0, this.purseNow() - buy.keep_shillings);
+    for (const seller of sellers) {
+      if (![...wants.values()].some(n => n > 0)) break;
+      if (this.travelInterrupted?.() || this.hereRoom() !== room) break;
+      const before = c.evSeq;
+      await s.pacer.submit('buy', () => c.buy(seller.id)).catch(() => {});
+      const ev = await c.waitFor({ since: before, kinds: ['shop', 'message'], timeoutMs: 4000 }).catch(() => ({ events: [] }));
+      const shop = ev.events?.find(e => e.kind === 'shop');
+      if (!shop?.items?.length) continue;
+      for (const [item, amount] of wants) {
+        if (!(amount > 0)) continue;
+        const row = shop.items.find(r => isReagent(r.name, item));
+        if (!row || !(Number(row.id) > 0)) continue;
+        notSold.delete(item);
+        const unit = Number(row.cost);
+        // AN UNPRICED ROW IS NOT A FREE ONE: skipped, never bought blind against the purse.
+        if (!(unit > 0)) continue;
+        prices[item] = unit;
+        const n = Math.min(amount, Math.floor(budget / unit));
+        if (n <= 0) continue;
+        const held = this.reagentExact(item);
+        for (const l of buyLines([{ id: Number(row.id), amount: n }])) {
+          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [l]));
+          const seq = c.evSeq;
+          await s.pacer.submit('read', () => c.requestInventory());
+          await c.waitFor({ since: seq, kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        }
+        const gained = Math.max(0, this.reagentExact(item) - held);
+        if (gained > 0) {
+          bought[item] = (bought[item] ?? 0) + gained;
+          budget -= gained * unit;
+          wants.set(item, amount - gained);
+          this.recordPurchase?.(item, unit, { kind: 'reagent', from: seller?.nameRsc ? c.rsc.get(seller.nameRsc) : null,
+            why: `practice buy_here: ${(forSpell.get(item) ?? []).join(', ')}` });
+        }
+      }
+    }
+    const short = [...wants].filter(([, n]) => n > 0).map(([item, n]) => `${item} ${n}`);
+    this.practiceBuyState = { at: now, room, bought, prices, purse: this.purseNow(), still_short: short, not_sold_here: [...notSold] };
+    if (Object.keys(bought).length) this.note('practice: bought reagents in this room', this.practiceBuyState);
+    else if (notSold.size && (!this._practiceBuyNotSoldAt || now - this._practiceBuyNotSoldAt > 600_000)) {
+      this._practiceBuyNotSoldAt = now;
+      this.note('practice: a short reagent is not sold in this room', this.practiceBuyState);
+    } else if (short.length) this.note('practice: could not buy the short reagents here', this.practiceBuyState);
+    return true;
   }
   // @end 1
 }
