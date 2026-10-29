@@ -278,6 +278,11 @@ through a nested shelter order.
   light weight opens a sell trip, so does 90% by weight, 89.6% does not, and on the island the prod pack is no longer
   dropped as "full of kept stock"; at Zala's counter they are sold, at the smithy never offered; no hall run from the
   island.
+- `m59-no-combat-lock-test.mjs` (20): the lockdown that accepts any NO_COMBAT room (`lock_no_combat`, off by default):
+  in one, the lock is that room whatever was assigned, and a journey suspended toward the old room is dropped; outside
+  one, it walks to the nearest by hops, locked there first so the confinement gate lets it go, and adopts it on arrival;
+  never from the Underworld, never over a moving journey, at most every 20 s; the pass adopts before combat and
+  survival and shepherds after the ladder; the broker carries the key.
 - `m59-island-town-test.mjs` (50): on the island every town destination is a Ko'catan counter and nothing routes off it;
   the mainland is unchanged; a journey across the East Tower gate is refused when the guard would refuse the pack, naming
   what; a strategy can say sellAtLoad; arrivals carry one spare weapon; every avar clan name resolves; a cup whose station is
