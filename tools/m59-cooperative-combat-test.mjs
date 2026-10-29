@@ -177,3 +177,19 @@ test('quarry admission changing after a tag holds the target rather than allowin
   f.line('Your mace wounds the skeleton.');f.co.update();f.ap.cooperativeTargetAllowed=()=>false;
   assert.equal(f.c.attack(200),false);assert.equal(f.packets.length,1);
 });
+
+// Prod 2026-10-29: a Windows rename over a record another keeper is reading throws EPERM; that reached fail() in 18 of
+// 21 keepers and switched sharing off for good. A transient rename error is retried, then the write is skipped.
+test('a transient rename error is retried, then skipped -- the store never throws it',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'coop-eperm-')),fleet=join(dir,'fleet.json');writeFileSync(fleet,'{}');
+  try {
+    let calls=0;const eperm=()=>Object.assign(new Error('EPERM: operation not permitted, rename'),{code:'EPERM'});
+    const flaky=new CooperationStore(fleet,{rename:()=>{if(++calls<3)throw eperm();},pause:()=>{}});
+    assert.equal(flaky.write({agent:'t1',at:1}),true);assert.equal(calls,3);
+    const removed=[];
+    const stuck=new CooperationStore(fleet,{rename:()=>{throw eperm();},remove:f=>removed.push(f),pause:()=>{}});
+    assert.equal(stuck.write({agent:'t2',at:1}),false);assert.equal(stuck.skipped,1);assert.equal(removed.length,1);
+    const broken=new CooperationStore(fleet,{rename:()=>{throw Object.assign(new Error('ENOSPC'),{code:'ENOSPC'});},pause:()=>{}});
+    assert.throws(()=>broken.write({agent:'t3',at:1}),/ENOSPC/);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

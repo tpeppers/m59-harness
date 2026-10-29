@@ -1,7 +1,7 @@
 // Generic cooperative attack transport. The private strategy chooses participants,
 // target and wait policy; this module owns evidence, bounded geometry and execution.
 import {createHash} from 'node:crypto';
-import {mkdirSync,readFileSync,readdirSync,writeFileSync,renameSync,realpathSync} from 'node:fs';
+import {mkdirSync,readFileSync,readdirSync,writeFileSync,renameSync,realpathSync,unlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {OF} from './m59-parse.mjs';
 import {classifyCombatLine} from './m59-combatlog.mjs';
@@ -12,18 +12,34 @@ import {creatureByName,loadSpawns} from './m59-spawns.mjs';
 import {survivalDecisionSnapshot} from './m59-survival-decision.mjs';
 const SPAWNS=process.env.M59_SPAWN_FILE||new URL('../substrate/m59-spawns.json',import.meta.url);
 
+// A RENAME OVER A FILE ANOTHER KEEPER IS READING FAILS ON WINDOWS (EPERM/EBUSY/EACCES), and every keeper reads every
+// other keeper's record on every pass. On prod 2026-10-29 that one transient error reached `fail()` in 18 of 21 keepers
+// within an hour of the hook loading, and `fail()` is permanent: sharing silently stopped fleet-wide while every farmer
+// went on fighting alone. A record is republished every pass and read with a 6 s horizon, so a missed write costs
+// nothing: retry briefly, then skip it -- never throw.
+const TRANSIENT_RENAME=new Set(['EPERM','EBUSY','EACCES']);
+const pauseMs=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);
 export class CooperationStore {
-  constructor(fleetPath) {
+  constructor(fleetPath,{rename=renameSync,remove=unlinkSync,pause=pauseMs}={}) {
     const canonical=realpathSync(fleetPath);
     const path=process.platform==='win32'?canonical.toLowerCase():canonical;
     this.scope=createHash('sha256').update(path).digest('hex').slice(0,24);
     this.dir=join(dirname(fleetPath),'.cooperative-combat',this.scope);
+    this.rename=rename;this.remove=remove;this.pause=pause;this.skipped=0;
   }
   write(record) {
     if(!/^[\w-]{1,64}$/.test(record.agent))throw new Error('invalid cooperative agent');
     mkdirSync(this.dir,{recursive:true});
     const file=join(this.dir,record.agent+'.json'),tmp=file+'.'+process.pid+'.tmp';
-    writeFileSync(tmp,JSON.stringify({...record,scope:this.scope}));renameSync(tmp,file);
+    writeFileSync(tmp,JSON.stringify({...record,scope:this.scope}));
+    for(let attempt=0;;attempt++) {
+      try {this.rename(tmp,file);return true;}
+      catch(e) {
+        if(!TRANSIENT_RENAME.has(e.code))throw e;
+        if(attempt>=4) {try{this.remove(tmp);}catch{} this.skipped++;this.lastSkip=e.code;return false;}
+        this.pause(2+attempt*3);
+      }
+    }
   }
   read(now=Date.now()) {
     let names=[];try{names=readdirSync(this.dir);}catch{return [];}
