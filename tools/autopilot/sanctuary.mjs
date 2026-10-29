@@ -8,9 +8,12 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 9 methods: sanctuary, readyToLeaveSanctuary, restingSquare, settle, leaveForManaWhileUnarmed,
-//   nearestSanctuary, townTripIfCornered, makeWay, hibernate
+// 12 methods: sanctuary, readyToLeaveSanctuary, restingSquare, settle, leaveForManaWhileUnarmed,
+//   nearestSanctuary, townTripIfCornered, makeWay, hibernate, noCombatLockAdopt, noCombatLockShepherd,
+//   nearestNoCombatRoom
+import { ROOM_NO_COMBAT, noCombatRooms, roomIsNoCombat } from '../m59-hazards.mjs';
 import { JUNGLE_SANCTUARIES } from '../m59-kocatan-gate.mjs';
+import { keeperOrigin } from '../m59-move-origin.mjs';
 import { OF, blocksMovement } from '../m59-parse.mjs';
 import { nearestSafeSpot } from '../m59-safespots.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -699,6 +702,81 @@ export class SanctuaryPart {
       note: 'vigor tops out around 80 of 200 on rest alone; past that it has to come from food' });
     this.progress('resting up between jobs');
     return true;
+  }
+  // THE NO-COMBAT LOCK (policy lockNoCombat). Operator 2026-10-29 ~18:50Z, during the Avar Village lockdown: "I'm planning
+  // on walking people around between the lockdown rooms, but will leave them in other lockdown acceptable rooms (inns &
+  // other 'no combat' rooms): I'd like you to keep any characters in whatever rooms I leave them in ... stay locked to
+  // their current rooms *as long as it's a no combat room* and have the lockdown auto-shepherd people to the nearest no
+  // combat room ... if I log off someone outside a no combat room. Make this the default lockdown behavior going forward:
+  // any no combat room is acceptable."
+  //
+  // So a locked character's room is wherever it STANDS, provided the server lets nobody swing there (the room's own
+  // NO_COMBAT flag: every inn, shop, bank and hall). It is decided HERE, in the keeper, on every pass, and not by a
+  // posture's tend loop a minute later: a keeper that relogs in room B still holding assignedRoom A walks out on its
+  // first pass ("leaving on unknown vitals -- there is somewhere else to be", readyToLeaveSanctuary), which is exactly
+  // the walk the lock exists to prevent. Adopting is a policy change and nothing else; it runs before anything can move.
+  noCombatLockAdopt() {
+    if (this.policy?.lockNoCombat !== true) return null;
+    const here = Number(this.s.world?.room?.num);
+    if (!Number.isInteger(here) || here <= 1 || !roomIsNoCombat(this.s)) return null;
+    const confine = Array.isArray(this.policy.confineRooms) ? this.policy.confineRooms.map(Number) : [];
+    if (Number(this.policy.assignedRoom) === here && confine.length === 1 && confine[0] === here) return here;
+    const was = { assigned_room: this.policy.assignedRoom ?? null, confine_rooms: this.policy.confineRooms ?? null };
+    this.policy.assignedRoom = here;
+    this.policy.confineRooms = [here];
+    // A journey suspended toward the OLD lock room is resumed by the next pass (a keeper handoff resumes them too), and
+    // it would walk the body out of the room it was just locked to. The journey goes; the lock is the order now.
+    const dropped = this.suspendedJourney && Number(this.suspendedJourney.to) !== here ? this.suspendedJourney.to : null;
+    if (dropped != null) this.suspendedJourney = null;
+    this.note('lockdown: locked to the no-combat room it is standing in', { room: here, was, dropped_journey_to: dropped,
+      why: 'lock_no_combat: any NO_COMBAT room is an acceptable lockdown room, and the one a character stands in is its own' });
+    return here;
+  }
+
+  // OUTSIDE A NO-COMBAT ROOM, A LOCKED CHARACTER WALKS TO THE NEAREST ONE, and is locked there on arrival. One journey at
+  // a time, through Autopilot.travel (the travel guard stays armed), asked again at most every 20 s while it has not
+  // arrived. Never from the Underworld (death's own ladder gets the body out first), never over a journey already
+  // moving the body, and the survival ladder has had the pass before this is asked.
+  async noCombatLockShepherd() {
+    if (this.policy?.lockNoCombat !== true) return false;
+    const s = this.s, here = Number(s.world?.room?.num);
+    if (!Number.isInteger(here) || here <= 1 || roomIsNoCombat(s)) return false;
+    if (this.inert?.travelling || this.townTrip) return false;
+    if (Date.now() - (this._noCombatShepherdAt ?? 0) < 20_000) return false;
+    this._noCombatShepherdAt = Date.now();
+    const best = this.nearestNoCombatRoom();
+    if (!best) {
+      this.note('lockdown: no no-combat room is reachable from here', { here });
+      return false;
+    }
+    this.policy.assignedRoom = best.room;
+    this.policy.confineRooms = [best.room];
+    this.doing = `lockdown: walking to no-combat room ${best.room}`;
+    this.note('lockdown: outside a no-combat room; walking to the nearest one', { here, to: best.room, hops: best.hops });
+    const r = await this.travel(best.room, { origin: keeperOrigin('no_combat_lock'), maxHops: best.hops + 4 })
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (r?.arrived) this.noCombatLockAdopt();
+    else this.note('lockdown: the walk to the no-combat room did not arrive; asking again', { to: best.room, reason: r?.reason ?? null });
+    this.progress(r?.arrived ? `lockdown: locked in ${best.room}` : `lockdown: walking to ${best.room}`);
+    return true;
+  }
+
+  // The no-combat room fewest hops away, by the router. The live map's room flags first, the baked map's list second.
+  nearestNoCombatRoom({ maxHops = 15 } = {}) {
+    const s = this.s, here = Number(s.world?.room?.num);
+    const rooms = s.world?.map?.rooms;
+    const flagged = rooms ? Object.entries(rooms).filter(([, r]) => (Number(r?.flags) & ROOM_NO_COMBAT) !== 0).map(([n]) => Number(n)) : [];
+    const candidates = flagged.length ? flagged : [...noCombatRooms().keys()];
+    let best = null;
+    for (const room of candidates) {
+      if (room === here || room <= 1) continue;
+      const r = s.world?.route?.(room);
+      if (!r?.found) continue;
+      const hops = r.hops.length;
+      if (hops > maxHops) continue;
+      if (!best || hops < best.hops) best = { room, hops };
+    }
+    return best;
   }
   // @end 1
 }

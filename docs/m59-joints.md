@@ -181,6 +181,27 @@ So a posture is a set of orders with these rules:
   practice included, silently), `no_flee`, `travel_unguarded`. Without `--accept <id>` nothing is pushed and the error
   names the flag. A tripwire accepts in its `then: { posture, accept: [...] }`.
 
+### A lockdown accepts ANY no-combat room (`lock_no_combat`)
+
+The default shape of a lockdown since 2026-10-29 (operator: *"keep any characters in whatever rooms I leave them in ...
+as long as it's a no combat room ... any no combat room is acceptable"*). The keeper policy `lock_no_combat: true`
+makes the lock room **whatever NO_COMBAT room the character stands in** (every inn, shop, bank and hall; the room's
+own flag, `m59-hazards.mjs`), re-decided on every pass: a person can walk a character to another inn, log off, and it
+stays there. Outside a no-combat room it walks to the nearest one by hops and locks there. Off by default; a posture
+turns it on. `substrate/postures.example/example-no-combat-lock.mjs` is the shape.
+
+**It is decided in the keeper, not in `tend`, and that is the point.** A keeper that relogs in room B while still
+assigned room A leaves on its first pass (`readyToLeaveSanctuary`: *"leaving on unknown vitals -- there is somewhere
+else to be"*), a minute before any tend loop could re-point it. So `noCombatLockAdopt` runs at the top of `passOnce`,
+right after the live check and before combat, survival or any mover; it also drops a journey suspended toward the old
+room. `noCombatLockShepherd` runs after the survival ladder, through `Autopilot.travel` (travel guard armed), at most
+every 20 s, never from the Underworld and never over a journey already moving the body.
+
+A posture using it sets `assigned_room` and `confine_rooms` ONLY for a unit standing in a no-combat room (so the save
+holds them and release restores them), and leaves them out for a unit outside one: the keeper picks the destination,
+and `tend` re-pushing its own guess would fight it. The release restores `lock_no_combat: false` because the keeper
+reports the default. `node tools/m59-no-combat-lock-test.mjs` (20) pins it.
+
 A posture is the "posture" piece of the [fleet plans](m59-fleet-plans.md) design proposal. The conductor that
 switches plans, and the loops and supply lines, are still to come.
 

@@ -2409,6 +2409,9 @@ export class Autopilot {
       // CLEAR THE KO'CATAN GATE (m59-kocatan-gate.mjs): an island town trip ends, and a gate refusal begins, by selling /
       // vaulting / dropping what the East Tower guard would refuse. On by default; false keeps only the old refusal ladder.
       kocatanGateClear: true,
+      // THE NO-COMBAT LOCK (sanctuary.mjs noCombatLockAdopt / noCombatLockShepherd): a lockdown's room is whatever
+      // NO_COMBAT room the character stands in, and outside one it walks to the nearest. Off by default; postures turn it on.
+      lockNoCombat: false,
       // AN ERRAND'S PURSE LEASE (m59-purse-lease.mjs): { carry, until, owner }. While live, no banking rule takes it.
       purseLease: null,
       // Weapons never to draw. null means no prohibition, which is what every doctrine
@@ -3460,6 +3463,8 @@ export class Autopilot {
     await this.applyCurseCycle();
     s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k) });
     if (!s.live) { this.note('not in game'); return; }
+    // THE NO-COMBAT LOCK ADOPTS THE ROOM IT STANDS IN before anything below can move the body (policy lockNoCombat).
+    this.noCombatLockAdopt();
     if (s.combat?.active) {
       await s.combat.tick();
       if (s.combat.active) { this.doing = `combat: ${s.combat.active.phase}`; return; }
@@ -3493,6 +3498,8 @@ export class Autopilot {
     }
     this.passStage='continueSurvivalDecision';this.passStageAt=Date.now();
     if (await this.continueSurvivalDecision()) return;
+    // A LOCKED CHARACTER OUTSIDE A NO-COMBAT ROOM walks to the nearest one, after survival has had the body.
+    if (await this.noCombatLockShepherd()) return;
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.
     // A loadout write lands on keys a strategy may govern: let the strategy answer for them again

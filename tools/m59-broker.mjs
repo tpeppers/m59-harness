@@ -11871,6 +11871,10 @@ const TOOLS = [
         'PASSES (m59-kocatan-gate.mjs): the last step of an island town trip, and the first answer to a gate refusal, sells ' +
         'plain loot at the smithy, vaults the rest, and drops what neither takes (a conjured weapon). Never a worn piece, ' +
         'never a bribe. Default true; false keeps only the old sell-then-vault refusal ladder' },
+      lock_no_combat: { type: 'boolean', description: 'THE NO-COMBAT LOCK, a lockdown that accepts ANY NO_COMBAT room (every ' +
+        'inn, shop, bank and hall): the keeper locks the character (assigned_room and confine_rooms) to the no-combat room ' +
+        'it stands in, re-deciding on every pass, so a character a person leaves in another inn stays THERE; outside a ' +
+        'no-combat room it walks to the nearest one and locks there. Default false; lockdown postures turn it on' },
       loot_eject: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         to: { type: 'array', items: { type: 'string' }, description: 'characters of ours to hand the sale pile to, in order of preference: a station first, then a courier' },
@@ -12936,6 +12940,7 @@ const TOOLS = [
         catch (e) { return { started: false, reason: `purse_lease refused: ${e.message}`, note: 'nothing was changed' }; }
       }
       if (a.kocatan_gate_clear !== undefined) p.policy.kocatanGateClear = a.kocatan_gate_clear !== false;
+      if (a.lock_no_combat !== undefined) p.policy.lockNoCombat = a.lock_no_combat === true;
       if (a.loot_eject !== undefined) {
         try { p.policy.lootEject = normalizeLootEject(a.loot_eject); }
         catch (e) { return { started: false, reason: `loot_eject refused: ${e.message}`, note: 'nothing was changed' }; }
