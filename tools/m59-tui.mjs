@@ -50,7 +50,8 @@ import * as webui from './m59-webui.mjs';
 // being the entry point; it used to bind the port on import.
 import * as maps from './m59-roomserve.mjs';
 import { commitmentOf, stepSelection, firstSelectable, allCommitted } from './m59-commitment.mjs';
-import { mergeTuiRow, fleetFreshness } from './m59-tui-state.mjs';
+import { mergeTuiRow, fleetFreshness, chaliceMarks, cupKey, zoneLabel } from './m59-tui-state.mjs';
+import { chargePossibilities, expendable } from './m59-rescue.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { liveDesk, desksIn, clientFolders, checkoutRoots } from './m59-plan-desk.mjs';
 import {
@@ -290,6 +291,42 @@ async function refresh() {
   // re-homes the selection every five seconds is unusable.
   if (!S.placed && S.rows.length) { S.sel = firstSelectable(S.rows, S); S.placed = true; }
   S.loading = false;
+  readCups().catch(() => {});
+}
+
+// HOW FULL EACH CUP IS, WHICH THE PACK DOES NOT SAY. The water level is only in the cup's
+// description (chalice.kod has one icon for every level), so it costs a `look_at` — a real
+// packet — and the board's five-second repaint must not become fleet traffic. So each cup is
+// looked at once, then again only when its holder changes room (a sip is a Rescue, and a
+// refill is a drop in a forest) or CUP_LOOK_MS has passed. One at a time, in the background:
+// a slow look never holds up the repaint, and until it answers the c is dim, not red.
+const CUP_LOOK_MS = Number(env.M59_TUI_CUP_LOOK_MS || 60_000);
+const cupLevels = new Map();             // cupKey(agent, id) -> { safe, room, at }
+let cupReading = false;
+async function readCups() {
+  if (cupReading) return;
+  cupReading = true;
+  try {
+    const now = Date.now(), held = new Set(), due = [];
+    for (const r of S.rows) for (const id of r.cups ?? []) {
+      const key = cupKey(r.agent, id), old = cupLevels.get(key);
+      held.add(key);
+      if (!old || old.room !== r.room_num || now - old.at > CUP_LOOK_MS) due.push({ r, id, key });
+    }
+    for (const key of [...cupLevels.keys()]) if (!held.has(key)) cupLevels.delete(key);
+    for (const { r, id, key } of due) {
+      const l = await call('look_at', { agent: r.agent, target: id }, 8000);
+      // AN ANSWER ABOUT ANOTHER OBJECT IS NOT AN ANSWER: look_at has been measured returning
+      // the previous call's object under that object's id. Retried in 15s rather than 5.
+      if (l?.__error || l?.id !== id) {
+        cupLevels.set(key, { safe: null, room: r.room_num, at: Date.now() - CUP_LOOK_MS + 15_000 });
+        continue;
+      }
+      const p = chargePossibilities(l.description ?? '');
+      cupLevels.set(key, { safe: p.length ? expendable(p) : null, room: r.room_num, at: Date.now() });
+    }
+  } finally { cupReading = false; }
+  if (S.view === 'list') draw();
 }
 
 async function loadHero(row) {
@@ -303,6 +340,10 @@ async function loadHero(row) {
 }
 
 // ------------------------------------------------------------------ views
+
+// The doing column is padded to a fixed width so Zone lines up at the far right; the widest
+// thing it holds is the staged line, 31 characters.
+const DOING_W = 33;
 
 function listView() {
   const L = [];
@@ -344,16 +385,22 @@ function listView() {
   }
   L.push('');
   L.push(c.dim('  ' + pad('character', 11) + pad('lvl', 4) + pad('health', 14) +
-               pad('mana', 13) + pad('vigor', 14) + pad('w/f', 5) + pad('spot', 7) +
-               pad('k/30m', 7) + 'doing'));
+               pad('mana', 13) + pad('vigor', 14) + pad('w/f/c+', 7) + pad('spot', 7) +
+               pad('k/30m', 7) + pad('doing', DOING_W) + 'Zone'));
 
+  const cups = chaliceMarks(S.rows, cupLevels);
   for (let i = 0; i < S.rows.length; i++) {
     const r = S.rows[i];
     const hp = num(r.health), mp = num(r.mana), vg = num(r.vigor_of);
     const spot = r.ap?.safe_spot
       ? (r.ap.safe_spot.works ? c.green('WALL ') : c.yellow('test '))
       : c.dim('  -  ');
-    const wf = (r.has_weapon ? c.green('w') : c.red('w')) + (r.has_food ? c.green('f') : c.red('f'));
+    // w/f/c+ — weapon, food, chalice, and + when this room refills a dropped cup.
+    // chaliceMarks in m59-tui-state.mjs says what each colour of c means.
+    const cup = cups.get(r.agent) ?? { cup: 'unknown', refill: false };
+    const wf = (r.has_weapon ? c.green('w') : c.red('w')) + (r.has_food ? c.green('f') : c.red('f')) +
+      ({ held: c.green, room: c.yellow, none: c.red }[cup.cup] ?? c.dim)('c') +
+      (cup.refill ? '+' : ' ');
     // THE ONE A CLIENT IS HOLDING. Worth marking because everything else on this row
     // reads as a fault when it is true: the keeper is deliberately stopped while a person
     // plays, so "no keeper", zero kills and a stalled activity are all correct and none
@@ -372,7 +419,7 @@ function listView() {
       pad(bar(hp.v, hp.max) + ' ' + c.dim(pad(r.health ?? '—', 7)), 14) +
       pad(bar(mp.v, mp.max, true) + ' ' + c.dim(pad(r.mana ?? '—', 6)), 13) +
       pad(bar(vg.v, vg.max) + ' ' + c.dim(pad(String(vg.v ?? '—'), 7)), 14) +
-      pad(wf, 5) + pad(spot, 7) +
+      pad(wf, 7) + pad(spot, 7) +
       // KILLS IN THE LAST HALF HOUR, not since the keeper started. The lifetime count is
       // reset by every restart and this fleet's keepers get restarted constantly, so it
       // largely measures uptime — a character with forty kills and none this hour looks
@@ -383,12 +430,13 @@ function listView() {
       // character that is deliberately walking a ring across the map is the same noise
       // the piloted exemption exists to remove.
       pad(k30 > 0 ? c.green(String(k30)) : (mine || held ? c.dim('—') : c.red('0')), 7) +
-      (mine ? c.cyan('YOU — ') : '') +
-      // THE COMMITMENT REPLACES THE ACTIVITY, because it IS the activity and it is the
-      // half worth reading. A keeper on a loot run reports "inert — a loot run is
-      // driving"; the operation is what the board should say.
-      (!mine && S.staged.includes(r.agent) ? c.yellow('staged — warm, out of the world')
-        : c.dim(cut((held ? held.label : r.ap?.activity) ?? '', mine ? 22 : 28)));
+      pad((mine ? c.cyan('YOU — ') : '') +
+        // THE COMMITMENT REPLACES THE ACTIVITY, because it IS the activity and it is the
+        // half worth reading. A keeper on a loot run reports "inert — a loot run is
+        // driving"; the operation is what the board should say.
+        (!mine && S.staged.includes(r.agent) ? c.yellow('staged — warm, out of the world')
+          : c.dim(cut((held ? held.label : r.ap?.activity) ?? '', mine ? 22 : 28))), DOING_W) +
+      zoneLabel(r);
     // Three different marks in one gutter: ▸ is where the cursor is, ◆ is where the
     // person is, and · is a character the fleet is using. They are independent — you can
     // be scrolled somewhere else entirely — so none must hide another. The committed mark
