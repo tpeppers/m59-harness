@@ -11940,6 +11940,12 @@ const TOOLS = [
         rest_seconds: { type: 'number', description: 'Short mana rest on a held wall while blocked by the reserve. Default 5; 0 never sits.' },
         spot: { type: ['object', 'null'], properties: { room: { type: 'number' }, row: { type: 'number' }, col: { type: 'number' } },
           description: 'Where to stand: in that room the drill walks to within 2 squares of {row, col} first, then practises standing still. null: wherever it stands.' },
+        buy_here: { type: ['object', 'boolean', 'null'], properties: {
+          casts: { type: 'number', description: 'Top each short reagent up to this many casts\' worth (plus what is kept). Default 10.' },
+          keep_shillings: { type: 'number', description: 'Never spend the purse below this. Default 0.' },
+          every_ms: { type: 'number', description: 'At most one buying visit per this long. Default 60000.' },
+          say: { type: 'array', items: { type: 'string' }, description: 'Words said first, for a counter that lists an item only after hearing it (e.g. "vials of solagh").' } },
+          description: 'BUY REAGENTS IN THE ROOM YOU ARE IN WHILE YOU TRAIN: when a listed spell is short of a reagent, buy it from a counter in this room, out of the purse; never walks. true = defaults; null = off.' },
       }, description: 'PRACTISE SPELLS AT THE DESK. While nothing needs it — no ticket, no errand, no journey, nothing swinging — a posted character casts one practice spell per gap_ms, never moving and never spending the mana or reagents its services need: the reserve is reserve_casts (2) x one cast of the dearest service it both offers (the chalice menu) and knows, from the kod spell catalogue — 60 mana on a desk that offers reveal. A cast that spends no mana was refused in silence and that spell is set aside. See tools/m59-deskpractice.mjs. null disables it' },
       farm_delivery: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, herbs_per_farmer: { type: 'number' },

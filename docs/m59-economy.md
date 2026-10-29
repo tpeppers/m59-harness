@@ -590,6 +590,25 @@ Measured 2026-10-10: "entroot berry" (singular) listed nothing; "entroot berries
 day ("no reply", no objects in the room), so his half is from the kod only.
 `substrate/fleetscripts/zheng-he-run.mjs` (local) says the trigger before buying.
 
+## Practice buys its own reagents where it stands (`buy_here`)
+
+`practice_spells.buy_here` (operator, 2026-10-29: *"using the shillings he has to buy reagents as needed ... a new 'buy
+reagents in the room you're in while you train' feature ... should be a standard feature"*). When a listed spell is
+short of a reagent, the drill buys it from a counter **in the room the character is standing in**, topping each short
+reagent up to `casts` casts' worth (default 10) out of the purse above `keep_shillings`, at most once per `every_ms`
+(60 s). `say: ["vials of solagh"]` covers a counter that lists an item only after hearing it (above). It never walks:
+a reagent nobody in the room sells is named (`not_sold_here`, once per ten minutes) and left for a person or a courier.
+`true` is the defaults. `node tools/m59-practice-buy-here-test.mjs` (28).
+
+Counted exactly, unlike `reagentOnHand`: Bless takes two plain **mushrooms** and two **sapphires** (bless.kod
+`ResetReagents`), and a substring count reads a pack of blue mushrooms as a Bless supply. Frisconar (Tos, 53) sells
+mushrooms and no sapphires; the First Royal Bank of Tos next door (54) and the Jasper and Barloque merchants sell
+sapphires.
+
+The guild chest is the OTHER supply line, and it belongs to town trips, not to the drill: `buyReagentsInTown` draws every
+want from the chests (`withdrawFromStockpile`, with `guild_wants`) before it spends a shilling, and `reagent_coop` sources
+the shopping list from the chest first. A drill in a lockdown room cannot walk to the hall, so it does not draw from it.
+
 ## Chalice farming: a free Rescue home instead of the walk
 
 Operator's plan, 2026-09-23. One named HOLDER carries the fleet's Chalice of the Rain at a

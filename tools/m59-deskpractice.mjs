@@ -138,7 +138,71 @@ export const PRACTICE_DEFAULTS = Object.freeze({
   // that's usually quiet enough for practice" ... "no reason not to add it as a feature"). `{ room, row, col }`: in that room
   // the drill first walks to within 2 squares of the spot, then practises standing still as before. null: where it stands.
   spot: null,
+  // BUY THE REAGENTS HERE (operator, 2026-10-29: "train Bless ... using the shillings he has to buy reagents as needed ...
+  // a new 'buy reagents in the room you're in while you train' feature ... should be a standard feature"). null: off.
+  // An object (or `true` for the defaults): when a listed spell is short of a reagent, the drill buys it from whoever in
+  // THE ROOM IT STANDS IN sells it, topping each short reagent up to `casts` casts' worth (on top of what is kept), out of
+  // the purse above `keep_shillings`, at most once per `every_ms`. `say`: words said first, for a counter that lists an
+  // item only after hearing its name (Frisconar's "vials of solagh", Tepal's "sapphires"). It never walks anywhere.
+  buy_here: null,
 });
+
+export const BUY_HERE_DEFAULTS = Object.freeze({ casts: 10, keep_shillings: 0, every_ms: 60_000, say: Object.freeze([]) });
+
+/** `buy_here`: null (off), or { casts, keep_shillings, every_ms, say }. Bad values are reported and keep the default. */
+export function normalizeBuyHere(v, problems = []) {
+  if (v == null || v === false) return null;
+  if (v === true) return { ...BUY_HERE_DEFAULTS, say: [] };
+  if (typeof v !== 'object' || Array.isArray(v)) { problems.push('buy_here must be true, null or an object'); return null; }
+  if (v.enabled === false) return null;
+  const out = { ...BUY_HERE_DEFAULTS, say: [] };
+  const range = { casts: [1, 200], keep_shillings: [0, 1_000_000], every_ms: [10_000, 3_600_000] };
+  for (const [k, x] of Object.entries(v)) {
+    if (k === 'enabled') continue;
+    if (k === 'say') { out.say = [].concat(x ?? []).map(w => String(w).trim()).filter(Boolean).slice(0, 5); continue; }
+    if (!range[k]) { problems.push(`buy_here.${k} is not a buy_here key, not applied`); continue; }
+    const n = Number(x);
+    if (Number.isFinite(n) && n >= range[k][0] && n <= range[k][1]) out[k] = n;
+    else problems.push(`buy_here.${k} must be a number in [${range[k][0]}, ${range[k][1]}]; kept ${BUY_HERE_DEFAULTS[k]}`);
+  }
+  return out;
+}
+
+/** The pack names one catalogue reagent goes by: "mushroom" is "mushroom"/"mushrooms", never "blue mushroom". */
+export function reagentForms(name) {
+  const w = String(name ?? '').toLowerCase().trim();
+  return new Set([w, `${w}s`, `${w}es`, w.replace(/y$/, 'ies'), w.replace(/tooth$/, 'teeth'), w.replace(/s$/, '')]);
+}
+export const isReagent = (itemName, reagent) => reagentForms(reagent).has(String(itemName ?? '').toLowerCase().trim());
+
+/**
+ * WHAT TO BUY HERE, BEFORE ANYTHING IS ASKED OF A COUNTER. Pure.
+ * For every listed spell this character knows, below 99, and not set aside: each of its reagents that is SHORT now (on hand
+ * less what is kept, under one cast) is topped up to `casts` casts' worth plus what is kept. Counted EXACTLY ("mushroom" is
+ * not "blue mushroom"), because a top-up that counts the wrong mushroom never buys the right one.
+ * @returns { wants: Map item -> amount, for: Map item -> [spell names] }
+ */
+export function buyHereWants({ practice, spells = [], exact = () => 0, reserve = { reagents: {} }, refusedUntil = new Map(),
+                               now = 0, catalogue = loadCatalogue() } = {}) {
+  const wants = new Map(), forSpell = new Map();
+  const cfg = practice?.buy_here;
+  if (!cfg) return { wants, for: forSpell };
+  const byName = new Map(spells.map(s => [String(s.name).toLowerCase(), s]));
+  for (const want of practice.spells ?? []) {
+    const s = byName.get(want.name);
+    if (!s || Number(s.ability) >= 99 || (refusedUntil.get(want.name) ?? 0) > now) continue;
+    const cost = spellCost(want.name, catalogue);
+    if (!cost?.reagents?.length) continue;
+    const kept = item => (reserve.reagents?.[item] || 0) + (practice.keep?.[item] || 0);
+    for (const [item, n] of cost.reagents) {
+      if (exact(item) - kept(item) >= n) continue;
+      const amount = cfg.casts * n + kept(item) - exact(item);
+      if (amount > (wants.get(item) ?? 0)) wants.set(item, amount);
+      forSpell.set(item, [...(forSpell.get(item) ?? []), want.name]);
+    }
+  }
+  return { wants, for: forSpell };
+}
 
 /** The `keep` map: pack name -> count, lower-case. Bad entries are reported and dropped. */
 export function normalizeKeep(v, problems = []) {
@@ -253,6 +317,7 @@ export function normalizePractice(cfg) {
       continue;
     }
     if (k === 'keep') { out.keep = normalizeKeep(v, out.problems); continue; }
+    if (k === 'buy_here') { out.buy_here = normalizeBuyHere(v, out.problems); continue; }
     if (k === 'spot') {
       if (v == null) { out.spot = null; continue; }
       const room = Number(v?.room), row = Number(v?.row), col = Number(v?.col);
