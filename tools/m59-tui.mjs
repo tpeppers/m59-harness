@@ -128,6 +128,13 @@ const c = {
   cyan: s => `${ESC}36m${s}${ESC}0m`,
   inv: s => `${ESC}7m${s}${ESC}0m`,
 };
+// A BAND ACROSS A WHOLE ROW, under whatever colours are already on it. Every colour above ends
+// in a full reset, which would end a single wrapping highlight at the first coloured cell, so
+// the background is put back after each reset. A background rather than inverse, so a red w
+// stays red; and padded to the terminal's width, so the band reaches the edge.
+const BAND = ESC + '48;5;238m';
+const band = (s, width) =>
+  BAND + s.replaceAll(ESC + '0m', ESC + '0m' + BAND) + ' '.repeat(Math.max(0, width - wide(s))) + ESC + '0m';
 // Width without the escape sequences, so padding lines up once colour is applied.
 const wide = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
 const pad = (s, n) => s + ' '.repeat(Math.max(0, n - wide(s)));
@@ -173,6 +180,7 @@ const S = {
   // the world. Empty means A has nothing to do, and it is not offered.
   staged: [],
   startAllArmedAt: 0,    // A asks twice: the first press arms, a second within 5s logs them on
+  rowHighlight: true,    // ←→ toggles the band across the whole selected row; the ▸ is there either way
 };
 
 // WHICH PORT IS WHOSE KEEPER — ASKED, NEVER COMPUTED.
@@ -443,7 +451,9 @@ function listView() {
     // is the faintest because it is the one that means "not here".
     const gutter = i === S.sel ? c.inv(mine ? '◆ ' : held ? '! ' : '▸ ')
                  : mine ? c.cyan('◆ ') : held ? c.dim('· ') : '  ';
-    L.push(gutter + line);
+    L.push(i === S.sel && S.rowHighlight
+      ? gutter + band(line, (stdout.columns || 120) - wide(gutter) - 1)
+      : gutter + line);
   }
   L.push('');
   // WHAT X DOES DEPENDS ON WHERE THE CURSOR IS, so the footer says which of the two it is
@@ -457,7 +467,7 @@ function listView() {
       ? c.bold(c.yellow('X')) + c.dim(' TAKE ') + c.yellow(cur.character ?? cur.agent) +
         c.dim(' off ' + cut(curHeld.label ?? 'fleet work', 24))
       : c.bold(c.yellow('X')) + c.dim(' leave override');
-  L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') + c.magenta('V pvp rec') + c.dim(' · ') +
+  L.push(c.dim('  ↑↓/jk move · ←→ highlight · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') + c.magenta('V pvp rec') + c.dim(' · ') +
          c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') + c.cyan('D DBFST') + c.dim(' · ') +
          c.cyan('G geometry') +
          (S.staged.length ? c.dim(' · ') + c.bold(c.yellow('A start all')) : '') +
@@ -1599,6 +1609,8 @@ function onKey(str, key) {
         S.status = c.yellow('every character is on fleet work — press X to reach them anyway');
       S.sel = next;
     }
+    // ←→ ONLY CHANGE HOW THE CURSOR LOOKS: the ▸ alone, or the ▸ and a band across the row.
+    else if (key.name === 'left' || key.name === 'right') S.rowHighlight = !S.rowHighlight;
     else if (key.name === 'return') {
       S.hero = S.rows[S.sel]; S.view = 'hero'; S.status = '';
       loadHero(S.hero).then(draw);
