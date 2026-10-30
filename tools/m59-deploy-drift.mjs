@@ -96,3 +96,26 @@ export function strandedCommits({ prodHead, trunkHead, remoteRef = null, trunkRe
   if (vsRemote === null) return bySubject(vsTrunk);
   return bySubject(vsTrunk.filter(sha => vsRemote.includes(sha)));
 }
+
+// AN UNTRACKED FILE THE TAG NOW TRACKS IS ADOPTED, NOT A COLLISION — WHEN IT IS THE SAME FILE.
+//
+// `--verify` names untracked files in prod as drift, and the fix it asks for is to commit them on
+// main. But `git checkout <tag>` then refuses ("untracked working tree files would be overwritten",
+// even when the bytes are identical), so landing prod-only work used to break the very next deploy.
+// Measured 2026-10-30: eleven such files, the panic-chalice tool among them, committed nowhere.
+//
+// So before the checkout: an untracked path the tag tracks whose content hashes to the tag's own
+// blob (`git hash-object`, which applies the same clean filters git would) is removed and checked
+// out again as the tracked copy — a no-op on disk. One that DIFFERS is a real collision: somebody
+// changed the prod copy after it was committed, and the deploy refuses rather than choosing.
+// Pure: `tracked` maps path -> the tag's blob, `hashOf(path)` is the working file's blob or null.
+export function adoptableUntracked({ untracked = [], tracked = new Map(), hashOf }) {
+  const adopt = [], conflict = [];
+  for (const path of untracked) {
+    const want = tracked.get(path);
+    if (!want) continue;                           // not in the tag: stays untracked, harmless
+    const have = hashOf(path);
+    (have && have === want ? adopt : conflict).push(path);
+  }
+  return { adopt, conflict };
+}

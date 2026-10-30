@@ -24,7 +24,7 @@
 // RUNS ON IMPORT — same reason `nextDeployTag` was carved out after it cut a rollback that
 // rolled forward. `cherry` is injected, so every case below is a fixture and none of them can
 // reach this machine's git.
-import { strandedCommits } from './m59-deploy-drift.mjs';
+import { strandedCommits, adoptableUntracked } from './m59-deploy-drift.mjs';
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -175,6 +175,20 @@ console.log('\nthe tool is wired to this module rather than keeping its own copy
      !/prod is \$\{s\.ahead\} commit\(s\) AHEAD/.test(src));
   // A second opinion nothing calls is not a second opinion.
   ok('and the subject second opinion is actually connected', /subjectSeen:/.test(src));
+  ok('and the checkout adopts identical untracked files first', /adoptableUntracked\(\{/.test(src));
+}
+
+console.log('\nan untracked file the tag now tracks is adopted when identical, refused when not');
+{
+  const tracked = new Map([['tools/a.mjs', 'b1'], ['tools/b.mjs', 'b2']]);
+  const blobs = { 'tools/a.mjs': 'b1', 'tools/b.mjs': 'CHANGED', 'substrate/x.mjs': 'b9' };
+  const r = adoptableUntracked({ untracked: ['tools/a.mjs', 'tools/b.mjs', 'substrate/x.mjs'], tracked,
+                                 hashOf: p => blobs[p] ?? null });
+  eq('identical content is adopted', r.adopt, ['tools/a.mjs']);
+  eq('a prod copy edited after the commit is a collision, never overwritten', r.conflict, ['tools/b.mjs']);
+  eq('an unreadable file is a collision too',
+     adoptableUntracked({ untracked: ['tools/a.mjs'], tracked, hashOf: () => null }).conflict, ['tools/a.mjs']);
+  eq('nothing untracked, nothing to do', adoptableUntracked({ tracked, hashOf: () => 'b1' }), { adopt: [], conflict: [] });
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

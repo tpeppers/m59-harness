@@ -28,7 +28,7 @@
 // one choice, which is why this tool refuses branches rather than merely preferring tags.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HARNESS = process.env.M59_HARNESS || process.cwd();
@@ -37,7 +37,7 @@ const TRUNK = process.env.M59_TRUNK || 'main';
 
 import { nextDeployTag, lightweightTagProblem } from './m59-deploytag.mjs';
 
-import { strandedCommits } from './m59-deploy-drift.mjs';
+import { strandedCommits, adoptableUntracked } from './m59-deploy-drift.mjs';
 import { holdsIn, holdRefusals } from './m59-release-consent.mjs';
 import { checkSubstrate, formatCheck } from './m59-substrate-archive.mjs';
 const git = (repo, ...args) => {
@@ -555,6 +555,28 @@ if (mode === '--cut') {
     };
     step(`tag ${tag} at ${s.trunkHead.slice(0, 8)}`, HARNESS, ['tag', '-a', tag, s.trunkRef, '-m', `deploy ${day}`]);
     step('fetch the trunk into prod', PROD, ['fetch', HARNESS, TRUNK]);
+    // Untracked files the tag now tracks (prod-only work landed on main) would make the checkout
+    // refuse even when identical: adopt the identical ones, refuse on any that differ.
+    {
+      const untracked = (git(PROD, 'ls-files', '--others', '--exclude-standard') ?? '').split('\n').filter(Boolean);
+      const tracked = new Map();
+      if (untracked.length) for (const l of (git(PROD, 'ls-tree', '-r', tag, '--', ...untracked) ?? '').split('\n')) {
+        const m = /^\d+ blob ([0-9a-f]+)\t(.+)$/.exec(l);
+        if (m) tracked.set(m[2], m[1]);
+      }
+      const { adopt, conflict } = adoptableUntracked({ untracked, tracked,
+        hashOf: p => git(PROD, 'hash-object', '--path', p, '--', p) });
+      if (conflict.length) {
+        console.error(`FAILED: ${tag} tracks ${conflict.length} file(s) prod holds untracked with DIFFERENT content:`);
+        for (const p of conflict) console.error(`  ${p}`);
+        console.error('Land the prod copy on main (or move it aside) and cut again; nothing was overwritten.');
+        process.exit(1);
+      }
+      if (adopt.length) {
+        console.log(`\n-> adopt ${adopt.length} untracked file(s) ${tag} now tracks, byte-identical:`);
+        for (const p of adopt) { console.log(`  ${p}`); unlinkSync(join(PROD, p)); }
+      }
+    }
     step(`move prod onto ${tag}`, PROD, ['checkout', tag]);
     // THE PIN COMES AFTER THE CHECKOUT, because promote.mjs reads the prod HEAD -
     // pinning first would faithfully record the version being replaced.
