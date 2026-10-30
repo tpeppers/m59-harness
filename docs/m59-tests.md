@@ -1320,7 +1320,7 @@ the records it describes.
   written only by the keeper it names and never for a monster or a fleetmate, that "of the The Second
   Swines" still parses, that a ledger row naming the agent and one naming the character are one death,
   that alarms alone are never a battle, that `finished` does not stretch a 0.49 s fight to 30 s, and
-  that a test fake without a real Recorder writes nothing),  `node tools/m59-pvp-telemetry-test.mjs` (10 — **what each of ours DID in a fight**: that every cast is
+  that a test fake without a real Recorder writes nothing),  `node tools/m59-pvp-replay-test.mjs` (4 — **a battle replayed over the room**: that a hit on us is a tier and an HP range scaled to our max HP and the faction-shield cap, that our hits assume an enemy of 88+ HP, that safety, karma and fire-wall lines get their own categories, that the windowed reader returns exactly a time slice of a file it never reads whole, that a trail body is named after the one of ours logged standing on it, and that the page's embedded data cannot close its script),  `node tools/m59-pvp-telemetry-test.mjs` (10 — **what each of ours DID in a fight**: that every cast is
   joined to the reply its caster heard (landed, already in effect, failed, no mana) and a cast with none
   says `no reply heard`, that an old fight's opener rows stand in as casts, that a robe swap and a broken
   armour are counted, that a third-person line is kept once with who heard it while "your wand" stays per

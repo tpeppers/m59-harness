@@ -316,6 +316,39 @@ export function collectRoom(roomNum, { fleets = null } = {}) {
   };
 }
 
+/**
+ * Just the room's shape — walls and which squares stand and walk — for a page that draws something
+ * else on top of it (the PvP replay, m59-pvp-replay-page.mjs). Same modules as collectRoom, without
+ * the routes, ledgers and step masks, so it is cheap enough to draw five rooms for one battle.
+ */
+let OUTLINE_WORLD = null;
+export function roomOutline(roomNum) {
+  OUTLINE_WORLD ??= readJson(sub('m59-map.json'));
+  const room = OUTLINE_WORLD?.rooms?.[String(roomNum)];
+  if (!room) return null;
+  const rows = room.rows, cols = room.cols;
+  const geo = sharedRoomGeometry(room);
+  const walkable = [], standable = [];
+  for (let r = 1; r <= rows; r++) {
+    let w = '', st = '';
+    for (let c = 1; c <= cols; c++) {
+      w += geo.walkable(r, c) ? '1' : '0';
+      let ok = false; try { ok = !!geo.standable(r, c); } catch {}
+      st += ok ? '1' : '0';
+    }
+    walkable.push(w); standable.push(st);
+  }
+  // Client/BSP units are 1024 to the square (clientd3d/drawdefs.h:42). collectRoom GUESSES the scale
+  // from the largest wall coordinate, which an outdoor room's far scenery throws off (Avar Village,
+  // 2154, guesses 2048), so this fixes the scale and keeps only walls near the walkable area.
+  const U = 1024, lo = -2 * U, hiX = (cols + 2) * U, hiY = (rows + 2) * U;
+  const inside = (x, y) => x >= lo && y >= lo && x <= hiX && y <= hiY;
+  const walls = (room.roo?.walls || []).map(w => w.slice(0, 4)).filter(w => inside(w[0], w[1]) && inside(w[2], w[3]));
+  const unitsPerSquare = U;
+  return { num: Number(roomNum), name: room.name ?? null, rows, cols, walls, unitsPerSquare, walkable, standable,
+           exits: (room.edgeExits || []).map(e => ({ row: e.row ?? null, col: e.col ?? null, to: e.to ?? e.room ?? null })) };
+}
+
 // ---------------------------------------------------------------------------
 // The page. One file, no network, no dependencies — the same rule as every tool here.
 // ---------------------------------------------------------------------------
@@ -1086,10 +1119,12 @@ resize(); fit();
 </script>
 `;
 
-export function renderPage(data) {
+export function renderPage(data, { aside = '' } = {}) {
   const title = data.room.name ? `${data.room.name} (${data.room.num})` : `Room ${data.room.num}`;
   return PAGE
     .replace('__TITLE__', title.replace(/[<>&]/g, ''))
+    // A section another tool contributes to the side panel (the geometry server's "PvP here").
+    .replace('<section id="findings">', aside + '<section id="findings">')
     // Split the closing tag so a name in the data can never end the script element early.
     .replace('__DATA__', JSON.stringify(data).replace(/<\//g, '<\\/'));
 }

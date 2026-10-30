@@ -32,6 +32,8 @@ function dur(ms) {
   const m = Math.floor(s / 60);
   return m < 60 ? `${m} m ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} m`;
 }
+// The geometry server (tools/m59-roomserve.mjs) draws each battle's replay. Same machine, loopback.
+const REPLAY_BASE = process.env.M59_REPLAY_BASE ?? 'http://localhost:8977';
 const offset = ms => `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(3)}s`;
 
 const RESULT = {
@@ -169,6 +171,7 @@ function battleHtml(b, i) {
       <span class="badge" style="background:${colour}">${esc(label)}</span>
       <span class="when">${esc(utc(b.start))} <span class="dim">· ${esc(ago(b.start))}</span></span>
       <span class="dur">${esc(dur(b.duration_ms))}</span>
+      <a class="replay" href="${esc(REPLAY_BASE)}/replay/${esc(encodeURIComponent(b.id))}" title="Walk through this battle over the rooms it happened in (geometry server)">▶ replay over geometry</a>
       ${rec ? '<span class="badge recon" title="Rebuilt by hand from evidence that has since rotated away">reconstructed</span>' : ''}
     </div>
     <div class="vs">vs ${foes}</div>
@@ -218,6 +221,7 @@ export function renderPvp({ days = 7, gapMs = DEFAULT_GAP_MS, characters = null,
   .battle .bhead { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline; }
   .badge { color:#fff; font-size:.72rem; font-weight:600; padding:.1rem .55rem; border-radius:999px;
            text-transform:uppercase; letter-spacing:.05em; }
+  a.replay { font-size:.82rem; color:var(--accent); text-decoration:none; font-weight:600; }
   .badge.recon { background:transparent; color:var(--edge); border:1px solid var(--edge); }
   .when { font-weight:600; } .dur { color:var(--dim); font-variant-numeric:tabular-nums; }
   .vs { margin:.35rem 0 .1rem; } .where { font-size:.85rem; }
