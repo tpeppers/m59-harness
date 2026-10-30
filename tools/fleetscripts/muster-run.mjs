@@ -24,10 +24,38 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verify, supply, rest, call as rpc } from '../m59-fleetscript.mjs';
+import { verify, rest, call as rpc } from '../m59-fleetscript.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { accepts, refusal } from '../m59-hazards.mjs';
-import { mealsOf } from '../m59-muster-lib.mjs';
+import { mealsOf, satisfies } from '../m59-muster-lib.mjs';
+import { itemClassIndex, resolveItemClass } from '../m59-itemclass.mjs';
+import { foodValue } from '../m59-items.mjs';
+
+// HAND-OVERS ARE TOP-UPS, SO A PLAN IS SAFE TO RUN TWICE. Operator, 2026-10-29: "would it cause problems to manually
+// rearrange reagents before calling the muster? or is the muster like idempotent?" It was not: each hand-over moved
+// "N loaves from A to B", so a second run of one plan gave twice, and a hand rearrangement between preflight and run
+// was given on top of. Now each one first reads the receiver and gives only what it is still SHORT of its need for
+// that key (meals by the game's Food tree, a reagent by kod class) -- at most the planned amount -- and re-reads to
+// say what actually moved. Run it again and it moves nothing.
+let INDEX = null;
+const classOf = n => { INDEX ??= itemClassIndex(); const r = resolveItemClass(String(n), INDEX); return r.ok ? r.class : String(n); };
+const isFood = n => !!foodValue(n);
+const holding = (items, key) => (items ?? []).filter(i => satisfies(i, key, { classOf, isFood }))
+  .reduce((n, i) => n + Math.max(1, Number(i.amount) || 1), 0);
+async function topUp(call, plan, g, from) {
+  const need = (plan.needs?.[g.to] ?? []).find(n => n.key === g.key)?.amount;
+  const read = async () => (await call('inventory', { agent: g.to }, 60_000).catch(() => null))?.items ?? null;
+  const before = await read();
+  if (!before) return { ok: false, why: `could not read ${g.to}'s pack` };
+  const short = Math.max(0, (Number.isFinite(need) ? need : Infinity) - holding(before, g.key));
+  const n = Math.min(g.amount, short);
+  if (!n) return { ok: true, moved: 0, why: `${g.to} already holds its ${need} ${g.key}` };
+  const r = await call('supply', { from, to: g.to, what: g.name, amount: n, stationary: true, who_travels: 'neither' }, 180_000)
+    .catch(e => ({ error: e.message }));
+  const after = await read();
+  const moved = after ? holding(after, g.key) - holding(before, g.key) : 0;
+  return moved > 0 ? { ok: true, moved } : { ok: false, moved: 0, why: r?.error ?? r?.reason ?? 'nothing moved' };
+}
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SUB = process.env.M59_SUBSTRATE || join(REPO, 'substrate');
@@ -123,7 +151,7 @@ export const script = {
     const t = plan.target;
     const isPart = plan.participants.includes(agent);
     const gives = plan.transfers.filter(x => x.kind === 'pack' && x.holder === agent && !x.hops);
-    const handOver = g => ({ ...supply(agent, g.to, g.name, { amount: g.amount, exact: true }), optional: true });
+    const handOver = g => ({ ...verify(async ({ call }) => topUp(call, plan, g, agent), `top up ${g.to}: up to ${g.amount} ${g.name}`), optional: true });
     // A giver hands over FIRST, before anything of its own can fail and unwind it, and then settles the barrier, so a
     // receiver never waits on a giver that stopped for some other reason.
     const steps = [...gives.map(handOver)];
@@ -135,14 +163,9 @@ export const script = {
     }, 'survival on and the fight floor'));
     if (isPart) steps.push(rest({ health: t.health, vigor: t.vigor }));
     // THE SECOND CHANCE. A hand-over refused for room (a full pack) usually clears once the receiver has eaten; so each
-    // of this giver's hand-overs is checked again after the rest, and only the short part is sent.
+    // of this giver's hand-overs is tried again after the rest -- the same top-up, so it sends only what is still short.
     if (gives.length) steps.push({ ...verify(async ({ call }) => {
-      for (const g of gives) {
-        const inv = await call('inventory', { agent: g.to }, 60_000).catch(() => null);
-        const have = (inv?.items ?? []).filter(i => String(i.name).toLowerCase() === g.name.toLowerCase()).reduce((n, i) => n + (Number(i.amount) || 1), 0);
-        if (have >= g.amount) continue;
-        await call('supply', { from: agent, to: g.to, what: g.name, amount: g.amount - have, stationary: true, who_travels: 'neither' }, 180_000).catch(() => null);
-      }
+      for (const g of gives) await topUp(call, plan, g, agent);
       return true;
     }, 'hand-overs, second chance'), optional: true });
     if (isPart) steps.push(verify(async ({ call }) => {
