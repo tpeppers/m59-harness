@@ -34,6 +34,26 @@
         { "name": "lever-east", "row": 26, "col": 9, "_what": "one square north of the lever at r27c9" },
         { "name": "lever-hall", "row": 25, "col": 8, "_what": "in front of the final door; where everyone not pulling waits" }
       ]
+    },
+    "2154": {
+      "_room": "Avar Village (Ko'catan)",
+      "_source": "plGenerators in kod/object/active/holder/room/monsroom/kcforest/ke4.kod (Constructed), read 2026-10-29 at Meridian59 fe93b6c6. Eleven generators, [row,col] per monsroom.kod:218-219; avars, chieftains and shamans 40/35/25, capped at 12. The mana node appears at NODE_ROW/NODE_COL 34,52.",
+      "_why": "The room has ONE exit (west edge, r16c1, to 2144) and so had ZERO baked routes: a one-exit room has no exit pairs, and the bake only planned between exits. Every walk to or from a generator was planned live on the coarse grid, and this room's obstacles are sector-height ledges rather than full-height walls: of 752 neighbouring standable pairs the mover refuses in at least one direction, 617 have floors more than 384 client units apart (measured 2026-10-29). 2026-10-29 village run: 15 jams of 5-34 s at the neck c7-12 in front of the door. Declared, every generator has a baked route from the door and one back (24 routes, 0 unproved pivot legs); the two directions differ because a ledge you drop off is not one you climb. Generator-to-generator is baked too except five pairs the BFS reaches but cannot spell on the mover (53,46/53,56/46,66/33,71 -> 22,67 and 70,20 -> 14,25); for those railAcross boards whichever other head has a line to the target.",
+      "points": [
+        { "name": "gen-n-e",    "row": 13, "col": 54 },
+        { "name": "gen-n-mid",  "row": 20, "col": 39 },
+        { "name": "gen-mid",    "row": 34, "col": 39 },
+        { "name": "gen-mid-s",  "row": 44, "col": 37 },
+        { "name": "gen-s",      "row": 53, "col": 46 },
+        { "name": "gen-s-e",    "row": 53, "col": 56 },
+        { "name": "gen-e",      "row": 46, "col": 66 },
+        { "name": "gen-far-e",  "row": 33, "col": 71 },
+        { "name": "gen-ne",     "row": 22, "col": 67 },
+        { "name": "gen-far-sw", "row": 70, "col": 20 },
+        { "name": "gen-nw",     "row": 14, "col": 25 },
+        { "name": "mana-node",  "row": 34, "col": 52,
+          "_what": "NODE_AVAR, which appears only after offerings or slaughter (ke4.kod OfferingCheck). Also where the food offerings are judged: rows 32-36, cols 48-53." }
+      ]
     }
   }
 }

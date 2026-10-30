@@ -1884,6 +1884,75 @@ console.log('\nroom 2600 — the crypt in Marion, over the gully to the levers')
   }
 }
 
+// ------------------------------------------ a room with one door has no exit pairs
+//
+// Avar Village (2154), 2026-10-29. One exit, the west edge at r16c1, so the bake — which
+// plans between exits — had nothing to pair it with and the room carried ZERO routes. Every
+// walk to a generator and back was planned live on the coarse grid, and this room's
+// obstacles are sector-height ledges rather than walls: of 752 neighbouring standable pairs
+// the mover refuses, 617 have floors more than 384 client units apart. The village run that
+// day jammed fifteen times at the neck in front of the door.
+//
+// The eleven generators are declared in substrate/m59-waypoints.json from ke4.kod's
+// plGenerators, [row,col]. Pinned: each has a route from the door and one back, every step of
+// both lands on the mover's predicate, and `railAcross` boards a line from a generator
+// square — where before the only head in the room was the door itself.
+console.log('\nroom 2154 — Avar Village, every generator to the only door and back');
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const raw = realMap?.rooms?.['2154'] ?? realMap?.rooms?.[2154];
+  const geometry = raw ? sharedRoomGeometry(raw) : null;
+  if (!geometry?.collisionReady) {
+    skip('room 2154 generator rails are baked from real collision geometry', 'no geometry');
+  } else {
+    const DOOR = '16,1';
+    const GENERATORS = [[13, 54], [20, 39], [34, 39], [44, 37], [53, 46],
+                        [53, 56], [46, 66], [33, 71], [22, 67], [70, 20], [14, 25]];
+    const baked = bakeRoom(raw);
+    const exits = baked.anchors.filter(a => a.kind !== 'waypoint');
+    ok('the room has exactly one exit, the west edge at r16c1 — why it had no routes',
+       exits.length === 1 && `${exits[0].row},${exits[0].col}` === DOOR, JSON.stringify(exits));
+    const walk = (key) => {
+      const p = baked.routes?.[key];
+      if (!p) return null;
+      const [fr, fc] = key.split('>')[0].split(',').map(Number);
+      let prev = { row: fr, col: fc };
+      const refused = [];
+      for (const s of replay(fr, fc, p)) {
+        if (!geometry.declaredFallJumps(prev.row, prev.col).some(j => j.row === s.row && j.col === s.col)
+            && !geometry.moverStepLands(prev.row, prev.col, s.row, s.col))
+          refused.push(`${prev.row},${prev.col}>${s.row},${s.col}`);
+        prev = s;
+      }
+      return { refused, end: `${prev.row},${prev.col}` };
+    };
+    for (const [row, col] of GENERATORS) {
+      const gen = `${row},${col}`;
+      const out = walk(`${DOOR}>${gen}`), back = walk(`${gen}>${DOOR}`);
+      ok(`r${row}c${col}: a route from the door and one back, every step on the mover`,
+         out && back && !out.refused.length && !back.refused.length
+           && out.end === gen && back.end === DOOR,
+         JSON.stringify({ out, back }));
+    }
+
+    const status = attachStepMasks(realMap);
+    const { activeRoutes } = await import('./m59-routes.mjs');
+    const table = status?.ok ? activeRoutes() : null;
+    if (!table?.rooms?.['2154']?.routes?.[`53,46>${DOOR}`]) {
+      skip('railAcross boards a 2154 generator line', 'the routing table on disk has no 2154 generator route — rebake 2154');
+    } else {
+      const { sessionWalkPrototype } = await import('./m59-session-walk.mjs');
+      const railAcross = sessionWalkPrototype({}).railAcross;
+      const board = (row, col, to) => railAcross.call(
+        { world: { room: { num: 2154 }, geometry }, client: { self: { row, col } } }, to);
+      const toDoor = board(53, 46, { row: 16, col: 1 });
+      const end = toDoor?.squares?.at(-1);
+      ok('from the south generator r53c46 a line to the door is boarded, and ends on it',
+         end?.row === 16 && end?.col === 1, JSON.stringify(toDoor && { from: toDoor.from, end }));
+    }
+  }
+}
+
 // ------------------------------------------ a slide that stops on the far side of a wall
 //
 // Marion (200), 2026-09-30. A thin raised wall (2240 on 1600) runs down the crypt yard's east
