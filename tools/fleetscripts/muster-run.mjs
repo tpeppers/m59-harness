@@ -32,6 +32,27 @@ import { mealsOf } from '../m59-muster-lib.mjs';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SUB = process.env.M59_SUBSTRATE || join(REPO, 'substrate');
 const PLANS = new Map();
+// THE DELIVERY BARRIER. Every body of one run is driven by this process in parallel, and a receiver's own steps finish
+// in seconds (a rested body rests no further) -- so on the 2026-10-29 rehearsal eight receivers read "0/4 meals" before
+// their givers had handed anything over. Each giver settles its hand-overs here when they are done (delivered or not);
+// each receiver's check waits for every hand-over addressed to it, bounded, and only then reads its pack.
+const DELIVERIES = new Map();          // `${muster}:${to}` -> [promise]
+const settleOf = new Map();            // `${muster}:${from}` -> resolve()
+function barrierFor(muster, plan) {
+  if (DELIVERIES.has(`${muster}:*`)) return;
+  DELIVERIES.set(`${muster}:*`, true);
+  const byGiver = new Map();
+  for (const t of plan.transfers.filter(x => x.kind === 'pack' && x.holder && !x.hops)) {
+    if (!byGiver.has(t.holder)) {
+      let done; const promise = new Promise(r => { done = r; });
+      byGiver.set(t.holder, promise); settleOf.set(`${muster}:${t.holder}`, done);
+    }
+    const key = `${muster}:${t.to}`;
+    DELIVERIES.set(key, [...(DELIVERIES.get(key) ?? []), byGiver.get(t.holder)]);
+  }
+}
+const deliveriesTo = (muster, agent, ms) =>
+  Promise.race([Promise.all(DELIVERIES.get(`${muster}:${agent}`) ?? []), new Promise(r => setTimeout(r, ms))]);
 const truthy = v => v === true || /^(true|1|yes)$/i.test(String(v ?? ''));
 const list = v => String(v ?? '').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -46,6 +67,36 @@ function loadPlan(muster, maxAgeMin) {
   return plan;
 }
 
+// SETTLE, before anybody is leased: retire the jobs over the participants, and take each out of its lockdown to a hold.
+// ONE FUNCTION FOR BOTH DOORS -- the fleet REPL's `resolveAgents` and FleetScratch's `setup` (a pad's pre-run hook;
+// FleetScratch never calls resolveAgents) -- and SAFE TO RUN TWICE: a unit already out of a posture is skipped, and a
+// retired job is no longer live, so a second settle finds nothing to do rather than failing.
+async function settle(p, log = console.log) {
+  const plan = loadPlan(p.muster, Number(p.max_age_min ?? 15));
+  const missing = (plan.hazards_to_accept ?? []).filter(h => !accepts(list(p.accept), h));
+  if (missing.length) throw new Error(missing.map(h => refusal(h, `muster ${p.muster}`)).join(' | '));
+  const retire = plan.settle.filter(x => x.cancel_jobs.length).map(x => x.agent);
+  if (retire.length) {
+    const r = await rpc('job_cancel', { agents: retire, by: `muster-run:${p.muster}`, why: `muster ${p.muster}: taking these characters` }, 60_000);
+    log(`  settle: retired ${r?.cancelled?.length ?? 0} job(s): ${(r?.cancelled ?? []).map(j => `${j.name} (was ${j.was})`).join(', ') || '-'}`);
+  }
+  const byPosture = new Map();
+  for (const x of plan.settle) for (const name of x.release ?? []) byPosture.set(name, [...(byPosture.get(name) ?? []), x.agent]);
+  if (byPosture.size) {
+    const { release, readSave } = await import('../m59-posture.mjs');
+    for (const [name, wanted] of byPosture) {
+      const still = wanted.filter(a => readSave(fleetName(), name)?.units?.[a]);
+      if (!still.length) { log(`  settle: ${name}: already out of it`); continue; }
+      const r = await release(name, { fleet: fleetName(), only: still, toHold: true, by: `muster-run:${p.muster}`, call: rpc, log: m => log(`  settle: ${m}`) });
+      if (r.failed?.length) throw new Error(`${name}: release to a hold failed for ${r.failed.map(f => f.agent).join(', ')}`);
+    }
+  }
+  PLANS.set(p.muster, plan);
+  return plan;
+}
+/** Who a plan drives: its participants and every giver (a giver who stays home still hands over). */
+export const planAgents = plan => [...new Set([...plan.participants, ...plan.transfers.filter(t => t.kind === 'pack' && t.holder).map(t => t.holder)])];
+
 export const script = {
   name: 'muster-run',
   describe: 'Fire a preflight plan (m59-preflight.mjs): settle jobs and lockdowns, hand over supplies, rest, check, then run the muster\'s operation.',
@@ -56,28 +107,11 @@ export const script = {
     max_age_min: { type: 'number', default: 15, describe: 'refuse a plan older than this' },
     launch:      { default: 'true', describe: 'true: hand the ready ones to the muster\'s operation afterwards' },
   },
+  // FleetScratch's door: agents come from the `go` line (m59-preflight prints it), the settle runs here.
+  setup: [async (ctx) => { await settle(ctx.params, ctx.say); }],
   async resolveAgents(p) {
-    const plan = loadPlan(p.muster, Number(p.max_age_min));
-    const missing = (plan.hazards_to_accept ?? []).filter(h => !accepts(list(p.accept), h));
-    if (missing.length) throw new Error(missing.map(h => refusal(h, `muster ${p.muster}`)).join(' | '));
-    const givers = [...new Set(plan.transfers.filter(t => t.kind === 'pack' && t.holder).map(t => t.holder))];
-    const agents = [...new Set([...plan.participants, ...givers])];
-    // SETTLE, before the runner leases anybody.
-    const retire = plan.settle.filter(s => s.cancel_jobs.length).map(s => s.agent);
-    if (retire.length) {
-      const r = await rpc('job_cancel', { agents: retire, by: `muster-run:${p.muster}`, why: `muster ${p.muster}: taking these characters` }, 60_000);
-      console.log(`  settle: retired ${r?.cancelled?.length ?? 0} job(s): ${(r?.cancelled ?? []).map(j => `${j.name} (was ${j.was})`).join(', ') || '-'}`);
-    }
-    const byPosture = new Map();
-    for (const s of plan.settle) for (const name of s.release ?? []) byPosture.set(name, [...(byPosture.get(name) ?? []), s.agent]);
-    if (byPosture.size) {
-      const { release } = await import('../m59-posture.mjs');
-      for (const [name, only] of byPosture) {
-        const r = await release(name, { fleet: fleetName(), only, toHold: true, by: `muster-run:${p.muster}`, call: rpc, log: s => console.log(`  settle: ${s}`) });
-        if (r.failed?.length) throw new Error(`${name}: release to a hold failed for ${r.failed.map(f => f.agent).join(', ')}`);
-      }
-    }
-    PLANS.set(p.muster, plan);
+    const plan = await settle(p);
+    const agents = planAgents(plan);
     const skipped = [...plan.readiness.filter(a => a.exclude).map(a => ({ agent: a.agent, why: a.exclude })),
                      ...plan.excluded_for_supply.map(o => ({ agent: o.agent, why: `stays home: ${o.why}` }))];
     return { agents, skipped };
@@ -85,17 +119,20 @@ export const script = {
   async steps(p) {
     const { agent } = p;
     const plan = PLANS.get(p.muster) ?? loadPlan(p.muster, Number(p.max_age_min));
+    barrierFor(p.muster, plan);
     const t = plan.target;
     const isPart = plan.participants.includes(agent);
     const gives = plan.transfers.filter(x => x.kind === 'pack' && x.holder === agent && !x.hops);
     const handOver = g => ({ ...supply(agent, g.to, g.name, { amount: g.amount, exact: true }), optional: true });
-    const steps = [];
+    // A giver hands over FIRST, before anything of its own can fail and unwind it, and then settles the barrier, so a
+    // receiver never waits on a giver that stopped for some other reason.
+    const steps = [...gives.map(handOver)];
+    if (gives.length) steps.push({ ...verify(async () => { settleOf.get(`${p.muster}:${agent}`)?.(); return true; }, 'hand-overs settled'), optional: true });
     if (isPart) steps.push(verify(async ({ call }) => {
       const r = await call('autopilot', { agent, action: 'start', survival_enabled: true, fight_above_vigor: t.fightAboveVigor,
         why: `muster ${p.muster}: survival on, fight floor ${t.fightAboveVigor}` }, 60_000);
       return r?.error ? { ok: false, why: r.error } : true;
     }, 'survival on and the fight floor'));
-    steps.push(...gives.map(handOver));
     if (isPart) steps.push(rest({ health: t.health, vigor: t.vigor }));
     // THE SECOND CHANCE. A hand-over refused for room (a full pack) usually clears once the receiver has eaten; so each
     // of this giver's hand-overs is checked again after the rest, and only the short part is sent.
@@ -109,6 +146,7 @@ export const script = {
       return true;
     }, 'hand-overs, second chance'), optional: true });
     if (isPart) steps.push(verify(async ({ call }) => {
+      await deliveriesTo(p.muster, agent, 600_000);
       const s = await call('status', { agent }, 60_000);
       const inv = await call('inventory', { agent }, 60_000);
       const meals = mealsOf(inv?.items ?? []);

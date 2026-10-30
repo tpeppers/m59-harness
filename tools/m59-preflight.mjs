@@ -199,6 +199,14 @@ export async function preflight(name, { fleet, log = console.log } = {}) {
   for (const t of plan.transfers) log(`   ${t.kind === 'pack' ? `${t.holder} hands` : t.kind === 'vault' ? `${t.holder} withdraws from its vault` : 'a member draws from the chest'} ` +
     `${t.amount} ${t.name} -> ${t.to}  @${t.room ?? '?'}${t.hops ? ` (${t.hops} room${t.hops > 1 ? 's' : ''} away)` : ''}`);
   for (const s of plan.shortfalls) log(`   SHORT ${s.agent}: ${s.short} ${s.key} (${s.why})`);
+  // THE LINES TO RUN, so nobody assembles an agent list by hand from the lines above.
+  report.agents = [...new Set([...report.participants, ...plan.transfers.filter(t => t.kind === 'pack' && t.holder).map(t => t.holder)])];
+  const accept = hazards.length ? ` accept=${hazards.join(',')}` : '';
+  report.run = { repl: `muster-run muster=${name}${accept}`,
+                 fleetscratch: `go muster-run-pad muster=${name}${accept} agents=${report.agents.join(',')}` };
+  log(`\nRUN within 15 minutes (muster-run refuses an older plan):`);
+  log(`   fleet REPL:   ${report.run.repl}            (add launch=false to stop at "ready")`);
+  log(`   FleetScratch: ${report.run.fleetscratch}`);
   return report;
 }
 
