@@ -22,6 +22,7 @@ import { StockpileBook, canEnterHall, savingsOf, sourcePlan } from '../m59-stock
 import { BOOKMAKERS_HALL_ROOM, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN, StorageCache, chestKey } from '../m59-storage.mjs';
 import { detailSettings, saveVaultSnapshot } from '../m59-strategy-stats.mjs';
 import { BARLOQUE_VAULT, GUILD_CHEST_SECTION, TITHE_FLEET } from '../m59-autopilot.mjs';
+import { dispositionBlock, dispositionNames, inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
 
 export class HallPart {
   // @part 1
@@ -231,8 +232,8 @@ export class HallPart {
   }
 
   async vaultRunIfPassing() {
-    const wanted = Array.isArray(this.policy.vaultItems)
-      ? this.policy.vaultItems.map(String).filter(Boolean) : [];
+    const wanted = [...new Set([...(Array.isArray(this.policy.vaultItems)
+      ? this.policy.vaultItems.map(String).filter(Boolean) : []), ...dispositionNames(this, 'vault')])];
     if (!wanted.length) return false;
     const c = this.s.client;
     if (!c || !(c.inventory || []).some(o => skills.itemIsProtected(c.rsc.get(o.nameRsc), wanted)))
@@ -261,7 +262,9 @@ export class HallPart {
       return true;
     }
     this.doing = 'trading';
-    const result = await skills.depositInVault(this.s, { vaultman: vaultman.id, items: wanted })
+    await inspectDispositionQuality(this);
+    const result = await skills.depositInVault(this.s, { vaultman: vaultman.id, items: wanted,
+      allowItem: o => !this.s.lootDisposition?.(o) || !dispositionBlock(this, o) })
       .catch(e => ({ deposited: [], error: e.message }));
     if (result.deposited?.length) this.tradeFact({ deposited: result.deposited });
     this.detailEvent('vault_accumulation', 'deposit', {

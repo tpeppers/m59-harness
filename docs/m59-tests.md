@@ -278,6 +278,12 @@ through a nested shelter order.
   armourer and sold by him is SOLD), calls a stack merged rather than tracing it, and splits
   unidentified rings by icon class under one name. With no `kill_drop` rows it lists pickups and
   gives no share.
+- `m59-loot-policies-test.mjs` and `m59-loot-policy-runtime-test.mjs` (20 together, `node --test`): composed loot
+  dispositions (`docs/m59-loot-policies.md`). Absent sources keep today's behaviour; profiles compose individual ->
+  guild -> fleet with provenance; a disposition overrides loot-ignore and per-creature filters for pickup but never the
+  cursed/unidentified/broken/capacity guards; condition bands are 0-4, unknown condition is kept for inspection; sale,
+  vault and town drop each read the same per-object decision and keep loadout reserves, equipped gear and operator
+  intents; a vault deposit verifies the inventory delta. Drafted 10-27 in the trunk checkout, landed 2026-10-30.
 - `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
   real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the

@@ -21,6 +21,7 @@ import * as skills from '../m59-skills.mjs';
 import { stockpileKeepTest } from '../m59-stockpile.mjs';
 import { StorageCache } from '../m59-storage.mjs';
 import { onIsland } from '../m59-autopilot.mjs';
+import { dispositionNames } from '../m59-loot-policy-runtime.mjs';
 
 export class InventoryPart {
   // @part 1
@@ -47,9 +48,12 @@ export class InventoryPart {
     return out;
   }
 
-  protectedItemNames() {
+  protectedItemNames({ dispositions = true } = {}) {
     return [...new Set([
-      ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems : []),
+      ...(dispositions ? dispositionNames(this) : []),
+      // A matched loot disposition (m59-loot-policies.mjs) supersedes this old destination preference;
+      // hard keeps below remain. Sale planning checks the individual object (quality can differ by ID).
+      ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems.filter(name => !this.s.lootDisposition?.({ name })) : []),
       ...(Array.isArray(this.policy.protectedItems) ? this.policy.protectedItems : []),
       ...this.inheritedProtectedNames(),
     ].map(String).filter(Boolean))];
@@ -162,7 +166,7 @@ export class InventoryPart {
   // paths: protectedItemNames() is also the co-op's deposit filter, and adding them THERE is the
   // 2026-09-17 deadlock (unsellable and undepositable). Over the plan, they sell as before.
   saleProtectedNames() {
-    const base = this.protectedItemNames();
+    const base = this.protectedItemNames({ dispositions: false });
     // On Ko'catan, less the holds the island cannot deliver (islandSaleRelease). Off the island, the identity.
     const release = names => (typeof this.islandSaleRelease === 'function' ? this.islandSaleRelease(names) : names);
     if (!this.policy.reagentCoop?.enabled) return release(base);

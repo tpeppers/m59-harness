@@ -1,0 +1,13 @@
+{
+  "format": "m59-loot-policies/1",
+  "profiles": {
+    "example-collection": {
+      "name": "Example collection (unassigned)",
+      "rules": [
+        { "item": "purple mushroom", "action": "vault" },
+        { "item": "mace", "action": "vault", "min_condition": 3, "otherwise": "sell" }
+      ]
+    }
+  },
+  "assignments": { "fleet": null, "guilds": {}, "characters": {} }
+}

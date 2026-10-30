@@ -133,6 +133,7 @@ import { resolveFleet, rosterGameEndpoint, ledgerDirFor } from './m59-fleetpath.
 import { liveDesk } from './m59-plan-desk.mjs';
 import { PLAN_RELAY_PATH, servePlanRelay } from './m59-plan-relay.mjs';
 import { readBook, observeShop, npcInfo, whoSells, roomInfo, recent as recentNpcs, WANDERERS } from './m59-worldbook.mjs';
+import { LootPolicyControls } from './m59-loot-policy-controls.mjs';
 import {
   BROKER_FLEET_LOCK_KIND,
   addFleetLockGuard,
@@ -4238,6 +4239,19 @@ const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
+// LOOT POLICIES (m59-loot-policies.mjs, docs/m59-loot-policies.md): compose, preview and save the registered
+// item-disposition sources. Each member's composed view is its keeper's own `loot_policies` status.
+let humanLootPolicies = null;
+function lootPolicyControls() {
+  return humanLootPolicies ??= new LootPolicyControls({ stateFile: STATE_FILE, members: async () =>
+    Promise.all([...sessions.entries()].map(async ([agent, s]) => {
+      try {
+        const state = s instanceof KeeperProxy ? await keeperState(agent, s._index, { fresh: true }) : null;
+        return { agent, character: state?.character || s.client?.me?.name || agent,
+          status: state?.loot_policies ?? { error: 'Keeper does not support loot policies; deployment required' } };
+      } catch (e) { return { agent, character: agent, status: { error: e.message } }; }
+    })) });
+}
 // (a SAFESPOT_FILE pointed here at the per-square outcome book. Retired 2026-09-20 — see
 // the tombstone in m59-safespots.mjs.)
 
@@ -14173,6 +14187,14 @@ const TOOLS = [
             'A cast also shares the one-per-second timer with attacks.',
       };
     },
+  },
+  {
+    name: 'loot_policies',
+    description: 'Compose, inspect, preview and revision-check edits to registered item-disposition policy sources. No game orders; saved sources are hot-read by compatible keepers.',
+    schema: { type: 'object', properties: { action: { enum: ['read', 'preview', 'save'] },
+      source: { type: 'string' }, document: { type: 'object' }, expected_state: { type: 'string' },
+      expected_pid: { type: 'number' }, expected_revision: { type: 'string' } }, required: ['action'] },
+    run: a => lootPolicyControls().run(a),
   },
   {
     // THE FLEET'S WORLD BOOK (m59-worldbook.mjs). Every keeper writes the NPCs in the room it

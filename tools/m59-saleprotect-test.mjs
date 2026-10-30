@@ -59,7 +59,7 @@ ok('no co-op: exactly the ordinary keep list', () => {
 });
 ok('the deposit filter is untouched: protectedItemNames does not call it', () => {
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  const at = src.indexOf('  protectedItemNames() {');
+  const at = src.indexOf('  protectedItemNames(');
   assert.ok(at > 0 && !src.slice(at, src.indexOf('\n  }\n', at)).includes('saleProtectedNames'));
   assert.equal((src.match(/skills\.sellAll\(s, \{[^}]*?protect: this\.saleProtectedNames\(\)/gs) ?? []).length, 3,
     'all three keeper sale paths use the sale list');

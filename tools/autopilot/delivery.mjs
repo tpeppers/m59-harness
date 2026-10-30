@@ -194,8 +194,8 @@ export class DeliveryPart {
       // A SALE TO MAKE ROOM IS STILL A SALE, and was the one path that told no ledger.
       if (sold?.sold?.length) this.tradeFact({ earned: sold.total_received, sold: sold.sold });
     }
-    // Still tight, or nobody here buys: shed what is provably worthless.
-    const dead = skills.junkAndBroken(c);
+    // Still tight, or nobody here buys: shed what is provably worthless -- never what a loot policy names.
+    const dead = skills.junkAndBroken(c).filter(o => !s.lootDisposition?.(o));
     const dropped = [];
     if (dead.length && (c.inventory?.length ?? 0) >= (this.policy.maxCarry ?? 50) - wantSlots) {
       for (const d of dead.slice(0, 4)) {

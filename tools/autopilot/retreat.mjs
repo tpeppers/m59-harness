@@ -108,7 +108,7 @@ export class RetreatPart {
     if (this.policy.dropJunk !== false && spares.length)
       await skills.inspectForBroken(s, spares).catch(() => null);
 
-    const dead = skills.junkAndBroken(c);
+    const dead = skills.junkAndBroken(c).filter(o => !s.lootDisposition?.(o));
     if (this.policy.dropJunk !== false && dead.length) {
       const d = dead[0];
       await s.pacer.submit('drop', () => c.drop([this.dropSpec(d)]));

@@ -1342,11 +1342,17 @@ export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
 // sound and we are exactly where we started.
 export async function inspectForBroken(s, ids, { retries = 1, timeoutMs = 3000 } = {}) {
   const c = s.need();
+  if (c._lootCondition) for (const [id, reading] of c._lootCondition)
+    if (Date.now() - reading.at >= 60_000 || c._lootCondition.size > 512) c._lootCondition.delete(id);
   const broken = brokenSet(c);
   const out = { broken: [], sound: [], unknown: [] };
   for (const id of ids) {
     // Already condemned — do not spend a round trip re-confirming it.
-    if (broken.has(id)) { out.broken.push(id); continue; }
+    if (broken.has(id)) {
+      const item = c.inventory?.find(o => o.id === id) ?? c.room?.objects?.get(id);
+      if (item) { c._lootCondition ??= new Map(); c._lootCondition.set(id, { name: c.rsc.get(item.nameRsc) || '', level: 0, at: Date.now() }); }
+      out.broken.push(id); continue;
+    }
     let desc = null;
     for (let i = 0; i <= retries && desc == null; i++) {
       await s.pacer.submit('look', () => c.look(id));
@@ -1354,6 +1360,11 @@ export async function inspectForBroken(s, ids, { retries = 1, timeoutMs = 3000 }
       desc = events.find(e => e.id === id)?.description ?? null;
     }
     if (desc == null) { out.unknown.push(id); continue; }
+    const inspected = c.inventory?.find(o => o.id === id) ?? c.room?.objects?.get(id);
+    if (inspected) {
+      c._lootCondition ??= new Map();
+      c._lootCondition.set(id, { name: c.rsc.get(inspected.nameRsc) || '', level: parseConditionLevel(desc), at: Date.now() });
+    }
     // Both phrasings: weapons say "shattered by a powerful blow", armour and helms say
     // "is useless" (armor.kod:24, helmet.kod:24). Checking only the first meant every
     // ruined breastplate on a corpse field was picked up and carried.
@@ -4029,7 +4040,8 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
     const allowance=saleAllowance(loadout,x.name,remaining);
     const saleAmount=Math.min(x.amount,allowance.amount);
-    const recommended=equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
+    const disposition=s.lootDisposition?.(x.o);
+    const recommended=disposition ? disposition.action==='sell' : equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
     let blocked=error||(!equipped?'equipment is not known':null);
     if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
@@ -4044,14 +4056,17 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     }
     // Explicit clicks may nominate ordinary carried loot, but do not override
     // configured keep floors or reserve lists, equipped gear, or fleet needs.
-    if(!normal.sell&&!equipment.sell.has(x.id)&&!blocked)blocked=normal.why;
+    if(disposition && disposition.action!=='sell')blocked=disposition.reason;
+    // An explicit sell disposition replaces generic name guards, never a loadout reserve.
+    if(disposition?.action==='sell' && keepTestFor(loadout,pack)?.(x.name))blocked='loadout keep rule';
+    if(!normal.sell&&!equipment.sell.has(x.id)&&!blocked&&disposition?.action!=='sell')blocked=normal.why;
     if(!saleAmount&&!blocked)blocked='working stock reserved by the loadout';
     if(recommended&&!blocked)remaining.find(i=>i.id===x.id).amount-=saleAmount;
     const slot=armourKind(x.name)?.slot;
     const role=weaponScore(x.name)>0?'weapon':slot==='armour'?'armor':
       slot==='shield'?'shield':slot==='helm'?'helmet':foods.has(x.id)?'food':'other';
     // Intent metadata carries appearance, never grants an action capability.
-    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,reason:equipment.sell.get(x.id)||normal.why};
+    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,disposition,reason:disposition?.reason||equipment.sell.get(x.id)||normal.why};
   });
   return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
 }
@@ -4115,6 +4130,8 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
     while(left>0) {
       const live=c.inventory.find(o=>o.id===it.id);
       if(!live)break;
+      const disposition=s.lootDisposition?.(live);
+      if(disposition && disposition.action!=='sell'){refused.push({name:it.name,why:disposition.reason});break;}
       const amount=Math.min(left,live.amount||1,saleAllowance(loadout,it.name,packNow()).amount,maxStack||Infinity);
       if(!(amount>0))break;
       const offer={...live,amount:live.amount>0?amount:0};
@@ -4125,7 +4142,8 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
         break;
       }
       const veto=saleBlocked(s,it);
-      if(veto || saleAllowance(loadout,it.name,packNow()).amount<amount)break;
+      const currentDisposition=s.lootDisposition?.(live);
+      if(veto || (currentDisposition && currentDisposition.action!=='sell') || saleAllowance(loadout,it.name,packNow()).amount<amount)break;
       const done = await s.sellOne(merchant, offer, true);
       if (done.sold) { sold.push({ name: it.name, amount, price: done.offered_price }); total += done.offered_price; left-=amount; }
       else { refused.push({ name: it.name, why: done.note || 'accept failed' }); break; }
@@ -4154,7 +4172,8 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
 // `ids`: deposit exactly these objects (re-read from the pack, so an id that no longer exists deposits nothing). A name
 // cannot tell a spare chain armor from the worn one, and `keep` holds back whichever copy it meets first; the Ko'catan
 // gate vault (autopilot kocatanGateVault) names the spares by id for that reason.
-export async function depositInVault(s, { vaultman, items = [], keep = null, ids = null } = {}) {
+// `allowItem`: a per-object veto, and an item a loot policy sends anywhere but the vault is never deposited.
+export async function depositInVault(s, { vaultman, items = [], keep = null, ids = null, allowItem = null } = {}) {
   const c = s.need();
   const byId = Array.isArray(ids) && ids.length ? new Set(ids.map(Number)) : null;
   const wanted = [...new Set([].concat(items || []).map(String).map(x => x.trim()).filter(Boolean))];
@@ -4162,6 +4181,10 @@ export async function depositInVault(s, { vaultman, items = [], keep = null, ids
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   let before = (c.inventory || []).filter(o => byId ? byId.has(Number(o.id)) : itemIsProtected(c.rsc.get(o.nameRsc) || '', wanted));
+  before = before.filter(o => {
+    const d = s.lootDisposition?.(o);
+    return (!d || d.action === 'vault') && (!allowItem || allowItem(o));
+  });
   const kept = [];
   for (const [name, n] of Object.entries(keep ?? {})) {
     let left = Math.max(0, Math.floor(Number(n) || 0));
@@ -4183,7 +4206,11 @@ export async function depositInVault(s, { vaultman, items = [], keep = null, ids
   // a request to deposit that object.
   const specs = before.map(o => o.amount > 0 ? { id: o.id, amount: o.amount } : o.id);
   const since = c.evSeq;
-  await s.pacer.submit('trade', () => c.depositItems(vaultman, specs));
+  await s.pacer.submit('trade', () => {
+    if (before.some(o => { const d = s.lootDisposition?.(o); return (d && d.action !== 'vault') || (allowItem && !allowItem(o)); }))
+      throw new Error('Loot disposition changed before deposit; re-plan required');
+    return c.depositItems(vaultman, specs);
+  });
   const response = await c.waitFor({ since, kinds: ['message'], timeoutMs: 2500 })
     .catch(() => ({ events: [] }));
   await s.pacer.submit('read', () => c.requestInventory());

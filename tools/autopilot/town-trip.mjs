@@ -23,7 +23,8 @@ import { detailSettings, recordStrategyStat } from '../m59-strategy-stats.mjs';
 import * as townFavors from '../m59-town-favors.mjs';
 import { completeTownIncome, recordTownTrade } from '../m59-town-income.mjs';
 import { addTradeFact, newTripTrade, packCounts, tripLedgerFields } from '../m59-towntrip-ledger.mjs';
-import { BANKS, FOOD_SHOPS, MARKETS, MARKET_STOPS, MIN_SELL_TRIP_VALUE, REAGENT_SHOP, TITHE_FLEET, TRIP_PURPOSE, VIGOR_CAP, hungerNeedsTown, townDestinations , townTable } from '../m59-autopilot.mjs';
+import { BARLOQUE_VAULT, BANKS, FOOD_SHOPS, MARKETS, MARKET_STOPS, MIN_SELL_TRIP_VALUE, REAGENT_SHOP, TITHE_FLEET, TRIP_PURPOSE, VIGOR_CAP, hungerNeedsTown, townDestinations , townTable } from '../m59-autopilot.mjs';
+import { dropTownDispositions } from '../m59-loot-policy-runtime.mjs';
 
 export class TownTripPart {
   // @part 1
@@ -507,6 +508,10 @@ export class TownTripPart {
       // "WHILE YOU'RE IN TOWN" (m59-town-favors.mjs): last of the buying, out of what is left.
       ['town favors', () => this.gatherTownFavors()],
       ['vault', () => this.vaultRunIfPassing()],
+      // A loot policy's `drop_town` (m59-loot-policies.mjs): only at a verified town-service room.
+      ['drop designated town loot', () => { const t = townTable(this.s.world?.room?.num);
+        return dropTownDispositions(this, [...(t.BANKS ?? []), ...(t.FOOD_SHOPS ?? []), ...(t.MARKET_STOPS ?? []),
+          t.REAGENT_SHOP, BARLOQUE_VAULT].filter(Boolean).map(r => r.room)); }],
       // LAST, ON KO'CATAN: leave town with a pack the East Tower guard will let through (sell / vault / drop;
       // m59-kocatan-gate.mjs). A no-op anywhere else, or when the farm is not past the gate.
       // A failure is noted and passed, never retried: the refusal path in travel() gets another go at it.

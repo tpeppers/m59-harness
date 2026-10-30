@@ -17,6 +17,7 @@ import{healReadiness}from'./m59-recovery-heal.mjs';
 
 import { reagentRefusalSpell } from './m59-sharing.mjs';
 import { sessionWalkPrototype } from './m59-session-walk.mjs';
+import { LootPolicyStore, sessionLootDecision } from './m59-loot-policies.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
@@ -1538,6 +1539,7 @@ class Session {
   constructor(name, { communicationStateFile = null } = {}) {
     this.name = name;
     this.fleetStateFile = communicationStateFile;
+    this.lootPolicyStore = communicationStateFile ? new LootPolicyStore(communicationStateFile) : null;
     this.communications = communicationStateFile ? new CommunicationsArchive({ stateFile: communicationStateFile, agent: name }) : null;
     this.pacer = new Pacer();
     this.combatEpoch = 0;
@@ -5001,6 +5003,7 @@ class Session {
   // everything we're keeping"). [{name, unless_unworn}] — exact names, never substrings, because
   // "mushroom" is a bless reagent while "gold round shield" is 225 weight for 350 shillings.
   // `unless_unworn: 'shield' | 'armor'`: still taken by a character wearing none of that kind.
+  lootDisposition(item) { return sessionLootDecision(this, item); }
   setLootIgnore(list = []) { this._lootIgnore = Array.isArray(list) ? list : []; }
   // THE KO'CATAN GATE AS A LOOT CAP: { classify(name) -> guard category | null, limits } while on the island, else null.
   setGateCap(cap = null) { this._gateCap = cap && typeof cap.classify === 'function' && cap.limits ? cap : null; }
@@ -5206,7 +5209,7 @@ class Session {
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
         if ((shed?.get?.(o.id) ?? 0) > now - 1_800_000) { shedSkipped.push(name); return false; }
-        if (cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
+        if (!this.lootDisposition?.(o)?.pickup && cap && Number.isFinite(cap.max) && skills.weaponScore(name) > 0) {
           if (spares >= cap.max) { shedSkipped.push(name); return false; }
           spares++;
         }
@@ -5287,7 +5290,8 @@ class Session {
       cands = cands.filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
         const k = name.toLowerCase().trim();
-        if (!lootIgnored(name, this._lootIgnore, worn, held.get(k) ?? 0)) { held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); return true; }
+        // A loot policy's named disposition (m59-loot-policies.mjs) overrides the ignore list for that item.
+        if (this.lootDisposition?.(o)?.pickup || !lootIgnored(name, this._lootIgnore, worn, held.get(k) ?? 0)) { held.set(k, (held.get(k) ?? 0) + (Number(o.amount) || 1)); return true; }
         ignoredSkipped.push(name);
         return false;
       });
@@ -5313,10 +5317,20 @@ class Session {
         room: this.world?.room?.num ?? null, matcherFor: this._lootOnlyMatcher,
         floor: cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' })) });
       const leave = new Set(plan.leave.map(l => l.id));
-      if (leave.size) { cands = cands.filter(o => !leave.has(o.id)); lootOnlyLeft.push(...plan.leave); }
+      const overridden = new Set(cands.filter(o => this.lootDisposition?.(o)?.pickup).map(o => o.id));
+      if (leave.size) { cands = cands.filter(o => !leave.has(o.id) || overridden.has(o.id)); lootOnlyLeft.push(...plan.leave.filter(o => !overridden.has(o.id))); }
     }
 
     const taken = [], refused = [];
+    // A disposition is the shared pickup/town answer. Safety filters above are never undone.
+    if (!ids?.length || !explicitIdsOverride) cands = cands.filter(o => {
+      const d = this.lootDisposition?.(o);
+      if (!d || d.pickup) return true;
+      refused.push({ id: o.id, item: c.rsc.get(o.nameRsc), why: d.reason }); return false;
+    });
+    protect = [...protect, ...[...cands, ...(c.inventory || [])].filter(o => {
+      const d = this.lootDisposition?.(o); return d && d.action !== 'sell';
+    }).map(o => c.rsc.get(o.nameRsc) || '').filter(Boolean)];
     let wasCancelled = false;
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
     for (const n of ignoredSkipped)

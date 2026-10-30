@@ -36,6 +36,7 @@ import {publishFleetHealth,readFleetHealth} from './m59-fleet-health.mjs';
 import { withCastRite, idleGearCheck, riteStatus } from './m59-castrite.mjs';
 import { castRole } from './m59-spellgear.mjs';
 import {keeperRecoveryRescueReady} from './m59-move-origin.mjs';
+import { lootPolicyStatus } from './m59-loot-policy-runtime.mjs';
 import {continuingProvenRefugeLeg} from './m59-refuge-leg.mjs';
 import { SWARM_MIN_MAX_HEALTH } from './m59-swarm-follow.mjs';
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
@@ -3445,6 +3446,13 @@ export class Autopilot {
 
   async passOnce() {
     const s = this.s;
+    // LOOT POLICY COMPOSITION PROBLEMS, noted once per change (m59-loot-policy-runtime.mjs). A no-op with no store.
+    const lootStatus = lootPolicyStatus(this);
+    const lootIssues = JSON.stringify(lootStatus.error || lootStatus.diagnostics);
+    if (lootIssues !== this._lootPolicyIssues) {
+      this._lootPolicyIssues = lootIssues;
+      if (lootStatus.error || lootStatus.diagnostics?.length) this.note('loot policy composition', { error: lootStatus.error, diagnostics: lootStatus.diagnostics });
+    }
     // THE FARMING STRATEGY FIRST, so everything below this pass reads the file's posture. One stat
     // when nothing changed; a no-op with none assigned. m59-strategy-engine.mjs.
     await this.applyFarmStrategy('pass');

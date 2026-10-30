@@ -26,6 +26,7 @@ import { BOOKMAKERS_HALL_ROOM, StorageCache, chestFullness, chestKey } from '../
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan } from '../m59-tithe.mjs';
 import { TICKETS_FILE, TicketBook, readDeskOpen } from '../m59-vault-broker.mjs';
 import { FOOD_SHOP, FOOD_SHOPS, FOOD_WORD, REAGENT_BLOCKS, REAGENT_SHOP, SPAWN_FILE, TITHE_FLEET, onIsland, purchaseEnabled, reagentTargetFor, sleep , townTable } from '../m59-autopilot.mjs';
+import { inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
 
 export class TownShopsPart {
   // @part 1
@@ -333,6 +334,7 @@ export class TownShopsPart {
   // sell everything else.
   async sellInTown({ maxStack = null } = {}) {
     const s = this.s, c = s.need();
+    await inspectDispositionQuality(this);
     // "BUYS ANYTHING" IS USUALLY A TRICK, AND IT NEARLY COST THE FLEET EVERYTHING.
     //
     // The merchant index reports `buys_anything: true` for the bankers, and the affordance
@@ -452,6 +454,9 @@ export class TownShopsPart {
     // offered — the same rule farm delivery follows for the same reason.
     const l = this.loadout();
     const keepFloor = (item) => {
+      // A named loot disposition must not silently take the guild-chest detour instead.
+      const carried = this.s.client?.inventory?.find(o => norm(this.s.client.rsc.get(o.nameRsc) || '') === item);
+      if (carried && this.s.lootDisposition?.(carried)) return Infinity;
       const entry = l?.carry?.find(cRow => norm(cRow.item) === item);
       return entry ? (entry.min || 0) : 0;
     };

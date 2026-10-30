@@ -1045,3 +1045,14 @@ substrate/rescue-travel/
 # substrate/musters.example/ beside it carries the shape. A preflight plan is derived and regenerated in a second.
 /substrate/musters/
 /substrate/scratch/preflight/
+
+# Fleet-local loot disposition assignments (m59-loot-policies.mjs) and their transient locks.
+/substrate/**/*.loot-policies.json
+/substrate/*.loot-policies.json
+*.loot-policies.json.lock
+
+# Prod orders written straight into the deploy's substrate. This machine's, like every order; snapshots
+# live in m59-private operations/prod/substrate/. Named by --verify as drift until 2026-10-30.
+/substrate/production-*.mjs
+/substrate/cv-lockdown-farm.mjs
+/substrate/avar-village.json

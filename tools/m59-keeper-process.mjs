@@ -60,6 +60,7 @@ import './m59-navgeom.mjs';   // installs the height model + lenient fine path o
 import { resolveFleet, fleetName as resolvedFleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 import { createSightingsObserver, makeClassifier, TICK_MS as SIGHTINGS_TICK_MS } from './m59-sightings.mjs';
 import { createWorldObserver } from './m59-worldbook.mjs';
+import { lootPolicyStatus } from './m59-loot-policy-runtime.mjs';
 import { hostileBasis } from './m59-ally.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsCastArityOk } from './m59-rts-safety.mjs';
@@ -1253,6 +1254,7 @@ function state() {
     player_evidence: session?.playerEvidence?.status()??{enabled:false},
     sightings: session?.sightings?.status?.() ?? { enabled: false },
     worldbook: session?.worldbook?.status?.() ?? { enabled: false },
+    loot_policies: autopilot ? lootPolicyStatus(autopilot) : { protocol: 1, available: false, error: 'No running keeper autopilot' },
     connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //

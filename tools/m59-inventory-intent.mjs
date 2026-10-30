@@ -115,7 +115,10 @@ export function intentForSession(s,item,{dir=INTENT_DIR()}={}) {
   return sameItem(row,item)?row:null;
 }
 // Consulted again inside the paced accept callback, not just when planning.
-export function saleBlocked(s,item,{dir=INTENT_DIR(),now=Date.now()}={}) {
+export function saleBlocked(s,item,{dir=INTENT_DIR(),now=Date.now(),dispositionAction='sell'}={}) {
+  const live = s?.client?.inventory?.find(o => o.id === item.id);
+  const disposition = s?.lootDisposition?.(live ?? item);
+  if(disposition && disposition.action !== dispositionAction) return disposition.reason;
   const identity=sessionIdentity(s);if(!identity)return null; // old callers remain compatible
   try {
     const row=intentForSession(s,item,{dir});if(row?.state==='keep')return 'operator veto: '+row.reason;
