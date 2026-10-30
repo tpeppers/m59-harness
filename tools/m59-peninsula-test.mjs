@@ -229,6 +229,18 @@ test('2144: counted backwards, r38c49 is reached by the palisade alone and the w
   assert.ok(WEST.has(`${a.row},${a.col}`), `anchor r${a.row}c${a.col}`);
 });
 
+test("2144 from Piggy's exact fine position: the fine connectivity check does not seal itself into 8 squares", { skip }, async () => {
+  // On origin/main `exits()` proves a go door unreachable when `fineReachableSquares` comes back
+  // COMPLETE without it. From kod (3125,1672) the lattice's phase sealed the search into 8
+  // squares, every door to 2101 was marked unverified, and the palisade anchor led again.
+  const { fineReachableSquares } = await import('./m59-finepath.mjs');
+  const { protocolToClient } = await import('./m59-roo.mjs');
+  const geo = sharedRoomGeometry(map.rooms[2144]);
+  const f = fineReachableSquares(geo, { x: protocolToClient(3125), y: protocolToClient(1672) });
+  assert.ok(!(f.complete && !f.squares.has('30,39')),
+    `claims proof the west door is unreachable: complete=${f.complete}, ${f.squares.size} squares (${f.reason})`);
+});
+
 // The real walker against a fake client, as m59-edge-stage-test does it. `leaveVia` is stubbed
 // to refuse every square with a body, which is what the west door did on prod; the question is
 // only which squares the three-walk budget buys.

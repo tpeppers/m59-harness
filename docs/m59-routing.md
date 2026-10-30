@@ -2218,6 +2218,15 @@ Two fixes, both categorical:
   16 anchors, among them 578 -> 579 (r49c44, reached by 171 -> r49c12, 947), Blackstone Keep
   951 -> 950 (84 -> 824) and Ko'catan 2000 -> 2009 (459 -> 3137).
 
+**And a third place a position-free proof crept in: the fine connectivity check.** On the
+current tree `exits()` marks a `go` door unverified when `fineReachableSquares` from the body's
+exact point comes back COMPLETE without it. Its lattice is laid from that point, and from Piggy's
+own position (kod 3125,1672) one phase sealed itself into 8 squares while every phase 64-192
+units away walked the whole room — so all eight doors read unverified, no door was "proven",
+and the palisade anchor led again (`r38c49 r27c49 r30c40`). A complete answer is now re-asked
+once from another lattice phase and is the union, complete only if both exhaust
+(`m59-finepath.mjs`); a square is ruled out only when two phases both miss it.
+
 **So: bakes from snapshot positions are the wrong tool here.** Pepe and Piggy were standing on
 the room's body; the router already plans from any square, and a bake per start square would
 have baked the same anchor. What was wrong was which door, and why the bake believed in it.
