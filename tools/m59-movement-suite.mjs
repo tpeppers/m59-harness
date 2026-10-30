@@ -142,6 +142,7 @@ const SUITES = [
   ['m59-bastion-fallback-test.mjs', 'recent PvP death and last-stuck origins reach Castle Victoria through real walkers and modeled declared crossings; suffix boarding, square goals and paced ownership/body guards',600_000],
   ['m59-deviation-test.mjs', 'recorded Cragged departure, early atomic deviation, authoritative failure evidence, ownership and mandatory avoidance'],
   ['m59-wall-thread-test.mjs', 'a wall in the way is threaded along, not slid into; a refused slide does not end leaving before the doorway fallbacks (109, 2026-10-13)'],
+  ['m59-peninsula-test.mjs', 'a raised pocket you can fall out of but not climb into does not choose the door: live mover verdicts outrank the baked anchor, anchors rank on reverse reach (2144 -> 2101, 2026-10-30)'],
   ['m59-edge-stage-test.mjs', 'a body refusing an exit stage defers its neighbours: the budget tries elsewhere on the wall (596 -> 61, 2026-10-14)'],
   ['m59-ukgoth-north-door-test.mjs', 'a confirmed geometry slide is learned and re-planned, and a departure onto a broken rail head boards past it (599 -> 2, 2026-10-14)'],
 

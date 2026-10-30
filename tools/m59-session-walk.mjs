@@ -72,7 +72,7 @@ import {claimPassageMove, releaseConfirmedPassage, passageExitNeedsConfirmation,
  * Every dependency is named rather than imported, so this file cannot reach back into
  * m59-game.mjs and there is no import cycle to reason about.
  */
-import { boundedRegionEntry, boundedSilentGo, deferNearRefusedStage, distinctStagesFirst, spreadEdges } from './m59-world.mjs';
+import { anchorContradictedLive, boundedRegionEntry, boundedSilentGo, deferNearRefusedStage, distinctStagesFirst, provenDoorsBeforeExempt, spreadEdges } from './m59-world.mjs';
 
 import { forgetInferredExit,edgeConditionAllows } from './m59-map.mjs';
 
@@ -8527,6 +8527,15 @@ export function sessionWalkPrototype(deps) {
       }
       const already = spread.filter(x => Number(x.to) === Number(e.to) &&
                                          x.stand_on?.row === anchor.row && x.stand_on?.col === anchor.col);
+      // THE LIVE VERDICT FROM HERE OUTRANKS THE BAKE'S POSITION-FREE ONE. See
+      // `anchorContradictedLive`: 2144's anchor for 2101 is a door on a pocket nobody on the
+      // ground can step into, and flagging it put it ahead of the only door that can be.
+      if (already.length && anchorContradictedLive(spread, e.to, anchor)) {
+        const note = `kept anchor r${anchor.row}c${anchor.col} for ${e.to} out of the lead: ` +
+                     'the mover cannot step into it from here and another door to that room is proven';
+        if (!anchorTrace.includes(note)) anchorTrace.push(note);
+        continue;
+      }
       if (already.length) {
         // World may already prefer the anchor. Keep that preference after flattening
         // and distance-sorting its alternatives: in 567, failing to flag r1c45 put
@@ -8571,7 +8580,9 @@ export function sessionWalkPrototype(deps) {
     // different squares rather than one square asked three times. See distinctStagesFirst
     // for the measurement; the duplicates are moved to the tail, not removed, so nothing
     // that was reachable before is unreachable now.
-    let ordered = distinctStagesFirst(orderExits(spread));
+    // AND A DOOR THE MOVER HAS ALREADY REFUSED FROM HERE GOES BEHIND EVERY DOOR IT HAS NOT --
+    // `provenDoorsBeforeExempt`, re-applied after each deferral below.
+    let ordered = provenDoorsBeforeExempt(distinctStagesFirst(orderExits(spread)));
     for (let index = 0; index < ordered.length; index++) {
       const exit = ordered[index];
       if (spent >= budget) {
@@ -8697,7 +8708,7 @@ export function sessionWalkPrototype(deps) {
         if(!d?.confirmed||d.room!==roomBefore||me?.predicted||!p||me?.x!==p.x||me?.y!==p.y)
           return finish({...r,left:false,tried,stage:'walk'});
         // The approach to this stage deviated; its neighbours share the approach (596 -> 61).
-        if(r.stage==='walk')ordered=deferNearRefusedStage(ordered,index+1,exit.stand_on);
+        if(r.stage==='walk')ordered=provenDoorsBeforeExempt(deferNearRefusedStage(ordered,index+1,exit.stand_on),index+1);
         continue;
       }
       // A GEOMETRY REFUSAL AT A DOORWAY IS USUALLY THE BODY IN THE WRONG PART OF ITS OWN
@@ -8826,7 +8837,8 @@ export function sessionWalkPrototype(deps) {
       tried.push(refusal(exit, r));
       // A BODY HOLDING THIS STAGE, OR AN APPROACH THAT NEVER REACHED IT, HOLDS THE SQUARES
       // BESIDE IT TOO. Spend the next try further along the wall -- deferNearRefusedStage.
-      if (bodyBlocked || r?.stage === 'walk') ordered = deferNearRefusedStage(ordered, index + 1, exit.stand_on);
+      if (bodyBlocked || r?.stage === 'walk')
+        ordered = provenDoorsBeforeExempt(deferNearRefusedStage(ordered, index + 1, exit.stand_on), index + 1);
     }
     // EVERY SQUARE REFUSED. Normal travel reports the refusal and replans. An operator may
     // explicitly enable the unvalidated diagnostic below to test a known model gap, but

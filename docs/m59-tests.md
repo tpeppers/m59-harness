@@ -539,6 +539,15 @@ through a nested shelter order.
   conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
   every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
   entrance) the journey still arrives; on 1b5629a the press square itself was refused.
+- `m59-peninsula-test.mjs` (12 tests + 1 TODO): a raised pocket you can fall out of but not
+  climb into must not choose the door. A synthetic peninsula pins why the bake's largest-forward-
+  flood "body" lands on the pocket and that `reverseReachCounts`/`reached_by` (`anchorFor`) does
+  not; then the real Clearing of the Trading Post (2144): the palisade is a wall to the mover,
+  from Pepe's r26c50 and Piggy's r26c48 only the west door (r30c39/r31c39) can be stepped into,
+  a body-sized fine flood over the whole fort agrees, and the real `leaveViaAny` spends its
+  budget on the west door twice before any door the mover refused (before: `r38c49 r30c39
+  r27c49`, prod's ledger all of 2026-10-30). The TODO pins the class it does not fix: a slid
+  landing in 578 counted as a square whose next planned step the body cannot make.
 - `m59-qor-temple-test.mjs` (13 tests): walking into the Temple of Qor (802). The gate
   declaration matches the kod (heights, sector, triggers, the 600 s alternation) when `M59_ROOT`
   is set; 598 is in the ceiling table and the observed lift is applied; open, the corridor is four
