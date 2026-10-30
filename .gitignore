@@ -1037,3 +1037,9 @@ substrate/rescue-travel/
 /substrate/cooperative-logoff/
 /substrate/brax-farm/
 /substrate/bow-supply/
+
+# MUSTER SPECS ARE ORDERS (which characters, which rooms, which spells how many times), so they are this machine's,
+# like substrate/loadouts/: the private repo carries ours (strategy/musters/) and installs them here.
+# substrate/musters.example/ beside it carries the shape. A preflight plan is derived and regenerated in a second.
+/substrate/musters/
+/substrate/scratch/preflight/
