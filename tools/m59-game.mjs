@@ -5311,7 +5311,7 @@ class Session {
     if (this._lootOnly && (!ids?.length || !explicitIdsOverride) && cands.length) {
       const plan = planLootOnly({ spec: this._lootOnly, kill, memory: this._lootOnlyMemory,
         room: this.world?.room?.num ?? null, matcherFor: this._lootOnlyMatcher,
-        floor: cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '' })) });
+        floor: cands.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '', translation: o.translation ?? null })) });
       const leave = new Set(plan.leave.map(l => l.id));
       if (leave.size) { cands = cands.filter(o => !leave.has(o.id)); lootOnlyLeft.push(...plan.leave); }
     }

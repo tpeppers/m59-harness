@@ -75,6 +75,21 @@ console.log('matching');
   ok('purple mushroom is allowed', lf.itemAllowed('purple mushroom', ['purple mushroom']));
   ok('mushroom is NOT purple mushroom', !lf.itemAllowed('mushroom', ['purple mushroom']));
   ok('purple mushroom is NOT mushroom', !lf.itemAllowed('purple mushroom', ['mushroom']));
+  // COLOURS (operator 2026-10-30: only the Qor/Kraanan/Shal'ille disciple robes; robedisc.kod master translations are
+  // Qor 126 (black), Kraanan 203 (blue), Shal'ille 236 (gray), Faren 137, Riija 214, Jala 192 -- one item name for all six).
+  const ROBES = 'robes of the disciple#126|203|236';
+  ok('a colour suffix takes that item in a listed translation', lf.itemAllowed('robes of the disciple', [ROBES], 203));
+  ok('...and leaves it in an unlisted one (a Faren robe)', !lf.itemAllowed('robes of the disciple', [ROBES], 137));
+  ok('...and leaves it when the translation is unknown', !lf.itemAllowed('robes of the disciple', [ROBES], null));
+  ok('a plain name still ignores colour', lf.itemAllowed('wand', ['wand'], 77));
+  ok('the spec keeps the suffix and resolves the name part',
+     lf.lootOnlySpec({ 'orc wizard': ['Robes of the Disciple#126|203|236', 'wand'] }, { resolveItem: items.resolveItemName })['orc wizard'].join() === 'robes of the disciple#126|203|236,wand');
+  ok('a malformed colour suffix is refused, not dropped', (() => { try { lf.lootOnlySpec({ orc: ['robes of the disciple#blue'] }); return false; } catch (e) { return /colour suffix/.test(e.message); } })());
+  const robeKill = lf.planLootOnly({ spec: { 'orc wizard': [ROBES, 'wand'] }, kill: { name: 'orc wizard', before: [] },
+    floor: [{ id: 1, name: 'robes of the disciple', translation: 126 }, { id: 2, name: 'robes of the disciple', translation: 214 },
+            { id: 3, name: 'wand', translation: 0 }, { id: 4, name: 'orc tooth', translation: 0 }], room: 2501 });
+  ok('an orc wizard kill takes the Qor robe and the wand, leaves the Riija robe and the tooth',
+     robeKill.leave.map(l => l.id).sort().join() === '2,4', JSON.stringify(robeKill.leave.map(l => l.id)));
   ok('the rule names the spider', lf.lootOnlyRule(KERMIT, 'spider', { matcherFor })?.creature === 'spider');
   ok('...not the black spider (matched like hunt)', lf.lootOnlyRule(KERMIT, 'black spider', { matcherFor }) === null);
   ok('...and not the living tree', lf.lootOnlyRule(KERMIT, 'living tree', { matcherFor }) === null);
