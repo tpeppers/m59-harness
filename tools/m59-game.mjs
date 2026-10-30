@@ -1885,7 +1885,7 @@ class Session {
     if (!who) return;
     try {
       const entry = storage.writeVault(who, ev.items || [],
-        { at: ev.at ?? Date.now(), account: ev.vaultmanId ?? null });
+        { at: ev.at ?? Date.now(), account: ev.vaultmanId ?? null, room: this.world?.room?.num ?? null });
       this.recorder.line('note', { what: 'vault contents recorded', character: who,
         items: entry.items.length });
     } catch { /* a record is a convenience; never let it interrupt play */ }
