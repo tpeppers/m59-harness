@@ -74,6 +74,9 @@ export class StatusPart {
       // decision: which were left alone for want of fleet-mates at them, and which had enough (m59-gang-up.mjs).
       gang_up: this.gangUpStatus(),
       loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
+      // WHETHER AN UNIDENTIFIED WEAPON IS PICKED UP THIS PASS (policy.lootUnrevealedWeapons), and why:
+      // the mode, the verdict, the remove-curse desk it rests on, and a policy value it refused.
+      unrevealed_weapons: this.unrevealedWeaponStatus?.() ?? null,
       // THE FARMING STRATEGY: which file, applied or yielded per key, what it shadows, its hooks.
       // Null when none is assigned. And WHO SET EACH KEY, whichever writer it was.
       farm_strategy: this.farmStrategyStatus(),

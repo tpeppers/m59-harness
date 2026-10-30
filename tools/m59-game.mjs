@@ -414,6 +414,7 @@ import { tranceMs, classifyTranceLine } from './m59-trance.mjs';
 import { idleGearCheck } from './m59-castrite.mjs';
 import { makeCastVeto } from './m59-reagent-reserve.mjs';
 import { cycleMayLoot } from './m59-curse-cycle.mjs';
+import { refusedWeaponPickup } from './m59-unrevealed-weapons.mjs';
 let geometryStartupMode = 'eager';
 try {
   const masks = attachStepMasks(worldMap, {
@@ -5045,6 +5046,17 @@ class Session {
   }
 
   /**
+   * May an UNIDENTIFIED WEAPON be picked up this pass? `{ mode, allow, why }` from
+   * m59-unrevealed-weapons.mjs `unrevealedWeaponGate`, installed by the autopilot every pass from
+   * `policy.lootUnrevealedWeapons`. null -- and `allow: null` -- is the old behaviour: looted.
+   */
+  setUnrevealedWeaponLoot(gate = null) {
+    this._unrevealedWeaponLoot = gate && gate.mode != null
+      ? { mode: gate.mode, allow: gate.allow === true ? true : gate.allow === false ? false : null, why: gate.why ?? null }
+      : null;
+  }
+
+  /**
    * A LAP ENDS WHERE THE GOODS DO. Called when the pack is emptied into a merchant, a vault
    * or a guild chest — that is the moment the next 150% starts counting, and it is the only
    * moment, because a lap measured from anything else (a clock, a room change, a restart)
@@ -5144,13 +5156,16 @@ class Session {
       // full health for nineteen minutes because the rest floor they can never reach was
       // the thing being waited for.
       //
-      // JEWELLERY ONLY, AND UNREVEALED ONLY. This does not refuse unidentified loot in
-      // general -- a wand or a mace that turns out to be cursed is a bad afternoon, not a
-      // permanent one, because the wield is a separate decision that `weaponRanking`
-      // already guards. Rings and amulets have no such second chance, which is the whole
-      // difference. And identify reaches an item ON THE GROUND in the same room
-      // (`IsTargetInRange`), so leaving one where it lies costs nothing: it can be read
-      // first and picked up afterwards.
+      // JEWELLERY, UNREVEALED, ALWAYS. This does not refuse unidentified loot in general.
+      // It used to argue that a cursed mace was only a bad afternoon "because the wield is a
+      // separate decision that `weaponRanking` already guards" -- and that was WRONG:
+      // `item.kod:508-514` posts `TryUseItem` for ANY item `IsCursed` answers for, and
+      // `WeapAttCursed` is one, so a cursed weapon wields itself on pickup exactly as a ring
+      // does and then clings (operator, 2026-10-30: "The axe seems to cling to your hand!" on
+      // many of the fleet). Weapons are gated below, by `policy.lootUnrevealedWeapons`, and
+      // opt-in, because silence is the behaviour that was there. And identify reaches an item
+      // ON THE GROUND in the same room (`IsTargetInRange`), so leaving one where it lies costs
+      // nothing: it can be read first and picked up afterwards.
       if (UNREVEALED_JEWELLERY.test(n) && skills.isUnrevealed(o)) {
         // UNLESS THIS CHARACTER CAN TAKE THE CURSE OFF ITSELF, and the curse cycle's gate is open
         // this pass (m59-curse-cycle.mjs). Then ONE, and the keeper reads the body back afterwards.
@@ -5158,6 +5173,16 @@ class Session {
         cursedSkipped.push(`${n} (unidentified — a cursed ring equips itself on pickup)`);
         return false;
       }
+      // AND AN UNIDENTIFIED WEAPON, WHEN THIS CHARACTER WAS TOLD SO. Same mechanism as the ring:
+      // `item.kod:508-514` makes the pickup the wield, and `WeapAttCursed.ItemReqUnuse` never lets
+      // go. `policy.lootUnrevealedWeapons` (m59-unrevealed-weapons.mjs): 'never' refuses every
+      // unrevealed weapon, 'desk' refuses them while no remove-curse desk is on the service board,
+      // and both refuse one already graded cursed. Unset or 'always' takes them as before. Bows
+      // included: a cursed bow is a weapon and equips itself the same way. Applied to an explicit
+      // id list too, like the ring above -- a caller naming the id cannot see the curse either.
+      const weaponRefusal = refusedWeaponPickup(n, o, this._unrevealedWeaponLoot,
+        { isWeapon: w => skills.weaponScore(w) > 0, isUnrevealed: skills.isUnrevealed });
+      if (weaponRefusal) { cursedSkipped.push(weaponRefusal); return false; }
       return true;
     });
 

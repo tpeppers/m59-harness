@@ -2322,6 +2322,10 @@ export class Autopilot {
       // Cursed items this character may loot (see lootFloor's NEVER PICK THESE UP). Empty
       // refuses both, which is every character that is not a Shal'ille trainee.
       pickupCursed: [],
+      // UNIDENTIFIED WEAPONS OFF THE FLOOR (m59-unrevealed-weapons.mjs): null/'always' loots them as
+      // before; 'desk' only while a remove-curse desk publishes; 'never' never. A cursed weapon
+      // wields itself on pickup (item.kod:508-514), so for a weapon the loot IS the wield.
+      lootUnrevealedWeapons: null,
       // Total weapons retained after a merchant visit, including the equipped one.
       // Two means the weapon in hand and one best spare under weaponPriority.
       maxWeapons: 2,
@@ -3461,6 +3465,7 @@ export class Autopilot {
                           this.carryFloors(), () => this.overfarmKeepIds());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
     await this.applyCurseCycle();
+    this.applyUnrevealedWeaponLoot();
     s.setLootOnly?.(this.policy.lootOnly ?? null, { matcherFor: k => this.huntMatch(k) });
     if (!s.live) { this.note('not in game'); return; }
     // THE NO-COMBAT LOCK ADOPTS THE ROOM IT STANDS IN before anything below can move the body (policy lockNoCombat).

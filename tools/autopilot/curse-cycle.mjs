@@ -8,12 +8,13 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 7 methods: curseCycleInputs, curseCycleWornCursed, curseCycleLoose, curseCycleNote,
-//   applyCurseCycle, curseCycleHall, passCurseCycle
+// 9 methods: curseCycleInputs, curseCycleWornCursed, curseCycleLoose, curseCycleNote,
+//   applyCurseCycle, curseCycleHall, passCurseCycle, applyUnrevealedWeaponLoot, unrevealedWeaponStatus
 import { CURSE_CYCLE_REAGENT, CURSE_CYCLE_SPELL, curseCycleGate, normalizeCurseCycle, uncurseAffordable } from '../m59-curse-cycle.mjs';
 import { norm } from '../m59-loadout.mjs';
 import * as skills from '../m59-skills.mjs';
 import { CONTINUE, HANDLED } from '../m59-autopilot.mjs';
+import { readUnrevealedWeaponMode, unrevealedWeaponGate } from '../m59-unrevealed-weapons.mjs';
 
 export class CurseCyclePart {
   // @part 1
@@ -179,6 +180,58 @@ export class CurseCyclePart {
     if (left) return CONTINUE;
     this.progress('curse cycle: broke a curse and dropped the ring');
     return HANDLED;
+  }
+
+  // ------------------------------------------------------------------ unidentified weapons
+  //
+  // m59-unrevealed-weapons.mjs has the kod and the argument: a cursed weapon wields itself on
+  // pickup (item.kod:508-514) and never lets go. The keeper's half is the verdict for this pass,
+  // installed on the session like the curse cycle's gate; `lootFloor` reads it on every path.
+
+  /**
+   * Install this pass's verdict on unidentified weapons (`policy.lootUnrevealedWeapons`). Never
+   * throws. Unset is the old behaviour; an unreadable service board under 'desk', or any failure
+   * here while a mode is set, REFUSES -- the unknown is the curse.
+   */
+  applyUnrevealedWeaponLoot(now = Date.now()) {
+    const s = this.s;
+    const raw = this.policy?.lootUnrevealedWeapons ?? null;
+    let gate;
+    try {
+      const { mode, problem } = readUnrevealedWeaponMode(raw);
+      if (problem) this.curseCycleNote('unrevealed-weapons-problem', 'unrevealed weapons: policy value refused', { value: raw, problem });
+      let desks = null;
+      if (mode === 'desk') {
+        // The board is a file every desk rewrites once a minute; reading it every pass buys nothing.
+        if (!this._unrevealedWeaponDesks || now - this._unrevealedWeaponDesks.at >= 30_000) {
+          let read = null;
+          try { read = this.chaliceStore().desk() ?? {}; } catch { read = null; }
+          this._unrevealedWeaponDesks = { at: now, desks: read };
+        }
+        desks = this._unrevealedWeaponDesks.desks;
+      }
+      gate = { ...unrevealedWeaponGate(mode, { desks, now, rooms: this.policy?.confineRooms ?? null }), problem };
+    } catch (e) {
+      gate = raw == null
+        ? { mode: null, allow: null, desk: null, why: `gate failed (${e?.message ?? e}); unset, so looted as before`, problem: null }
+        : { mode: String(raw), allow: false, desk: null, why: `gate failed (${e?.message ?? e}); refused`, problem: null };
+    }
+    const was = this._unrevealedWeaponGate;
+    this._unrevealedWeaponGate = gate;
+    try { s?.setUnrevealedWeaponLoot?.(gate); } catch {}
+    if (gate.mode != null && (!was || was.mode !== gate.mode || was.allow !== gate.allow))
+      this.note(gate.allow === false ? 'unrevealed weapons: left on the floor' : 'unrevealed weapons: looted',
+        { mode: gate.mode, why: gate.why, desk: gate.desk?.name ?? null });
+    return gate;
+  }
+
+  /** For `autopilot status`: always present, so "unset" reads differently from "not reported". */
+  unrevealedWeaponStatus() {
+    const g = this._unrevealedWeaponGate;
+    const policy = this.policy?.lootUnrevealedWeapons ?? null;
+    if (!g) return { policy, mode: readUnrevealedWeaponMode(policy).mode, allow: null, desk: null, why: 'not computed yet', problem: null };
+    return { policy, mode: g.mode, allow: g.allow, desk: g.desk ?? null, in_confinement: g.in_confinement ?? null,
+             why: g.why ?? null, problem: g.problem ?? null };
   }
   // @end 1
 }

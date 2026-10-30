@@ -40,6 +40,7 @@ import { spareBlockerMode } from './m59-spare.mjs';
 import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
+import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
 
 // A name is also a file name, so it is a strict slug: no path, no dot-dot, no surprises.
 export const STRATEGY_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -140,6 +141,11 @@ export const STRATEGY_FIELDS = Object.freeze([
       throw new Error('sellAtLoad must be a pack fullness from 0 to 1'); return n; } },
   // LOOT EJECTION (m59-loot-eject.mjs): hand the sale pile to a station or courier of ours in the same room.
   { path: 'lootEject', keys: ['lootEject'], faculty: 'economy', arg: 'loot_eject', normalize: v => normalizeLootEject(v) },
+  // UNIDENTIFIED WEAPONS OFF THE FLOOR (m59-unrevealed-weapons.mjs): 'always' | 'desk' | 'never'. A cursed weapon
+  // wields itself on pickup (item.kod:508-514), so 'desk' takes one only while a remove-curse desk publishes.
+  // What to pick up is economy, like lootOnly; the keeper's own refusal of a cursed NAME is not this key's.
+  { path: 'lootUnrevealedWeapons', keys: ['lootUnrevealedWeapons'], faculty: 'economy', arg: 'loot_unrevealed_weapons',
+    normalize: v => unrevealedWeaponMode(v) },
   { path: 'weapons.touchSpell', keys: ['touchSpell'], faculty: 'work', arg: 'touch_spell',
     normalize: v => touchSpellName(v) },
   { path: 'weapons.touchSpellTiming', keys: ['touchSpellTiming'], faculty: 'work', arg: 'touch_spell_timing',
