@@ -35,6 +35,7 @@ process.env.M59_SPAWN_FILE = spawnFile;
 process.env.M59_LEDGER_DIR = join(dir, 'ledger');
 process.env.M59_PVP_HOLD_DIR = join(dir, 'holds');
 process.env.M59_WAR_FILE = join(dir, 'war.json');
+process.env.M59_GRUDGE_FILE = join(dir, 'grudges.json');
 writeFileSync(process.env.M59_WAR_FILE, JSON.stringify({ format: 'm59-war/1', our_guild: 'The Second Swines',
   enemy_guilds: { 'human resistance': { name: 'Human Resistance', since: 1 } },
   members: { neo: { name: 'Neo', guild: 'Human Resistance', guild_key: 'human resistance', source: 'guild_combat' } } }));
@@ -54,6 +55,7 @@ const ok = (label, cond, detail = '') => {
   console.log(`  ${cond ? 'yes ' : 'NO  '} ${label}${detail ? ' -- ' + detail : ''}`);
 };
 const MIN = 60_000;
+const monsterAttribution0 = () => ({ killer: 'frogman', kind: 'named_kill', was_killed_by_player: false });
 
 // ------------------------------------------------------------------ recognising PvP
 console.log('recognising a PvP death');
@@ -120,6 +122,44 @@ const classify = (o) => classifyPvpDeath({ isFleetmate: party.isFleetmate, enemy
 
   const none = classify({ character: 'Lew', deathAt: at, attribution: { killer: null, kind: 'unknown' } });
   ok('no named killer is not PvP', none.pvp === false);
+}
+
+// A PLAYER'S MINUTE. The operator, 2026-10-21: any PvP against the character in the 60 seconds
+// before it died makes the death PvP for the return delay, whoever struck last.
+console.log('a player hit us in the last minute');
+{
+  const at = 2_000_000;
+  const frog = { attribution: monsterAttribution0(), frames: [{ at: at - 1000, health: 0, threats: ['frogman'] }] };
+  const seen = classify({ character: 'Lew', deathAt: at, ...frog, attacks: [{ at: at - 40_000, name: 'Morpheus' }] });
+  ok('a frogman kill 40s after Morpheus hit us is PvP', seen.pvp === true && seen.basis === 'player_attack_recent'
+     && seen.killers[0] === 'Morpheus' && seen.killed_by[0] === 'frogman', JSON.stringify(seen));
+  const old = classify({ character: 'Lew', deathAt: at, ...frog, attacks: [{ at: at - 61_000, name: 'Morpheus' }] });
+  ok('61s before is outside the minute', old.pvp === false, JSON.stringify(old));
+  const after = classify({ character: 'Lew', deathAt: at, ...frog, attacks: [{ at: at + 30_000, name: 'Morpheus' }] });
+  ok('a hit seen after the death does not count', after.pvp === false);
+  const mate = classify({ character: 'Lew', deathAt: at, ...frog, attacks: [{ at: at - 5000, name: 'Rizzo' }] });
+  ok('a fleetmate in the attack list is not PvP', mate.pvp === false);
+  const dyn = classify({ character: 'Lew', deathAt: at, ...frog, attacks: [{ at: at - 5000, name: '<dynamic 1000081>' }] });
+  ok('an unresolved id in the attack list is not PvP', dyn.pvp === false);
+  const byMate = classify({ character: 'Lew', deathAt: at, attribution: { killer: 'Rizzo', kind: 'player_kill',
+    was_killed_by_player: true }, attacks: [{ at: at - 5000, name: 'Morpheus' }] });
+  ok("even a fleetmate's stray last blow is PvP when a stranger hit us first", byMate.pvp === true
+     && byMate.killers[0] === 'Morpheus');
+  const frames = [
+    { at: at - 30_000, health: 50, players_near: ['Morpheus'], threats: ['frogman'] },
+    { at: at - 25_000, health: 31, players_near: ['Morpheus', 'Rizzo'], threats: ['frogman'] },
+    { at: at - 1000, health: 2, players_near: [], threats: ['frogman'] },
+  ];
+  const fr = classify({ character: 'Lew', deathAt: at, attribution: monsterAttribution0(), frames });
+  ok('frames: health fell with a stranger in reach — PvP, fleetmate not named', fr.pvp === true
+     && fr.basis === 'player_attack_recent' && fr.killers.join() === 'Morpheus', JSON.stringify(fr));
+  const still = classify({ character: 'Lew', deathAt: at, attribution: monsterAttribution0(), frames: [
+    { at: at - 30_000, health: 50, players_near: ['Morpheus'] }, { at: at - 25_000, health: 50, players_near: ['Morpheus'] },
+    { at: at - 1000, health: 2, players_near: [] }] });
+  ok('frames: a stranger standing near while health held is not an attack', still.pvp === false);
+  const present = classify({ character: 'Lew', deathAt: at, attribution: monsterAttribution0(), frames: [
+    { at: at - 30_000, health: 50, players_present: ['Morpheus'] }, { at: at - 25_000, health: 31, players_present: ['Morpheus'] }] });
+  ok('frames: merely in the room (players_present) is not in reach', present.pvp === false);
 }
 
 // ------------------------------------------------------------------ the window
@@ -214,6 +254,29 @@ const monsterAttribution = { killer: 'frogman', kind: 'named_kill', was_killed_b
   ok('monster death -> recorded as not PvP', death.pvp === false);
   ok('monster death -> no hold', ap.pvpReturnGate(586) === null && ap.status().pvp_return_hold === null
      && readPvpDeath('t3') === null);
+}
+{
+  // The whole keeper path: a stranger in reach takes a bite, a frogman finishes the job.
+  const ap = keeper('t5');
+  const c = ap.s.client;
+  c.self = { col: 10, row: 10 };
+  c.rsc = { get: id => ({ 1: 'Morpheus' })[id] ?? '' };
+  c.room.objects.set(7, { id: 7, nameRsc: 1, flags: 0x4 | 0x8, col: 11, row: 10 });
+  let hp = 60;
+  c.vitals = () => ({ health: { value: hp, max: 60 }, mana: { value: 30, max: 30 }, vigor: { value: 190, max: 200 } });
+  await ap.checkAttackedByPlayer();
+  hp = 41;
+  await ap.checkAttackedByPlayer();
+  ok('(the keeper wrote the attack down for this character)', ap.playerAttacks?.[0]?.name === 'Morpheus',
+     JSON.stringify(ap.playerAttacks));
+  const f = ap.recordFrame();
+  ok('a frame names the player in reach', f?.players_near?.includes('Morpheus'), JSON.stringify(f?.players_near));
+  const death = { at: Date.now() + 500, room_num: 586 };
+  ap.classifyAndRememberPvp(death, { attribution: monsterAttribution, frames: [{ threats: ['frogman'] }] });
+  ok("a monster death inside a player's minute is recorded as PvP", death.pvp === true
+     && death.pvp_basis === 'player_attack_recent', JSON.stringify({ pvp: death.pvp, basis: death.pvp_basis }));
+  ok('...and holds the character off the farm', ap.pvpReturnGate(586)?.pvp_hold === true
+     && readPvpDeath('t5')?.killers?.[0] === 'Morpheus');
 }
 {
   // An older PvP death never overwrites a newer one.

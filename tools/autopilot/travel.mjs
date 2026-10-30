@@ -31,7 +31,7 @@ import { noteTrafficJam, trafficBlinkAdvice } from '../m59-traffic-blink.mjs';
 import { routeTravelKind } from '../m59-travel-kind.mjs';
 import { UNDERWORLD } from '../m59-travelgate.mjs';
 import { compactRefusals, travelJourneyMetrics, withTravelJourneyMetrics } from '../m59-trip-telemetry.mjs';
-import { REST_VIGOR_CAP, REST_VIGOR_WORTH_WAITING, TRAVEL_FORWARD_BIAS, TRAVEL_HOLD_ARM, TRAVEL_HOLD_MODE, journeyIncident, vigorPct } from '../m59-autopilot.mjs';
+import { REACH, REST_VIGOR_CAP, REST_VIGOR_WORTH_WAITING, TRAVEL_FORWARD_BIAS, TRAVEL_HOLD_ARM, TRAVEL_HOLD_MODE, journeyIncident, vigorPct } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
 
 export class TravelPart {
@@ -101,6 +101,13 @@ export class TravelPart {
       players_present: [...c.room.objects.values()]
         .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER))
         .map(o => c.rsc.get(o.nameRsc)).slice(0, 6),
+      // The players close enough to be the reason health fell — the frame half of "a player
+      // hit us in the last minute", which makes a death PvP for the return delay
+      // (`recentPlayerAttacks` in m59-pvp-return.mjs). Fleetmates included; the reader filters.
+      players_near: c.self ? [...c.room.objects.values()]
+        .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER) && (o.flags & OF.ATTACKABLE) &&
+                     Math.hypot(o.col - c.self.col, o.row - c.self.row) <= REACH)
+        .map(o => c.rsc.get(o.nameRsc)).slice(0, 6) : [],
     };
     // WHO ELSE WAS IN THE ROOM. Sightings only — this writes a record and decides
     // nothing; see the header of m59-intel.mjs for why that separation is load-bearing.

@@ -117,7 +117,7 @@ export class PvpReturnPart {
     let v;
     try {
       v = classifyPvpDeath({ character: this.who(), deathAt: death?.at, attribution, text, frames,
-        isFleetmate: n => party.isFleetmate(n), enemy: n => rememberedEnemy(n) });
+        attacks: this.playerAttacks ?? [], isFleetmate: n => party.isFleetmate(n), enemy: n => rememberedEnemy(n) });
     } catch (e) {
       try { this.note('could not classify the death as PvP or not', { why: e?.message ?? String(e) }); } catch {}
       return null;

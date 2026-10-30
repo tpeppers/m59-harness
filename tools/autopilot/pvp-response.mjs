@@ -124,6 +124,11 @@ export class PvpResponsePart {
       if (!sName || party.isFleetmate(sName)) continue;
       grudge.recordAttack(sName, { who: this.who(), room: this.s.world?.room?.num ?? null,
                                    playerClass: playerClassName(s.flags) });
+      // AND FOR THIS CHARACTER, WITH ITS TIME. The grudge book keys on the attacker and moves
+      // one `at` for the whole fleet, so it cannot say "hit ME in the last minute" — which is
+      // what makes a later monster death a PvP one (`classifyAndRememberPvp`).
+      (this.playerAttacks ??= []).push({ at: Date.now(), name: sName });
+      if (this.playerAttacks.length > 32) this.playerAttacks.shift();
     }
 
     const pb = playbook.playbookFor(this.who());

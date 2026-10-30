@@ -479,7 +479,7 @@ through a nested shelter order.
   `on_target` casts when a NEW quarry is chosen (once per target id), refreshes a buff with under
   20s of the 60s minimum left, settles on an *already* answer, still honours the rate limit;
   `before_swing` casts only at the swing; the farm pass calls it right after claiming the quarry.
-- `m59-pvp-return-test.mjs` (49): the PvP return delay (`pvp_return_delay_ms`, default 30 min).
+- `m59-pvp-return-test.mjs` (62): the PvP return delay (`pvp_return_delay_ms`, default 2 h), including a monster death inside a player's last minute counting as PvP (`recentPlayerAttacks`, `player_attack_recent`).
   Recognising a PvP death from the two live shapes of 2026-09-30 (a guild-combat kill the
   attribution could only guess, and a player standing in the room) and refusing every monster
   shape (an article, an unresolved `<dynamic …>` id, a monster's name in the frames, a

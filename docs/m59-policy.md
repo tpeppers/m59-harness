@@ -349,6 +349,18 @@ killer without an article when the name is not a monster that was standing there
 player:** an unresolved `<dynamic …>` id, a fleetmate, or a monster's name. The answer is stamped
 on the death record (`pvp`, `pvp_killers`, `pvp_basis`, `pvp_why`) so the post-mortem says so.
 
+**A player's minute makes it PvP, whoever struck last** (operator, 2026-10-21). When none of the
+killer evidence above names a player, the death is still PvP — `pvp_basis: player_attack_recent`
+— if a stranger player hit this character in the **60 seconds** before it died
+(`recentPlayerAttacks`, `RECENT_PVP_MS`). The camper does not need the kill: he hits, the character
+flees into a room of monsters, a frogman finishes it, and without this the keeper filed a monster
+death and walked straight back to the gate. Two sources, both *a stranger within reach AND our
+health fell*, the same standard `checkAttackedByPlayer` writes the grudge book on: that check's own
+per-character record (`Autopilot.playerAttacks` — the grudge book keys on the attacker and cannot
+say "hit ME, when"), and the death's frames, where `players_near` beside a falling `health` covers
+the blind walks the watchdog records. `pvp_killers` names the attackers; the last blow is kept as
+`killed_by`. Mere presence in the room (`players_present`) is not an attack.
+
 **Where it is enforced.** At `Autopilot.travel()` — the one gate every keeper-initiated journey
 passes, the same one the Underworld refusal and the confinement use — and as a rung at the top of
 `passFarm`, which rests instead of choosing work while the character stands somewhere safe. A
@@ -376,7 +388,7 @@ because the operator asked for it fleet-wide and an unconfigured character is ex
 walking back into the camper); an unusable value is refused at the setter rather than coerced
 (`Number(null)` is 0, which would switch it off); `m59-localpolicy.mjs` accepts it as an
 overridable key and warns when a block switches it off; and `policy_control` reflects it from
-the schema like every other order. `node tools/m59-pvp-return-test.mjs` (49) pins all of it.
+the schema like every other order. `node tools/m59-pvp-return-test.mjs` (62) pins all of it.
 
 ## WHERE A CHARACTER MAY FIGHT A PLAYER — `pvp_rooms`
 

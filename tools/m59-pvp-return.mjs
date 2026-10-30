@@ -57,6 +57,9 @@ const unresolved = s => !s || /^<.*>$/.test(String(s).trim()) || /<dynamic/i.tes
  *   unarticled_name the server named the killer without "a"/"an"/"the", which is how it names a
  *                   person and never a monster — and the name is not one of the monsters that
  *                   were standing there.
+ *   player_attack_recent  none of the above, but a stranger player hit us in the 60 seconds
+ *                   before the death (`recentPlayerAttacks`). The killers named are the
+ *                   attackers; whatever struck last is kept as `killed_by`.
  *
  * NEVER A PLAYER: an unresolved `<dynamic …>` id, a fleetmate (ours, even when one hits us by
  * accident — the hold answers a stranger at the gate, not Statler), a name that matches a
@@ -65,8 +68,66 @@ const unresolved = s => !s || /^<.*>$/.test(String(s).trim()) || /<dynamic/i.tes
  * @returns {{pvp: boolean, killers: string[], basis: string|null, why: string}}
  */
 export function classifyPvpDeath({ character, deathAt, attribution = null, text = [], frames = [],
-                                   isFleetmate = () => false, enemy = () => null,
-                                   windowMs = 120_000 } = {}) {
+                                   attacks = [], isFleetmate = () => false, enemy = () => null,
+                                   windowMs = 120_000, recentPvpMs = RECENT_PVP_MS } = {}) {
+  const v = classifyKiller({ character, deathAt, attribution, text, frames, isFleetmate, enemy, windowMs });
+  if (v.pvp) return v;
+  const recent = recentPlayerAttacks({ deathAt, attacks, frames, isFleetmate, recentPvpMs });
+  if (!recent.length) return v;
+  const names = [...new Set(recent.map(r => r.name))];
+  const last = recent.reduce((a, b) => (b.at > a.at ? b : a));
+  return { pvp: true, killers: names, basis: 'player_attack_recent',
+           killed_by: v.killers, killed_by_why: v.why,
+           why: `${names.join(', ')} attacked us ${Math.max(0, Math.round((deathAt - last.at) / 1000))}s ` +
+                `before the death (${last.source}); the killing blow was not theirs (${v.why}), but a ` +
+                `death inside a player's minute is a PvP death for the return delay` };
+}
+
+/**
+ * A PLAYER WHO HIT US IN THE LAST MINUTE MADE THIS A PVP DEATH, WHOEVER LANDED THE LAST BLOW.
+ *
+ * The operator, 2026-10-21: count every death with PvP against that character in the last 60
+ * seconds as PvP-related, for the purpose of resting at the inn rather than running back. The
+ * camper does not need the kill: he hits, the character flees below its line into a room of
+ * monsters, a frogman finishes it — and the classifier above, which only asks who struck last,
+ * filed that as a monster death and sent the character straight back to the man at the gate.
+ *
+ * Two sources, both "a stranger player within reach AND our health went down", which is the
+ * same evidence standard `checkAttackedByPlayer` writes the grudge book on:
+ *   attacks  the keeper's own observations, `{at, name}`, from `checkAttackedByPlayer`.
+ *   frames   the death's short memory: a frame whose health fell since the previous frame with
+ *            a player in `players_near`. The watchdog writes one per health change during a
+ *            blind walk, which is exactly when a pass is not there to call the check.
+ * A fleetmate and an unresolved `<dynamic …>` id are never the attacker, as above.
+ */
+export const RECENT_PVP_MS = 60_000;
+export function recentPlayerAttacks({ deathAt, attacks = [], frames = [], isFleetmate = () => false,
+                                      recentPvpMs = RECENT_PVP_MS } = {}) {
+  if (!Number.isFinite(Number(deathAt)) || !(recentPvpMs > 0)) return [];
+  const t = Number(deathAt);
+  // Two seconds after the death for clock skew between the frame and the death stamp, never more:
+  // a hit seen in the Underworld is not a hit that killed anybody.
+  const inWindow = at => Number.isFinite(at) && at >= t - recentPvpMs && at <= t + 2000;
+  const stranger = n => {
+    if (unresolved(n)) return false;
+    try { return !isFleetmate(n); } catch { return true; }
+  };
+  const out = [];
+  for (const a of attacks ?? [])
+    if (inWindow(Number(a?.at)) && stranger(a?.name))
+      out.push({ at: Number(a.at), name: String(a.name).trim(), source: 'seen hitting us' });
+  let prev = null;
+  for (const f of frames ?? []) {
+    const hp = Number(f?.health), was = Number(prev?.health);
+    if (prev && Number.isFinite(hp) && Number.isFinite(was) && hp < was && inWindow(Number(f?.at)))
+      for (const n of f?.players_near ?? [])
+        if (stranger(n)) out.push({ at: Number(f.at), name: String(n).trim(), source: 'within reach as our health fell' });
+    prev = f;
+  }
+  return out;
+}
+
+function classifyKiller({ character, deathAt, attribution, text, frames, isFleetmate, enemy, windowMs }) {
   const me = norm(character);
   const ours = n => { try { return !!isFleetmate(n); } catch { return false; } };
   // 1. The guild-combat broadcast naming US as the victim, near this death.
