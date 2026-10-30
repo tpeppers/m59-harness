@@ -81,7 +81,8 @@ was.
 with safety on, and the rule is symmetric, so in one fight two of ours can face the same raider from opposite sides
 of that line. The week to 2026-10-29: 205 refused swings, Scooter's 106 at Rick Deckard among them, one a second,
 while Morpheus -- whom he *could* hit -- killed him. A refused swing in a return-fire fight goes to `combatFailure`,
-which retries **the same target** every second; the three joints above are where that can now be answered.
+which retried **the same target** every second; that loop is gone (below), and the three joints above are where a
+pak can answer it better.
 
 - **Direct and indirect.** A fight swings only at players nobody has called indirect. `pvp.target` may call one
   indirect *before* any swing (a pak that keeps a faction book); `pvp.refused` after the server said no. A player
@@ -98,7 +99,11 @@ which retries **the same target** every second; the three joints above are where
   ([`m59-fleet-claims.mjs`](../tools/m59-fleet-claims.mjs), a file opened `wx` per server, room, key and window)
   before anything is sent; a claim another keeper holds is `claim_lost`, and nothing is cast.
 
-No pak: nobody is ever indirect and every fight is the old one. `m59-pvp-scope-test.mjs` pins that first.
+**And with no pak a safety refusal is not retried either** (operator, 2026-10-29). The player goes into the
+refused-here book (`m59-refused-targets.mjs`), exactly as a guild-only refusal does: not swung at again in that room,
+by this fight or the next fleet-mate's alarm, until it expires, we leave, or his blow reaches us. A war engagement's
+refusal still suspends him in the war book as well. Otherwise, with no pak nobody is ever indirect and the target pick
+is the old one; `m59-pvp-scope-test.mjs` pins both first.
 `substrate/paks.example/example-pvp-scope.mjs` is the shape.
 
 ## Paks
