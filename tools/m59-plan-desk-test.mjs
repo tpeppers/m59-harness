@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFi
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { parsePlanRequest, renderPlanView, parseArgs, createDesk, enc, liveDesk, yieldsTo, lastAck, whenHolds, runRequest, downgradeArg,
          checkoutRoots, clientFolders, serveStrays, STRAY_QUIET_MS, freshRequests } from './m59-plan-desk.mjs';
 import { reflectShopping, reflectPool, itemOptions } from './plans/courier.mjs';
@@ -371,6 +372,23 @@ ok('cancel removes the standing request', !existsSync(join(substrate, 'courier-r
     providerDirs: [], roster: () => { loaded++; return []; } });
   ok('with no client open, a tick neither loads the roster nor serves anyone', await idle.tick() === 0 && loaded === 0);
   ok('and says once that nobody is at a keyboard', readFileSync(join(tmp, 'idle', 'sub', 'human-presence.json'), 'utf8') === '{}');
+}
+
+// A DESK RUN AS ITS OWN PROCESS ANSWERS A CLIENT. Everything above drives createDesk from this file,
+// where the cycle cannot form: a provider (plans/fleetscripts.mjs) imports m59-plan-desk.mjs, which in
+// a desk process is the entry module, and while its loop was top-level await the first tick with a
+// client open waited on it for ever (2026-10-29, thirty-six wedged desks). --once ticks without
+// serving other checkouts' folders, and took the same path.
+{
+  const procDir = join(tmp, 'proc', 'cc'), inDir = join(procDir, 'plan', 'in');
+  mkdirSync(inDir, { recursive: true });
+  writeFileSync(join(inDir, '6161.tsv'), `M59PLANREQ\t1\t${Date.now()}\t6161\t127.0.0.1%3A1\t__nobody__\tnobody\t1\t0\nEND\n`);
+  const r = spawnSync(process.execPath, [join(HERE, 'm59-plan-desk.mjs'), '--fleet', 'test', '--once',
+    '--dir', procDir, '--substrate', join(tmp, 'proc', 'sub')], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+  const reply = join(procDir, 'plan', 'out', '6161.tsv');
+  ok('a desk process with a client open finishes its tick (no import cycle with its own entry module)',
+     r.status === 0 && /served 1 client/.test(r.stderr ?? ''), `status ${r.status} signal ${r.signal} ${(r.stderr ?? '').slice(-300)}`);
+  ok('and writes that client a reply', existsSync(reply) && readFileSync(reply, 'utf8').startsWith('M59PLAN\t'));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
