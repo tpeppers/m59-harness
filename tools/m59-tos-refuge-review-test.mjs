@@ -29,6 +29,15 @@ await test('confirmed shelter recovery takes precedence over a75-percent floor',
  assert.equal(recoveryDepartureFloor({...status,safe_spot:false},.75),.75);
  assert.equal(recoveryDepartureFloor(null,.75),.75);
 });
+await test('an errand may say how healed is enough to leave cover, never below its floor or above full',()=>{
+ // Avar Village rehearsal 2026-10-29: copies held at a refuge inside 2133 until 100% while the muster waited.
+ const status={hp:{value:116,max:119},room:{num:2133},you:{row:9,col:20},safe_spot:{works:true},survival_decisions:{current:{status:'recovering',chosen_refuge:{room:2133,row:9,col:20}}}};
+ assert.equal(recoveryDepartureFloor(status,.75,.9),.9);
+ assert.equal(recoveryDepartureFloor(status,.95,.9),.95);
+ assert.equal(recoveryDepartureFloor(status,.75,1.5),1);
+ assert.equal(recoveryDepartureFloor(status,.75,null),1);
+ assert.equal(recoveryDepartureFloor({...status,safe_spot:false},.75,.9),.75);
+});
 await test('protective poison resistance is not an active sickness',()=>{
  const c=Object.create(M59Client.prototype);c.enchantmentsById=new Map([[1,{id:1,name:'poison'}],[2,{id:2,name:'resist poison'}],[3,{id:3,name:'cure disease'}]]);
  assert.deepEqual(c.ailments().map(e=>e.name),['poison']);

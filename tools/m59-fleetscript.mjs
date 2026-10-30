@@ -668,7 +668,14 @@ export function healthFractionOf(s) {
 // A minimum departure floor does not end a keeper-owned shelter recovery.
 // Explicit rescue/plateau overrides remain with their caller. This only preserves
 // an active recovery behind cover until its health target is actually met.
-export function recoveryDepartureFloor(status, floor) {
+//
+// `leaveAt` (a walk's `leaveRecoveryAt`) lets an errand say how healed is healed enough to MOVE ON from that cover,
+// never below the walk's own floor and never above full; unset, it is full, as it always was. The case it exists for
+// (shadow rehearsal of the Avar Village, 2026-10-29): a body resting at a "proven safe spot" INSIDE an avar room was
+// held there until 100% -- Lew's copy at 116/119, Rizzo's at 116/117 -- while the rest waited at the muster, the
+// pattern that killed Animal on the road on prod. No shelter or flee threshold moves: this is only the bar to LEAVE a
+// refuge, and the keeper's own play-dead still answers a hit taken while it rests.
+export function recoveryDepartureFloor(status, floor, leaveAt = null) {
   const d = status?.survival_decisions?.current;
   const hp = status?.hp;
   const cover = status?.safe_spot;
@@ -676,7 +683,8 @@ export function recoveryDepartureFloor(status, floor) {
       || status?.you?.predicted || status?.room?.num !== d.chosen_refuge.room
       || status?.you?.row !== d.chosen_refuge.row || status?.you?.col !== d.chosen_refuge.col
       || !Number.isFinite(hp?.value) || !(hp?.max > 0)) return floor;
-  return Math.max(floor, 1);
+  const leave = Number(leaveAt);
+  return Math.max(floor, leaveAt != null && Number.isFinite(leave) ? Math.min(1, leave) : 1);
 }
 
 export async function observe(agent) {
@@ -2400,7 +2408,7 @@ function recordWalkIncident(ctx, agent, to, r, trace) {
   } catch { /* a record never fails the errand */ }
 }
 
-async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null, trace = {} }) {
+async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null, leaveRecoveryAt = null, trace = {} }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -2522,7 +2530,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
     // and the Underworld is always leavable.
     const recoveryStatus = at.room !== 1 && at.health != null && at.health < 1
       ? await call('autopilot', {agent, action: 'status'}, 30_000).catch(() => null) : null;
-    const departureFloor = recoveryPlateauAccepted ? minHealth : recoveryDepartureFloor(recoveryStatus, minHealth);
+    const departureFloor = recoveryPlateauAccepted ? minHealth : recoveryDepartureFloor(recoveryStatus, minHealth, leaveRecoveryAt);
     const gate = mayStartJourney({
       health: at.health, floor: departureFloor, from: at.room, to,
       // A script names its own destination, so `homeRoom` is not consulted here: the
@@ -3210,7 +3218,7 @@ async function runStep(ctx, agent, rawStep, state) {
     case 'walk':
       return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth,
                                                  despiteHazard: step.despiteHazard ?? null,
-                                                 plateauOk: step.plateauOk ?? null });
+                                                 plateauOk: step.plateauOk ?? null, leaveRecoveryAt: step.leaveRecoveryAt ?? null });
 
     // WAIT MY TURN AT A PLACE THAT ONLY FITS ONE. See the GATES block for the argument.
     case 'gate': {
