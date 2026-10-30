@@ -99,6 +99,20 @@ test('resume: a paused job with nothing to restart is cancelled, not left paused
   const r = board.resume({ all: true });
   assert.deepEqual(r.cancelled, [j.id]); assert.equal(j.state, 'cancelled');
 });
+test('cancel: a tripwire-paused job over the launch characters is retired, and resume never brings it back', () => {
+  const { w, board } = rig();
+  const paused = board.register({ name: 'buy-sapphires', agents: ['t17', 't20'], owner_pid: 100, stopFile: 'b.stop', restart: 'x' });
+  board.pause({ ids: [paused.id], by: 'tripwire island-pvp' });
+  const live = board.register({ name: 'second-wind-drill', agents: ['t21'], owner_pid: 200, stopFile: 'd.stop', restart: 'y' });
+  const other = board.register({ name: 'unrelated', agents: ['t5'], owner_pid: 300, restart: 'z' });
+  board.pause({ ids: [other.id] });
+  const r = board.cancel({ agents: ['t20', 't21'], by: 'avar-jumpstart', why: 'launch' });
+  assert.deepEqual(r.cancelled.map(x => `${x.name}:${x.was}`).sort(), ['buy-sapphires:paused', 'second-wind-drill:running']);
+  assert.equal(paused.state, 'cancelled'); assert.equal(live.state, 'cancelled'); assert.equal(paused.cancelled_by, 'avar-jumpstart');
+  assert.ok(w.killed.includes(200), 'the live one is stopped, as pause stops it');
+  const back = board.resume({ all: true, by: 'tripwire island-pvp' });
+  assert.deepEqual(back.resumed.map(x => x.id), [other.id], 'only the job nobody cancelled comes back');
+});
 test('the restarted run names the paused job it resumes, and the old one records the link', () => {
   const { board } = rig();
   const j = board.register({ name: 'q', agents: ['t1'], owner_pid: 100, restart: 'x' });

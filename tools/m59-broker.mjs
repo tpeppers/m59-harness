@@ -7327,6 +7327,16 @@ const TOOLS = [
     },
   },
   {
+    name: 'job_cancel',
+    description: 'Retire jobs so nothing restarts them -- by ids or by agents (no "all"): a live one is stopped as job_pause stops it, then every one is marked cancelled, which job_resume never selects. For a launch taking characters that a paused job (an alert\'s, say) would otherwise restart mid-launch.',
+    schema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, agents: { type: 'array', items: { type: 'string' } },
+      by: { type: 'string' }, why: { type: 'string' } } },
+    run: async a => {
+      if (!a.ids?.length && !a.agents?.length) throw new Error('job_cancel needs ids or agents');
+      return jobBoard.cancel({ ids: a.ids, agents: a.agents, by: a.by ?? null, why: a.why ?? null });
+    },
+  },
+  {
     name: 'job_resume',
     description: 'Resume paused jobs (ids, or all): each restart command is spawned detached with M59_JOB_RESUMES set, so the new run registers itself as resuming the old one. A paused job with no restart is cancelled.',
     schema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, by: { type: 'string' } } },

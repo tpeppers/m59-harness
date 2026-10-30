@@ -203,6 +203,27 @@ export class JobBoard {
     if (out.paused.length) this.save();
     return out;
   }
+  // RETIRE A JOB SO NOTHING BRINGS IT BACK. `pause` keeps the restart on purpose, and an alert's own release resumes
+  // what it paused -- so a job paused by a tripwire over characters a launch is about to take restarts in the middle of
+  // the launch. On 2026-10-29 `buy-sapphires [t17,t20]` and `walk-legs [t10]` sat paused by the island-PvP tripwire:
+  // the solo avar-road errands that had just killed Lew and Zoot. `cancel` kills a live one exactly as `pause` does,
+  // then marks it cancelled, which `resume` never selects. By ids or by agents only: there is no "cancel everything".
+  cancel({ ids, agents, by = null, why = null } = {}) {
+    this.sweep();
+    const out = { cancelled: [] };
+    for (const j of this.select({ ids, agents, states: ['running', 'paused', 'resumed', 'orphaned'] })) {
+      const was = j.state;
+      if (['running', 'resumed', 'orphaned'].includes(was)) {
+        if (j.stop.stopFile) { try { this.touch(j.stop.stopFile); } catch {} }
+        for (const pid of new Set([j.stop.pid, j.resumed_pid, ...(j.stop.pids ?? [])].filter(Boolean)))
+          if (this.pidAlive(pid)) { try { this.kill(pid); } catch {} }
+      }
+      this.mark(j, 'cancelled', why ?? 'cancelled', { cancelled_by: by, cancelled_at: this.now(), was });
+      out.cancelled.push({ id: j.id, name: j.name, was, agents: j.agents });
+    }
+    if (out.cancelled.length) this.save();
+    return out;
+  }
   resume({ ids, all = false, by = null } = {}) {
     const out = { resumed: [], cancelled: [] };
     for (const j of this.select({ ids, all, states: ['paused'] })) {

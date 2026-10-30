@@ -152,7 +152,16 @@ node tools/m59-posture.mjs release lockdown-cv --fleet prod
 node tools/m59-posture.mjs status  --fleet prod
 node tools/m59-posture.mjs apply   lockdown-cv --fleet prod --for 2h     # a lease: comes off by itself
 node tools/m59-posture.mjs tend    --fleet prod [--watch]            # re-read, re-push drift, expire leases
+node tools/m59-posture.mjs release inn-lock --fleet prod --agents t1,t2 --to-hold   # a launch's release, below
 ```
+
+**Part of a posture can come off, and it can come off to a HOLD.** `--agents` releases only those units; the
+posture stays on, and tended, over everyone else. `--to-hold` pushes nothing: the units keep the locked-in-place
+orders they have, `tend` stops re-imposing the posture on them, and whatever launches them decides what comes next.
+Restoring the save instead is the release hazard of 2026-10-29: `inn-lock`'s saved "before" was the Avar Village
+farm, so a plain release sends each character there alone from wherever it stands. Paused jobs resume only when a
+posture comes off entirely. A launch that does this names the hazard: `accept: ["release_lockdown"]`
+(`m59-muster-lib.mjs`).
 
 The commonest reactive order of October 2026 was a lockdown: about ten incidents and four different hand-rolled
 scripts. Its undo was the commonest silent failure:

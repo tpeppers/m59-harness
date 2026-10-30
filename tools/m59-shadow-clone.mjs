@@ -603,6 +603,33 @@ function copyLoadouts(chars) {
   return { copied, cleared };
 }
 
+// A POSTURE IS AN ORDER TOO. Prod's lockdowns live in substrate/posture-saves/prod/<name>.json — who is in each, and
+// the orders saved BEFORE it — and a clone that copies the lock's effect (lock_no_combat) without the posture has
+// nothing to release: the first shadow avar run saw clones locked by nothing anyone could take off. So every prod save
+// is mirrored into the shadow fleet's posture-saves, names translated, and a shadow save prod no longer has goes.
+// Paused job ids are prod's job board, which is not cloned, so they are dropped rather than pointing at nothing.
+export function translatePostureSave(save, names) {
+  const t = translateOrders(structuredClone(save), names);
+  return { ...t, paused_jobs: [], cloned_from: 'prod', cloned_at: new Date().toISOString() };
+}
+function copyPostures(chars) {
+  const sub = join(PROD_ROOT, 'substrate', 'posture-saves');
+  const from = join(sub, 'prod'), to = join(sub, FLEET);
+  const names = nameMap(chars);
+  const json = d => { try { return readdirSync(d).filter(f => f.endsWith('.json')); } catch { return []; } };
+  mkdirSync(to, { recursive: true });
+  const prodFiles = json(from), active = [];
+  for (const f of prodFiles) {
+    const save = readJson(join(from, f));
+    if (!save) continue;
+    writeFileSync(join(to, f), JSON.stringify(translatePostureSave(save, names), null, 1));
+    if (save.active) active.push(`${save.name ?? f.slice(0, -5)} (${Object.keys(save.units ?? {}).length})`);
+  }
+  let removed = 0;
+  for (const f of json(to)) if (!prodFiles.includes(f)) { rmSync(join(to, f)); removed++; }
+  return { copied: prodFiles.length, active, removed };
+}
+
 // ------------------------------------------------------------------ keepers (shadow band only)
 // EVERY KEEPER, IN THE WORLD OR NOT. discoverKeeperStates answers only for keepers that are in
 // game — right for reading state, wrong here: a keeper that is out is exactly the one that most
@@ -724,8 +751,10 @@ async function dress(snap, report) {
   const orders = has('--keep-orders') || DRY ? new Map() : prodOrders(here);
   if (orders.size) {
     const l = copyLoadouts(here);
-    say(`  orders: prod's mode and policy for ${orders.size} clone(s); loadouts ${l.copied} copied, ${l.cleared} cleared`);
-    report.orders = { copied: orders.size, loadouts: l };
+    const ps = copyPostures(snap.characters);
+    say(`  orders: prod's mode and policy for ${orders.size} clone(s); loadouts ${l.copied} copied, ${l.cleared} cleared; ` +
+        `postures ${ps.copied} copied${ps.active.length ? ` (ON: ${ps.active.join(', ')})` : ''}${ps.removed ? `, ${ps.removed} removed` : ''}`);
+    report.orders = { copied: orders.size, loadouts: l, postures: ps };
   }
   const keepers = brokerOurs ? await shadowKeepers(agents) : new Map();
   report.path = keepers.size ? 'hot (keepers cycled)' : 'cold (broker started)';

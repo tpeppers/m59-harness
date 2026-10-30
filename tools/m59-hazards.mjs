@@ -31,6 +31,7 @@ export const HAZARDS = {
   go_red: 'striking an innocent (not a murderer, outlaw, morph or war enemy) with safety off makes this character an outlaw, and killing one makes it a murderer: merchants refuse it and the karma does not come back',
   reroll: 'reroll deletes the character and cannot be undone',
   cancel_exception: 'this journey carries an exception (a chalice refill out of its confinement, say): it is on that errand on purpose, and recalling it leaves the errand half done',
+  release_lockdown: 'an operator lockdown is on over this character, and releasing it restores the orders saved BEFORE it (on 2026-10-29 the farm, from wherever each stood) unless it is released to a hold; a launch takes its own participants out of the lockdown, by name, and leaves everyone else in it',
   requires_unmet: 'this farm strategy requires something this character does not have, so it would stand at its post killing nothing (a troll crew ground six hours with weapons that could not hurt a troll, 2026-10-26). Accepted, the strategy is assigned and escalates: it asks the service board for the fix and keeps farming, then serves its `otherwise` fallback if no desk answers',
 };
 

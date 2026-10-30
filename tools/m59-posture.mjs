@@ -4,7 +4,7 @@
 //   node tools/m59-posture.mjs list                                   the postures this machine has
 //   node tools/m59-posture.mjs show   <posture> --fleet prod          what it would change, per character (reads only)
 //   node tools/m59-posture.mjs apply  <posture> --fleet prod [--dry] [--agents t1,t2] [--why "..."]
-//   node tools/m59-posture.mjs release <posture> --fleet prod [--dry]
+//   node tools/m59-posture.mjs release <posture> --fleet prod [--dry] [--agents t1,t2] [--to-hold]   --agents: only those; --to-hold: out of the posture, nothing pushed
 //   node tools/m59-posture.mjs status --fleet prod                    which postures are on, since when, over whom
 //   node tools/m59-posture.mjs tend   --fleet prod [--watch] [--dry]  re-read every unit of every posture that is on;
 //                                                                     re-push drift, release an expired lease
@@ -243,12 +243,34 @@ export async function apply(name, { fleet, dry = false, only = null, why = null,
   return { plan, failed };
 }
 
-export async function release(name, { fleet, dry = false, log = console.log, call = null } = {}) {
+// PART OF A POSTURE CAN COME OFF, AND IT CAN COME OFF TO A HOLD. `only` releases those units and leaves the posture on
+// over everyone else (and tended). `toHold` is the launch's release (avar-village.md, "the release hazard"): the units
+// leave the posture's care with NOTHING pushed — they keep the locked-in-place orders they have now, `tend` stops
+// re-imposing the posture on them, and whatever launches them decides their next orders. Restoring the save instead
+// would send each one back to its pre-lockdown farm, alone, from wherever it stands. Paused jobs are resumed only when
+// the posture comes off entirely, never on a partial release: a launch is taking those characters for itself.
+export async function release(name, { fleet, dry = false, log = console.log, call = null, only = null, toHold = false, by = null } = {}) {
   const save = readSave(fleet, name);
   if (!save?.active) throw new Error(`${name} is not on for ${fleet ?? 'the unnamed fleet'} (no active save in ${saveDir(fleet)})`);
+  const picked = only?.length ? [...new Set(only)] : Object.keys(save.units);
+  const strangers = picked.filter(a => !save.units[a]);
+  if (strangers.length) throw new Error(`${name} is not on over ${strangers.join(', ')} — nothing released`);
+  const partial = picked.length < Object.keys(save.units).length;
+  if (toHold) {
+    log(`${name}: ${picked.length} character(s) taken OUT of the posture to a hold where they stand (nothing pushed; ` +
+        `${partial ? `${Object.keys(save.units).length - picked.length} stay in it` : 'the posture comes off'})`);
+    if (dry) return { dry: true, held: picked };
+    const at = new Date().toISOString();
+    save.released_units = [...(save.released_units ?? []), ...picked.map(agent => ({ agent, at, to: 'hold', by }))];
+    for (const a of picked) delete save.units[a];
+    if (!Object.keys(save.units).length) { save.active = false; save.released_at = at; }
+    writeSave(fleet, name, save);
+    return { held: picked, remaining: Object.keys(save.units).length, failed: [] };
+  }
   const file = findPosture(name);
   const posture = file ? (await import(pathToFileURL(file).href)).default : { read: save.read ?? {} };
-  const rows = Object.entries(save.units).map(([agent, u]) => ({ agent, character: u.character, orders: restoreOrders(u.before), unknown: unrestorable(u.before) }));
+  const rows = Object.entries(save.units).filter(([agent]) => picked.includes(agent))
+    .map(([agent, u]) => ({ agent, character: u.character, orders: restoreOrders(u.before), unknown: unrestorable(u.before) }));
   log(`${name}: releasing ${rows.length} character(s) to what they had at ${save.applied_at}`);
   for (const r of rows) {
     log(`  ${r.agent.padEnd(5)} ${String(r.character ?? '').padEnd(14)} ${Object.entries(r.orders).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')}`);
@@ -263,7 +285,7 @@ export async function release(name, { fleet, dry = false, log = console.log, cal
     const miss = readBack(posture, r.orders, await policyOf(call, r.agent).catch(() => ({})));
     if (miss.length) failed.push({ agent: r.agent, did_not_take: miss });
   }
-  if (save.paused_jobs?.length) {
+  if (!partial && save.paused_jobs?.length) {
     for (const id of save.paused_jobs) {
       const res = await call('job_resume', { id, by: `posture:${name}` }).catch(e => ({ error: e.message }));
       if (res?.error) log(`  ! job_resume ${id}: ${res.error}`);
@@ -271,7 +293,8 @@ export async function release(name, { fleet, dry = false, log = console.log, cal
   }
   for (const f of failed) log(`  FAILED ${f.agent}: ${f.error ?? f.did_not_take.map(m => `${m.key} wanted ${JSON.stringify(m.wanted)} got ${JSON.stringify(m.got)}`).join('; ')}`);
   // The save stays ACTIVE while anything did not take: a release that half-worked is not released.
-  if (!failed.length) { save.active = false; save.released_at = new Date().toISOString(); }
+  if (!failed.length && partial) for (const r of rows) delete save.units[r.agent];
+  else if (!failed.length) { save.active = false; save.released_at = new Date().toISOString(); }
   save.release_failures = failed; writeSave(fleet, name, save);
   log(failed.length ? `${name}: ${failed.length} character(s) did NOT come back; the save is kept and still active` : `${name}: released, and read back on every character`);
   return { rows, failed };
@@ -360,8 +383,8 @@ async function main(argv) {
     if (argv.includes('--watch')) setInterval(() => once().catch(e => console.error(e.message)), Number(flag('--every-ms')) || 60_000);
     return;
   }
-  if (cmd === 'release') { const r = await release(name, { fleet, dry: argv.includes('--dry') }); process.exitCode = r.failed?.length ? 1 : 0; return; }
-  throw new Error('usage: m59-posture.mjs list | show|apply|release <posture> --fleet <name> [--for 2h] [--accept id,...] | tend [--watch] --fleet <name> | status --fleet <name>');
+  if (cmd === 'release') { const r = await release(name, { fleet, dry: argv.includes('--dry'), only, toHold: argv.includes('--to-hold'), by: flag('--why') }); process.exitCode = r.failed?.length ? 1 : 0; return; }
+  throw new Error('usage: m59-posture.mjs list | show|apply|release <posture> --fleet <name> [--agents a,b] [--to-hold] [--for 2h] [--accept id,...] | tend [--watch] --fleet <name> | status --fleet <name>');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(e => { console.error(e.message); process.exitCode = 1; });
