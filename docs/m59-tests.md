@@ -84,6 +84,13 @@ strategy answering, no unidentified ring is ever picked up. The gate needs remov
 A worn amulet does not shut the gate, and is put back on after the cast.
 A worn cursed ring is uncursed before it is dropped, never dropped while worn.
 
+`m59-unrevealed-weapons-test.mjs` (63) pins `policy.lootUnrevealedWeapons`: a cursed weapon wields itself
+on pickup (item.kod:508-514). Unset loots an unidentified weapon exactly as before; `never` refuses it;
+`desk` refuses it unless a fresh service-board desk lists uncurse ok (stale, not-ok, unreadable: refused);
+a revealed weapon is never refused and a graded-cursed one always is under desk/never; bows are weapons;
+the strategy field maps to the key and an unknown value refuses the file; on a keeper an unrecognised value
+is reported, not applied; and `lootFloor` obeys the installed verdict, explicit ids included.
+
 `m59-castrite-test.mjs` (31) pins the trance door and cast rites against the
 real Pacer, Session and M59Client methods. With no casting strategy, a wrapped
 cast sends exactly what it sent before. A caller's own cast hold is unchanged.

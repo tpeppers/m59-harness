@@ -96,6 +96,7 @@ export default {
 | `hunt` | `hunt` | work | the broker's hunt normal form |
 | `huntPriority` | `huntPriority` | work | `huntPrioritySpec` |
 | `lootOnly` | `lootOnly` | economy | `lootOnlySpec`, items resolved |
+| `lootUnrevealedWeapons` | `lootUnrevealedWeapons` | economy | `unrevealedWeaponMode`: `'always'` \| `'desk'` \| `'never'`; see [Unidentified weapons](#unidentified-weapons-lootunrevealedweapons-a-cursed-one-wields-itself) |
 | `protect` | `protectedItems` | economy | items resolved; **added to** the existing list, never replacing it |
 | `overfarm` | `overfarm` | economy | `normalizeOverfarm`, unknown keys refused |
 | `weapons.touchSpell` | `touchSpell` | work | `touchSpellName` |
@@ -313,6 +314,33 @@ answers, by `spareBlockers` (strategy) / `spare_blockers` (tool), movement facul
 At most six lures per room per ten minutes, then it is the movement ladder's again. A provoking swing that
 kills is noted loudly (`SPARED BLOCKER DIED`, `tally.spared_killed`). `qor-lupogg-sewers` (example) is the
 first user; `m59-spare-blocker-test.mjs` (14, offline) pins it.
+
+### Unidentified weapons (`lootUnrevealedWeapons`): a cursed one wields itself
+
+**PICKING UP A CURSED WEAPON IS WIELDING IT.** `item.kod:508-514` (`NewOwner`) posts `TryUseItem` on
+the picker for any item `IsCursed` answers for, and `WeapAttCursed` is one of the attributes it asks; then
+`ItemReqUnuse` refuses for ever ("The axe seems to cling to your hand!"). The curse is hidden until the item
+is revealed, so on the floor it is a plain `axe`, rarity 100. Operator, 2026-10-30: many of the fleet found
+wielding weapons they could not put down, all of them looted. Unidentified rings were already refused for the
+same reason; weapons were not, on the mistaken argument that the wield was a separate decision.
+
+```js
+lootUnrevealedWeapons: 'desk',   // -> lootUnrevealedWeapons [economy]; broker arg loot_unrevealed_weapons
+```
+
+| value | an unidentified weapon on the floor |
+|---|---|
+| unset / `null` | taken, exactly as before (silence is the old behaviour) |
+| `"always"` | taken, said out loud |
+| `"desk"` | taken only while some desk on the service board publishes `{ kind: 'uncurse', ok: true }` and has published within 15 minutes; a desk inside `confine.rooms` is preferred. No desk, a stale one, or a board that will not read: left on the floor |
+| `"never"` | left on the floor |
+
+Under `desk` and `never` a weapon already graded cursed (rarity 200) is refused too, desk or no desk. A revealed
+weapon is never refused, bows count as weapons, and an explicit id list is held to it like the unidentified ring.
+The refusal is visible in the loot result (`unidentified weapon — a cursed one equips itself on pickup; no
+remove-curse desk`). `autopilot status` reports the verdict as `unrevealed_weapons` (mode, allow, the desk it
+rests on, and any refused policy value: an unrecognised value on a keeper is reported and not applied).
+`m59-unrevealed-weapons-test.mjs` (offline) pins it.
 
 ### Gang up (`gangUp`): a creature fought only two-on-one
 

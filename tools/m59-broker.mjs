@@ -12428,6 +12428,13 @@ const TOOLS = [
           'nothing is already hitting us, then backs off; null or "off" leaves it to the movement ladder. ' +
           'Above the flee line only, at most 6 lures per room per 10 minutes. A farm strategy may declare ' +
           'it as `spareBlockers`. autopilot status reports it as policy.spareBlockers' },
+      loot_unrevealed_weapons: { type: ['string', 'null'],
+        description: 'UNIDENTIFIED WEAPONS ON THE FLOOR. A cursed weapon EQUIPS ITSELF ON PICKUP and never ' +
+          'comes off (item.kod:508-514), and an unrevealed one reads as a plain "axe". null or "always": looted ' +
+          'as before (the default); "desk": only while a remove-curse desk publishes uncurse on the service ' +
+          'board; "never": never. Under desk and never a weapon already graded cursed is refused too; revealed ' +
+          'weapons are unaffected. A farm strategy may declare it as `lootUnrevealedWeapons`. autopilot status ' +
+          'reports it as policy.lootUnrevealedWeapons and the verdict as unrevealed_weapons' },
       loot_only: { type: ['object', 'null'], additionalProperties: { type: 'array', items: { type: 'string' } },
         description: 'PER-CREATURE LOOT ALLOW LIST: { creature: [item, ...] }, e.g. {"spider": ' +
           '["purple mushroom"]}. After killing a listed creature the keeper picks up ONLY those ' +
@@ -13585,6 +13592,12 @@ const TOOLS = [
       }
       if (a.spare_blockers !== undefined) {
         try { p.policy.spareBlockers = farmStrategyField('spareBlockers').normalize(a.spare_blockers ?? null); }
+        catch (e) { return { started: false, reason: e.message }; }
+      }
+      // UNIDENTIFIED WEAPONS OFF THE FLOOR: the same normaliser the strategy field uses, so a value the
+      // keeper would not understand is refused here, at the door, with its reason.
+      if (a.loot_unrevealed_weapons !== undefined) {
+        try { p.policy.lootUnrevealedWeapons = farmStrategyField('lootUnrevealedWeapons').normalize(a.loot_unrevealed_weapons ?? null); }
         catch (e) { return { started: false, reason: e.message }; }
       }
       // THE FARMING STRATEGY ASSIGNMENT. Loaded and validated HERE so a missing or broken file is

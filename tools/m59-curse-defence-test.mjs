@@ -34,8 +34,9 @@ console.log('--- layer 1: never pick it up ---');
   ok('so is an unidentified amulet', blocked(unread('amulet')));
   ok('an IDENTIFIED ring is not refused here', !blocked(read('ring of lethargy')),
      'CURSED_ITEMS catches that one by name — this layer is for the ones it cannot see');
-  ok('an unidentified WEAPON is still taken', !blocked(unread('mace')),
-     'the wield is a separate decision and weaponRanking already guards it');
+  ok('an unidentified WEAPON is not the jewellery rule to refuse', !blocked(unread('mace')),
+     'a cursed weapon wields itself on pickup too (item.kod:508-514), but weapons are gated by ' +
+     'policy.lootUnrevealedWeapons (m59-unrevealed-weapons-test.mjs), opt-in');
   ok('an unidentified reagent is still taken', !blocked(unread('emerald')));
   ok('a stack is never "unrevealed"', !blocked({ name: 'ring', rarity: 100, amount: 4 }),
      'isUnrevealed excludes stacks, which is how a pile of arrows stays lootable');
