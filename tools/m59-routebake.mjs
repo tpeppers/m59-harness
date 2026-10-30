@@ -633,6 +633,64 @@ export function anchorSquares(anchors) {
 //
 // Iterative, because these rooms reach 8,639 walkable squares and recursion would not
 // survive the Cragged Mountains.
+/**
+ * HOW MANY SQUARES CAN WALK TO EACH TARGET — the reverse flood over the mover's own graph,
+ * one per distinct target square, counted with the target itself.
+ *
+ * "Can the body reach this exit" was asked FORWARD, from one seed: whichever square floods the
+ * most. The relation is directed, and the largest forward flood belongs to whatever sits
+ * UPSTREAM of the most ground — which is the room's body in a flat room and is a PENINSULA in a
+ * room with a ledge: a raised pocket you can fall out of but never climb into floods itself
+ * plus everything below it, so it always out-floods the floor it drains into. The Clearing of
+ * the Trading Post (2144) is the measured case: the palisade line is 365 on a 300 floor, the
+ * flood from its door r38c49 is 2163 squares against 2153 from anywhere on the ground, so the
+ * bake crowned the palisade the room, marked r38c49 `from_body`, and anchored the hop to the
+ * trading post (2101) on a door that no square on the ground can step into. Counted backwards
+ * it is 10 squares, all of them the palisade; the west door r31c39 is 2177.
+ *
+ * The rule that seeds the body cannot simply be flipped: largest-SCC was tried and lost West
+ * Jasper, whose biggest mutual clique is a pocket you can walk INTO and not out of (see the
+ * note above `floodFrom` in `bakeRoom`). Counting the squares that reach a target is neutral
+ * to both shapes — a source pocket is reached by nobody, a sink pocket reaches no exit — so it
+ * is recorded per anchor, and `anchorFor` chooses on it, rather than re-arguing the seed.
+ *
+ * `neighbors` is the same call the components pass makes, so with a mask attached this is
+ * array lookups plus the fall-jump cache the components pass already filled.
+ */
+export function reverseReachCounts(geometry, targets, { collision = true } = {}) {
+  const out = new Map();
+  if (!geometry || !Array.isArray(targets) || !targets.length) return out;
+  const { rows, cols } = geometry;
+  const at = (r, c) => r * (cols + 2) + c;
+  const preds = new Map();
+  for (let r = 1; r <= rows; r++) for (let c = 1; c <= cols; c++) {
+    if (!geometry.standable(r, c)) continue;
+    for (const n of geometry.neighbors(r, c, { collision })) {
+      const k = at(n.row, n.col);
+      let list = preds.get(k);
+      if (!list) preds.set(k, list = []);
+      list.push(at(r, c));
+    }
+  }
+  for (const t of targets) {
+    const row = t?.row, col = t?.col;
+    if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
+    const key = `${row},${col}`;
+    if (out.has(key)) continue;
+    const start = at(row, col);
+    const seen = new Set([start]);
+    const stack = [start];
+    while (stack.length) {
+      for (const p of preds.get(stack.pop()) ?? []) {
+        if (seen.has(p)) continue;
+        seen.add(p); stack.push(p);
+      }
+    }
+    out.set(key, seen.size);
+  }
+  return out;
+}
+
 export function components(geometry, { collision = true } = {}) {
   const { rows, cols } = geometry;
   const at = (r, c) => r * (cols + 2) + c;
@@ -1050,8 +1108,14 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
     ...waypointAnchors(room.num, geometry),
   ];
   const regionOf = a => comp.label[comp.at(a.row, a.col)];
+  // HOW MUCH OF THE ROOM CAN WALK TO EACH ANCHOR — see `reverseReachCounts`. `from_body`
+  // inherits whatever square won "largest forward flood", and a raised pocket you can only
+  // fall out of wins that by its own size; this is the same question asked backwards, which
+  // no seed can bias.
+  const reachedBy = reverseReachCounts(geometry, anchors, { collision });
   const tagged = anchors.map(a => ({ ...a, region: regionOf(a),
-                                     from_body: reachedFromBody.has(`${a.row},${a.col}`) }));
+                                     from_body: reachedFromBody.has(`${a.row},${a.col}`),
+                                     reached_by: reachedBy.get(`${a.row},${a.col}`) ?? 0 }));
   const strandedExits = tagged.filter(a => !a.from_body).length;
 
   // ONE BFS PER ANCHOR, AND NO SAME-REGION FILTER ON IT.
@@ -1528,6 +1592,9 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
     anchors: tagged.map(a => ({ kind: a.kind, dir: a.dir ?? null, to: a.to ?? null,
                                 row: a.row, col: a.col, region: a.region,
                                 from_body: !!a.from_body,
+                                // Squares that can walk here (itself included). `anchorFor` ranks
+                                // same-destination anchors on it; a table without it ranks as before.
+                                ...(Number.isFinite(a.reached_by) ? { reached_by: a.reached_by } : {}),
                                 ...(a.body_reachable ? { body_reachable: true } : {}) })),
     routes,
     // GUTTERS — see the block that bakes them. A place the room can drop you into and not

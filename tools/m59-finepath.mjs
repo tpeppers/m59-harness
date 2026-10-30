@@ -140,6 +140,26 @@ export function finePath(geo, from, to, { bounds = null, maxNodes = 20000, goalS
 // Directed connectivity on the same body-sized lattice as finePath. Only a fully
 // exhausted, room-bounded search can rule out a square; budget exhaustion is unknown.
 // This does not equate coarse components, or reverse a one-way movement edge.
+// A COMPLETE ANSWER HAS TO SURVIVE THE LATTICE'S PHASE. The lattice is laid from wherever the
+// body stands, and a slid landing that rounds onto a key already seen is dropped, so one phase
+// can seal itself into a few squares that other phases walk straight out of. Measured in The
+// Clearing of the Trading Post (2144) from Piggy's own position on 2026-10-30, kod (3125,1672)
+// = client (48976,25728): this answered "complete, 8 squares", while the same search started
+// 64-192 units away in y answered ~2150 -- the whole room -- and a body-sized flood on a fixed
+// lattice reaches the west door. `exits()` reads "complete and not in the set" as PROOF of
+// disconnection, marked every door to 2101 unverified, and the bake's anchor on the palisade
+// led the crossing again.
+//
+// So a complete component is re-asked ONCE from another phase the body can step to directly,
+// and the answer is the UNION, complete only if that search exhausts too. A square is then ruled
+// out only when two phases both miss it. (Requiring the second search to stay inside the first
+// set is too strict: phases differ by a square at a component's ragged edge, and that refused
+// the 567 phantom-island proof m59-routing-test pins.) In 2144 the second phase walks out into
+// the whole room and runs out of budget, so the answer is unknown -- never a proof. An
+// incomplete first search -- every search of a big open room inside its budget -- is returned
+// exactly as before, so the common case costs nothing; the complete case costs one more search
+// of a component small enough to exhaust, under its own node and time budget.
+const PHASES = [[0, STEP / 2], [STEP / 2, 0], [STEP / 2, STEP / 2]];
 export function fineReachableSquares(geo, from, { maxNodes = 20000, maxMs = 500 } = {}) {
   const squares = new Set();
   const result = (complete, reason, nodes) => ({ complete, reason, nodes, squares });
@@ -151,26 +171,43 @@ export function fineReachableSquares(geo, from, { maxNodes = 20000, maxMs = 500 
   if (!inside(from)) return result(false, 'origin outside room', 0);
   if (typeof geo._occupiable === 'function' && !geo._occupiable(from.x, from.y))
     return result(false, 'origin has no occupiable floor', 0);
-  const queue = [{ x: from.x, y: from.y }], seen = new Set([key(from.x, from.y)]);
-  const started = Date.now();
-  for (let i = 0; i < queue.length; i++) {
-    if (i >= maxNodes || (i % 64 === 0 && Date.now() - started >= maxMs))
-      return result(false, 'fine connectivity budget exhausted', i);
-    const cur = queue[i], square = squareOf(cur.x, cur.y);
-    squares.add(`${square.row},${square.col}`);
-    for (const m of MOVES) {
-      const aim = { x: cur.x + m.dx, y: cur.y + m.dy };
-      if (!inside(aim)) continue;
-      let landed;
-      try { landed = moveLands(geo, cur.x, cur.y, aim.x, aim.y); }
-      catch { return result(false, 'fine connectivity unavailable', i); }
-      if (!landed || !inside(landed)) continue;
-      const k = key(landed.x, landed.y);
-      if (seen.has(k)) continue;
-      seen.add(k); queue.push(landed);
+  // One search from one seed, adding the squares it touches to `into`.
+  const flood = (seed, into) => {
+    const started = Date.now();
+    const queue = [{ x: seed.x, y: seed.y }], seen = new Set([key(seed.x, seed.y)]);
+    for (let i = 0; i < queue.length; i++) {
+      if (i >= maxNodes || (i % 64 === 0 && Date.now() - started >= maxMs))
+        return { done: false, reason: 'fine connectivity budget exhausted', nodes: i };
+      const cur = queue[i], square = squareOf(cur.x, cur.y);
+      into.add(`${square.row},${square.col}`);
+      for (const m of MOVES) {
+        const aim = { x: cur.x + m.dx, y: cur.y + m.dy };
+        if (!inside(aim)) continue;
+        let landed;
+        try { landed = moveLands(geo, cur.x, cur.y, aim.x, aim.y); }
+        catch { return { done: false, reason: 'fine connectivity unavailable', nodes: i }; }
+        if (!landed || !inside(landed)) continue;
+        const k = key(landed.x, landed.y);
+        if (seen.has(k)) continue;
+        seen.add(k); queue.push(landed);
+      }
     }
+    return { done: true, nodes: queue.length };
+  };
+  const first = flood(from, squares);
+  if (!first.done) return result(false, first.reason, first.nodes);
+  for (const [dx, dy] of PHASES) {
+    const aim = { x: from.x + dx, y: from.y + dy };
+    if (!inside(aim)) continue;
+    let seed;
+    try { seed = moveLands(geo, from.x, from.y, aim.x, aim.y); }
+    catch { return result(false, 'fine connectivity unavailable', first.nodes); }
+    if (!seed || !inside(seed)) continue;
+    const again = flood(seed, squares);
+    if (!again.done) return result(false, again.reason, first.nodes + again.nodes);
+    return result(true, 'fine component exhausted', first.nodes + again.nodes);
   }
-  return result(true, 'fine component exhausted', queue.length);
+  return result(true, 'fine component exhausted', first.nodes);
 }
 
 /**

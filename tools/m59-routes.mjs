@@ -787,7 +787,18 @@ export function anchorFor(table, roomNum, toRoom) {
   if (!hit.length) return null;
   // Two declared exits to the SAME room is ordinary (The King's Way reaches 575 twice).
   // Prefer one the body can walk to; otherwise the first, which is still a real crossing.
-  return hit.find(a => a.from_body) ?? hit[0];
+  //
+  // AND AMONG THOSE, THE ONE MOST OF THE ROOM CAN WALK TO. `from_body` is only as good as the
+  // seed the bake flooded from, and a raised pocket you can fall out of but not climb into
+  // out-floods the floor below it: 2144's palisade made its door r38c49 `from_body`, first in
+  // the list, and so the anchor for 2101 — a door nobody on the ground can step into.
+  // `reached_by` (`reverseReachCounts`, m59-routebake.mjs) is 10 there and 2177 at the west
+  // door. A table baked before the field existed ranks exactly as it always did.
+  const pool = hit.filter(a => a.from_body);
+  const list = pool.length ? pool : hit;
+  if (list.some(a => Number.isFinite(a.reached_by)))
+    return list.reduce((best, a) => (a.reached_by ?? -1) > (best.reached_by ?? -1) ? a : best);
+  return list[0];
 }
 
 /**

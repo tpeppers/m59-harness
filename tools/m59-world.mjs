@@ -1995,6 +1995,60 @@ export function deferNearRefusedStage(ordered, from, refused, radius = REFUSED_S
   return [...head, ...tail.filter(e => !near(e)), ...tail.filter(near)];
 }
 
+// A DOOR THE MOVER CANNOT STEP INTO FROM HERE IS NOT WORTH A WALK WHILE ONE IT CAN IS ON
+// OFFER — WHATEVER THE BAKE SAYS, AND HOWEVER NEAR IT IS.
+//
+// `path()` plans the last step into a goal without asking the mover (the goal exemption: a
+// door tile is a pocket by design, and 346 baked go anchors are reachable only that way), and
+// `reach()` reports such a route `verified: false`. That verdict is measured from where the
+// body STANDS, which no position-independent table can be. Two things let a position-free
+// hint outrank it, and in The Clearing of the Trading Post (2144) both fired on every walk:
+//
+//   * the baked anchor. `anchorFor` took the first `from_body` door, and the bake's "body"
+//     is the LARGEST FORWARD FLOOD — which a raised pocket you can only fall OUT of always
+//     wins, because its flood is itself plus the whole room below it. 2144's palisade line is
+//     such a pocket (365 on a 300 floor: 65 kod against a 24-kod step), so its door r38c49 —
+//     which no square on the ground can step into — was `from_body` and the anchor for 2101.
+//     `leaveViaAny` flagged it `from_anchor`, and `orderExits` ranks that above `verified`.
+//   * distance. r27c49 is one square from a body outside the palisade at r26c50, and the only
+//     doors a body can enter, r30c39/r31c39, are forty-two steps round the fort.
+//
+// So the three-walk budget bought r38c49 (walk round the outside, refused), r30c39 (the real
+// door, a body in it), r27c49 (`geometry_blocked`) — the exact refusal sequence on prod's
+// ledger all through 2026-10-30 — and the hop was exhausted with its only door tried once.
+// Offline, a fine-lattice flood with the body's own collision reaches 108 points inside
+// r30c39/r31c39 and none in any of the other six doors to 2101.
+//
+// SCOPED TO `go` DOORS, which is where the goal exemption lives. An edge stage carries the
+// mover's own flood verdict (`grid_only`) and is already ranked on it; an edge anchor is a
+// square the bake walked a line to — the Ukgoth lesson — and is left exactly as it was.
+const goExit = e => e?.kind === 'go' && !!e?.stand_on && e.to != null;
+const liveProven = e => goExit(e) && e.reachable !== false && e.verified === true && e.grid_only !== true;
+const liveRefused = e => goExit(e) && (e.reachable === false || e.verified === false || e.grid_only === true);
+
+// Is the bake's anchor for `to` contradicted by the live list — offered here, refused by the
+// mover from here, while another door to the same room is proven from here?
+export function anchorContradictedLive(spread, to, anchor) {
+  if (!Array.isArray(spread) || to == null || !anchor) return false;
+  const same = spread.filter(e => goExit(e) && Number(e.to) === Number(to));
+  const at = same.filter(e => e.stand_on.row === anchor.row && e.stand_on.col === anchor.col);
+  return at.length > 0 && at.every(liveRefused) && same.some(liveProven);
+}
+
+// Stable partition of `ordered[from..]`: for each destination with a door PROVEN from here,
+// its goal-exempt doors move behind every other candidate. Reordered, never dropped — the
+// bargain `distinctStagesFirst` makes — so a stale verdict degrades rather than strands.
+// Re-applied after `deferNearRefusedStage`, so the deferred neighbour of a proven door that a
+// body held is still tried before a door the mover has already refused.
+export function provenDoorsBeforeExempt(ordered, from = 0) {
+  const list = Array.isArray(ordered) ? ordered : [];
+  const head = list.slice(0, from), tail = list.slice(from);
+  const proven = new Set(tail.filter(liveProven).map(e => Number(e.to)));
+  if (!proven.size) return list.slice();
+  const sink = e => liveRefused(e) && proven.has(Number(e.to));
+  return [...head, ...tail.filter(e => !sink(e)), ...tail.filter(sink)];
+}
+
 // A `go` sent immediately after the last movement update can disappear without either
 // a refusal or a room transition. Retry only that silent case, once by default. A
 // spoken refusal or a room change is authoritative, and the bound prevents a dead exit

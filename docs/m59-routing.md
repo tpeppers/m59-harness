@@ -2177,6 +2177,81 @@ the window (`code_ms`, the heaviest of our frames): on a machine running two fle
 timers are `(idle)` — the process was descheduled, not computing — and a planning fix cannot
 move those.
 
+## Peninsulas: a height wall is a wall, and the flood that forgets which way it runs
+
+**Asked 2026-10-30, about The Clearing of the Trading Post (2144):** is the stuck traffic there
+because "a wall built of height increases over the step limit is not a wall to the router,
+especially when there is a path up it from somewhere" — and is the answer per-room bakes from
+where people are standing, or fixing the height handling?
+
+**At the step, the height handling is right.** Since `STEP_MASK_VERSION` 4 a climb of more than
+`MAX_STEP_HEIGHT` is refused and a drop is allowed, per direction, which is the client's own
+rule. 2144's palisade is 365 on a 300 floor (65 kod against 24) and its trading-post roof is
+424-500: neither can be stepped onto from the ground and both can be fallen off. A body-sized
+fine-lattice flood over the whole fort (`m59-peninsula-test`) agrees with the mask door for
+door: of the eight `go` squares to 2101, only the west door r30c39/r31c39 can be entered.
+
+**The peninsula is real, and it bites where the room is reasoned about by FLOODING FORWARD
+FROM ONE SEED.** A raised pocket you can fall out of but never climb into has a forward flood of
+itself PLUS EVERYTHING BELOW IT, so it always out-floods the floor it drains into. The bake's
+`from_body` is "whichever square floods the most" (chosen over largest-SCC because of West
+Jasper's sink pocket), so in 2144 the palisade line won — 2163 squares to the ground's 2153 —
+its door r38c49 was `from_body`, and `anchorFor` made it THE anchor for 2101. Then at runtime
+`leaveViaAny` flagged that anchor `from_anchor`, which `orderExits` ranks above the live
+`verified` verdict, and `path()`'s goal exemption (the last step into a door is not asked of
+the mover) offers all six doors the mover refuses. The three-walk budget bought
+`r38c49 r30c39 r27c49` — exactly prod's ledger all day — and the hop was exhausted with the only
+real door tried once, usually with a body in it.
+
+Two fixes, both categorical:
+
+- **The live verdict from where the body stands outranks the bake's position-free one.**
+  `anchorContradictedLive` keeps a go anchor out of the lead when the mover cannot step into it
+  from here and another door to the same room is proven; `provenDoorsBeforeExempt` sinks every
+  refused door behind every proven one, re-applied after `deferNearRefusedStage`. Edge stages
+  are untouched (their anchors are walked lines, the Ukgoth lesson). Needs no rebake.
+- **Anchors are ranked on how much of the room can walk TO them** — `reverseReachCounts`,
+  recorded as `reached_by`. Counting backwards is neutral to both shapes: a source pocket is
+  reached by nobody, a sink pocket reaches no door. 2144's r38c49 is 10, the west door 2177.
+  `anchorFor` prefers `from_body`, then the largest `reached_by`; a table without the field
+  ranks as before, so this half takes effect at the next bake. Across all 264 rooms it changes
+  16 anchors, among them 578 -> 579 (r49c44, reached by 171 -> r49c12, 947), Blackstone Keep
+  951 -> 950 (84 -> 824) and Ko'catan 2000 -> 2009 (459 -> 3137).
+
+**And a third place a position-free proof crept in: the fine connectivity check.** On the
+current tree `exits()` marks a `go` door unverified when `fineReachableSquares` from the body's
+exact point comes back COMPLETE without it. Its lattice is laid from that point, and from Piggy's
+own position (kod 3125,1672) one phase sealed itself into 8 squares while every phase 64-192
+units away walked the whole room — so all eight doors read unverified, no door was "proven",
+and the palisade anchor led again (`r38c49 r27c49 r30c40`). A complete answer is now re-asked
+once from another lattice phase and is the union, complete only if both exhaust
+(`m59-finepath.mjs`); a square is ruled out only when two phases both miss it.
+
+**So: bakes from snapshot positions are the wrong tool here.** Pepe and Piggy were standing on
+the room's body; the router already plans from any square, and a bake per start square would
+have baked the same anchor. What was wrong was which door, and why the bake believed in it.
+The other 2144 failures are not geometry either: 2143 -> 2144 (147 exhaustions) and 2154 ->
+2144 are `object_blocked` in flat three-to-four-square necks where the ARRIVAL square of the
+reverse crossing sits on the staging squares, with keepers ping-ponging 2143 <-> 2144 on
+`hunt_relocation` — traffic, the "bag of tricks" problem above.
+
+**What is still not 1:1, and the categorical fix for it.** The graph has one node per square
+and one stand point per node; the body has a fine position. A square holding two places the
+body can be — two floors more than a step apart, or two sides of a pinch narrower than the
+body — makes A* over squares neither complete nor sound. Sampled 4x4, **5.6% of standable
+squares hold more than one floor layer** map-wide; 21.8% in The Cragged Mountains, 11.2% in
+Ukgoth, 6.5% in 2144, 4.0% in Avar Village. In 2144 it errs conservative (the ramp onto the
+north wall walk at r24c32-36 is climbable and invisible). In 578 it errs the dangerous way:
+r2c11 -> r2c10 slides to x=10080, inside r2c10 but east of a pinch the body cannot pass, and
+r2c10 -> r2c9 is then planned from a stand point the body never reached (`_standOnBoundary`
+exempts it from `_strandedByLanding`) — pinned as a TODO in `m59-peninsula-test`. The fix is a
+node per **(square, footing)**: each connected piece of floor inside a square, at
+step-compatible heights and admitting a body-sized disc, with edges proved footing to footing
+by the same trace and falls as one-way edges. It changes the mask format (`STEP_MASK_VERSION`),
+the bake, and every consumer keyed on `"row,col"` (blocked edges, route strings, anchors), so it
+is a project rather than a patch; `m59-fineroute.mjs` is the opt-in planner that already plans
+this way for the places that need it.
+
 ## The movement incident log
 
 ```bash

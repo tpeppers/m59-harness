@@ -48,7 +48,8 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { planBodyDetour } from './m59-body-detour.mjs';
 import {rememberedDeparture,planRailDeparture} from './m59-pocket-rails.mjs';
 import { World, boundedRegionEntry, boundedSilentGo, spreadEdges,
-         distinctStagesFirst, deferNearRefusedStage } from './m59-world.mjs';
+         distinctStagesFirst, deferNearRefusedStage,
+         anchorContradictedLive, provenDoorsBeforeExempt } from './m59-world.mjs';
 
 let pass = 0, fail = 0, skipped = 0;
 const ok = (name, condition, detail = '') => {
@@ -1565,6 +1566,9 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     // below — which of the flattened candidates count as different attempts — and a stub
     // returning the list unchanged would restore exactly the bug it was written for.
     distinctStagesFirst, deferNearRefusedStage,
+    // And the two that let the live verdict from where the body stands outrank the bake's
+    // position-free anchor (2144 -> 2101, m59-peninsula-test). Real, for the same reason.
+    anchorContradictedLive, provenDoorsBeforeExempt,
     // THE TWO INSTRUMENTS, AS THE REAL ONES. Both are ordinary exports of modules that
     // import without taking the fleet lock, and both are written to be unable to throw —
     // which is exactly the property worth exercising here rather than stubbing away. They
