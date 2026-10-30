@@ -164,7 +164,70 @@ export const JOINTS = Object.freeze({
       request: d => d.service ? ok({ do: 'request', service: String(d.service).toLowerCase(), why: why(d) }) : bad('request names a service'),
     },
   },
+  // THE THREE PVP SCOPE JOINTS (tools/m59-combat-assist.mjs). A soldier cannot hit a soldier of its own faction with
+  // safety on ("Good thing your safety was on!", player.kod CheckFactionAttack), and two of ours in one fight can face
+  // the same raider from opposite sides of that line. So a character in a PvP fight sorts the players in it into
+  // DIRECT combatants (it can hit them) and INDIRECT ones (it cannot, and they cannot hit it either -- the rule is
+  // symmetric), fights the first, and helps against the second. The harness only carries the sort and the help; which
+  // player is which, and what help, is a pak's. With none loaded nobody is ever indirect and every fight is the old one.
+  'pvp.target': {
+    clock: 'beat',
+    asked_at: 'CombatMode.syncPvP, when the set of players a PvP fight could swing at changes',
+    when: 'a PvP fight is choosing whom to swing at among the players in it',
+    facts: 'candidates [{name, attacked_us, last_attacked_at, indirect, probes, attackable, murderer, outlaw, enemy, distance}], current, room, room_flags, self, allies_here, hostiles_here',
+    answers: 'default (the fight\'s own pick: the current target, else the first present) | order { first?: [names], indirect?: [names], why } (swing at `first` in that order; never at `indirect` until they hit us)',
+    verbs: {
+      order: d => {
+        const first = names(d.first), indirect = names(d.indirect);
+        return first.length || indirect.length ? ok({ do: 'order', first, indirect, why: why(d) }) : bad('order names first or indirect');
+      },
+    },
+  },
+  'pvp.refused': {
+    clock: 'blow',
+    asked_at: 'CombatMode.event, when the server refuses our swing at a PLAYER in a PvP fight ("Good thing your safety was on!", "can\'t attack")',
+    when: 'the server has just told us this player cannot be attacked by us, with safety on',
+    facts: 'target {name, attacked_us, last_attacked_at, probes}, text, others [names still in the fight], room, self',
+    answers: 'default (as always: a war engagement drops the target, return fire retries every second) | indirect { why } (an indirect combatant: never swung at again in this fight unless it hits us)',
+    verbs: {
+      indirect: d => ok({ do: 'indirect', why: why(d) }),
+    },
+  },
+  'pvp.assist': {
+    clock: 'beat',
+    asked_at: 'CombatMode.advance, every beat of a PvP fight in which every player present is an indirect combatant',
+    when: 'this character is in a fight it cannot swing in: what does it do to help?',
+    facts: 'me {name, mana, max_mana, spells, castable, pack, ready_in_ms, casting}, hostiles [{name, id, distance, attacked_us, indirect, combatant, murderer, outlaw, enemy}], allies [{name, id, self, distance, health_pct, mana, buffs, spells, castable, role, attacked_by, monster_hits, busy_until, recent_casts, report_age_ms}], monsters [{id, name, distance, attacking: [ally names]}], room, room_flags, self, last, claims_lost',
+    answers: 'default (wait a second and ask again) | attack { target } (a player present: back to the fight, at him) | cast { spell, target: "self"|"room"|<ally name>, claim?: { key, ms }, why } | apply { item, target: "self"|<player name>, claim?, why } | fight_monster { id } | wait { ms } | stand_down (end the fight; the keeper\'s ladder has the body again)',
+    verbs: {
+      attack: d => d.target ? ok({ do: 'attack', target: String(d.target).trim(), why: why(d) }) : bad('attack names a target'),
+      cast: d => {
+        if (!d.spell) return bad('cast names a spell');
+        const claim = claimOf(d.claim);
+        if (claim?.error) return bad(claim.error);
+        return ok({ do: 'cast', spell: String(d.spell).trim().toLowerCase(), target: d.target == null ? 'self' : String(d.target).trim(), ...(claim ? { claim } : {}), why: why(d) });
+      },
+      apply: d => {
+        if (!d.item || !d.target) return bad('apply names an item and a target');
+        const claim = claimOf(d.claim);
+        if (claim?.error) return bad(claim.error);
+        return ok({ do: 'apply', item: String(d.item).trim().toLowerCase(), target: String(d.target).trim(), ...(claim ? { claim } : {}), why: why(d) });
+      },
+      fight_monster: d => Number.isSafeInteger(Number(d.id)) && Number(d.id) > 0 ? ok({ do: 'fight_monster', id: Number(d.id), why: why(d) }) : bad('fight_monster names an object id'),
+      wait: d => { const ms = num(d.ms, 0, 10_000, 1000); return Number.isNaN(ms) ? bad('wait ms is 0..10000') : ok({ do: 'wait', ms, why: why(d) }); },
+      stand_down: d => ok({ do: 'stand_down', why: why(d) }),
+    },
+  },
 });
+
+/** A fleet-wide claim on an assist action (tools/m59-fleet-claims.mjs): { key, ms }, or null, or { error }. */
+function claimOf(c) {
+  if (c == null) return null;
+  if (typeof c !== 'object' || !c.key) return { error: 'a claim is { key, ms }' };
+  const ms = num(c.ms, 250, 30_000, 2000);
+  if (Number.isNaN(ms)) return { error: 'claim ms is 250..30000' };
+  return { key: String(c.key).slice(0, 160), ms };
+}
 
 export const ALSO_VERBS = Object.freeze(['request', 'note']);
 

@@ -16,6 +16,12 @@ on both sides. A bare scroll is made by its icon only when a leaf class owns it.
 clone names, whole strings only. The refusals. And `M59Client.close()`
 exists and drops the socket (attached: quit first), which every keeper logoff path silently lacked.
 
+`m59-pvp-scope-test.mjs` (16) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
+docs/m59-joints.md). FIRST: with no pak, a safety refusal in return fire is retried at the same player as it always
+was. Then one probe and the move to the player we can hit; a hit undoing it; `pvp.target` unable to overrule a hit;
+an assist cast on an ally under a fleet claim and not under somebody else's; never a cast at an enemy; the combat
+sheet in fleet-health read back as an ally's facts; `alarm_adjacent`.
+
 `m59-joints-test.mjs` (143) pins the joints (docs/m59-joints.md). FIRST: with no pak, every joint answers
 default, every call site is guarded by `handles`, and a firewall step through the real Session is refused
 exactly as before. Then the closed answer sets, the condition language, strikes, follow-ups and decision
