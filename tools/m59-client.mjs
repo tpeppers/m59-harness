@@ -1296,6 +1296,15 @@ export class M59Client {
   // BP_REQ_CAST {4,OBJECT spell} {2,LIST_OBJ_PARM targets}. A spell with no
   // target still sends an empty list.
   cast(spellId, targets = []) {
+    // THE PVP REAGENT RESERVE (m59-reagent-reserve.mjs; installed by the session): outside a PvP fight, a cast that
+    // would take a reserved reagent below its floor is not sent. Every caster reaches the wire here, which is the point.
+    try {
+      if (this.castVeto?.(spellId, [].concat(targets))) {
+        this.castsVetoed = (this.castsVetoed ?? 0) + 1;
+        this.tapSent?.('cast', { spell_id: objId(spellId), vetoed: true, why: 'reagent_reserve' });
+        return false;
+      }
+    } catch { /* a veto that throws vetoes nothing */ }
     try { if (this.cooperativeCastVeto?.([].concat(targets))) return false; } catch { /* optional policy */ }
     this.send(BP.REQ_CAST, u32(objId(spellId)), encodeIdList([].concat(targets)));
     try { this.cooperativeCastSent?.([].concat(targets)); } catch { /* optional telemetry */ }

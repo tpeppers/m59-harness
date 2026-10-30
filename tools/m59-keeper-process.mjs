@@ -448,6 +448,8 @@ session.joints = new JointHost({ fleet: fleetName, agent, character, isHost: isH
   } });
 void session.joints.refresh();
 setInterval(() => { void session.joints.refresh(); }, 2000).unref?.();
+// THE PVP REAGENT RESERVE (m59-reagent-reserve.mjs): who this is, so client.cast can read this fleet's reserve file.
+session.reserveWho = { fleet: fleetName, agent, character };
 session.combat.sentinelEligibility = () => joinWanted &&
   process.env.M59_WAR_SENTINEL !== '0' && (autopilot?.policy ?? policy)?.warSentinel !== false;
 // WARBAND COMBAT (CombatMode.warbandTick): on while a swarm holds this character -- the terminal's S

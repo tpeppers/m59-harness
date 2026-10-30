@@ -68,7 +68,7 @@ const BOOKKEEPING = new Set(['finished', 'waiting', 'visible', 'pvp_offline', 'p
 export const COMBAT_EVENTS = new Set(['pvp_attacked', 'triggered', 'wand_volley', 'wand_refused', 'opener_cast',
   'pvp_outcome', 'pvp_rebound', 'pvp_retargeted', 'finished', 'opener_wait', 'opener_strategy_fault',
   // The PvP scope (m59-combat-assist.mjs): who we stopped swinging at and why, and what we did instead.
-  'pvp_indirect', 'pvp_indirect_cleared', 'pvp_refused_here', 'pvp_assisting', 'pvp_direct_again', 'pvp_assist', 'pvp_assist_skipped']);
+  'pvp_indirect', 'pvp_indirect_cleared', 'pvp_refused_here', 'pvp_stand_to', 'pvp_assisting', 'pvp_direct_again', 'pvp_assist', 'pvp_assist_skipped']);
 
 let fleetCache;
 const currentFleet = () => {

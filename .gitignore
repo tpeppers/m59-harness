@@ -955,6 +955,8 @@ substrate/island-admin/
 /substrate/paks.json
 /substrate/paks-*.json
 /substrate/pak-dirs.json
+# The PvP reagent reserve (tools/m59-reagent-reserve.mjs): casts of which spells this fleet keeps back from farming. Orders.
+/substrate/reagent-reserve*.json
 /substrate/postures/
 /substrate/posture-dirs.json
 /substrate/posture-saves/
