@@ -33,7 +33,7 @@ import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
-import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS } from './m59-pvp-strategy.mjs';
+import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS, STAND_TO_MS } from './m59-pvp-strategy.mjs';
 import { recordGroan, latestHealth } from './m59-player-health.mjs';
 import * as callout from './m59-pvp-callout.mjs';
 import * as yelp from './m59-pvp-yelp.mjs';
@@ -510,6 +510,7 @@ export class CombatMode {
       const d = this.consultSeen(p.name, p.verdict, room, now);
       if (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted')) { this.raiseWarAlarm(p.name, 'sighted', room); return; }
       if (d?.do === 'sortie' && this.beginSortie(d, p.name, 'sighted') === 'going') { this.raiseWarAlarm(p.name, 'sighted', room); return; }
+      if (d?.do === 'stand_to') this.beginStandTo(d, p.name);
     }
     hostile = hostiles.find(h => !this.fireHeld(h.name)) ?? null;
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
@@ -2259,7 +2260,7 @@ export class CombatMode {
         strategy: d.strategy ?? null, decision: d.do, to: d.room ?? null, why: d.why ?? null });
     }
     // A joust is a fight too: it lifts our room list here exactly as `engage` does.
-    if ((d.do === 'engage' || d.do === 'joust') && here > 1)
+    if ((d.do === 'engage' || d.do === 'joust' || d.do === 'stand_to') && here > 1)
       this.strategyEngage = { room: here, until: this.now() + Math.max(ENGAGE_WINDOW_MS, d.do === 'joust' ? d.ms : 0), player, strategy: d.strategy ?? null };
     if (d.do === 'hold_fire') {
       this.holdFire.set(String(player).toLowerCase(), this.now() + (d.ms ?? HOLD_FIRE_MS));
@@ -2555,6 +2556,50 @@ export class CombatMode {
     return true;
   }
 
+  /**
+   * pvp-strategy `stand_to`: a player worth preparing for is in the room and nobody has been hit. Take the body as PvP
+   * survival (safety stays ON) and assist -- buffs and heals before the first blow. Renewed by deciding again. A no-op
+   * without a pak answering pvp.assist, in a room where players cannot fight, during a flight, or under an operator's
+   * order: standing to is only worth the body if something will use the beat.
+   */
+  beginStandTo(d, enemy) {
+    const s = this.s, c = s.client, now = this.now();
+    if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return false;
+    if (this.pvpEligibility?.() === false || !s.joints?.handles?.('pvp.assist')) return false;
+    if (this.active?.flight || (this.active && !this.active.pvp) || this.pvpForbiddenHere()) return false;
+    const until = now + (d.ms ?? STAND_TO_MS);
+    if (this.active?.pvp) {
+      const p = this.active.pvp;
+      if (p.stand_to) { p.stand_to.until = Math.max(p.stand_to.until, until); p.stand_to.enemy = enemy; }
+      return true;
+    }
+    const decision = chooseSurvivalDecision(s, { strategy: 'pvp_stand_to', status: 'active',
+      reason: `${enemy} is here; stand to and help before anyone is hit`, reason_code: 'pvp_stand_to', source: 'combat',
+      mitigation: 'the pvp.assist ladder; the first blow turns it into return fire' },
+    { because: 'a PvP strategy stood this character to' });
+    this.stop('superseded by a PvP stand-to', { preserveId: decision.id });
+    const id = randomUUID();
+    withBodyCommand(s, () => s.cancelMovement(null, 'PvP stand-to', { preserveId: decision.id, origin: keeperOrigin('pvp_survival') }), id);
+    s._router?.clear?.();
+    if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = now; }
+    const keeper = this.keeper();
+    if (keeper) { keeper.suspendedJourney = null; keeper.frozenUntil = null; keeper.freezeSample = null; }
+    const order = normalizeCombatOrder({ action: 'kill', target: enemy });
+    const o = this.active = { id, order, acceptedAt: now, expiresAt: null, keepSafety: true,
+      client: c, playerId: c.selfId, room: s.world.room.num, roomObject: c.room.id,
+      phase: 'assisting', phaseRevision: 0, targetId: null, targetName: null,
+      attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false, assistNextAt: 0,
+      pvp: { version: 1, strategy: 'stand_to', character: characterName(s, c),
+        decision_id: decision.id, chosen_at: now, last_attacked_at: now, first_evidence: `stand-to: ${enemy}`,
+        attackers: [], attacks: 0, incoming_hits: 0, incoming_misses: 0, outgoing_hits: 0, outgoing_misses: 0,
+        reconnects: 0, ended_at: null, outcome: null, stand_to: { enemy, until, why: d.why ?? null, strategy: d.strategy ?? null },
+        start_health: Number.isFinite(c.vitals?.()?.health?.value) ? c.vitals().health.value : null, joust: null } };
+    updateSurvivalDecision(s, decision.id, { activated_at: now, phase: 'stand_to' });
+    this.record('pvp_stand_to', o);
+    s.pacer.wake?.(); this.wake();
+    return true;
+  }
+
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
@@ -2693,6 +2738,13 @@ export class CombatMode {
       this.record('pvp_rebound', o);
     }
     if (o.phase === 'offline') o.phase = 'waiting';
+    // STANDING TO (pvp-strategy `stand_to`): nobody has attacked yet, so there is nobody to swing at -- the fight
+    // assists until the window closes, or until a blow or a fleet-mate's alarm gives it an attacker.
+    if (p.stand_to && !p.attackers.length) {
+      if (this.now() >= p.stand_to.until) { this.stop(`stood to for ${p.stand_to.enemy}; no attack came`); return false; }
+      if (o.phase !== 'assisting') { o.phase = 'assisting'; o.phaseRevision++; o.targetId = null; o.targetName = null; o.assistNextAt = 0; }
+      return true;
+    }
     const seen = p.attackers.map(a => ({ a, target: combatTarget(c, a.character) })).filter(x => x.target);
     // Refused to us in this room: still in the room, never a target (m59-refused-targets.mjs).
     const present = seen.filter(x => !this.targetRefused(x.a.character));

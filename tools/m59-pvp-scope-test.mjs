@@ -319,6 +319,43 @@ try {
     f.mode.stop('test');
   });
 
+  // ------------------------------------------------------------------------------------------- 5. stand to
+  await test('stand_to: a strategy answers a sighting, and the room buffs BEFORE the first blow', async () => {
+    const { validateDecision } = await import('./m59-pvp-strategy.mjs');
+    assert.deepEqual(validateDecision({ do: 'stand_to', ms: 99_999_999 }).decision, { do: 'stand_to', ms: 600_000, why: null });
+    assert.match(validateDecision({ do: 'stand_to', ms: 5 }).error, /at least 1000/);
+    let facts = null;
+    const f = fixture({ paks: [assistPak(x => { facts = x; return { do: 'cast', spell: 'magic shield', target: 'Gonzo' }; })] });
+    f.mode.pvpStrategy = { decide: (moment, x) => moment === 'player_seen' && /rick/i.test(x.player) ? { do: 'stand_to', ms: 30_000, strategy: 't' } : null };
+    put(f, 4, OF.PLAYER, 6, 6); put(f, 2, P);
+    f.mode.event({ kind: 'appeared', id: 2 });
+    assert.equal(f.mode.active?.pvp?.strategy, 'stand_to');
+    assert.equal(f.mode.active.phase, 'assisting');
+    await f.mode.tick();
+    assert.ok(f.sent.includes('cast:900:4'), `buffed Gonzo with nobody hit (sent ${f.sent})`);
+    assert.equal(attacksAt(f, 2), 0, 'and started no fight');
+    assert.equal(facts.allies[0].role, 'standby');
+    assert.ok(!f.sent.includes('safety:false'));
+    // Rick's blow lands: the stand-to becomes return fire.
+    blow(f, 'Rick Deckard'); clock += 1100; await swing(f);
+    assert.notEqual(f.mode.active.phase, 'assisting');
+    assert.ok(attacksAt(f, 2) >= 1);
+    f.mode.stop('test');
+  });
+
+  await test('stand_to: the window closes when no attack comes; and without an assist pak it is not taken at all', async () => {
+    const f = fixture({ paks: [assistPak(() => ({ do: 'wait', ms: 1000 }))] });
+    put(f, 2, P);
+    assert.equal(f.mode.beginStandTo({ do: 'stand_to', ms: 5000 }, 'Rick Deckard'), true);
+    clock += 6000; await f.mode.tick();
+    assert.equal(f.mode.active, null);
+    assert.match(f.mode.last.reason, /no attack came/);
+    const bare = fixture();
+    put(bare, 2, P);
+    assert.equal(bare.mode.beginStandTo({ do: 'stand_to', ms: 5000 }, 'Rick Deckard'), false);
+    assert.equal(bare.mode.active, null);
+  });
+
   await test('alarm_elsewhere tells a strategy whether the alarm room is one exit away', () => {
     const f = fixture();
     let facts = null;

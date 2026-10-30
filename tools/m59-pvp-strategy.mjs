@@ -72,6 +72,12 @@
 //        do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's
 //        alarm both pass over them for `ms` (default HOLD_FIRE_MS, renewed by deciding again). It never
 //        stops return fire -- a player who hits us is answered exactly as before.
+//   { do: 'stand_to', ms?, why? }
+//        a player worth preparing for is HERE and nobody has been hit yet: take the body (as PvP survival, safety on)
+//        and ASSIST for `ms` (default STAND_TO_MS, at most STAND_TO_MAX_MS, renewed by deciding again) -- the
+//        pvp.assist joint's buffs and heals go out BEFORE the first blow (m59-combat-assist.mjs). It starts no fight:
+//        the first player blow, or a fleet-mate's attacked alarm, turns it into the ordinary one. Silence when this
+//        keeper has no pak answering pvp.assist, in a room where players cannot fight, or under an operator's order.
 //   { do: 'joust', period_ms?, swings?, gap?, ms?, why? }
 //        return fire in TIMED EXCHANGES rather than continuously: `swings` attacks (0-5, default 1), then the
 //        body backs away inside this room until `gap` squares (2-10, default 4) separate it from the attacker,
@@ -112,7 +118,9 @@ const SUBSTRATE = join(HERE, '..', 'substrate');
 export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
 /** What a module hears when it does not say: the moments that existed before `moments` did. */
 export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
-export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire', 'joust']);
+export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire', 'joust', 'stand_to']);
+export const STAND_TO_MS = 60_000;
+export const STAND_TO_MAX_MS = 10 * 60_000;
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
 export const STRIKES = 3;
 export const MAX_HOLD_MS = 4 * 3600_000;
@@ -200,6 +208,11 @@ export function validateDecision(d) {
   if (verb === 'default') return { decision: null };
   const why = d.why == null ? null : String(d.why).slice(0, 200);
   if (verb === 'engage') return { decision: { do: 'engage', why } };
+  if (verb === 'stand_to') {
+    const v = d.ms == null ? STAND_TO_MS : Number(d.ms);
+    if (!Number.isFinite(v) || v < 1000) return { decision: null, error: 'stand_to ms is at least 1000 milliseconds' };
+    return { decision: { do: 'stand_to', ms: Math.min(v, STAND_TO_MAX_MS), why } };
+  }
   if (verb === 'hold_fire') {
     const v = d.ms == null ? HOLD_FIRE_MS : Number(d.ms);
     if (!Number.isFinite(v) || v < 0) return { decision: null, error: 'hold_fire ms is non-negative milliseconds' };

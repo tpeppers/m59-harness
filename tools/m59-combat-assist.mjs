@@ -108,7 +108,8 @@ export class CombatAssist {
         .map(h => ({ spell: h.spell, target: h.target === 'self' ? me : lc(h.target), at: h.at })).slice(-6),
       mana: Number.isFinite(v.mana?.value) ? { value: v.mana.value, max: v.mana.max ?? null } : null,
       buffs: buffs.slice(0, 32), spells: this.sheet.spells, castable: this.sheet.castable,
-      role: !p ? null : o.phase === 'assisting' ? 'indirect' : 'direct',
+      // `standby`: standing to (pvp-strategy stand_to) -- nobody has attacked yet; a caster AND somebody to buff.
+      role: !p ? null : p.stand_to && !p.attackers.length ? 'standby' : o.phase === 'assisting' ? 'indirect' : 'direct',
       fighting: p && o.phase !== 'assisting' ? (o.targetName ?? null) : null,
       attackers: p ? p.attackers.map(a => lc(a.character)).slice(0, 16) : [],
       indirect: p ? Object.keys(p.indirect ?? {}).slice(0, 16) : [],

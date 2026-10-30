@@ -106,6 +106,18 @@ refusal still suspends him in the war book as well. Otherwise, with no pak nobod
 is the old one; `m59-pvp-scope-test.mjs` pins both first.
 `substrate/paks.example/example-pvp-scope.mjs` is the shape.
 
+**Standing to.** A PvP strategy may answer a sighting with `{ do: 'stand_to', ms }`: the character takes its body as PvP
+survival (safety on) with nobody attacking yet, and assists -- so the buffs go out BEFORE the first blow. Its sheet role
+is `standby`. The first blow, or a fleet-mate's attacked alarm, turns it into the ordinary fight; otherwise it ends
+when `ms` passes without a renewal. Without a pak answering `pvp.assist` it is not taken at all.
+
+**The reagent reserve** ([`tools/m59-reagent-reserve.mjs`](../tools/m59-reagent-reserve.mjs)). Practice, a coordinator's
+Discordance, a trainer script: anything that casts while farming would spend the reagents a PvP fight needs. So
+`client.cast` itself refuses a cast OUTSIDE a PvP fight that would take a reserved reagent below its floor (`c.castVeto`,
+installed per client beside `attackVeto`). The floors are casts per spell, counted only for spells the character knows,
+times the kod's cost, from `substrate/reagent-reserve-<fleet>.json` (gitignored; re-read on mtime). Inside a PvP fight --
+return fire, assisting, standing to -- nothing is refused. No file: nothing is ever refused. `m59-reagent-reserve-test.mjs` (6).
+
 ## Paks
 
 A pak is one file of behaviour, shareable on its own:

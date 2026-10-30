@@ -49,6 +49,9 @@ non-fleetmate player is in the room — `CombatMode.scanForEnemies`, at most onc
 it only if its `moments` array lists it (default `['attacked_by_player', 'player_seen']`), because a strategy written
 before it existed would read "a hostile, elsewhere" as one of its own and act on it.
 
+**`stand_to`** (2026-10-29): `{ do: 'stand_to', ms?, why? }` -- see docs/m59-joints.md "The PvP scope". Buffs before
+the first blow; starts no fight.
+
 **Facts:** `moment, character, agent, room, player, hostile, basis, pvp_allowed_here, health_pct, max_health,
 in_flight, flight_room, hold_room, now, allies_here, hostiles_here, sortie_room, sortie_phase, alarm_room, reporter` —
 frozen. `allies_here` does not count the character itself; `hostiles_here` counts players the war book or the

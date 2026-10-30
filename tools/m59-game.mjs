@@ -412,6 +412,7 @@ import { attachStepMasks } from './m59-routes.mjs';
 import { installDoorObserver } from './m59-ceiling-doors.mjs';
 import { tranceMs, classifyTranceLine } from './m59-trance.mjs';
 import { idleGearCheck } from './m59-castrite.mjs';
+import { makeCastVeto } from './m59-reagent-reserve.mjs';
 import { cycleMayLoot } from './m59-curse-cycle.mjs';
 let geometryStartupMode = 'eager';
 try {
@@ -2623,6 +2624,10 @@ class Session {
     // The buddy system (m59-buddy.mjs): a tagger with a tag out swings at nothing else, and at the tag
     // only until one blow has landed. Installed by Autopilot.passBuddy; absent, it vetoes nothing.
     c.attackVeto = id => vetoAttack(this, c, id) || vetoSpared(this, c, id) || !!this.buddyVeto?.(id);
+    // THE PVP REAGENT RESERVE (m59-reagent-reserve.mjs). `reserveWho` is set by the keeper process; until then, and in
+    // every session that never sets it, nothing is refused. A PvP fight that owns the body spends the reserve freely.
+    c.castVeto = makeCastVeto(this, c, { who: () => this.reserveWho ?? null, inPvp: () => !!this.combat?.active?.pvp,
+      log: line => console.log(line) });
     c.onEvent = ev => {
       c.observeSessionEvidence?.(ev);
       this.observeAttackMessage(ev,c);

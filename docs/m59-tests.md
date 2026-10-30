@@ -16,7 +16,11 @@ on both sides. A bare scroll is made by its icon only when a leaf class owns it.
 clone names, whole strings only. The refusals. And `M59Client.close()`
 exists and drops the socket (attached: quit first), which every keeper logoff path silently lacked.
 
-`m59-pvp-scope-test.mjs` (18) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
+`m59-reagent-reserve-test.mjs` (6) pins the PvP reagent reserve: no file refuses nothing; floors from the kod costs
+for known spells only; exact pack names; a farming cast refused at the floor and the same cast allowed in a PvP fight;
+a vetoed `client.cast` never reaches the wire.
+
+`m59-pvp-scope-test.mjs` (20) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
 docs/m59-joints.md). FIRST: with no pak, the target pick is the old one, and a safety refusal is NOT retried -- the
 player is refused here, the fight moves to whoever it can hit, the next alarm does not probe again, and his own blow
 undoes it. Then one probe and the move to the player we can hit; a hit undoing it; `pvp.target` unable to overrule a hit;
