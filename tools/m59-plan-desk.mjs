@@ -427,7 +427,16 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
   return { tick, state };
 }
 
-if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
+// THE LOOP IS A FUNCTION, NOT TOP-LEVEL AWAIT, BECAUSE A PROVIDER IMPORTS THIS FILE. Measured
+// 2026-10-29: tools/plans/fleetscripts.mjs imports parseArgs from here, and in a desk process this
+// file is the entry module. With the loop at top level its evaluation never finished, so the first
+// tick with a client open dynamically imported a provider that waits on a module still evaluating:
+// for ever. The desk beat once, answered nobody, went stale -- and every press of the terminal's L
+// started another one that did the same. Thirty-six were found. Ending evaluation here lets any
+// provider import anything from this file.
+if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) main().catch(e => { console.error(`plan desk: ${e.stack ?? e.message}`); process.exit(1); });
+
+async function main() {
   const argv = process.argv.slice(2);
   const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : d; };
   const { fleet } = resolveFleet(argv);
@@ -477,8 +486,19 @@ if (process.argv[1]?.endsWith('m59-plan-desk.mjs')) {
   // While none is: nothing, until a watched folder changes or IDLE_BEAT_MS passes -- that is the
   // heartbeat, which must stay inside DESK_FRESH_MS or a second desk would think this one dead.
   const IDLE_BEAT_MS = 10_000;
+  // A DESK THAT CANNOT FINISH A PASS LEAVES. Its heartbeat is stale after DESK_FRESH_MS, so a second
+  // desk is already entitled to start; one that stays wedged only becomes the next stray. Leaving
+  // keeps it to one: the broker starts a fresh desk within its PLAN_DESK_POLL.
+  const WEDGED_MS = 60_000;
+  let passAt = Date.now();
+  setInterval(() => {
+    if (Date.now() - passAt <= WEDGED_MS) return;
+    console.error(`plan desk: no pass completed in ${Math.round((Date.now() - passAt) / 1000)}s; leaving so a working desk can serve ${dir}`);
+    process.exit(1);
+  }, 5000).unref();
   let beatAt = 0;
   for (;;) {
+    passAt = Date.now();
     if (parent && !pidAlive(parent)) { console.error(`plan desk: broker pid ${parent} is gone; leaving with it`); process.exit(0); }
     if (Date.now() - listedAt > 300_000) relist();
     if (Date.now() - beatAt >= 5000) { heartbeat(); beatAt = Date.now(); }
