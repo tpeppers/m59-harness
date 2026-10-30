@@ -29,7 +29,7 @@ import { mkdirSync, openSync, writeFileSync, existsSync,
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectRoom, renderPage } from './m59-roomview.mjs';
-import { fleetName } from './m59-fleetpath.mjs';
+import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -40,6 +40,10 @@ const flag = (n, d = null) => {
 };
 const PORT = Number(flag('port', 8977));
 const FLEET = flag('fleet', null) ?? fleetName();
+// The roster (to tell ours from theirs in a PvP replay) and the dashboard serving /pvp, which the
+// replay links back to.
+const STATE = stateFileFor(FLEET && FLEET !== '-' ? FLEET : '');
+const PVP_PORT = Number(flag('pvp-port', 8902));
 
 // AM I THE PROGRAM, OR AM I A LIBRARY? Computed before anything that exits or binds, because
 // the two things below this line -- `--help` calling process.exit(0), and `server.listen` --
@@ -77,13 +81,34 @@ function ledgerStamp() {
 
 const cache = new Map();
 
-function pageFor(room) {
+// "PVP HERE": every battle in the last fortnight that touched this room, each a link to its replay
+// drawn over this map. One report serves every room, and it is re-read at most once a minute.
+let pvpBattles = { at: 0, list: [] };
+async function pvpAside(room) {
+  if (Date.now() - pvpBattles.at > 60_000) {
+    try {
+      const { loadWindow } = await import('./m59-pvp-replay.mjs');
+      pvpBattles = { at: Date.now(), list: loadWindow({ days: 14, stateFile: STATE }).report.battles };
+    } catch { pvpBattles = { at: Date.now(), list: [] }; }
+  }
+  const here = pvpBattles.list.filter(b => b.rooms.includes(room));
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = here.slice(0, 12).map(b => `<div style="margin:2px 0"><a href="/replay/${encodeURIComponent(b.id)}?map=${room}" style="color:var(--survey)">` +
+    `${esc(new Date(b.start).toISOString().replace('T', ' ').slice(0, 16))}Z</a> <span style="color:var(--${b.result === 'lost' ? 'bad' : b.result === 'won' ? 'ok' : 'muted'})">${esc(b.result)}</span> ` +
+    `<span style="color:var(--muted)">vs ${esc(b.enemies.map(e => e.name).join(', ') || '?')} · K${b.kills}/D${b.our_deaths}</span></div>`).join('');
+  return `<section id="pvpHere"><div class="eyebrow">PvP here, last 14 days</div><div class="mono" style="font-size:11.5px;margin-top:6px">` +
+    (rows || '<span style="color:var(--faint)">No battle touched this room.</span>') +
+    `<div style="margin-top:4px"><a href="/replay" style="color:var(--survey)">every replay →</a></div></div></section>`;
+}
+
+async function pageFor(room) {
   const stamp = ledgerStamp();
+  const aside = await pvpAside(room);
   const hit = cache.get(room);
-  if (hit && hit.at === stamp) return hit.html;
-  const data = collectRoom(room, { fleets: FLEET ? [FLEET] : null });
-  const html = renderPage(data);
-  cache.set(room, { at: stamp, html });
+  if (hit && hit.at === stamp && hit.aside === aside) return hit.html;
+  const data = hit?.at === stamp ? hit.data : collectRoom(room, { fleets: FLEET ? [FLEET] : null });
+  const html = renderPage(data, { aside });
+  cache.set(room, { at: stamp, html, data, aside });
   return html;
 }
 
@@ -141,8 +166,26 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(302, { location: '/' + room });
       return res.end();
     }
+    // PvP replays: a battle from the /pvp page, drawn over the rooms it happened in.
+    if (url.pathname === '/replay' || url.pathname === '/replay/') {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7));
+      const { loadWindow } = await import('./m59-pvp-replay.mjs');
+      const { renderReplayIndex } = await import('./m59-pvp-replay-page.mjs');
+      return send(200, 'text/html; charset=utf-8', renderReplayIndex(loadWindow({ days, stateFile: STATE }).report.battles, { days }));
+    }
+    const rp = url.pathname.match(/^\/replay\/(.+?)(\.json)?$/);
+    if (rp) {
+      const id = decodeURIComponent(rp[1]);
+      const { replayFor } = await import('./m59-pvp-replay.mjs');
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 30));
+      const r = replayFor(id, { days, stateFile: STATE, rebuild: url.searchParams.has('rebuild') });
+      if (!r) return send(404, 'text/plain; charset=utf-8', `no battle "${id}" in the last ${days} days — see /replay`);
+      if (rp[2]) return send(200, 'application/json; charset=utf-8', JSON.stringify(r));
+      const { renderReplayPage } = await import('./m59-pvp-replay-page.mjs');
+      return send(200, 'text/html; charset=utf-8', renderReplayPage(r, { pvpUrl: `http://localhost:${PVP_PORT}/pvp?days=7` }));
+    }
     const m = url.pathname.match(/^\/(\d+)$/);
-    if (m) return send(200, 'text/html; charset=utf-8', pageFor(Number(m[1])));
+    if (m) return send(200, 'text/html; charset=utf-8', await pageFor(Number(m[1])));
     if (url.pathname === '/') {
       const rows = roomsWithRoutes();
       const style = 'body{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#14161a;'
