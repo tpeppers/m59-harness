@@ -126,6 +126,11 @@ a dormant keeper answers with 423). An unreadable file stops the lap's rejoins, 
 while it is unreadable starts dormant-until-told: reading garbage as "nobody is held" would log every
 held character in at once.
 
+- **Before 2026-10-29 a hold did not log anybody off.** The keeper "closed" its client with
+  `session.client.close()` inside `try {} catch {}`, and `M59Client` had no such method: the keeper
+  recorded the character as out while the server still held it in the world. Fixed in
+  `m59-client.mjs`; a keeper picks it up when it is restarted (`restart-keepers`), so until then read
+  `pbLogged_on` or the broker's `session_characters`, not the keeper's `in_game`.
 - **Logging off to escape.** Logging off is the one move in this game that breaks a fight -- the
   ghost it leaves cannot be attacked (`logghost.kod` has no combat handler) -- and the sweep used
   to log the keeper straight back in, onto the square you left. **Hold the character first, then

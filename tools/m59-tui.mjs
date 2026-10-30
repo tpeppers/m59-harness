@@ -11,7 +11,8 @@
 // So this is the same information with the last step joined on: arrow keys to pick a
 // character, Enter for its full sheet, L to LAUNCH the client logged in as it with the
 // agent DLL injected, V to make it a PVP CAMERA that films every fight in its room, C to
-// open the COMPENDIUM with that character's real numbers in it. No copying, no pasting.
+// open the COMPENDIUM with that character's real numbers in it, Z to SHADOW-CLONE prod onto
+// the lab and launch that character's copy there. No copying, no pasting.
 //
 // THE CLIENT L STARTS IS THE PATCHED ONE WHEN THERE IS ONE. `m59-devclient.mjs` names the
 // build tree's own meridian.exe — the binary with clientd3d/m59dbg.c in it and without
@@ -469,7 +470,7 @@ function listView() {
       : c.bold(c.yellow('X')) + c.dim(' leave override');
   L.push(c.dim('  ↑↓/jk move · ←→ highlight · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') + c.magenta('V pvp rec') + c.dim(' · ') +
          c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') + c.cyan('D DBFST') + c.dim(' · ') +
-         c.cyan('G geometry') +
+         c.cyan('G geometry') + c.dim(' · ') + c.cyan('Z shadow clone') +
          (S.staged.length ? c.dim(' · ') + c.bold(c.yellow('A start all')) : '') +
          c.dim(' · C compendium · P plan · ') + xSays +
          c.dim(' · r refresh · q quit'));
@@ -558,6 +559,7 @@ function heroView() {
          c.bold(c.cyan('B')) + c.dim(` BOARD — the whole ${FLEET_LABEL} fleet in the commander · `) +
          c.bold(c.cyan('F')) + c.dim(' FIELD COMMAND — the same fleet on a map, in a browser · ') +
          c.bold(c.cyan('D')) + c.dim(' DBFST — edit live fleet orders · ') +
+         c.bold(c.cyan('Z')) + c.dim(' SHADOW CLONE — copy prod onto the lab and play this character’s clone · ') +
          (held ? c.bold(c.yellow('X')) + c.dim(' take it off ' + cut(held.label ?? 'fleet work', 22)) + c.dim(' · ') : '') +
          (S.staged.length ? c.bold(c.yellow('A')) + c.dim(` LOG-ON / START ALL ${S.staged.length} staged · `) : '') +
          c.dim('r refresh'));
@@ -764,6 +766,54 @@ async function alreadyPlaying(account) {
   return (await localClients({ ttlMs: 0 })).find(cl => String(cl.account ?? '').toLowerCase() === want) ?? null;
 }
 
+// ------------------------------------------------------------------ the shadow clone
+//
+// Z: COPY PRODUCTION ONTO THE LAB AND PLAY THE COPY OF THIS CHARACTER. `m59-shadow-clone.mjs`
+// re-dresses the standing shadow fleet from prod's keeper caches — stats, vitals, karma,
+// abilities, pack and gear, guild/hall/chests, faction, where they stand — and relogs it, in a
+// few seconds when the shadow broker is already up (about a minute when it has to start one).
+// Then the client is launched as the clone of the row under the cursor, on the lab server,
+// which bumps that clone's keeper exactly as L bumps a prod keeper. Nothing here writes to prod.
+let cloning = null;
+async function shadowClone(row) {
+  if (REMOTE) { S.status = c.yellow('shadow clone runs on the fleet machine — not from a remote terminal'); return; }
+  if (cloning) { S.status = c.yellow(`a shadow clone is already running (${Math.round((Date.now() - cloning) / 1000)}s)…`); return; }
+  cloning = Date.now();
+  const tool = join(REPO, 'tools', 'm59-shadow-clone.mjs');
+  S.status = c.dim('shadow clone: copying prod onto the lab… (log: substrate/shadow-clone.log)'); draw();
+  try {
+    const out = await new Promise((res) => {
+      let buf = '';
+      let log = null;
+      try { log = openSync(join(REPO, 'substrate', 'shadow-clone.log'), 'a'); } catch { /* no log, still run */ }
+      const child = spawn(process.execPath, [tool, '--json'], { cwd: REPO, windowsHide: true });
+      const tick = setInterval(() => { S.status = c.dim(`shadow clone: ${Math.round((Date.now() - cloning) / 1000)}s…`); draw(); }, 1000);
+      child.stdout.on('data', d => { buf += d; if (log != null) try { writeSync(log, d); } catch { /* ignore */ } });
+      child.stderr.on('data', d => { if (log != null) try { writeSync(log, d); } catch { /* ignore */ } });
+      child.on('close', code => { clearInterval(tick); res({ code, buf }); });
+      child.on('error', e => { clearInterval(tick); res({ code: 1, buf: String(e.message) }); });
+    });
+    let report = null;
+    try { report = JSON.parse(out.buf.trim().split(/\r?\n/).pop()); } catch { /* reported below */ }
+    if (!report) { S.status = c.red('shadow clone failed — see substrate/shadow-clone.log'); return; }
+    const secs = (report.total_ms / 1000).toFixed(1);
+    const snap = JSON.parse(readFileSync(report.snapshot, 'utf8'));
+    const rec = snap.characters.find(x => x.prod_agent === row.agent || x.shadow_account === row.agent);
+    const roster = JSON.parse(readFileSync(report.roster, 'utf8'));
+    const creds = rec ? roster[rec.shadow_account]?.credentials : null;
+    const said = `cloned in ${secs}s, ${report.in_game ?? '?'} in game` +
+      (report.bad_password?.length ? ` · ${report.bad_password.length} slot(s) cannot log in (roster password)` : '') +
+      (report.error ? ` · ${report.error}` : '');
+    if (!rec || !creds) { S.status = (report.ok ? c.green : c.yellow)(said) + c.dim(` · no clone of ${row.character ?? row.agent} to launch`); return; }
+    if (report.bad_password?.includes(rec.shadow_account)) {
+      S.status = c.yellow(said + ` · ${rec.shadow_name} (clone of ${rec.prod_character}) cannot log in — not launching`); return;
+    }
+    S.status = (report.ok ? c.green : c.yellow)(said) + c.dim(` · launching ${rec.shadow_name}, the clone of ${rec.prod_character}…`);
+    draw();
+    await launch({ agent: rec.shadow_account, character: rec.shadow_name }, { creds });
+  } finally { cloning = null; }
+}
+
 async function launch(row, opts = {}) {
   const t = launchedAt.get(row.agent);
   if (t && Date.now() - t < LAUNCH_SETTLE_MS) {
@@ -776,8 +826,10 @@ async function launch(row, opts = {}) {
   return launchOnce(row, opts, refused);
 }
 
-async function launchOnce(row, { viaProxy = false, extraEnv = null } = {}, refused = (m) => { S.status = m; }) {
-  const { creds, why } = GATE ? gateCreds(row) : rosterFor(row.agent);
+async function launchOnce(row, { viaProxy = false, extraEnv = null, creds: given = null } = {}, refused = (m) => { S.status = m; }) {
+  // `creds` is how Z hands over a SHADOW character: its credentials live in the shadow roster,
+  // not in the roster this terminal is reading, and they point at the lab server.
+  const { creds, why } = given ? { creds: given } : GATE ? gateCreds(row) : rosterFor(row.agent);
   if (GATE) viaProxy = false;
   if (!creds) return refused(c.red(why ?? ('no credentials on file for ' + row.agent)));
   const running = await alreadyPlaying(creds.account);
@@ -1617,6 +1669,7 @@ function onKey(str, key) {
     } else if (str === 'X' || str === 'x') override(S.rows[S.sel]).then(draw, oops);
     else if (str === 'L' || str === 'l') launch(S.rows[S.sel]).then(draw, fail);
     else if (str === 'S' || str === 's') swarm(S.rows[S.sel]).then(draw, fail);
+    else if (str === 'Z' || str === 'z') shadowClone(S.rows[S.sel]).then(draw, fail);
     else if (str === 'V' || str === 'v') pvpRecord(S.rows[S.sel]).then(draw, fail);
     // B is about the FLEET, not the row under the cursor — the board draws all of them.
     else if (str === 'B' || str === 'b') commander();
@@ -1632,6 +1685,7 @@ function onKey(str, key) {
     } else if (str === 'X' || str === 'x') override(S.hero).then(draw, oops);
     else if (str === 'L' || str === 'l') launch(S.hero).then(draw, fail);
     else if (str === 'S' || str === 's') swarm(S.hero).then(draw, fail);
+    else if (str === 'Z' || str === 'z') shadowClone(S.hero).then(draw, fail);
     else if (str === 'V' || str === 'v') pvpRecord(S.hero).then(draw, fail);
     else if (str === 'B' || str === 'b') commander();
     else if (str === 'F' || str === 'f') fieldCommand();

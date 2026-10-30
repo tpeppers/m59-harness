@@ -49,7 +49,11 @@ const ok = (what, cond, extra = '') => {
 // The keeper's POST /policy handler, from its guard to the end of the block.
 const policyHandler = (() => {
   const i = keeper.indexOf(`req.method === 'POST' && path === '/policy'`);
-  return i === -1 ? "" : keeper.slice(i, i + 6000);
+  // To the NEXT route, not a fixed width: a window of characters goes stale the moment the
+  // handler grows a comment, and then fails on code that did not change (2026-10-29, `replace`).
+  if (i === -1) return "";
+  const next = keeper.indexOf(`req.method === 'POST' && path === '/`, i + 10);
+  return keeper.slice(i, next === -1 ? i + 12000 : next);
 })();
 
 console.log('\nthe keeper end — POST /policy');
@@ -77,7 +81,7 @@ ok('and refuses BEFORE applying anything',
 // as the other two — stripped, never applied, because a `policy.by` that looks
 // authoritative and is read by nothing is the `purpose` bug wearing a different hat.
 ok('strips the reserved keys out of the body before applying',
-   /const\s*\{\s*agent:\s*\w+,\s*character:\s*\w+,\s*keeper_pid:\s*\w+,\s*mode:\s*\w+,\s*by:\s*\w+,\s*\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
+   /const\s*\{\s*agent:\s*\w+,\s*character:\s*\w+,\s*keeper_pid:\s*\w+,\s*mode:\s*\w+,\s*by:\s*\w+,\s*(?:replace:\s*\w+,\s*)?\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
 ok('so no mode, identity, or writer envelope key can land in policy',
    !/Object\.assign\(autopilot\.policy,\s*body\)/.test(policyHandler));
 ok('and the writer is what the log line reports, or naming it bought nothing',

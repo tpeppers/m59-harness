@@ -1,5 +1,82 @@
 # The shadow fleet — rehearsing an errand on a copy of production
 
+## THE FAST CLONE — prod onto the lab in seconds (`m59-shadow-clone.mjs`, TUI key `Z`)
+
+```bash
+node tools/m59-shadow-clone.mjs            # export prod's caches, re-dress every shadow, relog them
+node tools/m59-shadow-clone.mjs export     # just the snapshot (read-only)
+node tools/m59-shadow-clone.mjs dress      # re-dress from the snapshot on disk
+node tools/m59-shadow-clone.mjs --json     # last line is a JSON report: timings, who could not log in
+```
+
+In the terminal (`m59-tui.mjs`), **`Z`** runs it and then launches the client as the clone of the
+character under the cursor, on the lab server. Measured 2026-10-29 against the live 24-character
+prod fleet:
+
+| | hot (shadow broker already up) | cold (no shadow broker) |
+|---|---|---|
+| export from prod caches | 0.1 s | 0.1 s |
+| log the clones out | 0.05 s | — |
+| stats, karma, vitals, faction, 331 abilities, ~100 items, guild/hall/chests, login pose — written and read back | 0.3 s | 0.3 s |
+| log them back in | 2.8 s (staggered relog) | 55–75 s (broker boot + 24 keeper processes at below-normal priority) |
+| **total** | **3.3 s** | **~75 s, once** |
+
+`m59-shadow-run.mjs` took about ten minutes, and almost none of it was cloning: ~120 sequential
+broker calls to snapshot, a full login + reroll per character to create, 24 keeper processes six
+at a time to play, then a settle. The fast clone does only the cloning:
+
+- **Export from caches, not the wire.** Every prod keeper's `GET /state` answers from cache in ~2 ms
+  with attributes, karma, vitals, room and fine position, the pack with amounts and grades, and what is
+  worn. Abilities come from the keeper's ability book (`substrate/abilities/`), faction from
+  `substrate/faction-status/`, chests from `substrate/storage/`, base attributes from the sheet (the
+  keeper's stat group is AFTER gear — Clifford reads might 53 against a cap of 50). Guild roster and
+  rank come from the last live snapshot: they are in no cache. Nothing is asked of the prod broker.
+- **Never re-create a body; rewrite it.** The DM socket does 2000 commands in 130 ms, so every concern
+  is one fleet-wide batch plus a read-back. A body missing from the lab is reported, not made — that is
+  still `m59-shadow-run.mjs --until build`, once.
+- **Never restart a keeper; relog it.** Hot path: `/leave` each keeper, `hangup user` each body (see the
+  two traps below), dress offline, `/join` each keeper 60 ms apart. Cold path: dress offline, then start
+  the broker from the **prod checkout** so the clones run prod's code, every keeper spawned at once.
+- **A clone is exact by default.** Items prod does not carry are deleted (`--keep-surplus` keeps them).
+  Soldier-shield RANK is not observable; clones get the default.
+- **A clone starts with its original's ORDERS** — the roster's mode and policy and the character's
+  loadout file — with every prod agent or character named in them rewritten to its clone, whole strings
+  only. Cold: written into the shadow roster before the broker starts. Hot: pushed to each keeper while it
+  is logged out with `/policy {replace: true}`, a keeper route added for this (an older keeper, which does
+  not advertise `policy_replace` on `/live`, gets a merge and the clone says so). `--keep-orders` skips it.
+  Then change the orders under test through the shadow broker (8971).
+- **Every shadow account's password is `shadow`.** They are throwaway lab accounts. The first clone that
+  finds a slot off it stops the shadow broker, runs `set account password <id> shadow` (the numeric id —
+  the name is refused, which is probably why an older note here said the command did not work), rewrites
+  the roster (backup `.before-fixed-password`), `save game`, and cold-starts.
+- **Unidentified scrolls, wands and potions are made by ICON.** The wire's `icon_rsc` names the class
+  exactly when a leaf class owns that icon (`m59-item-signature.mjs`): prod's bare scrolls are
+  DiscordScrolls. An icon on a class with subclasses (prod's potion, 30298, is the base `Potion`'s and
+  29 potions share it) is non-specific and is not copied.
+
+Traps found building it, each now handled in the tool and pinned in `m59-shadow-clone-test.mjs`:
+
+- **`M59Client` had no `close()`.** Every keeper path that logs off — `/leave`, `/rejoin`, dormancy,
+  `/stop`, SIGTERM — called it inside `try {} catch {}`, so nothing was ever logged off: the keeper said
+  `in_game: false` while the server held `pbLogged_on = 1`. Fixed in `m59-client.mjs`; a running keeper
+  gets it only on restart, which is why the clone also hangs up server-side.
+- **`hangup user` blocks the caller's IP for five minutes** (`SOCKET_BLOCK_TIME`, adminfn.c:4200), and
+  every keeper and client here is 127.0.0.1 — the whole lab went dark. `hangup ip` is a TOGGLE: it lifts
+  an existing block and adds a *permanent* one when there is none, so it is sent only after a hangup
+  reported a disconnect.
+- **blakserv listens with a backlog of five** (async.c:143). 24 simultaneous logins get ECONNREFUSED
+  from a perfectly healthy server; hence the 60 ms stagger and the retry.
+- **Phantom shields.** A soldier shield deletes itself when `ReqUse` finds its owner in another
+  faction, and `Delete` clears `poOwner` without leaving the holder's list. Every shield the old,
+  faction-blind dress tried to put on became an ownerless list node that the planner counted as
+  carried. Listed-but-not-owned items are now detached and deleted, and faction is set before gear.
+- **A shield takes the weapon off** (`FreeHandSlotsFor`); wearing is re-asked until it sticks.
+- **A roster password the lab does not hold looks like a slow login.** The clone checks each roster
+  password's MD5 against the lab's own `savegame/accounts.*` and names the slots that cannot log in.
+  On 2026-10-29 seven shadow slots (04, 08–13) carried passwords that never reached the lab; the
+  matching ones were in a September roster.
+
+
 Held-item trimming must detach the item with `Holder.LeaveHold` before
 calling its `Delete` message. `Delete` alone leaves a stale inventory node
 and cached load behind (`kod/object/active/holder.kod:392`). A later clone can

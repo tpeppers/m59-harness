@@ -43,6 +43,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolveItemClass, itemClassIndex, KODDB } from './m59-itemclass.mjs';
 import { decodePrimaryColour } from './m59-pvp-gear.mjs';
+import { classOfIcon } from './m59-item-signature.mjs';
 
 // ---------------------------------------------------------------- the prod read gate
 //
@@ -330,6 +331,23 @@ function loadWandTints() {
     }
   } catch { /* no koddb: no tint resolves, and every bare "wand" stays refused */ }
 }
+// A BARE "scroll", "potion" OR "wand" IS NAMED BY ITS ICON RESOURCE ID, when the id is one
+// class's alone. blakcomp gives every class that declares its own icon a resource of its own
+// even when the bitmap is shared, and the wire carries that resource id (m59-item-signature.mjs):
+// 30434 is DiscordScroll, 30513 LightningWand, whatever the item is called. Exact — but only for a
+// LEAF class. A class with subclasses lends its icon to every one that does not declare its own,
+// so prod's bare "potion" at 30298 resolves to the base Potion and means "one of 29 potions": that
+// is non-specific, and stays refused rather than becoming a plain Potion.
+const GENERIC_NAMES = new Set(['wand', 'wands', 'scroll', 'scrolls', 'potion', 'potions']);
+export function iconHoldingClass(row, { classOf = classOfIcon, subclasses = itemSubclassCount } = {}) {
+  if (row?.icon_rsc == null || !GENERIC_NAMES.has(lc(row.name).trim())) return null;
+  const hit = classOf(row.icon_rsc);
+  if (!hit?.class) return null;
+  if (subclasses(hit.class) > 0)
+    return { ok: false, why: `icon ${row.icon_rsc} is ${hit.class}'s, which ${subclasses(hit.class)} subclasses can share` };
+  return { ok: true, class: hit.class, stack: (hit.chain ?? []).includes('NumberItem') };
+}
+
 /** wire translation -> { ok, class } when one Wand class has its primary colour, else { ok: false, why, candidates }. */
 export function wandClassByTranslation(translation) {
   if (WAND_TINTS == null) loadWandTints();
@@ -365,6 +383,12 @@ export function wantedHoldings(rows = [], wear = [], index = defaultIndex(), sub
   };
   for (const row of rows) {
     const amt = Number(row.amount) || 0;
+    const byIcon = iconHoldingClass(row, { subclasses });
+    if (byIcon?.ok) { add(row.name, byIcon.stack ? amt : Math.max(1, amt), row.rarity ?? 'unidentified', byIcon); continue; }
+    if (byIcon && !unknown.some(u => u.name === `${row.name} (icon ${row.icon_rsc})`)) {
+      unknown.push({ name: `${row.name} (icon ${row.icon_rsc})`, why: byIcon.why, candidates: [] });
+      continue;
+    }
     if (lc(row.name).trim() === 'wand' && row.translation) {
       const t = wandClassByTranslation(row.translation);
       if (t.ok) { add(row.name, 1, row.rarity ?? 'unidentified', t); continue; }
