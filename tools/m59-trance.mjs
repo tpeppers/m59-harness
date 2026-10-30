@@ -91,6 +91,35 @@ export function classifyTranceLine(text) {
   return null;
 }
 
+/**
+ * WHAT ONE CAST CAME TO, from the mana it took and how the session saw its trance end.
+ *
+ *   refused      nothing was taken: turned down before CanPayCosts (wrong target, no reagents, ...)
+ *   failed roll  HALF the mana and NO reagents (spell.kod:1150 SpellFailed, which returns before the reagents are
+ *                taken at :1279): the chance roll lost, so no trance was entered. Bad luck, not a fault.
+ *   broken       the trance started and something broke it: full mana AND every reagent gone for nothing.
+ *   completed    full price, and for a trance spell no "concentration is broken" before the hold ran out.
+ *   null         the mana was not read, so nothing can be said: UNKNOWN IS NOT REFUSED, as before.
+ *
+ * `ended` is the session's `pacer.lastTranceEnd.why` when the session ended its automatic hold AFTER this cast went
+ * out. Only "concentration broken" is read from it: the price alone separates a failed roll from a full cast, and a
+ * trance that finishes ends by the clock with no sentence at all (trance.kod:58), so a missing line is not evidence.
+ *
+ * Operator, 2026-10-30: Zoot's 125 edible mushrooms looked like broken concentration. The ledger said 43 haste casts,
+ * "100% worked" -- because a failed roll spends mana, and mana was all `ok` asked about. All 25 full-price casts had in
+ * fact completed; the drill could not say so, and so could not have said otherwise either.
+ */
+export function practiceOutcome({ name, spent = null, ended = null } = {}) {
+  if (/broken/i.test(String(ended ?? ''))) return 'broken';
+  if (spent == null) return null;
+  if (!(spent > 0)) return 'refused';
+  const full = Number(spellInfo(name)?.mana);
+  // Half price, read against the catalogue. A reading a tick late can lose a point to regeneration, so the line is
+  // three quarters of full, which a half-price failure never reaches.
+  if (Number.isFinite(full) && full > 1 && spent < full * 0.75) return 'failed roll';
+  return 'completed';
+}
+
 /** A move speed that will not break a trance: anything above walking is clamped to walking. */
 export const tranceSafeSpeed = (speed) =>
   Number.isFinite(speed) && speed > USER_WALKING_SPEED ? USER_WALKING_SPEED : speed;
