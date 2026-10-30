@@ -19,6 +19,10 @@
 //     "agents":     { "t8": { "spells": { "deflect": 8 } } },
 //     "characters": { "Zoot": null } }
 //
+// `exempt` (any layer, merged) names spells the reserve never refuses: they may spend what it holds. With
+// `"items": { "sapphire": 100000 }` and `"exempt": ["discordance"]`, outside a PvP fight sapphires go to Discordance and
+// nothing else.
+//
 // `spells` is CASTS to keep of each spell -- counted only for a spell this character KNOWS, and turned into reagents
 // with the kod's own costs (m59-deskpractice.mjs spellCost). `items` is a floor in units. Most specific wins per key
 // (character, then agent, then default); `null` there means no reserve at all. No file -- every fresh clone -- is no
@@ -69,11 +73,12 @@ export function resolveReserve(book, { agent = null, character = null } = {}) {
   };
   const layers = [book.default, pick(book.agents, agent), pick(book.characters, character)];
   if (layers.some(l => l === null)) return null;
-  const out = { spells: {}, items: {} };
+  const out = { spells: {}, items: {}, exempt: [] };
   for (const l of layers) {
     if (!l || typeof l !== 'object') continue;
     for (const [k, v] of Object.entries(l.spells ?? {})) out.spells[lc(k)] = Math.max(0, Number(v) || 0);
     for (const [k, v] of Object.entries(l.items ?? {})) out.items[reagentKey(k)] = Math.max(0, Number(v) || 0);
+    for (const s of [].concat(l.exempt ?? [])) if (!out.exempt.includes(lc(s))) out.exempt.push(lc(s));
   }
   return Object.values(out.spells).some(Boolean) || Object.values(out.items).some(Boolean) ? out : null;
 }
@@ -102,6 +107,11 @@ export function countReagent(pack, key) {
  */
 export function reserveBreach({ spell, known = [], pack = [], reserve = null, inPvp = false }) {
   if (!reserve || inPvp) return null;
+  // AN EXEMPT SPELL SPENDS WHAT THE RESERVE HOLDS (operator, 2026-10-30: "Make sure spells that use sapphires are
+  // reserved for PVP and Discordance *only*, because otherwise it might cut our farming time short"). Discordance lifts
+  // the shamans' sandstorm, the farm's survival cast; a farming Bless, Mend or Mirth spending the same sapphires is what
+  // ends the farm early.
+  if ((reserve.exempt ?? []).includes(lc(spell))) return null;
   const cost = spellCost(spell);
   if (!cost?.reagents?.length) return null;
   const floors = floorsFor(reserve, known);

@@ -59,6 +59,20 @@ try {
       'practising the reserved spell itself spends the reserve too');
   });
 
+  test('sapphires for PvP and Discordance only: exempt spells spend the reserve, everything else is refused', () => {
+    const book = { default: { items: { sapphire: 100000 }, exempt: ['Discordance'] }, agents: { t8: { exempt: ['mend'] } } };
+    const reserve = R.resolveReserve(book, { agent: 't9' });
+    const pack = [{ name: 'sapphire', amount: 40 }, { name: 'mushroom', amount: 20 }, { name: 'orc tooth', amount: 5 }];
+    assert.equal(R.reserveBreach({ spell: 'discordance', known: ['discordance', 'bless'], pack, reserve }), null, 'Discordance spends sapphires');
+    assert.equal(R.reserveBreach({ spell: 'discordance', known: ['discordance'], pack: [{ name: 'sapphire', amount: 2 }], reserve }), null, 'down to the last two');
+    assert.equal(R.reserveBreach({ spell: 'bless', known: ['bless'], pack, reserve })?.reagent, 'sapphire', 'a farming Bless is refused');
+    assert.equal(R.reserveBreach({ spell: 'mend', known: ['mend'], pack, reserve })?.reagent, 'sapphire', 'so is a farming Mend');
+    assert.equal(R.reserveBreach({ spell: 'bless', known: ['bless'], pack, reserve, inPvp: true }), null, 'Bless in a PvP fight is what the reserve is for');
+    assert.equal(R.reserveBreach({ spell: 'super strength', known: ['super strength'], pack, reserve }), null, 'a spell with no sapphire is untouched');
+    assert.deepEqual(R.resolveReserve(book, { agent: 't8' }).exempt.sort(), ['discordance', 'mend'], 'exempt lists merge across layers');
+    assert.equal(R.resolveReserve({ default: { exempt: ['discordance'] } }, {}), null, 'an exempt list alone is no reserve');
+  });
+
   test('client.cast: a vetoed cast never reaches the wire, and nobody named means no veto', () => {
     write({ default: { spells: { bless: 4 } } });
     const sent = [];
