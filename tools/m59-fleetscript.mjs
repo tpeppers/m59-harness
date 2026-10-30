@@ -164,6 +164,7 @@ import { registerJob, getJobContext } from './m59-jobclient.mjs';
 import { takeAgentLocks } from './m59-runlock.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
+import { isNoCombatRoom } from './m59-hazards.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { sayToNpc } from './m59-sayrange.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
@@ -3429,6 +3430,18 @@ async function runStep(ctx, agent, rawStep, state) {
           return { ok: true, outcome: 'already_rested', at: before.hpText,
                    note: `${before.hpText} is already at or above the ${want.health} floor — ` +
                          `not walking to a wall for nothing` };
+      }
+
+      // IN A NO-COMBAT ROOM THE WHOLE ROOM IS THE SAFE SPOT. The server refuses every attack there (the room's own
+      // NO_COMBAT flag, checked first in room.kod ReqSomethingAttack; m59-hazards isNoCombatRoom), so walking to a wall
+      // buys nothing -- and the safe-spot book has no "working" wall in an inn, so this step refused to rest ANYBODY in
+      // one: on 2026-10-29 every character of a shadow muster in the Aerie Guest House (2001) and Wulfgang's trading post
+      // (2101) failed "not a place to sit down", in the two rooms where nothing can touch them. rest_up rests health AND
+      // vigor (to the rest cap); the wall search below stays for every room where something can.
+      const standing = await observe(agent);
+      if (standing.ok && isNoCombatRoom(standing.room)) {
+        const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
+        return { ok: !r?.error, outcome: 'rested_in_a_no_combat_room', room: standing.room, why: r?.error };
       }
 
       const look = await call('safe_spots', { agent, reachable_only: true }, 60_000)
