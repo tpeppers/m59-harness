@@ -8,9 +8,12 @@ export function publishFleetHealth(s,{directory=process.env.M59_FLEET_HEALTH_DIR
  if(!c?.combatReady||c.state!=='game'||!credentials?.host||!c.me?.name||!c.self||!s.world?.room?.num)return false;
  const identity={host:credentials.host,port:Number(credentials.port),character:c.me.name};
  const health=c.vitals()?.health;if(!(health?.max>0)||!Number.isFinite(health.value))return false;
- const version=JSON.stringify([identity,c.selfId,s.world.room.num,health.value,health.max]);
+ // THE COMBAT SHEET (CombatMode.publicSheet, m59-combat-assist.mjs): mana, buffs, spells, castable, fight role. Optional; a
+ // reader that wants only health never looks at it, and a session without a CombatMode publishes none.
+ let combat=null;try{combat=s.combat?.publicSheet?.()??null;}catch{combat=null;}
+ const version=JSON.stringify([identity,c.selfId,s.world.room.num,health.value,health.max,combat]);
  if(version===s._healthPublishedVersion&&now-(s._healthPublishedAt??0)<500)return false;
- const report={at:now,pid:process.pid,character:c.me.name,endpoint:{host:fold(credentials.host),port:Number(credentials.port)},body_id:c.selfId,room:s.world.room.num,health:{value:health.value,max:health.max}};
+ const report={at:now,pid:process.pid,character:c.me.name,endpoint:{host:fold(credentials.host),port:Number(credentials.port)},body_id:c.selfId,room:s.world.room.num,health:{value:health.value,max:health.max},...(combat?{combat}:{})};
  try{mkdirSync(directory,{recursive:true});const file=join(directory,key(identity)+'.json'),tmp=file+'.'+process.pid+'.tmp';writeFileSync(tmp,JSON.stringify(report));renameSync(tmp,file);s._healthPublishedAt=now;s._healthPublishedVersion=version;return true;}catch{return false;}
 }
 export function readFleetHealth(identity,{directory=process.env.M59_FLEET_HEALTH_DIR??defaultDir,now=Date.now(),maxAgeMs=5000,room,bodyId}={}){

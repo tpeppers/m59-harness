@@ -54,6 +54,9 @@ is the compatibility promise, and the test's first section pins it per joint.
 | `combat.outcome` | `CombatMode.observeOutcome`: our blow read back (band, element, "laughs off") | `adjust` a channel's weight for a while |
 | `combat.channel` | `CombatMode.wandVolley`, before the volley picks a wand | `skip` channels this beat; `prefer` one |
 | `upkeep.curse` | `Autopilot.jointCurseUpkeep`, at most once a minute from the pass | `request` a service on ourselves |
+| `pvp.target` | `CombatMode.syncPvP`, when the players a PvP fight could swing at change | `order`: whom to swing at `first`, and who is `indirect` (never swung at until he hits us) |
+| `pvp.refused` | `CombatMode.event`: the server refused our swing at a player ("Good thing your safety was on!") | `indirect`: this player is one we cannot hit; the fight moves on |
+| `pvp.assist` | `CombatMode.advance`, every beat of a fight in which every player left is indirect | `attack` another player, `cast` on self/room/an ally (under a fleet `claim`), `apply` an item, `fight_monster`, `wait`, `stand_down` |
 
 What no answer can do:
 
@@ -71,6 +74,32 @@ keeper's combat log, and a row in `substrate/pvp/<fleet>/decisions-<day>.jsonl` 
 Each row carries the facts summary, the pak, the rule that fired, and any `ctx.branch(name, data)` the pak
 recorded at its own decision points. A fight replay can then show *why* a body did something, as well as where it
 was.
+
+## The PvP scope: direct and indirect combatants
+
+[`tools/m59-combat-assist.mjs`](../tools/m59-combat-assist.mjs). A soldier cannot hit a soldier of its own faction
+with safety on, and the rule is symmetric, so in one fight two of ours can face the same raider from opposite sides
+of that line. The week to 2026-10-29: 205 refused swings, Scooter's 106 at Rick Deckard among them, one a second,
+while Morpheus -- whom he *could* hit -- killed him. A refused swing in a return-fire fight goes to `combatFailure`,
+which retries **the same target** every second; the three joints above are where that can now be answered.
+
+- **Direct and indirect.** A fight swings only at players nobody has called indirect. `pvp.target` may call one
+  indirect *before* any swing (a pak that keeps a faction book); `pvp.refused` after the server said no. A player
+  whose blow reaches us in the last 30 s cannot be made indirect by `pvp.target` -- only by the server's own refusal
+  -- and an indirect one who hits us is direct again at once.
+- **Assisting.** When every player left in the fight is indirect, the fight is not over: its phase is `assisting`
+  and each beat asks `pvp.assist`. Safety stays on. A `cast` goes only on ourselves, the room, or a fleet-mate
+  present -- a spell at an enemy is an `attack`, which puts him back in the fight for one probe. Without a
+  `pvp.assist` handler the fight hands the body back to the keeper's ladder instead.
+- **What allies know about each other** is the `combat` sheet in each keeper's fleet-health report
+  (`m59-fleet-health.mjs`): mana, buffs, spells known, spells it can pay for now (`castable`), its fight role
+  (`direct`/`indirect`), who is attacking it, and which monsters hit it in the last 6 s, by object id.
+- **One of us does it.** An answer may carry `claim: { key, ms }`. The host takes it
+  ([`m59-fleet-claims.mjs`](../tools/m59-fleet-claims.mjs), a file opened `wx` per server, room, key and window)
+  before anything is sent; a claim another keeper holds is `claim_lost`, and nothing is cast.
+
+No pak: nobody is ever indirect and every fight is the old one. `m59-pvp-scope-test.mjs` pins that first.
+`substrate/paks.example/example-pvp-scope.mjs` is the shape.
 
 ## Paks
 

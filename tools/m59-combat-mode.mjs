@@ -23,6 +23,7 @@ import { Recorder } from './m59-recorder.mjs';
 import { PersonalThreat } from './m59-personal-threat.mjs';
 import { CombatFallback } from './m59-combat-fallback.mjs';
 import { CombatSupport } from './m59-combat-support.mjs';
+import { CombatAssist } from './m59-combat-assist.mjs';
 import { publishFleetHealth } from './m59-fleet-health.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
@@ -337,6 +338,9 @@ export async function escapeGroundEffect(session) {
   return false;
 }
 
+/** An attacker entry whose blow (hit or miss) reached US in this fight, as against one a fleetmate's alarm named. */
+export const hitUs = a => !!a && (a.hit_us_at != null || (a.incoming_hits ?? 0) + (a.incoming_misses ?? 0) > 0);
+
 export class CombatMode {
   constructor(session, { keeper = () => null, now = Date.now, schedule = setTimeout, unschedule = clearTimeout } = {}) {
     this.s = session; this.keeper = keeper; this.now = now;
@@ -350,6 +354,8 @@ export class CombatMode {
     this.personalThreat = new PersonalThreat({ now: this.now });
     this.fallback = new CombatFallback(this);
     this.support = new CombatSupport(this);
+    // THE PVP SCOPE (m59-combat-assist.mjs): indirect combatants, and what to do when they are all that is left.
+    this.assist = new CombatAssist(this); this.monsterHits = [];
     // THE WAR RESPONSE is off until the owning process says otherwise (`warEligibility`). The
     // keeper process wires it; a broker in-process session and every test that does not ask
     // for it keep the behaviour that was already there.
@@ -375,7 +381,7 @@ export class CombatMode {
     const refused_targets = this.refusedStatus();
     const pvp_strategy = this.pvpStrategyStatus();
     const personal = { personal_threat: this.personalThreatStatus(), fallback_queue: this.fallback.snapshot(),
-      support_queue: this.support.snapshot() };
+      support_queue: this.support.snapshot(), assist: this.assist.snapshot() };
     if (!o) return { active: false, ...personal, pvp_survival: this.pvpStatus(), war: this.warStatus(), ...(watch ? { watch } : {}),
       ...(pvp_strategy ? { pvp_strategy } : {}),
       ...(refused_targets?.length ? { refused_targets } : {}),
@@ -821,7 +827,7 @@ export class CombatMode {
       this.alarmAskedAt.set(key, now);
       if (this.alarmAskedAt.size > 256) this.alarmAskedAt.clear();
       const d = this.consultPvpStrategy('alarm_elsewhere', a.enemy, { hostile: true, basis: a.basis ?? null,
-        alarm_room: Number(a.room), reporter: a.reporter ?? null });
+        alarm_room: Number(a.room), reporter: a.reporter ?? null, alarm_adjacent: this.exitRooms().includes(Number(a.room)) });
       return d?.do === 'sortie' ? !!this.beginSortie(d, a.enemy, 'alarm') : false;
     }
     // A sighting in our map is a report, not a call to arms: our own scan sees the same enemy
@@ -2036,6 +2042,9 @@ export class CombatMode {
       // guild-only refusal of this player here is stale. Forgotten FIRST, so return fire below
       // runs exactly as it would for anybody else (m59-refused-targets.mjs forgetRefused).
       try { forgetRefused(this.s, result.character, { source: 'incoming_' + result.outcome }); } catch {}
+      // AN INDIRECT COMBATANT WHO HITS US IS NOT ONE ANY MORE (pvp.refused / pvp.target): the line between us moved --
+      // he went outlaw, changed faction, took the shield off -- so he is swung at again like anybody who attacked us.
+      this.clearIndirect(this.active, result.character, 'attacked_us');
       this.beginPvP(result, ev.at);
       // THE VICTIM IS THE ONLY ONE WHO HEARS THIS LINE, so it is the one fact the room does
       // not already share. Say it, so every fleet character in this map fights with us.
@@ -2070,6 +2079,10 @@ export class CombatMode {
       if (hit?.direction !== 'incoming' || hit.outcome !== 'hit' || hit.verb.toLowerCase() === 'fails to damage') continue;
       p.last_monster_hit = { at: this.now(), room: this.s.world?.room?.num,
         character: name, text: ev.text };
+      // Published in the fleet-health combat sheet, so an ally's pvp.assist can see what is on us (by object id: a
+      // room of six identical skeletons is six targets, and only one of them is hitting).
+      this.monsterHits.push({ id: monster.id, name, at: this.now() });
+      if (this.monsterHits.length > 16) this.monsterHits.splice(0, this.monsterHits.length - 16);
       this.record('pvp_monster_hit', this.active); this.wake(); return;
     }
   }
@@ -2641,6 +2654,9 @@ export class CombatMode {
       p.attackers.push(a);
     }
     a.last_attacked_at = Math.max(a.last_attacked_at, at);
+    // THEIR BLOW REACHED US (observePlayerCombat), as against a fleetmate's alarm naming them. Stamped here, before the
+    // syncPvP below asks pvp.target, because the hit/miss counters are only bumped after beginPvP returns.
+    if (evidence.direction === 'incoming') a.hit_us_at = Math.max(a.hit_us_at ?? 0, at);
     p.last_attacked_at = Math.max(p.last_attacked_at, at);
     // THE JOUST (m59-pvp-strategy.mjs): every blow asks the strategy again, and its latest answer paces the
     // fight. Any answer other than `joust` -- silence included -- is ordinary return fire again.
@@ -2693,15 +2709,121 @@ export class CombatMode {
     if (!present.length && this.now() - p.last_attacked_at >= PVP_DANGER_MS) {
       this.stop('PvP survival ended: attackers absent after 30 seconds'); return false;
     }
-    const pick = present.find(x => (x.target.flags & OF.ATTACKABLE) &&
+    // THE PVP SCOPE (m59-combat-assist.mjs). A pak may sort the players here into those we can hit and those we
+    // cannot -- before a swing (pvp.target) or after the server refused one (pvp.refused). We swing only at the
+    // first kind; when only the second is left the fight is not over, it ASSISTS (pvp.assist) until they leave. No
+    // pak: nobody is ever indirect, `direct` is `present`, and the pick below is the one it always was.
+    if (present.length) this.askTargetOrder(o, present);
+    const direct = present.filter(x => !this.isIndirect(o, x.a.character));
+    if (present.length && !direct.length) {
+      if (this.s.joints?.handles?.('pvp.assist')) {
+        if (o.phase !== 'assisting') {
+          withBodyCommand(s, () => s.cancelMovement(null, 'PvP: only indirect combatants here; assisting',
+            { preserveId: p.decision_id, origin: keeperOrigin('pvp_survival') }), o.id);
+          o.phase = 'assisting'; o.phaseRevision++; o.targetId = null; o.targetName = null; o.nextAt = 0; o.assistNextAt = 0;
+          this.record('pvp_assisting', o);
+        }
+        return true;
+      }
+      this.stop('PvP: every player here is an indirect combatant for this character (we cannot hit them, nor they us); ' +
+        'survival returns to the keeper ladder'); return false;
+    }
+    if (o.phase === 'assisting') {
+      o.phase = 'waiting'; o.phaseRevision++; o.targetId = null; o.targetName = null; o.nextAt = 0;
+      this.record('pvp_direct_again', o);
+    }
+    const preferred = (p.prefer ?? []).map(n => direct.find(x => (x.target.flags & OF.ATTACKABLE) &&
+      x.a.character.toLowerCase() === n)).find(Boolean);
+    const pick = preferred ?? direct.find(x => (x.target.flags & OF.ATTACKABLE) &&
       x.a.character.toLowerCase() === String(o.order.target).toLowerCase()) ??
-      present.find(x => x.target.flags & OF.ATTACKABLE) ?? present[0];
+      direct.find(x => x.target.flags & OF.ATTACKABLE) ?? direct[0];
     if (pick && String(o.order.target).toLowerCase() !== pick.a.character.toLowerCase()) {
       o.order.target = pick.a.character; o.phaseRevision++; o.targetId = null; o.nextAt = 0;
       this.record('pvp_retargeted', o);
     }
     return true;
   }
+
+  // ------------------------------------------------------------------ the pvp scope (m59-combat-assist.mjs)
+
+  // (hitUs, below the class: a blow of theirs reached us in this fight.)
+  isIndirect(o, name) { return !!o?.pvp?.indirect?.[String(name ?? '').trim().toLowerCase()]; }
+
+  markIndirect(o, name, { why = null, pak = null, source = null, text = null } = {}) {
+    const p = o?.pvp, key = String(name ?? '').trim().toLowerCase();
+    if (!p || !key) return;
+    (p.indirect ??= {})[key] = { at: this.now(), why, pak, source, ...(text ? { text } : {}) };
+    o.lastIndirect = { name, ...p.indirect[key] };
+    this.record('pvp_indirect', o);
+  }
+
+  clearIndirect(o, name, reason) {
+    const p = o?.pvp, key = String(name ?? '').trim().toLowerCase();
+    if (!p?.indirect?.[key]) return;
+    delete p.indirect[key];
+    o.lastIndirect = { name, cleared: reason, at: this.now() };
+    this.record('pvp_indirect_cleared', o);
+  }
+
+  /** pvp.target: asked when the candidates change (or every 5 s), never every beat. */
+  askTargetOrder(o, present) {
+    const joints = this.s.joints;
+    if (!joints?.handles?.('pvp.target')) return;
+    const p = o.pvp, c = o.client, me = c.self, now = this.now();
+    const candidates = present.map(({ a, target }) => {
+      const k = a.character.toLowerCase();
+      return { name: a.character, attacked_us: hitUs(a), hit_us_at: a.hit_us_at ?? null,
+        last_attacked_at: a.last_attacked_at ?? null, assisted: !!a.assisted, indirect: this.isIndirect(o, k),
+        probes: p.probes?.[k] ?? 0, attackable: !!(target.flags & OF.ATTACKABLE),
+        murderer: isKiller(target.flags), outlaw: isOutlaw(target.flags), enemy: !!(target.flags & OF.ENEMY),
+        distance: me ? Math.round(10 * Math.hypot(target.row - me.row, target.col - me.col)) / 10 : null };
+    });
+    const key = JSON.stringify(candidates.map(x => [x.name.toLowerCase(), x.attacked_us, x.indirect, x.murderer, x.outlaw, x.enemy]));
+    if (p.targetAskKey === key && now - (p.targetAskAt ?? 0) < 5000) return;
+    p.targetAskKey = key; p.targetAskAt = now;
+    const flags = this.roomFlagsHere();
+    let d = null;
+    try {
+      d = joints.ask('pvp.target', { ...roomFacts(this.s), room_flags: { no_combat: !!(flags & ROOM_NO_COMBAT), no_pk: !!(flags & ROOM_NO_PK) },
+        self: selfFacts(this.s, { now }), candidates, current: o.order.target ?? null, ...this.roomCount() });
+    } catch { d = null; }
+    if (d?.do !== 'order') return;
+    // A PLAYER WHOSE BLOW REACHED US IN THE LAST HALF MINUTE IS NOT MADE INDIRECT BY OPINION. Only the server's own
+    // refusal (pvp.refused) can do that: a hit is evidence the line between us is not where the pak's books say.
+    for (const n of d.indirect) {
+      const x = candidates.find(x => x.name.toLowerCase() === n);
+      const recent = x?.attacked_us && now - Number(x.hit_us_at ?? x.last_attacked_at) < PVP_DANGER_MS;
+      if (x && !x.indirect && !recent) this.markIndirect(o, x.name, { why: d.why, pak: d.pak, source: 'pvp.target' });
+    }
+    if (d.first.length) p.prefer = d.first;
+  }
+
+  /** pvp.refused: the server said no to a swing at a player. true when the pak took the answer. */
+  askRefused(o, text) {
+    const joints = this.s.joints;
+    if (!o?.pvp || !o.targetName || !joints?.handles?.('pvp.refused')) return false;
+    const t = o.client.room?.objects?.get?.(o.targetId);
+    if (!t || !(t.flags & OF.PLAYER)) return false;
+    const p = o.pvp, key = o.targetName;
+    p.probes ??= {}; p.probes[key] = (p.probes[key] ?? 0) + 1;
+    const a = p.attackers.find(x => x.character.toLowerCase() === key);
+    let d = null;
+    try {
+      d = joints.ask('pvp.refused', { ...roomFacts(this.s), self: selfFacts(this.s, { now: this.now() }), text,
+        target: { name: a?.character ?? key, attacked_us: hitUs(a), hit_us_at: a?.hit_us_at ?? null,
+          last_attacked_at: a?.last_attacked_at ?? null, probes: p.probes[key] },
+        others: p.attackers.filter(x => x.character.toLowerCase() !== key).map(x => x.character) });
+    } catch { d = null; }
+    if (d?.do !== 'indirect') return false;
+    this.markIndirect(o, a?.character ?? key, { why: d.why, pak: d.pak, source: 'pvp.refused', text });
+    o.targetId = null; o.targetName = null; o.phase = 'waiting'; o.phaseRevision++; o.nextAt = 0;
+    if (this.syncPvP(o)) this.refreshTarget(o);
+    this.wake();
+    return true;
+  }
+
+  /** The `combat` sheet this character publishes in its fleet-health report (m59-combat-assist.mjs). */
+  publicSheet() { return this.assist.publicSheet(); }
 
   combatFailure(o, reason) {
     if (!o?.pvp) { this.stop(reason); return; }
@@ -3046,6 +3168,9 @@ export class CombatMode {
       }
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
+        // A PLAYER WE CANNOT HIT, IN A PVP FIGHT: a pak answering pvp.refused may make him an indirect combatant, and
+        // the fight moves on to somebody it can hit, or to assisting. Silence: everything below, as always.
+        if (o.pvp && this.askRefused(o, ev.text)) return;
         // The leader swung at somebody the server will not let us hit (an innocent, with our
         // safety on): drop this target for the warband rather than re-issuing it every tick.
         // Remembered by room and NAME (ids recycle), in the one refused-here memory.
@@ -3239,6 +3364,8 @@ export class CombatMode {
         fault: o.pvp?.opener_fault ?? null, phase: o.phase ?? null,
         readiness: r ? { ready: r.ready ?? null, positioned: r.positioned ?? null, timer_remaining_ms: r.timer_remaining_ms ?? null, why: r.why ?? r.reason ?? null } : null };
     }
+    if (event === 'pvp_indirect' || event === 'pvp_indirect_cleared') return { phase: o.phase ?? null, indirect: o.lastIndirect ?? null };
+    if (event === 'pvp_assist' || event === 'pvp_assist_skipped') return { phase: o.phase ?? null, assist: o.lastAssist ?? null };
     return o.phase ? { phase: o.phase } : null;
   }
 
@@ -3322,6 +3449,8 @@ export class CombatMode {
       o.fallbackReason = 'flight'; this.fallback.offer(o, o.fallbackReason);
       return this.advanceFlight(o);
     }
+    // ONLY INDIRECT COMBATANTS LEFT (syncPvP): the pak's assist ladder has the beat (m59-combat-assist.mjs).
+    if (o.pvp && o.phase === 'assisting') return this.assist.beat(o);
     if (!o.pvp && effectsAt(c, c.self).length) {
       demand(await escapeGroundEffect(s), 'ground effect underfoot; no safe escape step');
       return;

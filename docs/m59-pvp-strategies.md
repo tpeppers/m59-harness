@@ -52,7 +52,8 @@ before it existed would read "a hostile, elsewhere" as one of its own and act on
 **Facts:** `moment, character, agent, room, player, hostile, basis, pvp_allowed_here, health_pct, max_health,
 in_flight, flight_room, hold_room, now, allies_here, hostiles_here, sortie_room, sortie_phase, alarm_room, reporter` —
 frozen. `allies_here` does not count the character itself; `hostiles_here` counts players the war book or the
-server marks hostile; `alarm_room` and `reporter` are set only for `alarm_elsewhere`.
+server marks hostile; `alarm_room`, `reporter` and `alarm_adjacent` (the alarm map is one exit from here) are set only
+for `alarm_elsewhere`.
 `player_health` is the fleet's groan-based estimate of the player (below), or null.
 `pvp_episode` is the return-fire fight in progress, or null: `{ elapsed_ms, start_health, health, attacks_sent,
 incoming_hits, incoming_misses, attackers, joust }`. `(start_health - health) / joust.exchanges` is the net cost of
