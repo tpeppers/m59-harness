@@ -859,6 +859,25 @@ export class M59Client {
     });
   }
 
+  // LOG OFF BY DROPPING THE CONNECTION — the thing the keeper's /leave, /rejoin, dormancy,
+  // /stop and SIGTERM paths have always called. Until 2026-10-29 THIS METHOD DID NOT EXIST:
+  // every one of them called `session.client.close()` inside `try {} catch {}`, the TypeError
+  // was swallowed, and nobody was ever logged off. A keeper told /leave reported
+  // `in_game: false` while the server still held the body (`pbLogged_on = 1`) — found when the
+  // shadow clone waited fifteen seconds for 24 logoffs that never came. blakserv logs a user
+  // off when its socket closes; an ATTACHED socket is the proxy's, so that one asks the proxy
+  // to quit first (attachedLogoff) and drops the socket after, the same order rejoin uses.
+  close() {
+    const sock = this.sock;
+    this.stopKeepalive();
+    if (!sock || sock.destroyed) { this.state = 'closed'; return; }
+    if (this.attach && this.state === 'game') {
+      this.attachedLogoff().catch(() => false).finally(() => { try { sock.destroy(); } catch { /* gone */ } });
+      return;
+    }
+    try { sock.destroy(); } catch { /* already gone */ }
+  }
+
   connect() {
     if (this.attach) return this.connectAttached();
     return new Promise((resolve, reject) => {

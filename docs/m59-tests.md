@@ -1,5 +1,14 @@
 # The offline test suites, and what each one pins
 
+`m59-shadow-clone-test.mjs` (50) pins the fast shadow clone (docs/m59-shadow.md). A prod keeper's `/state`
+becomes a snapshot record: base attributes from the sheet and not the geared stat group, numeric rarity named,
+a wand's translation kept, an ability with no number named rather than zeroed, room by number. The dress
+commands: three health properties then current health, karma in hundredths, faction through `ResetFaction`.
+A roster password whose MD5 the lab's save does not hold is named, and the fixed `shadow` password is checked
+on both sides. A bare scroll is made by its icon only when a leaf class owns it. Prod's orders are translated to
+clone names, whole strings only. The refusals. And `M59Client.close()`
+exists and drops the socket (attached: quit first), which every keeper logoff path silently lacked.
+
 `m59-joints-test.mjs` (143) pins the joints (docs/m59-joints.md). FIRST: with no pak, every joint answers
 default, every call site is guarded by `handles`, and a firewall step through the real Session is refused
 exactly as before. Then the closed answer sets, the condition language, strikes, follow-ups and decision

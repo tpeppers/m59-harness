@@ -1843,6 +1843,9 @@ const server = createServer(async (req, res) => {
         schema: 'm59-keeper-live/v1',
         cooperative_wait: !!session.cooperativeLogoffWaiting,
         tactical_orders: 1,
+        // POST /policy understands `replace: true` (see there). An older keeper would merge the
+        // word in as a policy field, so a writer sends it only to a keeper that says this.
+        policy_replace: 1,
         inventory_drop: 1,
         delivery_cache: 1,
         combat_mode: 3,
@@ -4483,8 +4486,25 @@ const server = createServer(async (req, res) => {
       // question after deaths #24, #25 and #26. Stripped here rather than applied, for
       // exactly the reason the two keys above it are: a `policy.by` that looks
       // authoritative and is read by nothing is the `purpose`-shaped bug again.
+      // `replace` IS THE SIXTH: replace the ORDER COPY instead of merging into it. Orders merge
+      // because a push is normally a few keys, and that is exactly wrong for installing a whole
+      // order set — every key the old orders had and the new ones do not survives. It is taken
+      // only while the keeper is OUT of the world: the next join builds a fresh autopilot from
+      // defaults plus this copy, so the result is exact, and a live autopilot is never left
+      // holding half of each. The shadow clone uses it to give each copy its original's orders.
       const { agent: _addressed, character: _character, keeper_pid: _keeperPid,
-              mode: wantMode, by: writtenBy, ...fields } = body;
+              mode: wantMode, by: writtenBy, replace: replaceOrders, ...fields } = body;
+      if (replaceOrders === true) {
+        if (inGame) { json({ ok: false, error: 'replace is taken only while out of the world (POST /leave first); it takes effect at the next join' }, 409); return; }
+        policy = {};
+        // The Autopilot object is CACHED per session (autopilotFor) and survives leave/join, so
+        // its policy is put back to the defaults this process captured at its first join too —
+        // otherwise the join merges the new orders over the old ones and nothing was replaced.
+        if (autopilot?.policy && defaultPolicy) {
+          for (const k of Object.keys(autopilot.policy)) delete autopilot.policy[k];
+          Object.assign(autopilot.policy, structuredClone(defaultPolicy));
+        }
+      }
       const applied = [];
       let modeChange = null;
       // THE SPOT INVARIANT, ON THE RECEIVING SIDE TOO. The broker coerces before it pushes,
