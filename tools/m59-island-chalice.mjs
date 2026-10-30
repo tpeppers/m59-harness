@@ -467,7 +467,11 @@ export async function recoverIslandRefill(ctx,{record,save}){
   }
   await hop(ctx,2000,record);record.refill.complete=true;save();
 }
-export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,rideMode:asked='auto'}={}){
+// DEFER THE REFILL (operator 2026-10-30: "add a little 'defer refill' to the chalice ride and use it with the refill deferred").
+// deferRefill: true ends the ride at the second landing (2001, the Aerie Guest House) and never walks the jungle to refill:
+// an escape, or an island so full of enemies that the operator does the town trips by hand. The cup is left as it is (a
+// refill is a later errand); the receipt says refill_deferred.
+export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',keepItems=true,queueBudgetMs=ISLAND_CONVOY_WAIT_MS,rideMode:asked='auto',deferRefill=false}={}){
   if(!Number.isSafeInteger(queueBudgetMs)||queueBudgetMs<=0)throw Error('invalid_refill_queue_budget');
   const {agent,call,state}=ctx;
   await call('autopilot',{agent,action:'town_trip',op:'drop',hold_ms:0});
@@ -487,7 +491,8 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
       // Island arrival proves both completed teleports without consuming more water.
       if(recovery==='refill'||recovery==='second_sip'){
         previous.sips[1].landed??=location(await call('look',{agent}));
-        if(previous.mode!=='rescue')await refillIslandCup(ctx,{record:previous,save,keepItems,queueBudgetMs});
+        if(previous.mode!=='rescue'&&!deferRefill)await refillIslandCup(ctx,{record:previous,save,keepItems,queueBudgetMs});
+        else if(deferRefill)previous.refill_deferred=true;
         previous.end=location(await call('look',{agent}));previous.complete=true;delete previous.failure;save();
         return {ok:true,evidence:file,recovered:true};
       }
@@ -511,7 +516,8 @@ export async function rideIslandCup(ctx,{evidenceDir='substrate/island-chalice',
     // A second sip (or cast) starts only after the first Rescue has landed.
     await legTo(ctx,2001,record,save);
     // A rescuer carries no cup, so there is nothing to refill.
-    if(mode!=='rescue')await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
+    if(mode!=='rescue'&&!deferRefill)await refillIslandCup(ctx,{record,save,keepItems,queueBudgetMs});
+    else if(deferRefill)record.refill_deferred=true;
     record.end=location(await call('look',{agent}));record.complete=true;save();
     writeFileSync(file.replace('-pending','-'+Date.now()),JSON.stringify(record,null,2));
     return {ok:true,evidence:file};

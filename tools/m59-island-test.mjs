@@ -114,6 +114,17 @@ try{
  finally{release();await shortHold;}
  await assert.rejects(withStashLease({agent:'long-a'},longA,async()=>{}, {budgetMs:0}),/invalid_refill_queue_budget/);
  await assert.rejects(rideIslandCup({agent:'invalid',call:()=>assert.fail('invalid budget mutated the body')},{queueBudgetMs:-1}),/invalid_refill_queue_budget/);
+ // DEFER THE REFILL (operator 2026-10-30): a cup ride recovered at the second landing finishes there, refill skipped.
+ {const evDir=join(dir,'defer');const pending=join(evDir,'deferer-pending.json');
+  (await import('node:fs')).mkdirSync(evDir,{recursive:true});
+  writeFileSync(pending,JSON.stringify({format:'m59-island-chalice/1',agent:'deferer',mode:'cup',sips:[{landed:{room:2510}},{}],travel:[],complete:false}));
+  const calls=[];
+  const r=await rideIslandCup({agent:'deferer',state:{},call:async(n,a)=>{calls.push(n);
+    if(n==='autopilot')return {ok:true};if(n==='look')return {room:{num:2001},you:{row:5,col:5},hp:{value:20,max:20}};
+    assert.fail('deferred ride made a '+n+' call (the refill walks the jungle)');}},{evidenceDir:evDir,deferRefill:true});
+  assert(r.ok&&r.recovered,'a deferred ride recovered at 2001 completes');
+  const rec=JSON.parse(readFileSync(pending,'utf8'));assert(rec.complete&&rec.refill_deferred,'the receipt says refill_deferred');
+  assert(calls.every(n=>n==='autopilot'||n==='look'),'only reads and the town-trip drop: '+calls.join(','));}
 }finally{rmSync(dir,{recursive:true,force:true});}
 const look=(room,hp=20,max=20)=>({room:{num:room},you:{row:4,col:40,x:2592,y:288},hp:{value:hp,max}});
 const heldOrigin={source:'fleetscript',name:'fixture',run_id:'current'},heldStatus={autopilot_status:{faculties:{movement:{owner:'fleetscript:fixture',expires_in_ms:5000}}}};
