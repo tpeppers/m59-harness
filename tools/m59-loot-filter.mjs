@@ -42,7 +42,11 @@
 
 import { itemNameKey } from './m59-items.mjs';
 
-export const LOOT_ONLY_MEMORY_MS = 10 * 60_000;
+// TWO HOURS, NOT TEN MINUTES (operator 2026-10-30: a farmer confined to one room, Floyd in 2501, keeps nothing but three
+// schools' disciple robes; at ten minutes every robe of the other three -- the same name, told apart only by colour -- and
+// every tooth and scroll it had left became "already on the floor before the fight" and was picked up). A room change
+// still clears it.
+export const LOOT_ONLY_MEMORY_MS = 2 * 60 * 60_000;
 const identity = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 /**

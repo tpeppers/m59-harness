@@ -219,7 +219,10 @@ console.log('through Session.lootFloor');
                     memory: mem, room: 537, now: 0, matcherFor });
   const later = lf.planLootOnly({ spec, floor: [{ id: 5, name: 'emerald' }], memory: mem, room: 537,
                                   now: lf.LOOT_ONLY_MEMORY_MS + 1, matcherFor });
-  ok('what was left is forgotten after ten minutes', later.leave.length === 0);
+  ok('what was left is forgotten after the memory window (two hours)', later.leave.length === 0);
+  lf.planLootOnly({ spec, kill: { name: 'spider', before: [] }, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 0, matcherFor });
+  ok('...but still left thirty minutes on (a confined farm keeps lying beside it)',
+     lf.planLootOnly({ spec, floor: [{ id: 6, name: 'emerald' }], memory: mem, room: 537, now: 30 * 60_000, matcherFor }).leave.length === 1);
   lf.planLootOnly({ spec, kill: { name: 'spider', before: [] }, floor: [{ id: 5, name: 'emerald' }],
                     memory: mem, room: 537, now: 0, matcherFor });
   const recycled = lf.planLootOnly({ spec, floor: [{ id: 5, name: 'wand' }], memory: mem, room: 537, now: 1, matcherFor });
