@@ -918,6 +918,15 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
      JSON.stringify(r.results.a1));
   ok('and does not walk anywhere to do it', !sent.some(x => x.name === 'walk_to'));
 
+  // AN INN IS ALL SAFE SPOT. 2026-10-29: a shadow muster asked eleven characters to rest in the Aerie Guest House
+  // (2001) and Wulfgang's trading post (2101), and the wall search refused every one, "not a place to sit down".
+  sent = fakeBroker({ rooms: { a1: 2001 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, safeSpots: [] });
+  r = await trip([rest({ vigor: 80 })], 'rest-inn');
+  ok('in a no-combat room a character rests where it stands, wall or no wall',
+     r.results.a1.ok === true && r.results.a1.state['0:rest'].outcome === 'rested_in_a_no_combat_room',
+     JSON.stringify(r.results.a1.state['0:rest']));
+  ok('without asking for a safe spot or walking to one', !sent.some(x => x.name === 'safe_spots' || x.name === 'walk_to'));
+
   // THE GEOMETRY'S ORDER IS THE ORDER, AND THE BOOK NO LONGER REORDERS IT.
   //
   // This pair used to assert the opposite: that a square the book called `holds` was walked
