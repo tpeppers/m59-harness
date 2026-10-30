@@ -40,7 +40,11 @@ export async function pruneSeals(sub,budget=SEAL_BUDGET_BYTES) {
   return removed;
 }
 
-if(parentPort&&workerData) {
+// ONLY AS THE RECORDER'S OWN WORKER. m59-pilgrimage.mjs imports this file for runtimeProvenance, and so does whatever imports
+// it -- the queued-exit planner worker among them -- so "in a worker with workerData" is true there too, and this body ran
+// mkdir(undefined) and killed the planner (exit_planner_worker_error, 8 movement suites crashed, 2026-10-30). The recorder
+// always passes a directory; nobody else does.
+if(parentPort&&typeof workerData?.dir==='string') {
   const {dir,maxFrames,maxBytes}=workerData;
   const sealBudget=workerData.sealBudget??SEAL_BUDGET_BYTES;
   const provenance=runtimeProvenance(workerData.root);
