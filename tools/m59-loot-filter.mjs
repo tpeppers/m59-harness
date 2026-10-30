@@ -69,14 +69,24 @@ export function lootOnlySpec(value, { resolveItem = null } = {}) {
         `(whole names, e.g. ["purple mushroom"]); got ${JSON.stringify(items)}`);
     const names = [];
     for (const it of list) {
-      if (typeof it !== 'string' || !itemNameKey(it))
+      // A COLOUR MAY BE NAMED: "robes of the disciple#126|203|236" takes that item only in those palette translations
+      // (operator 2026-10-30: Qor, Kraanan and Shal'ille disciple robes -- every school's robe has the same name, and only
+      // robedisc.kod's master translation tells them apart). The suffix stays on the stored name; the name part resolves.
+      const hash = typeof it === 'string' ? it.lastIndexOf('#') : -1;
+      const xlat = hash > 0 ? it.slice(hash + 1).trim() : null;
+      if (xlat != null && !/^\d+(\|\d+)*$/.test(xlat))
+        throw new Error(`loot_only.${creature}: ${JSON.stringify(it)} -- a colour suffix is #<n>|<n>... (palette translations)`);
+      const base = hash > 0 ? it.slice(0, hash) : it;
+      if (typeof it !== 'string' || !itemNameKey(base))
         throw new Error(`loot_only.${creature}: ${JSON.stringify(it)} is not an item name`);
-      let name = it.trim();
+      let name = base.trim();
       if (resolveItem) {
         try { name = resolveItem(name); }
         catch (e) { throw new Error(`loot_only.${creature}: ${e.message}`); }
       }
-      if (!names.some(n => itemNameKey(n) === itemNameKey(name))) names.push(name);
+      if (xlat != null) name = `${name}#${xlat}`;
+      if (!names.some(n => n === name || (!n.includes('#') && !name.includes('#') && itemNameKey(n) === itemNameKey(name))))
+        names.push(name);
     }
     const key = creature.trim().replace(/\s+/g, ' ');
     if (Object.keys(out).some(k => identity(k) === identity(key)))
@@ -97,8 +107,14 @@ export function lootOnlyRule(spec, creatureName, { matcherFor = null } = {}) {
   return null;
 }
 
-export const itemAllowed = (name, items = []) =>
-  items.some(want => { const k = itemNameKey(want); return !!k && k === itemNameKey(name); });
+/** Is this floor row on the list? A listed name with a #n|n suffix matches only those palette translations. */
+export const itemAllowed = (name, items = [], translation = null) =>
+  items.some(want => {
+    const s = String(want ?? ''), hash = s.lastIndexOf('#');
+    const k = itemNameKey(hash > 0 ? s.slice(0, hash) : s);
+    if (!k || k !== itemNameKey(name)) return false;
+    return hash <= 0 || s.slice(hash + 1).split('|').map(Number).includes(Number(translation));
+  });
 
 export function newLootOnlyMemory() {
   return { room: null, left: new Map(), kills: 0, filtered: 0, taken_allowed: 0, last: null };
@@ -146,7 +162,7 @@ export function planLootOnly({ spec, kill = null, floor = [], memory = null, roo
     if (!rule) continue;
     const fromThisKill = before ? !before.has(row.id) : true;
     if (!fromThisKill) continue;
-    if (itemAllowed(row.name, rule.items)) { if (memory) memory.taken_allowed++; continue; }
+    if (itemAllowed(row.name, rule.items, row.translation ?? null)) { if (memory) memory.taken_allowed++; continue; }
     leave.push({ id: row.id, name: row.name,
       why: `LOOT_ONLY — dropped by the ${rule.creature} just killed, and loot_only takes only ` +
            `${rule.items.join(', ')} from a ${rule.creature}` +
