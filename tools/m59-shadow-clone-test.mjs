@@ -15,7 +15,7 @@
 //   - seven roster passwords no longer matched the lab and read as a slow login.
 import { createHash } from 'node:crypto';
 import { recordFromState, bodyCmds, factionCmds, credentialMismatches, refusals,
-         translateOrders, passwordSlotsToFix, SHADOW_PASSWORD } from './m59-shadow-clone.mjs';
+         translateOrders, passwordSlotsToFix, SHADOW_PASSWORD, translatePostureSave } from './m59-shadow-clone.mjs';
 import { M59Client } from './m59-client.mjs';
 import { iconHoldingClass } from './m59-shadow-fidelity.mjs';
 
@@ -124,6 +124,18 @@ console.log('\nprod orders, translated');
   ok(o.policy.deliverTo.join() === 'shadow24,Kermitt', 'agents too, inside lists — and only whole strings');
   ok(o.policy.perAgent.shadow06?.room === 38, 'a key that names an agent is translated');
   ok(o.policy.hunt === 'troll' && o.mode === 'farm', 'everything else is left exactly');
+}
+
+console.log('\nprod postures, mirrored');
+{
+  const names = new Map([['t1', 'shadow06'], ['Kermit', 'Ffff']]);
+  const save = { name: 'inn-lock', active: true, paused_jobs: ['j1'],
+                 units: { t1: { character: 'Kermit', before: { farm_strategy: 'kocatan-avar-village', assigned_room: 2154 } } } };
+  const t = translatePostureSave(save, names);
+  ok(t.units.shadow06?.character === 'Ffff' && !t.units.t1, 'a lockdown save is over the clone, by its clone name');
+  ok(t.units.shadow06.before.farm_strategy === 'kocatan-avar-village', 'the orders saved before it are kept exactly');
+  ok(t.active === true && t.paused_jobs.length === 0, 'still on; prod job ids are dropped (the job board is not cloned)');
+  ok(save.units.t1, 'the prod save itself is not touched');
 }
 
 console.log('\nthe fixed shadow password');

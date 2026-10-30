@@ -7,6 +7,7 @@
 //   node tools/m59-jobs.mjs pause --agents t5,t6 every running job holding one of them
 //   node tools/m59-jobs.mjs pause --all [--force]  everything (finish-on-alert jobs too only with --force)
 //   node tools/m59-jobs.mjs resume <id> | --all  spawn each paused job's restart
+//   node tools/m59-jobs.mjs cancel <id> | --agents t17,t20   retire them: stop a live one, and nothing resumes them
 //   node tools/m59-jobs.mjs ... --json
 //
 // The board is held by the broker (m59-jobboard.mjs, docs/m59-operations.md "The job board"); this asks the same broker
@@ -42,6 +43,11 @@ try {
     if (!args) throw new Error('pause needs <id>, --agents a,b or --all');
     const r = out(await jobTool('job_pause', { ...args, force: flag('force'), by: 'm59-jobs', why: opt('why') ?? 'paused by hand' }));
     if (!flag('json')) console.log(`paused ${r.paused.length}: ${r.paused.join(', ') || '-'}` + (r.left_to_finish.length ? `; left to finish: ${r.left_to_finish.join(', ')}` : ''));
+  } else if (cmd === 'cancel') {
+    const args = opt('agents') ? { agents: list(opt('agents')) } : target ? { ids: [target] } : null;
+    if (!args) throw new Error('cancel needs <id> or --agents a,b (never --all: it is not undone)');
+    const r = out(await jobTool('job_cancel', { ...args, by: 'm59-jobs', why: opt('why') ?? 'cancelled by hand' }));
+    if (!flag('json')) console.log(`cancelled ${r.cancelled.length}: ${r.cancelled.map(x => `${x.id} ${x.name} (was ${x.was})`).join(', ') || '-'}`);
   } else if (cmd === 'resume') {
     const args = flag('all') ? { all: true } : target ? { ids: [target] } : null;
     if (!args) throw new Error('resume needs <id> or --all');
@@ -49,7 +55,7 @@ try {
     if (!flag('json')) console.log(`resumed ${r.resumed.length}: ${r.resumed.map(x => `${x.id} (pid ${x.pid ?? '?'})`).join(', ') || '-'}` +
       (r.cancelled.length ? `; cancelled (nothing to restart): ${r.cancelled.join(', ')}` : ''));
   } else {
-    console.log('usage: m59-jobs.mjs [report|list|pause|resume] (see the header)');
+    console.log('usage: m59-jobs.mjs [report|list|pause|resume|cancel] (see the header)');
     process.exitCode = 2;
   }
 } catch (e) {

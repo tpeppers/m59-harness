@@ -109,5 +109,24 @@ console.log('the fleet reply as prod sends it (deploy-2026-10-27-1)');
   ok('a bare array still works', P.unitsFromFleet([{ agent: 't1', max_health: 60, room: 70 }])[0].room === 70);
 }
 
+section('a launch takes ITS characters out of a lockdown, to a hold, and leaves the rest in it');
+{
+  // avar-village.md "the release hazard": the inn-lock save's "before" is the farm, so restoring it sends each one off alone.
+  const b = fakeBroker([{ agent: 't1' }, { agent: 't2' }, { agent: 't3' }]);
+  await P.apply('hold-38', { fleet: 'launch', call: b.call, log: quiet });
+  const pushesBefore = b.calls.filter(c => c.action === 'start').length;
+  let err = null; try { await P.release('hold-38', { fleet: 'launch', call: b.call, log: quiet, only: ['t9'] }); } catch (e) { err = e.message; }
+  ok('a character the posture is not on over is refused, nothing released', /not on over t9/.test(err ?? '') && P.readSave('launch', 'hold-38').active);
+  const r = await P.release('hold-38', { fleet: 'launch', call: b.call, log: quiet, only: ['t1', 't2'], toHold: true, by: 'avar-jumpstart' });
+  const save = P.readSave('launch', 'hold-38');
+  ok('to a hold: nothing is pushed (the units keep the orders they have now)', b.calls.filter(c => c.action === 'start').length === pushesBefore);
+  ok('the posture stays on over everyone else', save.active && Object.keys(save.units).join() === 't3' && r.remaining === 1);
+  ok('and remembers who left, how and for whom', save.released_units.map(x => `${x.agent}:${x.to}:${x.by}`).join() === 't1:hold:avar-jumpstart,t2:hold:avar-jumpstart');
+  const t = await P.tend({ fleet: 'launch', call: b.call, log: quiet });
+  ok('tend no longer re-imposes it on the ones that left', !t.flatMap(x => x.drift ?? []).some(d => ['t1', 't2'].includes(d.agent)));
+  await P.release('hold-38', { fleet: 'launch', call: b.call, log: quiet, only: ['t3'] });
+  ok('a partial release that restores takes only its own; the last one out turns the posture off', !P.readSave('launch', 'hold-38').active);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

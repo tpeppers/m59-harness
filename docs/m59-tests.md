@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+`m59-muster-lib-test.mjs` (18) pins the muster's readiness model (`m59-muster-lib.mjs`), from prod's cold state of
+2026-10-29: mushrooms are reagents and not meals; only live jobs over a character are its jobs; survival is off only
+while its lease runs; a drilled, locked, hungry body has every gap named with its remedy, and a lockdown's release is
+the named hazard `release_lockdown`; a body outside a no-combat room is excluded rather than prepared where it stands
+(Janice died at 78% in 2133); hand-overs never cross rooms, a donor keeps its target plus a margin, and who is still
+short is named.
+
 `m59-shadow-clone-test.mjs` (50) pins the fast shadow clone (docs/m59-shadow.md). A prod keeper's `/state`
 becomes a snapshot record: base attributes from the sheet and not the geared stat group, numeric rarity named,
 a wand's translation kept, an ability with no number named rather than zeroed, room by number. The dress

@@ -283,7 +283,13 @@ node tools/m59-jobs.mjs                       # running / paused / orphaned / re
 node tools/m59-jobs.mjs list --state paused   # one line per job (--agent t6, --kind fleetscript, --json)
 node tools/m59-jobs.mjs pause --agents t5,t6  # stop every job holding them; --all; --force for finish-on-alert jobs
 node tools/m59-jobs.mjs resume --all          # spawn each paused job's restart
+node tools/m59-jobs.mjs cancel --agents t17,t20   # retire them: a live one is stopped, and nothing ever resumes them
 ```
+
+**`cancel` exists because `pause` keeps the restart, on purpose, and an alert resumes what it paused.** A launch
+taking characters that a tripwire-paused job holds (on 2026-10-29: `buy-sapphires [t17,t20]`, the solo avar-road
+errand that had just killed Lew and Zoot) would otherwise see that job restart mid-launch. By ids or agents only —
+there is no `--all`, because it is not undone. Broker tool `job_cancel`; a broker started before it does not have it.
 
 Every run that holds characters is a **job the broker holds** (`tools/m59-jobboard.mjs`, persisted to
 `substrate/jobs-<fleet>.json`). Operator, 2026-10-25: *"any scripts can register themselves to be cancelled and/or
