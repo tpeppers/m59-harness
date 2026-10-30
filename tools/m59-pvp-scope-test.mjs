@@ -5,8 +5,8 @@
 //   node tools/m59-pvp-scope-test.mjs
 //
 // What it pins, in the order a reviewer should care:
-//   1. NO PAK, NO CHANGE. A refused swing at a player in a return-fire fight is retried, as it always was; nobody is
-//      ever indirect; the target pick is the old one.
+//   1. NO PAK: nobody is ever indirect and the target pick is the old one -- but a safety refusal is NOT retried any
+//      more (the operator, 2026-10-29): the player goes into the refused-here book, as a guild-only refusal does.
 //   2. ONE PROBE. With a pak answering pvp.refused, a player the server will not let us hit is swung at once and the
 //      fight moves to the player it CAN hit (Scooter, Rick Deckard and Morpheus, 2026-10-29).
 //   3. A HIT UNDOES IT. An indirect combatant whose blow reaches us is direct again; pvp.target cannot overrule a hit.
@@ -113,19 +113,44 @@ try {
   });
 
   // ---------------------------------------------------------------------------------------- 1. no pak, no change
-  await test('NO PAK: a safety refusal in return fire is retried at the same player, as it always was', async () => {
+  await test('NO PAK: nobody is ever indirect, and a fight with no refusal picks as it always did', async () => {
     const f = fixture();
     put(f, 2, P); put(f, 3, P, 5, 7);
     blow(f, 'Rick Deckard'); blow(f, 'Morpheus');
-    assert.ok(f.mode.active?.pvp);
-    assert.equal(String(f.mode.active.order.target).toLowerCase(), 'rick deckard');
+    assert.equal(String(f.mode.active.order.target).toLowerCase(), 'rick deckard', 'the first attacker, as before');
+    await swing(f); await swing(f);
+    assert.equal(attacksAt(f, 2), 2); assert.equal(attacksAt(f, 3), 0);
+    assert.deepEqual(f.mode.active.pvp.indirect ?? {}, {});
+    f.mode.stop('test');
+  });
+
+  await test('NO PAK, THE NEW DEFAULT: a safety refusal is never retried -- the fight moves to the player it can hit', async () => {
+    const f = fixture();
+    put(f, 2, P); put(f, 3, P, 5, 7);
+    blow(f, 'Rick Deckard'); blow(f, 'Morpheus');
     await swing(f);
     f.mode.event({ kind: 'message', text: SAFETY });
-    await swing(f); await swing(f);
-    assert.ok(attacksAt(f, 2) >= 2, `swung at Rick ${attacksAt(f, 2)}x (the old loop)`);
-    assert.equal(attacksAt(f, 3), 0);
-    assert.deepEqual(f.mode.active.pvp.indirect ?? {}, {}, 'nobody is indirect without a pak');
-    assert.notEqual(f.mode.active.phase, 'assisting');
+    for (let i = 0; i < 4; i++) await swing(f);
+    assert.equal(attacksAt(f, 2), 1, `Rick swung at ${attacksAt(f, 2)}x (was 106 on 2026-10-29)`);
+    assert.ok(attacksAt(f, 3) >= 2, 'Morpheus is fought instead');
+    assert.ok(f.mode.targetRefused('Rick Deckard'), 'remembered in the refused-here book');
+    f.mode.stop('test');
+  });
+
+  await test('NO PAK: the refusal outlives the fight -- the next alarm does not start another probe', async () => {
+    const f = fixture();
+    put(f, 2, P);
+    f.mode.beginPvP({ character: 'Rick Deckard', text: 'zone alarm', reason_code: 'zone_alarm' });
+    await swing(f);
+    f.mode.event({ kind: 'message', text: SAFETY });
+    assert.equal(f.mode.active, null, 'nobody left to hit: the keeper ladder has the body');
+    assert.equal(f.mode.beginWar('Rick Deckard', { basis: 'attacked', why: 'x', room: 2154, reporter: 'Gonzo' }), false);
+    await swing(f);
+    assert.equal(attacksAt(f, 2), 1);
+    // HIS blow lands: the refusal was wrong, and return fire runs as for anybody.
+    blow(f, 'Rick Deckard');
+    assert.ok(f.mode.active?.pvp); await swing(f);
+    assert.equal(attacksAt(f, 2), 2);
     f.mode.stop('test');
   });
 

@@ -2697,7 +2697,7 @@ export class CombatMode {
     // Refused to us in this room: still in the room, never a target (m59-refused-targets.mjs).
     const present = seen.filter(x => !this.targetRefused(x.a.character));
     if (!present.length && seen.length) {
-      this.stop('PvP: every attacker here cannot be attacked in this room (guild-only); ' +
+      this.stop('PvP: the server refused us every attacker here (guild-only, or safety); ' +
         'survival returns to the keeper ladder'); return false;
     }
     if (present.length && p.shelter?.status === 'approaching') {
@@ -2798,24 +2798,46 @@ export class CombatMode {
     if (d.first.length) p.prefer = d.first;
   }
 
-  /** pvp.refused: the server said no to a swing at a player. true when the pak took the answer. */
+  /**
+   * The server said no to a swing at a PLAYER in a PvP fight. Always answered: the swing is never simply retried.
+   *
+   * THE DEFAULT (operator, 2026-10-29: "change the harness default on not retrying"). It used to go to combatFailure,
+   * which re-sent the same swing every second for as long as the player stood there -- Scooter, 106 swings at Rick
+   * Deckard while Morpheus killed him. Now, with no pak answering, the player goes into the refused-here memory
+   * (m59-refused-targets.mjs) exactly as a guild-only refusal does: never swung at again in this room, by this fight or
+   * the next alarm's, until it expires, we leave the room, or HIS blow reaches us (forgetRefused, observePlayerCombat).
+   * The fight moves to anybody else it can hit, or ends and hands the body to the keeper's ladder.
+   *
+   * WITH A PAK answering pvp.refused `indirect`, he is instead an indirect combatant of THIS fight -- still in it, so
+   * the fight can assist against him (m59-combat-assist.mjs) -- which the refused-here memory would forbid.
+   */
   askRefused(o, text) {
-    const joints = this.s.joints;
-    if (!o?.pvp || !o.targetName || !joints?.handles?.('pvp.refused')) return false;
+    if (!o?.pvp || !o.targetName) return false;
     const t = o.client.room?.objects?.get?.(o.targetId);
     if (!t || !(t.flags & OF.PLAYER)) return false;
+    const joints = this.s.joints;
     const p = o.pvp, key = o.targetName;
     p.probes ??= {}; p.probes[key] = (p.probes[key] ?? 0) + 1;
     const a = p.attackers.find(x => x.character.toLowerCase() === key);
+    const name = a?.character ?? (String(this.s.client?.rsc?.get?.(t.nameRsc) ?? t.name ?? '').trim() || key);
     let d = null;
-    try {
-      d = joints.ask('pvp.refused', { ...roomFacts(this.s), self: selfFacts(this.s, { now: this.now() }), text,
-        target: { name: a?.character ?? key, attacked_us: hitUs(a), hit_us_at: a?.hit_us_at ?? null,
-          last_attacked_at: a?.last_attacked_at ?? null, probes: p.probes[key] },
-        others: p.attackers.filter(x => x.character.toLowerCase() !== key).map(x => x.character) });
-    } catch { d = null; }
-    if (d?.do !== 'indirect') return false;
-    this.markIndirect(o, a?.character ?? key, { why: d.why, pak: d.pak, source: 'pvp.refused', text });
+    if (joints?.handles?.('pvp.refused')) {
+      try {
+        d = joints.ask('pvp.refused', { ...roomFacts(this.s), self: selfFacts(this.s, { now: this.now() }), text,
+          target: { name, attacked_us: hitUs(a), hit_us_at: a?.hit_us_at ?? null,
+            last_attacked_at: a?.last_attacked_at ?? null, probes: p.probes[key] },
+          others: p.attackers.filter(x => x.character.toLowerCase() !== key).map(x => x.character) });
+      } catch { d = null; }
+    }
+    // A WAR ENGAGEMENT THE SERVER REFUSES was a wrong memory of a guild war, which is a fact about our GUILD and so the
+    // whole fleet's: the war book suspends him (as it always did). Whatever the pak says about this fight.
+    if (o.keepSafety) try { war.markRefused(name, { at: this.now(), why: text }); } catch {}
+    if (d?.do === 'indirect') this.markIndirect(o, name, { why: d.why, pak: d.pak, source: 'pvp.refused', text });
+    else {
+      this.refuseTarget(name, { why: 'safety', text, source: 'pvp_refused' });
+      o.lastIndirect = { name, at: this.now(), source: 'refused_here', text };
+      this.record('pvp_refused_here', o);
+    }
     o.targetId = null; o.targetName = null; o.phase = 'waiting'; o.phaseRevision++; o.nextAt = 0;
     if (this.syncPvP(o)) this.refreshTarget(o);
     this.wake();
@@ -3168,8 +3190,8 @@ export class CombatMode {
       }
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
-        // A PLAYER WE CANNOT HIT, IN A PVP FIGHT: a pak answering pvp.refused may make him an indirect combatant, and
-        // the fight moves on to somebody it can hit, or to assisting. Silence: everything below, as always.
+        // A PLAYER WE CANNOT HIT, IN A PVP FIGHT: never retried (askRefused). A pak answering pvp.refused makes him an
+        // indirect combatant; without one he is refused here. The branches below are for every other kind of order.
         if (o.pvp && this.askRefused(o, ev.text)) return;
         // The leader swung at somebody the server will not let us hit (an innocent, with our
         // safety on): drop this target for the warband rather than re-issuing it every tick.
@@ -3364,7 +3386,7 @@ export class CombatMode {
         fault: o.pvp?.opener_fault ?? null, phase: o.phase ?? null,
         readiness: r ? { ready: r.ready ?? null, positioned: r.positioned ?? null, timer_remaining_ms: r.timer_remaining_ms ?? null, why: r.why ?? r.reason ?? null } : null };
     }
-    if (event === 'pvp_indirect' || event === 'pvp_indirect_cleared') return { phase: o.phase ?? null, indirect: o.lastIndirect ?? null };
+    if (event === 'pvp_indirect' || event === 'pvp_indirect_cleared' || event === 'pvp_refused_here') return { phase: o.phase ?? null, indirect: o.lastIndirect ?? null };
     if (event === 'pvp_assist' || event === 'pvp_assist_skipped') return { phase: o.phase ?? null, assist: o.lastAssist ?? null };
     return o.phase ? { phase: o.phase } : null;
   }
