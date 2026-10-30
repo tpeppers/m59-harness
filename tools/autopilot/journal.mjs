@@ -455,25 +455,29 @@ export class JournalPart {
   // led here, and it is the field the audit is actually for: "cast create food" is a
   // fact, "cast create food because the larder was empty and a shop was four rooms
   // away" is a decision someone can disagree with.
-  recordCast(spell, { ok = false, made = [], why = null, target = null,
+  //
+  // `outcome` is what the cast came to when the caller could tell (m59-trance.mjs practiceOutcome: completed, failed
+  // roll, broken, refused), counted per spell and written to the ledger, so "how many trances broke" has an answer.
+  recordCast(spell, { ok = false, made = [], why = null, target = null, outcome = null,
                       mana_before = null, mana_after = null, reagents_before = null } = {}) {
     const name = String(spell || 'unknown').toLowerCase();
     const b = this.bookFor(name);
     b.cast++;
     if (ok) b.produced++; else b.nothing++;
+    if (outcome) (b.outcomes ||= {})[outcome] = (b.outcomes[outcome] || 0) + 1;
     // Only when both readings are real and the mana went DOWN. A cast that completes as
     // the character regenerates can read as negative, and a guessed cost is worse than
     // no cost — it would be summed into a fleet total and quietly believed.
     const cost = (typeof mana_before === 'number' && typeof mana_after === 'number'
                   && mana_before >= mana_after) ? mana_before - mana_after : null;
     if (cost != null) b.mana_spent += cost;
-    const e = { at: Date.now(), pass: this.passes, spell: name, ok: !!ok, why,
+    const e = { at: Date.now(), pass: this.passes, spell: name, ok: !!ok, why, outcome: outcome || undefined,
                 made: made.length ? made : undefined, target: target || undefined,
                 mana_cost: cost ?? undefined, reagents_before: reagents_before || undefined };
     this.spellbook.casts.push(e);
     if (this.spellbook.casts.length > 60)
       this.spellbook.casts.splice(0, this.spellbook.casts.length - 60);
-    this.ledgerEvent('cast', { spell: name, ok: !!ok, why, target: target || undefined,
+    this.ledgerEvent('cast', { spell: name, ok: !!ok, why, outcome: outcome || undefined, target: target || undefined,
                                made: made.length ? made : undefined,
                                mana_cost: cost ?? undefined, reagents_before: reagents_before || undefined });
     return e;
@@ -560,6 +564,7 @@ export class JournalPart {
         // line would say it was.
         worked: b.cast ? Math.round(100 * b.produced / b.cast) + '%' : null,
         mana_spent: b.mana_spent || undefined,
+        outcomes: b.outcomes || undefined,
         declined: Object.keys(b.declined).length ? b.declined : undefined,
       })).sort((a, b) => b.cast - a.cast),
       // Spells it only ever declined appear above with cast: 0 — that is the point.

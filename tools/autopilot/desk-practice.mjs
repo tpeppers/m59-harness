@@ -16,7 +16,12 @@ import { castsAbove, folRoomsOf } from '../m59-chalice.mjs';
 import { buyHereWants, choosePractice, deskReserve, isReagent, normalizePractice, offeredServices, pickCreatureTarget, touchedCreatures } from '../m59-deskpractice.mjs';
 import { OF, affordances, buyLines } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
+import { practiceOutcome, tranceMs } from '../m59-trance.mjs';
 import { Autopilot, REST_VIGOR_CAP } from '../m59-autopilot.mjs';
+
+// How long a practice spell whose trance was BROKEN is set aside (at least refused_ms): long enough that a leak stops
+// draining reagents, short enough that one stray break does not end a night's drill.
+export const PRACTICE_BROKEN_ASIDE_MS = 10 * 60_000;
 
 export class DeskPracticePart {
   // @part 1
@@ -390,12 +395,39 @@ export class DeskPracticePart {
     this._practiceAt = now;
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
+    const castAt = Date.now();
     await withCastRite(s, { spell, targets: targets, why: 'practiceAtDesk' }, () => s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050));
     await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
     // UNKNOWN IS NOT REFUSED. Only a reading that proves nothing was spent sets the spell aside.
     const landed = spent == null ? null : spent > 0;
+    // A CAST WITH A TRANCE IS NOT OVER WHEN THE MANA MOVES. The price is taken at the start and the spell happens at
+    // the end, two to thirty seconds later; the session's automatic hold drops every packet that would break it in
+    // between (m59-game.mjs noteCastSent). The drill used to hand the pass back on the first message -- "You focus
+    // your whole will" -- and record the cast as worked, so a broken trance and a finished one read the same. Now it
+    // stays for the trance, bounded at five seconds past it, and reads how it ended. A failed roll (half price) has
+    // no trance to wait for.
+    const tranceFor = practiceOutcome({ name: choice.cast.name, spent }) === 'completed' ? tranceMs(choice.cast.name) : 0;
+    const endedSince = () => { const e = s.pacer?.lastTranceEnd; return e && e.at >= castAt ? e.why : null; };
+    if (tranceFor > 0) {
+      while ((Date.now() < castAt + tranceFor + 250 || s.pacer?.holdStatus?.().active)
+             && Date.now() < castAt + tranceFor + 5000 && !/broken/i.test(endedSince() ?? ''))
+        await new Promise(r => setTimeout(r, 100));
+    }
+    const outcome = practiceOutcome({ name: choice.cast.name, spent, ended: endedSince() });
+    // A BROKEN TRANCE SETS THE SPELL ASIDE FOR TEN MINUTES, and says so. Something in this room or this keeper is
+    // breaking it -- every break takes the full price and every reagent -- so the drill stops paying until a person or
+    // the next window shows the cause is gone, rather than feeding the same leak a cast a minute.
+    if (outcome === 'broken') {
+      const asideMs = Math.max(cfg.refused_ms, PRACTICE_BROKEN_ASIDE_MS);
+      this._practiceRefused.set(choice.cast.name, Date.now() + asideMs);
+      this.tally.practice_trances_broken = (this.tally.practice_trances_broken || 0) + 1;
+      this.note('practice trance broken', { spell: choice.cast.name, ended: endedSince(), set_aside_s: Math.round(asideMs / 1000),
+        dropped_during_hold: s.pacer?.holdStatus?.().dropped ?? null });
+    }
+    if (outcome === 'completed') this.tally.practice_completed = (this.tally.practice_completed || 0) + 1;
+    if (outcome === 'failed roll') this.tally.practice_failed_rolls = (this.tally.practice_failed_rolls || 0) + 1;
     // A REFUSED CREATURE CAST SETS ASIDE THE CREATURE, NOT THE SPELL: "already dazzled" and
     // "out of reach" are facts about that target, and the next skeleton may take it. A landed one
     // is set aside for the longest the effect can run (Dazzle.kod bounds it to 15 s) plus a second.
@@ -408,11 +440,14 @@ export class DeskPracticePart {
     else if (landed === false) this._practiceRefused.set(choice.cast.name, now + cfg.refused_ms);
     if (landed) this.tally.practice_casts = (this.tally.practice_casts || 0) + 1;
     this.recordCast(choice.cast.name, {
-      ok: landed !== false,
+      // Worked means the spell HAPPENED: a failed roll and a broken trance both spent something and produced nothing.
+      ok: landed !== false && outcome !== 'failed roll' && outcome !== 'broken',
+      outcome,
       target: choice.cast.target === 'self' ? 'self' : creature ? `${creature.name} #${creature.id}` : mate ? mate.name : null,
       why: landed === false
         ? (creature ? `practice: no mana was spent on ${creature.name}; that creature is set aside 60s`
                     : `practice: no mana was spent, so the server refused it; set aside ${Math.round(cfg.refused_ms / 1000)}s`)
+        : outcome === 'broken' ? `practice: the trance was broken (${endedSince()}); full price paid for nothing; set aside ${Math.round(Math.max(cfg.refused_ms, PRACTICE_BROKEN_ASIDE_MS) / 1000)}s`
         : `${choice.why}; reserve ${reserve.why}`,
       mana_before: manaBefore, mana_after: manaAfter });
     return true;
