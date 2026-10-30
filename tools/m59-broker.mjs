@@ -15592,7 +15592,8 @@ const TOOLS = [
         // keeper wrote one and the economy board read the other - so a fleet whose vaults were
         // being read every trip rendered a column of blanks. See StorageCache.
         if (who && r?.opened) {
-          try { storage.writeVault(who, r.items ?? [], { at: Date.now() }); }
+          try { storage.writeVault(who, r.items ?? [], { at: Date.now(),
+                  room: proxied?._state?.room?.num ?? s.world?.room?.num ?? null }); }
           catch { /* a cache that will not write must not fail the reading */ }
         }
         return { ok: !!r?.opened, action, vaultman: r?.vaultman ?? null,

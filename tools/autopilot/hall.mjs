@@ -224,7 +224,7 @@ export class HallPart {
     // storage/vaults/ — so a fleet whose vaults were being cached every trip rendered a
     // page of "never read". Same reading, written once to each, rather than a second
     // measurement that can disagree with the first.
-    try { new StorageCache().writeVault(who, snapshot.items, { at: snapshot.at }); }
+    try { new StorageCache().writeVault(who, snapshot.items, { at: snapshot.at, room: this.s?.world?.room?.num ?? null }); }
     catch { /* the record is a convenience; never let it interrupt the errand */ }
     if (settings) this.detailEvent('vault_accumulation', 'snapshot', snapshot);
     return snapshot;

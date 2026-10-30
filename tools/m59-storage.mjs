@@ -173,12 +173,21 @@ export class StorageCache {
   get rentPath() { return join(this.dir, 'rent.json'); }
 
   // ---------------------------------------------------------------- vaults
-  writeVault(character, items = [], { at = null, account = null } = {}) {
+  // EACH TOWN'S VAULT IS ITS OWN, so the room it was read in is part of the reading. `items` stays the LAST vault read
+  // (what every board already shows); `by_room` keeps one entry per vault room, so a character with things in Tos and
+  // in Ko'catan keeps both, and a muster can ask "what is within three rooms of here" (m59-preflight.mjs). A reading
+  // with no room (a caller that does not know it) leaves `by_room` as it was.
+  writeVault(character, items = [], { at = null, account = null, room = null } = {}) {
+    const rows = items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1,
+                                   ...(i.fee != null ? { fee: Number(i.fee) } : {}) }));
+    const when = Number(at) || this.now();
+    const prev = readJson(this.vaultPath(character));
+    const byRoom = { ...(prev?.character === character ? prev.by_room ?? {} : {}) };
+    if (Number(room) > 0) byRoom[Number(room)] = { items: rows, observed_at: when };
     return writeJson(this.vaultPath(character), {
-      character, account: account ?? null,
-      items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1,
-                               ...(i.fee != null ? { fee: Number(i.fee) } : {}) })),
-      observed_at: Number(at) || this.now(),
+      character, account: account ?? null, items: rows, observed_at: when,
+      ...(Number(room) > 0 ? { room: Number(room) } : {}),
+      ...(Object.keys(byRoom).length ? { by_room: byRoom } : {}),
     });
   }
 

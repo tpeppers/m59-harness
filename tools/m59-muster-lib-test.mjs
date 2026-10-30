@@ -6,7 +6,8 @@
 // Offline. Each case is from the prod cold state of 2026-10-29 the Avar Village launch has to start from:
 // inn-locked bodies, second-wind drills leaving survival off and fight_above_vigor 0, paused tripwire jobs
 // over participants, mushrooms that are reagents and not meals, and food in only two of twenty packs.
-import { unitFromState, assess, planHandovers, planFood, planItem, countOf, readinessReport, DEFAULT_TARGET } from './m59-muster-lib.mjs';
+import { unitFromState, assess, planHandovers, planFood, planItem, countOf, readinessReport, DEFAULT_TARGET,
+         spellReagents, needsOf, sourcesFrom, planSupply, hopsFrom } from './m59-muster-lib.mjs';
 
 let passed = 0, failed = 0;
 const ok = (cond, what) => { if (cond) { passed++; console.log(`  ok   ${what}`); } else { failed++; console.log(`  FAIL ${what}`); } };
@@ -62,6 +63,49 @@ console.log('\nhand-overs');
   const s = planItem([{ agent: 'jan', room: 1, items: [{ name: 'sapphire', amount: 141 }] }, { agent: 'cam', room: 1, items: [{ name: 'sapphire', amount: 2 }] }],
     'sapphire', { need: x => (x.agent === 'cam' ? 20 : 0), keep: () => 0 });
   ok(s.handovers.length === 1 && s.handovers[0].amount === 18, 'the lifter is topped up to its need, from the carrier');
+}
+
+console.log('\nresources: what a muster needs, from the game');
+{
+  const spells = [{ name: 'discordance', cls: 'Discordance', reagents: [{ item: 'Sapphire', count: 2 }] },
+                  { name: 'create food', cls: 'CreateFood', reagents: [{ item: 'ElderBerry', count: 2 }, { item: 'Herbs', count: 2 }] }];
+  ok(JSON.stringify(spellReagents('Discordance', spells)) === '[{"class":"Sapphire","count":2}]', 'a spell\'s reagents come from the spell table, by name or class');
+  ok(spellReagents('no such spell', spells) === null, 'a spell nobody has is null, not "no reagents"');
+  const spec = { target: { meals: 4 }, casts: { discordance: 10, 'create food': 3 } };
+  const camilla = { agent: 't9', spells: ['discordance'], items: [] };
+  const n = needsOf(camilla, spec, { spells });
+  ok(n.find(x => x.key === 'Sapphire')?.amount === 20 && !n.some(x => x.key === 'Herbs'), 'reagents only for spells THIS character knows: 10 discordance = 20 sapphires, no herbs');
+  ok(n.find(x => x.key === 'meal')?.amount === 4, 'and the meals everyone needs');
+  let threw = false; try { needsOf(camilla, { casts: { discordence: 1 } }, { spells, knows: () => true }); } catch { threw = true; }
+  ok(threw, 'a misspelled spell in a muster spec is an error, not zero reagents');
+}
+{
+  // classOf/isFood stand in for the kod tables: a red mushroom is a reagent, bread is food.
+  const classOf = n => ({ 'loaf of bread': 'Bread', sapphire: 'Sapphire', 'red mushroom': 'RedMushroom' }[n] ?? n);
+  const isFood = n => n === 'loaf of bread';
+  const graph = new Map([[2001, new Set([2000])], [2000, new Set([2001, 2005])], [2005, new Set([2000])], [114, new Set()]]);
+  const distance = (a, b) => hopsFrom(graph, a).get(Number(b)) ?? Infinity;
+  ok(distance(2001, 2005) === 2 && distance(2001, 114) === Infinity, 'hops over the room graph (inn -> square -> vault is two)');
+  const units = [{ agent: 'a', character: 'A', room: 2001, items: [{ name: 'loaf of bread', amount: 22 }] },
+                 { agent: 'b', character: 'B', room: 2001, items: [{ name: 'red mushroom', amount: 100 }] },
+                 { agent: 'c', character: 'C', room: 2001, items: [] }];
+  const vaults = [{ character: 'C', room: 2005, items: [{ name: 'loaf of bread', amount: 3 }] },
+                  { character: 'B', room: 114, items: [{ name: 'loaf of bread', amount: 99 }] }];
+  const needs = { a: [{ key: 'meal', amount: 4 }], b: [{ key: 'meal', amount: 4 }], c: [{ key: 'meal', amount: 4 }] };
+  const plan = planSupply(needs, units, sourcesFrom({ units, vaults }), { classOf, isFood, distance, maxHops: 3, keep: (s, k) => (s.kind === 'pack' && k === 'meal' ? 2 : 0) });
+  ok(!plan.transfers.some(t => t.name === 'red mushroom'), 'a hundred mushrooms feed nobody');
+  const toC = plan.transfers.filter(t => t.to === 'c');
+  ok(toC[0]?.from === 'vault:C' && toC[0].amount === 3, 'a character draws on its OWN vault first, two rooms away');
+  ok(!plan.transfers.some(t => t.from === 'vault:B'), 'a vault on the mainland is out of reach, however full');
+  const given = plan.transfers.filter(t => t.from === 'pack:a').reduce((s, t) => s + t.amount, 0);
+  ok(given === 5, 'the donor gives only what is short (4 to b, 1 to c after its own vault)');
+  const tight = planSupply({ b: [{ key: 'meal', amount: 20 }] }, units, sourcesFrom({ units }),
+    { classOf, isFood, distance, keep: (s, k) => (s.kind === 'pack' && k === 'meal' ? 2 : 0) });
+  ok(tight.transfers.reduce((s, t) => s + t.amount, 0) === 20 && tight.shortfalls.length === 0 &&
+     planSupply({ a: [{ key: 'meal', amount: 4 }], b: [{ key: 'meal', amount: 40 }] }, units, sourcesFrom({ units }),
+       { classOf, isFood, distance, keep: () => 2 }).shortfalls[0]?.short === 40 - (22 - 4 - 2),
+     'a donor never gives away its own need or its margin; what is left short is named');
+  ok(plan.shortfalls.length === 0, 'everybody covered');
 }
 
 console.log('\nthe survey');

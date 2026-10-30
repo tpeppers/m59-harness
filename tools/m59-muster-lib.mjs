@@ -149,3 +149,149 @@ export function readinessReport(assessments) {
     `${String(a.agent).padEnd(9)}${String(a.character ?? '').slice(0, 12).padEnd(13)}${String(a.room ?? '?').padEnd(6)}` +
     (a.exclude ? `OUT: ${a.exclude}` : a.ready ? 'ready' : a.gaps.map(g => `${g.kind}(${g.why})`).join('; ')));
 }
+
+// ================================================================================== THE RESOURCES OF A MUSTER
+//
+// Operator, 2026-10-29: "your process of like 'check if people have food' and ending up bouncing back-and-forth with
+// the 'are mushrooms edible?' and wasting time — our preliminary 'scope out resources available for the muster' tool
+// should instantly cross reference what everyone's carrying, what's available within ~3 rooms (the island vaults for
+// many of our people), etc." So a need and a holding are compared by what the GAME says an item is — its kod class
+// (m59-itemclass.mjs, the same table the wire's names resolve through) and its Food tree — never by a name somebody
+// typed. A red mushroom is a RedMushroom, a reagent; a loaf of bread is Bread, food. Asked of the game, not argued.
+//
+// THE PIECES, all pure (the CLI m59-preflight.mjs reads the world and hands them in):
+//   needsOf(unit, spec)        what one participant must carry: meals, and every reagent of every spell the muster
+//                              wants cast N times that THIS character knows (substrate/m59-spells.json, any spell)
+//   sourcesFrom({...})         every place a thing can come from: packs, each character's vault (its owner only),
+//                              guild chests — with the room each one is in
+//   planSupply(...)            each need filled from the participant itself first, then the nearest source within
+//                              `maxHops` rooms, a donor keeping its own need plus `keep`; what nothing covers is named
+//
+// A transfer names who acts and where: a HANDOVER is two bodies in one room (`supply`), a WITHDRAWAL is a vault's
+// owner at that vault, a CHEST draw is any guild member at the hall. The executor fires each when its parties are
+// together and retries a refusal (a full pack is an ordering problem more often than a capacity one).
+
+/** Reagents of one spell, from the game's spell table: [{ class, count }], or null when no spell has that name. */
+export function spellReagents(spell, spells = []) {
+  const want = lc(spell).replace(/[^a-z0-9]/g, '');
+  const s = spells.find(x => lc(x.name).replace(/[^a-z0-9]/g, '') === want || lc(x.cls) === want);
+  return s ? (s.reagents ?? []).map(r => ({ class: r.item, count: Number(r.count) || 1 })) : null;
+}
+
+/**
+ * What one participant needs to carry, as [{ key, kind, amount, why }]. `key` is 'meal' for food, else a kod class.
+ * spec.target.meals: meals each; spec.casts: { '<spell>': castings } for every participant who KNOWS the spell;
+ * spec.items: { '<class or name>': n } for everyone; spec.roleItems(unit) for per-character extras.
+ */
+export function needsOf(unit, spec, { spells = [], knows = (u, s) => (u.spells ?? []).some(n => lc(n) === lc(s)), classOf = n => n } = {}) {
+  const need = new Map();
+  const add = (key, kind, amount, why) => {
+    if (!(amount > 0)) return;
+    const cur = need.get(key) ?? { key, kind, amount: 0, why: [] };
+    cur.amount += amount; cur.why.push(why); need.set(key, cur);
+  };
+  add('meal', 'food', Number(spec?.target?.meals ?? DEFAULT_TARGET.meals), 'meals');
+  for (const [spell, n] of Object.entries(spec?.casts ?? {})) {
+    if (!knows(unit, spell)) continue;
+    const reagents = spellReagents(spell, spells);
+    if (!reagents) throw new Error(`no spell called "${spell}" in the game's spell table`);
+    for (const r of reagents) add(r.class, 'reagent', r.count * Number(n), `${n}x ${spell}`);
+  }
+  for (const [item, n] of Object.entries({ ...(spec?.items ?? {}), ...(spec?.roleItems?.(unit) ?? {}) }))
+    add(classOf(item) ?? item, 'item', Number(n), item);
+  return [...need.values()].map(n => ({ ...n, why: n.why.join(', ') }));
+}
+
+/**
+ * Every source, as [{ id, kind: 'pack'|'vault'|'chest', holder, room, items, observed_at }]. A vault belongs to its
+ * owner (only the owner withdraws) and is in the room it was read in — or `room: null`, said out loud, for a vault
+ * read before the room was recorded.
+ */
+export function sourcesFrom({ units = [], vaults = [], chests = [] }) {
+  const out = [];
+  for (const u of units) out.push({ id: `pack:${u.agent}`, kind: 'pack', holder: u.agent, character: u.character, room: u.room, items: u.items ?? [] });
+  for (const v of vaults) {
+    const owner = units.find(u => lc(u.character) === lc(v.character));
+    out.push({ id: `vault:${v.character}`, kind: 'vault', holder: owner?.agent ?? null, character: v.character, room: v.room ?? null,
+               items: v.items ?? [], observed_at: v.observed_at ?? null });
+  }
+  for (const c of chests) out.push({ id: `chest:${c.slot ?? c.key}`, kind: 'chest', holder: null, room: c.room ?? null, items: c.items ?? [],
+                                     observed_at: c.observed_at ?? null });
+  return out;
+}
+
+/** Does an item row satisfy a need key? Food by the game's Food tree; anything else by kod class. */
+export const satisfies = (row, key, { classOf, isFood }) =>
+  key === 'meal' ? isFood(String(row?.name ?? '')) : lc(classOf(String(row?.name ?? ''))) === lc(key);
+
+/** Rooms by hop count from `from` over a room graph (Map room -> Set(rooms)). */
+export function hopsFrom(graph, from) {
+  const dist = new Map([[Number(from), 0]]), q = [Number(from)];
+  while (q.length) { const r = q.shift(); for (const n of graph?.get(r) ?? []) if (!dist.has(n)) { dist.set(n, dist.get(r) + 1); q.push(n); } }
+  return dist;
+}
+
+/**
+ * Fill every need. `needs`: { agent: [{key, kind, amount, why}] }; `units`: participants (agent, room); `sources` from
+ * sourcesFrom. Order: the participant's OWN pack, then its own vault, then other sources by hop distance from the
+ * participant (packs before vaults before chests at equal distance), never further than `maxHops`, and never a
+ * donor's own need or its `keep` margin. Returns
+ *   { transfers: [{ to, key, name, amount, kind, from, holder, room, hops }], shortfalls: [{ agent, key, short, why }] }
+ * A pack-to-pack transfer across rooms is a WALK first; the executor brings the parties together (`hops` says how far).
+ */
+export function planSupply(needs, units, sources, { classOf, isFood, distance = () => 0, maxHops = 3, keep = () => 0 } = {}) {
+  const avail = new Map(sources.map(s => [s.id, (s.items ?? []).map(i => ({ name: i.name, amount: Math.max(1, Number(i.amount) || 1) }))]));
+  const sat = (row, key) => satisfies(row, key, { classOf, isFood });
+  const take = (sourceId, key, max) => {
+    const out = [];
+    for (const row of avail.get(sourceId) ?? []) {
+      if (max <= 0) break;
+      if (!row.amount || !sat(row, key)) continue;
+      const n = Math.min(row.amount, max);
+      row.amount -= n; max -= n; out.push({ name: row.name, amount: n });
+    }
+    return out;
+  };
+  const byAgent = new Map(units.map(u => [u.agent, u]));
+  const keys = new Set(Object.values(needs).flat().map(n => n.key));
+  const remaining = {};
+  // 1. Everybody covers itself from its own pack first, so a donor's own need is never given away.
+  for (const [agent, list] of Object.entries(needs)) {
+    remaining[agent] = list.map(n => ({ ...n, short: n.amount - take(`pack:${agent}`, n.key, n.amount).reduce((s, r) => s + r.amount, 0) }));
+  }
+  // 2. A donor's margin is held back the same way.
+  for (const s of sources) for (const key of keys) take(s.id, key, keep(s, key));
+  const transfers = [], shortfalls = [];
+  const rank = { pack: 0, vault: 1, chest: 2 };
+  for (const [agent, list] of Object.entries(remaining)) {
+    const me = byAgent.get(agent);
+    for (const n of list) {
+      if (n.short <= 0) continue;
+      const cands = sources.filter(s => s.id !== `pack:${agent}` && !(s.kind === 'vault' && !s.holder))
+        .map(s => ({ s, hops: s.room == null ? Infinity : distance(me?.room, s.room), own: s.kind === 'vault' && s.holder === agent }))
+        .filter(c => c.hops <= maxHops)
+        .sort((a, b) => Number(b.own) - Number(a.own) || a.hops - b.hops || rank[a.s.kind] - rank[b.s.kind]);
+      for (const c of cands) {
+        if (n.short <= 0) break;
+        for (const row of take(c.s.id, n.key, n.short)) {
+          transfers.push({ to: agent, key: n.key, name: row.name, amount: row.amount, kind: c.s.kind, from: c.s.id,
+                           holder: c.s.holder, room: c.s.room, hops: c.hops });
+          n.short -= row.amount;
+        }
+      }
+      if (n.short > 0) shortfalls.push({ agent, key: n.key, short: n.short, why: n.why });
+    }
+  }
+  return { transfers, shortfalls };
+}
+
+/** What every source holds of each need key — the "what do we have at all" table, most first. */
+export function holdingsTable(keys, sources, { classOf, isFood }) {
+  const table = {};
+  for (const key of keys) {
+    table[key] = sources.map(s => ({ source: s.id, room: s.room, amount: (s.items ?? []).filter(r => satisfies(r, key, { classOf, isFood }))
+      .reduce((n, r) => n + Math.max(1, Number(r.amount) || 1), 0) })).filter(x => x.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+  }
+  return table;
+}
