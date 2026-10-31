@@ -116,7 +116,18 @@ server. And it is a coverage claim only for these anchor pairs.
   solver (d), and every runtime consumer — Stages 2-5 of (e).
 
 **Bake cost.** The four rooms: 61 s wall single-threaded, 17,792 footings, 147,197 edges,
-0.38 MB on disk (0.81 MB JSON). All rooms: BAKE_ALL_LINE
+0.38 MB on disk (0.81 MB JSON). **All 264 rooms, `--jobs 2`: 7 min 9 s wall** (704 s of
+per-room work), 85.3M traces; 348,821 standable squares, **374,199 footings** (27,016 squares,
+7.7%, hold more than one), 28,495 square refinements, 4,612 squares with floor but no
+body-clear sample; **2,920,791 edges** (2,644,013 walk of which 7,169 through samples, 19,332
+slide, 255,419 timed fall, 2,027 untimed fall; 7,293 slides unplaced); 15 door-state variants.
+**13.83 MB of JSON, 6.06 MB gzipped on disk** (`substrate/m59-finenav.json.gz`, gitignored).
+Exits that attached to no footing, in 3 rooms: 150 west->574, 537 north->536, 574 north->563
+(no published approach whose stand point a footing reaches; every plan to them falls back,
+flagged). Rooms with moving sectors no baked door state covers, flagged on every plan there:
+35 (5, 47, 48, 60, 380, 532, 568, 589, 598, 701-715, 750, 801, 802, 1006, 2151, 2500, 2505,
+2507, 2508, 2600-2602). Re-replayed from the full table, 578 and 2144 are unchanged (0 refused,
+15/15 and 126/126).
 
 The operator's goal: bots stop getting stuck on geometry. The agreed design, restated as
 claims this document either supports with a measurement or marks unverified:
