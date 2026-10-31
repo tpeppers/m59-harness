@@ -1,9 +1,122 @@
 # Fine navigation: route and move on footings, not squares — Stage 1 design
 
-**Status: Stage 1 (research, measurement, design). Nothing in the router or the mover has
-changed.** The measurement tool is `tools/m59-finenav-measure.mjs`; every number below came
-from it on `origin/main` at `8890cc41`, run offline at below-normal priority while the prod
-fleet was live (so absolute timings are upper-ish; ratios are the point).
+**Status: the bake, its loader and its query are BUILT (operator's Stage 1, 2026-10-31) — see
+"Built" directly below. Nothing in the router or the mover has changed and nothing on the hot
+path reads the graph.** The research sections (a)-(e) that follow are the 2026-10-30 design
+and are kept as written; their numbers came from `tools/m59-finenav-measure.mjs` on
+`origin/main` at `8890cc41`, run offline at below-normal priority while the prod fleet was live
+(so absolute timings are upper-ish; ratios are the point).
+
+## Built: the footing bake, the loader and the query
+
+| file | what |
+|---|---|
+| `tools/m59-finenav-bake.mjs` | the bake. `--rooms 578,599 \| all`, `--jobs` (capped at 2), `--check`, `--out` |
+| `tools/m59-finenav.mjs` | format, loader (`loadFineNav`, `fineNavRoom`), query (`footingAt`, `planFootings`, `legsOf`/`edgeLegs`, `planFine`), and `replayLegs` |
+| `tools/m59-finenav-test.mjs` | 11 offline tests, registered in `m59-movement-suite.mjs` and `docs/m59-tests.md` |
+| `tools/m59-peninsula-test.mjs` | the 578 case as a real assertion against the graph; the square-planner TODO stays a TODO |
+| `tools/m59-finenav-measure.mjs --graph` | the AFTER half of the replay in (c) |
+| `substrate/m59-finenav.json.gz` | the table: gitignored and derived, like `node-rails.json` |
+
+**Format.** `m59-finenav/1`, `FINE_NAV_VERSION` 1, gated on `geometryManifestSha256`; a table
+of another version or another geometry is refused whole (`loadFineNav`), as a stale step mask
+is. Per room, base64 typed arrays: footing square, representative (two 6-bit wire offsets in
+the square), floor, degree; edges as Uint16 (14-bit target, 2-bit kind); side tables for edges
+that carry a landing (`aim`, `land` in wire units) and for edges that carry `via` points. Plus
+`exits`, `stats`, `moving`, and `variants` (one full graph per baked door state).
+**`standPoint`, `STEP_MASK_VERSION` and `m59-routes.json` are untouched**; the representative
+rule lives only inside this bake.
+
+**What the bake does, per room** (rules and reasons are in the file header):
+
+1. *Samples* on a 256 lattice (4x4 a square), every point on the wire lattice. A sample is a
+   place a body can be: floor, interior sector, not within 2 units of any wall line other than a
+   step-compatible floor seam (so never on a one-sided wall), and four 2-unit probes free (so
+   at least `PLAYER_RADIUS` + 2 from any wall that blocks it from that side).
+   **Refinement:** a square is resampled at 64, then 32, when it has no such sample OR when
+   it holds a floor band (heights within a step) that no sample is on — reading floors costs no
+   trace. The second rule was found the hard way: 578's r32c46 is valley at 3200 with a 7072
+   shelf through it that the walk to the south exit uses, and pitch 256 sampled only the valley.
+2. *Footings* are the strongly connected pieces of the directed straight-trace lattice graph.
+3. *Representative*: the member deepest inside the footing. Footing 0 of a square is the one
+   that holds the square's legacy stand point (mutual straight walk), so `"row,col"` keys mean
+   footing 0 and only multi-footing squares need `"row,col#k"`.
+4. *Edges*, from the representative, to every footing in the 8 neighbour squares and the other
+   footings of its own square, **proved with the live mover's options** (`queueValidatedMove`
+   sends `slide: true` and rounds onto the wire toward the start; `landFrom` is that arithmetic
+   aimed at a point):
+   - `walk`: the move lands exactly on the target representative; or, when the two
+     representatives cannot see each other, a sample of one that walks straight onto a sample
+     of the other, joined to both representatives through the footings (`via`, pulled tight);
+   - `slide`: it lands elsewhere; the edge goes to the footing the body is really in (a straight
+     walk, or a walk through that footing's samples, reaches its representative) and records
+     `land`;
+   - `fall`: sent as a fall is sent, `slide: true, fall: true`, onto lower ground out to three
+     squares; a fall that slides along the lip and lands elsewhere records `land` like a slide
+     (82 of 535 falls in 578, 324 of 8,011 in 599). `timed` when the frame-by-frame fall
+     (`m59-falltrace.mjs`, also `slide: true`) proves the same landing; plans use only timed
+     falls unless asked (`falls: 'any'`). **No span gate**: `maxSpan` measures take-off to
+     landing while `traceFallMotion` includes the level run before the lip, so it refuses real
+     jumps (jump audit, 2026-10-31); the trace alone decides.
+   - `slide:false` is kept for exactly three questions, all about place rather than motion and
+     all stricter than the live mover: the clearance probes, the lattice adjacency and pulled
+     chains inside a footing (an unobstructed straight trace arrives identically with slide
+     on), and membership in `footingAt`.
+5. *Exits* attach to footings: every footing in a `go` door's square; for an edge exit, the
+   footing that reaches each published `fine_stand_on` (directly or along its samples) of the
+   approaches `edgeCandidatesOf` says fire THAT exit, with the crossing target kept.
+6. *Door states.* A room whose routing table has `stepMaskVariants` is baked again per variant
+   on a private geometry (`applySectorHeights`). `fineNavRoom(table, room, {doorState})` returns
+   that state's graph or refuses an unbaked one; without a state the base graph comes back
+   flagged `door_state_assumed`. Moving sectors in `m59-variable-sectors.json` that no variant
+   covers are recorded as `moving.unmodelled` and every plan in that room carries
+   `unmodelled_moving_sectors` — never silently frozen.
+
+**The query.** `planFine({geo, graph, from, goal})`: `footingAt` places the body (`member` —
+it can walk to the representative and back — else `walk_in`, preferring a footing at the body's
+own height so a first leg never steps off the shelf it is on), A* over footings, and legs that
+are each proved from where the previous one leaves the body. Every miss falls back to the
+square planner **flagged**: `source: 'square_fallback', fallback: true, fallback_reason`. Nothing
+imports any of it from the broker, keepers, walker, world or routes (a test asserts this).
+
+**Before / after**, the same replay on the same pairs (`--no-fine` for before, `--graph` for
+after), all four rooms baked from the table on disk:
+
+| room | two-step plans refused from the real landing — square / **footing** | anchor routes the body cannot follow — square / **footing** | footing plans that fell back |
+|---|---|---|---|
+| 578 | 1,682 of 85,648 / **0 of 142,937** | 8 of 15 / **0 of 15** | 0 |
+| 599 | 467 of 203,859 / **0 of 404,241** | 1 of 8 / **0 of 8** | 0 |
+| 2144 | 22 of 103,866 / **0 of 132,825** | 0 of 126 / **0 of 126** | 0 |
+| 2154 | 309 of 332,411 / **0 of 514,371** | 6 of 151 / **0 of 151** | 0 |
+
+Planning on the graph took a median of 0.1-1.7 ms and at most 12.7 ms per pair offline (A* over
+footings, no traces but `footingAt`'s handful). Before the representative and refinement rules
+above were in, 578 fell back on 2 pairs and 2144 on 1; those were the cases that found them.
+
+**What "zero" means, honestly.** The replay sends every leg with the live mover's arithmetic
+(`landFrom`: slide on, wire rounding toward the start) from where the previous leg really left
+the body — but it is the same model of the client the bake used, on static geometry with no
+bodies in the way. It proves the graph is consistent with the mover; it is not a walk on a
+server. And it is a coverage claim only for these anchor pairs.
+
+**Residue, reported rather than hidden:**
+- `slide_unplaced` — slides whose landing no footing representative can be reached from, so
+  they are not edges (578: 107, 599: 20, 2144: 11, 2154: 31). Conservative: a lost edge, never
+  an unsound one.
+- squares with floor but no body-clear sample even at pitch 32 (2144: 9, 2154: 1).
+- untimed falls are excluded from plans by default (578: 5, 599: 23, 2144: 2, 2154: 46).
+- plans are representative to representative, about a square a leg (1,014 legs for 578's
+  15 routes): no string-pulled pivots yet.
+
+**Deferred, on purpose:**
+- **Declared fall-jumps** (`m59-falljumps.json`) are not edges: the file is under audit and
+  was left alone. A route that needs one falls back, flagged.
+- Pivots (string-pulled long chords proved at bake time), ceilings that move
+  (`m59-ceiling-doorbake.mjs`), door states not in the routing table, the jump deviation
+  solver (d), and every runtime consumer — Stages 2-5 of (e).
+
+**Bake cost.** The four rooms: 61 s wall single-threaded, 17,792 footings, 147,197 edges,
+0.38 MB on disk (0.81 MB JSON). All rooms: BAKE_ALL_LINE
 
 The operator's goal: bots stop getting stuck on geometry. The agreed design, restated as
 claims this document either supports with a measurement or marks unverified:

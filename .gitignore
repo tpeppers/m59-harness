@@ -869,6 +869,13 @@ substrate/item-identification.json
 # all say so by name when it is absent.
 /substrate/node-rails.json
 
+# The fine navigation graph (footings), tools/m59-finenav-bake.mjs. DERIVED from
+# substrate/m59-map.json and substrate/m59-routes.json (for door variants), which ARE committed,
+# and regenerable in minutes — same reasoning as node-rails.json above: a multi-megabyte binary
+# that changes wholesale whenever the bake's logic moves, read by nothing on the hot path yet.
+# Ignored so it can never sit untracked in prod-deploy and block `m59-deploy.mjs --cut`.
+/substrate/m59-finenav.json.gz
+
 # THE SAFE-SPOT BOOK, RETIRED 2026-09-20. Nothing reads or writes it any more (tombstone
 # in tools/m59-safespots.mjs). Ignored rather than merely deleted so a running fleet that
 # still has one on disk does not show up as an untracked file for ever.

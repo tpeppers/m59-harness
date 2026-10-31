@@ -10,6 +10,8 @@
 //   node tools/m59-finenav-measure.mjs --no-fine                skip the fineroute comparison
 //   node tools/m59-finenav-measure.mjs --rooms all --footings-only   map-wide footing survey (~3 min)
 //   node tools/m59-finenav-measure.mjs --jumps                  the declared fall-jumps' landing room
+//   node tools/m59-finenav-measure.mjs --graph                  the AFTER half: the same replay on the footing
+//                                                               graph (m59-finenav-bake.mjs; table, else baked here)
 //
 // ONE SUITE AT A TIME. This shares cores with the live fleet; it drops its own priority, and
 // `--rooms all` is one core for about three minutes. Do not run copies in parallel.
@@ -416,6 +418,68 @@ if (has('jumps')) {
   process.exit(0);
 }
 const ROOMS = ROOMS_ARG === 'all' ? Object.keys(table.rooms).map(Number) : ROOMS_ARG.split(',').map(Number);
+if (has('graph')) {
+  // THE AFTER HALF: the same three questions asked of the footing graph.
+  //   two-step  every edge a->f followed by every edge out of f, executed from where the first
+  //             really left the body (`replayLegs`, the mover's slide-and-quantize arithmetic)
+  //   routes    every baked anchor pair, planned on the graph from the body at the from
+  //             square's stand point, then executed leg by leg from where each leg left it
+  // The graph comes from the table on disk when it is current, else is baked here.
+  const FN = await import('./m59-finenav.mjs');
+  const { bakeRoomAllStates } = await import('./m59-finenav-bake.mjs');
+  const loaded = FN.loadFineNav(map);
+  report.graph = {};
+  for (const n of ROOMS) {
+    const room = map.rooms[n], baked = table.rooms[n];
+    if (!room || !baked) continue;
+    const geo = sharedRoomGeometry(room);
+    let g = loaded.table ? FN.fineNavRoom(loaded.table, n).graph : null;
+    let source = 'table';
+    if (!g) { const t0 = now(); g = FN.decodeRoom(FN.encodeRoom(bakeRoomAllStates(map, table, n)), n); source = `baked here in ${Math.round(now() - t0)} ms`; }
+    console.log(`\n== ${n} ${room.name} — footing graph (${source}): ${g.footings.length} footings`);
+    // two-step
+    let t0 = now(), pairs = 0, refused = 0;
+    const reasons = {}, ex = [];
+    for (const a of g.footings) for (const e of a.edges) {
+      if (e.kind === FN.EDGE.FALL_UNTIMED) continue;
+      for (const e2 of g.footings[e.to].edges) {
+        if (e2.kind === FN.EDGE.FALL_UNTIMED) continue;
+        pairs++;
+        const r = FN.replayLegs(geo, a.rep, [...FN.edgeLegs(g, e), ...FN.edgeLegs(g, e2)]);
+        if (!r.ok) { refused++; reasons[r.reason] = (reasons[r.reason] ?? 0) + 1; if (ex.length < 6) ex.push(`${FN.footingKey(g, a.id)} -> ${FN.footingKey(g, e.to)} -> ${FN.footingKey(g, e2.to)}: ${r.reason} at leg ${r.at}`); }
+      }
+    }
+    console.log(`two-step plans on the graph refused from the real landing: ${refused} of ${pairs} ${JSON.stringify(reasons)}; ${Math.round(now() - t0)} ms`);
+    for (const s of ex) console.log('   ' + s);
+    // routes
+    t0 = now();
+    const out = { routes: 0, planned: 0, walked: 0, failed: 0, fallback: 0, fallback_found: 0, why: {}, failures: [], legs: 0, plan_ms: [] };
+    for (const key of Object.keys(baked.routes ?? {})) {
+      const [a, b] = key.split('>');
+      const [fr, fc] = a.split(',').map(Number), [tr, tc] = b.split(',').map(Number);
+      const sp = geo.standPoint(fr, fc);
+      if (!sp) continue;
+      out.routes++;
+      const t1 = now();
+      const p = FN.planFine({ geo, graph: g, from: sp, goal: { row: tr, col: tc } });
+      out.plan_ms.push(now() - t1);
+      if (p.source !== 'finenav') { out.fallback++; if (out.failures.length < 8) out.failures.push(`${sq(fr, fc)}>${sq(tr, tc)}: fallback (${p.fallback_reason ?? p.why})${FN.planFine({ geo, graph: g, from: sp, goal: { row: tr, col: tc }, falls: 'any', squareFallback: false }).ok ? ' — found with untimed falls' : ''}`); if (p.ok) out.fallback_found++; out.why[p.fallback_reason ?? p.why] = (out.why[p.fallback_reason ?? p.why] ?? 0) + 1; continue; }
+      out.planned++; out.legs += p.legs.length;
+      const r = FN.replayLegs(geo, sp, p.legs);
+      if (r.ok) out.walked++;
+      else { out.failed++; if (out.failures.length < 8) out.failures.push(`${sq(fr, fc)}>${sq(tr, tc)}: leg ${r.at + 1}/${p.legs.length} ${r.leg.kind} ${r.reason} from (${r.body.x},${r.body.y})`); }
+    }
+    out.plan_ms.sort((x, y) => x - y);
+    const med = out.plan_ms[Math.floor(out.plan_ms.length / 2)] ?? 0, max = out.plan_ms.at(-1) ?? 0;
+    console.log(`routes: ${out.routes} pairs; planned on the graph ${out.planned}, executed end to end ${out.walked}, broke ${out.failed}; ` +
+      `fell back to the square planner ${out.fallback} (${out.fallback_found} of those found) ${JSON.stringify(out.why)}; ` +
+      `${out.legs} legs; plan median ${med.toFixed(1)} ms, max ${max.toFixed(1)} ms; ${Math.round(now() - t0)} ms`);
+    for (const f of out.failures) console.log('   ' + f);
+    report.graph[n] = { footings: g.footings.length, two_step: { pairs, refused, reasons }, routes: { ...out, plan_ms: undefined, plan_median_ms: +med.toFixed(1), plan_max_ms: +max.toFixed(1) } };
+  }
+  const o = flag('json'); if (o) writeFileSync(o, JSON.stringify(report, null, 1));
+  process.exit(0);
+}
 const total = { rooms: 0, standable: 0, footings: 0, multi: 0, multiHeight: 0, zero: 0, nodes: 0, edges: 0, ms: 0, traces: 0, worst: [] };
 for (const n of ROOMS) {
   const room = map.rooms[n], baked = table.rooms[n];

@@ -570,7 +570,7 @@ through a nested shelter order.
   conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
   every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
   entrance) the journey still arrives; on 1b5629a the press square itself was refused.
-- `m59-peninsula-test.mjs` (13 tests + 1 TODO): a raised pocket you can fall out of but not
+- `m59-peninsula-test.mjs` (14 tests + 1 TODO): a raised pocket you can fall out of but not
   climb into must not choose the door. A synthetic peninsula pins why the bake's largest-forward-
   flood "body" lands on the pocket and that `reverseReachCounts`/`reached_by` (`anchorFor`) does
   not; then the real Clearing of the Trading Post (2144): the palisade is a wall to the mover,
@@ -579,7 +579,20 @@ through a nested shelter order.
   budget on the west door twice before any door the mover refused (before: `r38c49 r30c39
   r27c49`, prod's ledger all of 2026-10-30), and `fineReachableSquares` from Piggy's exact fine
   point does not seal itself into 8 squares by lattice phase. The TODO pins the class it does not fix: a slid
-  landing in 578 counted as a square whose next planned step the body cannot make.
+  landing in 578 counted as a square whose next planned step the body cannot make. The TODO stays
+  a TODO for the square planner; the last test asserts the same case on the FOOTING graph
+  (`m59-finenav-bake.mjs`): r2c10 is two footings either side of one-sided wall 499, the body
+  stopped at x=10080 is placed in the east one, and every edge out of it executes from there.
+- `m59-finenav-test.mjs` (11): the fine navigation graph (docs/m59-fine-nav-design.md), baked
+  in-process for 578, 2144 and 599 — never from the table on disk. Encode/decode round-trips a
+  room exactly; every representative is a place a body can be (2-unit probes free) and none is on
+  a wall line; every edge in 578 executes from its representative and lands where it says
+  (`replayLegs`, the mover's slide-and-quantize arithmetic); falls are one-way; 578's r2c10 is
+  two footings; every declared exit of 578 and 2144 attaches to a footing, including 2144's west
+  door; a 578 route the square table cannot have followed executes end to end; the fallback to
+  the square planner is flagged, never silent; 599 is baked per door state and an unbaked state
+  is refused; `loadFineNav` refuses another version or another geometry; and nothing on the
+  hot path imports the graph yet.
 - `m59-qor-temple-test.mjs` (13 tests): walking into the Temple of Qor (802). The gate
   declaration matches the kod (heights, sector, triggers, the 600 s alternation) when `M59_ROOT`
   is set; 598 is in the ceiling table and the observed lift is applied; open, the corridor is four
