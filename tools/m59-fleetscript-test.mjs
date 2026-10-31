@@ -900,6 +900,23 @@ console.log('\nA DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED T
 }
 
 
+console.log('\nA SQUARE THAT RESOLVED TO NULL IS NOT r0c0');
+{
+  // 2026-10-31, the Temple of Kraanan (801): an approach with nobody to approach resolves its square to null, and
+  // Number(null) is 0, so walk_to and crawl_to set off for the room's corner for a whole deadline ("crawl_to: E -> r46c42
+  // (46 from rnullcnull)"). As optional steps they must refuse before moving, and the plan carries on.
+  const { walkTo, crawlTo, verify } = await import('./m59-fleetscript.mjs');
+  const sent = fakeBroker({ rooms: { a1: 801 } });
+  let after = false;
+  const r = await fleetScript({ name: 'null-square', fleet: 'testfleet', agents: ['a1'], onLog: quiet, pollMs: 30,
+    steps: [{ ...walkTo(() => null, () => null), optional: true },
+            { ...crawlTo(() => null, () => null, { optional: true }) },
+            verify(async () => { after = true; return { ok: true }; }, 'the step after')] });
+  ok('a walk_to to a null square sends no walk', !sent.some(x => x.name === 'walk_to'), JSON.stringify(sent.map(x => x.name)));
+  ok('a crawl_to to a null square sends no hop', !sent.some(x => /short_hop|crawl/.test(x.name)), JSON.stringify(sent.map(x => x.name)));
+  ok('and the plan carries on past them', after === true && r.results.a1.ok === true, JSON.stringify(r.results.a1));
+}
+
 console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
 {
   // Waldorf, 2026-09-08: four deaths in one day, every one `strategy: fieldrest`, three with

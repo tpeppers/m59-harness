@@ -3176,6 +3176,13 @@ async function statusWithPosition(agent) {
   return st;
 }
 
+// A SQUARE THAT RESOLVED TO NOTHING IS NOT A SQUARE, AND NULL IS THE WORST WAY TO SAY SO. `Number(null)` is 0, so a
+// run-time col/row that came back null passed every finite test as r0c0 and was walked and crawled toward for a whole
+// deadline: Raphael and Zoot in the Temple of Kraanan (801), 2026-10-31, "crawl_to: E -> r46c42 (46 from rnullcnull)" for
+// minutes, and Zoot dragged off Qerti'nya's doorstep by disciple-quest's "nobody to approach" rungs. Both walk_to and
+// crawl_to refuse it before moving; as an `optional` step that is the skip the plan meant.
+const notASquare = v => v == null || v === '' || !Number.isFinite(Number(v));
+
 export function resolveStep(step, state) {
   const fields = DYNAMIC_FIELDS[step?.do];
   if (!fields) return step;
@@ -4398,6 +4405,10 @@ async function runStep(ctx, agent, rawStep, state) {
     // has never meant success, and an error has never meant failure either. This issues the
     // walk ONCE and then reads the world back.
     case 'walk_to': {
+      if (notASquare(step.row) || notASquare(step.col))
+        return { ok: false, outcome: 'no_square',
+                 why: `the plan asked for a walk to r${step.row}c${step.col}, which is not a square. A run-time ` +
+                      'target that resolved to nothing belongs in an `optional` step, which then skips it' };
       const within = step.within ?? 0;
       const deadline = Date.now() + (step.deadlineMs ?? 240_000);
       const stallMs = step.stallMs ?? 45_000;
@@ -4480,7 +4491,7 @@ async function runStep(ctx, agent, rawStep, state) {
       // `maxSteps` asking the keeper for neighbours it will never use. Reachable the moment a
       // square is chosen at run time — which is the point of a dynamic `col`/`row` — so it is
       // refused here the same way `walk` refuses a destination that is not a room number.
-      if (!Number.isFinite(Number(goal.row)) || !Number.isFinite(Number(goal.col)))
+      if (notASquare(goal.row) || notASquare(goal.col))
         return { ok: false, outcome: 'no_square',
                  why: `the plan asked for a crawl to r${goal.row}c${goal.col}, which is not a ` +
                       `square. A run-time target that resolved to nothing belongs in an ` +
