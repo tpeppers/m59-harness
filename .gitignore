@@ -869,6 +869,12 @@ substrate/item-identification.json
 # all say so by name when it is absent.
 /substrate/node-rails.json
 
+# The fine navigation graph (footings), tools/m59-finenav-bake.mjs, is COMMITTED, not ignored
+# (operator 2026-10-31: "just put the precomputed file in git"). 6 MB gzipped. Every checkout,
+# prod-deploy included, gets it by git rather than by a 7-minute rebake, and a tracked file
+# cannot sit untracked in prod-deploy and block `m59-deploy.mjs --cut`. The loader refuses a
+# table whose geometryManifestSha256 does not match the map, so a stale copy is refused, not misread.
+
 # THE SAFE-SPOT BOOK, RETIRED 2026-09-20. Nothing reads or writes it any more (tombstone
 # in tools/m59-safespots.mjs). Ignored rather than merely deleted so a running fleet that
 # still has one on disk does not show up as an untracked file for ever.

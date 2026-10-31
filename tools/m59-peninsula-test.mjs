@@ -326,3 +326,34 @@ test('578 (TODO, layered squares): a slid landing the planner counts as r2c10 ca
   });
   assert.ok(reachesR2c9, `the body stopped at (${landing.x},${landing.y}) cannot get into r2c9, which the planner steps to next`);
 });
+
+// THE SAME CASE ON THE FOOTING GRAPH, AS A REAL ASSERTION. The TODO above stays a TODO for the
+// square planner. On the graph (tools/m59-finenav-bake.mjs) r2c10 is two footings either side
+// of one-sided wall 499 at x=9728, no representative sits on the wall line, and every edge says
+// where the body lands — so the body that slid to x=10080 is planned from where it IS.
+test('578 on the footing graph: the body stopped east of the wall in r2c10 is planned from where it is', {
+  skip: !map?.rooms?.[578] ? 'no room 578 in the map on disk' : false,
+}, async () => {
+  const FN = await import('./m59-finenav.mjs');
+  const { bakeRoom } = await import('./m59-finenav-bake.mjs');
+  const geo = sharedRoomGeometry(map.rooms[578]);
+  const g = FN.decodeRoom(FN.encodeRoom(bakeRoom(map.rooms[578], geo)), 578);
+  const sp = geo.standPoint(2, 11);
+  const landing = geo._moverStepFrom(sp.x, sp.y, 2, 10);       // (10080,1536): the square planner's stranded body
+  const reps = FN.footingsIn(g, 2, 10).map(id => g.footings[id].rep);
+  assert.ok(reps.some(p => p.x < 9728) && reps.some(p => p.x > 9728), `r2c10 is split by the wall: ${JSON.stringify(reps)}`);
+  const at = FN.footingAt(geo, g, landing);
+  assert.notEqual(at.footing, null, 'the stranded body is in some footing');
+  assert.ok(g.footings[at.footing].rep.x > 9728 || g.footings[at.footing].col !== 10,
+    `the body east of the wall is not put in the west footing (${JSON.stringify(g.footings[at.footing].rep)})`);
+  // every way out of where the body really is executes from there
+  for (const e of g.footings[at.footing].edges) {
+    if (e.kind === FN.EDGE.FALL_UNTIMED) continue;
+    const legs = FN.legsOf(g, landing, at.footing, [{ from: at.footing, edge: g.footings[at.footing].edges.indexOf(e), to: e.to }]);
+    const r = FN.replayLegs(geo, landing, legs);
+    assert.ok(r.ok, `from (${landing.x},${landing.y}) to ${FN.footingKey(g, e.to)}: ${r.reason} at leg ${r.at}`);
+  }
+  // and a plan to r2c9 from there either does not exist on the graph or is walked end to end
+  const p = FN.planFine({ geo, graph: g, from: landing, goal: { row: 2, col: 9 }, squareFallback: false });
+  if (p.ok) assert.ok(FN.replayLegs(geo, landing, p.legs).ok, 'the plan to r2c9 is one the body makes');
+});
