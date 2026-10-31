@@ -246,6 +246,13 @@ The second exclusion keeps a red-alert lockdown meaningful: a body does not flee
 the enemy is killing in. Everything else about the confinement stands, so no other journey, no other
 room, and no second hop are let out.
 
+**An order that lives only in prose is invisible to this rule.** Rooms on `NEVER_ENTER` are already safe,
+because the router refuses them as a destination unless a journey passes `allowHazard`, which a survival
+exit never does. But "never 2154" (Avar Village, the island farm's standing order) was held only in
+session notes, and 2154 borders the farm's confinement [2143, 2144, 2101]. prod-deploy-fb added it to
+`bannedDestinations` for the island farmers on 2026-10-31. **Any fleet confined next to a room it must
+never enter needs that room in `bannedDestinations`.**
+
 **How it is enforced.** `m59-survival-edge.mjs` holds the pure verdict. Autopilot.travel's confinement
 gate asks it, writes a `survival_edge_pass` ledger event, and on a yes hands `Session.travel` an
 `edgePass: {to}`. The guard honours that pass only from the room the journey set out from, into that
