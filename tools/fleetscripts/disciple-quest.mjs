@@ -48,7 +48,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { walk, say, shop, fight, verify, walkTo, crawlTo, gate, ungate } from '../m59-fleetscript.mjs';
 import { QUEST_NPC_RADIUS, sayToNpc } from '../m59-sayrange.mjs';
-import { doorsFor } from '../m59-doorplan.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { saveRun, runId } from '../m59-questbook.mjs';
 
@@ -93,13 +92,45 @@ export const KRAANAN_MONSTERS = Object.freeze({
   // Ileria) — that room's spawn counter is shared across its whole table and has been measured
   // holding ten larvae and zero fungus beasts.
   'fungus beast': { room: 563, level: 50, difficulty: 1 },
-  // Seafarer's Peak: cap 15, 60%. The Berdonne Canyons (32) is the alternative.
-  'mutant ant': { room: 515, level: 65, difficulty: 8 },
+  // THE HILLS (516), NOT SEAFARER'S PEAK (515), BECAUSE ONE KILL NEEDS A ROOM YOU CAN STAND IN.
+  // By the spawn table alone 515 is the better ant room (m59-spawns.json: 515 ants 60% cap 15,
+  // trolls 40%; 516 ants 30% cap 12, trolls 70%). But 515's only exit is the edge back to 516
+  // (m59-map.json), so every trip to 515 is the 516 -> 515 crossing, and on 2026-10-31 Zoot's
+  // quest asked for a mutant ant and that walk failed three times running, while the prod fleet
+  // ledger (read by the coordinating session, 2026-10-31) holds 18 mutant ant kills in 516 itself. The quest wants ONE kill by this character's own
+  // hand, so reachability beats spawn rate, and the body is in 516 on the way to 515 anyway.
+  // The failed crossing is a movement defect in its own right, not settled by this. The
+  // alternatives, by `huntRooms`: 515, or the Berdonne Canyons (32: ants 50% cap 10, orcs 50%).
+  // 516 is also troll-heavy (difficulty 8, like the ant), which is the cost of this choice.
+  'mutant ant': { room: 516, level: 65, difficulty: 8 },
   // Castle Victoria: cap 10, 40%, and a road this fleet already knows. G9 (579) is one hop
   // south of the Kraanan temple but carries a single RESPAWNING skeleton, so it is a coin
   // flip rather than a hunting ground.
   'skeleton': { room: 38, level: 75, difficulty: 5 },
 });
+
+// THE FLEET REPL HANDS EVERY PARAMETER OVER AS A STRING, and `Object.entries` of a string walks
+// its characters. 2026-10-31: `dry disciple-quest agents=t17 school=kraanan
+// huntRooms={"mutant%20ant":32}` was refused with `huntRooms names "0", which is not a monster` --
+// the first character's index, a sentence about nothing the operator typed. So a string is
+// parsed as JSON (the REPL has already decoded %20), as hall-draw's `wants` is, and a string that
+// is not JSON, or JSON that is not an object, is refused saying what was given and what is wanted.
+export function parseHuntRooms(huntRooms) {
+  if (huntRooms == null || huntRooms === '') return {};
+  let rooms = huntRooms;
+  if (typeof rooms === 'string') {
+    try { rooms = JSON.parse(rooms); }
+    catch (e) {
+      throw new Error(`disciple-quest: huntRooms ${JSON.stringify(huntRooms)} is not JSON ` +
+        `(${e.message}). Pass an object of monster to room, e.g. huntRooms={"mutant%20ant":516} ` +
+        `at the fleet REPL, %20 standing for the space.`);
+    }
+  }
+  if (!rooms || typeof rooms !== 'object' || Array.isArray(rooms))
+    throw new Error(`disciple-quest: huntRooms must be an object of monster to room, e.g. ` +
+      `{"mutant ant":516}; got ${JSON.stringify(huntRooms)}.`);
+  return rooms;
+}
 
 export const SCHOOLS = Object.freeze({
   kraanan: {
@@ -198,10 +229,10 @@ export const TEMPLE_LIFTS = Object.freeze({
 // reached. EMPTY ON PURPOSE, and the Temple of Qor is why. Both entrances land at r33c14
 // (tempqor.kod:201-204), rows 18-19 wall the body off from Zuxana (r16c15), and the way in is round
 // the EAST walk to the north ceiling door (r3-4 c17-18, tempqor.kod:172-189): `go` on a trigger
-// square, and the ceiling lifts slowly and drops again 5 s after the press. That is the operable-door
-// rung below -- walk onto the trigger, press, walk straight through -- the one written for Kraanan.
-// An earlier entry here sent 802 to r20c17 instead ("heard through the wall"); that walk dithers out
-// at r20c21 and the door rung never ran (Bunsen 2026-10-11, out_of_earshot). Measured on the shadow
+// square, and the ceiling lifts slowly and drops again 5 s after the press. The harness's in-room walk
+// works that door (walk onto the trigger, press, walk straight through: `walkThroughOperableDoor`), as
+// it does Kraanan's. An earlier entry here sent 802 to r20c17 instead ("heard through the wall"); that
+// walk dithers out at r20c21 and the door was never pressed (Bunsen 2026-10-11, out_of_earshot). Measured on the shadow
 // fleet 2026-10-12: r33c14 -> r4c18 by the east walk in 37 steps, press, walk at once, on Zuxana's
 // square 7.5 s later; leaving, `travel` presses the same door from inside on its own.
 export const APPROACH = Object.freeze({});
@@ -620,7 +651,8 @@ export const script = {
     // The room to hunt the assigned monster in, when the default is wrong for this fleet's
     // level band. Keyed by the name the priestess SPEAKS: "fungus beast", "mutant ant",
     // "skeleton".
-    huntRooms: { describe: 'override the hunting room per monster, e.g. {"skeleton":2601}' },
+    huntRooms: { describe: 'override the hunting room per monster, as JSON: {"skeleton":2601}; ' +
+                           'at the fleet REPL write the space as %20, huntRooms={"mutant%20ant":32}' },
     rounds: { type: 'number', default: 40,
               describe: 'swing budget for the Kraanan fight — a budget for the whole fight, ' +
                         'not for one exchange' },
@@ -674,10 +706,13 @@ export const script = {
                       `(riija and jala have no quest).`);
 
     const hunts = { ...KRAANAN_MONSTERS };
-    for (const [name, room] of Object.entries(huntRooms ?? {})) {
+    for (const [name, room] of Object.entries(parseHuntRooms(huntRooms))) {
       if (!hunts[name]) throw new Error(
         `disciple-quest: huntRooms names "${name}", which is not a monster this quest can ` +
         `ask for. It asks for one of: ${Object.keys(KRAANAN_MONSTERS).join(', ')}.`);
+      if (!Number.isInteger(Number(room)) || Number(room) <= 0) throw new Error(
+        `disciple-quest: huntRooms sends the ${name} hunt to ${JSON.stringify(room)}, which is ` +
+        `not a room number.`);
       hunts[name] = { ...hunts[name], room: Number(room) };
     }
 
@@ -736,15 +771,20 @@ export const script = {
         return { ok: true, approaching: want, at: `r${at.row}c${at.col}`, room: state.near.room };
       }, `could not look for the ${label}`),
 
-      // THROUGH AN OPERABLE DOOR FIRST, WHEN THE ROOM HAS ONE. The Temple of Kraanan (801) keeps
-      // Qerti'nya behind a ceiling door that opens only for a `go` pressed ON r30c20 or r31c20 and
-      // shuts itself ten seconds later (tempkra.kod SomethingTryGo, RESET_TIME). On 2026-10-11 the
-      // walk and the crawl below both ran out of time 32 squares short of her and the quest
-      // failed `out_of_earshot`; by hand, walk to r31c20, `go`, walk on, reached her in 8 s.
-      // The door table (m59-doors.json, read by m59-doorplan doorsFor) already knew the door —
-      // only the walker's exit planning ever asked it. So: still out of earshot, and the room has
-      // an ungated door -> walk onto the trigger square that best lies between body and NPC,
-      // press, and let the walk below go straight through while it is up.
+      // A ROOM WHOSE NPC IS BEST HEARD FROM A NAMED SQUARE (`APPROACH`, empty today).
+      //
+      // THE DOOR IS NOT HERE ANY MORE, AND THAT IS THE POINT. This step used to carry its own
+      // operable-door rung: the Temple of Kraanan (801) keeps Qerti'nya behind a ceiling door that
+      // opens for a `go` on r30c20 or r31c20 and shuts ten seconds later, and on 2026-10-11 the
+      // walk and the crawl below ran out of time 32 squares short of her, so this walked onto the
+      // trigger, sent `act go`, and walked straight on. On 2026-10-31 Raphael and Zoot spent
+      // forty-five minutes failing `walk_to` / `crawl_to` toward her from r31c20 and r32c21 all
+      // the same, and the operator delivered the letter by hand. A door step in one fleetscript
+      // helps that fleetscript; the next errand into 801 or 802 needs another copy. So the
+      // HARNESS's in-room walk works the door now (`Session.walkThroughOperableDoor`, reached by
+      // every `walkTo` — the `walk_to` rung below, and every keeper walk): target behind a shut
+      // door the table knows -> walk to the trigger, press, wait on the server's sector-height
+      // event, walk through while it is up. Pinned offline by m59-inroom-door-test.mjs.
       verify(async ({ agent: me, call, state }) => {
         if (!state.near) return { ok: true, skipped: 'nothing to approach' };
         const view = await call('look', { agent: me }, 30_000).catch(() => null);
@@ -768,50 +808,8 @@ export const script = {
           return { ok: true, approach: `r${appr.row}c${appr.col}`, at: now ? `r${now.row}c${now.col}` : null,
                    heard: !!(now && d2(now) <= 25), npc: `r${near.row}c${near.col}` };
         }
-        let plan = null;
-        try { plan = doorsFor(room, { row: you.row, col: you.col }); } catch { return { ok: true, skipped: 'door table unreadable' }; }
-        const doors = [...(plan?.on ?? []), ...(plan?.others ?? [])].filter(p => !p.gate && p.stand_on?.length);
-        if (!doors.length) return { ok: true, skipped: 'no operable door in this room' };
-        // EVERY TRIGGER SQUARE, BEST FIRST, NOT ONLY THE BEST. A trigger the body can walk to beats a
-        // nearer one it cannot (the rule openOperableDoor already keeps). Temple of Qor (802): r4c17 and
-        // r4c18 tie on this score and r4c17 is listed first, but the mover has NO route to r4c17 from the
-        // entrance ("no route the mover can walk through this geometry", 5 steps) while r4c18 is 31 steps
-        // round the east walk. Taking only the first, the shadow run stood at r20c9, never pressed.
-        const cands = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
-          .sort((a, b) => a.cost - b.cost);
-        // ON THE TRIGGER, READ BACK -- AND READ AGAIN. A `look` straight after the walk can still report
-        // the square before (2026-10-11 run 3: arrived on r31c20, read r32c20, skipped the press, and
-        // the next walk stalled at the shut door). So: re-read a few times, and re-walk if it is truly off.
-        const at = sq => now => now && now.row === sq.row && now.col === sq.col;
-        let now = you, onIt = false, best = cands[0];
-        const tried = [];
-        for (const cand of cands) {
-          best = cand;
-          onIt = at(cand.sq)(now);
-          for (let t = 0; t < 2 && !onIt; t++) {
-            const w = await call('walk_to', { agent: me, row: cand.sq.row, col: cand.sq.col }, 120_000).catch(() => null);
-            for (let r = 0; r < 3 && !onIt; r++) {
-              await new Promise(res => setTimeout(res, 700));
-              now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you ?? now;
-              onIt = at(cand.sq)(now);
-            }
-            // A square with no route is not worth a second walk; the next trigger may have one.
-            if (!onIt && /no route/i.test(String(w?.reason ?? w?.error ?? ''))) break;
-          }
-          if (onIt) break;
-          tried.push(`r${cand.sq.row}c${cand.sq.col}`);
-        }
-        if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, tried,
-                            at: now ? `r${now.row}c${now.col}` : null };
-        // PRESS AND GO THROUGH IN ONE BREATH. The door shuts itself (801: 10 s), and the next STEP is
-        // too late: 2026-10-11 the re-run pressed on r31c20 and the following walk_to found every
-        // direction geometry_blocked. By hand the same press with an immediate walk crossed in 8 s.
-        await call('act', { agent: me, verb: 'go' }, 30_000).catch(() => null);
-        const through = await call('walk_to', { agent: me, row: state.near.row, col: state.near.col }, 120_000).catch(e => ({ error: e.message }));
-        const after = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
-        return { ok: true, door: best.p.name ?? best.p.sector, pressed: true, walked: !!through?.arrived,
-                 at: after ? `r${after.row}c${after.col}` : null, shuts_after_ms: best.p.within_ms };
-      }, `could not work the door on the way to the ${label}`),
+        return { ok: true, skipped: 'no named approach square for this room' };
+      }, `could not reach the approach square for the ${label}`),
 
       // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
       // fourteen rows in one call in the Temple of Kraanan — and then WEDGES, returning the

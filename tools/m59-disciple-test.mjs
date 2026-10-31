@@ -324,8 +324,9 @@ console.log('\nthe lift into the Temple of Qor');
   ok('the lift is a fallback that never walks to the lift room', !q.some(s => s.do === 'walk' && s.to === 598));
   const { APPROACH } = await import('./fleetscripts/disciple-quest.mjs');
   // 802 IS REACHED THROUGH ITS DOOR, NOT HEARD THROUGH A WALL. A named approach short-circuits the
-  // operable-door rung; r20c17 dithered out at r20c21 and the door was never pressed (2026-10-11/12).
-  ok('802 has no approach square, so the operable-door rung runs', !(802 in APPROACH));
+  // walk the door is worked on; r20c17 dithered out at r20c21 and the door was never pressed
+  // (2026-10-11/12). The door itself is the harness's now (m59-inroom-door-test.mjs).
+  ok('802 has no approach square, so the walk_to rung reaches its door', !(802 in APPROACH));
   const { doorsFor } = await import('./m59-doorplan.mjs');
   const qor = doorsFor(802, { row: 33, col: 14 });
   const door = [...(qor?.on ?? []), ...(qor?.others ?? [])].find(p => Number(p.sector) === 4);
@@ -389,15 +390,16 @@ console.log('\nthe errand, per school');
     // The take is immediately before the look that starts the approach, and the hand-back is
     // after the last thing that needs her. Anything else is a gate that does not cover the
     // contended stretch, which is the same as no gate at all.
-    // look -> door -> walk: the door step (2026-10-11, the Temple of Kraanan's ceiling door) sits
-    // between the look that finds the NPC and the walk toward her.
+    // look -> approach -> walk: the approach step (a named square, for a room that has one) sits
+    // between the look that finds the NPC and the walk toward her. It used to be a DOOR step
+    // (2026-10-11, the Temple of Kraanan's ceiling door); the harness walk works the door now.
     ok(`${school}: each take is followed by the approach it exists to protect`,
        gates.filter(([, x]) => !x.release)
             .every(([i]) => verbs[i + 1] === 'verify' && verbs[i + 2] === 'verify' && verbs[i + 3] === 'walk_to'),
        verbs.join(' '));
-    ok(`${school}: every approach works an operable door before it walks`,
+    ok(`${school}: every approach checks for a named square before it walks`,
        steps.map((x, i) => [i, x]).filter(([, x]) => x.do === 'walk_to')
-            .every(([i]) => steps[i - 1]?.do === 'verify' && /work the door/.test(String(steps[i - 1]?.why ?? ''))),
+            .every(([i]) => steps[i - 1]?.do === 'verify' && /approach square/.test(String(steps[i - 1]?.why ?? ''))),
        verbs.join(' '));
     ok(`${school}: every run-time walk declares its candidate rooms`,
        steps.filter(s => s.do === 'walk' && typeof s.to === 'function')
@@ -687,13 +689,43 @@ console.log('\nturning what she said into what to do');
      readAsk(['nothing like a quest'], { school: 'kraanan' }).handled === false);
   ok('and it keeps the raw sentence, which is the whole specification for the handler',
      readAsk(['nothing like a quest'], { school: 'kraanan' }).raw === 'nothing like a quest');
+  // 516, not 515: 515's only way in is the 516 -> 515 edge, which failed three times running on
+  // Zoot's quest (2026-10-31). See the KRAANAN_MONSTERS comment for the evidence both ways.
   ok('a kill ask carries the room and the difficulty, not just the name',
-     (a => a.room === 515 && a.difficulty === 8)(
+     (a => a.room === 516 && a.difficulty === 8)(
        readAsk(['kill a mutant ant.'], { school: 'kraanan' })));
   // THE DECOY. Nothing the priestess says contains "red", so a recogniser written against the
   // CLASS name reports no assignment and the run reads as "the quest never started".
   ok('and "red ant" is NOT what she says, so matching on the class would find nothing',
      readAsk(['kill a red ant.'], { school: 'kraanan' }).kind === 'unknown');
+}
+
+// ---------------------------------------------------------------- huntRooms from the fleet REPL
+console.log('\nhuntRooms as the fleet REPL hands it over: a string');
+{
+  const { parseHuntRooms } = await import('./fleetscripts/disciple-quest.mjs');
+  const huntRoomsOf = async huntRooms => {
+    const steps = await script.steps({ school: 'kraanan', agent: 't17', agents: ['t17'], huntRooms });
+    return new Set(steps.filter(s => s.do === 'walk' && Array.isArray(s.candidates)).flatMap(s => s.candidates));
+  };
+  // The REPL decodes %20 before the script sees it, so this is what `huntRooms={"mutant%20ant":32}`
+  // arrives as. It used to be refused with `huntRooms names "0"` -- the first character's index.
+  ok('a JSON string is parsed', JSON.stringify(parseHuntRooms('{"mutant ant":32}')) === '{"mutant ant":32}');
+  ok('and an object is taken as it is', parseHuntRooms({ skeleton: 2601 }).skeleton === 2601);
+  ok('nothing given is no override', JSON.stringify(parseHuntRooms(undefined)) === '{}' &&
+     JSON.stringify(parseHuntRooms('')) === '{}');
+  ok('the string reaches the plan: the ant hunt is offered room 32',
+     (await huntRoomsOf('{"mutant ant":32}')).has(32));
+  const refusal = async v => { try { await huntRoomsOf(v); return null; } catch (e) { return e.message; } };
+  const bad = await refusal('{"mutant ant":32');
+  ok('a malformed string is refused saying it is not JSON, and showing the REPL form',
+     /is not JSON/.test(bad ?? '') && /mutant%20ant/.test(bad ?? ''), bad);
+  const arr = await refusal('[32]');
+  ok('JSON that is not an object is refused as such', /must be an object/.test(arr ?? ''), arr);
+  const room = await refusal('{"mutant ant":"Seafarer"}');
+  ok('a room that is not a number is refused', /not a room number/.test(room ?? ''), room);
+  const who = await refusal('{"red ant":32}');
+  ok('and a monster the quest never asks for is still refused by name', /names "red ant"/.test(who ?? ''), who);
 }
 
 // ---------------------------------------------------------------- the questbook

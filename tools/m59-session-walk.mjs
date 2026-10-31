@@ -83,7 +83,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
-import { planDoorChain } from './m59-ceiling-doors.mjs';
+import { planDoorChain, doorBringsCloser } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
 
@@ -2819,6 +2819,10 @@ export function sessionWalkPrototype(deps) {
     // walk back to a held wall all leave it off and plan exactly as they did before it
     // existed.
     clearance = 0,
+    // WORK AN OPERABLE DOOR ON THE WAY, when the target is behind one. See
+    // `walkThroughOperableDoor`. `false` is for the walks that ARE the door work — the walk onto
+    // a trigger square, and the walk through once it is open — so they cannot recurse.
+    doors = true,
   } = {}) {
     const c = this.need();
     const geo = this.world.geometry;
@@ -2860,6 +2864,22 @@ export function sessionWalkPrototype(deps) {
       return { arrived: false, steps: 0, reason: 'collision_geometry_unavailable',
                position: { col: me0.col, row: me0.row },
                note: 'no movement packet was sent because the server does not validate player geometry' };
+    }
+
+    // A SQUARE BEHIND A SHUT DOOR IS REACHED BY OPENING THE DOOR, NOT BY WALKING AT IT.
+    //
+    // Journeys have worked operable doors before an exit walk since The Wryn's Keep (704); an
+    // IN-ROOM walk never did, so every errand whose destination was inside a room with a door in
+    // the middle grew its own door step, copied fleetscript to fleetscript. Here, before the
+    // remembered-departure branch below, because a walk that already failed AT the door would
+    // otherwise be resumed as a departure detour and never reach the door at all. A walk carrying
+    // `beforeMutation` is left alone: that caller authorises every packet (the RTS guard, a melee
+    // approach), and the door's walk-and-press cannot route its packets through the hook.
+    // Optional call, because this method is lifted by text into fixtures that do not carry it.
+    if (doors && typeof beforeMutation !== 'function' && typeof this.walkThroughOperableDoor === 'function') {
+      const through = await this.walkThroughOperableDoor(col, row,
+        { maxSteps, hardCap, movementGeneration, controlToken, avoidSquares, clearance });
+      if (through) return through;
     }
 
     // An unchanged resumed order must not re-derive the same rejected departure.
@@ -5906,21 +5926,34 @@ export function sessionWalkPrototype(deps) {
     }
     const pick = chosen?.p;
     if (!pick) return { opened: false, reason: 'no trigger square this body could aim at' };
-    const target = chosen.sq;
+    let target = chosen.sq;
+    // EVERY TRIGGER SQUARE OF THE DOOR, BEST FIRST, NOT ONLY THE BEST. The Temple of Qor (802):
+    // r4c17 and r4c18 both press its north door, the plan calls r4c17 reachable, and the mover
+    // has no way onto it from the entrance while r4c18 is round the east walk. Taking only the
+    // first, a shadow run stood at r20c9 and never pressed (2026-10-11). disciple-quest.mjs kept
+    // this rule in its own door step; that step is gone (2026-10-31), so the rule lives here.
+    const spares = (pick.stand_on ?? [])
+      .filter(s => !(s.row === target.row && s.col === target.col) && Number.isFinite(here.row))
+      .sort((x, y) => cheb(x, here) - cheb(y, here));
+    const misses = [];
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (cancelled() || isInterrupted())
         return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
-      if (c.self?.row !== target.row || c.self?.col !== target.col) {
+      while (c.self?.row !== target.row || c.self?.col !== target.col) {
+        // `doors: false`: this walk IS the door work. A trigger the mover cannot reach would
+        // otherwise send walkTo back here to open a door so it can walk to the door.
         const walked = await this.walkTo(target.col, target.row,
-          { movementGeneration, controlToken }).catch(e => ({ arrived: false, reason: e.message }));
+          { movementGeneration, controlToken, doors: false }).catch(e => ({ arrived: false, reason: e.message }));
         if (cancelled() || walked?.cancelled)
           return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
         await this.confirmPosition?.();
-        if (c.self?.row !== target.row || c.self?.col !== target.col)
+        if (c.self?.row === target.row && c.self?.col === target.col) break;
+        misses.push(`r${target.row}c${target.col}` + (walked?.reason ? ` (${walked.reason})` : ''));
+        if (!spares.length || misses.length >= 3)
           return { opened: false, sector: pick.sector,
-                   reason: `could not reach the trigger r${target.row}c${target.col}` +
-                           (walked?.reason ? ` (${walked.reason})` : '') };
+                   reason: `could not reach the trigger ${misses.join(', ')}` };
+        target = spares.shift();
       }
 
       // Stand first: a seated press is refused before the room ever hears it (see
@@ -5983,6 +6016,150 @@ export function sessionWalkPrototype(deps) {
       if (!plan || (!plan.on.length && !plan.others.length)) return false;
       return !targets.some(t => geo.path(me.row, me.col, t.row, t.col)?.found);
     } catch { return false; }
+  }
+
+  /**
+   * AN IN-ROOM WALK WHOSE TARGET IS BEHIND AN OPERABLE DOOR: OPEN IT, THEN WALK THROUGH.
+   *
+   * The Temple of Kraanan (801), 2026-10-31. Priestess Qerti'nya stands at r13c20 behind a ceiling
+   * door that opens for a `go` pressed on r30c20 or r31c20 and shuts itself ten seconds after the
+   * press (tempkra.kod SomethingTryGo, RESET_TIME). Raphael and Zoot spent forty-five minutes on
+   * `walk_to` and `crawl_to` from r31c20 and r32c21 — `movement_deviation`, "no route the mover can
+   * walk", crawls out of time ten to nineteen squares short — standing ON the trigger with the door
+   * shut in front of them, and the operator delivered the letter by hand. The door table knew the
+   * door, `openOperableDoor` knew how to work it, and `travel` used both before an exit walk; the
+   * in-room walk asked none of them, so `disciple-quest.mjs` carried its own copy of the door step
+   * (walk to the trigger, `act go`, `walk_to`), and the next errand into a room like this would
+   * have needed another. The operator: "change it so the m59-harness does the door properly, and
+   * it's not something being copied fleetscript-to-fleetscript."
+   *
+   * Returns null — the caller walks exactly as before — unless ALL of these hold: the room has an
+   * operable door (`exitsBehindShutDoor`, which also answers false without geometry), the live
+   * geometry the mover enforces has no path to the target, the body is standing on floor (from
+   * off the floor every path fails and the walk's own recovery comes first), and there is a door
+   * worth pressing: one the ceiling-door table PROVES opens the way (`planDoorChain`), or, where
+   * the table cannot say, an ungated door whose opening brings the body closer to the target (see
+   * `choose` below for why, and for 802). That is what keeps a hunting room with a door in it — 568, the Lake of Jala's Song —
+   * from walking to the far wall to press a door every time a target is cut off for some other
+   * reason.
+   *
+   * Otherwise: work the door(s) with `openOperableDoor` (the trigger walk, the stand, the press,
+   * the wait on the server's sector-height event, the retries, the gate refusal), then walk
+   * straight on with `doors: false` while the door is still up. If a proven door's walk falls
+   * short and the target is behind a shut door again — it shut on the way — one more press and
+   * one more walk. A door that would not open is remembered for a minute for this room, so a
+   * caller re-issuing the walk does not press a gated door it was just refused at; the walk then
+   * proceeds exactly as it would have. Every result carries `doors`: what was pressed and what it did.
+   */
+  async walkThroughOperableDoor(col, row, { movementGeneration = this.movementGeneration, controlToken,
+                                             ...walk } = {}) {
+    const target = { row, col };
+    if (!this.exitsBehindShutDoor?.([target])) return null;
+    const c = this.client ?? this.need?.();
+    const geo = this.world?.geometry, map = this.world?.map;
+    const roomNum = Number(this.world?.room?.num ?? NaN), roomId = c?.room?.id ?? null;
+    const me = () => c?.self ?? null;
+    if (!me() || (typeof geo?.standable === 'function' && !geo.standable(me().row, me().col))) return null;
+    const refusals = (this.inRoomDoorRefusals ??= new Map());
+    const roomKey = `${roomNum}:${roomId}`;
+    if ((refusals.get(roomKey) ?? 0) > Date.now()) return null;
+    const guessKey = `${roomKey}:${row},${col}`;
+    // WHICH DOOR. First asked of the ceiling-door table: a chain it can PROVE opens the way.
+    // `{ already: true }` is the table saying nothing need open, so the live refusal is about
+    // something other than a door, and that is the ordinary walk's to report.
+    //
+    // AND WHEN THE TABLE CANNOT PROVE IT, A GUESS — BUT ONLY ON A DOOR THAT BRINGS THE BODY
+    // CLOSER. The Temple of Qor (802) is why there is a second answer at all: its north ceiling
+    // door is how the body reaches Zuxana (shadow fleet 2026-10-12: press on r4c18, on her square
+    // 7.5 s later), and the baked geometry has no path to her square with that door open OR shut,
+    // so the table returns null. The fleetscript door step this replaces pressed there anyway, and
+    // it worked. The guess is narrowed three ways: no gate (a guessed press at a guild door is a
+    // five-second refusal); opening it must bring the body's nearest reachable square strictly
+    // closer to the target (`doorBringsCloser`: 802 goes from four squares to two, while 568's
+    // lake lift adds one square and moves nothing, so a hunting target cut off by water presses
+    // nothing); and one press per walk, with a ten-minute memory for this target whether the
+    // door was ruled out or pressed and did not help.
+    const choose = () => {
+      if (!me()) return null;
+      let plans = null;
+      try { plans = doorsFor(roomNum, { row: me().row, col: me().col }); } catch { return null; }
+      const all = [...(plans?.on ?? []), ...(plans?.others ?? [])];
+      let step = null;
+      if (typeof planDoorChain === 'function' && map) {
+        try {
+          step = planDoorChain(map, roomNum, { row: me().row, col: me().col }, [target], all,
+            { observed: c?.room?.sectorHeights ?? new Map() });
+        } catch { step = null; }
+      }
+      if (step?.sector != null) return { sector: step.sector, proven: true };
+      if (step?.already) return null;
+      if ((guesses.get(guessKey) ?? 0) > Date.now()) return null;
+      if (typeof doorBringsCloser !== 'function' || !map || !geo) return null;
+      const closer = new Set(all.filter(p => !p.gate && p.stand_on?.length).map(p => Number(p.sector))
+        .filter(sector => {
+          try {
+            return doorBringsCloser(map, roomNum, { row: me().row, col: me().col }, target, sector,
+              { observed: c?.room?.sectorHeights ?? new Map(), live: geo })?.closer === true;
+          } catch { return false; }
+        }));
+      if (!closer.size) { guesses.set(guessKey, Date.now() + 600_000); return null; }
+      return { proven: false, exclude: [...new Set(all.map(p => Number(p.sector)).filter(s => !closer.has(s)))] };
+    };
+    const guesses = (this.inRoomDoorGuesses ??= new Map());
+    const doors = [];
+    const stopped = () => {
+      if (this.movementWasCancelled?.(movementGeneration, controlToken))
+        return this.cancelledMovement?.() ?? { arrived: false, cancelled: true, reason: 'movement cancelled' };
+      if (this.client && this.client !== c) return { arrived: false, cancelled: true, reason: 'client changed' };
+      if (c?.room?.id !== roomId || Number(this.world?.room?.num ?? NaN) !== roomNum)
+        return { arrived: false, left_room: true, reason: 'left the room while working a door', doors };
+      return null;
+    };
+    const press = async choice => {
+      const opened = await this.openOperableDoor({ movementGeneration, controlToken, targets: [target],
+                                                   ...(choice.proven ? {} : { exclude: choice.exclude }) })
+        .catch(e => ({ opened: false, reason: e?.message ?? String(e) }));
+      doors.push({ sector: opened.sector ?? null, opened: !!opened.opened, proven: choice.proven,
+                   reason: opened.reason ?? null,
+                   ...(opened.gate ? { gate: opened.gate } : {}),
+                   ...(opened.at ? { at: `r${opened.at.row}c${opened.at.col}` } : {}),
+                   ...(opened.shuts_after_ms != null ? { shuts_after_ms: opened.shuts_after_ms } : {}) });
+      return opened;
+    };
+    // Only a door that was pressed and did not open is remembered; a cancelled press is not a refusal.
+    const refused = () => refusals.set(roomKey, Date.now() + 60_000);
+    // A PROVEN chain of up to three (704's master wing is two deep), each door re-asked from where
+    // the last press left the body, stopping as soon as the target is reachable. A guess is one
+    // press: the geometry that could not prove it will not prove it after it either, and asking
+    // again would press the door it just opened, which waits out a cycle for nothing.
+    let choice = choose();
+    for (let n = 0; n < 3 && choice; n++) {
+      const opened = await press(choice);
+      const stop = stopped();
+      if (stop) return { ...stop, doors };
+      if (!opened.opened) { refused(); break; }
+      if (!choice.proven) break;
+      choice = this.exitsBehindShutDoor([target]) ? choose() : null;
+      if (!choice?.proven) break;
+    }
+    if (!doors.length) return null;
+    const through = () => this.walkTo(col, row, { ...walk, movementGeneration, controlToken, doors: false })
+      .catch(e => ({ arrived: false, reason: e?.message ?? String(e) }));
+    let walked = await through();
+    const last = doors.at(-1);
+    const short = () => !walked?.arrived && !walked?.cancelled && !walked?.left_room && !stopped();
+    // IT SHUT ON THE WAY: one more press and one more walk, for a door the table proves.
+    if (short() && last?.opened && last.proven && this.exitsBehindShutDoor([target])) {
+      const again = choose();
+      if (again?.proven) {
+        const opened = await press(again);
+        const stop = stopped();
+        if (stop) return { ...stop, doors };
+        if (opened.opened) walked = await through(); else refused();
+      }
+    }
+    if (short() && last?.opened && !last.proven) guesses.set(guessKey, Date.now() + 600_000);
+    return { ...(walked ?? { arrived: false }), doors };
   }
 
   /**
