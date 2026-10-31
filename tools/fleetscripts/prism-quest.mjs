@@ -78,6 +78,8 @@ export const PRIESTESSES = Object.freeze([
   { npc: 'Zuxana', room: 802, where: 'Temple of Qor -- the lift from 598, door alternating every 10 min' },
 ]);
 const PRIESTESS_ROOMS = PRIESTESSES.map(p => p.room);
+// Every room an approach can happen in: the priestesses' and both wanderers' (closeOn's gate walk).
+const GATE_ROOMS = [...new Set([...PRIESTESS_ROOMS, ...Object.values(WANDERERS).flatMap(w => w.rooms)])];
 
 const DELIVER_MS = 2 * 3600_000;           // questengine.kod:4597 / 5139 timelimit
 const COLLECT_MS = 4 * 3600_000;           // :4624 / :5165
@@ -178,10 +180,18 @@ const closeOn = (who, label) => [
     state.near = { ...at, room: roomOf(view) };
     return { ok: true, at: `r${at.row}c${at.col}` };
   }, `find ${label}`),
+  // THE GATE FOR THE TWO APPROACH STEPS. A walk to the room he was found in arrives at once; with nobody to approach it
+  // is a walk to null, skipped, and the runner skips the walk_to/crawl_to below with it. They cannot gate themselves:
+  // Number(null) is 0, so a null square is read as r0c0 and crawled toward for the whole deadline (Raphael in 801,
+  // 2026-10-31, "crawl_to: E -> r46c42 (46 from rnullcnull)" for minutes, once the cycle steps became `anywhere`).
+  { ...walk(st => st.near?.room ?? null, { candidates: GATE_ROOMS }), optional: true },
   { ...walkTo(st => st.near?.col ?? null, st => st.near?.row ?? null, { within: NEAR_NPC, deadlineMs: 90_000, stallMs: 20_000 }),
     room: st => st.near?.room ?? null, optional: true },
   crawlTo(st => st.near?.col ?? null, st => st.near?.row ?? null,
-          { within: NEAR_NPC, optional: true, maxSteps: 40, deadlineMs: 120_000, room: st => st.near?.room ?? null }),
+          // 40 steps / 2 min ran out 10-19 squares short of Qerti'nya in the pillared Temple of Kraanan (801) every
+          // cycle for 45 min on 2026-10-31 (the shut door was the other half, now Session.walkTo's): a crawl there
+          // takes about 9 s a square.
+          { within: NEAR_NPC, optional: true, maxSteps: 90, deadlineMs: 480_000, room: st => st.near?.room ?? null }),
 ];
 
 /** Where the next leg toward him starts: the fresh room, else the best room to search first. */
@@ -291,10 +301,10 @@ function toPriestess() {
   const to802 = st => going(st) && st.q.open.dest.room === 802;
   for (const s of toTemple(802)) {
     if (s.do === 'walk') steps.push({ ...s, to: st => (to802(st) ? 802 : null), candidates: [802], optional: true });
-    else if (s.do === 'verify') steps.push({ ...s, optional: true, fn: async (ctx) => (to802(ctx.state) ? s.fn(ctx) : { ok: true, skipped: true }) });
+    else if (s.do === 'verify') steps.push({ ...s, optional: true, lift: true, fn: async (ctx) => (to802(ctx.state) ? s.fn(ctx) : { ok: true, skipped: true }) });
     // A crawl to a null square is refused before it moves (m59-fleetscript.mjs crawl_to), so the
     // ~40 lift legs cost nothing when the delivery is not to Zuxana.
-    else steps.push({ ...s, optional: true, col: st => (to802(st) ? s.col : null), row: st => (to802(st) ? s.row : null),
+    else steps.push({ ...s, optional: true, lift: true, col: st => (to802(st) ? s.col : null), row: st => (to802(st) ? s.row : null),
                       ...(s.room != null ? { room: st => (to802(st) ? s.room : null) } : {}) });
   }
   steps.push({ ...verify(async ({ agent, call, state }) => {
@@ -383,6 +393,12 @@ function collect(RUN) {
 function cycleSteps({ begin, p, RUN, allRooms }) {
   const slots = Number(p.searchSlots);
   const pose = (roomOf, label) => postureStep(TAG, roomOf, { fleeBelow: p.fleeBelow, restBelow: p.restBelow }, label);
+  // EVERY STEP HERE GATES ITSELF ON `state.q`, SO NONE OF THEM BELONGS TO THE ROOM OF THE WALK BEFORE IT.
+  // A walk to null means "not going" (already with him, or not this phase) and is skipped as optional,
+  // and the runner skips every following non-walk step with it unless it is `anywhere`
+  // (m59-fleetscript.mjs, 2026-09-28). Without this, Raphael (hk3) found Parrin in 852 on 2026-10-31,
+  // the null walk beside him skipped the ask, deliver and collect, and all 50 cycles ran in a second.
+  // The lift legs to Zuxana (802) keep the old rule: they do belong to the temple walk before them.
   return [
     begin,
     pose(st => (st.q?.phase === 'ask' ? wandererTarget(st) : null), 'the wanderer (ask)'),
@@ -397,7 +413,8 @@ function cycleSteps({ begin, p, RUN, allRooms }) {
     ...reachWanderer(['collect'], slots, allRooms),
     ...closeOn(st => (st.q?.phase === 'collect' && st.q.withHim ? nameOf(st) : null), 'the wanderer'),
     collect(RUN),
-  ];
+    // walk_to / crawl_to stay room-bound: closeOn's gate walk skips them when there is nobody to approach.
+  ].map(s => (['walk', 'walk_to', 'crawl_to'].includes(s.do) || s.lift ? s : { ...s, anywhere: true }));
 }
 
 // ---------------------------------------------------------------- the script

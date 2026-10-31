@@ -2100,6 +2100,17 @@ two servers apart; `FigurePowerFromCount` and the power half of `CalcFactionBonu
 Part's per-faction benefits (no to-hit for Duke or Princess, unfactioned a quarter and never
 negative, the non-intriguing flat bonus); and that the board renders with its tab and route.
 
+## The prism quest — a walk to null is "not going", not "skip the quest"
+
+**`m59-prism-quest-test.mjs` (10) — the plan, replayed through the runner's own skip rule.** It compiles a
+real quester's plan for `tools/fleetscripts/prism-quest.mjs` and applies `m59-fleetscript.mjs`'s rule for a
+skipped optional walk (every following step up to the next walk goes with it, unless it is `anywhere`). It pins
+two incidents from 2026-10-31, both Raphael questing for Parrin. First, the null walk that means "already beside
+him" took the ask, the delivery and the collection with it, and 50 cycles finished in a second; the cycle steps
+are `anywhere` now. Second, `walk_to` / `crawl_to` with nobody to approach read the null square as r0c0
+(`Number(null)`) and crawled at the temple's corner for minutes; they now sit behind a gate walk to the room the
+NPC was seen in, which is null, and skipped, when nobody was. On the script before the fix it fails 4 of 10.
+
 ## The disciple gate — the level-3 spell quest
 
 **`m59-disciple-test.mjs` (223) — three groups, none of which is about whether the errand runs.**
