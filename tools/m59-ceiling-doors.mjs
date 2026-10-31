@@ -177,3 +177,54 @@ export function previewOpenedDoor(map, roomNum, sector, { observed = new Map() }
   return {geometry,state:key,sector:Number(sector),conditional:true,
     requires:'matching normal server opening and live collision checks before each move'};
 }
+
+// DOES OPENING THIS DOOR BRING THE BODY CLOSER, WHEN NOTHING CAN PROVE IT REACHES THE TARGET?
+//
+// `planDoorChain` answers "which door makes the target reachable", and in the Temple of Qor (802)
+// it answers null: the baked geometry has no path to Zuxana's square (r16c15) with the north
+// ceiling door open OR shut, though the door is how bodies reach her (shadow fleet 2026-10-12,
+// press on r4c18, on her square 7.5 s later). What the bake DOES say is that opening it adds 165
+// squares to the body's ground and brings its nearest square from four away to two. In the Lake
+// of Jala's Song (568), a hunting room whose lift door is the room's only operable door, opening
+// it adds one square and the nearest square to a target cut off by the lake does not move — which
+// is the case an in-room walk must NOT walk to the far wall and press for. So: the nearest
+// Chebyshev distance to `target` over the squares the mover can step to from `from`, in the live
+// geometry (`live`, the doors as they are now) and in a private copy with `sector` opened.
+// Returns `{ shut, open, closer }`, or null when the table cannot model that door at all.
+const CLOSER_PREVIEWS = new WeakMap();
+export function doorBringsCloser(map, roomNum, from, target, sector,
+                                 { observed = new Map(), live = null, maxNodes = 6000 } = {}) {
+  const room = map?.rooms?.[roomNum];
+  if (!live || !room?.roo || !from || !target) return null;
+  const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum];
+  const door = def && def.doors.find(d => (d.ids ?? [d.id]).includes(Number(sector)));
+  if (!door) return null;
+  // One private geometry per (room, door-state): `previewOpenedDoor` builds a fresh one per call.
+  const key = def.doors.map(d => {
+    if (d === door) return d.open;
+    const seen = (d.ids ?? [d.id]).map(id => observed.get(id));
+    return seen[0]?.type === 5 && seen.every(x => x?.type === 5 && x.height === seen[0].height) ? seen[0].height : (d.shipped ?? d.closed);
+  }).join(',');
+  const cache = CLOSER_PREVIEWS.get(room.roo) ?? new Map();
+  CLOSER_PREVIEWS.set(room.roo, cache);
+  if (!cache.has(key)) cache.set(key, previewOpenedDoor(map, roomNum, sector, { observed })?.geometry ?? null);
+  const opened = cache.get(key);
+  if (!opened) return null;
+  const nearest = g => {
+    const cheb = (r, c) => Math.max(Math.abs(r - target.row), Math.abs(c - target.col));
+    const seen = new Set([`${from.row},${from.col}`]), queue = [[from.row, from.col]];
+    let best = cheb(from.row, from.col);
+    for (let i = 0; i < queue.length && seen.size < maxNodes; i++) {
+      const [r, c] = queue[i];
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const nr = r + dr, nc = c + dc, k = `${nr},${nc}`;
+        if ((!dr && !dc) || seen.has(k) || !g.inBounds(nr, nc) || !g.moverStepLands(r, c, nr, nc)) continue;
+        seen.add(k); queue.push([nr, nc]);
+        best = Math.min(best, cheb(nr, nc));
+      }
+    }
+    return best;
+  };
+  const shut = nearest(live), open = nearest(opened);
+  return { shut, open, closer: open < shut };
+}

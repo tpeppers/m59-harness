@@ -48,7 +48,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { walk, say, shop, fight, verify, walkTo, crawlTo, gate, ungate } from '../m59-fleetscript.mjs';
 import { QUEST_NPC_RADIUS, sayToNpc } from '../m59-sayrange.mjs';
-import { doorsFor } from '../m59-doorplan.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { saveRun, runId } from '../m59-questbook.mjs';
 
@@ -198,10 +197,10 @@ export const TEMPLE_LIFTS = Object.freeze({
 // reached. EMPTY ON PURPOSE, and the Temple of Qor is why. Both entrances land at r33c14
 // (tempqor.kod:201-204), rows 18-19 wall the body off from Zuxana (r16c15), and the way in is round
 // the EAST walk to the north ceiling door (r3-4 c17-18, tempqor.kod:172-189): `go` on a trigger
-// square, and the ceiling lifts slowly and drops again 5 s after the press. That is the operable-door
-// rung below -- walk onto the trigger, press, walk straight through -- the one written for Kraanan.
-// An earlier entry here sent 802 to r20c17 instead ("heard through the wall"); that walk dithers out
-// at r20c21 and the door rung never ran (Bunsen 2026-10-11, out_of_earshot). Measured on the shadow
+// square, and the ceiling lifts slowly and drops again 5 s after the press. The harness's in-room walk
+// works that door (walk onto the trigger, press, walk straight through: `walkThroughOperableDoor`), as
+// it does Kraanan's. An earlier entry here sent 802 to r20c17 instead ("heard through the wall"); that
+// walk dithers out at r20c21 and the door was never pressed (Bunsen 2026-10-11, out_of_earshot). Measured on the shadow
 // fleet 2026-10-12: r33c14 -> r4c18 by the east walk in 37 steps, press, walk at once, on Zuxana's
 // square 7.5 s later; leaving, `travel` presses the same door from inside on its own.
 export const APPROACH = Object.freeze({});
@@ -736,15 +735,20 @@ export const script = {
         return { ok: true, approaching: want, at: `r${at.row}c${at.col}`, room: state.near.room };
       }, `could not look for the ${label}`),
 
-      // THROUGH AN OPERABLE DOOR FIRST, WHEN THE ROOM HAS ONE. The Temple of Kraanan (801) keeps
-      // Qerti'nya behind a ceiling door that opens only for a `go` pressed ON r30c20 or r31c20 and
-      // shuts itself ten seconds later (tempkra.kod SomethingTryGo, RESET_TIME). On 2026-10-11 the
-      // walk and the crawl below both ran out of time 32 squares short of her and the quest
-      // failed `out_of_earshot`; by hand, walk to r31c20, `go`, walk on, reached her in 8 s.
-      // The door table (m59-doors.json, read by m59-doorplan doorsFor) already knew the door —
-      // only the walker's exit planning ever asked it. So: still out of earshot, and the room has
-      // an ungated door -> walk onto the trigger square that best lies between body and NPC,
-      // press, and let the walk below go straight through while it is up.
+      // A ROOM WHOSE NPC IS BEST HEARD FROM A NAMED SQUARE (`APPROACH`, empty today).
+      //
+      // THE DOOR IS NOT HERE ANY MORE, AND THAT IS THE POINT. This step used to carry its own
+      // operable-door rung: the Temple of Kraanan (801) keeps Qerti'nya behind a ceiling door that
+      // opens for a `go` on r30c20 or r31c20 and shuts ten seconds later, and on 2026-10-11 the
+      // walk and the crawl below ran out of time 32 squares short of her, so this walked onto the
+      // trigger, sent `act go`, and walked straight on. On 2026-10-31 Raphael and Zoot spent
+      // forty-five minutes failing `walk_to` / `crawl_to` toward her from r31c20 and r32c21 all
+      // the same, and the operator delivered the letter by hand. A door step in one fleetscript
+      // helps that fleetscript; the next errand into 801 or 802 needs another copy. So the
+      // HARNESS's in-room walk works the door now (`Session.walkThroughOperableDoor`, reached by
+      // every `walkTo` — the `walk_to` rung below, and every keeper walk): target behind a shut
+      // door the table knows -> walk to the trigger, press, wait on the server's sector-height
+      // event, walk through while it is up. Pinned offline by m59-inroom-door-test.mjs.
       verify(async ({ agent: me, call, state }) => {
         if (!state.near) return { ok: true, skipped: 'nothing to approach' };
         const view = await call('look', { agent: me }, 30_000).catch(() => null);
@@ -768,50 +772,8 @@ export const script = {
           return { ok: true, approach: `r${appr.row}c${appr.col}`, at: now ? `r${now.row}c${now.col}` : null,
                    heard: !!(now && d2(now) <= 25), npc: `r${near.row}c${near.col}` };
         }
-        let plan = null;
-        try { plan = doorsFor(room, { row: you.row, col: you.col }); } catch { return { ok: true, skipped: 'door table unreadable' }; }
-        const doors = [...(plan?.on ?? []), ...(plan?.others ?? [])].filter(p => !p.gate && p.stand_on?.length);
-        if (!doors.length) return { ok: true, skipped: 'no operable door in this room' };
-        // EVERY TRIGGER SQUARE, BEST FIRST, NOT ONLY THE BEST. A trigger the body can walk to beats a
-        // nearer one it cannot (the rule openOperableDoor already keeps). Temple of Qor (802): r4c17 and
-        // r4c18 tie on this score and r4c17 is listed first, but the mover has NO route to r4c17 from the
-        // entrance ("no route the mover can walk through this geometry", 5 steps) while r4c18 is 31 steps
-        // round the east walk. Taking only the first, the shadow run stood at r20c9, never pressed.
-        const cands = doors.flatMap(p => p.stand_on.map(sq => ({ p, sq, cost: cheb(you, sq) + cheb(sq, state.near) })))
-          .sort((a, b) => a.cost - b.cost);
-        // ON THE TRIGGER, READ BACK -- AND READ AGAIN. A `look` straight after the walk can still report
-        // the square before (2026-10-11 run 3: arrived on r31c20, read r32c20, skipped the press, and
-        // the next walk stalled at the shut door). So: re-read a few times, and re-walk if it is truly off.
-        const at = sq => now => now && now.row === sq.row && now.col === sq.col;
-        let now = you, onIt = false, best = cands[0];
-        const tried = [];
-        for (const cand of cands) {
-          best = cand;
-          onIt = at(cand.sq)(now);
-          for (let t = 0; t < 2 && !onIt; t++) {
-            const w = await call('walk_to', { agent: me, row: cand.sq.row, col: cand.sq.col }, 120_000).catch(() => null);
-            for (let r = 0; r < 3 && !onIt; r++) {
-              await new Promise(res => setTimeout(res, 700));
-              now = (await call('look', { agent: me }, 30_000).catch(() => null))?.you ?? now;
-              onIt = at(cand.sq)(now);
-            }
-            // A square with no route is not worth a second walk; the next trigger may have one.
-            if (!onIt && /no route/i.test(String(w?.reason ?? w?.error ?? ''))) break;
-          }
-          if (onIt) break;
-          tried.push(`r${cand.sq.row}c${cand.sq.col}`);
-        }
-        if (!onIt) return { ok: true, door: best.p.name ?? best.p.sector, pressed: false, tried,
-                            at: now ? `r${now.row}c${now.col}` : null };
-        // PRESS AND GO THROUGH IN ONE BREATH. The door shuts itself (801: 10 s), and the next STEP is
-        // too late: 2026-10-11 the re-run pressed on r31c20 and the following walk_to found every
-        // direction geometry_blocked. By hand the same press with an immediate walk crossed in 8 s.
-        await call('act', { agent: me, verb: 'go' }, 30_000).catch(() => null);
-        const through = await call('walk_to', { agent: me, row: state.near.row, col: state.near.col }, 120_000).catch(e => ({ error: e.message }));
-        const after = (await call('look', { agent: me }, 30_000).catch(() => null))?.you;
-        return { ok: true, door: best.p.name ?? best.p.sector, pressed: true, walked: !!through?.arrived,
-                 at: after ? `r${after.row}c${after.col}` : null, shuts_after_ms: best.p.within_ms };
-      }, `could not work the door on the way to the ${label}`),
+        return { ok: true, skipped: 'no named approach square for this room' };
+      }, `could not reach the approach square for the ${label}`),
 
       // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
       // fourteen rows in one call in the Temple of Kraanan — and then WEDGES, returning the

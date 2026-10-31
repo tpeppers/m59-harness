@@ -577,6 +577,23 @@ through a nested shelter order.
   conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
   every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
   entrance) the journey still arrives; on 1b5629a the press square itself was refused.
+- `m59-inroom-door-test.mjs` (40): an IN-ROOM walk to a square behind an operable door. On the
+  real Session (`walkTo`, its door hook, `openOperableDoor`, `waitForDoorOpen`) and the committed
+  801 geometry, against a model of tempkra.kod's door (sector 1 to 164 at speed 16 from
+  r30c20/r31c20, shut 10 s after the press): from r31c20 and r32c21 a `walkTo` to Qerti'nya at
+  r13c20 presses once on the trigger, reports sector 1 opened, and reaches her square before the
+  door shuts; with `doors: false` the same walk is the incident (Raphael and Zoot, 2026-10-31,
+  45 minutes). A room with no door (39) walks as before with no door report; 568's lake lift is
+  not pressed for a target the lake cuts off (`doorBringsCloser`: no closer), and that is
+  remembered per target; no geometry, no door. On a virtual clock: a door that will not open is
+  pressed three times, then the walk proceeds and a re-issue within the minute does not press it
+  again; a cancel at the press walks nothing and is not remembered as a refusal; a door that shuts
+  on the way is pressed once more and the walk arrives; and 802, where the table cannot prove a
+  chain to Zuxana but opening the north door brings the body from four squares to two, is pressed
+  ONCE as a guess (falling through r4c17, which the mover cannot reach, to r4c18) and not again
+  for that target. Its seam assertions pin the hook's place in `walkTo` (after the no-geometry
+  refusal, before the remembered departure, skipped under `beforeMutation`), `doors: false` on the
+  trigger walk and the walk through, and that disciple-quest.mjs no longer presses doors itself.
 - `m59-peninsula-test.mjs` (14 tests + 1 TODO): a raised pocket you can fall out of but not
   climb into must not choose the door. A synthetic peninsula pins why the bake's largest-forward-
   flood "body" lands on the pocket and that `reverseReachCounts`/`reached_by` (`anchorFor`) does

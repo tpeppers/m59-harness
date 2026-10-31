@@ -66,6 +66,21 @@ Guild passage and counter doors use the same wait and retry routines; the
 Bookmakers' password door retains its native five-second cycle. Konima's
 sector 1 lifts from 1060 to 1150 at speed 50, with a ten-second close timer.
 
+**An in-room walk works the door itself; a fleetscript must not.** `walkTo` asks
+`walkThroughOperableDoor` before it plans: when the room has an operable door, the
+live geometry has no path to the target, and either the ceiling-door table proves a
+chain that opens the way (`planDoorChain`) or an ungated door's opening brings the
+body's nearest reachable square closer (`doorBringsCloser`, the Temple of Qor's case,
+one press per walk and remembered per target), it runs `openOperableDoor` and walks
+on with `doors: false` while the door is up. Rooms without doors, sessions without
+geometry, walks carrying `beforeMutation`, and the trigger walk itself are unchanged.
+`openOperableDoor` now tries every trigger square of the chosen door, best first,
+before calling it unreachable. Prod 2026-10-31: Raphael and Zoot failed 45 minutes of
+`walk_to` toward Qerti'nya (801, r13c20) from r31c20/r32c21 with the door shut in
+front of them; disciple-quest.mjs had carried its own copy of the door step.
+`m59-inroom-door-test.mjs` pins it. `crawl_to` does not work doors: at about a square
+every eight seconds it cannot use a ten-second window, and `walk_to` runs first.
+
 Fresh room contents rebind the controlled body by its unique character name,
 even when a save reused its old object ID for another visible player. If the
 body cannot be identified, the client exposes no other player's pose and
