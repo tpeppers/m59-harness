@@ -44,7 +44,7 @@ export const DEFAULT_MAX_AGE_MS = 30 * 60 * 1000;
 
 // Enough to see a trend without the file growing without bound. Each entry is one
 // ability moving by one point, which is what advancement looks like.
-const MAX_HISTORY = 400;
+export const MAX_HISTORY = 400;
 
 const safeName = (s) => String(s || 'unknown').replace(/[^A-Za-z0-9_-]/g, '');
 const fileFor = (character) => `${ABILITY_DIR}/${safeName(character)}.json`;
