@@ -8,8 +8,10 @@ and of the legacy `strategy: 'coop'` healing/economy preset.
 The hook receives `phase` (`request` or `helper`), agent, room, whether the body is
 at a safe spot, visible fleetmates, and nearby attackable monsters. It returns null
 to retain existing behavior, or `{enabled:true, helper_health, danger_quiet_ms,
-cooldown_ms, attempt_ms}`. The executor bounds all numeric settings. There is no
-public strategy that enables this behavior by default.
+cooldown_ms, attempt_ms, max_offline_ms}`. The executor bounds all numeric settings.
+`max_offline_ms` is optional (60 000 to 1 800 000); absent, null or non-positive means no
+deadline, which is the original behaviour. There is no public strategy that enables this
+behavior by default.
 
 ## Handoff
 
@@ -71,16 +73,51 @@ search in the same escape. No peer's body, old packet stream or predicted positi
 becomes authority to move the returning character.
 
 The condition proves a distraction hit, not the server's hidden aggro target. With
-multiple captured threats, each must have a hit receipt; an unhit threat cannot be
+multiple captured threats, each must have a receipt; an unresolved threat cannot be
 ignored because a different monster was distracted.
+
+## A target that is gone
+
+A target can also be resolved by a `gone` receipt. In a busy farm room the captured
+monster is usually killed by another farmer before a helper swings, and a dead monster
+cannot take a hit receipt: measured on prod 2026-10-31, about 25 of 30 play-deads in two
+hours waited offline indefinitely for that reason.
+
+`gone` is an observation, not a timer. Every opted-in keeper publishes presence from its
+500ms watchdog, including while it fights, and the same call runs
+`observeCooperativeTargets`. For each `offline` or `returning` request in the helper's own
+room (same room number, room object and save epoch), it reads the helper's live object
+list. That read counts only if the helper is live and combat-ready, its own body is in the
+list, no save is running, and the helper has no pending request of its own. An unreadable
+read is never absence and restarts the clock. A target id absent across repeated reads
+spanning `GONE_MS` (15s), with no gap over `GONE_GAP_MS` (3s), gets
+`{kind:'gone', request_id, target_id, name, helper, helper_body, seen_absent_since,
+observations, at}`. The receipt is written under the room lock to `offline` records only,
+because `returning` belongs to the requester. It is refreshed every `GONE_REFRESH_MS` (5s)
+while the absence lasts and never overwrites a fresh hit receipt. If the id is seen again,
+the receipt is deleted.
+
+The gate accepts a gone receipt under the same rules as a hit receipt. It must be under
+30 seconds old and no older than the request's `offline_at`, its writer must have fresh,
+living presence in the request's room and body, and the writer must not be waiting on a
+request of its own. Its absence span must also be at least `GONE_MS`.
 
 ## Failure and observation
 
-No timeout forces the victim back into an undistracted room. After thirty seconds,
-native `cooperative_logoff` status marks the wait stalled and lists outstanding
-targets. If no helper can act, it remains offline; the game's existing logoff-ghost
-penalties still apply to prolonged offline periods. Operator stop, dormancy and
-handoff cancel the current login attempt rather than defeating its condition.
+No timeout forces the victim back into an undistracted room unless the strategy asked
+for one. After thirty seconds, native `cooperative_logoff` status marks the wait stalled
+and lists each target as hit, gone or neither, with `deadline_at` when one applies. If no
+helper can act and no deadline was granted, it remains offline; the game's existing
+logoff-ghost penalties still apply to prolonged offline periods. Operator stop, dormancy
+and handoff cancel the current login attempt rather than defeating its condition.
+
+The opt-in `max_offline_ms` is stored on the request when it is admitted, so a restarted
+keeper or a broker rejoin applies the same bound. Once `now - offline_at` reaches it and
+the targets are still unresolved, the gate marks the request `state:'aborted',
+reason:'deadline', released:'deadline'` and lets the login proceed.
+`cooperativeLogoffReturn.released` is then `'deadline'`. The returning keeper still heads
+straight for cover, and its survival decision says the wait ran out, not that a
+distraction happened.
 
 Helper start/result/defer events and confirmed distraction kills enter normal
 keeper telemetry. Read-only cleanup can finish after the victim returns, but a

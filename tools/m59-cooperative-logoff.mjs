@@ -67,7 +67,9 @@ export function normalizeCooperativeLogoff(answer) {
   if(answer?.enabled!==true)return null;
   const bounded=(key,min,max,otherwise)=>Number.isFinite(answer[key])?Math.max(min,Math.min(max,answer[key])):otherwise;
   return {enabled:true,helper_health:bounded('helper_health',.9,1,.95),danger_quiet_ms:bounded('danger_quiet_ms',1000,30000,3000),
-    cooldown_ms:bounded('cooldown_ms',30000,300000,60000),attempt_ms:bounded('attempt_ms',1000,10000,6000)};
+    cooldown_ms:bounded('cooldown_ms',30000,300000,60000),attempt_ms:bounded('attempt_ms',1000,10000,6000),
+    // OPT-IN. Absent or null is no deadline at all, which is the behaviour this always had.
+    max_offline_ms:answer.max_offline_ms>0?bounded('max_offline_ms',60000,1800000,null):null};
 }
 export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
   if(!pilot._cooperativeLogoffConfig)return false;
@@ -76,7 +78,65 @@ export function publishCooperativePresence(pilot,{now=Date.now()}={}) {
   const p={at:now,agent:s.name,pid:process.pid,character:c?.me?.name??s.credentials?.character,
     live:!!s.live&&c?.combatReady===true,body:c?.selfId,room:s.world?.room?.num,room_object:c?.room?.id,
     health:c?.vitals?.()?.health??null,enabled:true};
-  store.write('presence',s.name,p);s._cooperativePublishedAt=now;return true;
+  store.write('presence',s.name,p);s._cooperativePublishedAt=now;
+  // Presence is published by the watchdog every 500ms whatever the keeper is doing, including
+  // fighting, so the gone observation rides on it: a helper busy in combat still reports.
+  try{observeCooperativeTargets(pilot,{now,store});}catch(e){pilot.note?.('cooperative target observation unavailable',{why:e.message});}
+  return true;
+}
+
+// A TARGET THAT IS GONE IS RESOLVED -- AND "GONE" IS EVIDENCE, NOT A DEADLINE.
+//
+// Measured on prod 2026-10-31: in a room with ~18 fleet farmers the captured monster is
+// nearly always killed by somebody else before a helper gets its distraction swing in, so
+// no hit receipt can ever be written and ~25 of ~30 play-deads in two hours waited offline
+// for ever. A monster that no longer exists cannot be attacking anybody; what was missing was
+// a way to SAY so that is as strict as a hit.
+//
+// So a 'gone' receipt is written only by a fleet-mate standing in the request's own room
+// (same room number and room object, same save epoch), from its OWN live object list, after
+// the target id has been absent from that list across repeated observations spanning at least
+// GONE_MS with no gap longer than GONE_GAP_MS. One read is never enough; a read this helper
+// could not make (not live, not combat-ready, not in that room, own body not in the list, a
+// save in progress or a different save epoch) is never absence and restarts the clock. The id
+// seen again deletes the receipt. The gate accepts it only while it is fresh and its writer's
+// presence is fresh and in the room -- the same rules a hit receipt meets.
+export const GONE_MS=15000, GONE_GAP_MS=3000, GONE_REFRESH_MS=5000;
+export function observeCooperativeTargets(pilot,{now=Date.now(),store=cooperativeStore(pilot.s)}={}) {
+  const s=pilot.s,c=s?.client;if(!store||!s?.name)return 0;
+  const seen=s._cooperativeGoneSeen??=new Map(),ids=c?.idsAsOf?.()??null;
+  const room=s.world?.room?.num,roomObject=c?.room?.id,objects=c?.room?.objects;
+  const readable=!!s.live&&c.combatReady===true&&objects instanceof Map&&c.selfId!=null&&objects.has(c.selfId)&&
+    ids?.saving!==true&&room!=null&&roomObject!=null&&!pending(store.read('request',s.name));
+  const requests=readable?store.list('request').filter(r=>r.agent!==s.name&&['offline','returning'].includes(r.state)&&
+    r.room===room&&r.room_object===roomObject&&(ids?.last_save_at??null)===(r.last_save_at??null)):[];
+  const live=new Set();let wrote=0;
+  for(const r of requests)for(const t of r.targets??[]){
+    const key=r.id+':'+t.id;live.add(key);
+    const present=objects.has(t.id),prior=seen.get(key);
+    if(present){
+      seen.delete(key);
+      if(r.receipts?.[t.id]?.kind==='gone')wrote+=store.lock(room,()=>{const cur=store.read('request',r.agent);
+        if(cur?.id!==r.id||cur.state!=='offline'||cur.receipts?.[t.id]?.kind!=='gone')return 0;
+        delete cur.receipts[t.id];store.write('request',r.agent,cur);return 1;})?1:0;
+      continue;
+    }
+    const continued=!!prior&&now>=prior.last&&now-prior.last<=GONE_GAP_MS;
+    const since=continued?prior.since:now,n=continued?prior.n+1:1;
+    seen.set(key,{since,last:now,n});
+    const had=r.receipts?.[t.id];
+    if(n<2||now-since<GONE_MS||had&&now-(had.kind==='gone'?had.at:had.hit_at)<(had.kind==='gone'?GONE_REFRESH_MS:30000))continue;
+    wrote+=store.lock(room,()=>{const cur=store.read('request',r.agent);
+      // Only an 'offline' record: 'returning' is requester-owned (see cooperativeAfterLogin).
+      if(cur?.id!==r.id||cur.state!=='offline'||cur.room!==room||cur.room_object!==roomObject)return 0;
+      const old=cur.receipts?.[t.id];if(old&&old.kind!=='gone'&&now-old.hit_at<30000)return 0;
+      cur.receipts={...(cur.receipts??{}),[t.id]:{kind:'gone',request_id:cur.id,target_id:t.id,name:t.name,
+        helper:s.name,helper_body:c.selfId,seen_absent_since:since,observations:n,at:now}};
+      store.write('request',cur.agent,cur);return 1;})?1:0;
+  }
+  // An unreadable observation is never absence: it forgets every clock it could not continue.
+  for(const key of [...seen.keys()])if(!live.has(key))seen.delete(key);
+  return wrote;
 }
 export async function configureCooperativeLogoff(pilot,phase) {
   const s=pilot.s;if(typeof s._askStrategies!=='function')return null;
@@ -105,7 +165,10 @@ export function requestCooperativeLogoff(pilot,offered,{now=Date.now()}={}) {
     return store.write('request',s.name,{id:randomUUID(),agent:s.name,character:c.me?.name??s.credentials.character,state:'preparing',
       created_at:now,room:s.world.room.num,room_object:c.room.id,body:c.selfId,position:position(c.self),
       last_save_at:c.idsAsOf?.()?.last_save_at,spot_rule:pilot.policy?.spotRule??'wall',los:pilot.policy?.los??0,
-      targets,helpers:helpers.map(p=>p.agent),receipts:{},strategy:offered.strategy});
+      targets,helpers:helpers.map(p=>p.agent),receipts:{},strategy:offered.strategy,
+      // Carried on the request because the gate also runs on keeper restart and broker rejoin,
+      // where the strategy that granted it is not asked again.
+      max_offline_ms:Number.isFinite(offered.config.max_offline_ms)?offered.config.max_offline_ms:null});
   });
 }
 export function markCooperativeOffline(session) {
@@ -124,7 +187,10 @@ export function abortPreparingCooperativeLogoff(session,id,reason) {
   }
   return false;
 }
-// No deadline can quietly change "not distracted" into "safe to log in".
+// No UNASKED deadline can quietly change "not distracted" into "safe to log in". Each target
+// is satisfied by a fresh confirmed hit OR by fresh evidence that it is gone (see
+// observeCooperativeTargets) -- an observation from the room, not a timer. The one timer is
+// `max_offline_ms`, which the private strategy must ask for; without it there is none.
 // This gate also runs on keeper restart and broker rejoin, not just the initial call.
 export async function cooperativeBeforeLogin(session,credentials,{wait=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now}={}) {
   const store=cooperativeStore(session,credentials);if(!store)return;
@@ -133,21 +199,33 @@ export async function cooperativeBeforeLogin(session,credentials,{wait=ms=>new P
     if(session.cooperativeLoginAllowed?.()===false)throw Error('cooperative login cancelled by keeper ownership');
     if(r.state==='preparing')throw Error('cooperative logoff has not confirmed socket departure');
     const receipts=Object.values(r.receipts??{});
-    const valid=r.targets.every(t=>{
-      const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper);
-      return hit?.request_id===r.id&&hit.hit_at>=r.offline_at&&hit.target_id===t.id&&hit.name===t.name&&
-        now()-hit.hit_at<30000&&fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper));
-    });
+    const satisfied=t=>{
+      const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper),at=hit?.kind==='gone'?hit.at:hit?.hit_at;
+      if(!(hit?.request_id===r.id&&hit.target_id===t.id&&hit.name===t.name&&at>=r.offline_at&&at<=now()&&now()-at<30000&&
+        fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper))))return false;
+      return hit.kind==='gone'?at-hit.seen_absent_since>=GONE_MS:true;
+    };
+    const valid=r.targets.every(satisfied);
     if(valid&&receipts.length){
       const permit=store.lock(r.room,()=>{const current=store.read('request',session.name);
         if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
         current.state='returning';store.write('request',session.name,current);return true;});
       if(permit){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now()};return;}
+    }else if(Number.isFinite(r.max_offline_ms)&&Number.isFinite(r.offline_at)&&now()-r.offline_at>=r.max_offline_ms){
+      // The opt-in deadline: the strategy asked for a bounded wait, so the body comes back
+      // undistracted and the record says so. 'aborted' is not pending, so nothing re-gates it.
+      const released=store.lock(r.room,()=>{const current=store.read('request',session.name);
+        if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
+        Object.assign(current,{state:'aborted',reason:'deadline',released:'deadline',released_at:now()});
+        store.write('request',session.name,current);return true;});
+      if(released){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now(),released:'deadline'};return;}
     }else if(r.state==='returning'){
       store.lock(r.room,()=>{const current=store.read('request',session.name);if(current?.id===r.id&&current.state==='returning'){current.state='offline';store.write('request',session.name,current);}});
     }
     session.cooperativeLogoffWaiting={request_id:r.id,room:r.room,since:r.offline_at,waiting_ms:now()-r.offline_at,
-      targets:r.targets.map(t=>({id:t.id,name:t.name,hit:!!r.receipts?.[t.id]})),stalled:now()-r.offline_at>30000};
+      targets:r.targets.map(t=>({id:t.id,name:t.name,hit:!!r.receipts?.[t.id]&&r.receipts[t.id].kind!=='gone',
+        gone:r.receipts?.[t.id]?.kind==='gone',satisfied:satisfied(t)})),stalled:now()-r.offline_at>30000,
+      deadline_at:Number.isFinite(r.max_offline_ms)?r.offline_at+r.max_offline_ms:null};
     await wait(200);
   }
 }
@@ -177,7 +255,8 @@ export async function cooperativeAssist(pilot,{now=Date.now}={}) {
   const c=s.client,room=s.world.room.num;
   const requests=store.list('request').filter(r=>r.state==='offline'&&now()-r.offline_at>=800&&now()-(r.last_attempt_at??0)>=2000&&r.room===room&&r.room_object===c.room.id&&r.helpers.includes(s.name)).sort((a,b)=>a.created_at-b.created_at);
   for(const request of requests){
-    const target=request.targets.find(t=>!request.receipts?.[t.id]||now()-request.receipts[t.id].hit_at>=30000);
+    // A gone receipt carries `at`, not `hit_at`; reading hit_at off one would be NaN and never retry.
+    const target=request.targets.find(t=>{const x=request.receipts?.[t.id];return !x||!(now()-(x.kind==='gone'?x.at:x.hit_at)<30000);});
     if(!target)continue;
     const object=c.room.objects.get(target.id);
     if(!object||object.nameRsc!==target.name_rsc||c.rsc.get(object.nameRsc)!==target.name||!(object.flags&OF.ATTACKABLE)||(object.flags&OF.PLAYER))continue;

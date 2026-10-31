@@ -148,9 +148,13 @@ export class CooperativePart {
       ['movement','survival','recovery','combat'].some(k=>this.facultyHeld(k))||
       (decisionId?current?.id!==decisionId:current&&current.reason_code!=='cooperative_logoff'))return false;
     r.cover_attempted_at=Date.now();this.frozenUntil=null;this.freezeSample=null;
+    // A login released by the strategy's opt-in max_offline_ms is NOT a distraction: say so,
+    // and still go straight for cover rather than standing in an undistracted room.
+    const deadline=r.released==='deadline';
     const decision=chooseSurvivalDecision(s,{strategy:'nearest_refuge',
-      reason:'fleetmate landed the distraction hits; return to cover',reason_code:'cooperative_return'},
-      {because:'confirmed cooperative distraction',outcome:'arrived'});
+      reason:deadline?'cooperative wait reached its opt-in max_offline_ms undistracted; return to cover'
+        :'fleetmate resolved every captured threat (hit, or observed gone); return to cover',reason_code:'cooperative_return'},
+      {because:deadline?'cooperative wait deadline (opt-in)':'confirmed cooperative distraction',outcome:'arrived'});
     const preparedRefuge=cooperativeReturnRefuge(s);
     this.note('cooperative immediate return to cover',{request_id:r.request_id,prepared:!!preparedRefuge,
       login_ready_at:s.client.loginReadyAt??null,released_at:r.released_at});

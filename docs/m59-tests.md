@@ -2693,11 +2693,19 @@ the frozen farming hour or constitute another native one-hour trial.
 
 ## Cooperative logoff
 
-`node tools/m59-cooperative-logoff-test.mjs` exercises socketless native
+`node tools/m59-cooperative-logoff-test.mjs` (23) exercises socketless native
 `playDead`/`Session.rejoin`, durable login waits across restarts, last-helper
 admission, miss versus confirmed hit, multiple threats, stage/faculty preemption,
 paced approach ownership, post-hit cleanup, immediate return before another
 farming pass, ghost-position projection, stale-hint refusal and credited kills.
+It also covers `gone` receipts, the 2026-10-31 deadlock fix. A target absent from a
+same-room helper's own object list for `GONE_MS` releases login, even while that helper
+is fighting. One read, a gapped series, or an unreadable room (no own body, a save in
+progress, another save epoch) does not. A stale receipt does not count, and neither does
+one from a helper in another room or one waiting offline itself. A target that reappears
+invalidates its receipt, and a mixed hit plus gone set releases. The opt-in
+`max_offline_ms` is bounded, travels with the request, and releases a restarted waiter at
+its deadline and not before. Without it, nothing ever times out.
 The cooperative suite also calls the actual native attack exchange to prove its
 streamed notification precedes internal health reads and excludes chat.
 `m59-combat-approach-test.mjs` exercises the real fight hit callback, verifies

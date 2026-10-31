@@ -232,6 +232,99 @@ try{
   assert(await cooperativeAssist(f.b.pilot));await pending;assert.equal(connected,1);assert.equal(f.store().read('request','victim').state,'resumed');
   console.log('PASS actual Session.rejoin destroys the old socket, waits for distraction, and completes exactly one gated login');
  }
+ // GONE: a target killed by somebody else (or otherwise vanished) is resolved by a fresh,
+ // repeated observation from a helper in the request's room -- never by a single read.
+ const watch=(f,from,to,step=1000)=>{f.b.s._cooperativePublishedAt=0;for(let t=from;t<=to;t+=step)publishCooperativePresence(f.b.pilot,{now:t});};
+ const gate=(f,at,why='still waiting')=>cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>at,wait:async()=>{throw Error(why);}});
+ {
+  const f=fixture('gone-satisfies');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  f.b.c.room.objects.delete(40);f.b.s.combat={active:{}};
+  watch(f,T,T+14000);assert.equal(f.store().read('request','victim').receipts[40],undefined,'14s of absence is not GONE_MS');
+  watch(f,T+15000,T+15000);
+  const g=f.store().read('request','victim').receipts[40];
+  assert.equal(g.kind,'gone');assert.equal(g.helper,'helper');assert.equal(g.helper_body,2);assert.equal(g.target_id,40);
+  assert.equal(g.name,'daemon skeleton');assert.equal(g.seen_absent_since,T);assert.equal(g.at,T+15000);assert.equal(g.request_id,r.id);
+  await gate(f,T+15100);assert.equal(f.store().read('request','victim').state,'returning');
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,undefined,'a resolved wait is not a deadline release');
+  console.log('PASS a target absent from a same-room helper\'s own object list for GONE_MS (helper busy in combat) writes a gone receipt that releases login');
+ }
+ {
+  const f=fixture('gone-single-read');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  f.b.c.room.objects.delete(40);
+  watch(f,T,T);watch(f,T+16000,T+16000);
+  assert.equal(f.store().read('request','victim').receipts[40],undefined,'two reads 16s apart are not continuous absence');
+  watch(f,T+20000,T+34000,3500);
+  assert.equal(f.store().read('request','victim').receipts[40],undefined,'observations further apart than GONE_GAP_MS restart the clock');
+  const lost=fixture('gone-unreadable');await lost.setup();const lr=lost.offline(),L=lr.offline_at+1000;
+  lost.b.c.room.objects.delete(40);lost.b.c.room.objects.delete(2);watch(lost,L,L+16000);
+  lost.b.c.room.objects.set(2,{id:2,nameRsc:'Helper',flags:OF.PLAYER});lost.b.c.idsAsOf=()=>({last_save_at:7,saving:true});watch(lost,L+17000,L+33000);
+  lost.b.c.idsAsOf=()=>({last_save_at:8});watch(lost,L+34000,L+50000);
+  assert.equal(lost.store().read('request','victim').receipts[40],undefined,'an unreadable room (no own body, a save, another epoch) is never absence');
+  await assert.rejects(gate(f,T+34100),/still waiting/);
+  console.log('PASS one read, a gapped series, or a room the helper could not read never counts as gone');
+ }
+ {
+  const f=fixture('gone-stale');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  f.b.c.room.objects.delete(40);watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
+  watch(f,T+46000,T+46000);
+  assert.equal(f.store().read('request','victim').receipts[40].at,T+15000,'a gap restarts the clock rather than refreshing');
+  await assert.rejects(gate(f,T+46100),/still waiting/);
+  const other=fixture('gone-other-room');await other.setup();const o=other.offline(),U=o.offline_at+1000;
+  other.b.c.room.objects.delete(40);other.b.s.world.room.num=828;watch(other,U,U+16000);
+  assert.equal(other.store().read('request','victim').receipts[40],undefined,'a helper in another room cannot write one');
+  other.b.s.world.room.num=827;watch(other,U+20000,U+35000);assert.equal(other.store().read('request','victim').receipts[40].kind,'gone');
+  other.b.s.world.room.num=828;other.b.s._cooperativePublishedAt=0;publishCooperativePresence(other.b.pilot,{now:U+35500});
+  await assert.rejects(gate(other,U+35600),/still waiting/,'nor satisfy one once it stands elsewhere');
+  other.b.s.world.room.num=827;other.b.s._cooperativePublishedAt=0;publishCooperativePresence(other.b.pilot,{now:U+36000});
+  const own=other.store();own.write('request','helper',{id:'helper-own',agent:'helper',state:'offline',room:827});
+  await assert.rejects(gate(other,U+36100),/still waiting/,'a helper with its own pending request cannot vouch');
+  own.write('request','helper',{id:'helper-own',agent:'helper',state:'resumed',room:827});
+  await gate(other,U+36100);assert.equal(other.store().read('request','victim').state,'returning');
+  console.log('PASS a stale gone receipt, or one from a helper elsewhere or itself waiting offline, does not satisfy the gate');
+ }
+ {
+  const f=fixture('gone-reappears');await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  f.b.c.room.objects.delete(40);watch(f,T,T+15000);
+  assert.equal(f.store().read('request','victim').receipts[40].kind,'gone');
+  f.b.c.room.objects.set(40,{id:40,nameRsc:'daemon skeleton',flags:OF.ATTACKABLE,row:10,col:10});watch(f,T+15500,T+15500);
+  assert.equal(f.store().read('request','victim').receipts[40],undefined,'the same id seen again invalidates its gone receipt');
+  await assert.rejects(gate(f,T+15600),/still waiting/);
+  console.log('PASS a target seen again deletes its gone receipt and the victim keeps waiting');
+ }
+ {
+  const f=fixture('gone-mixed');
+  for(const actor of [f.a,f.b])actor.c.room.objects.set(41,{id:41,nameRsc:'narthyl worm',flags:OF.ATTACKABLE,row:10,col:11});
+  await f.setup();const r=f.offline(),T=r.offline_at+1000;
+  f.b.c.room.objects.delete(41);watch(f,T,T+15000);
+  await assert.rejects(gate(f,T+15100),/still waiting/,'one gone target does not release a victim with another live attacker');
+  let hit;f.b.pilot.fightNow=async o=>(hit=o.exactTargetId,{target_id:o.exactTargetId,landed_hits:1});
+  assert(await cooperativeAssist(f.b.pilot,{now:()=>T+15000}));assert.equal(hit,40,'the helper does not chase the gone target');
+  const receipts=f.store().read('request','victim').receipts;assert.equal(receipts[41].kind,'gone');assert.equal(receipts[40].landed_hits,1);
+  await gate(f,T+15100);assert.equal(f.store().read('request','victim').state,'returning');
+  console.log('PASS one hit target plus one gone target together satisfy the gate');
+ }
+ {
+  const norm=(await import('./m59-cooperative-logoff.mjs')).normalizeCooperativeLogoff;
+  assert.equal(norm({enabled:true}).max_offline_ms,null);assert.equal(norm({enabled:true,max_offline_ms:null}).max_offline_ms,null);
+  assert.equal(norm({enabled:true,max_offline_ms:5000}).max_offline_ms,60000);assert.equal(norm({enabled:true,max_offline_ms:1e9}).max_offline_ms,1800000);
+  assert.equal(norm({enabled:true,max_offline_ms:0}).max_offline_ms,null);assert.equal(norm({enabled:true,max_offline_ms:Infinity}).max_offline_ms,null);
+  const f=fixture('deadline');f.a.s._askStrategies=async()=>({strategy:'fixture-private',answer:{...policy,max_offline_ms:120000}});
+  const made=await f.setup();assert.equal(made.max_offline_ms,120000,'the deadline travels with the request');
+  const r=f.offline();
+  await assert.rejects(gate(f,r.offline_at+119999),/still waiting/,'not before the deadline');
+  assert.equal(f.store().read('request','victim').state,'offline');assert.equal(f.a.s.cooperativeLogoffWaiting.deadline_at,r.offline_at+120000);
+  const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory};
+  await cooperativeBeforeLogin(restarted,f.a.s.credentials,{now:()=>r.offline_at+120000,wait:async()=>assert.fail('deadline reached on a restarted keeper')});
+  const done=f.store().read('request','victim');
+  assert.equal(done.state,'aborted');assert.equal(done.reason,'deadline');assert.equal(done.released,'deadline');
+  assert.equal(restarted.cooperativeLogoffReturn.released,'deadline');
+  await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('an aborted request no longer gates')});
+  const none=fixture('no-deadline');const nr=await none.setup();assert.equal(nr.max_offline_ms,null);const n=none.offline();
+  await assert.rejects(gate(none,n.offline_at+10*3600000),/still waiting/,'without the option nothing ever times out');
+  assert.equal(none.store().read('request','victim').state,'offline');
+  console.log('PASS opt-in max_offline_ms releases a restarted waiter at its deadline and not before; without it nothing times out');
+ }
  assert(PASS_STAGES.indexOf('passCooperative')>PASS_STAGES.indexOf('passFleeAndRest'));
  assert(PASS_STAGES.indexOf('passCooperative')<PASS_STAGES.indexOf('passFarm'));
  console.log('PASS cooperative work runs after survival and before discretionary farming');
