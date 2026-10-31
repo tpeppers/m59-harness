@@ -16,12 +16,15 @@
 //   * on the island, a sale plan sells the island reagents' surplus and routes it to Zala (2002), the store last;
 //   * a caster keeps a few casts' worth of what it casts with; the character's own protect list, loadout keep list and
 //     carry rows always win;
+//   * a spell in the PvP reagent reserve or the character's TRAINING stock keeps floor + stock instead (operator
+//     2026-10-30: PvP first, training second, selling last -- Robin sold 10 kriipa claws at Wulfgang a minute before 28
+//     more were handed to it for deflect practice);
 //   * on the mainland nothing changed: same terms, same plan;
 //   * a pack 90% full by BULK with light weight opens a sell trip, so does 90% by WEIGHT with low bulk; 89% does not
 //     (operator 2026-10-27: "go at hitting 90% full of either bulk/weight"), and on the island that trip is no longer
 //     dropped as "full of kept stock";
 //   * the sale at Zala's counter really offers and sells them, and the smithy is never offered a reagent.
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,6 +33,7 @@ process.env.M59_LEDGER_DIR ??= join(scratch, 'ledger');
 process.env.M59_GUILD_PLAN = join(scratch, 'no-guild-plan.json');      // the rig stubs the guild's wants itself
 process.env.M59_STORAGE_DIR = join(scratch, 'storage');
 process.env.M59_INVENTORY_INTENT_DIR = join(scratch, 'intent');
+process.env.M59_REAGENT_RESERVE_FILE = join(scratch, 'reagent-reserve.json');
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -84,7 +88,7 @@ const PACK = [
   ['yrxl sap', 5], ['uncut seraphym', 100], ['long sword', 0],
 ];
 function rig({ room = 2125, pack = PACK, policy = {}, loadout = LOADOUT, spells = [], guild = ['dragonfly eye', 'uncut seraphym', 'vial of solagh'],
-               might = 55, merchants = [] } = {}) {
+               might = 55, merchants = [], who = null } = {}) {
   const notes = [], sold = [];
   const inventory = pack.map(([name, amount], i) => ({ id: 100 + i, nameRsc: name, amount }));
   const objects = new Map(merchants.map((name, i) => [990001 + i, { id: 990001 + i, nameRsc: name, flags: 0xffffffff }]));
@@ -95,7 +99,7 @@ function rig({ room = 2125, pack = PACK, policy = {}, loadout = LOADOUT, spells 
     requestInventory: () => {}, waitFor: async () => ({ events: [] }),
   };
   const s = {
-    name: 'islander', client: c, need: () => c, world: { room: { num: room } },
+    name: 'islander', client: c, need: () => c, world: { room: { num: room } }, reserveWho: who,
     pacer: { submit: async (_k, f) => f() },
     // A MOB_BUYER counter-offers 60% of value; the accept moves the goods. Records who bought what.
     sellOne: async (merchant, offer, accept) => {
@@ -163,6 +167,27 @@ console.log('a caster keeps a few casts; the character\'s own orders always win'
   ok('the loadout\'s keep list (kriipa claw): kept', selling(plan, 'kriipa claw') === 0);
   ok('the loadout\'s own carry row for rainbow fern (max 50) wins over the island ceiling: 150 sold, 50 kept',
      selling(plan, 'rainbow fern') === 150, JSON.stringify(row(plan, 'rainbow fern')));
+}
+
+console.log('PvP first, training second, selling last: the reserve and the training stock outlast a sale');
+{
+  const who = { fleet: 'prod', agent: 'islander', character: 'Islander' };
+  ok('no reserve file: deflect keeps the usual ten casts (10 kriipa claws), 50 of 60 sold',
+     selling(planOf(rig({ spells: ['deflect'], who }).k), 'kriipa claw') === 50);
+  writeFileSync(process.env.M59_REAGENT_RESERVE_FILE, JSON.stringify({ default: { spells: { deflect: 8 } },
+    training: { islander: { deflect: 40 } } }));
+  await new Promise(r => setTimeout(r, 2100));                        // readReserve re-checks at most every 2 s
+  const { k } = rig({ spells: ['deflect'], who });
+  ok('PvP floor 8 + training 40 casts of deflect: 48 kriipa claws kept, 12 sold',
+     selling(planOf(k), 'kriipa claw') === 12, JSON.stringify(row(planOf(k), 'kriipa claw')));
+  ok('a fleet-mate without the training stock keeps max(10, 8) = 10',
+     selling(planOf(rig({ spells: ['deflect'], who: { ...who, character: 'Other' } }).k), 'kriipa claw') === 50);
+  ok('a character the keeper has not named (no reserveWho) keeps the usual ten',
+     selling(planOf(rig({ spells: ['deflect'] }).k), 'kriipa claw') === 50);
+  ok('a training stock for a spell the character does not know keeps nothing extra',
+     selling(planOf(rig({ spells: [], who }).k), 'kriipa claw') === 60);
+  writeFileSync(process.env.M59_REAGENT_RESERVE_FILE, '{}');
+  await new Promise(r => setTimeout(r, 2100));
 }
 
 console.log('on the mainland nothing changed');

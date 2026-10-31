@@ -73,6 +73,22 @@ try {
     assert.equal(R.resolveReserve({ default: { exempt: ['discordance'] } }, {}), null, 'an exempt list alone is no reserve');
   });
 
+  test('training: a stock above the PvP floor, kept from a sale and never by the cast veto', () => {
+    const book = { default: { spells: { deflect: 8, bless: 3 } }, characters: { Zoot: null },
+      training: { robin: { Deflect: 40, haste: 0 } } };
+    assert.deepEqual(R.trainingFor(book, 'Robin'), { deflect: 40 }, 'case-insensitive, a zero stock is none');
+    assert.deepEqual(R.trainingFor(book, 'Kermit'), {});
+    assert.deepEqual(R.trainingFor({}, 'Robin'), {}, 'no training key: nothing');
+    assert.deepEqual(R.keptCastsFor(book, { character: 'Robin' }), { deflect: 48, bless: 3 }, 'floor plus stock');
+    assert.deepEqual(R.keptCastsFor(book, { character: 'Kermit' }), { deflect: 8, bless: 3 });
+    assert.deepEqual(R.keptCastsFor({ ...book, training: { zoot: { haste: 5 } } }, { character: 'Zoot' }), { haste: 5 },
+      'no reserve still keeps the training stock');
+    const reserve = R.resolveReserve(book, { character: 'Robin' });
+    const pack = [{ name: 'kriipa claw', amount: 20 }, { name: 'vial of solagh', amount: 50 }];
+    assert.equal(R.reserveBreach({ spell: 'deflect', known: ['deflect'], pack, reserve }), null,
+      'practice may spend the training stock: 20 claws against a floor of 8 casts');
+  });
+
   test('client.cast: a vetoed cast never reaches the wire, and nobody named means no veto', () => {
     write({ default: { spells: { bless: 4 } } });
     const sent = [];

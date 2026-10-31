@@ -28,6 +28,13 @@
 // (character, then agent, then default); `null` there means no reserve at all. No file -- every fresh clone -- is no
 // reserve and nothing is ever refused.
 //
+// TRAINING IS THE SECOND TIER (operator, 2026-10-30): "training should be the second-to-highest priority use of reagents
+// (after PVP, PVP is always 'highest tier importance'), vaulting is below 'active use' and selling is behind vaulting."
+// The book's top-level `training` -- { "<Character>": { "<spell>": <casts> } } -- is a stock ABOVE the PvP floor. The
+// cast veto never reads it (practice may spend it; that is what it is for). What reads it is every path that would
+// otherwise SELL the reagent: keptCastsFor() is the floor plus the stock, and the island sale keeps that many casts
+// (m59-island-sale.mjs). m59-private's pvp-reserve-share fills it from fleet-mates' spare, after every PvP floor.
+//
 // A PACK NAME IS MATCHED EXACTLY, not by substring: `mushroom` is the plain mushroom, never the red, purple or edible
 // one, and a reserve of plain mushrooms must not be counted out of a stack of red ones. Plurals and "vial(s) of" fold.
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -81,6 +88,29 @@ export function resolveReserve(book, { agent = null, character = null } = {}) {
     for (const s of [].concat(l.exempt ?? [])) if (!out.exempt.includes(lc(s))) out.exempt.push(lc(s));
   }
   return Object.values(out.spells).some(Boolean) || Object.values(out.items).some(Boolean) ? out : null;
+}
+
+/** This character's training stock from the book's `training`: { spell: casts } (lower-case), {} for none. */
+export function trainingFor(book, character) {
+  const table = book?.training;
+  if (!table || typeof table !== 'object' || character == null) return {};
+  const hit = Object.keys(table).find(k => lc(k) === lc(character));
+  const out = {};
+  for (const [spell, casts] of Object.entries(hit === undefined ? {} : table[hit] ?? {})) {
+    const n = Math.max(0, Number(casts) || 0);
+    if (n) out[lc(spell)] = n;
+  }
+  return out;
+}
+
+/**
+ * Casts of each spell a sale must leave in the pack: the PvP reserve's casts plus the training stock. { spell: casts },
+ * lower-case, before any check of which spells the character knows (the caller has the spell list).
+ */
+export function keptCastsFor(book, { agent = null, character = null } = {}) {
+  const out = { ...(resolveReserve(book, { agent, character })?.spells ?? {}) };
+  for (const [spell, casts] of Object.entries(trainingFor(book, character))) out[spell] = (out[spell] ?? 0) + casts;
+  return out;
 }
 
 /** Reagent floors for a reserve and the spells this character knows: Map reagentKey -> units. */

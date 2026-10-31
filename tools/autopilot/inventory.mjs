@@ -17,6 +17,7 @@ import { spellCost } from '../m59-deskpractice.mjs';
 import { guildKeepTest, guildPlan, reagentSource } from '../m59-guildwants.mjs';
 import { islandCastReserve, islandSaleLoadout, releaseIslandHolds } from '../m59-island-sale.mjs';
 import { listLoadouts, norm } from '../m59-loadout.mjs';
+import { keptCastsFor, readReserve, reserveFile } from '../m59-reagent-reserve.mjs';
 import * as skills from '../m59-skills.mjs';
 import { stockpileKeepTest } from '../m59-stockpile.mjs';
 import { StorageCache } from '../m59-storage.mjs';
@@ -208,12 +209,16 @@ export class InventoryPart {
   // (islandCastReserve, from the spells the server says it knows), the rest "surplus above the loadout ceiling", which the
   // sale plan sells to the counter that buys it even while a mainland character's want names it -- nobody there can be
   // handed it from here. Every path that SELLS reads this; what the character carries and asks the fleet for does not.
+  // A spell in the PvP reserve or this character's training stock keeps that many casts instead, when it is more
+  // (keptCastsFor: PvP first, training second, selling last -- operator 2026-10-30).
   saleLoadout() {
     const own = this.loadout?.() ?? null;
     if (!onIsland(this.s?.world?.room?.num)) return own;
     const c = this.s?.client;
     const spells = (c?.spells ?? []).map(sp => c?.rsc?.get?.(sp.nameRsc) ?? sp?.name).filter(Boolean);
-    return islandSaleLoadout(own, islandCastReserve(spells, { cost: spellCost }));
+    const who = this.s?.reserveWho ?? null;
+    const keep = who ? keptCastsFor(readReserve(reserveFile(who.fleet)), who) : {};
+    return islandSaleLoadout(own, islandCastReserve(spells, { cost: spellCost, keep }));
   }
 
   guildWantedNames() {

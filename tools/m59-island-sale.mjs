@@ -61,8 +61,13 @@ export function islandReagent(name) {
  * How much of each island reagent this character keeps for its own casting: CASTS_KEPT casts of the dearest known spell
  * that uses it. `spells` are the names the server says the character knows; `cost(name)` answers
  * `{ reagents: [[item, n], ...] }` or null (m59-deskpractice.mjs spellCost). An unknown spell list keeps nothing.
+ *
+ * `keep` is { spell: casts } that must outlast a sale -- the PvP reserve plus the training stock
+ * (m59-reagent-reserve.mjs keptCastsFor). A spell named there keeps the larger of the two. Operator, 2026-10-30:
+ * "training should be the second-to-highest priority use of reagents (after PVP) ... selling is behind vaulting": Robin's
+ * sell trip at Wulfgang sold 10 kriipa claws a minute before 28 more were handed to it for deflect practice.
  */
-export function islandCastReserve(spells = [], { cost, casts = CASTS_KEPT } = {}) {
+export function islandCastReserve(spells = [], { cost, casts = CASTS_KEPT, keep = {} } = {}) {
   const out = {};
   if (typeof cost !== 'function') return out;
   for (const spell of spells ?? []) {
@@ -71,7 +76,8 @@ export function islandCastReserve(spells = [], { cost, casts = CASTS_KEPT } = {}
     for (const [item, n] of c?.reagents ?? []) {
       const r = islandReagent(item);
       if (!r) continue;
-      out[r] = Math.max(out[r] ?? 0, Math.max(1, Number(n) || 1) * casts);
+      const want = Math.max(casts, Number(keep?.[String(spell ?? '').trim().toLowerCase()]) || 0);
+      out[r] = Math.max(out[r] ?? 0, Math.max(1, Number(n) || 1) * want);
     }
   }
   return out;
