@@ -9,6 +9,10 @@
 //   node tools/m59-service.mjs restart-keepers [--fleet prod]   # KEEPERS only: handed off, nobody leaves
 //   node tools/m59-service.mjs status  [--fleet prod]
 //   node tools/m59-service.mjs logs    [--fleet prod] [--lines 80] [--follow]
+//   node tools/m59-service.mjs --help                           # usage; does nothing else
+//
+// Any flag a subcommand does not read is REFUSED before anything acts — see
+// m59-service-args.mjs for the list and the two incidents behind it.
 //
 // A broker started by hand from a terminal — or by an agent from a shell — belongs to
 // that terminal. This one was found running with its whole ancestry dead:
@@ -43,10 +47,20 @@ import * as uptime from './m59-uptime.mjs';
 import * as webui from './m59-webui.mjs';
 import { movementMapFile } from './m59-map-path.mjs';
 import { loadMap, movementMapReadiness } from './m59-map.mjs';
+import { checkServiceArgs, serviceUsage } from './m59-service-args.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 const argv = process.argv.slice(2);
+
+// AN UNKNOWN FLAG IS REFUSED HERE, BEFORE A FLEET IS EVEN RESOLVED. `arg()` and `has()` below
+// answer "not given" for anything they were not asked about, so a wrong flag used to vanish:
+// 2026-10-31, `restart-keepers --fleet prod --only t17` (the filter is `--agents`) handed off
+// all 24 prod keepers; 2026-10-21, `--help` ran a real restart. Every subcommand's flags are
+// listed in m59-service-args.mjs, and m59-service-args-test.mjs pins them.
+const ARGS = checkServiceArgs(argv);
+if (ARGS.help) { console.log(serviceUsage()); process.exit(0); }
+if (!ARGS.ok) { for (const line of ARGS.errors) console.error(line); process.exit(2); }
 
 const arg = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; };
 const has = (n) => argv.includes(n);
@@ -928,11 +942,10 @@ function cmdGoapLogs() {
 
 // ---------------------------------------------------------------- main
 
-const sub = argv.find(a => !a.startsWith('-'));
-const goapMode = sub === 'goap';
-const cmd = goapMode
-  ? (argv.find(a => a !== 'goap' && !a.startsWith('-')) || 'status')
-  : (sub || 'status');
+// The command as checkServiceArgs parsed it, values skipped: one parse, so the check and the
+// dispatch can never disagree about which word is the command.
+const goapMode = ARGS.goap;
+const cmd = ARGS.cmd;
 let code = 0;
 if (goapMode) {
   switch (cmd) {

@@ -2731,3 +2731,18 @@ list confirms is never condemned), and `freeRoomFor`'s `precious` guard: a held-
 dropped only when a fresh look at its own id says it is broken, un-condemned when it reads
 sound, kept when no reply (or a reply under another id) came. The last case checks that
 `makeWeapon` passes the keeper's `heldBackIds` and protected names.
+
+## m59-service-args-test.mjs (108) — the service refuses a flag it does not read
+
+2026-10-31 19:52Z: `m59-service.mjs restart-keepers --fleet prod --only t17` was meant for one
+keeper. `--only` is not a flag (the filter is `--agents`), `arg('--agents')` answered null, and all
+24 production keepers were handed off. On 2026-10-21 `--help` did the same thing to a restart. The
+suite pins `checkServiceArgs` in `m59-service-args.mjs`, a pure function: every subcommand's
+accepted flags (each one alone and all together, plus the command lines other tools already send);
+`--only` refused with "did you mean --agents?"; `--help` / `-h` usage-only wherever it appears; and
+the other silent drops refused too: a flag of another subcommand, `--fleet=prod` (never read, so it
+meant the default fleet), a flag given twice, a value-flag with no value, `--agents ,` (an empty
+list means every keeper), a bad port, mode or count, and a stray word such as `restart-keepers t17`.
+Read as source, `m59-service.mjs` runs the check before it resolves a fleet or awaits anything,
+dispatches on the checked command rather than a second parse, and reads no flag the table does
+not accept, and the table accepts no flag the service does not read.
