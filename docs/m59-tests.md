@@ -255,6 +255,30 @@ through a nested shelter order.
   `fleetscript:<name>#<run>` origin, and a keeper posture that will fight the walk is warned about
   once.
 
+- `m59-travel-threw-test.mjs` (7): **a journey that threw still leaves a reason.** `Autopilot.travel`
+  writes its ledger row and movement incident in a `finally`; when `Session.travel` threw, both said
+  `reason: null` (228 `not_arrived` incidents on prod, 455 with repeats, 2026-10-27..31). `travelThrewOutcome` turns the
+  error into `travel_threw: <name>: <message> @ <fn file:line>` (first in-repository frame, path below
+  `tools/`), the row carries `threw_at`, the incident the same reason, and the exception still reaches
+  the caller unchanged. A journey that returns is untouched.
+
+- `m59-edge-guard-travel-test.mjs` (5): **a journey does not walk to an edge the step guard refuses.**
+  Real map, real `Session.travel`/`leaveViaAny`/`leaveVia`, fake client with prod's `beforeMove` guard.
+  From the incidents' own squares: 2501 -> 2508 confined to 2501 (t16 caster_exit) sends no move at all,
+  and 2142 -> 2143 confined to 2142/2143/2144/2101 (Sweetums survival_exit), once the south edge is
+  exhausted, no longer re-plans through 2133 and walks to r29c1 to throw `edge_out_of_confinement`; both
+  return `route_progressing_exits_exhausted` naming the refused hop. Unconfined, 2501 -> 2508 still walks
+  to the north edge and sends the crossing; `edgeIntoRefused` is the guard's own rule.
+
+- `m59-survival-edge-test.mjs` (9): **a survival exit may leave the confinement (probationary, since
+  2026-10-30, revisit 2026-11-30).** It pins the pure verdict: out into an ordinary room yes, but never into
+  `bannedDestinations` or a room where one of ours died to a player within the PvP hold. It also pins that
+  only `survival_exit`/`caster_exit` count, and `recentPvpDeathRooms` over a scratch hold directory
+  (fleet-mate kills, `pvp:false` and torn files skipped). On the real 2501 with the REAL `Session` guard,
+  the pass walks a body confined to 2501 out over the north edge to 2508, and without it nothing crosses.
+  A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
+  two minutes ends it. See docs/m59-boundary.md.
+
 - `m59-gang-up-test.mjs` (33): `gangUp`, a creature fought only two-on-one or more. Through the keeper's own
   chooser (findCreature, `gangUpFilter`, the ranking, `hunt_priority`) over a fake room: a lone keeper beside a
   Guardian of Zjiria takes a troll; one fleet-mate within the radius OF THE GUARDIAN makes it quarry; a stranger, a

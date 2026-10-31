@@ -250,6 +250,34 @@ export function knownKillers(env = process.env, { now = Date.now(), ttlMs = 10_0
   return set;
 }
 
+/**
+ * ROOMS WHERE ONE OF OURS DIED TO A PLAYER RECENTLY: `room_num` of every hold record whose death is within
+ * `withinMs`. Fleet-mate kills and records marked `pvp: false` are not PvP. Asked by the survival edge pass
+ * (m59-survival-edge.mjs), which will not walk a hurt body out of its confinement into such a room. Cached
+ * like knownKillers; an unreadable directory is an empty set.
+ */
+let pvpRoomsCache = { dir: null, at: 0, records: [] };
+export function recentPvpDeathRooms({ withinMs = PVP_RETURN_DELAY_MS_DEFAULT, env = process.env, now = Date.now(),
+                                      ttlMs = 10_000 } = {}) {
+  if (offLimits(env)) return new Set();
+  const dir = pvpHoldDir(env);
+  if (pvpRoomsCache.dir !== dir || now - pvpRoomsCache.at >= ttlMs) {
+    const records = [];
+    let files = [];
+    try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { files = []; }
+    for (const f of files) {
+      try {
+        const r = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+        if (r?.pvp === false || r?.basis === 'fleetmate') continue;
+        if (Number.isFinite(Number(r?.room_num)) && Number.isFinite(Number(r?.died_at)))
+          records.push({ room: Number(r.room_num), at: Number(r.died_at) });
+      } catch { /* one bad file is not every file */ }
+    }
+    pvpRoomsCache = { dir, at: now, records };
+  }
+  return new Set(pvpRoomsCache.records.filter(r => now - r.at <= withinMs).map(r => r.room));
+}
+
 export function writePvpDeath(agent, record, env = process.env) {
   if (offLimits(env)) return null;
   const file = pvpHoldFile(agent, env);

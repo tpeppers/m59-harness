@@ -2056,14 +2056,45 @@ class Session {
   // under all of them, on the step. No confinement, no guard: an unconfined keeper goes where its journey says.
   // And only a step that LEAVES the confinement: a body already outside it is on its way home (a farmer sent to an inn
   // crosses rooms it is not confined to), and travel's confinementAvoid keeps that walk on the confined road.
-  edgeCrossingBlock(target) {
+  //
+  // `travel` asks the same question BEFORE it walks (`edgeIntoRefused`), because the guard throws from the step and the
+  // router treats a confinement only as a preference (findPath drops `avoid` on its last pass). Prod 2026-10-27..31: a
+  // journey whose confined hop was exhausted re-planned through a room outside the confinement, walked a hurt body across
+  // the room to that edge, and threw here -- 2142 -> 2133, 2501 -> 2508, 599 -> 589, every ~30 s on resume.
+  edgeConfinement() {
     const confine = autopilotIfAny(this.name)?.policy?.confineRooms;
-    if (!Array.isArray(confine) || !confine.length || !target) return null;
+    return Array.isArray(confine) && confine.length ? confine.map(Number) : null;
+  }
+  // A SURVIVAL EXIT'S PASS THROUGH THE GUARD (PROBATIONARY since 2026-10-30, revisit 2026-11-30; m59-survival-edge.mjs).
+  // Autopilot.travel decides whether a survival or caster exit may leave the confinement (not into a banned room, not
+  // into one where we died to a player within the PvP hold) and hands travel `edgePass: {to}`. It opens exactly one
+  // crossing: from the room the journey set out from, into that room, while the journey's movement generation is live.
+  // A cancel, a new order, arrival, or two minutes ends it -- nothing else the body does is let out.
+  edgePassAllows(to) {
+    const p = this.edgePass;
+    if (!p || Number(to) !== p.to) return false;
+    if (Date.now() > p.until || this.movementGeneration !== p.generation) { this.edgePass = null; return false; }
+    return Number(this.world?.room?.num) === p.from;
+  }
+  // Would the guard below refuse a step over an EDGE from the room we stand in into room `to`? Go exits are not guarded.
+  edgeIntoRefused(to, confine = this.edgeConfinement()) {
+    const room = this.world?.room;
+    if (!confine || !room || to == null || !confine.includes(Number(room.num))) return false;
+    return !confine.includes(Number(to)) && !this.edgePassAllows(to);
+  }
+  edgeCrossingBlock(target) {
+    const confine = this.edgeConfinement();
+    if (!confine || !target) return null;
     const room = this.world?.room;   // the map's own record for the room we stand in (World, memoised)
-    if (!room || !confine.map(Number).includes(Number(room.num))) return null;
+    if (!room || !confine.includes(Number(room.num))) return null;
     const row = Math.floor(target.y / KOD_FINENESS), col = Math.floor(target.x / KOD_FINENESS);
     const to = edgeCrossedAt(room, row, col)?.edge?.to;
-    if (to == null || confine.map(Number).includes(Number(to))) return null;
+    if (to == null || confine.includes(Number(to))) return null;
+    if (this.edgePassAllows(to)) {
+      console.log(`[edge] ${this.name} survival exit crosses from ${room.num} r${row}c${col} out of the confinement ` +
+                  `into ${to} (probationary pass: ${this.edgePass?.why ?? 'survival exit'})`);
+      return null;
+    }
     return { blocked: true, reason: 'edge_out_of_confinement', from: room.num, to, square: { row, col } };
   }
 
@@ -5681,7 +5712,14 @@ class Session {
     // bake models such a room with its doors shut, so walking at it only exhausts hops and
     // stumbles. Omit it and travel behaves exactly as it always did.
     handOffAt = null,
+    // A SURVIVAL EXIT'S PASS THROUGH THE CONFINEMENT GUARD: `{ to, why }`, decided by Autopilot.travel
+    // (m59-survival-edge.mjs, probationary). See `edgePassAllows`. Omit it and nothing changes.
+    edgePass = null,
   } = {}) {
+    this.edgePass = edgePass && Number.isFinite(Number(edgePass.to))
+      ? { to: Number(edgePass.to), from: Number(this.world?.room?.num), generation: movementGeneration,
+          until: Date.now() + 120_000, why: edgePass.why ?? null }
+      : null;
     if (allowRescue) {
       const {tryRescueTravel} = await import('./m59-rescue-travel.mjs');
       const shortcut = await tryRescueTravel(this, toRoomNum, {origin, avoid, allowHazard, hazardWhy,
@@ -6185,6 +6223,32 @@ class Session {
       // journeys. Take them all and let orderExits choose — it already prefers
       // reachable ones and then the nearest.
       let candidates = this.world.exits().filter(e => e.to === nextHop.to);
+      // AN EDGE THE STEP GUARD WILL REFUSE IS NOT A CANDIDATE. `edgeCrossingBlock` throws from the
+      // step that crosses an edge out of the confinement, and the router only PREFERS the
+      // confinement (findPath drops `avoid` on its last pass). So a journey whose confined hop was
+      // exhausted re-planned through a room outside it, walked a hurt body across the room to that
+      // edge, and threw at the boundary: 2142 -> 2133 (end r29c1), 2501 -> 2508 (r1c13),
+      // 599 -> 589, prod 2026-10-27..31, re-issued every ~30 s by resume_journey. Ask the guard
+      // here instead, and record the hop exhausted, which `world.route` keeps out of the first
+      // expansion on every pass: the re-plan finds a confined way or ends with a reason, and
+      // nothing walks. New information, so no stumble is charged. `typeof`: travel is lifted by
+      // text into fakes without it.
+      if (typeof this.edgeIntoRefused === 'function' && this.edgeIntoRefused(nextHop.to)) {
+        const guarded = candidates.filter(e => e.kind === 'edge');
+        candidates = candidates.filter(e => e.kind !== 'edge');
+        if (guarded.length && !candidates.length) {
+          exhaustedHops.set(nextHopKey, {
+            from: here.num, to: Number(nextHop.to), to_name: nextHop.to_name,
+            reason: 'edge_out_of_confinement', outcome: 'edge_out_of_confinement', attempts: 0,
+            refusals: [], skipped: guarded.map(e => ({ stand_on: e.stand_on ?? null, why: 'edge_out_of_confinement' })),
+          });
+          log.push({ unreachable_exit: nextHop.to, blocked_hop: nextHopKey, name: nextHop.to_name,
+                     reason: 'edge_out_of_confinement',
+                     note: 'every way to that room is an edge out of the confinement, which the step guard ' +
+                           'refuses — replanning without it rather than walking to it' });
+          continue;
+        }
+      }
       // ...UNLESS THE DESTINATION HAS SIDES. See doorsLandingNear: when several doors lead
       // to the same room and that room is split, they are not alternatives, and picking by
       // distance arrives on the wrong island with the prey visible and unreachable. Only

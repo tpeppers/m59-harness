@@ -36,8 +36,12 @@ ok(edgeCrossedAt(null, 0, 0) === null && edgeCrossedAt(r2125, NaN, 3) === null, 
 const src = fs.readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 ok(/c\.beforeMove = target => \{[\s\S]{0,600}this\.edgeCrossingBlock\(target\)/.test(src), 'beforeMove consults edgeCrossingBlock');
 ok(/code: 'EDGE_OUT_OF_CONFINEMENT'/.test(src), 'the refusal carries EDGE_OUT_OF_CONFINEMENT');
-ok(/edgeCrossingBlock\(target\) \{[\s\S]{0,300}confineRooms[\s\S]{0,120}!confine\.length/.test(src), 'no confinement, no guard');
-ok(/!room \|\| !confine\.map\(Number\)\.includes\(Number\(room\.num\)\)/.test(src), 'only a step that LEAVES the confinement: a body outside it walks home');
+// The confinement is read once, by `edgeConfinement`, for the step guard and for travel's pre-walk check
+// (`edgeIntoRefused`); m59-edge-guard-travel-test drives both against the real map.
+ok(/edgeConfinement\(\) \{[\s\S]{0,120}confineRooms[\s\S]{0,120}confine\.length \? [\s\S]{0,40}: null/.test(src)
+   && /edgeCrossingBlock\(target\) \{\s*const confine = this\.edgeConfinement\(\);\s*if \(!confine \|\| !target\) return null;/.test(src),
+   'no confinement, no guard');
+ok(/!room \|\| !confine\.includes\(Number\(room\.num\)\)\) return null/.test(src), 'only a step that LEAVES the confinement: a body outside it walks home');
 
 console.log(`m59-edge-confinement-test: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

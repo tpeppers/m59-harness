@@ -72,7 +72,11 @@ const hostile = names => names.map((n, i) => ({ id: 100 + i, nameRsc: n, flags: 
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the survival pass asks it before the about-to-die rungs', /if \(await this\.leaveForCasters\(\{ hostiles, v \}\)/.test(src)
      && src.indexOf('leaveForCasters({ hostiles, v })') < src.indexOf('const worstHit = Math.min(30'));
-  ok('and the confinement gate lets the caster exit through', /&& !approachRoom && !casterExitLeg\) \{/.test(src));
+  // Since 2026-10-30 (probationary, m59-survival-edge.mjs) the caster leg passes the gate as a SURVIVAL EXIT: out of the
+  // confinement unless the room is banned or one of ours died to a player there within the PvP hold.
+  ok('and the confinement gate lets the caster exit through, as a survival exit',
+     /isSurvivalExit\(\{ origin: opts\?\.origin, casterExit: opts\?\.casterExit \}\)/.test(src)
+     && /&& !approachRoom && !survivalExitLeg\) \{/.test(src));
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
