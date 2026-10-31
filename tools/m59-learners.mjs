@@ -4,7 +4,7 @@
 //   node tools/m59-learners.mjs archery                               # spell or skill, from the catalogue
 //   node tools/m59-learners.mjs --skill archery --agents t18,t20      # just these
 //   node tools/m59-learners.mjs --spell "enchant weapon" --room-policy 2,599 --exclude hk1,hk2,hk3
-//   node tools/m59-learners.mjs archery --window 48 --margin 16       # rate over 48h, ETA to +16
+//   node tools/m59-learners.mjs archery --window 48 --margin 5        # rate over 48h, ETA to +5
 //   ... --buy --teacher "Priestess Qerti'nya" --teacher-room 801 --price 1000 --home 2
 //
 // Was m59-spell-learners.mjs, which hardcoded `kind: 'spells'` and so answered "no catalogue row
@@ -28,9 +28,15 @@
 // only its last MAX_HISTORY changes, so a busy character's window is cut to its oldest row and
 // the column says so. `eta` is short/rate; `eta+M` is (short+margin)/rate.
 //
-// WHY A MARGIN. The prediction has been optimistic on real counters: Scooter refused at +4
-// (2026-10-13), Waldorf refused at +6 and sold at +16 (2026-10-22), with the formula matching
-// player.kod exactly — likeliest cause raw intellect below the status intellect. Default 16.
+// RAW INTELLECT, NOT THE STATUS NUMBER. PlayerCanLearn reads GetRawIntellect (player.kod:10839),
+// piIntellect alone; the status bar shows GetIntellect, which adds piIntellectMod. The Princess'
+// army shield writes into that mod — +3 intellect at ranks 3-6, +5 at 7-10 (prinshld.kod
+// UpdateRankPowers) — so for her soldiers the status number lowers the bar the game does not
+// lower. That was the "optimism" once covered by a 16-point margin: Waldorf (a supreme hero, +5,
+// 14 points of need) refused at 190 and sold at 200 against a predicted 184; Scooter (an average
+// soldier, +3) refused at +4. The Duke's and rebel shields add agility/stamina and might/aim and
+// leave this alone. So the bonus is taken back out, by rank from the shield-ranker's book
+// (substrate/shield-ranker-<fleet>.json) or +5 when the rank is unknown, and the margin is 0.
 //
 // --buy runs the public `learn-skill` fleetscript for each character that can learn it and does
 // not know it yet, one at a time (one driver per fleet). It does not fund anybody: a purse under
@@ -94,9 +100,19 @@ export function abilitiesAt(abilities, history, since) {
   return { ...abilities, spells: rewind('spells'), skills: rewind('skills') };
 }
 
+/** The intellect PlayerCanLearn reads: status intellect less the Princess shield's rank bonus.
+ *  `princessRank` null with the shield on assumes the highest bonus. */
+export function rawIntellect({ intellect, equipment = [], princessRank = null }) {
+  const n = Number(intellect) || 0;
+  if (!(equipment ?? []).some(e => /shield of the princess/i.test(typeof e === 'string' ? e : e?.name ?? ''))) return n;
+  const r = Number(princessRank);
+  const bonus = !Number.isFinite(r) || princessRank == null ? 5 : r <= 2 ? 0 : r <= 6 ? 3 : 5;
+  return Math.max(1, n - bonus);
+}
+
 /** How fast `have` is moving, and when `short` (and short + margin) closes. Pure. */
 export function trend({ abilities, intellect, name, kind, catalogue, constants, history = [],
-                        now = Date.now(), windowMs = 24 * 3600_000, margin = 16, maxHistory = MAX_HISTORY }) {
+                        now = Date.now(), windowMs = 24 * 3600_000, margin = 0, maxHistory = MAX_HISTORY }) {
   const nowS = standing({ abilities, intellect, name, kind, catalogue, constants });
   if (nowS.known || nowS.have == null) return { ...nowS, rate: null, hours: null, eta: null, eta_margin: null };
   let since = now - windowMs, truncated = false;
@@ -119,7 +135,7 @@ const fmtH = h => h == null ? '—' : h === 0 ? 'now' : h < 48 ? `${h.toFixed(1)
 export async function main(argv = process.argv.slice(2)) {
   const arg = (n, d = null) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
   const list = s => String(s ?? '').split(',').map(x => x.trim()).filter(Boolean);
-  const valued = new Set(['spell', 'skill', 'learn', 'agents', 'exclude', 'room-policy', 'broker', 'window', 'margin',
+  const valued = new Set(['spell', 'skill', 'learn', 'agents', 'exclude', 'room-policy', 'broker', 'window', 'margin', 'ranks', 'fleet',
                           'teacher', 'teacher-room', 'price', 'home']);
   const bare = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && valued.has(argv[i - 1].slice(2))));
   const NAME = arg('skill') || arg('spell') || arg('learn') || bare[0] ||
@@ -127,7 +143,11 @@ export async function main(argv = process.argv.slice(2)) {
   const catalogue = plannerCatalogue();
   const KIND = arg('skill') ? 'skills' : arg('spell') ? 'spells' : kindOf(catalogue, NAME);
   if (!KIND) { console.error(`"${NAME}" is not one spell or one skill in compendium/data/planner.json`); process.exit(2); }
-  const windowMs = Number(arg('window', 24)) * 3600_000, margin = Number(arg('margin', 16));
+  const windowMs = Number(arg('window', 24)) * 3600_000, margin = Number(arg('margin', 0));
+  const fleetName = arg('fleet') || process.env.M59_FLEET || null;
+  const ranksFile = arg('ranks') || (fleetName ? path.join(REPO, 'substrate', `shield-ranker-${fleetName}.json`) : null);
+  let ranks = {};
+  try { ranks = ranksFile ? JSON.parse(fs.readFileSync(ranksFile, 'utf8')).units ?? {} : {}; } catch { ranks = {}; }
   const BROKER = `http://127.0.0.1:${Number(arg('broker') || 8901)}/`;
   const call = async (tool, args, ms = 120_000) => {
     const r = await fetch(BROKER, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -153,8 +173,9 @@ export async function main(argv = process.argv.slice(2)) {
   for (const r of rows) {
     try {
       const [ab, st] = await Promise.all([retry('abilities', { agent: r.agent }), retry('status', { agent: r.agent })]);
-      const intellect = Number(st?.attributes?.intellect?.value) || 0;
-      out.push({ agent: r.agent, name: r.character, intellect, purse: Number(r.purse) || 0, room: r.room_num,
+      const shown = Number(st?.attributes?.intellect?.value) || 0;
+      const intellect = rawIntellect({ intellect: shown, equipment: st?.equipment, princessRank: ranks[r.agent]?.rank?.max ?? null });
+      out.push({ agent: r.agent, name: r.character, intellect, shown, purse: Number(r.purse) || 0, room: r.room_num,
         ...trend({ abilities: ab, intellect, name: NAME, kind: KIND, catalogue, constants,
                    history: loadBook(r.character).history, windowMs, margin }) });
     } catch (e) {
@@ -164,13 +185,13 @@ export async function main(argv = process.argv.slice(2)) {
   out.sort((a, b) => Number(!!b.known) - Number(!!a.known) || Number(!!b.can) - Number(!!a.can) ||
     (a.short ?? 1e9) - (b.short ?? 1e9));
   console.log(`${NAME} (${KIND.slice(0, -1)}): who can learn it (PlayerCanLearn via compendium/tools/learn.mjs)`);
-  console.log(`  rate = change in "have" over the last ${windowMs / 3600_000}h of each ability book; eta+${margin} allows for the observed optimism`);
+  console.log(`  rate = change in "have" over the last ${windowMs / 3600_000}h of each ability book; int is RAW (Princess shield bonus taken out)${margin ? `; eta+${margin} adds a margin` : ''}`);
   for (const x of out) {
     if (x.have == null && !x.known) { console.log(`  ${x.agent.padEnd(4)} ${String(x.name).slice(0, 12).padEnd(12)} ${x.why ?? 'no answer'}`); continue; }
     const state = x.known ? 'KNOWS IT' : x.can ? `CAN LEARN (have ${x.have} / need ${x.need})` : `short ${x.short} (have ${x.have} / need ${x.need})`;
     const pace = x.known ? '' : `  ${x.rate == null ? '' : `${x.rate >= 0 ? '+' : ''}${x.rate.toFixed(2)}/h over ${fmtH(x.hours)}${x.truncated ? '*' : ''}`}` +
-      `  eta ${fmtH(x.eta)}  eta+${margin} ${fmtH(x.eta_margin)}`;
-    console.log(`  ${x.agent.padEnd(4)} ${String(x.name).slice(0, 12).padEnd(12)} int ${String(x.intellect).padStart(2)} ${state}${pace}` +
+      `  eta ${fmtH(x.eta)}${margin ? `  eta+${margin} ${fmtH(x.eta_margin)}` : ''}`;
+    console.log(`  ${x.agent.padEnd(4)} ${String(x.name).slice(0, 12).padEnd(12)} int ${String(x.intellect).padStart(2)}${x.shown !== x.intellect ? ` (shown ${x.shown})` : ''} ${state}${pace}` +
       `  [${x.below}]  purse ${x.purse}${x.why ? ' — ' + x.why : ''}`);
   }
   if (out.some(x => x.truncated)) console.log(`  * the book holds only its last ${MAX_HISTORY} changes; the window was cut to the oldest`);

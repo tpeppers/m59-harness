@@ -4,8 +4,9 @@
 // Pins: a skill resolves to kind 'skills' and is answered (archery said "no catalogue row" when the
 // tool hardcoded spells); a spell still works through the old m59-spell-learners name; the replay
 // of `have` counts only the best three (a gain in the fourth-best moves nothing); a full book cuts
-// the window to its oldest row; no gain is no ETA rather than infinity or zero.
-import { standing, trend, kindOf, abilitiesAt, plannerCatalogue } from './m59-learners.mjs';
+// the window to its oldest row; no gain is no ETA rather than infinity or zero; the Princess shield's
+// intellect bonus is taken back out because PlayerCanLearn reads raw intellect.
+import { standing, trend, kindOf, abilitiesAt, plannerCatalogue, rawIntellect } from './m59-learners.mjs';
 import * as shim from './m59-spell-learners.mjs';
 import { learningConstants } from './m59-loadout.mjs';
 
@@ -68,6 +69,23 @@ ok(d.rate < 0 && (d.eta === null || d.can), `decay: rate ${d.rate} eta ${d.eta}`
 const k = trend({ abilities: { ...gonzo, skills: [...gonzo.skills, { name: 'archery', ability: 1 }] }, intellect: 15,
                   name: 'archery', catalogue, constants, history: hist, now });
 ok(k.known && k.eta === null, 'already known');
+
+// Raw intellect: the Princess shield's rank bonus comes back out; the other two shields do nothing.
+const P = ['longbow', "shield of the Princess' army"];
+ok(rawIntellect({ intellect: 35, equipment: P, princessRank: 10 }) === 30, 'Waldorf: supreme hero, +5');
+ok(rawIntellect({ intellect: 18, equipment: P, princessRank: 4 }) === 15, 'Scooter: average soldier, +3');
+ok(rawIntellect({ intellect: 18, equipment: P, princessRank: 2 }) === 18, 'a lowly peon gets nothing');
+ok(rawIntellect({ intellect: 18, equipment: P }) === 13, 'unknown rank assumes +5');
+ok(rawIntellect({ intellect: 15, equipment: ['shield of the rebel militia'], princessRank: 10 }) === 15, 'rebel shield: untouched');
+ok(rawIntellect({ intellect: 15, equipment: [{ name: "shield of the Duke's army" }] }) === 15, "Duke's shield: untouched");
+// Waldorf, 2026-10-22: predicted 184 at shown int 33; real need was 191-200. Raw 28 is 14 more.
+const kraanan = { spells: [{ name: 'create weapon', ability: 99 }], skills: [] };
+const shownNeed = standing({ abilities: kraanan, intellect: 33, name: 'enchant weapon', catalogue, constants }).need;
+const rawNeed = standing({ abilities: kraanan, intellect: 28, name: 'enchant weapon', catalogue, constants }).need;
+ok(rawNeed - shownNeed === 14, `five points of intellect is 14 points of need: ${rawNeed - shownNeed}`);
+ok(trend({ abilities: gonzo, intellect: 15, name: 'archery', catalogue, constants, history: hist, now, windowMs: 10 * H }).eta_margin
+   === trend({ abilities: gonzo, intellect: 15, name: 'archery', catalogue, constants, history: hist, now, windowMs: 10 * H }).eta,
+   'margin defaults to 0');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

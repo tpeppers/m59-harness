@@ -1406,11 +1406,12 @@ the records it describes.
   composed sell decision, and the fleet-wide gear write, against scratch directories; it sets
   `M59_LOADOUT_DIR` so it never reads the real one, which a live keeper is reading every
   pass) and
-  `node tools/m59-learners-test.mjs` (18 — who can learn a spell OR a skill and when: that a
+  `node tools/m59-learners-test.mjs` (26 — who can learn a spell OR a skill and when: that a
   skill such as archery resolves to the skill catalogue rather than "no catalogue row", that the
   old m59-spell-learners name still answers spells, that the pace replays `have` backwards
   through the ability book so a gain in the fourth-best ability is no pace, that a full book
-  cuts the window to its oldest row, and that no gain is no ETA) and
+  cuts the window to its oldest row, that no gain is no ETA, and that the Princess' army
+  shield's +3/+5 intellect comes back out, because PlayerCanLearn reads raw intellect) and
   `node tools/m59-coordination-test.mjs` (25 — what the fleet is short of, who is near
   enough to be handed it, and how far a courier walks: that a loadout shortfall of any kind
   reaches the board with its quantity, that the neighbourhood is polled nearest-first, and
