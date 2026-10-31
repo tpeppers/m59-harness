@@ -1511,6 +1511,19 @@ the records it describes.
   `facing` itself, that a refusal nothing predicted is `unexplained` and a hit despite a
   prediction is `unexpected`, that the rate is refused over SHOTS, that shot and fight-message
   rows never enter the battle log, and that PvP replay seals evict oldest-first under a budget) and
+  `node tools/m59-pvp-pace-test.mjs` (23 — **the `pvpPace` hook and the focus book**: that with no pvpPace
+  strategy every timer is unchanged and nothing is written, that a factor stretches the swing, the timed zap
+  and the targeted cast and the next attack waits for it, that a timerless zap waits `volley_ms` x factor,
+  that a factor below 1 is 1, above `PACE_MAX` is the cap, and a throw, a promise or nonsense is full speed,
+  that the largest factor wins and any release wins outright and holds for the rest of the fight, that it is
+  asked at most every 250 ms and never for a monster, that ctx counts the fleet's attackers on the target and
+  in the fight from the shared book, us included, that a band-4 groan counts only since the fight began, that
+  `ally_low` is us or a fresh same-room fleet-health report, that the fight is the unbroken run of lines, that
+  `blowOutcome` reads a damaging hit, a 0-damage hit, a miss, both wands and another target's line from the kod
+  wording, and that under `after: 'hit'` a swing stamps the plain timer, a confirmed hit inside that blow's
+  cooldown stretches it from the send with the factor recomputed to count that hit, a miss, a 0-damage blow, a
+  late line or a second line stretches nothing, hitters count only inside 4 s, and a timerless zap waits only
+  after a zap that hit) and
   `node tools/m59-guild-refusal-test.mjs` (14 — **"Only those in guilds may attack each other
   here."** (room.kod `room_guild_combat`, a ROOM_GUILD_PK_ONLY refusal of one TARGET, not the
   room): that after it no path — operator order, war scan or alarm, return fire, fight-back,

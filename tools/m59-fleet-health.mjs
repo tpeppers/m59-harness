@@ -1,5 +1,5 @@
 // Read only fleet observations; the game protocol does not expose another player's HP.
-import{mkdirSync,readFileSync,writeFileSync,renameSync}from'node:fs';import{join}from'node:path';import{fileURLToPath}from'node:url';import{createHash}from'node:crypto';
+import{mkdirSync,readFileSync,readdirSync,writeFileSync,renameSync}from'node:fs';import{join}from'node:path';import{fileURLToPath}from'node:url';import{createHash}from'node:crypto';
 const defaultDir=fileURLToPath(new URL('../substrate/fleet-health/',import.meta.url));
 const fold=s=>String(s??'').trim().toLowerCase();
 const key=({host,port,character})=>createHash('sha256').update(JSON.stringify([fold(host),Number(port),fold(character)])).digest('hex');
@@ -21,4 +21,14 @@ export function readFleetHealth(identity,{directory=process.env.M59_FLEET_HEALTH
   if(r.endpoint?.host!==fold(identity.host)||r.endpoint?.port!==Number(identity.port)||fold(r.character)!==fold(identity.character)||r.room!==room||r.body_id!==bodyId||!Number.isFinite(r.at)||r.at>now||now-r.at>maxAgeMs||!(r.health?.value>0)||!(r.health.max>=r.health.value))return null;
   return r;
  }catch{return null;}
+}
+// Every fresh report from one room on one server: [{ character, health_pct, at }]. For a fleet-wide question
+// (the pvpPace hook asks "is any of us in this fight at 25% or less") where no single identity is known.
+export function fleetHealthInRoom(endpoint,{directory=process.env.M59_FLEET_HEALTH_DIR??defaultDir,now=Date.now(),maxAgeMs=5000,room}={}){
+ const out=[];let names=[];try{names=readdirSync(directory).filter(n=>/^[0-9a-f]{64}\.json$/.test(n));}catch{return out;}
+ for(const n of names){try{const r=JSON.parse(readFileSync(join(directory,n),'utf8'));
+  if(r.endpoint?.host!==fold(endpoint?.host)||r.endpoint?.port!==Number(endpoint?.port)||r.room!==room||!Number.isFinite(r.at)||r.at>now||now-r.at>maxAgeMs||!(r.health?.max>0)||!Number.isFinite(r.health.value))continue;
+  out.push({character:r.character,health_pct:Math.round(100*r.health.value/r.health.max),at:r.at});
+ }catch{}}
+ return out;
 }

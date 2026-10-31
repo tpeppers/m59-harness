@@ -24,7 +24,7 @@ import { PersonalThreat } from './m59-personal-threat.mjs';
 import { CombatFallback } from './m59-combat-fallback.mjs';
 import { CombatSupport } from './m59-combat-support.mjs';
 import { CombatAssist } from './m59-combat-assist.mjs';
-import { publishFleetHealth } from './m59-fleet-health.mjs';
+import { publishFleetHealth, fleetHealthInRoom } from './m59-fleet-health.mjs';
 import { isGuildOnlyRefusal, refusedHere, noteRefused, refusedTargets, forgetRefused } from './m59-refused-targets.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import * as swarm from './m59-swarm-follow.mjs';
@@ -34,12 +34,41 @@ import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
 import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS, STAND_TO_MS } from './m59-pvp-strategy.mjs';
-import { recordGroan, latestHealth } from './m59-player-health.mjs';
+import { recordGroan, latestHealth, roomGroans } from './m59-player-health.mjs';
+import { recordFocus, roomFocus } from './m59-pvp-focus.mjs';
 import * as callout from './m59-pvp-callout.mjs';
 import * as yelp from './m59-pvp-yelp.mjs';
 import { zalgo, healthLevel } from './m59-zalgo.mjs';
 // A joust exchange that has not sent its swings in this long gives up and evades (the attacker is keeping away).
 export const JOUST_EXCHANGE_MAX_MS = 4_000;
+// The pvpPace hook (m59-strategies.mjs) is asked at most this often in a fight, and its factor is capped here:
+// 4 is a quarter speed, which is already a body standing still in a fight it chose.
+export const PACE_EVERY_MS = 250;
+export const PACE_MAX = 4;
+
+/**
+ * What the server said about one of our blows at `target`: 'hit' (it took damage), 'miss', or null (not about
+ * that). "Your <weapon or spell> <verb> <target>." is a hit unless the verb is "fails to damage" (0 HP), and
+ * "<target> blocks|dodges|parries|avoids your attack." is a miss (battler.kod:960 and :993; attack spells reach
+ * the same line through AssessHit -- atakspel.kod's own "You hit" resource is never sent). Wands: the fire wand's
+ * "...engulfs <target>!" and the vampiric wand's "...as <target>'s life force ..." (firewand.kod:154,
+ * vampwand.kod:165-170). Anything else is null, and null is never a hit.
+ */
+export function blowOutcome(text, target) {
+  const t = String(text ?? '').replace(/~[a-zA-Z]/g, '').replace(/\s+/g, ' ').trim();
+  const name = String(target ?? '').trim().toLowerCase();
+  if (!t || !name) return null;
+  const is = who => { const w = String(who ?? '').trim().toLowerCase(); return w === name || w.endsWith(' ' + name); };
+  const miss = /^(.+?) (?:blocks|dodges|parries|avoids) your attack\.$/i.exec(t);
+  if (miss) return is(miss[1]) ? 'miss' : null;
+  const blow = readOurBlow(t);
+  if (blow?.kind === 'hit') return is(blow.target) ? (blow.band > 0 ? 'hit' : 'miss') : null;
+  for (const re of [/a ball of fire engulfs (.+)!$/i, /as (.+)'s life force (?:fills your body|is sucked away)\.$/i]) {
+    const m = re.exec(t);
+    if (m) return is(m[1]) ? 'hit' : null;
+  }
+  return null;
+}
 
 /**
  * Where a jousting body steps back to: a standable square in this room at least `gap` from the attacker, near
@@ -1068,6 +1097,13 @@ export class CombatMode {
     if (!ready.positioned) {
       return 'approach';
     }
+    // A PACED FIGHT (pvpPace) slows a timerless zap as well: it has no server timer to stretch, so it
+    // waits volley_ms x factor from the last zap -- under `after: 'hit'`, only when that zap hit.
+    // The decision's own hold still stands.
+    const lastZap = this.lastAimedSend?.at === this.lastWandFireAt ? this.lastAimedSend : null;
+    if (pick && !needsTimer && o.pace?.factor > 1 && this.lastWandFireAt != null &&
+        (o.pace.after !== 'hit' || lastZap?.hit === true) &&
+        this.now() < this.lastWandFireAt + cfg.volley_ms * o.pace.factor) return hold;
     if (!pick || !ready.ready) return hold ?? (needsTimer ? 'hold' : null);
     await this.stand(o);
     let faceDeg = null;
@@ -1096,7 +1132,7 @@ export class CombatMode {
       this.lastOutChannel = { channel: `wand:${String(pick.name ?? 'wand').toLowerCase()}`, at: this.now() };
       this.lastVolleyBeat = sentCtx.beat;
       this.lastWandFireAt = this.now();
-      if (needsTimer) this.attackReadyAt = this.now() + wandShot.ATTACK_TIMER_MS;
+      this.attackSent(o, needsTimer ? wandShot.ATTACK_TIMER_MS : cfg.volley_ms, { stamp: needsTimer });
       if (shot) this.openWandShot(shot);
       this.lastWandId = pick.o.id;
       o.zaps = (o.zaps ?? 0) + 1;
@@ -1313,7 +1349,7 @@ export class CombatMode {
         if (!ready.ready) return;
         c.cast(spell.id, aim === 'none' ? [] : [aim === 'self' ? c.selfId : live.id]);
         o.openerAt = this.now(); o.openerSpell = name; o.openerAim = aim; o.openerWaiting = null;
-        this.attackReadyAt = this.now() + this.spellTimerMs(name);
+        this.attackSent(o, this.spellTimerMs(name), { aimed: aim === 'target' });
         o.casts++; o.openerCasts = (o.openerCasts ?? 0) + 1;
         if (o.pvp) { o.pvp.opener_casts = (o.pvp.opener_casts ?? 0) + 1; o.pvp.opener = { strategy: st.name, spell: name }; }
         if (o.firstAttackAt == null) { o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt); }
@@ -2207,6 +2243,169 @@ export class CombatMode {
   /** The fleet's groan-based estimate for a player, or null. Never throws on the strategy path. */
   playerHealth(player) {
     try { return latestHealth(player, { now: this.now() }); } catch { return null; }
+  }
+
+  // ------------------------------------------------------------------ the pvpPace seam
+  //
+  // A private strategy may SLOW this character's own attacks on purpose (m59-strategies.mjs pvpPace): its
+  // factor multiplies the cooldown stamped after each swing, zap and targeted cast against a player. It
+  // can only add time. The server's timer is the floor, and a factor below 1 is read as 1. With no
+  // enabled pvpPace strategy nothing is read, nothing is written and every timer is what it always was.
+  //
+  // `after: 'hit'` stretches only a blow the server CONFIRMS did damage (observeOwnBlow). The timer
+  // stamped at send is the plain one; the hit line that comes back extends it to send + ms x factor,
+  // with the factor recomputed at that instant so it counts this very hit. A miss, a blow that does no
+  // damage, or a blow whose answer never comes leaves the plain timer: the next attack goes at full speed.
+
+  /** The enabled pvpPace strategies among the combat strategies already loaded. */
+  paceStrategies() {
+    return (this.wandStrategies?.strategies ?? []).filter(st => st.enabled && typeof st.pvpPace === 'function');
+  }
+
+  /** Ask the pace once per PACE_EVERY_MS; a release holds for the rest of this fight. Never throws. */
+  async refreshPvpPace(o, target) {
+    if (!target || !(target.flags & OF.PLAYER)) { o.pace = null; return; }
+    await this.combatStrategies();
+    if (!this.paceStrategies().length) { o.pace = null; return; }
+    if (o.pace?.released || (o.pace && this.now() - o.pace.asked_at < PACE_EVERY_MS)) return;
+    this.computePace(o, target);
+  }
+
+  /** Ask every pvpPace strategy now, synchronously, and keep the answer on the order. Never throws. */
+  computePace(o, target) {
+    const asked = this.paceStrategies(), now = this.now();
+    if (!asked.length) return (o.pace = null);
+    if (o.pace?.released) return o.pace;
+    let ctx;
+    try { ctx = this.paceContext(o, target); } catch (e) { this.notePaceFault(o, 'harness', `could not build ctx: ${e.message}`); return o.pace ?? null; }
+    let pace = { factor: 1, after: 'any', strategy: null, why: null, released: false };
+    for (const st of asked) {
+      let a;
+      try { a = st.pvpPace(ctx); } catch (e) { this.notePaceFault(o, st.name, `threw: ${e.message}`); continue; }
+      if (a == null) continue;
+      if (typeof a.then === 'function') { this.notePaceFault(o, st.name, 'answered a promise; pvpPace is synchronous'); continue; }
+      if (a.released === true) { pace = { factor: 1, after: 'any', strategy: st.name, why: a.why ?? null, released: true }; break; }
+      const f = Number(a.factor);
+      if (!Number.isFinite(f)) { this.notePaceFault(o, st.name, `factor ${a.factor} is not a number`); continue; }
+      const factor = Math.round(Math.min(PACE_MAX, Math.max(1, f)) * 1000) / 1000;
+      if (factor > pace.factor)
+        pace = { factor, after: a.after === 'hit' ? 'hit' : 'any', strategy: st.name, why: a.why ?? null, released: false };
+    }
+    const prev = o.pace;
+    o.pace = { ...pace, asked_at: now, since: prev && prev.factor === pace.factor && !pace.released ? prev.since : now,
+      engaged: ctx.engaged, attackers_on_target: ctx.attackers_on_target, hitters_on_target: ctx.hitters_on_target,
+      enemies_here: ctx.enemies_here, low_groan: ctx.fight.low_groan, ally_low: ctx.fight.ally_low,
+      fight_started_at: ctx.fight.started_at, last_blow: prev?.last_blow ?? null };
+    if (o.pvp) o.pvp.pace = { ...o.pace };
+    if (!prev || prev.factor !== pace.factor || prev.released !== pace.released || prev.after !== pace.after)
+      this.s.recorder?.line?.('combat', { event: 'pvp_pace', order_id: o.id, target: o.targetName ?? null,
+        room: this.s.world?.room?.num ?? null, factor: pace.factor, after: pace.after, released: pace.released,
+        strategy: pace.strategy, why: pace.why, engaged: ctx.engaged, attackers_on_target: ctx.attackers_on_target,
+        hitters_on_target: ctx.hitters_on_target, enemies_here: ctx.enemies_here });
+    return o.pace;
+  }
+
+  /** The question pvpPace is asked: plain data, documented at the hook in m59-strategies.mjs. */
+  paceContext(o, target) {
+    const c = o.client, now = this.now(), room = this.s.world?.room?.num ?? null;
+    const fold = n => String(n ?? '').trim().toLowerCase();
+    const me = this.character?.() ?? characterName(this.s, c);
+    const focus = roomFocus(room, { now });
+    const engaged = new Set([...focus.engaged.map(fold), fold(me)]);
+    const onTarget = new Set([fold(me)]), hitters = new Set();
+    for (const [t, attackers] of Object.entries(focus.targets))
+      if (fold(t) === fold(o.targetName)) for (const a of attackers) onTarget.add(fold(a));
+    for (const [t, attackers] of Object.entries(focus.hitters))
+      if (fold(t) === fold(o.targetName)) for (const a of attackers) hitters.add(fold(a));
+    // THE ENEMIES HERE: players in the room, not ours, that the war book marks hostile, that one of us
+    // is hitting, that are hitting us, or that are this fight's target. A bystander is not counted.
+    const targeted = new Set(Object.keys(focus.targets).map(fold));
+    const attackers = new Set((o.pvp?.attackers ?? []).map(a => fold(a.character)));
+    let enemies = 0;
+    for (const x of c.room?.objects?.values?.() ?? []) {
+      if (x.id === c.selfId || !(x.flags & OF.PLAYER)) continue;
+      const name = c.rsc?.get?.(x.nameRsc) ?? x.name;
+      if (!name || this.isOurs(name)) continue;
+      const k = fold(name);
+      if (k === fold(o.targetName) || targeted.has(k) || attackers.has(k) ||
+          war.warHostility({ name, flags: x.flags }, { fleetmate: false, now })?.hostile) enemies++;
+    }
+    const startedAt = Math.min(focus.started_at ?? Infinity, o.pvp?.chosen_at ?? o.acceptedAt ?? now);
+    const low = roomGroans(room, { since: startedAt, now }).find(g => g.band === 4 && !this.isOurs(g.name)) ?? null;
+    const v = c.vitals?.()?.health, max = v?.max ?? v?.scale_max;
+    const myPct = Number.isFinite(v?.value) && max > 0 ? Math.round(100 * v.value / max) : null;
+    const ours = this.s.credentials?.host ? fleetHealthInRoom(this.s.credentials, { now, room }) : [];
+    const allyLow = [...(myPct != null ? [{ character: me, health_pct: myPct, at: now }] : []),
+      ...ours.filter(h => fold(h.character) !== fold(me))].find(h => h.health_pct <= 25) ?? null;
+    return { now, character: me, room,
+      target: { name: o.targetName ?? null, health: this.playerHealth(o.targetName) },
+      me: { health_pct: myPct }, enemies_here: enemies, allies_here: this.roomCount().allies_here,
+      engaged: engaged.size, attackers_on_target: onTarget.size, hitters_on_target: hitters.size,
+      fight: { started_at: Number.isFinite(startedAt) ? startedAt : null,
+        low_groan: low ? { name: low.name, at: low.at, reporter: low.reporter } : null, ally_low: allyLow } };
+  }
+
+  /**
+   * After a packet went out: stamp the shared attack timer, stretched now unless the pace waits for a hit,
+   * and remember the send so its hit line can stretch it later. `stamp: false` is a timerless zap, which
+   * has no timer to stamp. Returns the timer.
+   */
+  attackSent(o, ms, { aimed = true, stamp = true } = {}) {
+    const live = o.client.room?.objects?.get?.(o.targetId), now = this.now();
+    const player = !!(aimed && live && (live.flags & OF.PLAYER));
+    const factor = player && o.pace?.after !== 'hit' ? Math.max(1, o.pace?.factor ?? 1) : 1;
+    if (stamp) this.attackReadyAt = now + Math.round(ms * factor);
+    if (player) {
+      this.lastAimedSend = { at: now, ms, order: o.id, target: o.targetName ?? null, stamp, hit: null };
+      this.noteFocus(o, live);
+    }
+    return this.attackReadyAt;
+  }
+
+  /** One line in the fleet's focus book (m59-pvp-focus.mjs) -- only while a pvpPace strategy reads it. */
+  noteFocus(o, live, { hit = false } = {}) {
+    if (!live || !(live.flags & OF.PLAYER) || !this.paceStrategies().length) return;
+    try {
+      recordFocus({ room: this.s.world?.room?.num, attacker: this.character?.() ?? characterName(this.s, o.client),
+        target: o.targetName ?? exactName(o.client, live), hit, at: this.now() });
+    } catch { /* evidence only */ }
+  }
+
+  /** The server's answer to one of our blows at the fight's target: a hit goes in the book and may stretch the timer. */
+  observeOwnBlow(ev, c) {
+    const o = this.active;
+    if (ev.kind !== 'message' || !ev.text || !o?.targetName || !this.paceStrategies().length) return;
+    const outcome = blowOutcome(ev.text, o.targetName);
+    if (!outcome) return;
+    const live = c.room?.objects?.get?.(o.targetId);
+    if (!live || !(live.flags & OF.PLAYER)) return;
+    const now = this.now(), send = this.lastAimedSend;
+    // OURS, AND THE LATEST: the answer arrives inside that blow's own cooldown, or it is about an older one.
+    const latest = !!(send && send.order === o.id && send.hit == null && now - send.at < send.ms);
+    if (latest) send.hit = outcome === 'hit';
+    const blow = { hit: outcome === 'hit', at: now, stretched_ms: 0 };
+    if (o.pace) o.pace.last_blow = blow;
+    if (outcome !== 'hit') return;
+    this.noteFocus(o, live, { hit: true });
+    if (!latest || o.pace?.released) return;
+    const pace = this.computePace(o, live);
+    if (!pace || pace.released || pace.after !== 'hit' || !(pace.factor > 1)) return;
+    pace.last_blow = blow;
+    if (!send.stamp) return;   // a timerless zap: wandVolley reads send.hit and the factor itself
+    const until = send.at + Math.round(send.ms * pace.factor);
+    if (until <= (this.attackReadyAt ?? 0)) return;
+    blow.stretched_ms = until - Math.max(this.attackReadyAt ?? 0, send.at + send.ms);
+    this.attackReadyAt = until;
+    if (o.nextAt != null && o.nextAt < until) o.nextAt = until;
+    if (o.pvp) o.pvp.pace = { ...pace };
+  }
+
+  notePaceFault(o, strategy, why) {
+    o.paceFaults ??= new Set();
+    if (o.paceFaults.has(strategy)) return;
+    o.paceFaults.add(strategy);
+    console.error(`[strategies] ${strategy} pvpPace ${why}; the fight goes on at full speed`);
+    if (o.pvp) o.pvp.pace_fault = { strategy, why };
   }
 
   /** true while a strategy's hold_fire says not to start a fight with this player. */
@@ -3189,6 +3388,7 @@ export class CombatMode {
     if (ev.kind === 'said' || ev.kind === 'message') { this.observeLeash(ev); this.hear(ev); }
     if (ev.kind === 'said') this.noteFightSaid(ev);
     if (ev.kind === 'message' && ev.text) this.noteFightMessage(ev.text);
+    if (ev.kind === 'message' && ev.text) { try { this.observeOwnBlow(ev, client); } catch { /* evidence only */ } }
     if (ev.kind === 'message' && ev.text && this.lastWandId != null) this.noteWandMessage(ev.text);
     if (ev.kind === 'message' && ev.text) this.recordPvpDeath(ev, client);
     this.observePlayerCombat(ev, client);
@@ -3571,6 +3771,8 @@ export class CombatMode {
     if (o.pvp?.joust && await this.joustTick(o, target)) return;
     await this.prepareSafety(o);
     if (o.pvp || this.targetAtWar(o) || o.order.warband) {
+      // THE PACE (pvpPace, below) is read before anything is sent: every timer stamped this beat uses it.
+      await this.refreshPvpPace(o, target);
       // THE OPENER (pvpOpener, above) goes first, and its first cast goes even before the gear: an
       // opening spell lands on the beat the target appears, not after a gear swap.
       if (!o.pvpGearOn && !o.openerFirst) { o.openerFirst = true; if (await this.pvpOpener(o, target)) return; }
@@ -3622,8 +3824,7 @@ export class CombatMode {
         if (!ready.ready) return;
         if (c.attack(live.id) === false) return;
         this.lastOutChannel = { channel: 'melee', at: this.now() };
-        this.attackReadyAt = this.now() + 1000;
-        o.nextAt = this.attackReadyAt;
+        o.nextAt = this.attackSent(o, 1000);
         if (o.firstAttackAt == null) {
           o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt);
         }
@@ -3644,7 +3845,7 @@ export class CombatMode {
         if (!this.attackReadiness(o, live, { sight: step.target === 'target', facing: step.target === 'target' }).ready) return;
         c.cast(spell.id, step.target === 'none' ? [] : [step.target === 'self' ? c.selfId : live.id]);
         this.lastOutChannel = { channel: `spell:${String(step.spell).toLowerCase()}`, at: this.now() };
-        this.attackReadyAt = this.now() + this.spellTimerMs(step.spell);
+        this.attackSent(o, this.spellTimerMs(step.spell), { aimed: step.target === 'target' });
         o.casts++; o.pendingAdvance = true;
         o.nextAt = this.now() + step.hold_ms;
       }, 1050));

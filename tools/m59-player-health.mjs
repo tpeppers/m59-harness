@@ -100,5 +100,13 @@ export function latestHealth(name, { now = Date.now(), maxAgeMs = 120_000, file 
   return null;
 }
 
+/** Every groan heard in one room at or after `since`, oldest first: [{ at, name, band, reporter }]. */
+export function roomGroans(room, { since = 0, now = Date.now(), file = HEALTH_FILE() } = {}) {
+  return tail(file, now)
+    .filter(r => Number(r.room) === Number(room) && Number(r.at) >= since && Number(r.at) <= now && GROAN_BANDS[r.band])
+    .map(r => ({ at: Number(r.at), name: r.name, band: r.band, reporter: r.reporter ?? null }))
+    .sort((a, b) => a.at - b.at);
+}
+
 /** Forget the read cache (tests). */
 export const resetHealthCache = () => { cache = { file: null, read_at: 0, rows: [] }; lastWritten.clear(); };

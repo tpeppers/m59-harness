@@ -111,6 +111,20 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // to establish stock. This hook must be synchronous at paced dispatch,
 //     // where current stock and target HP are rechecked against its answer.
 //     healingWand(ctx) { return null; },
+//     // Asked every 250 ms of a fight with a PLAYER (PvP, war or warband): how much to STRETCH this
+//     // character's own attack timer, voluntarily. { factor: 1..4, why? } multiplies the cooldown
+//     // stamped after every swing, zap and targeted cast (2 = attack at half speed); { released: true }
+//     // ends the stretch for the rest of this fight and the hook is not asked again until the fight
+//     // ends. null or factor 1 is full speed. { factor, after: 'hit' } stretches only a blow the server
+//     // confirms did damage, with the hook asked again the instant that hit lands; a miss leaves the plain
+//     // timer. ctx = { now, character, room, target: { name, health },
+//     // me: { health_pct }, enemies_here, allies_here, engaged, attackers_on_target, hitters_on_target,
+//     // fight: { started_at, low_groan, ally_low } }: `engaged` and `attackers_on_target` are the fleet's
+//     // distinct attackers (us included) read from the shared m59-pvp-focus.mjs book, `hitters_on_target`
+//     // the distinct ones whose damage landed on the target in the last 4 s (us only if we did); `low_groan` is the
+//     // first band-4 pain sound (25% or less) any of us heard in this room since the fight began;
+//     // `ally_low` a fleet-mate here at 25% or less. Synchronous and cheap: no I/O, no waiting.
+//     pvpPace(ctx) { return null; },
 //     // Asked by a keeper CONSIDERING a town stop (at most once a minute) and again, unthrottled,
 //     // as one OPENS (ctx.opening = { purpose, trigger, to }). It may start a trip now and/or add
 //     // "while you're in town" favors -- e.g. when two casters run low, the next shopper goes and
@@ -151,7 +165,7 @@ export const REQUIRED = ['name', 'kind', 'enabled'];
 // cooperativeCombat: configure once with {decide(ctx)}; the synchronous decision
 // receives fresh same-roster observations and returns a checked target/hold choice.
 // It supplements individual farming assignments; protected faculties remain central.
-export const HOOKS = ['cooperativeCombat', 'cooperativeLogoff', 'rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
+export const HOOKS = ['cooperativeCombat', 'cooperativeLogoff', 'rescueTravel', 'whenStuck', 'beforeCrossing', 'atTownStop', 'chalice', 'pvpWand', 'pvpOpener', 'pvpFallback', 'pvpSupport', 'healingWand', 'pvpPace', 'townTrip', 'wandDuty', 'farmBuff', 'castRite', 'idleGear', 'curseCycle'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and
