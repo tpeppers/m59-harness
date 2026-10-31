@@ -1,7 +1,8 @@
 import {applyAncientFloors} from './m59-moving-platform.mjs';
 // Exact precomputed ceiling geometry, separate from legacy floor door variants.
 import { readFileSync } from 'node:fs';
-import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION, RoomGeometry, exitSquaresOf } from './m59-roo.mjs';
+import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION, RoomGeometry, exitSquaresOf,
+         PLAYER_HEIGHT, heightKodToClient } from './m59-roo.mjs';
 import { forgetReach, applyDoorState, noteDoorState } from './m59-routes.mjs';
 
 const table = JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)));
@@ -158,6 +159,28 @@ export function planDoorChain(map, roomNum, from, targets, plans,
   }
   return null;
 }
+// THE CEILING HEIGHT AT WHICH A BODY FITS UNDER THIS DOOR, in kod units, or null.
+//
+// A ceiling door is passable once its ceiling stands PLAYER_HEIGHT above the door sector's floor
+// (canCrossWall's headroom rule), which on a slow lift is well before the top of its swing. That
+// moment is what `waitForDoorOpen` waits for when it is given one (see there for the Temple of
+// Qor, whose door starts closing before its lift has finished). Read off the geometry the mover
+// enforces — the floor of every sector record the door moves — so it is the same rule the step
+// mask was baked with. Null for a door this table does not hold, or when the answer would not lie
+// strictly between the door's shut and open heights (a door that is never passable, or always is).
+export function ceilingPassableKod(map, roomNum, sector, { geometry = null } = {}) {
+  const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum];
+  const door = def && def.doors.find(d => (d.ids ?? [d.id]).includes(Number(sector)));
+  if (!door) return null;
+  const room = map?.rooms?.[roomNum];
+  const g = geometry ?? (room?.roo ? sharedRoomGeometry(room) : null);
+  const floors = (door.indices ?? []).map(i => g?.sectors?.[i]?.floorHeight).filter(Number.isFinite);
+  if (!floors.length) return null;
+  const kod = Math.ceil((Math.max(...floors) + PLAYER_HEIGHT) / heightKodToClient(1));
+  const lo = Math.min(door.closed, door.open), hi = Math.max(door.closed, door.open);
+  return kod > lo && kod < hi ? kod : null;
+}
+
 /** Prepare a private, conditional door state without changing the live room. */
 export function previewOpenedDoor(map, roomNum, sector, { observed = new Map() } = {}) {
   const def = table.version === STEP_MASK_VERSION && table.rooms[roomNum],room=map?.rooms?.[roomNum];
@@ -180,11 +203,12 @@ export function previewOpenedDoor(map, roomNum, sector, { observed = new Map() }
 
 // DOES OPENING THIS DOOR BRING THE BODY CLOSER, WHEN NOTHING CAN PROVE IT REACHES THE TARGET?
 //
-// `planDoorChain` answers "which door makes the target reachable", and in the Temple of Qor (802)
-// it answers null: the baked geometry has no path to Zuxana's square (r16c15) with the north
-// ceiling door open OR shut, though the door is how bodies reach her (shadow fleet 2026-10-12,
-// press on r4c18, on her square 7.5 s later). What the bake DOES say is that opening it adds 165
-// squares to the body's ground and brings its nearest square from four away to two. In the Lake
+// `planDoorChain` answers "which door makes the target reachable", and for a target no door state
+// reaches it answers null. Until 2026-10-31 that was Zuxana's own square in the Temple of Qor (802),
+// a bake artifact (her bridge's square centres sat on its edges, over the pit; declared stand points
+// fixed it and the chain is proven now). The pit square below her dais (r18c15) still is: nothing
+// walks into it in either state, and opening the north door brings the nearest square from three
+// away to two — a door worth one guessed press, and no more. In the Lake
 // of Jala's Song (568), a hunting room whose lift door is the room's only operable door, opening
 // it adds one square and the nearest square to a target cut off by the lake does not move — which
 // is the case an in-room walk must NOT walk to the far wall and press for. So: the nearest

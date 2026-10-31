@@ -83,7 +83,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
-import { planDoorChain, doorBringsCloser } from './m59-ceiling-doors.mjs';
+import { planDoorChain, doorBringsCloser, ceilingPassableKod } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
 
@@ -5970,7 +5970,15 @@ export function sessionWalkPrototype(deps) {
       await (this.pacer?.submit ? this.pacer.submit('move', press) : press())
         .catch(() => {});
       if(pressedAt===null)return {opened:false,sector:pick.sector,reason:cancelled()?'movement cancelled':'door trigger changed before press'};
-      const opening = await waitForDoorOpen(c, pick, { since, cancelled,pressedAt });
+      // HEAD-HIGH IS OPEN. A ceiling door is waited on until a body fits under it, not until its
+      // lift stops (m59-door-wait.mjs): the Temple of Qor's starts closing 25 ms after its lift
+      // tops out. `typeof`: this method is lifted by text into fakes that may not pass it in.
+      let passableHeight = null;
+      if (typeof ceilingPassableKod === 'function' && this.world?.map) {
+        try { passableHeight = ceilingPassableKod(this.world.map, roomNum, pick.sector, { geometry: this.world?.geometry }); }
+        catch { passableHeight = null; }
+      }
+      const opening = await waitForDoorOpen(c, pick, { since, cancelled, pressedAt, passableHeight });
       if (cancelled()) return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
       if (!opening.opened && refusedToGo(c, since))
         opening.reason = 'the server refused the press: "You are unable to go anywhere." ' +
@@ -6071,11 +6079,13 @@ export function sessionWalkPrototype(deps) {
     // AND WHEN THE TABLE CANNOT PROVE IT, A GUESS — BUT ONLY ON A DOOR THAT BRINGS THE BODY
     // CLOSER. The Temple of Qor (802) is why there is a second answer at all: its north ceiling
     // door is how the body reaches Zuxana (shadow fleet 2026-10-12: press on r4c18, on her square
-    // 7.5 s later), and the baked geometry has no path to her square with that door open OR shut,
-    // so the table returns null. The fleetscript door step this replaces pressed there anyway, and
-    // it worked. The guess is narrowed three ways: no gate (a guessed press at a guild door is a
+    // 7.5 s later), and until 2026-10-31 the baked geometry had no path to her square with that
+    // door open OR shut, so the table returned null. That was the bake, not the room: her bridge's
+    // squares had their centres on its edges, over the pit (declared stand points since, and the
+    // table now PROVES the door). The guess remains for a target no door state reaches. It is
+    // narrowed three ways: no gate (a guessed press at a guild door is a
     // five-second refusal); opening it must bring the body's nearest reachable square strictly
-    // closer to the target (`doorBringsCloser`: 802 goes from four squares to two, while 568's
+    // closer to the target (`doorBringsCloser`: 802's pit below the dais goes from three to two, while 568's
     // lake lift adds one square and moves nothing, so a hunting target cut off by water presses
     // nothing); and one press per walk, with a ten-minute memory for this target whether the
     // door was ruled out or pressed and did not help.

@@ -68,7 +68,7 @@
      "kind": "ceiling",
      "animation": "ANIMATE_CEILING_LIFT",
      "speed": 16,
-     "delay_ms": null,
+     "delay_ms": 12000,
      "delay_from": "LIFT_DELAY",
      "gate": null,
      "opened_via": "OpenDoor"
@@ -94,7 +94,7 @@
      "kind": "ceiling",
      "animation": "ANIMATE_CEILING_LIFT",
      "speed": 16,
-     "delay_ms": null,
+     "delay_ms": 12000,
      "delay_from": "LIFT_DELAY",
      "gate": null,
      "opened_via": "OpenDoor"
@@ -352,7 +352,7 @@
      "kind": "ceiling",
      "animation": "ANIMATE_CEILING_LIFT",
      "speed": 16,
-     "delay_ms": null,
+     "delay_ms": 10000,
      "delay_from": "LIFT_DELAY",
      "gate": "ReqLegalEntry",
      "opened_via": "openEntrancedoor"
@@ -1468,7 +1468,7 @@
      "kind": "ceiling",
      "animation": "ANIMATE_CEILING_LIFT",
      "speed": 16,
-     "delay_ms": null,
+     "delay_ms": 5000,
      "delay_from": "RESET_TIME",
      "gate": null,
      "ambiguous_pairs": true
@@ -1858,11 +1858,7 @@
   "incomplete": [],
   "no_auto_close": [
    "5 SECTOR_DOOR",
-   "951 FEAST_DOOR_OPEN",
-   "703 ENTRANCE",
-   "568 DOOR",
-   "568 DOOR",
-   "802 SECTOR_DOOR"
+   "951 FEAST_DOOR_OPEN"
   ]
  }
 }

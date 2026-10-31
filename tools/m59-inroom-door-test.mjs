@@ -19,6 +19,12 @@
 // decides this door, at its real speed — so those cases take a few real seconds each. The second
 // lifts the door methods by name onto a virtual clock for the cases that would take a minute of
 // real time: a door that will not open, a cancel, a door that shuts on the way, and 802's guess.
+//
+// THE TEMPLE OF QOR (802), BOTH WAYS, PROD 2026-10-31: walk_to Zuxana refused at r21c17 stepping
+// into the pit, and `travel` out from her side failing for an hour with the door shut. The real
+// Session again, at the game's own pace: in from r33c14 and r4c18, out from r15c18 to 598. See
+// the 802 block below for the three defects (two stand-point bakes and the door's head-high
+// moment). Those walks take about 40 s each of real time.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { bastionHarness } from './fixtures/bastion-fallback-client.mjs';
@@ -62,8 +68,8 @@ const timers = new Set();
 const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function room(num, from, { door = null } = {}) {
-  const f = fixture({ from: { room: num, x: from.col * 64 + 32, y: from.row * 64 + 32 } }, { maxMs: 60_000 });
+function room(num, from, { door = null, realPace = false, edgeLandings = null, maxMs = 60_000 } = {}) {
+  const f = fixture({ from: { room: num, x: from.col * 64 + 32, y: from.row * 64 + 32 } }, { maxMs, realPace, edgeLandings });
   const { s, c } = f;
   c.room.sectorHeights = new Map();
   const mine = [], seen = { go: [], opened: [], closed: [] };
@@ -91,10 +97,12 @@ function room(num, from, { door = null } = {}) {
   c.go = () => {
     const me = c.self;
     seen.go.push({ at: sq(me), t: Date.now() });
-    // SomethingTryGo judges the body's OWN square (user.kod:5669).
-    if (door && door.on(me) && door.works) {
+    // SomethingTryGo judges the body's OWN square (user.kod:5669). A door with `holds` ignores a
+    // press while its timer runs (tempqor.kod: `AND ptDoor = $`).
+    if (door && door.on(me) && door.works && !(door.holds && door.busy)) {
+      door.busy = true;
       later(() => { seen.opened.push(Date.now()); emit('sector-height', { room: c.room.id, sector: door.sector, height: door.open, type: 5, speed: door.speed }); }, 50);
-      later(() => { seen.closed.push(Date.now()); emit('sector-height', { room: c.room.id, sector: door.sector, height: door.closed, type: 5, speed: door.speed }); }, door.resetMs);
+      later(() => { door.busy = false; seen.closed.push(Date.now()); emit('sector-height', { room: c.room.id, sector: door.sector, height: door.closed, type: 5, speed: door.speed }); }, door.resetMs);
     }
     return baseGo();
   };
@@ -133,6 +141,102 @@ console.log('\n801: the same walk with doors turned off is the incident, square 
   ok('and nothing pressed the door', t.seen.go.length === 0);
   for (const x of timers) clearTimeout(x);
   timers.clear();
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE TEMPLE OF QOR (802), BOTH WAYS. PROD 2026-10-31. Walking in: walk_to Zuxana (r16c15) from
+// r33c17 went 23 steps to r21c17 and was refused stepping r21c17 > r20c16 (`movement_deviation`,
+// `geometry_blocked`); from the door trigger r4c18 it walked 73 steps back to the same refusal;
+// with the door opened by hand it walked east to r7c30 and was refused heading south. No reply
+// carried `doors`. Walking out: from Zuxana's side with the door shut, `travel` to 852 failed
+// every seven minutes for an hour ("did not reach 852 in three attempts").
+//
+// Three defects, all offline-measurable:
+//   1. ZUXANA'S DAIS WAS UNREACHABLE IN THE BAKE WITH THE DOOR OPEN OR SHUT. The dais (sector floor
+//      3488) is reached from the north hall (3200) by a stepped bridge one square wide whose edges
+//      are the centre lines of columns 14 and 15, over a pit (floor 0). Every bridge square's centre
+//      is on an edge and reads the pit, so the step mask had no step onto it, `path` found nothing,
+//      and `walkTo` fell back to the coarse grid, which calls the pit floor and planned into it
+//      (r21c17 > r20c16). Declared stand points on the bridge (substrate/m59-standpoints.json).
+//   2. THE DOOR COULD BE ENTERED BUT NOT LEFT. From Zuxana's side the doorway is a gap in a
+//      one-sided wall at x 17152; r4c17's centre is the end of wall 42 and r3c17's is on wall 19,
+//      so the mask crossed the door only from outside (a one-sided wall is walked through from its
+//      back). A declared stand point in the gap.
+//   3. THE DOOR NEVER COUNTED AS OPEN. tempqor.kod lifts the ceiling 192 -> 270 at speed 16 (4.98 s)
+//      and its DoorTimer drops it 5.0 s after the press; `waitForDoorOpen` waited for the full lift,
+//      so a press "opened" 25 ms before it closed (and in this model, never: "pressed three times
+//      and no sector moved"). It now ends when the ceiling is head-high (`ceilingPassableKod`, 240,
+//      at 3.1 s). And `m59-doors.json` had RESET_TIME as null: `RESET_TIME = 5000   % five seconds`.
+//
+// The walks are the REAL Session at the game's own pace (`realPace`): an instant fixture outruns
+// the vertical fall envelope on the entrance staircase and is refused for a reason no body meets.
+{
+  const { ceilingPassableKod, previewOpenedDoor, applyCeilingDoors: applyCD, planDoorChain: chain } = await imp('m59-ceiling-doors.mjs');
+  const { sharedRoomGeometry: shared } = await imp('m59-roo.mjs');
+  const { loadDoors } = await imp('m59-doorplan.mjs');
+  const QOR = 802, ZUXANA = { row: 16, col: 15 }, ENTRANCE = { row: 33, col: 14 }, SOUTH_EXIT = { row: 38, col: 14 };
+  const INSIDE = { row: 15, col: 18 };   // Raphael's square on Zuxana's side, 2026-10-31
+
+  console.log('\n802: what the committed tables say about the room');
+  applyCD(map, QOR, new Map());                                  // the door where the .roo ships it: shut
+  const shut = shared(map.rooms[QOR]), open = previewOpenedDoor(map, QOR, 4).geometry;
+  const found = (g, a, b) => !!g.path(a.row, a.col, b.row, b.col)?.found;
+  for (const from of [ENTRANCE, { row: 21, col: 17 }, { row: 4, col: 18 }])
+    ok(`door open, the mover has a path to Zuxana from ${sq(from)}; shut, it has none`,
+       found(open, from, ZUXANA) && !found(shut, from, ZUXANA));
+  for (const from of [INSIDE, ZUXANA])
+    ok(`door open, the mover has a path from ${sq(from)} to the south exit ${sq(SOUTH_EXIT)}; shut, it has none`,
+       found(open, from, SOUTH_EXIT) && !found(shut, from, SOUTH_EXIT));
+  const plans = (at) => doorsFor(QOR, at).others;
+  const inChain = chain(map, QOR, ENTRANCE, [ZUXANA], plans(ENTRANCE), {});
+  ok('the ceiling table PROVES the north door gets the entrance to Zuxana', inChain?.sector === 4,
+     JSON.stringify(inChain));
+  const outChain = chain(map, QOR, INSIDE, [SOUTH_EXIT], plans(INSIDE), {});
+  ok('and gets Zuxana\'s side to the south exit, pressed from inside the door',
+     outChain?.sector === 4 && outChain.at?.col === 17, JSON.stringify(outChain));
+  const qorTable = loadDoors().rooms?.[QOR]?.doors?.[0];
+  ok('m59-doors.json knows the door shuts 5000 ms after the press (tempqor.kod RESET_TIME)',
+     qorTable?.delay_ms === 5000, JSON.stringify(qorTable?.delay_ms));
+  const passable = typeof ceilingPassableKod === 'function' ? ceilingPassableKod(map, QOR, 4) : 'no ceilingPassableKod';
+  ok('and a body fits under it at ceiling 240 (floor 3072 + PLAYER_HEIGHT 768), 3.0 s into the lift',
+     passable === 240, String(passable));
+
+  // tempqor.kod: SECTOR_DOOR lifts to 270 at speed 16 from r3-4 c17-18, back to 192 RESET_TIME
+  // (5000 ms) after the press, and a press while ptDoor runs does nothing.
+  const qorDoor = () => ({ sector: 4, open: 270, closed: 192, speed: 16, resetMs: 5000, works: true, holds: true,
+    on: me => me && (me.row === 3 || me.row === 4) && (me.col === 17 || me.col === 18) });
+
+  for (const start of [ENTRANCE, { row: 4, col: 18 }]) {
+    console.log(`\n802: walk_to Zuxana at ${sq(ZUXANA)} from ${sq(start)}, door shut`);
+    const t = room(QOR, start, { door: qorDoor(), realPace: true, maxMs: 120_000 });
+    const r = await t.s.walkTo(ZUXANA.col, ZUXANA.row, { maxSteps: 120 });
+    ok('the door is pressed once, from a trigger square', t.seen.go.length === 1 &&
+       ['r3c17', 'r3c18', 'r4c17', 'r4c18'].includes(t.seen.go[0].at), JSON.stringify(t.seen.go));
+    ok('it is the table\'s door, proven, and it opened', r.doors?.length === 1 && r.doors[0].sector === 4 &&
+       r.doors[0].proven === true && r.doors[0].opened === true, JSON.stringify(r.doors));
+    ok('and the walk reaches her square', r.arrived === true && sq(t.where()) === sq(ZUXANA),
+       JSON.stringify({ arrived: r.arrived, reason: r.reason, at: t.where() }));
+    for (const x of timers) clearTimeout(x);
+    timers.clear();
+  }
+
+  console.log(`\n802: leaving from Zuxana's side (${sq(INSIDE)}), door shut — a journey to 598`);
+  {
+    // The south edge is StandardLeaveDir -> ExitFromQor into whichever entrance is live; i8.kod
+    // (598) puts the body at r32c25.
+    const t = room(QOR, INSIDE, { door: qorDoor(), realPace: true, maxMs: 120_000,
+      edgeLandings: { [QOR]: { south: { to: 598, arriveRow: 32, arriveCol: 25 } } } });
+    const r = await t.s.travel(598, {});
+    ok('the journey presses the door once, from inside it', t.seen.go.length === 1 &&
+       ['r3c17', 'r4c17'].includes(t.seen.go[0].at), JSON.stringify(t.seen.go));
+    ok('says it worked a door before the exit walk',
+       (r.log ?? []).some(e => e.outcome === 'operated_a_door' && Number(e.sector) === 4),
+       JSON.stringify((r.log ?? []).map(e => e.outcome ?? e.reason ?? e.to)));
+    ok('and leaves the temple for 598', r.arrived === true && t.crossings.some(x => x.from === QOR && x.to === 598),
+       JSON.stringify({ arrived: r.arrived, reason: r.reason, crossings: t.crossings, at: t.where() }));
+    for (const x of timers) clearTimeout(x);
+    timers.clear();
+  }
 }
 
 console.log('\na room with no operable door walks exactly as before');
@@ -302,34 +406,34 @@ console.log('\n801 on a virtual clock: the door shuts on the way');
 
 console.log('\n802: the table cannot prove the door, and the guess is one press');
 {
-  // The Temple of Qor's north ceiling door (tempqor.kod, sector 4, r3-4 c17-18). The baked
-  // geometry has no path to Zuxana (r16c15) with that door open or shut, so planDoorChain says
-  // null — and the door IS the way in (shadow fleet 2026-10-12). The fleetscript step this
-  // replaced pressed it unconditionally; the harness presses it as a guess.
-  const [qor] = doorsFor(802, null).others;
-  const qorDoor = { sector: 4, open: 270, closed: 192, speed: 16, resetMs: 10_000, works: true,   // the table could not resolve RESET_TIME (delay_ms null); a model
+  // The Temple of Qor's north ceiling door (tempqor.kod, sector 4, r3-4 c17-18). Zuxana herself is
+  // now PROVEN behind it (above); this is the branch for a target no door state reaches. r18c15 is
+  // in the pit below her dais (sector floor 0, nothing climbs out of it): planDoorChain says null
+  // with the door open or shut, and opening the door still brings the body's nearest square from
+  // three away to two — so the harness presses it once, as a guess, and does not press again.
+  const qorDoor = { sector: 4, open: 270, closed: 192, speed: 16, resetMs: 10_000, works: true,   // long enough that the guess is not about timing
     on: me => me && (me.row === 3 || me.row === 4) && (me.col === 17 || me.col === 18) };
   const v = virtual(802, { row: 33, col: 14 }, { door: qorDoor });
-  const ZUXANA = { row: 16, col: 15 };
-  ok('the shut door leaves the mover no path to her', v.s.exitsBehindShutDoor([ZUXANA]) === true);
-  ok('the table cannot prove a chain to her', planDoorChain(map, 802, { row: 33, col: 14 }, [ZUXANA],
+  const PIT = { row: 18, col: 15 };
+  ok('the shut door leaves the mover no path to the pit square', v.s.exitsBehindShutDoor([PIT]) === true);
+  ok('the table cannot prove a chain to it', planDoorChain(map, 802, { row: 33, col: 14 }, [PIT],
      doorsFor(802, { row: 33, col: 14 }).others, {}) === null);
   const began = performance.now();
-  const why = doorBringsCloser(map, 802, { row: 33, col: 14 }, ZUXANA, 4, { live: v.s.world.geometry });
+  const why = doorBringsCloser(map, 802, { row: 33, col: 14 }, PIT, 4, { live: v.s.world.geometry });
   const tookMs = performance.now() - began;
-  ok('but opening the door brings the body from four squares of her to two', why?.shut === 4 && why?.open === 2 &&
+  ok('but opening the door brings the body from three squares of it to two', why?.shut === 3 && why?.open === 2 &&
      why.closer === true, JSON.stringify(why));
   console.log(`       (doorBringsCloser took ${tookMs.toFixed(1)}ms, cold)`);
-  const r = await v.s.walkTo(ZUXANA.col, ZUXANA.row);
+  const r = await v.s.walkTo(PIT.col, PIT.row);
   ok('the door is walked to and pressed once, as a guess', v.seen.go.length === 1 &&
      ['r3c17', 'r3c18', 'r4c17', 'r4c18'].includes(v.seen.go[0].at) && r.doors?.[0]?.proven === false &&
      r.doors[0].opened === true, JSON.stringify({ go: v.seen.go, doors: r.doors }));
-  ok('then the walk goes on with doors off', v.seen.walks.at(-1)?.doors === false && v.seen.walks.at(-1)?.to === sq(ZUXANA),
+  ok('then the walk goes on with doors off', v.seen.walks.at(-1)?.doors === false && v.seen.walks.at(-1)?.to === sq(PIT),
      JSON.stringify(v.seen.walks));
-  // The model cannot walk the rest (the bake has no way in), so the guess did not help — and
-  // is not pressed again for this target for ten minutes.
+  // Nothing walks into the pit, so the guess did not help — and is not pressed again for this
+  // target for ten minutes.
   await v.advance(30_000);
-  await v.s.walkTo(ZUXANA.col, ZUXANA.row);
+  await v.s.walkTo(PIT.col, PIT.row);
   ok('a guess that did not help is not repeated for the same target', v.seen.go.length === 1, String(v.seen.go.length));
 }
 
