@@ -249,6 +249,9 @@ assert(!keeperSurvivalInterruption({reason:'keeper_recovery_active'}));
  const ready=chooseBraxBoarding(geo,body,objects);assert(ready,'admit the physically usable boarding lane');
  const {bastionHarness}=await import('./fixtures/bastion-fallback-client.mjs'),h=await bastionHarness(),{withBodyCommand}=await h.imp('m59-body-command.mjs');
  const native=h.fixture({from:{room:579,x:body.x,y:body.y},bodies:f.actors.filter(o=>o.id!==body.id).map((o,i)=>({...o,id:10+i,nameRsc:10+i}))},{bodies:true,maxMs:15000,maxPackets:60});
+ // The server's own report of the floors the geometry above was set from: a declared jump with
+ // `requires.sectors` checks it before flying (m59-jump-precondition.mjs).
+ native.c.room.sectorHeights=new Map(Object.entries(f.floors).map(([id,height])=>[Number(id),{height,type:4}]));
  const result=await withBodyCommand(native.s,async()=>{const w=await native.s.walkFine(ready.plan.takeoff.x,ready.plan.takeoff.y,{stride:8,maxSteps:32,arriveWithin:0,exactArrival:true,holdShelf:true});assert(w.arrived,JSON.stringify(w));return native.s.step(ready.col,25,{fall:true,timedFall:true,aimX:ready.col*64+32,aimY:1632});},'actual-platform-boarding');
  assert(result.moved,JSON.stringify(result));assert.equal(native.c.self.row,25);
 }

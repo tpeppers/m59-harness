@@ -147,8 +147,10 @@ t.test(`bastion frozen-body escape ${id}`,async()=>{
   assert.equal(r.arrived,true,JSON.stringify({id,r,pose:f.c.self}));assert.equal(f.s.world.room.num,38);
   assert.equal(f.c.self.predicted,false);assert.ok(f.packets.length<384);
   if(id==='bastion-27-2'){
-    assert.ok(falls.some(j=>j.from.row===36&&j.from.col===16&&j.to.row===38&&j.to.col===10),'retain the declared Ukgoth shelf landing');
-    assert.ok(!falls.some(j=>j.from.row===36&&j.from.col===16&&j.to.row===38&&j.to.col===8),'clearance alone cannot choose a longer undeclared jump');
+    // The declared cliff jump is r37c14 -> r39c12 since 2026-10-31 (docs/falljump-audit-2026-10-31.md);
+    // it was r36c16 -> r38c10, and the undeclared variant this guarded against was r36c16 -> r38c8.
+    assert.ok(falls.some(j=>j.from.row===37&&j.from.col===14&&j.to.row===39&&j.to.col===12),'retain the declared Ukgoth shelf landing');
+    assert.ok(!falls.some(j=>j.from.row===37&&j.from.col===14&&!(j.to.row===39&&j.to.col===12)),'clearance alone cannot choose a longer undeclared jump');
   }
 })));
 });

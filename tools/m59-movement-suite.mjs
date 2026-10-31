@@ -126,6 +126,7 @@ const SUITES = [
   ['m59-entry-recovery-test.mjs','healthy body-blocked arrivals may retreat through a reversible entry and retry under the original deadline and cancellation'],
   ['m59-walk-avoidance-dispatch-test.mjs','forbidden squares survive MCP movement dispatch, proxy JSON and keeper execution'],
   ['m59-position-read-test.mjs','fine observations require an ordered server read tied to this client and room'],
+  ['m59-declared-jump-test.mjs','every declared jump proves as the mover flies it (live trace options, wire rounding, air span, requires.sectors); live preconditions refuse by name; each attempt writes an outcome row'],
   ['m59-jump-takeoff-test.mjs','declared ledge variations retain stock timed gravity, ordinary takeoff approaches and running/occupied-landing guards'],
   ['m59-rest-dispatch-test.mjs','journey recovery delegates one bounded rest to the keeper rather than nesting its default rest in a proxy loop'],
   ['m59-fine-safeleg-test.mjs','safe legs from the actual fine body stop at proved refuges within the travelled distance allowance'],

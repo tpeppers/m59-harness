@@ -2144,7 +2144,14 @@ console.log('\na deflected step lands only where the body can do what the stand 
   const status = room?.roo ? attachStepMasks(realMap) : null;
   const { activeRoutes } = await import('./m59-routes.mjs');
   const table = status?.ok ? activeRoutes() : null;
-  const squares = table ? bakedPath(table, 599, { row: 1, col: 66 }, { row: 1, col: 27 }) : null;
+  // THE RAIL AS IT WAS BAKED ON 2026-10-13, AS A FIXTURE. Re-keying the Ukgoth cliff jump to
+  // r37c14 -> r39c12 (2026-10-31, docs/falljump-audit-2026-10-31.md) re-baked 1,66>1,27 along the
+  // north side, which no longer passes r18c58 -- so the live table no longer holds the broken head
+  // this pins. `fineRailBoard` is what is under test, not the bake, so the head it was measured on
+  // is held here verbatim.
+  const OLD_RAIL_1_66_TO_1_27 = '1,66 6,65 7,64 8,65 9,66 10,66 11,65 12,64 13,63 14,62 15,61 16,60 17,59 18,58 23,53 25,51 27,50 28,49 29,48 29,47 29,46 30,45 31,44 32,39 32,34 31,29 30,24 29,19 28,17 33,19 34,18 36,16 38,10 33,10 28,10 23,10 18,10 13,10 8,12 5,17 5,22 5,24 3,26 1,27'
+    .split(' ').map(p => { const [row, col] = p.split(',').map(Number); return { row, col }; });
+  const squares = table ? OLD_RAIL_1_66_TO_1_27 : null;
   if (!room?.roo || !Array.isArray(squares) || squares.length < 14) {
     skip('fineRailBoard boards Ukgoth past its broken rail head', 'no 599 geometry or rail on disk');
   } else {

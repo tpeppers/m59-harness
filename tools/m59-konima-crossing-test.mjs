@@ -94,11 +94,13 @@ for(const separateQueueBudget of [false,true]){
  await active;
 }
 {
- const hg=roomGeometry(2502),j=fallJumpsIn(2502).find(j=>j.to.row===44&&j.to.col===27);
- const short={id:1,x:1744,y:2814},landing=clientToProtocol(j.to_fine),clear={x:1344,y:3076};
+ const hg=roomGeometry(2502),j=fallJumpsIn(2502).find(j=>j.to.row===40&&j.to.col===29);
+ // A settled landing a few units short of the declared lip, on the same 8000 shelf (2026-10-31: the
+ // lip is r40c29 (1884,2572); it was a plateau point (1750,2824) a walk beyond it).
+ const short={id:1,x:1878,y:2566},landing=clientToProtocol(j.to_fine),clear={x:1344,y:3076};
  assert(planDeclaredLanding(hg,short,j).found,'the native short landing has a short ground connection');
  assert(!planDeclaredLanding(hg,{...short,predicted:true},j).found);
- assert(!planDeclaredLanding(hg,{...short,x:1644},j).found);
+ assert(!planDeclaredLanding(hg,{...short,x:1778},j).found);
  const disconnected=Object.create(hg);disconnected.traceFineMoveClient=()=>({moved:false,blocked:true});
  assert(!planDeclaredLanding(disconnected,short,j).found,'matching height and proximity cannot cross a wall');
  const lower=Object.create(hg),originalFloor=hg.floorBaseAtClient.bind(hg),shortClient=protocolToClient(short);
@@ -191,8 +193,10 @@ for(const mode of ['climb','drop']){
 // Refined takeoffs retain live bodies, ordinary recovery and lower escape.
 const hg=roomGeometry(2502),hd=fallJumpsIn(2502)[0],ha={x:2201,y:2650},hs={x:2305,y:2714},hc={x:1344,y:3076},hl={x:2241,y:2322};
 for(const mode of ['traffic','recovery','health_wait','lower','cancel']){
- let body=mode==='health_wait'?{x:2176,y:2552}:{...ha},hp=mode==='health_wait'?15:20,jumps=0,waits=0,restored=0,cancelled=false;
- let objects=mode==='traffic'?[{id:2,flags:525,row:39,col:34,x:2176,y:2552}]:[];
+ let body=mode==='health_wait'?{x:2176,y:2552}:{...ha},hp=mode==='health_wait'?15:20,jumps=0,waits=0,restored=0,cancelled=false,recoveredAt=0;
+ // Traffic stands on the declared lip (r40c29) so no take-off can prove a clear flight until it
+ // moves; it stood beside the old plateau-run line before the 2026-10-31 re-declaration.
+ let objects=mode==='traffic'?[{id:2,flags:525,row:40,col:29,x:1884,y:2572}]:[];
  const read=async()=>{
   if(cancelled)throw Error('cancelled_by_operator');
   return {room:{num:2502},you:{id:1,...body,row:Math.floor(body.y/64),col:Math.floor(body.x/64)},hp:{value:hp,max:20},vigor:{value:200},objects};
@@ -216,7 +220,7 @@ for(const mode of ['traffic','recovery','health_wait','lower','cancel']){
   waitAtCover:async()=>{waits++;objects=[];if(mode==='health_wait')hp=20;else body={...hs};},
   recover:async({since,initial})=>{
    assert(Number.isFinite(since));
-   if(mode==='recovery'&&initial.hp.value===12){restored++;hp=20;return true;}
+   if(mode==='recovery'&&initial.hp.value===12){restored++;recoveredAt=walks.length;hp=20;return true;}
    return false;
   },
  });
@@ -228,7 +232,9 @@ for(const mode of ['traffic','recovery','health_wait','lower','cancel']){
  if(mode==='recovery'){
   assert.equal(restored,1);assert.equal(jumps,2);
   assert(!walks.some(p=>p.x===hs.x&&p.y===hs.y),'healthy keeper recovery does not retreat into a follower staging cell');
-  assert(!walks.some(p=>p.x===ha.x&&p.y===ha.y),'a proved takeoff at the recovery body does not backtrack through the old approach');
+  // Since 2026-10-31 the approach point is itself a proved run-up takeoff, so the FIRST flight may
+  // leave from it; what must not happen is a walk back to it after the recovery.
+  assert(!walks.slice(recoveredAt).some(p=>p.x===ha.x&&p.y===ha.y),'a proved takeoff at the recovery body does not backtrack through the old approach');
  }
  if(mode==='health_wait'){assert.equal(waits,1);assert.equal(jumps,1);}
  if(mode==='lower')assert.equal(jumps,0,'lower Hollows approach uses the checked gutter, never another takeoff');

@@ -55,6 +55,9 @@ console.log('fine posture: seated movement, packet reuse, renewed rest and queue
  assert.deepEqual(capture.reply.mover.validation,{});
  const f=h.fixture({from:{room:capture.room,...capture.from}});
  applyAncientFloors({rooms:{579:{}}},579,new Map([[2,{height:250,type:4}],[3,{height:250,type:4}],[4,{height:540,type:4}],[5,{height:200,type:4}],[6,{height:200,type:4}],[7,{height:200,type:4}],[8,{height:200,type:4}],[9,{height:510,type:4}]]),null,{geometryOf:()=>f.s.world.geometry});
+ // What the server reported, which the floors above stand for; the Brax entry declares
+ // `requires.sectors {3:250}` and Session.step checks it (m59-jump-precondition.mjs).
+ f.c.room.sectorHeights=new Map([[2,{height:250,type:4}],[3,{height:250,type:4}],[4,{height:540,type:4}],[9,{height:510,type:4}]]);
  f.s.pacer=new Pacer();f.s.pacer.authority=()=>bodyAuthority(f.s);let inject=true;
  const submit=f.s.pacer.submit.bind(f.s.pacer);f.s.pacer.submit=(kind,...args)=>{if(kind==='move'&&inject){inject=false;f.s.pacer.holdForCast(150,'casting create food',{auto:true,spell:'create food'});}return submit(kind,...args);};
  const options={fall:true,timedFall:true,aimX:3552,aimY:1632};

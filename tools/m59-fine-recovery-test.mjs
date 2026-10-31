@@ -180,11 +180,13 @@ try{
  const beforeLower=moves;
  await assert.rejects(walkHollowsOut(ctx,{budgetMs:10000}),/hollows_lower_escape_unproved/);
  assert.equal(moves,beforeLower,'an unproved lower Hollows escape cannot become an uphill movement command');
- pose={id:1,x:1744,y:2814,row:43,col:27};
+ // A few units short of the declared lip, r40c29 (1884,2572) since 2026-10-31; it was a plateau
+ // point (1750,2824) a walk beyond it (docs/falljump-audit-2026-10-31.md).
+ pose={id:1,x:1878,y:2566,row:40,col:29};
  let landingCommands=0;
  await assert.rejects(walkHollowsOut({...ctx,call:async(name,args)=>{
   if(name==='walk_to'){
-   landingCommands++;assert(Math.hypot(args.x-1750,args.y-2824)<=8,
+   landingCommands++;assert(Math.hypot(args.x-1884,args.y-2572)<=8,
     'a resumed short landing completes the shelf before any staging walk');
    throw Error('fixture_landing_completion_observed');
   }

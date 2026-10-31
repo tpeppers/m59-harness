@@ -266,6 +266,7 @@ import { COMMANDER_SCHEMA, COMMERCE_SCHEMA, COMMANDER_FACULTIES,
 import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
+import { declaredJumpNear, livePreconditionState } from './m59-jump-precondition.mjs';
 import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
@@ -8987,6 +8988,13 @@ const TOOLS = [
         sameFloor(hereFloor, floorOfDeclared(j.from.row, j.from.col, 'from')) &&
         sameFloor(wantFloor, floorOfDeclared(j.to.row, j.to.col, 'to'))),
         {from:{row:me.row,col:me.col},to:{row:a.to_row,col:a.to_col}});
+      // A declared jump whose room is in the wrong state (Brax's lift down) is not offered by the
+      // live geometry at all -- it reads uphill. Name the precondition rather than "not declared".
+      if (!declared) {
+        const waiting = declaredJumpNear(Number(s.world?.room?.num ?? NaN), { row: me.row, col: me.col }, { row: a.to_row, col: a.to_col });
+        const pre = waiting ? livePreconditionState(waiting, s.client?.room?.sectorHeights ?? null) : null;
+        if (pre && pre.ok !== true) return { made: false, moved: false, reason: pre.reason, precondition: pre };
+      }
       if (!declared)
         throw new Error(`${a.agent}: ${me.row},${me.col} -> ${a.to_row},${a.to_col} is not a declared ` +
                         `fall-jump or a one-square variation of one. Declared near here: ` +
@@ -9017,7 +9025,8 @@ const TOOLS = [
       return { from: before, aimed_at: { col: a.to_col, row: a.to_row }, landed,
                floor, landing_floor: wanted,
                made: floor != null && wanted != null && Math.abs(floor - wanted) <= 64,
-               moved: !!r?.moved, reason: r?.reason ?? null };
+               moved: !!r?.moved, reason: r?.reason ? r.reason + (r.detail ? ': ' + r.detail : '') : null,
+               ...(r?.precondition ? { precondition: r.precondition } : {}) };
       });
     },
   },

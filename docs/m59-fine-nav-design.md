@@ -487,7 +487,7 @@ departure. Its output (p, q) feeds the existing `declaredJumpMoveOptions` aim.
 
 **Found while measuring, needs reconciling before jumps become graph edges:** 6 of the 18
 declared jumps are refused by the current timed-fall proof from their own declared fine
-points (2502 r41c34>r44c27; 579 r40c33>r40c32, r38c31>r42c30, r47c39>r49c36, and the two
+points (2502 r41c34>r44c27 [re-declared r40c33>r40c29]; 579 r40c33>r40c32, r38c31>r42c30, r47c39>r49c36, and the two
 579 r15c55/56 > r8c55/56 entries, which are 4,416 units UPHILL and are evidently lift
 rides, not falls); the two 599 jumps have no fine points and use stand points (r36c16>r38c10
 refused). Several "proofs that arrive" have spans beyond `maxSpan` because `traceFallMotion`

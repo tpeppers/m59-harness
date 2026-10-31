@@ -112,20 +112,20 @@
    "room": 2502,
    "room_name": "The Archaic Hollows",
    "from": {
-    "row": 41,
-    "col": 34
+    "row": 40,
+    "col": 33
    },
    "to": {
-    "row": 44,
-    "col": 27
+    "row": 40,
+    "col": 29
    },
    "from_fine": {
-    "x": 34192,
-    "y": 41376
+    "x": 33408,
+    "y": 40128
    },
    "to_fine": {
-    "x": 26976,
-    "y": 44160
+    "x": 29120,
+    "y": 40128
    },
    "kind": "fall",
    "requires": {
@@ -133,26 +133,34 @@
    },
    "observed_by": "operator, 2026-10-09, native client movement recording",
    "part_of_cycle": false,
-   "note": "Approach to the small western cavern on the outward cave-to-island trip. Recorded native client points: takeoff KOD x2201 y2650, intermediate x1891 y2589 over the lower floor, landing x1750 y2824. Both endpoints are on floor 8000; the intervening floor is 4800. This is an operator-observed running crossing, not a candidate inferred from fall arithmetic. The return trip uses the lower eastern exit and does not reverse this crossing. The source recording has one-second position samples, so it does not establish the exact airborne arc."
+   "note": "Approach to the small western cavern on the outward cave-to-island trip. Recorded native client points: takeoff KOD x2201 y2650, intermediate x1891 y2589 over the lower floor, landing x1750 y2824. Both endpoints are on floor 8000; the intervening floor is 4800. This is an operator-observed running crossing, not a candidate inferred from fall arithmetic. The return trip uses the lower eastern exit and does not reverse this crossing. The source recording has one-second position samples, so it does not establish the exact airborne arc. 2026-10-31 (docs/falljump-audit-2026-10-31.md): the old points (34192,41376) -> (26976,44160) were the walk around the crossing, not the crossing — same floor 8000, 7734 apart, and the straight line falls into the 4800 pit and stops on wall 21. The operator's own intermediate sample (client 29232,40400) is the far lip: the run goes up the 8000-8465 ramp and leaves its top edge at x=31296 across ~2000 units of pit. Declared now from the ramp FOOT on the approach shelf, r40c33 (33408,40128) floor 8000, to the far lip r40c29 (29120,40128) floor 8000; the air phase is the leap off the ramp top, 2176 against a 2344 budget for its 465 drop. The take-off stays on the 8000 shelf on purpose: followDeclaredApproach's shelf fence and planDeclaredTakeoff's same-shelf test both measure against from_fine, and a ramp-top point (8465) would put every staging pose on the plateau below the fence. Prod 2026-10-27: 5 characters crossed via the refined take-off, 0 failures logged."
   },
   {
    "room": 599,
    "room_name": "Ukgoth, Holy Land of Trolls",
    "from": {
-    "row": 36,
-    "col": 16
+    "row": 37,
+    "col": 14
    },
    "to": {
-    "row": 38,
-    "col": 10
+    "row": 39,
+    "col": 12
    },
    "kind": "fall",
    "requires": {
     "running": true
    },
-   "note": "The notorious Ukgoth cliff jump. The ONLY doorway to Outside Castle Victoria is at row 1, col 27, on the cliff top this reaches; the eastern crossing the router used instead (row 1, col 62) goes through solid rock. Approximate endpoints as given by the operator — the take-off ledge runs out around 2.5 squares along this line.",
+   "note": "The notorious Ukgoth cliff jump. The ONLY doorway to Outside Castle Victoria is at row 1, col 27, on the cliff top this reaches; the eastern crossing the router used instead (row 1, col 62) goes through solid rock. Approximate endpoints as given by the operator — the take-off ledge runs out around 2.5 squares along this line. 2026-10-31 (docs/falljump-audit-2026-10-31.md): re-keyed from r36c16 -> r38c10, which had no fine points and was proved from stand points. Solid one-sided wall 39 runs along the take-off ledge's west lip from (17408,32768) to (13312,37888); from r36c16 the body cannot leave westward and the live mover slides the whole length of the wall before the air. Declared now where the ledge runs out: r37c14 (14208,37632) floor 5872 -> r39c12 (11648,39552) floor 3840, air span about 3200 against 4338, 976 ms. The lab's jumptrials (2026-08-25) landed 39,11-40,11 on this same shelf; prod trails 2026-10-06..26 show 6 made and 32 into the 3200 gully from the old stand point.",
    "observed_by": "operator, 2026-08-20",
-   "part_of_cycle": true
+   "part_of_cycle": true,
+   "from_fine": {
+    "x": 14208,
+    "y": 37632
+   },
+   "to_fine": {
+    "x": 11648,
+    "y": 39552
+   }
   },
   {
    "room": 599,
@@ -302,8 +310,8 @@
     "y": 47360
    },
    "to_fine": {
-    "x": 36340,
-    "y": 50152
+    "x": 36544,
+    "y": 49856
    },
    "kind": "fall",
    "requires": {
@@ -311,7 +319,7 @@
    },
    "part_of_cycle": false,
    "observed_by": "m59-jumpfinder.mjs, confirmed by Cccc 2026-08-26 — keeper reported arrival 5/5, independently observed 3/5",
-   "note": "THE FIRST JUMP IN THIS FILE NOBODY DESCRIBED. Found by carving the room with a never-descend closure and asking the client's own fall physics what a 4208 drop buys — 0.96s of air and about 4.8 squares, against the 4 this needs. Then executed by a character: `{jumped:true, asked:{49,36}, landed:{49,36}, arrived:true}`. Declared with fine points because the SQUARES read uphill and the points do not; the square-only form of this entry was refused by the geometry, correctly. The 3/5 in observed_by is my own checker lagging, not a miss: the broker's `look` serves a two-second snapshot and twice reported the take-off while the keeper had already reported the landing. The keeper reads the live client and said 5/5."
+   "note": "THE FIRST JUMP IN THIS FILE NOBODY DESCRIBED. Found by carving the room with a never-descend closure and asking the client's own fall physics what a 4208 drop buys — 0.96s of air and about 4.8 squares, against the 4 this needs. Then executed by a character: `{jumped:true, asked:{49,36}, landed:{49,36}, arrived:true}`. Declared with fine points because the SQUARES read uphill and the points do not; the square-only form of this entry was refused by the geometry, correctly. The 3/5 in observed_by is my own checker lagging, not a miss: the broker's `look` serves a two-second snapshot and twice reported the take-off while the keeper had already reported the landing. The keeper reads the live client and said 5/5. 2026-10-31 (docs/falljump-audit-2026-10-31.md): to_fine moved from (36340,50152) — 24 units from the room's south wall (walls 421/714 at y=50176), inside the 248 body radius, so no trace could ever reach it; every one stopped at y=49919 — to (36544,49856) on the same 3744 floor in the same square. Air span 3739 against 6208."
   },
   {
    "room": 589,
@@ -377,7 +385,10 @@
    "kind": "fall",
    "requires": {
     "running": true,
-    "timed_fall": true
+    "timed_fall": true,
+    "sectors": {
+     "3": 250
+    }
    },
    "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
    "part_of_cycle": false,
@@ -397,7 +408,7 @@
     "x": 55808,
     "y": 25088
    },
-   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250)."
+   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250). 2026-10-31 (docs/falljump-audit-2026-10-31.md): requires.sectors {3:250} made machine-readable — the note always said it; prod's entry landings read floor 4000 (250), where the .roo ships 4224 (264)."
   },
   {
    "room": 579,
@@ -405,12 +416,16 @@
    "kind": "fall",
    "requires": {
     "running": true,
-    "timed_fall": true
+    "timed_fall": true,
+    "sectors": {
+     "3": 800,
+     "4": 510
+    }
    },
    "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
    "part_of_cycle": false,
    "from": {
-    "row": 15,
+    "row": 14,
     "col": 55
    },
    "to": {
@@ -419,13 +434,13 @@
    },
    "from_fine": {
     "x": 55808,
-    "y": 14848
+    "y": 13888
    },
    "to_fine": {
     "x": 55808,
-    "y": 7680
+    "y": 8064
    },
-   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform."
+   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform. 2026-10-31 (docs/falljump-audit-2026-10-31.md): requires.sectors added — g9.kod raises SECTOR_PLATFORM 3 to 800 and lowers SECTOR_LEDGE_N 4 to 510 when the puzzle is solved, and the static .roo has the platform at 264, so every offline check read this 4416 units UPHILL. Prod 2026-10-23 landed it 11/11 at floor 8160 after lift-validated read {3:800,4:510}. Take-off moved from y=14848 to the platform's north edge (y=13888, r14) and the landing to y=8064, so the air span (5824) is inside its 6522 budget; a body staged on y=14848 one square back is still within the jump verb's one-square neighbourhood."
   },
   {
    "room": 579,
@@ -433,7 +448,10 @@
    "kind": "fall",
    "requires": {
     "running": true,
-    "timed_fall": true
+    "timed_fall": true,
+    "sectors": {
+     "3": 250
+    }
    },
    "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
    "part_of_cycle": false,
@@ -453,7 +471,7 @@
     "x": 56832,
     "y": 25088
    },
-   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250). Parallel adjacent lane for grouped arrivals."
+   "note": "Brax entry, southern shelf onto the lowered platform. Operator 2026-10-14 approximate r39c55 resolves to the standable r32c55 shelf; r39c55 has no floor. Source g9.kod sector 3 must be down (250). Parallel adjacent lane for grouped arrivals. 2026-10-31 (docs/falljump-audit-2026-10-31.md): requires.sectors {3:250} made machine-readable — the note always said it; prod's entry landings read floor 4000 (250), where the .roo ships 4224 (264)."
   },
   {
    "room": 579,
@@ -461,12 +479,16 @@
    "kind": "fall",
    "requires": {
     "running": true,
-    "timed_fall": true
+    "timed_fall": true,
+    "sectors": {
+     "3": 800,
+     "4": 510
+    }
    },
    "observed_by": "operator, 2026-10-14; fine endpoints under local trial",
    "part_of_cycle": false,
    "from": {
-    "row": 15,
+    "row": 14,
     "col": 56
    },
    "to": {
@@ -475,13 +497,13 @@
    },
    "from_fine": {
     "x": 56832,
-    "y": 14848
+    "y": 13888
    },
    "to_fine": {
     "x": 56832,
-    "y": 7680
+    "y": 8000
    },
-   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform. Parallel adjacent lane for grouped arrivals."
+   "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform. Parallel adjacent lane for grouped arrivals. 2026-10-31 (docs/falljump-audit-2026-10-31.md): requires.sectors added — g9.kod raises SECTOR_PLATFORM 3 to 800 and lowers SECTOR_LEDGE_N 4 to 510 when the puzzle is solved, and the static .roo has the platform at 264, so every offline check read this 4416 units UPHILL. Prod 2026-10-23 landed it 8/8 at floor 8160 after lift-validated read {3:800,4:510}. Take-off moved from y=14848 to the platform's north edge (y=13888, r14) and the landing to y=8000, so the air span (5888) is inside its 6522 budget; a body staged on y=14848 one square back is still within the jump verb's one-square neighbourhood."
   }
  ]
 }

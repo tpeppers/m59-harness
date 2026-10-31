@@ -42,6 +42,12 @@ export const TERMINAL_MOVEMENT_REASONS = Object.freeze([
   // standing on each other's lines, every one retrying until the run ended. Nothing handled
   // them and nothing stopped them either.
   'fall_blocked_by_body',
+  // A DECLARED JUMP WHOSE ROOM IS NOT IN THE STATE IT NEEDS (`requires.sectors`,
+  // m59-jump-precondition.mjs). Brax's north ledge is a fall only with the lift up; with it down
+  // it is a 4416-unit climb, and no heading changes which state the lift is in. `_unknown` is the
+  // server not having reported the sector at all, refused rather than guessed from the .roo.
+  'jump_precondition_unmet',
+  'jump_precondition_unknown',
 ]);
 
 const TERMINAL = new Set(TERMINAL_MOVEMENT_REASONS);

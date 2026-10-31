@@ -1303,6 +1303,12 @@ const ordinaryStep = compileSessionMethod(brokerSource,
     declaredJumpNeedsRun: () => false,
     // Every fall step now writes a telemetry row; the ledger has its own suite.
     recordTactic: () => {},
+    // THE DECLARED-JUMP PRECONDITION AND OUTCOME ROW (2026-10-31). With `declaredJumpNeedsRun`
+    // false and no timed fall these fixtures never reach them; the real logic is pinned in
+    // m59-declared-jump-test against the real table and a real Session.
+    declaredJumpNear: () => null,
+    livePreconditionState: () => ({ ok: true, sectors: [] }),
+    jumpOutcomeRow: () => null, recordJumpOutcome: () => false,
     // The jump telemetry asks the server's MOVEON bits which nearby objects actually block,
     // so a corpse the server marks walk-through never counts as being on the line.
     blocksMovement,

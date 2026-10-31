@@ -92,21 +92,27 @@ const ONLY = flag('agents') ? String(flag('agents')).split(',').map(x => x.trim(
 //
 // What is left is TIMING, because the only thing that fails a jump from 36,16 is something
 // standing on the line. These vary how long to wait and how strict to be about 'clear'.
+// RE-KEYED 2026-10-31 (docs/falljump-audit-2026-10-31.md): the declaration is now r37c14 -> r39c12,
+// where the take-off ledge runs out past wall 39, and the jump verb only flies a declared jump from
+// within one square of its take-off. The strategies below were MEASURED from r36c16 -> r38c10 and
+// the figures quoted in this file are about that pair; they now run against the new one. The two
+// strafe controls keep their old squares as recorded experiments: strafe_n (35,16) is outside the
+// new neighbourhood and will be refused as undeclared, which is the honest answer.
 const STRATEGIES = {
-  baseline:  { from: { row: 36, col: 16 }, to: { row: 38, col: 10 },
+  baseline:  { from: { row: 37, col: 14 }, to: { row: 39, col: 12 },
                why: 'the declared jump, blind — jumps into whatever is there' },
-  land_wide: { from: { row: 36, col: 16 }, to: { row: 38, col: 11 },
+  land_wide: { from: { row: 37, col: 14 }, to: { row: 39, col: 11 },
                why: 'a square short of the declared landing, same shelf — 100% so far' },
-  clear1:    { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, wait: 1, patience: 0,
+  clear1:    { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, wait: 1, patience: 0,
                why: 'jump unless something is ON the line — the loosest useful gate' },
-  patient:   { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, wait: 2, patience: 20,
+  patient:   { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, wait: 2, patience: 20,
                why: 'wait up to 20s for a 2-square gap, then take it anyway' },
   // THE ADAPTIVE ONE, AND THE ONE MOST LIKELY TO BEAT A CROWDED ROOM: do not pick the landing
   // in advance. Raycast to every square of the shelf at the moment of the jump and take the
   // line with the most clearance from whatever is standing under the drop. A fixed target is
   // a bet that the room will be empty where you aimed; this is a choice made with the room in
   // front of you.
-  pick_clear: { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, candidates: true, wait: 1, patience: 6,
+  pick_clear: { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, candidates: true, wait: 1, patience: 6,
                why: 'raycast every shelf square and jump at whichever line is clearest' },
   // BOTH LEVERS AT ONCE. The two that work do different things: waiting gets a clear line and
   // a clear line is worth ~100%, while re-aiming is the only thing that survives a line that
@@ -160,15 +166,15 @@ const STRATEGIES = {
   //
   // This takes the maximum-clearance line unconditionally and goes. It is the honest answer
   // to a camped obstacle: there is no clean jump to be had, so take the least dirty one.
-  best_line: { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, candidates: true,
+  best_line: { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, candidates: true,
                wait: 1, patience: 0, alwaysJump: true,
                why: 'no gate: always jump at whichever line has the most clearance' },
-  hold_wall: { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, candidates: true,
+  hold_wall: { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, candidates: true,
                wait: 2, patience: 45, waitAt: { row: 34, col: 21 },
                why: 'wait behind cover at 34,21, on the jump line, then run through and jump' },
-  hybrid:    { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, candidates: true, wait: 2, patience: 20,
+  hybrid:    { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, candidates: true, wait: 2, patience: 20,
                why: 'wait up to 20s for a 2-square gap, then re-aim at the clearest shelf square' },
-  clear:     { from: { row: 36, col: 16 }, to: { row: 38, col: 10 }, wait: 3, patience: 0,
+  clear:     { from: { row: 37, col: 14 }, to: { row: 39, col: 12 }, wait: 3, patience: 0,
                why: 'declines outright unless 3 squares of the line are clear' },
   strafe_n:  { from: { row: 35, col: 16 }, to: { row: 38, col: 10 },
                why: 'CONTROL: one square north — refuted, 0 of 3' },

@@ -61,26 +61,85 @@ const REPO = join(HERE, '..');
 // The fall arithmetic is shared with `m59-jumpfinder.mjs` — both files used to carry their
 // own copy and both had the same bug. See m59-falljump-physics.mjs.
 import { RUN_SPEED, reachFor, fallenBy, maxSpan } from './m59-falljump-physics.mjs';
+import { traceFallMotion } from './m59-falltrace.mjs';
+
+/**
+ * THE AIR SPAN OF A TIMED-FALL TRACE: every stretch the body spends above the floor under it,
+ * measured from where it LEFT the floor to where it touched down.
+ *
+ * `maxSpan(drop)` is a statement about the air: how far a body runs horizontally while falling
+ * `drop + MAX_STEP_HEIGHT`. It used to be applied to the straight line between the two
+ * endpoints, which counts the level run-up before the edge as if it were in the air -- so a
+ * declared take-off a square back from the lip (2505 r27c60 > r27c65, 5120 against 1774), or one
+ * whose run climbs a ramp first (2502's Hollows), failed a gate whose arithmetic it satisfies.
+ * docs/falljump-audit-2026-10-31.md. `traceFallMotion` already integrates every frame, so the
+ * honest measurement is read off its frames: a phase opens on the last grounded frame before the
+ * body is above its floor and closes on the frame it is back on one.
+ *
+ * The leave point is the last GROUNDED frame, so a phase is over-measured by at most one frame of
+ * travel (speed * dt): `slack` is that one frame, and nothing more.
+ */
+export function airPhases(start, frames, { speed = RUN_SPEED, dt = 16 } = {}) {
+  const phases = [];
+  let grounded = { x: start.x, y: start.y, z: start.z }, open = null;
+  for (const f of frames ?? []) {
+    const airborne = Number.isFinite(f.floor) && f.z > f.floor;
+    if (airborne && !open) open = { leave: grounded, leave_ms: f.ms };
+    if (!airborne) {
+      if (open) {
+        const span = Math.hypot(f.x - open.leave.x, f.y - open.leave.y), drop = open.leave.z - f.floor;
+        phases.push({ leave: { x: open.leave.x, y: open.leave.y }, touch: { x: f.x, y: f.y },
+          from_floor: open.leave.z, to_floor: f.floor, drop, span, air_ms: f.ms - open.leave_ms,
+          max_span: maxSpan(drop), slack: speed * dt / 1000 });
+        open = null;
+      }
+      grounded = { x: f.x, y: f.y, z: f.z };
+    }
+  }
+  return phases;
+}
+
+/** The first air phase that outruns its own budget, or null. */
+const overBudget = phases => phases.find(p => p.span > p.max_span + p.slack) ?? null;
 
 /** Check an undeclared fall on actual centre floors and integer wire endpoints. */
-export function proveCandidateFall(geo, candidate) {
+export function proveCandidateFall(geo, candidate, collision = {}) {
   const floor=p=>geo.floorBaseAtClient(p.x,p.y,geo.leafAtClient(p.x,p.y));
   const a=candidate.fromFine,b=candidate.toFine,fa=floor(a),fb=floor(b);
-  const span=Math.hypot(b.x-a.x,b.y-a.y),budget=maxSpan(fa-fb);
+  const chord=Math.hypot(b.x-a.x,b.y-a.y),budget=maxSpan(fa-fb);
+  // THE LIVE MOVER'S OPTIONS: slide on, fall on, timed. A declared jump is sent with exactly
+  // these (Session.step -> queueValidatedMove), so a proof with any other options is a proof
+  // about a move nobody makes. `collision` carries roomFlags/overrideDepths for a caller that
+  // has them.
+  const trace=(p,q)=>{
+    if(!geo.collisionReady)return {available:false,arrived:false,reason:'collision_geometry_unavailable'};
+    return traceFallMotion(geo,p.x,p.y,q.x,q.y,{slide:true,recordFrames:true,...collision});
+  };
+  const phasesOf=(p,t)=>t?.fall_motion?.frames?airPhases({x:p.x,y:p.y,z:floor(p)},t.fall_motion.frames):[];
+  // A landing above the take-off by more than one step has no air budget at all: nothing to trace.
   let reason=!Number.isFinite(fa)||!Number.isFinite(fb)?'endpoint_has_no_floor'
-    :span>budget?'fall_span_exceeds_actual_floor_budget':null;
-  const trace=reason?null:geo.traceFineMoveClient(a.x,a.y,b.x,b.y,{fall:true,timedFall:true});
-  if(!reason&&trace?.arrived!==true)reason=trace?.reason??'timed_fall_not_proved';
+    :!(budget>0)?'fall_span_exceeds_actual_floor_budget':null;
+  const flight=reason?null:trace(a,b),phases=phasesOf(a,flight);
+  if(!reason&&flight?.arrived!==true)reason=flight?.reason??'timed_fall_not_proved';
+  const over=reason?null:overBudget(phases);
+  if(!reason&&over)reason='fall_span_exceeds_actual_floor_budget';
   const quantize=p=>quantizeRailPoint(p,{floorAt:(x,y)=>floor({x,y}),
     edge:(a,b)=>geo.traceFineMoveClient(a.x,a.y,b.x,b.y)?.arrived===true});
   const fromWire=reason?null:quantize(a),toWire=reason?null:quantize(b);
   if(!reason&&(!fromWire.ok||!toWire.ok))reason='wire_endpoint_not_proved';
-  const wireSpan=fromWire?.ok&&toWire?.ok?Math.hypot(toWire.client.x-fromWire.client.x,toWire.client.y-fromWire.client.y):null;
-  if(!reason&&wireSpan>maxSpan(fromWire.floor-toWire.floor))reason='wire_fall_span_exceeds_budget';
-  const wireTrace=reason?null:geo.traceFineMoveClient(fromWire.client.x,fromWire.client.y,toWire.client.x,toWire.client.y,{fall:true,timedFall:true});
+  const wireTrace=reason?null:trace(fromWire.client,toWire.client);
   if(!reason&&wireTrace?.arrived!==true)reason=wireTrace?.reason??'wire_timed_fall_not_proved';
+  const wirePhases=wireTrace?phasesOf(fromWire.client,wireTrace):[];
+  if(!reason&&overBudget(wirePhases))reason='wire_fall_span_exceeds_budget';
+  const longest=phases.reduce((m,p)=>!m||p.span>m.span?p:m,null);
+  const strip=t=>t?.fall_motion?{...t,fall_motion:{dt:t.fall_motion.dt,elapsed_ms:t.fall_motion.elapsed_ms,waited_ms:t.fall_motion.waited_ms}}:t;
   return {model_proved:!reason,reason,from_floor_client:fa,to_floor_client:fb,
-    span_client:span,max_span_client:budget,trace,from_wire:fromWire,to_wire:toWire,wire_trace:wireTrace};
+    // `span_client` is now the AIR span of the longest phase (the run-up is not air), and
+    // `max_span_client` that phase's own budget (0 and the endpoint budget for a walk with no air);
+    // `chord_span_client` is the old straight line.
+    span_client:longest?longest.span:0,max_span_client:longest?longest.max_span:budget,
+    chord_span_client:chord,air_phases:phases.map(({leave,touch,drop,span,max_span,air_ms})=>({leave,touch,drop,span:Math.round(span),max_span:Math.round(max_span),air_ms})),
+    trace:strip(flight),from_wire:fromWire,to_wire:toWire,wire_trace:strip(wireTrace)};
 }
 
 /** Keep corners unless the mover proves the replacement chord reaches its endpoint. */

@@ -189,8 +189,16 @@ uses the complete Dispel state observed by the character before applying
 the matching baked mask.
 
 The outward Hollows crossing is declared from the operator's successful native
-client recording. The approach near r41c34 leads to a physics-checked fine
-takeoff at r40c33 and landing at r44c27; the ordinary jump uses stock gravity.
+client recording.
+
+- **Since 2026-10-31** (`docs/falljump-audit-2026-10-31.md`) it is r40c33 >
+  r40c29. The run goes from the ramp foot on the 8000 approach shelf, up the
+  8000–8465 ramp, off its top edge, across the ~2000-unit pit, and lands on the
+  far lip at (29120,40128).
+- **The old landing r44c27** was a point a walk beyond the lip. The straight line
+  to it falls into the pit.
+- **`western_out_1`** in `m59-fine-guides.json` now starts at the lip. The
+  approach near r41c34 is unchanged, and the ordinary jump uses stock gravity.
 It requires running vigor. Followers serialize that crossing and clear its
 landing. The western climb uses body-seeded 128-client-unit rails, with both
 lattice bridges and wire-rounded command chords checked against ordinary

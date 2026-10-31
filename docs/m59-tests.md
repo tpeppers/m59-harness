@@ -175,7 +175,14 @@ Island movement regressions run in `m59-movement-suite.mjs`: fine refuge
 approaches and actual-distance bounds (`m59-fine-safeleg-test`), policy
 transport including per-room distances (`m59-safeleg-policy-test`), bounded
 keeper rest dispatch (`m59-rest-dispatch-test`), and declared takeoff refinement
-with stock gravity at four frame intervals (`m59-jump-takeoff-test`). The
+with stock gravity at four frame intervals (`m59-jump-takeoff-test`).
+`m59-declared-jump-test` covers every declared jump. Each one proves on the live
+trace options, wire rounding, the air-span gate and its `requires.sectors`. The
+jumps moved on 2026-10-31 also prove with slide off, inside their own squares.
+Brax's north ledge proves with the lift up and is refused on the shipped .roo.
+Session.step refuses an unmet or unobserved sector by name and writes an outcome
+row for every attempt, sent or refused. The reader turns those rows into a
+landed rate. The
 pocket suite also checks fall settlement and cancellation before a delayed
 departure packet. Populated fleet trials remain separate live evidence.
 

@@ -85,6 +85,7 @@ import { planAccountLeases } from './runtime/account-leases.mjs';
 import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
 import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
+import { declaredJumpNear, livePreconditionState } from './m59-jump-precondition.mjs';
 import { moveOrigin, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
@@ -2902,6 +2903,15 @@ const server = createServer(async (req, res) => {
             const selected=selectDeclaredFall(candidates,{from:{row:me.row,col:me.col},to:{row:toRow,col:toCol}});
             if(selected){match=selected.to;from=selected.from;}
             if (!match) {
+              // A DECLARED JUMP THAT IS NOT A FALL RIGHT NOW. The geometry here carries the live
+              // sector heights, so with Brax's lift down `declaredFallJumps` (correctly) does not
+              // offer the north ledge -- it is uphill. Say WHY, by name, rather than "no such jump".
+              const waiting = declaredJumpNear(Number(session.world?.room?.num ?? NaN), { row: me.row, col: me.col }, { row: toRow, col: toCol });
+              const pre = waiting ? livePreconditionState(waiting, session.client?.room?.sectorHeights ?? null) : null;
+              if (pre && pre.ok !== true) {
+                json({ jumped: false, arrived: false, reason: pre.reason, precondition: pre });
+                return;
+              }
               json({ jumped: false,
                      reason: `no declared fall-jump from ${me.row},${me.col} to ${toRow},${toCol}`,
                      declared_here: declaredHere.map(j => j.row + ',' + j.col),
@@ -2935,7 +2945,8 @@ const server = createServer(async (req, res) => {
                    from: before, aimed_at_fine: !!land?.to_fine,
                    landed: now ? { row: now.row, col: now.col } : null,
                    arrived: !!now && now.row === toRow && now.col === toCol,
-                   ...(moved ? {} : { reason: r?.reason?`declared jump refused: ${r.reason}`:'declared jump landing not observed' }),
+                   ...(moved ? {} : { reason: r?.reason?`declared jump refused: ${r.reason}${r.detail?': '+r.detail:''}`:'declared jump landing not observed' }),
+                   ...(r?.precondition ? { precondition: r.precondition } : {}),
                    mover: r ?? null });
             });
             return;

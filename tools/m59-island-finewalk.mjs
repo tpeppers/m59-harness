@@ -424,7 +424,7 @@ export async function walkHollowsOut(ctx,options={}){
   if(!staging.found)throw Error('hollows_staging_'+staging.reason);
   const read=async()=>{const l=await readIslandFinePosition(ctx);options.onSample?.(l);checkIslandCancellation(ctx,l);return l;};
   const walk=(point,guard={})=>checkedIslandWalk(ctx,point,{...remaining(),...guard});
-  const declaration=fallJumpsIn(2502).find(j=>j.to?.row===44&&j.to?.col===27);
+  const declaration=fallJumpsIn(2502).find(j=>j.to?.row===40&&j.to?.col===29);
   // This lower pocket has no proved ordinary path to any room exit or the
   // western climb. Unlike Konima it has no established walking gutter. Never
   // aim uphill or invent a teleport; the route must prevent that descent.
