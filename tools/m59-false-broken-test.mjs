@@ -212,6 +212,14 @@ const SOUND = 'This weapon has been dedicated to Kraanan\'s glory.  Enchanted by
 const SHATTERED = 'This mace has been shattered by a powerful blow.';
 const isMace = d => d.id === 11023;
 
+console.log('\nWEAPON_CONDITION: a bow says "is broken and in pieces", not "shattered" (bow.kod:38)');
+{
+  const { WEAPON_CONDITION } = await import('./m59-skills.mjs');
+  ok('a broken longbow reads as broken', WEAPON_CONDITION.test('Expertly carved for flexibility and range, this bow gives you the envious advantage of a long ranged attack.\r\n\r\nThis longbow is broken and in pieces.'));
+  ok('a shattered mace still reads as broken', WEAPON_CONDITION.test(SHATTERED));
+  ok('a worn but sound bow does not', !WEAPON_CONDITION.test('This longbow is well worn and could use some repair.'));
+}
+
 console.log('\nfreeRoomFor(): a precious item leaves only on a fresh look at its own id');
 {
   const t = packClient({ inventory: [{ id: 11023, nameRsc: 10 }], broken: [11023],

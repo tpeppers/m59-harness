@@ -417,7 +417,11 @@ export const WEAPON_IS_BROKEN = /is broken; you can'?t use it/i;  // weapon.kod:
 // pass, and the character retried the same dead mace for ever while reporting itself
 // unarmed. Zoot accumulated four of them and fought bare-handed with a full pack.
 export const WEAPON_USE_BROKEN = /can'?t use .*--it'?s broken/i;  // player.kod:127
-export const WEAPON_CONDITION = /shattered by a powerful blow/i;  // seen when examining it
+// A BOW SAYS IT DIFFERENTLY (operator 2026-10-31). Melee weapons describe a ruin as "has been shattered by a powerful blow"
+// (weapon.kod:92, weapon_condition_broken); bows override it with " is broken and in pieces." (bow.kod:38,
+// bow_condition_broken). Matching only the first left every broken longbow reading as sound: Scooter carried two on prod,
+// the keeper kept reaching for them, and he stood in the clearing unable to shoot.
+export const WEAPON_CONDITION = /shattered by a powerful blow|is broken and in pieces/i;  // seen when examining it
 
 // RUINED ARMOUR REFUSES IN COMPLETE SILENCE, AND ONLY THE DESCRIPTION SAYS SO.
 //
