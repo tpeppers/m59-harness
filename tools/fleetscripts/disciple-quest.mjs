@@ -92,13 +92,45 @@ export const KRAANAN_MONSTERS = Object.freeze({
   // Ileria) — that room's spawn counter is shared across its whole table and has been measured
   // holding ten larvae and zero fungus beasts.
   'fungus beast': { room: 563, level: 50, difficulty: 1 },
-  // Seafarer's Peak: cap 15, 60%. The Berdonne Canyons (32) is the alternative.
-  'mutant ant': { room: 515, level: 65, difficulty: 8 },
+  // THE HILLS (516), NOT SEAFARER'S PEAK (515), BECAUSE ONE KILL NEEDS A ROOM YOU CAN STAND IN.
+  // By the spawn table alone 515 is the better ant room (m59-spawns.json: 515 ants 60% cap 15,
+  // trolls 40%; 516 ants 30% cap 12, trolls 70%). But 515's only exit is the edge back to 516
+  // (m59-map.json), so every trip to 515 is the 516 -> 515 crossing, and on 2026-10-31 Zoot's
+  // quest asked for a mutant ant and that walk failed three times running, while the prod fleet
+  // ledger (read by the coordinating session, 2026-10-31) holds 18 mutant ant kills in 516 itself. The quest wants ONE kill by this character's own
+  // hand, so reachability beats spawn rate, and the body is in 516 on the way to 515 anyway.
+  // The failed crossing is a movement defect in its own right, not settled by this. The
+  // alternatives, by `huntRooms`: 515, or the Berdonne Canyons (32: ants 50% cap 10, orcs 50%).
+  // 516 is also troll-heavy (difficulty 8, like the ant), which is the cost of this choice.
+  'mutant ant': { room: 516, level: 65, difficulty: 8 },
   // Castle Victoria: cap 10, 40%, and a road this fleet already knows. G9 (579) is one hop
   // south of the Kraanan temple but carries a single RESPAWNING skeleton, so it is a coin
   // flip rather than a hunting ground.
   'skeleton': { room: 38, level: 75, difficulty: 5 },
 });
+
+// THE FLEET REPL HANDS EVERY PARAMETER OVER AS A STRING, and `Object.entries` of a string walks
+// its characters. 2026-10-31: `dry disciple-quest agents=t17 school=kraanan
+// huntRooms={"mutant%20ant":32}` was refused with `huntRooms names "0", which is not a monster` --
+// the first character's index, a sentence about nothing the operator typed. So a string is
+// parsed as JSON (the REPL has already decoded %20), as hall-draw's `wants` is, and a string that
+// is not JSON, or JSON that is not an object, is refused saying what was given and what is wanted.
+export function parseHuntRooms(huntRooms) {
+  if (huntRooms == null || huntRooms === '') return {};
+  let rooms = huntRooms;
+  if (typeof rooms === 'string') {
+    try { rooms = JSON.parse(rooms); }
+    catch (e) {
+      throw new Error(`disciple-quest: huntRooms ${JSON.stringify(huntRooms)} is not JSON ` +
+        `(${e.message}). Pass an object of monster to room, e.g. huntRooms={"mutant%20ant":516} ` +
+        `at the fleet REPL, %20 standing for the space.`);
+    }
+  }
+  if (!rooms || typeof rooms !== 'object' || Array.isArray(rooms))
+    throw new Error(`disciple-quest: huntRooms must be an object of monster to room, e.g. ` +
+      `{"mutant ant":516}; got ${JSON.stringify(huntRooms)}.`);
+  return rooms;
+}
 
 export const SCHOOLS = Object.freeze({
   kraanan: {
@@ -619,7 +651,8 @@ export const script = {
     // The room to hunt the assigned monster in, when the default is wrong for this fleet's
     // level band. Keyed by the name the priestess SPEAKS: "fungus beast", "mutant ant",
     // "skeleton".
-    huntRooms: { describe: 'override the hunting room per monster, e.g. {"skeleton":2601}' },
+    huntRooms: { describe: 'override the hunting room per monster, as JSON: {"skeleton":2601}; ' +
+                           'at the fleet REPL write the space as %20, huntRooms={"mutant%20ant":32}' },
     rounds: { type: 'number', default: 40,
               describe: 'swing budget for the Kraanan fight — a budget for the whole fight, ' +
                         'not for one exchange' },
@@ -673,10 +706,13 @@ export const script = {
                       `(riija and jala have no quest).`);
 
     const hunts = { ...KRAANAN_MONSTERS };
-    for (const [name, room] of Object.entries(huntRooms ?? {})) {
+    for (const [name, room] of Object.entries(parseHuntRooms(huntRooms))) {
       if (!hunts[name]) throw new Error(
         `disciple-quest: huntRooms names "${name}", which is not a monster this quest can ` +
         `ask for. It asks for one of: ${Object.keys(KRAANAN_MONSTERS).join(', ')}.`);
+      if (!Number.isInteger(Number(room)) || Number(room) <= 0) throw new Error(
+        `disciple-quest: huntRooms sends the ${name} hunt to ${JSON.stringify(room)}, which is ` +
+        `not a room number.`);
       hunts[name] = { ...hunts[name], room: Number(room) };
     }
 

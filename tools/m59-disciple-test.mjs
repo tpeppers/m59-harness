@@ -689,13 +689,43 @@ console.log('\nturning what she said into what to do');
      readAsk(['nothing like a quest'], { school: 'kraanan' }).handled === false);
   ok('and it keeps the raw sentence, which is the whole specification for the handler',
      readAsk(['nothing like a quest'], { school: 'kraanan' }).raw === 'nothing like a quest');
+  // 516, not 515: 515's only way in is the 516 -> 515 edge, which failed three times running on
+  // Zoot's quest (2026-10-31). See the KRAANAN_MONSTERS comment for the evidence both ways.
   ok('a kill ask carries the room and the difficulty, not just the name',
-     (a => a.room === 515 && a.difficulty === 8)(
+     (a => a.room === 516 && a.difficulty === 8)(
        readAsk(['kill a mutant ant.'], { school: 'kraanan' })));
   // THE DECOY. Nothing the priestess says contains "red", so a recogniser written against the
   // CLASS name reports no assignment and the run reads as "the quest never started".
   ok('and "red ant" is NOT what she says, so matching on the class would find nothing',
      readAsk(['kill a red ant.'], { school: 'kraanan' }).kind === 'unknown');
+}
+
+// ---------------------------------------------------------------- huntRooms from the fleet REPL
+console.log('\nhuntRooms as the fleet REPL hands it over: a string');
+{
+  const { parseHuntRooms } = await import('./fleetscripts/disciple-quest.mjs');
+  const huntRoomsOf = async huntRooms => {
+    const steps = await script.steps({ school: 'kraanan', agent: 't17', agents: ['t17'], huntRooms });
+    return new Set(steps.filter(s => s.do === 'walk' && Array.isArray(s.candidates)).flatMap(s => s.candidates));
+  };
+  // The REPL decodes %20 before the script sees it, so this is what `huntRooms={"mutant%20ant":32}`
+  // arrives as. It used to be refused with `huntRooms names "0"` -- the first character's index.
+  ok('a JSON string is parsed', JSON.stringify(parseHuntRooms('{"mutant ant":32}')) === '{"mutant ant":32}');
+  ok('and an object is taken as it is', parseHuntRooms({ skeleton: 2601 }).skeleton === 2601);
+  ok('nothing given is no override', JSON.stringify(parseHuntRooms(undefined)) === '{}' &&
+     JSON.stringify(parseHuntRooms('')) === '{}');
+  ok('the string reaches the plan: the ant hunt is offered room 32',
+     (await huntRoomsOf('{"mutant ant":32}')).has(32));
+  const refusal = async v => { try { await huntRoomsOf(v); return null; } catch (e) { return e.message; } };
+  const bad = await refusal('{"mutant ant":32');
+  ok('a malformed string is refused saying it is not JSON, and showing the REPL form',
+     /is not JSON/.test(bad ?? '') && /mutant%20ant/.test(bad ?? ''), bad);
+  const arr = await refusal('[32]');
+  ok('JSON that is not an object is refused as such', /must be an object/.test(arr ?? ''), arr);
+  const room = await refusal('{"mutant ant":"Seafarer"}');
+  ok('a room that is not a number is refused', /not a room number/.test(room ?? ''), room);
+  const who = await refusal('{"red ant":32}');
+  ok('and a monster the quest never asks for is still refused by name', /names "red ant"/.test(who ?? ''), who);
 }
 
 // ---------------------------------------------------------------- the questbook
