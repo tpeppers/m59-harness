@@ -30,7 +30,7 @@ import { traceSurvival } from '../m59-survival-trace.mjs';
 import { noteTrafficJam, trafficBlinkAdvice } from '../m59-traffic-blink.mjs';
 import { routeTravelKind } from '../m59-travel-kind.mjs';
 import { UNDERWORLD } from '../m59-travelgate.mjs';
-import { compactRefusals, travelJourneyMetrics, withTravelJourneyMetrics } from '../m59-trip-telemetry.mjs';
+import { compactRefusals, travelJourneyMetrics, travelThrewOutcome, withTravelJourneyMetrics } from '../m59-trip-telemetry.mjs';
 import { REACH, REST_VIGOR_CAP, REST_VIGOR_WORTH_WAITING, TRAVEL_FORWARD_BIAS, TRAVEL_HOLD_ARM, TRAVEL_HOLD_MODE, journeyIncident, vigorPct } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
 
@@ -1269,6 +1269,14 @@ export class TravelPart {
         const handed = this.leverPuzzleHandoff(outcome.room?.num ?? this.s.world?.room?.num, room);
         if (handed) outcome = { ...outcome, ...handed, hops: outcome.hops, log: outcome.log };
       }
+    } catch (e) {
+      // A JOURNEY THAT THREW STILL GETS A REASON. Without this `outcome` is null in the finally
+      // below, so the ledger row and the movement incident say `reason: null`, and the error
+      // itself goes to a caller that keeps it only in the in-memory journal. 455 such incidents
+      // on prod 2026-10-27..31, the largest "stuck" class. Re-thrown unchanged: callers behave
+      // exactly as they did; only the record is new. See travelThrewOutcome.
+      outcome = travelThrewOutcome(e);
+      throw e;
     } finally {
       // ONLY IF IT IS STILL THE VERY HOLD WE TOOK. Reviving somebody else's is how a
       // character ends up driven by two things at once — the same rule travelJob follows.
@@ -1326,6 +1334,8 @@ export class TravelPart {
         ended_in: Number(this.s?.world?.room?.num ?? NaN) || null,
         arrived: outcome?.arrived ?? false,
         reason: outcome?.reason ?? null,
+        // WHERE IT THREW, innermost first (travelThrewOutcome). Absent on every journey that returned.
+        ...(outcome?.threw ? { threw_at: outcome.frames ?? [] } : {}),
         // WHICH STEP OF WHICH CROSSING REFUSED, not only that the exits ran out. The travel
         // result has carried `refusals` (each candidate's stand_on, stage and reason) since the
         // exhausted-exit work, and only the caller ever saw it: on 2026-10-04 Camilla failed

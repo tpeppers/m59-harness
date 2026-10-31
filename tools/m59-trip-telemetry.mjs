@@ -28,6 +28,32 @@ export function withTravelJourneyMetrics(outcome, counters = {}) {
   return { ...outcome, journey: travelJourneyMetrics(counters) };
 }
 
+// A JOURNEY THAT THREW, AS AN OUTCOME. `Autopilot.travel` writes its ledger row and movement
+// incident in a `finally`, and `Session.travel` throwing used to leave `outcome` null there: the
+// row said `arrived: false, reason: null` and the exception went on to a caller that swallowed
+// it into the in-memory journal (`leaveRoomForRecovery`, `leaveForCasters`). Prod 2026-10-27..31:
+// 455 `not_arrived` incidents with no reason, the largest class of "stuck" on the fleet, and the
+// one thing that could say why was thrown away. So the error and where it came from become the
+// reason. `frames` are the first in-repository stack frames, innermost first, as
+// `fn file:line` -- the file is the path below `tools/`, never an absolute path, so two
+// checkouts produce the same string. The caller re-throws: this changes the record, not the flow.
+export function travelThrewOutcome(e, { maxFrames = 4 } = {}) {
+  const message = String(e?.message ?? e ?? 'unknown error').replace(/\s+/g, ' ').slice(0, 200);
+  const frames = [];
+  for (const line of String(e?.stack ?? '').split('\n').slice(1)) {
+    const m = /^\s*at (?:(.*?) \()?(.*?):(\d+):\d+\)?\s*$/.exec(line);
+    if (!m) continue;
+    const file = m[2].replace(/\\/g, '/');
+    const at = file.lastIndexOf('/tools/');
+    if (at < 0 || /\/node_modules\//.test(file)) continue;
+    frames.push(`${m[1] ? m[1] + ' ' : ''}${file.slice(at + '/tools/'.length)}:${m[3]}`);
+    if (frames.length >= maxFrames) break;
+  }
+  const name = e?.name && e.name !== 'Error' ? `${e.name}: ` : '';
+  return { arrived: false, threw: true, frames,
+           reason: `travel_threw: ${name}${message}` + (frames.length ? ` @ ${frames[0]}` : '') };
+}
+
 // The keeper's travel hook counts wall holds and sanctuary pauses as shelter stops. Its
 // ordinary tally counts a different, older kind of rest. Say which evidence we have rather
 // than calling every pause a rest at a safe wall (a sanctuary is not one).
