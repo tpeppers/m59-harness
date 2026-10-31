@@ -3,7 +3,7 @@
 Split out of [`CLAUDE.md`](../CLAUDE.md). The code is [`tools/m59-pvp-strategy.mjs`](../tools/m59-pvp-strategy.mjs)
 (the loader and the closed decision set) and the PvP-strategy section of `CombatMode` in
 [`tools/m59-combat-mode.mjs`](../tools/m59-combat-mode.mjs) (the keeper's half). The guard is
-`node tools/m59-pvp-strategy-test.mjs` (111, offline).
+`node tools/m59-pvp-strategy-test.mjs` (172, offline).
 
 ## What the operator asked for
 
@@ -53,9 +53,10 @@ before it existed would read "a hostile, elsewhere" as one of its own and act on
 the first blow; starts no fight.
 
 **Facts:** `moment, character, agent, room, player, hostile, basis, pvp_allowed_here, health_pct, max_health,
-in_flight, flight_room, hold_room, now, allies_here, hostiles_here, sortie_room, sortie_phase, alarm_room, reporter` —
-frozen. `allies_here` does not count the character itself; `hostiles_here` counts players the war book or the
-server marks hostile; `alarm_room`, `reporter` and `alarm_adjacent` (the alarm map is one exit from here) are set only
+in_flight, flight_room, hold_room, now, allies_here, hostiles_here, sortie_room, sortie_phase, alarm_room, reporter,
+aggressor` — frozen. `allies_here` does not count the character itself; `hostiles_here` counts players the war book or
+the server marks hostile, and players under an `aggress` in force; `hostile`/`basis` stay the war book's and the
+server's, and `aggressor` is true while this character's own `aggress` about `player` is in force; `alarm_room`, `reporter` and `alarm_adjacent` (the alarm map is one exit from here) are set only
 for `alarm_elsewhere`.
 `player_health` is the fleet's groan-based estimate of the player (below), or null.
 `pvp_episode` is the return-fire fight in progress, or null: `{ elapsed_ms, start_health, health, attacks_sent,
@@ -70,8 +71,26 @@ one exchange, healing included -- which is what a `joust` paces against.
 | `{ do: 'flee_to', room, hold_ms?, hold_orders?, max_ms?, via?, row?, col?, why? }` | takes the body as survival (`pvp_strategy_flight`), cancels any journey or job, walks the validated router to `room` without asking the confinement, ends the flight on arrival and HOLDS there: `Autopilot.travel` refuses the keeper's own journeys out until `hold_ms` passes (explicit orders are let through, unless `hold_orders: true`, which refuses those too -- a director such as the DUM moves units with explicit `travel` and would walk a fled unit straight back out). A blow on the road does not restart it and a war engagement does not preempt it. A flight that does not arrive backs off 15 s. `via` walks to that room first, planning around `room`, then steps in -- for a room whose entrances are edges from different neighbours landing on islands that do not reach each other (Ukgoth's NE corner is reached only from 598); a way in that fails is recorded (`pvp_strategy_flight_via`, `via_result`) and the flight goes straight in. `row`/`col` is a post walked to on arrival, best effort, and asked of the router as `arriveNear` |
 | `{ do: 'sortie', room, home, row?, col?, max_ms?, idle_ms?, home_hold_ms?, wait_home_fight?, why? }` | a deliberate excursion into ONE other map. The body is taken as a flight takes it (the walk out ignores the fight it leaves), walks to `room` and, given a square, to that square. There our room list is lifted for the sortie, the keeper is held in the map (explicit orders too), and return fire and the war response engage whoever is hostile. It ends after `idle_ms` (default 30 s) with no hostile in the map, after `max_ms` (default 3 min, at most 15), or the moment the body is anywhere but `room` or `home` -- a sortie never follows anyone a second map out -- and the body flies back to `home`, held there for `home_hold_ms`. A `flee_to` decided meanwhile replaces it. A sortie decided in its own map posts in place and the fight goes on. `wait_home_fight: true` keeps a posted sortie waiting while its HOME is still fighting: a fleet-mate's attacked/engaged alarm from `home` counts as a hostile on the idle clock (lab rehearsal 2026-10-16: two door guards went home after 30 quiet seconds while the enemy was still fighting inside, and it walked out to nobody). `CombatMode.sortieTick`, every 250 ms in the keeper process, keeps it honest |
 | `{ do: 'hold_fire', ms?, why? }` | do not START a fight with this player: the war response's on-sight engagement and a fleet-mate's alarm pass over them for `ms` (default 6 s, at most 60 s; renewed by deciding again). Never stops return fire: a player who hits us is answered as before |
+| `{ do: 'aggress', ms?, why? }` | **`player_seen` only** (on any other moment it is silence). The strategy has judged this stranger a TARGET -- the operator's rule (2026-10-31) is a member of an aggressor guild who is also attackable under the faction-shield rules, and the strategy decides that, not the harness. For `ms` (default 60 s, at most 5 min, renewed by deciding again; `CombatMode.aggress`) the war response treats the player as a war-book hostile with verdict basis `aggressor` -- see below. It lifts nothing and never asks for `go_red` |
 | `{ do: 'engage', why? }` | lifts this character's own `pvp_rooms` refusal **for this room**, for 60 s (renewed by deciding again): return fire on a hit, the war response on a hostile sighting. The server's room flags, the safety flag and every refused-target memory still apply |
 | `{ do: 'joust', period_ms?, swings?, gap?, ms?, why? }` | return fire in TIMED EXCHANGES. An exchange is `swings` attacks (0-5, default 1) sent by the ordinary attack path; then the body backs away INSIDE THIS ROOM (`joustRetreat`: a standable square at least `gap` squares from the attacker, 2-10, default 4, near where it stands and not in a corner) and waits; the next exchange starts `period_ms` (2-30 s, default 6 s) after the last one began. An exchange that cannot send its swings in 4 s gives up and evades. `swings: 0` only evades. It lasts `ms` (default 60 s, at most 15 min) and lifts our room list here as `engage` does. Every blow asks again, so the strategy re-paces as the fight goes; any other answer to a later blow -- `null` included -- ends it and the fight is ordinary return fire. It never leaves the room. Combat lines `pvp_joust_started/evade/exchange/ended`; `combat.pvp_survival.joust` in status |
+
+**`aggress`, exactly.** `player_seen` is asked at most once per player per room per 5 s, so the decision is
+REMEMBERED (`CombatMode.noteAggress`, keyed on the lower-cased name, like `hold_fire`) and every scan in the window
+overlays it (`aggressVerdicts`). In `scanForEnemies` the strategy is now consulted for every stranger BEFORE the
+hostile is chosen, so an `aggress` (or `hold_fire`, or `engage`) decided in this scan counts in this scan. A stranger
+the war book and the server do not already mark hostile, and who is not a guildmate, then reads
+`{ hostile: true, basis: 'aggressor' }` and goes down the war-book path UNCHANGED: one of ours is dropped before the
+strategy is even asked (and `aggressor()` refuses ours again), the object must carry `OF.ATTACKABLE`, a target the
+server already refused us in this room (`targetRefused`) and a `hold_fire` in force are passed over, and
+`warScanAction` still asks `warEnabled`, the swarm leash and our `pvp_rooms` -- outside them it is a sighting
+alarm, never an engagement. `beginWar` then keeps every gate it has (flight, no-combat room, operator order) and
+engages with `keepSafety`: safety is never lowered, and a "Good thing your safety was on" refusal goes through
+`askRefused` into the refused-target memory, so the player is not re-engaged here. As for any war-book hostile, the
+engagement raises an alarm with basis `aggressor`, which fleet-mates in the SAME map treat as a call to arms
+(`onWarAlarm` -> `beginWar`, their own gates included) and which `alarm_elsewhere` strategies hear; a callout
+arrival and a posted sortie's idle clock count the aggressor as a hostile too, and the combat reason reads
+`reason_code: 'aggressor'`.
 
 `decide` must be synchronous and fast. A throw, a promise or more than 25 ms (`M59_PVP_STRATEGY_MS`) is
 silence and a strike; three strikes stand the module down until its file changes.

@@ -39,6 +39,8 @@
 //   (start_health - health) / exchanges is the net cost of one exchange, healing included,
 //   player_health -- the fleet's groan-based estimate of the player's health (m59-player-health.mjs):
 //   { band 1-4, min_pct, max_pct, age_ms, room } from the last time anyone of ours heard them hurt, or null
+//   aggressor -- true while an `aggress` this character's strategy decided about `player` is still in force
+//   (hostiles_here counts those players too; `hostile`/`basis` stay the war book's and the server's)
 //
 // THE DECISIONS — a CLOSED set, like the playbook verbs. Anything else is reported and ignored.
 //   null | 'default' | { do: 'default' }    what the harness already does; silence
@@ -86,6 +88,16 @@
 //        strategy re-paces as the fight goes) and lifts our room list here as `engage` does. Any other answer
 //        to a later blow -- null included -- ends it and the fight is ordinary return fire again. It never
 //        leaves the room: it slows a fight down, it does not run from one.
+//   { do: 'aggress', ms?, why? }                                            (player_seen only)
+//        this stranger is a TARGET: the strategy has judged them one (operator, 2026-10-31: a member of an
+//        aggressor guild who is ALSO attackable under the faction-shield rules -- the strategy decides that,
+//        the harness does not). For `ms` (default AGGRESS_MS, at most AGGRESS_MAX_MS, renewed by deciding
+//        again) the war response treats them exactly as a war-book hostile, verdict basis 'aggressor': the
+//        object must still be ATTACKABLE, never one of ours or a guildmate, not refused to us here, not held
+//        by hold_fire, and our pvp_rooms, the swarm leash and the server's room flags still decide -- outside
+//        them it is a sighting. Safety stays ON: a server refusal is remembered as for a war target and the
+//        player is not re-engaged here. It lifts nothing and never asks for go_red. Answered on any other
+//        moment it is silence (the default behaviour).
 //
 // WHERE THE FILES ARE (all optional, all this machine's — gitignored, never committed):
 //   strategies   substrate/pvp-strategies/<name>.mjs (or M59_PVP_STRATEGY_DIR), then every directory in
@@ -118,7 +130,10 @@ const SUBSTRATE = join(HERE, '..', 'substrate');
 export const PVP_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen', 'alarm_elsewhere']);
 /** What a module hears when it does not say: the moments that existed before `moments` did. */
 export const DEFAULT_MOMENTS = Object.freeze(['attacked_by_player', 'player_seen']);
-export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire', 'joust', 'stand_to']);
+export const PVP_DECISIONS = Object.freeze(['default', 'flee_to', 'engage', 'sortie', 'hold_fire', 'joust', 'stand_to', 'aggress']);
+/** `aggress`: how long a stranger stays a target after one decision, and the most one decision may ask. */
+export const AGGRESS_MS = 60_000;
+export const AGGRESS_MAX_MS = 5 * 60_000;
 export const STAND_TO_MS = 60_000;
 export const STAND_TO_MAX_MS = 10 * 60_000;
 export const DECIDE_BUDGET_MS = Number(process.env.M59_PVP_STRATEGY_MS || 25);
@@ -212,6 +227,11 @@ export function validateDecision(d) {
     const v = d.ms == null ? STAND_TO_MS : Number(d.ms);
     if (!Number.isFinite(v) || v < 1000) return { decision: null, error: 'stand_to ms is at least 1000 milliseconds' };
     return { decision: { do: 'stand_to', ms: Math.min(v, STAND_TO_MAX_MS), why } };
+  }
+  if (verb === 'aggress') {
+    const v = d.ms == null ? AGGRESS_MS : Number(d.ms);
+    if (!Number.isFinite(v) || v < 1000) return { decision: null, error: 'aggress ms is at least 1000 milliseconds' };
+    return { decision: { do: 'aggress', ms: Math.min(v, AGGRESS_MAX_MS), why } };
   }
   if (verb === 'hold_fire') {
     const v = d.ms == null ? HOLD_FIRE_MS : Number(d.ms);

@@ -33,7 +33,8 @@ import { lineOfSight } from './m59-safespots.mjs';
 import { loadCatalogue } from './m59-deskpractice.mjs';
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { pvpRoomsRefusal, pvpRoomsStopReason, warScanAction, outsideRoomsRow } from './m59-pvp-rooms.mjs';
-import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS, STAND_TO_MS } from './m59-pvp-strategy.mjs';
+import { ENGAGE_WINDOW_MS, PLAYER_SEEN_EVERY_MS, DEFAULT_SORTIE_MS, DEFAULT_SORTIE_IDLE_MS, HOLD_FIRE_MS, STAND_TO_MS,
+  AGGRESS_MS, AGGRESS_MAX_MS } from './m59-pvp-strategy.mjs';
 import { recordGroan, latestHealth, roomGroans } from './m59-player-health.mjs';
 import { recordFocus, roomFocus } from './m59-pvp-focus.mjs';
 import * as callout from './m59-pvp-callout.mjs';
@@ -400,6 +401,9 @@ export class CombatMode {
     this.sortie = null; this.lastSortie = null; this.alarmAskedAt = new Map();
     // hold_fire: player (lower case) -> until. The groan book is read through latestHealth.
     this.holdFire = new Map(); this.lastGroan = null;
+    // aggress: player (lower case) -> { until, strategy, why, room, at }. A target the strategy named on
+    // player_seen; consultSeen is throttled per PLAYER_SEEN_EVERY_MS, so the decision is REMEMBERED here.
+    this.aggress = new Map();
     // The last attacked/engaged alarm heard from each map, by map number (sortie wait_home_fight).
     this.alarmRoomAt = new Map();
   }
@@ -516,31 +520,38 @@ export class CombatMode {
       if (o.id === c.selfId || !(o.flags & OF.PLAYER)) continue;
       const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
       if (!name) continue;
+      // ONE OF OURS FIRST, AND ABSOLUTELY: a fleet-mate is never seen, never asked about, never a target.
       const mine = this.isOurs(name);
       if (mine) { ours.push(name); continue; }
       const verdict = war.warHostility({ name, flags: o.flags }, { fleetmate: mine, now });
-      seen.push({ name, verdict });
-      if (verdict.hostile) {
-        // Refused to us in this room: not engaged here, and not re-engaged on every object change.
-        // Chosen after the strategy below has spoken, so a hold_fire this scan is honoured.
-        if ((o.flags & OF.ATTACKABLE) && !this.targetRefused(name)) hostiles.push({ o, name, verdict });
-        continue;
-      }
+      seen.push({ o, name, verdict });
+      if (verdict.hostile) continue;
       if (!this.warSeen.has(o.id)) this.warSeen.set(o.id, now);
       if (!(o.flags & OF.GUILDMATE) && war.needsLook(name, { now })) unknown.push({ o, name });
     }
     if (this.warSeen.size > 512) this.warSeen.clear();
-    this.noteCalloutArrivals(c, seen, room, now);
-    // THE STRATEGY SEES EVERY STRANGER, hostile or not (m59-pvp-strategy.mjs `player_seen`): a flight
-    // ends the scan here; an `engage` lifts this room's pvp_rooms refusal for the scan just below.
-    if (this.sortie?.phase === 'posted' && this.sortie.room === room && seen.some(p => p.verdict?.hostile))
-      this.sortie.last_hostile_at = now;
+    // THE STRATEGY SEES EVERY STRANGER, hostile or not (m59-pvp-strategy.mjs `player_seen`), BEFORE the
+    // hostile is chosen: a flight ends the scan here; an `engage` lifts this room's pvp_rooms refusal for
+    // the scan just below; a `hold_fire` is honoured below; an `aggress` decided now counts THIS scan.
     for (const p of seen) {
       const d = this.consultSeen(p.name, p.verdict, room, now);
-      if (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted')) { this.raiseWarAlarm(p.name, 'sighted', room); return; }
-      if (d?.do === 'sortie' && this.beginSortie(d, p.name, 'sighted') === 'going') { this.raiseWarAlarm(p.name, 'sighted', room); return; }
+      const away = (d?.do === 'flee_to' && this.beginFlight(d, p.name, 'sighted'))
+        || (d?.do === 'sortie' && this.beginSortie(d, p.name, 'sighted') === 'going');
+      if (away) {
+        this.aggressVerdicts(seen, now); this.noteCalloutArrivals(c, seen, room, now);
+        this.raiseWarAlarm(p.name, 'sighted', room); return;
+      }
       if (d?.do === 'stand_to') this.beginStandTo(d, p.name);
     }
+    // An `aggress` in force makes a stranger the war book does not name hostile, basis 'aggressor'; from
+    // here on it is the war-book path, unchanged.
+    this.aggressVerdicts(seen, now);
+    this.noteCalloutArrivals(c, seen, room, now);
+    if (this.sortie?.phase === 'posted' && this.sortie.room === room && seen.some(p => p.verdict?.hostile))
+      this.sortie.last_hostile_at = now;
+    // Refused to us in this room: not engaged here, and not re-engaged on every object change.
+    for (const p of seen)
+      if (p.verdict.hostile && (p.o.flags & OF.ATTACKABLE) && !this.targetRefused(p.name)) hostiles.push(p);
     hostile = hostiles.find(h => !this.fireHeld(h.name)) ?? null;
     // A fighter engages (which also raises the alarm); a sentinel only reports what it saw.
     // OUTSIDE pvp_rooms a fighter is a sentinel too (m59-pvp-rooms.mjs): no engagement, but the
@@ -756,8 +767,9 @@ export class CombatMode {
     if (!known) {
       this.beginPvP({ character: name, text: reporter ? `zone alarm from ${reporter}: ${why}` : `at war: ${why}`,
         reason: reporter ? `${reporter} is fighting ${name} in this map; the room fights together`
-                         : `${name} is at war with this fleet (${basis}); engage on sight`,
-        reason_code: reporter ? 'zone_alarm' : 'guild_war' }, this.now());
+          : basis === 'aggressor' ? `${name} is an aggressor (${why}); engage on sight`
+          : `${name} is at war with this fleet (${basis}); engage on sight`,
+        reason_code: reporter ? 'zone_alarm' : basis === 'aggressor' ? 'aggressor' : 'guild_war' }, this.now());
       // A war engagement NEVER turns safety off; an incoming hit that already owned the body
       // keeps whatever it decided.
       if (this.active?.pvp && !had) this.active.keepSafety = true;
@@ -2195,11 +2207,12 @@ export class CombatMode {
 
   pvpStrategyStatus() {
     const host = this.pvpStrategy;
-    if (!host && !this.lastFlight && !this.sortie && !this.lastSortie) return null;
+    if (!host && !this.lastFlight && !this.sortie && !this.lastSortie && !this.aggress.size) return null;
     const keeper = this.keeper?.();
     return { ...(host?.status?.() ?? {}), flight: this.active?.flight ?? null, last_flight: this.lastFlight,
       sortie: this.sortie, last_sortie: this.lastSortie, last_groan: this.lastGroan,
       hold_fire: Object.fromEntries([...this.holdFire].filter(([, u]) => u > this.now())),
+      aggress: Object.fromEntries([...this.aggress].filter(([, a]) => a.until > this.now())),
       engage: this.strategyEngage, hold: keeper?.pvpStrategyHold ?? null,
       backoff_until: this.flightBackoffUntil > this.now() ? this.flightBackoffUntil : null };
   }
@@ -2226,7 +2239,7 @@ export class CombatMode {
       hold_room: hold && hold.until > this.now() ? hold.room : null, now: this.now(),
       ...this.roomCount(), sortie_room: this.sortie?.room ?? null, sortie_phase: this.sortie?.phase ?? null,
       alarm_room: null, reporter: null, player_health: this.playerHealth(player), pvp_episode: this.pvpEpisode(),
-      ...extra };
+      aggressor: !!this.aggressor(player), ...extra };
   }
 
   /** The return-fire fight in progress, as a strategy sees it (m59-pvp-strategy.mjs `pvp_episode`), or null. */
@@ -2328,7 +2341,8 @@ export class CombatMode {
       if (!name || this.isOurs(name)) continue;
       const k = fold(name);
       if (k === fold(o.targetName) || targeted.has(k) || attackers.has(k) ||
-          war.warHostility({ name, flags: x.flags }, { fleetmate: false, now })?.hostile) enemies++;
+          war.warHostility({ name, flags: x.flags }, { fleetmate: false, now })?.hostile
+          || (!(x.flags & OF.GUILDMATE) && this.aggressor(name))) enemies++;
     }
     const startedAt = Math.min(focus.started_at ?? Infinity, o.pvp?.chosen_at ?? o.acceptedAt ?? now);
     const low = roomGroans(room, { since: startedAt, now }).find(g => g.band === 4 && !this.isOurs(g.name)) ?? null;
@@ -2416,6 +2430,42 @@ export class CombatMode {
     this.holdFire.delete(k); return false;
   }
 
+  /** The `aggress` in force for this player, or null. Never one of ours, whatever the map holds. */
+  aggressor(name) {
+    const k = String(name ?? '').toLowerCase(), a = this.aggress.get(k);
+    if (!a) return null;
+    if (this.now() >= a.until) { this.aggress.delete(k); return null; }
+    return this.isOurs(name) ? null : a;
+  }
+
+  /** Remember a strategy's `aggress` (player_seen): hostile for `ms`, capped, renewed by deciding again. */
+  noteAggress(name, d, room = this.s.world?.room?.num ?? null) {
+    if (!name || this.isOurs(name)) return null;
+    const v = Number(d?.ms ?? AGGRESS_MS);
+    const ms = Math.min(Number.isFinite(v) && v >= 1000 ? v : AGGRESS_MS, AGGRESS_MAX_MS);
+    const a = { until: this.now() + ms, at: this.now(), room, strategy: d?.strategy ?? null, why: d?.why ?? null };
+    this.aggress.set(String(name).toLowerCase(), a);
+    if (this.aggress.size > 256) this.aggress.clear();
+    return a;
+  }
+
+  /**
+   * Overlay the `aggress` window on a scan's verdicts: a stranger the war book and the server do not mark
+   * hostile, that is not a guildmate, becomes `{ hostile: true, basis: 'aggressor' }`. Ours never reach
+   * here (scanForEnemies drops them first) and aggressor() refuses them again.
+   */
+  aggressVerdicts(seen, now = this.now()) {
+    for (const p of seen) {
+      if (p.verdict?.hostile || (p.o?.flags & OF.GUILDMATE)) continue;
+      const a = this.aggressor(p.name);
+      if (!a) continue;
+      const by = a.strategy ? `PvP strategy ${a.strategy}` : 'a PvP strategy';
+      p.verdict = { hostile: true, basis: 'aggressor', strategy: a.strategy,
+        why: `${by}: ${a.why ?? 'aggress'}, ${Math.max(0, Math.round((a.until - now) / 1000))}s left` };
+    }
+    return seen;
+  }
+
   /** A pain sound (m59-player-health.mjs): the hurt player's health band, recorded for players not ours. */
   observeGroan(ev, c) {
     if (ev.kind !== 'groan' || !ev.source || ev.source === c.selfId) return;
@@ -2438,7 +2488,8 @@ export class CombatMode {
         const name = c.rsc?.get?.(o.nameRsc) ?? o.name;
         if (!name) continue;
         if (this.isOurs(name)) { allies_here++; continue; }
-        if (war.warHostility({ name, flags: o.flags }, { fleetmate: false, now })?.hostile) hostiles_here++;
+        if (war.warHostility({ name, flags: o.flags }, { fleetmate: false, now })?.hostile
+          || (!(o.flags & OF.GUILDMATE) && this.aggressor(name))) hostiles_here++;
       }
     } catch { /* a count we could not take is zero, never a throw on the strategy path */ }
     return { allies_here, hostiles_here };
@@ -2475,8 +2526,11 @@ export class CombatMode {
     if (now - (this.pvpSeenAt.get(key) ?? -Infinity) < PLAYER_SEEN_EVERY_MS) return null;
     this.pvpSeenAt.set(key, now);
     if (this.pvpSeenAt.size > 512) this.pvpSeenAt.clear();
-    return this.consultPvpStrategy('player_seen', name,
+    const d = this.consultPvpStrategy('player_seen', name,
       { hostile: !!verdict?.hostile, basis: verdict?.basis ?? null });
+    // `aggress` is a player_seen decision only; answered on any other moment it is silence (the default).
+    if (d?.do === 'aggress') this.noteAggress(name, d, room);
+    return d;
   }
 
   /** The keeper's hold on the room a flight lands in (Autopilot.travel refuses keeper journeys out). */

@@ -1487,7 +1487,7 @@ the records it describes.
   hostile contact, that a fight carried out of the list ends with "outside pvp_rooms" and never
   the suspension text, that inside the list nothing changes, and that every keeper gate asks the
   one function) and
-  `node tools/m59-pvp-strategy-test.mjs` (149 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
+  `node tools/m59-pvp-strategy-test.mjs` (172 — **modular PvP strategies**, docs/m59-pvp-strategies.md:
   that no assignment, `default`, an unknown verb, a throw, a promise or a slow decide is silence and the
   old behaviour, that agent beats character beats default and `null` stops the fall-through, that a local
   module overrides a private one of the same name and an edited one reloads, that `flee_to` takes the body,
@@ -1503,7 +1503,13 @@ the records it describes.
   without swinging until `period_ms` has passed, re-paces on every blow with `pvp_episode` in the facts, lifts
   pvp_rooms like `engage`, only evades at `swings: 0` and ends on any other answer, that `joustRetreat` slips
   along a wall rather than into a corner, that a `rescue` ambush is accepted outside the confinement, travels,
-  and engages an attacker already standing there, and that a menagerie host is never assigned anything) and
+  and engages an attacker already standing there, that an `aggress` on `player_seen` makes an attackable
+  stranger hostile (basis `aggressor`) and engaged on sight in the scan it was decided, safety kept on, while
+  outside pvp_rooms it is only a sighting, a fleet-mate is never asked about or made a target (not even by a
+  forced window entry), a non-ATTACKABLE player is not engaged, the window outlives the throttled consult and
+  expires after `ms`, a server safety refusal is remembered and the player is not re-engaged, `hold_fire`
+  still wins, and an `aggress` answered on a blow is silence, and that a menagerie host is never assigned
+  anything) and
   `node tools/m59-wand-shot-test.mjs` (15 — **why a wand zap was refused**: that the server's
   "behind you" test and staircase line of sight are transcribed, that a stale target square is
   charged to `stale` and a missing one to `other_room` ahead of every other gate, that any zap,

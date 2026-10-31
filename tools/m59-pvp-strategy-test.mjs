@@ -22,6 +22,8 @@ import { readToolSource } from './autopilot/source.mjs';
 //   - already in the room: no flight, only the hold;
 //   - a flight that does not arrive backs off; an operator's combat order is never preempted;
 //   - engage lifts pvp_rooms for this room only: return fire where the list refused it;
+//   - aggress (player_seen) makes an attackable stranger a war-book hostile, basis aggressor, safety on, inside
+//     pvp_rooms only; never a fleet-mate, never a non-ATTACKABLE body, never a refused target; it expires;
 //   - a menagerie host is never assigned anything; Autopilot.travel refuses keeper journeys out of a hold.
 
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from 'node:fs';
@@ -523,6 +525,101 @@ console.log('combat mode: hold_fire');
   reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => null });
   put(f, 2, P | OF.ENEMY); f.mode.event({ kind: 'appeared', id: 2 });
   ok('without hold_fire the same hostile IS engaged on sight (the control)', !!f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  f.mode.stop('test');
+}
+
+console.log('combat mode: aggress');
+{
+  // Operator, 2026-10-31: a member of an aggressor guild who is ALSO attackable under the faction-shield rules
+  // is a target. The STRATEGY decides that; the harness only carries it through the war response, safety on.
+  const v = d => ps.validateDecision(d);
+  ok('aggress is a decision with a bounded window', v('aggress').decision?.ms === ps.AGGRESS_MS
+    && v({ do: 'aggress', ms: 99 * 60_000 }).decision.ms === ps.AGGRESS_MAX_MS && !!v({ do: 'aggress', ms: 0 }).error
+    && !!v({ do: 'aggress', ms: 'x' }).error);
+  ok('an unknown verb is still refused, a near miss included', v({ do: 'aggresss' }).decision === null
+    && /unknown decision/.test(v({ do: 'aggresss' }).error) && v({ do: 'attack' }).decision === null);
+}
+const aggr = (who = 'Bob', ms = 30_000) => (m, x) => m === 'player_seen' && x.player === who ? { do: 'aggress', ms, strategy: 'aggr', why: 'aggressor guild, shield-attackable' } : null;
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: aggr() });
+  put(f, 3, P); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('an attackable stranger the strategy names is engaged on sight, the scan it was decided in',
+    !!f.mode.active?.pvp && f.mode.active.pvp.attackers.some(a => a.character === 'Bob'), JSON.stringify(f.mode.status().war));
+  ok('with verdict basis aggressor', f.mode.status().war.last?.basis === 'aggressor' && f.mode.status().war.last.enemy === 'Bob');
+  ok('safety stays ON: a war engagement keeps it', f.mode.active?.keepSafety === true);
+  ok('the room hears it as an engagement alarm, basis aggressor', war.readAlarms().some(a => a.enemy === 'Bob' && a.basis === 'aggressor'));
+  ok('the decision is remembered and reported', f.mode.aggressor('Bob')?.strategy === 'aggr'
+    && f.mode.status().pvp_strategy?.aggress?.bob?.until > Date.now());
+  await f.mode.tick();
+  ok('and the attack goes out with safety never lowered', f.sent.includes('attack:3') && !f.sent.some(x => x === 'safety:false'), f.sent.join());
+  // The server refuses the blow (Bob was not attackable after all): remembered, and not re-engaged here.
+  f.mode.event({ kind: 'message', text: 'Hey! You almost hit Bob! Good thing your safety was on!' });
+  await f.mode.tick();
+  ok('a server refusal is remembered for this room', !!f.mode.targetRefused('Bob'), JSON.stringify(f.mode.refusedStatus()));
+  f.mode.stop('test'); f.advance(6000);
+  f.mode.event({ kind: 'changed', id: 3 });
+  ok('and the refused target is not re-engaged, aggress or not', !f.mode.active?.pvp && f.asked.filter(a => a.player === 'Bob').length >= 2
+    && !f.sent.some(x => x === 'safety:false'), JSON.stringify(f.mode.status().war));
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => null });
+  put(f, 3, P); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('without aggress the same stranger is NOT engaged (the control)', !f.mode.active?.pvp && !f.mode.aggress.size);
+}
+{
+  reset(); const f = fixture({ room: 576, pvpRooms: [38], strategy: aggr() });
+  put(f, 3, P); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('outside pvp_rooms aggress lifts nothing: no engagement', !f.mode.active?.pvp, JSON.stringify(f.mode.status().war));
+  ok('...only a sighting, reported as one', war.readAlarms().some(a => a.enemy === 'Bob' && a.basis === 'sighted')
+    && f.mode.status().war.last?.basis === 'sighted' && !!f.mode.pvpRoomsRefusal());
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: () => ({ do: 'aggress', strategy: 'everyone' }) });
+  f.c.rsc.set(4, 'Statler');
+  put(f, 4, P); f.mode.event({ kind: 'appeared', id: 4 });
+  ok('a fleet-mate is never asked about, never a target', !f.mode.active?.pvp && !f.asked.some(a => a.player === 'Statler'));
+  ok('...and cannot be made one by hand', f.mode.noteAggress('Statler', { do: 'aggress' }) === null && f.mode.aggressor('Statler') === null);
+  f.mode.aggress.set('statler', { until: Date.now() + 60_000 });
+  f.mode.event({ kind: 'changed', id: 4 });
+  ok('...not even with an entry forced into the window', !f.mode.active?.pvp && f.mode.aggressor('Statler') === null);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: aggr() });
+  put(f, 3, OF.PLAYER); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('not ATTACKABLE: not engaged, though the window is open', !f.mode.active?.pvp && !!f.mode.aggressor('Bob'));
+  f.advance(1000); put(f, 3, P); f.mode.event({ kind: 'changed', id: 3 });
+  ok('the window outlives the throttled consult: attackable a second later, engaged without being asked again',
+    !!f.mode.active?.pvp && f.asked.filter(a => a.player === 'Bob' && a.moment === 'player_seen').length === 1, JSON.stringify(f.mode.status().war));
+  f.mode.stop('test');
+}
+{
+  let first = true;
+  reset(); const f = fixture({ room: 38, pvpRooms: [38],
+    strategy: (m, x) => { if (m !== 'player_seen' || x.player !== 'Bob') return null; const d = first ? { do: 'aggress', ms: 10_000, strategy: 'aggr' } : null; first = false; return d; } });
+  put(f, 3, OF.PLAYER); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('the decision opens the window', !!f.mode.aggressor('Bob'));
+  f.advance(10_001); put(f, 3, P); f.mode.event({ kind: 'changed', id: 3 });
+  ok('it expires after ms unless decided again', !f.mode.active?.pvp && f.mode.aggressor('Bob') === null
+    && f.asked.filter(a => a.player === 'Bob' && a.moment === 'player_seen').length === 2 && f.asked.at(-1).aggressor === false);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: aggr() });
+  f.mode.refuseTarget('Bob', { why: 'safety' });
+  put(f, 3, P); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('a target already refused here is not engaged', !f.mode.active?.pvp);
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38],
+    strategy: (m, x) => x.player === 'Bob' ? (m === 'player_seen' ? { do: 'hold_fire', ms: 6000, strategy: 'h' } : null) : null });
+  f.mode.noteAggress('Bob', { do: 'aggress', ms: 30_000 });
+  put(f, 3, P); f.mode.event({ kind: 'appeared', id: 3 });
+  ok('hold_fire still wins over an aggress in force', !f.mode.active?.pvp && f.mode.fireHeld('Bob'));
+}
+{
+  reset(); const f = fixture({ room: 38, pvpRooms: [38], strategy: (m) => m === 'attacked_by_player' ? { do: 'aggress', strategy: 'x' } : null });
+  put(f, 2, P); hitBy(f); await f.mode.tick();
+  ok('aggress answered on a blow is silence: ordinary return fire, no window', !!f.mode.active?.pvp && f.sent.includes('attack:2')
+    && f.mode.aggressor('Morpheus') === null);
   f.mode.stop('test');
 }
 
