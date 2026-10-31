@@ -144,7 +144,10 @@ console.log('the gate as a loot cap, and the vault when selling did not clear it
   ok('off the island, no cap', gateCapFilter(floor, inv, o => o.name, null).keep.length === floor.length);
   const { readToolSource } = await import('./autopilot/source.mjs');
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  ok('the keeper hands the looter the cap on the island only', /s\.setGateCap\?\.\(onIsland\(s\.world\?\.room\?\.num\) \? this\.gateLootCap\(\) : null\)/.test(src));
+  ok('the keeper hands the looter the cap where gateCapApplies says', /s\.setGateCap\?\.\(gateCapApplies\(s\.world\?\.room\?\.num\) \? this\.gateLootCap\(\) : null\)/.test(src));
+  ok("the cap: Ko'catan and the near jungle yes; the trading post's rooms (2101, 2143, 2144, 2154) and the mainland no",
+     A.gateCapApplies(2001) && A.gateCapApplies(2133) && A.gateCapApplies(2115)
+     && !A.gateCapApplies(2101) && !A.gateCapApplies(2143) && !A.gateCapApplies(2144) && !A.gateCapApplies(2154) && !A.gateCapApplies(599));
   ok('a refusal within the hour after the sell trip vaults the excess', /askedAt && Date\.now\(\) - askedAt > 180_000 && Date\.now\(\) - askedAt < 3_600_000[\s\S]{0,200}this\.kocatanGateVault/.test(src));
 
   // The vault deposit: exact ids, the worn piece never.

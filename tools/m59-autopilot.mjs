@@ -1918,6 +1918,12 @@ export const VILLAGE_TOWN = Object.freeze({
   FOOD_SHOP: TRADING_POST,
   REAGENT_SHOP: TRADING_POST,                    // entroot, fairy wings, mushrooms as conditional sales
 });
+// THE GATE CAP IS FOR FARMERS WHO WALK BACK THROUGH THE EAST TOWER. Operator 2026-10-31: nerudite armour is "quite
+// valuable" and spares should be picked up and sold at the trading post, or handed to a fleet-mate who would wear one. In
+// the trading post's rooms the town is Wulfgang (VILLAGE_TOWN), confinement keeps the farmers on this side of 2133, and the
+// cap was leaving 545 nerudite armours on the floor of 2143 in two days -- and stopping a farmer in leather from looting the
+// suit that would replace it. Everywhere else on the island the cap stands.
+export const gateCapApplies = room => onIsland(room) && !VILLAGE_ROOMS.includes(Number(room));
 /** The counters for wherever this room is: the trading post in the Avar Village, the island's on the island, the mainland's everywhere else. */
 export function townTable(room) {
   if (VILLAGE_ROOMS.includes(Number(room))) return VILLAGE_TOWN;
@@ -3467,8 +3473,9 @@ export class Autopilot {
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
     s.setLootIgnore?.(this.lootIgnoreList());
-    // On the island the East Tower guard is a loot cap (m59-game setGateCap): no second armour, helmet, gauntlet or shield.
-    s.setGateCap?.(onIsland(s.world?.room?.num) ? this.gateLootCap() : null);
+    // On the island the East Tower guard is a loot cap (m59-game setGateCap): no second armour, helmet, gauntlet or shield --
+    // except in the trading post's rooms, whose town is Wulfgang and whose farmers never walk past the guard (gateCapApplies).
+    s.setGateCap?.(gateCapApplies(s.world?.room?.num) ? this.gateLootCap() : null);
     s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
                           this.carryFloors(), () => this.overfarmKeepIds());
     s.setCursedPickup?.(this.policy.pickupCursed ?? []);
