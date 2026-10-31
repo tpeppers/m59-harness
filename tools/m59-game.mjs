@@ -5267,7 +5267,7 @@ class Session {
     }
     cands = cands.slice(0, maxItems);
 
-    // DO NOT PICK UP A WEAPON THAT IS ALREADY BROKEN.
+    // A WEAPON OR A PIECE OF ARMOUR IS PICKED UP ONLY WHEN A LOOK SAYS IT IS NOT BROKEN.
     //
     // A shattered weapon is worth nothing, cannot be wielded, cannot be sold, and is not
     // renamed — so it looks exactly like the real thing on the floor and gets taken every
@@ -5276,11 +5276,22 @@ class Session {
     // wield one. Asking the server here costs one look per weapon-shaped candidate and
     // saves a pack slot carried across the world.
     //
-    // Only weapon-shaped names are checked, because that is the only class whose
-    // brokenness we can read, and only when nothing was asked for by id — an explicit
-    // `ids` request is the caller overriding us on purpose. UNKNOWN is taken, not
-    // skipped: a look that came back empty is not evidence of anything.
+    // ONLY AFFIRMATIVELY SOUND GEAR IS TAKEN (operator, 2026-10-31: "only pick up
+    // affirmatively non-broken"). This used to take UNKNOWN as well, on the argument that
+    // an empty look is not evidence of anything — and so is not evidence the item is sound
+    // either. A broken longbow looks identical on the floor, and an archer carrying one
+    // cannot shoot: on 2026-10-31 the fleet kept finding broken longbows in its packs, and
+    // the Avar coordinator (substrate/fleetscripts/lib/avar-village-ops.mjs) had to hunt
+    // them down and drop them. Leaving an unconfirmed item costs nothing: it is still on
+    // the floor, and the next sweep looks at it again. So `broken` and `unknown` both stay
+    // where they lie, and an inspection that THROWS takes none of the gear it was asked
+    // about. Everything that is not weapon- or armour-shaped (arrows, shillings, reagents)
+    // is not asked about and is unaffected.
+    //
+    // Only when nothing was asked for by id — an explicit `ids` request with
+    // `explicitIdsOverride` is the caller naming the item it wants, on purpose.
     const brokenSkipped = [...emptyWandsSkipped];
+    const unconfirmedSkipped = [];
     if ((!ids?.length || !explicitIdsOverride) && cands.length) {
       // ARMOUR AND SHIELDS BREAK THE SAME WAY AND WERE NOT BEING ASKED ABOUT.
       //
@@ -5296,16 +5307,17 @@ class Session {
         return skills.weaponScore(n) > 0 || !!skills.armourKind(n);
       });
       if (brokenish.length) {
+        // A THROW IS NOT A VERDICT: nothing was confirmed sound, so nothing in `brokenish` is.
         const verdict = await skills.inspectForBroken(this, brokenish.map(o => o.id))
-                                    .catch(() => ({ broken: [] }));
-        const dead = new Set(verdict.broken || []);
-        if (dead.size) {
-          cands = cands.filter(o => {
-            if (!dead.has(o.id)) return true;
-            brokenSkipped.push(c.rsc.get(o.nameRsc) || 'a piece of gear');
-            return false;
-          });
-        }
+                                    .catch(() => ({ broken: [], sound: [], unknown: [] }));
+        const dead = new Set(verdict?.broken || []);
+        const sound = new Set(verdict?.sound || []);
+        const gear = new Set(brokenish.map(o => o.id));
+        cands = cands.filter(o => {
+          if (!gear.has(o.id) || (sound.has(o.id) && !dead.has(o.id))) return true;
+          (dead.has(o.id) ? brokenSkipped : unconfirmedSkipped).push(c.rsc.get(o.nameRsc) || 'a piece of gear');
+          return false;
+        });
       }
     }
 
@@ -5444,6 +5456,10 @@ class Session {
       refused.push({ item: n, why: 'BROKEN — the server says it has been shattered. It cannot be ' +
                                    'wielded or sold, and its name does not say so, which is why the ' +
                                    'fleet used to carry them for ever. Left on the floor.' });
+    for (const n of unconfirmedSkipped)
+      refused.push({ item: n, why: 'UNCONFIRMED — weapon or armour whose condition a look did not confirm ' +
+                                   '(an empty look, or the inspection failed). Gear is taken only when a look ' +
+                                   'says it is not broken; it stays on the floor and is looked at again next sweep.' });
     for (const n of [...new Set(shedSkipped)])
       refused.push({ item: n, why: 'a spare weapon past maxWeapons, or one this character just shed — ' +
                                    'left on the floor rather than carried until a rare town trip' });

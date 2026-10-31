@@ -2732,6 +2732,21 @@ dropped only when a fresh look at its own id says it is broken, un-condemned whe
 sound, kept when no reply (or a reply under another id) came. The last case checks that
 `makeWeapon` passes the keeper's `heldBackIds` and protected names.
 
+## m59-loot-sound-gear-test.mjs (21) — floor gear is taken only when a look says it is sound
+
+Operator, 2026-10-31: "only pick up affirmatively non-broken". A broken longbow looks identical on
+the floor and an archer carrying one cannot shoot; that day the Avar coordinator kept finding them
+in packs. `Session.lootFloor` used to take a weapon- or armour-shaped item whose look came back
+empty, and everything when `inspectForBroken` threw. Through the real `lootFloor` and the real
+`inspectForBroken` against a fake client, the suite pins: a bow that reads sound is taken; one that
+reads broken is left and refused as `BROKEN`; one whose look stays empty after the retry is left and
+refused as `UNCONFIRMED`, a different reason so the logs tell the two apart; armour (a ruined
+leather armor, a sound shield, an unlooked circlet) follows the same rule; an inspection that throws
+takes none of the gear and still takes the arrows and shillings, which are never looked at; an
+explicit `ids` request (`explicitIdsOverride`, the default) takes the item unlooked, even one that
+would read broken; and `explicitIdsOverride: false` holds an id list to the rule.
+`m59-unrevealed-weapons-test.mjs`'s floor fixture answers every look as sound for this reason.
+
 ## m59-service-args-test.mjs (108) — the service refuses a flag it does not read
 
 2026-10-31 19:52Z: `m59-service.mjs restart-keepers --fleet prod --only t17` was meant for one

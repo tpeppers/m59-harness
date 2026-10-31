@@ -174,11 +174,15 @@ function floor(gate) {
     { id: 12, nameRsc: 12, flags: OF.GETTABLE, col: 5, row: 5, amount: 1, rarity: 0 },     // revealed long sword
     { id: 13, nameRsc: 13, flags: OF.GETTABLE, col: 5, row: 5, amount: 1, rarity: 100 },   // unidentified reagent
   ];
-  const gets = [];
+  const gets = [], looks = [];
+  // Every look answers SOUND: lootFloor takes a weapon only when a look affirmatively says it is
+  // not broken (operator, 2026-10-31), and this suite is about the unrevealed gate, not condition.
   const c = { state: 'game', selfId: 1, evSeq: 1, inventory: [], self: { id: 1, col: 5, row: 5 },
     room: { objects: new Map(objs.map(o => [o.id, o])) }, rsc: { get: k => names.get(k) ?? '' },
-    roomContents: () => {}, requestInventory: () => {}, look: () => {}, get: id => gets.push(id),
-    equipment: () => ({ known: true, equipped: [] }), waitFor: async () => ({ events: [] }) };
+    roomContents: () => {}, requestInventory: () => {}, look: id => looks.push(id), get: id => gets.push(id),
+    equipment: () => ({ known: true, equipped: [] }),
+    waitFor: async ({ kinds = [] } = {}) => ({ events: kinds.includes('look')
+      ? looks.splice(0).map(id => ({ kind: 'look', id, description: 'This weapon is in fine condition.' })) : [] }) };
   const s = { client: c, live: true, pacer: { submit: async (_k, fn) => fn() }, need: () => c,
               world: { room: { num: 599 } } };
   Session.prototype.setUnrevealedWeaponLoot.call(s, gate);
