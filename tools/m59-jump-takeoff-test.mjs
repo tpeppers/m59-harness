@@ -4,9 +4,12 @@ import {fallJumpsIn} from './m59-falljump.mjs';
 import {planDeclaredTakeoff,declaredJumpMoveOptions,canJoinDeclaredTakeoff} from './m59-jump-takeoff.mjs';
 import {protocolToClient} from './m59-finepos.mjs';
 import {traceFallMotion} from './m59-falltrace.mjs';
-const geo=roomGeometry(2502),declaration=fallJumpsIn(2502).find(j=>j.to.row===44&&j.to.col===27),body={x:2200,y:2648};
+const geo=roomGeometry(2502),declaration=fallJumpsIn(2502).find(j=>j.to.row===40&&j.to.col===29),body={x:2200,y:2648};
 const from=protocolToClient(body),landing=declaration.to_fine;
-assert.equal(traceFallMotion(geo,from.x,from.y,landing.x,landing.y).arrived,false,'the old approximate takeoff is not a timed flight proof');
+// 2026-10-31 (docs/falljump-audit-2026-10-31.md): the declaration now names the far LIP of the pit,
+// r40c29, not a point a walk away across the plateau. From the old approach point on the 8000
+// shelf the run goes up the 8000-8465 ramp and leaves its top edge, so it is itself a timed flight.
+assert.equal(traceFallMotion(geo,from.x,from.y,landing.x,landing.y).arrived,true,'the approach shelf is a run-up takeoff for the lip landing');
 const p=planDeclaredTakeoff(geo,body,declaration);
 assert(p.found,JSON.stringify(p));
 assert(Math.abs(Math.floor(p.takeoff.y/64)-declaration.from.row)<=1);
@@ -20,10 +23,10 @@ for(const dt of [8,16,33,50]){
 }
 assert.equal(declaredJumpMoveOptions(null,200).ok,false);
 for(const vigor of [undefined,null,NaN,0,11])assert.equal(declaredJumpMoveOptions(declaration,vigor).ok,false);
-assert.deepEqual(declaredJumpMoveOptions(declaration,12).options,{fall:true,timedFall:true,aimX:1750,aimY:2824});
+assert.deepEqual(declaredJumpMoveOptions(declaration,12).options,{fall:true,timedFall:true,aimX:1884,aimY:2572});
 assert.equal(planDeclaredTakeoff(geo,{x:1891,y:2589},declaration).reason,'declared_takeoff_wrong_shelf');
 assert.equal(planDeclaredTakeoff(geo,body,declaration,{maxMs:0}).reason,'takeoff_search_budget');
-const blocked=planDeclaredTakeoff(geo,body,declaration,{objects:new Map([[9,{id:9,flags:9,x:1750,y:2824}]])});
+const blocked=planDeclaredTakeoff(geo,body,declaration,{objects:new Map([[9,{id:9,flags:9,x:1884,y:2572}]])});
 assert.equal(blocked.found,false,'an occupied landing cannot be planned as clear');
 console.log('Declared takeoffs refine on the same ledge, retain running guards, and pass stock gravity at four frame intervals.');
 

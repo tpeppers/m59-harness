@@ -37,7 +37,10 @@ const declaration=col=>{const x=(col-1)*1024+512;return {room:579,from:{row:15,c
 // Twenty-five real Session movers share one body field. Both lanes advance in
 // one native order each, with actual fine movement, gravity and final-send guards.
 const count=25,actors=Array.from({length:count},(_,i)=>({id:100+i,name:'convoy-'+i,flags:5,x:3552+(i%2)*64,y:992+Math.floor(i/2)*32}));
-const clients=actors.map(actor=>{const f=h.fixture({from:{room:579,x:actor.x,y:actor.y},bodies:actors.filter(b=>b.id!==actor.id)},{bodies:true,wireNames:true,maxPackets:300,maxMs:100000});raised(f.s.world.geometry);return f;});
+// `sectorHeights` is what the server reported and what the raised geometry stands for; a declared
+// jump with `requires.sectors` checks it before flying (m59-jump-precondition.mjs).
+const observedHeights=()=>new Map(Object.entries(capture.observed).map(([id,height])=>[Number(id),{type:4,height}]));
+const clients=actors.map(actor=>{const f=h.fixture({from:{room:579,x:actor.x,y:actor.y},bodies:actors.filter(b=>b.id!==actor.id)},{bodies:true,wireNames:true,maxPackets:300,maxMs:100000});raised(f.s.world.geometry);f.c.room.sectorHeights=observedHeights();return f;});
 clients.forEach((f,index)=>{const base=f.c.moveTo.bind(f.c);f.c.moveTo=(x,y)=>{base(x,y);Object.assign(actors[index],{x,y,row:Math.floor(y/64),col:Math.floor(x/64)});for(const [j,other]of clients.entries())if(j!==index&&other.c.room.objects.has(100+index))other.c.room.objects.set(100+index,other.roomObject(actors[index]));};});
 const began=Date.now(),outcomes=[];
 await Promise.all(clients.map(async(f,index)=>withBodyCommand(f.s,async()=>{

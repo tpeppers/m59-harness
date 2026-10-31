@@ -26,7 +26,7 @@ const specs=[{room:2505,walks:[
  ]}];
 const hollowsStage=planRefugeStage(roomGeometry(2502),{x:2201,y:2650},{row:42,col:36});
 if(!hollowsStage.found)throw Error('unproved Hollows waiting refuge');
-const hollowsJump=fallJumpsIn(2502).find(j=>j.to.row===44&&j.to.col===27);
+const hollowsJump=fallJumpsIn(2502).find(j=>j.to.row===40&&j.to.col===29);
 if(!hollowsJump?.to_fine)throw Error('unproved Hollows landing');
 const western=[clientToProtocol(hollowsJump.to_fine),...HOLLOWS_OUT_POINTS];
 specs.push({room:2502,walks:[

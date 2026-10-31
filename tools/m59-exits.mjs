@@ -32,7 +32,7 @@
 //             a region. There is nothing to press and no packet to send, so it is invisible to
 //             anything looking for a door. This is the one that cost a month.
 //   fall      `m59-falljumps.json` — and it is NOT an exit. It is an INTRA-ROOM affordance
-//             (`{room: 599, from: r36c16, to: r38c10}`) that makes a door reachable which the
+//             (`{room: 599, from: r37c14, to: r39c12}`, r36c16 -> r38c10 before 2026-10-31) that makes a door reachable which the
 //             step-height rule otherwise forbids. Filed here because "can I get out of this
 //             room?" cannot be answered without it, and because the standing rule is that
 //             "unreachable" is a fact about that file rather than about the world.

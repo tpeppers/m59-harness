@@ -826,7 +826,8 @@ export const KNOWN_TRAPS = Object.freeze({
   // and neither is an opinion:
   //
   //   * THE NORTH EXIT WORKS, AND IT IS A JUMP. It is declared in our own
-  //     substrate/m59-falljumps.json — 599 r36c16 -> r38c10, kind `fall`, requires running,
+  //     substrate/m59-falljumps.json — 599 r36c16 -> r38c10 (re-keyed r37c14 -> r39c12 on
+  //     2026-10-31, docs/falljump-audit-2026-10-31.md), kind `fall`, requires running,
   //     noted there as "the notorious Ukgoth cliff jump ... the ONLY doorway to Outside
   //     Castle Victoria is at row 1, col 27, on the cliff top this reaches". The Relic is for
   //     climbing back after MISSING the jump, not for taking it. The entry above was written

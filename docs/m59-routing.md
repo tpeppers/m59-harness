@@ -291,6 +291,51 @@ not a button. A normal `go` from a button and an observed ceiling lift open the
 fine route back into the cave. This supersedes the older closed-geometry claim
 below that the Island return is physically unwalkable.
 
+### Declared jumps: one proof, a precondition, and an outcome row
+
+A declared jump is proved the way the mover flies it, by one function:
+`proveDeclaredJump` in `m59-declared-jump.mjs` (`node tools/m59-declared-jump.mjs`
+proves all of them). It traces with `LIVE_FALL_TRACE`, the options Session.step
+sends a declared jump with (`slide:true, fall:true, timedFall:true`, `unclipped`).
+It checks integer wire endpoints. Its span gate measures the AIR: `airPhases`
+reads `traceFallMotion`'s frames, and a phase runs from the last grounded frame
+to touchdown. So a take-off a run-up behind the lip is judged on the leap, not on
+the level run before it. `proveCandidateFall` uses the same gate. Before
+2026-10-31, `finenav-measure --jumps` traced with `slide:false` and the gate
+measured the straight chord. Seven of the eighteen jumps read as refused that way
+while characters were landing them (`docs/falljump-audit-2026-10-31.md`).
+
+A jump that exists only in one room state says so in machine-readable form:
+`"requires": {"sectors": {"3": 800, "4": 510}}`. The key is the kod sector id
+(`#sectorID`, the .roo's serverId) and the value is the kod height.
+
+- **Offline**, `geometryForDeclaration` applies the precondition to a fresh
+  geometry, never the shared one the router reads.
+- **Live**, Session.step compares it with `client.room.sectorHeights`, the
+  server's own sector reports that Brax's `lift-validated` reads. A mismatch is
+  refused as `jump_precondition_unmet`, with a detail such as `sector 3 is 250,
+  needs 800`. A sector the server has not reported is refused as
+  `jump_precondition_unknown`; the .roo is not the world there. Both are terminal
+  movement reasons.
+- **The jump verbs**, in the keeper and the broker, name the precondition when
+  the live geometry does not offer the jump at all.
+- **The static router** still drops a jump that reads uphill on the shipped
+  .roo. Brax's north ledge therefore never becomes a baked edge; it is flown by
+  the Brax tooling with the lift observed up.
+
+Every declared jump the mover tries writes one row to
+`substrate/history/<fleet>/jump-outcomes-YYYY-MM-DD.jsonl`
+(`m59-jump-outcomes.mjs`). The row is written from Session.step, sent or refused.
+It records:
+
+- the declared take-off against the actual one, and the aim;
+- the landing the client sent after paying the air time, with its floor;
+- `landed_on_target`, and the precondition state.
+
+`node tools/m59-jump-outcomes.mjs` prints a landed rate per jump. Until this
+existed, the only declared-jump rows were written before the jump, as
+`attempted:false`.
+
 Explicit declared jumps, including their permitted one-square takeoff
 variations, use timed stock gravity and retain the running-vigor guard.
 `m59-jump-takeoff.mjs` can refine an approximate takeoff on the same ledge:

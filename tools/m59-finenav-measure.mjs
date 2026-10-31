@@ -355,15 +355,21 @@ async function jumpSurvey(map) {
   const { fileURLToPath } = await import('node:url');
   const table = JSON.parse(readFileSync(fileURLToPath(new URL('../substrate/m59-falljumps.json', import.meta.url)), 'utf8'));
   const { maxSpan, jumpConfidence } = await import('./m59-falljump-physics.mjs');
+  // THE LIVE MOVER'S TRACE, ON THE ROOM IN THE STATE THE JUMP NEEDS. This used `slide:false`, which
+  // is not how Session.step sends a declared jump, and the static .roo, which is not the room Brax's
+  // north jump is flown in -- seven of eighteen read as refused that way while characters landed
+  // them (docs/falljump-audit-2026-10-31.md). `proved` is the full proof: wire rounding, air span.
+  const { LIVE_FALL_TRACE, geometryForDeclaration, proveDeclaredJump } = await import('./m59-declared-jump.mjs');
   const rows = [];
   for (const j of table.jumps ?? []) {
     const room = map.rooms[j.room];
     if (!room) continue;
-    const geo = sharedRoomGeometry(room);
+    const { geometry: geo, applied } = geometryForDeclaration(room, j);
     const a = j.from_fine ?? geo.standPoint(j.from.row, j.from.col), b = j.to_fine ?? geo.standPoint(j.to.row, j.to.col);
     if (!a || !b) continue;
     const ha = geo.floorBaseAtClient(a.x, a.y), hb = geo.floorBaseAtClient(b.x, b.y);
-    const fall = (p, q) => geo.traceFineMoveClient(p.x, p.y, q.x, q.y, { slide: false, fall: true, timedFall: true });
+    const fall = (p, q) => geo.traceFineMoveClient(p.x, p.y, q.x, q.y, LIVE_FALL_TRACE);
+    const full = proveDeclaredJump(room, j);
     const times = [];
     let proof = null;
     for (let k = 0; k < 5; k++) { const t0 = now(); proof = fall(a, b); times.push(now() - t0); }
@@ -391,6 +397,9 @@ async function jumpSurvey(map) {
     const takeMs = now() - t0;
     const span = Math.hypot(b.x - a.x, b.y - a.y), drop = ha - hb;
     const row = { room: j.room, from: sq(j.from.row, j.from.col), to: sq(j.to.row, j.to.col), fine: !!j.from_fine,
+      sectors: applied.map(r => `${r.sector}=${r.height}`).join(',') || null,
+      proved: full.proved, proved_reason: full.reason,
+      air_span: full.proof ? Math.round(full.proof.span_client) : null, air_max_span: full.proof ? Math.round(full.proof.max_span_client) : null,
       drop, span: Math.round(span), max_span: Math.round(maxSpan(drop)), verdict: jumpConfidence(drop, span).verdict,
       proof_arrived: !!proof?.arrived, proof_reason: proof?.reason ?? null, flight_ms: proof?.fall_motion?.elapsed_ms ?? null,
       trace_ms_median: +times[2].toFixed(2),
@@ -399,7 +408,8 @@ async function jumpSurvey(map) {
       takeoff_shelf_samples: T.length, takeoff_reaching: tOk,
       ms_per_proof: +((landMs + takeMs) / Math.max(1, L.length + T.length)).toFixed(2) };
     rows.push(row);
-    console.log(`${j.room} ${row.from}->${row.to}${row.fine ? '' : ' (stand points)'}: drop ${drop}, span ${row.span}/${row.max_span}, ` +
+    console.log(`${j.room} ${row.from}->${row.to}${row.fine ? '' : ' (stand points)'}${row.sectors ? ' [' + row.sectors + ']' : ''}: ` +
+      `${row.proved ? 'PROVED' : 'REFUSED ' + row.proved_reason} (air ${row.air_span}/${row.air_max_span}); drop ${drop}, chord ${row.span}/${row.max_span}, ` +
       `proof ${row.proof_arrived ? 'arrives' : 'REFUSED ' + row.proof_reason}, air ${row.flight_ms} ms, trace ${row.trace_ms_median} ms; ` +
       `landing shelf ${lOk}/${L.length} reached (first miss ${row.landing_margin_to_first_miss}u from aim); ` +
       `take-off shelf ${tOk}/${T.length} reaches it; ${row.ms_per_proof} ms/proof`);

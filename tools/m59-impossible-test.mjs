@@ -336,16 +336,17 @@ console.log('\nand the reverse of a declared fall is never an edge');
   if (!geo) {
     console.log('  --   room 599 geometry unavailable, skipping');
   } else {
-    const fwd = geo.declaredFallJumps(36, 16);
+    // Re-keyed 2026-10-31 from r36c16 -> r38c10 to r37c14 -> r39c12 (docs/falljump-audit-2026-10-31.md).
+    const fwd = geo.declaredFallJumps(37, 14);
     ok('the jump is offered from the take-off',
-       fwd.some(j => j.row === 38 && j.col === 10), JSON.stringify(fwd));
+       fwd.some(j => j.row === 39 && j.col === 12), JSON.stringify(fwd));
     ok('the take-off offers it as a neighbour',
-       geo.neighbors(36, 16, { collision: true }).some(n => n.row === 38 && n.col === 10 && n.fall));
+       geo.neighbors(37, 14, { collision: true }).some(n => n.row === 39 && n.col === 12 && n.fall));
     ok('the landing knows what it fell from',
-       geo.declaredFallJumps(38, 10, { reverse: true }).some(j => j.row === 36 && j.col === 16));
+       geo.declaredFallJumps(39, 12, { reverse: true }).some(j => j.row === 37 && j.col === 14));
     // THE ASSERTION THAT MATTERS. Reverting the reverse-bar makes this one fail.
     ok('and the landing does NOT offer the take-off back',
-       !geo.neighbors(38, 10, { collision: true }).some(n => n.row === 36 && n.col === 16));
+       !geo.neighbors(39, 12, { collision: true }).some(n => n.row === 37 && n.col === 14));
   }
 }
 

@@ -63,8 +63,9 @@ const DEST   = Number(arg('to', 2));
 const FROM   = (arg('from', '34,19')).split(',').map(Number);
 // The tight loop walks these three squares and jumps; --travel runs the whole pipeline.
 const DIRECT  = !has('travel');
-const TAKEOFF = (arg('takeoff', '36,16')).split(',').map(Number);
-const LANDING = (arg('landing', '38,10')).split(',').map(Number);
+// The declared pair since 2026-10-31 (docs/falljump-audit-2026-10-31.md); it was 36,16 -> 38,10.
+const TAKEOFF = (arg('takeoff', '37,14')).split(',').map(Number);
+const LANDING = (arg('landing', '39,12')).split(',').map(Number);
 const PATIENCE = Number(arg('patience', 30)) * 1000;   // the jump is ~4s; 30 is already generous
 const BOOK   = join(REPO, 'substrate', `jumptest-${FLEET ?? 'default'}.json`);
 

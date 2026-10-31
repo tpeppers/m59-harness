@@ -557,7 +557,7 @@ already.
 mana node stands where a person can walk to it in the retail client — they are easter eggs and
 players get them. So the agent is in that room BECAUSE the model is missing a jump, a ramp, a
 passage or a trigger, and finding which IS the errand rather than the obstacle. The file
-declares eight jumps in four rooms, and the column that predicts which stones the mover calls
+declares eighteen jumps in seven rooms (2026-10-31), and the column that predicts which stones the mover calls
 reachable is not the terrain — it is **whether somebody wrote the jump down**. Room 27 is the
 proof: four measurements called it unreachable on a night the operator had already melded it.
 The "needs new jumping mechanics" row has since been wrong twice in one day (750 is one square

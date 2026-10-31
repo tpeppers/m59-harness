@@ -39,6 +39,8 @@ import { planBodyDetour } from './m59-body-detour.mjs';
 import {planRailDeparture,rememberedDeparture,rememberDeparture,forgetDeparture} from './m59-pocket-rails.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
+import { declaredJumpNear, livePreconditionState } from './m59-jump-precondition.mjs';
+import { jumpOutcomeRow, recordJumpOutcome } from './m59-jump-outcomes.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import {waitForVerticalSettlement} from './m59-vertical-motion.mjs';
 import {withProvenRefugeLeg} from './m59-refuge-leg.mjs';
@@ -986,10 +988,58 @@ export function sessionWalkPrototype(deps) {
     // declared shelf. Its timed fall can therefore start outside the exact
     // declaration square; retain full flight validation for those lanes too.
     let declaredTimedFall = fall && timedFall;
+    // THE DECLARATION THIS FALL IS FLYING, WHEN IT IS ONE, AND ITS OUTCOME ROW.
+    //
+    // A declared jump used to leave only a row written BEFORE it, `attempted:false`, so whether it
+    // landed was unknowable except from incident trails (docs/falljump-audit-2026-10-31.md).
+    // `noteJump` writes one m59-jump-outcomes.mjs row per attempt from here, the choke point every
+    // declared fall passes through, whether the mover sent it or refused it.
+    let declaredJump = null, jumpPrecondition = null, jumpVigor = null;
+    // Asked for a timed flight by the caller (the jump verb) rather than by the walker's own
+    // planned fall edge, which `timedFall` cannot say once the declared branch below sets it.
+    const jumpTrigger = fall && timedFall ? 'jump_verb' : 'declared';
+    const noteJump = (queued, refusal = null) => {
+      if (!declaredJump) return;
+      try {
+        const geo = this.world?.geometry;
+        recordJumpOutcome(jumpOutcomeRow({ agent: this.name ?? null, character: this.client?.me?.name ?? null,
+          room: Number(this.world?.room?.num ?? 0) || null, declaration: declaredJump, requested: { row, col },
+          before, aim, queued, precondition: jumpPrecondition, refusal, vigor: jumpVigor,
+          trigger: jumpTrigger,
+          floorAt: geo?.floorBaseAtClient ? (x, y) => geo.floorBaseAtClient(x, y) : null }));
+      } catch { /* the record never breaks the jump */ }
+    };
+    let aim = null;   // assigned below; `noteJump` reads it when it fires
     if (fall && before) {
       const vig = (() => { try { return c.vitals?.()?.vigor?.value ?? null; } catch { return null; } })();
+      jumpVigor = vig;
       const isDeclared = declaredJumpNeedsRun(this.world?.room?.num, before, { row, col });
+      // The jump verb may fly a declared jump from a neighbouring square on the same shelf, so the
+      // exact pair is asked first and the one-square neighbourhood second.
+      if (isDeclared || declaredTimedFall)
+        declaredJump = declaredJumpNear(this.world?.room?.num, before, { row, col });
+      // A JUMP WHOSE WORLD IS NOT IN THE STATE IT NEEDS IS NOT FLOWN. Brax's north ledge is only
+      // reachable with the lift up (g9.kod sector 3 at 800, sector 4 at 510); from the platform
+      // down it is a 4416-unit climb. The declaration says so in `requires.sectors`, and the
+      // server has said what the sectors are: `client.room.sectorHeights`, the same record the
+      // Brax tooling validates its lift against. A sector the server has not reported is refused
+      // as unknown -- the .roo is not the world here. Terminal (m59-movement.mjs): no heading fixes it.
+      if (declaredJump) {
+        jumpPrecondition = livePreconditionState(declaredJump, c.room?.sectorHeights ?? null);
+        if (jumpPrecondition.ok !== true) {
+          recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: Number(this.world?.room?.num ?? 0),
+                         tactic: 'declared_jump', trigger: 'refused_precondition', worked: false,
+                         ms: 0, hp_lost: 0, attempted: true,
+                         note: `from ${before.row},${before.col} to ${row},${col}: ${jumpPrecondition.reason}` });
+          noteJump(null, jumpPrecondition.code);
+          return { moved: false, left_room: false, position: before,
+                   reason: jumpPrecondition.code, detail: jumpPrecondition.detail,
+                   precondition: jumpPrecondition,
+                   note: `${jumpPrecondition.reason}; this declared jump needs the room in another state` };
+        }
+      }
       if (Number.isFinite(vig) && vig < RUN_VIGOR_FLOOR && isDeclared) {
+        noteJump(null, 'jump_needs_run');
         recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: Number(this.world?.room?.num ?? 0),
                        tactic: 'declared_jump', trigger: 'refused_no_run', worked: false,
                        ms: 0, hp_lost: 0, attempted: true,
@@ -1391,7 +1441,7 @@ export function sessionWalkPrototype(deps) {
     // a body in the way, and with monster collision being height-agnostic something standing
     // in the gully below is a wall. Order is therefore: dodge a blocker, else the point the
     // operator actually landed on, else the square's stand point, else its middle.
-    let aim = fall
+    aim = fall
       ? (laneAim
          ?? ((aimX != null && aimY != null) ? { x: aimX, y: aimY } : null)
          ?? this.world?.geometry?.standPointWire?.(row, col)
@@ -1443,12 +1493,13 @@ export function sessionWalkPrototype(deps) {
     const settled=timedFall?await waitForVerticalSettlement(()=>this.collisionVertical,{roomId,
       cancelled:()=>!ownsStep()||c.room.id!==roomId||(c.selfId??c.self?.id)!==settleBodyId||this.lifeBoundary!==settleLife
         ||c.self?.x!==before?.x||c.self?.y!==before?.y}):{ok:true,waited_ms:0};
-    if(!settled.ok)return {moved:false,position:before,left_room:c.room.id!==roomId,reason:settled.reason};
+    if(!settled.ok){noteJump(null,settled.reason);return {moved:false,position:before,left_room:c.room.id!==roomId,reason:settled.reason};}
     const queued = await this.queueValidatedMove(aim.x, aim.y, { speed, slide: true, fall, timedFall,unclipped:declaredTimedFall,
         maxDeviation: timedFall||typeof this.confirmMovementDeviation!=='function' ? null : KOD_FINENESS,
         beforeMutation:()=>ownsStep()&&(typeof beforeMutation!=='function'||beforeMutation('move',{col,row})!==false),
         minGap: Math.max(gap, owed), expectedRoomId: roomId,
         targetGuard:convoyQueue?.queued?({from,to})=>queueLineGuard(from,queueHead,to):null });
+    noteJump(queued);
     // `col`/`row` are `step`'s ARGUMENTS, which are where it is going — not where it is.
     // The first cut of this called them `from`, and a trace of an oscillating walk then read
     // as a character teleporting between two distant squares. Both ends are recorded now:

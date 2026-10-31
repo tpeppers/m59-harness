@@ -93,27 +93,31 @@ test('the real router retains exhausted first hops on its permissive pass and fi
   const fresh=w.route(to);assert.equal(`${room}>${fresh.hops[0].to}`,refusedHop,'a new journey must not inherit the refusal');
  }
 });
+// 2026-10-31 (docs/falljump-audit-2026-10-31.md): the Ukgoth cliff jump is declared r37c14 -> r39c12,
+// where the ledge runs out past wall 39; it was r36c16 -> r38c10, a stand-point pair the live mover
+// could only make by sliding the length of that wall first.
 test('the recorded declared cliff jump uses timed gravity and reaches the intended shelf',async()=>{
- for(const [x,y]of [[1072,2304],[1056,2336]]){
-  const f=fixture(599,x,y),r=await f.s.followRail([{row:36,col:16},{row:38,col:10}]);
-  assert.equal(r.railed,true,JSON.stringify(r));assert.equal(f.c.self.row,38);assert.equal(f.c.self.col,10);
+ for(const [x,y]of [[952,2416],[928,2400]]){
+  const f=fixture(599,x,y),r=await f.s.followRail([{row:37,col:14},{row:39,col:12}]);
+  assert.equal(r.railed,true,JSON.stringify(r));assert.equal(f.c.self.row,39);assert.equal(f.c.self.col,12);
   assert.equal(f.packets.length,1);assert.notEqual(f.s.finePositionUnknown,true);
  }
- const f=fixture(599,1072,2304),table=routesFor(map.geometryManifestSha256);
- const rail=bakedPath(table,599,{row:1,col:66},{row:1,col:27}),at=rail.findIndex(p=>p.row===36&&p.col===16);
+ const f=fixture(599,952,2416),table=routesFor(map.geometryManifestSha256);
+ const rail=bakedPath(table,599,{row:1,col:66},{row:1,col:27}),at=rail.findIndex(p=>p.row===37&&p.col===14);
+ assert.ok(at>=0,'the baked road to the north door takes the declared jump');
  const r=await f.s.followRail(rail.slice(at));assert.equal(r.railed,true,JSON.stringify(r));
  assert.equal(f.c.self.row,1);assert.equal(f.c.self.col,27);
 });
 test('a declared running jump still refuses low vigor and an intervening live blocker',async()=>{
- const low=fixture(599,1072,2304);low.c.vitals=()=>({vigor:{value:11,max:200}});
- const r=await low.s.step(10,38,{fall:true});assert.equal(r.reason,'jump_needs_run');assert.equal(low.packets.length,0);
- const f=fixture(599,1072,2304);f.c.room.objects.set(2,{id:2,flags:9,x:864,y:2384,row:37,col:13});
+ const low=fixture(599,952,2416);low.c.vitals=()=>({vigor:{value:11,max:200}});
+ const r=await low.s.step(12,39,{fall:true});assert.equal(r.reason,'jump_needs_run');assert.equal(low.packets.length,0);
+ const f=fixture(599,952,2416);f.c.room.objects.set(2,{id:2,flags:9,x:815,y:2517,row:39,col:12});
  // Use the send boundary directly so this negative case does not wait for a
  // pursuing monster. Timed flight must still validate every collision microstep.
- const blocked=await f.s.queueValidatedMove(672,2464,{fall:true,timedFall:true,speed:18,slide:false});
+ const blocked=await f.s.queueValidatedMove(800,2528,{fall:true,timedFall:true,speed:18,slide:false});
  assert.equal(blocked.sent,false);assert.equal(f.packets.length,0);
- const paced=fixture(599,1072,2304);paced.s.pacer.submit=async(k,run)=>{if(k==='move')paced.c.room.objects.set(2,{id:2,flags:9,x:672,y:2464,row:38,col:10});return run();};
- const changed=await paced.s.step(10,38,{fall:true});assert.equal(changed.moved,false);assert.equal(paced.packets.length,0,'a newly blocked jump must not be clipped into the gully');
+ const paced=fixture(599,952,2416);paced.s.pacer.submit=async(k,run)=>{if(k==='move')paced.c.room.objects.set(2,{id:2,flags:9,x:800,y:2528,row:39,col:12});return run();};
+ const changed=await paced.s.step(12,39,{fall:true});assert.equal(changed.moved,false);assert.equal(paced.packets.length,0,'a newly blocked jump must not be clipped into the gully');
 });
 test('the live Tos spider-blocked batch also reaches the journey replanner',async()=>{
  const f=fixture(596,128,240);f.c.roomNameRsc=map.rooms[596].nameRsc;f.c.roomRsc=map.rooms[596].roomRsc;
