@@ -2252,6 +2252,11 @@ the bake, and every consumer keyed on `"row,col"` (blocked edges, route strings,
 is a project rather than a patch; `m59-fineroute.mjs` is the opt-in planner that already plans
 this way for the places that need it.
 
+**The project is designed and measured in [`m59-fine-nav-design.md`](m59-fine-nav-design.md)** (Stage 1:
+the footing model, the before-numbers from `tools/m59-finenav-measure.mjs`, and the staged plan). The
+578 case above is not a pinch: r2c10's stand point lies ON a one-sided wall (x=9728), which a point on
+the line may leave either way and a body beside it may not cross back.
+
 ## The movement incident log
 
 ```bash
