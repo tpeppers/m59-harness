@@ -222,3 +222,43 @@ the errand and the operator were told nothing.
 `node tools/m59-move-origin-test.mjs` pins both sides of the cancel, the ledger row, the job
 report, the busy refusal, the incident record, and a SOURCE SWEEP that fails by file and line
 when a `.travel(` or `cancelMovement(` call in the keeper or broker names no origin.
+
+### A survival exit may leave the confinement (PROBATIONARY: since 2026-10-30, revisit 2026-11-30)
+
+**Two survival rules disagreed.** `leaveForCasters` (a caster in the room) and the no-safe-spot
+`survival_exit` take the nearest way out of a room that is killing the body, whatever the confinement
+says. The step guard, `Session.edgeCrossingBlock`, refuses every step over an edge out of
+`confineRooms`, whichever faculty chose it. Autopilot.travel let the caster leg out and refused the
+survival one; the guard then refused both at the edge. On prod, 2026-10-27..31, that was 228 journeys
+that walked a hurt body across a room to an edge, threw `edge_out_of_confinement`, and were re-issued
+every ~30 s. `fix/travel-threw` stopped the walk. This section decides which rule wins.
+
+**The rule, operator 2026-10-30.** Surviving the next second outranks staying on the farm map. A
+survival or caster exit may cross the confinement into **the one room it was sent to**, except when
+that room is:
+
+- in the character's `bannedDestinations`, or
+- a room where one of ours died to a player within the fleet's own PvP return hold (`pvpReturnDelayMs`,
+  two hours by default; `recentPvpDeathRooms` reads the `pvp-holds-<fleet>/` records, skipping
+  fleet-mate kills).
+
+The second exclusion keeps a red-alert lockdown meaningful: a body does not flee a caster into the room
+the enemy is killing in. Everything else about the confinement stands, so no other journey, no other
+room, and no second hop are let out.
+
+**How it is enforced.** `m59-survival-edge.mjs` holds the pure verdict. Autopilot.travel's confinement
+gate asks it, writes a `survival_edge_pass` ledger event, and on a yes hands `Session.travel` an
+`edgePass: {to}`. The guard honours that pass only from the room the journey set out from, into that
+room, while the journey's movement generation is live. A cancel, the next journey, or two minutes ends
+it, and each crossing it allows prints `[edge] … survival exit crosses …` in the keeper log. One change
+in behaviour to note: **the caster leg used to pass the gate unconditionally**, and it now obeys the two
+exclusions as well.
+
+**Why probationary.** The confinement exists because journeys out of it have killed characters (Gonzo
+in room 2, 2026-08-19; Lew into 2133, 2026-10-27). The bet is that a one-room exit from a room already
+killing the body is a different risk from a journey. **Revisit 2026-11-30:** count `survival_edge_pass`
+events with `allowed: true`, and any death or PvP event within a few minutes after one in the room it
+entered. If there are none, drop the "probationary" label. If PvP followed, narrow the rule or revert it
+(`SURVIVAL_EDGE_ORIGINS` in the module). `node tools/m59-survival-edge-test.mjs` (9) pins the verdict,
+the PvP-room reader, and the pass on the real 2501 north edge.
+

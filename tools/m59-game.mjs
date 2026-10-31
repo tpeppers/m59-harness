@@ -2065,11 +2065,22 @@ class Session {
     const confine = autopilotIfAny(this.name)?.policy?.confineRooms;
     return Array.isArray(confine) && confine.length ? confine.map(Number) : null;
   }
+  // A SURVIVAL EXIT'S PASS THROUGH THE GUARD (PROBATIONARY since 2026-10-30, revisit 2026-11-30; m59-survival-edge.mjs).
+  // Autopilot.travel decides whether a survival or caster exit may leave the confinement (not into a banned room, not
+  // into one where we died to a player within the PvP hold) and hands travel `edgePass: {to}`. It opens exactly one
+  // crossing: from the room the journey set out from, into that room, while the journey's movement generation is live.
+  // A cancel, a new order, arrival, or two minutes ends it -- nothing else the body does is let out.
+  edgePassAllows(to) {
+    const p = this.edgePass;
+    if (!p || Number(to) !== p.to) return false;
+    if (Date.now() > p.until || this.movementGeneration !== p.generation) { this.edgePass = null; return false; }
+    return Number(this.world?.room?.num) === p.from;
+  }
   // Would the guard below refuse a step over an EDGE from the room we stand in into room `to`? Go exits are not guarded.
   edgeIntoRefused(to, confine = this.edgeConfinement()) {
     const room = this.world?.room;
     if (!confine || !room || to == null || !confine.includes(Number(room.num))) return false;
-    return !confine.includes(Number(to));
+    return !confine.includes(Number(to)) && !this.edgePassAllows(to);
   }
   edgeCrossingBlock(target) {
     const confine = this.edgeConfinement();
@@ -2079,6 +2090,11 @@ class Session {
     const row = Math.floor(target.y / KOD_FINENESS), col = Math.floor(target.x / KOD_FINENESS);
     const to = edgeCrossedAt(room, row, col)?.edge?.to;
     if (to == null || confine.includes(Number(to))) return null;
+    if (this.edgePassAllows(to)) {
+      console.log(`[edge] ${this.name} survival exit crosses from ${room.num} r${row}c${col} out of the confinement ` +
+                  `into ${to} (probationary pass: ${this.edgePass?.why ?? 'survival exit'})`);
+      return null;
+    }
     return { blocked: true, reason: 'edge_out_of_confinement', from: room.num, to, square: { row, col } };
   }
 
@@ -5696,7 +5712,14 @@ class Session {
     // bake models such a room with its doors shut, so walking at it only exhausts hops and
     // stumbles. Omit it and travel behaves exactly as it always did.
     handOffAt = null,
+    // A SURVIVAL EXIT'S PASS THROUGH THE CONFINEMENT GUARD: `{ to, why }`, decided by Autopilot.travel
+    // (m59-survival-edge.mjs, probationary). See `edgePassAllows`. Omit it and nothing changes.
+    edgePass = null,
   } = {}) {
+    this.edgePass = edgePass && Number.isFinite(Number(edgePass.to))
+      ? { to: Number(edgePass.to), from: Number(this.world?.room?.num), generation: movementGeneration,
+          until: Date.now() + 120_000, why: edgePass.why ?? null }
+      : null;
     if (allowRescue) {
       const {tryRescueTravel} = await import('./m59-rescue-travel.mjs');
       const shortcut = await tryRescueTravel(this, toRoomNum, {origin, avoid, allowHazard, hazardWhy,

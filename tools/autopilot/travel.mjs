@@ -33,6 +33,8 @@ import { UNDERWORLD } from '../m59-travelgate.mjs';
 import { compactRefusals, travelJourneyMetrics, travelThrewOutcome, withTravelJourneyMetrics } from '../m59-trip-telemetry.mjs';
 import { REACH, REST_VIGOR_CAP, REST_VIGOR_WORTH_WAITING, TRAVEL_FORWARD_BIAS, TRAVEL_HOLD_ARM, TRAVEL_HOLD_MODE, journeyIncident, vigorPct } from '../m59-autopilot.mjs';
 import { survivalOffOf } from '../m59-hazards.mjs';
+import { isSurvivalExit, pvpWindowMs, survivalEdgeVerdict, SURVIVAL_EDGE_REVISIT } from '../m59-survival-edge.mjs';
+import { recentPvpDeathRooms } from '../m59-pvp-return.mjs';
 
 export class TravelPart {
   // @part 1
@@ -928,13 +930,30 @@ export class TravelPart {
     // confined to [38] walking out to a station at 2 where Morpheus camps. A confinement is the operator's
     // and outranks an errand's convenience: wandDutyStep now stands down when the station is outside it.
     const approachRoom = approachLeg && (this.policy?.approachRooms ?? []).map(Number).includes(Number(room));
-    // AND LEAVING A ROOM THAT IS CASTING AT US (leaveForCasters): survival, one exit away, whatever the confinement says.
-    const casterExitLeg = opts?.casterExit === true;
-    if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))
-        && !approachRoom && !casterExitLeg) {
+    // AND A SURVIVAL EXIT (leaveForCasters, the no-safe-spot survival_exit): one exit away, out of the confinement,
+    // unless the room is banned or one of ours died to a player there within the PvP hold. PROBATIONARY since
+    // 2026-10-30, revisit 2026-11-30 -- m59-survival-edge.mjs. The caster leg used to pass unconditionally; it now
+    // obeys the same two exclusions. `survivalEdge` also becomes the step guard's pass below (`edgePass`), because
+    // the guard refuses the edge crossing whichever faculty chose it.
+    const outsideConfine = confine?.length && !confine.map(Number).includes(Number(room));
+    const survivalEdge = outsideConfine && isSurvivalExit({ origin: opts?.origin, casterExit: opts?.casterExit })
+      ? survivalEdgeVerdict({ to: room, policy: this.policy,
+          pvpRooms: recentPvpDeathRooms({ withinMs: pvpWindowMs(this.policy) }) })
+      : null;
+    if (survivalEdge) {
+      this.note(survivalEdge.allowed ? 'survival exit leaves the confinement' : 'survival exit refused out of the confinement', {
+        wanted: Number(room), confined_to: confine.map(Number), origin: opts?.origin?.name ?? (opts?.casterExit ? 'caster_exit' : null),
+        why: survivalEdge.why, revisit: SURVIVAL_EDGE_REVISIT });
+      recordEvent(this.who(), 'survival_edge_pass', { wanted: Number(room), allowed: survivalEdge.allowed,
+        why: survivalEdge.why, room: this.s.world?.room?.num ?? null });
+    }
+    const survivalExitLeg = survivalEdge?.allowed === true;
+    if (outsideConfine && !chaliceRooms.includes(Number(room))
+        && !approachRoom && !survivalExitLeg) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
         here: this.s.world?.room?.num ?? null, doing: this.doing,
+        ...(survivalEdge ? { survival_exit_refused: survivalEdge.why } : {}),
         why: 'the operator confined this character to these rooms. A journey out of them is ' +
              'the thing that has been killing it, and no destination is worth the road',
         note: 'this refuses the JOURNEY, not the reason for it — the pass falls through to ' +
@@ -945,7 +964,8 @@ export class TravelPart {
         room: this.s.world?.room?.num ?? null,
       });
       return { arrived: false, refused: true, confined: true,
-               why: `room ${room} is outside the confinement ${confine.join('/')}` };
+               why: `room ${room} is outside the confinement ${confine.join('/')}` +
+                    (survivalEdge ? ` (survival exit refused: ${survivalEdge.why})` : '') };
     }
 
     // A PVP STRATEGY'S HOLD (m59-pvp-strategy.mjs `flee_to` with `hold_ms`). The flight landed the body
@@ -1246,6 +1266,8 @@ export class TravelPart {
         origin: journeyOrigin,
         movementGeneration,
         ...(wantSide ? { arriveNear: wantSide } : {}),
+        // THE STEP GUARD'S PASS for a survival exit allowed out of the confinement above: this one room, this journey.
+        ...(survivalExitLeg ? { edgePass: { to: Number(room), why: survivalEdge.why } } : {}),
         // A ROOM THAT IS WORKED RATHER THAN WALKED ends the walk on arrival and hands the body
         // to the keeper (passLeverPuzzle). Only 2600 on the way to 2601 today.
         handOffAt: (here, to) => puzzleBlocksJourney(here, to),
