@@ -87,6 +87,52 @@ character one map away knows how hurt an enemy was when it walked out the door. 
 and a reading as of the last blow: `player_health` carries `band`, `min_pct`, `max_pct`, `age_ms` and `room`,
 and is null when nobody has heard that player hurt in the last two minutes.
 
+**Not every blow groans** (m59-research `reports/player-hurt-sounds.md`). The band is the health AFTER the
+blow. A player's weapon hit groans; a monster's hit groans only if that monster has a miss sound. A player's
+ATTACK SPELL never does: `atakspel.kod` calls `AssessHit` without a stroke object, so `DoHitMessageSound` returns
+before the sound. Walls, earthquake, poison and room enchantments do not groan either. A fight fought only with
+spells leaves the book empty.
+
+## Slowing down on purpose: the pvpPace hook
+
+A private COMBAT strategy (`substrate/strategies/*.mjs`, not a PvP strategy file) may answer `pvpPace(ctx)`. The
+hook is documented beside the others in `tools/m59-strategies.mjs`, and the keeper's half is `CombatMode.refreshPvpPace`.
+It is asked at most every 250 ms (`PACE_EVERY_MS`) of a fight whose target is a player, before anything is sent,
+and answers `{ factor, why? }`, `{ released: true, why? }` or null:
+
+- **`factor`** multiplies the cooldown stamped after every swing, timed zap and targeted cast at that player
+  (`CombatMode.attackSent`). A timerless zap (vampiric shock) waits `volley_ms` x factor from the last zap. It is
+  clamped to 1..`PACE_MAX` (4), so it can only ADD time and the server's own timer stays the floor. With several
+  strategies answering, the largest factor wins.
+- **`after: 'hit'`** beside a factor stretches only a blow the server CONFIRMS did damage. The timer stamped at
+  send is the plain one. When the hit line comes back inside that blow's own cooldown (`CombatMode.observeOwnBlow`),
+  the hook is asked again at that instant, so it counts this very hit, and the timer becomes send + ms x factor.
+  A miss, a "fails to damage" (0 HP), a line about an older blow, or no line at all leaves the plain timer, so the
+  next attack goes at full speed. The point is damage that ARRIVES evenly spaced, not attacks that leave evenly
+  spaced. For a timerless zap, the `volley_ms` x factor wait applies only after a zap that hit.
+- **`released: true`** is full speed for the rest of this fight. The hook is not asked again until the order ends.
+- null, a throw, a promise or a non-number is full speed, reported once per fight.
+
+**Which lines are hits** (`blowOutcome`, from the kod). "Your <weapon or spell> <verb> <target>." is a hit
+(battler.kod:960, which attack spells also reach through `AssessHit`), unless the verb is "fails to damage". A
+miss is "<target> blocks|dodges|parries|avoids your attack." (:993). The fire wand's "...a ball of fire engulfs
+<target>!" and the vampiric wand's "...as <target>'s life force ..." are hits. Anything else is not a hit.
+
+ctx adds the fleet's view to the character's own. **`engaged`** and **`attackers_on_target`** count distinct
+fleet attackers, us included, read from the **focus book** `substrate/pvp-focus-<fleet>.jsonl`
+(`tools/m59-pvp-focus.mjs`). Every keeper appends one line per attack it sends at a player, and a `hit: true` line per
+confirmed hit, but only while a pvpPace strategy is enabled, so a fleet without one writes nothing. An attacker
+counts for `FOCUS_WINDOW_MS` (8 s) after its last line. **`hitters_on_target`** counts the distinct fleet characters
+with a hit line on the target inside `HIT_WINDOW_MS` (4 s). We are in it only once we have hit, which is exactly when
+an `after: 'hit'` answer is asked for. **`enemies_here`** counts players in the room who are not ours and who are the target, hit by one of us,
+hitting us, or marked hostile by the war book. **`fight.started_at`** is the first line of the room's unbroken run
+of focus lines (no gap over `FIGHT_GAP_MS`, 30 s), so a keeper who arrives late agrees on it with the rest.
+**`fight.low_groan`** is the first band-4 groan from a player who is not ours, in this room, since then.
+**`fight.ally_low`** is us, or a fleet-mate's fresh `substrate/fleet-health/` report from this room, at 25% or less.
+
+Combat lines are `pvp_pace` (on every change of factor, `after` or release). The current pace, with `last_blow`
+(`hit`, `stretched_ms`), is `pace` in the PvP status and episode. The guard is `node tools/m59-pvp-pace-test.mjs` (23).
+
 ## What a strategy cannot do
 
 - It is not asked about monsters, deaths or anything on the 1-second survival clock other than a player; the
