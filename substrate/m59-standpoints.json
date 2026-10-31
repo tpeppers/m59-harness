@@ -122,6 +122,66 @@
       },
       "why": "Kardde's Canyon fence 221 runs diagonally from r19c19 (0,0) to r21c19 (768,256) and through this square's centre, so the centre belongs to both sides and the bake let r20c19 > r21c18 cross it. Every route from the north entrance (from 593) was planned straight down column 19 and through here, and walking it from where r19c19 > r20c19 actually lands stops at this edge. This point is on the column-19 side, 267 client units east of the fence, where a body arriving from the north is.",
       "observed_by": "traceFineMoveClient, 2026-10-18"
+    },
+    {
+      "roo": "tempqor.roo",
+      "room": 802,
+      "row": 4,
+      "col": 17,
+      "fine": {
+        "x": 16896,
+        "y": 3200
+      },
+      "why": "Temple of Qor (802), the inside of the north ceiling door (sector 4, tempqor.kod SomethingTryGo on r3-4 c17-18). The doorway from Zuxana's side is a gap in a one-sided wall at client x 17152 between wall 19 (y 2432-2688) and wall 42 (y 3584-3840), so a body passes it only with its centre between y 2936 and 3336. r4c17's centre (y 3584) is the top end of wall 42 and r3c17's (y 2560) is on wall 19: the step mask, baked from those centres, crossed the door only from the outside (a one-sided wall is walked through from its back), so with the door OPEN the collision router still had no way out from Zuxana's side and travel walked at the pit instead (prod 2026-10-31 17:31-18:40Z, 'did not reach 852 in three attempts'). This point is in the gap, 384 client units clear of wall 42's end; with the door shut the slab beyond it (sector 4, zero headroom) still refuses the step.",
+      "observed_by": "traceFineMoveClient, 2026-10-31"
+    },
+    {
+      "roo": "tempqor.roo",
+      "room": 802,
+      "row": 14,
+      "col": 14,
+      "fine": {
+        "x": 14080,
+        "y": 13824
+      },
+      "why": "Temple of Qor (802), the bridge to Zuxana's dais. The north hall (sector floor 3200) reaches the dais (3488, r16c14-r16c15) only by a tongue of hall and a stepped bridge (3296, 3392) exactly one square wide, client x 13824-14848, from the lower half of r14 through r15, with a pit (sector floor 0) on both sides. The bridge's two edges are the centre lines of column 14 (x 13824) and column 15 (x 14848), so the centres of r14c14, r14c15, r15c14 and r15c15 all lie on an edge and read the pit: the step mask held no step onto the bridge, the collision router had no path to Zuxana (r16c15) from anywhere in the room with the north ceiling door open or shut, and walkTo fell back to the coarse grid, which calls the pit floor and planned r21c17 > r20c16 into it (prod 2026-10-31, movement_deviation). This point is on the tongue, 256 client units inside the bridge's west edge.",
+      "observed_by": "traceFineMoveClient + leafAtClient, 2026-10-31"
+    },
+    {
+      "roo": "tempqor.roo",
+      "room": 802,
+      "row": 14,
+      "col": 15,
+      "fine": {
+        "x": 14592,
+        "y": 13824
+      },
+      "why": "Temple of Qor bridge (see r14c14): on the tongue, 256 client units inside the bridge's east edge.",
+      "observed_by": "traceFineMoveClient + leafAtClient, 2026-10-31"
+    },
+    {
+      "roo": "tempqor.roo",
+      "room": 802,
+      "row": 15,
+      "col": 14,
+      "fine": {
+        "x": 14080,
+        "y": 14848
+      },
+      "why": "Temple of Qor bridge (see r14c14): on the bridge, 256 client units inside its west edge.",
+      "observed_by": "traceFineMoveClient + leafAtClient, 2026-10-31"
+    },
+    {
+      "roo": "tempqor.roo",
+      "room": 802,
+      "row": 15,
+      "col": 15,
+      "fine": {
+        "x": 14592,
+        "y": 14848
+      },
+      "why": "Temple of Qor bridge (see r14c14): on the bridge, 256 client units inside its east edge.",
+      "observed_by": "traceFineMoveClient + leafAtClient, 2026-10-31"
     }
   ]
 }

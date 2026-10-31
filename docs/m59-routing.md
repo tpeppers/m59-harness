@@ -81,6 +81,25 @@ front of them; disciple-quest.mjs had carried its own copy of the door step.
 `m59-inroom-door-test.mjs` pins it. `crawl_to` does not work doors: at about a square
 every eight seconds it cannot use a ten-second window, and `walk_to` runs first.
 
+**The door hook fires only when the BAKE agrees with the room, and in the Temple of Qor (802)
+it did not, twice.** Prod 2026-10-31: `walk_to` Zuxana (r16c15) was refused at r21c17 stepping
+into r20c16, from the door trigger it walked 73 steps back to the same refusal, and `travel` out
+from her side failed for an hour. The collision router had NO path to her square with the north
+door open or shut, so `walkTo` fell back to the coarse grid, which calls the 3200-unit pit around
+her dais floor and planned straight into it. The dais is reached by a stepped bridge one square
+wide whose edges are the centre lines of columns 14 and 15, so every bridge square's centre read
+the pit; and from her side the doorway is a gap in a one-sided wall whose ends sit on r3c17's and
+r4c17's centres, so the mask crossed the door from outside only. Both are the
+fine-grid-is-the-reality trap, fixed the declared way (`substrate/m59-standpoints.json`, room 802
+rebaked in `m59-routes.json` and `m59-ceiling-doors.json`). The third defect was the door's
+clock: it lifts 192 -> 270 at speed 16 (4.98 s) and shuts 5.0 s after the press, so waiting for
+the full lift "opened" it 25 ms before it closed. `waitForDoorOpen` now ends when a body fits
+under a rising ceiling (`ceilingPassableKod`: floor + `PLAYER_HEIGHT`, 240 here, 3.1 s), and
+`m59-doors.mjs` reads a constant with a trailing `%` comment (`RESET_TIME = 5000   % five
+seconds` had been null). When `walk_to` into a door room plans a step the mover refuses, ask first
+whether `path` finds the target at all in either door state; if it does not, the coarse fallback is
+what you are watching.
+
 Fresh room contents rebind the controlled body by its unique character name,
 even when a save reused its old object ID for another visible player. If the
 body cannot be identified, the client exposes no other player's pose and

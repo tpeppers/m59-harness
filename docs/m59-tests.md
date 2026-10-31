@@ -577,7 +577,7 @@ through a nested shelter order.
   conditions — guildh4's twelve entry hotplates in the room and the walker's real avoid set,
   every door shut — from r39c26, r42c28 and the master's wing (r42c33, MASTERDOOR then the
   entrance) the journey still arrives; on 1b5629a the press square itself was refused.
-- `m59-inroom-door-test.mjs` (40): an IN-ROOM walk to a square behind an operable door. On the
+- `m59-inroom-door-test.mjs` (58, about two minutes of real time): an IN-ROOM walk to a square behind an operable door. On the
   real Session (`walkTo`, its door hook, `openOperableDoor`, `waitForDoorOpen`) and the committed
   801 geometry, against a model of tempkra.kod's door (sector 1 to 164 at speed 16 from
   r30c20/r31c20, shut 10 s after the press): from r31c20 and r32c21 a `walkTo` to Qerti'nya at
@@ -588,10 +588,20 @@ through a nested shelter order.
   remembered per target; no geometry, no door. On a virtual clock: a door that will not open is
   pressed three times, then the walk proceeds and a re-issue within the minute does not press it
   again; a cancel at the press walks nothing and is not remembered as a refusal; a door that shuts
-  on the way is pressed once more and the walk arrives; and 802, where the table cannot prove a
-  chain to Zuxana but opening the north door brings the body from four squares to two, is pressed
-  ONCE as a guess (falling through r4c17, which the mover cannot reach, to r4c18) and not again
-  for that target. Its seam assertions pin the hook's place in `walkTo` (after the no-geometry
+  on the way is pressed once more and the walk arrives; and 802's pit square r18c15, which no door
+  state reaches but which opening the north door brings from three squares to two, is pressed
+  ONCE as a guess and not again for that target. THE TEMPLE OF QOR BOTH WAYS (prod 2026-10-31):
+  with the door shut the committed tables give no path to Zuxana (r16c15) from r33c14, r21c17 or
+  r4c18 and none from her side (r15c18, r16c15) to the south exit r38c14, and with it open they
+  give all five; `planDoorChain` proves sector 4 both ways (from inside, pressed on c17);
+  m59-doors.json has its 5000 ms RESET_TIME and `ceilingPassableKod` says 240. Then the real
+  Session at the game's pace (`realPace` in the fixture) against tempqor.kod's door (192 -> 270 at
+  speed 16, shut 5 s after the press, presses ignored while it runs): `walkTo` from r33c14 and
+  r4c18 presses once, proven, and stands on Zuxana's square; `travel(598)` from r15c18 presses once
+  from inside, logs `operated_a_door`, and crosses into 598 (the fixture's `edgeLandings` puts the
+  south edge at i8.kod's r32c25). On origin/main the walk stops at r21c17 (`movement_deviation`),
+  the door "pressed three times and no sector moved", and the journey ends
+  `route_progressing_exits_exhausted`: 22 failures. Its seam assertions pin the hook's place in `walkTo` (after the no-geometry
   refusal, before the remembered departure, skipped under `beforeMutation`), `doors: false` on the
   trigger walk and the walk through, and that disciple-quest.mjs no longer presses doors itself.
 - `m59-peninsula-test.mjs` (14 tests + 1 TODO): a raised pocket you can fall out of but not

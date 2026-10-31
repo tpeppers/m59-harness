@@ -61,9 +61,14 @@ import { counterSectorsInSource } from './m59-varsectors.mjs';
  * Case-insensitively keyed, because kod is case-insensitive and a table that only answers to
  * the canonical spelling is the bug that hid the Temple of Qor's two entrances for a month.
  */
+//
+// A TRAILING `%` COMMENT IS STILL A CONSTANT. tempqor.kod declares `RESET_TIME = 5000   % five
+// seconds`, and a pattern that wanted the line to end at the number read no RESET_TIME at all,
+// so the Temple of Qor's north door went into m59-doors.json with `delay_ms: null` and every
+// press was waited on as if it stayed open for the 8 s default (2026-10-31).
 export function parseConstants(src) {
   const out = new Map();
-  const re = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+)\s*$/gm;
+  const re = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+)\s*(?:%.*)?$/gm;
   let m;
   while ((m = re.exec(src))) out.set(m[1].toUpperCase(), Number(m[2]));
   return out;

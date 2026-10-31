@@ -8,9 +8,19 @@
 // even been asked to move, and every press read "no matching opening event". The animation that
 // follows is the slow part (76 units at speed 16 is 4.85s, the operator's "3-5s for guild hall
 // doors"), and it is waited out from that event, never guessed.
+//
+// A RISING CEILING IS OPEN ONCE A BODY FITS UNDER IT, NOT ONCE IT STOPS. `passableHeight` (kod) is
+// the ceiling height at which the door's sector gives a body PLAYER_HEIGHT of headroom
+// (`ceilingPassableKod` in m59-ceiling-doors.mjs); given one between the shut and open heights, the
+// wait ends when the ceiling reaches it rather than at the top of the swing. The Temple of Qor's
+// north door (tempqor.kod) lifts 192 -> 270 at speed 16, 4.98 s, and its DoorTimer drops it again
+// 5.0 s after the press — so a wait for the full swing ended 25 ms before the close event, and in
+// the offline model (where the close arrives on the press's clock) never ended at all: "pressed
+// three times and no sector moved", while the ceiling had been head-high from 3.0 s to 6.9 s of
+// every press. Without one, the full swing is waited, as before.
 export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
   now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
-  eventTimeoutMs = 1500, pressedAt = null } = {}) {
+  eventTimeoutMs = 1500, pressedAt = null, passableHeight = null } = {}) {
   const began = now(), room = c.room?.id;
   const press=Number.isFinite(pressedAt)?pressedAt:began;
   const window=Number.isFinite(plan.within_ms)&&plan.within_ms>0?plan.within_ms:8000;
@@ -44,7 +54,12 @@ export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
   // Never claim completion beyond the known open window, or wait without a bound.
   if (!Number.isFinite(duration))
     return { opened: false, reason: 'door animation exceeds its opening window' };
-  const until = started + duration;
+  const rising = Number.isFinite(plan.from_height) && Number.isFinite(plan.to_height) &&
+    plan.to_height > plan.from_height;
+  const passable = rising && event.speed > 0 && Number.isFinite(passableHeight) &&
+    passableHeight > plan.from_height && passableHeight < plan.to_height
+    ? Math.ceil((passableHeight - plan.from_height) * 1000 / event.speed) + 100 : null;
+  const until = started + (passable != null ? Math.min(duration, passable) : duration);
   // Its close timer starts at the press, not at the response. A delayed sector
   // packet can leave insufficient time even when the animation alone fits.
   if(until>=deadline)return {opened:false,reason:'door animation exceeds the remaining opening window'};
@@ -56,7 +71,8 @@ export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
   if (stopped()) return { opened: false, reason: 'movement cancelled' };
   if (shut()) return { opened: false, reason: 'door closed before crossing' };
   if(now()>=deadline)return {opened:false,reason:'door opening window expired'};
-  return { opened: true, animation_ms: duration, waited_ms: now() - began,remaining_ms:deadline-now() };
+  return { opened: true, animation_ms: duration, ...(passable != null ? { passable_ms: passable } : {}),
+           waited_ms: now() - began,remaining_ms:deadline-now() };
 }
 
 // Door cycles differ: Konima holds for ten seconds, ordinary guild doors for

@@ -26,7 +26,10 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
   const attached=attachStepMasks(map);
   if(!attached.ok)throw Error('Bastion tests require the collision routing table');
 
-  function fixture(entry,{bodies=false,wireNames=false,selfId=entry.from.id??1,maxPackets=512,maxMs=30000}={}) {
+  // `edgeLandings` names where a DYNAMIC edge exit lands, keyed `{[room]:{[direction]:{to,arriveRow,arriveCol}}}`.
+  // The Temple of Qor's south edge is `StandardLeaveDir` -> `ExitFromQor` into whichever of 598/589 is live
+  // (tempqor.kod, i8.kod, h9.kod), so the map has no landing for it; a test that leaves it says which side is open.
+  function fixture(entry,{bodies=false,wireNames=false,selfId=entry.from.id??1,maxPackets=512,maxMs=30000,edgeLandings=null,realPace=false}={}) {
     const deadline=Date.now()+maxMs;
     let room=entry.from.room,pending=null;
     const packets=[],crossings=[],events=[],asks=[];
@@ -42,7 +45,7 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
         packets.push({room,x,y,row,col});
         this.predictSelf({x,y,row,col});
         const direction=row<1?'north':row>r.rows?'south':col<1?'west':col>r.cols?'east':null;
-        const edge=direction?selectedEdgeAt(r,direction,{row,col}):null;
+        const edge=direction?(selectedEdgeAt(r,direction,{row,col})??edgeLandings?.[room]?.[direction]??null):null;
         const trigger=direction?null:codeExits(room).find(e=>inRegion(e.when,row,col));
         if(edge||trigger)pending={from:room,exit:edge??trigger};
       },
@@ -75,7 +78,12 @@ export async function bastionHarness(root=fileURLToPath(new URL('../../',import.
     const s=Object.assign(Object.create(Session.prototype),{client:c,movementGeneration:0,name:'offline-bastion',
       cancelledMovementTokens:new Set(),movementCancellationChecks:new Map(),
       need:()=>c,moveSpeed:()=>18,movementWasCancelled:(g,t)=>Session.prototype.movementWasCancelled.call(s,g,t)||packets.length>=maxPackets||Date.now()>deadline,
-      pacer:{async submit(_kind,run){applyPending();bodyAuthority(s).guard();return run();},wake(){}},
+      // `realPace` honours the gap a move asks for (Pacer.submit's third argument), so a walk takes
+      // the time a body would. Anything modelled on the clock -- a door's lift, the vertical fall
+      // envelope (m59-vertical-motion.mjs) -- is otherwise outrun by a fixture that moves instantly.
+      pacer:{last:0,async submit(_kind,run,minGap){
+        if(realPace&&Number(minGap)>0){const wait=this.last+Number(minGap)-Date.now();if(wait>0)await new Promise(r=>setTimeout(r,wait));this.last=Date.now();}
+        applyPending();bodyAuthority(s).guard();return run();},wake(){}},
       async confirmPosition(){c.roomContents();releaseConfirmedPassage(s);return c.self;},
       async refreshRoomIdentity(){c.roomContents();return {confirmed:true,room:s.world.room};},
       async _askStrategies(){return null;},_blinkPointHere:()=>null,
