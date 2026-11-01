@@ -1,4 +1,4 @@
-import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
+import {cooperativeReconnectRefusal,cooperativeWaitActive} from './m59-cooperative-logoff.mjs';
 import{executeDeliveryCacheDrop}from'./m59-delivery-cache.mjs';
 import{receiveDeliveryNotice,deliveryNoticesOf}from'./m59-delivery-notices.mjs';
 import { isVaultmanName, vaultsSaid, isBankerLine } from './m59-vaults.mjs';
@@ -1646,7 +1646,7 @@ function state() {
     // `goap` above stays as the compact movement/render shape; this is the operational
     // status shape.  Keeping both named prevents a reader from mistaking one for the other.
     autopilot_status: autopilotStatus,
-    cooperative_wait: !!session.cooperativeLogoffWaiting,
+    cooperative_wait: cooperativeWaitActive(session),
     delivery_cache: 1,
     delivery_notices: deliveryNoticesOf(session),
     // CAN THIS CHARACTER HEAR. The broker's `fleet` reported `listening: false` for every
@@ -1872,7 +1872,7 @@ const server = createServer(async (req, res) => {
       // dominant idle hot loop. Legacy `/health` remains rich for rolling compatibility.
       json({
         schema: 'm59-keeper-live/v1',
-        cooperative_wait: !!session.cooperativeLogoffWaiting,
+        cooperative_wait: cooperativeWaitActive(session),
         tactical_orders: 1,
         // POST /policy understands `replace: true` (see there). An older keeper would merge the
         // word in as a policy field, so a writer sends it only to a keeper that says this.

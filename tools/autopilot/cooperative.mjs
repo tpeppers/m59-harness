@@ -136,7 +136,10 @@ export class CooperativePart {
       await this.resumeCooperativeReturn({decisionId:decision.id});
     }else {
       this.note('cooperative logoff remains unresolved',{request_id:request.id,why:result.why});
-      if(abortPreparingCooperativeLogoff(s,request.id,result.why))return false;
+      // Aborted whether or not the socket survived: a `preparing` record left behind refused every
+      // later login (Robin, 2026-11-01, 4.5 hours). Still live means the body never left, so the
+      // ladder carries on; out means the broker's sweep brings it back now that nothing refuses.
+      if(abortPreparingCooperativeLogoff(s,request.id,result.why)&&s.live)return false;
     }
     return true;
   }
@@ -150,11 +153,14 @@ export class CooperativePart {
     r.cover_attempted_at=Date.now();this.frozenUntil=null;this.freezeSample=null;
     // A login released by the strategy's opt-in max_offline_ms is NOT a distraction: say so,
     // and still go straight for cover rather than standing in an undistracted room.
-    const deadline=r.released==='deadline';
+    // Any other release (preparing_timeout, offline_overrun, store_failure: m59-cooperative-logoff.mjs)
+    // is a stuck record ended by its bound -- also undistracted, also straight for cover.
+    const deadline=r.released==='deadline',undistracted=r.released!=null;
     const decision=chooseSurvivalDecision(s,{strategy:'nearest_refuge',
       reason:deadline?'cooperative wait reached its opt-in max_offline_ms undistracted; return to cover'
+        :undistracted?`cooperative logoff ended by its bound (${r.released}) undistracted; return to cover`
         :'fleetmate resolved every captured threat (hit, or observed gone); return to cover',reason_code:'cooperative_return'},
-      {because:deadline?'cooperative wait deadline (opt-in)':'confirmed cooperative distraction',outcome:'arrived'});
+      {because:deadline?'cooperative wait deadline (opt-in)':undistracted?'stuck cooperative logoff recovered':'confirmed cooperative distraction',outcome:'arrived'});
     const preparedRefuge=cooperativeReturnRefuge(s);
     this.note('cooperative immediate return to cover',{request_id:r.request_id,prepared:!!preparedRefuge,
       login_ready_at:s.client.loginReadyAt??null,released_at:r.released_at});

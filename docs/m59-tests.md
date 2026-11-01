@@ -2703,7 +2703,7 @@ the frozen farming hour or constitute another native one-hour trial.
 
 ## Cooperative logoff
 
-`node tools/m59-cooperative-logoff-test.mjs` (23) exercises socketless native
+`node tools/m59-cooperative-logoff-test.mjs` (32) exercises socketless native
 `playDead`/`Session.rejoin`, durable login waits across restarts, last-helper
 admission, miss versus confirmed hit, multiple threats, stage/faculty preemption,
 paced approach ownership, post-hit cleanup, immediate return before another
@@ -2716,6 +2716,14 @@ one from a helper in another room or one waiting offline itself. A target that r
 invalidates its receipt, and a mixed hit plus gone set releases. The opt-in
 `max_offline_ms` is bounded, travels with the request, and releases a restarted waiter at
 its deadline and not before. Without it, nothing ever times out.
+The 2026-11-01 stuck-logoff checks: a busy rename is retried and leaves no tmp; a `preparing`
+record whose departure write failed is confirmed offline by its own gate; one nobody confirms is
+abandoned at `PREPARING_MAX_MS` and not before, by the gate and by the `/join` refusal; an
+unwritable deadline release keeps the waiter alive, clears the wait flag when it ends, and logs in
+past the overrun margin; with no waiter the join handler re-gates inside the bound and abandons
+past it; a hand-aborted file lets the next login in and clears a stale flag; a stuck record is
+never resolved into a login the keeper does not want; and a failed reconnect aborts its
+`preparing` record even when the session is already out. Each recovery writes a ledger row.
 The cooperative suite also calls the actual native attack exchange to prove its
 streamed notification precedes internal health reads and excludes chat.
 `m59-combat-approach-test.mjs` exercises the real fight hit callback, verifies
