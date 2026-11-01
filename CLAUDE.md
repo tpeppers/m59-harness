@@ -804,6 +804,20 @@ waits sized from the journey's own p90, travel issued once and never re-issued w
 walking, results read back from the world, the bot's lease taken, and a known trap room
 refused outright.
 
+**AND EVERY RUN STARTS FROM THE WORLD AS IT IS (`liveStart`, 2026-11-01).** Before the lock,
+per character, the broker is asked: a body a PERSON is piloting is refused, naming the client
+pid and how long it has been held, unless the script declares `codeKick: true` (or the
+invocation says `codeKick=true`), in which case the claim is released, the keeper is waited back
+into the world and the pilot state is READ AGAIN before step 0; a body another LIVE job on the
+board holds is refused, naming the job, script and owner pid; a job whose owner is gone (pid dead,
+or alive with a different start time, which is pid reuse) is taken over at once with its movement
+cancelled first and its row retired. Then each body's room is read with `look` into
+`state.startRoom`, and `steps(agent, state)` is built from it. Never plan a leg from the `fleet`
+row: for a character a person has been playing, it is where the body stood BEFORE they took it.
+That is how Piggy was walked off the island from 2143 while his row still said 537. `legFor` and
+`liveRoom` (exported by the fleetscript module, `tools/m59-livestart.mjs`) decide legs from live
+state; `substrate/fleetscripts/island-move-in.mjs` on prod is the worked example.
+
 **AND A STEP MAY LEARN ITS ARGUMENT FROM AN EARLIER STEP, BECAUSE SOMETIMES THE SERVER PICKS.**
 `walk`, `say` and `fight` take a function of the run state as well as a value — the same shape
 `bank`'s `amount` has always had. It exists for the errands where the game names the destination

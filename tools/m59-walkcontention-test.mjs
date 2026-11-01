@@ -72,6 +72,8 @@ function fakeBroker({ room = 39, replies = [], arriveAt = null }) {
     let payload = { ok: true };
     if (name === 'status') payload = { where: { num: room, name: 'room' },
                                        hp: { value: 50, max: 50 }, gold: null };
+    // The live start room (FleetScript `liveStart`) is read with `look`, never the status snapshot.
+    else if (name === 'look') payload = { room: { num: room, name: 'room' } };
     else if (name === 'travel_estimate') payload = { ms: 1000, hops: 2 };
     else if (name === 'travel') {
       const scripted = replies.length ? replies.shift() : { started: true };

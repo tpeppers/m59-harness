@@ -167,7 +167,14 @@ This is an offline scheduling regression, not a native survival measurement.
 - `node tools/m59-resistance-test.mjs` and `node tools/m59-mirror-test.mjs`:
   resistance estimates and saved-scene combat simulation.
 - `node tools/m59-fleetscript-test.mjs`: includes verified cast outcomes and
-  retry-aware transport alongside the existing FleetScript coverage.
+  retry-aware transport alongside the existing FleetScript coverage, and `liveStart`
+  (2026-11-01, Piggy and Waldorf): a piloted body is refused, naming the client pid; a declared
+  `codeKick` releases the claim, waits for a non-spectate keeper and re-reads the pilot state
+  before step 0; a live job on the board refuses, naming id, script and owner pid; a killed
+  REPL's row (owner pid dead, row still `running`) and a reused pid (alive, other start time) are
+  taken over on the first attempt with `cancel_movement` before `busy` and the row retired by
+  `job_end` (never `job_cancel`, which kills pids); `state.startRoom` is the `look`, never the
+  snapshot, and `runNamed` hands it to the script.
 
 These tests are offline. They do not execute a raid or shut down a server.
 

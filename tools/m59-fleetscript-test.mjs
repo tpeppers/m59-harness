@@ -106,7 +106,11 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       onInventory = null, onSellAll = null,
                       // WHAT `look` SAYS ABOUT POSITION. undefined: `positions` (or 0,0); a function:
                       // its answer, read live (a keeper world that moves); null: no position at all.
-                      lookAt = undefined, lookRoom = undefined } = {}) {
+                      lookAt = undefined, lookRoom = undefined,
+                      // WHO ELSE HOLDS THE BODY (guarantee liveStart). `piloted` is what `pilot action=status`
+                      // lists -- an array, or a function of {sent} for a claim that ends after a kick; `jobs` is
+                      // the board's live rows, same shape. null for either: the broker cannot answer it.
+                      piloted = [], jobs = [] } = {}) {
   const invReads = {};
   const sent = [], rested = [], saidLines = [];
   const chatLog = [];
@@ -238,6 +242,15 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       : { hopped: false, reason: 'the hop was sent and the body did not move' };
     }
     else if (name === 'cancel_movement') payload = { cancelled: true };
+    else if (name === 'pilot' && a.action === 'status') {
+      const list = typeof piloted === 'function' ? piloted({ sent }) : piloted;
+      payload = list === null ? { error: 'pilot status unavailable' } : { piloted: list };
+    }
+    else if (name === 'pilot' && a.action === 'release') payload = { released: true, agent };
+    else if (name === 'jobs') {
+      const list = typeof jobs === 'function' ? jobs({ sent }) : jobs;
+      payload = list === null ? { error: 'no board' } : { jobs: list };
+    }
     // The portal, as the server behaves: it moves the character out of 1011-1018, or it
     // does not and says so. `leftRaza: false` models a portal that did not take.
     else if (name === 'leave_raza') {
@@ -3135,6 +3148,323 @@ console.log('\na broker refusal fails an act step, it is never ok');
     if(!resolve(scratch).startsWith(resolve(tmpdir())+sep))throw Error('waiver fixture cleanup escaped temporary directory');
     rmSync(scratch,{recursive:true,force:true});
   }
+}
+// ---------------------------------------------------------------- liveStart (2026-11-01)
+//
+// THE INCIDENT: the operator was piloting Piggy, whose fleet row still said 537 (mainland) while he stood in 2143 on
+// the island; a session code-kicked him and ran a mainland-start script that walked him back out toward the Icky
+// Cave. Minutes later the operator ran the same script on Waldorf from MANAGE. Neither run could see the other; a dead
+// owner's walk kept going; the next start only said "took over a stale lock".
+console.log('\nliveStart: who holds the body, and where it stands, read live (2026-11-01, Piggy and Waldorf)');
+{
+  const { UNSAFE_GUARANTEES, parseUnsafe, ACTIVE_JOB_IDS, legFor: legForExport } = await import('./m59-fleetscript.mjs');
+  const { pilotHold, jobOwnerVerdict, judgeJobs, legFor, liveRoom } = await import('./m59-livestart.mjs');
+  const { RUN_LOCK_DIR } = await import('./m59-runlock.mjs');
+  const { spawn } = await import('node:child_process');
+  const { mkdirSync } = await import('node:fs');
+  const { processStartedAt } = await import('./runtime/process-identity.mjs');
+
+  // ---- the entry on the list, with its incident
+  const g = UNSAFE_GUARANTEES.liveStart;
+  ok('liveStart is on the guarantee list with a since and an incident naming Piggy and Waldorf',
+     g?.since === '2026-11-01' && /Piggy/.test(g.incident) && /Waldorf/.test(g.incident));
+  ok('and it is waivable by name, with the mandatory reason',
+     parseUnsafe({ reason: 'test', waives: ['liveStart'] }).waived.has('liveStart'));
+  let threw = false; try { parseUnsafe({ waives: ['liveStart'] }); } catch { threw = true; }
+  ok('a waiver of it with no reason is refused at load', threw);
+
+  // ---- a. pilotHold, pure
+  const T = 1_800_000_000_000;
+  const st = { piloted: [{ agent: 't14', pid: 4242, alive: true, held_s: 312 },
+                         { agent: 't4', pid: 99, alive: false, held_s: 5 }] };
+  const h = pilotHold('t14', { pilotStatus: st });
+  ok('pilot status names the holder pid and how long', h.held === true && h.pid === 4242 && h.heldMs === 312_000);
+  ok('a claim whose client the broker reports dead is not a person at the controls',
+     pilotHold('t4', { pilotStatus: st }).held === false);
+  ok('an agent nobody claims is free', pilotHold('t1', { pilotStatus: st }).held === false);
+  ok('the fleet row is the fallback when pilot status cannot answer',
+     pilotHold('t14', { fleetRows: [{ agent: 't14', piloted: { since: T - 60_000, pid: 7 } }], now: T }).heldMs === 60_000);
+  ok('a remote lease holder is named', pilotHold('t14', { pilotStatus: { piloted: [{ agent: 't14', alive: true,
+     holder: 'steamdeck m59-tui', held_s: 1 }] } }).holder === 'steamdeck m59-tui');
+  ok('neither source readable is UNKNOWN, never "nobody"', pilotHold('t14', {}).held === null);
+
+  // ---- b. jobOwnerVerdict, pure, with injected pids
+  const job = (o = {}) => ({ id: 'j1', name: 'island-move-in (local)', kind: 'fleetscript', agents: ['a1'],
+    owner_pid: 5000, owner_start: T - 3_600_000, state: 'running', started_at: T - 60_000,
+    heartbeat_at: T - 30_000, heartbeat_ms: 60_000, ...o });
+  const opt = (o = {}) => ({ selfPid: 1, now: T, alive: () => true, startOf: () => T - 3_600_000, ...o });
+  ok('a running owner with the recorded start time is LIVE', jobOwnerVerdict(job(), opt()).live === true);
+  ok('a dead owner pid is dead', jobOwnerVerdict(job(), opt({ alive: () => false })).live === false);
+  const reused = jobOwnerVerdict(job(), opt({ startOf: () => T - 5_000 }));
+  ok('a live pid whose start time differs is a REUSED pid, and dead', reused.live === false && /different process/.test(reused.why));
+  ok('an unreadable start time keeps it live (fail closed)', jobOwnerVerdict(job(), opt({ startOf: () => null })).live === true);
+  ok('no recorded start: live, and it says pid reuse cannot be ruled out',
+     /cannot be ruled out/.test(jobOwnerVerdict(job({ owner_start: null }), opt()).why));
+  ok('no heartbeat past the board\'s own limit is dead',
+     jobOwnerVerdict(job({ heartbeat_at: T - 6 * 60_000 }), opt()).live === false);
+  ok('a row of THIS process that is not in flight here is a leftover, dead',
+     jobOwnerVerdict(job({ owner_pid: 1 }), opt()).live === false);
+  ok('a row of this process still in flight here is live',
+     jobOwnerVerdict(job({ owner_pid: 1 }), opt({ ownJobIds: new Set(['j1']) })).live === true);
+  const sorted = judgeJobs([job(), job({ id: 'j2', agents: ['zz'] }), job({ id: 'j3', state: 'paused' }),
+                            job({ id: 'j4', state: 'done' })], ['a1'], opt());
+  ok('judgeJobs: only rows naming our agents, paused noted not refused, ended ignored',
+     sorted.live.length === 1 && sorted.paused.length === 1 && sorted.dead.length === 0);
+
+  // ---- c. legFor / liveRoom, pure
+  const legs = [['farm', [2143, 2144, 2101]], ['island', r => r >= 2000 && r < 2500], ['cave', r => r >= 2500 && r <= 2505]];
+  ok('legFor: a farm room is the farm leg', legFor(2143, legs, 'mainland') === 'farm');
+  ok('legFor: an island room', legFor(2005, legs, 'mainland') === 'island');
+  ok('legFor: anything else is the fallback', legFor(537, legs, 'mainland') === 'mainland');
+  ok('legFor: an unreadable room is NOT the fallback', legFor(null, legs, 'mainland') === null &&
+     legFor(undefined, legs, 'mainland', { unknown: 'ask' }) === 'ask');
+  ok('legFor is re-exported by the fleetscript module', legForExport === legFor);
+  const lr = await liveRoom({ agent: 'a1', call: async (n) => (n === 'look' ? { room: { num: 2143, name: 'Deep' } } : null) });
+  const lrBad = await liveRoom({ agent: 'a1', call: async () => { throw new Error('keeper gone'); } });
+  ok('liveRoom reads look', lr.room === 2143 && lr.name === 'Deep');
+  ok('liveRoom: an unreadable look is null with the error, never a snapshot', lrBad.room === null && /keeper gone/.test(lrBad.error));
+
+  // ---- REAL processes for the pid half: a live owner, and a dead one (a REPL killed with taskkill /T /F)
+  const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+  const gone = spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' });
+  await new Promise(r => gone.on('exit', r));
+  await new Promise(r => setTimeout(r, 500));
+  const liveStart = processStartedAt(live.pid);
+  const now = Date.now();
+  const row = (o = {}) => ({ id: 'jx', name: 'island-move-in (local)', kind: 'fleetscript', agents: ['a1'],
+    owner_pid: live.pid, owner_start: liveStart, state: 'running', started_at: now - 90_000,
+    heartbeat_at: now - 10_000, heartbeat_ms: 60_000, note: 'island-move-in agents=a1', ...o });
+  const idx = (sent, pred) => sent.findIndex(pred);
+  const isBusy = c => c.name === 'autopilot' && c.action === 'busy';
+
+  // a. A PIGGY: piloted, no kick declared -> refused, nothing driven
+  {
+    const sent = fakeBroker({ rooms: { a1: 537 }, lookRoom: 2143,
+      piloted: [{ agent: 'a1', pid: 31337, alive: true, held_s: 600 }] });
+    const logs = [];
+    const r = await fleetScript({ name: 'island-move-in', fleet: 'testfleet', agents: ['a1'],
+      steps: [walk(27)], onLog: (...a) => logs.push(a.join(' ')) });
+    ok('a piloted body is REFUSED', r.ok === false && r.refused === true && r.contended?.includes('a1'), r.why);
+    ok('the refusal names the client pid and how long it has been held', /31337/.test(r.why) && /10m/.test(r.why), r.why);
+    ok('and it says how to take it (codeKick)', /codeKick/.test(r.why));
+    ok('nothing was marked busy, claimed, travelled or cancelled',
+       !sent.some(c => isBusy(c) || c.name === 'travel' || c.name === 'cancel_movement' ||
+                       (c.name === 'pilot' && c.action === 'release')), JSON.stringify(sent.map(c => c.name)));
+    ok('the refusal is on the log', logs.some(l => /REFUSING/.test(l) && /PILOTED/.test(l)));
+  }
+
+  // a. THE KICK, declared: release, wait for the keeper, read again, THEN run
+  const withKeeper = ({ spectate = null, liveOk = true } = {}) => {
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes(`:${KEEPER_PORT}/live`))
+        return { ok: true, json: async () => ({ agent: 'a1', character: 'A One', pid: 777, ok: liveOk,
+                                                 in_game: liveOk, connected: liveOk, spectate }) };
+      if (u.includes(`:${KEEPER_PORT}/`)) return { ok: true, json: async () => ({ error: 'no keeper in this test' }) };
+      return inner(url, opts);
+    };
+  };
+  {
+    const sent = fakeBroker({ rooms: { a1: 537 }, lookRoom: 2143,
+      piloted: ({ sent }) => sent.some(c => c.name === 'pilot' && c.action === 'release') ? []
+        : [{ agent: 'a1', pid: 31337, alive: true, held_s: 30 }] });
+    withKeeper();
+    let seen = null;
+    const r = await fleetScript({ name: 'kick-then-run', fleet: 'testfleet', agents: ['a1'], codeKick: true, pollMs: 50,
+      steps: (agent, state) => [verify(async ctx => { seen = ctx.state.startRoom; return true; })], onLog: quiet });
+    const rel = idx(sent, c => c.name === 'pilot' && c.action === 'release');
+    const statusAfter = sent.filter((c, i) => i > rel && c.name === 'pilot' && c.action === 'status').length;
+    ok('a declared kick releases the claim and the run goes on', r.ok === true && rel >= 0, JSON.stringify(r));
+    ok('the claim is released BEFORE anything is marked busy', rel >= 0 && rel < idx(sent, isBusy));
+    ok('the pilot state is READ AGAIN after the kick, before step 0', statusAfter >= 2);
+    ok('and the run starts from the live room, not the 537 snapshot', seen === 2143, String(seen));
+  }
+  {
+    // A KICK THAT DOES NOT TAKE: the claim stays -> refused, bounded, nothing walked.
+    const sent = fakeBroker({ rooms: { a1: 39 }, piloted: [{ agent: 'a1', pid: 31337, alive: true, held_s: 30 }] });
+    withKeeper();
+    const t0 = Date.now();
+    const r = await fleetScript({ name: 'kick-fails', fleet: 'testfleet', agents: ['a1'],
+      codeKick: { budgetMs: 300 }, pollMs: 50, steps: [walk(54)], onLog: quiet });
+    ok('a kick the claim survives is refused within its budget', r.refused === true && /still held/.test(r.why) &&
+       Date.now() - t0 < 15_000, r.why);
+    ok('and nothing was marked busy or travelled', !sent.some(c => isBusy(c) || c.name === 'travel'));
+  }
+  {
+    // A SPECTATE KEEPER IS THE PERSON'S OWN CONNECTION: it is not "the keeper is back".
+    const sent = fakeBroker({ rooms: { a1: 39 },
+      piloted: ({ sent }) => sent.some(c => c.name === 'pilot' && c.action === 'release') ? []
+        : [{ agent: 'a1', pid: 31337, alive: true, held_s: 30 }] });
+    withKeeper({ spectate: { player: 'Piggy' } });
+    const r = await fleetScript({ name: 'kick-spectate', fleet: 'testfleet', agents: ['a1'],
+      codeKick: { budgetMs: 300 }, pollMs: 50, steps: [walk(54)], onLog: quiet });
+    ok('a spectate keeper answering /live does not count as the keeper logging back in',
+       r.refused === true && /keeper is not back/.test(r.why), r.why);
+    ok('and nothing walked', !sent.some(c => c.name === 'travel'));
+  }
+
+  // b. A LIVE JOB on the board -> refused, naming id, script and owner pid
+  {
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row()] });
+    const r = await fleetScript({ name: 'second-controller', fleet: 'testfleet', agents: ['a1'],
+      steps: [walk(54)], onLog: quiet });
+    ok('a body held by another LIVE job is REFUSED', r.refused === true && r.contended?.includes('a1'), r.why);
+    ok('the refusal names the job id, the script and the owner pid',
+       /jx/.test(r.why) && /island-move-in/.test(r.why) && new RegExp(String(live.pid)).test(r.why), r.why);
+    ok('and how to stop it', /m59-jobs\.mjs cancel jx/.test(r.why));
+    ok('nothing was marked busy, cancelled or retired', !sent.some(c => isBusy(c) || c.name === 'cancel_movement' ||
+       c.name === 'job_end' || c.name === 'travel'));
+  }
+  {
+    // A PID WINDOWS HANDED TO SOMEBODY ELSE: alive, wrong start time -> taken over, never refused.
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row({ owner_start: liveStart - 3_600_000 })] });
+    const r = await fleetScript({ name: 'after-reuse', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: quiet });
+    const end = sent.find(c => c.name === 'job_end');
+    ok('a live pid with a different start time is a dead owner: the run proceeds', r.ok === true, JSON.stringify(r));
+    ok('the dead row is retired as cancelled, naming the takeover', end?.id === 'jx' && end.state === 'cancelled' &&
+       /after-reuse/.test(end.result ?? ''), JSON.stringify(end));
+    ok('and job_cancel (which kills the row\'s pids) is never sent', !sent.some(c => c.name === 'job_cancel'));
+  }
+  {
+    // A dead row that ALSO names a body this run is not taking stays on the board for that body.
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row({ id: 'jboth', agents: ['a1', 'b2'], owner_pid: gone.pid })] });
+    const r = await fleetScript({ name: 'takes-only-a1', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: quiet });
+    ok('a dead row naming another body too: a1 is taken over, its movement cancelled', r.ok === true &&
+       sent.some(c => c.name === 'cancel_movement' && c.agent === 'a1'));
+    ok('but b2 is neither cancelled nor its row retired', !sent.some(c => c.name === 'cancel_movement' && c.agent === 'b2') &&
+       !sent.some(c => c.name === 'job_end' && c.id === 'jboth'));
+  }
+  {
+    // PRISM-GUARD'S CASE: the REPL was killed with taskkill /T /F, its row still reads `running`, its owner pid is
+    // dead, and its run lock is still on disk. The relaunch must go at once: no refusal, no retry delay.
+    mkdirSync(RUN_LOCK_DIR, { recursive: true });
+    writeFileSync(join(RUN_LOCK_DIR, 'run-testfleet--a1.lock'), JSON.stringify(
+      { pid: gone.pid, startedAt: now - 120_000, at: now - 60_000, fleet: 'testfleet', agent: 'a1',
+        label: 'prism-quest [a1]', argv: 'node m59-fleet-repl.mjs' }));
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row({ id: 'jk', name: 'prism-quest (local)', owner_pid: gone.pid,
+      owner_start: now - 120_000 })] });
+    const logs = [];
+    const t0 = Date.now();
+    const r = await fleetScript({ name: 'go-to', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: (...a) => logs.push(a.join(' ')) });
+    const ms = Date.now() - t0;
+    const cancelAt = idx(sent, c => c.name === 'cancel_movement' && c.agent === 'a1');
+    ok('a killed REPL\'s row (dead owner, still running) is taken over on the FIRST attempt', r.ok === true && !r.refused,
+       JSON.stringify(r));
+    ok('immediately: no retry delay', ms < 10_000, `${ms}ms`);
+    ok('its movement is cancelled BEFORE the body is marked busy', cancelAt >= 0 && cancelAt < idx(sent, isBusy));
+    ok('the movement is cancelled once, not again for the stale lock',
+       sent.filter(c => c.name === 'cancel_movement' && c.agent === 'a1').length === 1);
+    ok('the dead row is retired so no alert release resumes it', sent.some(c => c.name === 'job_end' && c.id === 'jk'));
+    ok('the takeover is on the log with the reason', logs.some(l => /taking over job jk/.test(l) && /is gone/.test(l)));
+  }
+  {
+    // A STALE RUN LOCK WITH NO BOARD ROW (the board was away): the dead run's walk is still stopped.
+    mkdirSync(RUN_LOCK_DIR, { recursive: true });
+    writeFileSync(join(RUN_LOCK_DIR, 'run-testfleet--a1.lock'), JSON.stringify(
+      { pid: gone.pid, startedAt: now - 120_000, at: now - 60_000, fleet: 'testfleet', agent: 'a1',
+        label: 'island-move-in [a1]', argv: 'node m59-fleet-repl.mjs' }));
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [] });
+    const logs = [];
+    const r = await fleetScript({ name: 'after-stale-lock', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: (...a) => logs.push(a.join(' ')) });
+    const cancelAt = idx(sent, c => c.name === 'cancel_movement' && c.agent === 'a1');
+    ok('a stale lock taken over cancels the dead run\'s movement before anything is marked busy',
+       r.ok === true && cancelAt >= 0 && cancelAt < idx(sent, isBusy), JSON.stringify(sent.map(c => c.name)));
+    ok('and says so', logs.some(l => /took over a stale lock/.test(l)) && logs.some(l => /cancelled the dead run/.test(l)));
+  }
+  {
+    // A LEFTOVER ROW FROM THIS SAME PROCESS (its end never reached the board) does not block the next run here...
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row({ id: 'jself', owner_pid: process.pid, owner_start: null })] });
+    const r = await fleetScript({ name: 'same-process-next', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: quiet });
+    ok('a leftover row of this process is taken over, not a refusal', r.ok === true && sent.some(c => c.name === 'job_end' && c.id === 'jself'));
+    // ...but one still in flight in this process does.
+    ACTIVE_JOB_IDS.add('jself');
+    try {
+      fakeBroker({ rooms: { a1: 39 }, jobs: [row({ id: 'jself', owner_pid: process.pid, owner_start: null })] });
+      const r2 = await fleetScript({ name: 'same-process-concurrent', fleet: 'testfleet', agents: ['a1'],
+        steps: [verify(async () => true)], onLog: quiet });
+      ok('a run still in flight in this same process is LIVE and refuses', r2.refused === true && /jself/.test(r2.why));
+    } finally { ACTIVE_JOB_IDS.delete('jself'); }
+  }
+  {
+    // A PAUSED job is not driving anything: noted, not refused.
+    const sent = fakeBroker({ rooms: { a1: 39 }, jobs: [row({ id: 'jp', state: 'paused', owner_pid: gone.pid })] });
+    const logs = [];
+    const r = await fleetScript({ name: 'past-a-paused-job', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: (...a) => logs.push(a.join(' ')) });
+    ok('a paused job does not refuse the run', r.ok === true);
+    ok('but the run says an alert release would resume it', logs.some(l => /paused job jp/.test(l) && /cancel jp/.test(l)));
+    ok('and does not retire it on its own', !sent.some(c => c.name === 'job_end' && c.id === 'jp'));
+  }
+  {
+    // UNREADABLE: the board is bookkeeping (advisory); the pilot state is advisory unless warnings: 'error'.
+    fakeBroker({ rooms: { a1: 39 }, jobs: null, piloted: null });
+    const logs = [];
+    const r = await fleetScript({ name: 'nothing-answers', fleet: 'testfleet', agents: ['a1'],
+      steps: [verify(async () => true)], onLog: (...a) => logs.push(a.join(' ')) });
+    ok('an unreadable board and pilot state are said and run past', r.ok === true &&
+       logs.some(l => /job board could not be read/.test(l)) && logs.some(l => /could not tell whether a person/.test(l)));
+    const sent = fakeBroker({ rooms: { a1: 39 }, piloted: null });
+    const r2 = await fleetScript({ name: 'nothing-answers-strict', fleet: 'testfleet', agents: ['a1'], warnings: 'error',
+      steps: [walk(54)], onLog: quiet });
+    ok("with warnings: 'error' an unreadable pilot state refuses", r2.refused === true && !sent.some(isBusy));
+  }
+  {
+    // THE WAIVER turns the refusals off and still reads the room.
+    fakeBroker({ rooms: { a1: 39 }, lookRoom: 2143, jobs: [row()],
+      piloted: [{ agent: 'a1', pid: 31337, alive: true, held_s: 30 }] });
+    let seen = null;
+    const r = await fleetScript({ name: 'waived', fleet: 'testfleet', agents: ['a1'],
+      unsafe: { reason: 'offline fixture: a rescue that must take a piloted body', waives: ['liveStart'] },
+      steps: [verify(async ctx => { seen = ctx.state.startRoom; return true; })], onLog: quiet });
+    ok('waives: [liveStart] runs over a pilot claim and a live job', r.ok === true, JSON.stringify(r));
+    ok('and still hands the script the live room', seen === 2143);
+  }
+
+  // c. THE LIVE ROOM, before the plan is built
+  {
+    // Piggy's numbers: the snapshot says 537, the world says 2143.
+    const sent = fakeBroker({ rooms: { a1: 537 }, lookRoom: 2143 });
+    let built = null;
+    const r = await fleetScript({ name: 'plan-from-live', fleet: 'testfleet', agents: ['a1'],
+      steps: (agent, state) => { if (state.startRoom !== undefined) built = state.startRoom;
+        return legFor(state.startRoom, [['farm', [2143]]], 'mainland') === 'farm' ? [verify(async () => true)] : [walk(27)]; },
+      onLog: quiet });
+    ok('steps(agent, state) is built AFTER the live read: state.startRoom is the look, not the snapshot', built === 2143);
+    ok('so the island body is not walked back to the cave', r.ok === true && !sent.some(c => c.name === 'travel'));
+    const lookAt = idx(sent, c => c.name === 'look' && c.agent === 'a1');
+    ok('the room is read with look, after the body is held', lookAt > idx(sent, isBusy));
+  }
+  {
+    const sent = fakeBroker({ rooms: { a1: 39 }, lookRoom: 0 });
+    const r = await fleetScript({ name: 'no-room', fleet: 'testfleet', agents: ['a1'], steps: [walk(54)], onLog: quiet });
+    ok('an unreadable live room refuses the agent rather than plan from a snapshot',
+       r.results?.a1?.ok === false && r.results.a1.step === 'liveStart' && r.results.a1.never_started === true, JSON.stringify(r.results?.a1));
+    ok('and nothing travelled', !sent.some(c => c.name === 'travel'));
+  }
+  {
+    // THE REPL PATH: runNamed hands the run state to the script, and a script's own codeKick declaration travels.
+    const { runNamed } = await import('./m59-fleetlib.mjs');
+    fakeBroker({ rooms: { a1: 537 }, lookRoom: 2143,
+      piloted: ({ sent }) => sent.some(c => c.name === 'pilot' && c.action === 'release') ? []
+        : [{ agent: 'a1', pid: 31337, alive: true, held_s: 30 }] });
+    withKeeper();
+    let got = null;
+    let passedKick = null;
+    const scripts = new Map([['move-in', { name: 'move-in', source: 'test', codeKick: { budgetMs: 2000 },
+      params: { agents: { type: 'agents', required: true } },
+      steps: (p, state) => { if (state?.startRoom !== undefined) got = state.startRoom; return [verify(async () => true)]; } }]]);
+    const r = await runNamed('move-in', { agents: 'a1' }, { scripts, onLog: quiet,
+      fleetScript: o => { passedKick = o.codeKick; return fleetScript({ ...o, fleet: 'testfleet', pollMs: 50, onLog: quiet }); } });
+    ok('runNamed forwards the script\'s codeKick declaration', passedKick?.budgetMs === 2000);
+    ok('and hands the script the live start room as its second argument', r.ok === true && got === 2143, JSON.stringify(r));
+  }
+  live.kill();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

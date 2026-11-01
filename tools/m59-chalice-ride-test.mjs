@@ -384,6 +384,8 @@ try {
       sent.push({ name, ...a });
       let payload = { ok: true };
       if (name === 'status') payload = { where: { num: rooms[a.agent], name: 'room' }, hp: { value: 50, max: 50 } };
+      // The live start room (FleetScript `liveStart`) is read with `look`, never the status snapshot.
+      else if (name === 'look') payload = { room: { num: rooms[a.agent], name: 'room' } };
       else if (name === 'chalice_ride') { payload = reply(a); if (keeperRooms) Object.assign(rooms, keeperRooms); }
       else if (name === 'travel') { rooms[a.agent] = a.to; payload = { started: true }; }
       else if (name === 'travel_estimate') payload = { ms: 1000, hops: 1 };

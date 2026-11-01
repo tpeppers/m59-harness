@@ -162,6 +162,8 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } fr
 import { join, resolve } from 'node:path';
 import { registerJob, getJobContext } from './m59-jobclient.mjs';
 import { takeAgentLocks } from './m59-runlock.mjs';
+import { pilotHold, pilotRefusal, judgeJobs, jobRefusal, liveRoom, formatAge } from './m59-livestart.mjs';
+export { legFor, liveRoom } from './m59-livestart.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
 import { isNoCombatRoom } from './m59-hazards.mjs';
@@ -1323,6 +1325,22 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'long lease is a long paralysis, and the runner holding it was waiting for an ' +
               'errand that could never finish. Survival belongs to this repository at 1s ' +
               '(see the boundary table); a lease that outlives the body quietly takes it back',
+  },
+  liveStart: {
+    what: 'every run starts from the world as it is: a body a PERSON is piloting is refused (or ' +
+          'code-kicked, when the script declares `codeKick`, and read again after the kick), a body ' +
+          'another LIVE job holds is refused, a job whose owner is dead is taken over with its ' +
+          'movement cancelled first, and the room each body stands in is read live (`look`) into ' +
+          '`state.startRoom` -- never from the broker snapshot',
+    since: '2026-11-01',
+    incident: 'the operator was piloting Piggy (t14) and had walked him to 2143 on the island while ' +
+              'the broker fleet row still said 537 on the mainland -- a pre-pilot snapshot. A ' +
+              'session wrote island-move-in for a mainland start, code-kicked the operator and ran ' +
+              'it: Piggy was walked from 2143 back OUT toward the Icky Cave (27). Minutes later the ' +
+              'operator ran the same script on Waldorf (t4) from the TUI MANAGE tab and the same ' +
+              'thing happened; neither side could see, or cancel, the job of the other in time. And ' +
+              'the walk of the Piggy run kept going after its owner process died, while the next start ' +
+              'reported only "took over a stale lock". 06:15-06:30Z',
   },
   coordUnits: {
     what: 'coordinates carry their space (square / protocol / client) instead of being bare numbers',
@@ -4916,6 +4934,173 @@ async function runEvictionCheck(ctx, agent, step, call) {
   return { ran: true, held: contents.length, pct: plan?.pct ?? null,
            freed: plan?.freed ?? 0, evicted: done };
 }
+// ---------------------------------------------------------------- liveStart: who holds the body, read live
+//
+// GUARANTEE `liveStart` (UNSAFE_GUARANTEES). The decisions are pure and live in m59-livestart.mjs; this is the
+// reading and the acting, in the order that keeps side effects last: the job board first (reads only), then the
+// pilot claim (the kick is the one thing here that changes the world before the lock), the board AGAIN if a kick
+// happened -- four minutes is long enough for somebody else to start something -- and only then the takeover of a
+// dead job, whose first act is to stop the walk its dead owner left running.
+
+/** Job ids THIS process has registered and not yet ended: a same-pid row outside this set is a leftover. */
+export const ACTIVE_JOB_IDS = new Set();
+
+const pilotStatusNow = async () => {
+  const st = await call('pilot', { action: 'status' }, 30_000).catch(e => ({ error: e?.message ?? String(e) }));
+  if (Array.isArray(st?.piloted)) return { pilotStatus: st, fleetRows: null };
+  // The fleet row is the second source, asked only when the first could not answer: it is a big read on prod.
+  const f = await call('fleet', {}, 60_000).catch(() => null);
+  const rows = Array.isArray(f?.fleet) ? f.fleet : Array.isArray(f?.rows) ? f.rows : Array.isArray(f) ? f : null;
+  return { pilotStatus: null, fleetRows: rows, error: st?.error ?? 'pilot status had no `piloted` list' };
+};
+
+const jobsNow = async () => {
+  const r = await call('jobs', { state: 'running,orphaned,paused' }, 30_000)
+    .catch(e => ({ error: e?.message ?? String(e) }));
+  return Array.isArray(r?.jobs) ? { jobs: r.jobs } : { jobs: null, error: r?.error ?? 'no `jobs` list in the reply' };
+};
+
+/**
+ * A KEEPER BACK IN THE WORLD FOR THIS AGENT, scanned fresh: `/live` answering `ok` (connected and in game) for the
+ * agent, and NOT a spectate keeper -- a spectate keeper drives a person's own connection, which is the very thing
+ * a kick exists to end.
+ */
+async function ownKeeperLive(fleet, agent) {
+  let band;
+  try {
+    const mod = await import('./runtime/keeper-bands.mjs');
+    band = mod.lookupKeeperBand(fleet, { registryPath: process.env.M59_KEEPER_BAND_REGISTRY || undefined });
+  } catch { return null; }
+  if (!band) return null;
+  const probes = [];
+  for (let port = band.base; port <= band.end; port++)
+    probes.push(fetch(`http://127.0.0.1:${port}/live`, { signal: AbortSignal.timeout(1500) })
+      .then(r => (r.ok === false ? null : r.json())).then(v => (v?.agent === agent ? { port, ...v } : null))
+      .catch(() => null));
+  const hits = (await Promise.all(probes)).filter(Boolean);
+  return hits.find(v => v.ok === true && v.in_game !== false && !v.spectate) ?? null;
+}
+
+/**
+ * THE CODE KICK, as substrate/scratch/code-kick.mjs does it (operator 2026-10-28): release the broker's pilot claim,
+ * let the reconciler log the keeper back in -- that login is what bumps the person's client off -- and wait until
+ * the keeper is connected and in the world. Then the caller reads the pilot state AGAIN; the kick is not trusted.
+ */
+async function codeKickOne({ agent, fleet, held, budgetMs, pollMs, log }) {
+  const r = await call('pilot', { action: 'release', agent }, 30_000).catch(e => ({ error: e?.message ?? String(e) }));
+  log(agent, `CODE KICK: releasing the pilot claim (${held.holder ? `remote ${held.holder}` : `client pid ${held.pid ?? '?'}`}, ` +
+             `held ${held.heldMs == null ? '?' : formatAge(held.heldMs)}) -> ` +
+             `${r?.error ? `error: ${r.error}` : r?.released ? 'released' : JSON.stringify(r).slice(0, 120)}`);
+  const until = Date.now() + budgetMs;
+  for (let n = 0; ; n++) {
+    const { pilotStatus, fleetRows } = await pilotStatusNow();
+    const still = pilotHold(agent, { pilotStatus, fleetRows });
+    const k = still.held === false ? await ownKeeperLive(fleet, agent) : null;
+    if (k) {
+      log(agent, `CODE KICK: keeper back in the world (port ${k.port}, pid ${k.pid})`);
+      keeperPortsAt = 0;          // the keeper the next scan must find is the one that just logged in
+      return { ok: true, port: k.port };
+    }
+    if (Date.now() >= until)
+      return { ok: false, why: `kicked ${agent}, but ${still.held ? 'the pilot claim is still held' : still.held === null
+        ? 'the pilot state could not be read' : 'its keeper is not back in the world'} after ${formatAge(budgetMs)}` };
+    if (n % 6 === 0) log(agent, `CODE KICK: waiting for the keeper to log in (pilot ${still.held ? 'still held' : 'released'})`);
+    await sleep(Math.max(50, Math.min(pollMs, 5000)));
+  }
+}
+
+/**
+ * Returns `{ ok: true, tookOver: [{job, agents, why}], cancelled: Set<agent> }` or `{ ok: false, why, contended }`.
+ * Nothing here takes a lock or walks; the only world changes are a kick the script declared and, for a job whose
+ * owner is dead, a movement cancel and the retirement of its row.
+ */
+async function liveStartGate({ name, agents, fleet, codeKick, pollMs, log, warnMode }) {
+  const now = () => Date.now();
+  const kickBudget = (typeof codeKick === 'object' && codeKick ? Number(codeKick.budgetMs) : 0) || 240_000;
+
+  const boardCheck = async () => {
+    const { jobs, error } = await jobsNow();
+    // THE BOARD IS BOOKKEEPING, NEVER A PRECONDITION (m59-jobclient.mjs): unreadable is said and run past. The run
+    // lock still covers a rival in this checkout.
+    if (!jobs) {
+      log(`liveStart: the job board could not be read (${error}) -- carrying on without that check`);
+      return { live: [], dead: [], paused: [] };
+    }
+    return judgeJobs(jobs, agents, { ownJobIds: ACTIVE_JOB_IDS, now: now() });
+  };
+  const refuseLive = verdict => {
+    if (!verdict.live.length) return null;
+    const why = verdict.live.map(x => jobRefusal(x, now())).join('\n');
+    return { ok: false, why: `${name}: refusing -- ${why}`, contended: verdict.live.flatMap(x => x.agents),
+             jobs: verdict.live.map(x => ({ id: x.job.id, name: x.job.name, owner_pid: x.job.owner_pid ?? null })) };
+  };
+
+  let verdict = await boardCheck();
+  let refused = refuseLive(verdict);
+  if (refused) return refused;
+
+  // a. A PERSON AT THE CONTROLS.
+  let pilot = await pilotStatusNow();
+  const holds = () => agents.map(a => ({ agent: a, ...pilotHold(a, pilot) }));
+  let read = holds();
+  const unknown = read.filter(h => h.held === null);
+  if (unknown.length) {
+    const line = `liveStart: could not tell whether a person is piloting ${unknown.map(h => h.agent).join(', ')} ` +
+                 `(${pilot.error ?? 'no answer'})`;
+    if (warnMode === 'error')
+      return { ok: false, why: `${name}: refusing -- ${line}`, contended: unknown.map(h => h.agent) };
+    log(`${line} -- carrying on, as an advisory (warnings: 'error' refuses)`);
+  }
+  const piloted = read.filter(h => h.held === true);
+  if (piloted.length) {
+    if (!codeKick)
+      return { ok: false, why: `${name}: refusing -- ${piloted.map(h => pilotRefusal(h.agent, h)).join('\n')}`,
+               contended: piloted.map(h => h.agent),
+               piloted: piloted.map(h => ({ agent: h.agent, pid: h.pid, held_ms: h.heldMs })) };
+    for (const h of piloted) {
+      const k = await codeKickOne({ agent: h.agent, fleet, held: h, budgetMs: kickBudget, pollMs, log });
+      if (!k.ok) return { ok: false, why: `${name}: refusing -- ${k.why}. Nothing has walked.`, contended: [h.agent] };
+    }
+    // AND READ IT AGAIN, AFTER THE KICK AND BEFORE STEP 0. A kick that "worked" is a claim, not an observation.
+    pilot = await pilotStatusNow();
+    read = holds();
+    const still = read.filter(h => h.held === true);
+    if (still.length)
+      return { ok: false, why: `${name}: refusing -- still piloted after the kick: ` +
+               still.map(h => pilotRefusal(h.agent, h)).join('\n'), contended: still.map(h => h.agent) };
+    verdict = await boardCheck();
+    refused = refuseLive(verdict);
+    if (refused) return refused;
+  }
+
+  // b, the other half: A JOB WHOSE OWNER IS GONE IS TAKEN OVER AT ONCE -- no refusal, no retry delay (prism-guard
+  // kills a REPL with taskkill /T /F and re-runs within a second) -- and its walk is stopped FIRST, because a dead
+  // runner's journey lives in the keeper and keeps going (the Piggy run, 2026-11-01).
+  const cancelled = new Set();
+  for (const d of verdict.dead) {
+    for (const a of d.agents) {
+      if (cancelled.has(a)) continue;
+      const c = await call('cancel_movement', { agent: a }, 30_000).catch(e => ({ error: e?.message ?? String(e) }));
+      cancelled.add(a);
+      log(a, `liveStart: taking over job ${d.job.id} "${d.job.name}" (${d.why}) -- its movement cancelled first` +
+             (c?.error ? ` (cancel answered: ${c.error})` : ''));
+    }
+    // RETIRED, so the board stops reporting these bodies held by a run nobody is driving -- but only when every
+    // body it names is one this run took: a row that still names somebody else's character stays, and reads
+    // orphaned, which is the true answer for those. `job_end` and not `job_cancel`, because cancel KILLS the row's
+    // pids when they answer -- and a pid this check has just judged dead may already belong to another process.
+    const others = (d.job.agents ?? []).map(String).filter(a => !agents.map(String).includes(a));
+    if (others.length) log(`liveStart: job ${d.job.id} also names ${others.join(', ')} -- left on the board for them`);
+    else await call('job_end', { id: d.job.id, ok: false, state: 'cancelled',
+      result: `taken over by ${name}: ${d.why}`.slice(0, 300) }, 30_000).catch(() => {});
+  }
+  for (const p of verdict.paused)
+    log(`liveStart: note -- paused job ${p.job.id} "${p.job.name}" also names ${p.agents.join(', ')}; an alert ` +
+        `release would resume it into this run. Cancel it (node tools/m59-jobs.mjs cancel ${p.job.id}) if this ` +
+        'run replaces it.');
+  return { ok: true, tookOver: verdict.dead, cancelled };
+}
+
 // ---------------------------------------------------------------- the compiler
 //
 // `steps` may be an array, or a function of the agent so each courier can compute its own
@@ -4969,6 +5154,11 @@ export async function fleetScript({
   // (setJobContext), so nothing here needs a caller to remember. Absent (tests, direct imports): no registration.
   // `finishOnAlert` is the script's own declaration that an alert must let it finish (the island ride).
   job = null, finishOnAlert = false,
+  // THE CODE KICK, DECLARED (guarantee `liveStart`). A body a person is piloting is refused unless the script says
+  // its first act is to take it: `true`, or `{ budgetMs }` for how long to wait for the keeper to log back in
+  // (default 240 s). The kick releases the pilot claim, waits for the keeper to be in the world, and the pilot
+  // state is then read AGAIN before step 0. Never implied by `unsafe`: kicking a person off is an act, not a waiver.
+  codeKick = false,
   // Widen which devnotes this errand is shown. The rooms it walks to are matched
   // automatically, so most tasks need nothing here; `{ tags, touches }` adds topics and
   // files on top of that.
@@ -5223,6 +5413,25 @@ They are driven by tools/m59-menagerie.mjs and ` +
   const unreachableReason = allowUnreachable ? (waiver.reason ?? null) : null;
   if (waived.has('journeyBudget')) { budgetFloorMs = 0; budgetCapMs = Math.max(budgetCapMs, 0); }
 
+  // GUARANTEE `liveStart`, a and b: WHO IS HOLDING THESE BODIES RIGHT NOW, read live, before the lock.
+  //
+  // 2026-11-01 06:15-06:30Z: the operator was piloting Piggy, the session ran a script on him anyway, then the operator
+  // ran the same script on Waldorf from MANAGE -- two controllers, neither able to see or cancel the other. The run
+  // lock could not have caught either: it is per CHECKOUT, a person's client takes no lock at all, and the TUI's runs
+  // and a session's runs meet only on the broker. So the broker is asked -- its pilot claims and its job board --
+  // and a dead owner's row is taken over with its walk cancelled first. See m59-livestart.mjs for the rules.
+  let liveTakeover = { tookOver: [], cancelled: new Set() };
+  if (!waived.has('liveStart')) {
+    const gate = await liveStartGate({ name, agents, fleet, codeKick, pollMs, log: onLog, warnMode: warn.mode });
+    if (!gate.ok) {
+      for (const line of String(gate.why).split(/\n/)) onLog(`REFUSING -- ${line}`);
+      return { ok: false, refused: true, why: gate.why, contended: gate.contended ?? [],
+               ...(gate.piloted ? { piloted: gate.piloted } : {}), ...(gate.jobs ? { jobs: gate.jobs } : {}),
+               results: {} };
+    }
+    liveTakeover = gate;
+  }
+
   // RULE 1 — waivable, and the one most likely to be regretted: two drivers on one BODY is
   // how twenty-one keepers ended up fighting over the same characters. It is waivable
   // because a test harness driving a shadow fleet legitimately needs it.
@@ -5256,8 +5465,17 @@ They are driven by tools/m59-menagerie.mjs and ` +
     onLog('Wait for it, stop that pid, or pass --force if you know it is dead.');
     return { ok: false, refused: true, holder: h, agent: claim.agent };
   }
-  for (const stale of claim.tookOverFrom ?? [])
+  for (const stale of claim.tookOverFrom ?? []) {
     onLog(`note: took over a stale lock on ${stale.agent} — ${stale.why}`);
+    // AND THE WALK ITS DEAD OWNER LEFT RUNNING. A runner's journey lives in the KEEPER, so a lock taken over from a
+    // dead process is a body still walking somebody else's route (the Piggy run, 2026-11-01, "took over a stale lock"
+    // and said nothing more). A board row already handled is not cancelled twice.
+    if (waived.has('liveStart') || liveTakeover.cancelled.has(stale.agent)) continue;
+    const c = await call('cancel_movement', { agent: stale.agent }, 30_000).catch(e => ({ error: e?.message ?? String(e) }));
+    liveTakeover.cancelled.add(stale.agent);
+    onLog(`  ${stale.agent}: cancelled the dead run's movement before anything else` +
+          (c?.error ? ` (cancel answered: ${c.error})` : ''));
+  }
   onLog(`controls ${control.names.join(', ')}` +
         (control.declared ? (control.wildcard ? ' (declared: whole fleet)' : ' (declared)')
                           : ' (derived from agents — undeclared control is warned, not refused)'));
@@ -5358,6 +5576,26 @@ They are driven by tools/m59-menagerie.mjs and ` +
       hold = setHold(waived.has('keeperLease')
         ? { ok: true, cancelJourney: async () => {}, release: async () => {} }
         : await holdKeeper(ctx, agent, fleet));
+      // GUARANTEE `liveStart`, c: WHERE THIS BODY IS STANDING, READ LIVE, BEFORE THE PLAN IS BUILT.
+      //
+      // After the hold, so the keeper's own journey has been cancelled and the answer is not a moving target; before
+      // `steps(agent, state)`, so a plan can be built from it. `look` and never `status`/`fleet`: for a character a
+      // person has been playing those are where it stood BEFORE they took it -- Piggy's row said 537 while he stood
+      // in 2143, and a mainland plan walked him off the island. No fallback to the snapshot: unreadable refuses.
+      {
+        const here = await liveRoom({ call, agent });
+        state.startRoom = here.room;
+        state.startRoomName = here.name;
+        state.startAt = here.you;
+        if (here.room == null && !waived.has('liveStart')) {
+          const why = `could not read where ${agent} is standing (look: ${here.error ?? 'no room in the reply'}) -- ` +
+                      'refusing to plan from a snapshot. Nothing has walked.';
+          ctx.log(agent, `plan refused: ${why}`);
+          results[agent] = { ok: false, at: 0, step: 'liveStart', why, never_started: true, state: state.results };
+          return;
+        }
+        ctx.log(agent, `starts in room ${here.room ?? '?'}${here.name ? ` (${here.name})` : ''}, read live`);
+      }
       const plan = typeof steps === 'function' ? await steps(agent, state) : steps;
 
       // VAULT BEFORE SELL, CHECKED BEFORE ANYTHING WALKS.
@@ -5374,7 +5612,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // going wrong and this one is about a character not coming back. Asked before the
       // first step so the refusal costs nothing, and asked per agent because where a
       // character is standing is part of the question.
-      const trap = trapCheck(plan, { standingIn: (await observe(agent)).room, allowTraps });
+      const trap = trapCheck(plan, { standingIn: state.startRoom ?? (await observe(agent)).room, allowTraps });
       if (trap) {
         ctx.log(agent, `plan refused: ${trap}`);
         results[agent] = { ok: false, at: 0, step: 'trap', why: trap, state: state.results };
@@ -5702,6 +5940,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
     note: jobSpec.line ?? null,
   }).catch(() => null) : null;
   if (jobHandle?.registered) ctx.log(`job ${jobHandle.id} on the board${jobHandle.job?.finish_on_alert ? ' (finish on alert)' : ''}`);
+  // OURS WHILE IT RUNS: another run in this same process must read this row as live (liveStart b), and a row this
+  // process registered and no longer runs as a leftover.
+  if (jobHandle?.id) ACTIVE_JOB_IDS.add(jobHandle.id);
   let threw = true;
   try {
     await withCallOrigin(origin,async()=>{
@@ -5714,12 +5955,13 @@ They are driven by tools/m59-menagerie.mjs and ` +
     dropSignalHandlers();
     claim.release();
     // A run that unwound with an error is a failed job, not a running one left for the orphan sweep to find.
-    if (threw) await jobHandle?.end?.({ ok: false, result: 'unwound with an error' });
+    if (threw) { await jobHandle?.end?.({ ok: false, result: 'unwound with an error' }); ACTIVE_JOB_IDS.delete(jobHandle?.id); }
   }
 
   const ok = agents.filter(a => results[a]?.ok).length;
   ctx.log(`${name}: ${ok}/${agents.length} completed`);
   await jobHandle?.end?.({ ok: ok > 0, result: `${ok}/${agents.length} completed` });
+  ACTIVE_JOB_IDS.delete(jobHandle?.id);
   return { ok: ok > 0, results };
 }
 export {estimatePlayer as estimatePlayerCombat} from './m59-player-evidence.mjs';

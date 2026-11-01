@@ -54,6 +54,8 @@ function fakeBroker({ room = 700, items = [], guildReply = null } = {}) {
     let payload = { ok: true };
     if (name === 'status') payload = { where: { num: room, name: 'room' },
                                        hp: { value: 50, max: 50 }, gold: null };
+    // The live start room (FleetScript `liveStart`) is read with `look`, never the status snapshot.
+    else if (name === 'look') payload = { room: { num: room, name: 'room' } };
     else if (name === 'inventory') payload = { items };
     else if (name === 'travel') payload = { started: true };
     else if (name === 'travel_estimate') payload = { ms: 1000, hops: 2 };
