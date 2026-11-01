@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {fleetName,stateFileFor,resolveControlUrl} from './m59-fleetpath.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 const HERE=fileURLToPath(import.meta.url),ROOT=resolve(dirname(HERE),'..');
 const read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
 const samePath=(a,b)=>typeof a==='string'&&typeof b==='string'&&resolve(a).toLowerCase()===resolve(b).toLowerCase();
@@ -134,7 +135,7 @@ async function worker(manifest){
   runTask:actor=>runNamed('archerplus',braxArcherTaskArgs(rec,actor,braxProvisionReserve),{scripts,fleetScript}),
   serviceFactory:opts=>new BraxSupplyService(opts),verify:()=>localBraxBroker(rec.fleet),
   verifyActors:async agents=>{const rows=(await call('fleet',{refresh:true})).fleet;
-   for(const agent of agents){const row=rows?.find(r=>r.agent===agent);if(!row||!Object.hasOwn(row,'piloted')||row.piloted)throw Error('Brax actor missing, unknown or human-piloted: '+agent);}
+   for(const agent of agents){const row=rows?.find(r=>r.agent===agent);if(!row||!Object.hasOwn(row,'piloted')||rowHumanHeld(row))throw Error('Brax actor missing, unknown or human-piloted: '+agent);}
   }}));
 }
 if(process.argv[1]&&resolve(process.argv[1])===HERE){

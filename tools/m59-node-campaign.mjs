@@ -11,6 +11,7 @@ import {runTour,tourPosition} from './m59-node-tour.mjs';
 import {takeRunLock,releaseRunLock} from './m59-runlock.mjs';
 import {fleetName,stateFileFor} from './m59-fleetpath.mjs';
 import {ensureNodeKeeperBuild} from './m59-node-keeper-build.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const args=process.argv.slice(2),arg=(k,d=null)=>{const i=args.indexOf('--'+k);return i<0?d:args[i+1];};
@@ -51,7 +52,7 @@ if(arg('plan')){
       const rows=(await call('fleet',{})).fleet,row=rows.find(r=>r.agent===job.agent);
       if(!row||row.character!==job.character)throw Error('campaign_character_identity_changed');
       if(!availableForTour(row)){
-        record.status='waiting';record.waiting={agent:job.agent,at:new Date().toISOString(),reason:row.piloted?'human_piloted':row.committed?.label??'parked'};save(record);
+        record.status='waiting';record.waiting={agent:job.agent,at:new Date().toISOString(),reason:rowHumanHeld(row)?'human_piloted':row.committed?.label??'parked'};save(record);
         console.log('CAMPAIGN WAIT '+JSON.stringify(record.waiting));break;
       }
       delete record.waiting;record.status='running';job.status='active';

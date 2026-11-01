@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { foodValue } from './m59-items.mjs';
 import { armourKind, armourScore, isCursed, isJunk, weaponScore } from './m59-skills.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 export const SHELTER_ROOM = 39;
 export const PHASE_CADENCE_MS = Object.freeze({
@@ -107,7 +108,7 @@ function safetyReason(row, room) {
   if (hp[0] !== hp[1]) return `not at full health (${hp[0]}/${hp[1]})`;
   if (row.recent_hurt || Number(row.hurt?.lost_10m) > 0) return 'recently hurt';
   if (row.committed) return 'committed to another job';
-  if (row.piloted) return 'under human control';
+  if (rowHumanHeld(row)) return 'under human control';
   if (row.parked) return 'parking is in progress';
   // Unknown is not empty.  In particular, a KeeperProxy that has not published its
   // use list cannot tell us which sword or shield is equipped, so it cannot safely

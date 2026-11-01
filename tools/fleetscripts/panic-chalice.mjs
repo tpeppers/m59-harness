@@ -2,6 +2,7 @@ import {verify,call} from '../m59-fleetscript.mjs';
 import {panicChalice} from '../m59-panic-chalice.mjs';
 import {mkdirSync,writeFileSync,readdirSync,readFileSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';
+import { rowHumanHeld } from '../m59-spectate-route.mjs';
 // runNamed calls steps separately for each agent, passing the same agents array.
 // The rendezvous must belong to that run, rather than to one agent's step list.
 const runs=new WeakMap();
@@ -40,7 +41,7 @@ export const script={
   async resolveAgents({agents,destination=2001}){
     const fleet=await call('fleet'),rows=new Map((fleet.fleet??[]).map(r=>[r.agent,r]));
     const selected=[],skipped=[];
-    for(const a of agents){const row=rows.get(a);if(!row||row.piloted||row.in_roster===false)skipped.push({agent:a,why:!row?'not in live fleet':row.piloted?'human piloted':'not in roster'});else selected.push(a);}
+    for(const a of agents){const row=rows.get(a);if(!row||rowHumanHeld(row)||row.in_roster===false)skipped.push({agent:a,why:!row?'not in live fleet':rowHumanHeld(row)?'human piloted':'not in roster'});else selected.push(a);}
     const dir=resolve('substrate/scratch/panic-chalice');
     if(existsSync(dir))for(const f of readdirSync(dir).filter(f=>f.endsWith('.json'))){
       const prior=JSON.parse(readFileSync(resolve(dir,f),'utf8'));

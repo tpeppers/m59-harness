@@ -1,5 +1,6 @@
 // Pure identity and sequencing checks for explicitly authorized remote node tours.
 import {CIRCUIT_NODES} from './m59-node-circuit.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 export const endpointName=s=>s&&`${String(s.host).toLowerCase()}:${s.port}`;
 export function railIdentityProblem({fleet,agent,rostered,health,expectedGame=null,checkedRail=false,candidates=false}){
   const live=health?.session_game_servers?.[agent]??health?.game_server;
@@ -11,7 +12,7 @@ export function railIdentityProblem({fleet,agent,rostered,health,expectedGame=nu
   return null;
 }
 export function availableForTour(row){
-  return !!row&&!row.piloted&&!row.parked&&(!row.committed||row.committed.takeable===true);
+  return !!row&&!rowHumanHeld(row)&&!row.parked&&(!row.committed||row.committed.takeable===true);
 }
 export function tourObjectiveComplete(r){
   if(!r?.selection)return r?.complete===true&&r.nodes?.length===5&&r.nodes.every(n=>['melded','already'].includes(n.status));

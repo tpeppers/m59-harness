@@ -26,9 +26,9 @@ import { fileURLToPath } from 'node:url';
 import { readToolSource } from './autopilot/source.mjs';
 import {
   chooseKeeperRoute, spectateHolds, humanHeld, readSpectateBeat, writeSpectateBeat, listSpectateBeats,
-  SPECTATE_BEAT_MAX_AGE_MS, SPECTATE_PROBE_MAX_AGE_MS,
+  SPECTATE_BEAT_MAX_AGE_MS, SPECTATE_PROBE_MAX_AGE_MS, rowHumanHeld,
 } from './m59-spectate-route.mjs';
-import { scanKeepers } from './m59-keeper.mjs';
+import { scanKeepers, overlaySpectateKeepers } from './m59-keeper.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -178,7 +178,38 @@ try {
     const k = (await scan({ [SPORT]: live() }, { band: { base: 9101, end: 9101 } })).get('t17');
     ok('a spectate keeper is found even with no band keeper for its agent', k?.port === SPORT && k?.band_port === null);
   }
+  console.log("\noverlaySpectateKeepers: a caller that scans its own band (FleetScript's lease) sees the driver");
+  {
+    // holdKeeper scanned the band itself and took work/movement/economy on the OFFLINE band keeper of a
+    // relinquished character, while the spectate keeper steered the body with nothing held.
+    const found = new Map([['t17', { port: bandPort, character: 'Zoot', pid: 777 }], ['t3', { port: 9012, character: 'Statler', pid: 555 }]]);
+    await overlaySpectateKeepers(found, { roster: ROSTER, spectateDir: dir, fetchImpl: fakeFetch({ [SPORT]: live() }),
+                                          now: () => NOW, pidAlive });
+    const k = found.get('t17');
+    ok('the lease target is the spectate keeper', k?.port === SPORT && k?.pid === SPID && k?.spectate === true, JSON.stringify(k));
+    ok('...with the identity a write must carry (character and pid)', k?.character === 'Zoot');
+    ok('every other agent keeps its band entry', found.get('t3')?.port === 9012 && !found.get('t3')?.spectate);
+    const unproven = new Map([['t17', { port: bandPort, character: 'Zoot', pid: 777 }]]);
+    await overlaySpectateKeepers(unproven, { roster: ROSTER, spectateDir: dir, fetchImpl: fakeFetch({ [SPORT]: live({ agent: 't4' }) }),
+                                             now: () => NOW, pidAlive });
+    ok('a spectate port answering for somebody else is never the lease target', unproven.get('t17')?.port === bandPort &&
+       !unproven.get('t17')?.spectate && !!unproven.get('t17')?.spectate_holds);
+    const other = new Map([['t17', { port: bandPort, character: 'Zoot', pid: 777 }]]);
+    await overlaySpectateKeepers(other, { roster: 'C:/elsewhere/substrate/fleets/prod.json', spectateDir: dir,
+                                          fetchImpl: fakeFetch({ [SPORT]: live() }), now: () => NOW, pidAlive });
+    ok("another checkout's roster is never routed to", other.get('t17')?.port === bandPort && !other.get('t17')?.spectate);
+  }
 } finally { rmSync(tmp, { recursive: true, force: true }); }
+
+console.log('\nrowHumanHeld: what a fleet-row reader steps over');
+{
+  ok('a row saying human_held:true is hands-off', rowHumanHeld({ piloted: { pid: 1 }, human_held: true }) === true);
+  ok('a piloted row a spectate keeper drives (human_held:false) is NOT hands-off',
+     rowHumanHeld({ piloted: { pid: 1 }, human_held: false }) === false);
+  ok('a row from an older broker (no human_held) still means piloted', rowHumanHeld({ piloted: { pid: 1 } }) === true);
+  ok('...and an unpiloted one is free', rowHumanHeld({ piloted: null }) === false && rowHumanHeld({}) === false);
+  ok('no row is not human-held (the caller decides what a missing row means)', rowHumanHeld(null) === false && rowHumanHeld(undefined) === false);
+}
 
 console.log('\nthe broker routes through the decision (read as text: importing it runs it)');
 {
@@ -239,6 +270,49 @@ console.log('\nthe broker routes through the decision (read as text: importing i
      refresh.indexOf('proveSpectateRoute(this.name)') < refresh.indexOf('keeperState(this.name'));
   ok('a cached snapshot is never served across a route change', /this\._stateRoute === this\._routeKey\(\)/.test(refresh));
   ok('the fleet row says which keeper is driving', /driver: s instanceof KeeperProxy \? s\.driver : null/.test(broker));
+  ok('...and whether to keep hands off (human_held)', /human_held: humanHeld\(name\),/.test(broker));
+  ok('pilot status says whether each claim is relinquished', /human_held: humanHeld\(agent\),/.test(broker));
+
+  // GAP 1: COMMANDER LEASES. A relinquished character is leasable; one a person plays is not.
+  const lease = broker.slice(broker.indexOf("name: 'commander_lease',"), broker.indexOf("name: 'tactical_intent',"));
+  const acquire = lease.slice(lease.indexOf("if (a.action === 'acquire')"), lease.indexOf('const record = commanderLeases.issue('));
+  ok('commander_lease acquire refuses only a HUMAN-HELD character (proven fresh)',
+     /if \(await humanHeldNow\(row\.agent\)\) throw new Error\('agent is being played by a local Meridian client'\)/.test(acquire) &&
+     !/pilotOf\(row\.agent\)/.test(acquire));
+  ok('...and finds the session of a character held at startup (routedSession)', /const s = routedSession\(row\.agent\);/.test(acquire));
+  const heartbeat = lease.slice(lease.indexOf("if (a.action !== 'heartbeat')"));
+  ok('a person taking control back ends the lease on the next heartbeat',
+     /if \(await humanHeldNow\(row\.agent\)\) throw new Error\('a person took the controls back'\)/.test(heartbeat));
+  ok('the RTS read offers a relinquished character for leasing', /else if \(humanHeld\(agent\)\) blocked = 'agent is being played by a local Meridian client'/.test(broker));
+  const release = fn('releaseCommanderClaims');
+  ok('releasing a claim the departed spectate keeper held does not throw',
+     /try \{ released = \(await p\.releaseFaculties/.test(release) && /release_error/.test(release));
+  ok('humanHeldNow proves the route before deciding',
+     /async function humanHeldNow\(agent\) \{[\s\S]{0,200}proveSpectateRoute\(agent, \{ force: true \}\)[\s\S]{0,80}return humanHeld\(agent\);/.test(broker));
+  ok('routedSession only mints a proxy for a rostered keeper-backed character a spectate keeper holds',
+     /function routedSession\(agent\) \{[\s\S]{0,200}if \(!agentIndices\.has\(agent\) \|\| !inAnyRoster\(agent\) \|\| !spectateHolds\(agent\)\) return null;/.test(broker));
+  ok('the liveness sweep adopts spectate-held characters so their proof stays fresh',
+     /adoptSpectateSessions\(\)[\s\S]{0,300}const proxies = \[\.\.\.sessions\.values\(\)\]/.test(fn('runKeeperLivenessSweep')));
+
+  // GAP 2: THE CHAT POLLER.
+  const poll = broker.slice(broker.indexOf('function startControlChatWatch('), broker.indexOf('function startPilotWatch('));
+  ok('the chat poller listens to every keeper-driven character, a relinquished one included',
+     /sessions\.values\(\)\]\.filter\(s => s instanceof KeeperProxy && !humanHeld\(s\.name\)\)/.test(poll) &&
+     !/!pilotOf\(s\.name\)/.test(poll));
+  ok('...after adopting any spectate-held character it had no session for', /adoptSpectateSessions\(\)/.test(poll));
+  ok('...and still only while a person is at some character (the operator it listens for)',
+     /!\[\.\.\.piloted\.keys\(\)\]\.some\(a => pilotOf\(a\)\)/.test(poll));
+}
+
+console.log('\nFleetScript leases the keeper that is driving (read as text)');
+{
+  const fsrc = lf(readToolSource(join(TOOLS, 'm59-fleetscript.mjs'), 'utf8'));
+  const ports = fsrc.slice(fsrc.indexOf('async function keeperPorts('), fsrc.indexOf('async function keeperMovecheck('));
+  ok('the lease scan overlays a proven spectate keeper on the band', /overlaySpectateKeepers\(found, \{ fleet \}\)/.test(ports));
+  const hold = fsrc.slice(fsrc.indexOf('export async function holdKeeper('));
+  ok('every beat notices the driver changing and re-points the lease',
+     /driverMoved\(\)\.then\(async moved => \{\s*if \(moved && await refresh\(\)\)/.test(hold) &&
+     hold.indexOf('driverMoved().then') < hold.indexOf("ask('commander_heartbeat'"));
 }
 
 console.log('\nthe keeper process in spectate mode, and the launcher (read as text)');

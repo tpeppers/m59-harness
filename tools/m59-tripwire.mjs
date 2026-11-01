@@ -58,6 +58,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, appendFileSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -246,7 +247,7 @@ async function fleetRows(call) {
 export async function observe(call, needs, { alarmsSince = Date.now() - 10 * 60_000, now = Date.now() } = {}) {
   const obs = { now };
   if (needs.has('who')) {
-    const rows = (await fleetRows(call)).filter(r => !r.host && !r.piloted && r.activity !== 'NOT IN GAME' && r.in_roster !== false);
+    const rows = (await fleetRows(call)).filter(r => !r.host && !rowHumanHeld(r) && r.activity !== 'NOT IN GAME' && r.in_roster !== false);
     for (const r of rows.slice(0, 3)) {
       const agent = r.agent ?? r.name;
       const w = await call('who', { agent }, 20_000).catch(e => ({ error: e.message }));

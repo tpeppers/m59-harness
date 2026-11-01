@@ -15,6 +15,7 @@ import {buyCourierGoods} from './m59-courier-purchases.mjs';
 import {braxProvisionReserve} from './m59-brax-supply.mjs';
 import {islandReadOwner,checkIslandCancellation} from './m59-island-observation.mjs';
 import {reserveBraxService,startBraxService,releaseBraxReservation,braxServiceStatus,localBraxBroker} from './m59-brax-service.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 export {localBraxBroker} from './m59-brax-service.mjs';
 const groups=new Map(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const count=(items,name)=>items.filter(i=>String(i.name).toLowerCase()===name||name==='herb'&&String(i.name).toLowerCase()==='herbs').reduce((n,i)=>n+(i.amount>0?i.amount:1),0);
@@ -41,7 +42,7 @@ function braxHunt(farmRoom,qor){const skeleton=farmRoom===828?'tusked skeleton':
 export function requireBraxArcherScript(scripts){const s=scripts.get('archerplus');if(!s||s.integration?.version!==1||!s.integration.stationarySupply||!s.integration.allowedRooms||!s.integration.cooperativeStop)throw Error('Install the updated private archerplus FleetScript with stationary supply, allowed_rooms and managed stop support before migrating archers');return s;}
 export function requireAutomatedBraxActors(rows,agents){
  if(!Array.isArray(rows))throw Error('fleet visibility is unavailable; cannot distinguish human-piloted actors');
- for(const agent of agents){const row=rows.find(r=>r.agent===agent);if(!row||!Object.hasOwn(row,'piloted')||row.piloted)throw Error('Brax actor missing, unknown or human-piloted: '+agent);}
+ for(const agent of agents){const row=rows.find(r=>r.agent===agent);if(!row||!Object.hasOwn(row,'piloted')||rowHumanHeld(row))throw Error('Brax actor missing, unknown or human-piloted: '+agent);}
 }
 export function qorCaster(abilities){
  return (abilities?.spells??[]).some(s=>Number(s.ability??s.proficiency??0)>0&&String(s.school??spellbook().get(String(s.name).toLowerCase())?.school??'').toLowerCase()==='qor');

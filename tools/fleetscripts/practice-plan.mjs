@@ -46,6 +46,7 @@ import { verify, call as brokerCall, FOOD_KEEP } from '../m59-fleetscript.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { planPractice, courierRequestPlan, mergeCourierRequests, itemKey } from '../m59-practice-plan.mjs';
 import { lapState } from '../plans/courier.mjs';
+import { rowHumanHeld } from '../m59-spectate-route.mjs';
 
 const SUBSTRATE = process.env.M59_SUBSTRATE_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'substrate');
 const REQUESTS = join(SUBSTRATE, 'courier-requests.json');
@@ -88,7 +89,7 @@ export function pickAgents({ rows = [], requested = [], exclude = [] } = {}) {
     if (ex.has(agent)) skipped.push({ agent, why: 'excluded' });
     else if (!r) skipped.push({ agent, why: 'not on the fleet list' });
     else if (r.in_roster === false) skipped.push({ agent, why: 'not in the roster' });
-    else if (r.piloted) skipped.push({ agent, why: 'piloted by a person' });
+    else if (rowHumanHeld(r)) skipped.push({ agent, why: 'piloted by a person' });
     else out.push(agent);
   }
   return { agents: out, skipped };
@@ -148,7 +149,7 @@ export const script = {
     verify(async ({ agent, call, state }) => {
       const row = await fleetRow(call, agent);
       if (list(p.exclude).includes(agent)) { state.skip = 'excluded'; return { ok: true, why: `${agent}: excluded, untouched` }; }
-      if (row?.piloted) { state.skip = 'piloted'; return { ok: true, why: `${agent}: piloted by a person, untouched` }; }
+      if (rowHumanHeld(row)) { state.skip = 'piloted'; return { ok: true, why: `${agent}: piloted by a person, untouched` }; }
       if (row && row.in_roster === false) { state.skip = 'not in roster'; return { ok: true, why: `${agent}: not in the roster, untouched` }; }
 
       const [ab, ap, st, inv] = await Promise.all([

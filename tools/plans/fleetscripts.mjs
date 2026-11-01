@@ -28,6 +28,7 @@ import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { loadFleetScripts, asAgents } from '../m59-fleetlib.mjs';
 import { argsFor as kindArgs, argId } from '../m59-plan-kinds.mjs';
+import { readSpectateBeat, spectateHolds } from '../m59-spectate-route.mjs';
 import { parseArgs } from '../m59-plan-desk.mjs';
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -188,8 +189,14 @@ export const provider = {
     catch (err) { return { ok: false, message: `${e._script}: ${err.message}` }; }
     const piloted = Object.entries(s.params ?? {}).filter(([, spec]) => spec?.type === 'agents')
       .some(([key]) => asAgents(values[key]).includes(ctx.client.agent));
-    if (piloted)
-      return { ok: false, message: `${ctx.client.agent} is the character you are piloting — a FleetScript drives keepers, and yours is offline while you play` };
+    // RELINQUISHED IS NOT PLAYING. Once you hand the controls to Keeper (the Control row), a spectate keeper
+    // drives your character on your own connection and the broker routes a FleetScript's orders and lease
+    // to it (m59-spectate-route.mjs), so your own character may be in the run. Take control back and the
+    // run's lease ends with the spectate keeper.
+    const relinquished = piloted && spectateHolds(readSpectateBeat(ctx.client.agent), { agent: ctx.client.agent,
+      pidAlive: pid => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } } }).holds;
+    if (piloted && !relinquished)
+      return { ok: false, message: `${ctx.client.agent} is the character you are piloting — a FleetScript drives keepers, and yours is offline while you play. Relinquish control to Keeper first to include it.` };
     const line = replLine(e._script, values);
     const r = launch(root, ctx.fleet, line, ctx.substrate, e._script);
     return { ok: true, message: `started: ${line} (pid ${r.pid}; log ${r.log})` };

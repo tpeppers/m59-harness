@@ -21,6 +21,8 @@
 //     RoomStartEnchantment), it outlives its caster's presence, and it casts without a
 //     trance. Walk in, cast, walk out, come back before it lapses.
 
+import { rowHumanHeld } from './m59-spectate-route.mjs';
+
 export const GHOST_ROOM = 40;          // The Throne Room of Victoria Castle
 export const DOOR_ROOM = 38;           // Castle Victoria — the room the throne room opens off
 
@@ -119,7 +121,7 @@ export function spawnBlockers(agents = [], { lightbearer = '', healers = [], max
  */
 export function chamberStayers(rows = [], { count = 2, over = 75, room = GHOST_ROOM, exclude = [], order = [], spots = [] } = {}) {
   const at = a => { const i = order.indexOf(a); return i < 0 ? 1e9 : i; };
-  const pool = rows.map(r => { const [cur, max] = String(r.health ?? '').split('/').map(Number); return { agent: r.agent, cur, max, room: Number(r.room_num), piloted: !!r.piloted }; })
+  const pool = rows.map(r => { const [cur, max] = String(r.health ?? '').split('/').map(Number); return { agent: r.agent, cur, max, room: Number(r.room_num), piloted: rowHumanHeld(r) }; })
     .filter(c => c.room === Number(room) && !c.piloted && !exclude.includes(c.agent) && c.cur > 0 && c.max > Number(over))
     .sort((a, b) => b.cur - a.cur || b.max - a.max || at(a.agent) - at(b.agent));
   const n = Math.max(0, Math.min(Number(count) || 0, spots.length, pool.length));

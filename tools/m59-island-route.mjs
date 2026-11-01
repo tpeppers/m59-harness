@@ -330,7 +330,7 @@ async function admittedIslandTransitWithinBudget(ctx,{from,to,room=2505,budgetMs
   if(!leg.ok)throw Error('hop_failed_'+destination);return leg;
  };
  const isPiloted=agent=>(readPiloted??(async who=>((await ctx.call('pilot',{action:'status'}))?.piloted??[])
-  .some(p=>p.agent===who&&p.alive!==false)))(agent).then(Boolean,()=>false);
+  .some(p=>p.agent===who&&p.alive!==false&&p.human_held!==false)))(agent).then(Boolean,()=>false); // relinquished to a spectate keeper: its room is live, not a person's
  const proof=async(agent,{cached=false}={})=>{
   if(cached){
    // `status brief` still sends stats/spell/skill requests. Polling an active

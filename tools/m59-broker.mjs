@@ -2268,6 +2268,42 @@ function humanHeld(agent) {
 }
 
 /**
+ * `humanHeld`, on a FRESH proof. The sync form reads the last `/live` proof, which the liveness sweep
+ * renews; a decision that hands a body to somebody (a commander lease) proves the route first, so a
+ * spectate keeper that has just started counts, and one that has just gone does not.
+ */
+async function humanHeldNow(agent) {
+  if (pilotOf(agent) && spectateHolds(agent)) await proveSpectateRoute(agent, { force: true }).catch(() => null);
+  return humanHeld(agent);
+}
+
+/**
+ * THE SESSION FOR A CHARACTER A SPECTATE KEEPER IS DRIVING, EVEN WHEN THIS BROKER NEVER MADE ONE.
+ * A character a person was playing when this broker started (`heldByLocalClients`) or when it took
+ * over by live handover (`piloted_preserved`) has a keeper slot but no KeeperProxy: nothing was logged
+ * in, so nothing was registered. Every reader that walks `sessions` -- the fleet board, the chat
+ * poller, the commander lease, the liveness sweep that keeps the spectate proof fresh -- then could
+ * not see the character at all while the person had handed it to a keeper. This makes the proxy the
+ * same way `session()` does on first use (keeper-backed and rostered; a KeeperProxy logs nobody in,
+ * it reads `/state` and sends orders, and every login decision still gates on `spectateHolds`).
+ * Returns the existing session otherwise, or null.
+ */
+function routedSession(agent) {
+  const s = sessions.get(agent);
+  if (s) return s;
+  if (!agentIndices.has(agent) || !inAnyRoster(agent) || !spectateHolds(agent)) return null;
+  try { return session(agent); } catch { return null; }
+}
+
+/** Make sure every spectate-held, keeper-backed character has its proxy (see `routedSession`). */
+function adoptSpectateSessions() {
+  let made = 0;
+  for (const agent of agentIndices.keys())
+    if (!sessions.has(agent) && routedSession(agent)) made++;
+  return made;
+}
+
+/**
  * The decision, PROVEN: when a spectate keeper holds the body and names a port, ask that port's `/live`
  * (cheap, no state projection) and decide again on the reply. `force` re-asks even a recent proof --
  * every ORDER does, because a respawn or a recycled port between proof and send is the cached-port bug.
@@ -4358,6 +4394,9 @@ async function runKeeperLivenessSweep() {
   if (keeperLivenessSweepRunning) return;
   keeperLivenessSweepRunning = true;
   try {
+    // A character a person handed to a spectate keeper while this broker held no session for it (it
+    // was being played at startup or at handover) gets its proxy here, so it is proven and seen.
+    try { adoptSpectateSessions(); } catch { /* evidence, never fatal to the sweep */ }
     const proxies = [...sessions.values()]
       .filter(s => s instanceof KeeperProxy && !s._liveness.disposed);
     if (!proxies.length) return;
@@ -6501,7 +6540,14 @@ function startControlChatWatch() {
     if (polling || ![...piloted.keys()].some(a => pilotOf(a))) return;
     polling = true;
     try {
-      const rows = [...sessions.values()].filter(s => s instanceof KeeperProxy && !pilotOf(s.name));
+      // EVERY CHARACTER A KEEPER IS DRIVING IS LISTENED TO, INCLUDING ONE A PERSON HANDED TO A SPECTATE
+      // KEEPER. This skipped every piloted character, which was right while "piloted" meant "a person is
+      // playing it and no keeper is on it": there was nothing to ask. A relinquished character is driven
+      // by the same keeper process, its `/chat` is routed there by keeperGet, and a desk or a control verb
+      // addressed to it (from the operator at another character) must reach it like any other. A
+      // character a person is actually playing is still skipped: humanHeld.
+      try { adoptSpectateSessions(); } catch { /* the poll goes on with what it has */ }
+      const rows = [...sessions.values()].filter(s => s instanceof KeeperProxy && !humanHeld(s.name));
       for (let i = 0; i < rows.length; i += 4) await Promise.all(rows.slice(i, i + 4).map(async s => {
         const r = await keeperGet(s.name, s._index, 'chat', { since: 0, limit: 64, include_self: 'false' });
         if (!r || r.error) return;
@@ -7126,11 +7172,18 @@ async function releaseCommanderClaims(record, agents = record.agents) {
   const outcomes = [];
   for (const row of agents) {
     const p = commanderKeeper(row.agent);
-    const released = p
-      ? (await p.releaseFaculties({ faculties: COMMANDER_FACULTIES, by: record.owner })).released
-      : [];
-    if (p) await p.freeBusy({ by: record.owner });
+    // ONE ROW THAT CANNOT BE RELEASED DOES NOT STOP THE REST, AND DOES NOT THROW. The usual cause is a
+    // keeper that is no longer driving the body -- a spectate keeper that exited when its person took
+    // control back, leaving the order to route to the offline normal keeper, which answers `not in
+    // game`. Its claims went with it; the lease record still ends, and says what happened.
+    let released = [], error = null;
+    if (p) {
+      try { released = (await p.releaseFaculties({ faculties: COMMANDER_FACULTIES, by: record.owner })).released ?? []; }
+      catch (e) { error = e?.message ?? String(e); }
+      try { await p.freeBusy({ by: record.owner }); } catch (e) { error ??= e?.message ?? String(e); }
+    }
     outcomes.push({ agent: row.agent, character: row.character, released,
+                    ...(error ? { release_error: error } : {}),
                     ...commanderKeeperState(row.agent) });
   }
   return outcomes;
@@ -9728,12 +9781,17 @@ const TOOLS = [
         const outcomes = [], candidates = [];
         for (const row of requested) {
           try {
-            const s = sessions.get(row.agent);
+            // routedSession: a character a person handed to a spectate keeper may have no proxy yet.
+            const s = routedSession(row.agent);
             if (!s) throw new Error('agent session is absent');
+            // A PERSON WHO RELINQUISHED CONTROL TO A SPECTATE KEEPER IS WATCHING, NOT PLAYING, and the
+            // lease goes to that keeper like any other (keeperAction routes the claim there). One who is
+            // actually at the controls still refuses every lease -- and takes a granted one back the
+            // moment they take control back: see the heartbeat below.
+            if (await humanHeldNow(row.agent)) throw new Error('agent is being played by a local Meridian client');
             s.need();
             exactRosterAuthority(s, { ...row, ...endpoint });
             requireControlEndpoint(s, endpoint.host, endpoint.port);
-            if (pilotOf(row.agent)) throw new Error('agent is being played by a local Meridian client');
             if (s.job && !s.job.done) throw new Error(`agent is busy: ${s.job.label}`);
             const held = commanderLeases.activeForAgent(row.agent);
             if (held) throw new Error(`agent is already held by lease ${held.leaseId}`);
@@ -9821,8 +9879,11 @@ const TOOLS = [
       const outcomes = [], retained = [];
       for (const row of record.agents) {
         try {
-          const s = sessions.get(row.agent);
+          const s = routedSession(row.agent);
           if (!s) throw new Error('agent session is absent');
+          // THE PERSON TOOK CONTROL BACK. Their client holds the connection again and the spectate keeper
+          // the claim was made on is stopping: the lease ends here, not when its claim happens to lapse.
+          if (await humanHeldNow(row.agent)) throw new Error('a person took the controls back');
           s.need();
           exactRosterAuthority(s, row);
           requireControlEndpoint(s, record.server.host, record.server.port);
@@ -17744,7 +17805,7 @@ const TOOLS = [
       // dispatched onto a loot run just cancels one of them. Neither is one a PERSON is
       // holding: an errand on a piloted character fights whoever is at the keyboard.
       const eligible = [...sessions]
-        .filter(([n, s]) => s.client?.state === 'game' && !pilotOf(n))
+        .filter(([n, s]) => s.client?.state === 'game' && !humanHeld(n))
         .map(([n, s]) => ({ agent: n, character: s.client.me?.name ?? null,
                             level: s.client.vitals()?.health?.max ?? null,
                             room: s.world?.room?.num ?? null,
@@ -18643,6 +18704,8 @@ const TOOLS = [
     } },
     run: async (a) => {
       const rows = [];
+      // A character handed to a spectate keeper while this broker held no session for it still has a row.
+      try { adoptSpectateSessions(); } catch { /* the board is drawn with what there is */ }
       // ASK THE PROCESS THAT OWNS EACH SOCKET WHEN SOMEBODY ACTUALLY DRAWS THE BOARD.
       // Ordinary reads coalesce inside the two-second snapshot TTL; refresh:true bypasses
       // it. Neither path sends a Meridian packet. There is deliberately no background rich
@@ -18863,6 +18926,11 @@ const TOOLS = [
           // WHICH KEEPER IS DRIVING: null for the character's own process, or the spectate keeper on a
           // person's connection that every read and order on this row is routed to (m59-spectate-route.mjs).
           driver: s instanceof KeeperProxy ? s.driver : null,
+          // WHETHER TO KEEP HANDS OFF. `piloted` says a person's client holds the connection; this says
+          // whether they are PLAYING it. False for a character they relinquished to a spectate keeper,
+          // which takes orders like any keeper-backed one. Readers ask m59-spectate-route.mjs
+          // rowHumanHeld(row), never `row.piloted`, so a row from an older broker still means piloted.
+          human_held: humanHeld(name),
           // The safe-spot thesis is a survival claim, so it has to be scored as one.
           // Deaths while standing in a square we believed in are the number that
           // falsifies it, and they are worth separating from deaths in the open.
@@ -19411,6 +19479,10 @@ const TOOLS = [
           piloted: [...piloted.entries()].map(([agent, p]) => ({
             agent, character: p.character, pid: p.pid, object_id: p.objectId,
             alive: pilotAlive(p), held_s: Math.round((Date.now() - p.since) / 1000),
+            // RELINQUISHED: the person handed the controls to a spectate keeper on their own connection
+            // and is watching. `human_held` false means orders and leases reach that keeper.
+            human_held: humanHeld(agent),
+            driver: sessions.get(agent) instanceof KeeperProxy ? sessions.get(agent).driver : null,
             ...describePilotLease(p, Date.now()),
             keeper_resumes_on_release: p.keeperWasRunning })),
           // WHETHER ANYONE IS EVEN LOOKING. Without this, "the client is running and
@@ -20439,7 +20511,8 @@ async function brokerRtsRead(url) {
       const keeper = commanderKeeperState(agent);
       let blocked = null;
       if (!settings.enabled) blocked = 'commander is unavailable';
-      else if (piloted.has(agent)) blocked = 'agent is being played by a local Meridian client';
+      // humanHeld, not piloted.has: a character relinquished to a spectate keeper is leasable (see commander_lease).
+      else if (humanHeld(agent)) blocked = 'agent is being played by a local Meridian client';
       else if (!commanderKeeper(agent)) blocked = 'agent has no keeper for survival telemetry/fail-back';
       else if (!commanderKeeper(agent)?.running) blocked = 'keeper is stopped';
       else if (commanderKeeper(agent)?.inert) blocked = 'keeper is already inert for another controller';

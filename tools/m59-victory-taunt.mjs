@@ -37,6 +37,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pvpReport } from './m59-pvp.mjs';
 import { normName } from './m59-war.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..', '..');
 export const TAUNT_FILE = (env = process.env) => env.M59_TAUNT_FILE ?? join(HERE, 'substrate', 'victory-taunts.json');
@@ -110,7 +111,7 @@ export function speakerFacts(row) {
   const mana = frac(row.mana), hp = frac(row.health);
   return { agent: row.agent, character: row.character, level: Number(row.level) || 0,
     mana: mana?.[0] ?? (Number.isFinite(row.mana_now) ? row.mana_now : null), max_mana: mana?.[1] ?? null,
-    max_hp: hp?.[1] ?? 0, piloted: !!row.piloted, online: row.room_num != null || row.room != null };
+    max_hp: hp?.[1] ?? 0, piloted: rowHumanHeld(row), online: row.room_num != null || row.room != null };
 }
 
 export const broadcastCost = (maxMana, percent) => Math.max(1, Math.floor(maxMana * percent / 100) + 1);
