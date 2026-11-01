@@ -67,6 +67,21 @@ export async function scanKeepers({ fleet, band = null, fetchImpl = fetch, timeo
 
 function processAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } }
 
+/**
+ * THE SPECTATE HALF OF `scanKeepers`, FOR A CALLER THAT SCANS THE BAND ITSELF. `found` is that caller's
+ * agent -> { port, character, pid, ... } map; a proven spectate keeper replaces its entry (marked
+ * `spectate: true`), exactly as scanKeepers does. FleetScript's lease (holdKeeper) scans its own band and
+ * used to claim work/movement/economy on the OFFLINE normal keeper of a relinquished character, while
+ * the spectate keeper went on steering the body with nothing held.
+ */
+export async function overlaySpectateKeepers(found, { fleet = null, roster = null, spectateDir = null,
+                                                      fetchImpl = fetch, timeoutMs = LIVE_TIMEOUT_MS,
+                                                      now = Date.now, pidAlive = processAlive } = {}) {
+  await overlaySpectate(found, { roster: roster ?? stateFileFor(fleet), dir: spectateDir, fetchImpl, timeoutMs,
+                                 now, pidAlive });
+  return found;
+}
+
 async function overlaySpectate(found, { roster, dir, fetchImpl, timeoutMs, now, pidAlive }) {
   await Promise.all(listSpectateBeats(dir ? { dir } : {}).map(async beat => {
     const agent = String(beat.agent);

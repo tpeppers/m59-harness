@@ -27,6 +27,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { sanitizeOutbound } from './m59-inbox.mjs';
 import { conflictsPath } from './m59-intel.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 // ============================================================================
 // CONFIG
@@ -142,7 +143,7 @@ export function summarizeCharacter(row) {
     vigorPct = Math.max(0, Math.min(100, Math.round(100 * v / 200)));
   }
   const ms = Number.isFinite(row.ms_since_moved) ? row.ms_since_moved : null;
-  const busy = !!(row.parked || row.committed || row.piloted);
+  const busy = !!(row.parked || row.committed || rowHumanHeld(row));
   const stuck = ms != null && ms > 300_000 && !busy;
   return {
     name:           row.character ?? row.agent ?? null,

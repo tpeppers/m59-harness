@@ -26,6 +26,7 @@
 // launch script executes, and a hazard id when the remedy is an act the operator has to say out loud.
 import { foodValue } from './m59-items.mjs';
 import { survivalOffOf, isNoCombatRoom } from './m59-hazards.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 export const LIVE_JOB_STATES = Object.freeze(['running', 'paused', 'resumed', 'orphaned']);
 
@@ -55,7 +56,7 @@ export function unitFromState(state, { row = null, jobs = [], postures = [], isF
   const items = Array.isArray(state?.items) ? state.items : [];
   return {
     agent: state?.agent ?? row?.agent ?? null, character: state?.character ?? row?.character ?? null,
-    room: Number(state?.room?.num) || null, inGame: !!state?.in_game, piloted: !!row?.piloted,
+    room: Number(state?.room?.num) || null, inGame: !!state?.in_game, piloted: rowHumanHeld(row),
     hp: Number(state?.hp?.value) || 0, hpMax: Number(state?.hp?.max) || 1,
     vigor: Number(state?.vigor?.value ?? state?.vigor) || 0,
     items, meals: mealsOf(items, isFood),

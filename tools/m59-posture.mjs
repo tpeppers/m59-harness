@@ -49,6 +49,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rename
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HAZARDS } from './m59-hazards.mjs';
+import { rowHumanHeld } from './m59-spectate-route.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
@@ -185,7 +186,7 @@ const roomNum = (r) => {
 export function unitsFromFleet(f) {
   const rows = [f, f?.fleet, f?.agents, f?.rows].find(Array.isArray) ?? [];
   return rows.map(r => ({ agent: r.agent ?? r.name, character: r.character ?? r.me ?? null,
-    max_health: healthMax(r), host: !!r.host, piloted: !!r.piloted,
+    max_health: healthMax(r), host: !!r.host, piloted: rowHumanHeld(r),
     room: roomNum(r), in_game: r.activity !== 'NOT IN GAME' && r.in_roster !== false }));
 }
 async function fleetUnits(call) {

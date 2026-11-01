@@ -2811,6 +2811,14 @@ async function keeperPorts(fleet, { wantAgent = null, maxAgeMs = 30_000 } = {}) 
           { port, character: v.character, pid: v.pid }); })
         .catch(() => {}));
     await Promise.all(probes);
+    // AND THE KEEPER THAT IS ACTUALLY DRIVING. A character a person relinquished to a spectate keeper
+    // (m59-spectate-route.mjs) has its band keeper alive and OFFLINE; the lease below was taken there,
+    // and the spectate keeper steering the body went on with nothing held. A proven spectate keeper
+    // replaces the band entry, the same decision the broker and scanKeepers make.
+    try {
+      const { overlaySpectateKeepers } = await import('./m59-keeper.mjs');
+      await overlaySpectateKeepers(found, { fleet });
+    } catch { /* no spectate keeper is evidence of none; the band answer stands */ }
     return found;
   })();
   return keeperPortsPromise;
@@ -2945,7 +2953,8 @@ export async function holdKeeper(ctx, agent, fleet) {
     ctx.log(agent, `the keeper would not yield work/movement/economy: ${claim?.error ?? 'refused'}`);
     return { ok: false, cancelJourney: async () => {}, release: async () => {} };
   }
-  ctx.log(agent, `holding ${got.join(', ')} on keeper :${who.port} — survival stays with the keeper`);
+  ctx.log(agent, `holding ${got.join(', ')} on ${who.spectate ? 'the spectate keeper driving a relinquished character' : 'keeper'} ` +
+                 `:${who.port} — survival stays with the keeper`);
 
   // AND THE JOURNEY THAT IS ALREADY IN FLIGHT, WHICH THE CLAIM DOES NOT TOUCH.
   //
@@ -3025,9 +3034,26 @@ export async function holdKeeper(ctx, agent, fleet) {
   // and never left 599; a walk to 104 failed 3 of 3 the same way. While a walk of ours is in
   // flight the retake still happens and the cancel does not.
   const own = { walkUntil: 0 };
+  // THE DRIVER CAN CHANGE UNDER A RUNNING ERRAND: a person relinquishes the character to a spectate
+  // keeper, or takes it back and the spectate keeper exits. Either way the lease is on a keeper that is
+  // no longer steering. One small file read per beat says so (m59-spectate-route.mjs), and the re-scan
+  // then points `who` at the driver, whose heartbeat renews nothing -- which the take-back below handles.
+  const driverMoved = async () => {
+    try {
+      const { readSpectateBeat, spectateHolds } = await import('./m59-spectate-route.mjs');
+      const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
+      const held = spectateHolds(readSpectateBeat(agent), { agent, pidAlive: alive });
+      return held.holds ? held.pid !== who.pid : !!who.spectate;
+    } catch { return false; }
+  };
   const beat = setInterval(() => {
     if (done) return;
-    ask('commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS }).then(async hb => {
+    driverMoved().then(async moved => {
+      if (moved && await refresh()) {
+        who.spectate = (await keeperPorts(fleet, { wantAgent: agent }).catch(() => null))?.get(agent)?.spectate === true;
+        ctx.log(agent, `the keeper driving this character changed -- now ${who.spectate ? 'a spectate keeper' : 'its own keeper'} :${who.port}`);
+      }
+    }).catch(() => {}).then(() => ask('commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS })).then(async hb => {
       if (done) return;
       const renewed = Array.isArray(hb?.renewed) ? hb.renewed : null;
       if (!renewed || KEEPER_FACULTIES.every(f => renewed.includes(f))) return;

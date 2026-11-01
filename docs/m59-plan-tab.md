@@ -269,7 +269,23 @@ the proxy's attach port (`tools/m59-proxy-attach.mjs`, `--attach 8932`):
 - The broker still marks the character piloted, but while a spectate keeper drives, the flag
   no longer black-holes commands (`humanHeld`): combat orders and the other piloted gates go
   through. With no spectate keeper running, a piloted character is hands-off as before. The
-  `fleet` row's `driver` field says which keeper is driving.
+  `fleet` row's `driver` field says which keeper is driving, and `human_held` says whether to keep
+  hands off (false for a relinquished character). A tool that steps over held characters asks
+  `rowHumanHeld(row)` (`tools/m59-spectate-route.mjs`), never `row.piloted`; `pilot status`
+  carries the same `human_held` per claim.
+- **Leases and FleetScripts reach it.** `commander_lease` grants a relinquished character (the claim
+  goes to the spectate keeper; survival, recovery, mortality and identity stay with it, as on any
+  keeper) and ends the lease on the next heartbeat after you take control back. A FleetScript's
+  hold leases the spectate keeper too (its band scan overlays it) and re-points the lease if you
+  relinquish or take back mid-run. The MANAGE tab offers your own character to a FleetScript once
+  you have relinquished it.
+- **Chat reaches it.** The control-chat poller (desk services, `control` verbs from the operator at
+  another character) listens to a relinquished character like any keeper-driven one.
+- **A character played at broker start or at a live handover** has no proxy until it is relinquished;
+  the broker makes one then (`routedSession`), so it appears on `fleet` and can be leased.
+- **Taking control back** silences the keeper at the proxy on its next packet, then stops it. Nothing
+  reconnects: the person's client keeps the one connection throughout, and the normal keeper stays
+  offline (the rejoin sweep skips a piloted character) until the client exits.
 - **One driver per character.** While any believable spectate heartbeat holds the character,
   the broker never asks the normal keeper to log in: the rejoin sweep skips it, a staged start
   leaves it alone, and `restart-keepers` replaces its keeper dormant.

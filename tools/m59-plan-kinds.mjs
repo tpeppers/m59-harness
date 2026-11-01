@@ -35,6 +35,16 @@ import { readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WANDERERS } from './m59-worldbook.mjs';
+import { readSpectateBeat, spectateHolds } from './m59-spectate-route.mjs';
+
+// The person's own character is barred from a FleetScript while they PLAY it, not once they have
+// relinquished it to a spectate keeper: that keeper takes the run's orders and lease like any other.
+const relinquished = agent => {
+  try {
+    return spectateHolds(readSpectateBeat(agent), { agent,
+      pidAlive: pid => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } } }).holds;
+  } catch { return false; }
+};
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = join(HERE, '..');
@@ -187,7 +197,7 @@ export function argsFor(script, ctx = {}, { scripts = null, taskId = null } = {}
                 default: spec.default != null ? String(spec.default) : '', help: spec.describe ?? '', optional: !spec.required };
     const none = label => (spec.required ? [] : [{ value: '', label }]);
     if (kind === 'agents') Object.assign(a, { type: 'agents', options: fleetOptions(ctx),
-      excluded: ctx.client?.agent ? [{ value: ctx.client.agent, why: 'the character you are piloting — a FleetScript drives keepers, and yours is offline while you play' }] : [] });
+      excluded: ctx.client?.agent && !relinquished(ctx.client.agent) ? [{ value: ctx.client.agent, why: 'the character you are piloting — a FleetScript drives keepers, and yours is offline while you play (relinquish control to Keeper to include it)' }] : [] });
     else if (kind === 'boolean') Object.assign(a, { type: 'boolean', default: String(spec.default === true || spec.default === 'true') });
     else if (kind === 'options') {
       const opts = spec.options.map(o => typeof o === 'object' ? { value: String(o.value), label: String(o.label ?? o.value) } : { value: String(o), label: String(o) });

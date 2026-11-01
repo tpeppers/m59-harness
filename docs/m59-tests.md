@@ -2780,7 +2780,7 @@ Read as source, `m59-service.mjs` runs the check before it resolves a fleet or a
 dispatches on the checked command rather than a second parse, and reads no flag the table does
 not accept, and the table accepts no flag the service does not read.
 
-## m59-spectate-route-test.mjs (90) — the broker talks to whichever keeper is driving
+## m59-spectate-route-test.mjs (115) — the broker talks to whichever keeper is driving
 
 2026-11-01, t17 (Zoot): the operator relinquished control to a spectate keeper on the PLAN tab, and
 the broker went on reading the character's normal keeper process, which was alive and offline.
@@ -2800,3 +2800,13 @@ and every one re-proves the route. Lifecycle (stop, leave, wake, dormancy, rejoi
 the normal keeper. The rejoin sweep, staged start and keeper handoff skip a spectate-held character.
 Spectate mode refuses to start without the attachment. The launcher writes only the scrubbed roster
 copy.
+
+The two gaps closed after it (2026-11-01) are pinned too. **Leases:** `commander_lease` refuses only a
+character a person is PLAYING (`humanHeldNow`, proven fresh), finds the proxy of a character held at
+broker start (`routedSession`), and ends a granted lease on the next heartbeat once the person takes
+control back; a release the departed spectate keeper cannot answer no longer throws. FleetScript's
+own band scan (`holdKeeper`) overlays the proven spectate keeper (`overlaySpectateKeepers`, driven with
+a fake fetch), so the lease is taken on the keeper that is steering, and every beat re-points it when
+the driver changes. **Chat:** the control-chat poller listens to every keeper-driven character, a
+relinquished one included, and still skips one a person plays. `rowHumanHeld` is the rule a `fleet`-row
+reader uses: `human_held` when the broker sends it, `piloted` from an older broker.

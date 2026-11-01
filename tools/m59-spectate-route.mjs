@@ -144,7 +144,27 @@ export function chooseKeeperRoute({ agent, character = null, roster = null, beat
  * DOES THE `piloted` FLAG STILL KEEP THE BROKER'S HANDS OFF? Only when nobody but the person is driving.
  * A person who relinquished control to a spectate keeper is watching, not playing: the keeper's orders
  * are the character's orders. With no spectate keeper running, a piloted character is hands-off as ever.
+ *
+ * NOT YET: A SECOND PERSON. A planned follow-on lets a guest's DebugClient attach to the owner's proxy
+ * (an invite carrying a one-time token, the m59-handoff/m59-lend grant pattern) and take the controls by
+ * holding the proxy GATE. The gate holder is the control token; this rule only knows "a spectate keeper
+ * heartbeat is driving". Once a guest can hold the gate, the holder (`keeper:<agent>` or a person's) must
+ * be an input here, or a guest at the controls would read as keeper-driven and receive the fleet's orders.
  */
 export function humanHeld({ piloted, route }) {
   return !!piloted && route?.route !== 'spectate';
+}
+
+/**
+ * IS A PERSON HOLDING THIS CHARACTER, AS A `fleet` ROW SAYS IT? The broker's row carries `human_held`
+ * (humanHeld above, decided where the heartbeat and the pilot claim both live) beside the informational
+ * `piloted`. A row from a broker older than that field has only `piloted`, which then means what it
+ * always meant. So a reader that steps over human-held characters asks this, never `row.piloted`: a
+ * character a person relinquished to a spectate keeper is driven by the keeper and takes orders like any
+ * other, while one the person is actually playing is still left alone.
+ */
+export function rowHumanHeld(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (typeof row.human_held === 'boolean') return row.human_held;
+  return !!row.piloted;
 }
