@@ -30,6 +30,7 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 import { esc, ago, num, NAV, STYLE, magicTag } from './m59-page-chrome.mjs';
 import { StorageCache, GUILD_CHEST_SLOTS, VAULT_BULK_MAX, CHEST_BULK_MAX,
          BOOKMAKERS_CHESTS } from './m59-storage.mjs';
+import { readVaultSnapshots } from './m59-strategy-stats.mjs';
 import { loadLooks, loadList, magicOf } from './m59-magicsort.mjs';
 import { guildPlan, normalisePlan } from './m59-guildwants.mjs';
 import { evictionOrder } from './m59-chest-eviction.mjs';
@@ -100,6 +101,36 @@ function itemGrid(items, empty, ctx) {
   }).join('')}</div>`;
 }
 
+// BOTH VAULTS, EACH UNDER ITS OWN HEADING. Obert Cair'bre's and Itzal cha'Nosak's are separate
+// stores with separate 3000-bulk ceilings, read on separate trips, so each carries its own
+// fullness and its own age. How a reading was placed is said when it is not a recorded room —
+// see `vaultReadings` in m59-storage.mjs.
+const VAULT_LABEL = { 114: 'mainland vault', 2005: 'island vault' };
+const SOURCE_SAID = {
+  room: '',
+  vaultman: ' · placed by the vaultman the keeper named',
+  snapshot: ' · from the keeper\'s vault-run snapshot',
+  inferred: ' · room not recorded; mainland by construction (read before the island vault was readable)',
+};
+function vaultStore(v, ctx) {
+  const r = v.reading;
+  return `<div class="store">
+    <h4>${esc(VAULT_LABEL[v.room] ?? `vault ${v.room}`)}</h4>
+    <div class="dim" style="font-size:.74rem">${esc(v.npc)} · ${esc(v.where)} (${v.room})${r
+      ? ` · ${num(r.fullness.bulk)} of ${num(VAULT_BULK_MAX)} bulk (${r.fullness.percent}%)
+         · read ${esc(ago(r.observed_at))}${esc(SOURCE_SAID[r.source] ?? '')}` : ''}</div>
+    ${itemGrid(r?.items, 'never read — a vault states its contents only when somebody asks this vaultman for a withdrawal list', ctx)}
+  </div>`;
+}
+function unplacedStore(u, ctx) {
+  return `<div class="store">
+    <h4>vault, which one unknown</h4>
+    <div class="dim" style="font-size:.74rem">${num(u.fullness.bulk)} bulk · read ${esc(ago(u.observed_at))}
+      · nothing recorded which vaultman this came from, so it is not filed under either</div>
+    ${itemGrid(u.items, 'empty', ctx)}
+  </div>`;
+}
+
 // A RANKING, NOT A LOG. Nothing evicts from a guild chest yet: the server never does
 // (chest.kod:29) and nothing in this repository withdraws by this order. So the card says
 // "would give up first", and the history underneath says "left between readings", which is
@@ -164,11 +195,19 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
   const planFor = (slot) => plan?.chests.get(slot) ?? null;
 
   const liveOf = new Map((live || []).map(x => [x.character, x]));
-  const rows = e.rows.map(r => ({
-    character: r.character,
-    l: liveOf.get(r.character) ?? null,
-    vault: storage.readVault(r.character),
-  }));
+  // The keeper's own vault-run snapshots name the vaultman, which places readings the cache
+  // file did not tag with a room. Read once; a missing directory is an empty list.
+  let snapshots = [];
+  try { snapshots = readVaultSnapshots(); } catch { snapshots = []; }
+  const rows = e.rows.map(r => {
+    const vaults = storage.readVaults(r.character, { snapshots });
+    return {
+      character: r.character,
+      l: liveOf.get(r.character) ?? null,
+      vaults,
+      vaultItems: [...vaults.vaults.flatMap(v => v.reading?.items ?? []), ...(vaults.unplaced?.items ?? [])],
+    };
+  });
 
   // WORST FIRST, because the reason somebody opens this page is that something would not fit.
   // A pack with no reading sorts last rather than as 0% — it is not the emptiest, it is unknown.
@@ -179,19 +218,22 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
   const tight = rows.filter(r => (r.l?.pack?.percent ?? 0) >= 90).length;
   const magicHeld = rows.reduce((n, r) => n +
     (r.l?.pack_items ?? []).filter(i => magicOf(i, ctx)).length +
-    (r.vault?.items ?? []).filter(i => magicOf(i, ctx)).length, 0);
+    r.vaultItems.filter(i => magicOf(i, ctx)).length, 0);
   const unread = rows.reduce((n, r) => n +
     (r.l?.pack_items ?? []).filter(i => magicOf(i, ctx)?.grade === 'unidentified').length, 0);
+  const vaultsRead = (room) => rows.filter(r => r.vaults.vaults.some(v => v.room === room && v.reading)).length;
 
-  const packCards = sorted.map(({ character, l, vault }) => {
+  const packCards = sorted.map(({ character, l, vaults }) => {
     const pack = l?.pack ?? null;
     const full = (pack?.percent ?? 0) >= 90;
+    const vaultPct = vaults.vaults.map(v => `${(VAULT_LABEL[v.room] ?? `vault ${v.room}`).replace(' vault', '')} ${
+      v.reading ? `${v.reading.fullness.percent}%` : 'never read'}`).join(' · ');
     return `
     <div class="pack-card${full ? ' full' : ''}">
       <h3>${esc(character)}
         <span class="pct">${pack ? `pack ${pack.percent}% · ${pack.binding}-bound`
                                  : 'pack not read'}</span>
-        <span class="pct">${vault ? `vault ${vault.fullness.percent}%` : 'vault never read'}</span>
+        <span class="pct">vaults: ${esc(vaultPct)}</span>
       </h3>
       ${bar(pack?.percent ?? null, pack
         ? `${pack.bulk} bulk / ${pack.weight} weight against ${pack.max}, ${pack.binding}-bound`
@@ -207,13 +249,8 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
             : Array.isArray(l.pack_items) ? 'nothing in the pack'
             : 'the broker holding this character is running code that does not report the item list — restart it and this fills in', ctx)}
         </div>
-        <div class="store">
-          <h4>vault</h4>
-          ${vault ? `<div class="dim" style="font-size:.74rem">${vault.fullness.bulk} of
-             ${num(VAULT_BULK_MAX)} bulk · read ${esc(ago(vault.observed_at))}</div>` : ''}
-          ${itemGrid(vault?.items,
-            'never read — a vault states its contents only when a withdrawal is requested', ctx)}
-        </div>
+        ${vaults.vaults.map(v => vaultStore(v, ctx)).join('')}
+        ${vaults.unplaced ? unplacedStore(vaults.unplaced, ctx) : ''}
       </div>
     </div>`;
   }).join('');
@@ -226,7 +263,7 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
 <style>${STYLE}${EXTRA_STYLE}</style>
 </head><body><div class="wrap">
   <h1>Inventory</h1>
-  <div class="sub">Every pack, every vault, every chest — listed in full · ${esc(FLEET_LABEL)} fleet
+  <div class="sub">Every pack, both vaults, every chest — listed in full · ${esc(FLEET_LABEL)} fleet
     · shillings, the bank and the two <a href="/economy">create food</a> reagents live on the
     Economy page, because on this fleet they are fuel rather than cargo</div>
   ${NAV('inventory')}
@@ -238,7 +275,10 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
       <div class="v ${tight ? 'warn' : ''}">${tight}</div>
       <div class="n">a full pack refuses every hand-over, on WEIGHT, and says nothing</div></div>
     <div class="card"><div class="k">magic items held</div><div class="v">${magicHeld}</div>
-      <div class="n">in packs and vaults · hover any one for its description</div></div>
+      <div class="n">in packs and both vaults · hover any one for its description</div></div>
+    <div class="card"><div class="k">vaults read</div>
+      <div class="v">${vaultsRead(114)} / ${vaultsRead(2005)}</div>
+      <div class="n">mainland / island, of ${rows.length} · each vault is its own ${num(VAULT_BULK_MAX)} bulk</div></div>
     <div class="card"><div class="k">awaiting a reveal</div>
       <div class="v ${unread ? 'warn' : ''}">${unread}</div>
       <div class="n">graded unidentified — ${unread ? `${unread * 3} orc teeth to read them all`
