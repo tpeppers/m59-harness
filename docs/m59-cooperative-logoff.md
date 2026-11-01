@@ -119,6 +119,45 @@ reason:'deadline', released:'deadline'` and lets the login proceed.
 straight for cover, and its survival decision says the wait ran out, not that a
 distraction happened.
 
+## A record nobody is finishing ends by itself
+
+Prod, 2026-11-01: Robin sat in `preparing` for 4.5 hours and Scooter in `offline` for an hour
+past a four-minute `max_offline_ms`, both out of the game, and hand-aborting Scooter's file did
+not bring him back. The trigger was Windows: `renameSync` over a request file another keeper is
+reading at that instant throws EPERM, and about twenty keepers read every request file twice a
+second. 142 orphaned `request-*.json.<pid>.<uuid>.tmp` files are the writes that never landed;
+Robin's holds the `offline` from `markCooperativeOffline`, Scooter's the deadline `aborted`.
+What made a failed write permanent was this code: the throw escaped the rejoin, a `preparing`
+record refused every later login (in-process and the keeper's `/join`/`/rejoin`, answered 423
+to the broker's sweep every 45 s), and a waiter that died by throwing left
+`cooperativeLogoffWaiting` set, so the keeper reported `cooperative_wait: true` and the sweep
+stepped over the character for good.
+
+Now:
+
+- Writes retry a busy rename briefly (`replaceFileSync`) and never leave a tmp; an EPERM on the
+  room lock's exclusive create is "busy", like EEXIST. A held lock is still never broken.
+- `markCooperativeOffline` never throws, and remembers the departure in memory; the login gate
+  confirms a `preparing` record this session departed for (`confirmed_offline`).
+- A `preparing` record older than `PREPARING_MAX_MS` (60 s; the honest window is under a second)
+  is abandoned and the login proceeds (`preparing_timeout`).
+- Past `max_offline_ms` the gate releases as before; if the release cannot be written it retries,
+  and past `max_offline_ms + OFFLINE_OVERRUN_MS` (30 s) it logs in anyway (`offline_overrun`).
+  A store that stays unreadable for `STORE_FAILURE_MAX_MS` (60 s) ends the gate too.
+- A waiter that exits by throwing clears its flag, after-login clears it unconditionally, and the
+  keeper reports `cooperative_wait` only while a login is in flight (`cooperativeWaitActive`).
+- `/join` and `/rejoin` refuse only while a continuation is running. With none, a stuck record is
+  abandoned and a pending one inside its bound is re-gated by the join itself (`regated`).
+- A failed cooperative reconnect aborts its `preparing` record whether or not the socket survived.
+
+Every one of those writes a `cooperative_logoff_recovered` ledger row (`action`, `reason_code`,
+`why`, `by`, the request's times, and whether the record could be written), keyed on the
+character. None of them logs anybody in by itself: the gate only runs inside a login somebody
+asked for, still refuses when `cooperativeLoginAllowed()` is false (dormancy, handoff, leave, a
+stopping keeper), and a human pilot is the broker's to honour, as before. A body released this way
+is undistracted, so `cooperativeLogoffReturn.released` names the bound and the keeper heads
+straight for cover.
+
 Helper start/result/defer events and confirmed distraction kills enter normal
 keeper telemetry. Read-only cleanup can finish after the victim returns, but a
 second attack from the old distraction scope cannot follow it.

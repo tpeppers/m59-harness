@@ -1,6 +1,6 @@
 import { readToolSource } from './autopilot/source.mjs';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync,readdirSync,renameSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Session} from './m59-game.mjs';
@@ -13,12 +13,16 @@ import {load,firstAnswer} from './m59-strategies.mjs';
 import {cooperativeStore,configureCooperativeLogoff,publishCooperativePresence,requestCooperativeLogoff,markCooperativeOffline,
   cooperativeBeforeLogin,cooperativeAfterLogin,cooperativeAssist,cooperativeHelperReady,
   prepareCooperativeRefuge,cooperativeReturnRefuge} from './m59-cooperative-logoff.mjs';
-import {cooperativeReconnectRefusal} from './m59-cooperative-logoff.mjs';
+import {cooperativeReconnectRefusal,cooperativeWaitActive,replaceFileSync,stuckCooperativeLogoff,abortPreparingCooperativeLogoff,
+  PREPARING_MAX_MS,OFFLINE_OVERRUN_MS} from './m59-cooperative-logoff.mjs';
 // Healing sessions (one logoff each) go to a temp dir, never the checkout's substrate/.healing.
 process.env.M59_HEALING_DIR=(await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(),'m59-coop-healing-'));
 const dir=mkdtempSync(join(tmpdir(),'m59-cooperative-logoff-'));
 party.setRosterSource(()=>new Set(['Victim','Helper','Second']));
 const policy={enabled:true,helper_health:.95,danger_quiet_ms:3000,cooldown_ms:60000,attempt_ms:6000};
+// Every cooperative_logoff_recovered row lands here instead of a fleet ledger.
+const ledger=[];const capture=(who,kind,row)=>ledger.push({who,kind,...row});
+const rowsFor=(agent,action)=>ledger.filter(r=>r.agent===agent&&r.kind==='cooperative_logoff_recovered'&&(!action||r.action===action));
 function fixture(label='case'){
  const directory=join(dir,label),cred=character=>({host:'fixture.invalid',port:15959,character,account:'offline-test',password:'unused'});
  const monster={id:40,nameRsc:'daemon skeleton',flags:OF.ATTACKABLE,row:10,col:10};
@@ -28,7 +32,7 @@ function fixture(label='case'){
    room:{id:8270,objects:new Map(bodies.map(o=>[o.id,{...o}]))},rsc:{get:x=>x},idsAsOf:()=>({last_save_at:7}),vitals:()=>({health:{value:100,max:100},vigor:{value:180}}),sock:{destroy(){c.state='offline';}}};
   Object.assign(s,{name,client:c,credentials:cred(character),fleetStateFile:join(directory,'fleet.json'),cooperativeLogoffDirectory:directory,world:{room:{num:827}},movementGeneration:1,
    cancelMovement:()=>({cancelled:true}),movementWasCancelled:g=>g!==s.movementGeneration});
-  s._askStrategies=async()=>({strategy:'fixture-private',answer:policy});
+  s._askStrategies=async()=>({strategy:'fixture-private',answer:policy});s.cooperativeRecordEvent=capture;
   const pilot={s,mode:'farm',tally:{},stageInFlight:new Map(),inReachOfUs:()=>[...c.room.objects.values()].filter(o=>!(o.flags&OF.PLAYER)),
    currentRecoveryWall:()=>false,safety:()=>({fleeAt:.9}),checkFreeze:()=>false,facultyHeld:()=>false,fightFloor:()=>80,threat:()=>({landing:0}),note(){},
    fightNow:async opts=>({target_id:opts.exactTargetId,landed_hits:1})};
@@ -72,8 +76,9 @@ try{
   f.b.pilot.stageInFlight.set('passFarm',Promise.resolve());assert.equal(await cooperativeAssist(f.b.pilot),false);f.b.pilot.stageInFlight.clear();
   assert.equal(calls,0);assert.equal(await cooperativeAssist(f.b.pilot),true);assert.equal(calls,1);
   assert.deepEqual(f.store().read('request','victim').receipts,{},'a miss cannot release login');
-  let polls=0;await assert.rejects(cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>{if(++polls===2)throw Error('still offline');}}),/still offline/);
-  assert.equal(polls,2);assert(f.a.s.cooperativeLogoffWaiting);
+  let polls=0,seen=null;await assert.rejects(cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>{seen=f.a.s.cooperativeLogoffWaiting;if(++polls===2)throw Error('still offline');}}),/still offline/);
+  assert.equal(polls,2);assert(seen?.request_id,'the waiter publishes its wait while it runs');
+  assert.equal(f.a.s.cooperativeLogoffWaiting,null,'a waiter that exited by throwing no longer claims to be waiting');
   console.log('PASS helpers defer during combat/danger/unfinished work; a submitted attack or miss never releases reconnect');
  }
  {
@@ -82,7 +87,7 @@ try{
   assert(await cooperativeAssist(f.b.pilot));assert.equal(options.rounds,1);assert.equal(options.loot,false);assert.equal(options.exactTargetId,40);
   await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('a real hit should release immediately')});
   assert.equal(f.store().read('request','victim').state,'returning','login failure/restart must still revalidate the hit');
-  const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory};
+  const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory,cooperativeRecordEvent:capture};
   await cooperativeBeforeLogin(restarted,f.a.s.credentials,{wait:async()=>assert.fail('durable receipt should survive a keeper restart')});
   f.b.c.vitals=()=>({health:{value:0,max:100}});f.b.s._cooperativePublishedAt=0;publishCooperativePresence(f.b.pilot);
   await assert.rejects(cooperativeBeforeLogin(restarted,f.a.s.credentials,{wait:async()=>{throw Error('helper died');}}),/helper died/);
@@ -204,6 +209,7 @@ try{
  }
  {
   const f=fixture('native-control-rejoin');await f.setup();f.offline();let sideEffects=0,reply;
+  f.a.s.joining=new Promise(()=>{});   // the gated login that owns this wait, in flight
   const source=readToolSource(new URL('./m59-keeper-process.mjs',import.meta.url),'utf8');
   const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
   for(const path of ['/join','/rejoin']){
@@ -215,6 +221,7 @@ try{
     assert.equal(reply.status,423);assert.equal(reply.body.reason_code,'cooperative_wait');
   }
   assert.equal(sideEffects,0,'native broker requests must not stop the keeper, close its continuation or start another login');
+  f.a.s.joining=null;
   console.log('PASS actual native /join and /rejoin handlers refuse before every stop/change/login side effect during a cooperative wait');
  }
  {
@@ -312,9 +319,10 @@ try{
   const f=fixture('deadline');f.a.s._askStrategies=async()=>({strategy:'fixture-private',answer:{...policy,max_offline_ms:120000}});
   const made=await f.setup();assert.equal(made.max_offline_ms,120000,'the deadline travels with the request');
   const r=f.offline();
-  await assert.rejects(gate(f,r.offline_at+119999),/still waiting/,'not before the deadline');
-  assert.equal(f.store().read('request','victim').state,'offline');assert.equal(f.a.s.cooperativeLogoffWaiting.deadline_at,r.offline_at+120000);
-  const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory};
+  let waiting=null;
+  await assert.rejects(cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>r.offline_at+119999,wait:async()=>{waiting=f.a.s.cooperativeLogoffWaiting;throw Error('still waiting');}}),/still waiting/,'not before the deadline');
+  assert.equal(f.store().read('request','victim').state,'offline');assert.equal(waiting.deadline_at,r.offline_at+120000);
+  const restarted={name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory,cooperativeRecordEvent:capture};
   await cooperativeBeforeLogin(restarted,f.a.s.credentials,{now:()=>r.offline_at+120000,wait:async()=>assert.fail('deadline reached on a restarted keeper')});
   const done=f.store().read('request','victim');
   assert.equal(done.state,'aborted');assert.equal(done.reason,'deadline');assert.equal(done.released,'deadline');
@@ -324,6 +332,139 @@ try{
   await assert.rejects(gate(none,n.offline_at+10*3600000),/still waiting/,'without the option nothing ever times out');
   assert.equal(none.store().read('request','victim').state,'offline');
   console.log('PASS opt-in max_offline_ms releases a restarted waiter at its deadline and not before; without it nothing times out');
+ }
+ // STUCK LOGOFFS, prod 2026-11-01. A cooperative logoff nobody is finishing ends by its own bound,
+ // the keeper's flag stops claiming a wait nobody is doing, and every recovery is a ledger row.
+ const eperm=()=>Object.assign(Error('EPERM: operation not permitted, rename'),{code:'EPERM'});
+ const restartedOf=(f,extra={})=>({name:'victim',fleetStateFile:f.a.s.fleetStateFile,cooperativeLogoffDirectory:f.a.s.cooperativeLogoffDirectory,
+   credentials:f.a.s.credentials,cooperativeRecordEvent:capture,...extra});
+ {
+  const box=join(dir,'rename-retry');mkdirSync(box);const target=join(box,'r.json');writeFileSync(target,'{"old":1}');
+  let tries=0;writeFileSync(target+'.tmp','{"new":1}');
+  replaceFileSync(target+'.tmp',target,{rename:(a,b)=>{if(++tries<3)throw eperm();renameSync(a,b);}});
+  assert.equal(tries,3);assert.equal(JSON.parse(readFileSync(target,'utf8')).new,1,'a busy target is replaced once its reader lets go');
+  writeFileSync(target+'.tmp2','{"lost":1}');
+  assert.throws(()=>replaceFileSync(target+'.tmp2',target,{rename:()=>{throw eperm();},attempts:3}),/EPERM/);
+  assert.equal(existsSync(target+'.tmp2'),false,'a write that never lands leaves no orphaned tmp behind');
+  assert.throws(()=>replaceFileSync(target+'.tmp3',target,{rename:()=>{throw Object.assign(Error('ENOSPC'),{code:'ENOSPC'});}}),/ENOSPC/,'only sharing errors are retried');
+  // The store's own writes go through it: a session-level rename stub stands in for a reader holding the file.
+  const f=fixture('busy-store');await f.setup();let busy=2;
+  f.a.s.cooperativeRename=(a,b)=>{if(busy-->0)throw eperm();renameSync(a,b);};
+  markCooperativeOffline(f.a.s);f.a.s.cooperativeRename=null;
+  assert.equal(f.store().read('request','victim').state,'offline','markCooperativeOffline lands through two EPERMs');
+  assert.equal(readdirSync(f.store().dir).filter(n=>n.endsWith('.tmp')).length,0,'and leaves no tmp');
+  console.log('PASS Windows rename over a busy file is retried, a failed write leaves no tmp, and only sharing errors are retried');
+ }
+ {
+  // SHAPE A, in process (Robin): markCooperativeOffline's write fails after the socket is gone.
+  const f=fixture('preparing-unrecorded');const r=await f.setup();assert.equal(r.state,'preparing');
+  f.a.c.sock.destroy();f.a.s.client=null;
+  f.a.s.cooperativeRename=()=>{throw eperm();};
+  markCooperativeOffline(f.a.s);   // must not throw: the join after it is the only way back in
+  f.a.s.cooperativeRename=null;
+  assert.equal(f.store().read('request','victim').state,'preparing','the departure write failed, as on prod');
+  assert.equal(f.a.s.cooperativeDeparture.request_id,r.id,'but this session remembers that it left for this request');
+  await assert.rejects(gate(f,Date.now()+1000),/still waiting/,'and then waits for distraction rather than throwing');
+  const now=f.store().read('request','victim');
+  assert.equal(now.state,'offline');assert.equal(now.offline_at,f.a.s.cooperativeDeparture.at);assert.equal(now.offline_confirmed_by,'login gate');
+  assert.equal(rowsFor('victim','confirmed_offline').length,1);assert.equal(rowsFor('victim','confirmed_offline')[0].who,'Victim','the row is keyed on the character');
+  now.offline_at-=1000;f.store().write('request','victim',now);   // past the helper's 800ms settle
+  assert(await cooperativeAssist(f.b.pilot));await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('a hit releases the confirmed record')});
+  assert.equal(f.store().read('request','victim').state,'returning');
+  console.log('PASS a preparing record whose departure write failed is confirmed offline by this session\'s own gate and then released by distraction as usual');
+ }
+ {
+  // SHAPE A, no owner (restart, or the gate that would have confirmed it is gone).
+  const f=fixture('preparing-stuck');const r=await f.setup();
+  const young=restartedOf(f);
+  await assert.rejects(cooperativeBeforeLogin(young,f.a.s.credentials,{now:()=>r.created_at+10000,wait:async()=>{assert.equal(young.cooperativeLogoffWaiting.phase,'preparing');throw Error('still waiting');}}),/still waiting/);
+  assert.equal(f.store().read('request','victim').state,'preparing','a young preparing record may still be confirmed by its own keeper');
+  assert.equal(young.cooperativeLogoffWaiting,null);
+  const old=restartedOf(f);
+  await cooperativeBeforeLogin(old,f.a.s.credentials,{now:()=>r.created_at+PREPARING_MAX_MS,wait:async()=>assert.fail('a preparing record past its bound must not hold the login')});
+  const done=f.store().read('request','victim');
+  assert.equal(done.state,'aborted');assert.equal(done.reason,'preparing_timeout');assert.equal(done.recovered_by,'login gate');
+  assert.equal(old.cooperativeLogoffReturn.released,'preparing_timeout','the body comes back undistracted and goes straight for cover');
+  const row=rowsFor('victim','abandoned').at(-1);assert.equal(row.reason_code,'preparing_timeout');assert.equal(row.state_was,'preparing');assert.equal(row.record_written,true);
+  console.log('PASS a preparing record nobody confirmed is abandoned at PREPARING_MAX_MS by the login gate, with a ledger row, and not before');
+ }
+ {
+  // SHAPE A, the path that actually held Robin for 4.5 hours: the broker's sweep posting /rejoin.
+  const f=fixture('preparing-refusal');const r=await f.setup();f.a.c.sock.destroy();f.a.s.client=null;
+  const rec=f.store().read('request','victim');rec.created_at=Date.now()-4.5*3600000;f.store().write('request','victim',rec);
+  f.a.s.joining=new Promise(()=>{});
+  assert.equal(cooperativeReconnectRefusal(f.a.s).reason_code,'cooperative_wait','a running continuation still owns it');
+  f.a.s.joining=null;
+  assert.equal(cooperativeReconnectRefusal(f.a.s),null,'no continuation and past its bound: the join goes through');
+  assert.equal(f.store().read('request','victim').state,'aborted');assert.equal(f.store().read('request','victim').reason,'preparing_timeout');
+  assert.equal(rowsFor('victim','abandoned').at(-1).by,'keeper join handler');
+  console.log('PASS the keeper /join and /rejoin refusal no longer holds a stuck preparing record: it abandons it, says so, and lets the sweep in');
+ }
+ {
+  // SHAPE B (Scooter): the deadline release cannot be written. The waiter must not die of it, must
+  // not leave cooperative_wait set if it does die, and must go anyway past the margin.
+  const f=fixture('deadline-unwritable');f.a.s._askStrategies=async()=>({strategy:'fixture-private',answer:{...policy,max_offline_ms:240000}});
+  await f.setup();const r=f.offline();
+  f.a.s.cooperativeRename=()=>{throw eperm();};
+  f.a.s.joining=new Promise(()=>{});let during=null;
+  await assert.rejects(cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>r.offline_at+240000,wait:async()=>{during=cooperativeWaitActive(f.a.s);throw Error('still waiting');}}),/still waiting/,
+    'a failed release write is retried, not thrown');
+  assert.equal(during,true,'while the waiter runs, the keeper reports the wait');
+  assert.equal(cooperativeWaitActive(f.a.s),false,'once it is gone, it does not (Scooter: an hour stepped over by the sweep)');
+  f.a.s.joining=null;
+  assert.equal(f.store().read('request','victim').state,'offline');
+  await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{now:()=>r.offline_at+240000+OFFLINE_OVERRUN_MS,wait:async()=>assert.fail('past max_offline_ms + margin the login goes even unrecorded')});
+  assert.equal(f.a.s.cooperativeLogoffReturn.released,'offline_overrun');
+  const row=rowsFor('victim','released_unrecorded').at(-1);assert.equal(row.reason_code,'offline_overrun');assert.equal(row.record_written,false);
+  f.a.s.cooperativeRename=null;
+  console.log('PASS a deadline release that cannot be written keeps the waiter alive, clears the wait flag when it ends, and logs in past the margin anyway');
+ }
+ {
+  // SHAPE B with no waiter left at all: the join handler ends it once it is past max_offline_ms + margin.
+  const f=fixture('offline-refusal');f.a.s._askStrategies=async()=>({strategy:'fixture-private',answer:{...policy,max_offline_ms:240000}});
+  await f.setup();f.offline();
+  const rec=f.store().read('request','victim');
+  assert.equal(stuckCooperativeLogoff(rec,rec.offline_at+240000+OFFLINE_OVERRUN_MS-1),null,'not inside the margin');
+  assert.equal(cooperativeReconnectRefusal(f.a.s,f.a.s.credentials,{now:rec.offline_at+60000}),null,'inside its bound with no waiter: the join re-enters the gate');
+  assert.equal(f.store().read('request','victim').state,'offline','re-gating does not resolve the record');
+  assert.equal(rowsFor('victim','regated').at(-1).reason_code,'no_continuation');
+  assert.equal(cooperativeReconnectRefusal(f.a.s,f.a.s.credentials,{now:rec.offline_at+240000+OFFLINE_OVERRUN_MS}),null);
+  assert.equal(f.store().read('request','victim').state,'aborted');assert.equal(f.store().read('request','victim').reason,'offline_overrun');
+  console.log('PASS with no waiter, the join handler re-gates an offline record inside its bound and abandons one past max_offline_ms + margin');
+ }
+ {
+  // THE HAND-ABORTED FILE (what operators did tonight): state aborted, `aborted_reason`, no aborted_at,
+  // and a dead waiter's flag still on the session.
+  const f=fixture('hand-aborted');await f.setup();f.offline();
+  f.a.s.cooperativeLogoffWaiting={request_id:'dead-waiter',room:827,at:Date.now()-3600000};
+  const rec=f.store().read('request','victim');rec.state='aborted';rec.aborted_reason='operator-session: stuck offline >5 min';f.store().write('request','victim',rec);
+  assert.equal(cooperativeWaitActive(f.a.s),false,'a flag with no login in flight is not a wait the broker should step over');
+  assert.equal(cooperativeReconnectRefusal(f.a.s),null);
+  await cooperativeBeforeLogin(f.a.s,f.a.s.credentials,{wait:async()=>assert.fail('an aborted file does not gate')});
+  cooperativeAfterLogin(f.a.s);
+  assert.equal(f.a.s.cooperativeLogoffWaiting,null,'after-login clears the flag even with no return to complete');
+  assert.equal(f.store().read('request','victim').state,'aborted','and does not touch the operator\'s record');
+  console.log('PASS a hand-aborted request lets the next login straight in and clears the stale wait flag that used to block the sweep');
+ }
+ {
+  // NOT FIGHTING A DELIBERATE ABSENCE: dormancy, a handoff, a leave or a stopping keeper.
+  const f=fixture('stuck-but-dormant');const r=await f.setup();const quiet=restartedOf(f,{cooperativeLoginAllowed:()=>false});
+  await assert.rejects(cooperativeBeforeLogin(quiet,f.a.s.credentials,{now:()=>r.created_at+PREPARING_MAX_MS*10,wait:async()=>assert.fail('no wait')}),/ownership/);
+  assert.equal(f.store().read('request','victim').state,'preparing','an owner that does not want the login decides nothing');
+  assert.equal(rowsFor('victim').filter(x=>x.request_id===r.id).length,0);
+  console.log('PASS a stuck record is never resolved into a login the keeper does not want (dormant, handing off, left, stopping)');
+ }
+ {
+  // A cooperative reconnect that FAILED with the socket gone aborts its preparing record too.
+  const f=fixture('reconnect-failed-out');await configureCooperativeLogoff(f.b.pilot,'helper');
+  const p=f.a.pilot;
+  Object.assign(p,{fleetLogoff:Autopilot.prototype.fleetLogoff,
+    reconnect:async()=>{f.a.c.sock.destroy();f.a.s.client=null;return{ok:false,why:'rename EPERM'};}});
+  assert.equal(await p.fleetLogoff('captured off-wall danger'),true,'out of the world: the ladder does not carry on as if live');
+  const rec=f.store().read('request','victim');assert.equal(rec.state,'aborted');assert(rec.aborted_at>0);
+  assert.equal(rowsFor('victim','abandoned').at(-1).reason_code,'reconnect_failed');
+  assert.equal(abortPreparingCooperativeLogoff(f.a.s,rec.id,'again'),false,'only a preparing record is aborted');
+  console.log('PASS a failed cooperative reconnect aborts its preparing record even when the session is already out');
  }
  assert(PASS_STAGES.indexOf('passCooperative')>PASS_STAGES.indexOf('passFleeAndRest'));
  assert(PASS_STAGES.indexOf('passCooperative')<PASS_STAGES.indexOf('passFarm'));

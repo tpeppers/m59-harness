@@ -9,6 +9,7 @@ import {keeperOrigin, liveMoveOrder, withMoveOrder} from './m59-move-origin.mjs'
 import {isActiveRecoveryDecision,currentSurvivalDecision} from './m59-survival-decision.mjs';
 import * as party from './m59-party.mjs';
 import {stationaryTradeActive} from './m59-stationary-trade.mjs';
+import {recordEvent} from './m59-ledger.mjs';
 const base = fileURLToPath(new URL('../substrate/cooperative-logoff/', import.meta.url));
 const fold = x => String(x ?? '').trim().toLowerCase();
 const hash = x => createHash('sha256').update(x).digest('hex');
@@ -50,18 +51,39 @@ export function cooperativeReturnRefuge(session,{now=Date.now()}={}) {
     Math.hypot(me.x-p.from.x,me.y-p.from.y)>2)return null;
   return p.spot;
 }
+// WINDOWS WILL NOT REPLACE A FILE SOMEBODY ELSE HAS OPEN. renameSync over a target that another
+// process is reading at that instant throws EPERM/EACCES/EBUSY, and here ~20 keeper processes read
+// every request file twice a second (presence publication lists them all). Prod, 2026-11-01: 142
+// orphaned `request-*.json.<pid>.<uuid>.tmp` files, each a write that never landed -- among them
+// Robin's `offline` (00:03:02Z, markCooperativeOffline: the record stayed `preparing` for 4.5 hours
+// with her out of the game) and Scooter's deadline `aborted` (04:41:13Z, exactly offline_at + 240 s:
+// the release threw, the waiter died, and he stayed out for an hour). A short bounded retry is what
+// every Windows writer of a shared file needs; a write that still fails throws, and every caller
+// that owns a login now survives that (see cooperativeBeforeLogin).
+const BUSY=new Set(['EPERM','EACCES','EBUSY']);
+const pause=ms=>{try{Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);}catch{}};
+export function replaceFileSync(tmp,path,{rename=renameSync,attempts=8}={}){
+  for(let i=0;;i++){
+    try{rename(tmp,path);return;}
+    catch(e){if(!BUSY.has(e.code)||i>=attempts-1){try{unlinkSync(tmp);}catch{}throw e;}pause(Math.min(100,5*2**i));}
+  }
+}
 export function cooperativeStore(session, credentials=session.credentials, {directory=session.cooperativeLogoffDirectory??process.env.M59_COOPERATIVE_LOGOFF_DIR??base}={}) {
   if (!session.fleetStateFile || !credentials?.host || !credentials?.port || !session.name) return null;
   const scope=JSON.stringify([fold(resolve(session.fleetStateFile)),fold(credentials.host),Number(credentials.port)]);
   const dir=join(directory,hash(scope));
   const file=(kind,agent)=>join(dir,kind+'-'+hash(agent)+'.json');
-  const write=(kind,agent,value)=>{mkdirSync(dir,{recursive:true});const path=file(kind,agent),tmp=path+'.'+process.pid+'.'+randomUUID()+'.tmp';writeFileSync(tmp,JSON.stringify(value));renameSync(tmp,path);return value;};
+  const write=(kind,agent,value)=>{mkdirSync(dir,{recursive:true});const path=file(kind,agent),tmp=path+'.'+process.pid+'.'+randomUUID()+'.tmp';writeFileSync(tmp,JSON.stringify(value));replaceFileSync(tmp,path,{rename:session.cooperativeRename??renameSync});return value;};
   const list=kind=>{try{return readdirSync(dir).filter(n=>n.startsWith(kind+'-')&&n.endsWith('.json')).map(n=>read(join(dir,n))).filter(Boolean);}catch(e){if(e.code==='ENOENT')return[];throw e;}};
+  // EPERM on an exclusive create is a lock whose owner is deleting it right now (Windows keeps the
+  // name until the last handle closes): busy, exactly like EEXIST, never an error. A held lock is
+  // still never broken; the login gate no longer needs one to end a stuck record (gateStep).
+  const open=path=>{try{return openSync(path,'wx');}catch(e){if(e.code==='EEXIST'||BUSY.has(e.code))return null;throw e;}};
   return {scope,dir,read:(kind,agent)=>read(file(kind,agent)),write,list,
-    lock(room,run){mkdirSync(dir,{recursive:true});const path=join(dir,'room-'+room+'.lock');let fd;try{fd=openSync(path,'wx');}catch(e){if(e.code==='EEXIST')return null;throw e;}
+    lock(room,run){mkdirSync(dir,{recursive:true});const path=join(dir,'room-'+room+'.lock');const fd=open(path);if(fd==null)return null;
       const token=randomUUID();
       try{writeFileSync(fd,JSON.stringify({pid:process.pid,process_started_at:Math.round(Date.now()-process.uptime()*1000),at:Date.now(),token}));return run();}
-      finally{closeSync(fd);if(read(path)?.token===token)unlinkSync(path);}}};
+      finally{closeSync(fd);try{if(read(path)?.token===token)unlinkSync(path);}catch{}}}};
 }
 export function normalizeCooperativeLogoff(answer) {
   if(answer?.enabled!==true)return null;
@@ -171,20 +193,126 @@ export function requestCooperativeLogoff(pilot,offered,{now=Date.now()}={}) {
       max_offline_ms:Number.isFinite(offered.config.max_offline_ms)?offered.config.max_offline_ms:null});
   });
 }
-export function markCooperativeOffline(session) {
-  const store=cooperativeStore(session),r=store?.read('request',session.name);
-  if(r?.state==='preparing'){r.state='offline';r.offline_at=Date.now();store.write('request',session.name,r);}
+// A COOPERATIVE LOGOFF THAT NOBODY IS FINISHING MUST END BY ITSELF, AND SAY SO.
+//
+// Prod, 2026-11-01, two shapes, both with the character out of the game and nothing waiting:
+//
+//  A. STUCK IN `preparing`. Robin (t8): created 00:03:02Z, never `offline`, 4.5 hours out; Lew (t20)
+//     05:20Z. markCooperativeOffline runs AFTER Session.rejoinConnection has destroyed the socket, and
+//     its write failed (the rename above; the orphaned tmp holds the `offline` that never landed). It
+//     threw out of the rejoin, abortPreparingCooperativeLogoff refused because the session was no
+//     longer live, and from then on every login refused a `preparing` record: the in-process gate
+//     threw "has not confirmed socket departure" and the keeper's /join and /rejoin answered 423 to
+//     the broker's sweep every 45 s. Hand-marking the file `aborted` let the next sweep in.
+//
+//  B. `offline` PAST ITS DEADLINE. Scooter (t21): offline 04:37:13Z, max_offline_ms 240000. The
+//     deadline release at 04:41:13Z threw on its write, the throw killed the waiter loop and with it
+//     the join -- but `session.cooperativeLogoffWaiting` was never cleared, so the keeper reported
+//     `cooperative_wait: true` for an hour and the broker's sweep (keeperCooperativeWait) stepped
+//     over him. Hand-aborting the file changed nothing for exactly that reason; a keeper handoff did.
+//
+// So: a waiter that exits by throwing clears its flag; cooperative_wait is reported only while a
+// login continuation actually exists (cooperativeWaitActive); the gate rides out store errors; a
+// `preparing` record this session itself departed for is confirmed offline by the gate; and two
+// bounds end a record nobody can finish -- PREPARING_MAX_MS after creation (the honest window is
+// under a second) and max_offline_ms + OFFLINE_OVERRUN_MS after going offline (the waiter releases
+// at max_offline_ms; past the margin it releases even if the record cannot be written). Every one
+// of those is a `cooperative_logoff_recovered` ledger row naming what was done and why.
+//
+// None of this logs anybody in by itself. The gate runs only inside a login somebody asked for
+// (Autopilot.reconnect, keeper startup, the broker's sweep via /join or /rejoin), and it still
+// throws on `cooperativeLoginAllowed() === false` -- dormancy, a handoff, a leave, a stopping keeper
+// -- before it decides anything. A human pilot is the broker's to honour: its sweep never posts
+// /rejoin for a piloted character, and the keeper's /rejoin refuses while dormant.
+export const PREPARING_MAX_MS=60000, OFFLINE_OVERRUN_MS=30000, STORE_FAILURE_MAX_MS=60000;
+const continuation=session=>!!(session?.joining||session?.rejoinTask);
+// What the keeper reports as `cooperative_wait`, which makes the broker's sweep step over it. True
+// only while a login is actually in flight in this process and the gate has a waiting record.
+export function cooperativeWaitActive(session) {
+  return !!session?.cooperativeLogoffWaiting&&continuation(session);
 }
-export function cooperativeReconnectRefusal(session,credentials=session.credentials) {
-  const store=cooperativeStore(session,credentials),r=store?.read('request',session.name);
-  return pending(r)?{ok:false,reason_code:'cooperative_wait',request_id:r.id,
-    note:'the current cooperative continuation owns login until distraction is confirmed'}:null;
+export function stuckCooperativeLogoff(r,now=Date.now()) {
+  if(!pending(r))return null;
+  if(r.state==='preparing'){
+    const age=Number.isFinite(r.created_at)?now-r.created_at:Infinity;
+    return age>=PREPARING_MAX_MS?{reason_code:'preparing_timeout',age_ms:Number.isFinite(age)?age:null,
+      why:`still preparing ${Number.isFinite(age)?Math.round(age/1000)+'s':'(no created_at)'} after the request; `+
+        `the socket departure is never confirmed this late (bound ${PREPARING_MAX_MS/1000}s)`}:null;
+  }
+  const since=Number.isFinite(r.offline_at)?r.offline_at:r.created_at;
+  if(!Number.isFinite(r.max_offline_ms)||!Number.isFinite(since))return null;
+  const over=now-since-r.max_offline_ms;
+  return over>=OFFLINE_OVERRUN_MS?{reason_code:'offline_overrun',overrun_ms:over,
+    why:`${r.state} ${Math.round((now-since)/1000)}s, past max_offline_ms ${Math.round(r.max_offline_ms/1000)}s `+
+      `by more than ${OFFLINE_OVERRUN_MS/1000}s; nothing released it`}:null;
+}
+// The ledger row, written against the CHARACTER (the ledger's key) even while it has no client.
+export function noteCooperativeRecovery(session,detail,{credentials=session?.credentials}={}) {
+  const who=session?.client?.me?.name??credentials?.character??session?.credentials?.character??session?.name;
+  try{(session?.cooperativeRecordEvent??recordEvent)(who,'cooperative_logoff_recovered',{agent:session?.name,...detail});}catch{}
+  try{console.error(`[cooperative] ${session?.name} ${detail?.action}: ${detail?.why??''}`);}catch{}
+}
+function abandonRecord(session,store,r,{reason_code,why},{now,by}) {
+  let written=false,error=null;
+  try{
+    written=!!store.lock(r.room??'none',()=>{const cur=store.read('request',session.name);
+      if(cur?.id!==r.id||!pending(cur))return false;
+      Object.assign(cur,{state:'aborted',reason:reason_code,aborted_at:now,recovered_by:by,recovered_why:why});
+      store.write('request',session.name,cur);return true;});
+  }catch(e){error=e.message;}
+  return {written,error};
+}
+const summary=r=>({request_id:r?.id??null,state_was:r?.state??null,created_at:r?.created_at??null,
+  offline_at:r?.offline_at??null,max_offline_ms:r?.max_offline_ms??null,room:r?.room??null});
+export function markCooperativeOffline(session,{now=Date.now()}={}) {
+  // NEVER THROWS: the socket is already gone, and the join that follows is the only way back in.
+  let store=null,r=null;
+  try{store=cooperativeStore(session);r=store?.read('request',session.name);}
+  catch(e){session.cooperativeDeparture={request_id:null,at:now,unread:e.message};return;}
+  if(r?.state!=='preparing')return;
+  // Remembered in memory too, so the gate can confirm the departure the file failed to record.
+  session.cooperativeDeparture={request_id:r.id,at:now};
+  try{r.state='offline';r.offline_at=now;store.write('request',session.name,r);}
+  catch(e){try{console.error(`[cooperative] ${session.name} could not record the departure (${e.message}); the login gate will`);}catch{}}
+}
+export function cooperativeReconnectRefusal(session,credentials=session.credentials,{now=Date.now()}={}) {
+  let store=null,r=null;
+  try{store=cooperativeStore(session,credentials);r=store?.read('request',session.name);}
+  catch(e){
+    // Unreadable: only a live continuation in this process is a reason to refuse; otherwise the
+    // join's own gate copes (and bounds) the unreadable store.
+    return continuation(session)?{ok:false,reason_code:'cooperative_wait',request_id:null,note:'cooperative store unreadable while a login continuation is running: '+e.message}:null;
+  }
+  if(!pending(r))return null;
+  if(continuation(session))return {ok:false,reason_code:'cooperative_wait',request_id:r.id,
+    note:'the current cooperative continuation owns login until distraction is confirmed'};
+  const stuck=stuckCooperativeLogoff(r,now);
+  if(stuck){
+    const done=abandonRecord(session,store,r,stuck,{now,by:'keeper join handler'});
+    noteCooperativeRecovery(session,{action:'abandoned',...summary(r),reason_code:stuck.reason_code,why:stuck.why,
+      by:'keeper join handler',record_written:done.written,write_error:done.error,then:'login allowed'},{credentials});
+    return null;
+  }
+  // Pending, inside its bound, and nothing in this process is waiting on it: whatever owned it is
+  // gone (a keeper restart, or a waiter that died). Let the join in -- it runs the same gate again,
+  // so distraction receipts and the deadline still decide when the body comes back.
+  noteCooperativeRecovery(session,{action:'regated',...summary(r),reason_code:'no_continuation',
+    why:'a pending cooperative logoff had no waiter in this process; the requested login re-enters the gate',
+    by:'keeper join handler'},{credentials});
+  return null;
 }
 export function abortPreparingCooperativeLogoff(session,id,reason) {
-  const store=cooperativeStore(session),r=store?.read('request',session.name);
-  if(session.live&&r?.id===id&&r.state==='preparing'){
-    r.state='aborted';r.reason=reason;store.write('request',session.name,r);return true;
-  }
+  // Live or not: a reconnect that failed must not leave `preparing` claiming login. If the socket did
+  // go, the broker's sweep brings the body back once nothing refuses it.
+  try{
+    const store=cooperativeStore(session),r=store?.read('request',session.name);
+    if(r?.id===id&&r.state==='preparing'){
+      r.state='aborted';r.reason=reason;r.aborted_at=Date.now();store.write('request',session.name,r);
+      if(!session.live)noteCooperativeRecovery(session,{action:'abandoned',...summary({...r,state:'preparing'}),
+        reason_code:'reconnect_failed',why:'the cooperative reconnect failed and the session is out: '+reason,by:'fleetLogoff'});
+      return true;
+    }
+  }catch(e){try{console.error(`[cooperative] ${session.name} could not abort the preparing request: ${e.message}`);}catch{}}
   return false;
 }
 // No UNASKED deadline can quietly change "not distracted" into "safe to log in". Each target
@@ -192,51 +320,135 @@ export function abortPreparingCooperativeLogoff(session,id,reason) {
 // observeCooperativeTargets) -- an observation from the room, not a timer. The one timer is
 // `max_offline_ms`, which the private strategy must ask for; without it there is none.
 // This gate also runs on keeper restart and broker rejoin, not just the initial call.
+//
+// The bounds above are not distraction timers: PREPARING_MAX_MS ends a request whose departure was
+// never recorded, and OFFLINE_OVERRUN_MS only ever acts AFTER the strategy's own max_offline_ms.
+const cancelled=()=>Object.assign(Error('cooperative login cancelled by keeper ownership'),{cooperativeCancel:true});
+function gateStep(session,store,now) {
+  const r=store.read('request',session.name);if(!pending(r))return true;
+  if(session.cooperativeLoginAllowed?.()===false)throw cancelled();
+  if(r.state==='preparing'){
+    const d=session.cooperativeDeparture;
+    if(d&&(d.request_id===r.id||d.request_id==null&&Number.isFinite(r.created_at)&&d.at>=r.created_at)){
+      // This session closed its own socket for this request; only the record missed it.
+      const marked=store.lock(r.room,()=>{const cur=store.read('request',session.name);
+        if(cur?.id!==r.id||cur.state!=='preparing')return false;
+        Object.assign(cur,{state:'offline',offline_at:d.at,offline_confirmed_by:'login gate'});
+        store.write('request',session.name,cur);return true;});
+      if(marked)noteCooperativeRecovery(session,{action:'confirmed_offline',...summary(r),reason_code:'departure_unrecorded',
+        why:'this session closed its socket for this request but the record still said preparing; the gate recorded the departure'});
+      return false;
+    }
+    const stuck=stuckCooperativeLogoff(r,now());
+    if(stuck){
+      const done=abandonRecord(session,store,r,stuck,{now:now(),by:'login gate'});
+      noteCooperativeRecovery(session,{action:'abandoned',...summary(r),reason_code:stuck.reason_code,why:stuck.why,
+        by:'login gate',record_written:done.written,write_error:done.error,then:'logging in and going straight for cover'});
+      session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts:[],refuge:null,released_at:now(),released:stuck.reason_code};
+      return true;
+    }
+    session.cooperativeLogoffWaiting={request_id:r.id,room:r.room,at:now(),phase:'preparing',since:r.created_at,
+      waiting_ms:now()-r.created_at,abandon_at:Number.isFinite(r.created_at)?r.created_at+PREPARING_MAX_MS:null};
+    return false;
+  }
+  const receipts=Object.values(r.receipts??{});
+  const satisfied=t=>{
+    const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper),at=hit?.kind==='gone'?hit.at:hit?.hit_at;
+    if(!(hit?.request_id===r.id&&hit.target_id===t.id&&hit.name===t.name&&at>=r.offline_at&&at<=now()&&now()-at<30000&&
+      fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper))))return false;
+    return hit.kind==='gone'?at-hit.seen_absent_since>=GONE_MS:true;
+  };
+  const targets=r.targets??[];
+  const valid=targets.every(satisfied);
+  if(valid&&receipts.length){
+    const permit=store.lock(r.room,()=>{const current=store.read('request',session.name);
+      if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
+      current.state='returning';store.write('request',session.name,current);return true;});
+    if(permit){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now()};return true;}
+  }else if(Number.isFinite(r.max_offline_ms)&&Number.isFinite(r.offline_at)&&now()-r.offline_at>=r.max_offline_ms){
+    // The opt-in deadline: the strategy asked for a bounded wait, so the body comes back
+    // undistracted and the record says so. 'aborted' is not pending, so nothing re-gates it.
+    let released=false,error=null;
+    try{released=store.lock(r.room,()=>{const current=store.read('request',session.name);
+      if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
+      Object.assign(current,{state:'aborted',reason:'deadline',released:'deadline',released_at:now()});
+      store.write('request',session.name,current);return true;});}
+    catch(e){error=e.message;}
+    if(released){
+      noteCooperativeRecovery(session,{action:'released_at_deadline',...summary(r),reason_code:'deadline',
+        why:`no distraction confirmed within max_offline_ms ${Math.round(r.max_offline_ms/1000)}s; logging in undistracted`});
+      session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now(),released:'deadline'};return true;
+    }
+    // The release could not be written. Past the margin the login goes anyway: a record nobody can
+    // write must not keep the body out. Short of it, the next poll tries the write again.
+    const stuck=stuckCooperativeLogoff(r,now());
+    if(stuck){
+      noteCooperativeRecovery(session,{action:'released_unrecorded',...summary(r),reason_code:stuck.reason_code,why:stuck.why,
+        by:'login gate',record_written:false,write_error:error??'room lock busy',then:'logging in and going straight for cover'});
+      session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now(),released:stuck.reason_code};
+      return true;
+    }
+  }else if(r.state==='returning'){
+    store.lock(r.room,()=>{const current=store.read('request',session.name);if(current?.id===r.id&&current.state==='returning'){current.state='offline';store.write('request',session.name,current);}});
+  }
+  session.cooperativeLogoffWaiting={request_id:r.id,room:r.room,at:now(),phase:r.state,since:r.offline_at,waiting_ms:now()-r.offline_at,
+    targets:targets.map(t=>({id:t.id,name:t.name,hit:!!r.receipts?.[t.id]&&r.receipts[t.id].kind!=='gone',
+      gone:r.receipts?.[t.id]?.kind==='gone',satisfied:satisfied(t)})),stalled:now()-r.offline_at>30000,
+    deadline_at:Number.isFinite(r.max_offline_ms)?r.offline_at+r.max_offline_ms:null};
+  return false;
+}
 export async function cooperativeBeforeLogin(session,credentials,{wait=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now}={}) {
   const store=cooperativeStore(session,credentials);if(!store)return;
-  for(;;){
-    const r=store.read('request',session.name);if(!pending(r))return;
-    if(session.cooperativeLoginAllowed?.()===false)throw Error('cooperative login cancelled by keeper ownership');
-    if(r.state==='preparing')throw Error('cooperative logoff has not confirmed socket departure');
-    const receipts=Object.values(r.receipts??{});
-    const satisfied=t=>{
-      const hit=r.receipts?.[t.id],p=hit&&store.read('presence',hit.helper),at=hit?.kind==='gone'?hit.at:hit?.hit_at;
-      if(!(hit?.request_id===r.id&&hit.target_id===t.id&&hit.name===t.name&&at>=r.offline_at&&at<=now()&&now()-at<30000&&
-        fresh(p,now())&&p.body===hit.helper_body&&p.room===r.room&&p.room_object===r.room_object&&!pending(store.read('request',hit.helper))))return false;
-      return hit.kind==='gone'?at-hit.seen_absent_since>=GONE_MS:true;
-    };
-    const valid=r.targets.every(satisfied);
-    if(valid&&receipts.length){
-      const permit=store.lock(r.room,()=>{const current=store.read('request',session.name);
-        if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
-        current.state='returning';store.write('request',session.name,current);return true;});
-      if(permit){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now()};return;}
-    }else if(Number.isFinite(r.max_offline_ms)&&Number.isFinite(r.offline_at)&&now()-r.offline_at>=r.max_offline_ms){
-      // The opt-in deadline: the strategy asked for a bounded wait, so the body comes back
-      // undistracted and the record says so. 'aborted' is not pending, so nothing re-gates it.
-      const released=store.lock(r.room,()=>{const current=store.read('request',session.name);
-        if(current?.id!==r.id||!['offline','returning'].includes(current.state))return false;
-        Object.assign(current,{state:'aborted',reason:'deadline',released:'deadline',released_at:now()});
-        store.write('request',session.name,current);return true;});
-      if(released){session.cooperativeLogoffReturn={request_id:r.id,room:r.room,receipts,refuge:r.refuge??null,released_at:now(),released:'deadline'};return;}
-    }else if(r.state==='returning'){
-      store.lock(r.room,()=>{const current=store.read('request',session.name);if(current?.id===r.id&&current.state==='returning'){current.state='offline';store.write('request',session.name,current);}});
+  let failing=null;
+  try{
+    for(;;){
+      let done;
+      try{done=gateStep(session,store,now);failing=null;}
+      catch(e){
+        if(e.cooperativeCancel)throw e;
+        // A store this process cannot read or write right now is a fact about Windows file sharing,
+        // not about the distraction. Ride it out, bounded: past STORE_FAILURE_MAX_MS the login goes.
+        failing??={since:now(),why:e.message};
+        if(session.cooperativeLoginAllowed?.()===false)throw cancelled();
+        if(now()-failing.since>=STORE_FAILURE_MAX_MS){
+          noteCooperativeRecovery(session,{action:'released_store_failure',request_id:session.cooperativeLogoffWaiting?.request_id??null,
+            reason_code:'store_failure',why:`the cooperative store failed for ${Math.round((now()-failing.since)/1000)}s: ${e.message}`,
+            by:'login gate',then:'logging in and going straight for cover'});
+          const id=session.cooperativeLogoffWaiting?.request_id??null;
+          if(id)session.cooperativeLogoffReturn={request_id:id,room:session.cooperativeLogoffWaiting.room??null,receipts:[],refuge:null,released_at:now(),released:'store_failure'};
+          return;
+        }
+        session.cooperativeLogoffWaiting={...(session.cooperativeLogoffWaiting??{}),at:now(),store_error:e.message,store_failing_since:failing.since};
+        done=false;
+      }
+      if(done)return;
+      await wait(200);
     }
-    session.cooperativeLogoffWaiting={request_id:r.id,room:r.room,since:r.offline_at,waiting_ms:now()-r.offline_at,
-      targets:r.targets.map(t=>({id:t.id,name:t.name,hit:!!r.receipts?.[t.id]&&r.receipts[t.id].kind!=='gone',
-        gone:r.receipts?.[t.id]?.kind==='gone',satisfied:satisfied(t)})),stalled:now()-r.offline_at>30000,
-      deadline_at:Number.isFinite(r.max_offline_ms)?r.offline_at+r.max_offline_ms:null};
-    await wait(200);
+  }catch(e){
+    // A waiter that is gone must not go on telling the broker it is waiting (Scooter, above).
+    session.cooperativeLogoffWaiting=null;
+    throw e;
   }
 }
 export function cooperativeAfterLogin(session) {
-  const store=cooperativeStore(session),id=session.cooperativeLogoffReturn?.request_id;
-  if(!store||!id)return;
-  const r=store.read('request',session.name);
-  // The admission lock made returning requester-owned. Helpers never write a
-  // returning record, so post-login completion cannot race their old cleanup.
-  if(r?.id===id&&r.state==='returning'){r.state='resumed';r.resumed_at=Date.now();store.write('request',session.name,r);}
+  // Cleared first and unconditionally: a gate that returned because somebody else resolved the record
+  // (a hand-abort, a deadline written by a previous keeper) set no return, and the flag it left
+  // behind would otherwise keep the broker's sweep stepping over a character that is back in game.
   session.cooperativeLogoffWaiting=null;
+  session.cooperativeDeparture=null;
+  const id=session.cooperativeLogoffReturn?.request_id;
+  if(!id)return;
+  try{
+    const store=cooperativeStore(session);if(!store)return;
+    const r=store.read('request',session.name);
+    // The admission lock made returning requester-owned. Helpers never write a
+    // returning record, so post-login completion cannot race their old cleanup.
+    if(r?.id===id&&r.state==='returning'){r.state='resumed';r.resumed_at=Date.now();store.write('request',session.name,r);}
+  }catch(e){
+    // Logged in either way. A `returning` record left behind is still pending, but bounded: the next
+    // gate revalidates it, the join handler re-gates it, and the bounds above end it.
+    try{console.error(`[cooperative] ${session.name} could not record the return: ${e.message}`);}catch{}
+  }
 }
 export function cooperativeHelperReady(pilot,config,{now=Date.now(),during=false,requestId=null}={}) {
   const s=pilot.s,c=s.client,h=c?.vitals?.()?.health,v=c?.vitals?.()?.vigor;
