@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StorageCache, packFullness, bulkFullness, vaultFullness, chestFullness,
          packMax, PACK_BASE, VAULT_BULK_MAX, CHEST_BULK_MAX, STOREBOX_BULK_MAX,
-         GUILD_CHEST_SLOTS, BOOKMAKERS_CHESTS, chestKey, parseChestKey } from './m59-storage.mjs';
+         GUILD_CHEST_SLOTS, BOOKMAKERS_CHESTS, chestKey, parseChestKey,
+         vaultReadings, vaultNamed, ISLAND_VAULT_READABLE_SINCE } from './m59-storage.mjs';
 
 let n = 0;
 const ok = (c, why) => { assert.ok(c, why); n++; };
@@ -175,6 +176,73 @@ try {
     n += 1;
     assert.throws(() => cache.writeChest(2, {}), /named by its square/);
   } finally { rmSync(dir2, { recursive: true, force: true }); }
+}
+
+// ------------------------------------------------------------------ two vaults, two readings
+//
+// The incident: prod 2026-10-31, Kermit opened Itzal cha'Nosak's list on the island and the
+// per-character file's `items` became his island vault. His mainland reading survived only in
+// the keeper's vault-latest snapshot from 10-25. The board must show BOTH, each under its own
+// vaultman, and never file one vault's contents under the other.
+{
+  eq(vaultNamed("Obert Cair'bre (id 780) [buy/offer]")?.room, 114, 'a snapshot names its vaultman');
+  eq(vaultNamed({ name: "Itzal cha'Nosak" })?.room, 2005, 'a described object names one too');
+  eq(vaultNamed('Frular'), null, 'anyone else is no vault');
+
+  const before = ISLAND_VAULT_READABLE_SINCE - 86_400_000, after = ISLAND_VAULT_READABLE_SINCE + 86_400_000;
+  const room = (r, which) => r.vaults.find(v => v.room === which)?.reading;
+
+  // Kermit, exactly: tagged island reading plus an older mainland snapshot.
+  const kermit = vaultReadings({ character: 'Kermit', room: 2005, observed_at: after + 5000,
+      items: [{ name: 'kriipa claw', amount: 65 }],
+      by_room: { 2005: { items: [{ name: 'kriipa claw', amount: 65 }], observed_at: after + 5000 } } },
+    { snapshots: [{ character: 'Kermit', at: before, vaultman: "Obert Cair'bre (id 780) [buy/offer]",
+                    items: [{ name: 'dark angel feather', amount: 9, cost: 0 }] },
+                  { character: 'Rowlf', at: after, vaultman: "Itzal cha'Nosak", items: [{ name: 'ruby', amount: 2 }] }] });
+  eq(room(kermit, 2005)?.items[0].name, 'kriipa claw', 'the island reading is the island vault');
+  eq(room(kermit, 2005)?.source, 'room');
+  eq(room(kermit, 114)?.items[0].name, 'dark angel feather', 'and the mainland one comes back from the snapshot');
+  eq(room(kermit, 114)?.source, 'snapshot');
+  eq(kermit.unplaced, null);
+  ok(!room(kermit, 2005).items.some(i => i.name === 'ruby'), "another character's snapshot is not this one's");
+
+  // An untagged reading from before the island was readable is the mainland's, and says so.
+  const old = vaultReadings({ character: 'Animal', observed_at: before, items: [{ name: 'emerald', amount: 9 }] });
+  eq(room(old, 114)?.source, 'inferred', 'untagged and pre-island: mainland, inferred');
+  eq(room(old, 2005), null, 'and the island is unread, not empty');
+
+  // Untagged and after: placed only by a snapshot of the same instant that names the vaultman.
+  const twin = vaultReadings({ character: 'Rowlf', observed_at: after + 1200, items: [{ name: 'ruby', amount: 2 }] },
+    { snapshots: [{ character: 'Rowlf', at: after + 1000, vaultman: "Itzal cha'Nosak (id 9) [buy/offer]",
+                    items: [{ name: 'ruby', amount: 2 }] }] });
+  eq(room(twin, 2005)?.source, 'vaultman', 'the same instant, named by the keeper');
+  eq(room(twin, 114), null);
+  const lost = vaultReadings({ character: 'Fozzie', observed_at: after, items: [{ name: 'herb', amount: 3 }] });
+  eq(lost.unplaced?.items[0].name, 'herb', 'with nothing naming the vaultman it is unplaced, not guessed');
+  eq(room(lost, 114), null); eq(room(lost, 2005), null);
+
+  // The newest reading of a vault wins, whichever source carried it.
+  const newer = vaultReadings({ character: 'Gonzo', room: 114, observed_at: before,
+      items: [{ name: 'old', amount: 1 }], by_room: { 114: { items: [{ name: 'old', amount: 1 }], observed_at: before } } },
+    { snapshots: [{ character: 'Gonzo', at: after, vaultman: "Obert Cair'bre", items: [{ name: 'new', amount: 1 }] }] });
+  eq(room(newer, 114)?.items[0].name, 'new', 'a newer snapshot beats an older cached reading');
+
+  // Nobody has looked: both vaults present, both null.
+  const none = vaultReadings(null, { character: 'Beaker' });
+  eq(none.vaults.length, 2, 'both vaults are always listed');
+  ok(none.vaults.every(v => v.reading === null), 'unread, not empty');
+
+  // Through the cache, against a scratch dir: the writer's by_room keeps both.
+  const dir3 = mkdtempSync(join(tmpdir(), 'm59-storage-vaults-'));
+  try {
+    const cache = new StorageCache({ dir: dir3, now: () => after });
+    cache.writeVault('Piggy', [{ name: 'emerald', amount: 1 }], { room: 114, at: after });
+    cache.writeVault('Piggy', [{ name: 'orc tooth', amount: 48 }], { room: 2005, at: after + 10 });
+    const both = cache.readVaults('Piggy');
+    eq(room(both, 114)?.items[0].name, 'emerald', 'an island read no longer hides the mainland one');
+    eq(room(both, 2005)?.items[0].name, 'orc tooth');
+    ok(cache.readVaults('Nobody').vaults.every(v => v.reading === null));
+  } finally { rmSync(dir3, { recursive: true, force: true }); }
 }
 
 console.log(`storage: ${n} assertions passed`);

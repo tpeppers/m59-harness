@@ -29,6 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renam
 import { join, resolve } from 'node:path';
 import { weighPack } from './m59-items.mjs';
 import { chestDiff } from './m59-chest-eviction.mjs';
+import { VAULTS } from './m59-vaults.mjs';
 
 // player.kod:737-738 declare both at 1700; :10458 and :10463 add might*20 to each. The
 // same formula the planner and `carryCapacity` use — imported rather than restated
@@ -93,6 +94,85 @@ export function bulkFullness(items = [], max = VAULT_BULK_MAX) {
 
 export const vaultFullness = (items = []) => bulkFullness(items, VAULT_BULK_MAX);
 export const chestFullness = (items = []) => bulkFullness(items, CHEST_BULK_MAX);
+
+// ---------------------------------------------------------------- WHICH VAULT A READING IS OF
+//
+// TWO VAULTS, AND EACH IS ITS OWN 3000. Obert Cair'bre (114) and Itzal cha'Nosak (2005) each
+// hold a separate `Storage` object (`FindVaultByNum`, monster.kod:3219), so a character's
+// mainland things and island things are two lists, two ceilings, and two readings taken on two
+// different days. The per-character file's top-level `items` is "the last vault read", and the
+// first island reading on prod (Kermit, 2026-10-31) replaced his mainland one there.
+//
+// A reading is placed by the best evidence it carries, in this order:
+//   'room'      `by_room` / `room` — written by every reader since 7d0cd7fb (2026-10-29).
+//   'vaultman'  a `vault-latest` snapshot of the same instant, which names the vaultman.
+//   'inferred'  an untagged reading taken BEFORE f766246d: until then every reader matched
+//               /obert cair|vaultman/, which Itzal cha'Nosak does not, so it is the mainland's
+//               by construction. The page says "inferred", never "observed".
+//   'snapshot'  a `vault-latest` snapshot on its own (written by the keeper's vault run).
+// The newest reading of each vault wins. An untagged reading after f766246d with nothing
+// naming its vaultman is UNPLACED: shown as such, never guessed into either vault.
+export const ISLAND_VAULT_READABLE_SINCE = Date.parse('2026-10-27T03:23:03Z'); // f766246d
+const SAME_INSTANT_MS = 5000;
+
+const squash = s => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+/** The vault whose vaultman this text names ("Obert Cair'bre (id 780) [buy/offer]"), or null. */
+export function vaultNamed(text) {
+  const t = squash(text && typeof text === 'object' ? text.name : text);
+  return t ? VAULTS.find(v => t.includes(squash(v.npc))) ?? null : null;
+}
+
+const sameItems = (a, b) => a.length === b.length &&
+  a.every((x, i) => x.name === b[i]?.name && Number(x.amount) === Number(b[i]?.amount));
+
+/**
+ * Every vault, with this character's newest reading of each.
+ *
+ * `record` is the raw `storage/vaults/<character>.json` (or null); `snapshots` are
+ * `vault-latest` rows for any character (filtered here). Returns
+ * `{ vaults: [{ room, npc, where, reading }], unplaced }`, where a reading is
+ * `{ items, observed_at, fullness, source }`. `reading: null` means nobody has looked —
+ * not that the vault is empty.
+ */
+export function vaultReadings(record, { snapshots = [], character = record?.character } = {}) {
+  const best = new Map();                 // room -> reading
+  const offer = (room, items, at, source) => {
+    if (!(Number(room) > 0) || !Array.isArray(items)) return;
+    const prev = best.get(Number(room));
+    if (prev && (prev.observed_at ?? 0) >= (Number(at) || 0)) return;
+    best.set(Number(room), { items, observed_at: Number(at) || null, source,
+                             fullness: vaultFullness(items) });
+  };
+  const mine = (snapshots ?? []).filter(s => s && s.character === character && Array.isArray(s.items));
+  for (const s of mine) {
+    const v = vaultNamed(s.vaultman);
+    if (v) offer(v.room, s.items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
+                 s.at, 'snapshot');
+  }
+  let unplaced = null;
+  if (record && Array.isArray(record.items)) {
+    // Offered after the snapshots so that, at the same instant, the richer record (fees) wins the tie.
+    const offerFirst = (room, items, at, source) => {
+      const prev = best.get(Number(room));
+      if (prev && prev.source === 'snapshot' && (prev.observed_at ?? 0) <= (Number(at) || 0) + SAME_INSTANT_MS)
+        best.delete(Number(room));
+      offer(room, items, at, source);
+    };
+    for (const [room, r] of Object.entries(record.by_room ?? {}))
+      offerFirst(room, r?.items, r?.observed_at, 'room');
+    const at = Number(record.observed_at) || 0;
+    if (Number(record.room) > 0) offerFirst(record.room, record.items, at, 'room');
+    else {
+      const twin = mine.find(s => Math.abs((Number(s.at) || 0) - at) <= SAME_INSTANT_MS && vaultNamed(s.vaultman));
+      if (twin) offerFirst(vaultNamed(twin.vaultman).room, record.items, at, 'vaultman');
+      else if (at && at < ISLAND_VAULT_READABLE_SINCE) offerFirst(VAULTS[0].room, record.items, at, 'inferred');
+      else if (![...best.values()].some(r => sameItems(r.items, record.items)))
+        unplaced = { items: record.items, observed_at: at || null, source: 'unplaced',
+                     fullness: vaultFullness(record.items) };
+    }
+  }
+  return { vaults: VAULTS.map(v => ({ ...v, reading: best.get(v.room) ?? null })), unplaced };
+}
 
 const safe = value => String(value ?? 'unknown').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'unknown';
 const readJson = (path) => {
@@ -195,6 +275,12 @@ export class StorageCache {
     const v = readJson(this.vaultPath(character));
     if (!v || v.character !== character || !Array.isArray(v.items)) return null;
     return { ...v, fullness: vaultFullness(v.items) };
+  }
+
+  /** Both vaults for one character — see `vaultReadings`. Never null: an unread vault is `reading: null`. */
+  readVaults(character, { snapshots = [] } = {}) {
+    const v = readJson(this.vaultPath(character));
+    return vaultReadings(v && v.character === character ? v : null, { snapshots, character });
   }
 
   allVaults() {
