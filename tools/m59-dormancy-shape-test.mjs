@@ -170,7 +170,8 @@ await test('staged: start_all wakes only staged holds, through wakeDormant, and 
   assert.match(s, /rec\?\.by === STAGED_BY/);
   assert.match(s, /wakeDormant\(agent, /);
   assert.doesNotMatch(s, /\/rejoin/);
-  assert.match(s, /const work = staged\.filter\(agent => !pilotOf\(agent\)\);/);
+  // A spectate keeper holding the body (m59-spectate-route.mjs) is occupied the same way as a pilot.
+  assert.match(s, /const work = staged\.filter\(agent => !pilotOf\(agent\)(?: && !spectateHolds\(agent\))?\);/);
   assert.match(s, /reason: 'pilot'/, 'a piloted staged hold becomes a pilot wait');
   assert.match(s, /M59_KEEPER_CONCURRENCY/, 'woken in lanes, not all at once');
 });

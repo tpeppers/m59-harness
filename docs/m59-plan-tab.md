@@ -250,10 +250,34 @@ the proxy's attach port (`tools/m59-proxy-attach.mjs`, `--attach 8932`):
 - **Take control back** releases the gate first, then stops the spectate keeper.
 - **If the keeper dies while holding the gate**, the desk gives the controls back within
   about 20 seconds and tells you.
-- The broker sees the character as piloted throughout and leaves it alone. The spectate
-  keeper never registers with the broker and holds no claim.
+- **It is the keeper process itself.** `m59-spectate-keeper.mjs` is a launcher: it scrubs the
+  roster, sets the attachment (`M59_KEEPER_ATTACH`) and runs `m59-keeper-process.mjs` in the same
+  process in SPECTATE mode (`M59_KEEPER_SPECTATE`), with its full HTTP API on an ephemeral
+  loopback port. Spectate mode skips the broker's ownership permit (it never logs in, and it
+  refuses to start without the attachment), writes no carry, and stops 15 s after the
+  attachment is gone.
+- **The broker routes to it.** The heartbeat names the pid, the `http_port` and the roster it
+  serves. While the heartbeat is fresh and that port's `/live` names this agent, character and
+  pid, the broker's `KeeperProxy` reads `/state` there (`fleet`, `status`, `inventory`,
+  `equipment`, `abilities`) and sends orders there (`/action`: travel, cast, act, supply,
+  combat; and `/policy`, which also goes to the normal keeper so its rejoin re-applies the
+  current orders). A port that answers for another agent or pid gets nothing, and neither does
+  the offline normal keeper. When the spectate keeper exits, everything falls back to the
+  normal keeper. The decision is `tools/m59-spectate-route.mjs` (pure, pinned by
+  `m59-spectate-route-test.mjs`); `scanKeepers` in `tools/m59-keeper.mjs` makes the same one, so
+  the coordinators that scan keepers see the driver too.
+- The broker still marks the character piloted, but while a spectate keeper drives, the flag
+  no longer black-holes commands (`humanHeld`): combat orders and the other piloted gates go
+  through. With no spectate keeper running, a piloted character is hands-off as before. The
+  `fleet` row's `driver` field says which keeper is driving.
+- **One driver per character.** While any believable spectate heartbeat holds the character,
+  the broker never asks the normal keeper to log in: the rejoin sweep skips it, a staged start
+  leaves it alone, and `restart-keepers` replaces its keeper dormant.
 - It runs against a password-free copy of the roster (`substrate/spectate/<agent>-roster.json`),
   because `Session` can write to its roster and the real one is the only copy of the passwords.
+- A spectate keeper started before this change serves no HTTP API. The broker still keeps the
+  normal keeper from logging in under it, but refuses orders for that character until it is
+  restarted: take control back, then relinquish again.
 
 To check it is driving, look at the Control row's description: it shows how many keeper
 packets were sent and how many moves were mirrored. `GET http://127.0.0.1:8931/gate` shows
@@ -332,6 +356,7 @@ when the window isn't focused or is minimized.
 | `tools/m59-human-handoff.mjs` | harness | the courier's half of a trade with a person |
 | `tools/m59-proxy-attach.mjs`, `tools/m59-spectate-keeper.mjs` | harness | spectate: the keeper attached to your connection |
 | `tools/m59-spectate-test.mjs` | harness | offline: attach, gate handover, mirrored moves, edge safety |
+| `tools/m59-spectate-route.mjs`, `tools/m59-spectate-route-test.mjs` | harness | which keeper the broker talks to while a spectate keeper drives |
 | `tools/m59-plan-desk-test.mjs`, `tools/m59-proxy-gate-test.mjs` | harness | offline tests |
 
 The file protocol is documented at the top of `m59-plan-desk.mjs` and mirrored in

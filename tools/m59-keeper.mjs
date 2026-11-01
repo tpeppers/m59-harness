@@ -25,31 +25,83 @@
 //   3. CHECK: the reply's identity headers (x-m59-agent, -character, -keeper-pid) or, from an older
 //      keeper, the body's own `agent`, must be the one asked for. A mismatch exits 3, loudly.
 import { fileURLToPath } from 'node:url';
-import { fleetName } from './m59-fleetpath.mjs';
+import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
+import { chooseKeeperRoute, listSpectateBeats } from './m59-spectate-route.mjs';
 
 const LIVE_TIMEOUT_MS = 700;
 const pendingBandScans = new WeakMap();
 
-/** Scan the band. Map agent -> { port, agent, character, pid, in_game }. */
-export async function scanKeepers({ fleet, band = null, fetchImpl = fetch, timeoutMs = LIVE_TIMEOUT_MS } = {}) {
+/**
+ * Scan the band. Map agent -> { port, agent, character, pid, in_game }.
+ *
+ * AND THE KEEPER THAT IS ACTUALLY DRIVING. A character a person relinquished to a spectate keeper (the
+ * same keeper process, attached to their client through the proxy) has its normal keeper on the band,
+ * alive and OFFLINE, while the spectate keeper drives on a port outside the band. Answering with the
+ * band's entry handed every scanning tool a frozen character (t17, 2026-11-01). So a spectate keeper
+ * whose heartbeat holds this agent and whose `/live` proves agent and pid REPLACES the band entry,
+ * marked `spectate: true`; one that holds but cannot be proven marks the band entry `spectate_holds`.
+ * The decision is m59-spectate-route.mjs's, the same one the broker makes. `spectate: false` skips it.
+ */
+export async function scanKeepers({ fleet, band = null, fetchImpl = fetch, timeoutMs = LIVE_TIMEOUT_MS,
+                                    spectate = true, spectateDir = null, roster = null,
+                                    now = Date.now, pidAlive = processAlive } = {}) {
   if (!band) {
     const { lookupKeeperBand } = await import('./runtime/keeper-bands.mjs');
     band = lookupKeeperBand(fleet, { registryPath: process.env.M59_KEEPER_BAND_REGISTRY || undefined });
   }
-  if (!band) return new Map();
-  let pending=pendingBandScans.get(fetchImpl);if(!pending){pending=new Map();pendingBandScans.set(fetchImpl,pending);}
-  const key=`${band.base}:${band.end}:${timeoutMs}`;
-  if(pending.has(key))return pending.get(key);
-  const request=(async()=>{
-    const found=new Map(),probes=[];
-    for(let port=band.base;port<=band.end;port++)
-      probes.push(fetchImpl(`http://127.0.0.1:${port}/live`,{signal:AbortSignal.timeout(timeoutMs)})
-        .then(r=>r.ok?r.json():null)
-        .then(v=>{if(v?.agent)found.set(String(v.agent),{port,agent:String(v.agent),character:v.character??null,pid:v.pid??null,in_game:v.in_game??null});})
-        .catch(()=>{}));
-    await Promise.all(probes);return found;
-  })().finally(()=>pending.delete(key));
-  pending.set(key,request);return request;
+  // SIMULTANEOUS SCANS SHARE ONE: one set of probes, one Map, for every caller asking the same question.
+  const rosterPath = spectate ? (roster ?? stateFileFor(fleet)) : null;
+  let pending = pendingBandScans.get(fetchImpl);
+  if (!pending) { pending = new Map(); pendingBandScans.set(fetchImpl, pending); }
+  const key = `${band ? `${band.base}:${band.end}` : 'no band'}:${timeoutMs}:` +
+              (spectate ? `spectate ${spectateDir ?? ''}|${rosterPath}` : 'band only');
+  if (pending.has(key)) return pending.get(key);
+  const request = (async () => {
+    const found = band ? await scanBand(band, fetchImpl, timeoutMs) : new Map();
+    if (spectate) await overlaySpectate(found, { roster: rosterPath, dir: spectateDir, fetchImpl, timeoutMs, now, pidAlive });
+    return found;
+  })().finally(() => pending.delete(key));
+  pending.set(key, request);
+  return request;
+}
+
+function processAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } }
+
+async function overlaySpectate(found, { roster, dir, fetchImpl, timeoutMs, now, pidAlive }) {
+  await Promise.all(listSpectateBeats(dir ? { dir } : {}).map(async beat => {
+    const agent = String(beat.agent);
+    const first = chooseKeeperRoute({ agent, roster, beat, now: now(), pidAlive });
+    if (!first.holds) return;
+    let value = null, error = null;
+    if (first.route === 'probe') {
+      try {
+        const r = await fetchImpl(`http://127.0.0.1:${first.port}/live`, { signal: AbortSignal.timeout(timeoutMs) });
+        value = r.ok ? await r.json() : null;
+        if (!r.ok) error = `HTTP ${r.status}`;
+      } catch (e) { error = e?.message ?? String(e); }
+    }
+    const d = first.route === 'probe'
+      ? chooseKeeperRoute({ agent, roster, beat, now: now(), pidAlive,
+                            probe: { port: first.port, pid: first.pid, at: now(), value, error } })
+      : first;
+    if (d.route === 'spectate') {
+      const band = found.get(agent);
+      found.set(agent, { port: d.port, agent, character: value?.character ?? null, pid: d.pid,
+                         in_game: value?.in_game ?? null, spectate: true, band_port: band?.port ?? null });
+    } else if (found.has(agent)) {
+      found.set(agent, { ...found.get(agent), spectate_holds: d.why });
+    }
+  }));
+}
+
+async function scanBand(band, fetchImpl, timeoutMs) {
+  const found=new Map(),probes=[];
+  for(let port=band.base;port<=band.end;port++)
+    probes.push(fetchImpl(`http://127.0.0.1:${port}/live`,{signal:AbortSignal.timeout(timeoutMs)})
+      .then(r=>r.ok?r.json():null)
+      .then(v=>{if(v?.agent)found.set(String(v.agent),{port,agent:String(v.agent),character:v.character??null,pid:v.pid??null,in_game:v.in_game??null});})
+      .catch(()=>{}));
+  await Promise.all(probes);return found;
 }
 
 /** The keeper for `who` — an agent id (t6) or a character name (Beaker), case-insensitive. */
@@ -105,7 +157,8 @@ async function main(argv) {
       return 2;
     }
     for (const k of [...keepers.values()].sort((a, b) => a.agent.localeCompare(b.agent, undefined, { numeric: true })))
-      console.log(`${k.agent.padEnd(5)} ${String(k.character ?? '?').padEnd(12)} port ${k.port}  pid ${k.pid}  ${k.in_game ? 'in game' : 'NOT in game'}`);
+      console.log(`${k.agent.padEnd(5)} ${String(k.character ?? '?').padEnd(12)} port ${k.port}  pid ${k.pid}  ${k.in_game ? 'in game' : 'NOT in game'}` +
+                  (k.spectate ? `  SPECTATE (band keeper on ${k.band_port ?? 'none'})` : k.spectate_holds ? `  held by a spectate keeper: ${k.spectate_holds}` : ''));
     return 0;
   }
 

@@ -29,6 +29,7 @@ import { carryFile, captureCarry, writeCarry, readCarry, consumeCarry, policyToA
 import { sourceForPush, sameValue } from './m59-policy-sources.mjs';
 import { KEY_FACULTY } from './m59-strategy-schema.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeSpectateBeat } from './m59-spectate-route.mjs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
 import {executeExactDrop} from './m59-inventory-drop.mjs';
 import {currentSurvivalDecision,isActiveRecoveryDecision} from './m59-survival-decision.mjs';
@@ -111,12 +112,32 @@ function arg(name) {
 }
 
 const agent = arg('--agent');
-const port = Number(arg('--port') || 0);
+let port = Number(arg('--port') || 0);
+// SPECTATE MODE (tools/m59-spectate-keeper.mjs, tools/m59-spectate-route.mjs). The same keeper, attached
+// to a PERSON's client connection through the proxy instead of logged in (M59_KEEPER_ATTACH). The
+// launcher has already pointed M59_STATE_FILE at a password-free roster copy. Here it changes four
+// things and nothing else: no broker ownership permit (it never logs in, and the broker did not spawn
+// it), an ephemeral HTTP port published in the heartbeat so the broker can route to it, no carry
+// (its assignments are the roster's), and it exits once the attachment has been gone for 15s.
+const SPECTATE = (() => {
+  if (!process.env.M59_KEEPER_SPECTATE) return null;
+  try { const v = JSON.parse(process.env.M59_KEEPER_SPECTATE); return v && typeof v === 'object' && v.beat ? v : null; }
+  catch { return null; }
+})();
+if (process.env.M59_KEEPER_SPECTATE && !SPECTATE) {
+  console.error('[keeper] M59_KEEPER_SPECTATE is set but unreadable; refusing to start');
+  process.exit(2);
+}
+if (SPECTATE && !process.env.M59_KEEPER_ATTACH) {
+  // Without the attachment this process would LOG IN, with no ownership permit and no password.
+  console.error('[keeper] spectate mode without M59_KEEPER_ATTACH; refusing to start');
+  process.exit(2);
+}
 const fleetName = arg('--fleet') || process.env.M59_FLEET || 'default';
 const host = arg('--host') || process.env.M59_HOST || '127.0.0.1';
 const serverPort = Number(arg('--server-port') || process.env.M59_PORT || 8899);
 
-if (!agent || !port) {
+if (!agent || (!port && !SPECTATE)) {
   console.error('usage: m59-keeper-process.mjs --agent <id> --port <port> [--fleet <name>]');
   process.exit(1);
 }
@@ -207,7 +228,9 @@ party.setRosterSource(party.rosterFileSource(fleetPath, {
 console.error(`[keeper] ${agent} knows ${party.rosterCharacterNames(fleet).size} fleetmate(s) ` +
   `from ${fleetPath}` + (hostCharacters.length ? ` plus ${hostCharacters.length} menagerie host(s)` : ''));
 
-const { account, password, character } = entry.credentials;
+const { account, character } = entry.credentials;
+// An attached client never sends a password, and the spectate roster copy has none to give.
+const password = SPECTATE ? '(attached; never sent)' : entry.credentials.password;
 const credHost = entry.credentials.host || host;
 const credPort = entry.credentials.port || serverPort;
 // THE BOOT ORDERS, AND THEY ARE RE-APPLIED ON EVERY REJOIN — so they are `let`, not
@@ -231,7 +254,7 @@ let mode = entry.autopilot?.mode || 'goap';
 // busy when the Autopilot is built. A field the roster has changed since is left to the roster.
 const CARRY_FILE = carryFile(fleetPath, agent);
 let carried = null;
-try { carried = readCarry(CARRY_FILE, { agent, character: entry.credentials?.character, pid: process.pid }); }
+if (!SPECTATE) try { carried = readCarry(CARRY_FILE, { agent, character: entry.credentials?.character, pid: process.pid }); }
 catch (e) { console.error(`[keeper] ${agent} carry unreadable: ${e.message}`); }
 if (carried) {
   const a = policyToAdopt(carried, bootPolicy, bootMode);
@@ -243,6 +266,7 @@ if (carried) {
 }
 /** Write what this keeper has been told, for the process that replaces it. */
 function writeAssignmentCarry(reason) {
+  if (SPECTATE) return;   // a spectate keeper's assignments are the roster's; the next real keeper must not adopt them
   try {
     writeCarry(CARRY_FILE, captureCarry({ agent, character: entry.credentials?.character, pid: process.pid, reason,
       claims: autopilot?.claims, busy: autopilot?.busy, bootPolicy, livePolicy: policy, bootMode, liveMode: mode }));
@@ -318,7 +342,9 @@ async function requireKeeperOwnership() {
   throw new Error('broker did not install both ownership guards before login');
 }
 
-try { await requireKeeperOwnership(); }
+if (SPECTATE) console.error(`[keeper] ${agent} SPECTATE: attached to player ${SPECTATE.player} via proxy port ` +
+                            `${SPECTATE.attach_port}; no ownership permit (this process never logs in)`);
+else try { await requireKeeperOwnership(); }
 catch (error) {
   console.error(`[keeper] ${agent} refused before Session/login: ${error.message}`);
   process.exit(3);
@@ -1854,6 +1880,9 @@ const server = createServer(async (req, res) => {
         inventory_drop: 1,
         delivery_cache: 1,
         combat_mode: 3,
+        // A SPECTATE keeper says so: it drives a person's connection, and the broker routes to it only
+        // through the heartbeat (m59-spectate-route.mjs). null for an ordinary keeper.
+        spectate: SPECTATE ? { player: SPECTATE.player ?? null, attach_port: SPECTATE.attach_port ?? null } : null,
         audio_observations: 1,
         intent_observations: 1,
         ok: !!(inGame && session.live),
@@ -5467,7 +5496,8 @@ function readBody(req) {
 // There is no cache timer and therefore no work when nobody is observing this keeper.
 
 const stateCache = new DemandSnapshot(state, { maxAgeMs: 2_000, maxStaleMs: 2_000 });
-const statePath = `substrate/keeper-${agent}.json`;
+// A spectate keeper writes its debugging snapshot beside its heartbeat, never over the normal keeper's.
+const statePath = SPECTATE ? `${SPECTATE.beat.replace(/\.json$/, '')}-keeper.json` : `substrate/keeper-${agent}.json`;
 
 function writeStateSnapshot(value) {
   try {
@@ -5541,9 +5571,9 @@ function saveFinalState() {
 
 // ---------------------------------------------------------------- signal handling
 
-process.on('SIGTERM', async () => {
-  log(`[keeper] ${agent} SIGTERM received`);
-  armShutdownWatchdog('SIGTERM');
+async function shutdown(why = 'SIGTERM') {
+  log(`[keeper] ${agent} ${why} received`);
+  armShutdownWatchdog(why);
   writeAssignmentCarry('SIGTERM');
   changeJoinIntent(false);
   if (autopilot) autopilot.stop('SIGTERM');
@@ -5552,7 +5582,8 @@ process.on('SIGTERM', async () => {
     try { session.client.close(); } catch {}
   }
   try{await session.playerEvidence?.close?.();}finally{process.exit(0);}
-});
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 process.on('SIGINT', () => process.kill(process.pid, 'SIGTERM'));
 
@@ -5561,10 +5592,47 @@ process.on('exit', () => {
   saveFinalState();
 });
 
+// ---------------------------------------------------------------- spectate heartbeat
+//
+// WHERE THE BROKER FINDS THIS PROCESS (tools/m59-spectate-route.mjs). The heartbeat names the pid, the
+// HTTP port it bound and the roster it serves; the broker routes reads and orders here only after this
+// port's `/live` names the same agent, character and pid. It beats every second, says `driving` while
+// the attachment is up, and `stopped: ...` on the way out, so a reader never routes to a corpse.
+//
+// THE ATTACHMENT IS THE WHOLE REASON TO EXIST. Not on the first closed client: the Session reconnects by
+// itself (a renumbered object id after `save game`, a stale stream), and in attached mode that reconnect
+// is a fresh attach the proxy accepts once the old one has detached. So it takes 15s without a live,
+// attached client to stop -- the same rule the standalone spectate keeper had.
+function startSpectateHeartbeat() {
+  const beat = state => writeSpectateBeat(SPECTATE.beat, {
+    pid: process.pid, at: Date.now(), agent, character: session.client?.me?.name ?? character,
+    player: SPECTATE.player ?? null, port: SPECTATE.attach_port ?? null, attach_port: SPECTATE.attach_port ?? null,
+    http_port: port, roster: SPECTATE.roster ?? null, fleet: fleetName, state,
+  });
+  let lastAttached = Date.now(), stopping = false;
+  beat('starting');
+  const timer = setInterval(() => {
+    if (stopping) return;
+    const c = session.client;
+    if (c && c.state === 'game' && !c.sock?.destroyed) lastAttached = Date.now();
+    if (Date.now() - lastAttached > 15_000) {
+      stopping = true; clearInterval(timer);
+      beat('stopped: attachment gone for 15s');
+      shutdown('attachment gone for 15s');
+      return;
+    }
+    beat(Date.now() - lastAttached < 2500 ? 'driving' : 'reattaching');
+  }, 1000);
+  process.on('exit', () => { stopping = true; beat('stopped: exited'); });
+}
+
 // ---------------------------------------------------------------- start
 
 server.listen(port, '127.0.0.1', () => {
+  // Port 0 (spectate mode) is the OS's choice; every later use of `port` means the bound one.
+  port = server.address()?.port ?? port;
   log(`[keeper] ${agent} HTTP API on port ${port}`);
+  if (SPECTATE) startSpectateHeartbeat();
   // THE EVENT-LOOP STALL MONITOR. blakserv logs a session out after 30 seconds of silence
   // (INACTIVE_GAME), and on 2026-09-01 the shadow fleet lost about five keepers a tour that
   // way while their own logs said nothing at all: the broker's /live probe went unanswered,

@@ -19,6 +19,7 @@ import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evidenceDirFor } from '../m59-fleetpath.mjs';
+import { readSpectateBeat, spectateHolds, spectateDir } from '../m59-spectate-route.mjs';
 
 const TTL_MS = 120_000, RENEW_MS = 30_000;
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -61,11 +62,13 @@ const renewals = new Map();   // pid -> timer
 // to the person's own connection through the proxy's attach port. Started here, one per agent;
 // its heartbeat is <harness>/substrate/spectate/<agent>.json.
 const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const spectateBeat = agent => { try { return JSON.parse(readFileSync(join(HARNESS, 'substrate', 'spectate', `${agent}.json`), 'utf8')); } catch { return null; } };
-const spectateAlive = agent => { const h = spectateBeat(agent); if (!h || Date.now() - h.at > 10_000 || /^stopped/.test(h.state)) return null;
-  try { process.kill(h.pid, 0); return h; } catch { return null; } };
+// The heartbeat is read the way the broker reads it (tools/m59-spectate-route.mjs), so the desk and the
+// broker can never disagree about whether a spectate keeper is alive.
+const spectateBeat = agent => readSpectateBeat(agent);
+const spectateAlive = agent => { const h = spectateBeat(agent);
+  return spectateHolds(h, { agent, pidAlive: alive }).holds ? h : null; };
 function logFd(agent) {
-  try { const d = join(HARNESS, 'substrate', 'spectate'); mkdirSync(d, { recursive: true }); return openSync(join(d, `${agent}.log`), 'a'); }
+  try { const d = spectateDir(); mkdirSync(d, { recursive: true }); return openSync(join(d, `${agent}.log`), 'a'); }
   catch { return 'ignore'; }
 }
 function startSpectate(ctx, advert, playerId) {

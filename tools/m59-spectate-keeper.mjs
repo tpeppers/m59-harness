@@ -14,23 +14,35 @@
 // gate is held by `keeper:<agent>` (m59-proxy-attach.mjs); the person's own client is locked
 // out for exactly that time and watches the moves arrive.
 //
-// WHY NOT THE BROKER'S KEEPER PROCESS. The server allows one connection per character and the
-// person's client holds it, so the broker's keeper (which logs in) has nothing to log in to;
-// the broker sees the character as piloted and leaves it alone, which is right. This process
-// never registers with the broker and holds no claim of its own.
+// IT IS NOW LITERALLY THE KEEPER PROCESS. This file used to build its own Session and Autopilot and
+// served no HTTP API, so the broker -- which marks the character piloted -- went on reading the
+// character's NORMAL keeper process, offline and frozen, and sent every order there. Measured
+// 2026-11-01 on t17 (Zoot): `fleet` put him in room 566 while he walked the East Tower (2013), and
+// autopilot start, travel, cast and supply all went to a process with no socket. So this is now a
+// launcher: it scrubs the roster, sets the attachment, and runs m59-keeper-process.mjs IN THIS
+// PROCESS (same pid) in SPECTATE mode, on an ephemeral loopback port it publishes in the heartbeat.
+// The broker's KeeperProxy routes reads and orders here while that heartbeat is live and the port's
+// `/live` names this agent, character and pid (tools/m59-spectate-route.mjs); when this exits,
+// everything falls back to the normal keeper. The broker still sees the character as piloted, and
+// still keeps the normal keeper from logging in while this holds the body.
+//
+// WHY NOT THE BROKER'S KEEPER PROCESS ITSELF. The server allows one connection per character and the
+// person's client holds it, so the broker's keeper (which logs in) has nothing to log in to. This
+// process never logs in, holds no fleet or account claim, and is not spawned by the broker.
 //
 // IT NEVER WRITES THE LIVE ROSTER. Session may record a learned character name back into the
 // roster file, and the roster is the only copy of the account passwords. So it runs against a
 // scrubbed copy (passwords removed) under substrate/spectate/, and an attached client never
 // needs a password anyway.
 //
-// It exits when the attachment closes (the person's client went away, or the proxy did), and on
-// SIGTERM from the desk. Its heartbeat is substrate/spectate/<agent>.json.
+// It exits when the attachment has been gone for 15s (the person's client went away, or the proxy
+// did), and on SIGTERM from the desk. Its heartbeat is substrate/spectate/<agent>.json.
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFleet } from './m59-fleetpath.mjs';
+import { spectateDir, writeSpectateBeat } from './m59-spectate-route.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -40,64 +52,42 @@ if (!/^[a-z0-9_-]{1,40}$/.test(agent ?? '') || !(port > 0) || !(player > 0)) {
   console.error('usage: m59-spectate-keeper.mjs --fleet <name> --agent <agent> --attach-port <port> --player <objId>');
   process.exit(2);
 }
-const { stateFile } = resolveFleet(argv);
+const resolved = resolveFleet(argv);
+const { stateFile } = resolved;
 const live = JSON.parse(readFileSync(stateFile, 'utf8'));
 const entry = live[agent];
 if (!entry?.credentials) { console.error(`no roster entry for ${agent} in ${stateFile}`); process.exit(2); }
 
 // The scrubbed roster. Every entry is kept (fleetmates are recognised by name), no password survives.
-const dir = resolve(HERE, '..', 'substrate', 'spectate');
+// The heartbeat directory follows THIS checkout (or M59_SPECTATE_DIR), where the broker looks for it.
+const dir = spectateDir();
 mkdirSync(dir, { recursive: true });
 const scrubbed = Object.fromEntries(Object.entries(live).map(([k, v]) =>
   [k, v?.credentials ? { ...v, credentials: { ...v.credentials, password: undefined } } : v]));
 const rosterCopy = join(dir, `${agent}-roster.json`);
 writeFileSync(rosterCopy, JSON.stringify(scrubbed, null, 1));
+const beat = join(dir, `${agent}.json`);
+// Before the keeper binds its port: alive, not yet routable (no http_port), so the desk sees it start.
+writeSpectateBeat(beat, { pid: process.pid, at: Date.now(), agent, player, port, attach_port: port,
+                          http_port: null, roster: resolve(stateFile), fleet: resolved.fleet, state: 'starting' });
+
 process.env.M59_STATE_FILE = rosterCopy;
 process.env.M59_KEEPER_ATTACH = JSON.stringify({ port, agent, player });
-
-const beat = join(dir, `${agent}.json`);
-const heartbeat = state => { try { writeFileSync(beat + '.tmp', JSON.stringify({ pid: process.pid, at: Date.now(), agent, player, port, state })); renameSync(beat + '.tmp', beat); } catch {} };
-heartbeat('starting');
-
-// Imported only now: these modules read M59_STATE_FILE when they load.
-const { Session } = await import('./m59-session.mjs');
-const { autopilotFor } = await import('./m59-autopilot.mjs');
-
-const session = new Session(agent, { communicationStateFile: rosterCopy });
-let autopilot = null, stopping = false;
-const stop = (why, code = 0) => {
-  if (stopping) return; stopping = true;
-  console.error(`[spectate] ${agent} stopping: ${why}`);
-  try { autopilot?.stop?.(); } catch {}
-  try { session.client?.sock?.destroy?.(); } catch {}
-  heartbeat(`stopped: ${why}`);
-  setTimeout(() => process.exit(code), 300);
-};
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => stop(sig));
-
-try {
-  const { account, character, host, port: serverPort } = entry.credentials;
-  await session.join({ account, password: '(attached; never sent)', character, host, port: serverPort });
-  console.error(`[spectate] ${agent} attached as ${session.client?.me?.name ?? character} (self ${session.client?.selfId})`);
-  autopilot = autopilotFor(session);
-  autopilot.mode = entry.autopilot?.mode || 'goap';
-  Object.assign(autopilot.policy, entry.autopilot?.policy || {});
-  await autopilot.applyFarmStrategy?.('join');
-  autopilot.start();
-  console.error(`[spectate] ${agent} keeper driving (mode=${autopilot.mode}, hunt=${JSON.stringify(autopilot.policy.hunt ?? null)})`);
-  heartbeat('driving');
-} catch (e) {
-  stop(`could not attach: ${e.message}`, 1);
+process.env.M59_KEEPER_SPECTATE = JSON.stringify({ beat, roster: resolve(stateFile), player, attach_port: port });
+// WALL CLAIMS ARE SHARED WITH THE FLEET. The keeper scopes them by roster path, and its roster here is
+// the scrubbed copy; without this it would claim walls in a namespace of its own and stand on a
+// fleetmate's. Scoped exactly as the real keeper would scope it, from the LIVE roster path.
+if (!process.env.M59_SPOT_CLAIMS_NAMESPACE) {
+  const { spotClaimNamespace } = await import('./m59-spotclaims.mjs');
+  process.env.M59_SPOT_CLAIMS_NAMESPACE = spotClaimNamespace({ fleetPath: stateFile,
+    host: entry.credentials.host || process.env.M59_HOST || '127.0.0.1',
+    port: entry.credentials.port || process.env.M59_PORT || 8899 });
 }
 
-// The attachment is the whole reason to exist: when it is gone for good, so is this. NOT on the first
-// closed client: the Session reconnects by itself (a renumbered object id after `save game`, a stale
-// stream), and in attached mode that reconnect is simply a fresh attach -- the proxy accepts it once
-// the old one has detached. So it takes 15s without a live, attached client to stop.
-let lastAttached = Date.now();
-setInterval(() => {
-  if (stopping) return;
-  if (session.client && session.client.state === 'game' && !session.client.sock?.destroyed) lastAttached = Date.now();
-  if (Date.now() - lastAttached > 15_000) return stop('attachment gone for 15s');
-  heartbeat(Date.now() - lastAttached < 2500 ? 'driving' : 'reattaching');
-}, 1000);
+// The keeper reads its arguments from process.argv, and its modules read M59_STATE_FILE when they load,
+// so both are set first and the keeper is imported only now. `--port 0`: the OS picks; the keeper
+// publishes what it bound.
+process.argv = [process.argv[0], join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', '0',
+                '--fleet', resolved.fleet === '' ? '-' : resolved.fleet];
+console.error(`[spectate] ${agent} running the keeper process attached to player ${player} via proxy port ${port}`);
+await import('./m59-keeper-process.mjs');

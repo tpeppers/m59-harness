@@ -271,6 +271,7 @@ import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
 import { validatePvpRooms } from './m59-pvp-rooms.mjs';
+import { chooseKeeperRoute, readSpectateBeat, humanHeld as spectateHumanHeld } from './m59-spectate-route.mjs';
 
 // WHO ORDERED THIS MOVE, as an MCP caller says it (m59-move-origin.mjs). A caller that names
 // nobody is `mcp:unattributed` — the honest default for a tool call, never empty and never a guess.
@@ -1454,8 +1455,9 @@ async function startStaged({ by = 'dormancy tool' } = {}) {
   const staged = Object.entries(all)
     .filter(([agent, rec]) => rec?.by === STAGED_BY && inAnyRoster(agent)).map(([agent]) => agent);
   if (!staged.length) return { ok: true, started: 0, of: 0, note: 'nobody is held by a staged start' };
-  const piloted = staged.filter(agent => pilotOf(agent));
-  const work = staged.filter(agent => !pilotOf(agent));
+  // A spectate keeper holding the body is occupied the same way: its login would bump the person.
+  const piloted = staged.filter(agent => pilotOf(agent) || spectateHolds(agent));
+  const work = staged.filter(agent => !pilotOf(agent) && !spectateHolds(agent));
   for (const agent of piloted) {
     try {
       dormancyStore().set(agent, normalizeDormancy({ reason: 'pilot', by,
@@ -1851,7 +1853,9 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
   // old keeper is stopped, and the rejoin sweep wakes the new one when the person is done.
   // A person playing THROUGH this keeper's own connection (a proxied client) is the one case that
   // is still refused: there the keeper's socket is theirs, and replacing it would bump them.
-  const piloted = !!pilotOf(agent);
+  // A spectate keeper driving on the person's connection holds the body as surely as the person does:
+  // the replacement must start dormant, not log in over them.
+  const piloted = !!pilotOf(agent) || spectateHolds(agent);
   let dormantSwap = false, createdDormancy = false;
   keeperHandoffs.add(agent);
   let child = null, reservedPort = null;
@@ -2184,10 +2188,15 @@ async function keeperState(agent, index, { fresh = false } = {}) {
 // answer to say otherwise. Same `agent` stamp as `keeperEnvelope`, in the query string
 // because these are GETs; the keeper answers 409 when it is somebody else.
 async function keeperGet(agent, index, path, params = {}) {
-  const port = keeperPort(agent, index);
+  // ROUTED (see the spectate block below): a spectate keeper driving this character answers its reads.
+  const sp = await proveSpectateRoute(agent);
+  if (sp.holds && sp.route !== 'spectate' && sp.route !== 'keeper')
+    return { error: `${agent}: a spectate keeper holds this character but cannot be read (${sp.why})` };
+  const routed = sp.route === 'spectate';
+  const port = routed ? sp.port : keeperPort(agent, index);
   const q = new URLSearchParams(Object.entries({ ...params, agent,
     character: rosterEntry(agent)?.credentials?.character ?? null,
-    keeper_pid: keeperProcesses.get(agent)?.pid ?? null })
+    keeper_pid: routed ? sp.pid : keeperProcesses.get(agent)?.pid ?? null })
     .filter(([, v]) => v !== undefined && v !== null && v !== ''));
   try {
     const res = await fetch(`http://127.0.0.1:${port}/${path}${q.toString() ? '?' + q : ''}`,
@@ -2197,6 +2206,153 @@ async function keeperGet(agent, index, path, params = {}) {
   } catch (e) {
     return { error: e.message };
   }
+}
+
+// ---------------------------------------------------------------- spectate routing
+//
+// WHICHEVER KEEPER IS DRIVING THE BODY ANSWERS FOR IT. A spectate keeper (m59-spectate-keeper.mjs) is
+// this same keeper process attached to a PERSON's client connection through the proxy, started when
+// they relinquish control on the PLAN tab. The normal keeper process is then alive but offline -- the
+// person's client holds the one connection the server allows -- and before this every read and order
+// went to it: 2026-11-01, `fleet`/`status`/`autopilot` put t17 in room 566 while he walked the East
+// Tower (2013), and autopilot start, travel, cast and supply went to a process with no socket.
+//
+// The decision is `chooseKeeperRoute` (m59-spectate-route.mjs), pure and tested offline. This block only
+// gathers its two impure inputs: the heartbeat the spectate keeper writes (pid, http_port, roster) and a
+// `/live` reply from that port. A route is `spectate` only when the reply names this agent, this
+// character and the heartbeat's pid; a port answering for anybody else is `refused` and gets nothing.
+//
+// WHAT IS ROUTED: `/state` (so fleet, status, inventory, equipment, abilities and the emulated client),
+// `/action` (every order through keeperAction: travel, cast, act, supply, combat...), `/policy`
+// (autopilot set/start -- pushed to the normal keeper too, so its rejoin re-applies the current orders),
+// and the addressed GETs. WHAT IS NOT: the normal keeper's lifecycle -- stop, rejoin, wake, dormancy,
+// handoff, leave -- which still addresses the process this broker spawned. And while any believable
+// spectate heartbeat holds the character (`holds`), the normal keeper is never asked to log in.
+const spectateLinks = new Map();   // agent -> { probe, liveness, inflight, beat, beatAt }
+const SPECTATE_BEAT_READ_MS = 1000;
+
+function spectateLink(agent) {
+  let link = spectateLinks.get(agent);
+  if (!link) {
+    link = { probe: null, liveness: null, inflight: null, beat: null, beatAt: 0 };
+    spectateLinks.set(agent, link);
+  }
+  return link;
+}
+
+// One small file per agent, read at most once a second: the sync getters below ask on every access.
+function spectateBeatNow(agent) {
+  const link = spectateLink(agent);
+  const now = Date.now();
+  if (now - link.beatAt >= SPECTATE_BEAT_READ_MS) { link.beat = readSpectateBeat(agent); link.beatAt = now; }
+  return link.beat;
+}
+
+/** The current decision from what is already known: no network, safe in a getter. */
+function spectateRouteNow(agent) {
+  return chooseKeeperRoute({
+    agent, character: rosterEntry(agent)?.credentials?.character ?? null, roster: STATE_FILE,
+    beat: spectateBeatNow(agent), probe: spectateLinks.get(agent)?.probe ?? null,
+    now: Date.now(), pidAlive: isProcessLive,
+  });
+}
+
+/** May a spectate keeper be holding this body? Then the normal keeper must not log in. */
+function spectateHolds(agent) {
+  try { return spectateRouteNow(agent).holds === true; } catch { return false; }
+}
+
+/** A piloted character stays hands-off unless a spectate keeper is actually driving it. */
+function humanHeld(agent) {
+  return spectateHumanHeld({ piloted: !!pilotOf(agent), route: spectateRouteNow(agent) });
+}
+
+/**
+ * The decision, PROVEN: when a spectate keeper holds the body and names a port, ask that port's `/live`
+ * (cheap, no state projection) and decide again on the reply. `force` re-asks even a recent proof --
+ * every ORDER does, because a respawn or a recycled port between proof and send is the cached-port bug.
+ */
+async function proveSpectateRoute(agent, { force = false } = {}) {
+  let decision = spectateRouteNow(agent);
+  if (!decision.holds) return decision;
+  if (decision.route === 'keeper') return decision;         // held, but nothing to route to
+  if (decision.route !== 'probe' && !force) return decision;
+  const link = spectateLink(agent);
+  const ask = { port: decision.port, pid: decision.pid };
+  if (!link.inflight || link.inflight.port !== ask.port || link.inflight.pid !== ask.pid) {
+    const request = (async () => {
+      const at = Date.now();
+      try {
+        const reply = await keeperLiveAt(ask.port, { timeoutMs: 2000 });
+        link.probe = reply.ok ? { ...ask, at, value: reply.value }
+                              : { ...ask, at, value: null, error: `HTTP ${reply.status}` };
+      } catch (e) {
+        link.probe = { ...ask, at, value: null, error: e?.message ?? String(e) };
+      }
+      return link.probe;
+    })();
+    link.inflight = { ...ask, promise: request };
+    request.finally(() => { if (link.inflight?.promise === request) link.inflight = null; }).catch(() => {});
+  }
+  await link.inflight?.promise.catch(() => null);
+  decision = spectateRouteNow(agent);
+  // A proof of THIS process feeds its own liveness book -- never the normal keeper's, whose phantom and
+  // reconnect evidence must stay about the process this broker spawned.
+  if (decision.route === 'spectate') {
+    if (!link.liveness || link.liveness.spectatePid !== decision.pid) {
+      link.liveness = new KeeperLiveness({ agent, character: rosterEntry(agent)?.credentials?.character ?? null,
+        phantomAfterMs: KeeperProxy.PHANTOM_AFTER_MS, probeEveryMs: KEEPER_LIVENESS_SWEEP_MS });
+      link.liveness.spectatePid = decision.pid;
+    }
+    link.liveness.observe(decision.sample, { pid: decision.pid, at: link.probe?.at ?? Date.now() });
+  } else if (decision.route === 'refused' && link.refusedWhy !== decision.why) {
+    link.refusedWhy = decision.why;
+    console.error(`[spectate] ${agent}: not routing -- ${decision.why}`);
+  }
+  return decision;
+}
+
+/** The live link for a routed agent, or null: what the KeeperProxy getters read. */
+function spectateDriving(agent) {
+  const d = spectateRouteNow(agent);
+  if (d.route !== 'spectate') return null;
+  const link = spectateLinks.get(agent);
+  if (!link?.liveness || link.liveness.spectatePid !== d.pid) return null;
+  return { ...d, link };
+}
+
+/** `/state` from a spectate keeper, identity-checked against the heartbeat's pid. Null on any doubt. */
+async function spectateKeeperState(agent, route, { fresh = false } = {}) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${route.port}/state${fresh ? '?fresh=1' : ''}`,
+                            { signal: AbortSignal.timeout(fresh ? 15000 : 5000) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const valid = validateKeeperSample(j, { agent, character: rosterEntry(agent)?.credentials?.character ?? null,
+                                            pid: route.pid });
+    if (!valid.ok) {
+      console.error(`[spectate] ${agent}: port ${route.port} /state refused -- ${valid.reason}`);
+      return null;
+    }
+    return j;
+  } catch { return null; }
+}
+
+/**
+ * WHERE AN ORDER GOES. A verified spectate keeper, or -- with no spectate keeper holding the body --
+ * the normal keeper, verified exactly as before. A spectate keeper that holds the body but cannot be
+ * proven gets NOTHING, and neither does the offline keeper: sending there is the bug this replaces.
+ */
+async function verifiedKeeperOrderTarget(agent, index) {
+  const sp = await proveSpectateRoute(agent, { force: true });
+  if (sp.route === 'spectate') {
+    const character = rosterEntry(agent)?.credentials?.character ?? null;
+    return Object.freeze({ port: sp.port, identity: Object.freeze({ agent, character, pid: sp.pid }),
+                           record: null, spectate: true, inventory_drop: sp.sample?.inventory_drop === 1 ? 1 : 0 });
+  }
+  if (sp.holds)
+    throw new Error(`${agent}: a spectate keeper holds this character but cannot take orders (${sp.why}); refusing write`);
+  return verifiedKeeperWriteTarget(agent, index);
 }
 
 // WHO WE THINK WE ARE TALKING TO, SENT WITH EVERY ORDER.
@@ -2320,7 +2476,8 @@ async function verifiedKeeperWriteTarget(agent, index) {
 // less: two timeouts racing, and the wrong one winning silently, is this bug again.
 async function keeperAction(agent, index, name, args, { timeoutMs = 60_000, beforeSend = null } = {}) {
   try {
-    const target = await verifiedKeeperWriteTarget(agent, index);
+    // A spectate keeper driving the body takes the order; otherwise the normal keeper, as ever.
+    const target = await verifiedKeeperOrderTarget(agent, index);
     beforeSend?.(target);
     const res = await fetch(`http://127.0.0.1:${target.port}/action`, {
       method: 'POST',
@@ -2390,8 +2547,7 @@ async function keeperPolicy(agent, index, { policy, mode, via = null } = {}) {
   // `autopilot action=start` callers pushed a whole policy over a fresh keeper (prod 2026-10-27, practiceSpells -> null
   // on six keepers right after a handoff).
   body.by = `broker pid ${process.pid} fleet ${FLEET ?? 'default'}${via ? ` via ${String(via).slice(0, 160)}` : ''}`;
-  try {
-    const target = await verifiedKeeperWriteTarget(agent, index);
+  const push = async (target) => {
     const res = await fetch(`http://127.0.0.1:${target.port}/policy`, {
       method: 'POST',
       headers: keeperIdentityHeaders(target.identity),
@@ -2403,6 +2559,18 @@ async function keeperPolicy(agent, index, { policy, mode, via = null } = {}) {
     // `applied` is absent from a keeper predating this change. Say so rather than
     // reporting a confident `pushed: true` about a reply that never confirmed anything.
     return { pushed: true, confirmed: Array.isArray(j.applied), ...j };
+  };
+  try {
+    const target = await verifiedKeeperOrderTarget(agent, index);
+    const result = await push(target);
+    if (!target.spectate) return result;
+    // THE ORDERS OUTLIVE THE SPECTATE KEEPER. The normal keeper re-applies its live policy every time it
+    // rejoins, so a push that reached only the spectate keeper would be undone the moment the person took
+    // control back and the normal keeper came home. It is offline, not deaf: the same push goes to it,
+    // best effort, and its answer is reported beside the one that is driving.
+    const also = await verifiedKeeperWriteTarget(agent, index).then(push)
+      .catch(e => ({ pushed: false, error: e.message }));
+    return { ...result, via: 'spectate', spectate_pid: target.identity.pid, keeper: also };
   } catch (e) {
     return { pushed: false, error: e.message };
   }
@@ -2452,6 +2620,7 @@ class KeeperProxy {
     this._index = index;
     this._state = null;
     this._stateAt = 0;
+    this._stateRoute = null;   // 'keeper' or 'spectate:<pid>': which process `_state` came from
     this._stateTtl = 2000;
     // New keepers report the age of their demand-built projection. Normal cached reads are
     // strictly under two seconds; the small margin covers response scheduling without
@@ -2501,7 +2670,35 @@ class KeeperProxy {
   }
 
   get live() {
+    const routed = this._routedStatus();
+    if (routed) return routed.live;
     return this._liveness.status({ processAlive: this._processAlive() }).live;
+  }
+
+  // WHILE A SPECTATE KEEPER DRIVES THIS CHARACTER, ITS PROOF IS THE ONE THAT COUNTS (see "spectate
+  // routing"). The normal keeper is offline then, and its liveness book stays about that process --
+  // lifecycle, phantom and reconnect decisions still read it through `_liveness` directly. Null when
+  // nothing is routed; a heartbeat whose port is not yet proven gets its proof started here.
+  _routedStatus() {
+    let d;
+    try { d = spectateRouteNow(this.name); } catch { return null; }
+    if (d.route === 'probe') proveSpectateRoute(this.name).catch(() => {});
+    if (d.route !== 'spectate') return null;
+    const link = spectateLinks.get(this.name);
+    if (!link?.liveness || link.liveness.spectatePid !== d.pid) return null;
+    return link.liveness.status({ processAlive: isProcessLive(d.pid) });
+  }
+
+  // Which process `_state` came from, so a cached snapshot is never served across a route change.
+  _routeKey() {
+    try { const d = spectateRouteNow(this.name); return d.route === 'spectate' ? `spectate:${d.pid}` : 'keeper'; }
+    catch { return 'keeper'; }
+  }
+
+  /** Which keeper is driving this character right now: null for its own process. */
+  get driver() {
+    const d = spectateDriving(this.name);
+    return d ? { kind: 'spectate', pid: d.pid, port: d.port } : null;
   }
 
   // A PHANTOM IS NOT LIVE, AND IT USED TO BE.
@@ -2524,6 +2721,8 @@ class KeeperProxy {
   // in_game true, socket says otherwise, and it has said so long enough to be believed.
   // Undefined `connected` means a keeper older than this field: fail OPEN, behave as before.
   get phantom() {
+    const routed = this._routedStatus();
+    if (routed) return routed.phantom;
     return this._liveness.status({ processAlive: this._processAlive() }).phantom;
   }
 
@@ -3272,7 +3471,8 @@ class KeeperProxy {
   async _refreshState({ fresh = false, force = false } = {}) {
     if (this._liveness.disposed) return null;
     const now = Date.now();
-    if (!fresh && !force && this._state && now - this._stateAt < this._stateTtl) return this._state;
+    if (!fresh && !force && this._state && now - this._stateAt < this._stateTtl &&
+        this._stateRoute === this._routeKey()) return this._state;
     // Coalesce callers onto one loopback projection. A fresh=true request is stronger
     // because it asks the keeper to touch Meridian; it may reuse another fresh request but
     // waits out a cache-only request before starting its own.
@@ -3282,6 +3482,11 @@ class KeeperProxy {
       if (this._liveness.disposed) return null;
     }
     const request = (async () => {
+      // ROUTED: a spectate keeper driving this character is the one whose picture is true.
+      const route = await proveSpectateRoute(this.name);
+      if (route.route === 'spectate') return this._refreshSpectateState(route, { fresh });
+      // Held by a spectate keeper that cannot be proven: neither process's picture is the character's.
+      if (route.holds && route.route !== 'keeper') return null;
       const s = await keeperState(this.name, this._index, { fresh });
       const observedAt = Date.now();
       if (!s) {
@@ -3318,6 +3523,7 @@ class KeeperProxy {
       this._identityConflict = null;
       this._state = candidate;
       this._stateAt = observedAt;
+      this._stateRoute = 'keeper';
       this._client = null;
       if (Array.isArray(candidate.saves)) saveClock.observeAll(candidate.saves, this.name);
       return this._state;
@@ -3326,6 +3532,36 @@ class KeeperProxy {
     this._stateInFlight = record;
     try { return await request; }
     finally { if (this._stateInFlight === record) this._stateInFlight = null; }
+  }
+
+  // The spectate half of `_refreshState`: the same checks, against the spectate keeper's own pid and
+  // its own liveness book, so a frozen normal keeper and a driving spectate keeper never mix samples.
+  async _refreshSpectateState(route, { fresh = false } = {}) {
+    const link = spectateLinks.get(this.name);
+    const s = await spectateKeeperState(this.name, route, { fresh });
+    const observedAt = Date.now();
+    if (this._liveness.disposed) return null;
+    if (!s) { link?.liveness?.unavailable('spectate state endpoint did not answer', { at: observedAt }); return null; }
+    if (s.as_of_ms !== undefined &&
+        (!Number.isFinite(Number(s.as_of_ms)) || Number(s.as_of_ms) < 0 ||
+         Number(s.as_of_ms) > this._stateMaxReportedAge)) {
+      link?.liveness?.unavailable(`state snapshot age ${s.as_of_ms}ms exceeds ${this._stateMaxReportedAge}ms`,
+                                  { at: observedAt });
+      return null;
+    }
+    const accepted = link?.liveness?.spectatePid === route.pid
+      ? link.liveness.observe(s, { pid: route.pid, at: observedAt })
+      : { ok: false, reason: 'spectate keeper changed while its state was read' };
+    if (!accepted.ok) {
+      console.error(`[spectate] ${this.name}: rejected /state identity — ${accepted.reason}`);
+      return null;
+    }
+    this._state = s;
+    this._stateAt = observedAt;
+    this._stateRoute = `spectate:${route.pid}`;
+    this._client = null;
+    if (Array.isArray(s.saves)) saveClock.observeAll(s.saves, this.name);
+    return this._state;
   }
 
   _expectedIdentity() {
@@ -3445,6 +3681,8 @@ class KeeperProxy {
   }
 
   get inGame() {
+    const routed = this._routedStatus();
+    if (routed) return routed.inGame;
     return this._liveness.status({ processAlive: this._processAlive() }).inGame;
   }
   get character() { return this._liveness.sample?.character ?? this._state?.character ?? null; }
@@ -4124,8 +4362,13 @@ async function runKeeperLivenessSweep() {
       .filter(s => s instanceof KeeperProxy && !s._liveness.disposed);
     if (!proxies.length) return;
     const now = Date.now();
-    await Promise.all(proxies.filter(s => s._liveness.due(now))
-      .map(s => s.refreshLiveness().catch(() => null)));
+    await Promise.all([
+      ...proxies.filter(s => s._liveness.due(now)).map(s => s.refreshLiveness().catch(() => null)),
+      // A spectate keeper driving a character is re-proven on the same clock, so the getters never
+      // route on a proof older than the sweep (m59-spectate-route.mjs SPECTATE_PROBE_MAX_AGE_MS).
+      ...proxies.filter(s => spectateHolds(s.name))
+        .map(s => proveSpectateRoute(s.name, { force: true }).catch(() => null)),
+    ]);
   } finally {
     keeperLivenessSweepRunning = false;
     if (!brokerStopping &&
@@ -5405,7 +5648,7 @@ async function reconcileFleet() {
   await Promise.all([...sessions.entries()]
     .filter(([agent, s]) => s instanceof KeeperProxy &&
       inAnyRoster(agent) && !leftOnPurpose.has(agent) && !dormant[agent] &&
-      !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent))
+      !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent) && !spectateHolds(agent))
     .map(async ([agent, proxy]) => {
       const proof = await proxy.refreshLiveness({ force: true });
       livenessProofs.set(agent, { proxy, proof });
@@ -5432,6 +5675,10 @@ async function reconcileFleet() {
     // character out from under a hand that is on the keys, and the login would bump
     // them straight out of the world.
     if (pilotOf(agent)) continue;
+    // DRIVEN THROUGH THE PERSON'S CONNECTION (m59-spectate-route.mjs). A spectate keeper holds the one
+    // connection the server allows; rejoining the normal keeper would bump the person and the keeper
+    // driving for them. Occupied, whether or not this broker also marked the character piloted.
+    if (spectateHolds(agent)) continue;
     // OUT ON PURPOSE (m59-dormancy.mjs). Not missing either -- and this sweep, which exists to put
     // back characters that FELL out, is exactly what used to undo every deliberate absence within
     // a lap: a person who logged off to survive was logged straight back in onto the attacker's
@@ -5460,7 +5707,7 @@ async function reconcileFleet() {
       // defer the sweep; a dead or unknown process still needs recovery.
       if(keeperCooperativeWait(proof))continue;
       if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
-          sessions.get(agent) !== existing || existing._liveness.disposed)
+          spectateHolds(agent) || sessions.get(agent) !== existing || existing._liveness.disposed)
         continue;
       if (proof.identityMismatch) {
         if (proof.processAlive === true) {
@@ -5633,6 +5880,7 @@ async function reconcileFleet() {
           const target = await verifiedKeeperWriteTarget(agent, index);
           const port = target.port;
           if (brokerStopping || leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
+              spectateHolds(agent) ||
               sessions.get(agent) !== existing || existing._liveness.disposed)
             continue;
           const r = await fetch(`http://127.0.0.1:${port}/rejoin`, {
@@ -7279,13 +7527,14 @@ async function factionSpeech(s, text) {
 const combatDispatch = new CombatDispatch({
   rooms: () => worldMap.rooms,
   candidates: () => [...sessions.keys()].filter(agent => !menagerieState.has(agent)).map(agent => ({
-    agent, unavailable: pilotOf(agent) ? 'character is human-piloted' : null,
+    agent, unavailable: humanHeld(agent) ? 'character is human-piloted' : null,
   })),
   send: async (agent, command) => {
-    if (pilotOf(agent)) return { skipped: true, reason: 'character is human-piloted' };
+    // humanHeld, not pilotOf: a person who relinquished control to a spectate keeper is watching.
+    if (humanHeld(agent)) return { skipped: true, reason: 'character is human-piloted' };
     const s = sessions.get(agent);
     if (s instanceof KeeperProxy) return keeperAction(agent, s._index, 'combat_order', command, {
-      timeoutMs: 3000, beforeSend: () => { if (pilotOf(agent)) throw Error('character is human-piloted'); },
+      timeoutMs: 3000, beforeSend: () => { if (humanHeld(agent)) throw Error('character is human-piloted'); },
     });
     if (!s?.combat) return { error: 'combat controller unavailable' };
     return s.combat.issue(command);
@@ -7419,11 +7668,11 @@ const TOOLS = [
     run: async a => {
       if (a.fleet_state && resolve(a.fleet_state) !== resolve(STATE_FILE))
         throw new Error('combat: WRONG BROKER — expected roster does not match this broker');
-      if (pilotOf(a.agent)) return { skipped: true, reason: 'character is human-piloted' };
+      if (humanHeld(a.agent)) return { skipped: true, reason: 'character is human-piloted' };
       a = { ...a, revision: combatDispatch.revision = Math.max(Date.now(), combatDispatch.revision + 1) };
       const s = session(a.agent);
       if (s instanceof KeeperProxy) return keeperAction(a.agent, s._index, 'combat', a, {
-        timeoutMs: 3000, beforeSend: () => { if (pilotOf(a.agent)) throw Error('character is human-piloted'); },
+        timeoutMs: 3000, beforeSend: () => { if (humanHeld(a.agent)) throw Error('character is human-piloted'); },
       });
       return s.combat.issue(a);
     },
@@ -15153,7 +15402,7 @@ const TOOLS = [
           results.push({ agent, queued: false, reason: 'not in game' });
           continue;
         }
-        if (pilotOf(agent)) {
+        if (humanHeld(agent)) {
           results.push({ agent, character: c.me?.name, queued: false,
                          reason: 'a local Meridian client is playing this character' });
           continue;
@@ -17607,7 +17856,7 @@ const TOOLS = [
         if (a.agent && cr.agent !== a.agent) continue;
         const p = autopilotIfAny(cr.agent);
         if (!p) { skipped.push(`${cr.character}: no keeper`); continue; }
-        if (pilotOf(cr.agent)) { skipped.push(`${cr.character}: somebody is playing this one`); continue; }
+        if (humanHeld(cr.agent)) { skipped.push(`${cr.character}: somebody is playing this one`); continue; }
         if (p.errand) { skipped.push(`${cr.character}: already on ${p.errand.kind}`); continue; }
         const s = sessions.get(cr.agent);
         const hv = s?.client?.vitals?.()?.health;
@@ -18611,6 +18860,9 @@ const TOOLS = [
           // Null for every character nobody is playing, which is nearly all of them.
           piloted: (() => { const p = pilotOf(name);
             return p ? { since: p.since, pid: p.pid, ...(p.lease ? { remote: p.lease.holder } : {}) } : null; })(),
+          // WHICH KEEPER IS DRIVING: null for the character's own process, or the spectate keeper on a
+          // person's connection that every read and order on this row is routed to (m59-spectate-route.mjs).
+          driver: s instanceof KeeperProxy ? s.driver : null,
           // The safe-spot thesis is a survival claim, so it has to be scored as one.
           // Deaths while standing in a square we believed in are the number that
           // falsifies it, and they are worth separating from deaths in the open.
@@ -21231,7 +21483,7 @@ function serveDashboard(port, { handle = null } = {}) {
         const readiness = {};
         if (!url.searchParams.has('mode') || url.searchParams.get('mode') === 'current') {
           await Promise.all([...sessions].map(async ([agent, s]) => {
-            if (pilotOf(agent)) { readiness[agent] = {unavailable:true,methods:[],reason:'human-piloted'}; return; }
+            if (humanHeld(agent)) { readiness[agent] = {unavailable:true,methods:[],reason:'human-piloted'}; return; }
             try {
               const gate = await s._journeyGate(Number(url.searchParams.get('to')??50));
               if (!gate.ok) { readiness[agent] = {unavailable:true,methods:[],reason:gate.why}; return; }

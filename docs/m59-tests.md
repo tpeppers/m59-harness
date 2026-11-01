@@ -2771,3 +2771,24 @@ list means every keeper), a bad port, mode or count, and a stray word such as `r
 Read as source, `m59-service.mjs` runs the check before it resolves a fleet or awaits anything,
 dispatches on the checked command rather than a second parse, and reads no flag the table does
 not accept, and the table accepts no flag the service does not read.
+
+## m59-spectate-route-test.mjs (90) — the broker talks to whichever keeper is driving
+
+2026-11-01, t17 (Zoot): the operator relinquished control to a spectate keeper on the PLAN tab, and
+the broker went on reading the character's normal keeper process, which was alive and offline.
+`fleet` put him in room 566 while he was in the East Tower (2013), and autopilot start, travel,
+cast and supply all went to a process with no socket. The suite pins `chooseKeeperRoute` in
+`m59-spectate-route.mjs`, a pure function. A fresh heartbeat for this agent and roster, with a live
+pid and a `/live` reply naming this agent, character and pid, routes to the spectate keeper's
+port. A missing, stale, stopped, dead-pid, other-agent or other-roster heartbeat gives the normal
+keeper, as before. A port answering for another agent, pid or character, or not answering at all,
+is `refused` and still `holds`, so the offline keeper is not used instead. A heartbeat with no HTTP
+port (a spectate keeper from before routing) is not routed to, but still holds the body. `humanHeld`
+keeps a piloted character hands-off only when no spectate keeper is driving. The suite also drives
+`scanKeepers` with a fake fetch and a temporary heartbeat directory: the spectate keeper replaces
+the band entry, and a wrong-pid answer leaves the band entry marked `spectate_holds`. It reads the
+broker, the keeper process and the launcher as text. Orders go through `verifiedKeeperOrderTarget`
+and every one re-proves the route. Lifecycle (stop, leave, wake, dormancy, rejoin) still addresses
+the normal keeper. The rejoin sweep, staged start and keeper handoff skip a spectate-held character.
+Spectate mode refuses to start without the attachment. The launcher writes only the scrubbed roster
+copy.
