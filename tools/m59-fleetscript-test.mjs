@@ -3187,6 +3187,11 @@ console.log('\nliveStart: who holds the body, and where it stands, read live (20
   ok('a remote lease holder is named', pilotHold('t14', { pilotStatus: { piloted: [{ agent: 't14', alive: true,
      holder: 'steamdeck m59-tui', held_s: 1 }] } }).holder === 'steamdeck m59-tui');
   ok('neither source readable is UNKNOWN, never "nobody"', pilotHold('t14', {}).held === null);
+  // A RELINQUISHED CHARACTER (spectate keeper driving the person's connection) keeps its claim with human_held:false: runnable.
+  ok('a relinquished claim (human_held:false) is not a person at the controls',
+     pilotHold('t14', { pilotStatus: { piloted: [{ agent: 't14', pid: 4242, alive: true, held_s: 9, human_held: false }] } }).held === false);
+  ok('human_held:true still refuses', pilotHold('t14', { pilotStatus: { piloted: [{ agent: 't14', pid: 4242, alive: true, held_s: 9, human_held: true }] } }).held === true);
+  ok('a relinquished fleet row is free', pilotHold('t14', { fleetRows: [{ agent: 't14', piloted: { since: T, pid: 7 }, human_held: false }], now: T }).held === false);
 
   // ---- b. jobOwnerVerdict, pure, with injected pids
   const job = (o = {}) => ({ id: 'j1', name: 'island-move-in (local)', kind: 'fleetscript', agents: ['a1'],

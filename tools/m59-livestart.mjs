@@ -60,7 +60,10 @@ export function pidAlive(pid) {
 export function pilotHold(agent, { pilotStatus = null, fleetRows = null, now = Date.now() } = {}) {
   const list = Array.isArray(pilotStatus?.piloted) ? pilotStatus.piloted : null;
   if (list) {
-    const p = list.find(x => String(x?.agent) === String(agent) && x?.alive !== false);
+    // A RELINQUISHED CHARACTER IS NOT HELD (feat/spectate-gaps): its claim stays while a spectate keeper drives the person's
+    // own connection, and the broker says so with `human_held: false` -- the fleet may run it, which is the point of
+    // relinquishing. An older broker sends no `human_held`, and the claim then counts as before.
+    const p = list.find(x => String(x?.agent) === String(agent) && x?.alive !== false && x?.human_held !== false);
     if (!p) return { held: false, source: 'pilot status' };
     return { held: true, pid: p.pid ?? null, heldMs: Number.isFinite(Number(p.held_s)) ? Number(p.held_s) * 1000 : null,
              holder: p.holder ?? null, source: 'pilot status' };
@@ -70,7 +73,7 @@ export function pilotHold(agent, { pilotStatus = null, fleetRows = null, now = D
     const row = rows.find(r => String(r?.agent) === String(agent));
     if (!row) return { held: null, source: 'fleet row (agent not on it)' };
     const p = row.piloted;
-    if (!p) return { held: false, source: 'fleet row' };
+    if (!p || row.human_held === false) return { held: false, source: 'fleet row' };
     return { held: true, pid: p.pid ?? null, heldMs: Number.isFinite(Number(p.since)) ? now - Number(p.since) : null,
              holder: p.remote ?? null, source: 'fleet row' };
   }
