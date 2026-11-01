@@ -131,6 +131,9 @@ function fakeWorld({
     if (name === 'status') {
       payload = { where: { num: rooms[agent], name: 'room' },
                   hp: health[agent] ?? { value: 50, max: 50 }, gold: null };
+    } else if (name === 'look') {
+      // The live start room (FleetScript `liveStart`) is read with `look`, never the status snapshot.
+      payload = { room: { num: rooms[agent], name: 'room' } };
     } else if (name === 'travel') {
       rooms[agent] = a.to;
       payload = { started: true };

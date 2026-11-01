@@ -296,7 +296,10 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     name: `${name} (${script.source})`,
     mode: script.mode ?? 'errand',
     agents,
-    steps: agent => script.steps({ ...withDefaults, agent, agents }),
+    // THE RUN STATE IS THE SECOND ARGUMENT, so a script can build its plan from where the body ACTUALLY stands:
+    // `state.startRoom` is read live (`look`) by the runner before the plan is built (guarantee `liveStart`). The
+    // preflights sample the plan with an empty state first, so a script must cope with `startRoom` undefined.
+    steps: (agent, state) => script.steps({ ...withDefaults, agent, agents }, state),
     minHealth: withDefaults.minHealth,
     // AND THE FRAGILE FLOOR, FOR THE SAME REASON AND WITH A SHARPER EDGE. `fragileBody`
     // refuses a journey for a body under a MAXIMUM-health floor, which is right on a road and
@@ -321,6 +324,9 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     // THE JOB BOARD: a script that must not be interrupted by an alert says so on itself (`finishOnAlert: true`, the
     // island ride), and an invocation may say it too (`finishOnAlert=true`). The REPL supplies the replay line.
     finishOnAlert: script.finishOnAlert === true || withDefaults.finishOnAlert === true || withDefaults.finishOnAlert === 'true',
+    // THE CODE KICK (guarantee `liveStart`): a body a person is piloting is refused unless the script declares that
+    // taking it is its first act (`codeKick: true | { budgetMs }`), or the invocation says so (`codeKick=true`).
+    codeKick: script.codeKick ?? (withDefaults.codeKick === true || withDefaults.codeKick === 'true'),
   });
   // Initialization scripts may hand standing work to a managed service only
   // AFTER the runner has cancelled its journeys and released every body/lock.
