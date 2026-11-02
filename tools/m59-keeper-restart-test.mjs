@@ -16,7 +16,7 @@ import {
   DEFAULT_KEEPER_RSS_MB, DEFAULT_MARGIN_MB, carriedTravel, stillTheSameWalk,
 } from './m59-keeper-restart.mjs';
 import { rtsJobReport } from './m59-rts-safety.mjs';
-import { brokerLacksHandoff } from './m59-war-restart.mjs';
+import { brokerLacksHandoff, describeRestartRow, describeRestartTotal } from './m59-war-restart.mjs';
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
 const src = f => readFileSync(join(TOOLS, f), 'utf8');
@@ -217,6 +217,51 @@ ok(!brokerLacksHandoff(Error('fetch failed')), 'an unreachable broker is a failu
      're-checked on the old connection, still before the spawn');
   ok(wr.indexOf('resumeCarriedWalk(agent, index, carry)') > wr.indexOf('sessions.set(agent, proxy)'),
      're-issued only after the broker is talking to the replacement');
+}
+
+// ---- A CHARACTER A PERSON IS PLAYING IS NEVER DROPPED WITHOUT A LINE (2026-11-02, Gonzo t18).
+// The report says which of four things happened, and the total counts deferred and skipped apart.
+{
+  const deferred = describeRestartRow({ agent: 't18', ok: true, deferred: true, pid: 4242, port: 9530, old_pid: 29352,
+                                        gives_up_at: Date.UTC(2026, 10, 2, 13) });
+  ok(/^piloted: successor staged \(pid 4242, port 9530\)/.test(deferred), 'a deferred row says a successor is staged');
+  ok(/takes over when the pilot logs off/.test(deferred), '...and when it takes over');
+  ok(/old pid 29352 keeps the body until then/.test(deferred), '...and who has the body meanwhile');
+  ok(/gives up 2026-11-02T13:00:00\.000Z/.test(deferred), '...and when it gives up');
+  ok(/^skipped  being played/.test(describeRestartRow({ agent: 't18', ok: true, skipped: true, why: 'being played by a person' })),
+     'a --skip-piloted row says skipped, not handed off');
+  ok(/^replaced dormant  pid 1 -> 2 .*logs in when the pilot logs off/.test(
+       describeRestartRow({ agent: 't20', ok: true, dormant: true, old_pid: 1, pid: 2, port: 9, wakes: 'pilot_released' })),
+     'a dormant swap is no longer printed as "handed off"');
+  eq(describeRestartRow({ agent: 't1', ok: true, old_pid: 1, pid: 2, port: 9 }), 'handed off  pid 1 -> 2 (port 9)',
+     'an ordinary handoff prints exactly as before');
+  eq(describeRestartRow({ agent: 't1', ok: false, why: 'x' }), 'FAILED  x');
+  eq(describeRestartTotal({ mode: 'handoff', restarted: 23, of: 24, deferred: 1 }),
+     '23 of 24 handed off without leaving the world, 1 waiting for the person playing them (pending successor)');
+  eq(describeRestartTotal({ mode: 'handoff', restarted: 24, of: 24 }), '24 of 24 handed off without leaving the world');
+
+  // The broker side, read from source: the candidates include a held character whose keeper a live
+  // handover preserved WITHOUT a keeperProcesses record -- the exact set that was filtered out.
+  const broker = src('m59-broker.mjs');
+  const cand = broker.slice(broker.indexOf('function warRestartCandidates('), broker.indexOf('async function warRestartFleet('));
+  ok(/!keeperProcesses\.has\(a\) && keeperPorts\.has\(a\) && \(!!pilotOf\(a\) \|\| spectateHolds\(a\)\)/.test(cand),
+     'a held character with a port but no record is a candidate');
+  ok(/return all\.filter\(a => keeperProcesses\.has\(a\) \|\| heldWithoutRecord\(a\)\);/.test(cand), 'and is not filtered out');
+  const fleet = broker.slice(broker.indexOf('async function warRestartFleet('), broker.indexOf('async function stopRecordedKeeper('));
+  ok(/const want = warRestartCandidates\(agents\);/.test(fleet), 'warRestartFleet walks the candidates');
+  ok(/restarted: results\.filter\(r => r\.ok && !r\.deferred && !r\.skipped\)\.length/.test(fleet), 'a deferral is not counted as a restart');
+  const wr = broker.slice(broker.indexOf('async function warRestartKeeper'), broker.indexOf('async function warRestartFleet'));
+  ok(wr.indexOf('old = await preservedPilotKeeper(agent)') > wr.indexOf('keeperHandoffs.add(agent)'),
+     'a preserved keeper is looked up after the mark, inside the try');
+  ok(/if \(adoptedOld && keeperProcesses\.get\(agent\) === old\) keeperProcesses\.delete\(agent\);/.test(wr),
+     'and a record written only for this call is taken out again');
+  ok(/if \(piloted && skipPiloted\) return \{ agent, ok: true, skipped: true/.test(wr), '--skip-piloted touches nothing');
+  ok(wr.indexOf("if (piloted && skipPiloted)") < wr.indexOf('keeperHandoffs.add(agent)'), '...not even the mark');
+  ok(/decideRestartMode\(\{ concurrency: 1, requested: 'auto', env \}\)/.test(wr),
+     'a standing successor passes the same memory gate as one handoff');
+  const service = src('m59-service.mjs');
+  ok(/skipPiloted: has\('--skip-piloted'\)/.test(service) && /arg\('--defer-max-minutes'\)/.test(service),
+     'restart-keepers takes --skip-piloted and --defer-max-minutes');
 }
 
 console.log(`m59-keeper-restart-test: ${n} assertions passed`);

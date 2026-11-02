@@ -284,13 +284,13 @@ async function unparkFleet() {
   }
 
   if (KEEPERS) {
-    const { restartKeepers } = await import('./m59-war-restart.mjs');
+    const { restartKeepers, describeRestartTotal } = await import('./m59-war-restart.mjs');
     const conc = arg('concurrency', null);
     const r = await restartKeepers({ url: RPC, fleet: FLEET ?? undefined, mode: keeperMode,
       decidedBy: 'the memory check above',
       concurrency: typeof conc === 'string' ? Number(conc) : null });
-    console.log(`\n${stamp()} ${r.restarted} of ${r.of} keeper(s) ` +
-                (r.mode === 'handoff' ? 'handed off without leaving the world' : 'logged off and back on a new pid'));
+    // Counts the characters waiting on a person (pending successors) apart from the ones handed off.
+    console.log(`\n${stamp()} ${describeRestartTotal(r)}`);
     if (r.mode !== 'handoff' && !NO_WAIT) await unparkFleet().catch(() => {});
     process.exit(r.ok ? 0 : 1);
   }

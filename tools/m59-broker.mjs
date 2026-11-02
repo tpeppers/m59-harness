@@ -269,7 +269,8 @@ import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { declaredJumpNear, livePreconditionState } from './m59-jump-precondition.mjs';
 import { runWho } from './m59-who.mjs';
 import { moveOrigin, originLabel, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
-import { carriedTravel, stillTheSameWalk } from './m59-keeper-restart.mjs';
+import { carriedTravel, stillTheSameWalk, decideRestartMode } from './m59-keeper-restart.mjs';
+import { PendingSuccessors, PENDING_ENV, pilotedRestartPlan, pendingMaxWaitMs } from './runtime/pending-successors.mjs';
 import { validatePvpRooms } from './m59-pvp-rooms.mjs';
 import { chooseKeeperRoute, readSpectateBeat, humanHeld as spectateHumanHeld } from './m59-spectate-route.mjs';
 
@@ -1310,6 +1311,10 @@ async function allocateKeeperPort(agent, index, credentials = null) {
     const taken = new Set();
     for (const [who, port] of keeperPorts) if (who !== agent) taken.add(port);
     for (const [who, rec] of keeperProcesses) if (who !== agent && rec?.port) taken.add(rec.port);
+    // A PENDING SUCCESSOR'S PORT, INCLUDING THIS AGENT'S OWN: `portIsOursOrFree` would read the
+    // successor answering as this agent as "ours, still up" and adopt a dormant process that is not
+    // this broker's keeper (runtime/pending-successors.mjs).
+    for (const port of pendingSuccessors.ports()) taken.add(port);
     return taken;
   };
   for (let port = start; port <= portBand.end; port++) {
@@ -1559,6 +1564,18 @@ async function spawnKeeperInner(agent, index, credentials) {
     const reply = await keeperLiveAt(port, { timeoutMs: 3000 });
     if (reply.ok) {
       const live = reply.value;
+      if (String(live?.agent ?? '') === String(agent) && live?.pending_successor) {
+        // AN ORPHANED PENDING SUCCESSOR, NEVER A SURVIVOR TO ADOPT. Our own are in
+        // pendingSuccessors and their ports are never offered here, so this one belongs to a broker
+        // that ended without handing its book on. It never held the body; adopting it would make a
+        // dormant process with a record nobody wakes this character's keeper. Stopped by its address.
+        const identity = { agent, character: live.character, pid: Number(live.pid) };
+        const stopped = await postToKeeperIdentity(port, identity, '/stop', {}).catch(() => ({ ok: false }));
+        console.error(`[keeper] ${agent}: port=${port} holds an orphaned pending successor pid=${live.pid}; ` +
+                      `${stopped.ok ? 'stopped it' : 'it did not accept a stop'}; a keeper starts on the next lap`);
+        if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
+        return false;
+      }
       if (String(live?.agent ?? '') === String(agent)) {
         const expectedCharacter = keeperCharacterIdentity(credentials?.character);
         const observedCharacter = keeperCharacterIdentity(live?.character);
@@ -1820,6 +1837,151 @@ async function spawnKeeperInner(agent, index, credentials) {
   return false;
 }
 
+// ============================================================================ PENDING SUCCESSORS
+//
+// A KEEPER ON THE NEW CODE, WARM AND INERT, WAITING FOR A PERSON TO LET GO OF THEIR CHARACTER
+// (operator, 2026-11-02). The decisions and the order of the take-over are runtime/pending-
+// successors.mjs, tested offline; these are its hands. A successor is in NONE of this broker's maps
+// -- not keeperProcesses, keeperPorts or sessions -- so no order, policy push, lease or rejoin can
+// reach it; it is addressed only by the take-over, by its exact pid, and only once nobody holds the
+// body. Its port is reserved through `pendingSuccessors.ports()` for every spawn that scans the band.
+
+/**
+ * The spawn env of a pending successor: dormant on a record of its own, and marked as one. The mark
+ * carries the broker's give-up time, so a successor whose broker ended without handing its book on
+ * (a crash) exits by itself rather than waiting as an orphan until a reboot.
+ */
+const pendingSuccessorEnv = (deadline) => ({
+  [DORMANCY_ENV]: encodeDormancy(normalizeDormancy({ reason: 'pilot', wake: 'manual', by: 'restart-keepers',
+    note: 'pending successor: on the new code, waiting for the person playing this character to log off' })),
+  [PENDING_ENV]: String(deadline),
+});
+
+/**
+ * THE KEEPER A LIVE BROKER HANDOVER PRESERVED UNDER A PILOT: alive on its recorded port, but with no
+ * keeperProcesses record. Believed only on the same proof the handover used -- this agent, this
+ * character, a valid pid, and both ownership guards -- and never if it is itself a pending successor.
+ */
+async function preservedPilotKeeper(agent) {
+  const port = keeperPorts.get(agent);
+  if (!Number.isInteger(port)) return null;
+  const reply = await keeperLiveAt(port, { timeoutMs: 3000 }).catch(() => null);
+  if (!reply?.ok || reply.value?.pending_successor) return null;
+  const pid = Number(reply.value?.pid);
+  const id = validateKeeperSample(reply.value, { agent, character: rosterEntry(agent)?.credentials?.character ?? null, pid });
+  if (!id.ok || !keeperOwnershipIsGuarded(agent, pid)) return null;
+  return { pid, port, startedAt: Date.now(), adopted: true, preserved: true };
+}
+
+/** A POST to one exact keeper process, addressed by agent and pid like every other keeper write. */
+async function postToKeeperIdentity(port, identity, path, body = {}, timeoutMs = 5000) {
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST', headers: keeperIdentityHeaders(identity),
+    body: keeperEnvelope(identity, body), signal: AbortSignal.timeout(timeoutMs),
+  });
+  const value = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, value };
+}
+
+const successorIdentity = rec => ({ agent: rec.agent, character: rosterEntry(rec.agent)?.credentials?.character ?? null, pid: rec.pid });
+
+const pendingSuccessors = new PendingSuccessors({
+  log: line => console.error(line),
+  fx: {
+    // Exactly what the rejoin sweep and a staged start ask before they would log anybody in.
+    occupied: agent => !!pilotOf(agent) || spectateHolds(agent),
+    successorAlive: rec => rec.child ? !spawnedChildExited(rec.child) : isProcessLive(rec.pid),
+    async oldKeeper(agent) {
+      let rec = keeperProcesses.get(agent);
+      if (!rec || !recordedKeeperAlive(rec)) rec = await preservedPilotKeeper(agent);
+      if (!rec) return null;
+      const identity = { agent, character: rosterEntry(agent)?.credentials?.character ?? null, pid: rec.pid };
+      const reply = await keeperLiveAt(rec.port, { timeoutMs: 3000 }).catch(() => null);
+      const sample = reply?.ok && validateKeeperSample(reply.value, identity).ok ? reply.value : null;
+      return { pid: rec.pid, port: rec.port, identity,
+               live: sample ? { connected: !!sample.connected, in_game: !!sample.in_game,
+                                cooperative_wait: sample.cooperative_wait === true } : null };
+    },
+    dormancy(agent) {
+      const record = dormancyOf(agent);
+      return record ? { record, stayOut: !dormancyVerdict(record, { pilotHeld: false }).wake } : null;
+    },
+    clearDormancy: (agent, why) => { try { dormancyStore().clear(agent, { why, by: 'pending successor' }); } catch {} },
+    fenceOld: async old => (await postToKeeperIdentity(old.port, old.identity, '/handoff', { timeout_ms: 150_000 })
+      .catch(() => ({ ok: false }))).ok,
+    unfenceOld: async old => (await postToKeeperIdentity(old.port, old.identity, '/handoff', { cancel: true })
+      .catch(() => ({ ok: false }))).ok,
+    wake: (rec, why) => postToKeeperIdentity(rec.port, successorIdentity(rec), '/wake',
+      { why: `pending successor: ${why}`, by: 'pending successor', refresh_orders: true }, 30_000).catch(e => ({ ok: false, error: e.message })),
+    sleep: async (rec, record) => (await postToKeeperIdentity(rec.port, successorIdentity(rec), '/dormant', record, 30_000)
+      .catch(() => ({ ok: false }))).ok,
+    async waitReady(rec, { dormant }) {
+      const until = Date.now() + 90_000;
+      while (!brokerStopping && Date.now() < until && (rec.child ? !spawnedChildExited(rec.child) : isProcessLive(rec.pid))) {
+        const reply = await keeperLiveAt(rec.port, { timeoutMs: 2000 }).catch(() => ({ ok: false }));
+        if (reply.ok) {
+          if (!validateKeeperSample(reply.value, successorIdentity(rec)).ok) return false;
+          if (dormant ? (reply.value.dormancy && !reply.value.in_game) : (reply.value.in_game && reply.value.connected)) return true;
+        }
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return false;
+    },
+    async swap(agent, rec) {
+      const index = agentIndices.get(agent);
+      keeperProcesses.set(agent, rec.child ? { pid: rec.pid, port: rec.port, startedAt: Date.now(), child: rec.child, detached: true }
+                                           : { pid: rec.pid, port: rec.port, startedAt: Date.now(), adopted: true });
+      keeperPorts.set(agent, rec.port);
+      const previous = sessions.get(agent);
+      const proxy = makeKeeperProxy(agent, index);
+      await proxy.initialize();
+      sessions.set(agent, proxy);
+      try { previous?.dispose?.(); } catch {}
+      ensureKeeperLivenessSweep();
+    },
+    stopOld: async old => (await postToKeeperIdentity(old.port, old.identity, '/stop', {}).catch(() => ({ ok: false }))).ok,
+    async stopSuccessor(rec) {
+      // Addressed first (the keeper never held the body, so its stop writes no carry and releases no
+      // claim), then the exact child handle if this broker spawned it. A bare numeric pid is never
+      // signalled: an adopted entry's number may already name somebody else's process.
+      await postToKeeperIdentity(rec.port, successorIdentity(rec), '/stop', {}).catch(() => null);
+      if (rec.child && !spawnedChildExited(rec.child)) {
+        await waitForSpawnedChildExit(rec.child, 2000);
+        if (!spawnedChildExited(rec.child)) { try { rec.child.kill('SIGTERM'); } catch {} await waitForSpawnedChildExit(rec.child, 5000); }
+      }
+    },
+    mark: (agent, on) => { if (on) keeperHandoffs.add(agent); else keeperHandoffs.delete(agent); },
+    record: (agent, what, detail) => {
+      const character = rosterEntry(agent)?.credentials?.character;
+      if (character) recordEvent(character, 'keeper_successor', { what, agent, ...detail });
+    },
+  },
+});
+
+// THE WATCH. Every few seconds while a successor waits: cheap (a map walk and the same sync pilot
+// checks the sweep makes), and it is what notices a spectate keeper's heartbeat ending. A released
+// pilot claim does not wait for it -- releasePilot ticks at once.
+//
+// ONE BROKER DECIDES. A warm successor broker holds the carried book from the handover snapshot but
+// must not take anybody over until it has committed (`started()` arms it), and a predecessor that is
+// freezing, retiring or no longer owns the fleet claim must stop: two brokers each waking the same
+// successor would be two take-overs of one body.
+let pendingSuccessorTimer = null;
+let pendingTakeoversArmed = !successorOf();
+function tickPendingSuccessors() {
+  if (!pendingTakeoversArmed || brokerStopping || brokerRetired || !pendingSuccessors.size) return;
+  if (!fleetClaimStillOurs()) return;
+  pendingSuccessors.tick().catch(e => console.error(`[pending] tick failed: ${e.message}`));
+}
+function ensurePendingSuccessorWatch() {
+  if (pendingSuccessorTimer) return;
+  pendingSuccessorTimer = setInterval(() => {
+    if (!pendingSuccessors.size) { clearInterval(pendingSuccessorTimer); pendingSuccessorTimer = null; return; }
+    tickPendingSuccessors();
+  }, Number(process.env.M59_PENDING_SUCCESSOR_TICK_MS || 5000));
+  pendingSuccessorTimer.unref?.();
+}
+
 // ============================================================================ WAR RESTART
 //
 // REPLACE A KEEPER WITHOUT THE CHARACTER EVER LEAVING THE WORLD. The old restart was a logoff:
@@ -1837,13 +1999,22 @@ async function spawnKeeperInner(agent, index, credentials) {
 //      records and proxy are swapped to it.
 // The sweep steps over the agent for the whole of it (keeperHandoffs). If the replacement does
 // not come up, it is stopped and the old keeper's handoff is withdrawn: nothing changed.
-async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
+async function warRestartKeeper(agent, { timeoutMs = 90_000, deferPiloted = true, skipPiloted = false,
+                                         deferMaxMinutes = null } = {}) {
   const index = agentIndices.get(agent);
   const credentials = rosterEntry(agent)?.credentials ?? null;
-  const old = keeperProcesses.get(agent);
+  let old = keeperProcesses.get(agent);
+  // Asked once, here, and passed down: every decision below is about the same moment.
+  const piloted = !!pilotOf(agent) || spectateHolds(agent);
   if (!credentials) return { agent, ok: false, why: 'not in a loaded roster' };
-  if (!old || !recordedKeeperAlive(old)) return { agent, ok: false, why: 'no live keeper to hand off from' };
+  // --skip-piloted: the operator said hands off, so nothing below may touch this character at all.
+  if (piloted && skipPiloted) return { agent, ok: true, skipped: true, why: pilotedRestartPlan({ occupied: true, skip: true }).why };
+  // A KEEPER PRESERVED UNDER A PILOT HAS NO RECORD (a live broker handover keeps the process and its
+  // port, not a keeperProcesses entry), so "no record" is not "no keeper" for an occupied character:
+  // it is looked up by port below, after the mark. That gap is how t18 was skipped on 2026-11-02.
+  if (old ? !recordedKeeperAlive(old) : !piloted) return { agent, ok: false, why: 'no live keeper to hand off from' };
   if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) return { agent, ok: false, why: 'already being brought up or handed off' };
+  if (pendingSuccessors.activating(agent)) return { agent, ok: false, why: 'its pending successor is taking over right now' };
   // A CHARACTER OUT OF THE WORLD ON PURPOSE IS REPLACED DORMANT, NOT SKIPPED. This used to refuse
   // every piloted character ("being played by a person"), which was right about the handoff -- the
   // replacement's login would bump the person -- and wrong about what came next: the old keeper,
@@ -1855,29 +2026,64 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
   // is still refused: there the keeper's socket is theirs, and replacing it would bump them.
   // A spectate keeper driving on the person's connection holds the body as surely as the person does:
   // the replacement must start dormant, not log in over them.
-  const piloted = !!pilotOf(agent) || spectateHolds(agent);
-  let dormantSwap = false, createdDormancy = false;
+  //
+  // AND WHERE THE SWAP IS NOT SAFE NOW, A SUCCESSOR WAITS (2026-11-02, runtime/pending-successors.mjs).
+  // The two refusals above -- the person's play riding this keeper's own socket, or an old keeper
+  // that will not say whether it is connected -- used to leave the body on OLD code with nothing to
+  // bring it forward. Now the replacement is spawned exactly as for a dormant swap, but with a
+  // record of its own (never the shared store, so nothing else wakes it), and is registered as this
+  // character's PENDING SUCCESSOR instead of being swapped in: no record changes, no order reaches
+  // it, nothing is sent to the server, and the old keeper is not told anything. When the person
+  // lets go it takes over the way a handoff does. `--skip-piloted` keeps the old refusal.
+  let dormantSwap = false, createdDormancy = false, pending = false, adoptedOld = false, pendingWait = null;
   keeperHandoffs.add(agent);
   let child = null, reservedPort = null;
   try {
     // Inside the try, so the finally releases the mark however this ends.
+    if (!old) {
+      old = await preservedPilotKeeper(agent);
+      // Nothing to restart, and not a failure: the sweep spawns a keeper from the code on disk when
+      // the person is done. Said, so the line exists -- the bug was the character with no line at all.
+      if (!old) return { agent, ok: true, skipped: true, why: 'being played by a person, and no keeper of ours answers ' +
+                                               'for it; the sweep starts one on the code on disk when the person is done' };
+      // Recorded for the length of this call only, so the identity-checked writes below can address
+      // it; the finally takes it out again unless a swap replaced it.
+      keeperProcesses.set(agent, old);
+      adoptedOld = true;
+    }
     if (piloted || dormancyOf(agent)) {
       const live = await keeperLiveAt(old.port, { timeoutMs: 3000 }).catch(() => ({ ok: false }));
       const connected = live.ok ? !!live.value?.connected : null;
-      if (connected === true)
-        return { agent, ok: false, why: piloted
-          ? 'being played by a person through this keeper\'s own connection (a proxied client); replacing it would bump them'
-          : 'a dormancy record says this character is out, but its keeper is in the world; wake it or clear the record first' };
-      if (connected === null)
-        return { agent, ok: false, why: `${piloted ? 'being played by a person' : 'held dormant'}, and the old keeper did not say whether it is connected` };
+      const plan = pilotedRestartPlan({ occupied: piloted, dormant: !!dormancyOf(agent), connected, defer: deferPiloted });
+      if (plan.action === 'refuse') return { agent, ok: false, why: plan.why };
+      if (plan.action === 'defer') {
+        // A SUCCESSOR IS A WHOLE KEEPER FOR AS LONG AS THE PERSON PLAYS, so it passes the same memory
+        // gate as one handoff, read against the defaults (a tasklist from inside the broker's event loop
+        // is the stall the loop profiler keeps catching). A short machine refuses, and says so.
+        const env = { M59_KEEPER_RSS_MB: process.env.M59_KEEPER_RSS_MB, M59_RESTART_MARGIN_MB: process.env.M59_RESTART_MARGIN_MB };
+        const fits = decideRestartMode({ concurrency: 1, requested: 'auto', env });
+        if (fits.mode !== 'handoff')
+          return { agent, ok: false, why: `${plan.why.split(';')[0]}; no successor staged: ${fits.message}` };
+        // A successor from an earlier restart is on that restart's code: this one replaces it.
+        if (pendingSuccessors.has(agent)) await pendingSuccessors.teardown(agent, 'superseded by a newer restart-keepers');
+        pending = true;
+        pendingWait = pendingMaxWaitMs({ minutes: deferMaxMinutes });
+        for (const w of pendingWait.warnings) console.error(`[war-restart] ${agent}: ${w}`);
+      }
       dormantSwap = true;
-      if (!dormancyOf(agent)) {
+      if (!pending && !dormancyOf(agent)) {
         dormancyStore().set(agent, normalizeDormancy({ reason: 'pilot', by: 'restart-keepers',
           note: 'replacement keeper waits for the person playing this character' }));
         createdDormancy = true;
       }
+    } else if (pendingSuccessors.has(agent)) {
+      // Nobody holds it now, so an ordinary handoff below replaces the old keeper; a successor still
+      // waiting for a person who has gone would be a second replacement for the same body.
+      await pendingSuccessors.teardown(agent, 'the character is free; restart-keepers hands it off directly');
     }
-    const target = await verifiedKeeperWriteTarget(agent, index);
+    // A pending successor never writes to the old keeper, so it needs no write target (and an old
+    // keeper that would not say whether it is connected would not pass the identity proof anyway).
+    const target = pending ? null : await verifiedKeeperWriteTarget(agent, index);
     const tell = async (body) => fetch(`http://127.0.0.1:${target.port}/handoff`, {
       method: 'POST', headers: keeperIdentityHeaders(target.identity),
       body: keeperEnvelope(target.identity, body), signal: AbortSignal.timeout(5000),
@@ -1910,6 +2116,8 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     const band = keeperPortBand();
     const taken = () => {
       const t = new Set([old.port, ...handoffPorts]);
+      // A pending successor is listening on its port for as long as the person plays.
+      for (const p of pendingSuccessors.ports()) t.add(p);
       for (const [, p] of keeperPorts) t.add(p);
       for (const [, rec] of keeperProcesses) if (rec?.port) t.add(rec.port);
       return t;
@@ -1938,6 +2146,7 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
     const { spawn } = await import('node:child_process');
     const HERE = dirname(fileURLToPath(import.meta.url));
     const permit = keeperOwnershipPermit(agent);
+    const pendingSince = Date.now(), pendingDeadline = pending ? pendingSince + pendingWait.ms : null;
     const logFd = openSync(`substrate/keeper-${agent}.log`, 'a');
     try {
       child = spawn(process.execPath,
@@ -1946,7 +2155,8 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
         { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
           env: { ...process.env, M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(permit), 'utf8').toString('base64url'),
                  // Only a dormant swap starts dormant; an ordinary handoff's replacement must log in.
-                 ...(dormantSwap ? dormancyEnvFor(agent) : {}) },
+                 // A pending successor starts dormant on a record of its OWN, never the shared store's.
+                 ...(dormantSwap ? (pending ? pendingSuccessorEnv(pendingDeadline) : dormancyEnvFor(agent)) : {}) },
           windowsHide: process.env.M59_KEEPER_WINDOWS !== '1',
           // Detached for the reason at the other keeper spawn: attached, it dies with the broker.
           detached: true });
@@ -1961,7 +2171,8 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       return { agent, ok: false, why: `replacement guard failed: ${guarded.reason}` };
     }
     console.error(`[war-restart] ${agent}: replacement pid=${child.pid} port=${port}; old pid=${old.pid} port=${old.port} ` +
-                  (dormantSwap ? 'replaced DORMANT (out of the world on purpose)' : 'handing off'));
+                  (pending ? 'staged as a PENDING SUCCESSOR (the person is still playing)'
+                           : dormantSwap ? 'replaced DORMANT (out of the world on purpose)' : 'handing off'));
 
     // READY MEANS IN THE WORLD, NOT MERELY LISTENING: in_game and connected, with this exact pid.
     // For a dormant swap it means the opposite, deliberately: answering, ours, dormant, and OUT.
@@ -1983,6 +2194,16 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
       return { agent, ok: false, why: dormantSwap
         ? 'the dormant replacement did not come up in time; the old keeper is untouched'
         : 'the replacement did not reach the world in time; the old keeper carries on' };
+    }
+
+    // A PENDING SUCCESSOR IS NOT SWAPPED IN: it is registered, and the broker keeps talking to the
+    // old keeper (or to nobody, while the person holds the body) until the person lets go.
+    if (pending) {
+      pendingSuccessors.stage(agent, { pid: child.pid, port, child, startedAt: pendingSince, deadline: pendingDeadline,
+        old_pid: old.pid, reason: 'restart-keepers while a person was playing', by: 'restart-keepers' });
+      ensurePendingSuccessorWatch();
+      return { agent, ok: true, deferred: true, pid: child.pid, port, old_pid: old.pid, gives_up_at: pendingDeadline,
+               why: 'being played by a person: a successor on the new code is staged and takes over when they log off' };
     }
 
     // THE SWAP. The old keeper exits on its own when its connection drops; the broker now talks
@@ -2014,6 +2235,8 @@ async function warRestartKeeper(agent, { timeoutMs = 90_000 } = {}) {
   } finally {
     keeperHandoffs.delete(agent);
     if (reservedPort != null) handoffPorts.delete(reservedPort);
+    // A preserved keeper this call recorded, and nothing replaced, goes back to having no record.
+    if (adoptedOld && keeperProcesses.get(agent) === old) keeperProcesses.delete(agent);
   }
 }
 
@@ -2041,18 +2264,36 @@ async function resumeCarriedWalk(agent, index, carry) {
            ...(ok ? {} : { why: String(r?.error ?? r?.why ?? 'not started') }) };
 }
 
-async function warRestartFleet({ agents = null, concurrency = 3, timeoutMs = 90_000 } = {}) {
-  const want = (agents?.length ? agents : [...keeperProcesses.keys()]).filter(a => keeperProcesses.has(a));
+// WHO A RESTART WALKS. Every keeper this broker records -- AND every character a person is holding
+// whose keeper has a port but no record. That second set is what a live broker handover leaves
+// behind (`piloted_preserved` keeps the process and the port, not the record), and filtering on
+// keeperProcesses alone dropped it before anything looked: Gonzo (t18), 2026-11-02, skipped without
+// a line and resumed on old code when the operator let go.
+function warRestartCandidates(agents = null) {
+  const heldWithoutRecord = a => !keeperProcesses.has(a) && keeperPorts.has(a) && (!!pilotOf(a) || spectateHolds(a));
+  const all = agents?.length ? agents
+    : [...new Set([...keeperProcesses.keys(), ...[...keeperPorts.keys()].filter(heldWithoutRecord)])];
+  return all.filter(a => keeperProcesses.has(a) || heldWithoutRecord(a));
+}
+
+async function warRestartFleet({ agents = null, concurrency = 3, timeoutMs = 90_000, deferPiloted = true,
+                                 skipPiloted = false, deferMaxMinutes = null } = {}) {
+  const want = warRestartCandidates(agents);
   const results = [];
   let next = 0;
   const worker = async () => {
     while (next < want.length) {
       const agent = want[next++];
-      results.push(await warRestartKeeper(agent, { timeoutMs }));
+      results.push(await warRestartKeeper(agent, { timeoutMs, deferPiloted, skipPiloted, deferMaxMinutes }));
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, want.length)) }, worker));
-  return { ok: results.every(r => r.ok), restarted: results.filter(r => r.ok).length, of: want.length, results };
+  // A DEFERRED OR SKIPPED CHARACTER IS NOT A FAILURE, AND NOT A RESTART EITHER: counted apart, so
+  // "23 of 24 handed off, 1 waiting for its pilot" says what happened.
+  return { ok: results.every(r => r.ok), restarted: results.filter(r => r.ok && !r.deferred && !r.skipped).length,
+           deferred: results.filter(r => r.deferred).length, skipped: results.filter(r => r.skipped).length,
+           of: want.length, results,
+           ...(pendingSuccessors.size ? { pending_successors: pendingSuccessors.list() } : {}) };
 }
 
 async function stopRecordedKeeper(agent, record, { reason = 'shutdown' } = {}) {
@@ -2104,6 +2345,8 @@ async function stopRecordedKeeper(agent, record, { reason = 'shutdown' } = {}) {
 }
 
 async function killAllKeepers(reason = 'broker shutdown') {
+  // Pending successors first: none of them ever held a body, and a stopped broker can wake nobody.
+  if (pendingSuccessors.size) await pendingSuccessors.teardownAll(reason).catch(() => null);
   const snapshot = [...keeperProcesses.entries()];
   const results = await Promise.all(snapshot.map(([agent, record]) =>
     stopRecordedKeeper(agent, record, { reason })));
@@ -5687,7 +5930,8 @@ async function reconcileFleet() {
   await Promise.all([...sessions.entries()]
     .filter(([agent, s]) => s instanceof KeeperProxy &&
       inAnyRoster(agent) && !leftOnPurpose.has(agent) && !dormant[agent] &&
-      !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent) && !spectateHolds(agent))
+      !keeperSpawning.has(agent) && !keeperHandoffs.has(agent) && !pilotOf(agent) && !spectateHolds(agent) &&
+      !pendingSuccessors.has(agent))
     .map(async ([agent, proxy]) => {
       const proof = await proxy.refreshLiveness({ force: true });
       livenessProofs.set(agent, { proxy, proof });
@@ -5710,6 +5954,10 @@ async function reconcileFleet() {
     // second one on the same port for the same character. Measured twice: two zombies
     // per resume, each holding a game socket for a character nobody could then log in.
     if (keeperSpawning.has(agent) || keeperHandoffs.has(agent)) continue;
+    // A SUCCESSOR IS WAITING TO TAKE THIS CHARACTER OVER (runtime/pending-successors.mjs). Its own
+    // watch does the login the moment the person lets go; a /rejoin here would put the OLD keeper back
+    // in the world on the old code first -- the very thing it was staged to prevent.
+    if (pendingSuccessors.has(agent)) continue;
     // Being played by a person. Not missing — occupied. Rejoining would take the
     // character out from under a hand that is on the keys, and the login would bump
     // them straight out of the world.
@@ -5746,7 +5994,7 @@ async function reconcileFleet() {
       // defer the sweep; a dead or unknown process still needs recovery.
       if(keeperCooperativeWait(proof))continue;
       if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || keeperHandoffs.has(agent) || pilotOf(agent) ||
-          spectateHolds(agent) || sessions.get(agent) !== existing || existing._liveness.disposed)
+          spectateHolds(agent) || pendingSuccessors.has(agent) || sessions.get(agent) !== existing || existing._liveness.disposed)
         continue;
       if (proof.identityMismatch) {
         if (proof.processAlive === true) {
@@ -6292,6 +6540,12 @@ function releasePilot(agent, why = 'released') {
       console.error(`[pilot] ${agent} still in game — keeper restarted here rather than ` +
                     `waiting for a rejoin that is not coming`);
     } catch (e) { console.error(`[pilot] ${agent} keeper did not restart: ${e.message}`); }
+  }
+  // A SUCCESSOR ON THE NEW CODE IS WAITING FOR EXACTLY THIS MOMENT (runtime/pending-successors.mjs).
+  // Not inline: pilotOf() releases lazily from inside other decisions, and the take-over awaits.
+  if (pendingSuccessors.has(agent)) {
+    console.error(`[pilot] ${agent}: a pending successor takes over now`);
+    setImmediate(tickPendingSuccessors);
   }
   return p;
 }
@@ -7670,11 +7924,34 @@ const TOOLS = [
       agents: { type: 'array', items: { type: 'string' } },
       concurrency: { type: 'integer', minimum: 1, maximum: 8, description: 'handoffs in flight at once (default 3)' },
       timeout_ms: { type: 'integer', minimum: 20000, maximum: 300000 },
+      defer_piloted: { type: 'boolean', description: 'default true: a character a person is playing whose keeper cannot be swapped now gets a PENDING SUCCESSOR on the new code, inert until they log off, then it takes over as a handoff does' },
+      skip_piloted: { type: 'boolean', description: 'leave every character a person is playing exactly as it is (no swap, no successor); reported as skipped' },
+      defer_max_minutes: { type: 'number', minimum: 1, maximum: 10080, description: `how long a pending successor waits for the person before it is stopped and the old keeper kept (default ${pendingMaxWaitMs({ env: {} }).ms / 60_000}, or ${'M59_PENDING_SUCCESSOR_MAX_MIN'})` },
     }, required: ['fleet_state'] },
     run: async a => {
       if (!a.fleet_state || resolve(a.fleet_state) !== resolve(STATE_FILE))
         throw new Error(`war_restart: fleet_state ${a.fleet_state} is not this broker's roster (${STATE_FILE})`);
-      return warRestartFleet({ agents: a.agents ?? null, concurrency: a.concurrency ?? 3, timeoutMs: a.timeout_ms ?? 90_000 });
+      return warRestartFleet({ agents: a.agents ?? null, concurrency: a.concurrency ?? 3, timeoutMs: a.timeout_ms ?? 90_000,
+        deferPiloted: a.defer_piloted !== false, skipPiloted: a.skip_piloted === true,
+        deferMaxMinutes: a.defer_max_minutes ?? null });
+    },
+  },
+  {
+    name: 'pending_successors',
+    description: 'Keepers staged by restart-keepers for characters a person is playing: on the new code, inert (never logged in, sent nothing), each taking over as a handoff the moment its person logs off, or stopped after its max wait. action list (default) shows them; cancel stops the named ones now (the old keeper stays, on its code).',
+    schema: { type: 'object', properties: {
+      action: { enum: ['list', 'cancel'] },
+      agents: { type: 'array', items: { type: 'string' } },
+      why: { type: 'string' },
+    } },
+    run: async a => {
+      if ((a.action ?? 'list') === 'list')
+        return { pending: pendingSuccessors.list(), note: pendingSuccessors.size ? undefined : 'no keeper is waiting for a person to log off' };
+      if (!a.agents?.length) throw new Error('pending_successors cancel needs agents');
+      const results = [];
+      for (const agent of a.agents)
+        results.push(await pendingSuccessors.teardown(agent, `cancelled by an operator${a.why ? `: ${a.why}` : ''}`));
+      return { results, pending: pendingSuccessors.list() };
     },
   },
   {
@@ -18942,6 +19219,10 @@ const TOOLS = [
           // which takes orders like any keeper-backed one. Readers ask m59-spectate-route.mjs
           // rowHumanHeld(row), never `row.piloted`, so a row from an older broker still means piloted.
           human_held: humanHeld(name),
+          // A KEEPER ON THE NEW CODE WAITING FOR THE PERSON TO LOG OFF (runtime/pending-successors.mjs):
+          // the keeper this row reads is still the old one until it takes over. Null nearly always.
+          pending_successor: (() => { const r = pendingSuccessors.get(name);
+            return r ? { pid: r.pid, port: r.port, since: r.startedAt, gives_up_at: r.deadline ?? null } : null; })(),
           // The safe-spot thesis is a survival claim, so it has to be scored as one.
           // Deaths while standing in a square we believed in are the number that
           // falsifies it, and they are worth separating from deaths in the open.
@@ -20250,6 +20531,9 @@ function brokerHealth() {
     // A STAGED START STILL WAITING: `held` characters are warm and out of the world until
     // `dormancy` start_all. `requested` is this process's flag; the holds outlive it on disk.
     staged: { requested: STAGED_START, held: stagedCount() },
+    // KEEPERS WAITING FOR A PERSON TO LOG OFF: restart-keepers staged each on the new code while its
+    // character was being played; each takes over when the person lets go (runtime/pending-successors.mjs).
+    pending_successors: pendingSuccessors.list(),
     // WHAT THIS BROKER COSTS, IN ITS OWN WORDS. A caller choosing a timeout is guessing
     // without this, and every wrong guess is work computed for nobody. Slowest first,
     // and a tool with too few samples is left out rather than reported as fact.
@@ -21974,6 +22258,10 @@ function buildHandoverSnapshot() {
   put('commerceQuotes', commerceQuotes.records);
   put('combat', { revision: combatDispatch.revision, commands: combatDispatch.commands });
   put('piloted', piloted);
+  // Pids and ports only: a successor broker adopts each by its address and proves its identity
+  // before addressing it. Without this every pending successor would be an orphan the moment the
+  // predecessor retired, and its character would resume on the old keeper.
+  put('pendingSuccessors', pendingSuccessors.exportSnapshot());
   put('rejoinState', rejoinState);
   put('leftOnPurpose', leftOnPurpose);
   put('forgotten', forgotten);
@@ -22013,6 +22301,11 @@ function restoreHandoverSnapshot(s) {
     refill(combatDispatch.commands, s.combat.commands);
   }
   refill(piloted, s.piloted);
+  if (Array.isArray(s.pendingSuccessors) && s.pendingSuccessors.length) {
+    const n = pendingSuccessors.importSnapshot(s.pendingSuccessors);
+    console.error(`[handover] ${n} pending successor(s) carried: ${s.pendingSuccessors.map(r => r.agent).join(', ')}`);
+    ensurePendingSuccessorWatch();
+  }
   refill(rejoinState, s.rejoinState);
   refill(leftOnPurpose, s.leftOnPurpose);
   refill(forgotten, s.forgotten);
@@ -22279,6 +22572,9 @@ async function runAsSuccessor() {
       // The board's file is this broker's now: persist from here (a warm successor never wrote it).
       jobBoard.persist = true;
       try { jobBoard.save(); } catch {}
+      // The carried pending successors are this broker's to wake from here on.
+      pendingTakeoversArmed = true;
+      if (pendingSuccessors.size) ensurePendingSuccessorWatch();
       startLedger();
       startReconciling();
       startPilotWatch();

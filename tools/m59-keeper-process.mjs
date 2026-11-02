@@ -89,6 +89,7 @@ import { fallJumpsIn, selectDeclaredFall } from './m59-falljump.mjs';
 import { declaredJumpNear, livePreconditionState } from './m59-jump-precondition.mjs';
 import { moveOrigin, movementReport, withMoveOrder , exceptionCancelRefusal } from './m59-move-origin.mjs';
 import { DORMANCY_ENV, decodeDormancy, normalizeDormancy, withLogoff, dormancyVerdict } from './m59-dormancy.mjs';
+import { PENDING_ENV } from './runtime/pending-successors.mjs';
 import { PvpStrategyHost } from './m59-pvp-strategy.mjs';
 import { JointHost } from './m59-joints.mjs';
 import { postRequest } from './rpg/requests.mjs';
@@ -244,8 +245,9 @@ const credPort = entry.credentials.port || serverPort;
 // CURRENT orders rather than the ones this process happened to start with.
 // WHAT THE ROSTER SAID AT BOOT, before any push mutates it (`policy` below IS the roster entry's
 // object). The carry compares against it: see tools/m59-keeper-carry.mjs.
-const bootPolicy = structuredClone(entry.autopilot?.policy || {});
-const bootMode = entry.autopilot?.mode || 'goap';
+// `let` for one reason: a PENDING SUCCESSOR (below) re-reads both when it is woken, hours after boot.
+let bootPolicy = structuredClone(entry.autopilot?.policy || {});
+let bootMode = entry.autopilot?.mode || 'goap';
 let policy = entry.autopilot?.policy || {};
 let mode = entry.autopilot?.mode || 'goap';
 // A CHARACTER'S ASSIGNMENTS OUTLIVE ITS KEEPER PROCESS (tools/m59-keeper-carry.mjs). The keeper
@@ -264,9 +266,60 @@ if (carried) {
     `${carried.claims.length} claim(s), busy ${carried.busy ? 'yes' : 'no'}, policy ${Object.keys(a.fields).join(',') || 'none'}` +
     (a.mode ? `, mode ${a.mode}` : '') + (a.skipped.length ? `; roster changed, not carried: ${a.skipped.join(',')}` : ''));
 }
+// A PENDING SUCCESSOR (tools/runtime/pending-successors.mjs): restart-keepers started this process on the
+// new code while a person was playing the character, dormant on a record of its own, to take over when
+// they log off. Until its first login it NEVER HELD THE BODY, and everything a keeper does on its way
+// out in the body's name is somebody else's to do: it writes no carry (it was told nothing, and an
+// empty carry would overwrite the old keeper's), saves no final state over the old keeper's snapshot,
+// and releases no safe-spot claim -- the claim is keyed by agent, so releasing it would free the OLD
+// keeper's wall. The env value is the broker's give-up time; past it (plus a margin) a successor that
+// was never woken exits by itself, which is what ends one orphaned by a broker crash.
+const PENDING_SUCCESSOR = (() => {
+  const raw = process.env[PENDING_ENV];
+  if (!raw || SPECTATE) return null;
+  const deadline = Number(raw);
+  return { deadline: Number.isFinite(deadline) && deadline > 1e12 ? deadline : null };
+})();
+let everJoined = false;
+const neverHeldBody = () => !!PENDING_SUCCESSOR && !everJoined;
+if (PENDING_SUCCESSOR) console.error(`[keeper] ${agent} PENDING SUCCESSOR: dormant until the person playing this character ` +
+  `logs off` + (PENDING_SUCCESSOR.deadline ? `; exits by itself after ${new Date(PENDING_SUCCESSOR.deadline + 5 * 60_000).toISOString()}` : ''));
+
+/**
+ * THE ORDERS AS THEY ARE NOW, for a pending successor about to log in. It read the roster at boot,
+ * possibly hours ago, and the old keeper it replaces has been told things since: so the roster entry
+ * is read again, and the carry the old keeper wrote when it was fenced (POST /handoff) is adopted on
+ * top of it, by the same rule as at boot (tools/m59-keeper-carry.mjs).
+ */
+function refreshPendingOrders() {
+  let fresh = null;
+  try { fresh = JSON.parse(readFileSync(fleetPath, 'utf8'))?.[agent] ?? null; }
+  catch (e) { console.error(`[keeper] ${agent} pending successor: roster re-read failed (${e.message}); keeping the boot orders`); }
+  if (!fresh) try { fresh = JSON.parse(readFileSync(menageriePath, 'utf8'))?.[agent] ?? null; } catch {}
+  if (fresh?.autopilot) {
+    entry.autopilot = fresh.autopilot;
+    bootPolicy = structuredClone(fresh.autopilot.policy || {});
+    bootMode = fresh.autopilot.mode || 'goap';
+    policy = fresh.autopilot.policy || {};
+    mode = fresh.autopilot.mode || 'goap';
+  }
+  try { carried = readCarry(CARRY_FILE, { agent, character: entry.credentials?.character, pid: process.pid }); }
+  catch (e) { carried = null; console.error(`[keeper] ${agent} carry unreadable: ${e.message}`); }
+  let adopted = null;
+  if (carried) {
+    adopted = policyToAdopt(carried, bootPolicy, bootMode);
+    Object.assign(policy, adopted.fields);
+    if (adopted.mode) mode = adopted.mode;
+  }
+  console.error(`[keeper] ${agent} pending successor: orders re-read from the roster (mode ${mode})` +
+    (carried ? `; carried from pid ${carried.pid} (${carried.reason}): ${carried.claims.length} claim(s), ` +
+               `policy ${Object.keys(adopted.fields).join(',') || 'none'}` : '; no carry'));
+}
+
 /** Write what this keeper has been told, for the process that replaces it. */
 function writeAssignmentCarry(reason) {
   if (SPECTATE) return;   // a spectate keeper's assignments are the roster's; the next real keeper must not adopt them
+  if (neverHeldBody()) return;   // a pending successor was told nothing; see PENDING_SUCCESSOR
   try {
     writeCarry(CARRY_FILE, captureCarry({ agent, character: entry.credentials?.character, pid: process.pid, reason,
       claims: autopilot?.claims, busy: autopilot?.busy, bootPolicy, livePolicy: policy, bootMode, liveMode: mode }));
@@ -808,6 +861,7 @@ async function joinGenerationOnce(generation) {
     });
     assertJoinIntent(generation);
     inGame = true;
+    everJoined = true;
     connectionRevision++;
     cancelInitialJoinRetry();
     console.error(`[keeper] ${agent} joined as ${session.client?.me?.name ?? character}`);
@@ -1895,6 +1949,9 @@ const server = createServer(async (req, res) => {
         // OUT ON PURPOSE. A dormant keeper is alive and deliberately not in the world; the record
         // says why and what ends it (m59-dormancy.mjs). null when it is not dormant.
         dormancy,
+        // A PENDING SUCCESSOR that has not taken over yet (runtime/pending-successors.mjs): not this
+        // character's keeper, and never to be adopted as one. null for every ordinary keeper.
+        pending_successor: neverHeldBody() ? { deadline: PENDING_SUCCESSOR.deadline } : null,
         uptime_s: Math.floor((Date.now() - startedAt) / 1000),
         // The saves this client has seen, for the broker's fleet-wide save clock. Cheap — a
         // six-entry array already held — so it rides on the liveness poll the broker makes
@@ -4436,6 +4493,7 @@ const server = createServer(async (req, res) => {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
       try {
+        if (asked.refresh_orders === true && neverHeldBody() && dormancy) refreshPendingOrders();
         const r = await wakeFromDormancy(String(asked.why ?? 'asked to wake'), String(asked.by ?? 'unattributed'));
         json({ ok: true, ...r, in_game: inGame, connected: !!session.live });
       } catch (e) {
@@ -5562,6 +5620,9 @@ function armShutdownWatchdog(why, ms = 5000) {
 let finalStateSaved = false;
 function saveFinalState() {
   if (finalStateSaved) return false;
+  // The snapshot file is keyed by agent: a pending successor that never logged in would overwrite the
+  // live old keeper's with "not in game" (see PENDING_SUCCESSOR).
+  if (neverHeldBody()) return false;
   finalStateSaved = true;
   // A graceful stop keeps the historical final snapshot contract. This is the only
   // unobserved path which constructs enriched state, and it happens once, not twice.
@@ -5588,9 +5649,20 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => process.kill(process.pid, 'SIGTERM'));
 
 process.on('exit', () => {
-  releaseSpot(agent);
+  // The claim is keyed by agent: a pending successor releasing it would free the OLD keeper's wall.
+  if (!neverHeldBody()) releaseSpot(agent);
   saveFinalState();
 });
+
+// THE ORPHAN BACKSTOP. The broker stops a pending successor at its give-up time; one whose broker
+// crashed without handing its book on is stopped by nobody, so past that time (plus five minutes)
+// a successor that was never woken leaves by itself. It never held the body, so it takes nothing
+// with it.
+if (PENDING_SUCCESSOR?.deadline) setInterval(() => {
+  if (!neverHeldBody() || !dormancy || Date.now() < PENDING_SUCCESSOR.deadline + 5 * 60_000) return;
+  log(`[keeper] ${agent} pending successor was never woken by its give-up time; exiting`);
+  process.exit(0);
+}, 60_000).unref?.();
 
 // ---------------------------------------------------------------- spectate heartbeat
 //

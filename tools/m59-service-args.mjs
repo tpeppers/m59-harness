@@ -33,6 +33,8 @@ const VALUE_FLAGS = {
   // reading of an unrecognised mode is a warning and `auto`, which is too late to be a refusal.
   '--mode':        { hint: '<auto|handoff|logoff>', oneOf: ['auto', 'handoff', 'logoff'] },
   '--concurrency': { hint: '<n>', int: [1, 1000] },
+  // How long a pending successor waits for a person to log off (runtime/pending-successors.mjs).
+  '--defer-max-minutes': { hint: '<minutes>', int: [1, 10080] },
   '--lines':       { hint: '<n>', int: [0, 1e9] },  // 0 has always meant "the whole log"
 };
 
@@ -44,7 +46,7 @@ export const SERVICE_FLAGS = Object.freeze({
   'start':           START,
   'stop':            ['--fleet', '--http', '--dashboard', '--no-ui', '--force'],
   'restart':         [...START, '--cold', '--force'],
-  'restart-keepers': ['--fleet', '--http', '--agents', '--mode', '--concurrency'],
+  'restart-keepers': ['--fleet', '--http', '--agents', '--mode', '--concurrency', '--skip-piloted', '--defer-max-minutes'],
   'status':          ['--fleet', '--http', '--dashboard'],
   'logs':            ['--fleet', '--lines', '--follow'],
 });

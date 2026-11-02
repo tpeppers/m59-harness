@@ -145,9 +145,10 @@ held character in at once.
   used to skip a piloted character ("being played by a person"), and when the person logged out the
   OLD keeper was told to rejoin. Now a piloted character whose keeper is disconnected is replaced
   DORMANT: no handoff (there is no connection to hand), the replacement starts with a `pilot`
-  record, the old keeper is stopped, and the sweep wakes the new one when the person is done. A
-  person playing THROUGH the keeper's own socket (`--proxy`) is still refused, because there the
-  keeper's connection is theirs.
+  record, the old keeper is stopped, and the sweep wakes the new one when the person is done. Where
+  that swap is not safe right now -- a person playing THROUGH the keeper's own socket (`--proxy`), or
+  an old keeper that will not say whether it is connected -- a **pending successor** waits for them
+  instead (2026-11-02; [below](#a-person-playing-a-character-a-successor-waits-for-them-to-log-off)).
 
 **Not built yet, and shaped for:** a keeper that logs ITSELF off to survive (`reason: 'evade'`).
 The playbook verbs `logoff` and `call_for_help` already promise "stay off for `stay_off_s`" and say
@@ -217,6 +218,68 @@ handoffs probed the same free port and one died `EADDRINUSE` (nine of twenty-two
 concurrency 3). A broker with the port reservation advertises
 `keeper_handoff: {port_reservation: true}` on `/health`, and only then does the default rise
 to three.
+
+#### A person playing a character: a successor waits for them to log off
+
+```bash
+node tools/m59-service.mjs restart-keepers --fleet prod                        # default: piloted ones get a successor
+node tools/m59-service.mjs restart-keepers --fleet prod --skip-piloted         # leave them exactly as they are
+node tools/m59-service.mjs restart-keepers --fleet prod --defer-max-minutes 240
+node tools/m59-service.mjs status --fleet prod                                 # "successor  t18 pid ... waiting 12m"
+```
+
+A character a person is playing (a DebugClient or shortcut login, a remote pilot lease, or a spectate
+keeper on their connection) cannot be handed off: the replacement's login would bump them. On
+2026-11-02 `restart-keepers` skipped Gonzo (t18) **without a line** -- a live broker handover had
+preserved his keeper under the pilot without a `keeperProcesses` record, and the restart only walked
+that map -- and when the operator let go, the same old keeper resumed him on the old code. Operator:
+*"add an option to that where the keeper's started inert and waiting for me to log off before it
+logs on."* So now each such character gets one of three things, and the restart says which:
+
+- **replaced dormant** (since 2026-10-07): its keeper is already out of the world (the person's client
+  bumped it), so the replacement starts with a `pilot` hold, the old keeper is stopped, and the sweep
+  wakes the new one when the person is done.
+- **a pending successor**: the swap is not safe now -- the person plays through the keeper's own
+  socket, or the old keeper would not say whether it is connected. A keeper on the new code is spawned
+  warm and DORMANT on a record of its own (never the shared dormancy store), with the account's
+  ownership guard beside the old keeper's, and registered as that character's successor
+  (`runtime/pending-successors.mjs`). It is in none of the broker's maps, so no order, policy push,
+  lease or rejoin reaches it, and it sends nothing to the server. The output line reads
+  `t18   piloted: successor staged (pid 4242, port 9530) on the new code, inert; takes over when the
+  pilot logs off, gives up ... (old pid 29352 keeps the body until then)`.
+- **skipped**: `--skip-piloted` (tool argument `skip_piloted`) leaves every character a person holds
+  exactly as it is -- no swap, no successor -- and says so.
+
+**When the person lets go** (client exits, remote lease lapses, spectate heartbeat ends), the pilot
+watch notices in seconds and the successor takes over the way a handoff does: the old keeper is
+FENCED (`/handoff`: it will not reconnect by any path), the person's absence is checked once more, the
+successor is woken (it re-reads the roster's orders and adopts the old keeper's carry) and logs in --
+a still-connected old keeper is dropped by the server, which is its cue to exit -- and only when the
+successor answers `in_game` and `connected` with its own pid are the broker's records swapped; then
+the old keeper is told to stop, its socket already gone. A dormancy hold that does not end with the
+person (an operator hold, an evade) is honoured: the successor takes that record instead of logging
+in. The rejoin sweep steps over the character for the whole wait, so the OLD keeper is never
+`/rejoin`ed onto the old code first.
+
+**It never touches a held body, and it is bounded.** `occupied` is asked before anything is sent and
+again immediately before the wake; a person who comes back in between keeps the body and the fence is
+withdrawn. A successor is a whole keeper process (~500 MB), so it is staged only when the one-handoff
+memory gate passes (`m59-keeper-restart.mjs`), and a short machine refuses with the numbers. It gives up
+after `--defer-max-minutes` (tool `defer_max_minutes`; env `M59_PENDING_SUCCESSOR_MAX_MIN`; default
+12 h): the successor is stopped, the reason logged and written to the character's ledger
+(`keeper_successor`, `torn_down`), and the old keeper keeps the body on its code -- run
+`restart-keepers --agents t18` once the person is done. A take-over that fails (the successor never
+reaches the world, the old keeper will not take the fence) is tried ONCE: the successor is stopped, the
+fence withdrawn, and the old keeper and the sweep carry on exactly as before. A second `restart-keepers`
+replaces a waiting successor with one on the newer code.
+
+**Where to see one.** `m59-service.mjs status` prints a `successor` line per waiting character;
+`/health` carries `pending_successors`; each fleet row carries `pending_successor` (`{pid, port, since,
+gives_up_at}`, null nearly always); the broker tool `pending_successors` lists them and `cancel`s one;
+the ledger records `keeper_successor` rows (`staged`, `activated`, `torn_down`). A live broker handover
+carries the book (pids and ports, never process handles) and only the broker that owns the fleet may
+wake one; an orderly broker stop stops them. A successor whose broker crashed without handing its book
+on exits by itself five minutes after its give-up time, and is never adopted as a surviving keeper.
 
 ### Restarting the broker: hand it over, do not log it off
 

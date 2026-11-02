@@ -1988,7 +1988,7 @@ starts the count again, and a character that earns something is forgotten. **It 
 the day a stall reason can go unclassified again.**
 
 
-## m59-keeper-restart-test.mjs (60) — a keeper restart is a handoff unless memory says no
+## m59-keeper-restart-test.mjs (98) — a keeper restart is a handoff unless memory says no
 
 Pins `decideRestartMode` in `m59-keeper-restart.mjs`: handoff when free memory exceeds
 (concurrency + 1) x per-keeper RSS + margin, strictly; a concurrency that does not fit is lowered
@@ -2000,6 +2000,31 @@ environment, and an unrecognised value is reported and treated as `auto`; measur
 the logoff fallback is addressed by agent, character and pid with one line per keeper; only an
 `unknown tool` may fall through to a logoff — a wrong-broker refusal never does. And the callers
 that used to `POST /stop` (friendly-reboot, node-keeper-build) now go through it.
+And (2026-11-02, Gonzo t18) the restart REPORT says which of four things happened to each keeper --
+handed off, replaced dormant, a pending successor staged, or skipped by `--skip-piloted` -- and the
+total counts deferred and skipped apart from restarted; and, read from the broker source, that a
+character a person holds whose keeper a live handover preserved WITHOUT a keeperProcesses record is
+still a restart candidate, looked up after the mark and un-recorded again afterwards, that
+`--skip-piloted` touches nothing, and that a standing successor passes the one-handoff memory gate.
+
+## pending-successors-test.mjs (24) — a keeper waits, inert, for the person to log off
+
+`node tools/runtime/pending-successors-test.mjs`. Drives `runtime/pending-successors.mjs` against fake
+hands that record every call, so "never while held" is a statement about the calls actually made.
+`pilotedRestartPlan`: a free character is handed off as before, a piloted one whose keeper is out of
+the world is replaced dormant now, one played THROUGH its keeper or whose keeper will not answer is
+DEFERRED (the old refusal comes back with `defer: false`), `--skip-piloted` skips every occupied one,
+and a dormancy hold with nobody at the controls is never deferred. The max wait (12 h; the caller,
+then `M59_PENDING_SUCCESSOR_MAX_MIN`; garbage reported). The take-over: a hundred ticks with a
+person holding the body send nothing to anybody; when they let go it is fence, wake, ready, swap,
+stop-old in that order with the sweep stepped over throughout; a person who comes back between the
+fence and the login keeps the body and the fence is withdrawn; a successor that does not reach the
+world is stopped and forgotten after ONE attempt; an old keeper that will not take the fence is
+never logged in over; a cooperative-logoff wait is waited for; an operator hold makes it a dormant
+take-over with no login; a pilot hold is cleared before the login; past the max wait only the
+successor is stopped, with the reason recorded; a take-over in flight cannot be torn down or
+started twice; and the book crosses a live broker handover by pid and port, never a handle.
+**It should fail the day a successor can log in while a person holds the body.**
 
 `m59-nowindow-test.mjs` now also scans `tools/runtime/` and counts `tasklist`/`taskkill` as
 program launches, because the process-identity checks there run on every keeper spawn, adoption
@@ -2438,14 +2463,19 @@ arrived / died / timeout / elsewhere with damage counted as every drop.
   penalty guard outranking all of them; a deadline wake without a deadline refused rather than read
   as "for ever"; an unreadable hand-over failing CLOSED; and a corrupt store throwing instead of
   reading as "nobody is held". Temp directory only.
-- `node tools/m59-dormancy-shape-test.mjs` (22): that the keeper and the broker CONSULT it where
+- `node tools/m59-dormancy-shape-test.mjs` (25): that the keeper and the broker CONSULT it where
   forgetting to is the bug -- join, the autopilot's reconnect, `/join` and `/rejoin` refuse a dormant
   keeper (423, never the 409 a broker reads as a stranger's port), a dormant spawn never logs in, the
   rejoin sweep reads the store before any `/rejoin` and stops the lap if it cannot, `restart-keepers`
   replaces a piloted character dormant instead of skipping it, and a person logging off under a hold
   starts the penalty clock; and that a STAGED START holds everybody before the first spawn (never
   on an adoption, never over an existing hold) and `start_all` wakes only its own holds, in lanes,
-  without bumping a pilot. Source text only, like `m59-handoff-shape-test.mjs`.
+  without bumping a pilot. And the PENDING SUCCESSOR wiring (2026-11-02): it starts dormant on a
+  record of its own, is registered before any swap so no record names it, is skipped by the rejoin
+  sweep and offered by no port allocation, is never adopted as a surviving keeper, is woken at once by
+  a released pilot but only by the broker that owns the fleet, crosses a live handover and is stopped
+  by an orderly shutdown; and a successor that never held the body writes no carry, no final state and
+  never releases the old keeper's wall claim. Source text only, like `m59-handoff-shape-test.mjs`.
 
 ## Departure deviation guard
 
