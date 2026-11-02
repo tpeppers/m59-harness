@@ -228,6 +228,9 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `fleet` | The fleet, with a way to climb inside any of them. |
 | `fleetbook` | THE FLEETBOOK — WHAT AN ERRAND ACHIEVES IN THE GAME, WHAT IT COSTS, AND WHAT IT NEEDS. |
 | `fleetlib` | WHERE FLEET SCRIPTS LIVE, AND WHOSE THEY ARE. |
+| `fleet-insights` | Read-only spell practice rates, explicit-goal ETAs, courier timing and quiet/PvP-hit reports. |
+| `fleet-insights-page` | Spell practice and Couriers dashboard boards. |
+| `fleet-insights-server` | Optional loopback companion for older brokers; verifies source fleet identity. |
 | `fleetpath` | WHICH ROSTER FILE IS "THE FLEET" RIGHT NOW. |
 | `fleets` | WHICH FLEETS DOES THIS MACHINE ACTUALLY HAVE CREDENTIALS FOR, AND IS ANYTHING HOLDING THEM? |
 | `fleetscope` | WHOSE RECORDS ARE THESE? One answer, for every tool that reads a per-character file. |

@@ -72,6 +72,8 @@ export const TABS = [
   { key: 'fleet', href: '/', label: 'Fleet' },
   { key: 'dum', href: '/dum', label: 'DUM bot' },
   { key: 'harness', href: '/harness', label: 'Harness' },
+  { key: 'practice', href: '/practice', label: 'Spell practice' },
+  { key: 'couriers', href: '/couriers', label: 'Couriers' },
   { key: 'deaths', href: '/deaths', label: 'Post mortems' },
   { key: 'travel', href: '/travel', label: 'Travel' },
   { key: 'tougher', href: '/tougher', label: 'Tougher' },

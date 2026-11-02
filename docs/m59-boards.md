@@ -1,5 +1,9 @@
 # The boards and the planner
 
+`/practice` and `/couriers` show spell progress, explicit-target ETAs, courier
+timing percentiles and quiet/PvP-hit lap history. See
+[fleet operations boards](m59-fleet-insights.md) for metric definitions and coverage.
+
 `/arrivals` compares fleet arrival P90s using inspected current resources or
 explicit what-if assumptions. See [arrival estimates](m59-arrivals.md) for
 evidence limits, whole-route simulation and the matching travel selector.

@@ -6,6 +6,7 @@
 // one port over. Keep the list here so the HTTP server and its offline test share it.
 
 const EXACT = new Set([
+  '/practice', '/couriers',
   '/budget', '/deaths', '/deaths/report', '/dum', '/economy', '/economy/trips', '/harness', '/inventory',
   '/communications', '/faction', '/players', '/pvp', '/skills', '/stats', '/tougher', '/travel',
   '/hometowns', '/arrivals', '/maximums',

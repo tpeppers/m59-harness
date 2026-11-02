@@ -259,7 +259,8 @@ for (let run = 1; run <= MAX_RUNS && !stopping; run++) {
     h = await brokerHealth();
     led = await trainingLedger({ agent: AGENT, code: file ? codeIdentity(file) : null, health: h });
     before = await snapshot((t, a) => call(t, a), AGENT, { school: SCHOOL, reagentNames: REAGENTS });
-    await led.record({ kind: 'run_start', school: SCHOOL, command: describe(entry), gate: g0, snapshot: before });
+    await led.record({ kind: 'run_start', school: SCHOOL, command: describe(entry), gate: g0, snapshot: before,
+      goals: { until: UNTIL, until_known: UNTIL_KNOWN, until_said: UNTIL_SAID, abilities: TARGETS } });
   } catch (e) { say(`training ledger unavailable: ${e.message}`); led = null; }
   const t0 = Date.now();
   const r = await runOnce(entry.cmd, entry.stdin, led ? { M59_TRAINING_RUN: led.run } : {}, { watch: UNTIL_SAID });
