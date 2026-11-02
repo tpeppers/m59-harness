@@ -50,6 +50,58 @@ export const BOOKMAKERS_HALL_ROOM = 714;
 export const BOOKMAKERS_CHESTS = 3;
 export const STORAGE_DIR = process.env.M59_STORAGE_DIR || 'substrate/storage';
 
+// EVERY GUILD HALL ON THE SERVER, BY ROOM NUMBER. A ROSTER MAY HOLD MORE THAN ONE GUILD, AND EACH
+// GUILD MAY HOLD ONE OF THESE.
+//
+// `RID_GUILDH1..15` (blakston.khd) and each hall's own `room_name_*` and `viFoyer_*`
+// (kod/object/active/holder/room/ghall/guildhN.kod). The room number is the hall's durable name:
+// the map's number, which no save renumbers. A hall's object id is a handle and recycles.
+//
+// THIS IS WHAT LETS A CHEST READING SAY WHICH HALL IT CAME FROM. A chest is named by its square
+// ("r18c6"), and squares are only unique WITHIN a room. With one hall that was enough; with two,
+// "r18c6" names a chest in each of them, and a reading filed under the bare square would land in
+// whichever hall's books happened to be open. So a reading is filed under the hall it was TAKEN
+// IN -- the room the reader was standing in -- never under the reader's own guild. A member of one
+// guild using an ally's chests updates the ally's books, because that is whose chest changed.
+//
+// `foyer` is the InFoyer box (ghall.kod:896), where the hall password is refused in silence;
+// null where the hall declares none. Only 714's passage (m59-guild-passage.mjs) is surveyed.
+export const GUILD_HALL_ROOMS = Object.freeze({
+  701: { name: 'Mercenary Alley', foyer: { north: 16, south: 21, west: 11, east: 19 } },
+  702: { name: 'The Hall of Explorers', foyer: { north: 16, south: 20, west: 30, east: 34 } },
+  703: { name: 'The Den of Shadows', foyer: { north: 1, south: 8, west: 1, east: 7 } },
+  704: { name: "The Wryn's Keep", foyer: { north: 44, south: 51, west: 21, east: 29 } },
+  705: { name: "West Tower Guild Hall in Ko'catan", foyer: { north: 27, south: 48, west: 0, east: 27 } },
+  706: { name: 'The Old Dwarven Hall', foyer: null },
+  707: { name: 'Guild hall 707 (guildh5)', foyer: { north: 25, south: 33, west: 13, east: 23 } },
+  708: { name: 'The Sewer Hideout', foyer: null },
+  709: { name: 'The Abandoned Warehouse', foyer: { north: 5, south: 11, west: 15, east: 24 } },
+  710: { name: 'Guild hall 710 (guildh10)', foyer: { north: 25, south: 33, west: 13, east: 23 } },
+  711: { name: 'The Ivory Chapel', foyer: { north: 9, south: 15, west: 3, east: 12 } },
+  712: { name: 'The home of the Friends of the Forest', foyer: { north: 2, south: 7, west: 11, east: 20 } },
+  713: { name: 'The Hall of the Slaughtered Command', foyer: { north: 1, south: 13, west: 1, east: 7 } },
+  714: { name: "The Bookmaker's Guild House", foyer: { north: 2, south: 3, west: 26, east: 39 } },
+  715: { name: "Inner Sanctum of Queen Venya'cyr", foyer: { north: 0, south: 27, west: 0, east: 31 } },
+});
+export const isGuildHallRoom = (room) =>
+  Number.isInteger(Number(room)) && Object.prototype.hasOwnProperty.call(GUILD_HALL_ROOMS, Number(room));
+export const hallName = (room) => GUILD_HALL_ROOMS[Number(room)]?.name ?? (room == null ? null : `room ${room}`);
+
+// THE FLAT LAYOUT IS HALL 714'S. Until the roster could hold a second guild every chest reading was
+// the Bookmaker's, and was filed as `chests/<square>.json` with a `room` field that was often the
+// room's OBJECT ID (2569 on prod) rather than its number. So a flat file is read as 714 whatever its
+// `room` says, and 714 keeps writing there -- every reader of that layout keeps working and the
+// history files stay continuous. Any other hall files under `chests/<room>/`.
+export const LEGACY_CHEST_HALL = BOOKMAKERS_HALL_ROOM;
+
+// FRULAR NAMES THE GUILD IN HIS RENT ANSWER: "The The Second Swines owes 6547 coins in rent" --
+// `The %s` with the guild's own name, which may itself begin with "The". That is the one rent fact
+// that does not depend on who asked, so it is what a rent reading is filed under.
+export function rentGuildName(said) {
+  const m = /\bThe (.+?) (?:owes \d+ coins?|has a positive balance|owes no rent)/i.exec(String(said ?? ''));
+  return m ? m[1].trim() : null;
+}
+
 const pct = (used, max) => (max > 0 ? Math.min(999, Math.round((used / max) * 100)) : null);
 
 /**
@@ -174,6 +226,8 @@ export function vaultReadings(record, { snapshots = [], character = record?.char
   return { vaults: VAULTS.map(v => ({ ...v, reading: best.get(v.room) ?? null })), unplaced };
 }
 
+export const sameGuild = (a, b) => a != null && b != null &&
+  String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const safe = value => String(value ?? 'unknown').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'unknown';
 const readJson = (path) => {
   if (!existsSync(path)) return null;
@@ -249,8 +303,16 @@ export class StorageCache {
   }
 
   vaultPath(character) { return join(this.dir, 'vaults', `${safe(character)}.json`); }
-  chestPath(key) { return join(this.dir, 'chests', `${String(key)}.json`); }
+  // 714 is the flat layout (LEGACY_CHEST_HALL); every other hall has a directory of its own.
+  chestDir(room = LEGACY_CHEST_HALL) {
+    const r = room == null ? LEGACY_CHEST_HALL : Number(room);
+    return r === LEGACY_CHEST_HALL ? join(this.dir, 'chests') : join(this.dir, 'chests', String(r));
+  }
+  chestPath(key, room = LEGACY_CHEST_HALL) { return join(this.chestDir(room), `${String(key)}.json`); }
+  // RENT IS PER GUILD. `rent.json` is the reading from before a roster could hold two guilds (or one
+  // whose guild could not be named); a named guild has `rent/<guild>.json`.
   get rentPath() { return join(this.dir, 'rent.json'); }
+  rentPathFor(guild) { return guild ? join(this.dir, 'rent', `${safe(String(guild).toLowerCase())}.json`) : this.rentPath; }
 
   // ---------------------------------------------------------------- vaults
   // EACH TOWN'S VAULT IS ITS OWN, so the room it was read in is part of the reading. `items` stays the LAST vault read
@@ -299,13 +361,22 @@ export class StorageCache {
   // and "there is nothing in it" are opposite facts about a guild's stores.
   // KEYED ON THE SQUARE. `object_id` is still recorded — it is useful within a single visit
   // and it is how a recycled id gets noticed — but nothing addresses a chest by it.
+  //
+  // AND FILED UNDER ITS HALL. `room` is REQUIRED and must be a guild hall's room NUMBER: with more
+  // than one guild in the roster a square names a chest in each hall, and a reading with no hall is
+  // a reading that will be filed under the wrong one. The old fallback to the room's object id (2569
+  // for 714 on prod) is refused rather than guessed at.
   writeChest(where, { object_id = null, room = null, items = [], by = null, at = null } = {}) {
     const key = typeof where === 'string' ? where : chestKey(where);
     const at2 = parseChestKey(key);
     if (!at2)
       throw new Error(`a chest is named by its square, like "r18c6" — got ${JSON.stringify(where)}`);
-    const prev = readJson(this.chestPath(key));
-    const next = writeJson(this.chestPath(key), { slot: key, row: at2.row, col: at2.col,
+    if (!isGuildHallRoom(room))
+      throw new Error(`a chest reading needs the guild hall's ROOM NUMBER (701-715) to say whose chest it is — ` +
+                      `got ${JSON.stringify(room)}; an object id is a handle, not a hall`);
+    room = Number(room);
+    const prev = readJson(this.chestPath(key, room));
+    const next = writeJson(this.chestPath(key, room), { slot: key, row: at2.row, col: at2.col,
       object_id, room,
       items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
       opened_by: by ?? null, observed_at: Number(at) || this.now() });
@@ -315,7 +386,7 @@ export class StorageCache {
     try {
       const d = chestDiff(prev, next);
       if (d && (d.left.length || d.arrived.length)) {
-        const path = this.chestHistoryPath(key);
+        const path = this.chestHistoryPath(key, room);
         mkdirSync(join(path, '..'), { recursive: true });
         appendFileSync(path, JSON.stringify({ slot: key, room: next.room,
           prev_at: prev.observed_at ?? null, at: next.observed_at, by: next.opened_by,
@@ -326,14 +397,18 @@ export class StorageCache {
   }
 
   // Beside the readings, NOT among them: `allChests` takes every `*.json` in chests/ for a chest.
-  chestHistoryPath(key) { return join(this.dir, 'chest-history', `${String(key)}.jsonl`); }
+  chestHistoryPath(key, room = LEGACY_CHEST_HALL) {
+    const r = room == null ? LEGACY_CHEST_HALL : Number(room);
+    return r === LEGACY_CHEST_HALL ? join(this.dir, 'chest-history', `${String(key)}.jsonl`)
+                                   : join(this.dir, 'chest-history', String(r), `${String(key)}.jsonl`);
+  }
 
   /** The last `limit` changes seen in one chest, newest first. Missing file is an empty list. */
-  readChestHistory(where, { limit = 20 } = {}) {
+  readChestHistory(where, { limit = 20, room = LEGACY_CHEST_HALL } = {}) {
     const key = typeof where === 'string' ? where : chestKey(where);
     if (!parseChestKey(key)) return [];
     let text = '';
-    try { text = readFileSync(this.chestHistoryPath(key), 'utf8'); } catch { return []; }
+    try { text = readFileSync(this.chestHistoryPath(key, room), 'utf8'); } catch { return []; }
     const out = [];
     for (const line of text.split('\n').reverse()) {
       if (!line.trim()) continue;
@@ -343,11 +418,25 @@ export class StorageCache {
     return out;
   }
 
-  readChest(where) {
+  readChest(where, room = LEGACY_CHEST_HALL) {
     const key = typeof where === 'string' ? where : chestKey(where);
     if (!parseChestKey(key)) return null;
-    const v = readJson(this.chestPath(key));
-    return v ? { ...v, fullness: chestFullness(v.items ?? []) } : null;
+    const hall = room == null ? LEGACY_CHEST_HALL : Number(room);
+    const v = readJson(this.chestPath(key, hall));
+    // A flat file's own `room` may be an object id (see LEGACY_CHEST_HALL); the directory says which hall.
+    return v ? { ...v, room: hall, chest_id: `${hall}/${key}`, fullness: chestFullness(v.items ?? []) } : null;
+  }
+
+  /** The hall rooms anybody has filed a chest reading under. */
+  chestHalls() {
+    let names = [];
+    try { names = readdirSync(join(this.dir, 'chests'), { withFileTypes: true }); } catch { return []; }
+    const halls = new Set();
+    for (const d of names) {
+      if (d.isDirectory() && isGuildHallRoom(d.name) && Number(d.name) !== LEGACY_CHEST_HALL) halls.add(Number(d.name));
+      else if (d.isFile() && d.name.endsWith('.json') && parseChestKey(d.name.slice(0, -5))) halls.add(LEGACY_CHEST_HALL);
+    }
+    return [...halls].sort((a, b) => a - b);
   }
 
   // EVERY CHEST ANYONE HAS LOOKED IN, which is not the same as every chest that exists.
@@ -357,24 +446,36 @@ export class StorageCache {
   // be on, and inventing one would be inventing chests. So this reports what has actually
   // been seen, and "we have never looked in the hall" is the empty list — which
   // `guildStoreAvailable` already treats as "no evidence of a hall to fill".
-  allChests() {
-    let names = [];
-    try { names = readdirSync(join(this.dir, 'chests')); } catch { return []; }
-    return names
-      .filter(f => f.endsWith('.json'))
-      .map(f => f.slice(0, -5))
-      // A file that is not named after a square is not a chest reading. The numeric ones
-      // this scheme replaced are exactly that, and they are skipped rather than parsed --
-      // they named a hall the guild no longer owns.
-      .filter(k => !!parseChestKey(k))
-      .map(k => this.readChest(k))
-      .filter(Boolean)
-      .sort((a, b) => (a.row - b.row) || (a.col - b.col));
+  //
+  // EVERY HALL, unless `room` names one. Each row carries `room` (the hall it was read in) and
+  // `chest_id` ("714/r18c6"), because `slot` alone is no longer unique once there are two halls.
+  // A caller deciding anything about ONE guild's stores must pass that guild's hall: the
+  // unfiltered list is for boards that show every hall side by side.
+  allChests({ room = null } = {}) {
+    const halls = room == null ? this.chestHalls() : [Number(room)];
+    const out = [];
+    for (const hall of halls) {
+      let names = [];
+      try { names = readdirSync(this.chestDir(hall)); } catch { continue; }
+      out.push(...names
+        .filter(f => f.endsWith('.json'))
+        .map(f => f.slice(0, -5))
+        // A file that is not named after a square is not a chest reading. The numeric ones
+        // this scheme replaced are exactly that, and they are skipped rather than parsed --
+        // they named a hall the guild no longer owns.
+        .filter(k => !!parseChestKey(k))
+        .map(k => this.readChest(k, hall))
+        .filter(Boolean));
+    }
+    return out.sort((a, b) => (a.room - b.room) || (a.row - b.row) || (a.col - b.col));
   }
 
+  // FILED UNDER THE GUILD FRULAR NAMED. The asker's guild is the fallback, never the first choice:
+  // what Frular says is what the server's books say, whoever happened to ask.
   writeRent({ due = null, credit = null, in_guild = null, hours_left = null, said = null,
               guild = null, by = null, at = null } = {}) {
-    return writeJson(this.rentPath, { due: due == null ? null : Number(due),
+    guild = rentGuildName(said) ?? guild ?? null;
+    return writeJson(this.rentPathFor(in_guild === false ? null : guild), { due: due == null ? null : Number(due),
       credit: credit == null ? null : Number(credit),
       in_guild: in_guild == null ? null : !!in_guild,
       hours_left: hours_left == null ? null : Number(hours_left),
@@ -382,5 +483,37 @@ export class StorageCache {
       observed_at: Number(at) || this.now() });
   }
 
-  readRent() { return readJson(this.rentPath); }
+  // `readRent(guild)` is that guild's reading. The pre-split `rent.json` still answers for a guild it
+  // NAMES (its `guild` field, or the guild Frular named in `said`) -- and for nobody else, because a
+  // second guild reading the first guild's balance as its own is exactly the mix-up this prevents.
+  // With no guild, the newest reading of any guild: that is the old single-guild behaviour, and is
+  // only right while the roster holds one guild.
+  readRent(guild = null) {
+    if (guild) {
+      const own = readJson(this.rentPathFor(guild));
+      if (own) return own;
+      const legacy = readJson(this.rentPath);
+      const named = legacy ? (legacy.guild ?? rentGuildName(legacy.said)) : null;
+      return named && sameGuild(named, guild) ? { ...legacy, guild: named } : null;
+    }
+    const all = this.allRents();
+    return all.sort((a, b) => (b.observed_at ?? 0) - (a.observed_at ?? 0))[0] ?? null;
+  }
+
+  /** Every guild's last rent reading, one per guild (the legacy file only for a guild nothing newer names). */
+  allRents() {
+    const out = [];
+    try {
+      for (const f of readdirSync(join(this.dir, 'rent')).filter(f => f.endsWith('.json'))) {
+        const r = readJson(join(this.dir, 'rent', f));
+        if (r) out.push({ ...r, guild: r.guild ?? rentGuildName(r.said) });
+      }
+    } catch { /* no per-guild readings yet */ }
+    const legacy = readJson(this.rentPath);
+    if (legacy) {
+      const named = legacy.guild ?? rentGuildName(legacy.said);
+      if (!out.some(r => named && sameGuild(r.guild, named))) out.push({ ...legacy, guild: named, legacy: true });
+    }
+    return out;
+  }
 }

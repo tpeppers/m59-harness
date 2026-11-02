@@ -8,6 +8,11 @@ import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 
 let closed;
+// THE HALLS WHOSE PASSAGE IS SURVEYED. Everything in this file -- anchors, doors, the closed-state
+// geometry -- is the Bookmaker's Guild House (714). A roster holding several guilds can own other
+// halls; until each is surveyed the keeper refuses their chests by name (autopilot/hall.mjs
+// `hallHere`) rather than walk 714's doors in a room that does not have them.
+export const SURVEYED_HALLS = Object.freeze([714]);
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
 // EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED — INCLUDING ON THE WAY OUT.
 //

@@ -37,6 +37,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { guildPlan, guildShortfall, guildStoreAvailable, contributionPlan, countWanted, entryNames } from './m59-guildwants.mjs';
 import { StorageCache, CHEST_BULK_MAX, chestFullness, BOOKMAKERS_HALL_ROOM } from './m59-storage.mjs';
+import { rentForHall } from './m59-hall-select.mjs';
 import { evictionOrder, tally, NEVER_EVICT } from './m59-chest-eviction.mjs';
 import { freeRoom, loadConfig, readDeskOpen, RANK_SIR, PKILL_ENABLE_HP } from './m59-vault-broker.mjs';
 
@@ -113,13 +114,17 @@ export function chestBoard({ chests = [], plan = null, bulk = () => null, worth 
 }
 
 /** Everything the page needs, read live from disk and the price/bulk tables. */
-export async function liveBoard({ root = here('..') } = {}) {
+// `hall` is the guild hall's room (default 714). A roster may hold several guilds, each with its own
+// hall, rent and plan; this board is about ONE of them, and its rent is its owner's (m59-guild-registry).
+// One rule for "whose rent gates this hall", shared with the Inventory board and the planner.
+const hallRent = (store, hall) => rentForHall({ store, room: Number(hall) }).rent;
+export async function liveBoard({ root = here('..'), hall = HALL } = {}) {
   const { liveInputs } = await import('./m59-chest-evict.mjs');
-  const inputs = await liveInputs({ root });
+  const inputs = await liveInputs({ root, hallRoom: hall });
   const store = new StorageCache();
-  const chests = store.allChests().filter(c => Number(c.room) === HALL || c.room == null);
-  const rent = store.readRent();
-  const plan = guildPlan();
+  const chests = store.allChests({ room: hall });
+  const rent = hallRent(store, hall);
+  const plan = guildPlan(Number(hall));
   const sellAt = sellerFor(inputs);
   return {
     gate: guildStoreAvailable({ rent, chests }),
@@ -283,28 +288,28 @@ export function rankCouriers({ rows = [], saleBulk = 0, access = new Set(), cfg 
 }
 
 /** Everyone the chest readings and their history show opening a chest. */
-export function chestOpeners(store = new StorageCache()) {
+export function chestOpeners(store = new StorageCache(), { hall = null } = {}) {
   const out = new Set();
-  for (const c of store.allChests()) {
+  for (const c of store.allChests({ room: hall })) {
     if (c.opened_by) out.add(norm(c.opened_by));
-    try { for (const h of store.readChestHistory(c.slot, { limit: 2000 })) if (h?.by) out.add(norm(h.by)); } catch { /* no history */ }
+    try { for (const h of store.readChestHistory(c.slot, { limit: 2000, room: c.room })) if (h?.by) out.add(norm(h.by)); } catch { /* no history */ }
   }
   return out;
 }
 
 /** Live: read the fleet, estimate each row's way to the hall, look in its pack for drop-offs. */
-export async function liveCouriers({ call, saleBulk = 0, inspect = 8 } = {}) {
+export async function liveCouriers({ call, saleBulk = 0, inspect = 8, hall = HALL } = {}) {
   const rows = (await call('fleet', {}, 60_000))?.fleet ?? [];
   const store = new StorageCache();
-  const chests = store.allChests().filter(c => Number(c.room) === HALL);
-  const rent = store.readRent();
-  const plan = guildPlan();
+  const chests = store.allChests({ room: hall });
+  const rent = hallRent(store, hall);
+  const plan = guildPlan(Number(hall));
   const cfg = loadConfig();
   const desk = readDeskOpen('prod');
-  const access = chestOpeners(store);
+  const access = chestOpeners(store, { hall });
   const eta = new Map();
   await Promise.all(rows.filter(r => Number.isFinite(Number(r.room_num))).map(async r => {
-    const e = await call('travel_estimate', { from: Number(r.room_num), to: HALL }, 15_000).catch(() => null);
+    const e = await call('travel_estimate', { from: Number(r.room_num), to: hall }, 15_000).catch(() => null);
     eta.set(r.agent, Number.isFinite(e?.ms) ? e.ms : null);
   }));
   // Packs are read only for the nearest few that pass the cheap checks: an inventory read is a

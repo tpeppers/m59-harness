@@ -51,7 +51,11 @@ import { fileURLToPath } from 'node:url';
 // back.
 import { proficiencyFor as profFor } from './m59-skills.mjs';
 import { guildPlan, saveGuildPlan, guildStoreAvailable, guildShortfall } from './m59-guildwants.mjs';
-import { StorageCache, GUILD_CHEST_SLOTS, CHEST_BULK_MAX, chestFullness } from './m59-storage.mjs';
+import { StorageCache, GUILD_CHEST_SLOTS, CHEST_BULK_MAX, chestFullness, hallName } from './m59-storage.mjs';
+// Which hall the guild-hall sheet is editing, when the roster holds more than one guild. The same
+// default and the same rent rule as the Inventory board, so the two never show different halls.
+import { GuildRegistry } from './m59-guild-registry.mjs';
+import { hallChoices, pickHall, rentForHall, hallLabel } from './m59-hall-select.mjs';
 // The loadout format, and the only thing that decides what a character name may become on
 // the filesystem. This server accepts one over a socket; it does not get to invent its own
 // rule for that.
@@ -59,7 +63,7 @@ import { readLoadout, writeLoadout, writeLoadoutPlan, listLoadouts, loadoutPath,
          LOADOUT_DIR, applyInventoryToAll } from './m59-loadout.mjs';
 // The Guild Chest page's half: the board, the sell plan, the sale jobs and their scheduler.
 import { liveBoard, liveCouriers, readSales, saveSellPlan, addJob, cancelJob, nextDue, updateJob,
-         runSaleJob, jobLogFile, normaliseSellPlan, SALES_FILE } from './m59-guild-sale.mjs';
+         runSaleJob, jobLogFile, normaliseSellPlan, SALES_FILE, HALL as SALE_HALL } from './m59-guild-sale.mjs';
 
 // The m59-research reports, rendered on request from wherever this machine keeps them.
 import { serveReports, reportsDir } from '../compendium/tools/reports.mjs';
@@ -372,6 +376,31 @@ function readBody(req, res, then) {
   });
 }
 
+// The hall picker's rows, as the guild pages draw them.
+const hallRows = (halls = []) => halls.map(c => ({ room: c.room, name: c.name, label: hallLabel(c), guild: c.guild,
+  allies: c.allies ?? [], chests: c.chests, has_plan: !!c.has_plan }));
+
+// WHICH HALL a /_guildplan (or /_guildchest) request is about, and whether it can be planned against.
+// Read fresh on every request -- the registry and the readings are files the keepers rewrite, and a
+// sheet left open across a chalice landing should see the new owner on its next load.
+//   { room, halls, chests, rent, owner, gate, why }   or   { error }
+export function guildPlanHall(asked = null, { write = false, store = new StorageCache() } = {}) {
+  const registry = new GuildRegistry({ dir: store.dir });
+  let halls = [];
+  try { halls = hallChoices({ store, registry }); } catch { halls = []; }
+  const pick = pickHall(halls, asked);
+  if (pick.invalid)
+    return { error: `"${pick.invalid}" is not a guild hall room — a hall is named by its room number, 701-715` };
+  if (write && !pick.explicit && halls.length > 1)
+    return { error: `this roster has ${halls.length} guild halls (${halls.map(c => c.room).join(', ')}) — ` +
+                    'say which one the plan is for: ?hall=<room> or a "hall" field' };
+  const room = pick.room;
+  const chests = store.allChests({ room });
+  const { rent, owner, why: rentWhy } = rentForHall({ store, registry, room });
+  const gate = guildStoreAvailable({ rent, chests });
+  return { room, halls, chests, rent, owner, gate, why: gate.ok ? null : (!rent && rentWhy) || gate.why || null };
+}
+
 export function createServer({ access = 'local' } = {}) {
   const mode = parseAccess(access);
   const server = http.createServer(async (req, res) => {
@@ -544,15 +573,25 @@ export function createServer({ access = 'local' } = {}) {
     // The sheet is offered only when the cache shows a guild AND an opened chest, which is
     // the same gate the keeper uses. A planner that let somebody fill in three chests for a
     // hall the fleet does not own would be collecting items against nowhere to put them.
+    //
+    // ONE PLAN PER HALL. The roster may hold several guilds, each with its own hall, and a plan names
+    // chests by square -- so the sheet edits one hall at a time: `?hall=<room>` on the GET, and the
+    // same on the POST (query or a `hall` field). With no hall named the GET shows the default
+    // (m59-hall-select.mjs `pickHall`: the only hall, else 714 if read, else the first), which for a
+    // one-guild roster is exactly what this answered before. The gate is that hall's chests against
+    // the rent of the guild that OWNS it -- an ally's hall is not filled on our guild's say-so.
     if (url.pathname === '/_guildplan' && req.method === 'GET') {
-      const store = new StorageCache();
-      const chests = store.allChests(), rent = store.readRent();
-      const gate = guildStoreAvailable({ rent, chests });
-      const plan = guildPlan();
+      const sel = guildPlanHall(url.searchParams.get('hall'));
+      if (sel.error) return json(res, { error: sel.error }, 400);
+      const { room, halls, chests, rent, owner, gate, why } = sel;
+      const plan = guildPlan(room);
       return json(res, {
-        available: gate.ok, why: gate.why ?? null,
+        hall: room, hall_name: hallName(room), guild: owner,
+        halls: hallRows(halls),
+        available: gate.ok, why,
         slots: GUILD_CHEST_SLOTS, chest_bulk_max: CHEST_BULK_MAX,
-        chests: chests.map(c => ({ slot: c.slot, never_opened: !!c.never_opened,
+        chests: chests.map(c => ({ slot: c.slot, room: c.room ?? room, chest_id: c.chest_id ?? `${room}/${c.slot}`,
+          never_opened: !!c.never_opened,
           observed_at: c.observed_at ?? null, opened_by: c.opened_by ?? null,
           items: c.items ?? null, bulk: c.items ? chestFullness(c.items).bulk : null,
           percent: c.fullness?.percent ?? null })),
@@ -564,18 +603,28 @@ export function createServer({ access = 'local' } = {}) {
 
     if (url.pathname === '/_guildplan' && req.method === 'POST') {
       return readBody(req, res, (raw) => {
-        const store = new StorageCache();
-        const gate = guildStoreAvailable({ rent: store.readRent(), chests: store.allChests() });
+        // A WRITE DOES NOT GUESS ITS HALL. A read may fall back to the default and say so; a plan
+        // saved into a hall nobody chose is an instruction to every keeper for the wrong chests. So
+        // with more than one hall, a POST that does not name one is refused -- and one naming a room
+        // that is not a guild hall is refused whatever the roster holds.
+        const asked = url.searchParams.get('hall') ?? (raw && typeof raw === 'object' ? raw.hall : null);
+        const sel = guildPlanHall(asked, { write: true });
+        if (sel.error) return json(res, { error: sel.error }, 400);
+        const { room, gate, why } = sel;
         // REFUSED RATHER THAN SAVED-AND-IGNORED. A plan written against a hall the fleet
         // does not own would sit on disk protecting items from every vendor the fleet
         // visits, for a chest that does not exist.
         if (!gate.ok) {
           res.writeHead(409, JSONH);
-          res.end(JSON.stringify({ error: 'no guild hall', why: gate.why }));
+          res.end(JSON.stringify({ error: 'no guild hall', why, hall: room }));
           return;
         }
-        const { saved, problems } = saveGuildPlan(raw);
-        return json(res, { saved, problems });
+        const body = { ...(raw ?? {}) };
+        delete body.hall;   // the request's address, not part of the plan -- saveGuildPlan keeps every field it is given
+        if (body.hall_room != null && Number(body.hall_room) !== room)
+          return json(res, { error: `the plan says hall_room ${body.hall_room} but was sent to hall ${room}` }, 400);
+        const { saved, problems } = saveGuildPlan(body, room);
+        return json(res, { saved, problems, hall: room });
       });
     }
 
@@ -634,7 +683,11 @@ export function createServer({ access = 'local' } = {}) {
     // nothing (runSaleJob: no borrow, no travel, no trade, no bank).
     if (url.pathname === '/_guildchest' && req.method === 'GET') {
       try {
-        const board = await liveBoard({ root: REPO });
+        // ONE HALL'S BOARD, `?hall=<room>` -- the same choice and default as /_guildplan. A read falls
+        // back to the default hall on a room that is not a hall rather than failing the whole page.
+        let sel = guildPlanHall(url.searchParams.get('hall'));
+        if (sel.error) sel = guildPlanHall(null);
+        const board = await liveBoard({ root: REPO, hall: sel.room });
         const book = readSales();
         // name -> bulk per unit, so a line added in the page is sized before it is saved.
         let catalogue = {};
@@ -642,13 +695,21 @@ export function createServer({ access = 'local' } = {}) {
           const items = JSON.parse(fs.readFileSync(path.join(REPO, 'substrate', 'm59-items.json'), 'utf8')).items ?? {};
           for (const [n, v] of Object.entries(items)) catalogue[n] = Number.isFinite(v?.bulk) ? v.bulk : null;
         } catch { /* no table */ }
-        return json(res, { ...board, sell_plan: book.sell_plan, jobs: book.jobs.slice(-40).reverse(),
+        // `hall` is the hall this board is, and the page posts its plan edits back to /_guildplan naming
+        // it -- with two halls a plan POST that names none is refused. `sale_hall`: a sale job walks to
+        // hall 714 and draws from ITS chests (m59-guild-sale.mjs HALL), so the page offers selling only
+        // while that is the hall on screen.
+        return json(res, { ...board, hall: sel.room, hall_name: hallName(sel.room), guild: sel.owner,
+                           halls: hallRows(sel.halls), sale_hall: SALE_HALL,
+                           sell_plan: book.sell_plan, jobs: book.jobs.slice(-40).reverse(),
                            scheduler: SCHEDULER.state, catalogue });
       } catch (e) { res.writeHead(500, JSONH); return res.end(JSON.stringify({ error: e.message })); }
     }
     if (url.pathname === '/_guildsale/couriers' && req.method === 'GET') {
       try {
-        const out = await liveCouriers({ call: brokerTool, saleBulk: Number(url.searchParams.get('bulk')) || 0 });
+        let sel = guildPlanHall(url.searchParams.get('hall'));
+        if (sel.error) sel = guildPlanHall(null);
+        const out = await liveCouriers({ call: brokerTool, saleBulk: Number(url.searchParams.get('bulk')) || 0, hall: sel.room });
         return json(res, { couriers: out.couriers, desk_open: out.desk });
       } catch (e) { res.writeHead(502, JSONH); return res.end(JSON.stringify({ error: `the broker: ${e.message}` })); }
     }

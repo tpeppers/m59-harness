@@ -239,6 +239,9 @@ export async function guildRentStatus(s) {
       new StorageCache().writeRent({
         due: r.rent.due, credit: r.rent.credit, in_guild: r.rent.in_guild,
         hours_left: r.hours_left, said: r.rent.said,
+        // Frular names the guild in the sentence and writeRent files it under THAT name; the
+        // asker's own guild is only the fallback for a sentence that does not name one.
+        guild: c.guild?.name ?? null,
         by: c.me?.name ?? s.name ?? null,
       });
     } catch { /* the record is a convenience; never let it interrupt the errand */ }

@@ -12,20 +12,80 @@
 //   refreshVaultCache, vaultRunIfPassing, withdrawFromStockpile, takeFromChest, hallWithdraw,
 //   hallMove
 import { isVaultmanName, vaultsSaid } from '../m59-vaults.mjs';
-import { guildPassage, hallPost } from '../m59-guild-passage.mjs';
-import { SAID_NOTE, hallPassword, inFoyer } from '../m59-hallsecret.mjs';
+import { guildPassage, hallPost, SURVEYED_HALLS } from '../m59-guild-passage.mjs';
+import { SAID_NOTE, hallPassword, inFoyer, foyerFor } from '../m59-hallsecret.mjs';
+import { GuildRegistry } from '../m59-guild-registry.mjs';
+import { guildPlan } from '../m59-guildwants.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
 import { affordances, dropSpec as dropSpecFor } from '../m59-parse.mjs';
 import * as skills from '../m59-skills.mjs';
 import { StockpileBook, canEnterHall, savingsOf, sourcePlan } from '../m59-stockpile.mjs';
-import { BOOKMAKERS_HALL_ROOM, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN, StorageCache, chestKey } from '../m59-storage.mjs';
+import { BOOKMAKERS_HALL_ROOM, STOCKPILE_GET_REACH, STOCKPILE_WALK_WITHIN, StorageCache, chestKey,
+         isGuildHallRoom, hallName } from '../m59-storage.mjs';
 import { detailSettings, saveVaultSnapshot } from '../m59-strategy-stats.mjs';
 import { BARLOQUE_VAULT, GUILD_CHEST_SECTION, TITHE_FLEET } from '../m59-autopilot.mjs';
 import { dispositionBlock, dispositionNames, inspectDispositionQuality } from '../m59-loot-policy-runtime.mjs';
 
 export class HallPart {
   // @part 1
+
+  // WHICH HALL IS MINE, AND WHICH HALL AM I STANDING IN. The roster can hold more than one guild, each
+  // with its own hall, so "the hall" stopped being a constant. A character's OWN hall is where its
+  // guild's errands go (deposits, stockpile draws, the chalice's landing); the hall it is STANDING in
+  // is whose chests it is touching -- an ally's, possibly -- and every reading is filed under that one.
+  //
+  // `hall` falls back to 714 only while nothing contradicts the old single-guild world: no hall has
+  // ever been recorded and fewer than two guilds are known. Once there is a second guild, a guild with
+  // no recorded hall has NO hall, and its errands say so instead of walking into somebody else's.
+  guildHall() {
+    const c = this.s?.client ?? null;
+    const hereNum = Number(this.s?.world?.room?.num ?? NaN);
+    const reg = new GuildRegistry();
+    const ctx = reg.contextFor(c?.me?.name ?? this.name, { here: Number.isFinite(hereNum) ? hereNum : null,
+      guild: c?.guild?.name ?? null, rank: c?.guild?.rank ?? null });
+    let hall = ctx.own_hall, hall_source = hall != null ? 'registry' : null;
+    if (hall == null && !reg.halls().length && reg.guilds().length < 2) {
+      hall = BOOKMAKERS_HALL_ROOM; hall_source = 'single-guild default (no hall recorded yet)';
+    }
+    return { ...ctx, hall, hall_source,
+             why: hall == null ? `no hall is recorded for ${ctx.guild ? `guild "${ctx.guild}"` : 'this character\'s guild (unknown)'} — ` +
+               'record one with: node tools/m59-guild-registry.mjs hall --room <701-715> --guild "<name>"' : null };
+  }
+
+  // OUR GUILD'S STORES, AND NOBODY ELSE'S: the plan for our hall, our hall's chest readings, our
+  // guild's rent. Every keep/sell/deposit/source decision reads this one bundle, so with two guilds
+  // in the roster no character weighs its plan against the other hall's chests or the other guild's
+  // rent. `plan` is null for a guild with no hall (and no plan), which every caller already reads as
+  // "no guild wants" rather than "want nothing".
+  guildStores() {
+    const mine = this.guildHall();
+    const store = new StorageCache();
+    if (mine.hall == null) return { ...mine, store, plan: null, chests: [], rent: null };
+    // A single-guild roster whose guild has not been read yet still has the one rent reading there is.
+    const rent = mine.guild ? store.readRent(mine.guild)
+      : (mine.hall_source === 'registry' ? null : store.readRent());
+    return { ...mine, store, plan: guildPlan(mine.hall), chests: store.allChests({ room: mine.hall }), rent };
+  }
+
+  // CAN THIS BODY WORK THE CHESTS OF THE HALL IT IS STANDING IN? Three different refusals, each with
+  // its own fix: not a hall at all; a hall whose passage nobody has surveyed (only 714's is, in
+  // m59-guild-passage.mjs, and walking 714's doors in another room would be walking into walls); and
+  // a hall whose owner is neither our guild nor an ally (CanEnter, ghall.kod:1039, refuses silently).
+  hallHere() {
+    const roomNum = Number(this.s?.world?.room?.num ?? NaN);
+    if (!isGuildHallRoom(roomNum))
+      return { ok: false, room: Number.isFinite(roomNum) ? roomNum : null, why: `not in a guild hall (room ${roomNum})` };
+    if (!SURVEYED_HALLS.includes(roomNum))
+      return { ok: false, room: roomNum, why: `hall ${roomNum} (${hallName(roomNum)}) has no surveyed passage to its chests — ` +
+        `only ${SURVEYED_HALLS.join(', ')} is mapped in m59-guild-passage.mjs` };
+    const ctx = this.guildHall();
+    if (ctx.may_use_here === false)
+      return { ok: false, room: roomNum, owner: ctx.here_owner,
+               why: `hall ${roomNum} belongs to "${ctx.here_owner}", and ${ctx.guild ? `"${ctx.guild}"` : 'this character'} is not ` +
+                    'its member or ally at rank SIR or above — CanEnter refuses that in silence (ghall.kod:1039)' };
+    return { ok: true, room: roomNum, owner: ctx.here_owner, guild: ctx.guild };
+  }
 
   /**
    * Get to where the chests can actually be seen: out of the foyer, password spoken, door
@@ -48,9 +108,8 @@ export class HallPart {
   // THE VAULT BROKER'S POSTS: 'booth' (the window to the foyer), 'chests', 'inside'. Never through
   // the main door; see hallPost. Refuses outside the hall.
   async hallPostTo(where) {
-    const roomNum = Number(this.s.world?.room?.num ?? NaN);
-    if (roomNum !== BOOKMAKERS_HALL_ROOM)
-      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})` };
+    const where0 = this.hallHere();
+    if (!where0.ok) return { ok: false, why: where0.why };
     const r = await hallPost(this, where, () => this.travelInterrupted?.() ?? false)
       .catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     this.note('hall post', { where, ...r });
@@ -60,6 +119,10 @@ export class HallPart {
   async reachHallChests() {
     const s = this.s, c = s.need();
     const steps = [];
+    // THE PASSAGE IS ONE HALL'S GEOMETRY. Refused in any other room before a single door is tried.
+    const where0 = this.hallHere();
+    if (!where0.ok) return { ok: false, why: where0.why, steps: [{ step: 'which_hall', ok: false, why: where0.why }],
+                             at: { row: c.self?.row ?? null, col: c.self?.col ?? null } };
     try {
       await guildPassage(this, GUILD_CHEST_SECTION, () => false);
       steps.push({ step: 'guild_passage', ok: true, to_section: GUILD_CHEST_SECTION });
@@ -119,19 +182,22 @@ export class HallPart {
   }
 
   async sayHallPassword() {
-    const word = hallPassword(TITHE_FLEET);
+    // THE HOST HALL'S WORD, NOT OURS. The door compares against the hall OWNER's password
+    // (ghall.kod:965), so in an ally's hall it is the ally's word that opens it.
+    const hallRoom = Number(this.s?.world?.room?.num ?? NaN);
+    const word = hallPassword(TITHE_FLEET, { room: Number.isFinite(hallRoom) ? hallRoom : null });
     if (!word) {
-      this.note('no hall password recorded for this fleet', {
+      this.note('no hall password recorded for this hall', { room: Number.isFinite(hallRoom) ? hallRoom : null,
         why: 'the chests sit behind a secret door that only opens for a spoken password, and ' +
-             'none is recorded. Record it with: node tools/m59-hallsecret.mjs set ' +
-             '--fleet <name> --password <word>. Until then every chest read finds nothing ' +
+             'none is recorded for this hall. Record it with: node tools/m59-hallsecret.mjs set ' +
+             '--fleet <name> --room <hall room> --password <word>. Until then every chest read finds nothing ' +
              'and looks exactly like an empty hall.' });
       return { ok: false, why: 'no password recorded' };
     }
     const c = this.s.need();
     const me = this.s?.client?.self ?? null;
     const row = me?.row ?? me?.y ?? null, col = me?.col ?? me?.x ?? null;
-    const foyer = inFoyer(row, col);
+    const foyer = inFoyer(row, col, foyerFor(Number.isFinite(hallRoom) ? hallRoom : null));
     if (foyer === true) {
       // REFUSED IN SILENCE, and doubly so: the foyer is also the hall's silence area, so the
       // say would not even be heard by anyone inside. Better to say why than to speak the
@@ -189,8 +255,11 @@ export class HallPart {
       }
       const items = (box.items ?? []).map(o => ({ id: o.id, name: o.name, amount: o.amount || 1 }));
       // FILED UNDER THE SQUARE WE JUST READ IT AT, never under a number decided elsewhere.
+      // AND UNDER THE HALL WE ARE STANDING IN -- an ally's, possibly -- by its room NUMBER. The
+      // `?? c.room?.id` that stood here filed readings under an object handle (2569), which names
+      // no hall; writeChest now refuses that, and the catch below says so.
       (store ?? new StorageCache()).writeChest(chest.key ?? chestKey(chest), {
-        object_id: chest.id, room: this.s.world?.room?.num ?? c.room?.id ?? null,
+        object_id: chest.id, room: this.s.world?.room?.num ?? null,
         items, by: c.me?.name ?? this.name ?? this.s.name });
       this.note('refreshed the guild chest cache', { slot, stacks: items.length, why });
       return items;
@@ -302,8 +371,12 @@ export class HallPart {
   // Returns what it managed to take, so the caller buys only the remainder.
   async withdrawFromStockpile(need = []) {
     if (!need.length) return { took: [], saved: 0 };
+    // OUR GUILD'S HALL, AND ONLY ITS CHESTS. With two guilds in the roster the other hall's readings
+    // are somebody else's stock, and planning a draw against them walks to the wrong building.
+    const mine = this.guildHall();
+    if (mine.hall == null) { this.note('cannot use the stockpile', { why: mine.why }); return { took: [], saved: 0, why: mine.why }; }
     const store = new StorageCache();
-    const chests = store.allChests();
+    const chests = store.allChests({ room: mine.hall });
     const available = chests.some(ch => ch && !ch.never_opened);
     const plan = sourcePlan({ need, chests, available,
                               why: 'no chest has ever been opened, so what they hold is unknown' });
@@ -312,9 +385,9 @@ export class HallPart {
     // THE DOOR IS RANK, NOT MEMBERSHIP. CanEnter (ghall.kod:1039) admits members and allies at
     // rank >= SIR and refuses apprentices by name, so a character that has just been inducted
     // would walk to Barloque and be turned away with no message at all. Check before walking.
-    const g = this.s.client?.guild ?? null;
-    const door = canEnterHall({ guildId: g?.id ?? null, rank: g?.rank ?? null,
-                                hallGuildId: g?.id ?? null });
+    // Compared by NAME: a guild's object id is a handle, and the hall's owner is recorded by name.
+    const door = canEnterHall({ guildId: mine.guild ?? null, rank: mine.rank ?? null,
+                                hallGuildId: mine.guild ?? null });
     if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0, why: `cannot use the stockpile: ${door.why}` }; }
 
     // A `const before = snapshot();` STOOD HERE from 5a487a5 (2026-09-17) until 2026-09-25, copied
@@ -324,7 +397,7 @@ export class HallPart {
     // Loial, for eight days. The value was never read. Found by running this against prod's
     // chest cache with travel stubbed out.
     this.doing = 'travelling';
-    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { origin: keeperOrigin('stockpile_withdraw'), maxHops: 14 })
+    const trip = await this.travel(mine.hall, { origin: keeperOrigin('stockpile_withdraw'), maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the stockpile', { why: trip.reason || 'travel refused' });
@@ -547,8 +620,8 @@ export class HallPart {
     // that went 0 -> 0. Every want is short on a refusal, and `why` says which refusal it was.
     const allShort = () => Object.fromEntries((wants ?? []).map(w => [String(w.item ?? ''), Number(w.amount) || 0])
       .filter(([k, n]) => k && n > 0));
-    if (roomNum !== BOOKMAKERS_HALL_ROOM)
-      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})`, took: {}, short: allShort() };
+    const where0 = this.hallHere();
+    if (!where0.ok) return { ok: false, why: where0.why, took: {}, short: allShort() };
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     if (!hall.ok) return { ok: false, why: hall.why, steps: hall.steps, took: {}, short: allShort() };
     const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));
@@ -687,7 +760,8 @@ export class HallPart {
       return (c.inventory ?? []).filter(o => same(nameOf(o), item)).reduce((n, o) => n + (Number(o.amount) || 1), 0);
     };
     const roomNum = Number(s.world?.room?.num ?? NaN);
-    if (roomNum !== BOOKMAKERS_HALL_ROOM) return { ok: false, why: `not in the hall (room ${roomNum})`, moves: [] };
+    const where0 = this.hallHere();
+    if (!where0.ok) return { ok: false, why: where0.why, moves: [] };
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     if (!hall.ok) return { ok: false, why: hall.why, moves: [] };
     const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));

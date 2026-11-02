@@ -47,6 +47,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { GUILD_HALL_ROOMS } from './m59-storage.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FLEETS_DIR = process.env.M59_FLEETS_DIR || resolve(HERE, '..', 'substrate', 'fleets');
@@ -68,15 +69,37 @@ function readSecrets(fleet, dir = FLEETS_DIR) {
   }
 }
 
+// ONE PASSWORD PER HALL, NOT PER FLEET. The secret door compares what was said against
+// `Send(poGuild_owner,@GetPassword)` (ghall.kod:965) -- the HALL OWNER's password, not the speaker's
+// guild's. So when a roster holds two allied guilds and a member of one walks into the other's hall,
+// the word that opens the chest room is the host's. Passwords are therefore keyed by hall ROOM:
+//
+//     { "guild_hall":  { "room": 714, "password": "..." },          <- the one there always was
+//       "guild_halls": { "705": { "password": "..." } } }           <- every other hall
+//
+// The legacy `guild_hall` block stays where it is (older deploys read it) and answers for its own
+// room -- 714 when it names none, because that is the only hall it was ever written for.
+const LEGACY_ROOM = 714;
+const legacyRoom = (data) => Number(data?.guild_hall?.room ?? LEGACY_ROOM);
+function wordFor(data, room) {
+  if (room == null || Number(room) === legacyRoom(data)) {
+    const v = data?.guild_hall?.password;
+    if (typeof v === 'string' && v.length) return v;
+    if (room == null) return null;
+  }
+  const v = data?.guild_halls?.[String(Number(room))]?.password;
+  return typeof v === 'string' && v.length ? v : null;
+}
+
 /**
- * The word this fleet says to open its guild hall's secret door, or null.
+ * The word that opens a guild hall's secret door, or null. `room` is the hall the body is standing
+ * in; omitted, it is the fleet's original hall.
  * NEVER log the return value — use `describe()` for anything a human or a file will read.
  */
-export function hallPassword(fleet, { dir = FLEETS_DIR } = {}) {
+export function hallPassword(fleet, { dir = FLEETS_DIR, room = null } = {}) {
   const { data, unreadable } = readSecrets(fleet, dir);
   if (unreadable) return null;
-  const v = data?.guild_hall?.password;
-  return typeof v === 'string' && v.length ? v : null;
+  return wordFor(data, room);
 }
 
 /** Everything ABOUT the secret that is safe to print. Never the secret. */
@@ -91,6 +114,12 @@ export function describe(fleet, { dir = FLEETS_DIR } = {}) {
     has_password: typeof word === 'string' && word.length > 0,
     length: typeof word === 'string' ? word.length : 0,
     hall_room: present && !unreadable ? (data?.guild_hall?.room ?? null) : null,
+    // Every hall this fleet can open, with whether a word is recorded -- never the word.
+    halls: present && !unreadable ? [
+      ...(data?.guild_hall ? [{ room: legacyRoom(data), has_password: !!wordFor(data, legacyRoom(data)) }] : []),
+      ...Object.keys(data?.guild_halls ?? {}).map(Number).filter(r => r !== legacyRoom(data) || !data?.guild_hall)
+        .map(room => ({ room, has_password: !!wordFor(data, room) })),
+    ] : [],
     note: present && !unreadable && word
       ? 'the word itself is deliberately not reported — read it with hallPassword()'
       : 'no hall password recorded for this fleet',
@@ -101,10 +130,17 @@ export function describe(fleet, { dir = FLEETS_DIR } = {}) {
 export function setHallPassword(fleet, password, { dir = FLEETS_DIR, room = null } = {}) {
   const word = String(password ?? '');
   if (!word) throw new Error('setHallPassword needs a password');
-  const { path, data } = readSecrets(fleet, dir);
-  const next = { ...data, guild_hall: { ...(data.guild_hall ?? {}), password: word,
-                                        ...(room != null ? { room: Number(room) } : {}),
-                                        set_at: new Date().toISOString() } };
+  const { path, data, unreadable } = readSecrets(fleet, dir);
+  if (unreadable) throw new Error(`${path} will not parse — fix it by hand rather than overwrite it`);
+  // The legacy block keeps its own hall; any OTHER hall gets an entry of its own, so recording a second
+  // guild's password can never overwrite the first guild's.
+  const legacy = room == null || (data.guild_hall ? Number(room) === legacyRoom(data) : Number(room) === LEGACY_ROOM);
+  const next = legacy
+    ? { ...data, guild_hall: { ...(data.guild_hall ?? {}), password: word,
+                               ...(room != null ? { room: Number(room) } : {}),
+                               set_at: new Date().toISOString() } }
+    : { ...data, guild_halls: { ...(data.guild_halls ?? {}),
+                                [String(Number(room))]: { password: word, set_at: new Date().toISOString() } } };
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
@@ -142,8 +178,13 @@ export const SAID_NOTE = 'said the hall password';
 // failing to open the door -- nobody in the hall proper can hear it at all.
 export const BOOKMAKERS_FOYER = Object.freeze({ north: 2, south: 3, west: 26, east: 39 });
 
+// Every hall's box, from its own kod (m59-storage.mjs GUILD_HALL_ROOMS). null where the hall declares
+// no complete box, and then `inFoyer` cannot answer for it.
+export const foyerFor = (room) => room == null ? BOOKMAKERS_FOYER : (GUILD_HALL_ROOMS[Number(room)]?.foyer ?? null);
+
 /** Is this square inside a hall's foyer, where the password is refused in silence? */
 export function inFoyer(row, col, box = BOOKMAKERS_FOYER) {
+  if (!box) return null;                                              // a hall with no known box
   if (!Number.isFinite(row) || !Number.isFinite(col)) return null;   // unknown, not "outside"
   return row >= box.north && row <= box.south && col >= box.west && col <= box.east;
 }

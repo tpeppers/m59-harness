@@ -22,6 +22,11 @@
   .off { border:1px dashed var(--line,#3a3a3a); border-radius:10px; padding:1rem; color:var(--dim,#888); }
   .short { font-size:.8rem; color:var(--dim,#888); margin-top:.4rem; }
   .row-del { cursor:pointer; color:var(--dim,#888); }
+  /* WHICH HALL. Shown only when the roster holds more than one guild hall; with one, the sheet
+     looks exactly as it always did. */
+  .hallpick { margin:.6rem 0 0 0; font-size:.9rem; }
+  .hallpick select { font-size:.9rem; }
+  .hallwho { font-size:.8rem; color:var(--dim,#888); margin:.2rem 0 0 0; }
 </style>
 </head><body>
 <div class="wrap">
@@ -33,6 +38,9 @@
   trips, so a target shrinks as others fill it and a satisfied plan produces no work and no
   walk at all.</p>
 
+  <p class="hallpick" id="hallpick" hidden><label>Guild hall
+    <select id="hallsel"></select></label></p>
+  <p class="hallwho" id="hallwho"></p>
   <div id="gate"></div>
   <div class="halls" id="halls"></div>
   <p id="shortfall" class="short"></p>
@@ -45,6 +53,12 @@
 (function () {
   var rel = '..';
   var CHESTS = [], PLAN = {}, MAX = 24000, AVAILABLE = false;
+  // ONE PLAN PER HALL. HALL is the room this sheet is editing: `?hall=<room>` in this page's own
+  // address when somebody picked one (so a reload or a bookmark keeps it), else whatever the server
+  // chose as the default. Every load and every save names it -- with two halls the server refuses a
+  // save that does not.
+  var HALL = (function () { var m = /[?&]hall=(\d+)/.exec(location.search); return m ? Number(m[1]) : null; })();
+  var DIRTY = false;   // an input changed since the last load
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g,
     function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); };
@@ -75,7 +89,7 @@
         }).join('') + '</tbody></table></div>';
     }).join('');
     Array.prototype.forEach.call(document.querySelectorAll('.pi,.pt'), function (el) {
-      el.addEventListener('change', collect);
+      el.addEventListener('change', function () { DIRTY = true; collect(); });
     });
   }
 
@@ -95,16 +109,32 @@
   }
 
   function load() {
-    fetch(rel + '/_guildplan').then(function (r) { return r.json(); }).then(function (b) {
+    fetch(rel + '/_guildplan' + (HALL != null ? '?hall=' + HALL : '')).then(function (r) { return r.json(); }).then(function (b) {
+      // A hall in the address the server will not take (not a guild hall room) falls back to the
+      // default rather than leaving a sheet with no picker on it.
+      if (b.error && HALL != null) { say(b.error + ' — showing the default hall'); HALL = null; load(); return; }
+      if (b.error) { AVAILABLE = false; draw(); $('gate').innerHTML = '<div class="off">' + esc(b.error) + '</div>'; $('save').disabled = true; return; }
       AVAILABLE = !!b.available; CHESTS = b.chests || []; MAX = b.chest_bulk_max || 24000;
       PLAN = {};
       if (b.plan) Object.keys(b.plan).forEach(function (k) { PLAN[k] = b.plan[k]; });
+      DIRTY = false;
       $('gate').innerHTML = AVAILABLE ? '' :
         '<div class="off"><strong>No guild hall.</strong> ' + esc(b.why || '') +
         '<br>Guild wants stay off until the fleet belongs to a guild and somebody has ' +
         'opened a chest in its hall — a plan against a hall the fleet does not own would ' +
         'hold items back from every vendor for a chest that does not exist.</div>';
       $('save').disabled = !AVAILABLE;
+      HALL = b.hall != null ? Number(b.hall) : HALL;
+      var halls = b.halls || [];
+      $('hallpick').hidden = halls.length < 2;
+      $('hallsel').innerHTML = halls.map(function (h) {
+        return '<option value="' + h.room + '"' + (h.room === HALL ? ' selected' : '') + '>' + esc(h.label || h.room) + '</option>';
+      }).join('');
+      var here = halls.filter(function (h) { return h.room === HALL; })[0];
+      $('hallwho').textContent = halls.length < 2 ? '' :
+        (b.hall_name || ('hall ' + HALL)) + ' (room ' + HALL + ') · ' +
+        (b.guild ? 'owned by ' + b.guild + (here && here.allies && here.allies.length ? ' · allied with ' + here.allies.join(', ') : '')
+                 : 'nothing records which guild owns this hall');
       $('shortfall').textContent = (b.shortfall || []).length
         ? 'Still short: ' + b.shortfall.map(function (s) { return s.short + ' ' + s.item; }).join(', ')
         : '';
@@ -116,7 +146,7 @@
     collect();
     say('saving…');
     fetch(rel + '/_guildplan', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chests: Object.keys(PLAN).reduce(function (o, k) {
+      body: JSON.stringify({ hall: HALL, chests: Object.keys(PLAN).reduce(function (o, k) {
         o[k] = { items: PLAN[k] }; return o; }, {}) }) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (x) {
@@ -125,6 +155,20 @@
         load();
       })
       .catch(function (e) { say('failed: ' + e.message); });
+  });
+
+  // Switching halls drops unsaved edits, so it asks first -- the edits are for the chests on screen,
+  // and carrying them into another hall's plan would file them under squares they were not meant for.
+  $('hallsel').addEventListener('change', function () {
+    var next = Number($('hallsel').value);
+    if (DIRTY && !confirm("Discard the unsaved changes to this hall's plan?")) {
+      $('hallsel').value = String(HALL); return;
+    }
+    HALL = next;
+    var u = new URL(location.href); u.searchParams.set('hall', String(HALL));
+    history.replaceState(null, '', u.toString());
+    say('');
+    load();
   });
 
   load();

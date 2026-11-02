@@ -1605,6 +1605,21 @@ the records it describes.
   tab bar all six boards share, and the pack drill-in: that it names what is in the pack
   rather than only how full it is, and that an EMPTY pack, a character the broker is not
   holding, and a broker too old to report the list are three different sentences) and
+  `node tools/m59-multiguild-boards-test.mjs` (41 — the boards with TWO guild halls: /inventory
+  shows one hall's chests, plan and history at a time behind a `?hall=<room>` picker that exists
+  only when there is more than one hall, and with one hall looks exactly as it did; the
+  compendium's `/_guildplan` lists the halls, gates each on the rent of the guild that OWNS it
+  (never on another guild's newer reading), and refuses a plan POST that does not name its hall
+  when there are two — a write never guesses — then files it under `guild-plans/<room>.json`;
+  the Economy board shows one rent per guild; and `m59-hall-chests` tells two halls' `r18c2`
+  apart by `chest_id`. Scratch dirs only) and
+  `node tools/m59-guild-registry-test.mjs` (58 — the data layer under those boards: a chest
+  reading is refused without a hall ROOM NUMBER and filed under the hall it was read in, the
+  same square in two halls is two chests, the flat layout reads as 714 whatever object id an old
+  file carries; rent is filed under the guild Frular NAMED and one guild never reads another's;
+  a roster files every member and the newer roster wins; only a SOLE guild adopts 714; an ally
+  may use a hall and an ally's apprentice may not; each hall has its own password and plan, and
+  a plan counts only its own hall's chests even when handed every hall's. Scratch dirs only) and
   `node tools/m59-economy-island-test.mjs` (55 — the Economy board's bank toggle,
   `?view=mainland|island|combined`: that the island account is `kocatan`, the same key
   Huital's sentences and room 2005 are filed under; that a balance comes from the bank book or

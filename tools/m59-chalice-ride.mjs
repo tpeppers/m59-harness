@@ -180,7 +180,7 @@ export async function rideChaliceNow(ap, opts = {}) {
     ap.claimFaculties({ faculties: taken, by: 'chalice_ride', leaseMs: o.budgetMs + 60_000,
                         why: `riding the chalice to the guild hall${o.why ? ` (${o.why})` : ''}` });
   const trip = { onDemand: true, maxHops: o.maxHops, why: o.why, startedAt: started,
-                 target: { room: GUILD_HALL_ROOM }, chalice: { stage: 'decide', at: started } };
+                 target: { room: ap.chaliceHall?.() ?? GUILD_HALL_ROOM }, chalice: { stage: 'decide', at: started } };
   ap._rideNow = trip;
   try { ap.chaliceEvent?.('ride_now', { why: o.why, server: pre.server, queued: pre.queued, max_hops: o.maxHops }); } catch {}
   const deadline = started + o.budgetMs;
@@ -212,7 +212,8 @@ export async function rideChaliceNow(ap, opts = {}) {
       if (r?.done) {
         const room = ap.hereRoom();
         try { ap.chaliceEvent?.('ride_now_landed', { room, ticket: st.ticket ?? null, total_ms: Date.now() - started }); } catch {}
-        return { ok: true, landed: true, room, guild_hall: room === GUILD_HALL_ROOM,
+        return { ok: true, landed: true, room, guild_hall: room === (ap.chaliceHall?.() ?? GUILD_HALL_ROOM),   // the RIDER's guild's hall (rescue.kod:125)
+                 
                  ms: st.drankAt ? Date.now() - st.drankAt : null, total_ms: Date.now() - started,
                  ticket: st.ticket ?? null, server: st.server ?? pre.server ?? null };
       }

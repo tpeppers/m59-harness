@@ -5,6 +5,7 @@
 //   node tools/m59-hall-chests.mjs --find ring        only names matching (a regex, case-insensitive)
 //   node tools/m59-hall-chests.mjs --find "inky|herb" --total     one line per name, all chests summed
 //   node tools/m59-hall-chests.mjs --json             the same, for a script
+//   node tools/m59-hall-chests.mjs --hall 714         one guild hall only (its room number, 701-715)
 //   node tools/m59-hall-chests.mjs --root C:/code/m59-lab/prod-deploy    whose substrate to read
 //
 // Operator, 2026-09-28: "Write the tool to view the guild hall chests without walking there: I
@@ -22,8 +23,15 @@
 // on M59_CONTROL_URL (default 8901) for its /health `root` and reads there, falling back to this
 // checkout. An unidentified item is cached under its unrevealed name (a resistance ring reads
 // "ring"), so --find ring finds every ring, identified or not.
+//
+// MORE THAN ONE HALL. The roster may hold several guilds, each with its own hall, and a chest is named
+// by its square -- "r18c6" can be a chest in two halls. So every chest prints with its hall and the
+// guild the registry says owns it (m59-guild-registry.mjs), and `--hall <room>` keeps one hall.
+// `--total` sums whatever is shown, so with no --hall it sums every hall: say --hall to ask what ONE
+// guild has.
 import { resolve, join } from 'node:path';
-import { StorageCache, chestFullness } from './m59-storage.mjs';
+import { StorageCache, chestFullness, hallName, isGuildHallRoom } from './m59-storage.mjs';
+import { GuildRegistry } from './m59-guild-registry.mjs';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt = null) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -37,7 +45,9 @@ async function brokerRoot() {
   } catch { return null; }
 }
 
-export function summarise(chests, { find = null, now = Date.now() } = {}) {
+// `owners` is hall room -> guild name (or a function of the room); a hall nobody has recorded is null.
+export function summarise(chests, { find = null, now = Date.now(), owners = null } = {}) {
+  const ownerOf = typeof owners === 'function' ? owners : (room) => owners?.[room] ?? null;
   const rx = find ? new RegExp(find, 'i') : null;
   return chests.map(ch => {
     const merged = new Map();
@@ -48,7 +58,11 @@ export function summarise(chests, { find = null, now = Date.now() } = {}) {
       merged.set(name, (merged.get(name) ?? 0) + (Number(it.amount) || 1));
     }
     return {
-      slot: ch.slot, room: ch.room ?? null, opened_by: ch.opened_by ?? null,
+      slot: ch.slot, room: ch.room ?? null,
+      chest_id: ch.chest_id ?? (ch.room != null ? `${ch.room}/${ch.slot}` : ch.slot),
+      hall_name: ch.room != null ? hallName(ch.room) : null,
+      guild: ch.room != null ? ownerOf(Number(ch.room)) : null,
+      opened_by: ch.opened_by ?? null,
       observed_at: ch.observed_at ?? null,
       age_min: Number.isFinite(ch.observed_at) ? Math.round((now - ch.observed_at) / 60000) : null,
       fullness: chestFullness(ch.items ?? []),
@@ -60,22 +74,32 @@ export function summarise(chests, { find = null, now = Date.now() } = {}) {
 async function main() {
   const root = opt('--root') ?? (process.env.M59_STORAGE_DIR ? null : await brokerRoot()) ?? process.cwd();
   const dir = process.env.M59_STORAGE_DIR && !opt('--root') ? process.env.M59_STORAGE_DIR : join(resolve(root), 'substrate', 'storage');
-  const chests = summarise(new StorageCache({ dir }).allChests(), { find: opt('--find') });
+  const hall = opt('--hall');
+  if (hall != null && !isGuildHallRoom(hall)) {
+    console.error(`--hall wants a guild hall's room number (701-715), got ${JSON.stringify(hall)}`);
+    process.exit(2);
+  }
+  let owners = null;
+  try { const reg = new GuildRegistry({ dir }); owners = (room) => reg.ownerOfHall(room); } catch { owners = null; }
+  const chests = summarise(new StorageCache({ dir }).allChests(hall != null ? { room: Number(hall) } : {}),
+                           { find: opt('--find'), owners });
   if (has('--json')) { console.log(JSON.stringify({ dir, chests }, null, 2)); return; }
-  if (!chests.length) { console.log(`no chest readings under ${dir} — nobody has opened a chest from this checkout`); return; }
-  console.log(`guild chests, as last read — ${dir}`);
+  if (!chests.length) { console.log(`no chest readings under ${dir}${hall != null ? ` for hall ${hall}` : ''} — nobody has opened a chest there from this checkout`); return; }
+  console.log(`guild chests, as last read — ${dir}${hall != null ? ` — hall ${hall} only` : ''}`);
   if (has('--total')) {
     const tot = new Map();
     for (const ch of chests) for (const it of ch.items) tot.set(it.name, (tot.get(it.name) ?? 0) + it.amount);
     const oldest = Math.max(...chests.map(c => c.age_min ?? 0));
-    console.log(`  (${chests.length} chests; oldest reading ${oldest} min ago)`);
+    const halls = [...new Set(chests.map(c => c.room))];
+    console.log(`  (${chests.length} chests in ${halls.length} hall(s): ${halls.join(', ')}; oldest reading ${oldest} min ago)`);
     for (const [n, a] of [...tot].sort((x, y) => x[0].localeCompare(y[0]))) console.log(`  ${String(a).padStart(6)}  ${n}`);
     if (!tot.size) console.log('  nothing matches');
     return;
   }
   for (const ch of chests) {
     const f = ch.fullness;
-    console.log(`\n${ch.slot}  room ${ch.room ?? '?'}  read ${ch.age_min ?? '?'} min ago by ${ch.opened_by ?? '?'}` +
+    console.log(`\n${ch.slot}  hall ${ch.room ?? '?'}${ch.hall_name ? ` ${ch.hall_name}` : ''}` +
+                ` (${ch.guild ?? 'owner not recorded'})  read ${ch.age_min ?? '?'} min ago by ${ch.opened_by ?? '?'}` +
                 (f ? `  · ${f.percent ?? '?'}% full` : ''));
     if (!ch.items.length) console.log('  nothing matches');
     for (const it of ch.items) console.log(`  ${String(it.amount).padStart(6)}  ${it.name}`);

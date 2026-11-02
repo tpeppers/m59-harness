@@ -19,6 +19,13 @@
   var FLEET = [];               // [{agent, character}] for the "give to" picker
   var COURIERS = null;
   var POLL = null;
+  // WHICH GUILD HALL. The roster may hold several guilds, each with its own hall, chests and plan.
+  // `?hall=<room>` in this page's address picks one (so a reload or a bookmark keeps it); without it the
+  // server shows its default (tools/m59-hall-select.mjs). The picker is drawn only when there is more
+  // than one hall. SALES are hall 714's alone (m59-guild-sale.mjs walks there), so the Sell section is
+  // hidden while another hall is shown rather than offering to sell one hall's stock out of another.
+  var HALL = (function () { var m = /[?&]hall=(\d+)/.exec(window.location.search); return m ? Number(m[1]) : null; })();
+  var hallQ = function (sep) { return HALL != null ? sep + 'hall=' + HALL : ''; };
 
   var el = function (id) { return document.getElementById(id); };
   var esc = function (s) {
@@ -233,7 +240,9 @@
       chests[s] = { items: PLAN[s].map(function (e) { var o = { item: e.item, target: e.target }; if ((e.also || []).length) o.also = e.also; return o; }) };
     });
     el('gcSaveEdits').disabled = true;
-    post('/_guildplan', { chests: chests }).then(function (j) {
+    // The board is ONE hall's (the server says which in `hall`), and with more than one hall on the
+    // roster a plan save that does not name its hall is refused rather than filed under a guess.
+    post('/_guildplan', { hall: B.hall, chests: chests }).then(function (j) {
       PLAN0 = '';   // reload from what was saved
       return load().then(function () {
         say('Plan saved' + (j.problems && j.problems.length ? ' — ' + esc(j.problems.length) + ' note(s): ' + esc(j.problems.slice(0, 3).join('; ')) : '') + '. The keepers read it on their next pass.', 'good');
@@ -319,7 +328,7 @@
 
   function findCouriers() {
     el('gcCouriers').innerHTML = '<p class="gc-dim">Asking the broker where everyone is and what they carry…</p>';
-    return fetch(rel + '/_guildsale/couriers?bulk=' + Math.round(saleBulk())).then(function (r) { return r.json(); }).then(function (j) {
+    return fetch(rel + '/_guildsale/couriers?bulk=' + Math.round(saleBulk()) + hallQ('&')).then(function (r) { return r.json(); }).then(function (j) {
       if (j.error) throw new Error(j.error);
       COURIERS = j.couriers;
       renderCouriers(j.desk_open);
@@ -423,7 +432,7 @@
       POLL = setTimeout(function () { refreshJobsOnly(); }, 15000);
   }
   function refreshJobsOnly() {
-    fetch(rel + '/_guildchest').then(function (r) { return r.json(); }).then(function (j) { B.jobs = j.jobs; B.scheduler = j.scheduler; renderJobs(); });
+    fetch(rel + '/_guildchest' + hallQ('?')).then(function (r) { return r.json(); }).then(function (j) { B.jobs = j.jobs; B.scheduler = j.scheduler; renderJobs(); });
   }
 
   // ------------------------------------------------------------------ loading
@@ -432,10 +441,12 @@
 
   function load() {
     say('Reading the chests…');
-    return fetch(rel + '/_guildchest').then(function (r) {
+    return fetch(rel + '/_guildchest' + hallQ('?')).then(function (r) {
       return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status); return j; });
     }).then(function (j) {
       B = j;
+      if (B.hall != null) HALL = Number(B.hall);
+      renderHallPick();
       var keepPlanEdits = PLAN0 && dirtySlots().length;
       if (!keepPlanEdits) {
         PLAN = {};
@@ -450,7 +461,12 @@
       if (!TAB || !chestOf(TAB)) TAB = (B.chests[0] || {}).slot || null;
       el('gcItemList').innerHTML = Object.keys(B.catalogue || {}).sort().map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
       var r = B.rent || {};
-      say((B.gate && B.gate.ok ? 'In the guild' : '<span class="bad">' + esc((B.gate && B.gate.why) || 'no guild hall') + '</span>')
+      var otherHall = B.sale_hall != null && B.hall != null && Number(B.hall) !== Number(B.sale_hall);
+      el('gcSaleSec').hidden = otherHall;
+      say((B.halls && B.halls.length > 1 ? esc(B.hall_name || ('hall ' + B.hall)) + ' (' + esc(B.hall) + ')'
+          + (B.guild ? ' · ' + esc(B.guild) : ' · owner not recorded') + ' · ' : '')
+        + (otherHall ? 'sales draw from hall ' + esc(B.sale_hall) + ' only, so selling is off for this hall · ' : '')
+        + (B.gate && B.gate.ok ? 'In the guild' : '<span class="bad">' + esc((B.gate && B.gate.why) || 'no guild hall') + '</span>')
         + (r.credit != null ? ' · rent credit ' + num(r.credit) + ' (read ' + ago(r.observed_at) + ')' : '')
         + ' · vault desk ' + (B.desk ? 'open' : 'closed')
         + (B.problems && B.problems.length ? ' · <span title="' + esc(B.problems.join('\n')) + '">' + B.problems.length + ' plan notes</span>' : ''));
@@ -458,6 +474,36 @@
     }).catch(function (e) {
       say('This page needs the harness serving it (node tools/m59-compendium.mjs): ' + esc(e.message), 'bad');
     });
+  }
+
+  // The picker lives beside Refresh and is made here rather than in the derived page, so the page
+  // stays what derive/guild.mjs writes and a one-hall roster gets no new control at all.
+  function renderHallPick() {
+    var halls = (B && B.halls) || [];
+    var pick = el('gcHall');
+    if (halls.length < 2) { if (pick) pick.parentNode.removeChild(pick); return; }
+    if (!pick) {
+      pick = document.createElement('select');
+      pick.id = 'gcHall';
+      pick.setAttribute('aria-label', 'Guild hall');
+      pick.style.marginRight = '8px';
+      var tools = document.querySelector('.gc-tools');
+      tools.insertBefore(pick, tools.firstChild);
+      pick.onchange = function () {
+        var next = Number(pick.value);
+        if (PLAN0 && dirtySlots().length && !window.confirm("Discard the unsaved changes to this hall's plan?")) {
+          pick.value = String(HALL); return;
+        }
+        HALL = next;
+        PLAN0 = ''; TAB = null; COURIERS = null;
+        el('gcCouriers').innerHTML = '';
+        try { var u = new URL(window.location.href); u.searchParams.set('hall', String(HALL)); window.history.replaceState(null, '', u.toString()); } catch (e) { /* old browser: the picker still works */ }
+        load();
+      };
+    }
+    pick.innerHTML = halls.map(function (h) {
+      return '<option value="' + esc(h.room) + '"' + (Number(h.room) === Number(HALL) ? ' selected' : '') + '>' + esc(h.label || h.room) + '</option>';
+    }).join('');
   }
 
   function boot() {

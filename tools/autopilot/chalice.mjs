@@ -32,7 +32,8 @@ import { loadSpawns } from '../m59-spawns.mjs';
 import { SPAWN_FILE } from '../m59-autopilot.mjs';
 import * as skills from '../m59-skills.mjs';
 import { orderPrice, orderSkills, pendingOrderFor, writeState as writeOrderState } from '../m59-standing-orders.mjs';
-import { BOOKMAKERS_HALL_ROOM, StorageCache } from '../m59-storage.mjs';
+import { BOOKMAKERS_HALL_ROOM, StorageCache, isGuildHallRoom } from '../m59-storage.mjs';
+import { GuildRegistry } from '../m59-guild-registry.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Autopilot, REAGENT_TARGET_BY_KIND, TITHE_FLEET, purchaseEnabled, reagentTargetFor, onIsland } from '../m59-autopilot.mjs';
@@ -443,10 +444,29 @@ export class ChalicePart {
 
   // ------------------------------------------------------------------ money home by the desk
 
-  /** Shillings in the guild hall's chests, from the latest readings; null when none was ever read. */
+  // THE CHALICE LANDS IN THE RIDER'S OWN GUILD'S HALL. It casts Rescue (chalice.kod NewApplied), and
+  // Rescue teleports to `Send(Send(who,@GetGuild),@GetGuildHall)` (rescue.kod:125-136) -- so with
+  // more than one guild in the roster, two riders sipping the same cup land in two different halls.
+  // `GUILD_HALL_ROOM` (714) is what this was before, and is still the answer while nothing is
+  // recorded (guildHall's single-guild default).
+  chaliceHall() { return this.guildHall?.().hall ?? GUILD_HALL_ROOM; }
+
+  // AND A LANDING IS THE SERVER NAMING THAT HALL. A guilded rider arriving in a hall room has just been
+  // told which hall its guild owns, by the one mechanic that cannot be wrong about it; write it down.
+  noteChaliceHall(here) {
+    try {
+      const guild = this.s?.client?.guild?.name ?? this.guildHall?.().guild ?? null;
+      if (!guild || !isGuildHallRoom(here)) return;
+      const reg = new GuildRegistry();
+      if (reg.ownerOfHall(here) !== guild || reg.hallOf(guild) !== Number(here))
+        reg.recordHall(here, guild, { source: 'chalice landing (Rescue lands in the rider\'s own guild hall)' });
+    } catch { /* bookkeeping never costs a landing */ }
+  }
+
+  /** Shillings in our guild hall's chests, from the latest readings; null when none was ever read. */
   hallShillings() {
     try {
-      const chests = new StorageCache().allChests().filter(ch => Number(ch.room) === BOOKMAKERS_HALL_ROOM);
+      const chests = new StorageCache().allChests({ room: this.chaliceHall() });
       if (!chests.length) return null;
       return chests.reduce((n, ch) => n + (ch.items ?? []).filter(i => /^shillings?$/i.test(String(i.name ?? '')))
         .reduce((m, i) => m + (Number(i.amount) || 0), 0), 0);
@@ -742,7 +762,8 @@ export class ChalicePart {
     if (!Object.keys(cfg.holder_supply ?? {}).length) return;
     const store = this.chaliceStore();
     if (!Object.keys(holderShortfall(store.supply(), { except: this.who() })).length) return;
-    const hops = this.hereRoom() === GUILD_HALL_ROOM ? 0 : this.hopsTo(GUILD_HALL_ROOM);
+    const hall = this.chaliceHall();
+    const hops = this.hereRoom() === hall ? 0 : this.hopsTo(hall);
     if (!Number.isFinite(hops) || hops > cfg.chest_detour_hops) {
       this.chaliceEvent('cargo_chest_skipped', { hops: Number.isFinite(hops) ? hops : null,
         limit: cfg.chest_detour_hops, why: 'the guild hall is too far from this town trip' });
@@ -1584,20 +1605,22 @@ export class ChalicePart {
           this.tally.chalice_rides = (this.tally.chalice_rides || 0) + 1;
           this.note('landed by chalice', { landed_in: here, ms, onward_hops: hops ?? null,
             to: trip.target.room });
-          this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM,
+          this.noteChaliceHall(here);
+          const ownHall = this.chaliceHall();
+          this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === ownHall,
             ...(st.human ? { human: true } : {}) });
           // STANDING BESIDE THE GUILD'S CHESTS: take on part of what the holder is short of.
           // NOT FOR A RIDE ON DEMAND: there is no trip home to carry the cargo to the holder, and
           // no town stop whose standing order needs funding.
-          if (here === GUILD_HALL_ROOM && !trip.onDemand) await this.chaliceTakeCargo(cfg, store).catch(e =>
+          if (here === ownHall && !trip.onDemand) await this.chaliceTakeCargo(cfg, store).catch(e =>
             this.note('could not draw the holder\'s restock', { why: e.message }));
           // AND A STANDING ORDER'S MONEY, WHILE THE CHESTS ARE A FEW STEPS AWAY. The town trip
           // funds it again later, but by then the character is in Barloque and the chests are
           // a walk back across the city: Rowlf's order of 2026-09-25 landed here and was left
           // unfunded there. The later call draws only if still short, so this cannot double.
-          if (here === GUILD_HALL_ROOM && !trip.onDemand) await this.fundStandingOrder().catch(e =>
+          if (here === ownHall && !trip.onDemand) await this.fundStandingOrder().catch(e =>
             this.note('could not fund the standing order at the hall', { why: e.message }));
-          if (here === GUILD_HALL_ROOM) await this.chaliceDepositMoney(cfg).catch(e =>
+          if (here === ownHall) await this.chaliceDepositMoney(cfg).catch(e =>
             this.note('could not deposit money at the hall', { why: e.message }));
           return { done: true, landed: here };
         }
