@@ -6,6 +6,7 @@ import { RoomGeometry, applySectorHeights } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
+import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 
 let closed;
 // THE HALLS WHOSE PASSAGE IS SURVEYED. Everything in this file -- anchors, doors, the closed-state
@@ -160,6 +161,10 @@ async function standUp(s, isInterrupted) {
     await s.standBeforeGo({ shouldCancel: isInterrupted }).catch(() => null);
 }
 
+// "(body at r4c28, trigger r3c28, seated:false, 0 bodies within 2 sq; ledger dp-3f2a9c01d4)": the
+// scene of the last press that did not open, for the error a FleetScript prints.
+const pressSuffix = p => p?.summary ? ` (${p.summary}${p.written && p.detail?.id ? `; ledger ${p.detail.id}` : ''})` : '';
+
 export async function guildPassage(k, destination, isInterrupted) {
   const s = k.s, c = s.need();
   const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
@@ -227,17 +232,21 @@ export async function guildPassage(k, destination, isInterrupted) {
           : approach?.cancelled_by ? `; cancelled by ${approach.cancelled_by}` : ''}` +
         `${approach?.near_trigger?.length ? `; near the trigger: ${approach.near_trigger.join(', ')}` : ''}, after 3 approaches)`);
     }
-    let crossed = false, refused = 0;
+    // `lastPress` is the scene of the last press that did not open (m59-door-refusal.mjs): the
+    // pose AT the press, the trigger it was meant for, posture, movement in flight and the bodies
+    // round the trigger. It is written to the ledger as `door_press_refused` and its one-line
+    // summary rides the error, because "refused 3 of 3" alone was all prod had on 2026-11-01.
+    let crossed = false, refused = 0, lastPress = null;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
       if (isInterrupted()) throw new Error('guild passage paused for survival');
       await standUp(s, isInterrupted);
       guard();
       const since = c.evSeq;
-      let pressedAt=null;
+      let pressedAt=null, pose=null;
       if (door.secret) {
-        pressedAt=Date.now();
+        pose=doorPressPose(s, c);pressedAt=Date.now();
         if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
-      } else await s.pacer.submit('move', () => { guard();pressedAt=Date.now();return c.go(); });
+      } else await s.pacer.submit('move', () => { guard();pose=doorPressPose(s, c);pressedAt=Date.now();return c.go(); });
       const plans = doorsFor(714, { row: c.self.row, col: c.self.col });
       // The password-operated door is not in SomethingTryGo's table.
       const definition = [...plans.on, ...plans.others].find(p => p.sector === door.sector)
@@ -252,9 +261,13 @@ export async function guildPassage(k, destination, isInterrupted) {
       if (!opening.opened) {
         const cantGo = refusedToGo(c, since);
         if (cantGo) refused++;
+        lastPress = noteDoorPressRefused(s, { source: 'guild_passage', keeper: k, since, pose,
+          door: { sector: door.sector, kind: 'guild', direction: inward ? 'inward' : 'outward', secret: !!door.secret },
+          trigger, across, openingReason: opening.reason, attempt: attempt + 1, attempts: 3, refused });
         k.note?.('guild door opening not verified', { sector: door.sector,
           reason: cantGo ? 'the server refused the press: "You are unable to go anywhere." ' +
-                           '(seated, held or webbed), not a slow door' : opening.reason });
+                           '(seated, held or webbed, or not on the trigger), not a slow door' : opening.reason,
+          ...(lastPress?.summary ? { scene: lastPress.summary } : {}) });
         if (attempt < 2) {
           const retryAt = doorRetryAt(plan,pressedAt);
           while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
@@ -299,7 +312,8 @@ export async function guildPassage(k, destination, isInterrupted) {
       }
     }
     if (!crossed) throw new Error(`guild door ${door.sector} could not be crossed` +
-      (refused ? `: the server refused ${refused} of 3 presses as "unable to go anywhere"` : ''));
+      (refused ? `: the server refused ${refused} of 3 presses as "unable to go anywhere"` : '') +
+      pressSuffix(lastPress));
   }
   throw new Error('guild passage exceeded its door limit');
 }
@@ -336,13 +350,14 @@ async function crossCounter(k, westward, isInterrupted) {
   if (c.self.row !== trigger[0] || c.self.col !== trigger[1])
     throw new Error(`counter door trigger (${trigger.join(',')}) not reached`);
   const plan = { sector: COUNTER.sector, from_height: 100, to_height: 190, within_ms: 5000 };
+  let lastPress = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     guard();
     await standUp(s, isInterrupted);
     guard();
     const since = c.evSeq;
-    let pressedAt=null;
-    await s.pacer.submit('move', () => { guard();pressedAt=Date.now();return c.go(); });
+    let pressedAt=null, pose=null;
+    await s.pacer.submit('move', () => { guard();pose=doorPressPose(s, c);pressedAt=Date.now();return c.go(); });
     const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted,pressedAt });
     if (opening.opened) {
       for (let step = 0; step < 6; step++) {
@@ -357,13 +372,17 @@ async function crossCounter(k, westward, isInterrupted) {
       k.note?.('counter door passage', { westward, crossed: ok, at: { row: c.self.row, col: c.self.col } });
       if (ok) return;
     } else {
+      lastPress = noteDoorPressRefused(s, { source: 'counter_door', keeper: k, since, pose,
+        door: { sector: COUNTER.sector, kind: 'counter', direction: westward ? 'west' : 'east' },
+        trigger, across: landing, openingReason: opening.reason, attempt: attempt + 1, attempts: 3 });
       k.note?.('counter door opening not verified', { reason: refusedToGo(c, since)
-        ? 'the server refused the press: "You are unable to go anywhere."' : opening.reason });
+        ? 'the server refused the press: "You are unable to go anywhere."' : opening.reason,
+        ...(lastPress?.summary ? { scene: lastPress.summary } : {}) });
     }
     const retryAt = doorRetryAt(plan,pressedAt);
     while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
   }
-  throw new Error('counter door 58 could not be crossed');
+  throw new Error('counter door 58 could not be crossed' + pressSuffix(lastPress));
 }
 
 /**

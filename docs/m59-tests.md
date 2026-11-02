@@ -63,12 +63,14 @@ deadline abandoned is still walking, so while it is in flight no directional run
 `M59_IN_FLIGHT_HOLD_MS` (30 min) is presumed hung and no longer holds; `0` restores the old ladder. Prod
 2026-10-27: a town trip and a hunt relocation on one body at the Ko'catan East Tower.
 
-`m59-kocatan-door-test.mjs` (12) pins the 2013 -> 2115 door on the real Session walk and committed geometry,
+`m59-kocatan-door-test.mjs` (21) pins the 2013 -> 2115 door on the real Session walk and committed geometry,
 against a model of koctower.kod / kocatwn.kod / user.kod: three GO squares, a captain who says "You may pass."
 as a room broadcast, "You are unable to go anywhere." judged on the SERVER's square. One walker crosses and
 every go is judged on a doorway square. A second walker on the same body reproduces the live refusals square
 for square (`doorway_position_not_confirmed`, `geometry_blocked`, and the cant-go with a fleet-mate's
-"You may pass." in it).
+"You may pass." in it). The refused go leaves a `door_press_refused` ledger row (m59-door-refusal.mjs) whose pose at the
+press is ON the doorway and whose pose after is where the other walker left it; the crossing that worked
+leaves none.
 
 `m59-confined-relocation-test.mjs` (24) pins `preyRooms` under a confinement on the real spawn table: only
 confined rooms are offered, and when none qualifies the station is (Zoot, 2005 -> 2115, with 2115 on the
@@ -572,6 +574,19 @@ through a nested shelter order.
   still section 4; from r11c4 the doors are worked 3, 53, 55, 59; and a crossing that stops in
   the doorway throws `guild door 3 could not be crossed` rather than reporting success and
   failing at door 53's trigger (Camilla, prod 2026-10-01).
+- `m59-ceiling-doors-test.mjs` (11): the hall's ceiling doors and `guildPassage`. Live ceiling packets
+  open and shut the mover's geometry; a seated body on a trigger stands and leaves; a press the server
+  refuses throws `... refused 3 of 3 presses as "unable to go anywhere" (body at r18c10, trigger r18c10,
+  seated:false, 1 bodies within 2 sq; ledger dp-...)` and leaves one `door_press_refused` row per press
+  with the expected and actual squares, KOD fine points, posture, movement generation and the bodies
+  round the trigger (a player counted, an item listed and not), sealing the replay ring once; a body
+  dragged off the trigger before the `go` is recorded where it was (the 2026-11-01 shape); a press that
+  opens writes nothing.
+- `m59-door-refusal-test.mjs` (4): the refusal record itself. Spoken refusal `server_refused`, silent
+  press `not_verified`; webbed reads `held`; the job steering the body is named; ten objects and six
+  rows per door per ten minutes however crowded or looped, the next window saying how many were held
+  back; never throws and writes nothing without a character name; the reader by room and id prefix;
+  and `--export` redacts fleet-mates and strangers to roles while monsters, numbers and units survive.
 - `m59-wrynkeep-exit-test.mjs` (42): leaving The Wryn's Keep (704) from r42c28 and r39c24,
   whose entrance is three ceiling sectors raised one second apart by a counter
   (`#sector=piPos2`). The kod scan reads the counter as sectors 1+2+3, not its initial value 0;

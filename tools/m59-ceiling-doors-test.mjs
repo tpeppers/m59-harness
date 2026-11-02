@@ -1,13 +1,24 @@
 #!/usr/bin/env node
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { M59Client, BP } from './m59-client.mjs';
-import { sharedRoomGeometry } from './m59-roo.mjs';
-import { attachStepMasks, applyDoorState, doorStates } from './m59-routes.mjs';
-import { applyCeilingDoors, installDoorObserver } from './m59-ceiling-doors.mjs';
-import { guildPassage, guildSection } from './m59-guild-passage.mjs';
-import { Session } from './m59-session.mjs';
+import { readFileSync, readdirSync, mkdtempSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+// A refused press is written to the fleet ledger (m59-door-refusal.mjs), so the ledger is pointed
+// at a scratch directory BEFORE anything that records is imported (see m59-ledger-test.mjs).
+const scratch = mkdtempSync(join(tmpdir(), 'm59-ceiling-doors-'));
+process.env.M59_LEDGER_DIR = scratch;
+const { M59Client, BP } = await import('./m59-client.mjs');
+const { sharedRoomGeometry } = await import('./m59-roo.mjs');
+const { attachStepMasks, applyDoorState, doorStates } = await import('./m59-routes.mjs');
+const { applyCeilingDoors, installDoorObserver } = await import('./m59-ceiling-doors.mjs');
+const { guildPassage, guildSection } = await import('./m59-guild-passage.mjs');
+const { Session } = await import('./m59-session.mjs');
+const { resetDoorRefusalWindows } = await import('./m59-door-refusal.mjs');
+// Every `door_press_refused` row the ledger holds so far.
+const refusals = () => existsSync(scratch) ? readdirSync(scratch).filter(f => /^fleet-.*\.jsonl$/.test(f))
+  .flatMap(f => readFileSync(join(scratch, f), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)))
+  .filter(r => r.kind === 'door_press_refused') : [];
 const fresh = () => {
   const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url)));
   attachStepMasks(map);
@@ -170,10 +181,17 @@ test('an applied ceiling state is visible to doorStates(), not just to its own W
 // event" for eight hours. Already on the trigger, they never walked, so nothing stood them up.
 // Animal, seated at r19c10, could not walk to door 59 at all. The server here is modelled the
 // way user.kod is: a seated body neither walks nor presses, and `stand` is the only way out.
-function seatedHall(start, { standWorks = true } = {}) {
-  const { map, g, observed } = fresh(), opened = [], log = [];
+//
+// `drag` models the 2026-11-01 shape: something moves the body off the trigger between the confirm
+// and the `go` (a competing walker), and the server, judging its OWN square, finds no trigger there.
+function seatedHall(start, { standWorks = true, drag = null, bystanders = [] } = {}) {
+  const { map, g, observed } = fresh(), opened = [], log = [], seals = [];
   let seated = true, stands = 0;
-  const c = { self: { ...start }, room: { id: 2572, sectorHeights: observed }, evSeq: 0, events: [],
+  const c = { self: { ...start }, room: { id: 2572, sectorHeights: observed,
+      objects: new Map(bystanders.map((b, i) => [9000 + i, { id: 9000 + i, ...b }])) },
+    me: { name: 'Tester' }, selfId: 1, evSeq: 0, events: [],
+    lastPostureCommand: { verb: 'rest', at: Date.now(), room_object_id: 2572 },
+    eventsSince: since => c.events.filter(e => e.seq > since),
     waitFor: async ({ since, match }) => ({ events: c.events.filter(e => e.seq > since && (!match || match(e))) }) };
   const emit = e => c.events.push({ ...e, at: Date.now(), seq: ++c.evSeq });
   const open = id => {
@@ -187,9 +205,23 @@ function seatedHall(start, { standWorks = true } = {}) {
     if (col === 28 && [3,4].includes(row)) open(59);
     else if (col === 10 && [18,19].includes(row)) open(55);
     else if (col === 13 && [11,13].includes(row)) open(53);
+    // `SomethingTryGo` matched nothing at the server's square: the same sentence a seat gets.
+    else emit({ kind: 'message', text: 'You are unable to go anywhere.' });
   };
-  const s = { need: () => c, world: { geometry: g }, pacer: { submit: async (_kind, fn) => fn() },
-    async standBeforeGo() { stands++; if (standWorks) seated = false; },
+  const s = { name: 't17', need: () => c, world: { geometry: g, room: { num: 714, name: 'Guild Hall' } },
+    movementGeneration: 7,
+    replayRecorder: { seal: (kind, detail) => { seals.push({ kind, detail });
+      return { id: `seal-${seals.length}`, file: `replays/${kind}/seal-${seals.length}.json`, status: 'queued' }; } },
+    pacer: { submit: async (kind, fn) => {
+      if (kind !== 'move' || !drag) return fn();
+      // The other walker moves the body before the `go` leaves, and its next command lands while
+      // the passage is still waiting on the door.
+      c.self = { ...drag, x: drag.col * 64 + 40, y: drag.row * 64 + 20 };
+      const sent = fn(); s.movementGeneration++; return sent;
+    } },
+    // The client sends `stand` either way; whether the server honoured it is `standWorks`.
+    async standBeforeGo() { stands++; c.lastPostureCommand = { verb: 'stand', at: Date.now(), room_object_id: 2572 };
+      if (standWorks) seated = false; },
     async step(col, row) { if (seated) return { moved: false, reason: 'snapped back' };
       c.self = { row, col }; return { moved: true }; },
     async walkTo(col, row) {
@@ -197,15 +229,19 @@ function seatedHall(start, { standWorks = true } = {}) {
       c.self = { row, col }; observed.clear(); applyCeilingDoors(map, 714, observed);
     } };
   const k = { s, note: (what, facts) => log.push({ what, ...facts }), sayHallPassword: async () => ({ ok: true }) };
-  return { k, c, opened, log, stands: () => stands };
+  return { k, c, opened, log, seals, stands: () => stands };
 }
 
 test('a character seated on the hall door trigger stands up and leaves', async () => {
-  const { k, c, opened, stands } = seatedHall({ row: 18, col: 10 });
+  resetDoorRefusalWindows();
+  const before = refusals().length;
+  const { k, c, opened, stands, seals } = seatedHall({ row: 18, col: 10 });
   await guildPassage(k, 0, () => false);
   assert.equal(guildSection(c.self.row, c.self.col), 0, 'out through 55 and 59 to the foyer');
   assert.deepEqual(opened, [55, 59]);
   assert.ok(stands() >= 2, 'stood before each leg, not once per journey');
+  assert.equal(refusals().length, before, 'a press that opened writes no door_press_refused row');
+  assert.equal(seals.length, 0, 'and seals no replay ring');
 });
 
 test('a character seated beyond the hall door can walk to the entrance trigger', async () => {
@@ -215,10 +251,62 @@ test('a character seated beyond the hall door can walk to the entrance trigger',
 });
 
 test('a press the server refuses is named as a refusal, not a slow door', async () => {
-  const { k, log } = seatedHall({ row: 18, col: 10 }, { standWorks: false });
+  resetDoorRefusalWindows();
+  const before = refusals().length;
+  const { k, log, seals } = seatedHall({ row: 18, col: 10 }, { standWorks: false,
+    bystanders: [{ row: 17, col: 10, x: 10 * 64 + 32, y: 17 * 64 + 32, flags: 0x4, name: 'Bystander' },
+                 { row: 18, col: 13, flags: 0, name: 'meat pie' }] });
   await assert.rejects(guildPassage(k, 0, () => false),
-    /guild door 55 could not be crossed: the server refused 3 of 3 presses as "unable to go anywhere"/);
+    /guild door 55 could not be crossed: the server refused 3 of 3 presses as "unable to go anywhere" \(body at r18c10, trigger r18c10, seated:false, 1 bodies within 2 sq; ledger dp-[0-9a-f]{10}\)/);
   const notes = log.filter(e => e.what === 'guild door opening not verified');
   assert.equal(notes.length, 3);
   assert.ok(notes.every(e => /unable to go anywhere/.test(e.reason)), 'each note says the server refused');
+  assert.ok(notes.every(e => /^body at r18c10, trigger r18c10/.test(e.scene)), 'and carries the scene');
+
+  // THE LEDGER ROW: one per refused press, self-sufficient to stage the scene again.
+  const rows = refusals().slice(before);
+  assert.equal(rows.length, 3, 'one door_press_refused row per refused press');
+  const r = rows[2];
+  assert.equal(r.character, 'Tester'); assert.equal(r.agent, 't17');
+  assert.equal(r.source, 'guild_passage'); assert.equal(r.verdict, 'server_refused');
+  assert.equal(r.server_message, 'You are unable to go anywhere.');
+  assert.deepEqual([r.attempt, r.attempts, r.refused_so_far], [3, 3, 3]);
+  assert.equal(r.room.num, 714, 'the room by its map number');
+  assert.equal(r.room.object_id_at_capture, 2572, 'the object id kept, and labelled as a handle');
+  assert.deepEqual({ sector: r.door.sector, direction: r.door.direction }, { sector: 55, direction: 'outward' });
+  assert.deepEqual(r.expected.trigger, { row: 18, col: 10, at: 'r18c10' });
+  assert.deepEqual(r.expected.trigger_fine, { x: 10 * 64 + 32, y: 18 * 64 + 32, units: 'kod', what: 'square centre' });
+  assert.deepEqual(r.expected.across, { row: 20, col: 10, at: 'r20c10' });
+  assert.equal(r.actual.at_press.at, 'r18c10'); assert.equal(r.actual.at_press.on_trigger, true);
+  assert.equal(r.posture.seated, false, 'the client had sent stand');
+  assert.equal(r.posture.last_command, 'stand');
+  assert.equal(r.nearby.bodies_within_2, 1, 'a player counts as a body; a meat pie does not');
+  assert.equal(r.nearby.objects[0].name, 'Bystander'); assert.equal(r.nearby.objects[0].kind, 'player');
+  assert.deepEqual(r.nearby.objects[0].fine, { x: 672, y: 1120, units: 'kod' });
+  assert.ok(r.nearby.objects.some(o => o.kind === 'item'), 'the item is listed, just not counted');
+  assert.equal(r.movement.generation_at_press, 7);
+  assert.match(r.units_note, /64 units per square/);
+  assert.ok('harness_sha' in (r.code ?? {}), 'the code it ran on');
+
+  // THE RING IS SEALED ONCE, NOT THREE TIMES: a refusal loop must not write a bundle per press.
+  assert.equal(seals.length, 1, 'one replay seal per door per window');
+  assert.equal(seals[0].kind, 'door_refused');
+  assert.equal(rows[0].replay_seal.file, 'replays/door_refused/seal-1.json', 'and the row names the bundle');
+  assert.ok(!rows[1].replay_seal && !rows[2].replay_seal);
+});
+
+test('a body dragged off the trigger before the press is recorded where it actually was', async () => {
+  resetDoorRefusalWindows();
+  const before = refusals().length;
+  // Walked onto door 55's trigger, then pulled one square north before the `go` left.
+  const { k } = seatedHall({ row: 18, col: 10 }, { drag: { row: 17, col: 10 } });
+  await assert.rejects(guildPassage(k, 0, () => false),
+    /refused 3 of 3 presses as "unable to go anywhere" \(body at r17c10, trigger r18c10, seated:false, 0 bodies within 2 sq, movement gen \+1 since press/);
+  const r = refusals().slice(before)[0];
+  assert.equal(r.actual.at_press.at, 'r17c10', 'the pose at the press, not the trigger the walk reached');
+  assert.equal(r.actual.at_press.on_trigger, false);
+  assert.deepEqual(r.actual.at_press.off_trigger, { rows: -1, cols: 0, squares: 1 });
+  assert.deepEqual(r.actual.at_press.fine, { x: 680, y: 1108, units: 'kod' });
+  assert.equal(r.actual.at_press.fine_in_square, true);
+  assert.deepEqual(r.expected.trigger, { row: 18, col: 10, at: 'r18c10' });
 });

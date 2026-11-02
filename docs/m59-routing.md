@@ -2051,6 +2051,53 @@ visible symptom, not the cause. Both callers now stand before each walk and pres
 and a refused press is reported as a refusal. Blink would not have helped:
 resting also sets PFLAG_NO_MAGIC.
 
+**A press that does not open is written down with its scene** (`door_press_refused`,
+`tools/m59-door-refusal.mjs`). On 2026-11-01 between 23:30Z and 23:57Z the `tree-farm` hall
+deposit failed three times for two characters with `guild door 59 could not be crossed: the
+server refused 3 of 3 presses as "unable to go anywhere"`, while trips before and after crossed
+and the operator saw nothing in the way, and nothing recorded where the body was. "Unable to go
+anywhere" has two causes with opposite fixes: PFLAG_NO_MOVE (seated, held, webbed), or no
+exit/trigger at the SERVER's square because the body is not where the client thinks. Every press
+that does not open now leaves one fleet-ledger row, from `guildPassage` (and its counter door),
+`openOperableDoor`, a same-room door, and a `leaveVia` go-exit the server refused:
+
+| field | what |
+|---|---|
+| `source`, `verdict` | which crossing; `server_refused` (the server said so) or `not_verified` (nothing opened, nothing said) |
+| `server_message`, `said`, `opening_reason` | the sentence, up to four heard after the press, and the wait's own reason |
+| `room` | `{num, name, object_id_at_capture}` — the map number is the identity, the id a handle |
+| `door`, `expected` | sector/kind/direction; the `trigger` square (`rNcM`), its `trigger_fine` centre in KOD units, and `across` |
+| `actual.at_press`, `actual.after` | the pose copied IN the pacer callback that sent the `go`, and again at record time: square, KOD fine `{x,y}`, `predicted`, `on_trigger`, `off_trigger` |
+| `posture` | `seated` from the last posture command in this room (`null` when unknown, never a guess), `held` from ailments, `keeper_doing` |
+| `movement` | generation at press and now, the live move order and job with `ordered_by`, keeper rungs in flight, last cancel, last three pre-emptions, last six movement commands |
+| `nearby` | up to ten objects within 3 squares of the trigger or body (name, kind, handle, square, fine), and `bodies_within_2` — players and monsters only, never items |
+| `replay_seal`, `code`, `summary` | the sealed replay bundle, harness sha / deploy tag, and the one-liner |
+
+The one-liner rides the error — `... refused 3 of 3 presses as "unable to go anywhere" (body at
+r17c10, trigger r18c10, seated:false, 0 bodies within 2 sq, movement gen +1 since press; ledger
+dp-...)` — and `press_scene` on `leaveVia`/`openOperableDoor` results. Bounded: at most six rows
+per door per ten minutes, the next carrying `suppressed_since_last`. A `server_refused` press also
+seals the keeper's replay ring under `substrate/replays/door_refused/` (once per door per ten
+minutes): `m59-seal-replay/v1`, the last two minutes of client-observed `scene` frames, the same
+frame shape `m59-shadow-replay.mjs` stages on the shadow server (docs/m59-shadow.md). The
+`m59-death-replay.mjs` CLI still loads only `m59-death-replay/v1` bundles, so running a seal
+there is a loader change nobody has made yet.
+
+```bash
+node tools/m59-door-refusal.mjs --room 714 --since 7d          # the rows, newest first
+node tools/m59-door-refusal.mjs --export dp-3f2a9c01d4 --out tools/fixtures/<name>.json
+```
+
+`--export` writes a redacted fixture (`m59-door-press-fixture/1`): the subject is `player A`,
+fleet-mates and strangers near the door become `player B` / `stranger A`, monsters keep their
+names, and `replay` names the room, the square to stand on, the verb and the seal.
+
+**A lead the record should settle.** `guildPassage` confirms the trigger square ONCE before its
+three presses and never re-walks between them, so a body pulled off the trigger after the confirm
+is refused three times in a row — the exact shape of the 2026-11-01 message. The test
+`a body dragged off the trigger before the press is recorded where it actually was` reproduces it
+offline. Whether that is what happened on prod is what `actual.at_press.on_trigger` will say.
+
 The door observer belongs to each Session login, including recovery reconnects.
 Attaching it only during keeper startup left Camilla's replacement client recording
 opening packets while its movement geometry stayed shut. Replacement clients reset

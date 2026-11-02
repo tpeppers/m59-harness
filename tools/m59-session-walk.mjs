@@ -85,7 +85,18 @@ import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 import { planDoorChain, doorBringsCloser, ceilingPassableKod } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
+import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 import { gatedEntrance, gateState, gatePassable, waitForGateOpen } from './m59-gated-entrances.mjs';
+
+// A DOOR PRESS THAT DID NOT OPEN, written to the ledger as `door_press_refused` with its scene:
+// the pose at the press, the square it was meant for, posture, movement in flight and the bodies
+// round it (m59-door-refusal.mjs, the 2026-11-01 hall incident). The methods below are lifted by
+// text into fakes, so they reach this and `doorPressPose` through `typeof`, like planDoorChain.
+function recordDoorPress(s, options) {
+  let keeper = null;
+  try { keeper = autopilotIfAny(s?.name); } catch { keeper = null; }
+  return noteDoorPressRefused(s, { keeper, ...options });
+}
 
 // A checked fine controller may already have delivered the actual body to the
 // published opening. Rewalking its coarse cell can undo that exact approach.
@@ -5786,8 +5797,12 @@ export function sessionWalkPrototype(deps) {
     // postdates d263bf0 and never had the call; see the note in `leaveVia`.
     await this.standBeforeGo();
     if (cancelled()) return cancellation();
-    await this.pacer.submit('move', () =>
-      this.movementWasCancelled(movementGeneration, controlToken) ? false : c.go());
+    let pose = null;
+    await this.pacer.submit('move', () => {
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return false;
+      pose = typeof doorPressPose === 'function' ? doorPressPose(this, c) : null;
+      return c.go();
+    });
     // The door announces itself - room.kod sends room_door_was_opened before it moves the
     // body - but the announcement is not the move, and a refusal (user_cant_go) is a
     // message too. The position is the fact; the sentences are evidence for a refusal.
@@ -5808,7 +5823,14 @@ export function sessionWalkPrototype(deps) {
     const goMoved = after.row !== at.row || after.col !== at.col;
     if (near && goMoved) return { crossed: true, at: { row: after.row, col: after.col }, said };
     const moved = !before || after.row !== before.row || after.col !== before.col;
+    const press = typeof recordDoorPress === 'function'
+      ? recordDoorPress(this, { source: 'same_room_door', since, pose, messages: said,
+          door: { kind: 'same_room', name: door.name ?? null },
+          trigger: { row: door.row, col: door.col }, across: { row: door.arriveRow, col: door.arriveCol },
+          openingReason: moved ? 'landed_off_target' : 'go_did_nothing', attempt: 1, attempts: 1 })
+      : null;
     return { crossed: false, at: { row: after.row, col: after.col }, said,
+             ...(press?.summary ? { press_scene: press.summary } : {}),
              reason: moved ? 'landed_off_target' : 'go_did_nothing',
              note: moved
                ? `expected to land near r${door.arriveRow}c${door.arriveCol}`
@@ -5936,6 +5958,7 @@ export function sessionWalkPrototype(deps) {
       .filter(s => !(s.row === target.row && s.col === target.col) && Number.isFinite(here.row))
       .sort((x, y) => cheb(x, here) - cheb(y, here));
     const misses = [];
+    let lastPress = null, refusedPresses = 0;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (cancelled() || isInterrupted())
@@ -5962,9 +5985,10 @@ export function sessionWalkPrototype(deps) {
         await this.standBeforeGo({ shouldCancel: () => cancelled() || isInterrupted() }).catch(() => null);
       if(cancelled())return {opened:false,sector:pick.sector,reason:'movement cancelled'};
       const since = c.evSeq;
-      let pressedAt=null;
+      let pressedAt=null,pose=null;
       const press=async()=>{
         if(cancelled()||c.self?.row!==target.row||c.self?.col!==target.col)return;
+        pose=typeof doorPressPose==='function'?doorPressPose(this,c):null;
         pressedAt=Date.now();return c.go();
       };
       await (this.pacer?.submit ? this.pacer.submit('move', press) : press())
@@ -5980,9 +6004,16 @@ export function sessionWalkPrototype(deps) {
       }
       const opening = await waitForDoorOpen(c, pick, { since, cancelled, pressedAt, passableHeight });
       if (cancelled()) return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
-      if (!opening.opened && refusedToGo(c, since))
+      const serverRefused = !opening.opened && refusedToGo(c, since);
+      if (serverRefused)
         opening.reason = 'the server refused the press: "You are unable to go anywhere." ' +
-                         '(seated, held or webbed), not a door that stayed shut';
+                         '(seated, held or webbed, or not on the trigger), not a door that stayed shut';
+      if (!opening.opened && typeof recordDoorPress === 'function') {
+        lastPress = recordDoorPress(this, { source: 'operable_door', since, pose,
+          door: { sector: pick.sector, name: pick.name ?? null, kind: 'operable', gate: pick.gate ?? null },
+          trigger: target, openingReason: opening.reason, attempt: attempt + 1, attempts: 3,
+          refused: (refusedPresses += serverRefused ? 1 : 0) });
+      } else if (serverRefused) refusedPresses++;
       if (opening.opened) {
         return { opened: true, sector: pick.sector, name: pick.name, at: target,
                  animation_ms: opening.animation_ms,
@@ -5993,7 +6024,9 @@ export function sessionWalkPrototype(deps) {
       if (pick.gate)
         return { opened: false, sector: pick.sector, gate: pick.gate,
                  reason: `${opening.reason}; this door asks ${pick.gate}. ` +
-                         'The opening was not verified; access or an existing door cycle may be responsible' };
+                         'The opening was not verified; access or an existing door cycle may be responsible' +
+                         (lastPress?.summary ? ` (${lastPress.summary})` : ''),
+                 ...(lastPress?.summary ? { press_scene: lastPress.summary } : {}) };
       if (attempt < 2) {
         // A `go` while it is already open does not restart the five-second timer.
         const retryAt = doorRetryAt(pick,pressedAt);
@@ -6002,7 +6035,10 @@ export function sessionWalkPrototype(deps) {
       }
     }
     return { opened: false, sector: pick.sector,
-             reason: 'pressed three times and no sector moved' };
+             reason: 'pressed three times and no sector moved' +
+                     (refusedPresses ? `; the server refused ${refusedPresses} as "unable to go anywhere"` : '') +
+                     (lastPress?.summary ? ` (${lastPress.summary})` : ''),
+             ...(lastPress?.summary ? { press_scene: lastPress.summary } : {}) };
   }
 
   // IS EVERY WAY OUT BEHIND A DOOR THIS ROOM WILL OPEN? Asked by `travel` BEFORE it walks at a
@@ -7022,6 +7058,8 @@ export function sessionWalkPrototype(deps) {
       // BP_PLAYER reports the new room — and waitFor returns on the first match of
       // ANY listed kind. Listening for 'message' too therefore returned the
       // announcement of success and called it a failure, every single time.
+      // The pose at the last `go` and the sequence before the first, for a refusal's record.
+      let goPose = null, goSince = null;
       const go = await boundedSilentGo({
         sequence: () => c.evSeq,
         eventsSince: since => c.eventsSince(since),
@@ -7046,6 +7084,7 @@ export function sessionWalkPrototype(deps) {
           let emitted=false,sequence=null;
           const result=await this.pacer.submit('move', () => {
             if(this.movementWasCancelled(movementGeneration,controlToken)||leftExpectedRoom())return false;
+            goPose=typeof doorPressPose==='function'?doorPressPose(this,c):null;goSince??=c.evSeq;
             sequence=c.evSeq;c.go();emitted=true;return true;
           },DOOR_SETTLE_MS);
           return{sent:emitted,sequence,reason:result?.held?'casting_hold':'go_not_sent'};
@@ -7066,6 +7105,15 @@ export function sessionWalkPrototype(deps) {
       if(go.unsent)return{left:false,stage:'go',reason:go.reason,unsent:true,go_attempts:go.attempts,crossing_packet_sent:go.attempts>0};
       if (go.unconfirmed_transition) return staleExit();
       const entered = go.entered, messages = go.messages, goAttempts = go.attempts;
+      // A `go` the server answered with "unable to go anywhere" from the exit square: the body was
+      // not where the confirm said, or something held it. Write the scene down (m59-door-refusal).
+      const press = !entered && goAttempts > 0 && typeof recordDoorPress === 'function' &&
+        (messages ?? []).some(m => /unable to go anywhere/i.test(String(m)))
+        ? recordDoorPress(this, { source: 'exit_go', since: goSince, pose: goPose, messages,
+            door: { kind: 'exit', to: exit.to ?? null, name: exit.name ?? null },
+            trigger: exit.stand_on, openingReason: leaned ? 'leaned into the doorway' : null,
+            attempt: goAttempts, attempts: goAttempts })
+        : null;
       // SAY WHETHER A PACKET ACTUALLY WENT OUT. `boundedSilentGo` counts its `send()`
       // calls, so this is knowable and was simply never reported: the field was set only
       // on the edge path, and every go-door refusal came back `crossing_packet_sent: null`
@@ -7077,6 +7125,7 @@ export function sessionWalkPrototype(deps) {
                ...(leaned && entered
                    ? { note: 'the exit square is not walkable in this room\'s grid, so this ' +
                              'leaned into the doorway from the square beside it' } : {}),
+               ...(press?.summary ? { press_scene: press.summary } : {}),
                ...(entered ? {} : {
                  reason: messages.length ? messages.join('; ')
                        : leaned ? `leaned into (${exit.stand_on.col},${exit.stand_on.row}) from beside ` +
