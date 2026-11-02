@@ -803,6 +803,17 @@ async function cmdStatus() {
   // security value disagreed with the bake is listed here, so "they changed a room" is a
   // named condition on the status line rather than a character that mysteriously will not
   // walk. Silence means no room has disagreed — which is the ordinary answer.
+  // KEEPERS WAITING FOR A PERSON TO LOG OFF (runtime/pending-successors.mjs): each is on the code
+  // restart-keepers loaded, inert, and takes its character over when the person lets go. The body is
+  // still on the OLD keeper until then, which is the thing worth knowing before a deploy is called done.
+  const waiting = Array.isArray(h.pending_successors) ? h.pending_successors : [];
+  for (const p of waiting) {
+    const min = ms => `${Math.round(ms / 60_000)}m`;
+    console.log(`  successor  ${p.agent} pid ${p.pid} (port ${p.port}) waiting ${min(p.waiting_ms ?? 0)} for the pilot to log off` +
+                c.dim(p.activating ? ' — taking over now'
+                  : `; old pid ${p.old_pid ?? '?'} keeps the body until then` +
+                    (p.gives_up_in_ms != null ? `, gives up in ${min(p.gives_up_in_ms)}` : '')));
+  }
   const drift = Array.isArray(h.geometry_drift) ? h.geometry_drift : [];
   if (drift.length)
     console.log(c.bad(`  geometry  ${drift.length} room(s) DRIFTED from the baked map`) +
@@ -971,15 +982,18 @@ if (goapMode) {
     // replacement (the broker's war_restart), so nobody leaves the world; a machine short of
     // memory falls back to the old stop-and-sweep and says so with the numbers
     // (m59-keeper-restart.mjs). --mode handoff|logoff|auto and M59_RESTART_MODE override it.
-    const { restartKeepers } = await import('./m59-war-restart.mjs');
+    // A character a person is playing gets a PENDING SUCCESSOR (runtime/pending-successors.mjs):
+    // on the new code, inert, taking over when they log off. --skip-piloted leaves it alone instead;
+    // --defer-max-minutes bounds the wait.
+    const { restartKeepers, describeRestartTotal } = await import('./m59-war-restart.mjs');
     const r = await restartKeepers({ url: `http://127.0.0.1:${HTTP_PORT}/`,
       agents: arg('--agents')?.split(',').map(x => x.trim()).filter(Boolean) ?? null,
-      mode: arg('--mode'), concurrency: arg('--concurrency') != null ? Number(arg('--concurrency')) : null })
+      mode: arg('--mode'), concurrency: arg('--concurrency') != null ? Number(arg('--concurrency')) : null,
+      skipPiloted: has('--skip-piloted'),
+      deferMaxMinutes: arg('--defer-max-minutes') != null ? Number(arg('--defer-max-minutes')) : null })
       .catch(e => ({ ok: false, why: e.message }));
     if (r.why && !r.results?.length) console.error(c.bad(r.why));
-    else console.log(r.mode === 'handoff'
-      ? c.ok(`${r.restarted} of ${r.of} keeper(s) handed off without leaving the world`)
-      : `${r.restarted} of ${r.of} keeper(s) logged off and back on a new pid`);
+    else console.log(r.mode === 'handoff' ? c.ok(describeRestartTotal(r)) : describeRestartTotal(r));
     code = r.ok ? 0 : 1;
     break;
   }

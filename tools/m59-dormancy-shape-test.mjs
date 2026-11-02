@@ -127,15 +127,62 @@ await test('broker: restart-keepers no longer skips a piloted character outright
 
 await test('broker: a dormant swap starts dormant, is ready when dormant and OUT, and stops the old keeper', () => {
   const w = block(broker, broker.indexOf(') {', broker.indexOf('async function warRestartKeeper(')));
-  assert.match(w, /\.\.\.\(dormantSwap \? dormancyEnvFor\(agent\) : \{\}\)/, 'only a dormant swap starts dormant');
+  // A pending successor is a dormant swap that is not swapped in: it starts dormant on a record of its
+  // OWN (pendingSuccessorEnv), never the shared store's, so nothing but its take-over can wake it.
+  assert.match(w, /\.\.\.\(dormantSwap \? \(pending \? pendingSuccessorEnv\(pendingDeadline\) : dormancyEnvFor\(agent\)\) : \{\}\)/,
+               'only a dormant swap starts dormant');
   assert.match(w, /dormantSwap \? \(reply\.value\.dormancy && !reply\.value\.in_game\)/);
   assert.match(w, /if \(legacy \|\| dormantSwap\) await post\('\/stop', \{\}\);/);
   before(w, 'if (!dormantSwap && !(await tell(', 'const band = keeperPortBand()', 'no handoff is told on a dormant swap');
 });
 
-await test('broker: a person playing THROUGH the keeper\'s own connection is still refused', () => {
+await test('broker: a person playing THROUGH the keeper\'s own connection is refused or deferred, never swapped', () => {
   const w = block(broker, broker.indexOf(') {', broker.indexOf('async function warRestartKeeper(')));
-  before(w, 'if (connected === true)', 'const target = await verifiedKeeperWriteTarget', 'refused before anything is touched');
+  // The decision is pilotedRestartPlan (runtime/pending-successors.mjs, behaviour-tested there); here, that
+  // a refusal returns before anything is touched and a deferral never addresses the old keeper.
+  assert.match(w, /const plan = pilotedRestartPlan\(\{ occupied: piloted, dormant: !!dormancyOf\(agent\), connected, defer: deferPiloted \}\);/);
+  before(w, "if (plan.action === 'refuse') return { agent, ok: false, why: plan.why };", 'verifiedKeeperWriteTarget(agent, index)',
+         'refused before anything is touched');
+  assert.match(w, /const target = pending \? null : await verifiedKeeperWriteTarget\(agent, index\);/,
+               'a pending successor never addresses the old keeper while it is staged');
+  before(w, 'if (pending) {', 'keeperProcesses.set(agent, { pid: child.pid, port',
+         'a pending successor is registered and returned BEFORE the swap, so no record ever names it');
+});
+
+await test('broker: a pending successor is invisible to the rejoin sweep and to every port allocation', () => {
+  const sweep = block(broker, broker.indexOf('async function reconcileFleet()'));
+  before(sweep, 'if (pendingSuccessors.has(agent)) continue;', '/rejoin`',
+         'the sweep never /rejoins the OLD keeper while a successor waits for the same body');
+  const alloc = block(broker, broker.indexOf(') {', broker.indexOf('async function allocateKeeperPort(')));
+  assert.match(alloc, /for \(const port of pendingSuccessors\.ports\(\)\) taken\.add\(port\);/, 'its port is never offered');
+  const w = block(broker, broker.indexOf(') {', broker.indexOf('async function warRestartKeeper(')));
+  assert.match(w, /for \(const p of pendingSuccessors\.ports\(\)\) t\.add\(p\);/, 'nor to a handoff replacement');
+  const inner = block(broker, broker.indexOf('async function spawnKeeperInner('));
+  before(inner, 'live?.pending_successor', 'adopted guarded surviving', 'an orphaned successor is never adopted as a survivor');
+});
+
+await test('broker: a released pilot wakes its successor at once; only the committed owner may', () => {
+  const r = block(broker, broker.indexOf('function releasePilot('));
+  assert.match(r, /if \(pendingSuccessors\.has\(agent\)\) \{[\s\S]*?setImmediate\(tickPendingSuccessors\)/);
+  const t = block(broker, broker.indexOf('function tickPendingSuccessors('));
+  assert.match(t, /!pendingTakeoversArmed \|\| brokerStopping \|\| brokerRetired/);
+  assert.match(t, /if \(!fleetClaimStillOurs\(\)\) return;/);
+  assert.match(broker, /let pendingTakeoversArmed = !successorOf\(\);/, 'a warm successor broker waits for started()');
+  const started = block(broker, broker.indexOf('started() {'));
+  assert.match(started, /pendingTakeoversArmed = true;/);
+  assert.match(broker, /put\('pendingSuccessors', pendingSuccessors\.exportSnapshot\(\)\);/, 'a live handover carries the book');
+  assert.match(block(broker, broker.indexOf('async function killAllKeepers(')), /pendingSuccessors\.teardownAll\(reason\)/);
+});
+
+await test('keeper: a pending successor that never held the body leaves nothing behind in its name', () => {
+  assert.match(block(keeper, keeper.indexOf('function writeAssignmentCarry(')), /if \(neverHeldBody\(\)\) return;/, 'no carry');
+  assert.match(block(keeper, keeper.indexOf('function saveFinalState(')), /if \(neverHeldBody\(\)\) return false;/, 'no snapshot');
+  assert.match(keeper, /if \(!neverHeldBody\(\)\) releaseSpot\(agent\);/, 'and never the OLD keeper\'s wall claim');
+  const join = block(keeper, keeper.indexOf('async function joinGenerationOnce('));
+  before(join, 'inGame = true;', 'everJoined = true;');
+  const wake = handler(keeper, '/wake');
+  before(wake, 'refreshPendingOrders()', 'wakeFromDormancy(', 'orders are re-read before the login, not after');
+  assert.match(keeper, /pending_successor: neverHeldBody\(\) \? \{ deadline: PENDING_SUCCESSOR\.deadline \} : null,/);
 });
 
 await test('broker: a person logging off under a hold starts the penalty clock', () => {

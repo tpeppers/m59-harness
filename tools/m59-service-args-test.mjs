@@ -55,7 +55,8 @@ console.log('\n--help is usage and nothing else');
 console.log('\nevery flag each subcommand reads is accepted');
 {
   const sample = { '--fleet': 'prod', '--http': '8901', '--dashboard': '8902', '--agents': 't1,t2',
-                   '--mode': 'handoff', '--concurrency': '2', '--lines': '80' };
+                   '--mode': 'handoff', '--concurrency': '2', '--lines': '80',
+                   '--defer-max-minutes': '240' };
   const withAll = (prefix, flags) => [...prefix, ...flags.flatMap(f => sample[f] ? [f, sample[f]] : [f])];
   for (const [cmd, flags] of Object.entries(SERVICE_FLAGS)) {
     for (const f of flags) {

@@ -358,6 +358,15 @@ guarded survivors; a lab or copied/alias roster cannot. Claims predating keeper 
 closed and use the one-time `M59_ALLOW_UNGUARDED_TAKEOVER=1` migration in
 [`docs/INSTALL.md`](docs/INSTALL.md#when-it-does-not-work), never lock deletion.
 
+**A CHARACTER A PERSON IS PLAYING IS NO LONGER LEFT ON OLD CODE.** It cannot be handed off under them,
+and `restart-keepers` used to skip it — once without a line (Gonzo, 2026-11-02: a live handover had
+preserved his keeper with no record). Now it is replaced dormant if its keeper is already out of the
+world, and otherwise gets a **pending successor**: a keeper on the new code, warm, inert, in none of
+the broker's maps, that takes over as a handoff the moment the person logs off and sends nothing
+while they hold the body. Memory-gated, gives up after 12 h (`--defer-max-minutes`), shown in
+`m59-service.mjs status` and the `pending_successors` tool; `--skip-piloted` keeps the old
+hands-off behaviour ([`docs/m59-operations.md`](docs/m59-operations.md#a-person-playing-a-character-a-successor-waits-for-them-to-log-off)).
+
 **A BROKER RESTART IS A LIVE HANDOVER NOW, AND NOBODY LEAVES THE WORLD.** `restart` starts the
 next broker warm beside the running one, transfers the fleet lock and every account lease to it
 while both are alive (keeper guards kept, so no keeper notices), lets it adopt every running

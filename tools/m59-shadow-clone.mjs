@@ -645,6 +645,8 @@ async function shadowKeepers(agents) {
     try {
       const s = await (await fetch(`http://127.0.0.1:${port}/live`, { signal: AbortSignal.timeout(1500) })).json();
       if (!want.has(s?.agent) || !(Number(s.pid) > 0) || s.character !== roster[s.agent]?.credentials?.character) return;
+      // A keeper staged to take over from a person (runtime/pending-successors.mjs) is not the one to drive.
+      if (s.pending_successor) return;
       if (seen.has(s.agent)) dup.add(s.agent);
       else seen.set(s.agent, { port, agent: s.agent, character: s.character, pid: Number(s.pid), policyReplace: s.policy_replace === 1 });
     } catch { /* nothing on that port */ }
