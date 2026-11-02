@@ -441,13 +441,16 @@ export class TownShopsPart {
     // (`hall`), so carrying rings to the hall does not also switch on every other line of the plan.
     // AND THE PLAN'S `everyone` ITEMS, which every character carries home whatever its own guild_wants
     // (operator, 2026-10-19: "have everyone ... send [the dispel illusion reagents] back to the guild hall").
-    let plan = this.guildContributionPlan ? this.guildContributionPlan(guildPlan()) : guildPlan();
+    // OUR GUILD'S PLAN, OUR HALL'S CHESTS, OUR GUILD'S RENT (guildStores) -- with two guilds in the
+    // roster the other hall's plan is the other guild's business.
+    const mine = this.guildStores();
+    let plan = this.guildContributionPlan ? this.guildContributionPlan(mine.plan) : mine.plan;
     const hallOnly = cfg?.enabled ? null : [...(this.curseCycleHall() ?? []), ...(plan?.everyone ?? [])];
     if (!cfg?.enabled && !hallOnly.length) return null;
     if (!plan) return null;                       // no plan is not an empty plan
     if (hallOnly) plan = restrictPlan(plan, hallOnly);
-    const store = new StorageCache();
-    const chests = store.allChests(), rent = store.readRent();
+    const store = mine.store;
+    const chests = mine.chests, rent = mine.rent;
 
     // THE CONTRIBUTOR KEEPS ITS OWN FLOOR. A guild is not entitled to the elderberry a
     // caster eats with, so the loadout's own minimum comes off the top before anything is
@@ -474,7 +477,7 @@ export class TownShopsPart {
         .filter((v, i, a) => a.indexOf(v) === i)
         .map(item => [item, this.packAsItems().filter(x => norm(x.name) === item)
           .reduce((t, x) => t + (x.amount || 1), 0)])),
-      chests: Object.fromEntries((store.allChests() ?? []).map(ch =>
+      chests: Object.fromEntries((store.allChests({ room: mine.hall }) ?? []).map(ch =>
         [ch.slot, { rows: (ch.items ?? []).length, bulk: chestFullness(ch.items ?? []).bulk }])),
     }; } catch (e) { return { at: Date.now(), error: e?.message ?? String(e) }; } };
     if (!want.enabled) { this.note('guild wants are off', { why: want.why }); return want; }
@@ -514,7 +517,7 @@ export class TownShopsPart {
     }
 
     this.doing = 'travelling';
-    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { origin: keeperOrigin('guild_wants'), maxHops: 14 })
+    const trip = await this.travel(mine.hall, { origin: keeperOrigin('guild_wants'), maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
     if (!trip.arrived) {
       this.note('could not reach the guild hall to contribute', {

@@ -116,7 +116,7 @@ export class ShoppingPart {
     // The stockpile is the only source for these, so they never reach a price. Removed here
     // rather than at the counter: a merchant refusal is a sentence spoken to the room, and an
     // unaffordable TOTAL is what opens the loop this exists to close.
-    const split = splitBySourcing(requests, { policy: this.policy, plan: guildPlan() });
+    const split = splitBySourcing(requests, { policy: this.policy, plan: this.guildStores?.().plan ?? guildPlan() });
     requests = [...split.buy, ...foodLines];
     this.chestOnlyWants = split.stockpile;
     this.reagentsOff = split.off;

@@ -180,9 +180,10 @@ export async function liveInputs({ root = here('..'), hallRoom = DEFAULTS.hall_r
   const { guildPlan } = await import('./m59-guildwants.mjs');
   const { townOfRoom } = await import('./m59-profiles.mjs');
   const { unitWorth, unitCost } = await import('./m59-overfarm.mjs');
-  const chests = new StorageCache().allChests().filter(c => Number(c.room) === Number(hallRoom))
+  // ONE HALL'S CHESTS AND THAT HALL'S PLAN: a roster can hold several guilds, each with its own hall.
+  const chests = new StorageCache().allChests({ room: Number(hallRoom) })
     .map(c => ({ slot: c.slot, items: c.items ?? [], observed_at: c.observed_at ?? null }));
-  const plan = guildPlan();
+  const plan = guildPlan(Number(hallRoom));
   const targets = new Map();
   for (const [slot, items] of plan?.chests ?? new Map()) targets.set(slot, new Map(items.map(i => [norm(i.item), Number(i.target) || 0])));
   const merchants = JSON.parse(readFileSync(join(root, 'substrate', 'm59-merchants.json'), 'utf8')).merchants ?? [];

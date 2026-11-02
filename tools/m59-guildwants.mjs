@@ -28,11 +28,12 @@
 //
 // Nothing here does any I/O. The cache is `m59-storage.mjs`, the choreography is the
 // keeper's town trip, and `m59-guildwants-test.mjs` pins this.
-import { CHEST_BULK_MAX, GUILD_CHEST_SLOTS, chestFullness, parseChestKey, BOOKMAKERS_CHEST_SQUARES } from './m59-storage.mjs';
+import { CHEST_BULK_MAX, GUILD_CHEST_SLOTS, chestFullness, parseChestKey, BOOKMAKERS_CHEST_SQUARES,
+         LEGACY_CHEST_HALL, isGuildHallRoom } from './m59-storage.mjs';
 import { weighPack } from './m59-items.mjs';
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const GUILD_PLAN_FILE = process.env.M59_GUILD_PLAN ||
@@ -44,20 +45,55 @@ const norm = s => String(s ?? '').trim().toLowerCase();
 // trip: the common path is a stat() and a parse only when somebody has just saved from the
 // planner. A missing file is null and null means "no guild wants", never "want nothing" —
 // the same distinction a loadout draws, and for the same reason.
-let planCache = { at: 0, value: null };
-export function guildPlan(file = GUILD_PLAN_FILE) {
+//
+// ONE PLAN PER HALL. A plan names chests by square, and a square is only a chest within one hall --
+// so with more than one guild in the roster, each guild's hall has its own plan. Hall 714 keeps the
+// file it always had (`substrate/guild-plan.json`, which every older reader still opens); any other
+// hall's plan is `substrate/guild-plans/<room>.json`. Every function here takes either a FILE PATH
+// (as before) or a HALL ROOM NUMBER.
+export const GUILD_PLANS_DIR = process.env.M59_GUILD_PLANS_DIR ||
+  resolve(fileURLToPath(new URL('../substrate/guild-plans', import.meta.url)));
+export const guildPlanFileFor = (room = null) =>
+  room == null || Number(room) === LEGACY_CHEST_HALL ? GUILD_PLAN_FILE : join(GUILD_PLANS_DIR, `${Number(room)}.json`);
+const planFile = (fileOrRoom) => typeof fileOrRoom === 'number' || /^\d+$/.test(String(fileOrRoom ?? ''))
+  ? guildPlanFileFor(Number(fileOrRoom)) : (fileOrRoom ?? GUILD_PLAN_FILE);
+const roomOfFile = (file) => {
+  if (resolve(file) === resolve(GUILD_PLAN_FILE)) return LEGACY_CHEST_HALL;
+  const m = /(\d+)\.json$/.exec(file);
+  return m && resolve(dirname(file)) === resolve(GUILD_PLANS_DIR) ? Number(m[1]) : null;
+};
+
+/** The hall rooms that have a plan on disk. */
+export function guildPlanRooms() {
+  const out = [];
+  if (existsSync(GUILD_PLAN_FILE)) out.push(LEGACY_CHEST_HALL);
   try {
-    if (!existsSync(file)) { planCache = { at: 0, value: null }; return null; }
+    for (const f of readdirSync(GUILD_PLANS_DIR)) {
+      const m = /^(\d+)\.json$/.exec(f);
+      if (m && isGuildHallRoom(m[1]) && Number(m[1]) !== LEGACY_CHEST_HALL) out.push(Number(m[1]));
+    }
+  } catch { /* no other plans */ }
+  return out.sort((a, b) => a - b);
+}
+
+const planCache = new Map();   // file -> { at: mtime, value }
+export function guildPlan(fileOrRoom = GUILD_PLAN_FILE) {
+  const file = planFile(fileOrRoom);
+  try {
+    if (!existsSync(file)) { planCache.delete(file); return null; }
     const mtime = statSync(file).mtimeMs;
-    if (planCache.at === mtime) return planCache.value;
-    const value = normalisePlan(JSON.parse(readFileSync(file, 'utf8')));
-    planCache = { at: mtime, value };
+    const hit = planCache.get(file);
+    if (hit && hit.at === mtime) return hit.value;
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    const value = normalisePlan(raw, { room: raw?.hall_room ?? roomOfFile(file) });
+    planCache.set(file, { at: mtime, value });
     return value;
   } catch { return null; }
 }
 
-export function saveGuildPlan(raw, file = GUILD_PLAN_FILE) {
-  const normalised = normalisePlan(raw);
+export function saveGuildPlan(raw, fileOrRoom = GUILD_PLAN_FILE) {
+  const file = planFile(fileOrRoom);
+  const normalised = normalisePlan(raw, { room: raw?.hall_room ?? roomOfFile(file) });
   // THE PLANNER SHEET EDITS CHESTS AND NOTHING ELSE, so everything else on disk is kept.
   // This wrote `{chests}` alone, which silently dropped `reagents` (the chest-versus-buy
   // policy), its notes, and `coop_caps` -- one save from the sheet switched all three off.
@@ -69,7 +105,7 @@ export function saveGuildPlan(raw, file = GUILD_PLAN_FILE) {
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n');
   renameSync(tmp, file);
-  planCache = { at: 0, value: null };
+  planCache.delete(file);
   return { saved: out, problems: normalised.problems };
 }
 
@@ -85,6 +121,14 @@ export function saveGuildPlan(raw, file = GUILD_PLAN_FILE) {
  * and "off because this guild has no hall" are different problems with different fixes, and
  * a bare false would send somebody looking for a bug in the plan.
  */
+// A PLAN'S SQUARES ARE IN ITS OWN HALL. Given every hall's readings, keep only that hall's -- a
+// reading with no room predates the split and is the Bookmaker's. A plan with no hall (an inline
+// one built by a test or a caller) takes the readings as given, which is the old behaviour.
+export function hallChests(chests = [], room = null) {
+  if (room == null) return chests;
+  return chests.filter(c => c && Number(c.room ?? LEGACY_CHEST_HALL) === Number(room));
+}
+
 export function guildStoreAvailable({ rent = null, chests = [] } = {}) {
   if (!rent)
     return { ok: false, why: 'nobody has asked Frular about the guild yet — no rent reading is cached' };
@@ -106,8 +150,11 @@ export function guildStoreAvailable({ rent = null, chests = [] } = {}) {
  * kept — it is a legitimate "this chest should hold none of this" and is what makes an
  * item sellable again after the guild stops wanting it.
  */
-export function normalisePlan(raw) {
+export function normalisePlan(raw, { room = null } = {}) {
   const problems = [];
+  // Which hall these squares are in. The old slot NUMBERS only ever meant the Bookmaker's three.
+  const hallRoom = raw?.hall_room != null ? Number(raw.hall_room) : (room == null ? null : Number(room));
+  const legacySquares = hallRoom == null || hallRoom === LEGACY_CHEST_HALL ? BOOKMAKERS_CHEST_SQUARES : [];
   const chests = new Map();
   for (const [key, entry] of Object.entries(raw?.chests ?? {})) {
     // A CHEST IS NAMED BY ITS SQUARE, like "r18c6". It used to be a slot number 1..4, which
@@ -131,9 +178,9 @@ export function normalisePlan(raw) {
     let slot = String(key);
     const legacy = /^[1-9][0-9]*$/.test(slot) ? Number(slot) : null;
     if (legacy !== null) {
-      const square = BOOKMAKERS_CHEST_SQUARES[legacy - 1];
+      const square = legacySquares[legacy - 1];
       if (!square) {
-        problems.push(`chest ${key} is outside the ${BOOKMAKERS_CHEST_SQUARES.length} chests ` +
+        problems.push(`chest ${key} is outside the ${legacySquares.length} chests ` +
                       `this hall builds and was dropped`);
         continue;
       }
@@ -171,9 +218,9 @@ export function normalisePlan(raw) {
     chests.set(slot, items);
   }
   const reagents = normaliseReagents(raw, problems);
-  const coopCaps = normaliseCoopCaps(raw, problems);
+  const coopCaps = normaliseCoopCaps(raw, problems, legacySquares);
   const everyone = normaliseEveryone(raw, chests, problems);
-  return { chests, problems, reagents, coop_caps: coopCaps, everyone,
+  return { chests, problems, reagents, coop_caps: coopCaps, everyone, hall_room: hallRoom,
            empty: [...chests.values()].every(items => !items.length) };
 }
 
@@ -333,11 +380,11 @@ export const countWanted = (items, entry) => entryNames(entry).reduce((n, name) 
 // `coop_caps: { "r18c2": { "mushroom": 43 } }` (a chest's square, or its old slot number) caps
 // the co-op's target for that reagent in that chest. Written by m59-feed-me-more.mjs for the
 // reagents it gives space up from. Absent means the co-op's own share, exactly as before.
-function normaliseCoopCaps(raw, problems) {
+function normaliseCoopCaps(raw, problems, legacySquares = BOOKMAKERS_CHEST_SQUARES) {
   const out = new Map();
   for (const [key, caps] of Object.entries(raw?.coop_caps ?? {})) {
     let slot = String(key);
-    if (/^[1-9][0-9]*$/.test(slot)) slot = BOOKMAKERS_CHEST_SQUARES[Number(slot) - 1] ?? null;
+    if (/^[1-9][0-9]*$/.test(slot)) slot = legacySquares[Number(slot) - 1] ?? null;
     if (!slot || !parseChestKey(slot)) { problems.push(`coop_caps: "${key}" is not a chest and was ignored`); continue; }
     const m = new Map();
     for (const [item, n] of Object.entries(caps ?? {})) {
@@ -373,8 +420,9 @@ export function contributionPlan({ plan, chests = [], pack = [], keepFloor = () 
   const gate = guildStoreAvailable({ rent, chests });
   if (!gate.ok) return { enabled: false, why: gate.why, total: 0, chests: [], walk: false };
 
-  const { chests: want, problems } = plan?.chests instanceof Map ? plan : normalisePlan(plan);
-  const bySlot = new Map(chests.map(c => [c.slot, c]));
+  const norm1 = plan?.chests instanceof Map ? plan : normalisePlan(plan);
+  const { chests: want, problems } = norm1;
+  const bySlot = new Map(hallChests(chests, norm1.hall_room).map(c => [c.slot, c]));
   // What this character may part with at all, per item, spent down as chests claim it —
   // so two chests wanting the same item cannot each be promised the whole stack.
   const spare = new Map();
@@ -448,8 +496,9 @@ export function contributionPlan({ plan, chests = [], pack = [], keepFloor = () 
 export function guildKeepTest({ plan, chests = [], rent = null } = {}) {
   const gate = guildStoreAvailable({ rent, chests });
   if (!gate.ok) return () => false;
-  const { chests: want } = plan?.chests instanceof Map ? plan : normalisePlan(plan);
-  const bySlot = new Map(chests.map(c => [c.slot, c]));
+  const norm1 = plan?.chests instanceof Map ? plan : normalisePlan(plan);
+  const { chests: want } = norm1;
+  const bySlot = new Map(hallChests(chests, norm1.hall_room).map(c => [c.slot, c]));
   const shortfall = new Map();
   for (const [slot, items] of want) {
     const chest = bySlot.get(slot);

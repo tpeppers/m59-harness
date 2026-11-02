@@ -116,7 +116,9 @@ section('the snapshot cannot break the deposit it describes');
   // shape of a full draw, and is what a mushroom courier logged on 2026-10-04 beside a 0 -> 0 pack.
   const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const hw = src.slice(src.indexOf('async hallWithdraw('), src.indexOf('async hallWithdraw(') + 3000);
-  ok(/not in the hall[^\n]*short: allShort\(\)/.test(hw), 'the not-in-the-hall refusal reports every want as short');
+  // The refusal moved into hallHere() when the roster could hold several guild halls; what it returns
+  // is the same shape, and still has to carry every want as short.
+  ok(/hallHere\(\);\s*if \(!where0\.ok\)[^\n]*short: allShort\(\)/.test(hw), 'the not-in-the-hall refusal reports every want as short');
   ok(/if \(!hall\.ok\) return \{[^\n]*short: allShort\(\)/.test(hw), 'the hall-passage refusal reports every want as short');
   ok(!/ok: false[^\n]*short: \{\}/.test(hw), 'no refusal in hallWithdraw reports short: {}');
 }

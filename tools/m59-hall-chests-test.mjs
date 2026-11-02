@@ -16,5 +16,11 @@ ok(s.age_min === 10, 'every chest carries the age of its reading');
 const [r] = summarise(chests, { find: 'ring', now });
 ok(r.items.length === 2 && r.items.every(i => /ring/.test(i.name)), '--find keeps unidentified "ring" as well as named rings');
 ok(summarise([], {}).length === 0, 'no readings is no chests, not invented ones');
+// TWO HALLS: a square names a chest in each, so every row says its hall and the guild that owns it.
+const two = summarise([{ ...chests[0] }, { ...chests[0], room: 705, chest_id: '705/r18c2' }],
+                      { now, owners: { 714: 'Guild A' } });
+ok(two.map(c => c.chest_id).join(',') === '714/r18c2,705/r18c2', 'each chest carries a chest_id naming its hall');
+ok(two[0].guild === 'Guild A' && two[1].guild === null, 'and its owner, or null where nothing records one');
+ok(/Bookmaker/.test(two[0].hall_name ?? ''), "and the hall's name");
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

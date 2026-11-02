@@ -29,11 +29,13 @@ import { economy } from './m59-economy.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { esc, ago, num, NAV, STYLE, magicTag } from './m59-page-chrome.mjs';
 import { StorageCache, GUILD_CHEST_SLOTS, VAULT_BULK_MAX, CHEST_BULK_MAX,
-         BOOKMAKERS_CHESTS } from './m59-storage.mjs';
+         BOOKMAKERS_CHESTS, LEGACY_CHEST_HALL, hallName } from './m59-storage.mjs';
 import { readVaultSnapshots } from './m59-strategy-stats.mjs';
 import { loadLooks, loadList, magicOf } from './m59-magicsort.mjs';
 import { guildPlan, normalisePlan } from './m59-guildwants.mjs';
 import { evictionOrder } from './m59-chest-eviction.mjs';
+import { GuildRegistry } from './m59-guild-registry.mjs';
+import { hallChoices, pickHall, hallLabel } from './m59-hall-select.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -69,6 +71,15 @@ const EXTRA_STYLE = `
   .bar > i { display:block; height:100%; background:#8fbcbb; }
   .bar.hatch { background:repeating-linear-gradient(45deg,var(--line),var(--line) 4px,
                transparent 4px,transparent 8px); }
+  /* WHICH HALL. Links rather than a form, for the reason the economy page's bank tabs are links:
+     the page has a 60-second refresh, a link can be bookmarked, and it needs no JavaScript. */
+  .halls { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; margin:-.2rem 0 .5rem; }
+  .halls .k { color:var(--dim); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em;
+              margin-right:.2rem; }
+  .halls a { font-size:.82rem; padding:.3rem .8rem; border:1px solid var(--line); border-radius:999px;
+             color:var(--dim); text-decoration:none; }
+  .halls a:hover { color:var(--fg); }
+  .halls a.on { background:var(--accent); border-color:var(--accent); color:#fff; }
 `;
 
 // 0-100 with a fixed scale, and null renders hatched rather than as zero — "nobody has looked"
@@ -180,9 +191,36 @@ function chestCard(ch, planItems, history, ctx) {
   </div>`;
 }
 
-export function renderInventory({ hours = 168, live = null, characters = null } = {}) {
+// ONE HALL AT A TIME, AND THE PAGE SAYS WHICH. A roster may hold several guilds, allied, each with
+// its own hall, and a chest is named by its square -- "r18c6" is a chest in more than one hall -- so
+// the chests, the plan they are ranked against and the history all have to come from ONE hall or the
+// eviction order is computed against somebody else's plan. `hall` is the `?hall=<room>` the board
+// server passed through; m59-hall-select.mjs picks the default the same way the planner does.
+//
+// RENT IS NOT ON THIS PAGE when there is one hall, because it never was (it is money, and lives on
+// /economy). With more than one hall it is shown under the picker, because "whose hall is this and
+// can it be filled" is then the first thing a reader needs and the guild's name alone does not say.
+function rentLine(rent) {
+  if (!rent) return 'rent not read';
+  if (rent.in_guild === false) return 'the reader belonged to no guild';
+  const due = rent.due ?? (rent.credit != null ? -rent.credit : null);
+  const what = due == null ? 'rent unparsed' : due > 0 ? `owes ${num(due)} rent` : due < 0 ? `rent credit ${num(-due)}` : 'no rent owed';
+  return `${what} · asked ${ago(rent.observed_at)}`;
+}
+
+export function renderInventory({ hours = 168, live = null, characters = null, hall = null } = {}) {
   const e = economy({ sinceMs: hours * 3600 * 1000, live, characters });
   const storage = new StorageCache();
+  let halls = [];
+  try { halls = hallChoices({ store: storage, registry: new GuildRegistry({ dir: storage.dir }) }); }
+  catch { halls = []; }
+  const pick = pickHall(halls, hall);
+  const HALL = pick.room;
+  const here = halls.find(c => c.room === HALL) ?? { room: HALL, name: hallName(HALL), guild: null, allies: [], rent: null };
+  // The picker appears only when there is a choice to make -- or when the request named a hall that
+  // is not one of the known ones, so there is a way back. One hall looks exactly as it always did.
+  const showPicker = halls.length > 1 || (pick.explicit && !halls.some(c => c.room === HALL));
+  const chests = storage.allChests({ room: HALL });
 
   // READ ONCE, FOR THE WHOLE PAGE. The look cache and the keep list are files; opening them per
   // item would be a few thousand reads to render one board.
@@ -190,7 +228,7 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
   // THE PLAN IS READ ONCE and its problems are not this page's to print: /planner owns them. A
   // missing plan is null, and a chest with no plan ranks every stack as unplanned, which is true.
   let plan = null;
-  try { const raw = guildPlan(); plan = !raw ? null : raw.chests instanceof Map ? raw : normalisePlan(raw); }
+  try { const raw = guildPlan(HALL); plan = !raw ? null : raw.chests instanceof Map ? raw : normalisePlan(raw); }
   catch { plan = null; }
   const planFor = (slot) => plan?.chests.get(slot) ?? null;
 
@@ -291,11 +329,23 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
     as 0% — an unread pack is unknown, not empty. Nothing below is truncated.</div>
   <div class="packs">${packCards || '<div class="dim">no characters</div>'}</div>
 
-  <h2>Guild chests</h2>
+  <h2>Guild chests${showPicker ? ` — ${esc(here.name)}` : ''}</h2>
+  ${showPicker ? `<nav class="halls" aria-label="which guild hall">
+    <span class="k">hall</span>${halls.map(c => `
+    <a href="?hall=${c.room}&amp;hours=${esc(String(hours))}"${c.room === HALL ? ' class="on" aria-current="page"' : ''}
+       title="${esc(`${c.chests} chest reading(s)${c.has_plan ? ' · has a plan' : ''}`)}">${esc(hallLabel(c))}</a>`).join('')}
+  </nav>
+  <div class="sub" style="margin-top:-.2rem">${esc(here.name)} (room ${HALL}) · ${here.guild
+      ? `owned by <b>${esc(here.guild)}</b>${here.allies?.length ? ` · allied with ${esc(here.allies.join(', '))}` : ''}
+         · ${esc(rentLine(here.rent))}`
+      : 'nothing records which guild owns this hall'}${pick.invalid
+      ? ` · <span class="warn">"${esc(pick.invalid)}" is not a guild hall room (701-715), so this is the default hall</span>` : ''}</div>` : ''}
   <div class="sub" style="margin-top:-.4rem">A chest is ${num(CHEST_BULK_MAX)} BULK and no
     weight limit at all (chest.kod:29) — so it is the one store in the game that a heavy
-    haul does not fill. The Bookmaker's hall builds ${BOOKMAKERS_CHESTS}
-    (guildh14.kod:518,520,522) at r18c2, r18c6 and r20c4; a hall may hold ${GUILD_CHEST_SLOTS}.
+    haul does not fill. ${HALL === LEGACY_CHEST_HALL
+      ? `The Bookmaker's hall builds ${BOOKMAKERS_CHESTS}
+    (guildh14.kod:518,520,522) at r18c2, r18c6 and r20c4; a hall may hold ${GUILD_CHEST_SLOTS}.`
+      : `${esc(here.name)} builds whatever its own guildh*.kod creates; a hall may hold ${GUILD_CHEST_SLOTS}.`}
     Each is named by the SQUARE it stands on rather than by a slot number — an object id is
     a handle the server recycles and a chest cannot move — so only chests somebody has
     actually looked inside appear here. There is no list of every square a chest could
@@ -305,15 +355,15 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
     target; least value per bulk first, unpriced last), and the history is what changed between
     two readings, whoever took it.</div>
   <div class="chests">
-    ${storage.allChests().length === 0
+    ${chests.length === 0
       ? `<div class="chest empty"><h3>nothing looked in yet</h3>
            <div class="dim" style="font-size:.8rem">no chest in the hall has been opened.
            That is not the same as the hall being empty.</div></div>`
-      : storage.allChests().map(ch => !ch.items
+      : chests.map(ch => !ch.items
       ? `<div class="chest empty"><h3>${esc(ch.slot)}</h3>
            <div class="dim" style="font-size:.8rem">opened, but nothing has been read out of
            this chest. That is not the same as empty.</div></div>`
-      : chestCard(ch, planFor(ch.slot), storage.readChestHistory(ch.slot, { limit: 8 }), ctx)).join('')}
+      : chestCard(ch, planFor(ch.slot), storage.readChestHistory(ch.slot, { limit: 8, room: HALL }), ctx)).join('')}
   </div>
 
   <div class="sub" style="margin-top:1.2rem">Magic markers come from the server's own rarity

@@ -9,6 +9,7 @@ import { inventorySalePlan, carryCapacity } from './m59-skills.mjs';
 import { reagentFloorFor } from './m59-stockpile.mjs';
 import { dropSpec } from './m59-parse.mjs';
 import { hallPassword } from './m59-hallsecret.mjs';
+import { SURVEYED_HALLS } from './m59-guild-passage.mjs';
 import { guildPassage } from './m59-guild-passage.mjs';
 import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
@@ -16,7 +17,9 @@ import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
   coopFundingAmount, coopRemainingPlan, coopSupplyOutcome, coopFallbackDecision } from './m59-reagent-coop.mjs';
 import { guildPlan, coopCapFor } from './m59-guildwants.mjs';
 // The guild plan's coop_caps for one chest and reagent; null when the plan sets none (m59-feed-me-more).
-const planCoopCap = (slot, item) => { try { return coopCapFor(guildPlan(), slot, item); } catch { return null; } };
+// THE PLAN OF THE HALL THE CO-OP STOCKS (cfg.hall_room) -- one plan per hall, and with two guilds in the
+// roster the co-op's hall may be an ally's.
+const planCoopCapIn = hallRoom => (slot, item) => { try { return coopCapFor(guildPlan(hallRoom), slot, item); } catch { return null; } };
 
 const pending = reason => ({ pending: true, ready: false, reason });
 const interrupted = k => k.travelInterrupted() || k.suspendedJourney ||
@@ -152,14 +155,14 @@ async function transact(k, state, cfg, fleet) {
       for (const box of boxes.filter(b => cfg.chest_keys.includes(b.slot))) {
         await readBox(k, box, cfg);
         const planned = coopDepositPlan({ config: cfg, chests: [box], pack: pack(k),
-          saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCap });
+          saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCapIn(cfg.hall_room) });
         for (const line of planned.plan) {
           let left = line.amount;
           for (const item of [...c.inventory].filter(i => coopKey(c.rsc.get(i.nameRsc)) === line.item)) {
             if (!left) break;
             await readBox(k, box, cfg);
             const current = coopDepositPlan({ config: cfg, chests: [box], pack: pack(k),
-              saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCap }).plan.find(p => p.item === line.item);
+              saleItems: sale(k), keepFloor: name => ownFloor(k, name), capFor: planCoopCapIn(cfg.hall_room) }).plan.find(p => p.item === line.item);
             const amount = Math.min(left, item.amount || 1, current?.amount ?? 0);
             if (!amount) break;
             const moved = await transfer(k, box, item, amount, 'deposit', cfg, receipt);
@@ -249,11 +252,18 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
     if (mode === 'tithe' && bankable <= 0) return { skipped: true };
     if (['contribute', 'town'].includes(mode) && !(mode === 'town' && bankable > 0) &&
         !sale(k).some(i => cfg.reagents.includes(coopKey(i.name)))) return { skipped: true };
+    // ONLY A SURVEYED HALL. The co-op crosses the hall by m59-guild-passage.mjs, which is 714's
+    // geometry; a co-op pointed at another guild's hall would walk 714's doors in a room without them.
+    if (!SURVEYED_HALLS.includes(Number(cfg.hall_room))) {
+      (k.coopAttempts ??= {})[key] = Date.now() + cfg.retry_ms;
+      k.note('reagent coop unavailable', { reason: `hall ${cfg.hall_room} has no surveyed passage (only ${SURVEYED_HALLS.join(', ')})` });
+      return { plan, skipped: true };
+    }
     const c = k.s.need(), since = c.evSeq;
     await k.s.pacer.submit('read', () => c.requestGuildInfo());
     const membership = await c.waitFor({ since, kinds: ['guild'], timeoutMs: 3000 });
     if (!membership.events?.some(e => e.kind === 'guild' && e.what === 'roster') ||
-        !c.guild?.id || !(c.guild.rank >= 2) || !hallPassword(fleet)) {
+        !c.guild?.id || !(c.guild.rank >= 2) || !hallPassword(fleet, { room: cfg.hall_room })) {   // the HALL's word (ghall.kod:965), an ally's if it is theirs
       (k.coopAttempts ??= {})[key] = Date.now() + cfg.retry_ms;
       k.note('reagent coop unavailable', { reason: 'guild rank or hall key unavailable' });
       return { plan, skipped: true };

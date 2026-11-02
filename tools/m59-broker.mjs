@@ -15772,9 +15772,11 @@ const TOOLS = [
   {
     name: 'hall_withdraw',
     description:
-      'TAKE NAMED ITEMS OUT OF THE GUILD HALL\'S CHESTS (Bookmaker\'s hall, room 714). The ' +
-      'character must already be standing in 714 — a chalice ride lands there — and must be a ' +
-      'guild member of rank sir or above, or the door stays shut in silence. It walks out of the ' +
+      'TAKE NAMED ITEMS OUT OF THE GUILD HALL\'S CHESTS. The character must already be standing in ' +
+      'the hall — a chalice ride lands in its OWN guild\'s hall — and must be a member of the hall\'s ' +
+      'guild or an ally, of rank sir or above, or the door stays shut in silence. With several guilds in ' +
+      'the roster it works the chests of the hall it is STANDING IN (an ally\'s, possibly) and files the ' +
+      'readings under that hall; only halls with a surveyed passage (714 today) are walked. It walks out of the ' +
       'foyer, speaks the hall password, and takes EXACTLY `amount` of each named item — a partial ' +
       'stack is fine, e.g. 1,000 shillings out of 75,000 — through the counted container get, ' +
       'splitting across stacks and chests if one is short. What arrived ' +
@@ -16994,9 +16996,18 @@ const TOOLS = [
           out.why = 'this room snapshot carries no position for that object, so it cannot be ' +
                     'named — ask for room contents and try again';
         } else {
-          const room = c.room?.id ?? s.world?.room?.num ?? null;
-          storage.writeChest(key, { object_id: target, room, items,
-            by: c.me?.name ?? s.name });
+          // THE ROOM'S NUMBER, NEVER ITS OBJECT ID. This read `c.room?.id` first, so every hand
+          // recording on prod was filed with room 2569 -- an object handle that names no hall. With
+          // more than one guild hall the room is what says WHOSE chest this is, and writeChest
+          // refuses anything that is not a hall's number rather than guess.
+          const room = s.world?.room?.num ?? null;
+          try {
+            storage.writeChest(key, { object_id: target, room, items, by: c.me?.name ?? s.name });
+          } catch (error) {
+            out.recorded = false;
+            out.why = error.message;
+            return out;
+          }
           out.recorded_as_chest = key;
           out.fullness = chestFullness(items);
           // WHY THIS IS WORTH DOING BY HAND, ONCE. `guildStoreAvailable` refuses the whole
@@ -21705,7 +21716,7 @@ function serveDashboard(port, { handle = null } = {}) {
         .then(out => out?.fleet ?? null, () => null)
         .then(live => {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-          res.end(renderInventory({ hours, live, characters: fleetCharacters() }));
+          res.end(renderInventory({ hours, live, characters: fleetCharacters(), hall: url.searchParams.get('hall') }));
         })
         .catch(e => {
           res.writeHead(500, { 'content-type': 'text/plain' });

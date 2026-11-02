@@ -101,8 +101,7 @@ export class InventoryPart {
     if (this.policy.reagentCoop?.enabled) return [];
     if (!this.policy.guildWants?.enabled) return [];
     try {
-      const store = new StorageCache();
-      const chests = store.allChests();
+      const { chests } = this.guildStores();
       // The same availability gate the deposit half uses: with no usable store this must get
       // out of the way rather than fill every pack with unsellable herbs.
       const available = chests.some(ch => ch && !ch.never_opened);
@@ -133,7 +132,7 @@ export class InventoryPart {
    */
   chestSourcedNames() {
     try {
-      const plan = guildPlan();
+      const plan = this.guildStores().plan;
       if (!plan) return [];
       const named = new Set();
       // Everything this character has an opinion about, plus everything the guild names. A
@@ -172,11 +171,11 @@ export class InventoryPart {
     const release = names => (typeof this.islandSaleRelease === 'function' ? this.islandSaleRelease(names) : names);
     if (!this.policy.reagentCoop?.enabled) return release(base);
     try {
-      const plan = guildPlan();
+      const mine = this.guildStores();
+      const plan = mine.plan;
       if (!plan) return release(base);
       const coop = new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r)));
-      const store = new StorageCache();
-      const test = guildKeepTest({ plan, chests: store.allChests(), rent: store.readRent() });
+      const test = guildKeepTest({ plan, chests: mine.chests, rent: mine.rent });
       const short = [...(test.shortfall ?? new Map())].filter(([item, n]) => n > 0 && coop.has(norm(item)))
         .map(([item]) => item);
       return release([...new Set([...base, ...short])]);
@@ -224,7 +223,8 @@ export class InventoryPart {
   guildWantedNames() {
     // WITHOUT GUILD WANTS OF ITS OWN a character still holds back the plan's `everyone` items while a chest is
     // short of them (m59-guildwants.mjs normaliseEveryone; operator 2026-10-19, the dispel illusion reagents).
-    const full = guildPlan();
+    const mine = this.guildStores();
+    const full = mine.plan;
     const everyone = this.policy.guildWants?.enabled ? null : (full?.everyone ?? []);
     if (everyone && !everyone.length) return [];
     const plan = everyone ? restrictPlan(full, everyone) : full;
@@ -232,8 +232,7 @@ export class InventoryPart {
     const coopOwns = this.policy.reagentCoop?.enabled
       ? new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r))) : null;
     try {
-      const store = new StorageCache();
-      const test = guildKeepTest({ plan, chests: store.allChests(), rent: store.readRent() });
+      const test = guildKeepTest({ plan, chests: mine.chests, rent: mine.rent });
       return [...(test.shortfall ?? new Map())].filter(([, short]) => short > 0).map(([item]) => item)
         .filter(item => !coopOwns?.has(norm(item)));
     } catch { return []; }

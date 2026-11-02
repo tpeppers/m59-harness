@@ -5,6 +5,59 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). A command space that refuses in total 
 For shared reagent storage, chest reserves and the 20% shared-money tithe, see
 the [reagent coop](m59-reagent-coop.md).
 
+## More than one guild in the roster
+
+Since 2026-11-01 a roster may hold several guilds (two at first, up to four), usually
+allied, each with its own hall, rent, chests and chest plan.
+`tools/m59-guild-registry.mjs` keeps track of which guild is whose. Every chest, rent and
+plan decision follows four rules, and `node tools/m59-guild-registry-test.mjs` (58)
+checks each one:
+
+- **A chest belongs to the hall it stands in, not to the reader's guild.** A reading is
+  filed under the room it was taken in. `StorageCache.writeChest` refuses a reading with
+  no hall room number (701–715), because a square such as `r18c6` names a chest in
+  *every* hall. Hall 714 keeps the old flat layout (`storage/chests/<square>.json`) and
+  reads it as 714 whatever room id an old file recorded: prod's files say 2569, which is
+  an object handle. Every other hall uses `storage/chests/<room>/`. So a member of guild A
+  using guild B's chests updates B's books.
+- **Rent belongs to the guild Frular names.** His answer is "The `<guild>` owes …", so
+  `writeRent` files it under that name (`storage/rent/<guild>.json`). The old `rent.json`
+  still answers for the guild its sentence names, and never for any other guild.
+- **Membership comes from each character's own `UC_GUILDINFO`.** The session asks once
+  per login (`M59_GUILD_ON_LOGIN=0` turns this off). A roster lists every member by name,
+  so one read records the whole guild in `storage/guilds/<guild>.json`; the newest roster
+  wins. Alliances come from `UC_GUILD_LIST`. The registry never stores the password that
+  the roster sends to a guild master.
+- **Each hall has one owner, learned or declared.** The ways an owner gets recorded:
+  - A chalice landing. Rescue lands in the rider's *own* guild's hall (`rescue.kod:125`),
+    so the landing room is the server naming that hall.
+  - The operator: `node tools/m59-guild-registry.mjs hall --room <n> --guild "<name>"`.
+  - A one-time adoption, used only when flat chest readings already exist. 714 goes to
+    the guild that the old `rent.json` sentence names, which is the guild that has been
+    paying for it. If no rent reading names a guild, it goes to the only guild seen, and
+    only while that guild is the only one. Login order cannot decide this.
+
+What changes for the keeper:
+
+- **The keeper sends its guild's errands to its own hall.** Deposits, stockpile draws and
+  chalice cargo all go there, and use that hall's plan (`substrate/guild-plan.json` for
+  714, `substrate/guild-plans/<room>.json` for any other hall), that hall's chests and that
+  guild's rent (`guildStores()`). Until any hall is recorded *and* while fewer than two
+  guilds are known, the hall is 714, as it always was.
+- **Chests are worked only in a usable hall.** The keeper works the chests of the hall it
+  is standing in only if all of these hold:
+  - its passage is surveyed. Only 714's is (`SURVEYED_HALLS` in
+    `m59-guild-passage.mjs`), so every other hall is refused by name rather than walked
+    with 714's doors.
+  - its owner is our guild or an ally.
+  - the character's rank is at least sir (`hallHere()`).
+- **Hall passwords are kept per hall room.** The door checks the *owner's* password
+  (`ghall.kod:965`), so in an ally's hall the ally's word opens it. Record one with
+  `node tools/m59-hallsecret.mjs set --fleet <f> --room <n> --password <w>`.
+- **Pages pick a hall with `?hall=<room>`.** This applies to the Inventory board, the
+  planner's GUILD HALL sheet and the Guild Chest page. The picker appears only when there
+  is more than one hall.
+
 Rent payments to Frular are public and separate from the secret chest visit.
 After each payment, the payer uses FleetScript's shared NPC-speaking method to
 approach Frular, verify it is within hearing range, and ask `rent`. It waits past

@@ -68,6 +68,7 @@ import { recordEvent } from './m59-ledger.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
+import { GuildRegistry } from './m59-guild-registry.mjs';
 import { Recorder } from './m59-recorder.mjs';
 import { CommunicationsArchive } from './m59-communications.mjs';
 import {recordDeathNotice} from './m59-death-notices.mjs';
@@ -404,6 +405,7 @@ const PIVOT_ARRIVE_WITHIN = Number(process.env.M59_PIVOT_ARRIVE_WITHIN || 64);
 
 // ---------------------------------------------------------------- storage
 const storage = new StorageCache();
+const guildRegistry = new GuildRegistry({ dir: storage.dir });
 const resources = loadResources();
 let worldMap = loadMap();
 
@@ -2696,6 +2698,17 @@ class Session {
       // has already paid for the trip, and if the reply goes past unread the contents are
       // unknown until somebody pays for it again.
       if (ev.kind === 'vault-list') this.noteVault(ev);
+      // WHICH GUILD, OFF THE STREAM. A roster read files the WHOLE guild (every member by name) and
+      // an alliance list files who may walk into its hall; whoever asked, for whatever reason, the
+      // answer is kept. With more than one guild in the roster every hall, chest, rent and plan
+      // decision starts from this (m59-guild-registry.mjs). The password the roster carries to a
+      // guild master is NOT stored -- recordRoster drops it.
+      if (ev.kind === 'guild') {
+        try {
+          if (ev.what === 'roster' && ev.guild?.name) guildRegistry.recordRoster(ev.guild, { by: c.me?.name ?? this.name });
+          else if (ev.what === 'list' && c.guild?.name) guildRegistry.recordAllies(c.guild.name, ev.list);
+        } catch { /* bookkeeping never costs an event */ }
+      }
       // AND OFF THE STREAM FOR THE SAME REASON. An item leaving is announced once, by the
       // server, whatever took it; there is nothing to poll and nothing to ask afterwards,
       // because by then it is gone. See noteLeftPack.
@@ -2956,6 +2969,14 @@ class Session {
       readFactionStatus(this, { refresh: true })
         .then(status => this.recorder.line('note', { what: 'faction read', faction: status?.faction }))
         .catch(e => { this.recorder.line('note', { what: 'faction read failed', why: e.message }); });
+    // GUILD MEMBERSHIP, ONCE, HERE. Nothing volunteers it at login (docs/m59-guilds.md), and with
+    // more than one guild in the roster a character that does not know its guild does not know its
+    // hall, its rent or its chests. One paced UC_REQ_GUILDINFO: read-only, answered with a roster
+    // (filed by the onEvent hook above) or, for the guildless, one line of prose. Not awaited.
+    // `M59_GUILD_ON_LOGIN=0` turns it off.
+    if (process.env.M59_GUILD_ON_LOGIN !== '0')
+      this.pacer.submit('read', () => this.client?.requestGuildInfo?.())
+        .catch(e => { this.recorder.line('note', { what: 'guild read failed', why: e.message }); });
     // A chatter binds to the CLIENT, not to the session, so a rejoin after a save-game
     // renumber leaves it listening to a socket that no longer exists. Rebind here rather
     // than making every caller remember to.

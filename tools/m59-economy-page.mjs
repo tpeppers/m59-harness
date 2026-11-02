@@ -20,7 +20,8 @@ import { titheFleet } from './m59-tithe.mjs';
 // Only the RENT is read from storage here now. The vault, the chest ceilings and the chest
 // count went to /inventory with the stores they describe — an import left behind is a reader
 // being told this page still knows about chests.
-import { StorageCache } from './m59-storage.mjs';
+import { StorageCache, hallName } from './m59-storage.mjs';
+import { GuildRegistry } from './m59-guild-registry.mjs';
 import { tripsSummaryHtml } from './m59-towntrips-page.mjs';
 
 const { label: FLEET_LABEL, fleet: FLEET_NAME } = resolveFleet();
@@ -540,16 +541,27 @@ export function renderEconomy({ hours = 168, live = null, characters = null, vie
   <div class="sub" style="margin-top:-.4rem">Rent, and what is in the chests · none of this
     is pushed by the server, so every figure is the last thing somebody was told</div>
   ${(() => {
-    const rent = storage.readRent();
-    if (!rent) return `<p class="dim">Nobody has asked Frular about rent. He states it out
+    // ONE RENT PER GUILD. The roster may hold several guilds, each paying Frular for its own hall,
+    // and each reading is filed under the guild he NAMED (m59-storage.mjs `writeRent`). With one
+    // reading this renders exactly as it always did; with more, one block per guild, headed by the
+    // guild and the hall the registry says it owns. A reading that names no guild (the pre-split
+    // `rent.json`, or an asker in no guild) is shown only when nothing named exists -- beside named
+    // ones it is an older answer to a question that has since been asked properly.
+    let rents = [];
+    try { rents = storage.allRents(); } catch { rents = []; }
+    if (rents.some(r => r.guild)) rents = rents.filter(r => r.guild);
+    if (!rents.length) return `<p class="dim">Nobody has asked Frular about rent. He states it out
       loud and never mentions it again (gcreator.kod:180), so it has to be asked for in
       person at room ${esc(String(700))} — <code>guild action=status</code>.</p>`;
-    if (rent.in_guild === false)
-      return `<p class="dim">The character who asked belongs to no guild, so there is no
-        rent to report. <span class="dim">asked ${esc(ago(rent.observed_at))}</span></p>`;
-    const owed = rent.due != null && rent.due > 0;
-    const credit = rent.due != null && rent.due < 0;
-    return `<div class="cards">
+    let registry = null;
+    try { registry = new GuildRegistry({ dir: storage.dir }); } catch { registry = null; }
+    const rentBlock = (rent) => {
+      if (rent.in_guild === false)
+        return `<p class="dim">The character who asked belongs to no guild, so there is no
+          rent to report. <span class="dim">asked ${esc(ago(rent.observed_at))}</span></p>`;
+      const owed = rent.due != null && rent.due > 0;
+      const credit = rent.due != null && rent.due < 0;
+      return `<div class="cards">
       <div class="card"><div class="k">${owed ? 'rent owed' : credit ? 'rent credit' : 'rent'}</div>
         <div class="v ${owed ? 'bad' : credit ? 'good' : 'dim'}">${rent.due == null ? '?' :
           owed ? num(rent.due) : credit ? '+' + num(-rent.due) : '0'}</div>
@@ -564,6 +576,17 @@ export function renderEconomy({ hours = 168, live = null, characters = null, vie
         <div class="n">${rent.asked_by ? 'by ' + esc(rent.asked_by) : 'by somebody'}</div></div>
     </div>
     ${rent.said ? `<p class="dim" style="font-size:.78rem">He said: &ldquo;${esc(rent.said)}&rdquo;</p>` : ''}`;
+    };
+    if (rents.length === 1) return rentBlock(rents[0]);
+    return rents.sort((a, b) => String(a.guild).localeCompare(String(b.guild))).map(r => {
+      let room = null;
+      try { room = registry?.hallOf(r.guild) ?? null; } catch { room = null; }
+      return `<h4 style="margin:.8rem 0 .3rem 0">${esc(r.guild)}
+        <span class="dim" style="font-weight:normal;font-size:.8rem">${room
+          ? `· ${esc(hallName(room))} (room ${room}) · <a href="/inventory?hall=${room}">its chests</a>`
+          : '· no hall on record for this guild'}</span></h4>
+      ${rentBlock(r)}`;
+    }).join('');
   })()}
 
   <h3>Chests</h3>
