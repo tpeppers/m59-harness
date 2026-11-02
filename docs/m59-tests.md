@@ -1,5 +1,11 @@
 # The offline test suites, and what each one pins
 
+`node --test tools/m59-fleet-insights-test.mjs` checks practice rates and atrophy,
+ETA gates, duplicate sources, courier timestamps across UTC midnight, percentiles,
+quiet/PvP-hit classification, hourly hit deduplication, partial coverage, roster
+isolation, HTML escaping and dashboard routes. It writes only to a temporary
+directory. See [fleet operations boards](m59-fleet-insights.md).
+
 `m59-muster-lib-test.mjs` (18) pins the muster's readiness model (`m59-muster-lib.mjs`), from prod's cold state of
 2026-10-29: mushrooms are reagents and not meals; only live jobs over a character are its jobs; survival is off only
 while its lease runs; a drilled, locked, hungry body has every gap named with its remedy, and a lockdown's release is

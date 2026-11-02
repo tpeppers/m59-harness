@@ -247,6 +247,8 @@ import { renderStatsBoard } from './m59-stats-page.mjs';
 import { renderHometownsBoard } from './m59-hometowns-page.mjs';
 import { recordHometown, hometownDir } from './m59-hometowns.mjs';
 import { renderDumBoard, renderHarnessBoard } from './m59-observability-page.mjs';
+import { collectInsights } from './m59-fleet-insights.mjs';
+import { renderInsights } from './m59-fleet-insights-page.mjs';
 import { strategyStatsReport } from './m59-strategy-stats.mjs';
 import { renderHero, startScript } from './m59-hero-page.mjs';
 import { dashboardRedirectUrl } from './m59-dashboard-route.mjs';
@@ -21911,6 +21913,25 @@ function serveDashboard(port, { handle = null } = {}) {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
           res.end(renderDumBoard({ error: error.message }));
         });
+      return;
+    }
+    if (url.pathname === '/practice' || url.pathname === '/couriers') {
+      const hours = Math.max(.25, Math.min(720, Number(url.searchParams.get('hours')) || 24));
+      const page = url.pathname.slice(1);
+      const tool = TOOLS.find(t => t.name === 'fleet');
+      Promise.resolve(tool ? tool.run({}) : null).then(out => {
+        const live = out?.fleet ?? [];
+        const members = new Map([...fleetState].map(([agent, entry]) => [agent, entry?.credentials?.character]));
+        for (const row of live) if (row.character) members.set(row.agent, row.character);
+        const characters = [...members].map(([agent, character]) => ({ agent, character }));
+        const data = collectInsights({ root: BROKER_ROOT, fleet: FLEET, live, characters, hours });
+        const asJson = url.searchParams.get('format') === 'json';
+        res.writeHead(200, { 'content-type': asJson ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(asJson ? JSON.stringify(data) : renderInsights({ data, page }));
+      }).catch(error => {
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(renderInsights({ page, error: error.message }));
+      });
       return;
     }
     if (url.pathname === '/harness') {
