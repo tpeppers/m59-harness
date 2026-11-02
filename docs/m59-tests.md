@@ -2147,6 +2147,16 @@ are `anywhere` now. Second, `walk_to` / `crawl_to` with nobody to approach read 
 (`Number(null)`) and crawled at the temple's corner for minutes; they now sit behind a gate walk to the room the
 NPC was seen in, which is null, and skipped, when nobody was. On the script before the fix it fails 4 of 10.
 
+## The Jala pupil quest — Parrin's audition, then the level-1 songs
+
+**`m59-jala-pupil-test.mjs` (23) — the same skip-rule replay, for `tools/fleetscripts/jala-pupil.mjs`.** No
+skipped walk may take a quest step with it; the approaches, the bank withdrawal and the four `learn` steps must
+stand behind an optional gate walk and never be `anywhere`, so "not buying" skips the purchase instead of buying
+in the wrong room. It also checks the words against `questengine.kod` (start `pupil`, node 26 `sings`, node 28
+`bad`; set `M59_KOD` if the source is not at `C:/code/Meridian59`), that what the script sings holds no other
+quest's trigger and never "good", and that the assignment, sung and passed lines parse. Offline; never run live
+at the time of writing.
+
 ## The disciple gate — the level-3 spell quest
 
 **`m59-disciple-test.mjs` (223) — three groups, none of which is about whether the errand runs.**
