@@ -30,9 +30,17 @@
 // ladder). The "You may pass." in the live refusal was the captain waving a FLEET-MATE through:
 // a broadcast heard by everyone in the tower.
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { bastionHarness } from './fixtures/bastion-fallback-client.mjs';
 
 const h = await bastionHarness();
+// The harness points M59_LEDGER_DIR at a scratch directory; a refused `go` lands there as a
+// `door_press_refused` row (m59-door-refusal.mjs).
+const pressRows = () => { const d = process.env.M59_LEDGER_DIR;
+  return d && existsSync(d) ? readdirSync(d).filter(f => /^fleet-.*\.jsonl$/.test(f))
+    .flatMap(f => readFileSync(join(d, f), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)))
+    .filter(r => r.kind === 'door_press_refused') : []; };
 const { Session, map } = h;
 const { World } = await h.imp('m59-world.mjs');
 const { bodyAuthority } = await h.imp('m59-body-command.mjs');
@@ -59,6 +67,7 @@ function tower({ from, intruder = null, when = 'packet', mate = false, maxPacket
   const server = { x: from.x, y: from.y };            // where the server holds the body
   const c = {
     selfId: 77, evSeq: 0, rsc: new Map(), roomContentsRequested: 0, roomContentsReceived: 0, state: 'game',
+    me: { name: 'Tester' },
     room: { id: 10000 + room, flags: 0, objects: new Map() },
     get self() { return this.room.objects.get(this.selfId); },
     vitals: () => ({ health: { value: 90, max: 90 }, vigor: { value: 190, max: 200 } }),
@@ -161,6 +170,7 @@ const AT_THE_DOOR = { x: 37 * 64 + 32, y: 5 * 64 + 32 };
      `every go the server judged was on one of the three doorway squares: ${JSON.stringify(t.gos)}`);
   ok(t.said().includes(MAY_PASS), 'the captain waved it through');
   ok(!t.said().includes(CANT_GO), 'and nobody was told they could not go anywhere');
+  ok(pressRows().length === 0, 'a go that crossed writes no door_press_refused row');
 }
 
 // ------------------------------------------------------------- 2. a second walker on the same body
@@ -200,6 +210,21 @@ const triedOf = r => (r.log ?? []).flatMap(l => l.also_tried ?? []);
      `the go went out and came back as the live refusal: ${JSON.stringify(sent)}`);
   ok(t.gos.length >= 1 && t.gos.every(g => !onDoorway(g.row, g.col)),
      `every go was judged on the square the other walker had moved the body to: ${JSON.stringify(t.gos)}`);
+
+  // AND THE REFUSAL IS WRITTEN DOWN WITH ITS SCENE (2026-11-01: refused presses with no record of
+  // where the body was). The pose at the press is the doorway square the walker confirmed; the
+  // pose after is where the other walker left it -- the two halves of this failure, side by side.
+  const rows = pressRows().filter(x => x.source === 'exit_go');
+  ok(rows.length >= 1 && rows.length <= 6, `each refused go left a door_press_refused row, bounded: ${rows.length}`);
+  const row = rows[0];
+  ok(row.verdict === 'server_refused' && row.server_message === CANT_GO, 'the server\'s own sentence');
+  ok(row.said.includes(MAY_PASS), 'with the fleet-mate\'s pass that was heard in the same breath');
+  ok(row.room.num === TOWER && row.door.kind === 'exit' && row.door.to === JUNGLE, 'room by number, the exit by its destination');
+  ok(onDoorway(row.expected.trigger.row, row.expected.trigger.col), `expected: a doorway square, ${row.expected.trigger.at}`);
+  ok(row.actual.at_press.on_trigger === true, `at the press the body was on it: ${row.actual.at_press.at}`);
+  ok(row.actual.after.on_trigger === false && row.actual.after.fine.units === 'kod',
+     `and after it, off it, in fine KOD units: ${JSON.stringify(row.actual.after)}`);
+  ok(/^body at r\d+c\d+, trigger r\d+c\d+, seated:/.test(row.summary), `the one-line scene: ${row.summary}`);
 }
 
 console.log(`m59-kocatan-door-test: ${n} assertions passed`);

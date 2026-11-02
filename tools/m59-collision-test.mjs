@@ -47,6 +47,7 @@ import {
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { planBodyDetour } from './m59-body-detour.mjs';
 import {rememberedDeparture,planRailDeparture} from './m59-pocket-rails.mjs';
+import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 import { World, boundedRegionEntry, boundedSilentGo, spreadEdges,
          distinctStagesFirst, deferNearRefusedStage,
          anchorContradictedLive, provenDoorsBeforeExempt } from './m59-world.mjs';
@@ -1530,6 +1531,9 @@ const leaveVia = compileSessionMethod(brokerSource,
     // testing the imitations. `DOOR_SETTLE_MS` is zeroed for the same reason
     // MOVE_INTERVAL_MS is: the fake client answers immediately or not at all.
     boundedSilentGo, boundedRegionEntry, spreadEdges, DOOR_SETTLE_MS: 0,
+    // A refused `go` is written down with its scene (m59-door-refusal.mjs). The real recorder;
+    // m59-session-walk's `recordDoorPress` adds only the keeper lookup, which a fake has none of.
+    recordDoorPress: (s, options) => noteDoorPressRefused(s, options), doorPressPose,
     // Zero, which is the broker's own default and the measured one — see the constant.
     // Declared rather than inherited so a change to it shows up here as a test to update.
     LEAVE_VIA_CLEARANCE: 0,
