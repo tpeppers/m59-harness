@@ -249,6 +249,7 @@ import { recordHometown, hometownDir } from './m59-hometowns.mjs';
 import { renderDumBoard, renderHarnessBoard } from './m59-observability-page.mjs';
 import { collectInsights } from './m59-fleet-insights.mjs';
 import { renderInsights } from './m59-fleet-insights-page.mjs';
+import { createActivityRecorder, telemetryContext } from './m59-activity-telemetry.mjs';
 import { strategyStatsReport } from './m59-strategy-stats.mjs';
 import { renderHero, startScript } from './m59-hero-page.mjs';
 import { dashboardRedirectUrl } from './m59-dashboard-route.mjs';
@@ -4756,6 +4757,14 @@ const COMMANDER_FLEET = fleetIdentity(FLEET);
 // not an identity — treating it as one let a shutdown in one repository log out
 // another repository's whole fleet.
 const BROKER_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ACTIVITY_DIR = process.env.M59_ACTIVITY_DIR || join(process.env.M59_LEDGER_DIR || join(BROKER_ROOT, 'substrate', 'history', FLEET || 'default'), 'activity');
+const activityTelemetry = createActivityRecorder({
+  dir: ACTIVITY_DIR,
+  fleet: FLEET,
+  characterOf: agent => sessions.get(agent)?.client?.me?.name ?? fleetState.get(agent)?.credentials?.character ?? null,
+  roomOf: agent => sessions.get(agent)?._state?.room?.num ?? sessions.get(agent)?.client?.room?.num ?? null,
+  spellOf: name => spellCatalogue?.spells?.find(s => String(s.name).toLowerCase() === String(name).toLowerCase()) ?? null,
+});
 
 // Which rooms generate which creatures. Built by: node tools/m59-spawns.mjs
 // The Grand Museum of Raza. The map labels it "Tutorial Exit Inside"; the portal is
@@ -7851,6 +7860,12 @@ const combatDispatch = new CombatDispatch({
 });
 
 const TOOLS = [
+  {
+    name: 'activity_telemetry',
+    description: 'Append observational FleetScript lifecycle/step telemetry. No game actions; failures do not affect the run.',
+    schema: { type: 'object', properties: { event: { type: 'object' } }, required: ['event'] },
+    run: a => ({ recorded: activityTelemetry.lifecycle(a.event) }),
+  },
   createDeliveryNoticeTool({scope:()=>{const e=brokerGameEndpoints().game_server;if(!e)throw Error('delivery notices require one verified live fleet game endpoint');return JSON.stringify([COMMANDER_FLEET,e.host.toLowerCase(),e.port]);},lookup:agent=>session(agent),ground:async agent=>{const s=session(agent);if(s instanceof KeeperProxy)return s.roomContents();const c=s.need();await s.refresh();return{answered:true,room:s.world?.room?.num,objects:[...c.room.objects.values()].map(o=>({...o,name:c.rsc.get(o.nameRsc)}))};},notify:async(agent,notice)=>{const s=session(agent);return s instanceof KeeperProxy?keeperAction(agent,s._index,'delivery_notice',{notice},{timeoutMs:2000}):receiveDeliveryNotice(s,notice);}}),
   // ---------------------------------------------------------------- the job board (m59-jobboard.mjs)
   {
@@ -19999,6 +20014,7 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // demand split removes. Mutating keeper calls still perform their own cheap exact-identity
 // `/live` proof before writing.
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
+  'activity_telemetry',
   'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
   // The job board's `agent` is a filter over bookkeeping, never a body to read.
   'jobs', 'job_register', 'job_heartbeat', 'job_end', 'job_pause', 'job_resume',
@@ -20162,6 +20178,7 @@ async function callTool(name, args, caller) {
     const out = name !== 'combat' && targetSession?.runCommand
       ? await targetSession.runCommand(() => t.run(args || {}, caller))
       : await t.run(args || {}, caller);
+    activityTelemetry.observe(name, args || {}, out, { context: caller?.telemetry, started: t0 });
     // Say it in the ANSWER, not only in a log nobody is tailing. The caller that got this
     // wrong is the one reading this reply.
     if (unrecognised && out && typeof out === 'object' && !Array.isArray(out))
@@ -20192,6 +20209,7 @@ async function callTool(name, args, caller) {
     // caller its budget, and leaving those out of the history flatters exactly the calls
     // most worth declining.
     const ms = Date.now() - t0;
+    activityTelemetry.observe(name, args || {}, null, { context: caller?.telemetry, started: t0, error: e });
     recordToolMs(name, ms);
     recordFailed(name);
     if (rec?.line) rec.line('call', { tool: name, args: recordedArgs, ms, error: e.message });
@@ -20226,6 +20244,8 @@ async function handleRpc(msg, caller) {
       return reply({ tools: TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.schema })) });
     case 'tools/call': {
       const { name, arguments: args } = params || {};
+      const observationContext = telemetryContext(params?.telemetry);
+      if (observationContext) caller = { ...(caller || {}), telemetry: observationContext };
       // A STDIO CALLER HAS NO HEADERS, so the same budget may ride on the params. A
       // per-message deadline also lets ONE expensive call in a batch say it is willing to
       // wait longer than the connection default.
@@ -21924,7 +21944,7 @@ function serveDashboard(port, { handle = null } = {}) {
         const members = new Map([...fleetState].map(([agent, entry]) => [agent, entry?.credentials?.character]));
         for (const row of live) if (row.character) members.set(row.agent, row.character);
         const characters = [...members].map(([agent, character]) => ({ agent, character }));
-        const data = collectInsights({ root: BROKER_ROOT, fleet: FLEET, live, characters, hours });
+        const data = collectInsights({ root: BROKER_ROOT, fleet: FLEET, live, characters, hours, activityDir: ACTIVITY_DIR });
         const asJson = url.searchParams.get('format') === 'json';
         res.writeHead(200, { 'content-type': asJson ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         res.end(asJson ? JSON.stringify(data) : renderInsights({ data, page }));

@@ -24,7 +24,8 @@
 // repository already documents for m59-broker.mjs and m59-supervise.mjs. So a module must
 // export a `script` object and do nothing else; `steps` is a FUNCTION of its parameters,
 // never a value computed on load.
-import { readdirSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseUnsafe, UNSAFE_GUARANTEES, guaranteeText } from './m59-fleetscript.mjs';
@@ -292,8 +293,15 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     if (!agents.length) return { ok: false, why: 'no agents left after resolving' + (r?.skipped?.length ? ` (${r.skipped.length} skipped)` : '') };
   }
 
+  let telemetryCode = null;
+  try { if (script.file) telemetryCode = createHash('sha256').update(readFileSync(script.file)).digest('hex'); } catch { /* identity unavailable */ }
   const result = await fleetScript({
     name: `${name} (${script.source})`,
+    telemetry: { source: script.file?.replaceAll('\\', '/').split('/').slice(-2).join('/'), code: telemetryCode, description: script.describe, school: withDefaults.school,
+      domains: script.telemetry?.domains ?? [],
+      goals: { until: withDefaults.nextSpell ?? script.telemetry?.until,
+        abilities: Number(withDefaults.untilAbility) > 0 && withDefaults.spell
+          ? [{ name: withDefaults.spell, to: Number(withDefaults.untilAbility) }] : script.telemetry?.abilities ?? [] } },
     mode: script.mode ?? 'errand',
     agents,
     // THE RUN STATE IS THE SECOND ARGUMENT, so a script can build its plan from where the body ACTUALLY stands:

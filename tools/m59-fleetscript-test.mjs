@@ -278,6 +278,9 @@ console.log('one driver per fleet');
     minHealth:0.9,fragileBelow:20,
     steps: [verify(async ctx => {verifiedFleet=ctx.fleet;verifiedHealth=ctx.minHealth;verifiedFragility=ctx.fragileBelow;return true;})], onLog: quiet });
   ok('a run completes and releases its lock', first.ok);
+  const activity = sent.filter(c => c.name === 'activity_telemetry').map(c => c.event);
+  ok('every runner emits a started and completed telemetry receipt', activity.some(e => e.kind === 'run_start') && activity.some(e => e.kind === 'run_end' && e.ok));
+  ok('the shared runner times verification callbacks too', activity.some(e => e.kind === 'step_end' && e.step === 'verify' && e.ok && e.duration_ms >= 0));
   ok('verification callbacks receive the selected fleet for keeper reads', verifiedFleet==='testfleet');
   ok('verification callbacks receive the selected departure health floor', verifiedHealth===0.9);
   ok('verification callbacks receive the selected maximum health floor', verifiedFragility===20);

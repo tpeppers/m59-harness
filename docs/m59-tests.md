@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+`node --test tools/m59-activity-telemetry-test.mjs` checks shared runner/broker
+receipts, nested arrow shopping, zero-mana Mystic Touch fizzles, queued/trance
+unknowns, real guild withdrawal receipts, foreign-fleet exclusion, verified-result
+deduplication, bounded telemetry failures, both board projections and static
+source auditing. All data is synthetic and isolated. The main FleetScript suite
+also asserts that ordinary runs and verification steps emit lifecycle/timing rows.
+
 `node --test tools/m59-fleet-insights-test.mjs` checks practice rates and atrophy,
 ETA gates, duplicate sources, courier timestamps across UTC midnight, percentiles,
 quiet/PvP-hit classification, hourly hit deduplication, partial coverage, roster
