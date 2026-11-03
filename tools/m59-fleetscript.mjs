@@ -177,6 +177,7 @@ import { combatOrder } from './m59-combat-order.mjs';
 import { moveOrigin, originLabel, preemptionsOf, describePreemption, postureConflict } from './m59-move-origin.mjs';
 import { createIncidentLog } from './m59-movement-incidents.mjs';
 import { epochId } from './m59-epoch.mjs';
+import { createRunTelemetry, scriptDomains } from './m59-activity-telemetry.mjs';
 import { STALE_ID_REASON } from './m59-idgen.mjs';
 export { attackPlayer, killPlayer, ambushPlayer } from './m59-combat-orders.mjs';
 export { combatOrder } from './m59-combat-order.mjs';
@@ -383,6 +384,7 @@ const MOVE_TOOLS = new Set(['travel', 'walk_to', 'crawl_to', 'jump', 'cancel_mov
   'autopilot']);
 import {AsyncLocalStorage} from 'node:async_hooks';
 const callOriginScope=new AsyncLocalStorage();
+const activityScope = new AsyncLocalStorage();
 let callOrigin = null;
 const scriptOrigin = () => moveOrigin({ source: 'operator',
   name: String(process.argv[1] ?? 'a script').replace(/\\/g, '/').split('/').pop() || 'a script' });
@@ -445,7 +447,7 @@ export async function call(name, args = {}, ms = 180_000) {
       const r = await fetch(RPC(), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: 'tools/call',
-                               params: { name, arguments: args } }),
+                               params: { name, arguments: args, telemetry: activityScope.getStore() ?? undefined } }),
         signal: AbortSignal.timeout(ms),
       });
       const d = await r.json();
@@ -5133,6 +5135,7 @@ async function liveStartGate({ name, agents, fleet, codeKick, pollMs, log, warnM
 // (a withdrawal sized to what it already carries, say).
 export async function fleetScript({
   name, agents, steps, fleet = fleetName(), minHealth = 1, fragileBelow = 25, pollMs = 8000,
+  telemetry = {},
   mode = 'errand',
   // WHICH CHARACTERS THIS SCRIPT WILL CONTROL, declared at the top of the script rather
   // than inferred from what it turns out to touch. This is the unit the lock is taken over
@@ -5509,6 +5512,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // WHO THIS RUN IS, on every move it sends (m59-move-origin.mjs): the script's name and a run
   // id, so a cancel can be told apart from one by an earlier run of the same script.
   const runId = `${Date.now().toString(36)}-${process.pid}`;
+  const activity = createRunTelemetry({ call, run: runId, script: name, source: telemetry.source, code: telemetry.code });
   const origin = moveOrigin({ source: 'fleetscript', name, run_id: runId });
   const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs,
                 reviveMs, packSettleMs, learnSettleMs, name, runId, origin,
@@ -5553,6 +5557,11 @@ They are driven by tools/m59-menagerie.mjs and ` +
 
   const results = {};
   const runOne = async agent => {
+    const activityStarted = Date.now();
+    let domains = scriptDomains({ name, description: telemetry.description, domains: telemetry.domains ?? [] });
+    activity.event(agent, 'run_start', { domains, goals: telemetry.goals, school: telemetry.school });
+    const activityBeat = setInterval(() => activity.event(agent, 'run_heartbeat', { domains }), 30000);
+    activityBeat.unref?.();
     const state = { agent, results: {} };
     // Reassigned across a death, when the legs go back to the keeper and are taken again.
     // THE HOLD HAS TO BE REACHABLE FROM A STEP, not just from this closure.
@@ -5623,6 +5632,8 @@ They are driven by tools/m59-menagerie.mjs and ` +
         ctx.log(agent, `starts in room ${here.room ?? '?'}${here.name ? ` (${here.name})` : ''}, read live`);
       }
       const plan = typeof steps === 'function' ? await steps(agent, state) : steps;
+      domains = scriptDomains({ name, description: telemetry.description, steps: Array.isArray(plan) ? plan : [], domains });
+      activity.event(agent, 'run_plan', { domains, room: state.startRoom });
 
       // VAULT BEFORE SELL, CHECKED BEFORE ANYTHING WALKS.
       //
@@ -5798,12 +5809,14 @@ They are driven by tools/m59-menagerie.mjs and ` +
           continue;
         }
         const stepT0 = Date.now();
+        activity.event(agent, 'step_start', { step: step.do, index: at, to: step.to, why: step.label ?? step.why });
         CURRENT_STEP.set(agent, { script: ctx.name ?? null, at, do: step.do, label: step.label ?? null,
                                   why: step.why ?? null, to: step.to ?? null, t0: stepT0 });
         let r;
         try { r = await runStep(ctx, agent, step, state); }
         catch (e) { r = { ok:false, why:e.message, outcome:'step_exception' }; }
         CURRENT_STEP.delete(agent);
+        activity.event(agent, 'step_end', { step: step.do, index: at, to: step.to, ok: !!r.ok, duration_ms: Date.now() - stepT0, why: r.why });
         recordStepTime(ctx, { agent, at, do: step.do, label: step.label ?? null, why: step.why ?? null,
                               to: step.to ?? null, t0: stepT0, ms: Date.now() - stepT0, ok: !!r.ok,
                               dead: !!r.dead, outcome: r.outcome ?? null });
@@ -5919,6 +5932,8 @@ They are driven by tools/m59-menagerie.mjs and ` +
       results[agent] = { ok: false, why: e.message };
       ctx.log(agent, 'ERROR', e.message);
     } finally {
+      clearInterval(activityBeat);
+      activity.event(agent, 'run_end', { domains, ok: results[agent]?.ok === true, why: results[agent]?.why, duration_ms: Date.now() - activityStarted });
       // STOP SAYING BUSY BEFORE ANYTHING ELSE. A renewal that fires after the release would
       // re-mark a character the errand has already let go of, and nothing would ever take it
       // back — the lease would be the only thing that ever cleared it.
@@ -5971,15 +5986,16 @@ They are driven by tools/m59-menagerie.mjs and ` +
   if (jobHandle?.id) ACTIVE_JOB_IDS.add(jobHandle.id);
   let threw = true;
   try {
-    await withCallOrigin(origin,async()=>{
+    await activityScope.run(activity.context, () => withCallOrigin(origin,async()=>{
       if (parallel) await Promise.all(agents.map(runOne));
       else for (const a of agents) await runOne(a);
-    });
+    }));
     threw = false;
   } finally {
     await freeAll();
     dropSignalHandlers();
     claim.release();
+    await activity.flush();
     // A run that unwound with an error is a failed job, not a running one left for the orphan sweep to find.
     if (threw) { await jobHandle?.end?.({ ok: false, result: 'unwound with an error' }); ACTIVE_JOB_IDS.delete(jobHandle?.id); }
   }

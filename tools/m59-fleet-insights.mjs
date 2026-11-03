@@ -1,6 +1,7 @@
 // Read-only operations reports. No game calls, orders, roster passwords or fleet ownership.
 import { openSync, readSync, closeSync, fstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { activityReport, mergeActivityCasts } from './m59-activity-report.mjs';
 
 export const stamp = r => typeof r === 'number' ? r : Number(r?.t) || (typeof r?.at === 'number' ? r.at : Date.parse(r?.at ?? r?.iso ?? '')) || 0;
 const key = s => String(s ?? '').toLowerCase().trim();
@@ -62,6 +63,7 @@ export function practiceReport({ people = [], now = Date.now(), hours = 2 } = {}
     const recent = events.filter(e => stamp(e) >= since);
     for (const e of recent) if (e.spell && ['cast', 'improve'].includes(e.kind) && !configured.has(key(e.spell))) add(e.spell, 'recorded practice');
     for (const e of p.keeperEvents ?? []) if (stamp(e) >= since && stamp(e) <= now && !configured.has(key(e.spell))) add(e.spell, 'recorded keeper practice');
+    for (const e of p.nativeCasts ?? []) if (stamp(e) >= since && stamp(e) <= now && !configured.has(key(e.spell))) add(e.spell, 'broker spell use');
     for (const h of p.book?.history ?? []) if (h.kind === 'spell' && stamp({ t: h.at }) >= since && h.at <= now && !configured.has(key(h.name))) add(h.name, 'observed ability change');
     for (const [name, config] of configured) {
       const bookEntry = Object.entries(p.book?.spells ?? {}).find(([n]) => key(n) === name)?.[1];
@@ -72,7 +74,8 @@ export function practiceReport({ people = [], now = Date.now(), hours = 2 } = {}
       const gained = changes.reduce((n, e) => n + Math.max(0, e.delta), 0), lost = changes.reduce((n, e) => n + Math.max(0, -e.delta), 0);
       const trainedCasts = mine.filter(e => e.kind === 'cast');
       const keeperCasts = (p.keeperEvents ?? []).filter(e => key(e.spell) === name && stamp(e) >= since && stamp(e) <= now);
-      const casts = trainedCasts.length ? trainedCasts : keeperCasts;
+      const native = (p.nativeCasts ?? []).filter(e => key(e.spell) === name && stamp(e) >= since && stamp(e) <= now);
+      const casts = mergeActivityCasts(native, trainedCasts, keeperCasts);
       const outcomes = { success: 0, fizzle: 0, broken: 0, refused: 0, unknown: 0 };
       casts.forEach(e => outcomes[e.outcome in outcomes ? e.outcome : 'unknown']++);
       const firstObservation = numeric(bookEntry?.first);
@@ -91,7 +94,7 @@ export function practiceReport({ people = [], now = Date.now(), hours = 2 } = {}
       const runnerEnded = config.source === 'FleetScript goal' && events.some(e => e.kind === 'run_end' && e.run === latestStart?.run);
       const etaReason = target == null ? 'No target recorded' : current == null ? 'Ability unread' : current >= target ? 'Target reached' : runnerEnded ? 'Last recorded runner ended' : rate == null || rate <= 0 ? 'No positive net advancement' : changes.length < 2 || spanHours < 1 / 12 ? 'Need at least two changes over five minutes' : ['Human pilot', 'Paused', 'No recent evidence'].includes(state) ? 'Training activity is not current' : null;
       const etaMs = etaReason == null ? (target - current) / rate * 3_600_000 : null;
-      rows.push({ agent: p.agent, character: p.character, spell: name, source: config.source, current, target, gained, lost, rate, spanHours, attempts: casts.length, castSource: trainedCasts.length ? 'training ledger' : 'keeper ledger', outcomes, successPct: casts.length ? outcomes.success / casts.length * 100 : null, state, limit: fresh ? status.limited_on ?? status.why ?? null : null, lastAt: lastAt || null, bookAt: numeric(bookEntry?.at), etaMs, etaReason, changes });
+      rows.push({ agent: p.agent, character: p.character, spell: name, source: config.source, current, target, gained, lost, rate, spanHours, attempts: casts.length, castSource: native.length ? 'broker telemetry + earlier legacy records' : trainedCasts.length ? 'training ledger' : 'keeper ledger', outcomes, successPct: casts.length ? outcomes.success / casts.length * 100 : null, state, limit: fresh ? status.limited_on ?? status.why ?? null : native.at(-1)?.reason ?? null, lastAt: lastAt || null, bookAt: numeric(bookEntry?.at), etaMs, etaReason, changes });
     }
   }
   return { now, hours, rows, plans, summary: { characters: new Set(rows.map(r => r.agent)).size, spells: new Set(rows.map(r => r.spell)).size, gained: rows.reduce((n, r) => n + r.gained, 0), lost: rows.reduce((n, r) => n + r.lost, 0), attempts: rows.reduce((n, r) => n + r.attempts, 0) } };
@@ -133,7 +136,7 @@ export function parseCourierRun(log, text) {
   return { kind: 'lap_end', log, agent: actor, started: timed[0]?.slice(0, 8), ended: done.slice(0, 8), completed: /: 1\/1 completed/.test(done), legs, why: fail ?? null };
 }
 
-export function courierReport({ events = [], pvp = [], coveredDays = [], now = Date.now(), hours = 24, agent = null, character = null, members = [] } = {}) {
+export function courierReport({ events = [], active = [], pvp = [], coveredDays = [], now = Date.now(), hours = 24, agent = null, character = null, members = [] } = {}) {
   const since = now - hours * 3_600_000, ends = new Map(), starts = new Map();
   const transfers = events.filter(r => r.kind === 'transfer' && stamp(r) >= since && stamp(r) <= now);
   for (const r of events) {
@@ -151,7 +154,7 @@ export function courierReport({ events = [], pvp = [], coveredDays = [], now = D
     }
     if (duration == null && start && ended >= stamp(start)) duration = ended - stamp(start);
     const actor = r.agent ?? agent, person = members.find(m => m.agent === actor)?.character ?? r.character ?? character;
-    return [{ id, agent: actor, character: person, ended, duration, ok: r.completed === true, why: r.why ?? r.failed ?? null, refusals: r.transfer_refusals?.length ?? 0, legs: (r.legs ?? []).map(l => ({ from: l.from, to: l.to, ok: l.ok, duration: numeric(l.secs) == null ? null : l.secs * 1000, why: l.why ?? null })) }];
+    return [{ id, script: r.script ?? null, native: r.native === true, runKey: r.run_key ?? null, agent: actor, character: person, ended, duration, ok: r.completed === true, why: r.why ?? r.failed ?? null, refusals: r.transfer_refusals?.length ?? 0, legs: (r.legs ?? []).map(l => ({ from: l.from, to: l.to, ok: l.ok, duration: numeric(l.secs) == null ? null : l.secs * 1000, why: l.why ?? null })) }];
   }).sort((a, b) => b.ended - a.ended);
   const durations = trips.filter(t => t.ok && t.duration != null).map(t => t.duration);
   const routes = new Map();
@@ -181,22 +184,36 @@ export function courierReport({ events = [], pvp = [], coveredDays = [], now = D
     t.contact = rows.length ? 'PvP hit' : days.length && days.every(d => coverage.has(d)) ? 'Quiet' : 'Unmeasured';
     rows.forEach(h => inTransit.set(`${h.character}|${h.at}`, h));
   }
-  const courierNames = new Set([character, ...trips.map(t => t.character)].filter(Boolean).map(key));
+  for (const t of active) {
+    const rows = hitRows.filter(h => key(h.character) === key(t.character) && h.at >= t.started && h.at <= now);
+    t.pvpHits = rows.length; rows.forEach(h => inTransit.set(`${h.character}|${h.at}`, h));
+  }
+  const courierNames = new Set([character, ...trips.map(t => t.character), ...active.map(t => t.character)].filter(Boolean).map(key));
   const courierHits = hitRows.filter(h => courierNames.has(key(h.character)));
   const hourly = new Map();
   for (const h of courierHits) { const hour = Math.floor(h.at / 3600000) * 3600000; const b = hourly.get(hour) ?? { hour, hits: 0, inTransit: 0 }; b.hits++; if (inTransit.has(`${h.character}|${h.at}`)) b.inTransit++; hourly.set(hour, b); }
-  return { now, hours, trips, routes: [...routes.values()].map(r => ({ route: r.route, count: r.count, failures: r.failures, p50: percentile(r.samples, .5), p90: percentile(r.samples, .9) })).sort((a, b) => b.failures - a.failures || (b.p90 ?? 0) - (a.p90 ?? 0)),
+  return { now, hours, trips, active, routes: [...routes.values()].map(r => ({ route: r.route, count: r.count, failures: r.failures, p50: percentile(r.samples, .5), p90: percentile(r.samples, .9) })).sort((a, b) => b.failures - a.failures || (b.p90 ?? 0) - (a.p90 ?? 0)),
     recentTransfers: transfers.slice(-30).reverse().map(r => ({ at: stamp(r), from: r.from, to: r.to, item: r.item, moved: r.moved, asked: r.asked, ok: r.ok === true, dir: r.dir, room: r.room, why: r.why })),
     hourly: [...hourly.values()].sort((a, b) => b.hour - a.hour),
     summary: { completed: trips.filter(t => t.ok).length, total: trips.length, successPct: trips.length ? trips.filter(t => t.ok).length / trips.length * 100 : null, p50: percentile(durations, .5), p75: percentile(durations, .75), p90: percentile(durations, .9), timed: durations.length, transferTotal: transfers.length, transferSuccess: transfers.filter(t => t.ok).length, moved: transfers.reduce((n, t) => n + Math.max(0, Number(t.moved) || 0), 0), quiet: trips.filter(t => t.contact === 'Quiet').length, pvpTrips: trips.filter(t => t.contact === 'PvP hit').length, unmeasured: trips.filter(t => t.contact === 'Unmeasured').length, pvpHits: courierHits.length, inTransitHits: inTransit.size, hitHours: hourly.size, lastAt: Math.max(0, ...trips.map(t => t.ended), ...transfers.map(stamp)) || null } };
 }
 
 /** Only caller-supplied fleet members are read. Never enumerate ability books or load a password roster. */
-export function collectInsights({ root, fleet = '', live = [], characters = null, now = Date.now(), hours = 24 } = {}) {
+export function collectInsights({ root, fleet = '', live = [], characters = null, now = Date.now(), hours = 24, activityDir = null } = {}) {
   if (!root || (fleet && !safe(fleet))) throw new Error('An explicit root and valid fleet are required');
   const sub = join(root, 'substrate'), history = join(sub, 'history', fleet || 'default', 'training');
   const roster = characters ?? live.map(r => ({ agent: r.agent, character: r.character }));
   const coverage = [];
+  const activityRows = [], activityPath = activityDir || join(sub, 'history', fleet || 'default', 'activity');
+  for (const file of files(activityPath).filter(f => /^\d{4}-\d\d-\d\d\.jsonl$/.test(f))) {
+    const t = Date.parse(file.slice(0, 10));
+    if (t + 86400000 < now - (hours + 24) * 3600000 || t > now) continue;
+    const log = cachedRows(join(activityPath, file), 12_000_000, () => true);
+    activityRows.push(...log.rows);
+    if (log.truncated || log.malformed) coverage.push(`Shared activity ${file}: partial retained telemetry; missing starts remain unmeasured.`);
+  }
+  const native = activityReport(activityRows, { characters: roster, fleet, now });
+  native.active = native.active.filter(r => r.lastAt >= now - hours * 3600000);
   const ledgerRoot = join(sub, 'history', fleet || 'default'), keeperEvents = [];
   for (const file of files(ledgerRoot).filter(f => /^fleet-\d{4}-\d\d-\d\d\.jsonl$/.test(f))) {
     const t = Date.parse(file.slice(6, 16));
@@ -210,7 +227,7 @@ export function collectInsights({ root, fleet = '', live = [], characters = null
     if (log.truncated || log.malformed) coverage.push(`${p.character}: training log tail${log.truncated ? ' is bounded to 4 MB' : ''}${log.malformed ? `; ${log.malformed} incomplete rows skipped` : ''}`);
     const book = json(join(sub, 'abilities', `${p.character.replace(/[^A-Za-z0-9_-]/g, '')}.json`));
     if ((book?.history?.length ?? 0) >= 400 && Number(book.history[0].at) > now - hours * 3600000) coverage.push(`${p.character}: ability history is capped at 400 changes; its rate uses the retained observation span.`);
-    return { ...p, live: live.find(l => l.agent === p.agent), events: log.rows.filter(e => !e.character || e.character === p.character), keeperEvents: keeperEvents.filter(e => e.character === p.character), book, status: json(join(history, `${p.agent}.status.json`)), order: json(join(sub, 'training', fleet || 'default', `${encodeURIComponent(p.character).replace(/\*/g, '%2A').replace(/\./g, '%2E')}.json`)) };
+    return { ...p, live: live.find(l => l.agent === p.agent), events: [...log.rows.filter(e => !e.character || e.character === p.character), ...native.training.filter(e => e.character === p.character && e.agent === p.agent)], nativeCasts: native.casts.filter(e => e.character === p.character && e.agent === p.agent), keeperEvents: keeperEvents.filter(e => e.character === p.character), book, status: json(join(history, `${p.agent}.status.json`)), order: json(join(sub, 'training', fleet || 'default', `${encodeURIComponent(p.character).replace(/\*/g, '%2A').replace(/\./g, '%2E')}.json`)) };
   });
   // The pigeon file is legacy and unscoped. Accept it only if its declared
   // courier (source's agents=) belongs to this exact roster. Never assume hk2.
@@ -243,11 +260,19 @@ export function collectInsights({ root, fleet = '', live = [], characters = null
     if (!log.missing && !log.truncated && !log.malformed) coveredDays.push(day);
     else coverage.push(`PvP record ${day} is partial; quiet classification is unavailable for that day.`);
   }
-  const courierAgents = new Set([courier?.agent, ...runRows.map(r => r.agent)].filter(Boolean));
-  const couriers = courierReport({ events: [...pigeon.rows, ...runRows], pvp, coveredDays, hours, now, agent: courier?.agent, character: courier?.character, members: roster });
+  const courierAgents = new Set([courier?.agent, ...runRows.map(r => r.agent), ...native.trips.map(r => r.agent), ...native.active.map(r => r.agent)].filter(Boolean));
+  const legacyEvents = [...pigeon.rows, ...runRows].filter(r => {
+    if (r.kind !== 'lap_end' || !r.log) return true;
+    const ended = courierEndTime(r), actor = r.agent ?? courier?.agent;
+    const script = r.log.replace(/-[a-z0-9]+\.log$/, '');
+    return !native.trips.some(n => n.agent === actor && n.script?.replace(/ \([^)]*\)$/, '') === script && n.started_at <= ended && Math.abs(n.t - ended) < 120000);
+  });
+  const couriers = courierReport({ events: [...legacyEvents, ...native.trips, ...native.transfers], active: native.active, pvp, coveredDays, hours, now, agent: courier?.agent, character: courier?.character, members: roster });
+  couriers.summary.lastAt = Math.max(couriers.summary.lastAt ?? 0, ...native.active.map(r => r.lastAt)) || null;
+  couriers.stock = native.stock.filter(r => r.at >= now - hours * 3600000).slice(-25).reverse();
   const standing = courier ? json(join(sub, 'courier-requests.json'), {}) : {};
   const requests = roster.flatMap(p => Object.entries(standing[p.agent] ?? {}).filter(([, n]) => Number(n) > 0).map(([item, target]) => ({ character: p.character, agent: p.agent, item, target: Number(target) })));
-  return { fleet: fleet || 'default', now, hours, practice, couriers, requests, coverage, sources: { trainingCharacters: people.filter(p => p.events.length).length, abilityBooks: people.filter(p => p.book).length, pigeonMissing: pigeon.missing, courier: courier ? { agent: courier.agent, character: courier.character } : null, courierAgents: [...courierAgents], runLogs: runRows.length, pvpDays: coveredDays.length }, characters: roster.length };
+  return { fleet: fleet || 'default', now, hours, practice, couriers, requests, coverage, sources: { trainingCharacters: people.filter(p => p.events.length).length, abilityBooks: people.filter(p => p.book).length, pigeonMissing: pigeon.missing, courier: courier ? { agent: courier.agent, character: courier.character } : null, courierAgents: [...courierAgents], runLogs: runRows.length, activityRows: native.rows, pvpDays: coveredDays.length }, characters: roster.length };
 }
 
 const runCaches = new Map();

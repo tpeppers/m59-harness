@@ -229,6 +229,9 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `fleetbook` | THE FLEETBOOK — WHAT AN ERRAND ACHIEVES IN THE GAME, WHAT IT COSTS, AND WHAT IT NEEDS. |
 | `fleetlib` | WHERE FLEET SCRIPTS LIVE, AND WHOSE THEY ARE. |
 | `fleet-insights` | Read-only spell practice rates, explicit-goal ETAs, courier timing and quiet/PvP-hit reports. |
+| `activity-telemetry` | Shared observational FleetScript lifecycle and broker action receipts. |
+| `activity-report` | Project native receipts into practice, courier, stock and in-progress views. |
+| `telemetry-audit` | Statically audit FleetScripts and scratch drivers without executing them. |
 | `fleet-insights-page` | Spell practice and Couriers dashboard boards. |
 | `fleet-insights-server` | Optional loopback companion for older brokers; verifies source fleet identity. |
 | `fleetpath` | WHICH ROSTER FILE IS "THE FLEET" RIGHT NOW. |
