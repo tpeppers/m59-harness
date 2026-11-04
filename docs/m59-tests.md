@@ -34,7 +34,7 @@ for known spells only; exact pack names; a farming cast refused at the floor and
 a vetoed `client.cast` never reaches the wire; the book's `training` stock adds to the floor for a sale
 (`keptCastsFor`) and never for the cast veto.
 
-`m59-pvp-scope-test.mjs` (20) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
+`m59-pvp-scope-test.mjs` (21) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
 docs/m59-joints.md). FIRST: with no pak, the target pick is the old one, and a safety refusal is NOT retried -- the
 player is refused here, the fight moves to whoever it can hit, the next alarm does not probe again, and his own blow
 undoes it. Then one probe and the move to the player we can hit; a hit undoing it; `pvp.target` unable to overrule a hit;
@@ -1478,7 +1478,7 @@ the records it describes.
   enough to be handed it, and how far a courier walks: that a loadout shortfall of any kind
   reaches the board with its quantity, that the neighbourhood is polled nearest-first, and
   that a stale declaration and a zero shortfall are both refused as delivery orders) and
-  `node tools/m59-grudge-test.mjs` (48 — **the contract test for the only code here that
+  `node tools/m59-grudge-test.mjs` (51 — **a fleet-mate is refused by the book itself** (2026-11-04); **the contract test for the only code here that
   can make a character hit a real person**: that `PF_*` is read as an enum so a Dungeon
   Master is never mistaken for a murderer, that a grudge and a live flag are BOTH required
   and neither alone is enough, that the hour is measured from the last blow, and that a

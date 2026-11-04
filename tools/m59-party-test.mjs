@@ -535,8 +535,12 @@ console.log('\nwho is us, in a process with no broker in it');
   process.env.M59_GRUDGE_FILE = join(dir, 'grudges.json');
   const grudge = await import('./m59-grudge.mjs');
   const { OF, PF } = await import('./m59-parse.mjs');
-  grudge.recordAttack('Statler', { who: 'Zoot', room: 544, playerClass: 'outlaw' });
-  const red = { name: 'Statler', flags: (OF.PLAYER | OF.ATTACKABLE | PF.OUTLAW) >>> 0 };
+  // A LEGACY ENTRY, written straight into the file: since 2026-11-04 recordAttack itself refuses one of ours, so the
+  // only way a fleet-mate is in the book is a book written before that (18 were, on prod).
+  ok('recordAttack refuses a fleet-mate outright', grudge.recordAttack('Statler', { who: 'Zoot', room: 544 }) === null);
+  writeFileSync(process.env.M59_GRUDGE_FILE, JSON.stringify({ format: 'm59-grudges/1', grudges: {
+    statler: { name: 'Statler', first: Date.now(), at: Date.now(), hits: 1, victims: ['Zoot'], last_room: 544, player_class: 'outlaw' } } }, null, 1));
+  const red ={ name: 'Statler', flags: (OF.PLAYER | OF.ATTACKABLE | PF.OUTLAW) >>> 0 };
   const blind = grudge.mayReturnFire(red, { fleetmate: false });
   const sighted = grudge.mayReturnFire(red, { fleetmate: party.isFleetmate(red.name) });
   ok('a red name with a grudge on file IS a target to a keeper that cannot tell it is ours',

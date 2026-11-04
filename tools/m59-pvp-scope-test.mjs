@@ -154,6 +154,24 @@ try {
     f.mode.stop('test');
   });
 
+  await test('A FLEET-MATE IS NEVER A PVP OPPONENT: a blow from one of ours starts no fight and raises no alarm (2026-11-04, Kermit vs Lew)', async () => {
+    const party = await import('./m59-party.mjs');
+    party.setRosterSource(() => new Set(['Lew']));
+    try {
+      const f = fixture();
+      put(f, 2, P);
+      let alarms = 0;
+      const raise = f.mode.raiseWarAlarm.bind(f.mode);
+      f.mode.raiseWarAlarm = (...a) => { alarms++; return raise(...a); };
+      f.mode.beginPvP({ character: 'Lew', text: 'Lew attacks you', reason_code: 'incoming_hit' });
+      await swing(f);
+      assert.equal(f.mode.active?.pvp ?? null, null, 'no PvP response against a fleet-mate');
+      assert.equal(attacksAt(f, 2), 0, 'nobody swung at him');
+      assert.equal(alarms, 0, 'no war alarm against a fleet-mate');
+      f.mode.stop('test');
+    } finally { party.setRosterSource(null); }
+  });
+
   // ------------------------------------------------------------------------------------------- 2. one probe
   await test('pvp.refused: ONE swing at the player we cannot hit, then the fight is at the one we can', async () => {
     const f = fixture({ paks: [REFUSE] });

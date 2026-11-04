@@ -12,6 +12,7 @@ import { parsePlayerCombat } from './m59-player-evidence.mjs';
 import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision,
   updateSurvivalDecision } from './m59-survival-decision.mjs';
 import * as war from './m59-war.mjs';
+import { isFleetmate } from './m59-party.mjs';
 import * as gear from './m59-pvp-gear.mjs';
 import { sameRoomDoorPlan, renderState } from './m59-world.mjs';
 import * as keepoff from './m59-keepoff.mjs';
@@ -829,6 +830,10 @@ export class CombatMode {
 
   raiseWarAlarm(enemy, basis, room = this.s.world?.room?.num, extra = {}) {
     if (!this.sentinelEnabled() || !(room > 1) || !enemy) return;
+    // NEVER AN ALARM AGAINST ONE OF OURS (2026-11-04: Kermit raised 'attacked' against Lew, Statler against Fozzie, Rowlf
+    // against Animal; every keeper that read them answered a fleet-mate as an attacker). party.isFleetmate falls back to the
+    // roster file, so this holds in a keeper process that has never seen the other character.
+    if (isFleetmate(enemy)) return;
     const key = `${room}|${String(enemy).toLowerCase()}`, now = this.now();
     // A sighting repeats for as long as the enemy stands there; say it again only every
     // WAR_SIGHTING_EVERY_MS. An engagement or an attack is the room's call to arms and is fast.
@@ -2856,6 +2861,9 @@ export class CombatMode {
   beginPvP(evidence, observedAt = this.now()) {
     const s = this.s, c = s.client;
     if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
+    // A FLEET-MATE IS NEVER A PVP OPPONENT, whatever the evidence parser decided: a blow from one of ours (a swing at a
+    // monster beside us, an area spell, a misread message) is not an attack and starts no response, alarm or grudge.
+    if (isFleetmate(evidence?.character)) { this.record('pvp_fleetmate_ignored', { character: evidence.character, reason: evidence.reason_code ?? null }); return; }
     // A STRATEGY FLIGHT IN PROGRESS keeps going: a blow on the road is the reason for the road. The
     // alarm still goes out, so fleet-mates in the room we are running to know what is coming.
     if (this.active?.flight) { this.raiseWarAlarm(evidence.character, 'attacked', s.world.room.num); return; }

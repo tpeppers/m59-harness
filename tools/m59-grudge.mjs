@@ -60,7 +60,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'no
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName, resolveFleet } from './m59-fleetpath.mjs';
-import { rosterCharacterNames } from './m59-party.mjs';
+import { rosterCharacterNames, isFleetmate } from './m59-party.mjs';
 import { warHostility } from './m59-war.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -154,6 +154,9 @@ export function recordAttack(name, { who = null, room = null, at = Date.now(),
                                      playerClass = null } = {}) {
   const key = normName(name);
   if (!key) return null;
+  // NEVER ONE OF OURS (2026-11-04: 18 fleet characters were found in the prod book). The callers ask isFleetmate first;
+  // this is the book refusing it too, so a new caller that forgets cannot accuse our own people.
+  if (isFleetmate(String(name).trim())) return null;
   const all = readAll();                       // read-modify-write, not the cache
   const prev = all[key] ?? null;
   const row = {

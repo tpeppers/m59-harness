@@ -169,6 +169,18 @@ console.log('\nforgiving');
   ok('clear empties the list', activeGrudges().length === 0);
 }
 
+console.log('\nnever one of ours (2026-11-04: 18 fleet characters were in the prod book)');
+{
+  const party = await import('./m59-party.mjs');
+  clearAll();
+  party.setRosterSource(() => new Set(['Lew', 'Fozzie']));
+  ok('a fleet-mate is refused', recordAttack('Lew', { who: 'Kermit', room: 2143 }) === null && grudgeAgainst('Lew') === null);
+  ok('case and spacing do not get one of ours in', recordAttack('  fozzie ', { who: 'Statler' }) === null && grudgeAgainst('Fozzie') === null);
+  ok('a stranger is still recorded', recordAttack('Griefer', { who: 'Kermit' }) !== null && grudgeAgainst('Griefer') !== null);
+  party.setRosterSource(null);
+  clearAll();
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
