@@ -7,7 +7,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkTripwire, evaluate, step, freshFor, mayRelease, needsOf, readAssignment, watch } from './m59-tripwire.mjs';
+import { checkTripwire, evaluate, step, freshFor, mayRelease, needsOf, readAssignment, watch, transferPostureOwnership } from './m59-tripwire.mjs';
 import example from '../substrate/tripwires.example/example-enemy-online.mjs';
 
 let passed = 0, failed = 0;
@@ -42,6 +42,9 @@ ok('the example reads who and alarms', [...needsOf(example)].sort().join() === '
 section('triggers');
 ok('who_online: exact name, case and spacing folded', evaluate(example, { now: T0, who: who(['example   ENEMY']), alarms: [] }).length === 1);
 ok('who_online: a name that merely contains it does not trip', evaluate(example, { now: T0, who: who(['Example Enemy2']), alarms: [] }).length === 0);
+ok('who_online: a cached name is not a new login alert', evaluate(example, { now: T0, who: who(['Example Enemy'], false), alarms: [] }).length === 0);
+ok('optional Kasa action validates', checkTripwire({ ...example, then: { ...example.then, kasa: { alias: 'Example lamp', hue: 0 } } }).length === 0);
+ok('invalid Kasa colour refuses the tripwire', checkTripwire({ ...example, then: { ...example.then, kasa: { alias: 'Example lamp', hue: -1 } } }).some(e => /hue/.test(e)));
 ok('war_alarm: fresh alarm about the named enemy trips', evaluate(example, { now: T0, who: who([]), alarms: [{ at: T0 - 5000, enemy: 'Example Enemy', room: 38 }] })[0]?.room === 38);
 ok('war_alarm: an alarm older than within_ms does not', evaluate(example, { now: T0, who: who([]), alarms: [{ at: T0 - 2 * MIN, enemy: 'Example Enemy', room: 38 }] }).length === 0);
 const deaths = { name: 'd', when: [{ pvp_death: { count: 2, within_ms: 10 * MIN, killers: ['Morph'] } }], then: { posture: 'p' } };
@@ -88,6 +91,12 @@ section('releasing only what it put on');
   ok('the posture was on before it tripped: may not', !mayRelease('a', { a: { active: true, owned: false } }, tw).ok);
   ok('another tripwire still holds the same posture: may not', /b still holds lock/.test(mayRelease('a', { a: { active: true, owned: true }, b: { active: true } }, tw).why));
   ok('another tripwire on a different posture does not matter', mayRelease('a', { a: { active: true, owned: true }, c: { active: true } }, tw).ok);
+  const states = { a: { active: true, owned: true }, b: { active: true, owned: false } };
+  transferPostureOwnership('a', states.a, states, tw); states.a.active = false;
+  ok('the last shared holder inherits ownership and can restore the saved orders', states.b.owned && mayRelease('b', states, tw).ok);
+  const manual = { a: { active: true, owned: false }, b: { active: true, owned: false } };
+  transferPostureOwnership('a', manual.a, manual, tw);
+  ok('a manually applied posture is never inherited', !manual.b.owned);
 }
 
 section('a dry watch: observes through the broker, pushes nothing');

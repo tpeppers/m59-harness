@@ -1068,3 +1068,7 @@ substrate/rescue-travel/
 /substrate/production-*.mjs
 /substrate/cv-lockdown-farm.mjs
 /substrate/avar-village.json
+
+# Optional authenticated Kasa runtime and Windows user-encrypted account credentials.
+/substrate/kasa-runtime/
+/substrate/kasa-credentials.json

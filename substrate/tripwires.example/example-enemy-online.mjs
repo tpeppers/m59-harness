@@ -13,7 +13,11 @@ export default {
     { who_online: ['Example Enemy'] },
     { war_alarm: { enemies: ['Example Enemy'], within_ms: 60_000 } },
   ],
-  then: { posture: 'example-stay-put' },
+  then: {
+    posture: 'example-stay-put',
+    // Optional local bulb action (docs/m59-alert-lights.md):
+    // kasa: { alias: 'Example lamp', model: 'KL125', hue: 0, saturation: 100, brightness: 100, clear: 'restore' },
+  },
   quiet_ms: 15 * 60_000,
   rearm_ms: 5 * 60_000,
 };

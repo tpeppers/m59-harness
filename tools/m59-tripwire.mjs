@@ -59,6 +59,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rename
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { rowHumanHeld } from './m59-spectate-route.mjs';
+import { checkLight } from './m59-kasa.mjs';
+import { syncLights } from './m59-alert-lights.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -112,6 +114,7 @@ export const TRIGGERS = {
     needs: 'who',
     valid: s => names(s).length ? null : 'who_online needs at least one name',
     check: (s, obs) => {
+      if (obs.who?.refreshed !== true) return [];
       const want = new Set(names(s));
       return (obs.who?.players ?? []).filter(p => want.has(fold(p.name))).map(p => ({ trigger: 'who_online', name: p.name, by: obs.who.by ?? null }));
     },
@@ -156,6 +159,7 @@ export function checkTripwire(t) {
     const e = tr.valid(c[keys[0]]); if (e) errors.push(e);
   }
   if (t.quiet_ms != null && !(t.quiet_ms > 0)) errors.push('quiet_ms must be a positive number or null');
+  if (t.then?.kasa != null) errors.push(...checkLight(t.then.kasa));
   return errors;
 }
 
@@ -299,7 +303,10 @@ async function trip(name, t, st, { fleet, dry, why, log, call: injectedCall = nu
 
 async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires, call: injectedCall = null }) {
   const may = mayRelease(name, { ...states, [name]: st }, tripwires);
-  if (!may.ok) { log('stand_down_without_release', { tripwire: name, why: may.why }); return { ...st, active: false, released_at: Date.now(), quiet_since: null }; }
+  if (!may.ok) {
+    transferPostureOwnership(name, st, states, tripwires);
+    log('stand_down_without_release', { tripwire: name, why: may.why }); return { ...st, active: false, released_at: Date.now(), quiet_since: null };
+  }
   if (dry) { log('would_release', { tripwire: name, posture: t.then.posture, why }); return { ...st, active: false, released_at: Date.now(), quiet_since: null }; }
   const P = await posture();
   if (!P.readSave(fleet, t.then.posture)?.active) {
@@ -312,6 +319,26 @@ async function standDown(name, t, st, { fleet, dry, why, log, states, tripwires,
     if (r.failed?.length) { log('release_partial', { tripwire: name, failed: r.failed.map(f => f.agent) }); return st; }   // stays active: posture's own rule
     return { ...st, active: false, released_at: Date.now(), quiet_since: null };
   } catch (e) { log('release_failed', { tripwire: name, error: e.message }); return st; }
+}
+
+// If the first holder clears before a later holder, pass the original ownership on.
+// Otherwise the last holder would think this was a manually applied posture forever.
+export function transferPostureOwnership(name, st, states, tripwires) {
+  if (!st.owned) return;
+  const next = Object.entries(states).find(([n, s]) => n !== name && s.active && tripwires[n]?.then?.posture === tripwires[name]?.then?.posture);
+  if (next) next[1].owned = true;
+}
+
+async function lights(fleet, tripwires, states, { dry, log }) {
+  const file = join(stateDir(fleet), 'lights.json');
+  let records = {};
+  // Unlike a missing file, a damaged original-state save must never be overwritten.
+  try { if (existsSync(file)) records = JSON.parse(readFileSync(file, 'utf8')); }
+  catch (e) { log('lights_refused', { error: e.message }); return; }
+  await syncLights(tripwires, states, records, { dry, log, save: value => {
+    mkdirSync(stateDir(fleet), { recursive: true });
+    writeFileSync(file + '.tmp', JSON.stringify(value, null, 2)); renameSync(file + '.tmp', file);
+  } });
 }
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
@@ -344,6 +371,14 @@ export async function watch({ fleet, dry = false, everyMs = 15_000, tendMs = 60_
     const now = Date.now();
     const obs = await observe(call, needs, { alarmsSince: lastObs - 60_000, now }).catch(e => { log('observation_failed', { error: e.message }); return { now }; });
     lastObs = now;
+    // A full fleet posture can take time to apply. Signal new trips before that work;
+    // the light save is durable and failures stay independent of posture dispatch.
+    const pending = Object.entries(tripwires).map(([name, t]) => [name, step(t, states[name] ?? {}, obs, now)]);
+    if (pending.some(([, r]) => r.action === 'fire')) {
+      const preview = { ...states };
+      for (const [name, r] of pending) preview[name] = { ...r.state, ...(r.action === 'fire' ? { active: true } : {}), last_observation: { hits: r.hits.length } };
+      await lights(fleet, tripwires, preview, { dry, log });
+    }
     for (const [name, t] of Object.entries(tripwires)) {
       const wasQuiet = states[name]?.quiet_since;
       const r = step(t, states[name] ?? {}, obs, now);
@@ -355,6 +390,7 @@ export async function watch({ fleet, dry = false, everyMs = 15_000, tendMs = 60_
       states[name].last_observation = { at: now, fresh: freshFor(t, obs), hits: r.hits.length, by: obs.who?.by ?? null };
     }
     if (!dry) writeState(fleet, states);
+    await lights(fleet, tripwires, states, { dry, log });
     // Tend every posture that is on: a keeper handoff resets orders to the roster, so a lockdown verified at its
     // trip can be gone an hour later. Re-push drift, release an expired lease (m59-posture.mjs tend).
     if (now - lastTend >= tendMs) {
@@ -439,6 +475,7 @@ async function main(argv) {
       states[name] = await standDown(name, t, states[name], { fleet, dry: argv.includes('--dry'), why: 'by hand', log, states, tripwires: all });
     }
     if (!argv.includes('--dry')) writeState(fleet, states);
+    await lights(fleet, { ...(await armed(fleet, log)).tripwires, [name]: t }, states, { dry: argv.includes('--dry'), log });
     return;
   }
   throw new Error('usage: m59-tripwire.mjs list | check|try <tripwire> | look|watch|status --fleet <name> | fire|stand-down <tripwire> --fleet <name>');
