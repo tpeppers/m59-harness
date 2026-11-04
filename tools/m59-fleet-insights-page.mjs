@@ -51,7 +51,7 @@ function courierBody(data) {
 }
 
 export function renderInsights({ data = null, page = 'practice', error = null, dashboard = '' } = {}) {
-  const practice = page === 'practice', title = practice ? 'Spell practice' : 'Couriers';
+  const practice = page === 'practice', title = practice ? 'Spell & skill practice' : 'Couriers';
   const hours = data?.hours ?? 24;
   const notes = (data?.coverage ?? []).filter(c => practice ? !/^(Courier|PvP|No courier)/.test(c) : /^(Courier|PvP|No courier|Shared activity)/.test(c));
   const coverage = notes.length ? `<details class="alert"><summary>${notes.length} source coverage notes · some metrics use retained samples</summary><ul>${notes.map(c => `<li>${esc(c)}</li>`).join('')}</ul></details>` : '';

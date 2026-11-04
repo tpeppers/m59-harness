@@ -150,3 +150,27 @@ test('bounded JSONL, isolated fleet reads, escaping, page scripts, and routes', 
     assert.equal(stamp({ at: now }), now);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('every trained skill is on the practice board (fire and archery always for bow trainees): skill rows from the ability book, no casts, target 99 (2026-11-04)', () => {
+  const p = { agent: 't3', character: 'Statler', live: { snapshot_age_ms: 0, policy: { farmStrategy: 'kocatan-deep-jungle-archer' } },
+    book: { skills: { archery: { ability: 30, first: now - 48 * hour, at: now }, fire: { ability: 99, first: now - 48 * hour, at: now } },
+      history: [
+        { kind: 'skill', name: 'archery', from: 27, to: 28, by: 1, at: now - 50 * minute },
+        { kind: 'skill', name: 'archery', from: 28, to: 29, by: 1, at: now - 30 * minute },
+        { kind: 'skill', name: 'archery', from: 29, to: 30, by: 1, at: now - 5 * minute },
+      ] } };
+  const rows = practiceReport({ people: [p], now, hours: 1 }).rows;
+  const arch = rows.find(r => r.spell === 'archery'), fire = rows.find(r => r.spell === 'fire');
+  assert.ok(arch && fire, 'a bow trainee gets both skill rows, even fire with no change in the window');
+  assert.equal(arch.kind, 'skill'); assert.equal(arch.gained, 3); assert.equal(arch.rate, 3);
+  assert.equal(arch.current, 30); assert.equal(arch.target, 99); assert.equal(arch.attempts, 0);
+  assert.equal(arch.state, 'Active'); assert.equal(arch.etaMs, 69 / 3 * hour);
+  assert.equal(fire.etaReason, 'Target reached');
+  const melee = { ...p, agent: 't12', character: 'Fozzie', live: { snapshot_age_ms: 0, policy: { farmStrategy: 'kocatan-deep-jungle' } }, book: { skills: { fire: { ability: 10 } }, history: [] } };
+  assert.equal(practiceReport({ people: [melee], now, hours: 1 }).rows.filter(r => r.kind === 'skill').length, 0, 'no skill row for a melee striker whose skills did not move');
+  // EVERY TRAINED SKILL, not only the bow pair: a striker whose parry moved gets a parry row, labelled as observed.
+  melee.book = { skills: { parry: { ability: 61, first: now - 48 * hour } }, history: [{ kind: 'skill', name: 'parry', from: 60, to: 61, by: 1, at: now - 10 * minute }] };
+  const parry = practiceReport({ people: [melee], now, hours: 1 }).rows.filter(r => r.kind === 'skill');
+  assert.equal(parry.length, 1); assert.equal(parry[0].spell, 'parry'); assert.equal(parry[0].gained, 1);
+  assert.equal(parry[0].source, 'observed skill change'); assert.equal(parry[0].state, 'Active');
+});

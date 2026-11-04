@@ -5,6 +5,8 @@ import { activityReport, mergeActivityCasts } from './m59-activity-report.mjs';
 
 export const stamp = r => typeof r === 'number' ? r : Number(r?.t) || (typeof r?.at === 'number' ? r.at : Date.parse(r?.at ?? r?.iso ?? '')) || 0;
 const key = s => String(s ?? '').toLowerCase().trim();
+// Skills a BOW TRAINEE always shows on the practice board, even in a quiet window. Any other skill appears once it moves.
+export const TRAINED_SKILLS = ['fire', 'archery'];
 const numeric = n => n != null && Number.isFinite(Number(n)) ? Number(n) : null;
 const json = (p, fallback = null) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
 const files = p => { try { return readdirSync(p); } catch { return []; } };
@@ -95,6 +97,35 @@ export function practiceReport({ people = [], now = Date.now(), hours = 2 } = {}
       const etaReason = target == null ? 'No target recorded' : current == null ? 'Ability unread' : current >= target ? 'Target reached' : runnerEnded ? 'Last recorded runner ended' : rate == null || rate <= 0 ? 'No positive net advancement' : changes.length < 2 || spanHours < 1 / 12 ? 'Need at least two changes over five minutes' : ['Human pilot', 'Paused', 'No recent evidence'].includes(state) ? 'Training activity is not current' : null;
       const etaMs = etaReason == null ? (target - current) / rate * 3_600_000 : null;
       rows.push({ agent: p.agent, character: p.character, spell: name, source: config.source, current, target, gained, lost, rate, spanHours, attempts: casts.length, castSource: native.length ? 'broker telemetry + earlier legacy records' : trainedCasts.length ? 'training ledger' : 'keeper ledger', outcomes, successPct: casts.length ? outcomes.success / casts.length * 100 : null, state, limit: fresh ? status.limited_on ?? status.why ?? null : native.at(-1)?.reason ?? null, lastAt: lastAt || null, bookAt: numeric(bookEntry?.at), etaMs, etaReason, changes });
+    }
+    // SKILLS TRAINED BY USE (operator 2026-11-04: "hook it up so Fire/Archery training is also kind of presented through
+    // that"). Fire and archery improve by shooting, not by casting, so there are no cast attempts to count -- only the pushed
+    // ability book's `kind: 'skill'` changes, read exactly like a spell's. EVERY skill that moved in the window gets a row
+    // (operator, same day: "should list all spells and skills that are/have been trained"); a character on a bow strategy
+    // always shows fire and archery, even in a quiet window, because that training is configured. Target 99, the cap.
+    const strategy = String(p.live?.policy?.farmStrategy ?? '');
+    const bowTrainee = /archer/i.test(strategy);
+    const skillNames = new Set((p.book?.history ?? []).filter(h => h.kind === 'skill' && h.at >= since && h.at <= now).map(h => key(h.name)).filter(Boolean));
+    if (bowTrainee) for (const s of TRAINED_SKILLS) skillNames.add(s);
+    for (const name of skillNames) {
+      const bookEntry = Object.entries(p.book?.skills ?? {}).find(([n]) => key(n) === name)?.[1];
+      const changes = (p.book?.history ?? []).filter(h => h.kind === 'skill' && key(h.name) === name && h.at >= since && h.at <= now)
+        .map(e => ({ at: Number(e.at), delta: Number(e.to) - Number(e.from), from: Number(e.from), to: Number(e.to) })).filter(e => Number.isFinite(e.delta));
+      if (!changes.length && !(bowTrainee && bookEntry)) continue;
+      const gained = changes.reduce((n, e) => n + Math.max(0, e.delta), 0), lost = changes.reduce((n, e) => n + Math.max(0, -e.delta), 0);
+      const firstObservation = numeric(bookEntry?.first);
+      const cappedHistoryStart = (p.book?.history?.length ?? 0) >= 400 ? Math.min(...p.book.history.map(h => Number(h.at)).filter(Number.isFinite)) : since;
+      const spanHours = Math.max(0, now - Math.max(since, firstObservation ?? since, cappedHistoryStart)) / 3_600_000;
+      const rate = spanHours > 0 ? (gained - lost) / spanHours : null;
+      const current = numeric(bookEntry?.ability) ?? numeric(changes.at(-1)?.to);
+      const lastAt = Math.max(0, ...changes.map(e => e.at));
+      const target = 99;
+      const configured = bowTrainee && TRAINED_SKILLS.includes(name);
+      const state = p.live?.piloted ? 'Human pilot' : lastAt && now - lastAt < 30 * minuteMs ? 'Active' : configured ? 'Configured' : 'No recent evidence';
+      const etaReason = current == null ? 'Ability unread' : current >= target ? 'Target reached' : rate == null || rate <= 0 ? 'No positive net advancement' : null;
+      rows.push({ agent: p.agent, character: p.character, spell: name, kind: 'skill', source: configured ? 'bow practice (skill)' : 'observed skill change',
+        current, target, gained, lost, rate, spanHours, attempts: 0, castSource: 'skill: improves by use, no casts', outcomes: { success: 0, fizzle: 0, broken: 0, refused: 0, unknown: 0 },
+        successPct: null, state, limit: null, lastAt: lastAt || null, bookAt: numeric(bookEntry?.at), etaMs: etaReason == null ? (target - current) / rate * 3_600_000 : null, etaReason, changes });
     }
   }
   return { now, hours, rows, plans, summary: { characters: new Set(rows.map(r => r.agent)).size, spells: new Set(rows.map(r => r.spell)).size, gained: rows.reduce((n, r) => n + r.gained, 0), lost: rows.reduce((n, r) => n + r.lost, 0), attempts: rows.reduce((n, r) => n + r.attempts, 0) } };
