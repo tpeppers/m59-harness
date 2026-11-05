@@ -254,6 +254,8 @@ const SUITES = [
    'an in-room walk to a square behind an operable door opens it and walks through; no door, no geometry or no help from the door walks as before (801, Raphael and Zoot, 2026-10-31)'],
   ['m59-confined-relocation-test.mjs',
    'a confined farmer relocates only inside its confinement and falls back to its station (Zoot, 2005 -> 2115)'],
+  ['m59-illusion-exit-cache-test.mjs',
+   'an opened Icky Cave illusion wall offers 2500 from the same square that cached the shut answer (Waldorf, 27 -> 2500, 2026-11-05)'],
 ];
 
 // FAILURES THAT ARE ALREADY THERE, BY EXACT ASSERTION TEXT.

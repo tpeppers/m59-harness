@@ -69,6 +69,15 @@ const SHARED_EXIT_CACHE_CAP = Number.isSafeInteger(configuredSharedExitCap) && c
 // Keep at most the current static result on a World for compatibility with diagnostics
 // that inspect/clear `_exitCache`; the fleet-sized history lives only in the shared LRU.
 const LOCAL_EXIT_CACHE_CAP = 1;
+// One number per step-mask OBJECT, so a cache key can tell two door states of one room apart.
+const stepMaskIds = new WeakMap();
+let stepMaskSerial = 0;
+function stepMaskGeneration(mask) {
+  if (!mask || typeof mask !== 'object') return 0;
+  let id = stepMaskIds.get(mask);
+  if (!id) stepMaskIds.set(mask, id = ++stepMaskSerial);
+  return id;
+}
 const sharedExitCacheByMap = new WeakMap();
 function sharedExitCache(map) {
   if (!map || (typeof map !== 'object' && typeof map !== 'function')) return null;
@@ -665,7 +674,14 @@ export class World {
       // another actor merely because both occupy the same coarse square.
       const fineOriginKey = Number.isFinite(me?.x) && Number.isFinite(me?.y)
         ? `|${me.x},${me.y}` : '';
-      const key = `${room.num}|${room.roo ?? ''}|${origin.row},${origin.col}${fineOriginKey}`;
+      // THE DOOR STATE IS PART OF THE ANSWER. A door that moves swaps the geometry's step
+      // mask (applyDoorState / applyCeilingDoors attach a NEW mask object each time), and the
+      // flood below reads that mask -- so an answer computed with the Icky Cave illusion wall
+      // shut was served, from this same square, for the 30 s it stood open: exits() offered
+      // only 587 and 5, route() constrained the first hop to those, and travel(2500) reported
+      // "no route ... the obstacle is the graph itself" (t4, prod 2026-11-05).
+      const key = `${room.num}|${room.roo ?? ''}|m${stepMaskGeneration(geo?._stepMask)}|` +
+                  `${origin.row},${origin.col}${fineOriginKey}`;
       const shared = sharedExitCache(this.map);
       // Existing offline fixtures clear `_exitCache` explicitly to force one fresh compute.
       // Preserve that hook without clearing the fleet-wide cache for every other World.
