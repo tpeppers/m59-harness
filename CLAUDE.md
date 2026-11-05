@@ -1010,6 +1010,7 @@ on the machine that owns the roster, and git carries the SHAPE instead:
 | `substrate/tuning.json` | `substrate/tuning.example.json` |
 | `substrate/guild-plan.json` | `substrate/guild-plan.example.json` |
 | `substrate/policy.local.json` | `node tools/m59-localpolicy.mjs --example` |
+| `substrate/dibs-<fleet>.json` (floor items reserved per room) | `substrate/dibs.example.json` |
 | `substrate/playbooks/`, `substrate/goap-goals.json` | `substrate/goap-goals.example.json` |
 | `substrate/fleet-default`, `substrate/gy-cycle.json`, `substrate/overhead-last.json` | — one machine's answer; regenerate or re-anchor |
 

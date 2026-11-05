@@ -1077,3 +1077,7 @@ substrate/rescue-travel/
 # Optional authenticated Kasa runtime and Windows user-encrypted account credentials.
 /substrate/kasa-runtime/
 /substrate/kasa-credentials.json
+
+# Dibs: floor items in a room reserved for named characters (tools/m59-dibs.mjs). An instruction to the fleet, so this
+# machine's; the shape is substrate/dibs.example.json, BESIDE the files the tool reads.
+/substrate/dibs-*.json

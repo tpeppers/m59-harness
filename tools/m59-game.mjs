@@ -101,6 +101,7 @@ import * as exitgap from './m59-exitgap.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
 import { lapsedWeapon, dedicatedWeapon, alreadyDedicated } from './m59-weapon-magic.mjs';
 import { planLootOnly, newLootOnlyMemory } from './m59-loot-filter.mjs';
+import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
@@ -5361,6 +5362,22 @@ class Session {
       });
     }
 
+    // DIBS: an item reserved on THIS room's floor for named characters is left for them (m59-dibs.mjs). Operator 2026-11-05:
+    // Gonzo's purple mushroom drop at Zheng He's feet in 2144 was looted by every farmer walking through, and the ignore list
+    // above is per character and everywhere. Room- and item-scoped; a loot policy's disposition does NOT override it (the claim
+    // is a person's decision about whose the thing is); never applied to an explicit id request, which is a caller choosing it.
+    const dibsSkipped = [];
+    if (!ids?.length && cands.length) {
+      const book = readDibs(dibsFile());
+      if (book.claims.length) {
+        const { keep, left } = dibsFilter(cands, { book, room: this.world?.room?.num ?? null,
+          character: [c.me?.name, this.name], nameOf: o => c.rsc.get(o.nameRsc) || '' });
+        cands = keep;
+        for (const l of left) dibsSkipped.push({ id: l.o.id, item: l.name, why: `DIBS — on this floor ${l.claim.item} is for ` +
+          `${(l.claim.names ?? l.claim.for).join(', ')}${l.claim.why ? ` (${l.claim.why})` : ''}. Left on the floor.` });
+      }
+    }
+
     // THE KO'CATAN GATE, AS A LOOT CAP. Prod 2026-10-27: island farmers picked up a second body armour, helmet or shield
     // off avar kills and then the East Tower guard refused them the walk back into the jungle (2 weapons and one of each
     // wearable, worn pieces included; m59-island-chalice GATE_LIMITS). Body armour is sold at Ixla's smithy (kcsmith.kod),
@@ -5397,6 +5414,7 @@ class Session {
     }).map(o => c.rsc.get(o.nameRsc) || '').filter(Boolean)];
     let wasCancelled = false;
     for (const l of lootOnlyLeft) refused.push({ id: l.id, item: l.name, why: l.why });
+    for (const d of dibsSkipped) refused.push(d);
     for (const n of ignoredSkipped)
       refused.push({ item: n, why: 'IGNORED — on the fleet loot-ignore list (substrate/loot-ignore.json): not worth its weight. Left on the floor.' });
     for (const n of gateSkipped)

@@ -98,3 +98,25 @@ or production file is changed by these tests:
 ```powershell
 node --test tools/m59-loot-policies-test.mjs tools/m59-loot-policy-runtime-test.mjs
 ```
+
+## Dibs: a room's floor reserved for named characters
+
+`tools/m59-dibs.mjs`. Operator, 2026-11-05: a courier drops purple mushrooms at a cache character's feet in the Clearing
+of the Trading Post (2144) for three hold casters, and every other farmer walking through looted the pile on its ordinary
+loot pass. The ignore list is per character and everywhere, so it could only have stopped the whole fleet taking purple
+mushrooms off its own kills too. A **claim** is per room and per item:
+
+```bash
+node tools/m59-dibs.mjs set   --fleet prod --room 2144 --item "purple mushroom" --for Bunsen,Beaker,Robin --by tp --why "hold practice"
+node tools/m59-dibs.mjs list  --fleet prod
+node tools/m59-dibs.mjs clear --fleet prod --room 2144 --item "purple mushroom"
+```
+
+- **Where it bites:** `Session.lootFloor`, the one place a floor item becomes a carried one (kill tick, loot runner,
+  clean-up sweep, the `loot` tool, corpse follow-up, keeper action). A claimed item on the claimed floor is left there by
+  everybody not named in `for` (a character name or an agent id), with a `DIBS` reason in `refused`.
+- **What it never does:** refuse an explicit id request (`act get`, `loot ids=[...]`) -- that is a caller choosing the
+  object; or let a loot-policy disposition override it -- the claim is a person's decision about whose the thing is.
+- **The book** is `substrate/dibs-<fleet>.json` (`M59_DIBS_FILE` overrides), gitignored, shape in
+  `substrate/dibs.example.json`. Re-read on mtime by every keeper, no restart. A file that will not parse keeps the last
+  good book and says so; a claim for nobody is refused (it would strand the item); a claim past its `until` is spent.

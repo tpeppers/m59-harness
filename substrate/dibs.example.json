@@ -1,0 +1,8 @@
+{
+ "format": "m59-dibs/1",
+ "_what": "The SHAPE of substrate/dibs-<fleet>.json (tools/m59-dibs.mjs): items on one room's floor reserved for named characters. Every other character's loot pass leaves them; an explicit `act get` by id is never refused. Edit with `node tools/m59-dibs.mjs set|clear|list --fleet <f>`. No file: nothing is reserved.",
+ "claims": [
+  { "room": 2144, "item": "purple mushroom", "for": ["Bunsen", "Beaker", "Robin"],
+    "why": "hold practice: the courier's drop at the cache's feet is theirs", "by": "operator", "at": "2026-11-05T08:00:00Z", "until": null }
+ ]
+}

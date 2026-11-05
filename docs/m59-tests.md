@@ -371,6 +371,10 @@ through a nested shelter order.
   cursed/unidentified/broken/capacity guards; condition bands are 0-4, unknown condition is kept for inspection; sale,
   vault and town drop each read the same per-object decision and keep loadout reserves, equipped gear and operator
   intents; a vault deposit verifies the inventory delta. Drafted 10-27 in the trunk checkout, landed 2026-10-30.
+- `m59-dibs-test.mjs` (21): floor items reserved for named characters in one room (`m59-dibs.mjs`), pure and through
+  the real `Session.lootFloor`. Room- and item-scoped (the same item in the farm room is still anybody's), plurals match,
+  a claim may name the agent id, an expired claim is spent, a claim for nobody is refused, an unparseable book keeps the last
+  good one, and an explicit id request is never second-guessed. Gonzo's purple mushroom drop in 2144, 2026-11-05.
 - `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
   real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the
