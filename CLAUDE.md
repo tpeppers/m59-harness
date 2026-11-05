@@ -30,6 +30,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | see what is driving characters, or pause/resume runs for an alert (the job board, `m59-jobs.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#the-job-board) |
 | keep a character OUT of the world on purpose, or log off to escape a fight (`m59-dormant.mjs`) | [`docs/m59-operations.md`](docs/m59-operations.md#keeping-a-character-out-on-purpose-dormancy) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
+| decide HOW MANY casting reagents a farmer carries per lap (practice or buff upkeep), learn it lap by lap, tune it by hand, or stop a courier buying what a recipient cannot take (`m59-autobalance.mjs`) | [`docs/m59-reagent-autobalance.md`](docs/m59-reagent-autobalance.md) |
 | write, assign or debug a FARMING STRATEGY file (one task's quarry, weapons, loot, maps), or ask who set a policy key | [`docs/m59-strategies.md`](docs/m59-strategies.md) |
 | make a farm refuse a body that cannot do it (`requires: { magicWeapon: true }`), or escalate when it kills nothing (`floor`: ask a desk, then its `otherwise` catch-all, stop only when there is none) | [`docs/m59-strategies.md`](docs/m59-strategies.md#what-the-body-needs-the-kill-rate-floor-and-the-escalation) |
 | make a desk go WHEREVER ITS SERVER GOES (`station_room: 'holder'`; the chalice rations its cup outside a refill room) | [`docs/m59-economy.md`](docs/m59-economy.md#a-desk-that-follows-its-server) |

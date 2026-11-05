@@ -34,6 +34,18 @@ for known spells only; exact pack names; a farming cast refused at the floor and
 a vetoed `client.cast` never reaches the wire; the book's `training` stock adds to the floor for a sale
 (`keptCastsFor`) and never for the cast veto.
 
+`m59-reagent-autobalance-test.mjs` (26) pins the reagent autobalancer (docs/m59-reagent-autobalance.md). FIRST and
+last: NO ORDERS, the keeper is unchanged -- a trip carries no plan key, purchase requests, the sale loadout and the trip
+trigger are byte-identical, no lap opens and no pack fullness reaches the board. Then the kod's mana regeneration
+(CalculateManaTime) and catalogue costs; lap length by the binding ceiling; loot per kill from the room's drop tables;
+practice and maintenance casts; the PvP floor on top and named on every line; a sapphire spell un-plannable with its reason;
+the departure fit; pinned amounts and hand multipliers over the learner; hand edits logged with who/when/why; unknown keys
+reported and an unparseable orders file keeping the last good one; the signed lap discrepancy both ways; the learner
+raising after running out (at most x2), lowering after leftovers, converging on a simulated true rate and pack time; the
+`pack` / `first` / `reagents` triggers and `cancel_on_empty`; the courier pause and resume; and the keeper wiring (plan at
+trip open, restock overlay, sale keep, lap scored at the trip boundary, `first` opening an autobalance trip, `reagents`
+holding a full pack only with overfarm on, the courier gate in `prepareFarmDelivery`) plus the CLI's status rows.
+
 `m59-pvp-scope-test.mjs` (21) pins the PvP scope joints (`pvp.target`, `pvp.refused`, `pvp.assist`;
 docs/m59-joints.md). FIRST: with no pak, the target pick is the old one, and a safety refusal is NOT retried -- the
 player is refused here, the fight moves to whoever it can hit, the next alarm does not probe again, and his own blow
