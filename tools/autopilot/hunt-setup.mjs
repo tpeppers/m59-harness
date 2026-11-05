@@ -8,10 +8,11 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 27 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
+// 31 methods: wantedFightFloor, fightFloor, declareInterest, loadout, packAsItems,
 //   bannedWeaponsNow, huntsTrolls, bareHandedByTraining, touchSpellNow, huntAreaHere,
 //   nearestHuntAreaSquare, huntPriorityOrder, huntPriorityStatus, gangUpPlayersHere, gangUpVerdict,
-//   gangUpBars, gangUpLapsedPull, gangUpFilter, gangUpStatus, applyFarmStrategy,
+//   gangUpBars, gangUpLapsedPull, gangUpFilter, gangUpStatus, patrolHere, patrolEngageFilter,
+//   patrolWalk, patrolStatus, applyFarmStrategy,
 //   farmStrategyHook, farmStrategyStatus, policyForOrders, farmStrategyPushEcho,
 //   farmStrategyGate, farmStrategyFarming, rereadWeapons
 import { spellCost } from '../m59-deskpractice.mjs';
@@ -20,6 +21,7 @@ import { huntPriorityProblems, orderByHuntPriority, priorityRankOf } from '../m5
 import { recordEvent } from '../m59-ledger.mjs';
 import { loadoutFor, wantsOf } from '../m59-loadout.mjs';
 import { OF } from '../m59-parse.mjs';
+import { engageFilter, normPatrol, patrolNext, patrolState, replayOnMover } from '../m59-patrol-farm.mjs';
 import * as party from '../m59-party.mjs';
 import { SHORTFALL_TTL_MS, shortfallTargets } from '../m59-sharing.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -478,6 +480,115 @@ export class HuntSetupPart {
       why: names.length ? `not in hunt (${names.join(', ')}): gang_up only restricts what hunt allows, so this rule never applies`
                         : 'nothing is being hunted' }));
     return { rules: spec, ignored, last: this._gangUpLast ?? null };
+  }
+
+  // PATROL FARMING (policy.patrol, m59-patrol-farm.mjs). #movement
+  //
+  // Operator, 2026-11-04, of the Icky Cave: "walk across all the various spawn locations and kill any monsters
+  // seen ... in an infinite loop, killing everything it comes across." passFarm asks these three at the two
+  // places it already answers "which quarry" and "nothing to do"; with no patrol for this room every one of them
+  // answers the old way (null / the list unchanged / false), so silence is the behaviour that was already there.
+
+  /** The normalised patrol for this room, or null. A new policy object resets the loop state. */
+  patrolHere(roomNum) {
+    const p = this.policy?.patrol;
+    if (!p || typeof p !== 'object' || Number(p.room) !== Number(roomNum)) return null;
+    if (this._patrolFor !== p) {
+      let norm = null;
+      try { norm = normPatrol(p); } catch { norm = null; }
+      this._patrolFor = p; this._patrolNorm = norm; this._patrol = patrolState();
+    }
+    return this._patrolNorm;
+  }
+
+  /** Quarry within the patrol's radius (and whatever we are already fighting or pulling). A choice to fight marks
+   *  the loop for resuming at the nearest waypoint once the room is clear. */
+  patrolEngageFilter(found, self, patrol) {
+    const { kept, dropped } = engageFilter(found, self, patrol, [this.foeId, this.pendingPull?.target_id]);
+    const st = (this._patrol ??= patrolState());
+    if (kept.length) st.resume = true;
+    st.lastFilter = { at: Date.now(), engaged: kept.length, left_for_the_loop: dropped };
+    return kept;
+  }
+
+  /**
+   * Nothing in reach: walk one bounded piece of the loop. Returns true when the pass was spent on the patrol
+   * (walked, or refused to leave a wall while hurt), false to let passFarm's ordinary empty-pass branch answer
+   * (no position, no geometry, movement leased to someone else, or nothing on the loop reachable from here).
+   */
+  async patrolWalk(ctx, patrol) {
+    const s = this.s, c = s?.client, geo = s?.world?.geometry, self = c?.self;
+    if (!patrol || !self || !geo || typeof geo.path !== 'function') return false;
+    if (this.facultyHeld('movement')) {
+      const owner = this.facultyOwner('movement');
+      if (this._patrolHeldNoted !== owner) {
+        this._patrolHeldNoted = owner;
+        this.note('patrol paused: movement is leased', { owner, why: 'the holder decides where this body walks' });
+      }
+      return false;
+    }
+    this._patrolHeldNoted = null;
+    const st = (this._patrol ??= patrolState());
+    // The walker's own planner, replayed on the mover -- the same proof `m59-patrol-farm.mjs check` gives offline.
+    // walkTo would otherwise fall back to a collision-free plan and grind into the wall it could not see.
+    const plans = new Map();
+    const planTo = i => {
+      if (!plans.has(i)) {
+        const w = patrol.loop[i];
+        let p = null;
+        try { p = geo.path(self.row, self.col, w.row, w.col); } catch { p = null; }
+        const walks = !!p?.found && (p.steps.length === 0 || replayOnMover(geo, self, p.steps).walks);
+        plans.set(i, walks ? p : null);
+      }
+      return plans.get(i);
+    };
+    const next = patrolNext(patrol, st, self, i => !!planTo(i));
+    if (next.action !== 'walk') {
+      if (!this._patrolStuckAt || Date.now() - this._patrolStuckAt > 60_000) {
+        this._patrolStuckAt = Date.now();
+        this.note('patrol: no waypoint reachable from here', { at: `r${self.row}c${self.col}`, why: next.why,
+          consequence: 'the ordinary empty-pass branch decides this pass (hold a wall, relocate, roam)' });
+      }
+      return false;
+    }
+    const left = await this.leaveHold('patrolling to the next spawn point').catch(e => ({ refused: true, why: e.message }));
+    if (left?.refused) { this.doing = 'waiting'; return true; }
+    // ONE PIECE OF THE LEG, NOT THE WHOLE LEG. walkTo walks a proved route in one go once it has one, so a long
+    // leg would carry the body past everything it should stop for. Aim at the plan's legSteps-th square instead;
+    // the next pass looks at the room again and plans on from wherever this piece ended.
+    const plan = planTo(next.index);
+    const aim = plan?.steps?.length > patrol.legSteps ? plan.steps[patrol.legSteps - 1] : next.target;
+    this.emptyPasses = 0;
+    this.doing = 'patrolling';
+    const w = await s.walkTo(aim.col, aim.row, { maxSteps: patrol.legSteps + 8 })
+      .catch(e => ({ arrived: false, steps: 0, reason: e.message }));
+    const moved = (w?.steps ?? 0) > 0 || w?.arrived === true;
+    st.lastWalk = { at: Date.now(), waypoint: next.index, to: `r${next.target.row}c${next.target.col}`,
+      aim: `r${aim.row}c${aim.col}`, arrived: w?.arrived === true, steps: w?.steps ?? 0, reason: w?.arrived ? null : (w?.reason ?? null) };
+    if (moved) { st.stalls = 0; this.progress('patrolling'); return true; }
+    // A piece that moved nothing three times running gives that waypoint up for this lap, so one bad square cannot
+    // hold the whole loop; the next lap tries it again.
+    st.stalls = (st.stalls ?? 0) + 1;
+    if (st.stalls >= 3) {
+      const t = patrol.loop[next.index], k = `r${t.row}c${t.col}`;
+      st.skipped[k] = (st.skipped[k] ?? 0) + 1;
+      st.index = (next.index + 1) % patrol.loop.length;
+      st.stalls = 0;
+    }
+    this.noProgress('patrol walk did not move: ' + (w?.reason ?? 'no reason given'));
+    return true;
+  }
+
+  /** Status: the loop, where in it we are, and the last walk and engagement decision. Null when unset. */
+  patrolStatus() {
+    const p = this.policy?.patrol;
+    if (!p || typeof p !== 'object') return null;
+    const here = this.patrolHere(this.s?.world?.room?.num ?? null);
+    const st = this._patrol ?? null;
+    return { room: p.room, loop: (Array.isArray(p.loop) ? p.loop : []).map(w => `r${w?.row}c${w?.col}`),
+      engage_within: here?.engageWithin ?? p.engageWithin ?? null, in_patrol_room: !!here,
+      waypoint: st?.index ?? null, laps: st?.laps ?? 0, arrivals: st?.arrivals ?? 0, skipped: st?.skipped ?? {},
+      last_walk: st?.lastWalk ?? null, last_engagement: st?.lastFilter ?? null };
   }
 
   // FARMING STRATEGY FILES (m59-strategy-engine.mjs). Binding only: the engine loads, validates,

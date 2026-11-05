@@ -204,7 +204,8 @@ test('a jump whose AIR is too long is still refused', () => {
 
 test('every declared jump proves the way the mover flies it: live options, wire rounding, air span, preconditions', () => {
   const all = loadFallJumps().jumps;
-  assert.equal(all.length, 18);
+  // 19 since 2026-11-04: the Icky Cave pocket entry, 27 r36c46 > r34c46 (m59-patrol-farm.mjs).
+  assert.equal(all.length, 19);
   for (const j of all) {
     const r = proveDeclaredJump(map.rooms[j.room], j);
     assert.equal(r.proved, true, `${j.room} r${j.from.row}c${j.from.col}>r${j.to.row}c${j.to.col}: ${r.reason}`);

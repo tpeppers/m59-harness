@@ -73,6 +73,8 @@ export class StatusPart {
       // Null when unset. The creatures fought only two-on-one or more, any `hunt` never produces, and the last
       // decision: which were left alone for want of fleet-mates at them, and which had enough (m59-gang-up.mjs).
       gang_up: this.gangUpStatus(),
+      // Null when unset. The patrol loop (m59-patrol-farm.mjs): where in it, laps, skipped waypoints, the last walk.
+      patrol: this.patrolStatus(),
       loot_only: lootOnlyStatus(this.policy.lootOnly ?? null, this.s?._lootOnlyMemory ?? null),
       // WHETHER AN UNIDENTIFIED WEAPON IS PICKED UP THIS PASS (policy.lootUnrevealedWeapons), and why:
       // the mode, the verdict, the remove-curse desk it rests on, and a policy value it refused.

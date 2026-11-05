@@ -504,6 +504,25 @@
     "y": 8000
    },
    "note": "Brax entry, raised platform onto north ledge. Requires observed sector 3=800 after full 550/15 second ascent, sector 4=510. Never attempt from the down platform. Parallel adjacent lane for grouped arrivals. 2026-10-31 (docs/falljump-audit-2026-10-31.md): requires.sectors added — g9.kod raises SECTOR_PLATFORM 3 to 800 and lowers SECTOR_LEDGE_N 4 to 510 when the puzzle is solved, and the static .roo has the platform at 264, so every offline check read this 4416 units UPHILL. Prod 2026-10-23 landed it 8/8 at floor 8160 after lift-validated read {3:800,4:510}. Take-off moved from y=14848 to the platform's north edge (y=13888, r14) and the landing to y=8000, so the air span (5888) is inside its 6522 budget; a body staged on y=14848 one square back is still within the jump verb's one-square neighbourhood."
+  },
+  {
+   "room": 27,
+   "room_name": "A Deep, Dark, Spooky, Icky Cave",
+   "from": {
+    "row": 36,
+    "col": 46
+   },
+   "to": {
+    "row": 34,
+    "col": 46
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "offline only, 2026-11-04: proveDeclaredJump (tools/m59-declared-jump.mjs, LIVE_FALL_TRACE) PROVED at stand points, drop 384, air span 1556/2204, 400 ms. NOT YET WALKED BY A BOT; the operator patrols this cave by hand and his loop enters the pocket on the r50c34 -> r23c53 leg. The first patrol lap writes a jump-outcomes row; remove this entry if it does not land.",
+   "part_of_cycle": true,
+   "note": "The way INTO the Icky Cave pocket (rows 17-34, cols 45-56) that holds two of the room's generators, which every mover check called one-way: from the 1280 shelf at r36c46 run north over the row-35 trench (floor 0) and land on the 896 ramp foot at r34c46, which climbs to the 1500-1900 plateau round r23c53. geo.path already planned exactly this edge as an auto-detected fall; the bake dropped it because an undeclared fall is not a step (walksOnTheMover), which is why 50,34>23,53 had reach 1 and no route. The way out is the ordinary drop at the pocket edge (23,53>35,58 is baked). Siblings r36c45->r34c46 and r37c46->r34c46 also prove; r36c46 is declared because it is the one geo.path chose."
   }
  ]
 }
