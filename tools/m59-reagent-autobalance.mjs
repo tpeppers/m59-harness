@@ -110,6 +110,10 @@ export const LOOP_DEFAULTS = Object.freeze({
   // THE TOWN LAP (operator 2026-11-05: "do a full town lap at Barloque ... buy mushrooms at Joguer's herb shop"): what the
   // chest could not supply is BOUGHT, per item: { mushroom: { seller: 'Joguer' } }. Supervisor bank trips only.
   shops: Object.freeze({}),
+  // WHEN THE HALL CHESTS HAVE TOO FEW SHILLINGS (operator 2026-11-05: "take out 25 rubies (sells for ~4K to Herbutte), which
+  // doesn't require leaving Barloque"): { item: 'ruby', amount: 25, seller: 'Herbutte', room: 109 }. Herbutte refuses a stack
+  // of more than 25 (bqmerch.kod ObjectDesired), so amount is capped there. null: no gem sale.
+  fund_gem: null,
   kills_per_minute: 1,
   vigor: 100,
   sell_at_load: null,                  // null: the keeper's policy.sellAtLoad, else SELL_AT_LOAD 0.9
@@ -203,15 +207,26 @@ export function normalizeLoop(raw, problems = []) {
     if (k === 'cancel_on_empty') { if (typeof v === 'boolean') out.cancel_on_empty = v; else problems.push('cancel_on_empty must be true or false'); continue; }
     if (k === 'farm') { out.farm = v && typeof v === 'object' && !Array.isArray(v) ? v : null; if (v != null && !out.farm) problems.push('farm must be an object of autopilot args'); continue; }
     if (k === 'edits') { out.edits = Array.isArray(v) ? v.slice(-200) : []; continue; }
+    if (k === 'fund_gem') {
+      if (v == null) { out.fund_gem = null; continue; }
+      const item = typeof v?.item === 'string' ? v.item.trim() : '', seller = typeof v?.seller === 'string' ? v.seller.trim() : '';
+      const amount = Math.min(25, Math.trunc(Number(v?.amount ?? 25))), room = Number(v?.room);
+      if (!item || !seller || !(amount > 0) || !(room > 0)) { problems.push('fund_gem needs { item, amount (1..25), seller, room }, not applied'); continue; }
+      out.fund_gem = { item, amount, seller, room };
+      if (Number(v?.amount) > 25) problems.push('fund_gem.amount capped at 25: Herbutte refuses a larger stack');
+      continue;
+    }
     if (k === 'shops') {
       if (!v || typeof v !== 'object' || Array.isArray(v)) { problems.push('shops must be an object: { item: { seller } }'); continue; }
       for (const [item, spec] of Object.entries(v)) {
         const seller = typeof spec === 'string' ? spec : spec?.seller;
         if (!seller || typeof seller !== 'string') { problems.push(`shops.${item}: needs a seller, not applied`); continue; }
-        // FUNDS: a purse under `withdraw` is topped up to it at `bank` (a counter room) before buying -- the buy fleetscript's own
-        // withdrawal. Scooter went out with 604 shillings and the Swines hall chest holds none (2026-11-05).
-        const fund = Number(spec?.withdraw) > 0 && Number(spec?.bank) > 0 ? { withdraw: Number(spec.withdraw), bank: Number(spec.bank) } : {};
-        if ((spec?.withdraw != null || spec?.bank != null) && !fund.withdraw) problems.push(`shops.${item}: withdraw needs both an amount and a bank room, not applied`);
+        // FUNDS FROM THE HALL (operator 2026-11-05: "it should withdraw the shillings from one of the guild hall chests to make
+        // up the difference"): a purse under `withdraw` is topped up to it from the guild hall chests, in the hall, before
+        // the walk to the shop. Scooter went out with 604 shillings.
+        const fund = Number(spec?.withdraw) > 0 ? { withdraw: Number(spec.withdraw) } : {};
+        if (spec?.withdraw != null && !fund.withdraw) problems.push(`shops.${item}: withdraw must be a positive number of shillings, not applied`);
+        if (spec?.bank != null) problems.push(`shops.${item}: bank is not used -- shillings come from the guild hall chests`);
         out.shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}), ...fund };
       }
       continue;
