@@ -296,6 +296,24 @@ through a nested shelter order.
   `fleetscript:<name>#<run>` origin, and a keeper posture that will fight the walk is warned about
   once.
 
+- `m59-survival-resume-test.mjs` (52): **a keeper survival rung PAUSES an order; it never drops
+  one** (operator, 2026-11-05; Robin, FleetScript walk 2143 -> 713 cancelled by `keeper:play_dead`
+  "rest at the safe wall instead of logging off"). On a real `Session` and `Autopilot` with nothing
+  joined: a keeper cancel of an external travel order — `play_dead`, `shelter`, `watchdog`,
+  `retreat` — still cancels at once, and `Session.cancelMovement` hands the order to
+  `Autopilot.suspendPreemptedOrder`, so the suspended journey keeps the destination, the ISSUER's
+  origin and its options (`avoid`, hazard override with its reason, hop budget), even when the
+  journey hold was already revived; `resumeSuspendedJourney` then walks that destination with those
+  options, as the issuer's order marked `resumed_by: keeper:resume_journey`, and the resumed hold
+  keeps the options for a second pause. Not paused: an operator cancel (and `cancelJourney` clears
+  a held suspension that no later rung may resurrect), the keeper's own orders, `keeper_stop`.
+  `walkOrderState` (m59-move-origin.mjs) answers live / paused / taken / gone. The FleetScript half,
+  on a fake broker: a walk whose keeper rests for five budgets sends ONE travel, never cancels the
+  resume, logs PAUSED and RESUMED, and arrives; a pause past `survivalPauseMs` still ends; an
+  operator cancel or a newer order from another issuer ends the walk as `terminal` naming them and
+  is not re-issued over; death during a pause is still a death. Against the old walk() the same case
+  reproduces the incident verbatim: three travels, `did not reach 713 in three attempts`.
+
 - `m59-travel-threw-test.mjs` (7): **a journey that threw still leaves a reason.** `Autopilot.travel`
   writes its ledger row and movement incident in a `finally`; when `Session.travel` threw, both said
   `reason: null` (228 `not_arrived` incidents on prod, 455 with repeats, 2026-10-27..31). `travelThrewOutcome` turns the

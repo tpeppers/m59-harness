@@ -120,6 +120,8 @@ export class PassTravellingPart {
         this.suspendedJourney ??= {
           to: held.to, why: was, at: Date.now(), trigger: what,
           ...(pausedOrigin?{origin:pausedOrigin}:{}),guard:{...held.guard},
+          // And the issuer's options, so the resume is the same order (journeyResumeOptions).
+          ...(held.resume?{resume:held.resume}:{}),
           attempts: (held.attempts ?? 0) + 1,
           // The death count AT SUSPENSION. Resuming a journey the character died on is the
           // Cccc failure with extra steps, so the resume compares this against the live

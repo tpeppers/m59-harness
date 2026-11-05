@@ -105,7 +105,7 @@ import { readDibs, dibsFile, dibsFilter } from './m59-dibs.mjs';
 import { killDropItems } from './m59-killdrop.mjs';
 import { unCursedFromSaid, UNCURSE_SAID } from './m59-skills.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
-import { moveOrigin, originLabel, recordMovementCancel, describePreemption, installMoveOrders } from './m59-move-origin.mjs';
+import { moveOrigin, originLabel, recordMovementCancel, describePreemption, installMoveOrders, journeyResumeOptions } from './m59-move-origin.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
 // BROKER imports it, and ESM modules do not share scope, so the reference here was free
 // and `join()` threw ReferenceError wherever it was called. Nothing called it -- the
@@ -2282,7 +2282,9 @@ class Session {
         // own hold; neither a survival takeover nor a new owner is ours to renew.
         if (ours && keeper.inert === ours && !ours.cancelled) ours.at = Date.now();
         if (keeper.inert) return;
-        keeper.goTravelling(`travelling to ${where}`, { to: dest, origin: opts.origin });
+        keeper.goTravelling(`travelling to ${where}`, { to: dest, origin: opts.origin,
+          // The issuer's options ride the hold, so a survival pause can resume THIS order.
+          resume: { avoid: opts.avoid, allowHazard: opts.allowHazard, hazardWhy: opts.hazardWhy, maxHops: opts.maxHops } });
         ours = keeper.inert;
       };
       assert_();
@@ -2436,8 +2438,14 @@ class Session {
                                                           : (keeper.tally?.deaths ?? 0),
               };
             keeper?.journeyEndedInADeath?.('the travel job ended in a death');
-          } else if (!ours.cancelled && !arrived && dest != null && here !== Number(dest)) {
+          } else if (!ours.cancelled && !arrived && dest != null && here !== Number(dest)
+                     // A SURVIVAL PAUSE ALREADY HOLDS THIS ORDER, with its guard and the issuer's
+                     // options (Autopilot.suspendPreemptedOrder). Overwriting it with this thinner
+                     // note is how a resume used to lose `avoid`.
+                     && !(keeper.suspendedJourney && Number(keeper.suspendedJourney.to) === Number(dest))) {
+            const resume = journeyResumeOptions(ours.resume ?? { ...opts });
             keeper.suspendedJourney = {
+              ...(resume ? { resume } : {}),
               to: Number(dest), why: `travelling to ${where}`, at: Date.now(),
               // The order it belongs to, so a resume is still that issuer's journey.
               origin: opts.origin,
@@ -2547,6 +2555,16 @@ class Session {
     // both names — the line that would have answered the 2026-10-04 buy-spell walk in a glance.
     if (cancelRecord.preempted && !cancelRecord.self_cancel) {
       try { console.error(`[move] ${this.name}: ${describePreemption(cancelRecord)}`); } catch {}
+    }
+    // A KEEPER CANCEL OF SOMEBODY ELSE'S WALK PAUSES THE ORDER; IT NEVER DROPS IT. Recorded BEFORE
+    // the generation moves, so the order and the job it belonged to are still readable. The cancel
+    // itself is untouched -- survival still has the body within a step -- only the order is kept.
+    // See Autopilot.suspendPreemptedOrder (operator, 2026-11-05; Robin's walk to 713).
+    if (cancelRecord.preempted && !cancelRecord.self_cancel && cancelRecord.by?.source === 'keeper') {
+      try {
+        const keeper = autopilotIfAny(this.name);
+        if (keeper && keeper.s === this) keeper.suspendPreemptedOrder?.(cancelRecord, job);
+      } catch { /* a bookkeeping failure must never stand between survival and the body */ }
     }
     // Release the old cast's pacing pause before a new controller takes over.
     // Its asynchronous finally must not change a new owner's pause later.

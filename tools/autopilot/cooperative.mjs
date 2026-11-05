@@ -265,10 +265,11 @@ export class CooperativePart {
       }, { because: 'playing dead off a wall recovers vigor and never health', outcome: 'failed' });
       return false;
     }
-    const journey=this.inert;
-    if(journey?.travelling && !journey.cancelled && journey.to!=null && !this.suspendedJourney)
-      this.suspendedJourney={to:journey.to,why:journey.why,at:Date.now(),trigger:why,
-        attempts:(journey.attempts??0)+1,deaths_at:this.tally.deaths??0};
+    // THE ORDER IS PAUSED, WITH ITS ISSUER. This used to build the note by hand with no origin, no
+    // guard and no options, so the resume came back as the keeper's own journey and a FleetScript
+    // walk waiting on it could not recognise its order (Robin, 2026-11-05, walk to 713). One
+    // definition: suspendJourney (which refuses a journey its caller cancelled).
+    this.suspendJourney(why);
     if (atWall && this.hold?.reclaimed && this.turnedAt>=this.hold.takenAt
         && !(s.damagedAt>this.turnedAt)) {
       const active=currentSurvivalDecision(s);

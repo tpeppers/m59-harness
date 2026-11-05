@@ -197,7 +197,7 @@ import { lootOnlyStatus } from './m59-loot-filter.mjs';
 import { FarmStrategyEngine } from './m59-strategy-engine.mjs';
 import { PolicySourceBook } from './m59-policy-sources.mjs';
 import { keeperOrigin, claimantOrigin, moveOrigin, originLabel, liveMoveOrder, movementReport,
-         journeyProvenance, installMoveOrders, describePreemption } from './m59-move-origin.mjs';
+         journeyProvenance, installMoveOrders, describePreemption, journeyResumeOptions } from './m59-move-origin.mjs';
 import { recordMovementIncident, classifyJourneyFailure } from './m59-movement-incidents.mjs';
 import { packCounts, newTripTrade, addTradeFact, tripLedgerFields } from './m59-towntrip-ledger.mjs';
 import * as townFavors from './m59-town-favors.mjs';
@@ -3287,15 +3287,56 @@ export class Autopilot {
     if (this.suspendedJourney) return true; // a recovery detour cannot replace its parent
     const journey = this.travelling;
     if (journey?.to == null) return false;
+    // A journey its CALLER cancelled is withdrawn, not paused: `cancelJourney` marks it and clears
+    // the note, and suspending it here would resurrect an order its issuer has already ended.
+    if (journey.cancelled) return false;
     // The order this journey belongs to, so a resume is still that issuer's journey and a
     // FleetScript walk can recognise its own order coming back.
     const order = liveMoveOrder(this.s) ?? this.s?.moveOrder ?? null;
+    const job = this.s?.job && !this.s.job.done && Number(this.s.job.to) === Number(journey.to) ? this.s.job : null;
+    const resume = journeyResumeOptions(journey.resume ?? job?.resume ?? null);
     this.suspendedJourney = {
       to: journey.to, why: journey.why ?? 'travelling', at: Date.now(), trigger,
       guard: { ...this.travelGuard(this.inert?.travelling ? this.inert.guard : null) },
       attempts: (journey.attempts ?? 0) + 1, deaths_at: this.tally?.deaths ?? 0,
       ...(order?.origin && Number(order.to) === Number(journey.to) ? { origin: order.origin }
         : journey.origin ? {origin:journey.origin} : {}),
+      ...(resume ? { resume } : {}),
+    };
+    return true;
+  }
+  /**
+   * A KEEPER CANCEL OF SOMEBODY ELSE'S WALK IS A PAUSE, NEVER A DROP. Called by
+   * `Session.cancelMovement` for every cancel whose canceller is this keeper and whose victim is
+   * an external travel order (a FleetScript leg, an operator's travel, a bot's).
+   *
+   * Operator, 2026-11-05: "We need to fix the m59-harness to no longer cancel orders for
+   * survival. It should never drop the order: if it stops to rest it should then continue the
+   * previous order when it finishes resting." Robin (t8), 22:33Z that day: the keeper's
+   * `play_dead` rung ("rest at the safe wall instead of logging off") cancelled a FleetScript
+   * walk to 713. Survival keeps the body -- it must, at once, and nothing here slows that -- but
+   * the ORDER is the issuer's, so it is suspended with its destination, origin and options, and
+   * `resumeSuspendedJourney` walks it on when the rest is done.
+   *
+   * There were a dozen survival cancel sites (play_dead twice, shelter, watchdog, travel guard,
+   * retreat, the fight-back edict, clear_path, wedge shelter) and only some suspended; this is
+   * the one door they all pass through, so a new rung cannot forget. Not for the keeper's OWN
+   * orders (they have their own rules), not for `keeper_stop` (a stopped keeper resumes
+   * nothing), and never over a suspension already held (a detour cannot replace its parent).
+   */
+  suspendPreemptedOrder(rec, job = null) {
+    const p = rec?.preempted;
+    if (!p || rec.self_cancel || rec.by?.source !== 'keeper' || rec.by?.name === 'keeper_stop') return false;
+    if ((p.kind ?? 'travel') !== 'travel' || !(Number(p.to) > 0)) return false;
+    if (!p.origin || p.origin.source === 'keeper') return false;
+    if (this.inert?.cancelled) return false;
+    if (Number(this.travelling?.to) === Number(p.to)) return this.suspendJourney(rec.why);
+    if (this.suspendedJourney) return false;
+    const resume = journeyResumeOptions(job && Number(job.to) === Number(p.to) ? job.resume : null);
+    this.suspendedJourney = {
+      to: Number(p.to), why: `travelling to ${p.to}`, at: Date.now(), trigger: rec.why,
+      origin: p.origin, attempts: 1, deaths_at: this.tally?.deaths ?? 0,
+      ...(resume ? { resume } : {}),
     };
     return true;
   }

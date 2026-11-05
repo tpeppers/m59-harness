@@ -261,6 +261,8 @@ export class StatusPart {
             ordered_by: this.suspendedJourney.origin ? originLabel(this.suspendedJourney.origin) : null,
             trigger: this.suspendedJourney.trigger ?? null,
             attempts: this.suspendedJourney.attempts ?? 0,
+            // The issuer's options the resume will walk with (avoid, hazard override, hop budget).
+            options: this.suspendedJourney.resume ?? null,
             age_s: Math.round((Date.now() - (this.suspendedJourney.at ?? Date.now())) / 1000) }
         : null,
       stalled: this.stalledSince

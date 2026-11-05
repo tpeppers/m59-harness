@@ -128,6 +128,67 @@ export function liveMoveOrder(s) {
   return o;
 }
 
+/**
+ * WHAT A SURVIVAL PAUSE MUST HAND BACK BESIDES THE DESTINATION. Operator, 2026-11-05: "It should
+ * never drop the order: if it stops to rest it should then continue the previous order when it
+ * finishes resting." The order is the destination AND the issuer's options, so a suspended
+ * journey carries these and the resume walks with them -- `avoid` above all, because a resume
+ * that forgot it walked a room the issuer had ruled out (resume_journey kept only `to`).
+ * `runErrands` is deliberately absent: a resumed walk is mid-journey, its errands were settled at
+ * its start. A hazard override travels only with its reason, the rule the keeper enforces.
+ */
+export function journeyResumeOptions(o) {
+  if (!o || typeof o !== 'object') return null;
+  const out = {};
+  const avoid = Array.isArray(o.avoid) ? o.avoid.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+  if (avoid.length) out.avoid = [...new Set(avoid)];
+  const why = String(o.hazardWhy ?? '').trim();
+  if (o.allowHazard === true && why) { out.allowHazard = true; out.hazardWhy = why.slice(0, 160); }
+  const hops = Number(o.maxHops);
+  if (Number.isFinite(hops) && hops > 0) out.maxHops = Math.floor(hops);
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * WHERE ONE ISSUER'S WALK STANDS, read off `status.movement` and the keeper's
+ * `autopilot_status`. A FleetScript walk asks this on every poll, because "not there yet" has
+ * four different meanings and only one of them is a failure to count:
+ *
+ *   live    the body is walking this issuer's order to `to` -- including the keeper's resume
+ *           of it after a survival pause (origin kept, `resumed_by` added)
+ *   paused  the keeper's survival ladder took the body and HOLDS the order as a suspended
+ *           journey to `to` ordered by this issuer; it resumes it when survival is done.
+ *           Waiting through this is not a failed attempt.
+ *   taken   somebody who is NOT the keeper ended it: an operator cancel, or a newer order from
+ *           another issuer. Terminal, with that issuer's reason -- re-issuing would override them.
+ *   gone    none of the above (the keeper dropped it, or never suspended it): the old budget rules.
+ *
+ * A keeper preemption is never `taken`: the keeper does not issue orders over a FleetScript walk,
+ * it interrupts one to keep the body alive, and that is what `paused` is for.
+ */
+export function walkOrderState({ movement = null, autopilot = null } = {}, { mine = null, to = null, since = 0 } = {}) {
+  if (!mine || to == null) return { state: 'gone' };
+  const me = moveOrigin(mine), label = originLabel(me), dest = Number(to);
+  const isMine = (origin, by) => origin ? sameIssuer(moveOrigin(origin), me) : by != null && by === label;
+  const order = movement?.order ?? null;
+  if (order && (order.kind ?? 'travel') === 'travel' && Number(order.to) === dest && isMine(order.origin, order.ordered_by))
+    return { state: 'live', resumed: !!order.origin?.resumed_by, order };
+  const held = (autopilot?.autopilot_status ?? autopilot)?.suspended_journey ?? null;
+  if (held && Number(held.to) === dest && isMine(held.origin ?? null, held.ordered_by))
+    return { state: 'paused', trigger: held.trigger ?? null, attempts: held.attempts ?? null,
+             age_s: held.age_s ?? null, held };
+  if (order && order.origin && order.origin.source !== 'keeper' && !isMine(order.origin, order.ordered_by))
+    return { state: 'taken', by: order.ordered_by ?? originLabel(order.origin),
+             why: `a newer order from ${order.ordered_by ?? originLabel(order.origin)}` +
+                  `${order.to != null ? ` (walk to ${order.to})` : ''} replaced it` };
+  const outside = preemptionsOf(movement, { mine: me, to: dest, since })
+    .filter(r => (r.by?.source ?? String(r.by_label ?? '').split(':')[0]) !== 'keeper');
+  const last = outside.at(-1);
+  if (last) return { state: 'taken', by: last.by_label ?? originLabel(last.by),
+                     why: last.summary ?? describePreemption(last), record: last };
+  return { state: 'gone' };
+}
+
 /** A new keeper move is not the stalled external driver it just replaced. */
 export function keeperRecoveryRescueReady(s,bodyStillSince,now,minimumAgeMs){
   const order=liveMoveOrder(s);

@@ -192,6 +192,17 @@ the errand and the operator were told nothing.
   stamps `fleetscript:<script>#<run>` on every move it sends, and a standalone tool driving
   through its `call` is `operator:<script file>`. A resumed journey keeps its original issuer and
   adds `resumed_by`.
+- **A keeper cancel of somebody else's walk is a PAUSE, never a drop.** Operator, 2026-11-05:
+  *"It should never drop the order: if it stops to rest it should then continue the previous
+  order when it finishes resting."* Survival still takes the body at once — nothing here waits —
+  but `Session.cancelMovement` hands every keeper-origin cancel of an external travel order to
+  `Autopilot.suspendPreemptedOrder`, which suspends it with its issuer and its options (`avoid`,
+  hazard override with its reason, hop budget; `journeyResumeOptions`), and the resume rung walks
+  exactly that order on when the rest is done. A FleetScript walk reads `walkOrderState` each poll:
+  `paused` stops its clock (bounded by `survivalPauseMs`, 30 min, the keeper's own resume window),
+  `live` again gives the resumed walk a fresh budget, and only `taken` — an operator cancel or a
+  newer order from another issuer — ends it early, never re-issued over them. The keeper's own
+  orders and `keeper_stop` are not paused. `m59-survival-resume-test.mjs` pins it.
 - **Where a cancel is recorded — both sides, in one place.** `Session.cancelMovement(token, why,
   { origin })` records `{why, by, preempted}` BEFORE the movement generation moves, so the order
   it ends is still live and is named on the same record. A cancel by a DIFFERENT issuer is a

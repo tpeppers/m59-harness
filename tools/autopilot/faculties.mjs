@@ -13,7 +13,7 @@
 //   inertStatus, static FACULTIES, static PROTECTED_FACULTIES, facultyOwner, facultyHeld,
 //   claimFaculties, releaseFaculties, heartbeatFaculties, facultyStatus
 import { describeCommitment } from '../m59-commitment.mjs';
-import { claimantOrigin, keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
+import { claimantOrigin, journeyResumeOptions, keeperOrigin, liveMoveOrder } from '../m59-move-origin.mjs';
 import * as party from '../m59-party.mjs';
 import { recordShelterRun } from '../m59-shelter.mjs';
 import * as skills from '../m59-skills.mjs';
@@ -136,7 +136,7 @@ export class FacultiesPart {
   // journey taken back mid-hop could not be resumed even in principle: the destination had
   // never been stored anywhere a later pass could read. `takeBack` even reported it as
   // `was_travelling_to: <the why string>`, which reads like a destination and is not one.
-  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0, recoveryDetour = false, origin = null } = {}) {
+  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0, recoveryDetour = false, origin = null, resume = null } = {}) {
     // Already travelling for this reason: refresh nothing, the deadline is the caller's.
     // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
     // could not do it. Restored after the 2026-09-04 merge dropped it.
@@ -419,7 +419,11 @@ export class FacultiesPart {
                    to: (to != null && Number.isFinite(Number(to)) && Number(to) > 0)
                        ? Number(to) : null,
                    attempts: Number(attempts) || 0,
-                   origin: origin ?? (Number(liveMoveOrder(this.s)?.to)===Number(to) ? liveMoveOrder(this.s)?.origin : null) };
+                   origin: origin ?? (Number(liveMoveOrder(this.s)?.to)===Number(to) ? liveMoveOrder(this.s)?.origin : null),
+                   // THE ISSUER'S OPTIONS, so a survival pause can hand the SAME order back -- not
+                   // just its destination. A resume that dropped `avoid` walked the room the issuer
+                   // had ruled out (resume_journey kept only `to`, 2026-10-20). See journeyResumeOptions.
+                   ...(journeyResumeOptions(resume) ? { resume: journeyResumeOptions(resume) } : {}) };
     // A NEW JOURNEY RETIRES ANY SUSPENDED ONE. Whoever issued this said where the character
     // should be going now, and an older objective coming back to life underneath a live
     // instruction is two directions on one body — the thing this whole boundary exists to

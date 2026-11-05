@@ -174,7 +174,7 @@ import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m5
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 import { dispatchCombatOrders, oneCombatOrder } from './m59-combat-orders.mjs';
 import { combatOrder } from './m59-combat-order.mjs';
-import { moveOrigin, originLabel, preemptionsOf, describePreemption, postureConflict } from './m59-move-origin.mjs';
+import { moveOrigin, originLabel, preemptionsOf, describePreemption, postureConflict, walkOrderState } from './m59-move-origin.mjs';
 import { createIncidentLog } from './m59-movement-incidents.mjs';
 import { epochId } from './m59-epoch.mjs';
 import { createRunTelemetry, scriptDomains } from './m59-activity-telemetry.mjs';
@@ -2388,6 +2388,10 @@ const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
 const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
 const UNREADABLE_WAIT_MS = Number(process.env.M59_UNREADABLE_WAIT_MS ?? 60_000);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
+// HOW LONG ONE WALK WAITS, IN ALL, ON THE KEEPER'S SURVIVAL PAUSES. The keeper itself drops a
+// suspended journey after `resumeTravelWithinMs` (30 min) -- a rest to full at a wall -- so this
+// matches it: a walk never outwaits an order the keeper has already let go of.
+const SURVIVAL_PAUSE_MS = Number(process.env.M59_SURVIVAL_PAUSE_MS ?? 30 * 60_000);
 
 // The walk, with the errand's own-walk marker cleared however it ends (see holdKeeper's take-back).
 // A WALK THAT FAILED LEAVES A MOVEMENT INCIDENT (m59-movement-incidents.mjs) — where it set out
@@ -2474,7 +2478,7 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
   // same evidence as three that walked and failed, and they used to unwind identically -- so a
   // contention failure was filed as a movement defect. `#movement` ledgers are keyed on that
   // distinction being right.
-  let launched = 0, waitedOnOwn = false, recoveryPlateauAccepted = false;
+  let launched = 0, waitedOnOwn = false, recoveryPlateauAccepted = false, pauseSpent = 0;
   const sends = [];
   // WHO TOOK THE WALK, when somebody did. Each entry is a cancel of THIS step's order by another
   // issuer — the keeper's shelter rung, a bot, an operator — read off `status.movement`.
@@ -2686,14 +2690,72 @@ async function compiledWalkInner(ctx, agent, to, { minHealth, despiteHazard = nu
     }
     launched++;
     const launchedAt = Date.now() - 2000;   // a little slack for clock skew between processes
+    // NO SLACK FOR A VERDICT. `send()` itself cancels whatever was walking (the hold's release, the
+    // broker's cancel_movement) moments before the travel is accepted; those clear-the-way cancels
+    // must never read as somebody else ending this walk, so the terminal check starts here.
+    const takenSince = Date.now();
 
-    const until = Date.now() + budget;
+    // A SURVIVAL PAUSE IS NOT A FAILED ATTEMPT, AND IT DOES NOT SPEND THE BUDGET.
+    //
+    // Robin (t8), prod 2026-11-05: walking 2143 -> 713 on a 327s budget, the keeper's play_dead
+    // rung ("rest at the safe wall instead of logging off") took the body at 22:33:38 and HELD
+    // the order as a suspended journey. The budget ran on through the rest, the walk counted the
+    // attempt as failed, healed, cancelled the keeper's own resume of it to re-issue, and after
+    // three attempts reported "did not reach 713" -- while the keeper went on walking the order
+    // the script had already given up. Operator: "It should never drop the order: if it stops to
+    // rest it should then continue the previous order when it finishes resting."
+    //
+    // So each poll asks WHERE THE ORDER STANDS (walkOrderState): paused by the keeper -> the
+    // clock stops; resumed -> the walk gets a fresh budget from there; ended by somebody who is
+    // not the keeper (an operator cancel, a newer order) -> terminal, with their reason, and never
+    // re-issued over them. Bounded: at most `survivalPauseMs` of pause per walk, after which the
+    // old rules (re-observe, heal, re-issue) apply.
+    const pauseCap = Number.isFinite(ctx.survivalPauseMs) ? ctx.survivalPauseMs : SURVIVAL_PAUSE_MS;
+    let until = Date.now() + budget, lastPoll = Date.now(), paused = null;
+    const orderState = async (now) => {
+      const quick = walkOrderState({ movement: now.movement }, { mine, to, since: takenSince });
+      if (quick.state === 'live') return quick;
+      const ap = await call('autopilot', { agent, action: 'status' }, 30_000).catch(() => null);
+      return walkOrderState({ movement: now.movement, autopilot: ap }, { mine, to, since: takenSince });
+    };
     while (Date.now() < until) {
       await sleep(ctx.pollMs);
       const now = await observe(agent);
-      if (Number(now.room) === to) return { ok: true, room: to, ...preemptedFields() };
+      if (Number(now.room) === to) return { ok: true, room: to, ...preemptedFields(),
+                                            ...(pauseSpent ? { survival_paused_s: Math.round(pauseSpent / 1000) } : {}) };
       notePreemptions(now, launchedAt);
       if (now.dead) return { ok: false, why: withCause('died en route'), dead: true, ...preemptedFields() };
+      const st = await orderState(now);
+      const t = Date.now(), dt = t - lastPoll;
+      lastPoll = t;
+      if (st.state === 'taken')
+        return { ok: false, terminal: true, taken_by: st.by, ...preemptedFields(),
+                 why: `the walk to ${to} was ended by ${st.by}, not by the keeper: ${st.why} — ` +
+                      'not re-issued, because that would override them' };
+      if (st.state === 'paused') {
+        if (!paused) {
+          paused = { at: t, trigger: st.trigger };
+          ctx.log(agent, `the keeper PAUSED the walk to ${to} for survival (${st.trigger ?? 'a survival rung'}) ` +
+                         'and holds the order — waiting for it to resume; this is not a failed attempt');
+        }
+        const credit = Math.max(0, Math.min(dt, pauseCap - pauseSpent));
+        pauseSpent += credit;
+        until += credit;
+        if (credit < dt && !paused.capped) {
+          paused.capped = true;
+          ctx.log(agent, `the walk to ${to} has been paused for survival for ${Math.round(pauseSpent / 1000)}s ` +
+                         'in all — the pause allowance is spent, so the budget runs again');
+        }
+      } else if (paused) {
+        const held = Math.round((t - paused.at) / 1000);
+        if (st.state === 'live') {
+          ctx.log(agent, `the keeper RESUMED the walk to ${to} after ${held}s of survival — ` +
+                         'giving the resumed walk a fresh budget');
+          if (pauseSpent < pauseCap) until = Math.max(until, t + budget);
+        } else ctx.log(agent, `the survival pause on the walk to ${to} ended after ${held}s without a resume ` +
+                              '— back to the ordinary budget');
+        paused = null;
+      }
     }
   }
   if (!launched)
@@ -5172,6 +5234,8 @@ export async function fleetScript({
   // so no offline test ever covered the path where a walk gives up. That is exactly the
   // path that stranded Zoot in Barloque with his cargo. Untestable code is where bugs live.
   budgetFloorMs = 180_000, budgetCapMs = 900_000,
+  // How long one walk may wait, in all, on the keeper's survival pauses (SURVIVAL_PAUSE_MS).
+  survivalPauseMs = SURVIVAL_PAUSE_MS,
   // How long to keep re-reading the pack for goods that are on their way in.
   packSettleMs = 15_000,
   // The same patience for an ABILITY, which arrives on a different clock and in a different
@@ -5529,7 +5593,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
   const runId = `${Date.now().toString(36)}-${process.pid}`;
   const activity = createRunTelemetry({ call, run: runId, script: name, source: telemetry.source, code: telemetry.code });
   const origin = moveOrigin({ source: 'fleetscript', name, run_id: runId });
-  const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs,
+  const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs, survivalPauseMs,
                 reviveMs, packSettleMs, learnSettleMs, name, runId, origin,
                 // THE DECLARATION AND THE NAMES THAT COUNT AS CHARACTERS. Carried on ctx so
                 // the check happens at ONE door (runStep) rather than in each verb — the

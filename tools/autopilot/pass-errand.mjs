@@ -614,11 +614,15 @@ export class PassErrandPart {
       why: 'the survival ladder ended the movement, not the objective',
     });
     recordEvent(this.who(), 'travel_resumed', { to: j.to, trigger: j.trigger, attempts: j.attempts });
-    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard, origin: j.origin });
+    this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts, guard: j.guard, origin: j.origin, resume: j.resume });
     const ours = this.inert;
     let outcome = null;
     try {
-      outcome = await this.travel(j.to, { maxHops: 30,
+      // THE SAME ORDER, NOT JUST THE SAME ROOM: the issuer's `avoid`, its hazard override (with
+      // its reason) and its hop budget ride the suspension. Errands do not -- they were settled
+      // when the journey first set out.
+      const { maxHops = 30, ...issuerOptions } = j.resume ?? {};
+      outcome = await this.travel(j.to, { ...issuerOptions, maxHops,
         // STILL THE ORIGINAL ISSUER'S JOURNEY: a resume carries the order it suspended, and says
         // the keeper picked it back up. One the keeper started itself is its own.
         origin: j.origin ? { ...j.origin, resumed_by: 'keeper:resume_journey' } : keeperOrigin('resume_journey') });
