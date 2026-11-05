@@ -413,7 +413,14 @@ try {
     assert.equal(fa.practice_spells.spells[0].name, 'haste');
   });
 
-  console.log(`\n${passed} passed`);
+  await test('the supervisor rotates the practice list so every spell leads in turn (choosePractice casts the first affordable one)', async () => {
+    const { rotated, farmArgs } = await import('./m59-autobalance.mjs');
+    const loop = { mode: 'practice', practice: ['haste', 'super strength', 'resist poison'], room: 27, farm: {}, trigger: 'first', driver: 'script' };
+    const heads = [0, 1, 2, 3].map(t => farmArgs(loop, 'x', { turn: t }).practice_spells.spells[0].name);
+    assert.deepEqual(heads, ['haste', 'super strength', 'resist poison', 'haste']);
+    assert.deepEqual(rotated([], 5), []);
+  });
+console.log(`\n${passed} passed`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

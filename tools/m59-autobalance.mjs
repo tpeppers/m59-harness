@@ -113,10 +113,17 @@ export async function livePlan({ broker, fleet, agent, character, loop, learned 
 }
 
 // ------------------------------------------------------------------------------------------- the supervisor
-export function farmArgs(loop, why) {
+// THE PRACTICE LIST ROTATES (Scooter, 2026-11-04): the keeper's desk practice (m59-deskpractice.mjs choosePractice) casts the
+// FIRST affordable spell in list order, and a character that only ever regains one cast's worth of mana practises the head
+// of the list and nothing else -- in the guild hall, haste and super strength went 1.5 h uncast behind resist poison. The
+// supervisor re-pushes the list rotated by `turn` every ROTATE_MS, so each spell leads in turn and the lap's reagent use is
+// the whole list's, not one spell's.
+export const ROTATE_MS = 5 * 60_000;
+export const rotated = (list, turn = 0) => { const k = list.length ? ((turn % list.length) + list.length) % list.length : 0; return list.slice(k).concat(list.slice(0, k)); };
+export function farmArgs(loop, why, { turn = 0 } = {}) {
   const args = { ...(loop.farm ?? {}), mode: loop.farm?.mode ?? 'farm' };
   if (loop.mode === 'practice' && loop.practice.length)
-    args.practice_spells = { enabled: true, rooms: loop.room != null ? [loop.room] : [], spells: loop.practice.map(name => ({ name, target: 'self' })),
+    args.practice_spells = { enabled: true, rooms: loop.room != null ? [loop.room] : [], spells: rotated(loop.practice, turn).map(name => ({ name, target: 'self' })),
                              mana_floor: 0, reserve_casts: 0, rest_seconds: 60, refused_ms: 60_000, ...(loop.farm?.practice_spells ?? {}) };
   if (loop.trigger === 'reagents')
     args.overfarm = { enabled: true, overfarm_percent: 400, avoid: loop.drop_priority, ...(loop.farm?.overfarm ?? {}) };
@@ -153,7 +160,7 @@ async function supervise({ character, agent, fleet, broker }) {
   if (problems.length) log(`orders problems: ${problems.join('; ')}`);
   if (loop.hall == null || loop.room == null) throw new Error('the supervisor needs the loop\'s hall and room');
   log(`up: ${character} (${agent}) ${loop.mode} ${(loop.mode === 'practice' ? loop.practice : loop.maintain).join('/')}, trigger ${loop.trigger}, bank in ${loop.hall}`);
-  let lap = null;
+  let lap = null, turn = 0, rotatedAt = Date.now();
 
   async function bankTrip(verdict) {
     log(`lap over (${verdict.by}): ${verdict.why} -> bank trip to ${loop.hall}`);
@@ -206,6 +213,11 @@ async function supervise({ character, agent, fleet, broker }) {
         log(`first lap opened from the pack as it stands`);
         const o = await ap(farmArgs(loop, 'autobalance: farming')); if (o?.error) log(`orders: ${o.error}`);
       } else ab.observeLap(lap, { pack: items, fullness });
+      if (loop.mode === 'practice' && loop.practice.length > 1 && Date.now() - rotatedAt >= ROTATE_MS) {
+        rotatedAt = Date.now(); turn++;
+        const o = await ap({ practice_spells: farmArgs(loop, '', { turn }).practice_spells, why: `autobalance: practice rotation (${rotated(loop.practice, turn)[0]} first)` });
+        if (o?.error) log(`rotation: ${o.error}`);
+      }
       const v = ab.lapVerdict({ loop, lap, fullness });
       if (v.cancel) { log(`CANCELLED: ${v.why}`); break; }
       if (v.end) await bankTrip(v);
