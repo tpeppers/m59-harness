@@ -1788,6 +1788,12 @@ export class PassFarmPart {
         // gone and the honest move is the one the operator asked for by switching spots
         // off: close the distance and fight it where it stands. Same approach square and
         // same walk as `pull()`, without the walk back.
+        // A PATROL NEVER PULLS TO A WALL (operator 2026-11-05: Scooter, patrolling the Icky Cave, sat on the safe spot he had
+        // rested on and "could not bring it to the wall" for ten minutes, so the loop never walked). Safe spots stay always-on
+        // for rest, recovery and the survival ladder; only this opening pull is skipped in a patrol room: the held wall is let
+        // go and the quarry is walked up to and fought where it stands, exactly as with no wall at all.
+        const patrolHereNow = this.patrolHere?.(this.s.world?.room?.num ?? c.room?.num) ?? null;
+        if (patrolHereNow && this.hold) this.hold = null;
         if (!this.hold) {
           const closed = quarry ? await this.closeOnQuarry(quarry)
                                 : { closed: false, why: 'nothing to close on' };

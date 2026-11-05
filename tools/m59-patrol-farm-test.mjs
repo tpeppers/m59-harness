@@ -182,4 +182,12 @@ await ok('passFarm: the radius after gang-up and before the ranking; the walk af
   assert.ok(area < walk && walk < vigil);
 });
 
+await ok('a patrol never pulls to a wall: in a patrol room the held wall is let go and the quarry is closed on (Scooter 2026-11-05)', () => {
+  const src = readToolSource(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = s => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
+  const ask = at('const patrolHereNow = this.patrolHere?.('), drop = at('if (patrolHereNow && this.hold) this.hold = null;');
+  const close = at('const closed = quarry ? await this.closeOnQuarry(quarry)'), pull = at('const p = quarry ? await this.pull(quarry)');
+  assert.ok(ask < drop && drop < close && close < pull, 'asked, wall dropped, then the close-on branch, before any pull');
+});
+
 console.log(`\n${n} passed`);

@@ -320,7 +320,7 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
-- `m59-patrol-farm-test.mjs` (20): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
+- `m59-patrol-farm-test.mjs` (21): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
   named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy
   default is null and every keeper helper answers the old way without it (and in another room). The state machine:
   nearest waypoint first, arrival advances in loop order and counts laps, `arriveWithin` counts as arrived, after a
