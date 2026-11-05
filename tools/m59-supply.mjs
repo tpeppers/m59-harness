@@ -510,7 +510,7 @@ export async function supplyBetween(a, deps) {
     if (code !== 'receiver_full' || !overflowVerdict({ willing: true, said }).drop) return null;
     const rest = (missed ?? []).map(m => ({ name: m.name, amount: Math.max(0, (m.asked || 0) - Math.max(0, m.received || 0)) })).filter(m => m.amount > 0);
     if (!rest.length) return null;
-    return floorDrop(deps.floorIo, { agent: a.from, holder: a.to, items: rest }).catch(e => ({ ok: false, total: 0, why: e.message }));
+    return floorDrop(deps.floorIo, { agent: a.from, holder: a.to, items: rest, walk: false }).catch(e => ({ ok: false, total: 0, why: e.message }));
   };
 
   try {

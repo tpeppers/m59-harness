@@ -172,6 +172,14 @@ section('DROP-OFF AT THE HOLDER\'S FEET');
   ok('too far from the holder and no approach: nothing is dropped (no littering elsewhere)', r.total === 0 && w.floor.length === 0 && /could not stand within/.test(r.why));
 }
 
+{
+  // 2026-11-05 22:54Z: Zheng He (a cache) was walked ~30 squares to an archer's feet by a hand-over's overflow.
+  const w = world({ bodies: { hk2: { id: 1, name: 'Zheng He', col: 20, row: 20, pack: [] },
+                              t1: { id: 3, name: 'Piggy', col: 40, row: 40, pack: [{ id: 70, name: 'mushrooms', amount: 50 }] } } });
+  const r = await FC.floorDrop(w.io, { agent: 't1', holder: 'hk2', items: [{ name: 'mushrooms', amount: 30 }], walk: false });
+  ok('walk:false never walks the giver, even with an approach: nothing dropped far away', r.total === 0 && !w.log.some(l => l.startsWith('approach:')) && w.floor.length === 0);
+}
+
 section('DIBS: THE STASH IS THE CACHE\'S');
 {
   const near = { row: 20, col: 20, radius: 4 };

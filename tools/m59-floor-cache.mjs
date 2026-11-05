@@ -212,7 +212,7 @@ export async function floorPickup(io, { agent, holder, want, amount = null, radi
  * @returns { ok, dropped: {name: n}, total, refused: [...], at: {room, col, row}, reserved: [...], why }
  */
 export async function floorDrop(io, { agent, holder, items = [], radius = DEFAULT_RADIUS, reserve = true, ttlMs = STASH_TTL_MS,
-                                       holderCharacter = null } = {}) {
+                                       holderCharacter = null, walk = true } = {}) {
   const out = { ok: false, dropped: {}, total: 0, refused: [], reserved: [], at: null };
   const asked = items.filter(i => i?.name && Number(i.amount) > 0);
   if (!asked.length) return { ...out, ok: true, why: 'nothing to drop' };
@@ -221,7 +221,9 @@ export async function floorDrop(io, { agent, holder, items = [], radius = DEFAUL
   const near = holderSquare(scene, holderName);
   if (!near) return { ...out, why: `floor drop: ${typeof holder === 'string' ? holder : 'the holder'} is not visible in the giver's room: nothing dropped` };
   if (placed(scene?.you) && manhattan(scene.you, near) > radius) {
-    if (io.approach) { await io.approach(agent, near).catch(() => null); scene = await io.scene(agent); }
+    // walk:false -- a hand-over's overflow (m59-supply) never walks the GIVER: 2026-11-05 22:54Z Zheng He, a cache that must
+    // stay put, handed Camilla arrows, hit receiver_full, and was walked ~30 squares across 2144 to drop them at her feet.
+    if (walk && io.approach) { await io.approach(agent, near).catch(() => null); scene = await io.scene(agent); }
     if (placed(scene?.you) && manhattan(scene.you, near) > radius)
       return { ...out, why: `floor drop: could not stand within ${radius} squares of the holder (at ${manhattan(scene.you, near)}): nothing dropped` };
   }
