@@ -969,6 +969,11 @@ substrate/island-admin/
 /substrate/pak-dirs.json
 # The PvP reagent reserve (tools/m59-reagent-reserve.mjs): casts of which spells this fleet keeps back from farming. Orders.
 /substrate/reagent-reserve*.json
+# The reagent autobalancer (tools/m59-reagent-autobalance.mjs): a person's loop orders, and this machine's learned bets about
+# lap length and reagent use. The shape is substrate/reagent-autobalance.example.json, BESIDE the directory, not in it.
+/substrate/reagent-autobalance*.json
+!/substrate/reagent-autobalance.example.json
+/substrate/reagent-autobalance/
 /substrate/postures/
 /substrate/posture-dirs.json
 /substrate/posture-saves/

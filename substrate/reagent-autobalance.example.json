@@ -1,0 +1,38 @@
+{
+  "format": "m59-reagent-autobalance/1",
+  "_what": "The SHAPE of substrate/reagent-autobalance-<fleet>.json (tools/m59-reagent-autobalance.mjs). Copy it beside this file, rename it for your fleet, and edit it -- or use `node tools/m59-autobalance.mjs set <Character> <key> <value> --fleet <f> --by <you> --why <reason>`, which records the edit. No file, or no loop for a character: nothing is autobalanced and every keeper buys and sells exactly as before.",
+  "loops": {
+    "Scooter": {
+      "_why": "Practise haste / super strength / resist poison while farming the Icky Cave; bank in the Swines hall.",
+      "driver": "script",
+      "mode": "practice",
+      "practice": ["haste", "super strength", "resist poison"],
+      "kills_per_minute": 1,
+      "vigor": 100,
+      "trigger": "pack",
+      "cancel_on_empty": false,
+      "room": 27,
+      "hunt": ["orc", "spider"],
+      "loot_only": ["purple mushroom", "edible mushroom", "mushroom", "orc tooth", "red mushroom", "herb"],
+      "deposit": ["purple mushroom"],
+      "hall": 714,
+      "full_percent": 90,
+      "farm": { "mode": "farm", "farm_strategy": "icky-cave-orc-teeth", "assigned_room": 27, "confine_rooms": [27], "roam": false,
+                "loot_only": { "orc": ["purple mushroom", "edible mushroom", "mushroom", "orc tooth"],
+                               "spider": ["purple mushroom", "edible mushroom", "mushroom", "orc tooth", "red mushroom"] } },
+      "pinned": {},
+      "multipliers": {}
+    },
+    "Pepe": {
+      "_why": "Keep haste and super strength up for the whole lap on the keeper's own town trips; go to town when either cannot be kept up.",
+      "driver": "keeper",
+      "mode": "maintenance",
+      "maintain": ["haste", "super strength"],
+      "trigger": "first",
+      "durations": { "haste": 3.75 }
+    }
+  },
+  "couriers": {
+    "Zheng He": { "pause_after": 2, "room_below": 0.85 }
+  }
+}
