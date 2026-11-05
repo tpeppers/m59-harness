@@ -48,7 +48,16 @@ export function normalizeBook(raw, problems = []) {
     if (!who.length) { problems.push(`claim ${i}: "for" names nobody -- a claim for nobody would strand the item`); continue; }
     const until = c?.until ? Date.parse(c.until) : null;
     if (c?.until && !Number.isFinite(until)) { problems.push(`claim ${i}: until is not a date`); continue; }
-    claims.push({ room, item, for: who, names: c.for.map(n => String(n).trim()).filter(Boolean), until, why: c?.why ?? null, by: c?.by ?? null, at: c?.at ?? null });
+    // NEAR: a claim may cover only the squares around one spot (a cache stash at a holder's feet, m59-floor-cache.mjs), so a
+    // farmer's own kill drops elsewhere in the same room stay anybody's. Absent: the whole room, as before.
+    let near = null;
+    if (c?.near != null) {
+      const nr = Number(c.near.row), nc = Number(c.near.col), rad = Number(c.near.radius ?? 4);
+      if (!Number.isFinite(nr) || !Number.isFinite(nc) || !(rad >= 0)) { problems.push(`claim ${i}: near needs row, col and a radius`); continue; }
+      near = { row: nr, col: nc, radius: rad };
+    }
+    claims.push({ room, item, for: who, names: c.for.map(n => String(n).trim()).filter(Boolean), until, why: c?.why ?? null, by: c?.by ?? null, at: c?.at ?? null,
+                  ...(near ? { near } : {}), ...(c?.source ? { source: String(c.source) } : {}) });
   }
   return { claims };
 }
@@ -60,15 +69,22 @@ export const liveClaims = (book, now = Date.now()) => (book?.claims ?? []).filte
  * May `character` (a name, or [character, agent id]) pick up `item` off the floor of `room`? Pure.
  * -> { allowed: true } | { allowed: false, claim } (the claim it is reserved under).
  */
-export function dibsVerdict({ book, room, item, character, now = Date.now() }) {
+// SEVERAL CLAIMS MAY COVER ONE ITEM (an operator's claim on purple mushrooms in 2144 and a cache stash of them at Zheng He's
+// feet): the item is this character's when ANY covering claim names it, and left when at least one covers it and none does.
+// `at` is the item's square ({row, col}); a claim with `near` covers it only within `near.radius` squares (manhattan), and an
+// item whose square is unknown is covered (left alone is the safe reading of a reservation).
+export function dibsVerdict({ book, room, item, character, at = null, now = Date.now() }) {
   const r = Number(room), k = itemKey(item), me = [].concat(character ?? []).map(nameKey).filter(Boolean);
   if (!Number.isFinite(r) || !k) return { allowed: true };
+  let refusing = null;
   for (const c of liveClaims(book, now)) {
     if (c.room !== r || c.item !== k) continue;
+    if (c.near && at && Number.isFinite(Number(at.row)) && Number.isFinite(Number(at.col)) &&
+        Math.abs(Number(at.row) - c.near.row) + Math.abs(Number(at.col) - c.near.col) > c.near.radius) continue;
     if (me.some(m => c.for.includes(m))) return { allowed: true, claim: c, mine: true };
-    return { allowed: false, claim: c };
+    refusing ??= c;
   }
-  return { allowed: true };
+  return refusing ? { allowed: false, claim: refusing } : { allowed: true };
 }
 
 // ---- the file, re-read on mtime (every keeper calls this on every loot pass; a stat is the whole cost when nothing changed)
@@ -94,10 +110,10 @@ export const dibsError = file => cache.get(file)?.error ?? null;
 export const forgetDibs = () => cache.clear();
 
 /** Split floor candidates into kept and left-for-someone-else. `nameOf(o)` gives the item name. */
-export function dibsFilter(cands, { book, room, character, nameOf = o => o?.name ?? '', now = Date.now() }) {
+export function dibsFilter(cands, { book, room, character, nameOf = o => o?.name ?? '', atOf = o => (o && o.row != null && o.col != null ? { row: o.row, col: o.col } : null), now = Date.now() }) {
   const keep = [], left = [];
   for (const o of cands ?? []) {
-    const v = dibsVerdict({ book, room, item: nameOf(o), character, now });
+    const v = dibsVerdict({ book, room, item: nameOf(o), character, at: atOf(o), now });
     if (v.allowed) keep.push(o); else left.push({ o, name: nameOf(o), claim: v.claim });
   }
   return { keep, left };
@@ -116,7 +132,8 @@ function writeRaw(file, raw) {
 }
 export function setClaim(file, { room, item, forWho, why = null, by = null, until = null }, now = Date.now()) {
   const raw = readRaw(file);
-  raw.claims = (raw.claims ?? []).filter(c => !(Number(c.room) === Number(room) && itemKey(c.item) === itemKey(item)));
+  // A stash claim (source floor-cache) is the floor cache's own entry and is not replaced by an operator's claim.
+  raw.claims = (raw.claims ?? []).filter(c => c.source === 'floor-cache' || !(Number(c.room) === Number(room) && itemKey(c.item) === itemKey(item)));
   const claim = { room: Number(room), item: String(item), for: forWho, why, by, at: new Date(now).toISOString(), until };
   const problems = [];
   normalizeBook({ claims: [claim] }, problems);
@@ -125,6 +142,27 @@ export function setClaim(file, { room, item, forWho, why = null, by = null, unti
   writeRaw(file, raw);
   return claim;
 }
+/**
+ * A CACHE STASH CLAIM (m59-floor-cache.mjs stashClaim): added beside whatever is there, never replacing an operator's claim.
+ * One per room + item + holder: a second drop at the same cache refreshes its `until` and moves its `near`. Spent stash claims
+ * are pruned on every write, so the book does not grow with every drop-off.
+ */
+export function addStashClaim(file, claim, now = Date.now()) {
+  const problems = [];
+  normalizeBook({ claims: [claim] }, problems);
+  if (problems.length) throw new Error(problems.join('; '));
+  const raw = readRaw(file);
+  const holder = nameKey([].concat(claim.for)[0]);
+  raw.claims = (raw.claims ?? []).filter(c => {
+    if (c.source !== 'floor-cache') return true;
+    if (c.until && Date.parse(c.until) <= now) return false;
+    return !(Number(c.room) === Number(claim.room) && itemKey(c.item) === itemKey(claim.item) && nameKey([].concat(c.for)[0]) === holder);
+  });
+  raw.claims.push({ ...claim, source: 'floor-cache' });
+  writeRaw(file, raw);
+  return claim;
+}
+
 export function clearClaim(file, { room, item }) {
   const raw = readRaw(file);
   const before = (raw.claims ?? []).length;
@@ -150,6 +188,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const book = readDibs(file);
     console.log(`${file}${dibsError(file) ? `  (${dibsError(file)})` : ''}`);
     if (!book.claims.length) console.log('  no claims: every floor item is anybody\'s');
-    for (const c of book.claims) console.log(`  room ${c.room}: ${c.item} -> ${(c.names ?? c.for).join(', ')}${c.until ? ` until ${new Date(c.until).toISOString()}` : ''}${c.why ? `  (${c.why})` : ''}`);
+    for (const c of book.claims) console.log(`  room ${c.room}: ${c.item} -> ${(c.names ?? c.for).join(', ')}${c.near ? ` within ${c.near.radius} of r${c.near.row}c${c.near.col}` : ''}${c.source ? ` [${c.source}]` : ''}${c.until ? ` until ${new Date(c.until).toISOString()}` : ''}${c.why ? `  (${c.why})` : ''}`);
   } else { console.error('commands: list | set | clear'); process.exit(2); }
 }

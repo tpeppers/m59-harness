@@ -217,6 +217,20 @@ export const script = {
             (now > have ? '' : ` — ${r?.reason_code ?? r?.reason ?? r?.error ?? 'nothing moved'}`));
         got += Math.max(0, now - have);
       }
+      // STILL SHORT: THE FLOOR AROUND EACH GIVER HERE (m59-floor-cache.mjs; operator 2026-11-05: "if an archer needs arrows
+      // but Zheng He ... has no arrows, but there are arrows on the ground, the archer should get the nerudite arrows (or
+      // regular arrows) from the ground around Zheng He"). Automatic; exact names; verified by the archer's own pack.
+      for (const g of givers) {
+        if (g === String(agent).toLowerCase() || roomOf(g) !== mine) continue;
+        const have = arrowCount(await readPack(call));
+        const short = Number(p.supply_to) - have;
+        if (!(short > 0)) break;
+        const f = await call('floor_cache', { action: 'pickup', agent, near: g, what: 'arrows', amount: short }, 180_000)
+          .catch(e => ({ ok: false, got: 0, why: e.message }));
+        const now = arrowCount(await readPack(call));
+        if (now > have) log(`arrows off the floor around ${g}: ${now - have}, now ${now}`);
+        got += Math.max(0, now - have);
+      }
       return got;
     };
 

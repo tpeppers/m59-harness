@@ -1,7 +1,7 @@
 # The reagent autobalancer
 
 `tools/m59-reagent-autobalance.mjs` (pure planner and learner), `tools/m59-autobalance.mjs` (the CLI and supervisor),
-wired into the keeper's town trip and farm-delivery courier. Guard: `node tools/m59-reagent-autobalance-test.mjs` (28).
+wired into the keeper's town trip and farm-delivery courier. Guard: `node tools/m59-reagent-autobalance-test.mjs` (31).
 
 Operator, 2026-11-04: decide **how many** spellcasting reagents a character takes out of town or the guild chest each
 lap, for **practice** (as many casts as the lap's mana allows) or **maintenance** (the fewest casts that keep a list of
@@ -71,6 +71,11 @@ When the chests hold too few shillings, `fund_gem: { item: "ruby", amount: 25, s
 many gems out of the chest and sells exactly that stack to the seller before buying (operator, 2026-11-05: "take out 25
 rubies (sells for ~4K to Herbutte), which doesn't require leaving Barloque"). Herbutte refuses a stack of more than 25
 (`bqmerch.kod` ObjectDesired), so `amount` is capped at 25.
+
+## The cache and its floor (`cache.no_dropoff`)
+A cache drop-off (`cache: { agent, room, ... }`) hands over by `supply`; what the cache character cannot take (`receiver_full`)
+is dropped at its feet and reserved for it, unless `cache.no_dropoff: true`. The cache-room restock first picks the shortfall
+up off the floor around the cache character (automatic), then buys. See docs/m59-economy.md "The floor around a cache".
 
 ## Trip triggers (`trigger`)
 

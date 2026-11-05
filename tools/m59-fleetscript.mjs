@@ -4399,7 +4399,8 @@ async function runStep(ctx, agent, rawStep, state) {
         // by name instead of failing "carrying nothing matching those ids" — 2026-10-04 22:37Z.
         last = await call('supply', { from: step.from, to: step.to,
                                       what: [{ id: s0.id, amount: send, ...(s0.name ? { name: String(s0.name) } : {}) }],
-                                      ...(Number.isFinite(donor.ids_as_of) ? { ids_as_of: donor.ids_as_of } : {}) },
+                                      ...(Number.isFinite(donor.ids_as_of) ? { ids_as_of: donor.ids_as_of } : {}),
+                                      ...(step.no_dropoff === true || step.no_dropoff === 'true' ? { no_dropoff: true } : {}) },
                           step.timeoutMs ?? 180_000).catch(e => ({ error: e.message }));
         // AND A STALE-ID REFUSAL IS RETRIED ONCE, AFTER A FRESH READ, rather than ending the
         // step. It is a refusal about the HANDLE, not about the goods: the stack is still there
@@ -4417,6 +4418,18 @@ async function runStep(ctx, agent, rawStep, state) {
         moved += send;
       }
 
+      // THE FLOOR AROUND THE GIVER (m59-floor-cache.mjs, operator 2026-11-05), automatically: when an AMOUNT was asked and the
+      // giver could not supply all of it, the receiver picks the rest up off the floor within a few squares of the giver --
+      // exact names (the family 'arrows' is nerudite arrows then arrows), verified by its own pack. Same room only.
+      let floor = null;
+      if (Number.isFinite(target) && step.from !== step.to) {
+        const short = target - (countIn(await read(step.to)) - before);
+        if (short > 0 && want)
+          floor = await call('floor_cache', { action: 'pickup', agent: step.to, near: step.from, what: want, amount: short }, step.timeoutMs ?? 180_000)
+            .catch(e => ({ ok: false, got: 0, why: e.message }));
+        if (floor?.got > 0) ctx.log?.(agent, `supply ${step.from} -> ${step.to}: ${floor.got} ${want} from the floor around ${step.from}`);
+      }
+
       const after = countIn(await read(step.to));
       const received = after - before;
       // THE RECEIVER'S COUNT DECIDES. `moved` is what was asked for and believed; `received` is
@@ -4427,6 +4440,8 @@ async function runStep(ctx, agent, rawStep, state) {
       // crashed the reporter with "r.gained.map is not a function" while the goods had moved
       // perfectly well. A field name is part of the contract even when the step is new.
       if (received > 0) return { ok: true, what: want, received, before, after, rounds: rounds - 1,
+                                 ...(floor?.got > 0 ? { from_floor: floor.got } : {}),
+                                 ...(last?.to_floor ? { to_floor: last.to_floor.dropped } : {}),
                                  ...(last?.reason ? { said: last.reason } : {}) };
       return { ok: false, what: want, before, after,
                why: last?.reason ?? last?.error ?? `${step.to} holds no more ${want} than before` };

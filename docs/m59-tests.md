@@ -34,7 +34,7 @@ for known spells only; exact pack names; a farming cast refused at the floor and
 a vetoed `client.cast` never reaches the wire; the book's `training` stock adds to the floor for a sale
 (`keptCastsFor`) and never for the cast veto.
 
-`m59-reagent-autobalance-test.mjs` (29) pins the reagent autobalancer (docs/m59-reagent-autobalance.md). FIRST and
+`m59-reagent-autobalance-test.mjs` (31) pins the reagent autobalancer (docs/m59-reagent-autobalance.md). FIRST and
 last: NO ORDERS, the keeper is unchanged -- a trip carries no plan key, purchase requests, the sale loadout and the trip
 trigger are byte-identical, no lap opens and no pack fullness reaches the board. Then the kod's mana regeneration
 (CalculateManaTime) and catalogue costs; lap length by the binding ceiling; loot per kill from the room's drop tables;
@@ -376,10 +376,21 @@ through a nested shelter order.
   cursed/unidentified/broken/capacity guards; condition bands are 0-4, unknown condition is kept for inspection; sale,
   vault and town drop each read the same per-object decision and keep loadout reserves, equipped gear and operator
   intents; a vault deposit verifies the inventory delta. Drafted 10-27 in the trunk checkout, landed 2026-10-30.
-- `m59-dibs-test.mjs` (21): floor items reserved for named characters in one room (`m59-dibs.mjs`), pure and through
+- `m59-dibs-test.mjs` (21): floor items reserved for named characters in one room (`m59-dibs.mjs`; `near`-scoped and cache
+  stash claims are pinned in `m59-floor-cache-test.mjs`), pure and through
   the real `Session.lootFloor`. Room- and item-scoped (the same item in the farm room is still anybody's), plurals match,
   a claim may name the agent id, an expired claim is spent, a claim for nobody is refused, an unparseable book keeps the last
   good one, and an explicit id request is never second-guessed. Gonzo's purple mushroom drop in 2144, 2026-11-05.
+- `m59-floor-cache-test.mjs` (54): the floor around a cache or courier (`m59-floor-cache.mjs`, operator 2026-11-05),
+  against a fake floor world and fake sessions. Pickup: exact names only ('wand' never takes 'wand of healing'; 'arrows' is
+  nerudite arrows then arrows), only within `radius` of the HOLDER, the 7-square reach (approach, or skip `too_far`), pack
+  room bounds it, every get judged by the pack (a refused get is not counted), the excess over `amount` dropped back and
+  reserved. Drop-off: verified by the giver's pack, a refused drop reported and never counted, nothing dropped when the giver
+  cannot stand near the holder, each pile reserved for the holder. Dibs: `near`-scoped claims, two claims on one item (any
+  naming you allows it), stash claims sit beside and survive an operator's claim, refresh in place, prune when spent.
+  `supply`: picks off the floor when the giver has none (automatic), drops a `receiver_full` remainder at the receiver's
+  feet by default, and does not with `no_dropoff: true`. Plus the wiring in loot ejection, the autobalancer cache, the
+  fleetscript `supply` step, practice-bow, bow-supply and the broker's `floor_cache` tool.
 - `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
   real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom
   is taken (whole names: "mushroom" is left); after a tree kill the wand and berries are, and the

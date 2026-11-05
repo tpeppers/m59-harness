@@ -24,6 +24,7 @@ import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from 
 import { OF, dropSpec } from './m59-parse.mjs';
 import * as skills from './m59-skills.mjs';
 import { checkIds, refusalText } from './m59-idgen.mjs';
+import { floorPickup, floorDrop } from './m59-floor-cache.mjs';
 
 const num = (v, d) => (v === undefined || v === null ? d : Number(v));
 
@@ -448,11 +449,35 @@ export async function supplyBetween(a, deps) {
     ...(idCheck && !idCheck.ok ? { stale_ids: idCheck.refused } : {}),
   });
 
+  // THE FLOOR AROUND THE GIVER IS PART OF ITS STOCK (m59-floor-cache.mjs, operator 2026-11-05: "if an archer needs arrows
+  // but Zheng He ... has no arrows, but there are arrows on the ground, the archer should get [them] from the ground around
+  // Zheng He"). Automatic: when the giver carries nothing matching a NAMED want and the two stand in one room, the receiver
+  // picks it up off the floor within a few squares of the giver, verified by its own pack. Ids, 'all', 'food' and the
+  // default casting pair are not names a floor can answer.
+  const floorWant = () => {
+    if (typeof a.what === 'string' && a.what.trim() && !/^(reagents?|casting|all|food)$/i.test(a.what.trim())) return a.what.trim();
+    if (Array.isArray(a.what)) { const n = a.what.filter(e => e && typeof e === 'object' && e.id == null && typeof e.name === 'string').map(e => e.name); return n.length ? n : null; }
+    return null;
+  };
+  const fromFloor = async (inventory) => {
+    const want = floorWant(), io = deps.floorIo;
+    const same = give.room() != null && give.room() === recv.room();
+    if (!want || !io || !same) return nothingMatching(inventory);
+    const amount = Array.isArray(a.what) ? a.what.reduce((n, e) => n + num(e.amount, 1), 0) : num(a.amount, 2);
+    const r = await floorPickup(io, { agent: a.to, holder: a.from, want, amount }).catch(e => ({ ok: false, got: 0, why: e.message }));
+    if (!(r.got > 0)) return { ...nothingMatching(inventory), floor: r };
+    return { supplied: r.ok, partial: !r.ok, from_floor: true, from: giverName, to: receiverName,
+             reason: r.ok ? `from the floor: ${giverName} carried none, ${receiverName} picked ${r.got} up within ${r.radius ?? 'a few'} squares of ${giverName}`
+                          : `from the floor, short: ${r.why}`,
+             handed_over: Object.keys(r.picked), amounts: Object.entries(r.picked).map(([name, n]) => ({ name, asked: amount, received: n, giver_lost: 0, from_floor: true })),
+             floor: r, note: 'verified BY AMOUNT on the receiver pack; nothing left the giver' };
+  };
+
   // Asked before anything walks anywhere: a donor with nothing to give should not send
   // somebody on a journey to prove it.
   const inventory = await give.inventory();
   let items = pick(inventory);
-  if (!items.length) return nothingMatching(inventory);
+  if (!items.length) return fromFloor(inventory);
 
   const who = a.who_travels || 'from';
   const mover = who === 'to' ? recv : give;
@@ -472,6 +497,17 @@ export async function supplyBetween(a, deps) {
     return h;
   };
   const notes = [];
+
+  // THE REMAINDER A FULL RECEIVER COULD NOT TAKE GOES ON THE FLOOR AT ITS FEET (m59-floor-cache.mjs, operator 2026-11-05: "if
+  // Zheng He (or Raphael) can't carry everything to cache, the extra can be dropped off at the ground under them"). On by
+  // default; `no_dropoff: true` switches it off. Only on the server's own `receiver_full` -- a definitive sentence, never a
+  // guess from a silent wire -- and only what the giver still holds. The stash is reserved for the receiver by dibs.
+  const overflow = async (code, missed) => {
+    if (a.no_dropoff === true || code !== 'receiver_full' || !deps.floorIo) return null;
+    const rest = (missed ?? []).map(m => ({ name: m.name, amount: Math.max(0, (m.asked || 0) - Math.max(0, m.received || 0)) })).filter(m => m.amount > 0);
+    if (!rest.length) return null;
+    return floorDrop(deps.floorIo, { agent: a.from, holder: a.to, items: rest }).catch(e => ({ ok: false, total: 0, why: e.message }));
+  };
 
   try {
     // TWO UNKNOWNS ARE NOT THE SAME ROOM.
@@ -637,7 +673,7 @@ export async function supplyBetween(a, deps) {
     // before the walk describes a pack that has been fought, looted and eaten out of
     // since. This read has to happen anyway for the before-count, so the re-pick is free.
     items = pick(giverRows);
-    if (!items.length) return nothingMatching(giverRows);
+    if (!items.length) return fromFloor(giverRows);
     const before = recvRows.length;
 
     // WHERE THE RECEIVER'S STREAM IS BEFORE THE OFFER GOES OUT. Read after, the wait
@@ -685,7 +721,9 @@ export async function supplyBetween(a, deps) {
         giver_lost: (giveBefore.get(name) || 0) - (giverAfter.get(name) || 0),
         received: (receiverAfter.get(name) || 0) - (recvBefore.get(name) || 0) }));
       const failure = offerFailureFrom(said);
+      const floored = await overflow(failure?.code, notReceived);
       return { supplied: false, reason: failure?.why ?? 'the offer never reached them',
+        ...(floored ? { to_floor: floored, to_receiver: 0 } : {}),
         ...(failure ? { reason_code: failure.code, server_said: failure.said } : {}),
         submission: offerReply, said, not_received: notReceived,
         partial: notReceived.some(q => q.giver_lost !== 0 || q.received !== 0),
@@ -739,6 +777,7 @@ export async function supplyBetween(a, deps) {
     // one makes it cast a spell that fails silently for want of the other half. So
     // anything short of everything asked for is false, with `partial` saying which.
     const allMoved = items.length > 0 && missed.length === 0;
+    const floored = allMoved ? null : await overflow(failure?.code, missed);
     // REASON FIRST, AND IN EVERY RESPONSE.
     //
     // A caller that reads one field reads the first one. This used to be `supplied: false`
@@ -766,6 +805,8 @@ export async function supplyBetween(a, deps) {
       handed_over: moved.map(m => m.name),
       amounts: moved,
       not_received: missed,
+      // WHERE IT WENT: `to_receiver` is what rose in the receiver's own count, `to_floor` the giver's verified drop.
+      ...(floored ? { to_receiver: moved.reduce((n, m) => n + m.received, 0), to_floor: floored } : {}),
       receiver_carrying: now.length, was_carrying: before,
       travelled: who !== 'neither' ? who : null,
       notes: notes.length ? notes : undefined,

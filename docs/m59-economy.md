@@ -1158,6 +1158,52 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   at least 80%, nothing landing, no trade open) and never walks anywhere.
 
 
+## The floor around a cache is part of the cache (`floor_cache`, `no_dropoff`)
+
+Operator, 2026-11-05: *"Ensure that for our cache/courier pickups the ground nearby is also checked for whatever's desired:
+e.g., if an archer needs arrows but Zheng He is full of reagents and has no arrows, but there are arrows on the ground, the
+archer should get the nerudite arrows (or regular "arrows") from the ground around Zheng He... and similarly with dropping
+off, if Zheng He (or Raphael) can't carry everything to cache, the extra can be dropped off at the ground under them"*.
+Refinement the same day: **pickups from the floor are automatic; the drop-off overflow is on by default and `no_dropoff:
+true` switches it off** wherever a drop-off is configured or invoked. `tools/m59-floor-cache.mjs`; `m59-floor-cache-test.mjs`
+(54) pins it.
+
+| where | pickup (always) | drop-off overflow (default on) | switch |
+|---|---|---|---|
+| broker `supply` | the giver carries none of a NAMED `what` and both stand in one room: the receiver picks it up around the giver (`from_floor: true`) | the server says `receiver_full`: the giver drops the remainder at the receiver's feet (`to_receiver`, `to_floor`) | `no_dropoff: true` |
+| broker `floor_cache` | `action=pickup agent near what amount radius` (`action=scan` is read-only) | `action=drop agent near items:[{name, amount}]` | `no_dropoff: true` refuses a drop |
+| fleetscript `supply` step (and every script built on it, e.g. a local bring-to) | an `amount` the giver could not cover is picked up around the giver | through `supply` | `no_dropoff=true` on the step |
+| autobalancer cache (`loops.<C>.cache`) | the cache-room restock picks the shortfall up around the cache character before buying | the hand-over's `supply` | `cache.no_dropoff: true` |
+| keeper loot ejection (`loot_eject`) | -- | a receiver that does not take the batch gets it at its feet, from within 4 squares (no walk) | `loot_eject.no_dropoff: true` |
+| practice-bow `pullArrows`, bow-supply `pullBowArrows` | arrows still short after the givers: off the floor around each giver in the room | -- | -- |
+
+- **Exact names, never a family by substring.** `arrows` is the one named family: nerudite arrows first, then arrows. Any
+  other want matches its whole name, plural-insensitive, so `wand` never takes `wand of healing` (2026-10-13).
+- **Around the HOLDER**, within `radius` squares (default 4, manhattan), nearest first; never a pile elsewhere in the room.
+- **Reach is 7 squares** (user.kod:3634 "too far away"); the broker walks the picker within reach (`walk_to`), and a
+  candidate it cannot reach is `skipped: too_far`.
+- **Judged by the pack.** Each get and each drop is followed by an inventory read; a get or a drop the server refused moves
+  nothing and is reported under `refused`, never counted. The server splits a stack to what the picker can hold by itself
+  (UserGet: `GetNumberCanHold`), and whatever a whole stack brings in over `amount` is dropped straight back (`returned`).
+- **Overflow is only on the server's own `receiver_full`.** A silent wire, a busy counterparty or a refused item does not
+  litter the floor. Only what the giver still holds is dropped, and only standing within `radius` of the receiver; a giver
+  that cannot get there drops nothing and says so.
+- **The stash is reserved.** Every sweep picks up `*` since deploy-2026-11-05-12, so each drop writes a DIBS claim
+  (`m59-dibs.mjs addStashClaim`, `source: "floor-cache"`): that item, that room, within `near.radius` of the holder's square,
+  for the holder, for 30 minutes. Everybody else's loot pass leaves it; the holder's own sweep may take it back; a pickup
+  that wants it takes it by explicit id, which dibs never refuses. A stash claim sits BESIDE an operator's claim on the same
+  item and is never replaced by one (any covering claim naming you lets you take it). Spent stash claims are pruned on the
+  next write.
+- **The floor is a buffer, not a vault.** room.kod `DisposeTimer` (every ~5 min): with nobody in the room every disposable
+  floor item is destroyed; with somebody there and more than five floor objects the OLDEST fifth goes
+  (docs/m59-coordination-research.md). A cache holder standing in its room keeps the first rule off; nothing keeps the
+  second off in a busy room. Expect losses from a stash left long, and prefer the hall when the holder is FULL: the
+  autobalancer still sends the farmer to the hall when the cache character is over `full_percent`; the overflow is for the
+  part of a hand-over it could not take.
+- **Rollout**: loot ejection is keeper code (keeper restart); `supply` and `floor_cache` are broker code (broker handover);
+  fleetscripts and the autobalance supervisor pick it up on their next run.
+
+
 ## Make space: drop what was going to be sold (`make_space`, `sale_plan`)
 
 Operator, 2026-11-05: *"A more general harness fix for anytime anyone needs up to maybe 400 bulk/weight space: just

@@ -235,7 +235,11 @@ export function normalizeLoop(raw, problems = []) {
         if (seller && typeof seller === 'string') shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}) };
         else problems.push(`cache.shops.${item}: needs a seller, not applied`);
       }
-      out.cache = { agent, room, full_percent: full > 0 && full <= 100 ? full : 95, min_purse: minPurse >= 0 ? minPurse : 2000, shops };
+      // NO_DROPOFF (operator 2026-11-05): what the cache character cannot take at the hand-over is dropped at its feet and
+      // reserved for it (m59-floor-cache.mjs) by default; true keeps it in the farmer's pack, as before.
+      if (v?.no_dropoff != null && typeof v.no_dropoff !== 'boolean') problems.push('cache.no_dropoff must be true or false; floor drop-off left on');
+      out.cache = { agent, room, full_percent: full > 0 && full <= 100 ? full : 95, min_purse: minPurse >= 0 ? minPurse : 2000, shops,
+                    no_dropoff: v?.no_dropoff === true };
       continue;
     }
     if (k === 'shops') {

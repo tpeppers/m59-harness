@@ -195,10 +195,14 @@ async function supervise({ character, agent, fleet, broker }) {
       // HANDED OVER, NOT CHESTED: one supply per item name, both standing still in the cache room.
       // The farmer KEEPS what its next lap carries (haste's edible mushrooms are sold nowhere near); only the rest is handed over.
       const byName = ab.cacheHandover(inv, keys, planNow.ok ? planNow.totals : null);
+      // WHAT THE CACHE CANNOT CARRY GOES AT ITS FEET (supply's floor overflow, on unless cache.no_dropoff), reserved for it.
       const moved = {};
       for (const [what, amount] of Object.entries(byName)) {
-        const g = await rpc(broker, 'supply', { from: agent, to: loop.cache.agent, what, amount, stationary: true, who_travels: 'neither' }, 300_000).catch(e => ({ error: e.message }));
-        moved[what] = g?.error ? `error ${g.error.slice(0, 60)}` : (g?.amounts ?? []).reduce((a, x) => a + (Number(x.received) || 0), 0) + '/' + amount;
+        const g = await rpc(broker, 'supply', { from: agent, to: loop.cache.agent, what, amount, stationary: true, who_travels: 'neither',
+                                                ...(loop.cache.no_dropoff ? { no_dropoff: true } : {}) }, 300_000).catch(e => ({ error: e.message }));
+        const floored = g?.to_floor?.total ?? 0;
+        moved[what] = g?.error ? `error ${g.error.slice(0, 60)}` : (g?.amounts ?? []).reduce((a, x) => a + (Number(x.received) || 0), 0) + '/' + amount +
+          (floored ? ` (+${floored} at ${loop.cache.agent}'s feet)` : g?.to_floor?.why ? ` (floor: ${g.to_floor.why.slice(0, 60)})` : '');
       }
       log(`handed to ${loop.cache.agent}: ${JSON.stringify(moved).slice(0, 300)}`);
     } else {
@@ -206,6 +210,12 @@ async function supervise({ character, agent, fleet, broker }) {
       log(`deposited: ${JSON.stringify(dep?.deposited ?? dep?.error ?? dep).slice(0, 220)}`);
     }
     if (planNow.ok && viaCache) {
+      // THE FLOOR AROUND THE CACHE FIRST (m59-floor-cache.mjs, automatic): a stash other farmers left at its feet is the cache's
+      // stock too. Exact names, verified by this pack; then what is still short is bought.
+      for (const [item, need] of Object.entries(await shortfall(planNow.totals))) {
+        const f = await rpc(broker, 'floor_cache', { action: 'pickup', agent, near: loop.cache.agent, what: item, amount: need }, 180_000).catch(e => ({ got: 0, why: e.message }));
+        if (f?.got > 0) log(`cache floor: ${item} short ${need} -> ${f.got} picked up around ${loop.cache.agent}`);
+      }
       // RESTOCK IN THE CACHE ROOM: no chests here, so what the plan lacks is bought from loop.cache.shops with the purse carried.
       const shortNow = await shortfall(planNow.totals);
       for (const [item, need] of Object.entries(shortNow)) {

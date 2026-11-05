@@ -8,10 +8,10 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 20 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
+// 21 methods: deliveryCapFor, matchesKind, countOfKind, ownFloorFor, deliverableSpare,
 //   deliveryRadius, deliveryNeighbourhood, deliveryRequestOf, prepareFarmDelivery,
 //   deliveryCashReserve, cancelFarmDelivery, makeRoomToBuy, buyFarmDeliveryCargo, giveFarmReagents,
-//   deliverFarmSupplies, ejectLoot, giveItems, autobalanceCouriers, courierBalance, courierBalanceSave
+//   deliverFarmSupplies, ejectLoot, floorDropOff, giveItems, autobalanceCouriers, courierBalance, courierBalanceSave
 import { norm } from '../m59-loadout.mjs';
 import { roomsWithin } from '../m59-map.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -21,6 +21,8 @@ import { MARKET_KEEP } from '../m59-items.mjs';
 import * as party from '../m59-party.mjs';
 import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
 import * as autobalance from '../m59-reagent-autobalance.mjs';
+import { floorDrop, sessionFloorIo } from '../m59-floor-cache.mjs';
+import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
 import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
 
 export class DeliveryPart {
@@ -523,6 +525,22 @@ export class DeliveryPart {
         }
         this._ejectBackoff.set(target.toLowerCase(), Date.now() + BACKOFF_MS);
         this.note('loot ejection refused', { to: target, offered: rows.map(x => x.name), why: r.why });
+        // AT ITS FEET, THEN (m59-floor-cache.mjs; operator 2026-11-05: "if Zheng He (or Raphael) can't carry everything to
+        // cache, the extra can be dropped off at the ground under them"). On unless `no_dropoff`; only standing within a few
+        // squares of the receiver (no walk); each drop verified by this pack; the pile reserved for the receiver by dibs.
+        if (!cfg.no_dropoff) {
+          const d = await this.floorDropOff(target, rows.map(x => ({ name: x.name, amount: x.amount }))).catch(e => ({ total: 0, why: e.message }));
+          if (d?.total > 0) {
+            const moved = Object.entries(d.dropped).map(([name, amount]) => ({ name, amount }));
+            if (cfg.only_received) noteGone(me, moved);
+            this.tally.loot_ejected_floor = (this.tally.loot_ejected_floor || 0) + d.total;
+            this.note('ejected loot to the floor', { to: target, to_floor: d.dropped, refused: d.refused, reserved: d.reserved,
+              room: this.s.world?.room?.num ?? null, why: `${target} did not take it (${r.why}); dropped at its feet and reserved for it` });
+            try { this.ledgerEvent?.('loot_ejected', { to: target, to_floor: moved, items: [], room: this.s.world?.room?.num ?? null }); } catch {}
+            this.progress(`dropped ${d.total} loot at ${target}'s feet`);
+            return true;
+          }
+        }
       }
     }
     // OVERFLOW: nobody here took it and the pack is over the line. Drop the worst value per unit of pack where it stands.
@@ -547,6 +565,13 @@ export class DeliveryPart {
       why: 'no station or courier here to take it; the worst shillings per unit of pack go, so the pack keeps room for better loot' });
     try { this.ledgerEvent?.('loot_overflow_dropped', { items: dropped, room: this.s.world?.room?.num ?? null }); } catch {}
     return true;
+  }
+
+  // A DROP-OFF AT A FLEETMATE'S FEET (m59-floor-cache.mjs floorDrop), from this keeper's own body: no walking, verified by
+  // this pack, reserved for the receiver in the fleet's dibs book. -> floorDrop's result.
+  async floorDropOff(character, items) {
+    const io = sessionFloorIo(() => this.s, { character: n => n, reserve: claim => addStashClaim(dibsFile(), claim) });
+    return floorDrop(io, { agent: this.name ?? this.s.name, holder: character, holderCharacter: character, items });
   }
 
   // A ONE-WAY GIFT OF CHOSEN ITEMS to a fleetmate standing here: offer, wait for its (empty) counter, accept, and count

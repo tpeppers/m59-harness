@@ -61,5 +61,17 @@ export async function pullBowArrows(ctx,{donors=[],target=160,keep=0,stock={},ro
    save(journal,{...intent,phase:'confirmed',quantity:n,result});received+=n;mine=after;
   }catch(e){save(journal,{...intent,phase:'uncertain',error:e.message,receipt:e.receipt});throw e;}
  }
- return{received,arrows:arrowCount(mine.items),journal};
+ // STILL SHORT: THE FLOOR AROUND A DONOR IN THIS ROOM (m59-floor-cache.mjs, operator 2026-11-05), automatically. Exact names
+ // (nerudite arrows, then arrows), verified by the archer's own pack, never counted from the reply.
+ let floor=0;
+ for(const donor of [...new Set(donors)].filter(a=>a!==ctx.agent)){
+  if(ctx.shouldStop?.()||arrowCount(mine.items)>=target)break;
+  const [me,giver]=await Promise.all([state(ctx.agent),state(donor)]);
+  if(!(room(me)>1)||room(me)!==room(giver)||(expectedRoom!=null&&room(me)!==expectedRoom))continue;
+  const r=await ctx.call('floor_cache',{action:'pickup',agent:ctx.agent,near:donor,what:'arrows',amount:target-arrowCount(mine.items)},180000).catch(e=>({got:0,why:e.message}));
+  const after=await pack(ctx.agent),got=arrowCount(after.items)-arrowCount(mine.items);
+  if(got>0){floor+=got;mine=after;}
+  if(r?.got>0&&got<=0)break;
+ }
+ return{received,...(floor?{from_floor:floor}:{}),arrows:arrowCount(mine.items),journal};
 }

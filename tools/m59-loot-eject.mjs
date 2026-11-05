@@ -42,7 +42,7 @@ const names = (v, what) => {
 export function normalizeLootEject(v) {
   if (v == null || v.enabled === false) return null;
   if (typeof v !== 'object' || Array.isArray(v)) throw new Error('lootEject must be null or { enabled, to, every_s, batch }');
-  const KNOWN = ['enabled', 'to', 'every_s', 'batch', 'extra', 'merchant', 'overflow_at', 'drop_max', 'only_received'];
+  const KNOWN = ['enabled', 'to', 'every_s', 'batch', 'extra', 'merchant', 'overflow_at', 'drop_max', 'only_received', 'no_dropoff'];
   const bad = Object.keys(v).filter(k => !KNOWN.includes(k));
   if (bad.length) throw new Error(`lootEject: ${bad.join(', ')} not known (${KNOWN.join(', ')})`);
   const to = names(v.to ?? [], 'lootEject.to');
@@ -55,11 +55,14 @@ export function normalizeLootEject(v) {
   const extra = v.extra == null ? [] : [...new Set(names(v.extra, 'lootEject.extra').map(n => n.toLowerCase()))];
   const merchant = v.merchant == null ? 'normal' : String(v.merchant);
   if (v.only_received != null && typeof v.only_received !== 'boolean') throw new Error('lootEject.only_received must be true or false');
+  // NO_DROPOFF (operator 2026-11-05): a receiver that does not take the batch gets it on the floor at its feet, reserved for it
+  // (m59-floor-cache.mjs), by default; true keeps the old behaviour (back off, keep the goods).
+  if (v.no_dropoff != null && typeof v.no_dropoff !== 'boolean') throw new Error('lootEject.no_dropoff must be true or false');
   const every_s = v.every_s == null ? 90 : Number(v.every_s);
   if (!Number.isFinite(every_s) || every_s < 20 || every_s > 1800) throw new Error('lootEject.every_s must be 20..1800');
   const batch = v.batch == null ? 6 : Number(v.batch);
   if (!Number.isInteger(batch) || batch < 1 || batch > 12) throw new Error('lootEject.batch must be 1..12');
-  return { enabled: true, to, every_s, batch, extra, merchant, overflow_at, drop_max, only_received: v.only_received === true };
+  return { enabled: true, to, every_s, batch, extra, merchant, overflow_at, drop_max, only_received: v.only_received === true, no_dropoff: v.no_dropoff === true };
 }
 
 /** acceptDonations.trade_goods: null or { enabled: true, keep_free: 0.25, from: null | [names] }. */

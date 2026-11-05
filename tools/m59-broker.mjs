@@ -119,6 +119,8 @@ function spellCostLookups() {
 import * as skills from './m59-skills.mjs';
 import * as buyers from './m59-buyers.mjs';
 import { supplyBetween as supplyExchange } from './m59-supply.mjs';
+import { floorPickup, floorDrop, floorCandidates, holderSquare, wantNames, sessionFloorIo, DEFAULT_RADIUS as FLOOR_RADIUS } from './m59-floor-cache.mjs';
+import { addStashClaim, dibsFile as dibsBookFile } from './m59-dibs.mjs';
 import { SaveClock, IdRegistry, stampReply, judgeArgs, reresolveRefs, rewriteArgs,
          hhmmss } from './m59-idgen.mjs';
 import * as abilities from './m59-abilities.mjs';
@@ -7174,10 +7176,18 @@ const session = (name, { create = false } = {}) => {
 // Three things it needs from here and cannot import: how to look a session up by name,
 // whether a given session is keeper-backed, and the in-process keeper register. Everything
 // else — the flags, the larder, the arithmetic — it imports for itself.
+// THE FLOOR AROUND A CACHE (m59-floor-cache.mjs): one io for both kinds of session. The approach is the walk_to tool (the
+// keeper routes it); a stash is reserved in this fleet's dibs book, which every keeper's loot pass reads.
+const floorIo = sessionFloorIo(name => session(name), {
+  proxied: s => s instanceof KeeperProxy,
+  approach: (agent, sq) => callTool('walk_to', { agent, col: sq.col, row: sq.row, max_steps: 30 }).catch(e => ({ arrived: false, reason: e.message })),
+  reserve: claim => addStashClaim(dibsBookFile(FLEET || undefined), claim),
+});
 const supplyDeps = {
   session,
   isProxied: s => s instanceof KeeperProxy,
   autopilotIfAny,
+  floorIo,
 };
 const supplyBetween = (a) => supplyExchange(a, supplyDeps);
 
@@ -11862,8 +11872,59 @@ const TOOLS = [
       walk_ms: { type: 'number',
                  description: 'how long the walk may take before this gives up, default 300000 ' +
                               '(5 min). The handshake itself is seconds; this is the journey' },
+      no_dropoff: { type: 'boolean',
+                    description: 'FLOOR OVERFLOW OFF. By default, when the server refuses the hand-over because the ' +
+                      'RECEIVER is full (receiver_full), the giver drops the remainder on the floor at the' +
+                      ' feet of the receiver, verified by its own pack and reserved for the receiver by dibs; the reply says to_receiver ' +
+                      'and to_floor. true: nothing is dropped. (Floor PICKUP is always on: when the giver carries none ' +
+                      'of a named want and both stand in one room, the receiver picks it up off the floor around the giver.)' },
     }, required: ['from', 'to'] },
     run: async (a) => supplyBetween(a),
+  },
+  {
+    name: 'floor_cache',
+    description:
+      'THE FLOOR AROUND A CACHE OR COURIER IS PART OF ITS STOCK (operator 2026-11-05). ' +
+      'action=pickup: `agent` picks up `what` (a name, a list of names, or the family "arrows" = nerudite arrows then ' +
+      'arrows; exact names, never substrings) off the floor within `radius` squares (default 4) of `near` (the holder: ' +
+      'an agent or character name), nearest first, up to `amount` and its own pack room, walking within the 7-square ' +
+      'pickup reach first. Verified by the picker own pack; anything over `amount` is dropped back and stays ' +
+      'reserved. Explicit-id gets, so a dibs reservation on the stash never refuses it. ' +
+      'action=drop: `agent` drops `items` [{name, amount}] at the feet of `near` (walking within `radius` first) and ' +
+      'reserves the pile for `near` in the dibs book (m59-dibs.mjs; ttl 30 min). Verified by the giver pack; a ' +
+      'refused drop is reported, never counted. `no_dropoff: true` refuses the drop (the switch every drop-off path ' +
+      'honours). action=scan: what matches on the floor around `near`, read-only. ' +
+      'THE FLOOR IS A BUFFER, NOT A VAULT: room.kod DisposeTimer destroys the oldest fifth of a floor with more than ' +
+      'five objects every ~5 min, and everything when nobody is in the room.',
+    schema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['pickup', 'drop', 'scan'] },
+      agent: { type: 'string', description: 'the picker (pickup), the giver (drop), or the looker (scan)' },
+      near: { type: 'string', description: 'the cache/courier holder the floor is around (agent or character name)' },
+      what: { type: ['string', 'array'], items: { type: 'string' }, description: 'pickup/scan: the want' },
+      amount: { type: 'number', description: 'pickup: how many units wanted (default: all that fit)' },
+      items: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, amount: { type: 'number' } }, required: ['name', 'amount'] },
+               description: 'drop: what to put down, by exact name and amount' },
+      radius: { type: 'number', description: 'squares around the holder, default 4' },
+      no_dropoff: { type: 'boolean', description: 'drop: refuse (the drop-off overflow switch)' },
+      return_excess: { type: 'boolean', description: 'pickup: drop back what is over `amount` (default true)' },
+    }, required: ['action', 'agent', 'near'] },
+    run: async (a) => {
+      session(a.agent).need(); session(a.near).need();
+      const radius = Number(a.radius) > 0 ? Number(a.radius) : FLOOR_RADIUS;
+      if (a.action === 'scan') {
+        const scene = await floorIo.scene(a.agent);
+        const near = holderSquare(scene, floorIo.character(a.near));
+        if (!near) return { ok: false, why: `${a.near} is not visible in ${a.agent}'s room` };
+        return { ok: true, room: scene.room, near, items: floorCandidates({ objects: scene.objects, want: a.what ?? [], near, radius }), wants: wantNames(a.what ?? []) };
+      }
+      if (a.action === 'pickup')
+        return floorPickup(floorIo, { agent: a.agent, holder: a.near, want: a.what, amount: a.amount ?? null, radius, returnExcess: a.return_excess !== false });
+      if (a.action === 'drop') {
+        if (a.no_dropoff === true) return { ok: false, dropped: {}, total: 0, why: 'no_dropoff: floor drop-off is switched off for this call' };
+        return floorDrop(floorIo, { agent: a.agent, holder: a.near, items: a.items ?? [], radius });
+      }
+      throw new Error(`floor_cache: unknown action ${a.action}`);
+    },
   },
   {
     name: 'split',

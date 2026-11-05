@@ -450,7 +450,7 @@ try {
   await test('cache: drop off with a character until it is full, then the hall (operator 2026-11-05, Scooter -> Raphael)', async () => {
     const problems = [];
     const loop = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 53, shops: { mushrooms: 'Frisconar', herb: {} } } }, problems);
-    assert.deepEqual(loop.cache, { agent: 'hk3', room: 53, full_percent: 95, min_purse: 2000, shops: { mushroom: { seller: 'Frisconar' } } });
+    assert.deepEqual(loop.cache, { agent: 'hk3', room: 53, full_percent: 95, min_purse: 2000, shops: { mushroom: { seller: 'Frisconar' } }, no_dropoff: false });
     assert.deepEqual(AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 27, shops: { herb: { seller: 'Frisconar', room: 53 } } } }, []).cache.shops,
       { herb: { seller: 'Frisconar', room: 53 } }, 'a cache shop may stand in another room (cache in the Icky Cave, shop in Tos)');
     assert.ok(problems.some(p => /cache\.shops\.herb: needs a seller/.test(p)));
