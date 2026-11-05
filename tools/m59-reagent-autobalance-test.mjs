@@ -451,6 +451,8 @@ try {
     const problems = [];
     const loop = AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 53, shops: { mushrooms: 'Frisconar', herb: {} } } }, problems);
     assert.deepEqual(loop.cache, { agent: 'hk3', room: 53, full_percent: 95, min_purse: 2000, shops: { mushroom: { seller: 'Frisconar' } } });
+    assert.deepEqual(AB.normalizeLoop({ mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 27, shops: { herb: { seller: 'Frisconar', room: 53 } } } }, []).cache.shops,
+      { herb: { seller: 'Frisconar', room: 53 } }, 'a cache shop may stand in another room (cache in the Icky Cave, shop in Tos)');
     assert.ok(problems.some(p => /cache\.shops\.herb: needs a seller/.test(p)));
     assert.equal(AB.normalizeLoop({ mode: 'practice', practice: ['haste'] }, []).cache, null, 'no cache: the hall, as before');
     const bad = [];

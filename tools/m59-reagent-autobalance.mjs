@@ -230,7 +230,9 @@ export function normalizeLoop(raw, problems = []) {
       const shops = {};
       for (const [item, spec] of Object.entries(v?.shops ?? {})) {
         const seller = typeof spec === 'string' ? spec : spec?.seller;
-        if (seller && typeof seller === 'string') shops[reagentKey(item)] = { seller: seller.trim() };
+        // A shop may stand in another room than the cache (operator 2026-11-05: Raphael caches in the Icky Cave, 27; the farmers
+        // restock at Frisconar's in Tos, 53): { seller, room }. No room: the cache room, as before.
+        if (seller && typeof seller === 'string') shops[reagentKey(item)] = { seller: seller.trim(), ...(Number(spec?.room) > 0 ? { room: Number(spec.room) } : {}) };
         else problems.push(`cache.shops.${item}: needs a seller, not applied`);
       }
       out.cache = { agent, room, full_percent: full > 0 && full <= 100 ? full : 95, min_purse: minPurse >= 0 ? minPurse : 2000, shops };

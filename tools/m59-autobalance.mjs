@@ -211,7 +211,7 @@ async function supervise({ character, agent, fleet, broker }) {
       for (const [item, need] of Object.entries(shortNow)) {
         const shop = loop.cache.shops?.[item];
         if (!shop || need <= 0) continue;
-        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need} room=${dest} back=${dest}`);
+        const out = repl(`buy agents=${agent} seller=${encodeURIComponent(shop.seller)} item=${encodeURIComponent(item)} amount=${need} room=${shop.room ?? dest} back=${dest}`);
         const done = /buy \(\w+\): 1\/1 completed/.test(out);
         log(`cache-room restock: ${item} short ${need} -> ${shop.seller}: ${done ? 'ok' : 'NOT completed ' + (out.split('\n').filter(l => /REFUS|failed|cannot|afford/i.test(l)).pop() ?? '').slice(0, 160)}`);
       }
