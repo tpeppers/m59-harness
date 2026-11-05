@@ -133,6 +133,88 @@ test('actual baked hall supports every inward and outward trigger even when door
   await assert.rejects(guildPassage(k, 4, () => true), /survival/);
 });
 
+// THE HALL OF THE SLAUGHTERED COMMAND (713). Same harness as above, the second hall's rules:
+// MAIN_DOOR (sector 4) is PRESSED, from the foyer on col 7 (plGuild_doors, guildh13.kod:82) and from
+// inside on col 8 (guildh13.kod:126), rows 2-4; the chest room is behind a WALL that the password
+// moves you across -- row 8 -> row 10 and row 9 -> row 7, cols 26 and 27 only
+// (WalkThroughSecretWall, guildh13.kod:191-217). No sector moves for that one.
+const fresh713 = () => {
+  const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url)));
+  attachStepMasks(map);
+  return { map, g: sharedRoomGeometry(map.rooms[713]), observed: new Map() };
+};
+const hall713 = (start) => {
+  const { map, g, observed } = fresh713(), log = [];
+  const c = { self: { ...start }, room: { id: 3051, sectorHeights: observed }, evSeq: 0,
+    events: [], waitFor: async ({ since, match }) => ({
+      events: c.events.filter(e => e.seq > since && (!match || match(e))),
+    }) };
+  c.go = () => {
+    const { row, col } = c.self;
+    if (![7, 8].includes(col) || row < 2 || row > 4) throw new Error(`invalid GO trigger r${row}c${col}`);
+    log.push(4); observed.set(4, { type: 5, height: 500 });
+    c.events.push({ kind: 'sector-height', sector: 4, room: 3051, height: 500, speed: 0, at: Date.now(), seq: ++c.evSeq });
+    applyCeilingDoors(map, 713, observed);
+  };
+  const k = { sayHallPassword: async () => {
+      log.push('say');
+      const { row, col } = c.self;
+      if ([26, 27].includes(col) && row === 8) c.self = { row: 10, col };
+      else if ([26, 27].includes(col) && row === 9) c.self = { row: 7, col };
+      return { ok: true };
+    },
+    s: { need: () => c, world: { geometry: g, room: { num: 713 } }, pacer: { submit: async (_kind, fn) => fn() },
+      async step(col, row, options) {
+        assert.equal(options.confirm, true);
+        assert.ok(Math.max(Math.abs(row - c.self.row), Math.abs(col - c.self.col)) <= 1);
+        assert.ok(g.moverStepLands(c.self.row, c.self.col, row, col), `mover cannot land r${row}c${col}`);
+        c.self = { row, col }; return { moved: true };
+      },
+      async walkTo(col, row) {
+        const path = g.path(c.self.row, c.self.col, row, col);
+        assert.ok(path.found, `closed path r${c.self.row}c${c.self.col} -> r${row}c${col}`);
+        let previous = c.self;
+        for (const next of path.steps) {
+          assert.ok(g.moverStepLands(previous.row, previous.col, next.row, next.col),
+            `route planner's goal exception cannot certify landing r${next.row}c${next.col}`);
+          previous = next;
+        }
+        c.self = { row, col }; observed.clear(); applyCeilingDoors(map, 713, observed);
+      } } };
+  return { c, k, log, g };
+};
+test('713: from the Rescue landing in the foyer to the chests and back out, on the real bake', async () => {
+  const { c, k, log, g } = hall713({ row: 9, col: 3 });          // viTeleport, guildh13.kod:40-41
+  assert.equal(guildSection(9, 3, 713), 0, 'the Rescue landing is the foyer');
+  assert.equal(g.path(8, 26, 10, 26).found, false, 'the chest room is sealed: no walk crosses the secret wall');
+  await guildPassage(k, 2, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col, 713), 2);
+  assert.deepEqual([c.self.row, c.self.col], [10, 26], 'landed where WalkThroughSecretWall puts a speaker on r8c26');
+  await guildPassage(k, 0, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col, 713), 0);
+  // One press each way at the main door, and the word said exactly twice: on r8c26, then on r9c26.
+  assert.deepEqual(log, [4, 'say', 'say', 4]);
+});
+test('713: the chest side of the secret wall is section 2 and both of its triggers are where the kod reads them', () => {
+  for (const [r, col] of [[9, 26], [9, 27], [10, 26], [10, 27], [12, 24], [13, 24], [12, 29], [13, 29]])
+    assert.equal(guildSection(r, col, 713), 2, `r${r}c${col}`);
+  for (const [r, col] of [[8, 26], [8, 27], [7, 26], [3, 8], [3, 9], [5, 28], [9, 5], [13, 7]])
+    assert.equal(guildSection(r, col, 713), 1, `r${r}c${col}`);
+  for (const [r, col] of [[3, 7], [3, 6], [9, 3], [10, 2], [11, 2], [9, 4]])
+    assert.equal(guildSection(r, col, 713), 0, `r${r}c${col}`);
+});
+test('713: a missing hall password refuses at the wall rather than standing there', async () => {
+  const { k } = hall713({ row: 5, col: 28 });
+  k.sayHallPassword = async () => ({ ok: false, why: 'no password recorded' });
+  await assert.rejects(guildPassage(k, 2, () => false), /guild chest key unavailable/);
+});
+test('a hall nobody surveyed is refused by number, and so is a section the hall does not have', async () => {
+  const { k } = hall713({ row: 5, col: 28 });
+  await assert.rejects(guildPassage(k, 4, () => false), /hall 713 has no section 4/);
+  k.s.world.room.num = 701;
+  await assert.rejects(guildPassage(k, 2, () => false), /hall 701 has no surveyed passage/);
+});
+
 // A CEILING ROOM HAS TO BE ABLE TO SAY IT HAS A STATE APPLIED, AND COULD NOT.
 //
 // `DOOR_STATE` — what `doorStates()` returns — was written only by `applyDoorState`, the FLOOR

@@ -10,7 +10,7 @@ import { reagentFloorFor } from './m59-stockpile.mjs';
 import { dropSpec } from './m59-parse.mjs';
 import { hallPassword } from './m59-hallsecret.mjs';
 import { SURVEYED_HALLS } from './m59-guild-passage.mjs';
-import { guildPassage } from './m59-guild-passage.mjs';
+import { guildPassage, chestSectionOf, hallRoomOf } from './m59-guild-passage.mjs';
 import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
 import { keeperOrigin } from './m59-move-origin.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
@@ -77,7 +77,7 @@ async function approach(k, box) {
   // beside a chest unnecessarily attempts the raised chest platform.
   const inRange = p => Math.abs(p.row - box.row) + Math.abs(p.col - box.col) <= 7;
   if (inRange(me)) return;
-  await guildPassage(k, 4, () => inwardInterrupted(k));
+  await guildPassage(k, chestSectionOf(hallRoomOf(k.s)), () => inwardInterrupted(k));   // 714: 4, 713: 2
   const route = s.world.approachSquare(box.col, box.row);
   const at = route?.path?.find(inRange) ?? route;
   if (!at) throw new Error('no reachable approach to coop chest ' + box.slot);
@@ -252,8 +252,8 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
     if (mode === 'tithe' && bankable <= 0) return { skipped: true };
     if (['contribute', 'town'].includes(mode) && !(mode === 'town' && bankable > 0) &&
         !sale(k).some(i => cfg.reagents.includes(coopKey(i.name)))) return { skipped: true };
-    // ONLY A SURVEYED HALL. The co-op crosses the hall by m59-guild-passage.mjs, which is 714's
-    // geometry; a co-op pointed at another guild's hall would walk 714's doors in a room without them.
+    // ONLY A SURVEYED HALL. The co-op crosses the hall by m59-guild-passage.mjs, which knows only the
+    // halls it has surveyed; a co-op pointed at any other would walk doors in a room without them.
     if (!SURVEYED_HALLS.includes(Number(cfg.hall_room))) {
       (k.coopAttempts ??= {})[key] = Date.now() + cfg.retry_ms;
       k.note('reagent coop unavailable', { reason: `hall ${cfg.hall_room} has no surveyed passage (only ${SURVEYED_HALLS.join(', ')})` });

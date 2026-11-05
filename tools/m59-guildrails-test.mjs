@@ -17,10 +17,11 @@
 // landmarks must agree, and the client-to-square conversion must not invent a step.
 import { readFileSync, existsSync } from 'node:fs';
 import {
-  ANCHORS, DOOR_TABLE, CHESTS, EXIT, RAILS, ROOM,
+  ANCHORS, DOOR_TABLE, CHESTS, EXIT, RAILS, ROOM, HALL_TABLES, railsPath,
   hallGeometry, cutLeg, plan, railFor, parseSquare, sq, centre, edgeOf,
 } from './m59-guildrails.mjs';
-import { anchors as passageAnchors, doors as passageDoors, bakedCrossing } from './m59-guild-passage.mjs';
+import { anchors as passageAnchors, doors as passageDoors, bakedCrossing,
+         HALLS, SURVEYED_HALLS, chestSectionOf } from './m59-guild-passage.mjs';
 import { verifyRail } from './m59-railcut.mjs';
 
 let pass = 0, fail = 0;
@@ -215,6 +216,76 @@ console.log('\n7. THE SPELLINGS ROUND-TRIP, because a coordinate carries its uni
      pressed.length === passageDoors.length - 1,
      `pressed: ${pressed.map(d => d.sector).join(', ') || 'none'} of ` +
      `${passageDoors.length} doors — only the chest room's should speak`);
+}
+
+console.log('\n8. THE SECOND HALL: 713, THE HALL OF THE SLAUGHTERED COMMAND');
+{
+  // Its two copies must agree exactly as 714's do.
+  const mine = HALL_TABLES[713], theirs = HALLS[713];
+  ok('713 is surveyed in both files', !!mine && !!theirs && SURVEYED_HALLS.includes(713));
+  ok('...714 is still surveyed, and listed first', SURVEYED_HALLS[0] === 714);
+  ok('713: the same anchors', JSON.stringify(mine.anchors) === JSON.stringify(theirs.anchors), mine.anchors.map(sq).join(' '));
+  ok('713: the same doors, triggers, crossings and kinds',
+     mine.doors.length === theirs.doors.length && mine.doors.every((a, i) => {
+       const b = theirs.doors[i];
+       return a.sector === b.sector && JSON.stringify(a.inward) === JSON.stringify(b.inward) &&
+              JSON.stringify(a.outward) === JSON.stringify(b.outward) && !!a.secret === !!b.secret && !!a.teleport === !!b.teleport;
+     }));
+  ok('713: the chests are the last section', theirs.chestSection === mine.anchors.length - 1 && chestSectionOf(713) === 2);
+  ok('714: the chests are still section 4', chestSectionOf(714) === 4);
+  // EXACTLY ONE SPOKEN DOOR HERE TOO, and it is the wall, not the main door: saying the password at
+  // MAIN_DOOR would be saying it out loud at the front door of a hall on a shared server.
+  const spoken = theirs.doors.filter(d => d.secret).map(d => d.sector);
+  ok('713: only door 5 (the secret wall) is spoken', spoken.length === 1 && spoken[0] === 5, spoken.join(','));
+  ok('...and it is a teleport, not a ceiling', theirs.doors.find(d => d.sector === 5).teleport === true);
+
+  let threw = null;
+  try { hallGeometry([59], 713); } catch (e) { threw = e; }
+  ok('713 has no door 59, and says it has 4', !!threw && /room 713 has no door\(s\) 59/.test(threw.message) && /it has 4/.test(threw.message),
+     threw ? threw.message.slice(0, 90) : 'did not throw');
+  ok('713 shut is MAIN_DOOR at 360', hallGeometry([], 713).key === '360');
+  ok('713 with door 4 up is 500', hallGeometry([4], 713).key === '500');
+
+  // MAIN_DOOR sits on the col 7 / col 8 boundary: the crossing cuts with it up and not with it down.
+  const [inTrigger, inAcross] = mine.doors[0].inward;
+  const up = cutLeg(inTrigger, inAcross, { open: [4], room: 713 });
+  ok('r3c7 -> r3c9 with door 4 up: cut and verified', up.ok && up.verified === true, up.ok ? `${up.legs} legs` : up.why);
+  ok('...and NOT with the hall shut', !cutLeg(inTrigger, inAcross, { open: [], room: 713 }).ok);
+  const [outTrigger, outAcross] = mine.doors[0].outward;
+  ok('r3c8 -> r3c6 with door 4 up: cut', cutLeg(outTrigger, outAcross, { open: [4], room: 713 }).ok);
+  // THE SECRET WALL IS A WALL IN EVERY STATE. If this ever cuts, the chest room has a walkable
+  // entrance and the teleport is no longer the only way in -- re-survey before trusting either.
+  ok('r8c26 -> r10c26 never cuts, door 4 up or down',
+     !cutLeg([8, 26], [10, 26], { open: [], room: 713 }).ok && !cutLeg([8, 26], [10, 26], { open: [4], room: 713 }).ok);
+
+  const p = plan(713);
+  const kinds = p.reduce((a, l) => (a[l.kind] = (a[l.kind] ?? 0) + 1, a), {});
+  ok('713 plan: door 4 has crossings both ways, the spoken wall has none',
+     kinds.crossing === 2 && kinds.approach === 4 && kinds.landing === 4, JSON.stringify(kinds));
+  ok('713 plan: every chest both ways', kinds.chest === mine.chests.length * 2);
+
+  const path713 = railsPath(713);
+  if (!existsSync(path713)) ok('substrate/rail-713.json exists', false, 'run: node tools/m59-guildrails.mjs bake --room 713');
+  else {
+    const baked = JSON.parse(readFileSync(path713, 'utf8'));
+    ok('rail-713 is room 713', baked.room === 713);
+    ok('rail-713: every leg cut', baked.legs.every(l => l.ok), `${baked.legs.filter(l => !l.ok).length} failed`);
+    ok('rail-713: every leg verified by the mover\'s own trace', baked.legs.every(l => l.verified === true));
+    const cache = new Map();
+    let stale = 0;
+    for (const l of baked.legs.filter(x => x.ok && x.waypoints?.length > 1)) {
+      const id = (l.doors_open ?? []).join(',');
+      if (!cache.has(id)) cache.set(id, hallGeometry(l.doors_open ?? [], 713));
+      const v = verifyRail(l.waypoints, { edge: edgeOf(cache.get(id).geo), lattice: baked.lattice });
+      if (v && v.ok === false) stale++;
+    }
+    ok('rail-713: no leg stale against the map on disk', stale === 0, `${stale} stale`);
+    ok('rail-713 records door 5 as a teleport', baked.doors.some(d => d.sector === 5 && d.teleport && d.secret));
+    const first = bakedCrossing([3, 7], [3, 9], 4, 713);
+    ok('bakedCrossing reads 713\'s own file', Array.isArray(first) && first.at(-1).row === 3 && first.at(-1).col === 9,
+       JSON.stringify(first));
+    ok('...and 714\'s file does not answer for it', bakedCrossing([3, 7], [3, 9], 4) === null);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

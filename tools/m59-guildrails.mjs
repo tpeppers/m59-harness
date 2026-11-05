@@ -1,10 +1,16 @@
 #!/usr/bin/env node
-// BAKE THE BOOKMAKERS HALL: a rail for every door crossing, every chest, and the way out.
+// BAKE A GUILD HALL: a rail for every door crossing, every chest, and the way out.
 //
 //   node tools/m59-guildrails.mjs bake            # cut them all, write substrate/rail-714.json
 //   node tools/m59-guildrails.mjs show            # what is baked, leg by leg
 //   node tools/m59-guildrails.mjs check           # re-verify the baked lines against the map
 //   node tools/m59-guildrails.mjs probe r4c28 r2c28 --door 59   # one pair, one door state
+//   ... --room 713                                # any of the above for another surveyed hall
+//
+// 714 (the Bookmaker's Guild House) is the default and was the only hall for a year; 713 (the Hall
+// of the Slaughtered Command) is the second. A hall's SPOKEN WALL (713's door 5, a password
+// teleport, see m59-guild-passage.mjs) has no crossing to cut -- the server moves the body -- so
+// for it only the walk to the trigger and the walk on from the landing are baked.
 //
 // WHY A BAKE AND NOT A LIVE PLAN, which is what the hall does today.
 //
@@ -64,7 +70,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 const MAP = join(REPO, 'substrate', 'm59-map.json');
 const DOORS = join(REPO, 'substrate', 'm59-ceiling-doors.json');
-export const RAILS = join(REPO, 'substrate', 'rail-714.json');
+export const railsPath = (room = 714) => join(REPO, 'substrate', `rail-${Number(room)}.json`);
+export const RAILS = railsPath(714);
 export const ROOM = 714;
 
 // ---------------------------------------------------------------- the hall
@@ -84,6 +91,27 @@ export const DOOR_TABLE = [
 export const EXIT = [2, 33];
 export const CHESTS = [[18, 2], [18, 6], [20, 4]];
 
+// THE HALL OF THE SLAUGHTERED COMMAND (713, guildh13.kod), restated from m59-guild-passage.mjs for
+// the same reason as 714's and checked against it by the same test. Exit r10c2 is one of the foyer's
+// two `go` squares to Ko'catan South (2009, guildh13.kod:102-103); the chests are where
+// CreateStandardObjects puts them (guildh13.kod:313-320).
+export const HALL_TABLES = Object.freeze({
+  714: { anchors: ANCHORS, doors: DOOR_TABLE, exit: EXIT, chests: CHESTS,
+         exitNote: 'the hall\'s only `go` exit, to North Barloque (101)' },
+  713: { anchors: [[9, 3], [5, 28], [12, 26]],
+         doors: [
+           { sector: 4, inward: [[3, 7], [3, 9]], outward: [[3, 8], [3, 6]] },
+           { sector: 5, inward: [[8, 26], [10, 26]], outward: [[9, 26], [7, 26]], secret: true, teleport: true },
+         ],
+         exit: [10, 2], chests: [[12, 24], [13, 24], [12, 29], [13, 29]],
+         exitNote: 'the foyer\'s `go` exit to Ko\'catan South (2009)' },
+});
+const tableFor = (room) => {
+  const t = HALL_TABLES[Number(room)];
+  if (!t) throw new Error(`room ${room} is not a surveyed hall (${Object.keys(HALL_TABLES).join(', ')})`);
+  return t;
+};
+
 /** `rNcM` -> [row, col]. The one spelling humans and the policy both use. */
 export const parseSquare = (s) => {
   const m = /^r(\d+)c(\d+)$/i.exec(String(s).trim());
@@ -96,14 +124,16 @@ export const centre = ([row, col]) => ({ x: (col - 1) * 1024 + 512, y: (row - 1)
 
 // ---------------------------------------------------------------- the geometry, per door state
 
-let WORLD = null, DOORDATA = null;
+let WORLD = null, DOORFILE = null;
 function world() {
   if (!WORLD) { WORLD = JSON.parse(readFileSync(MAP, 'utf8')); attachStepMasks(WORLD); }
   return WORLD;
 }
-function doorData() {
-  if (!DOORDATA) DOORDATA = JSON.parse(readFileSync(DOORS, 'utf8')).rooms[String(ROOM)];
-  return DOORDATA;
+function doorData(room = ROOM) {
+  if (!DOORFILE) DOORFILE = JSON.parse(readFileSync(DOORS, 'utf8'));
+  const d = DOORFILE.rooms[String(room)];
+  if (!d) throw new Error(`substrate/m59-ceiling-doors.json has no room ${room}`);
+  return d;
 }
 
 /**
@@ -113,8 +143,8 @@ function doorData() {
  * key would read as "no such hall" and every rail across it would come back unreachable, which is
  * indistinguishable from a locked door. So a missing key throws with the key it looked for.
  */
-export function hallGeometry(open = []) {
-  const d = doorData();
+export function hallGeometry(open = [], room = ROOM) {
+  const d = doorData(room);
   const wanted = new Set(open.map(Number));
   // AN UNKNOWN DOOR MUST NOT READ AS "ALL SHUT". Without this, `hallGeometry([58])` when the hall
   // has no door 58 returns the closed hall and every rail across it comes back unreachable — which
@@ -123,14 +153,14 @@ export function hallGeometry(open = []) {
   const known = new Set(d.doors.map(dr => Number(dr.id)));
   const strange = [...wanted].filter(id => !known.has(id));
   if (strange.length)
-    throw new Error(`room ${ROOM} has no door(s) ${strange.join(', ')} ` +
+    throw new Error(`room ${room} has no door(s) ${strange.join(', ')} ` +
                     `(it has ${[...known].join(', ')}); refusing to hand back the shut hall, ` +
                     'which would read as "unreachable" rather than as a typo');
   const key = d.doors.map(dr => (wanted.has(Number(dr.id)) ? dr.open : dr.closed)).join(',');
   const state = d.states[key];
   if (!state) throw new Error(`no baked sector-height state for doors-open [${open.join(',')}] ` +
                               `(looked for "${key}"; the file holds ${Object.keys(d.states).length})`);
-  const geo = RoomGeometry.fromJSON(world().rooms[String(ROOM)].roo);
+  const geo = RoomGeometry.fromJSON(world().rooms[String(room)].roo);
   const mask = Buffer.from(state.mask, 'base64');
   applySectorHeights(geo, state.sectors, { mask });
   geo.attachStepMask(mask);
@@ -202,9 +232,9 @@ const floorOf = (geo) => (x, y) => {
 };
 
 /** Cut one leg and say, in one object, everything needed to believe or disbelieve it. */
-export function cutLeg(from, to, { open = [], geo = null, key = null } = {}) {
-  const g = geo ?? hallGeometry(open).geo;
-  const k = key ?? hallGeometry(open).key;
+export function cutLeg(from, to, { open = [], geo = null, key = null, room = ROOM } = {}) {
+  const g = geo ?? hallGeometry(open, room).geo;
+  const k = key ?? hallGeometry(open, room).key;
   const edge = edgeOf(g);
   const a = centre(from), b = centre(to);
   const cut = cutRail(a, b, { edge, bounds: { w: g.cols * 1024, h: g.rows * 1024 },
@@ -229,54 +259,61 @@ export function cutLeg(from, to, { open = [], geo = null, key = null } = {}) {
 }
 
 /** Every leg this hall needs, in the order the passage walks them. */
-export function plan() {
+export function plan(room = ROOM) {
+  const { anchors, doors, exit, chests, exitNote } = tableFor(room);
   const legs = [];
   const push = (kind, from, to, open, note) => legs.push({ kind, from, to, open, note });
 
-  for (let i = 0; i < DOOR_TABLE.length; i++) {
-    const d = DOOR_TABLE[i];
-    const before = ANCHORS[i], after = ANCHORS[i + 1];
+  for (let i = 0; i < doors.length; i++) {
+    const d = doors[i];
+    const before = anchors[i], after = anchors[i + 1];
     const [inTrigger, inAcross] = d.inward, [outTrigger, outAcross] = d.outward;
-    const tag = `door ${d.sector}${d.secret ? ' (secret — spoken, not stepped)' : ''}`;
+    const tag = `door ${d.sector}${d.teleport ? ' (secret wall — spoken, the server moves the body)'
+                                 : d.secret ? ' (secret — spoken, not stepped)' : ''}`;
     // INWARD: deeper into the hall.
     push('approach', before, inTrigger, [], `${tag} inward: walk to the trigger, hall shut`);
-    push('crossing', inTrigger, inAcross, [d.sector], `${tag} inward: cross while the ceiling is up`);
+    // A SPOKEN WALL HAS NO CROSSING TO CUT: no ceiling moves and no step is taken -- the body is
+    // moved from the trigger to the landing by the server. Cutting one would be cutting through a
+    // wall, and the flood would rightly refuse it.
+    if (!d.teleport) push('crossing', inTrigger, inAcross, [d.sector], `${tag} inward: cross while the ceiling is up`);
     push('landing', inAcross, after, [], `${tag} inward: on to the next anchor, hall shut again`);
     // OUTWARD: back towards the door, and towards the exit. This is the direction that stranded
     // Zoot for an hour, and it is the one nothing had a baked answer for.
     push('approach', after, outTrigger, [], `${tag} outward: walk to the trigger, hall shut`);
-    push('crossing', outTrigger, outAcross, [d.sector], `${tag} outward: cross while the ceiling is up`);
+    if (!d.teleport) push('crossing', outTrigger, outAcross, [d.sector], `${tag} outward: cross while the ceiling is up`);
     push('landing', outAcross, before, [], `${tag} outward: on to the previous anchor, hall shut`);
   }
-  push('exit', ANCHORS[0], EXIT, [], 'the hall\'s only `go` exit, to North Barloque (101)');
-  push('exit', EXIT, ANCHORS[0], [], 'and back in from the doorway');
-  for (const c of CHESTS) {
-    push('chest', ANCHORS[4], c, [], `guild chest at ${sq(c)}`);
-    push('chest', c, ANCHORS[4], [], `back from the chest at ${sq(c)}`);
+  push('exit', anchors[0], exit, [], exitNote);
+  push('exit', exit, anchors[0], [], 'and back in from the doorway');
+  const chestAnchor = anchors[anchors.length - 1];
+  for (const c of chests) {
+    push('chest', chestAnchor, c, [], `guild chest at ${sq(c)}`);
+    push('chest', c, chestAnchor, [], `back from the chest at ${sq(c)}`);
   }
   return legs;
 }
 
-export function bake({ onLeg = null } = {}) {
+export function bake({ onLeg = null, room = ROOM } = {}) {
+  const { anchors, doors, exit, chests } = tableFor(room);
   // One geometry per door state, built once. Thirty-odd floods against four geometries, not
   // thirty-odd geometries.
   const cache = new Map();
   const geoFor = (open) => {
     const id = open.join(',');
-    if (!cache.has(id)) cache.set(id, hallGeometry(open));
+    if (!cache.has(id)) cache.set(id, hallGeometry(open, room));
     return cache.get(id);
   };
   const out = [];
-  for (const p of plan()) {
+  for (const p of plan(room)) {
     const { geo, key } = geoFor(p.open);
-    const leg = cutLeg(p.from, p.to, { open: p.open, geo, key });
+    const leg = cutLeg(p.from, p.to, { open: p.open, geo, key, room });
     leg.kind = p.kind; leg.note = p.note;
     out.push(leg);
     onLeg?.(leg);
   }
-  return { version: 1, room: ROOM, lattice: LATTICE, cut: new Date().toISOString(),
-           anchors: ANCHORS.map(sq), exit: sq(EXIT), chests: CHESTS.map(sq),
-           doors: DOOR_TABLE.map(d => ({ sector: d.sector, secret: !!d.secret })),
+  return { version: 1, room: Number(room), lattice: LATTICE, cut: new Date().toISOString(),
+           anchors: anchors.map(sq), exit: sq(exit), chests: chests.map(sq),
+           doors: doors.map(d => ({ sector: d.sector, secret: !!d.secret, ...(d.teleport ? { teleport: true } : {}) })),
            legs: out };
 }
 
@@ -293,6 +330,9 @@ const isMain = !!process.argv[1] &&
 if (isMain) {
   const cmd = process.argv[2] ?? 'show';
   const arg = (n, d = null) => { const i = process.argv.indexOf('--' + n); return i < 0 ? d : process.argv[i + 1]; };
+  const room = Number(arg('room', ROOM));
+  tableFor(room);                                   // an unsurveyed room is refused before anything is read
+  const RAILS = railsPath(room);
   const load = () => existsSync(RAILS) ? JSON.parse(readFileSync(RAILS, 'utf8')) : null;
   const line = (l) => `  ${l.ok ? 'ok  ' : 'FAIL'} ${l.kind.padEnd(8)} ${l.from.padEnd(7)} -> ` +
     `${String(l.to).padEnd(7)} ${l.ok ? `${l.legs} legs` : l.why}` +
@@ -300,7 +340,7 @@ if (isMain) {
     `${l.verified === false ? '  VERIFY FAILED' : ''}`;
 
   if (cmd === 'bake') {
-    const baked = bake({ onLeg: (l) => console.log(line(l)) });
+    const baked = bake({ room, onLeg: (l) => console.log(line(l)) });
     writeFileSync(RAILS, JSON.stringify(baked, null, 1));
     const bad = baked.legs.filter(l => !l.ok);
     console.log(`\n${baked.legs.length - bad.length}/${baked.legs.length} legs cut -> ${RAILS}`);
@@ -314,7 +354,7 @@ if (isMain) {
 
   else if (cmd === 'show' || cmd === 'check') {
     const baked = load();
-    if (!baked) { console.error(`nothing baked yet at ${RAILS} — run: m59-guildrails.mjs bake`); process.exit(2); }
+    if (!baked) { console.error(`nothing baked yet at ${RAILS} — run: m59-guildrails.mjs bake --room ${room}`); process.exit(2); }
     console.log(`rail-${baked.room} cut ${baked.cut}, lattice ${baked.lattice}`);
     console.log(`  anchors ${baked.anchors.join(' ')}   exit ${baked.exit}   chests ${baked.chests.join(' ')}`);
     for (const l of baked.legs) console.log(line(l));
@@ -325,7 +365,7 @@ if (isMain) {
       const cache = new Map();
       for (const l of baked.legs.filter(x => x.ok)) {
         const id = (l.doors_open ?? []).join(',');
-        if (!cache.has(id)) cache.set(id, hallGeometry(l.doors_open ?? []));
+        if (!cache.has(id)) cache.set(id, hallGeometry(l.doors_open ?? [], room));
         const v = verifyRail(l.waypoints, { edge: edgeOf(cache.get(id).geo), lattice: baked.lattice });
         if (v && v.ok === false) { bad++; console.log(`  STALE ${l.from} -> ${l.to}: ${JSON.stringify(v).slice(0, 150)}`); }
       }
@@ -338,13 +378,13 @@ if (isMain) {
   else if (cmd === 'probe') {
     const from = parseSquare(process.argv[3]), to = parseSquare(process.argv[4]);
     const open = String(arg('door', '') || '').split(/[\s,]+/).filter(Boolean).map(Number);
-    const leg = cutLeg(from, to, { open });
+    const leg = cutLeg(from, to, { open, room });
     console.log(JSON.stringify({ ...leg, waypoints: leg.waypoints ? `[${leg.waypoints.length} points]` : undefined }, null, 1));
     process.exit(leg.ok ? 0 : 1);
   }
 
   else {
-    console.error('usage: m59-guildrails.mjs bake | show | check | probe rNcM rNcM [--door 59]');
+    console.error('usage: m59-guildrails.mjs bake | show | check | probe rNcM rNcM [--door 59]  [--room 714|713]');
     process.exit(2);
   }
 }

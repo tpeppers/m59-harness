@@ -46,9 +46,15 @@ What changes for the keeper:
   guilds are known, the hall is 714, as it always was.
 - **Chests are worked only in a usable hall.** The keeper works the chests of the hall it
   is standing in only if all of these hold:
-  - its passage is surveyed. Only 714's is (`SURVEYED_HALLS` in
-    `m59-guild-passage.mjs`), so every other hall is refused by name rather than walked
-    with 714's doors.
+  - its passage is surveyed. 714's and 713's are (`SURVEYED_HALLS` and the per-hall
+    `HALLS` table in `m59-guild-passage.mjs`), so every other hall is refused by name rather
+    than walked with another hall's doors. **713 (the Hall of the Slaughtered Command,
+    `guildh13.kod`) is three sections, not five:** foyer (r9c3, where a Rescue lands), hall
+    proper (r5c28), chest room (r12c26). Its MAIN_DOOR (sector 4) is pressed from r3c7 /
+    r3c8. Its chest room has **no door**: it is sealed by a wall, and the password said on
+    r8c26 moves the speaker to r10c26, said on r9c26 to r7c26 (`WalkThroughSecretWall`,
+    `guildh13.kod:191`). A character that is told "secret door" and waits for a ceiling to
+    lift there will wait for ever.
   - its owner is our guild or an ally.
   - the character's rank is at least sir (`hallHere()`).
 - **Hall passwords are kept per hall room.** The door checks the *owner's* password

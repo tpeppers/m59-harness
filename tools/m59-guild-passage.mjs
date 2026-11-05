@@ -1,4 +1,4 @@
-// Walk the Bookmakers hall's timed doors from their reachable trigger sides.
+// Walk a surveyed guild hall's doors (714, 713) from their reachable trigger sides.
 // The closed-state geometry identifies which section the character occupies;
 // actual movement always uses the live, collision-checked session geometry.
 import { readFileSync } from 'node:fs';
@@ -8,12 +8,23 @@ import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen, refusedToGo, doorRetryAt } from './m59-door-wait.mjs';
 import { noteDoorPressRefused, doorPressPose } from './m59-door-refusal.mjs';
 
-let closed;
-// THE HALLS WHOSE PASSAGE IS SURVEYED. Everything in this file -- anchors, doors, the closed-state
-// geometry -- is the Bookmaker's Guild House (714). A roster holding several guilds can own other
-// halls; until each is surveyed the keeper refuses their chests by name (autopilot/hall.mjs
-// `hallHere`) rather than walk 714's doors in a room that does not have them.
-export const SURVEYED_HALLS = Object.freeze([714]);
+// THE HALLS WHOSE PASSAGE IS SURVEYED, ONE TABLE EACH, KEYED BY ROOM NUMBER.
+//
+// This file was entirely the Bookmaker's Guild House (714) until the roster held a second guild.
+// A hall is a chain of SECTIONS (closed-door regions, one anchor each, numbered from the foyer)
+// with one DOOR between each neighbouring pair: `doors[i]` joins section i to section i+1. Every
+// function below takes the hall from the room the body is standing in (`s.world.room.num`) and
+// a hall that is not in `HALLS` is refused by name (autopilot/hall.mjs `hallHere`) rather than
+// walked with another hall's doors. Squares are [row, col] throughout, as in the kod.
+//
+// A door's `inward` / `outward` are [trigger, across]: where to stand to work it, and the first
+// square on the far side. A door is one of three kinds:
+//   pressed   (default)        `go` on the trigger, wait for the server's sector-height event
+//   secret                     SAY the guild password on the trigger, then wait as for a press
+//   secret + teleport          SAY the password on the trigger and the server MOVES the body
+//                              to `across` (UtilGoNearSquare); no sector moves, so there is no
+//                              height to wait for -- the position is the fact
+export const LEGACY_HALL = 714;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
 // EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED — INCLUDING ON THE WAY OUT.
 //
@@ -64,14 +75,96 @@ export const doors = [
   { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
   { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true, within_ms:5000 },
 ];
-export function guildSection(row, col) {
-  if (!closed) {
-    const data = JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url))).rooms[714];
-    closed = RoomGeometry.fromJSON(loadMap().rooms[714].roo);
+
+// THE HALL OF THE SLAUGHTERED COMMAND (713, guildh13.kod), the Rowlfs of War's hall on Ko'catan.
+// Three sections, two doors, and its secret door is not a door at all.
+//
+//   section 0  the L-shaped FOYER (InFoyer, guildh13.kod:219-241: rows 1-13, cols 1-7, and only
+//              cols 1-4 below row 4). Anchor r9c3 is viTeleport (guildh13.kod:40-41), which is
+//              where a Rescue / Chalice of the Rain lands a member arriving from elsewhere in
+//              Ko'catan (rescue.kod:136 -> room.kod:785 Teleport; ghall.kod:1208 propagates for
+//              anyone not already inside).
+//   section 1  the hall proper. Anchor r5c28 is viInner_teleport (guildh13.kod:61-62).
+//   section 2  the CHEST ROOM, rows 9-14 cols 23-30, the four chests at r12c24, r13c24, r12c29,
+//              r13c29 (guildh13.kod:313-320). Sealed in every door state: no step crosses the
+//              wall on the row 8 / row 9 boundary at cols 26-27 (moverStepLands, both ways).
+//
+//   door 4     MAIN_DOOR (guildh13.kod:15-17), a ceiling slab on the col 7 / col 8 boundary,
+//              rows 1-4, opened 360 -> 500 for DOOR_DELAY 5 s. Pressed from the foyer on col 7
+//              (plGuild_doors, guildh13.kod:82, matched by ghall.kod:981 SomethingTryGo, gated on
+//              CanEnter) and from inside on col 8 (guildh13.kod:123-137, gated on ReqLegalEntry).
+//              Inward crosses hotplates 1 then 2 on cols 8 and 9 in that order (guildh13.kod:337).
+//   door 5     SECRET_DOOR. Sector 5 itself is a sliver on r9c26-27 that every arriving user
+//              lifts to its OPEN height at speed 0 (NewHold, guildh13.kod:112-121) and nothing
+//              ever lowers (Open/CloseSecretDoor are no-ops, :284-294) -- it is never the barrier.
+//              The barrier is a wall, and the way through is WalkThroughSecretWall
+//              (guildh13.kod:191-217): the owner's password said outside the foyer
+//              (SomeoneSaid, :180-186) moves a speaker on row 8 to row 10, and one on row 9 to
+//              row 7, same column, for cols 26 and 27 only. Hence `teleport`.
+const SLAUGHTERED_COMMAND = {
+  room: 713, name: 'The Hall of the Slaughtered Command',
+  anchors: [[9,3],[5,28],[12,26]],
+  doors: [
+    { sector: 4, inward: [[3,7],[3,9]], outward: [[3,8],[3,6]] },
+    { sector: 5, inward: [[8,26],[10,26]], outward: [[9,26],[7,26]], secret: true, teleport: true, within_ms: 4000 },
+  ],
+  chestSection: 2, insideSection: 1, booth: false,
+};
+const BOOKMAKERS = {
+  room: 714, name: "The Bookmaker's Guild House",
+  anchors, doors,
+  chestSection: 4, insideSection: 3, booth: true,
+};
+export const HALLS = Object.freeze({ 714: BOOKMAKERS, 713: SLAUGHTERED_COMMAND });
+export const SURVEYED_HALLS = Object.freeze([714, 713]);
+
+/** The surveyed passage of hall `room`, or null. */
+export const hallSurvey = (room) => HALLS[Number(room)] ?? null;
+
+/** The section that holds hall `room`'s chests (714: 4, 713: 2). Throws for an unsurveyed hall. */
+export function chestSectionOf(room = LEGACY_HALL) {
+  const hall = hallSurvey(room);
+  if (!hall) throw new Error(`hall ${room} has no surveyed passage (only ${SURVEYED_HALLS.join(', ')})`);
+  return hall.chestSection;
+}
+
+/**
+ * Which hall a session is standing in. The room NUMBER, never the object id. A session that does
+ * not carry a room at all -- the offline fakes written when there was one hall -- is 714, which is
+ * what every caller meant before; a session that names a room this file has not surveyed throws.
+ */
+export function hallRoomOf(s) {
+  const raw = s?.world?.room?.num;
+  if (raw === undefined || raw === null) return LEGACY_HALL;
+  const room = Number(raw);
+  if (!hallSurvey(room))
+    throw new Error(`hall ${raw} has no surveyed passage (only ${SURVEYED_HALLS.join(', ')}) — ` +
+                    'refusing to walk another hall\'s doors in it');
+  return room;
+}
+
+let CEILING = null;
+const ceilingDoors = (room) =>
+  (CEILING ??= JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)))).rooms[room];
+
+const CLOSED = new Map();
+function closedGeometry(room) {
+  if (!CLOSED.has(room)) {
+    const data = ceilingDoors(room);
+    const geo = RoomGeometry.fromJSON(loadMap().rooms[room].roo);
     const state = data.states[data.doors.map(d => d.closed).join(',')];
-    applySectorHeights(closed, state.sectors, { mask: Buffer.from(state.mask, 'base64') });
-    closed.attachStepMask(Buffer.from(state.mask, 'base64'));
+    applySectorHeights(geo, state.sectors, { mask: Buffer.from(state.mask, 'base64') });
+    geo.attachStepMask(Buffer.from(state.mask, 'base64'));
+    CLOSED.set(room, geo);
   }
+  return CLOSED.get(room);
+}
+
+/** Which section of hall `room` the square [row, col] is in, by the all-doors-shut geometry; -1 if none. */
+export function guildSection(row, col, room = LEGACY_HALL) {
+  const hall = hallSurvey(room);
+  if (!hall) return -1;
+  const closed = closedGeometry(hall.room);
   // STRICT, NO GOAL EXEMPTION. `path` lets its final step into the goal skip `moverStepLands`
   // when no legal approach exists, which is right for a walker and wrong for a membership test:
   // the shut door's own slab is exactly a step the mover refuses, so a square ADJACENT to a shut
@@ -85,7 +178,7 @@ export function guildSection(row, col) {
   // mover-legal two-way path to any anchor, only a goal-exempt one. So a square keeps the old
   // reading when strict membership is empty, and only a square that strictly belongs somewhere
   // -- r7c7 strictly belongs to the chests -- is filed by it.
-  const member = goalExempt => anchors.findIndex(([r,c]) =>
+  const member = goalExempt => hall.anchors.findIndex(([r,c]) =>
     closed.path(row, col, r, c, { goalExempt }).found && closed.path(r, c, row, col, { goalExempt }).found);
   const strict = member(false);
   return strict >= 0 ? strict : member(null);
@@ -104,19 +197,20 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // The hall's geometry is ENUMERABLE — all 32 ceiling states are in substrate/m59-ceiling-doors.json
 // — so the line across an open door is a fact that can be cut in advance. m59-guildrails.mjs cuts
 // it against the state where that one door is up, verifies it with the mover's own trace, and
-// writes substrate/rail-714.json. This reads it.
+// writes substrate/rail-<room>.json (714, 713). This reads it.
 //
 // IT IS A FALLBACK, NOT A REPLACEMENT. The live geometry is the only thing that knows about
 // BODIES, and a rail knows only about the ceiling — so the live plan still goes first and the rail
 // answers only when the live plan has nothing. That way this can fix the race and cannot cause one.
-let RAILS = null;
-function bakedRails() {
-  if (RAILS === null) {
+// One file per hall, `substrate/rail-<room>.json`.
+const RAILS = new Map();
+function bakedRails(room = LEGACY_HALL) {
+  if (!RAILS.has(room)) {
     try {
-      RAILS = JSON.parse(readFileSync(new URL('../substrate/rail-714.json', import.meta.url)));
-    } catch { RAILS = false; }          // false, not null: asked once, absent, do not re-read
+      RAILS.set(room, JSON.parse(readFileSync(new URL(`../substrate/rail-${room}.json`, import.meta.url))));
+    } catch { RAILS.set(room, false); }  // false, not absent: asked once, missing, do not re-read
   }
-  return RAILS || null;
+  return RAILS.get(room) || null;
 }
 
 /**
@@ -127,8 +221,8 @@ function bakedRails() {
  * is the same line expressed in the units the caller can act on. A COORDINATE CARRIES ITS UNIT:
  * waypoints are CLIENT (1024 to a square), the result is grid.
  */
-export function bakedCrossing(from, to, sector) {
-  const baked = bakedRails();
+export function bakedCrossing(from, to, sector, room = LEGACY_HALL) {
+  const baked = bakedRails(Number(room));
   if (!baked) return null;
   const name = ([r, c]) => `r${r}c${c}`;
   const leg = baked.legs?.find(l => l.ok && l.from === name(from) && l.to === name(to) &&
@@ -165,23 +259,48 @@ async function standUp(s, isInterrupted) {
 // scene of the last press that did not open, for the error a FleetScript prints.
 const pressSuffix = p => p?.summary ? ` (${p.summary}${p.written && p.detail?.id ? `; ledger ${p.detail.id}` : ''})` : '';
 
+// THE SECRET WALL MOVES THE BODY; NOTHING ELSE ANNOUNCES IT. WalkThroughSecretWall
+// (guildh13.kod:191) is UtilGoNearSquare inside the room, which reaches us as our own BP_MOVE.
+// So the only evidence is the position: poll it until it is in the section the wall leads to,
+// then ask the server once (`confirmPosition`) before calling it a refusal, because a position
+// that was predicted rather than read is exactly the kind that misses a server-side move.
+async function awaitTeleport(s, c, room, target, { within_ms = 4000, isInterrupted = () => false } = {}) {
+  const here = () => guildSection(c.self.row, c.self.col, room) === target;
+  const until = Date.now() + within_ms;
+  while (Date.now() < until) {
+    if (here()) return true;
+    if (isInterrupted()) return false;
+    await sleep(150);
+  }
+  if (here()) return true;
+  await s.confirmPosition?.();
+  return here();
+}
+
+/**
+ * Walk the hall the body is standing in to `destination`, a SECTION NUMBER of that hall (0 is
+ * the foyer; `chestSectionOf(room)` is the chests). The hall is read off `k.s.world.room.num`.
+ */
 export async function guildPassage(k, destination, isInterrupted) {
   const s = k.s, c = s.need();
+  const room = hallRoomOf(s), hall = hallSurvey(room);
+  if (!Number.isInteger(destination) || destination < 0 || destination >= hall.anchors.length)
+    throw new Error(`hall ${room} has no section ${destination} (it has 0-${hall.anchors.length - 1})`);
   const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
   for (let leg = 0; leg < 8; leg++) {
     if (isInterrupted()) throw new Error('guild passage paused for survival');
-    const section = guildSection(c.self.row, c.self.col);
+    const section = guildSection(c.self.row, c.self.col, room);
     if (section === destination) return;
     // THE BOOTH IS OFF THE LINE: out through counter door 58 into section 3 first. A character left
     // in the booth (the vault broker's post) was stranded by every ordinary hall path —
     // hall_withdraw refused "outside the known passage" and a walk out never left the room
-    // (2026-09-27, Statler, after the broker probe).
-    if (section < 0 && inBoothPocket(c.self.row, c.self.col)) {
+    // (2026-09-27, Statler, after the broker probe). 714 alone has a booth.
+    if (section < 0 && hall.booth && inBoothPocket(c.self.row, c.self.col)) {
       await crossCounter(k, true, isInterrupted);
       continue;
     }
     if (section < 0) throw new Error('guild position is outside the known passage');
-    const inward = section < destination, door = doors[inward ? section : section - 1];
+    const inward = section < destination, door = hall.doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
     // UP TO THREE APPROACHES. Prod 2026-10-27: Kermit (door 59, stopped at r2c33 after 3 steps) and Lew (door 55, r20c18)
     // stopped short with no reason and no canceller, while the same draw worked for Animal half an hour earlier -- the
@@ -243,15 +362,37 @@ export async function guildPassage(k, destination, isInterrupted) {
       guard();
       const since = c.evSeq;
       let pressedAt=null, pose=null;
+      if (door.teleport) {
+        // A SPOKEN WALL (713's door 5): the word is said ON the trigger and the server moves the
+        // body to `across`. There is no sector to wait on and no step to take.
+        if (attempt && (c.self.row !== trigger[0] || c.self.col !== trigger[1])) {
+          await s.walkTo(trigger[1], trigger[0], { maxSteps: 10, hardCap: 12, beforeMutation: guard });
+          await s.confirmPosition?.();
+        }
+        pose=doorPressPose(s, c);pressedAt=Date.now();
+        if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
+        crossed = await awaitTeleport(s, c, room, section + (inward ? 1 : -1),
+          { within_ms: door.within_ms ?? 4000, isInterrupted });
+        if (isInterrupted()) throw new Error('guild passage paused for survival');
+        k.note?.('guild door passage', { sector: door.sector, inward, crossed, via: 'password teleport',
+          at: { row: c.self.row, col: c.self.col } });
+        if (!crossed) {
+          lastPress = noteDoorPressRefused(s, { source: 'guild_passage', keeper: k, since, pose,
+            door: { sector: door.sector, kind: 'guild', direction: inward ? 'inward' : 'outward', secret: true },
+            trigger, across, openingReason: 'password said, body not moved', attempt: attempt + 1, attempts: 3 });
+          if (attempt < 2) await sleep(1500);
+        }
+        continue;
+      }
       if (door.secret) {
         pose=doorPressPose(s, c);pressedAt=Date.now();
         if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
       } else await s.pacer.submit('move', () => { guard();pose=doorPressPose(s, c);pressedAt=Date.now();return c.go(); });
-      const plans = doorsFor(714, { row: c.self.row, col: c.self.col });
-      // The password-operated door is not in SomethingTryGo's table.
+      const plans = doorsFor(room, { row: c.self.row, col: c.self.col });
+      // The password-operated door is not in SomethingTryGo's table, and neither is a door pressed
+      // through the base class's plGuild_doors (713's foyer side, ghall.kod:981).
       const definition = [...plans.on, ...plans.others].find(p => p.sector === door.sector)
-        ?? JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)))
-          .rooms[714].doors.find(d => d.id === door.sector);
+        ?? ceilingDoors(room).doors.find(d => d.id === door.sector);
       const plan = definition?.to_height != null ? definition : {
         sector: door.sector, from_height: definition?.closed, to_height: definition?.open,
         within_ms: door.within_ms ?? 8000,
@@ -287,8 +428,8 @@ export async function guildPassage(k, destination, isInterrupted) {
           if (!path.found || !next) {
             // The live geometry has nothing. That is USUALLY the ceiling not having arrived yet
             // rather than a wall, so ask the baked line for this door before giving up on it.
-            const rail = bakedCrossing([c.self.row, c.self.col], across, door.sector) ??
-                         bakedCrossing(trigger, across, door.sector);
+            const rail = bakedCrossing([c.self.row, c.self.col], across, door.sector, room) ??
+                         bakedCrossing(trigger, across, door.sector, room);
             next = rail?.[0] ?? null;
             usedRail = !!next;
             if (!next) { result = { reason: 'no live path across the open door, and nothing baked' }; break; }
@@ -297,7 +438,7 @@ export async function guildPassage(k, destination, isInterrupted) {
           if (!result.moved) break;
         }
       } else result = await s.walkTo(across[1], across[0], { maxSteps: 5, hardCap: 6, beforeMutation: guard });
-      crossed = guildSection(c.self.row, c.self.col) === section + (inward ? 1 : -1);
+      crossed = guildSection(c.self.row, c.self.col, room) === section + (inward ? 1 : -1);
       k.note?.('guild door passage', { sector: door.sector, inward, crossed,
         at: { row: c.self.row, col: c.self.col }, reason: result?.reason,
         // A FALLBACK NOBODY CAN COUNT IS A FALLBACK NOBODY WILL MAINTAIN. If the rail is carrying
@@ -333,9 +474,9 @@ export const BOOTH = [2, 25];
 export const COUNTER = Object.freeze({ sector: 58, west: [2, 19], east: [2, 21],
   westLanding: [2, 19], eastLanding: [2, 22] });
 
-/** Is this square on the booth side of door 58 (the booth pocket)? Closed-door geometry. */
+/** Is this square on the booth side of door 58 (the booth pocket)? 714's closed-door geometry. */
 export function inBoothPocket(row, col) {
-  guildSection(row, col);                                   // builds `closed`
+  const closed = closedGeometry(714);
   return closed.path(row, col, BOOTH[0], BOOTH[1]).found && closed.path(BOOTH[0], BOOTH[1], row, col).found;
 }
 
@@ -386,8 +527,8 @@ async function crossCounter(k, westward, isInterrupted) {
 }
 
 /**
- * Walk to a broker post inside the hall: 'booth' (the window), 'chests' (section 4), or 'inside'
- * (section 3, the room between them). Never the main door: from the foyer or the main hall this
+ * Walk to a broker post inside the hall: 'booth' (the window, 714 only), 'chests' (the hall's chest
+ * section: 714's 4, 713's 2), or 'inside' (the section before it: 714's 3, 713's 1). Never the main door: from the foyer or the main hall this
  * refuses rather than walk in through door 59, because opening it is what the broker exists to stop.
  */
 export async function hallPost(k, where, isInterrupted = () => false) {
@@ -399,24 +540,30 @@ export async function hallPost(k, where, isInterrupted = () => false) {
     ? { ok: true, at: here() }
     : { ok: false, at: here(), pocket: inBoothPocket(...here()),
         why: `stopped at (${here().join(',')}), short of the booth (${BOOTH.join(',')})` });
+  // WHICH HALL'S POSTS. Only 714 has a booth; 'chests' and 'inside' are that hall's own sections.
+  let room;
+  try { room = hallRoomOf(k.s); } catch (e) { return { ok: false, why: e.message, at: here() }; }
+  const hall = hallSurvey(room);
   if (where === 'booth') {
+    if (!hall.booth) return { ok: false, why: `hall ${room} has no booth`, at: here() };
     if (inBoothPocket(...here())) {
       await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
       return atBooth();
     }
-    const sec = guildSection(...here());
+    const sec = guildSection(...here(), room);
     if (sec < 1) return { ok: false, why: `refusing to reach the booth from section ${sec} (it would open the main door)`, at: here() };
-    await guildPassage(k, 3, isInterrupted);
+    await guildPassage(k, hall.insideSection, isInterrupted);
     await crossCounter(k, false, isInterrupted);
     await k.s.walkTo(BOOTH[1], BOOTH[0], { maxSteps: 20, hardCap: 30 });
     return atBooth();
   }
   if (where === 'chests' || where === 'inside') {
-    if (inBoothPocket(...here())) await crossCounter(k, true, isInterrupted);
-    const sec = guildSection(...here());
+    if (hall.booth && inBoothPocket(...here())) await crossCounter(k, true, isInterrupted);
+    const sec = guildSection(...here(), room);
     if (sec < 1) return { ok: false, why: `refusing to walk in from section ${sec} (it would open the main door)`, at: here() };
-    await guildPassage(k, where === 'chests' ? 4 : 3, isInterrupted);
-    return { ok: guildSection(...here()) === (where === 'chests' ? 4 : 3), at: here() };
+    const target = where === 'chests' ? hall.chestSection : hall.insideSection;
+    await guildPassage(k, target, isInterrupted);
+    return { ok: guildSection(...here(), room) === target, at: here() };
   }
   return { ok: false, why: `unknown post ${where}: booth, chests or inside` };
 }

@@ -52,12 +52,16 @@ section('the run uses the passage routine that was measured, not a fresh guess')
   //
   // The first version of this fix was a one-row-south walk and an invented 4s wait, written
   // without looking for what existed. CLAUDE.md's index rule is exactly this: ask first.
-  ok(/guildPassage\(this, GUILD_CHEST_SECTION/.test(src), 'the run goes through guildPassage');
+  ok(/guildPassage\(this, chestSection,/.test(src), 'the run goes through guildPassage');
+  // ...to the chest section of the hall it is STANDING IN: 714's is GUILD_CHEST_SECTION (4), 713's is 2.
+  ok(/const chestSection = where0\.room === 714 \? GUILD_CHEST_SECTION : chestSectionOf\(where0\.room\)/.test(src),
+     'aiming at the chest section of the hall it is standing in');
   ok(/const GUILD_CHEST_SECTION = 4/.test(src), 'aiming at the chest section the coop also uses');
   ok(!/HALL_DOOR_MS/.test(src), 'the invented door delay is gone');
   ok(!/step: 'leave_foyer'/.test(src), 'and so is the hand-rolled foyer walk');
-  eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 3,
-     'the deposit, the withdraw AND the errand withdrawal (hallWithdraw) all go through it');
+  // Four since hallMove (chest-to-chest rebalancing) joined them; this read 3 and failed on main.
+  eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 4,
+     'the deposit, the withdraw, the errand withdrawal (hallWithdraw) AND hallMove all go through it');
   // Measured on prod 2026-09-25, first probe after the deploy: `this.world` does not exist on the
   // Autopilot, so the room read NaN and every hall withdrawal refused "not in the hall".
   const hw = src.slice(src.indexOf('async hallWithdraw('), src.indexOf('async hallWithdraw(') + 2500);

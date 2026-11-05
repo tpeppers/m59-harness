@@ -31,6 +31,20 @@ const stub = (row, col) => ({ s: { need: () => ({ self: { row, col } }),
   ok('an unknown post is refused', u.ok === false && /unknown post/.test(u.why));
 }
 
+console.log('\nthe second hall (713) has its own posts');
+{
+  const in713 = (row, col, num = 713) => ({ s: { need: () => ({ self: { row, col } }), world: { room: { num } },
+    walkTo: async (...a) => walked.push(a), pacer: { submit: async () => {} } }, note: () => {} });
+  const b = await hallPost(in713(5, 28), 'booth');
+  ok('713 has no booth, and says so', b.ok === false && /hall 713 has no booth/.test(b.why), JSON.stringify(b));
+  const f = await hallPost(in713(9, 3), 'chests');
+  ok('from 713\'s foyer (the Rescue landing r9c3) the chests are refused: it would open the main door',
+     f.ok === false && /section 0/.test(f.why) && /main door/.test(f.why), JSON.stringify(f));
+  const u = await hallPost(in713(5, 28, 701), 'chests');
+  ok('a hall nobody surveyed is refused by number', u.ok === false && /hall 701 has no surveyed passage/.test(u.why), JSON.stringify(u));
+  ok('still without a single step taken', walked.length === 0);
+  ok('713\'s secret-wall triggers are hall-proper (1) and chest-side (2)', guildSection(8, 26, 713) === 1 && guildSection(9, 26, 713) === 2);}
+
 console.log('\nthe booth is not a dead end');
 {
   const { readFileSync } = await import('node:fs');
