@@ -59,7 +59,9 @@ export const FLOOR_FAMILIES = Object.freeze({
 });
 
 export const key = s => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
-const same = (a, b) => a === b || a === `${b}s` || `${a}s` === b;
+// Exact, plural-insensitive: 'mushroom'/'mushrooms', and 'entroot berry'/'entroot berries' (a -y stack is -ies on the wire).
+const sing = n => n.replace(/ies$/, 'y').replace(/s$/, '');
+const same = (a, b) => a === b || a === `${b}s` || `${a}s` === b || (sing(a) === sing(b) && /ies$|y$/.test(a) && /ies$|y$/.test(b));
 
 /** The exact names a want covers, in preference order. `want` is a name, a family or a list of either. */
 export function wantNames(want) {

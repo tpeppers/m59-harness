@@ -92,6 +92,7 @@ const archerAndZheng = (extra = {}) => world({
 section('WHAT A WANT MEANS');
 ok("'arrows' is the family: nerudite arrows first, then arrows", JSON.stringify(FC.wantNames('arrows')) === JSON.stringify(['nerudite arrows', 'arrows']));
 ok('a name matches exactly, plural-insensitive', FC.matchIndex('Mushrooms', ['mushroom']) === 0 && FC.matchIndex('red mushrooms', ['mushroom']) === -1);
+ok('a -y name matches its -ies stack, and nothing else', FC.matchIndex('entroot berries', ['entroot berry']) === 0 && FC.matchIndex('elderberries', ['entroot berry']) === -1 && FC.matchIndex('elderberry', ['elderberries']) === 0);
 ok("'wand' never matches 'wand of healing' (2026-10-13)", FC.matchIndex('wand of healing', FC.wantNames('wand')) === -1);
 {
   const objs = [{ id: 1, name: 'arrows', amount: 5, col: 10, row: 10 }, { id: 2, name: 'nerudite arrows', amount: 5, col: 12, row: 12 },
