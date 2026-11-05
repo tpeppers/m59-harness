@@ -8,7 +8,7 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 8 methods: damageRate, timeToDeath, passArm, engagePlayerTarget, respondToConflict, passPlaybook,
+// 9 methods: damageRate, timeToDeath, passArm, unarmedMakeSpace, engagePlayerTarget, respondToConflict, passPlaybook,
 //   fightNow, passFightBack
 import * as grudge from '../m59-grudge.mjs';
 import { activeConflicts, clearConflict, declareConflict, recordTargetKill, targetsFor } from '../m59-intel.mjs';
@@ -21,6 +21,10 @@ import { refusedHere } from '../m59-refused-targets.mjs';
 import * as skills from '../m59-skills.mjs';
 import * as tougher from '../m59-tougher.mjs';
 import { CONJURED_WEAPON_BULK, CONTINUE, FIGHT_BACK_STALE_MS, HANDLED, REACH, SPELL_EXERTION_VIGOR, partialFightMadeProgress, pct, releaseQuarry, scriptedWalkDefersArming, sleep, unarmedBlocker, vigorOf } from '../m59-autopilot.mjs';
+
+// The unarmed make-space hook: at most once per ten minutes, and room for the weapon plus a margin.
+export const UNARMED_MAKE_SPACE_EVERY_MS = 10 * 60_000;
+export const UNARMED_MAKE_SPACE_MARGIN = 10;
 
 export class PassCombatPart {
   // @part 1
@@ -493,6 +497,14 @@ export class PassCombatPart {
       const blocker = classified.blocker;
       let unblockedWhy = classified.declinedWhy;
       if (blocker === 'room') {
+        // FIRST, MAKE THE ROOM IN PLACE (2026-11-05). Rizzo (t19) conjures his weapons and stood
+        // at 97% bulk reading `unarmed -- 60 bulk free, needs 70 to hold one` while every journey
+        // to a merchant was refused: a dead end with a pack full of things his own sale plan was
+        // going to sell. Operator: "just drop items planned to be sold, it's fine". So drop the
+        // least valuable sale-plan rows until the weapon fits (+ a margin), then try to arm again.
+        // ONLY sale-plan rows (makeSpaceNow, tools/m59-make-space.mjs), and at most once per
+        // MAKE_SPACE_EVERY_MS — a plan that cannot cover it says so and falls through to the trip.
+        if (await this.unarmedMakeSpace(c).catch(() => false)) return HANDLED;
         // AND THEN DO IT. The remedy below is "a sale, a drop or a hand-over", and the sale is
         // `bankRun` — which lives in passErrand, a rung this one never lets run, because the
         // refusal below returns HANDLED every pass. So an unarmed character with a full pack
@@ -590,6 +602,25 @@ export class PassCombatPart {
     }
 
     return CONTINUE;
+  }
+
+  // UNARMED AND NO ROOM FOR THE CONJURED WEAPON: drop sale-plan rows until it fits, then arm.
+  //
+  // True only when it ended armed. At most once per UNARMED_MAKE_SPACE_EVERY_MS whatever the
+  // outcome — a plan that cannot cover it must not be asked again every pass — and never while a
+  // bot holds the economy faculty, since dropping is the economy's call then. makeSpaceNow drops
+  // only rows of ownSalePlan() (tools/m59-make-space.mjs) and writes the `make_space` ledger row.
+  async unarmedMakeSpace(c = this.s?.client, now = Date.now()) {
+    if (!c || this.facultyHeld?.('economy')) return false;
+    if (now - (this._unarmedMakeSpaceAt ?? 0) < UNARMED_MAKE_SPACE_EVERY_MS) return false;
+    this._unarmedMakeSpaceAt = now;
+    const made = await this.makeSpaceNow({ bulk: CONJURED_WEAPON_BULK + UNARMED_MAKE_SPACE_MARGIN,
+      why: 'unarmed: room for a conjured weapon' }).catch(e => ({ ok: false, why: e?.message }));
+    if (!made?.dropped?.length && !made?.ok) return false;
+    // RETRY THE CONJURE NOW, through the same armSelf the top of passArm uses.
+    const armed = await this.armSelf().catch(() => false);
+    if (armed && skills.isArmed(c)) { this.progress?.('made space and armed itself'); return true; }
+    return false;
   }
 
   // A TARGET LIST NARROWS THE DEFENSIVE DECISION. IT CANNOT MAKE ONE.

@@ -3243,6 +3243,27 @@ const server = createServer(async (req, res) => {
               .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
             return;
           }
+          // THE SALE PLAN, READ-ONLY, and MAKE SPACE from it. One computation (Autopilot
+          // ownSalePlan, tools/m59-make-space.mjs), so sale_plan shows exactly the rows make_space
+          // would choose from. sale_plan sends nothing to the server; make_space drops by exact id
+          // and amount, only sale-plan rows, and verifies each drop by re-reading the pack.
+          case 'sale_plan': {
+            if (typeof autopilot?.salePlanView !== 'function') {
+              json({ ok: false, error: 'this keeper has no sale plan view' }, 409); return;
+            }
+            try { json(autopilot.salePlanView()); }
+            catch (e) { json({ ok: false, error: e?.message ?? String(e) }); }
+            return;
+          }
+          case 'make_space': {
+            if (typeof autopilot?.makeSpaceNow !== 'function') {
+              json({ ok: false, error: 'this keeper cannot make space' }, 409); return;
+            }
+            json(await autopilot.makeSpaceNow({ bulk: args.bulk ?? null, weight: args.weight ?? null,
+                                                 why: String(args.why ?? 'make_space (operator)') })
+              .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
+            return;
+          }
 
           // The broker owns the short commander capability; this process owns the
           // Autopilot and its per-faculty claims. Preserve that ownership API across the
