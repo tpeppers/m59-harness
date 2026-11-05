@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { CommunicationsArchive, communicationsDirFor, communicationSource, communicationFilters, readCommunications, PLAYER_COMMUNICATION_CHANNELS } from './m59-communications.mjs';
 import { communicationsReport, renderCommunications, fleetCommunications, renderFleetCommunications } from './m59-communications-page.mjs';
 import { M59Client, BP, OF } from './m59-client.mjs';
+import { FLEET_FILTER_JS } from './m59-page-filter.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'm59-communications-'));
 const env = { M59_EVIDENCE_DIR: root };
@@ -81,7 +82,8 @@ try {
   const view = await communicationsReport({ stateFile, env, params });
   eq(view.total, 2);
   const html = renderCommunications(view, params);
-  yes(!html.includes('<script>')); yes(html.includes('&lt;script&gt;'));
+  // The tab bar carries the board filter script (m59-page-filter.mjs); any OTHER script is an injection.
+  yes(!html.replace('<script>' + FLEET_FILTER_JS + '</script>', '').includes('<script>')); yes(html.includes('&lt;script&gt;'));
   yes(html.includes('Player communications')); yes(html.includes('malformed or partial'));
   const fleetParams = new URLSearchParams('hours=48&comm_date=2026-09-29&comm_source=player&comm_q=script');
   const fleetView = await fleetCommunications({ stateFile, params: fleetParams, local: true, env });

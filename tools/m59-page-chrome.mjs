@@ -17,6 +17,9 @@
 // reachable. A treemap that renders as a blank rectangle when the internet is down is
 // worse than no treemap.
 
+import { FLEET_FILTER_JS } from './m59-page-filter.mjs';
+export { narrowToWho } from './m59-page-filter.mjs';
+
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, m =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
@@ -90,10 +93,17 @@ export const TABS = [
   { key: 'hometowns', href: '/hometowns', label: 'Hometown / Rescue' },
 ];
 
+// The filter bars, the fleetmate links and `?who=` ride inside the tab bar, so every board
+// that has one has them — m59-page-filter.mjs says why it is one script and not nineteen.
 export const NAV = (here) => `
   <nav class="tabs">${TABS.map(t =>
     `\n    <a href="${t.href}"${t.key === here ? ' class="on"' : ''}>${t.label}</a>`).join('')}
-  </nav>`;
+  </nav><script>${FLEET_FILTER_JS}</script>`;
+
+// A fleetmate's name as a link to their hero page — the server-rendered half, so the
+// columns that are ABOUT a character link with scripts off too.
+export const heroLink = (name) => name
+  ? `<a class="hero" href="/hero/${encodeURIComponent(name)}">${esc(name)}</a>` : esc(name ?? '?');
 
 export const STYLE = `
   /* A magic item's marker. The cursed variant is red because it is the one irreversible

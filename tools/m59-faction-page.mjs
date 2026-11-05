@@ -21,7 +21,7 @@ import { FactionStatusCache } from './m59-faction-status.mjs';
 import { readIntelRows, foldIntel, estimatePower, benefitValue, BENEFITS, POWER_BANDS,
          FACTIONS, FLAG_COUNT, COUNCILORS, INTEL_FILE } from './m59-faction-intel.mjs';
 import { loyaltyDebt } from './m59-factions.mjs';
-import { esc, ago, NAV, STYLE } from './m59-page-chrome.mjs';
+import { esc, ago, heroLink, NAV, STYLE } from './m59-page-chrome.mjs';
 
 const NAMES = { duke: 'Duke', princess: 'Princess', rebel: 'Rebel', neutral: 'Unfactioned', unknown: 'Unknown' };
 const COLOURS = { duke: '#c0392b', princess: '#8e44ad', rebel: '#27ae60', neutral: 'var(--dim)', unknown: 'var(--dim)' };
@@ -117,7 +117,7 @@ export function renderFaction(opts = {}) {
       const hint = m ? ` <span class="${m.last === 'up' ? 'good' : 'bad'}" title="${m.up} up, ${m.down} down, last ${esc(ago(m.last_at))}">${m.last === 'up' ? '▲' : '▼'}</span>` : '';
       return `<span class="ben">${esc(b.label)} <b>${range(b.low, b.high)}</b><span class="dim">/${b.max}${esc(b.unit)}</span>${hint}</span>`;
     }).join(' ');
-    return `<tr><td><b>${esc(x.character ?? x.agent)}</b> <span class="dim">${esc(x.agent)}</span></td><td>${badge(x.faction)}</td>
+    return `<tr><td><b>${x.character ? heroLink(x.character) : esc(x.agent)}</b> <span class="dim">${esc(x.agent)}</span></td><td>${badge(x.faction)}</td>
       <td>${x.soldier ? '🛡' : ''}</td><td>${rank}</td><td>${favour}</td><td class="strength">${strength}</td>
       <td class="dim">${esc(ago(x.observed_at))}</td></tr>`;
   }).join('');

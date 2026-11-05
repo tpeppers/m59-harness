@@ -27,6 +27,27 @@ Which spells bottle and which need a prism are `potion` / `multicast` in
   board is invisible from whichever copy nobody remembered to edit. That had already
   happened once — the fleet page and the deaths page carried two separate copies.
 
+- **EVERY BOARD CAN BE ASKED ABOUT ONE CHARACTER, AND EVERY FLEETMATE'S NAME IS A LINK.**
+  Operator, 2026-11-04. One script, `m59-page-filter.mjs`, shipped inside `NAV()` so a board
+  that has the tab bar has it too — including boards not written yet. It puts a filter bar
+  (free text + a picker of the fleetmates that table mentions) on every table of 4+ rows,
+  list/log of 8+, and card grid keyed by character; links every roster name to
+  `/hero/<name>` (names from `/fleet-names.json`, the roster only, never a stranger); and
+  honours **`?who=<name>`**, which the tab bar carries from page to page and a picker at its
+  end sets. The broker also narrows the DATA for `?who=` on the boards whose cards and
+  charts are per character (deaths, tougher, skills, travel, stats, economy, inventory,
+  maximums, factions) via `narrowToWho`, so totals agree with the rows. **`/pvp` is
+  deliberately not narrowed server-side**: `pvpReport` uses the roster to decide who is
+  OURS, and a roster of one files every other fleetmate as an enemy. A table that should
+  not get a bar carries `data-nofilter`; a text that should not be linked, `data-nolink`.
+
+  `/hero/<name>` is a tabbed page: the character's own tabs (overview, pack, abilities, log,
+  play) and one tab per board, each the board ITSELF framed as `?who=<name>&embed=1` and
+  loaded on first open — not a second rendering, which would disagree with its source the
+  first time either changed. In a frame the script hides the chrome, reports its height to
+  the parent, and sends links to other pages to the top window. Only the own tabs refresh
+  (every 20s, while visible); a meta refresh would re-run every framed board.
+
   What each board can answer is decided by whether the quantity leaves a trace.
   **A bank balance does** — a banker says it aloud and `substrate/banks/` catches it — so
   `/economy` can report it with the broker down. **A purse and a pack do not.** Nothing

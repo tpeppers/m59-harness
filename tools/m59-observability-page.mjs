@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolveFleet } from './m59-fleetpath.mjs';
-import { ago, esc, NAV, STYLE } from './m59-page-chrome.mjs';
+import { ago, esc, heroLink, NAV, STYLE } from './m59-page-chrome.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -230,7 +230,7 @@ export function renderHarnessBoard({ fleet = [], details = null, hours = 2, erro
     totals.trading_s + totals.stalled_s;
   const fightingShare = activitySeconds ? +(100 * totals.fighting_s / activitySeconds).toFixed(1) : null;
   const body = rows.map(row => `
-    <tr><td class="name">${esc(row.character)}</td>${TIME_FIELDS.map(([key]) =>
+    <tr><td class="name">${heroLink(row.character)}</td>${TIME_FIELDS.map(([key]) =>
       `<td>${esc(durationLabel(row.time[key]))}</td>`).join('')}<td>${esc(row.activity)}</td></tr>`).join('');
   const mapTable = maps => `<div class="scroller"><table><thead><tr><th>map</th><th>duration</th><th>damage</th><th>safe</th></tr></thead><tbody>${
     (maps ?? []).map(map => `<tr><td>${esc(map.name ?? 'map')} (${esc(map.room ?? '--')})</td>` +

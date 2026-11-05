@@ -230,6 +230,7 @@ import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
 import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn, attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
+import { narrowToWho } from './m59-page-chrome.mjs';
 import { withCompendiumRequest } from './m59-compendium-links.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
 import { renderTravel } from './m59-travel-page.mjs';
@@ -21825,6 +21826,15 @@ function serveDashboard(port, { handle = null } = {}) {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       return res.end(JSON.stringify(out));
     }
+    // THE ROSTER, FOR THE BOARDS' FILTER SCRIPT (m59-page-filter.mjs): which names on a page
+    // are fleetmates, so they can be linked and filtered on. The fleet only — a menagerie host
+    // has no hero page — and names only, never an account.
+    if (url.pathname === '/fleet-names.json') {
+      const names = new Set();
+      for (const e of fleetState.values()) if (e?.credentials?.character) names.add(e.credentials.character);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(JSON.stringify({ names: [...names].sort() }));
+    }
     if (url.pathname.startsWith('/hero/')) {
       const parts = url.pathname.slice('/hero/'.length).split('/');
       const who = decodeURIComponent(parts[0] || '');
@@ -21905,7 +21915,7 @@ function serveDashboard(port, { handle = null } = {}) {
     if (url.pathname === '/stats') {
       try {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(renderStatsBoard({ characters: fleetCharacters() }));
+        return res.end(renderStatsBoard({ characters: narrowToWho(fleetCharacters(), url.searchParams.get('who')) }));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'text/plain' });
         return res.end('/stats failed: ' + e.message);
@@ -21978,7 +21988,9 @@ function serveDashboard(port, { handle = null } = {}) {
         // without this they sum two populations and say nothing about it. This broker is
         // serving the page and already holds the roster, so the answer is free and exact:
         // no probing, no fleet label, just the names it is logged in as.
-        const characters = fleetCharacters();
+        // `?who=` narrows it to one of them, so the cards and the treemaps agree with the
+        // filtered rows (m59-page-filter.mjs).
+        const characters = narrowToWho(fleetCharacters(), url.searchParams.get('who'));
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end(url.pathname === '/deaths' ? renderDeaths({ hours, characters, impact: url.searchParams.get('impact') ?? 'all' })
                      : url.pathname === '/travel' ? renderTravel({ hours, characters, sort: url.searchParams.get('sort') ?? 'crossings' })
@@ -22019,7 +22031,7 @@ function serveDashboard(port, { handle = null } = {}) {
         .then(out => out?.fleet ?? null, () => null)
         .then(live => {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-          res.end(renderEconomy({ hours, live, characters: fleetCharacters(),
+          res.end(renderEconomy({ hours, live, characters: narrowToWho(fleetCharacters(), url.searchParams.get('who')),
                                   view: url.searchParams.get('view') }));
         })
         .catch(e => {
@@ -22041,7 +22053,7 @@ function serveDashboard(port, { handle = null } = {}) {
         .then(out => out?.fleet ?? null, () => null)
         .then(live => {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-          res.end(renderInventory({ hours, live, characters: fleetCharacters(), hall: url.searchParams.get('hall') }));
+          res.end(renderInventory({ hours, live, characters: narrowToWho(fleetCharacters(), url.searchParams.get('who')), hall: url.searchParams.get('hall') }));
         })
         .catch(e => {
           res.writeHead(500, { 'content-type': 'text/plain' });
@@ -22124,7 +22136,7 @@ function serveDashboard(port, { handle = null } = {}) {
           if (e?.credentials?.host) servers.add(`${e.credentials.host}:${e.credentials.port ?? PORT}`);
         }
         characters.sort((a, b) => String(a.character ?? a.agent).localeCompare(String(b.character ?? b.agent)));
-        const opts = { characters, server: servers.size === 1 ? [...servers][0] : null };
+        const opts = { characters: narrowToWho(characters, url.searchParams.get('who')), server: servers.size === 1 ? [...servers][0] : null };
         if (url.searchParams.get('format') === 'json') {
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
           return res.end(JSON.stringify(factionReport(opts)));
@@ -22145,6 +22157,7 @@ function serveDashboard(port, { handle = null } = {}) {
         for (const [agent, e] of fleetState) if (e?.credentials?.character)
           characters.push({ agent, character: e.credentials.character });
         characters.sort((a, b) => a.character.localeCompare(b.character));
+        if (url.searchParams.get('who')) characters.splice(0, Infinity, ...narrowToWho(characters, url.searchParams.get('who')));
         if (url.searchParams.get('format') === 'json') {
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
           return res.end(JSON.stringify(maximumsReport({ characters })));

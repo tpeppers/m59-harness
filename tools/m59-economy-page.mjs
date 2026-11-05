@@ -14,7 +14,7 @@
 import { economy, SHORT_BELOW, foodHeld, bankView, normaliseView, BANK_VIEWS } from './m59-economy.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore } from './m59-dashboard.mjs';
-import { esc, ago, num, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
+import { esc, ago, num, heroLink, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
 import { StockpileBook } from './m59-stockpile.mjs';
 import { titheFleet } from './m59-tithe.mjs';
 // Only the RENT is read from storage here now. The vault, the chest ceilings and the chest
@@ -369,7 +369,7 @@ export function renderEconomy({ hours = 168, live = null, characters = null, vie
     // per character per render is a file read for a value nothing on this page displays.
     return `
     <tr data-character="${esc(r.character)}"${r.short ? ' class="row-short"' : ''}>
-      <td class="name">${esc(r.character)}</td>
+      <td class="name">${heroLink(r.character)}</td>
       <td class="num">${r.purse == null ? '<span class="dim">—</span>' : num(r.purse)}</td>
       <td class="num">${townIncomeCell(r.last_town_trip)}</td>${bankCells(r)}
       <td class="num ${(r.elderberry ?? 0) < SHORT_BELOW ? 'bad' : ''}">${r.elderberry == null ? '—' : r.elderberry}</td>

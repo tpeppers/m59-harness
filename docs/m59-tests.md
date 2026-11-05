@@ -2791,6 +2791,12 @@ the frozen farming hour or constitute another native one-hour trial.
   assignment history, failed/stale readings, unknown versus wandering, complete
   roster grouping, HTML escaping, and dashboard navigation.
 
+- `node tools/m59-page-filter-test.mjs` (9): the board filter script parses and has no
+  template hole or closing script tag, every tab bar carries it, `heroLink` escapes,
+  `?who=` narrowing keeps its input's shape and narrows an unknown name to nobody (never to
+  everybody), and the hero page frames each board with `?who=&embed=1`, offers `/pvp` only
+  on loopback, and no longer meta-refreshes (which would reload every framed board).
+
 ## Cooperative logoff
 
 `node tools/m59-cooperative-logoff-test.mjs` (32) exercises socketless native

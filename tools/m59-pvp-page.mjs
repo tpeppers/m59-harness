@@ -5,7 +5,7 @@
 // so the broker serves it on loopback only (see the /players route).
 
 import { readFileSync } from 'node:fs';
-import { NAV, STYLE, esc, ago } from './m59-page-chrome.mjs';
+import { NAV, STYLE, esc, ago, heroLink } from './m59-page-chrome.mjs';
 import { pvpReport, DEFAULT_GAP_MS } from './m59-pvp.mjs';
 import { describeAction, locText, OUTCOME_LABEL, battleTimeline } from './m59-pvp-telemetry.mjs';
 import { movementMapFile } from './m59-map-path.mjs';
@@ -155,7 +155,7 @@ function battleHtml(b, i) {
   const oursRows = b.ours.map(o => `<tr><td>${esc(o.name)}</td><td class="num">${o.kills || ''}</td><td class="num">${o.deaths ? `<span class="bad">${o.deaths}</span>` : ''}</td><td class="num">${o.volleys || ''}</td><td class="num">${o.refused || ''}</td><td class="num">${o.hits_out || ''}</td><td class="num">${o.hits_in || ''}</td></tr>`).join('');
   const rec = b.reconstructed;
   const did = tm?.characters?.length ? `<table class="ours"><thead><tr><th>What ours did</th><th>Maps</th><th>Swings</th><th>Casts</th><th>Landed</th><th>Wasted</th><th>Failed</th><th>No reply</th><th>Gear</th><th>Spells</th></tr></thead><tbody>${
-    tm.characters.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.maps.join(' → '))}</td><td class="num">${c.attacks || ''}${c.vetoed ? ` <span class="dim">(${c.vetoed} vetoed)</span>` : ''}</td>
+    tm.characters.map(c => `<tr><td>${heroLink(c.name)}</td><td>${esc(c.maps.join(' → '))}</td><td class="num">${c.attacks || ''}${c.vetoed ? ` <span class="dim">(${c.vetoed} vetoed)</span>` : ''}</td>
       <td class="num">${c.casts || ''}</td><td class="num">${c.landed ? `<span class="good">${c.landed}</span>` : ''}</td><td class="num">${c.wasted ? `<span class="bad">${c.wasted}</span>` : ''}</td>
       <td class="num">${c.failed ? `<span class="bad">${c.failed}</span>` : ''}</td><td class="num">${c.no_reply || ''}</td>
       <td class="num">${c.gear || ''}${c.gear_broken ? ` <span class="bad">(${c.gear_broken} broken)</span>` : ''}</td>

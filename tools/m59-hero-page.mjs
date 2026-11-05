@@ -15,6 +15,7 @@
 // dashboard server it is served from has no code path to a session, which is the
 // property that makes it safe to point at a home network.
 import { esc, lore, roomLink } from './m59-dashboard.mjs';
+import { NAV } from './m59-page-chrome.mjs';
 
 const clock = t => (t ? new Date(t).toTimeString().slice(0, 8) : '');
 
@@ -28,13 +29,44 @@ const STYLE = `
             --edge:#fbaa3e; --mana:#60a5fa; --skip:#6b6b6b; }
   }
   * { box-sizing:border-box; }
-  body { margin:0; padding:1.5rem 1rem 4rem; background:var(--bg); color:var(--fg);
-         font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
-  .wrap { max-width:1000px; margin:0 auto; }
-  h1 { font-size:1.5rem; margin:0 0 .1rem; letter-spacing:-.01em; }
-  h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
-       margin:2rem 0 .6rem; font-weight:600; }
-  .sub { color:var(--dim); font-size:.85rem; margin-bottom:1.2rem; }
+  body { margin:0; padding:1rem 1rem 3rem; background:var(--bg); color:var(--fg);
+         font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; }
+  h1 { font-size:1.4rem; margin:0; letter-spacing:-.01em; }
+  h2 { font-size:.72rem; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
+       margin:1.1rem 0 .4rem; font-weight:600; }
+  .sub { color:var(--dim); font-size:.82rem; margin-bottom:.6rem; }
+  /* The fleet tab bar, as m59-page-chrome.mjs draws it on every other board. */
+  .tabs { display:flex; gap:.15rem; margin:0 0 .8rem; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .tabs a { padding:.35rem .7rem; text-decoration:none; color:var(--dim); font-size:.82rem;
+            border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tabs a:hover { color:var(--fg); }
+  /* THIS CHARACTER'S TABS. Its own data first, then every board narrowed to it. */
+  .hhead { display:flex; gap:1rem; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; }
+  .hhead .who { flex:1 1 420px; }
+  .hhead .faction-priority { flex:0 1 420px; margin:0; padding:.5rem .8rem; }
+  .hhead .faction-priority strong { font-size:1rem; }
+  .vitals { display:grid; grid-template-columns:repeat(auto-fit,minmax(118px,1fr)); gap:.5rem; margin:.7rem 0 .6rem; }
+  .vitals .card { padding:.45rem .7rem; }
+  .vitals .val { font-size:1.15rem; }
+  .htabs { position:sticky; top:0; z-index:5; background:var(--bg); display:flex; flex-wrap:wrap;
+           gap:.1rem .6rem; border-bottom:1px solid var(--line); margin-bottom:.6rem; padding-top:.2rem; }
+  .htabs .grp { display:flex; flex-wrap:wrap; }
+  .htabs .boards { border-left:1px solid var(--line); padding-left:.5rem; }
+  .htabs a { padding:.35rem .6rem; text-decoration:none; color:var(--dim); font-size:.84rem;
+             border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  .htabs a:hover { color:var(--fg); }
+  .htabs a.on { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
+  .htabs .ct { font-size:.7rem; color:var(--dim); font-weight:400; }
+  .js .hpanel { display:none; }
+  .js .hpanel.on { display:block; }
+  .hpanel > h2:first-child, .hpanel .cols > div > h2:first-child { margin-top:.3rem; }
+  .bhead { display:flex; gap:.8rem; align-items:baseline; font-size:.85rem; margin:.2rem 0 .4rem; }
+  .bhead a { margin-left:auto; color:var(--accent); text-decoration:none; font-size:.8rem; }
+  .bhead .reload { font:inherit; border:1px solid var(--line); background:transparent; color:var(--dim);
+                   border-radius:6px; cursor:pointer; padding:0 .45rem; }
+  iframe.board { width:100%; height:70vh; border:1px solid var(--line); border-radius:10px; background:var(--bg); }
+  ul.effects { margin:.2rem 0; padding-left:1.1rem; }
   .back { color:var(--accent); text-decoration:none; font-size:.85rem; }
   .faction-priority { display:flex; align-items:center; justify-content:space-between; gap:1rem;
                       margin:0 0 1rem; padding:.85rem 1rem; background:var(--panel);
@@ -48,10 +80,10 @@ const STYLE = `
   .faction-priority strong { display:block; font-size:1.2rem; }
   .faction-priority p { max-width:55ch; margin:0; color:var(--dim); font-size:.82rem;
                         text-align:right; }
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.75rem; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.5rem; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.55rem .8rem; }
   .card .k { color:var(--dim); font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; }
-  .card .val { font-size:1.35rem; font-weight:600; margin-top:.1rem; }
+  .card .val { font-size:1.2rem; font-weight:600; margin-top:.05rem; }
   .card .sm { font-size:.75rem; color:var(--dim); }
   table { border-collapse:collapse; width:100%; font-size:.87rem; }
   th { text-align:left; color:var(--dim); font-weight:400; font-size:.68rem; text-transform:uppercase;
@@ -71,7 +103,7 @@ const STYLE = `
   .detail { max-width:430px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   a.lore, a.room-link { color:var(--accent); text-decoration:none; border-bottom:1px dotted var(--line); }
   a.lore:hover, a.room-link:hover { border-bottom-color:var(--accent); }
-  .cols { display:grid; grid-template-columns:1fr 1fr; gap:2rem; }
+  .cols { display:grid; grid-template-columns:3fr 2fr; gap:1.5rem; }
   @media (max-width:760px){
     .cols { grid-template-columns:1fr; }
     .faction-priority { align-items:flex-start; flex-direction:column; }
@@ -251,7 +283,7 @@ export function renderHero(h, { localhost = false } = {}) {
 
   const effects = (h.effects || []).map(e => `<li>${esc(e)}</li>`).join('');
 
-  const journal = (h.journal || []).slice(-30).reverse().map(e => `
+  const journalRows = (n) => (h.journal || []).slice(-n).reverse().map(e => `
     <tr><td class="dim">${esc(clock(e.at))}</td>
         <td>${esc(e.what)}</td>
         <td class="dim detail">${esc(Object.entries(e)
@@ -267,107 +299,99 @@ export function renderHero(h, { localhost = false } = {}) {
   const name = h.name ?? '?';
   const href = encodeURIComponent(name);
 
-  return `<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(name)} — Meridian 59</title>
-<meta http-equiv="refresh" content="20">
-<style>${STYLE}</style></head>
-<body><div class="wrap">
-  <a class="back" href="/fleet">&larr; fleet</a>
-  <h1>${esc(name)}</h1>
-  <div class="sub">${esc(h.agent ?? '')} · ${esc(h.strategy ?? 'no strategy')} ·
-    ${h.in_game ? 'in game' : '<span class="bad">not in game</span>'} ·
-    ${roomLink(h.room?.name, h.room?.num)}
-    ${h.room ? `<a href="/room3d/${esc(h.name)}" style="font-size:.75rem;margin-left:8px">3D view</a>` : ''}
-    ${h.position ? `<span class="dim">(col ${h.position.col}, row ${h.position.row})</span>` : ''}</div>
+  // ONE CHARACTER, EVERY BOARD. Operator, 2026-11-04: the hero page as a single page with
+  // tabs, and a tab for each fleet board showing that board's data for this character only.
+  // The board tabs are the boards THEMSELVES, framed with `?who=<name>&embed=1` — the broker
+  // narrows the data and m59-page-filter.mjs hides the chrome — rather than a second
+  // rendering of each one here, because a summary written twice is a summary that disagrees
+  // with its source the first time either is changed. They load when first opened: some of
+  // these boards cost the broker real work, and nobody opens all fifteen.
+  //
+  // /pvp and /communications name strangers and are served on loopback only, so their tabs
+  // are offered only where they would load.
+  const BOARDS = [
+    ['deaths', 'Post mortems', '/deaths'],
+    ['tougher', 'Tougher', '/tougher'],
+    ['travel', 'Travel', '/travel'],
+    ['skills', 'Skills', '/skills'],
+    ['practice', 'Spell practice', '/practice'],
+    ['couriers', 'Couriers', '/couriers'],
+    ['economy', 'Economy', '/economy'],
+    ['inventory', 'Inventory', '/inventory'],
+    ['stats', 'Build', '/stats'],
+    ['faction', 'Factions', '/faction'],
+    ['maximums', 'Maximums', '/maximums'],
+    ['harness', 'Harness', '/harness'],
+    ['dum', 'DUM bot', '/dum'],
+    ...(localhost ? [['pvp', 'PVP', '/pvp'], ['communications', 'Comms', '/communications']] : []),
+  ];
+  const boardSrc = (path) => `${path}?who=${href}&embed=1`;
+  const fullSrc = (path) => `${path}?who=${href}`;
+  const OWN = [
+    ['overview', 'Overview'],
+    ['pack', `Pack <span class="ct">${carried}</span>`],
+    ['abilities', `Abilities <span class="ct">${(h.skills?.length ?? 0) + (h.spells?.length ?? 0)}</span>`],
+    ['log', 'Log'],
+    ['play', 'Play'],
+  ];
 
-  <section class="faction-priority ${factionNeutral ? 'missing' : factionKnown ? 'member' : 'unknown'}"
-           aria-label="Faction status">
-    <div><span class="k">Faction</span><strong>${esc(factionLabel)}</strong></div>
-    <p>${esc(factionDetail)}</p>
-  </section>
+  const ownPanel = (key, body) => `<section class="hpanel" id="p-${key}" data-own="1">${body}</section>`;
+  const boardPanel = ([key, label, path]) => `<section class="hpanel" id="p-${key}">
+    <div class="bhead"><b>${esc(label)}</b> <span class="dim">for ${esc(name)}</span>
+      <a href="${fullSrc(path)}" target="_top">open the full board ↗</a>
+      <button type="button" class="reload" data-reload="${key}" title="reload this tab">↻</button></div>
+    <iframe class="board" data-src="${boardSrc(path)}" title="${esc(label)} for ${esc(name)}" loading="lazy"></iframe>
+    <noscript><a href="${fullSrc(path)}">${esc(label)} for ${esc(name)}</a></noscript>
+  </section>`;
 
-  <div class="cards">
-    <div class="card"><div class="k">doing</div>
-      <div class="val" style="font-size:1rem">${esc(h.activity ?? '—')}</div></div>
-    <div class="card"><div class="k">health</div>
-      <div class="val">${hp.value ?? '—'}<span class="sm"> / ${hp.max ?? '—'}</span></div>
-      <div class="sm">max health <em>is</em> the level</div></div>
-    <div class="card"><div class="k">mana</div>
-      <div class="val">${mp.value ?? '—'}<span class="sm"> / ${mp.max ?? '—'}</span></div></div>
-    <div class="card"><div class="k">vigor</div>
-      <div class="val">${vg.value ?? '—'}<span class="sm"> / ${vg.scale_max ?? 200}</span></div>
-      <div class="sm">${vg.rested === true ? 'rested' : vg.rest_threshold != null
-        ? `resting reaches ${vg.rest_threshold}` : ''}</div></div>
-    <div class="card"><div class="k">carrying</div>
-      <div class="val">${carried}<span class="sm"> / ${cap ?? '?'}</span></div>
-      <div class="sm">${freePct != null ? freePct + '% free' : 'no keeper limit set'}</div>
-      ${freePct != null ? `<div class="free"><span style="width:${100 - freePct}%"></span></div>` : ''}</div>
-    <div class="card"><div class="k">stamina</div><div class="val">${h.stamina ?? '—'}</div>
-      <div class="sm">${h.ceiling != null ? `lifetime cap ${h.ceiling} health` : ''}</div></div>
-  </div>
-
-  ${h.room_view ? renderRoomView(h.room_view, h.name) : ''}
-
-  <h2>GOAP plan</h2>
-  ${h.goap ? renderGoap(h.goap) : '<p class="dim">Not running the GOAP keeper.</p>'}
-
-  <h2>Safe spot</h2>
-  ${h.safe_spot ? `<div class="cards">
-    <div class="card"><div class="k">standing at</div>
-      <div class="val" style="font-size:1.1rem">${h.safe_spot.at.col}, ${h.safe_spot.at.row}</div>
-      <div class="sm">${h.safe_spot.works
-        ? '<span class="good">holds under attack</span>' : 'untested'}</div></div>
-    <div class="card" style="grid-column:span 2"><div class="k">evidence</div>
-      <div class="sm" style="margin-top:.3rem">${esc(h.safe_spot.evidence)}</div></div>
-    <div class="card"><div class="k">on us</div>
-      <div class="val">${h.threat?.in_swing_range ?? 0}</div>
-      <div class="sm">${h.threat?.camped_on_us ?? 0} camped${
-        (h.threat?.what || []).length ? ' · ' + esc(h.threat.what.join(', ')) : ''}</div></div>
-   </div>` : '<p class="dim">Not holding one.</p>'}
-  ${trials ? `<table style="margin-top:.8rem">
-    <thead><tr><th>time</th><th>reading</th><th>inputs</th></tr></thead>
-    <tbody>${trials}</tbody></table>` : ''}
-
-  <h2>Survival</h2>
-  <div class="cards">
-    <div class="card"><div class="k">deaths</div><div class="val ${h.deaths ? 'bad' : ''}">${h.deaths ?? 0}</div></div>
-    <div class="card"><div class="k">deaths in a safe spot</div>
-      <div class="val ${h.deaths_in_safe_spot ? 'bad' : 'good'}">${h.deaths_in_safe_spot ?? 0}</div>
-      <div class="sm">${h.deaths_in_proven_safe_spot ?? 0} of them in a proven one</div></div>
-    <div class="card"><div class="k">mulligans</div><div class="val">${h.mulligans ?? 0}</div>
-      <div class="sm">fights re-taken from full instead of lost</div></div>
-    <div class="card"><div class="k">logoffs</div><div class="val">${h.logoffs ?? 0}</div>
-      <div class="sm">deaths avoided by disconnecting</div></div>
-  </div>
-
+  const overview = `
   <div class="cols">
     <div>
-      <h2>Carrying</h2>
-      <table><thead><tr><th>item</th><th class="num">n</th><th>can</th></tr></thead>
-        <tbody>${items || '<tr><td colspan="3" class="dim">nothing at all</td></tr>'}</tbody></table>
+      <h2>GOAP plan</h2>
+      ${h.goap ? renderGoap(h.goap) : '<p class="dim">Not running the GOAP keeper.</p>'}
+
+      <h2>Safe spot</h2>
+      ${h.safe_spot ? `<div class="cards">
+        <div class="card"><div class="k">standing at</div>
+          <div class="val" style="font-size:1.05rem">${h.safe_spot.at.col}, ${h.safe_spot.at.row}</div>
+          <div class="sm">${h.safe_spot.works
+            ? '<span class="good">holds under attack</span>' : 'untested'}</div></div>
+        <div class="card"><div class="k">on us</div>
+          <div class="val">${h.threat?.in_swing_range ?? 0}</div>
+          <div class="sm">${h.threat?.camped_on_us ?? 0} camped${
+            (h.threat?.what || []).length ? ' · ' + esc(h.threat.what.join(', ')) : ''}</div></div>
+        <div class="card" style="grid-column:1/-1"><div class="k">evidence</div>
+          <div class="sm" style="margin-top:.2rem">${esc(h.safe_spot.evidence)}</div></div>
+       </div>` : '<p class="dim">Not holding one.</p>'}
+      ${trials ? `<table style="margin-top:.6rem">
+        <thead><tr><th>time</th><th>reading</th><th>inputs</th></tr></thead>
+        <tbody>${trials}</tbody></table>` : ''}
+
+      <h2>Survival</h2>
+      <div class="cards">
+        <div class="card"><div class="k">deaths</div><div class="val ${h.deaths ? 'bad' : ''}">${h.deaths ?? 0}</div>
+          <div class="sm"><a href="#deaths">post mortems →</a></div></div>
+        <div class="card"><div class="k">in a safe spot</div>
+          <div class="val ${h.deaths_in_safe_spot ? 'bad' : 'good'}">${h.deaths_in_safe_spot ?? 0}</div>
+          <div class="sm">${h.deaths_in_proven_safe_spot ?? 0} in a proven one</div></div>
+        <div class="card"><div class="k">mulligans</div><div class="val">${h.mulligans ?? 0}</div>
+          <div class="sm">fights re-taken from full</div></div>
+        <div class="card"><div class="k">logoffs</div><div class="val">${h.logoffs ?? 0}</div>
+          <div class="sm">deaths avoided by disconnecting</div></div>
+      </div>
     </div>
     <div>
-      <h2>Skills and spells</h2>
-      <table><thead><tr><th>name</th><th>kind</th>
-        <th class="num" title="ability, 0-100 — the only signal that practice is working">at</th></tr></thead>
-        <tbody>${abilities || '<tr><td colspan="3" class="dim">none known</td></tr>'}</tbody></table>
+      ${h.room_view ? renderRoomView(h.room_view, h.name) : ''}
+      ${effects ? `<h2>Status effects</h2><ul class="dim effects">${effects}</ul>` : ''}
+      <h2>Stats</h2>
+      <table><tbody>${stats || '<tr><td class="dim">none reported</td></tr>'}</tbody></table>
+      <h2>Latest</h2>
+      <table data-nofilter><tbody>${journalRows(6) || '<tr><td colspan="3" class="dim">nothing yet</td></tr>'}</tbody></table>
+      <div class="sm"><a href="#log">the whole log →</a></div>
     </div>
-  </div>
+  </div>`;
 
-  ${effects ? `<h2>Status effects</h2><ul class="dim">${effects}</ul>` : ''}
-
-  <h2>Stats</h2>
-  <table><tbody>${stats || '<tr><td class="dim">none reported</td></tr>'}</tbody></table>
-
-  <h2>Recent log</h2>
-  <table><thead><tr><th>time</th><th>what</th><th>detail</th></tr></thead>
-    <tbody>${journal || '<tr><td colspan="3" class="dim">nothing yet</td></tr>'}</tbody></table>
-
-  <h2>Play as this character</h2>
-  ${localhost ? `
+  const play = localhost ? `
     <button class="launch" onclick="grab()">
       <span class="ico">&#128481;</span>
       <span><span class="t">START AS ${esc(String(name).toUpperCase())}</span><br>
@@ -380,7 +404,6 @@ export function renderHero(h, { localhost = false } = {}) {
       async function grab() {
         const r = await fetch('/hero/${href}/start.ps1');
         const t = await r.text();
-        const one = 'powershell -NoProfile -ExecutionPolicy Bypass -File .\\\\start-${href}.ps1';
         try {
           await navigator.clipboard.writeText(t);
           alert('The script is on your clipboard. Save it as start.ps1 and run it,\\nor use the download link.');
@@ -390,10 +413,110 @@ export function renderHero(h, { localhost = false } = {}) {
     : `<p class="warn">Withheld. This page is reachable from the network and the launcher carries
        the account password in plain text, so it is only offered to a browser running on the
        machine the broker is on. Open <code>http://127.0.0.1</code> rather than the LAN address
-       to get it.</p>`}
+       to get it.</p>`;
 
-  <footer class="sub" style="margin-top:2.5rem">live from the broker · refreshes every 20s</footer>
-</div></body></html>`;
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name)} — Meridian 59</title>
+<style>${STYLE}</style>
+<script>document.documentElement.classList.add('js')</script></head>
+<body><div class="wrap">
+  ${NAV('')}
+  <header class="hhead">
+    <div class="who">
+      <h1>${esc(name)}</h1>
+      <div class="sub">${esc(h.agent ?? '')} · ${esc(h.strategy ?? 'no strategy')} ·
+        ${h.in_game ? 'in game' : '<span class="bad">not in game</span>'} ·
+        ${roomLink(h.room?.name, h.room?.num)}
+        ${h.room ? `<a href="/room3d/${esc(h.name)}" style="font-size:.75rem;margin-left:6px">3D view</a>` : ''}
+        ${h.position ? `<span class="dim">(col ${h.position.col}, row ${h.position.row})</span>` : ''}
+        · <b>${esc(h.activity ?? '—')}</b></div>
+    </div>
+    <section class="faction-priority ${factionNeutral ? 'missing' : factionKnown ? 'member' : 'unknown'}"
+             aria-label="Faction status">
+      <div><span class="k">Faction</span><strong>${esc(factionLabel)}</strong></div>
+      <p>${esc(factionDetail)}</p>
+    </section>
+  </header>
+
+  <div class="vitals">
+    <div class="card"><div class="k">health</div>
+      <div class="val">${hp.value ?? '—'}<span class="sm"> / ${hp.max ?? '—'}</span></div>
+      <div class="sm" title="max health is the level">${h.ceiling != null ? `cap ${h.ceiling}` : 'max = level'}</div></div>
+    <div class="card"><div class="k">mana</div>
+      <div class="val">${mp.value ?? '—'}<span class="sm"> / ${mp.max ?? '—'}</span></div></div>
+    <div class="card"><div class="k">vigor</div>
+      <div class="val">${vg.value ?? '—'}<span class="sm"> / ${vg.scale_max ?? 200}</span></div>
+      <div class="sm">${vg.rested === true ? 'rested' : vg.rest_threshold != null
+        ? `rests to ${vg.rest_threshold}` : ''}</div></div>
+    <div class="card"><div class="k">carrying</div>
+      <div class="val">${carried}<span class="sm"> / ${cap ?? '?'}</span></div>
+      ${freePct != null ? `<div class="free"><span style="width:${100 - freePct}%"></span></div>` : '<div class="sm">no keeper limit</div>'}</div>
+    <div class="card"><div class="k">stamina</div><div class="val">${h.stamina ?? '—'}</div></div>
+    <div class="card"><div class="k">deaths</div><div class="val ${h.deaths ? 'bad' : ''}">${h.deaths ?? 0}</div></div>
+  </div>
+
+  <nav class="htabs" aria-label="${esc(name)}">
+    <span class="grp">${OWN.map(([k, l]) => `<a href="#${k}" data-tab="${k}">${l}</a>`).join('')}</span>
+    <span class="grp boards">${BOARDS.map(([k, l]) => `<a href="#${k}" data-tab="${k}">${esc(l)}</a>`).join('')}</span>
+  </nav>
+
+  ${ownPanel('overview', overview)}
+  ${ownPanel('pack', `<table><thead><tr><th>item</th><th class="num">n</th><th>can</th></tr></thead>
+    <tbody>${items || '<tr><td colspan="3" class="dim">nothing at all</td></tr>'}</tbody></table>`)}
+  ${ownPanel('abilities', `<table><thead><tr><th>name</th><th>kind</th>
+    <th class="num" title="ability, 0-100 — the only signal that practice is working">at</th></tr></thead>
+    <tbody>${abilities || '<tr><td colspan="3" class="dim">none known</td></tr>'}</tbody></table>`)}
+  ${ownPanel('log', `<table><thead><tr><th>time</th><th>what</th><th>detail</th></tr></thead>
+    <tbody>${journalRows(30) || '<tr><td colspan="3" class="dim">nothing yet</td></tr>'}</tbody></table>`)}
+  ${ownPanel('play', play)}
+  ${BOARDS.map(boardPanel).join('')}
+
+  <footer class="sub" style="margin-top:2rem">live from the broker · this character's own tabs refresh every 20s;
+    a board tab refreshes on its own clock</footer>
+</div>
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.htabs [data-tab]');
+  var cur = null;
+  function show(key) {
+    var panel = document.getElementById('p-' + key);
+    if (!panel) { key = 'overview'; panel = document.getElementById('p-overview'); }
+    cur = key;
+    document.querySelectorAll('.hpanel').forEach(function (p) { p.classList.toggle('on', p === panel); });
+    tabs.forEach(function (t) { t.classList.toggle('on', t.dataset.tab === key); });
+    var f = panel.querySelector('iframe[data-src]');
+    if (f && !f.getAttribute('src')) f.src = f.dataset.src;
+    if (location.hash.slice(1) !== key) history.replaceState(null, '', '#' + key);
+  }
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="#"]');
+    if (a && document.getElementById('p-' + a.getAttribute('href').slice(1))) {
+      e.preventDefault(); show(a.getAttribute('href').slice(1)); window.scrollTo(0, document.querySelector('.htabs').offsetTop - 8);
+    }
+    var r = e.target.closest && e.target.closest('[data-reload]');
+    if (r) { var fr = document.querySelector('#p-' + r.dataset.reload + ' iframe'); if (fr) fr.src = fr.dataset.src; }
+  });
+  window.addEventListener('hashchange', function () { show(location.hash.slice(1)); });
+  // A framed board says how tall it is (m59-page-filter.mjs), so it never scrolls inside a scroll.
+  window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin || !e.data || !e.data.m59height) return;
+    document.querySelectorAll('iframe.board').forEach(function (f) {
+      if (f.contentWindow === e.source) f.style.height = Math.max(200, e.data.m59height + 12) + 'px';
+    });
+  });
+  // The old page refreshed itself every 20s. Now only this character's own tabs do, and only
+  // while somebody is looking — reloading a framed board every 20s would re-run it for nothing.
+  setInterval(function () {
+    var p = document.getElementById('p-' + cur);
+    if (!document.hidden && p && p.dataset.own) location.reload();
+  }, 20000);
+  show(location.hash.slice(1) || 'overview');
+})();
+</script>
+</body></html>`;
 }
 
 // The launcher itself. Two steps that are otherwise done by hand every time: start

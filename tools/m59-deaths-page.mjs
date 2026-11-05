@@ -19,7 +19,7 @@ import { loadPostmortems, facets, causeGroups, digest, TRUST_MS } from './m59-po
 import { allGains, toughSummary, allFeeds, FEED_SIZE } from './m59-tougher.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore, roomLink } from './m59-dashboard.mjs';
-import { esc, ago, NAV, STYLE, SQUARIFY_JS, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
+import { esc, ago, heroLink, NAV, STYLE, SQUARIFY_JS, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -173,7 +173,7 @@ export function renderDeaths({ hours = 168, characters = null, impact = 'all' } 
   const logRows = rows.slice(0, 80).map(r => `
     <tr class="death" data-file="${esc(r.file)}">
       <td class="dim">${esc(ago(r.at))}</td>
-      <td>${esc(r.character ?? '?')}</td>
+      <td>${heroLink(r.character)}</td>
       <td class="dim">${r.level ?? '—'}${r.impact.under_30 ? ' · under 30' : ''}<br><span class="${r.impact.category === 'true_deaths' ? 'bad' : 'dim'}">${r.impact.category === 'true_deaths' ? `True Death · −${r.impact.max_hp_lost} HP` : r.impact.category === 'no_hp_loss' ? 'No HP loss' : 'HP loss unknown'}</span></td>
       <td class="keeper">${keeperCell(r.keeper)}</td>
       <td>${esc(deathCauseLabel(r.cause))}
@@ -312,7 +312,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
   const gainRows = gains.slice(0, 60).map(g => `
     <tr>
       <td class="dim" title="${esc(g.interval_start ? new Date(g.interval_start).toISOString() + ' to ' + new Date(g.at).toISOString() : new Date(g.at).toISOString())}">${esc(ago(g.at))}${g.source === 'sample_recovery' ? ' <span class="pill">by this time · recovered</span>' : ''}</td>
-      <td>${esc(g.character)}</td>
+      <td>${heroLink(g.character)}</td>
       <td class="good">${g.from != null && g.to != null ? `${g.from} → <b>${g.to}</b>` : (g.to ?? '—')}</td>
       <td>${g.creature ? lore(g.creature) + ' <span class="guess" title="' + esc(g.attribution?.text ?? g.attributed ?? 'Inferred from a nearby kill') + '">(guess)</span>' : '<span class="guess">cause not recorded</span>'}</td>
       <td>${g.room ? roomLink(g.room, g.room_num) : '<span class="dim">—</span>'}</td>
@@ -322,7 +322,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
   // the right lifetime for "what is this character doing right now".
   const feedBlocks = feeds.map(f => `
     <div class="card">
-      <div class="k">${esc(f.character)}</div>
+      <div class="k">${heroLink(f.character)}</div>
       ${f.feed.map(e => {
         if (e.kind === 'gain')
           return `<div class="good"><b>TOUGHER</b> → ${e.to ?? '?'}${

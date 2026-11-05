@@ -15,7 +15,7 @@ import { summarise, readLedger } from './m59-ledger.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 // The tab bar, from the one place that has it. This page used to carry its own copy and
 // the deaths page carried another; a fourth board would have had to be added to both.
-import { NAV } from './m59-page-chrome.mjs';
+import { NAV, heroLink } from './m59-page-chrome.mjs';
 import { COMMUNICATIONS_STYLE, renderFleetCommunications } from './m59-communications-page.mjs';
 import { compendiumBase } from './m59-compendium-links.mjs';
 
@@ -356,7 +356,7 @@ export function renderDashboard({ hours = 24, localhost = false, piloted = [], l
   const eventRows = [...events].reverse().slice(0, 60).map(e => `
     <tr>
       <td class="dim">${esc(ago(e.t))}</td>
-      <td class="name">${esc(e.character)}</td>
+      <td class="name">${heroLink(e.character)}</td>
       <td class="ev ${e.kind === 'died' || e.kind === 'level_lost' ? 'bad' : e.kind === 'level_up' ? 'good' : ''}">${esc(e.kind.replace(/_/g, ' '))}</td>
       <td class="dim">${esc(Object.entries(e)
         .filter(([k]) => !['t', 'iso', 'type', 'character', 'kind'].includes(k))

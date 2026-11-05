@@ -20,7 +20,7 @@
 import { fleetAbilities } from './m59-abilities.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore } from './m59-dashboard.mjs';
-import { esc, ago, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
+import { esc, ago, heroLink, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -120,7 +120,7 @@ export function renderSkills({ hours = 168, characters = null } = {}) {
     if (!mine.length) return '';
     return `
     <div class="card">
-      <div class="k">${esc(c.character)}</div>
+      <div class="k">${heroLink(c.character)}</div>
       <div class="chips" style="margin-top:.4rem">${mine.map(({ a, h }) => `
         <span class="chip ${h.decayed ? 'decayed' : ''}" title="${esc(a.name)}${
           h.decayed ? ` — peaked at ${h.best}, so this one has decayed` : ''}"><b>${h.ability}</b> ${esc(a.name)}${
@@ -132,7 +132,7 @@ export function renderSkills({ hours = 168, characters = null } = {}) {
   const recent = f.recent.slice(0, 80).map(c => `
     <tr>
       <td class="dim">${esc(ago(c.at))}</td>
-      <td>${esc(c.character)}</td>
+      <td>${heroLink(c.character)}</td>
       <td class="dim">${esc(c.kind)}</td>
       <td>${lore(c.name)}</td>
       <td class="num">${c.from ?? '?'} → <b class="${c.by > 0 ? 'gain' : 'loss'}">${c.to ?? '?'}</b></td>
