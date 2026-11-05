@@ -1158,6 +1158,38 @@ default (and first eject) of using spare space for sell-gear 'trade goods'"*. `t
   at least 80%, nothing landing, no trade open) and never walks anywhere.
 
 
+## Make space: drop what was going to be sold (`make_space`, `sale_plan`)
+
+Operator, 2026-11-05: *"A more general harness fix for anytime anyone needs up to maybe 400 bulk/weight space: just
+drop items planned to be sold, it's fine.. (maybe have a fleetscript for it or something?? TryMakeSpace [amount] ?)"*.
+The incident: Rizzo (t19) conjures his weapons, stood at 97% bulk reading `unarmed -- 60 bulk free, needs 70 to hold
+one`, and while that refusal stood every journey to a merchant was refused too. Nothing regenerates pack space.
+`tools/m59-make-space.mjs`; `m59-make-space-test.mjs` (43) pins it.
+
+| where | what |
+|---|---|
+| `sale_plan agent=<a>` (broker tool, keeper op `sale_plan`, `Autopilot.salePlanView`) | READ-ONLY. The keeper's own sale plan on the counter's terms (`ownSalePlan()`: `MARKET_KEEP`, protected names with the island release, the sale loadout, `max_weapons`): every row with id, name, amount, sale_amount, role, recommended, blocked, reason, per-unit bulk/weight, estimated per-unit value, and `droppable` / `drop_block`. Totals: `sell` (what a town trip sells), `keep`, `droppable`; plus `capacity`. Sends nothing to the server. |
+| `make_space agent=<a> bulk=N weight=M` (broker tool, keeper op `make_space`, `Autopilot.makeSpaceNow`) | Drops `droppable` rows of that SAME plan until N bulk / M weight is FREE (a target, not an amount to drop; each capped at 400). Returns `{ok, needed, freed, dropped:[{name, amount, why}], short_by}`; a `make_space` ledger row when anything was dropped or it fell short. |
+| `run make-space agents=t19 bulk=70` (fleetscript, `tools/fleetscripts/make-space.mjs`) | The same, per agent, in place: no walking. |
+| the unarmed hook (`Autopilot.unarmedMakeSpace`, pass-combat) | When the unarmed blocker is `room`, it makes 70 + 10 bulk free and calls `armSelf()` again, BEFORE the pack-full town trip. At most once per 10 minutes (`UNARMED_MAKE_SPACE_EVERY_MS`) whatever the outcome; skipped while a bot holds the economy faculty. |
+
+- **Only the plan.** A row is droppable when the plan recommends it, has queued it (`state: sell`) and blocks it for
+  no reason: equipped gear, loadout keeps, protected names, fleet-wanted items, conjured (IA_MADE) items, operator
+  keep vetoes and the keep list all stay. Under that, a floor nobody can talk past: never money, never food (the
+  larder's call), never a bow, arrows or the chalice, never an id the keeper is holding back (enchanted, just
+  delivered), and never more of a stack than the plan's `sale_amount`.
+- **Least valuable per unit of what is short, first**, greedily on whichever of bulk/weight is further short;
+  `m59-item-value.mjs` for the value and the static weight table for the space. An item of unknown value goes after
+  every known one (unknown is not cheap); an unweighed item is never dropped (nothing could say what it freed).
+- **Partial stacks**, by exact id and amount: 45 bulk short of fairy wings at 5 each drops 9 of 10.
+- **Judged by the pack.** Every drop is followed by an inventory read; a drop the server did not take frees nothing and
+  comes back under `refused_items`. Unknown equipment blocks every row, so it drops nothing; an open trade refuses.
+- **Short is an answer.** When the plan cannot cover the target it drops what it can and says `short_by`, with
+  `ok: false`. It never reaches outside the plan to make up the difference.
+- Not the same as loot ejection's `overflow_at` above, which is a standing pack-fullness rule; this is a one-shot
+  target, asked for by an operator, a fleetscript or the unarmed hook.
+
+
 ## An errand's purse is leased
 
 Prod, 2026-10-26: a courier withdrew 6000 for a reagent run and the chalice holder's banking rule (keep the walking

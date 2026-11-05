@@ -8,13 +8,15 @@
 // (tools/autopilot/source.mjs) rebuilds the original single-file text for source-shape tests;
 // the `@part` markers are what it splices on.
 //
-// 14 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
-//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, postShoppingPlan,
+// 17 methods: poorVigorFloor, poorFarmingActive, poorShoppingRetryReady, deferUnaffordableShopping,
+//   purchaseRequests, purchaseFoodGap, shoppingPlan, saleRelief, ownSalePlan, salePlanView,
+//   makeSpaceNow, postShoppingPlan,
 //   ensurePurchaseFunds, bankRun, walkingFloat, bankAboveNow, purseLeaseStatus
 import { readBankerLine } from '../m59-bank.mjs';
 import { readSession } from '../m59-healing-session.mjs';
 import { guildPlan } from '../m59-guildwants.mjs';
 import { MARKET_KEEP, isFood, weighPack } from '../m59-items.mjs';
+import { makeSpace, salePlanSummary } from '../m59-make-space.mjs';
 import { bankAboveOf, leaseCarry, walkingFloatOf } from '../m59-purse-lease.mjs';
 import { norm } from '../m59-loadout.mjs';
 import { keeperOrigin } from '../m59-move-origin.mjs';
@@ -182,6 +184,47 @@ export class ShoppingPart {
         summary: { fullness: Number(after.toFixed(3)), stacks: stacksAfter, sellable_stacks: sold.length },
       };
     } catch { return null; }
+  }
+
+  /**
+   * THIS CHARACTER'S OWN SALE PLAN, on the terms the market counter sells on — the same arguments
+   * saleRelief passes. `sale_plan` shows it and `make_space` chooses from it, so the two cannot
+   * disagree about what is "planned to be sold" (tools/m59-make-space.mjs).
+   */
+  ownSalePlan() {
+    return skills.inventorySalePlan(this.s, { keep: MARKET_KEEP,
+      protect: this.islandSaleRelease ? this.islandSaleRelease(this.protectedItemNames()) : this.protectedItemNames(),
+      loadout: this.saleLoadout ? this.saleLoadout() : this.loadout(),
+      maxWeapons: this.policy.maxWeapons, weaponPriority: this.weaponPriorityNow() });
+  }
+
+  /** The sale plan, read-only: every row, what make_space could drop, and the sell/keep totals. */
+  salePlanView() {
+    const c = this.s?.client;
+    if (!c) return { ok: false, error: 'no client' };
+    const heldBack = this.heldBackIds?.() ?? new Set();
+    return { agent: this.s.name ?? null,
+             ...salePlanSummary(this.ownSalePlan(), { heldBack, capacity: skills.carryCapacity(c) }) };
+  }
+
+  /**
+   * DROP SALE-PLAN ITEMS, LEAST VALUABLE FIRST, UNTIL `bulk`/`weight` (each at most 400) IS FREE.
+   * Never anything outside ownSalePlan(); see tools/m59-make-space.mjs for the floor under it.
+   */
+  async makeSpaceNow({ bulk = null, weight = null, why = 'make_space' } = {}) {
+    if (!this.s?.client) return { ok: false, refused: 'no client', dropped: [], freed: { bulk: 0, weight: 0 } };
+    const r = await makeSpace(this.s, { bulk, weight, why,
+      planOf: () => this.ownSalePlan(),
+      capacityOf: () => skills.carryCapacity(this.s.client),
+      heldBack: () => this.heldBackIds?.() ?? new Set() });
+    // A drop, or a shortfall the plan could not cover, is worth a row; "already enough room" is not.
+    if (r.dropped?.length || (!r.refused && !r.ok)) {
+      try { this.ledgerEvent?.('make_space', { needed: r.needed, freed: r.freed, dropped: r.dropped,
+        short_by: r.short_by, ok: r.ok, why, room_num: this.s.world?.room?.num ?? null }); } catch {}
+      this.note('made space', { needed: r.needed, freed: r.freed, short_by: r.short_by,
+        dropped: (r.dropped ?? []).map(d => `${d.amount} ${d.name}`), why });
+    }
+    return r;
   }
 
   postShoppingPlan(plan) {

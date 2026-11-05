@@ -399,6 +399,14 @@ through a nested shelter order.
 - `m59-island-arrive-test.mjs` (15): arriving on the Island to stay. Both vaultmen are recognised (Itzal cha'Nosak,
   2005, as well as Obert); `vaultForJungle` deposits what the jungle guard refuses with keep counts, worn protection
   first, and reads the pack back; postures select by room; `island-arrive` vaults before it assigns the farm.
+- `m59-make-space-test.mjs` (43): `make_space` / `sale_plan` (tools/m59-make-space.mjs, operator 2026-11-05, Rizzo
+  unarmed at 97% bulk). Against the REAL `inventorySalePlan` and a fake client: only plan rows that are recommended,
+  queued and unblocked are dropped; never money, food, arrows, worn gear, protected names, the keep list or a held-back
+  id; least value per unit of the short dimension first, unknown value last; partial stacks; the 400 cap; `short_by`
+  and `ok: false` when the plan cannot cover it; a drop the server ignores is `refused_items`, not freed space; unknown
+  equipment and an open trade drop nothing; `sale_plan` sends no packet and changes nothing; the unarmed hook drops,
+  re-arms, is bounded to once per 10 minutes and steps aside for a bot holding economy; the keeper ops, broker tools and
+  the `make-space` fleetscript are wired.
 - `m59-island-sale-test.mjs` (54): a sell trip on Ko'catan sells the island reagents (prod 2026-10-27: packs full of
   dragonfly eyes, ferns and seraphym, worth 15-17k at Zala, carried home by every trip). Rainbow fern and five other
   real items with a weapon word in their name are not weapons, real weapons still are; on the island the sale plan

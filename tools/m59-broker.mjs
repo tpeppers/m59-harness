@@ -16103,6 +16103,50 @@ const TOOLS = [
     },
   },
   {
+    name: 'sale_plan',
+    description:
+      'WHAT THIS CHARACTER WOULD SELL, READ-ONLY. The keeper\'s own sale plan on the terms the market ' +
+      'counter sells on (loadout reserves, protected names, the fleet\'s wants, conjured items, operator ' +
+      'vetoes, the keep list): every pack row with id, name, amount, sale_amount, role, recommended, ' +
+      'blocked, reason, the per-unit bulk/weight from the static table and an estimated per-unit value, ' +
+      'and `droppable`/`drop_block` — make_space\'s verdict on that row, from the SAME computation, so ' +
+      'this is exactly what make_space would choose from. Totals: what a town trip would sell vs keep, ' +
+      'and what make_space could drop; plus carrying capacity. Sends nothing to the server and drops ' +
+      'nothing. Keeper-backed characters only.',
+    schema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, why: 'sale_plan needs a keeper-backed character' };
+      return keeperAction(s.name, s._index, 'sale_plan', {}, { timeoutMs: 15_000 });
+    },
+  },
+  {
+    name: 'make_space',
+    description:
+      'FREE UP TO 400 BULK AND/OR WEIGHT, IN PLACE, BY DROPPING WHAT THE CHARACTER WAS GOING TO SELL. ' +
+      'Operator, 2026-11-05: "just drop items planned to be sold, it\'s fine". Drops ONLY rows of its own ' +
+      'sale plan (see sale_plan: droppable rows) — never money, food, worn gear, bows, arrows, the ' +
+      'chalice, loadout-kept, protected, fleet-wanted or conjured items, and never more of a stack than ' +
+      'the plan would sell. Least valuable per unit of the short dimension first, by exact id and amount ' +
+      '(partial stacks), until `bulk`/`weight` is FREE (a target, not an amount to drop; each capped at ' +
+      '400). Every drop is verified by re-reading the pack. When the plan cannot cover it, it drops what ' +
+      'it can and says `short_by`. No walking. Returns {ok, needed, freed, dropped:[{name, amount, why}], ' +
+      'short_by}. Keeper-backed characters only.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      bulk: { type: 'number', description: 'free bulk wanted afterwards, 1..400' },
+      weight: { type: 'number', description: 'free weight wanted afterwards, 1..400' },
+      why: { type: 'string' },
+    }, required: ['agent'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, why: 'make_space needs a keeper-backed character' };
+      if (a.bulk == null && a.weight == null) return { ok: false, why: 'give bulk and/or weight (each at most 400)' };
+      return keeperAction(s.name, s._index, 'make_space',
+        { bulk: a.bulk ?? null, weight: a.weight ?? null, why: a.why ?? 'make_space (broker)' }, { timeoutMs: 180_000 });
+    },
+  },
+  {
     name: 'chalice_ride',
     description:
       'RIDE THE FLEET\'S CHALICE OF THE RAIN TO THE GUILD HALL NOW, outside a town trip — the courier\'s ' +
