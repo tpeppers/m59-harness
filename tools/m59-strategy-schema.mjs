@@ -39,6 +39,7 @@ import { normalizeBuddy } from './m59-buddy.mjs';
 import { spareBlockerMode } from './m59-spare.mjs';
 import { normalizeRequires, normalizeFloor } from './m59-strategy-gate.mjs';
 import { normalizeLootEject } from './m59-loot-eject.mjs';
+import { normPatrol } from './m59-patrol-farm.mjs';
 import { normalizeGangUp } from './m59-gang-up.mjs';
 import { unrevealedWeaponMode } from './m59-unrevealed-weapons.mjs';
 
@@ -215,6 +216,11 @@ export const STRATEGY_FIELDS = Object.freeze([
   // room view (Autopilot.gangUpFilter); otherwise it is handled as if `hunt` did not name it. It never widens the hunt.
   // Operator 2026-10-27, the Guardians of Zjiria in Ukgoth: "fight it 2-on-1 ... the only change from regular trolls".
   { path: 'gangUp', keys: ['gangUp'], faculty: 'work', arg: 'gang_up', normalize: v => normalizeGangUp(v) },
+  // PATROL FARMING (m59-patrol-farm.mjs): { room, loop: [{ row, col }, ...], engageWithin?, arriveWithin?, legSteps?,
+  // resumeSlack? }. In that room a farmer with nothing in reach walks the loop instead of holding a wall, engages quarry
+  // within engageWithin squares, and resumes at the nearest waypoint after a fight. Elsewhere nothing changes. `work`, like
+  // huntArea; the walk itself still yields when a bot or lease holds `movement`. Operator 2026-11-04, the Icky Cave.
+  { path: 'patrol', keys: ['patrol'], faculty: 'work', arg: 'patrol', normalize: v => normPatrol(v) },
 ]);
 
 /** { room, squares } -> { room, squares: [[row, col], ...] } (deduplicated), or null. */

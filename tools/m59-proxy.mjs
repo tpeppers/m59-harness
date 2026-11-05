@@ -36,6 +36,7 @@
 // pipe and simply watch for the seeds going past.
 import net from 'node:net';
 import { attachProxyCommunications, proxyCommunicationsConfig } from './m59-proxy-communications.mjs';
+import { attachHumanKills } from './m59-human-kills.mjs';
 import { resolveFleet, evidenceDirFor } from './m59-fleetpath.mjs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
@@ -1090,6 +1091,9 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     log('client connected');
     const s = new ProxySession(sock, { host, port, observe, gateable, log });
     if(communications)s.communications=attachProxyCommunications(s,communications);
+    // A PERSON'S KILLS, INTO THE FLEET LEDGER (m59-human-kills.mjs): passive, rides on the communications decoder for
+    // who the character is, and writes nothing while a keeper is attached to this connection.
+    if(s.communications)attachHumanKills(s,{log}).then(o=>{s.humanKills=o;}).catch(e=>log(`human kill counting off: ${e.message}`));
     if(context)try{context.attach(s);}catch{s.destroy();return;}
     current = s;
     sessions.add(s);

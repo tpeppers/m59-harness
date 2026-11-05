@@ -2660,6 +2660,8 @@ export class Autopilot {
       // { creature: { min, radius } } -- a creature fought only two-on-one or more (m59-gang-up.mjs): quarry only
       // while min-1 other fleet-mates stand within radius squares of it here. null = no such creature.
       gangUp: null,
+      // { room, loop: [{row, col}], engageWithin, ... } -- walk the loop when nothing is in reach (m59-patrol-farm.mjs). null = hold a wall.
+      patrol: null,
       // { room, squares, rect? } -- ONE character's operator-drawn hunt area (normGuardZone). Wins over huntArea
       // in its own room, so a strategy file's area is the fallback, never the override. null = none.
       guardZone: null,

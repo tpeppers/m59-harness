@@ -459,9 +459,34 @@ export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
 // there are no `killed` events in the older history, and nothing can invent them.
 export const KILL_WINDOW_MS = 30 * 60 * 1000;
 
+// A KILL A PERSON MADE IS COUNTED ONCE (m59-human-kills.mjs). The gate proxy writes a `human: true` row for a kill
+// seen in a piloted client's own messages; if a keeper wrote that same kill too (it was attached to the connection,
+// or took the body back mid-fight), the keeper's row is the one kept. Same character, same creature, within
+// HUMAN_DEDUPE_MS. With no human row in the list this returns the list itself.
+export const HUMAN_DEDUPE_MS = 5000;
+const lcName = s => String(s ?? '').trim().toLowerCase();
+
+/**
+ * Drop every `human: true` kill row that a keeper's row for the same character and creature, within `ms`, already
+ * counts. Everything else -- including every row when there is no human row -- passes through untouched, in order.
+ */
+export function dedupeKills(events = [], { ms = HUMAN_DEDUPE_MS } = {}) {
+  const humans = events.filter(e => e?.kind === 'killed' && e.human === true);
+  if (!humans.length) return events;
+  const keeperRows = new Map();
+  for (const e of events) if (e?.kind === 'killed' && e.human !== true) {
+    const k = `${e.character}|${lcName(e.creature)}`;
+    (keeperRows.get(k) ?? keeperRows.set(k, []).get(k)).push(e.t);
+  }
+  const shadowed = new Set(humans.filter(h => (keeperRows.get(`${h.character}|${lcName(h.creature)}`) ?? [])
+    .some(t => Math.abs(t - h.t) <= ms)));
+  return shadowed.size ? events.filter(e => !shadowed.has(e)) : events;
+}
+
+
 export function countKills(events = [], from = 0) {
   const by = new Map();
-  for (const e of events)
+  for (const e of dedupeKills(events))
     if (e.kind === 'killed' && e.character && e.t >= from)
       by.set(e.character, (by.get(e.character) || 0) + 1);
   return by;

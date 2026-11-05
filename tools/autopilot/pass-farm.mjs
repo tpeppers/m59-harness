@@ -584,6 +584,12 @@ export class PassFarmPart {
       // the rest of the hunt (trolls, beside the Guardians of Zjiria) goes on as it would have. Operator 2026-10-27.
       if (found.length && this.policy.gangUp) found = this.gangUpFilter(found);
 
+      // PATROL (policy.patrol, m59-patrol-farm.mjs): in the patrol's room only quarry within its radius is engaged, plus
+      // whatever we are already fighting; the rest is left for the loop to meet. Last of the filters, so it only narrows
+      // what confinement, the avoid set, the hunt area and gang-up allowed. No patrol here: null, nothing changes.
+      const patrol = this.patrolHere(room?.num);
+      if (patrol && found.length && c.self) found = this.patrolEngageFilter(found, c.self, patrol);
+
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
       // prefer the least-claimed creature while retaining findCreature's distance order
@@ -662,6 +668,12 @@ export class PassFarmPart {
           return HANDLED;
         }
       }
+
+      // NOTHING IN REACH ON A PATROL: WALK THE LOOP INSTEAD OF HOLDING A WALL. The vigil below is right where prey
+      // wanders to a waiting body and is exactly what a patrol replaces (operator 2026-11-04: "walk across all the
+      // various spawn locations ... in an infinite loop"). patrolWalk answers false when it cannot walk (leased
+      // movement, nothing reachable), and the ordinary branch below decides as it always did.
+      if (!found.length && patrol && await this.patrolWalk(ctx, patrol)) return HANDLED;
 
       if (!found.length) {
         // HOLDING A WALL IN A ROOM THAT SPAWNS IS WORK. WAITING IS THE JOB.

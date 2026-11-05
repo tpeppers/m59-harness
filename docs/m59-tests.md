@@ -320,6 +320,27 @@ through a nested shelter order.
   A pass naming another room lets nothing out, and a cancel, the next journey, a different start room or
   two minutes ends it. See docs/m59-boundary.md.
 
+- `m59-patrol-farm-test.mjs` (20): `patrol`, walk the spawn-point loop when nothing is in reach. The field takes
+  named `{ row, col }` waypoints only and refuses a bare pair, one waypoint, bad options and unknown keys; the policy
+  default is null and every keeper helper answers the old way without it (and in another room). The state machine:
+  nearest waypoint first, arrival advances in loop order and counts laps, `arriveWithin` counts as arrived, after a
+  fight the loop resumes at the NEAREST waypoint unless the one it had is within `resumeSlack` (forward, not back), an
+  unreachable waypoint is skipped and recorded, nothing reachable is `stuck`. The radius keeps quarry within
+  `engageWithin` plus whatever we are fighting. The walk aims at the plan's `legSteps`-th square, never the whole leg;
+  a movement lease and a hurt body on a wall stop it. `replayOnMover` refuses an undeclared 2-square step and passes a
+  declared jump. On the shipped map every leg of the operator's Icky Cave loop plans, replays on the mover and has a
+  baked route, and r50c34 -> r23c53 goes over the declared r36c46 -> r34c46. Source pins: the radius sits after gang-up
+  and before the ranking, the walk after the hunt-area return and before the wall vigil. **It should fail the day the
+  loop's pocket leg goes missing from the bake again.**
+
+- `m59-human-kills-test.mjs` (10): a person's kills, counted from the gate proxy. Only "You killed ..." is a kill; the
+  row is the keeper's `killed` shape plus `human: true, source: 'proxy'`; nothing is written while a keeper is attached
+  to the connection, for a player's name, or before the character is known. `dedupeKills` keeps the keeper's row when
+  both saw one kill (same character and creature within 5 s), keeps a different creature, another character or a later
+  kill, and returns the list itself when there are no human rows -- so `countKills` and roomyield read a fleet nobody
+  plays by hand exactly as before. `killRates` splits by hand / keeper over the window, per 30 minutes of window and
+  per room; the MANAGE-tab status line; the proxy, desk and roomyield wiring.
+
 - `m59-gang-up-test.mjs` (33): `gangUp`, a creature fought only two-on-one or more. Through the keeper's own
   chooser (findCreature, `gangUpFilter`, the ranking, `hunt_priority`) over a fake room: a lone keeper beside a
   Guardian of Zjiria takes a troll; one fleet-mate within the radius OF THE GUARDIAN makes it quarry; a stranger, a

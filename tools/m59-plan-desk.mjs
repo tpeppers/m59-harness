@@ -57,6 +57,7 @@
 // A request is executed AT MOST ONCE: its sequence must exceed every sequence already
 // acknowledged for that client pid, and the ack is written before the next tick reads.
 
+import { killStatusLine, recentKillRates } from './m59-human-kills.mjs';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, existsSync, statSync, watch } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -412,7 +413,10 @@ export async function createDesk({ fleet, dir, substrate, providerDirs, log = co
                                      inventory: req.inventory, pid: req.pid, at: req.at };
       const after = st.messages.length && req.requests.length ? await gatherEntries(providers, ctx) : g;
       const control = ctx.control ?? 'none';
-      const status = me ? `${me.agent} (${req.character}) on fleet ${fleet || '(unnamed)'}` :
+      // THE CHARACTER'S KILLS/30M BESIDE THE BOTS' (m59-human-kills.mjs): by hand from the gate proxy, by keeper from
+      // the keepers, one ledger, read at most every 15 s. Operator 2026-11-04: compare my rate with the fleet's.
+      const kills = me ? await recentKillRates().then(rows => ' | ' + killStatusLine(rows, req.character)).catch(() => '') : '';
+      const status = me ? `${me.agent} (${req.character}) on fleet ${fleet || '(unnamed)'}${kills}` :
         `account ${req.account} is not in fleet ${fleet || '(unnamed)'}'s roster — fleet plans need a fleet character`;
       writeAtomic(join(dir, 'plan', 'out', f), renderPlanView({ version: req.version, pid: req.pid, ack: st.ack, control, status,
         entries: after.entries, messages: st.messages }, Date.now()));

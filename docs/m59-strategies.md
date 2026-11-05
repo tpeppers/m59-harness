@@ -112,6 +112,7 @@ export default {
 | `practice` | `practiceSpells` | work | `normalizePractice`, problems refused |
 | `huntArea` | `huntArea` | work | `normHuntArea`: `{ room, squares: [[row, col], ...] }` — in that room only quarry on a listed square is chosen, and an idle farmer walks back onto the area (`m59-hunt-area-test.mjs`) |
 | `gangUp` | `gangUp` | work | `normalizeGangUp`: `{ '<creature>': { min, radius } }` (defaults `min: 2`, `radius: 4`) — a listed creature is quarry only while `min - 1` other fleet-mates stand within `radius` squares of IT; see [Gang up](#gang-up-gangup-a-creature-fought-only-two-on-one) (`m59-gang-up-test.mjs`) |
+| `patrol` | `patrol` | work | `normPatrol` (`m59-patrol-farm.mjs`): `{ room, loop: [{ row, col }, ...], engageWithin?, arriveWithin?, legSteps?, resumeSlack? }` — in that room a farmer with nothing in reach walks the loop instead of holding a wall; see [Patrol](#patrol-patrol-walk-the-spawn-points-in-a-loop) (`m59-patrol-farm-test.mjs`) |
 
 **A GUARD ZONE OVERRIDES IT FOR ONE CHARACTER.** `autopilot action=start guard_zone={ room, from: {row, col}, to: {row, col} }` (or `{ room, squares }`) is an operator order to one character, stored as `policy.guardZone` (`normGuardZone`, which keeps the drawn `rect`). In its own room it is the area `huntAreaHere` uses, in place of the strategy file's `huntArea`; `guard_zone: null` hands the room back to the file. The field command's room map draws one by dragging a rectangle (operator 2026-10-16).
 
@@ -386,6 +387,50 @@ It never widens the hunt: a listed creature `hunt` does not name is not prey wit
 taken, with the fleet-mates at it. A strategy key only: the `autopilot` tool takes no `gang_up` argument (like
 `huntArea`), so it reaches a keeper through a file, needs no broker restart, and is hot-reloaded with the file. The keeper
 code that asks it (`gangUpFilter` and the rest) needs a `restart-keepers` handoff. `m59-gang-up-test.mjs` (33) pins it.
+
+### Patrol (`patrol`): walk the spawn points in a loop
+
+Operator, 2026-11-04, of the Icky Cave (27): *"walk across all the various spawn locations and kill any monsters seen
+... those are the rails I'd have it take in an infinite loop, killing everything it comes across ... I'd like to see if
+you can get its kills/30m as high as a human player like mine."*
+
+```js
+patrol: { room: 27, loop: [{ row: 23, col: 53 }, { row: 35, col: 58 }, { row: 31, col: 31 }, { row: 32, col: 35 },
+                           { row: 51, col: 14 }, { row: 50, col: 34 }],
+          engageWithin: 8 },          // squares; also arriveWithin 1, legSteps 20, resumeSlack 3
+```
+
+**There is one farming path, and this goes through it.** Every farming keeper decides in `Autopilot.passFarm`
+(`tools/autopilot/pass-farm.mjs`); a strategy reaches it only as policy keys; the hunt setup, the wall, the pull and
+`fight()` are things passFarm calls. FleetScript's `fight` step and the broker's `fight` tool are one-shot fights an
+errand or an operator asks for, not farming, and cooperative combat / the buddy system are their own pass stages. So the
+patrol changes passFarm at two seams and nowhere else:
+
+- **Which quarry.** After confinement, the avoid set, the hunt area and gang-up, quarry farther than `engageWithin`
+  squares (Euclidean) is dropped, except whatever we are already fighting or pulling. The rest is left for the loop to
+  meet. The ranking, `huntPriority`, the wall a fight opens from, the pull and the fight then run exactly as before.
+- **Nothing to do.** Where passFarm would hold a wall and wait for something to come (the vigil), a patrol walks one
+  piece of the loop: `legSteps` squares of the walker's own plan (`geometry.path`, replayed on `moverStepLands` with
+  declared jumps exempt, which is the bake's rule), then the pass ends and the room is looked at again. A leg the mover
+  would refuse is never sent (walkTo would otherwise fall back to a collision-free plan); its waypoint is skipped for
+  that lap, as is one whose walk moves nothing three times running. A hurt body goes through `leaveHold`'s gate (it
+  takes or keeps a wall), and a bot or lease holding `movement` pauses the patrol, so the ordinary branch answers.
+
+After a fight the loop resumes at the **nearest** waypoint, unless the one it was heading for is within `resumeSlack`
+squares of that (so it carries on forward rather than doubling back). Survival, flee lines, fight-back, the engagement
+ceiling, spare and gang-up, loot and any `practice_spells` are above or beside this and untouched. `autopilot status`
+reports `patrol: { loop, waypoint, laps, arrivals, skipped, last_walk, last_engagement }`.
+
+**Prove a loop before you assign it:** `node tools/m59-patrol-farm.mjs check --strategy <name>` (or `--room 27 --loop
+r23c53 r35c58 ...`) plans every leg, replays it on the mover and reports the baked route. The Icky Cave's last leg,
+r50c34 -> r23c53, was *"missing from the bake"*: the pocket round r23c53 (rows 17-34, cols 45-56) is entered only by a
+running drop over the row-35 trench, r36c46 -> r34c46, which `geo.path` planned as an auto-detected fall and the bake
+refused as not-a-step (`reach 1`, no route). It is now declared in `substrate/m59-falljumps.json` (proved offline with
+`proveDeclaredJump`; not yet walked by a bot, so read its `jump-outcomes` rows after the first lap) and room 27 is
+rebaked. `substrate/farm-strategies.example/icky-cave-patrol.mjs` is the shape.
+
+A strategy key only (no `autopilot` argument), hot-reloaded with the file; the keeper code needs a `restart-keepers`
+handoff.
 
 ### The Icky Cave: the strategy holds the room, an errand takes the chalice
 
