@@ -24,7 +24,7 @@ import {holdStationaryTrade,releaseStationaryTrade,requireStationaryTrade} from 
 import { OF, dropSpec } from './m59-parse.mjs';
 import * as skills from './m59-skills.mjs';
 import { checkIds, refusalText } from './m59-idgen.mjs';
-import { floorPickup, floorDrop } from './m59-floor-cache.mjs';
+import { floorPickup, floorDrop, overflowVerdict } from './m59-floor-cache.mjs';
 
 const num = (v, d) => (v === undefined || v === null ? d : Number(v));
 
@@ -502,8 +502,12 @@ export async function supplyBetween(a, deps) {
   // Zheng He (or Raphael) can't carry everything to cache, the extra can be dropped off at the ground under them"). On by
   // default; `no_dropoff: true` switches it off. Only on the server's own `receiver_full` -- a definitive sentence, never a
   // guess from a silent wire -- and only what the giver still holds. The stash is reserved for the receiver by dibs.
-  const overflow = async (code, missed) => {
-    if (a.no_dropoff === true || code !== 'receiver_full' || !deps.floorIo) return null;
+  // AFFIRMATIVE ONLY (operator follow-up): the caller's order is the receiver's willingness; the server's own capacity
+  // sentence is the only 'full'. Every other refusal -- a cursed item, busy, left, offline, a refused amount, a giver that no
+  // longer has it, no counteroffer, a silent wire -- drops nothing.
+  const overflow = async (code, missed, said = []) => {
+    if (a.no_dropoff === true || !deps.floorIo) return null;
+    if (code !== 'receiver_full' || !overflowVerdict({ willing: true, said }).drop) return null;
     const rest = (missed ?? []).map(m => ({ name: m.name, amount: Math.max(0, (m.asked || 0) - Math.max(0, m.received || 0)) })).filter(m => m.amount > 0);
     if (!rest.length) return null;
     return floorDrop(deps.floorIo, { agent: a.from, holder: a.to, items: rest }).catch(e => ({ ok: false, total: 0, why: e.message }));
@@ -721,7 +725,7 @@ export async function supplyBetween(a, deps) {
         giver_lost: (giveBefore.get(name) || 0) - (giverAfter.get(name) || 0),
         received: (receiverAfter.get(name) || 0) - (recvBefore.get(name) || 0) }));
       const failure = offerFailureFrom(said);
-      const floored = await overflow(failure?.code, notReceived);
+      const floored = await overflow(failure?.code, notReceived, said);
       return { supplied: false, reason: failure?.why ?? 'the offer never reached them',
         ...(floored ? { to_floor: floored, to_receiver: 0 } : {}),
         ...(failure ? { reason_code: failure.code, server_said: failure.said } : {}),
@@ -777,7 +781,7 @@ export async function supplyBetween(a, deps) {
     // one makes it cast a spell that fails silently for want of the other half. So
     // anything short of everything asked for is false, with `partial` saying which.
     const allMoved = items.length > 0 && missed.length === 0;
-    const floored = allMoved ? null : await overflow(failure?.code, missed);
+    const floored = allMoved ? null : await overflow(failure?.code, missed, heard);
     // REASON FIRST, AND IN EVERY RESPONSE.
     //
     // A caller that reads one field reads the first one. This used to be `supplied: false`

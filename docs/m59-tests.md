@@ -381,7 +381,7 @@ through a nested shelter order.
   the real `Session.lootFloor`. Room- and item-scoped (the same item in the farm room is still anybody's), plurals match,
   a claim may name the agent id, an expired claim is spent, a claim for nobody is refused, an unparseable book keeps the last
   good one, and an explicit id request is never second-guessed. Gonzo's purple mushroom drop in 2144, 2026-11-05.
-- `m59-floor-cache-test.mjs` (54): the floor around a cache or courier (`m59-floor-cache.mjs`, operator 2026-11-05),
+- `m59-floor-cache-test.mjs` (81): the floor around a cache or courier (`m59-floor-cache.mjs`, operator 2026-11-05),
   against a fake floor world and fake sessions. Pickup: exact names only ('wand' never takes 'wand of healing'; 'arrows' is
   nerudite arrows then arrows), only within `radius` of the HOLDER, the 7-square reach (approach, or skip `too_far`), pack
   room bounds it, every get judged by the pack (a refused get is not counted), the excess over `amount` dropped back and
@@ -389,7 +389,11 @@ through a nested shelter order.
   cannot stand near the holder, each pile reserved for the holder. Dibs: `near`-scoped claims, two claims on one item (any
   naming you allows it), stash claims sit beside and survive an operator's claim, refresh in place, prune when spent.
   `supply`: picks off the floor when the giver has none (automatic), drops a `receiver_full` remainder at the receiver's
-  feet by default, and does not with `no_dropoff: true`. Plus the wiring in loot ejection, the autobalancer cache, the
+  feet by default, and does not with `no_dropoff: true`. AFFIRMATIVE ONLY: each other `supply` refusal (cursed item, giver
+  no longer has it, busy, left, offline, refused amount, silent wire) drops nothing; loot ejection drops only when the
+  receiver's published `trade_goods` takes this giver AND the refusal was for space (server sentence or the receiver's
+  weighed `capacity` record of this offer) -- stale, absent, off, other givers, `not_accepting`, `unweighed`, an earlier
+  offer's record and silence all drop nothing. Plus the wiring in loot ejection, the autobalancer cache, the
   fleetscript `supply` step, practice-bow, bow-supply and the broker's `floor_cache` tool.
 - `m59-loot-filter-test.mjs` (33): `loot_only`, a per-creature loot allow list, through the
   real `Session.lootFloor` against a fake client. After a spider kill only the purple mushroom

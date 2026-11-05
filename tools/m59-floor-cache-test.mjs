@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), 'm59-floor-cache-test-'));
+process.env.M59_FLOOR_SIGNAL_DIR = join(scratch, 'signals');
 const FC = await import('./m59-floor-cache.mjs');
 const D = await import('./m59-dibs.mjs');
 const { supplyBetween } = await import('./m59-supply.mjs');
@@ -247,10 +248,10 @@ const sdeps = (map, floorIo) => ({ session: n => map[n], isProxied: () => true, 
   ok('without a floor io the old answer stands: carrying nothing matching', out.supplied === false && /carrying nothing matching/.test(out.reason));
 }
 // The overflow: Piggy -> Zheng He, the server says Zheng He cannot carry it.
-const overflowCase = async (extra) => {
+const overflowCase = async (extra, said = ["Zheng He can't carry all the items you have offered."]) => {
   const giver = fakeSession('t1', { character: 'Piggy', items: [{ id: 70, name: 'mushrooms', amount: 50 }], others: [{ id: 1, name: 'Zheng He' }] });
   const recv = fakeSession('hk2', { character: 'Zheng He', items: [], others: [{ id: 3, name: 'Piggy' }] });
-  giver._fake.said = ["Zheng He can't carry all the items you have offered."];
+  giver._fake.said = said;
   recv._fake.willSeeOffer = false;
   const w = world({ bodies: { hk2: { id: 1, name: 'Zheng He', col: 20, row: 20, pack: [] },
                               t1: { id: 3, name: 'Piggy', col: 21, row: 20, pack: [{ id: 70, name: 'mushrooms', amount: 50 }] } } });
@@ -269,13 +270,66 @@ const overflowCase = async (extra) => {
   ok('no_dropoff: true -- nothing dropped, the goods stay with the giver', out.reason_code === 'receiver_full' && !out.to_floor && w.floor.length === 0 && w.bodies.t1.pack[0].amount === 50);
 }
 
+section('AFFIRMATIVE ONLY: EVERY OTHER REFUSAL IN supply DROPS NOTHING');
+for (const [kind, line] of [
+  ['item_refuses_to_leave (a cursed item)', "The sword doesn't seem to want to be given away."],
+  ['giver_no_longer_has_it', "Zheng He didn't have everything offered."],
+  ['counterparty_busy', "Zheng He can't deal with you now."],
+  ['counterparty_left', 'Zheng He is no longer here.'],
+  ['counterparty_offline', 'Zheng He is not online to accept.'],
+  ['amount_refused', "You can't offer that many."],
+  ['a silent wire (no sentence at all)', null],
+]) {
+  const { out, w } = await overflowCase({}, line ? [line] : []);
+  ok(`supply refusal "${kind}": nothing dropped, goods stay with the giver`, !out.to_floor && w.floor.length === 0 && w.bodies.t1.pack[0].amount === 50 && w.reserved.length === 0,
+     JSON.stringify(out).slice(0, 200));
+}
+
+section('AFFIRMATIVE ONLY: LOOT EJECTION NEEDS "WILLING" AND "FULL"');
+{
+  const V = FC.overflowVerdict, now = Date.now(), since = now - 2000;
+  const willing = { receiver: 'Zheng He', at: now, trade_goods: { from: null, keep_free: 0.25 } };
+  const cap = { kind: 'capacity', why: 'would fill to 92%', after: 0.92, at: now - 500 };
+  ok('willing + the receiver refused for space: drop', V({ accepts: willing, refusal: cap, giver: 'Piggy', since, now }).drop);
+  ok('willing + the server said it cannot carry it: drop', V({ accepts: willing, said: ["Zheng He can't carry all the items you have offered."], giver: 'Piggy', since, now }).drop);
+  ok('no accepts record (not configured, or never published): no drop', !V({ accepts: null, refusal: cap, giver: 'Piggy', since, now }).drop);
+  ok('accepts record stale (> 5 min): no drop', !V({ accepts: { ...willing, at: now - 6 * 60_000 }, refusal: cap, giver: 'Piggy', since, now }).drop);
+  ok('receiver does not take trade goods at all: no drop, even when "full"', !V({ accepts: { ...willing, trade_goods: null }, refusal: cap, said: ["Zheng He can't carry all the items you have offered."], giver: 'Piggy', since, now }).drop);
+  ok('trade goods only from others: no drop', !V({ accepts: { ...willing, trade_goods: { from: ['beaker'], keep_free: 0.25 } }, refusal: cap, giver: 'Piggy', since, now }).drop);
+  ok('... but from-list naming this giver: drop', V({ accepts: { ...willing, trade_goods: { from: ['piggy'], keep_free: 0.25 } }, refusal: cap, giver: 'Piggy', since, now }).drop);
+  for (const kind of ['not_accepting', 'unweighed'])
+    ok(`willing but refused as "${kind}": no drop`, !V({ accepts: willing, refusal: { kind, why: 'x', at: now - 500 }, giver: 'Piggy', since, now }).drop);
+  ok('a capacity refusal of an EARLIER offer does not count for this one', !V({ accepts: willing, refusal: { ...cap, at: since - 10_000 }, giver: 'Piggy', since, now }).drop);
+  ok('willing, no counter, nothing said, no record: no drop (silence is not "full")', !V({ accepts: willing, refusal: null, said: [], giver: 'Piggy', since, now }).drop);
+  ok('other sentences (busy, left, cursed) are not "full"', !V({ accepts: willing, said: ["Zheng He can't deal with you now.", 'Zheng He is no longer here.'], giver: 'Piggy', since, now }).drop);
+  // the files: what the receiver publishes is what the giver reads
+  const dir = join(scratch, 'sig');
+  FC.publishAccepts('Zheng He', { from: null, keep_free: 0.25 }, { dir });
+  FC.noteRefusal('Zheng He', 'Piggy', { kind: 'capacity', why: 'would fill to 92%', after: 0.92 }, { dir });
+  FC.noteRefusal('Zheng He', 'Rizzo', { kind: 'not_accepting', why: 'not on the take list' }, { dir });
+  ok('published records round-trip: Piggy (capacity) may drop', V({ accepts: FC.readAccepts('Zheng He', { dir }), refusal: FC.readRefusal('Zheng He', 'Piggy', { dir }), giver: 'Piggy', since }).drop);
+  ok('... Rizzo (not on the take list) may not', !V({ accepts: FC.readAccepts('Zheng He', { dir }), refusal: FC.readRefusal('Zheng He', 'Rizzo', { dir }), giver: 'Rizzo', since }).drop);
+  FC.publishAccepts('Zheng He', null, { dir });
+  ok('a receiver that stops taking trade goods says so: no drop', !V({ accepts: FC.readAccepts('Zheng He', { dir }), refusal: FC.readRefusal('Zheng He', 'Piggy', { dir }), giver: 'Piggy', since }).drop);
+  const so = src('autopilot/social.mjs');
+  ok('receiver: publishes its trade_goods every 30 s from acceptDonations', /publishAccepts\(meName, tg\)/.test(so));
+  ok('receiver: only a weighed over-full trade-goods refusal is kind capacity; unweighed is not',
+     /refuse\(`no room for trade goods: \$\{fit\.why\}`, fit\.after != null \? 'capacity' : 'unweighed'/.test(so));
+  ok('receiver: every other refusal defaults to not_accepting, recorded before the cancel',
+     /const refuse = async \(why, kind = 'not_accepting', after = null\) => \{[\s\S]{0,400}noteRefusal\(meName, t\.withName[\s\S]{0,400}cancelOffer/.test(so));
+  const dl = src('autopilot/delivery.mjs');
+  ok('giver: drops only on overflowVerdict(accepts, refusal, said) and never with no_dropoff',
+     /cfg\.no_dropoff \? \{ drop: false[\s\S]{0,300}overflowVerdict\(\{ accepts: readAccepts\(target\), refusal: readRefusal\(target/.test(dl) && /if \(verdict\.drop\) \{\s*const d = await this\.floorDropOff/.test(dl));
+  ok('giver: giveItems reports what the server said and when the offer went out', /return \{ moved: \[\], offeredAt, said: await heard\(\)/.test(dl));
+}
+
 // ---------------------------------------------------------------- wiring
 section('THE PATHS THAT USE IT');
 {
   ok('lootEject accepts no_dropoff (and refuses a non-boolean)', normalizeLootEject({ to: ['Zheng He'], no_dropoff: true }).no_dropoff === true &&
      normalizeLootEject({ to: ['Zheng He'] }).no_dropoff === false && (() => { try { normalizeLootEject({ to: ['x'], no_dropoff: 'yes' }); return false; } catch { return true; } })());
   const dl = src('autopilot/delivery.mjs');
-  ok('ejectLoot: a refused batch goes to the floor at the receiver\'s feet unless no_dropoff', /if \(!cfg\.no_dropoff\) \{\s*const d = await this\.floorDropOff\(target/.test(dl));
+  ok('ejectLoot: a refused batch goes to the floor only on the affirmative verdict', /if \(verdict\.drop\) \{\s*const d = await this\.floorDropOff\(target/.test(dl));
   ok('floorDropOff reserves in the fleet\'s dibs book', /async floorDropOff\([\s\S]{0,300}addStashClaim\(dibsFile\(\), claim\)/.test(dl));
   const book = { loops: { Scooter: { mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 27, no_dropoff: true } },
                           Rizzo: { mode: 'practice', practice: ['haste'], cache: { agent: 'hk3', room: 27 } } } };

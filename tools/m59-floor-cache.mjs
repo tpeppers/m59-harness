@@ -304,3 +304,76 @@ export function sessionFloorIo(sessionOf, { proxied = () => false, approach = nu
     settle: () => new Promise(r => setTimeout(r, settleMs)),
   };
 }
+
+// ============================================================================ WHEN AN OVERFLOW MAY DROP
+//
+// Operator follow-up, 2026-11-05: "Overflow drop-at-feet must fire ONLY on an AFFIRMATIVE 'receiver would accept this if it
+// had space' signal. Distinguish 'full' from any form of 'not taking that' (not configured to accept trade goods, wrong item,
+// refused offer, combat, etc.)". Two facts, both required:
+//
+//   WILLING  the receiver is configured to take THIS giver's goods. For `supply` the caller's own order is that config (it
+//            names the receiver and the goods); for loot ejection the receiver's keeper publishes its `trade_goods` setting
+//            (`publishAccepts`, refreshed every pass) and a stale or absent record is a no.
+//   FULL     the refusal was about SPACE: the server's own "can't carry all the items" sentence, or the receiver's keeper
+//            recording that THIS offer would fill its pack past `keep_free` (`noteRefusal` kind 'capacity'), after the
+//            offer went out. A refusal for any other reason -- not on the take list, not a fleetmate, unweighed items,
+//            a cursed item, busy, left, offline, a silent wire, no counter -- is not 'full' and drops nothing.
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const SIGNAL_DIR = process.env.M59_FLOOR_SIGNAL_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', '.floor-signals');
+export const ACCEPTS_MAX_AGE_MS = 5 * 60_000;
+export const REFUSAL_MAX_AGE_MS = 60_000;
+
+// The server's capacity sentences (user.kod; the same two m59-supply.mjs OFFER_FAILURES files under receiver_full).
+const CAPACITY_SAID = [/can'?t carry all the items you have offered/i, /you can'?t carry all the items that .* offered you/i];
+export const saidFull = (lines = []) => [].concat(lines ?? []).some(l => CAPACITY_SAID.some(re => re.test(String(l ?? ''))));
+
+const fileKey = n => key(n).replace(/[^a-z0-9]+/g, '_') || '_';
+const writeJson = (file, v) => { mkdirSync(dirname(file), { recursive: true }); const t = `${file}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(v)); renameSync(t, file); };
+const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
+
+/** The receiver says what it accepts as trade goods (null: nothing). `tradeGoods` is normalizeTradeGoods' answer. */
+export function publishAccepts(receiver, tradeGoods, { dir = SIGNAL_DIR, now = Date.now() } = {}) {
+  const rec = { receiver: String(receiver), at: now,
+                trade_goods: tradeGoods ? { from: tradeGoods.from ?? null, keep_free: tradeGoods.keep_free ?? null } : null };
+  writeJson(join(dir, `accepts-${fileKey(receiver)}.json`), rec);
+  return rec;
+}
+export const readAccepts = (receiver, { dir = SIGNAL_DIR } = {}) => readJson(join(dir, `accepts-${fileKey(receiver)}.json`));
+
+/** The receiver records why it refused THIS giver's offer: kind 'capacity' (would fill the pack) or anything else. */
+export function noteRefusal(receiver, giver, { kind, why = null, after = null }, { dir = SIGNAL_DIR, now = Date.now() } = {}) {
+  const file = join(dir, `refusals-${fileKey(receiver)}.json`);
+  const book = readJson(file) ?? {};
+  for (const [g, r] of Object.entries(book)) if (!(now - Number(r?.at) < REFUSAL_MAX_AGE_MS * 10)) delete book[g];
+  book[key(giver)] = { kind: String(kind), why, after, at: now };
+  writeJson(file, book);
+  return book[key(giver)];
+}
+export const readRefusal = (receiver, giver, { dir = SIGNAL_DIR } = {}) => (readJson(join(dir, `refusals-${fileKey(receiver)}.json`)) ?? {})[key(giver)] ?? null;
+
+/**
+ * MAY THE GIVER DROP THE REFUSED GOODS AT THE RECEIVER'S FEET? Pure.
+ * @param willing   true when the caller's own order names this receiver and these goods (supply); otherwise read `accepts`
+ * @param accepts   the receiver's published record (publishAccepts) -- loot ejection
+ * @param refusal   the receiver's record for this giver (noteRefusal), or null
+ * @param said      what the server told either side
+ * @param since     when this offer went out (a refusal before it is about another offer)
+ * -> { drop, why }
+ */
+export function overflowVerdict({ willing = false, accepts = null, refusal = null, said = [], giver, since = 0, now = Date.now() } = {}) {
+  if (!willing) {
+    if (!accepts || !(now - Number(accepts.at) <= ACCEPTS_MAX_AGE_MS)) return { drop: false, why: 'the receiver has not said it accepts trade goods (no fresh record): not dropped' };
+    if (!accepts.trade_goods) return { drop: false, why: 'the receiver does not accept trade goods: not dropped' };
+    const from = accepts.trade_goods.from;
+    if (Array.isArray(from) && !from.map(key).includes(key(giver))) return { drop: false, why: `the receiver takes trade goods only from ${from.join(', ')}: not dropped` };
+  }
+  if (saidFull(said)) return { drop: true, why: 'the server said the receiver cannot carry it' };
+  if (refusal && Number(refusal.at) >= Number(since) && now - Number(refusal.at) <= REFUSAL_MAX_AGE_MS) {
+    if (refusal.kind === 'capacity') return { drop: true, why: `the receiver refused for space: ${refusal.why ?? 'its pack would be too full'}` };
+    return { drop: false, why: `the receiver refused for another reason (${refusal.kind}: ${refusal.why ?? '?'}): not dropped` };
+  }
+  return { drop: false, why: 'no affirmative capacity refusal (silent, no counter, or another reason): not dropped' };
+}

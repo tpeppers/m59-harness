@@ -21,7 +21,7 @@ import { MARKET_KEEP } from '../m59-items.mjs';
 import * as party from '../m59-party.mjs';
 import { BACKOFF_MS, ejectBatch, ejectTarget, normalizeLootEject, noteGone, overflowDrops, readReceived } from '../m59-loot-eject.mjs';
 import * as autobalance from '../m59-reagent-autobalance.mjs';
-import { floorDrop, sessionFloorIo } from '../m59-floor-cache.mjs';
+import { floorDrop, sessionFloorIo, overflowVerdict, readAccepts, readRefusal } from '../m59-floor-cache.mjs';
 import { addStashClaim, dibsFile } from '../m59-dibs.mjs';
 import { REAGENT_SHOP, claimFarmDelivery, purchaseEnabled, reagentTargetFor, releaseFarmDelivery } from '../m59-autopilot.mjs';
 
@@ -528,14 +528,23 @@ export class DeliveryPart {
         // AT ITS FEET, THEN (m59-floor-cache.mjs; operator 2026-11-05: "if Zheng He (or Raphael) can't carry everything to
         // cache, the extra can be dropped off at the ground under them"). On unless `no_dropoff`; only standing within a few
         // squares of the receiver (no walk); each drop verified by this pack; the pile reserved for the receiver by dibs.
-        if (!cfg.no_dropoff) {
+        // AFFIRMATIVE ONLY (operator follow-up): the receiver must publish that it takes our trade goods, AND the refusal must
+        // be about space (the server's full sentence, or its own weighed-pack refusal of this offer). Anything else: kept.
+        const verdict = cfg.no_dropoff ? { drop: false, why: 'no_dropoff' }
+          : overflowVerdict({ accepts: readAccepts(target), refusal: readRefusal(target, c.me?.name ?? me), said: r.said ?? [],
+                              giver: c.me?.name ?? me, since: r.offeredAt ?? 0 });
+        if (!cfg.no_dropoff && !verdict.drop && this._ejectNoDrop !== `${target}|${verdict.why}`) {
+          this._ejectNoDrop = `${target}|${verdict.why}`;
+          this.note('loot ejection: not dropped at the receiver feet', { to: target, why: verdict.why });
+        }
+        if (verdict.drop) {
           const d = await this.floorDropOff(target, rows.map(x => ({ name: x.name, amount: x.amount }))).catch(e => ({ total: 0, why: e.message }));
           if (d?.total > 0) {
             const moved = Object.entries(d.dropped).map(([name, amount]) => ({ name, amount }));
             if (cfg.only_received) noteGone(me, moved);
             this.tally.loot_ejected_floor = (this.tally.loot_ejected_floor || 0) + d.total;
             this.note('ejected loot to the floor', { to: target, to_floor: d.dropped, refused: d.refused, reserved: d.reserved,
-              room: this.s.world?.room?.num ?? null, why: `${target} did not take it (${r.why}); dropped at its feet and reserved for it` });
+              room: this.s.world?.room?.num ?? null, why: `${target} had no room (${verdict.why}); dropped at its feet and reserved for it` });
             try { this.ledgerEvent?.('loot_ejected', { to: target, to_floor: moved, items: [], room: this.s.world?.room?.num ?? null }); } catch {}
             this.progress(`dropped ${d.total} loot at ${target}'s feet`);
             return true;
@@ -584,12 +593,15 @@ export class DeliveryPart {
     const held = id => { const o = (c.inventory || []).find(x => x.id === id); return o ? (o.amount > 0 ? o.amount : 1) : 0; };
     const before = new Map(rows.map(r => [r.id, held(r.id)]));
     const offers = rows.map(r => (r.whole ? r.id : { id: r.id, amount: r.amount }));
-    const at = c.evSeq;
+    const at = c.evSeq, offeredAt = Date.now();
+    // WHAT THE SERVER SAID about this offer: the capacity sentence is one of the two affirmative 'full' signals.
+    const heard = async () => ((await c.waitFor({ since: at, kinds: ['message', 'said'], timeoutMs: 300 }).catch(() => null))?.events ?? [])
+      .map(e => e.text).filter(Boolean);
     await s.pacer.submit('trade', () => c.offer(them.id, offers));
     const ev = await c.waitFor({ since: at, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 }).catch(() => ({ events: [] }));
     if (!ev.events?.some(e => e.kind === 'countered')) {
       await s.pacer.submit('trade', () => c.cancelOffer()).catch(() => {});
-      return { moved: [], why: `${character} did not take the offer (no counter in 8s: not accepting trade goods, or no room)` };
+      return { moved: [], offeredAt, said: await heard(), why: `${character} did not take the offer (no counter in 8s: not accepting trade goods, or no room)` };
     }
     const acceptingAt = c.evSeq;
     await s.pacer.submit('trade', () => c.acceptOffer());
@@ -599,7 +611,7 @@ export class DeliveryPart {
     // WHAT LEFT THE PACK, by id: a handshake that moves nothing must not read as a delivery.
     const moved = rows.map(r => ({ name: r.name, amount: Math.min(r.amount, Math.max(0, before.get(r.id) - held(r.id))) }))
       .filter(m => m.amount > 0);
-    return { moved, ...(moved.length ? {} : { why: 'the trade ended but nothing left the pack' }) };
+    return { moved, offeredAt, ...(moved.length ? {} : { said: await heard(), why: 'the trade ended but nothing left the pack' }) };
   }
 
   // ------------------------------------------------------------------ the courier balance

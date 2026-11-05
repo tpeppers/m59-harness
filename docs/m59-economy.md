@@ -1166,7 +1166,7 @@ archer should get the nerudite arrows (or regular "arrows") from the ground arou
 off, if Zheng He (or Raphael) can't carry everything to cache, the extra can be dropped off at the ground under them"*.
 Refinement the same day: **pickups from the floor are automatic; the drop-off overflow is on by default and `no_dropoff:
 true` switches it off** wherever a drop-off is configured or invoked. `tools/m59-floor-cache.mjs`; `m59-floor-cache-test.mjs`
-(54) pins it.
+(81) pins it.
 
 | where | pickup (always) | drop-off overflow (default on) | switch |
 |---|---|---|---|
@@ -1174,7 +1174,7 @@ true` switches it off** wherever a drop-off is configured or invoked. `tools/m59
 | broker `floor_cache` | `action=pickup agent near what amount radius` (`action=scan` is read-only) | `action=drop agent near items:[{name, amount}]` | `no_dropoff: true` refuses a drop |
 | fleetscript `supply` step (and every script built on it, e.g. a local bring-to) | an `amount` the giver could not cover is picked up around the giver | through `supply` | `no_dropoff=true` on the step |
 | autobalancer cache (`loops.<C>.cache`) | the cache-room restock picks the shortfall up around the cache character before buying | the hand-over's `supply` | `cache.no_dropoff: true` |
-| keeper loot ejection (`loot_eject`) | -- | a receiver that does not take the batch gets it at its feet, from within 4 squares (no walk) | `loot_eject.no_dropoff: true` |
+| keeper loot ejection (`loot_eject`) | -- | a receiver that takes this giver's trade goods but refused the batch FOR SPACE gets it at its feet, from within 4 squares (no walk) | `loot_eject.no_dropoff: true` |
 | practice-bow `pullArrows`, bow-supply `pullBowArrows` | arrows still short after the givers: off the floor around each giver in the room | -- | -- |
 
 - **Exact names, never a family by substring.** `arrows` is the one named family: nerudite arrows first, then arrows. Any
@@ -1185,9 +1185,19 @@ true` switches it off** wherever a drop-off is configured or invoked. `tools/m59
 - **Judged by the pack.** Each get and each drop is followed by an inventory read; a get or a drop the server refused moves
   nothing and is reported under `refused`, never counted. The server splits a stack to what the picker can hold by itself
   (UserGet: `GetNumberCanHold`), and whatever a whole stack brings in over `amount` is dropped straight back (`returned`).
-- **Overflow is only on the server's own `receiver_full`.** A silent wire, a busy counterparty or a refused item does not
-  litter the floor. Only what the giver still holds is dropped, and only standing within `radius` of the receiver; a giver
-  that cannot get there drops nothing and says so.
+- **AN OVERFLOW NEEDS TWO AFFIRMATIVE FACTS: WILLING AND FULL** (operator follow-up, 2026-11-05: "Distinguish 'full' from
+  any form of 'not taking that'"). `overflowVerdict` in `m59-floor-cache.mjs` is the one rule.
+  - *Willing*: for `supply`, the caller's order is the willingness. For loot ejection the RECEIVER's keeper publishes what it
+    takes as trade goods every 30 s from `acceptDonations` (`substrate/.floor-signals/accepts-<character>.json`); no record,
+    a record older than 5 minutes, `trade_goods` off, or a `from` list without this giver is a no.
+  - *Full*: the server's own sentence ("can't carry all the items you have offered", `receiver_full`), or, for loot
+    ejection, the receiver's keeper recording that THIS offer would fill its weighed pack past `keep_free`
+    (`refusals-<character>.json`, kind `capacity`, written before it cancels). Every other refusal drops nothing: not on
+    the take list, not a fleetmate, an unweighed pack or offer, a cursed item, busy, left, offline, a refused amount, a giver
+    that no longer has it, no counteroffer, a silent wire. The keeper notes `loot ejection: not dropped at the receiver
+    feet` with the reason, once per target and reason.
+  - Only what the giver still holds is dropped, and only standing within `radius` of the receiver; a giver that cannot get
+    there drops nothing and says so.
 - **The stash is reserved.** Every sweep picks up `*` since deploy-2026-11-05-12, so each drop writes a DIBS claim
   (`m59-dibs.mjs addStashClaim`, `source: "floor-cache"`): that item, that room, within `near.radius` of the holder's square,
   for the holder, for 30 minutes. Everybody else's loot pass leaves it; the holder's own sweep may take it back; a pickup

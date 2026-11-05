@@ -27,6 +27,7 @@ import { KOCATAN_SMITHY, gateClearPlan, gateStation } from '../m59-kocatan-gate.
 import * as party from '../m59-party.mjs';
 import { GATE_LIMITS, KOCATAN_VAULT, POOL_OF_VIGOR, POOL_DRINK_SAID, inPool, jungleStashPlan, jungleItemClassifier } from '../m59-island-chalice.mjs';
 import { normalizeTradeGoods, noteReceived, tradeGoodsFit } from '../m59-loot-eject.mjs';
+import { publishAccepts, noteRefusal } from '../m59-floor-cache.mjs';
 import * as pvpGear from '../m59-pvp-gear.mjs';
 import { affordablePoisonCure, castRecoveryCure } from '../m59-recovery-cure.mjs';
 import { affordableHeal, castRecoveryHeal, healAllowed, healReadiness } from '../m59-recovery-heal.mjs';
@@ -427,6 +428,14 @@ export class SocialPart {
     const cfg = cfgIn ?? this.policy.acceptDonations;
     if (!cfg || cfg.enabled === false) return;
     const c = this.s?.client;
+    // SAY WHAT THIS CHARACTER TAKES AS TRADE GOODS (m59-floor-cache.mjs publishAccepts), every 30 s: a giver whose offer is
+    // refused may drop it at our feet ONLY when we take its goods and refused for space. Absent or stale means "not willing".
+    const meName = c?.me?.name ?? this.s?.name ?? null;
+    if (meName && Date.now() - (this._acceptsAt ?? 0) >= 30_000) {
+      this._acceptsAt = Date.now();
+      let tg = null; try { tg = normalizeTradeGoods(cfg.trade_goods); } catch { tg = null; }
+      try { publishAccepts(meName, tg); } catch {}
+    }
     const t = c?.trade;
     if (!t || t.role !== 'recipient') return;              // nobody is offering us anything
     if (this._donationSeen === t.revision) return;          // already dealt with this one
@@ -445,7 +454,10 @@ export class SocialPart {
     if (this.wandDutyCfg && wandDuty.sameName(t.withName, this.wandDutyCfg.holder)) takes.push('wand');
     const offered = (t.theirs || []).map(i => String(i.name || '').toLowerCase());
 
-    const refuse = async (why) => {
+    const refuse = async (why, kind = 'not_accepting', after = null) => {
+      // WHY, FOR THE GIVER (m59-floor-cache.mjs noteRefusal), written BEFORE the cancel so the giver reads it as its trade
+      // ends: only kind 'capacity' (this offer would fill the pack) lets a giver drop the goods at our feet.
+      if (meName && t?.withName) { try { noteRefusal(meName, t.withName, { kind, why, after }); } catch {} }
       // THE DEFAULT PATH NEVER CANCELS: an offer it does not recognise may belong to another flow
       // (a supply exchange, a person trading by hand), so it is left exactly as it was.
       if (cfg._default) return { accepted: false, why, left_open: true };
@@ -472,7 +484,9 @@ export class SocialPart {
     const tradeGoodsApply = !!tradeGoods && !expected && (!tradeGoods.from || tradeGoods.from.includes(String(t.withName).toLowerCase()));
     if (tradeGoodsApply) {
       const fit = tradeGoodsFit({ offered: t.theirs || [], cap: skills.carryCapacity(c), keepFree: tradeGoods.keep_free });
-      if (!fit.fits) return refuse(`no room for trade goods: ${fit.why}`);
+      // CAPACITY ONLY WHEN THE PACK WAS WEIGHED AND THIS OFFER WOULD OVERFILL IT (`after` known); an unweighed pack or offer
+      // is a refusal of another kind and drops nothing.
+      if (!fit.fits) return refuse(`no room for trade goods: ${fit.why}`, fit.after != null ? 'capacity' : 'unweighed', fit.after ?? null);
     }
     const unwanted = expected || tradeGoodsApply ? [] : offered.filter(n => !takes.some(w => n.includes(w)));
     if (unwanted.length)
