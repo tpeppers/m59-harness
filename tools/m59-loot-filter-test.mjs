@@ -233,6 +233,27 @@ console.log('through Session.lootFloor');
      lf.lootOnlyStatus(spec, mem)?.rules?.spider?.[0] === 'purple mushroom' && lf.lootOnlyStatus(null) === null);
 }
 
+// ------------------------------------------------------------------ "*": any floor, whoever dropped it
+console.log('"*": the whole floor (operator 2026-11-05, Scooter)');
+{
+  const SCOOTER = { '*': ['purple mushroom', 'sapphire', 'orc tooth', 'edible mushroom'],
+                    orc: ['purple mushroom', 'orc tooth'] };
+  const spec = lf.lootOnlySpec(SCOOTER, { resolveItem: items.resolveItemName });
+  ok('"*" is a valid key', Array.isArray(spec?.['*']) && spec['*'].length === 4);
+  ok('"*" is never a creature', lf.lootOnlyRule(spec, 'orc', { matcherFor })?.creature === 'orc' && lf.lootOnlyRule({ '*': ['sapphire'] }, 'spider', { matcherFor }) === null);
+  const floor = [{ id: 1, name: 'small round shield' }, { id: 2, name: 'sapphire' }, { id: 3, name: 'long sword' },
+                 { id: 4, name: 'edible mushroom' }, { id: 5, name: 'leather armor' }];
+  const noKill = lf.planLootOnly({ spec, kill: null, floor, memory: lf.newLootOnlyMemory(), room: 27 });
+  ok('with no kill, everything off the list is left', JSON.stringify(noKill.leave.map(l => l.id).sort()) === '[1,3,5]',
+     JSON.stringify(noKill.leave.map(l => l.id)));
+  const old = lf.planLootOnly({ spec, kill: { name: 'orc', before: [1, 2, 3, 4, 5] }, floor, memory: lf.newLootOnlyMemory(), room: 27, matcherFor });
+  ok('floor items older than the fight are filtered too (the shield that kept coming home)', old.leave.some(l => l.id === 1) && !old.leave.some(l => l.id === 2));
+  const both = lf.planLootOnly({ spec, kill: { name: 'orc', before: [] }, floor, memory: lf.newLootOnlyMemory(), room: 27, matcherFor });
+  ok('a creature rule still applies on top (an orc\'s fresh sapphire and edible mushroom are left: the orc rule names neither)',
+     both.leave.some(l => l.id === 4) && both.leave.some(l => l.id === 2));
+  ok('without "*" older floor items loot as before', lf.planLootOnly({ spec: lf.lootOnlySpec({ orc: ['orc tooth'] }), kill: { name: 'orc', before: [1] }, floor: [floor[0]], memory: lf.newLootOnlyMemory(), room: 27, matcherFor }).leave.length === 0);
+}
+
 // ------------------------------------------------------------------ the hooks
 console.log('the hooks');
 {

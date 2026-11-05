@@ -48,6 +48,12 @@ import { itemNameKey } from './m59-items.mjs';
 // still clears it.
 export const LOOT_ONLY_MEMORY_MS = 2 * 60 * 60_000;
 const identity = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+// "*": ANY ITEM ON THE FLOOR, WHOEVER DROPPED IT (operator 2026-11-05, Scooter in the Icky Cave: "explicitly limit him to only
+// looting: purple mushrooms, sapphires, orc teeth, and edible mushrooms" -- small round shields and spare armour/weapons kept
+// coming home because a creature rule filters only what is attributed to the kill just made, and older floor items loot as
+// before). With "*" set, nothing off that list is picked up from any floor, after a kill or not. A creature rule still
+// applies on top of it (an item must pass both).
+export const ANY = '*';
 
 /**
  * Validate and normalise a `lootOnly` policy.
@@ -65,7 +71,7 @@ export function lootOnlySpec(value, { resolveItem = null } = {}) {
       `{"spider": ["purple mushroom"]}; got ${JSON.stringify(value)}`);
   const out = {};
   for (const [creature, items] of Object.entries(value)) {
-    if (['__proto__', 'constructor', 'prototype'].includes(creature) || !identity(creature))
+    if (['__proto__', 'constructor', 'prototype'].includes(creature) || (!identity(creature) && creature.trim() !== ANY))
       throw new Error(`loot_only: ${JSON.stringify(creature)} is not a creature name`);
     const list = typeof items === 'string' ? null : items;
     if (!Array.isArray(list) || !list.length)
@@ -104,6 +110,7 @@ export function lootOnlySpec(value, { resolveItem = null } = {}) {
 export function lootOnlyRule(spec, creatureName, { matcherFor = null } = {}) {
   if (!spec || !creatureName) return null;
   for (const [key, items] of Object.entries(spec)) {
+    if (key === ANY) continue;   // "*" is never a creature
     const test = typeof matcherFor === 'function' ? matcherFor(key)
       : live => identity(live) === identity(key);
     if (test(creatureName)) return { creature: key, items };
@@ -161,6 +168,11 @@ export function planLootOnly({ spec, kill = null, floor = [], memory = null, roo
       leave.push({ id: row.id, name: row.name,
         why: `LOOT_ONLY — left earlier after a ${remembered.creature} kill; ` +
              `loot_only takes only ${remembered.items.join(', ')} from it` });
+      continue;
+    }
+    if (spec[ANY] && !itemAllowed(row.name, spec[ANY], row.translation ?? null)) {
+      leave.push({ id: row.id, name: row.name, why: `LOOT_ONLY * — this character loots only ${spec[ANY].join(', ')}, from any floor` });
+      if (memory) memory.filtered++;
       continue;
     }
     if (!rule) continue;
