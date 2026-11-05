@@ -44,6 +44,7 @@ import { createReadStream, existsSync, readFileSync, readdirSync } from 'node:fs
 import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dedupeKills } from './m59-ledger.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -131,7 +132,8 @@ export function roomYield({ events = [], samples = [], from, to, match = () => t
 
   const buckets = new Map();
   const lastKill = new Map();     // `${room}|${creature}` -> [t, character] of the previous kill
-  for (const e of [...events].sort((a, b) => a.t - b.t)) {
+  // A person's kill that a keeper also recorded is one kill (m59-ledger.mjs dedupeKills; m59-human-kills.mjs).
+  for (const e of dedupeKills(events).slice().sort((a, b) => a.t - b.t)) {
     if (e.kind !== 'killed' || e.t < from || e.t >= to || !Number.isInteger(e.room_num)) continue;
     const r = R(e.room_num); r.name ??= e.room ?? null;
     if (!match(e.creature)) { r.other++; continue; }

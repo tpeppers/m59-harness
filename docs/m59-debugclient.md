@@ -199,6 +199,34 @@ implemented at `planpane.c:560-590`.
 `StartHelp` opens `M59_MAP_URL/<room#>` instead of the public guides (`C/clientd3d/winmsg.c:28-48`). This needs
 `m59-roomserve.mjs` on 8977, which the TUI starts with the **G** key (`H/tools/m59-tui.mjs:1294-1320`).
 
+### Kills/30m, by hand beside the bots (harness-side, 2026-11-04)
+
+Operator, 2026-11-04: *"enhance the debug client so we can pull out the kills/30m data"* -- to compare his own rate,
+playing by hand, with the bots'. While a person pilots a character its keeper is stopped, so no `killed` row was
+written for those hours and every kills/30m reader showed zero for him.
+
+- **Where the kill is seen:** the 5962 gate proxy L starts (`--observe --fleet-state ...`). It already decodes the
+  person's session passively for communications (`H/tools/m59-proxy-communications.mjs`: the character, the resource
+  table, players online); `H/tools/m59-human-kills.mjs` rides on that and reads BP_MESSAGE / BP_SYS_MESSAGE text
+  through `classifyCombatLine` ("You killed the orc.", player.kod). The room comes from BP_PLAYER's security word,
+  looked up in `substrate/m59-routes.json`.
+- **What is written:** the fleet's own `killed` row (`recordEvent`, `substrate/history/<fleet>/fleet-YYYY-MM-DD.jsonl`)
+  with `human: true, source: 'proxy'`, so the board's `kills_30m`, `m59-minimal` and `m59-roomyield` count it as they
+  are. Nothing is written while a keeper is attached to the connection (spectate / Full Auto writes its own), and
+  `dedupeKills` (in `countKills` and roomyield) drops a human row a keeper row already covers (same character and
+  creature within 5 s). A player's name is never recorded as a kill.
+- **Where it shows:** the MANAGE tab's status line (`H/tools/m59-plan-desk.mjs`), visible whenever no row is
+  selected: `t21 (Scooter) on fleet prod | kills/30m 7 (by hand 7) | bots avg 3.2, best Kermit 9`. The desk reads the
+  ledger at most every 15 s.
+- **From a script:** `node tools/m59-human-kills.mjs [--minutes 30] [--room 27] [--json]` -- per character, by hand /
+  keeper / total per 30 minutes, with a per-room split in `--json`.
+- **No client rebuild.** `C:\code\Meridian59` is unchanged: the MANAGE tab already draws the desk's status text. A
+  number in the window CAPTION would need a C change (`C/clientd3d/m59dbg.c` `DebugIdle` builds the caption from
+  `dbg_status`, which only the overlay loader sets) and `nmake RELEASE=1 Bclient`; not done. The DUM tab's status
+  string would also work, but nothing starts its server (`m59-client-context.mjs`, see Problems).
+- **Not seen:** a client that connects straight to the server instead of through 5962 (a proxy fronting another
+  server, see Problems), and a kill announced by a touch spell's own line rather than "You killed".
+
 ## Data flow
 
 ```
